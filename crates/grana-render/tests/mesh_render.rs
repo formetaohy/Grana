@@ -1,8 +1,8 @@
 use glam::Vec3;
-use grana_object::{Mesh, MeshVertex};
+use grana_object::{Mesh, MeshVertex, Track, TrackNode, TrackSet, TrackSource};
 use grana_render::{
-    Camera, ChannelParams, Frame, RenderParams, Renderer, SectionCamera, SurfaceFrame,
-    SurfaceStyle, TransferFunction,
+    Camera, ChannelParams, Frame, MeshFrame, MeshStyle, RenderParams, Renderer, SectionCamera,
+    TransferFunction, track_mesh,
 };
 use grana_volume::{Axis, BrickGrid, Channel, Extent, Spacing, Volume, VoxelData};
 
@@ -36,20 +36,28 @@ fn renders_surface_objects_and_sections() {
     let whole = [0, 0, SIDE, SIDE];
     let corner = [0, 0, 1, 1];
     let visible = [
-        SurfaceStyle::new([1.0, 0.12, 0.12], true, false),
-        SurfaceStyle::new([0.12, 1.0, 0.12], true, false),
+        MeshStyle::new([1.0, 0.12, 0.12], true, false),
+        MeshStyle::new([0.12, 1.0, 0.12], true, false),
     ];
     let selected = [
-        SurfaceStyle::new([1.0, 0.12, 0.12], true, true),
-        SurfaceStyle::new([0.12, 1.0, 0.12], true, false),
+        MeshStyle::new([1.0, 0.12, 0.12], true, true),
+        MeshStyle::new([0.12, 1.0, 0.12], true, false),
     ];
     let hidden = [
-        SurfaceStyle::new([1.0, 0.12, 0.12], false, false),
-        SurfaceStyle::new([0.12, 1.0, 0.12], false, false),
+        MeshStyle::new([1.0, 0.12, 0.12], false, false),
+        MeshStyle::new([0.12, 1.0, 0.12], false, false),
     ];
 
     let pixels = render(
-        &device, &queue, &target, &volume, &mesh, &visible, whole, corner, 0.0,
+        &device,
+        &queue,
+        &target,
+        &volume,
+        Some((&mesh, &visible)),
+        None,
+        whole,
+        corner,
+        0.0,
     );
     let red = red_pixels(&pixels);
     let green = green_pixels(&pixels);
@@ -66,7 +74,15 @@ fn renders_surface_objects_and_sections() {
     );
 
     let changed = render(
-        &device, &queue, &target, &volume, &mesh, &selected, whole, corner, 0.0,
+        &device,
+        &queue,
+        &target,
+        &volume,
+        Some((&mesh, &selected)),
+        None,
+        whole,
+        corner,
+        0.0,
     );
     assert!(
         green_sum(&changed) > green_sum(&pixels) + (SIDE * SIDE) as u64,
@@ -74,7 +90,15 @@ fn renders_surface_objects_and_sections() {
     );
 
     let cleared = render(
-        &device, &queue, &target, &volume, &mesh, &hidden, whole, corner, 0.0,
+        &device,
+        &queue,
+        &target,
+        &volume,
+        Some((&mesh, &hidden)),
+        None,
+        whole,
+        corner,
+        0.0,
     );
     assert_eq!(
         red_pixels(&cleared) + green_pixels(&cleared),
@@ -83,7 +107,15 @@ fn renders_surface_objects_and_sections() {
     );
 
     let section = render(
-        &device, &queue, &target, &volume, &mesh, &visible, corner, whole, 0.0,
+        &device,
+        &queue,
+        &target,
+        &volume,
+        Some((&mesh, &visible)),
+        None,
+        corner,
+        whole,
+        0.0,
     );
     let inside = red_pixels(&section);
     assert!(
@@ -92,13 +124,124 @@ fn renders_surface_objects_and_sections() {
     );
 
     let missed = render(
-        &device, &queue, &target, &volume, &mesh, &visible, corner, whole, 1.2,
+        &device,
+        &queue,
+        &target,
+        &volume,
+        Some((&mesh, &visible)),
+        None,
+        corner,
+        whole,
+        1.2,
     );
     assert_eq!(
         red_pixels(&missed),
         0,
         "the section fills an object the plane misses"
     );
+}
+
+#[test]
+fn renders_track_tubes_and_sections() {
+    let Some((device, queue)) = gpu() else {
+        return;
+    };
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("grana.track.test.target"),
+        size: wgpu::Extent3d {
+            width: SIDE,
+            height: SIDE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let volume = empty_volume();
+    let set = tracks();
+    let mesh = track_mesh(&set, 0.15);
+    let whole = [0, 0, SIDE, SIDE];
+    let corner = [0, 0, 1, 1];
+    let visible = [
+        MeshStyle::new([1.0, 0.12, 0.12], true, false),
+        MeshStyle::new([0.12, 1.0, 0.12], true, false),
+    ];
+    let hidden = [
+        MeshStyle::new([1.0, 0.12, 0.12], false, false),
+        MeshStyle::new([0.12, 1.0, 0.12], false, false),
+    ];
+
+    let pixels = render(
+        &device,
+        &queue,
+        &target,
+        &volume,
+        None,
+        Some((&mesh, &visible)),
+        whole,
+        corner,
+        0.0,
+    );
+    let red = red_pixels(&pixels);
+    let green = green_pixels(&pixels);
+    assert!(red > 100, "the first track is not drawn: {red}");
+    assert!(green > 100, "the second track is not drawn: {green}");
+
+    let cleared = render(
+        &device,
+        &queue,
+        &target,
+        &volume,
+        None,
+        Some((&mesh, &hidden)),
+        whole,
+        corner,
+        0.0,
+    );
+    assert_eq!(
+        red_pixels(&cleared) + green_pixels(&cleared),
+        0,
+        "a hidden track is still drawn"
+    );
+
+    let section = render(
+        &device,
+        &queue,
+        &target,
+        &volume,
+        None,
+        Some((&mesh, &visible)),
+        corner,
+        whole,
+        0.0,
+    );
+    assert!(
+        red_pixels(&section) + green_pixels(&section) > 20,
+        "the tracks do not cross the section"
+    );
+}
+
+fn tracks() -> TrackSet {
+    let first = Track::new(
+        None,
+        vec![
+            TrackNode::new(0, 0, [-0.7, -0.1, 0.0]),
+            TrackNode::new(1, 0, [-0.5, -0.1, 0.0]),
+            TrackNode::new(2, 0, [-0.3, -0.1, 0.0]),
+        ],
+    );
+    let second = Track::new(
+        None,
+        vec![
+            TrackNode::new(0, 1, [0.3, 0.1, 0.0]),
+            TrackNode::new(1, 1, [0.5, 0.1, 0.0]),
+            TrackNode::new(2, 1, [0.7, 0.1, 0.0]),
+        ],
+    );
+    TrackSet::new(TrackSource::Spots, 0, 1.0, vec![first, second])
 }
 
 fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
@@ -134,8 +277,8 @@ fn render(
     queue: &wgpu::Queue,
     target: &wgpu::Texture,
     volume: &Volume,
-    mesh: &Mesh,
-    styles: &[SurfaceStyle],
+    surface: Option<(&Mesh, &[MeshStyle])>,
+    tracks: Option<(&Mesh, &[MeshStyle])>,
     volume_region: [u32; 4],
     section_region: [u32; 4],
     focus_z: f32,
@@ -150,7 +293,12 @@ fn render(
     );
     let mut renderer = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
     renderer.set_pyramid(device, &pyramid);
-    renderer.set_surface(device, Some(mesh));
+    if let Some((mesh, _)) = surface {
+        renderer.set_surface(device, Some(mesh));
+    }
+    if let Some((mesh, _)) = tracks {
+        renderer.set_spot_tracks(device, Some(mesh));
+    }
     let mut camera = Camera::new(35.0);
     camera.fit(world, 1.0);
     camera.set_focus_along(Axis::Z, focus_z);
@@ -190,7 +338,9 @@ fn render(
                 section: &section,
                 params: &params,
                 markers: &[],
-                surface: Some(SurfaceFrame { styles }),
+                surface: surface.map(|(_, styles)| MeshFrame { styles }),
+                spot_tracks: tracks.map(|(_, styles)| MeshFrame { styles }),
+                surface_tracks: None,
                 volume_requests: &mut volume_requests,
                 section_requests: &mut section_requests,
             },
@@ -220,7 +370,9 @@ fn render(
             section: &section,
             params: &params,
             markers: &[],
-            surface: Some(SurfaceFrame { styles }),
+            surface: surface.map(|(_, styles)| MeshFrame { styles }),
+            spot_tracks: tracks.map(|(_, styles)| MeshFrame { styles }),
+            surface_tracks: None,
             volume_requests: &mut volume_requests,
             section_requests: &mut section_requests,
         },

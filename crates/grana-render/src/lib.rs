@@ -11,6 +11,7 @@ mod residency;
 mod screen;
 mod section;
 mod target;
+mod track;
 mod transfer;
 mod uniforms;
 
@@ -18,8 +19,9 @@ pub const MAX_CHANNEL: usize = 8;
 
 pub use camera::{Camera, Ray, plane_basis};
 pub use marker::Marker;
-pub use mesh::{SurfaceFrame, SurfaceStyle};
+pub use mesh::{MeshFrame, MeshStyle};
 pub use params::{ChannelParams, RenderParams, Shading};
 pub use renderer::{BrickRequest, Frame, FrameInfo, Renderer, ViewInfo};
 pub use section::SectionCamera;
+pub use track::track_mesh;
 pub use transfer::{Stop, TransferFunction};

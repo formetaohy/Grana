@@ -3,8 +3,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
-use grana_analysis::{SpotParams, SpotScan, SurfaceBuilder, SurfaceParams};
-use grana_object::{Spot, SpotSet, SurfaceSet};
+use grana_analysis::{
+    SpotParams, SpotScan, SurfaceBuilder, SurfaceParams, TrackBuilder, TrackParams,
+};
+use grana_object::{Spot, SpotSet, SurfaceSet, TrackSet, TrackSource};
 use grana_volume::{BrickCoord, Pyramid, VoxelData};
 use grana_zarr::Image;
 
@@ -14,6 +16,25 @@ use crate::source::Source;
 pub enum Kind {
     Spots,
     Surfaces,
+    SpotTracks,
+    SurfaceTracks,
+}
+
+impl Kind {
+    pub fn source(self) -> Option<TrackSource> {
+        match self {
+            Self::SpotTracks => Some(TrackSource::Spots),
+            Self::SurfaceTracks => Some(TrackSource::Surfaces),
+            Self::Spots | Self::Surfaces => None,
+        }
+    }
+
+    pub fn track(source: TrackSource) -> Self {
+        match source {
+            TrackSource::Spots => Self::SpotTracks,
+            TrackSource::Surfaces => Self::SurfaceTracks,
+        }
+    }
 }
 
 pub enum Outcome {
@@ -31,6 +52,7 @@ pub enum Event {
         time: u32,
         outcome: Outcome,
     },
+    Tracks(TrackSet),
     Done,
     Failed(String),
 }
@@ -105,6 +127,36 @@ pub fn start_surfaces(source: Source, channel: usize, params: SurfaceParams) -> 
     std::thread::spawn(move || run_surfaces(source, channel, params, token, events));
     Analysis {
         kind: Kind::Surfaces,
+        channel,
+        events: receiver,
+        cancel,
+    }
+}
+
+pub fn start_tracks(
+    source: TrackSource,
+    channel: usize,
+    frames: Vec<Vec<[f32; 3]>>,
+    params: TrackParams,
+    frame_interval: f32,
+) -> Analysis {
+    let kind = Kind::track(source);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let token = Arc::clone(&cancel);
+    let (events, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        run_tracks(
+            source,
+            channel,
+            frames,
+            params,
+            frame_interval,
+            token,
+            events,
+        );
+    });
+    Analysis {
+        kind,
         channel,
         events: receiver,
         cancel,
@@ -211,6 +263,42 @@ fn run_surfaces(
     if let Err(detail) = result {
         let _ = events.send(Event::Failed(detail));
     }
+}
+
+fn run_tracks(
+    source: TrackSource,
+    channel: usize,
+    frames: Vec<Vec<[f32; 3]>>,
+    params: TrackParams,
+    frame_interval: f32,
+    cancel: Arc<AtomicBool>,
+    events: Sender<Event>,
+) {
+    let total = frames.len();
+    let _ = events.send(Event::Progress {
+        time: 0,
+        done: 0,
+        total,
+    });
+    let mut builder = TrackBuilder::new(source, params);
+    for (time, centroids) in frames.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        builder.push(time as u32, centroids);
+        if time % 8 == 0 || time + 1 == total {
+            let _ = events.send(Event::Progress {
+                time: time as u32,
+                done: time + 1,
+                total,
+            });
+        }
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return;
+    }
+    let _ = events.send(Event::Tracks(builder.finish(channel, frame_interval)));
+    let _ = events.send(Event::Done);
 }
 
 fn scan_spots(

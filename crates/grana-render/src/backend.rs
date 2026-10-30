@@ -19,7 +19,7 @@ use wgpu::{
 use crate::cache::Cache;
 use crate::level::Resources;
 use crate::marker::Markers;
-use crate::mesh::Surfaces;
+use crate::mesh::Meshes;
 use crate::screen::Screen;
 use crate::target::{SCENE_FORMAT, SceneTarget, depth_layout};
 use crate::transfer::TransferFunction;
@@ -64,7 +64,7 @@ pub(crate) struct Backend {
     pub volume_pipeline: RenderPipeline,
     pub section_pipeline: RenderPipeline,
     pub markers: Markers,
-    pub surfaces: Surfaces,
+    pub meshes: Meshes,
     pub screen: Screen,
     pub uniforms: Buffer,
     pub section_uniforms: Buffer,
@@ -212,7 +212,7 @@ impl Backend {
             cache: None,
         });
         let markers = Markers::new(device, &frame_layout);
-        let surfaces = Surfaces::new(device, &frame_layout);
+        let meshes = Meshes::new(device, &frame_layout);
         let screen = Screen::new(device, format);
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.volume.uniforms"),
@@ -304,7 +304,7 @@ impl Backend {
             volume_pipeline,
             section_pipeline,
             markers,
-            surfaces,
+            meshes,
             screen,
             uniforms,
             section_uniforms,

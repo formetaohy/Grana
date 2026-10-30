@@ -254,6 +254,8 @@ fn draw(
             params,
             markers,
             surface: None,
+            spot_tracks: None,
+            surface_tracks: None,
             volume_requests,
             section_requests,
         },

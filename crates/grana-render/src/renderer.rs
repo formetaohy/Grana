@@ -10,7 +10,7 @@ use crate::backend::Backend;
 use crate::cache::Cache;
 use crate::level::{LevelCache, Resources};
 use crate::marker::{SectionFrame, VolumeFrame};
-use crate::mesh::SurfaceFrame;
+use crate::mesh::{MeshFrame, MeshStyle, SPOT_TRACK_LAYER, SURFACE_LAYER, SURFACE_TRACK_LAYER};
 use crate::residency::{self, Residency};
 use crate::transfer::TransferFunction;
 use crate::uniforms;
@@ -48,7 +48,9 @@ pub struct Frame<'a> {
     pub section: &'a SectionCamera,
     pub params: &'a RenderParams,
     pub markers: &'a [Marker],
-    pub surface: Option<SurfaceFrame<'a>>,
+    pub surface: Option<MeshFrame<'a>>,
+    pub spot_tracks: Option<MeshFrame<'a>>,
+    pub surface_tracks: Option<MeshFrame<'a>>,
     pub volume_requests: &'a mut Vec<BrickRequest>,
     pub section_requests: &'a mut Vec<BrickRequest>,
 }
@@ -78,7 +80,15 @@ impl Renderer {
     }
 
     pub fn set_surface(&mut self, device: &Device, mesh: Option<&Mesh>) {
-        self.backend.surfaces.set(device, mesh);
+        self.backend.meshes.set(SURFACE_LAYER, device, mesh);
+    }
+
+    pub fn set_spot_tracks(&mut self, device: &Device, mesh: Option<&Mesh>) {
+        self.backend.meshes.set(SPOT_TRACK_LAYER, device, mesh);
+    }
+
+    pub fn set_surface_tracks(&mut self, device: &Device, mesh: Option<&Mesh>) {
+        self.backend.meshes.set(SURFACE_TRACK_LAYER, device, mesh);
     }
 
     pub fn upload(
@@ -109,6 +119,8 @@ impl Renderer {
             params,
             markers,
             surface,
+            spot_tracks,
+            surface_tracks,
             volume_requests,
             section_requests,
         } = frame;
@@ -142,9 +154,12 @@ impl Renderer {
         backend.ensure_target(device, size);
         backend.screen.write(queue);
         backend.markers.prepare(device, queue, markers);
-        if let Some(surface) = &surface {
-            backend.surfaces.write_styles(queue, surface.styles);
-        }
+        let mesh_styles: [Option<&[MeshStyle]>; 3] = [
+            surface.map(|frame| frame.styles),
+            spot_tracks.map(|frame| frame.styles),
+            surface_tracks.map(|frame| frame.styles),
+        ];
+        backend.meshes.write_styles(queue, mesh_styles);
         backend
             .screen
             .background(encoder, backend.scene(), volume_region);
@@ -215,20 +230,19 @@ impl Renderer {
         let scene_radius =
             0.5 * Vec3::from(cache.pyramid.level(volume_render).world_extent()).length();
         backend.clear_depth(encoder);
-        if surface.is_some() {
-            backend.surfaces.draw_volume(
-                encoder,
-                queue,
-                crate::mesh::VolumeFrame {
-                    target: backend.scene(),
-                    depth: backend.depth(),
-                    region: volume_region,
-                    camera,
-                    shading: params.shading,
-                    scene_radius,
-                },
-            );
-        }
+        backend.meshes.draw_volume(
+            encoder,
+            queue,
+            crate::mesh::VolumeFrame {
+                target: backend.scene(),
+                depth: backend.depth(),
+                region: volume_region,
+                camera,
+                shading: params.shading,
+                scene_radius,
+            },
+            mesh_styles,
+        );
         backend.markers.draw_volume(
             encoder,
             queue,
@@ -348,15 +362,16 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
 
-        if surface.is_some() {
-            backend.surfaces.draw_section(
-                encoder,
-                backend.scene(),
-                backend.depth(),
-                section_region,
-                section_cache.section_group(),
-            );
-        }
+        backend.meshes.draw_section(
+            encoder,
+            crate::mesh::SectionFrame {
+                target: backend.scene(),
+                depth: backend.depth(),
+                region: section_region,
+                uniforms: section_cache.section_group(),
+            },
+            mesh_styles,
+        );
 
         backend.markers.draw_section(
             encoder,

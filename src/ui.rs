@@ -4,6 +4,7 @@ use crate::overlay::{self, Overlay};
 use crate::scene::{Scene, Selection};
 use crate::viewport::Viewport;
 use egui::{RichText, Ui};
+use grana_object::TrackSource;
 use grana_render::FrameInfo;
 use grana_volume::Axis;
 
@@ -50,6 +51,10 @@ pub struct Actions {
     pub clear_surfaces: bool,
     pub cancel_surfaces: bool,
     pub export_surfaces: bool,
+    pub track: Option<TrackSource>,
+    pub cancel_tracks: Option<TrackSource>,
+    pub clear_tracks: Option<TrackSource>,
+    pub export_tracks: Option<TrackSource>,
     pub volume: egui::Rect,
     pub section: egui::Rect,
 }
@@ -72,6 +77,10 @@ impl Actions {
             clear_surfaces: false,
             cancel_surfaces: false,
             export_surfaces: false,
+            track: None,
+            cancel_tracks: None,
+            clear_tracks: None,
+            export_tracks: None,
             volume: egui::Rect::ZERO,
             section: egui::Rect::ZERO,
         }
@@ -85,6 +94,7 @@ pub fn build(root: &mut Ui, state: &mut UiState<'_>) -> Actions {
         .resizable(true)
         .show(root, |ui| {
             egui::ScrollArea::vertical()
+                .id_salt("grana.controls")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.heading("grana");
@@ -352,6 +362,12 @@ fn objects_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) 
     spots_section(ui, state, actions);
     ui.separator();
     surfaces_section(ui, state, actions);
+    if state.scene.frame_count() > 1 {
+        ui.separator();
+        crate::track_ui::build(ui, state, actions, TrackSource::Spots);
+        ui.separator();
+        crate::track_ui::build(ui, state, actions, TrackSource::Surfaces);
+    }
 }
 
 fn spots_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
@@ -611,6 +627,7 @@ fn surfaces_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions)
     let selection = state.scene.selection();
     let mut clicked = None;
     egui::ScrollArea::vertical()
+        .id_salt("grana.surfaces")
         .max_height(150.0)
         .auto_shrink([false, true])
         .show(ui, |ui| {
@@ -809,29 +826,32 @@ fn camera_section(ui: &mut Ui, actions: &mut Actions) {
     );
 }
 
-fn progress(analysis: &[Progress], kind: Kind) -> Option<Progress> {
+pub(crate) fn progress(analysis: &[Progress], kind: Kind) -> Option<Progress> {
     analysis
         .iter()
         .copied()
         .find(|progress| progress.kind == kind)
 }
 
-fn caption(state: &UiState<'_>, progress: Progress) -> String {
+pub(crate) fn caption(state: &UiState<'_>, progress: Progress) -> String {
     let name = state
         .scene
         .dataset
         .channels()
         .get(progress.channel)
         .map_or("object", |channel| channel.name());
-    let prefix = if state.scene.frame_count() > 1 {
-        format!("frame {} · ", progress.time + 1)
-    } else {
-        String::new()
+    let prefix = match progress.kind {
+        Kind::SpotTracks | Kind::SurfaceTracks => String::new(),
+        Kind::Spots | Kind::Surfaces if state.scene.frame_count() > 1 => {
+            format!("frame {} · ", progress.time + 1)
+        }
+        Kind::Spots | Kind::Surfaces => String::new(),
     };
     if progress.total > 0 {
         let unit = match progress.kind {
             Kind::Spots => "blocks",
             Kind::Surfaces => "bricks",
+            Kind::SpotTracks | Kind::SurfaceTracks => "frames",
         };
         format!(
             "{prefix}{name} · {}/{} {unit}",
@@ -842,13 +862,13 @@ fn caption(state: &UiState<'_>, progress: Progress) -> String {
     }
 }
 
-fn color_swatch(ui: &mut Ui, tint: [f32; 3]) {
+pub(crate) fn color_swatch(ui: &mut Ui, tint: [f32; 3]) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 12.0), egui::Sense::hover());
     let color = egui::Color32::from_rgb(to_byte(tint[0]), to_byte(tint[1]), to_byte(tint[2]));
     ui.painter().rect_filled(rect, 2.0, color);
 }
 
-fn row(ui: &mut Ui, name: &str, value: String) {
+pub(crate) fn row(ui: &mut Ui, name: &str, value: String) {
     ui.label(RichText::new(name).weak());
     ui.monospace(value);
     ui.end_row();

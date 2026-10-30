@@ -91,3 +91,50 @@ impl SurfaceParams {
         self.min_volume = min_volume;
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrackParams {
+    max_step: f32,
+    max_gap: u32,
+    division: bool,
+    division_range: f32,
+}
+
+impl TrackParams {
+    pub fn new(max_step: f32, max_gap: u32, division: bool, division_range: f32) -> Self {
+        assert!(
+            max_step.is_finite() && max_step > 0.0,
+            "a tracking step must be a positive length"
+        );
+        assert!(
+            division_range.is_finite() && division_range > 0.0,
+            "a division range must be a positive length"
+        );
+        assert!(
+            !division || division_range >= max_step,
+            "the division range covers the tracking step"
+        );
+        Self {
+            max_step,
+            max_gap,
+            division,
+            division_range,
+        }
+    }
+
+    pub fn max_step(self) -> f32 {
+        self.max_step
+    }
+
+    pub fn max_gap(self) -> u32 {
+        self.max_gap
+    }
+
+    pub fn division(self) -> bool {
+        self.division
+    }
+
+    pub fn division_range(self) -> f32 {
+        self.division_range
+    }
+}

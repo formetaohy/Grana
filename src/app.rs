@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use glam::Vec2;
-use grana_render::{BrickRequest, Frame, FrameInfo, Marker, Renderer, SurfaceFrame, SurfaceStyle};
+use grana_object::{TrackSet, TrackSource};
+use grana_render::{BrickRequest, Frame, FrameInfo, Marker, MeshFrame, MeshStyle, Renderer};
 use grana_volume::Spacing;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -17,6 +18,7 @@ use crate::analysis::{self, Analysis, Event, Kind, Outcome, Poll, Progress};
 use crate::dataset::Dataset;
 use crate::demo;
 use crate::egui_layer::EguiLayer;
+use crate::export;
 use crate::gpu::Gpu;
 use crate::loader::{Event as LoaderEvent, Loader};
 use crate::scene::Scene;
@@ -45,8 +47,11 @@ pub struct App {
     analysis: Vec<Analysis>,
     progress: Vec<Progress>,
     markers: Vec<Marker>,
-    styles: Vec<SurfaceStyle>,
+    styles: Vec<MeshStyle>,
+    spot_track_styles: Vec<MeshStyle>,
+    surface_track_styles: Vec<MeshStyle>,
     surface_dirty: bool,
+    track_revision: u64,
     volume_requests: Vec<BrickRequest>,
     section_requests: Vec<BrickRequest>,
     in_flight: HashSet<BrickRequest>,
@@ -70,7 +75,10 @@ impl App {
             progress: Vec::new(),
             markers: Vec::new(),
             styles: Vec::new(),
+            spot_track_styles: Vec::new(),
+            surface_track_styles: Vec::new(),
             surface_dirty: true,
+            track_revision: 0,
             volume_requests: Vec::new(),
             section_requests: Vec::new(),
             in_flight: HashSet::new(),
@@ -140,11 +148,12 @@ impl App {
             if actions.cancel_spots {
                 self.cancel(Kind::Spots);
             }
-            if actions.clear_spots
-                && let Some(scene) = self.scene.as_mut()
-            {
-                scene.clear_spots();
-                self.surface_dirty = true;
+            if actions.clear_spots {
+                self.cancel(Kind::SpotTracks);
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.clear_spots();
+                    self.surface_dirty = true;
+                }
             }
             if actions.export_spots {
                 self.export_spots();
@@ -156,14 +165,29 @@ impl App {
             if actions.cancel_surfaces {
                 self.cancel(Kind::Surfaces);
             }
-            if actions.clear_surfaces
-                && let Some(scene) = self.scene.as_mut()
-            {
-                scene.clear_surfaces();
-                self.surface_dirty = true;
+            if actions.clear_surfaces {
+                self.cancel(Kind::SurfaceTracks);
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.clear_surfaces();
+                    self.surface_dirty = true;
+                }
             }
             if actions.export_surfaces {
                 self.export_surfaces();
+            }
+            if let Some(source) = actions.track {
+                self.start_tracks(source);
+            }
+            if let Some(source) = actions.cancel_tracks {
+                self.cancel(Kind::track(source));
+            }
+            if let Some(source) = actions.clear_tracks
+                && let Some(scene) = self.scene.as_mut()
+            {
+                scene.clear_tracks(source);
+            }
+            if let Some(source) = actions.export_tracks {
+                self.export_tracks(source);
             }
         }
         self.advance_playback();
@@ -368,12 +392,38 @@ impl App {
         let params = scene.params();
         scene.markers(&mut self.markers);
         scene.surface_styles(&mut self.styles);
+        scene.spot_track_styles(&mut self.spot_track_styles);
+        scene.surface_track_styles(&mut self.surface_track_styles);
         if self.surface_dirty {
             renderer.set_surface(&gpu.device, scene.surfaces().map(|set| set.mesh()));
             self.surface_dirty = false;
         }
-        let surface_view = (!self.styles.is_empty()).then_some(SurfaceFrame {
+        let revision = scene.tracks.revision();
+        if revision != self.track_revision {
+            renderer.set_spot_tracks(
+                &gpu.device,
+                scene
+                    .tracks
+                    .layer(TrackSource::Spots)
+                    .map(|layer| layer.mesh()),
+            );
+            renderer.set_surface_tracks(
+                &gpu.device,
+                scene
+                    .tracks
+                    .layer(TrackSource::Surfaces)
+                    .map(|layer| layer.mesh()),
+            );
+            self.track_revision = revision;
+        }
+        let surface_view = (!self.styles.is_empty()).then_some(MeshFrame {
             styles: &self.styles,
+        });
+        let spot_tracks = (!self.spot_track_styles.is_empty()).then_some(MeshFrame {
+            styles: &self.spot_track_styles,
+        });
+        let surface_tracks = (!self.surface_track_styles.is_empty()).then_some(MeshFrame {
+            styles: &self.surface_track_styles,
         });
         let frame = gpu.acquire()?;
         let view = frame
@@ -403,6 +453,8 @@ impl App {
                 params: &params,
                 markers: &self.markers,
                 surface: surface_view,
+                spot_tracks,
+                surface_tracks,
                 volume_requests: &mut self.volume_requests,
                 section_requests: &mut self.section_requests,
             },
@@ -432,6 +484,7 @@ impl App {
                     self.analysis.clear();
                     self.progress.clear();
                     self.surface_dirty = true;
+                    self.track_revision = 0;
                     self.loading = None;
                     self.message = None;
                     self.in_flight.clear();
@@ -519,6 +572,7 @@ impl App {
         enum Update {
             Progress(u32, usize, usize),
             Frame(u32, Outcome),
+            Tracks(TrackSet),
             Done,
             Failed(String),
         }
@@ -542,6 +596,9 @@ impl App {
                             Update::Frame(time, outcome),
                         ));
                     }
+                    Poll::Event(Event::Tracks(set)) => {
+                        updates.push((index, job.kind(), job.channel(), Update::Tracks(set)));
+                    }
                     Poll::Event(Event::Done) => {
                         updates.push((index, job.kind(), job.channel(), Update::Done));
                         break;
@@ -564,6 +621,7 @@ impl App {
             }
         }
         let mut removed = Vec::new();
+        let mut finished = Vec::new();
         for (index, kind, channel, update) in updates {
             match update {
                 Update::Progress(time, done, total) => {
@@ -590,9 +648,17 @@ impl App {
                         }
                     }
                 }
+                Update::Tracks(set) => {
+                    if let Some(scene) = self.scene.as_mut() {
+                        scene.install_tracks(set);
+                    }
+                }
                 Update::Done => {
                     self.progress.retain(|progress| progress.kind != kind);
                     removed.push(index);
+                    if let Some(source) = detected_source(kind) {
+                        finished.push(source);
+                    }
                 }
                 Update::Failed(detail) => {
                     self.progress.retain(|progress| progress.kind != kind);
@@ -605,6 +671,9 @@ impl App {
         removed.dedup();
         for index in removed.into_iter().rev() {
             self.analysis.remove(index);
+        }
+        for source in finished {
+            self.start_tracks(source);
         }
     }
 
@@ -646,6 +715,10 @@ impl App {
         if self.analysis.iter().any(|job| job.kind() == Kind::Spots) {
             return;
         }
+        self.cancel(Kind::SpotTracks);
+        if let Some(scene) = self.scene.as_mut() {
+            scene.clear_tracks(TrackSource::Spots);
+        }
         let Some(source) = self.source.as_ref().map(Loader::source) else {
             return;
         };
@@ -679,6 +752,10 @@ impl App {
         if self.analysis.iter().any(|job| job.kind() == Kind::Surfaces) {
             return;
         }
+        self.cancel(Kind::SurfaceTracks);
+        if let Some(scene) = self.scene.as_mut() {
+            scene.clear_tracks(TrackSource::Surfaces);
+        }
         let Some(source) = self.source.as_ref().map(Loader::source) else {
             return;
         };
@@ -707,6 +784,88 @@ impl App {
             .push(analysis::start_surfaces(source, channel, params));
     }
 
+    fn start_tracks(&mut self, source: TrackSource) {
+        if self.loading.is_some() {
+            return;
+        }
+        if self
+            .analysis
+            .iter()
+            .any(|job| job.kind().source() == Some(source))
+        {
+            return;
+        }
+        let detection = match source {
+            TrackSource::Spots => Kind::Spots,
+            TrackSource::Surfaces => Kind::Surfaces,
+        };
+        if self.analysis.iter().any(|job| job.kind() == detection) {
+            return;
+        }
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        if scene.frame_count() < 2 {
+            return;
+        }
+        let frames: Vec<(u32, usize, Vec<[f32; 3]>)> = match source {
+            TrackSource::Spots => scene
+                .spot_frames()
+                .map(|(time, set)| {
+                    (
+                        time,
+                        set.channel(),
+                        set.spots().iter().map(|spot| spot.center()).collect(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            TrackSource::Surfaces => scene
+                .surface_frames()
+                .map(|(time, set)| {
+                    (
+                        time,
+                        set.channel(),
+                        set.objects()
+                            .iter()
+                            .map(|object| object.centroid())
+                            .collect(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        };
+        let Some((_, channel, _)) = frames.first() else {
+            return;
+        };
+        let channel = *channel;
+        assert!(
+            frames.iter().all(|(_, candidate, _)| *candidate == channel),
+            "one track set belongs to one channel"
+        );
+        let detected = frames
+            .iter()
+            .filter(|(_, _, objects)| !objects.is_empty())
+            .count();
+        if detected == 0 {
+            return;
+        }
+        let mut detections = vec![Vec::new(); scene.frame_count() as usize];
+        for (time, _, objects) in frames {
+            detections[time as usize] = objects;
+        }
+        let params = scene.tracks.params(source);
+        let frame_interval = scene.dataset.frame_interval();
+        let kind = Kind::track(source);
+        self.message = None;
+        self.record_progress(kind, 0, channel, 0, detections.len());
+        self.analysis.push(analysis::start_tracks(
+            source,
+            channel,
+            detections,
+            params,
+            frame_interval,
+        ));
+    }
+
     fn export_spots(&mut self) {
         let Some(scene) = self.scene.as_ref() else {
             return;
@@ -715,7 +874,11 @@ impl App {
             return;
         };
         let channel = scene.dataset.channels()[first.channel()].name();
-        let file_name = format!("{}-{}-spots.csv", slug(scene.dataset.name()), slug(channel));
+        let file_name = format!(
+            "{}-{}-spots.csv",
+            export::slug(scene.dataset.name()),
+            export::slug(channel)
+        );
         let Some(path) = rfd::FileDialog::new()
             .set_title("Export spots")
             .set_file_name(file_name)
@@ -724,7 +887,7 @@ impl App {
         else {
             return;
         };
-        match std::fs::write(&path, spots_csv(scene)) {
+        match std::fs::write(&path, export::spots(scene)) {
             Ok(()) => self.message = None,
             Err(error) => {
                 self.message = Some(Message::error(format!(
@@ -745,8 +908,8 @@ impl App {
         let channel = scene.dataset.channels()[first.channel()].name();
         let file_name = format!(
             "{}-{}-surfaces.csv",
-            slug(scene.dataset.name()),
-            slug(channel)
+            export::slug(scene.dataset.name()),
+            export::slug(channel)
         );
         let Some(path) = rfd::FileDialog::new()
             .set_title("Export surfaces")
@@ -756,11 +919,45 @@ impl App {
         else {
             return;
         };
-        match std::fs::write(&path, surfaces_csv(scene)) {
+        match std::fs::write(&path, export::surfaces(scene)) {
             Ok(()) => self.message = None,
             Err(error) => {
                 self.message = Some(Message::error(format!(
                     "failed to export surfaces to {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+
+    fn export_tracks(&mut self, source: TrackSource) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(layer) = scene.tracks.layer(source) else {
+            return;
+        };
+        let set = layer.set();
+        let channel = scene.dataset.channels()[set.channel()].name();
+        let file_name = format!(
+            "{}-{}-{}-tracks.csv",
+            export::slug(scene.dataset.name()),
+            export::slug(channel),
+            source.name()
+        );
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Export tracks")
+            .set_file_name(file_name)
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            return;
+        };
+        match std::fs::write(&path, export::tracks(set)) {
+            Ok(()) => self.message = None,
+            Err(error) => {
+                self.message = Some(Message::error(format!(
+                    "failed to export tracks to {}: {error}",
                     path.display()
                 )));
             }
@@ -846,81 +1043,11 @@ fn file_name(path: &Path) -> String {
         .to_string()
 }
 
-fn spots_csv(scene: &Scene) -> String {
-    let interval = f64::from(scene.dataset.frame_interval());
-    let mut csv = String::from("frame,time_s,id,x_um,y_um,z_um,diameter_um,quality\n");
-    for (time, spots) in scene.spot_frames() {
-        let seconds = f64::from(time) * interval;
-        for (index, spot) in spots.spots().iter().enumerate() {
-            let center = spot.center();
-            csv.push_str(&format!(
-                "{time},{seconds:.4},{},{:.4},{:.4},{:.4},{:.4},{:.4}\n",
-                index + 1,
-                center[0],
-                center[1],
-                center[2],
-                spot.radius() * 2.0,
-                spot.quality()
-            ));
-        }
-    }
-    csv
-}
-
-fn surfaces_csv(scene: &Scene) -> String {
-    let interval = f64::from(scene.dataset.frame_interval());
-    let mut csv = String::from(
-        "frame,time_s,id,voxels,volume_um3,area_um2,sphericity,centroid_x_um,centroid_y_um,centroid_z_um,min_x_um,min_y_um,min_z_um,max_x_um,max_y_um,max_z_um,mean_intensity,min_intensity,max_intensity,intensity_std\n",
-    );
-    for (time, surfaces) in scene.surface_frames() {
-        let seconds = f64::from(time) * interval;
-        for (index, object) in surfaces.objects().iter().enumerate() {
-            let centroid = object.centroid();
-            let bounds = object.bounds();
-            let min = bounds.min();
-            let max = bounds.max();
-            let intensity = object.intensity();
-            csv.push_str(&format!(
-                "{time},{seconds:.4},{},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.2},{:.2},{:.2},{:.2}\n",
-                index + 1,
-                object.voxel_count(),
-                object.volume(),
-                object.area(),
-                object.sphericity(),
-                centroid[0],
-                centroid[1],
-                centroid[2],
-                min[0],
-                min[1],
-                min[2],
-                max[0],
-                max[1],
-                max[2],
-                intensity.mean(),
-                intensity.min(),
-                intensity.max(),
-                intensity.deviation(),
-            ));
-        }
-    }
-    csv
-}
-
-fn slug(name: &str) -> String {
-    let slug = name
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    if slug.is_empty() {
-        "dataset".to_string()
-    } else {
-        slug
+fn detected_source(kind: Kind) -> Option<TrackSource> {
+    match kind {
+        Kind::Spots => Some(TrackSource::Spots),
+        Kind::Surfaces => Some(TrackSource::Surfaces),
+        Kind::SpotTracks | Kind::SurfaceTracks => None,
     }
 }
 

@@ -163,6 +163,8 @@ impl Stream<'_> {
                     params: self.params,
                     markers: &[],
                     surface: None,
+                    spot_tracks: None,
+                    surface_tracks: None,
                     volume_requests: &mut self.volume_requests,
                     section_requests: &mut self.section_requests,
                 },
