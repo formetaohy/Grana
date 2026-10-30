@@ -17,10 +17,14 @@ use wgpu::{
 
 use crate::atlas::Atlas;
 use crate::level::{BrickRecord, LevelCache};
-use crate::{Camera, ChannelParams, MAX_CHANNEL, RenderParams, SectionCamera, TransferFunction};
+use crate::transfer::srgb_to_linear;
+use crate::{
+    Camera, ChannelDisplay, ChannelParams, MAX_CHANNEL, RenderParams, SectionCamera,
+    TransferFunction,
+};
 
 const LUT_SIZE: u32 = 1024;
-const MAX_STEPS: f32 = 2048.0;
+const MAX_STEPS: f32 = 4096.0;
 const DUMMY_VOXEL: [u16; 1] = [0];
 const SUPERCELL: u32 = 4;
 
@@ -40,9 +44,12 @@ const _: () = assert!(
     "the volume shader bakes the brick dimensions"
 );
 const _: () = {
-    assert!(size_of::<Uniforms>() == 304);
+    assert!(size_of::<Uniforms>() == 496);
     assert!(std::mem::offset_of!(Uniforms, channel_opacity) == 208);
     assert!(std::mem::offset_of!(Uniforms, channel_inverse) == 272);
+    assert!(std::mem::offset_of!(Uniforms, channel_mode) == 304);
+    assert!(std::mem::offset_of!(Uniforms, channel_threshold) == 336);
+    assert!(std::mem::offset_of!(Uniforms, channel_color) == 368);
     assert!(size_of::<SectionUniforms>() == 208);
     assert!(std::mem::offset_of!(SectionUniforms, channel_opacity) == 112);
 };
@@ -63,6 +70,9 @@ struct Uniforms {
     channel_opacity: [[f32; 4]; 2],
     channel_window: [[f32; 4]; 2],
     channel_inverse: [[f32; 4]; 2],
+    channel_mode: [[u32; 4]; 2],
+    channel_threshold: [[f32; 4]; 2],
+    channel_color: [[f32; 4]; 8],
 }
 
 #[repr(C)]
@@ -116,6 +126,9 @@ struct ChannelFields {
     opacity: [[f32; 4]; 2],
     window: [[f32; 4]; 2],
     inverse: [[f32; 4]; 2],
+    mode: [[u32; 4]; 2],
+    threshold: [[f32; 4]; 2],
+    color: [[f32; 4]; 8],
 }
 
 struct Backend {
@@ -1143,33 +1156,46 @@ fn outside(planes: &[Vec4; 6], minimum: Vec3, maximum: Vec3) -> bool {
 }
 
 fn channel_fields(pyramid: &Pyramid, params: &RenderParams) -> ChannelFields {
-    let mut opacity = [[0.0f32; 4]; 2];
-    let mut window = [[0.0f32; 4]; 2];
-    let mut inverse = [[0.0f32; 4]; 2];
+    let mut fields = ChannelFields {
+        opacity: [[0.0; 4]; 2],
+        window: [[0.0; 4]; 2],
+        inverse: [[0.0; 4]; 2],
+        mode: [[0; 4]; 2],
+        threshold: [[0.0; 4]; 2],
+        color: [[0.0; 4]; 8],
+    };
     for (index, channel) in params.channels.iter().enumerate() {
-        opacity[index / 4][index % 4] = if channel.visible {
+        let plane = index / 4;
+        let lane = index % 4;
+        fields.opacity[plane][lane] = if channel.visible {
             channel.opacity.clamp(0.0, 1.0)
         } else {
             0.0
         };
         let data = pyramid.channels()[index].intensity();
         let span = data.span();
-        if span > 0.0 {
-            let start = (channel.window.min() - data.min()) / span;
-            let window_span = (channel.window.max() - channel.window.min()) / span;
-            window[index / 4][index % 4] = start;
-            inverse[index / 4][index % 4] = if window_span > 0.0 {
-                1.0 / window_span
-            } else {
-                0.0
-            };
+        if span <= 0.0 {
+            continue;
         }
+        let start = (channel.window.min() - data.min()) / span;
+        let window_span = (channel.window.max() - channel.window.min()) / span;
+        let inverse = if window_span > 0.0 {
+            1.0 / window_span
+        } else {
+            0.0
+        };
+        fields.window[plane][lane] = start;
+        fields.inverse[plane][lane] = inverse;
+        let ChannelDisplay::Surface(surface) = channel.display else {
+            continue;
+        };
+        fields.mode[plane][lane] = 1;
+        fields.threshold[plane][lane] =
+            ((surface.threshold() - data.min()) / span - start) * inverse;
+        let [red, green, blue] = srgb_to_linear(surface.color());
+        fields.color[index] = [red, green, blue, 0.0];
     }
-    ChannelFields {
-        opacity,
-        window,
-        inverse,
-    }
+    fields
 }
 
 fn volume_uniforms(
@@ -1212,6 +1238,9 @@ fn volume_uniforms(
         channel_opacity: channels.opacity,
         channel_window: channels.window,
         channel_inverse: channels.inverse,
+        channel_mode: channels.mode,
+        channel_threshold: channels.threshold,
+        channel_color: channels.color,
     }
 }
 

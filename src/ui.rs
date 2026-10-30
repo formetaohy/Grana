@@ -3,7 +3,7 @@ use crate::overlay::{self, Overlay};
 use crate::scene::Scene;
 use crate::viewport::Viewport;
 use egui::{RichText, Ui};
-use grana_render::FrameInfo;
+use grana_render::{ChannelDisplay, FrameInfo, Surface};
 use grana_volume::Axis;
 
 pub struct Message(String);
@@ -225,6 +225,9 @@ fn channels_section(ui: &mut Ui, scene: &mut Scene) {
             {
                 clicked = Some(index);
             }
+            if matches!(view.display, ChannelDisplay::Surface(_)) {
+                ui.label(RichText::new("surface").small().weak());
+            }
         });
         ui.add(
             egui::Slider::new(&mut view.opacity, 0.0..=1.0)
@@ -240,18 +243,29 @@ fn channels_section(ui: &mut Ui, scene: &mut Scene) {
 fn display_section(ui: &mut Ui, scene: &mut Scene) {
     let index = scene.selected;
     let name = scene.channel(index).name().to_string();
+    let tint = scene.channel(index).tint();
     let data = scene.channel(index).intensity();
     let current = scene.channels[index].window;
+    let mut display = scene.channels[index].display;
     let mut start = current.min();
     let mut end = current.max();
     let available = data.min()..=data.max();
     ui.strong(format!("Display · {name}"));
+    ui.horizontal(|ui| {
+        let surface = matches!(display, ChannelDisplay::Surface(_));
+        if ui.selectable_label(!surface, "Volume").clicked() && surface {
+            display = ChannelDisplay::Volume;
+        }
+        if ui.selectable_label(surface, "Surface").clicked() && !surface {
+            display = ChannelDisplay::Surface(Surface::new(current.value(0.5), tint));
+        }
+    });
     let mut changed = false;
     changed |= ui
         .add(egui::Slider::new(&mut start, available.clone()).text("black"))
         .changed();
     changed |= ui
-        .add(egui::Slider::new(&mut end, available).text("white"))
+        .add(egui::Slider::new(&mut end, available.clone()).text("white"))
         .changed();
     ui.horizontal(|ui| {
         ui.label(
@@ -261,13 +275,36 @@ fn display_section(ui: &mut Ui, scene: &mut Scene) {
         );
         if ui.small_button("Auto").clicked() {
             scene.reset_window(index);
+            changed = false;
         }
     });
     if changed {
         scene.set_window(index, start, end);
     }
-    let window = scene.channels[index].window;
-    scene.selected_transfer().ui(ui, window);
+    match &mut display {
+        ChannelDisplay::Surface(surface) => {
+            let mut threshold = surface.threshold();
+            if ui
+                .add(egui::Slider::new(&mut threshold, available).text("threshold"))
+                .changed()
+            {
+                surface.set_threshold(threshold);
+            }
+            ui.horizontal(|ui| {
+                ui.label("surface color");
+                let mut color = surface.color();
+                if ui.color_edit_button_rgb(&mut color).changed() {
+                    surface.set_color(color);
+                }
+            });
+            ui.label(RichText::new("isosurface at the threshold").small().weak());
+        }
+        ChannelDisplay::Volume => {
+            let window = scene.channels[index].window;
+            scene.selected_transfer().ui(ui, window);
+        }
+    }
+    scene.channels[index].display = display;
 }
 
 fn section_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
@@ -312,7 +349,7 @@ fn section_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) 
 }
 
 fn rendering_section(ui: &mut Ui, scene: &mut Scene) {
-    ui.strong("Volume");
+    ui.strong("Rendering");
     ui.add(
         egui::Slider::new(&mut scene.step_scale, 0.25..=2.0)
             .text("sampling distance")

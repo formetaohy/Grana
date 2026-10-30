@@ -1,4 +1,6 @@
-use grana_render::{Camera, ChannelParams, Frame, RenderParams, Renderer, SectionCamera};
+use grana_render::{
+    Camera, ChannelDisplay, ChannelParams, Frame, RenderParams, Renderer, SectionCamera,
+};
 use grana_volume::{Axis, BrickGrid, Channel, Extent, Spacing, Volume, VoxelData};
 
 const SIDE: u32 = 256;
@@ -96,6 +98,7 @@ fn section_render(
             opacity: 1.0,
             window: pyramid.channels()[0].window(),
             transfer,
+            display: ChannelDisplay::Volume,
         }],
     };
     let grid = BrickGrid::new(volume.extent());

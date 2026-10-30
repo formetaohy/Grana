@@ -12,6 +12,9 @@ struct Uniforms {
     channel_opacity: array<vec4<f32>, 2>,
     channel_window: array<vec4<f32>, 2>,
     channel_inverse: array<vec4<f32>, 2>,
+    channel_mode: array<vec4<u32>, 2>,
+    channel_threshold: array<vec4<f32>, 2>,
+    channel_color: array<vec4<f32>, 8>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -21,9 +24,23 @@ struct Uniforms {
 @group(1) @binding(0) var atlases: binding_array<texture_3d<f32>, 8>;
 @group(1) @binding(1) var atlas_sampler: sampler;
 
+const SURFACE_MODE: u32 = 1u;
+const REFINEMENT_STEPS: u32 = 6u;
+const SURFACE_SUB_STEPS: u32 = 4u;
+const MAX_CELL_STEPS: u32 = 4096u;
+const MINIMUM_TRANSMITTANCE: f32 = 0.003;
+const MINIMUM_BRICK_ALPHA: f32 = 0.004;
+const MINIMUM_VOXEL_ALPHA: f32 = 1.0e-4;
+const GRADIENT_EPSILON: f32 = 1.0e-8;
+
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) ndc: vec2<f32>,
+}
+
+struct Scatter {
+    radiance: vec3<f32>,
+    transmittance: f32,
 }
 
 @vertex
@@ -44,21 +61,28 @@ fn channel_opacity(index: u32) -> f32 {
     return uniforms.channel_opacity[index / 4u][index % 4u];
 }
 
-fn channel_window(index: u32) -> f32 {
-    return uniforms.channel_window[index / 4u][index % 4u];
+fn channel_mode(index: u32) -> u32 {
+    return uniforms.channel_mode[index / 4u][index % 4u];
 }
 
-fn channel_inverse(index: u32) -> f32 {
-    return uniforms.channel_inverse[index / 4u][index % 4u];
+fn channel_threshold(index: u32) -> f32 {
+    return uniforms.channel_threshold[index / 4u][index % 4u];
+}
+
+fn channel_color(index: u32) -> vec3<f32> {
+    return uniforms.channel_color[index].rgb;
+}
+
+fn windowed(index: u32, unit: f32) -> f32 {
+    return windowed_unit(
+        uniforms.channel_window[index / 4u][index % 4u],
+        uniforms.channel_inverse[index / 4u][index % 4u],
+        unit,
+    );
 }
 
 fn channel_sample(index: u32, unit: f32) -> vec4<f32> {
-    let position = windowed_unit(
-        channel_window(index),
-        channel_inverse(index),
-        unit,
-    );
-    return textureSampleLevel(lut, lut_sampler, vec2<f32>(position, lut_row(index)), 0.0);
+    return textureSampleLevel(lut, lut_sampler, vec2<f32>(windowed(index, unit), lut_row(index)), 0.0);
 }
 
 fn sample_channel(index: u32, uvw: vec3<f32>) -> f32 {
@@ -77,18 +101,30 @@ fn sample_channel(index: u32, uvw: vec3<f32>) -> f32 {
     return textureSampleLevel(atlases[index], atlas_sampler, texel, 0.0).r;
 }
 
-fn brick_transparent(record: BrickRecord) -> bool {
+fn sample_windowed(index: u32, uvw: vec3<f32>) -> f32 {
+    return windowed(index, sample_channel(index, uvw));
+}
+
+fn ray_uvw(t: f32, direction: vec3<f32>) -> vec3<f32> {
+    return (uniforms.eye.xyz + direction * t - uniforms.box_min.xyz) / uniforms.box_size.xyz;
+}
+
+fn brick_visible(record: BrickRecord) -> bool {
     let count = u32(uniforms.march.z);
     for (var channel = 0u; channel < count; channel += 1u) {
-        if (channel_opacity(channel) > 0.0) {
-            let maximum = record.maxima[channel / 4u][channel % 4u];
-            let sample = channel_sample(channel, maximum);
-            if (sample.a > 0.004) {
-                return false;
+        if (channel_opacity(channel) <= 0.0) {
+            continue;
+        }
+        let maximum = record.maxima[channel / 4u][channel % 4u];
+        if (channel_mode(channel) == SURFACE_MODE) {
+            if (windowed(channel, maximum) >= channel_threshold(channel)) {
+                return true;
             }
+        } else if (channel_sample(channel, maximum).a > MINIMUM_BRICK_ALPHA) {
+            return true;
         }
     }
-    return true;
+    return false;
 }
 
 fn boundary_delta(uvw: vec3<f32>, direction: vec3<f32>, minimum: f32) -> f32 {
@@ -115,21 +151,66 @@ fn density_gradient(channel: u32, uvw: vec3<f32>, step: vec3<f32>) -> vec3<f32> 
     return vec3<f32>(dx, dy, dz);
 }
 
-fn shade(channel: u32, color: vec3<f32>, uvw: vec3<f32>, step: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
-    let gradient = density_gradient(channel, uvw, step);
-    if (length(gradient) < 1.0e-5) {
-        return color;
+fn shaded_normal(gradient: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+    let voxel = uniforms.box_size.xyz / uniforms.dims.xyz;
+    var normal = -gradient / voxel;
+    if (length(normal) < GRADIENT_EPSILON) {
+        return vec3<f32>(0.0);
     }
-    var normal = -gradient / uniforms.box_size.xyz;
-    normal = normal / length(normal);
+    normal = normalize(normal);
     if (dot(normal, direction) > 0.0) {
         normal = -normal;
     }
-    let to_eye = -direction;
-    let half_vector = normalize(uniforms.light.xyz + to_eye);
+    return normal;
+}
+
+fn lit(color: vec3<f32>, normal: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+    if (length(normal) < 0.5) {
+        return color;
+    }
+    let half_vector = normalize(uniforms.light.xyz - direction);
     let diffuse = max(dot(normal, uniforms.light.xyz), 0.0);
     let specular = pow(max(dot(normal, half_vector), 0.0), uniforms.shading.w);
-    return color * (uniforms.shading.x + uniforms.shading.y * diffuse) + vec3<f32>(specular * uniforms.shading.z);
+    return color * (uniforms.shading.x + uniforms.shading.y * diffuse)
+        + vec3<f32>(uniforms.shading.z * specular);
+}
+
+fn shade_volume(channel: u32, color: vec3<f32>, uvw: vec3<f32>, step: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+    let gradient = density_gradient(channel, uvw, step);
+    if (length(gradient) < GRADIENT_EPSILON) {
+        return color;
+    }
+    return lit(color, shaded_normal(gradient, direction), direction);
+}
+
+fn shade_surface(channel: u32, uvw: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+    let gradient = density_gradient(channel, uvw, vec3<f32>(1.0) / uniforms.dims.xyz);
+    return lit(channel_color(channel), shaded_normal(gradient, direction), direction);
+}
+
+fn refine_surface(channel: u32, direction: vec3<f32>, low: f32, high: f32, threshold: f32) -> f32 {
+    var near = low;
+    var far = high;
+    for (var step = 0u; step < REFINEMENT_STEPS; step += 1u) {
+        let middle = 0.5 * (near + far);
+        if (sample_windowed(channel, ray_uvw(middle, direction)) >= threshold) {
+            far = middle;
+        } else {
+            near = middle;
+        }
+    }
+    return 0.5 * (near + far);
+}
+
+fn scatter(optical_depth: f32, emission: vec3<f32>, radiance: vec3<f32>, transmittance: f32, fraction: f32) -> Scatter {
+    let depth = optical_depth * clamp(fraction, 0.0, 1.0);
+    if (depth <= 0.0) {
+        return Scatter(radiance, transmittance);
+    }
+    let segment_transmittance = exp(-depth);
+    let average_color = emission / max(optical_depth, 1.0e-20);
+    let emitted = transmittance * (1.0 - segment_transmittance) * average_color;
+    return Scatter(radiance + emitted, transmittance * segment_transmittance);
 }
 
 @fragment
@@ -159,57 +240,123 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let voxel_world = box_size / uniforms.dims.xyz;
         let gradient_step = vec3<f32>(1.0) / uniforms.dims.xyz;
         let direction_uvw = direction / box_size;
+        let voxels_per_world = length(direction / voxel_world);
+
+        var previous: array<f32, 8>;
+        var finished: u32 = 0u;
+        var surface_mask: u32 = 0u;
+        var volume_present = false;
+        for (var channel = 0u; channel < channel_count; channel += 1u) {
+            previous[channel] = 0.0;
+            if (channel_opacity(channel) <= 0.0) {
+                continue;
+            }
+            if (channel_mode(channel) == SURFACE_MODE) {
+                surface_mask |= 1u << channel;
+            } else {
+                volume_present = true;
+            }
+        }
 
         var t = start;
         var steps = 0u;
         var cells = 0u;
-        while (t < exit && steps < max_steps && cells < 4096u) {
+        var complete = false;
+        while (t < exit && steps < max_steps && cells < MAX_CELL_STEPS && !complete) {
             cells += 1u;
-            let uvw = (eye + direction * t - box_min) / box_size;
+            let uvw = ray_uvw(t, direction);
             let cell = brick_cell(uniforms.grid.xyz, uvw);
             let record = bricks[brick_index(uniforms.grid.xyz, cell)];
             let boundary = min(t + boundary_delta(uvw, direction_uvw, step_length * 0.25), exit);
-            if (record.slot == 0u || brick_transparent(record)) {
+            if (record.slot == 0u || !brick_visible(record)) {
                 t = boundary;
                 continue;
             }
-            let voxels_per_step = step_length * length(direction / voxel_world);
             while (t < boundary && steps < max_steps) {
-                let position = (eye + direction * t - box_min) / box_size;
+                let segment = min(step_length, boundary - t);
+                let position = ray_uvw(t, direction);
                 var optical_depth = 0.0;
                 var emission = vec3<f32>(0.0);
+                var hit_times: array<f32, 8>;
+                var hit_channels: array<u32, 8>;
+                var hit_count = 0u;
+
                 for (var channel = 0u; channel < channel_count; channel += 1u) {
                     let opacity = channel_opacity(channel);
-                    if (opacity > 0.0) {
+                    if (opacity <= 0.0 || (finished & (1u << channel)) != 0u) {
+                        continue;
+                    }
+                    if (channel_mode(channel) == SURFACE_MODE) {
+                        let threshold = channel_threshold(channel);
+                        var low = previous[channel];
+                        var low_t = t;
+                        var value = low;
+                        for (var sub = 1u; sub <= SURFACE_SUB_STEPS; sub += 1u) {
+                            let high_t = t + segment * f32(sub) / f32(SURFACE_SUB_STEPS);
+                            value = sample_windowed(channel, ray_uvw(high_t, direction));
+                            if (low < threshold && value >= threshold) {
+                                hit_times[hit_count] = refine_surface(channel, direction, low_t, high_t, threshold);
+                                hit_channels[hit_count] = channel;
+                                hit_count += 1u;
+                                break;
+                            }
+                            low = value;
+                            low_t = high_t;
+                        }
+                        previous[channel] = value;
+                    } else {
                         let unit = sample_channel(channel, position);
                         let sample = channel_sample(channel, unit);
                         let per_voxel = clamp(sample.a, 0.0, 0.999);
-                        if (per_voxel > 1.0e-4) {
-                            let tau = -log(1.0 - per_voxel) * voxels_per_step * opacity;
+                        if (per_voxel > MINIMUM_VOXEL_ALPHA) {
+                            let tau = -log(1.0 - per_voxel) * segment * voxels_per_world * opacity;
                             var color = sample.rgb;
                             if (per_voxel > 0.02) {
-                                color = shade(channel, color, position, gradient_step, direction);
+                                color = shade_volume(channel, color, position, gradient_step, direction);
                             }
                             optical_depth += tau;
                             emission += tau * color;
                         }
                     }
                 }
-                if (optical_depth > 0.0) {
-                    let step_transmittance = exp(-optical_depth);
-                    radiance += transmittance * (1.0 - step_transmittance) * emission / optical_depth;
-                    transmittance *= step_transmittance;
+
+                var consumed = 0.0;
+                var pending = hit_count;
+                while (pending > 0u) {
+                    var nearest = 1.0e20;
+                    var nearest_hit = 0u;
+                    for (var hit = 0u; hit < hit_count; hit += 1u) {
+                        if (hit_times[hit] < nearest) {
+                            nearest = hit_times[hit];
+                            nearest_hit = hit;
+                        }
+                    }
+                    let scattered = scatter(optical_depth, emission, radiance, transmittance, (nearest - t - consumed) / segment);
+                    radiance = scattered.radiance;
+                    transmittance = scattered.transmittance;
+                    consumed = max(consumed, nearest - t);
+                    let channel = hit_channels[nearest_hit];
+                    let alpha = channel_opacity(channel);
+                    radiance += transmittance * alpha * shade_surface(channel, ray_uvw(nearest, direction), direction);
+                    transmittance *= 1.0 - alpha;
+                    finished |= 1u << channel;
+                    hit_times[nearest_hit] = 1.0e20;
+                    pending -= 1u;
                 }
-                if (transmittance < 0.003) {
+                let scattered = scatter(optical_depth, emission, radiance, transmittance, (segment - consumed) / segment);
+                radiance = scattered.radiance;
+                transmittance = scattered.transmittance;
+
+                t += segment;
+                steps += 1u;
+                if (transmittance < MINIMUM_TRANSMITTANCE || (!volume_present && (finished & surface_mask) == surface_mask)) {
+                    complete = true;
                     break;
                 }
-                t += step_length;
-                steps += 1u;
             }
-            if (transmittance < 0.003) {
-                break;
+            if (!complete) {
+                t = max(t, boundary);
             }
-            t = max(t, boundary);
         }
     }
 

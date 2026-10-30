@@ -1,4 +1,4 @@
-use grana_render::{ChannelParams, RenderParams, Shading};
+use grana_render::{ChannelDisplay, ChannelParams, RenderParams, Shading};
 use grana_volume::{ChannelInfo, Intensity};
 
 use crate::dataset::Dataset;
@@ -9,6 +9,7 @@ pub struct ChannelView {
     pub opacity: f32,
     pub window: Intensity,
     pub default_window: Intensity,
+    pub display: ChannelDisplay,
     transfer: TransferEditor,
 }
 
@@ -30,6 +31,7 @@ impl Scene {
                 opacity: 1.0,
                 window: channel.window(),
                 default_window: channel.window(),
+                display: ChannelDisplay::Volume,
                 transfer: TransferEditor::new(channel.tint()),
             })
             .collect();
@@ -58,6 +60,7 @@ impl Scene {
                     opacity: channel.opacity,
                     window: channel.window,
                     transfer: channel.transfer.transfer(),
+                    display: channel.display,
                 })
                 .collect(),
         }
@@ -70,6 +73,11 @@ impl Scene {
     pub fn select(&mut self, index: usize) {
         assert!(index < self.channels.len(), "channel index out of bounds");
         self.selected = index;
+    }
+
+    pub fn set_display(&mut self, index: usize, display: ChannelDisplay) {
+        assert!(index < self.channels.len(), "channel index out of bounds");
+        self.channels[index].display = display;
     }
 
     pub fn set_window(&mut self, index: usize, start: f32, end: f32) {

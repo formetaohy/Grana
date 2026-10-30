@@ -1,8 +1,29 @@
+use grana_render::{ChannelDisplay, Surface};
 use grana_volume::{Channel, Extent, Spacing, Volume, VoxelData};
+
+use crate::scene::Scene;
 
 const CELL_COUNT: usize = 30;
 const PUNCTUM_COUNT: usize = 34;
 const MARGIN: f32 = 42.0;
+const NUCLEUS_THRESHOLD: f32 = 0.38;
+const MEMBRANE_THRESHOLD: f32 = 0.22;
+const MEMBRANE_OPACITY: f32 = 0.35;
+
+pub fn stage(scene: &mut Scene) {
+    stage_surface(scene, 0, NUCLEUS_THRESHOLD);
+    stage_surface(scene, 1, MEMBRANE_THRESHOLD);
+    scene.channels[1].opacity = MEMBRANE_OPACITY;
+}
+
+fn stage_surface(scene: &mut Scene, index: usize, fraction: f32) {
+    let channel = scene.channel(index);
+    let threshold = channel.intensity().value(fraction);
+    scene.set_display(
+        index,
+        ChannelDisplay::Surface(Surface::new(threshold, channel.tint())),
+    );
+}
 
 pub fn volume() -> Volume {
     let extent = Extent::new(512, 512, 64);
@@ -104,7 +125,7 @@ fn paint_membrane(
 ) {
     for_each_voxel(extent, centre, radii, 2.0, |index, squared| {
         let distance = squared.sqrt();
-        let shell = (-((distance - 1.0) / 0.10).powi(2)).exp();
+        let shell = (-((distance - 1.0) / 0.16).powi(2)).exp();
         if shell < 0.02 {
             return;
         }

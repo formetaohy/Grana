@@ -80,7 +80,8 @@ impl App {
         let egui = EguiLayer::new(&window, &gpu.device, gpu.format());
         let volume = demo::volume();
         let (source, pyramid) = Loader::memory(volume);
-        let scene = Scene::new(Dataset::synthetic("synthetic fluorescence", pyramid));
+        let mut scene = Scene::new(Dataset::synthetic("synthetic fluorescence", pyramid));
+        demo::stage(&mut scene);
         let mut renderer = Renderer::new(&gpu.device, &gpu.queue, gpu.format(), TEXTURE_BUDGET);
         renderer.set_pyramid(&gpu.device, scene.dataset.pyramid());
         self.scene = Some(scene);

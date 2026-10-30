@@ -120,7 +120,7 @@ fn lerp(from: f32, to: f32, t: f32) -> f32 {
     (from + (to - from) * t).clamp(0.0, 1.0)
 }
 
-fn srgb_to_linear(srgb: [f32; 3]) -> [f32; 3] {
+pub(crate) fn srgb_to_linear(srgb: [f32; 3]) -> [f32; 3] {
     srgb.map(|channel| {
         if channel <= 0.04045 {
             channel / 12.92

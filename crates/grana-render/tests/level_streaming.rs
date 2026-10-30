@@ -1,6 +1,6 @@
 use grana_render::{
-    BrickRequest, Camera, ChannelParams, Frame, RenderParams, Renderer, SectionCamera,
-    TransferFunction, ViewInfo,
+    BrickRequest, Camera, ChannelDisplay, ChannelParams, Frame, RenderParams, Renderer,
+    SectionCamera, TransferFunction, ViewInfo,
 };
 use grana_volume::{Axis, BrickGrid, Channel, Extent, Level, Pyramid, Spacing, Volume, VoxelData};
 
@@ -81,6 +81,7 @@ fn switches_levels() {
             opacity: 1.0,
             window: pyramid.channels()[0].window(),
             transfer: TransferFunction::tinted([0.3, 0.6, 1.0]),
+            display: ChannelDisplay::Volume,
         }],
     };
     let mut stream = Stream {
