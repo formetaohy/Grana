@@ -1,10 +1,10 @@
-use crate::analysis::Progress;
+use crate::analysis::{Kind, Progress};
 use crate::dataset::{Dataset, Origin};
 use crate::overlay::{self, Overlay};
-use crate::scene::Scene;
+use crate::scene::{Scene, Selection};
 use crate::viewport::Viewport;
 use egui::{RichText, Ui};
-use grana_render::{ChannelDisplay, FrameInfo, Surface};
+use grana_render::FrameInfo;
 use grana_volume::Axis;
 
 pub struct Message(String);
@@ -27,7 +27,7 @@ pub struct UiState<'a> {
     pub message: Option<&'a Message>,
     pub frame: FrameInfo,
     pub pending: usize,
-    pub analysis: Option<Progress>,
+    pub analysis: &'a [Progress],
 }
 
 #[derive(Clone, Copy)]
@@ -39,8 +39,12 @@ pub struct Actions {
     pub split: Option<f32>,
     pub detect_spots: bool,
     pub clear_spots: bool,
-    pub cancel_analysis: bool,
+    pub cancel_spots: bool,
     pub export_spots: bool,
+    pub detect_surfaces: bool,
+    pub clear_surfaces: bool,
+    pub cancel_surfaces: bool,
+    pub export_surfaces: bool,
     pub volume: egui::Rect,
     pub section: egui::Rect,
 }
@@ -55,8 +59,12 @@ impl Actions {
             split: None,
             detect_spots: false,
             clear_spots: false,
-            cancel_analysis: false,
+            cancel_spots: false,
             export_spots: false,
+            detect_surfaces: false,
+            clear_surfaces: false,
+            cancel_surfaces: false,
+            export_surfaces: false,
             volume: egui::Rect::ZERO,
             section: egui::Rect::ZERO,
         }
@@ -85,7 +93,7 @@ pub fn build(root: &mut Ui, state: &mut UiState<'_>) -> Actions {
                     ui.separator();
                     display_section(ui, state.scene);
                     ui.separator();
-                    analysis_section(ui, state, &mut actions);
+                    objects_section(ui, state, &mut actions);
                     ui.separator();
                     rendering_section(ui, state.scene);
                     ui.separator();
@@ -237,9 +245,6 @@ fn channels_section(ui: &mut Ui, scene: &mut Scene) {
             {
                 clicked = Some(index);
             }
-            if matches!(view.display, ChannelDisplay::Surface(_)) {
-                ui.label(RichText::new("surface").small().weak());
-            }
         });
         ui.add(
             egui::Slider::new(&mut view.opacity, 0.0..=1.0)
@@ -248,30 +253,19 @@ fn channels_section(ui: &mut Ui, scene: &mut Scene) {
         );
     }
     if let Some(index) = clicked {
-        scene.select(index);
+        scene.select_channel(index);
     }
 }
 
 fn display_section(ui: &mut Ui, scene: &mut Scene) {
     let index = scene.selected;
     let name = scene.channel(index).name().to_string();
-    let tint = scene.channel(index).tint();
     let data = scene.channel(index).intensity();
     let current = scene.channels[index].window;
-    let mut display = scene.channels[index].display;
     let mut start = current.min();
     let mut end = current.max();
     let available = data.min()..=data.max();
     ui.strong(format!("Display · {name}"));
-    ui.horizontal(|ui| {
-        let surface = matches!(display, ChannelDisplay::Surface(_));
-        if ui.selectable_label(!surface, "Volume").clicked() && surface {
-            display = ChannelDisplay::Volume;
-        }
-        if ui.selectable_label(surface, "Surface").clicked() && !surface {
-            display = ChannelDisplay::Surface(Surface::new(current.value(0.5), tint));
-        }
-    });
     let mut changed = false;
     changed |= ui
         .add(egui::Slider::new(&mut start, available.clone()).text("black"))
@@ -293,34 +287,18 @@ fn display_section(ui: &mut Ui, scene: &mut Scene) {
     if changed {
         scene.set_window(index, start, end);
     }
-    match &mut display {
-        ChannelDisplay::Surface(surface) => {
-            let mut threshold = surface.threshold();
-            if ui
-                .add(egui::Slider::new(&mut threshold, available).text("threshold"))
-                .changed()
-            {
-                surface.set_threshold(threshold);
-            }
-            ui.horizontal(|ui| {
-                ui.label("surface color");
-                let mut color = surface.color();
-                if ui.color_edit_button_rgb(&mut color).changed() {
-                    surface.set_color(color);
-                }
-            });
-            ui.label(RichText::new("isosurface at the threshold").small().weak());
-        }
-        ChannelDisplay::Volume => {
-            let window = scene.channels[index].window;
-            scene.selected_transfer().ui(ui, window);
-        }
-    }
-    scene.channels[index].display = display;
+    let window = scene.channels[index].window;
+    scene.selected_transfer().ui(ui, window);
 }
 
-fn analysis_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
+fn objects_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
     ui.strong("Objects");
+    spots_section(ui, state, actions);
+    ui.separator();
+    surfaces_section(ui, state, actions);
+}
+
+fn spots_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
     let selected = state.scene.selected;
     let name = state.scene.channel(selected).name().to_string();
     let minimum = state.scene.dataset.voxel_size().min_element();
@@ -346,34 +324,22 @@ fn analysis_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions)
     }
     state.scene.spot_params = params;
 
+    let progress = progress(state.analysis, Kind::Spots);
     ui.horizontal(|ui| {
         if ui
-            .add_enabled(state.analysis.is_none(), egui::Button::new("Detect spots"))
+            .add_enabled(progress.is_none(), egui::Button::new("Detect spots"))
             .clicked()
         {
             actions.detect_spots = true;
         }
-        if state.analysis.is_some() {
+        if progress.is_some() {
             if ui.button("Cancel").clicked() {
-                actions.cancel_analysis = true;
+                actions.cancel_spots = true;
             }
             ui.spinner();
         }
-        if let Some(progress) = state.analysis {
-            if progress.total > 0 {
-                ui.label(
-                    RichText::new(format!(
-                        "{} · {}/{} blocks",
-                        state.scene.dataset.channels()[progress.channel].name(),
-                        progress.done,
-                        progress.total
-                    ))
-                    .small()
-                    .weak(),
-                );
-            } else {
-                ui.label(RichText::new("preparing").small().weak());
-            }
+        if let Some(progress) = progress {
+            ui.label(RichText::new(caption(state, progress)).small().weak());
         }
     });
 
@@ -402,23 +368,29 @@ fn analysis_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions)
         if ui.checkbox(&mut visible, "visible").changed() {
             state.scene.set_spot_visible(visible);
         }
-        if ui.button("Export CSV").clicked() {
-            actions.export_spots = true;
-        }
-        let picked = state.scene.selection();
-        let measured = picked.and_then(|index| {
-            let spot = state.scene.spot(index)?;
-            Some((index, spot))
+        ui.horizontal(|ui| {
+            if ui.button("Export CSV").clicked() {
+                actions.export_spots = true;
+            }
+            if ui.button("Clear").clicked() {
+                actions.clear_spots = true;
+            }
         });
+        let measured = match state.scene.selection() {
+            Some(Selection::Spot(index)) => state.scene.spot(index),
+            _ => None,
+        };
         match measured {
-            Some((index, spot)) => {
+            Some(spot) => {
                 ui.separator();
-                egui::Grid::new("object")
+                egui::Grid::new("spot")
                     .num_columns(2)
                     .spacing([12.0, 3.0])
                     .show(ui, |ui| {
+                        if let Some(Selection::Spot(index)) = state.scene.selection() {
+                            row(ui, "object", format!("#{}", index + 1));
+                        }
                         let centre = spot.center();
-                        row(ui, "object", format!("#{}", index + 1));
                         row(
                             ui,
                             "position",
@@ -429,11 +401,7 @@ fn analysis_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions)
                     });
             }
             None => {
-                ui.label(
-                    RichText::new("click an object to measure it")
-                        .small()
-                        .weak(),
-                );
+                ui.label(RichText::new("click a spot to measure it").small().weak());
             }
         }
     } else {
@@ -445,6 +413,179 @@ fn analysis_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions)
             .weak(),
         );
     }
+}
+
+fn surfaces_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
+    let selected = state.scene.selected;
+    let name = state.scene.channel(selected).name().to_string();
+    let data = state.scene.channel(selected).intensity();
+    let available = data.min()..=data.max();
+    let mut params = state.scene.surface_params;
+    let mut threshold = params.threshold().clamp(data.min(), data.max());
+    if ui
+        .add(egui::Slider::new(&mut threshold, available).text("threshold"))
+        .changed()
+    {
+        params.set_threshold(threshold);
+    }
+    let mut min_volume = params.min_volume();
+    if ui
+        .add(
+            egui::Slider::new(&mut min_volume, 0.0..=200.0)
+                .text("min volume")
+                .suffix(" µm³"),
+        )
+        .changed()
+    {
+        params.set_min_volume(min_volume);
+    }
+    params.set_threshold(threshold);
+    state.scene.surface_params = params;
+
+    let progress = progress(state.analysis, Kind::Surfaces);
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(progress.is_none(), egui::Button::new("Detect surfaces"))
+            .clicked()
+        {
+            actions.detect_surfaces = true;
+        }
+        if progress.is_some() {
+            if ui.button("Cancel").clicked() {
+                actions.cancel_surfaces = true;
+            }
+            ui.spinner();
+        }
+        if let Some(progress) = progress {
+            ui.label(RichText::new(caption(state, progress)).small().weak());
+        }
+    });
+
+    let summary = state.scene.surfaces().map(|surfaces| {
+        (
+            surfaces.channel(),
+            surfaces.level(),
+            surfaces.object_count(),
+        )
+    });
+    let Some((channel, level, count)) = summary else {
+        ui.label(
+            RichText::new(format!(
+                "extracts connected surfaces of {name} at the threshold"
+            ))
+            .small()
+            .weak(),
+        );
+        return;
+    };
+    let channel_name = state.scene.dataset.channels()[channel].name().to_string();
+    ui.label(format!(
+        "{channel_name} · {count} objects · level {}",
+        level + 1
+    ));
+    let mut visible = state.scene.surface_visible();
+    if ui.checkbox(&mut visible, "visible").changed() {
+        state.scene.set_surface_visible(visible);
+    }
+    ui.horizontal(|ui| {
+        if ui.button("Export CSV").clicked() {
+            actions.export_surfaces = true;
+        }
+        if ui.button("Clear").clicked() {
+            actions.clear_surfaces = true;
+        }
+    });
+
+    let mut entries = state
+        .scene
+        .surfaces()
+        .map(|surfaces| {
+            surfaces
+                .objects()
+                .iter()
+                .enumerate()
+                .map(|(index, object)| (index, object.volume()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    entries.sort_by(|left, right| right.1.total_cmp(&left.1));
+    let selection = state.scene.selection();
+    let mut clicked = None;
+    egui::ScrollArea::vertical()
+        .max_height(150.0)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for (index, volume) in &entries {
+                ui.horizontal(|ui| {
+                    color_swatch(ui, Scene::object_color(*index));
+                    if ui
+                        .selectable_label(
+                            selection == Some(Selection::Surface(*index)),
+                            format!("#{} · {volume:.1} µm³", index + 1),
+                        )
+                        .clicked()
+                    {
+                        clicked = Some(*index);
+                    }
+                });
+            }
+        });
+    if let Some(index) = clicked {
+        state.scene.select(Some(Selection::Surface(index)));
+    }
+
+    let measured = match state.scene.selection() {
+        Some(Selection::Surface(index)) => state.scene.surface(index),
+        _ => None,
+    };
+    let Some(object) = measured else {
+        ui.label(
+            RichText::new("click a surface to measure it")
+                .small()
+                .weak(),
+        );
+        return;
+    };
+    let bounds = object.bounds();
+    let size = bounds.size();
+    let intensity = object.intensity();
+    egui::Grid::new("surface")
+        .num_columns(2)
+        .spacing([12.0, 3.0])
+        .show(ui, |ui| {
+            if let Some(Selection::Surface(index)) = state.scene.selection() {
+                row(ui, "object", format!("#{}", index + 1));
+            }
+            row(ui, "volume", format!("{:.2} µm³", object.volume()));
+            row(ui, "area", format!("{:.2} µm²", object.area()));
+            row(ui, "sphericity", format!("{:.3}", object.sphericity()));
+            let centroid = object.centroid();
+            row(
+                ui,
+                "centroid",
+                format!(
+                    "{:.2} · {:.2} · {:.2} µm",
+                    centroid[0], centroid[1], centroid[2]
+                ),
+            );
+            row(
+                ui,
+                "extent",
+                format!("{:.2} × {:.2} × {:.2} µm", size[0], size[1], size[2]),
+            );
+            row(ui, "voxels", object.voxel_count().to_string());
+            row(
+                ui,
+                "intensity",
+                format!(
+                    "{:.0} mean · {:.0} … {:.0} · σ {:.0}",
+                    intensity.mean(),
+                    intensity.min(),
+                    intensity.max(),
+                    intensity.deviation()
+                ),
+            );
+        });
 }
 
 fn section_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
@@ -567,6 +708,31 @@ fn camera_section(ui: &mut Ui, actions: &mut Actions) {
             .small()
             .weak(),
     );
+}
+
+fn progress(analysis: &[Progress], kind: Kind) -> Option<Progress> {
+    analysis
+        .iter()
+        .copied()
+        .find(|progress| progress.kind == kind)
+}
+
+fn caption(state: &UiState<'_>, progress: Progress) -> String {
+    let name = state
+        .scene
+        .dataset
+        .channels()
+        .get(progress.channel)
+        .map_or("object", |channel| channel.name());
+    if progress.total > 0 {
+        let unit = match progress.kind {
+            Kind::Spots => "blocks",
+            Kind::Surfaces => "bricks",
+        };
+        format!("{name} · {}/{} {unit}", progress.done, progress.total)
+    } else {
+        format!("{name} · preparing")
+    }
 }
 
 fn color_swatch(ui: &mut Ui, tint: [f32; 3]) {

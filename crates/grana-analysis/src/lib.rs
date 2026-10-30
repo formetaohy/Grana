@@ -1,7 +1,8 @@
 mod params;
 mod scan;
-mod spot;
+mod surface;
+mod table;
 
-pub use params::SpotParams;
+pub use params::{SpotParams, SurfaceParams};
 pub use scan::SpotScan;
-pub use spot::{Spot, SpotSet};
+pub use surface::SurfaceBuilder;

@@ -1,4 +1,5 @@
-use grana_analysis::{Spot, SpotParams, SpotScan};
+use grana_analysis::{SpotParams, SpotScan};
+use grana_object::Spot;
 use grana_volume::{Extent, Level, Spacing, VoxelData};
 
 const EXTENT: Extent = Extent::new(200, 96, 40);

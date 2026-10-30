@@ -3,8 +3,7 @@ use grana_volume::Pyramid;
 
 use crate::atlas::Atlas;
 use crate::level::LevelCache;
-use crate::params::{ChannelDisplay, RenderParams};
-use crate::transfer::srgb_to_linear;
+use crate::params::RenderParams;
 use crate::{Camera, SectionCamera};
 
 const MAX_STEPS: f32 = 4096.0;
@@ -25,9 +24,6 @@ pub(crate) struct Uniforms {
     channel_opacity: [[f32; 4]; 2],
     channel_window: [[f32; 4]; 2],
     channel_inverse: [[f32; 4]; 2],
-    channel_mode: [[u32; 4]; 2],
-    channel_threshold: [[f32; 4]; 2],
-    channel_color: [[f32; 4]; 8],
 }
 
 #[repr(C)]
@@ -49,12 +45,10 @@ pub(crate) struct SectionUniforms {
 }
 
 const _: () = {
-    assert!(size_of::<Uniforms>() == 496);
+    assert!(size_of::<Uniforms>() == 304);
     assert!(std::mem::offset_of!(Uniforms, channel_opacity) == 208);
+    assert!(std::mem::offset_of!(Uniforms, channel_window) == 240);
     assert!(std::mem::offset_of!(Uniforms, channel_inverse) == 272);
-    assert!(std::mem::offset_of!(Uniforms, channel_mode) == 304);
-    assert!(std::mem::offset_of!(Uniforms, channel_threshold) == 336);
-    assert!(std::mem::offset_of!(Uniforms, channel_color) == 368);
     assert!(size_of::<SectionUniforms>() == 256);
     assert!(std::mem::offset_of!(SectionUniforms, mapping) == 144);
     assert!(std::mem::offset_of!(SectionUniforms, channel_opacity) == 160);
@@ -64,9 +58,6 @@ struct ChannelFields {
     opacity: [[f32; 4]; 2],
     window: [[f32; 4]; 2],
     inverse: [[f32; 4]; 2],
-    mode: [[u32; 4]; 2],
-    threshold: [[f32; 4]; 2],
-    color: [[f32; 4]; 8],
 }
 
 pub(crate) fn volume_uniforms(
@@ -109,9 +100,6 @@ pub(crate) fn volume_uniforms(
         channel_opacity: channels.opacity,
         channel_window: channels.window,
         channel_inverse: channels.inverse,
-        channel_mode: channels.mode,
-        channel_threshold: channels.threshold,
-        channel_color: channels.color,
     }
 }
 
@@ -176,9 +164,6 @@ fn channel_fields(pyramid: &Pyramid, params: &RenderParams) -> ChannelFields {
         opacity: [[0.0; 4]; 2],
         window: [[0.0; 4]; 2],
         inverse: [[0.0; 4]; 2],
-        mode: [[0; 4]; 2],
-        threshold: [[0.0; 4]; 2],
-        color: [[0.0; 4]; 8],
     };
     for (index, channel) in params.channels.iter().enumerate() {
         let plane = index / 4;
@@ -202,14 +187,6 @@ fn channel_fields(pyramid: &Pyramid, params: &RenderParams) -> ChannelFields {
         };
         fields.window[plane][lane] = start;
         fields.inverse[plane][lane] = inverse;
-        let ChannelDisplay::Surface(surface) = channel.display else {
-            continue;
-        };
-        fields.mode[plane][lane] = 1;
-        fields.threshold[plane][lane] =
-            ((surface.threshold() - data.min()) / span - start) * inverse;
-        let [red, green, blue] = srgb_to_linear(surface.color());
-        fields.color[index] = [red, green, blue, 0.0];
     }
     fields
 }

@@ -1,8 +1,9 @@
 use std::ops::Range;
 
+use grana_object::Spot;
 use grana_volume::Level;
 
-use crate::{Spot, SpotParams};
+use crate::SpotParams;
 
 const FWHM_PER_SIGMA: f32 = 2.354_82;
 const MIN_SIGMA: f32 = 0.5;

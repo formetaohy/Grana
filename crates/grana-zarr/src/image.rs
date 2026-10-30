@@ -133,12 +133,30 @@ impl Image {
     }
 
     pub fn read_brick(&self, level: usize, coord: BrickCoord) -> Result<BrickData, Error> {
+        let channels = (0..self.pyramid.channel_count())
+            .map(|channel| self.read_channel_brick(level, channel, coord))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(BrickData::new(channels))
+    }
+
+    pub fn read_channel_brick(
+        &self,
+        level: usize,
+        channel: usize,
+        coord: BrickCoord,
+    ) -> Result<VoxelData, Error> {
         let Some(level_array) = self.levels.get(level) else {
             return Err(Error::Unsupported {
                 path: self.path.clone(),
                 detail: "the requested resolution level does not exist".to_string(),
             });
         };
+        if channel >= self.pyramid.channel_count() {
+            return Err(Error::Unsupported {
+                path: self.path.clone(),
+                detail: "the requested channel does not exist".to_string(),
+            });
+        }
         let grid = BrickGrid::new(level_array.layout.extent);
         let spatial = grid.padded_range(coord);
         let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
@@ -147,24 +165,20 @@ impl Image {
             spatial[1].end - spatial[1].start,
             spatial[2].end - spatial[2].start,
         );
-        let mut channels = Vec::with_capacity(self.pyramid.channel_count());
-        for index in 0..self.pyramid.channel_count() {
-            let data = self.read_region(
-                level,
-                index,
-                spatial[0].clone(),
-                spatial[1].clone(),
-                spatial[2].clone(),
-            )?;
-            channels.push(pad_brick(
-                &data,
-                origin,
-                extent,
-                grid.origin(coord),
-                level_array.layout.extent,
-            ));
-        }
-        Ok(BrickData::new(channels))
+        let data = self.read_region(
+            level,
+            channel,
+            spatial[0].clone(),
+            spatial[1].clone(),
+            spatial[2].clone(),
+        )?;
+        Ok(pad_brick(
+            &data,
+            origin,
+            extent,
+            grid.origin(coord),
+            level_array.layout.extent,
+        ))
     }
 
     pub fn read_region(

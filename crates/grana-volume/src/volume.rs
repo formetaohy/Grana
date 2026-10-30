@@ -120,12 +120,28 @@ impl Volume {
             self.extent,
             "the brick grid matches the volume extent"
         );
-        let origin = grid.origin(coord);
-        let channels = self
-            .channels
-            .iter()
-            .map(|channel| pad_brick(channel.data(), [0, 0, 0], self.extent, origin, self.extent))
+        let channels = (0..self.channels.len())
+            .map(|channel| self.channel_brick(grid, coord, channel))
             .collect();
         BrickData::new(channels)
+    }
+
+    pub fn channel_brick(&self, grid: &BrickGrid, coord: BrickCoord, channel: usize) -> VoxelData {
+        assert_eq!(
+            grid.extent(),
+            self.extent,
+            "the brick grid matches the volume extent"
+        );
+        assert!(
+            channel < self.channels.len(),
+            "the brick channel lies inside the volume"
+        );
+        pad_brick(
+            self.channels[channel].data(),
+            [0, 0, 0],
+            self.extent,
+            grid.origin(coord),
+            self.extent,
+        )
     }
 }

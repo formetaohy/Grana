@@ -1,5 +1,5 @@
 use grana_render::{
-    Camera, ChannelDisplay, ChannelParams, Frame, FrameInfo, RenderParams, Renderer, SectionCamera,
+    Camera, ChannelParams, Frame, FrameInfo, RenderParams, Renderer, SectionCamera,
     TransferFunction,
 };
 use grana_volume::{Axis, BrickGrid, Channel, Extent, Spacing, Volume, VoxelData};
@@ -73,7 +73,6 @@ fn streams_two_channels() {
                 opacity: 1.0,
                 window: channel.window(),
                 transfer: TransferFunction::tinted(channel.tint()),
-                display: ChannelDisplay::Volume,
             })
             .collect(),
     };
@@ -91,13 +90,14 @@ fn streams_two_channels() {
             Frame {
                 encoder: &mut encoder,
                 target: &view,
-                surface: [SIDE, SIDE],
+                size: [SIDE, SIDE],
                 volume_region: [0, 0, SIDE, SIDE],
                 section_region: [0, 0, 1, 1],
                 camera: &camera,
                 section: &section,
                 params: &params,
                 markers: &[],
+                surface: None,
                 volume_requests: &mut volume_requests,
                 section_requests: &mut section_requests,
             },
@@ -124,13 +124,14 @@ fn streams_two_channels() {
         Frame {
             encoder: &mut encoder,
             target: &view,
-            surface: [SIDE, SIDE],
+            size: [SIDE, SIDE],
             volume_region: [0, 0, SIDE, SIDE],
             section_region: [0, 0, 1, 1],
             camera: &camera,
             section: &section,
             params: &params,
             markers: &[],
+            surface: None,
             volume_requests: &mut volume_requests,
             section_requests: &mut section_requests,
         },

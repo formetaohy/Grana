@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use glam::Vec2;
-use grana_analysis::SpotSet;
-use grana_render::{BrickRequest, Frame, FrameInfo, Marker, Renderer};
+use grana_object::{SpotSet, SurfaceSet};
+use grana_render::{BrickRequest, Frame, FrameInfo, Marker, Renderer, SurfaceFrame, SurfaceStyle};
 use grana_volume::Spacing;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -13,7 +13,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::window::{Window, WindowId};
 
-use crate::analysis::{self, Analysis, Event, Poll, Progress};
+use crate::analysis::{self, Analysis, Event, Kind, Outcome, Poll, Progress};
 use crate::dataset::Dataset;
 use crate::demo;
 use crate::egui_layer::EguiLayer;
@@ -41,9 +41,11 @@ pub struct App {
     viewport: Viewport,
     scene: Option<Scene>,
     source: Option<Loader>,
-    analysis: Option<Analysis>,
-    analysis_progress: Option<Progress>,
+    analysis: Vec<Analysis>,
+    progress: Vec<Progress>,
     markers: Vec<Marker>,
+    styles: Vec<SurfaceStyle>,
+    surface_dirty: bool,
     volume_requests: Vec<BrickRequest>,
     section_requests: Vec<BrickRequest>,
     in_flight: HashSet<BrickRequest>,
@@ -61,9 +63,11 @@ impl App {
             viewport: Viewport::new(),
             scene: None,
             source: None,
-            analysis: None,
-            analysis_progress: None,
+            analysis: Vec::new(),
+            progress: Vec::new(),
             markers: Vec::new(),
+            styles: Vec::new(),
+            surface_dirty: true,
             volume_requests: Vec::new(),
             section_requests: Vec::new(),
             in_flight: HashSet::new(),
@@ -101,7 +105,8 @@ impl App {
             egui,
             renderer,
         });
-        self.start_analysis();
+        self.start_spots();
+        self.start_surfaces(demo::SURFACE_CHANNEL);
     }
 
     fn redraw(&mut self) {
@@ -120,19 +125,34 @@ impl App {
         }
         if !opened {
             if actions.detect_spots {
-                self.start_analysis();
+                self.start_spots();
+            }
+            if actions.cancel_spots {
+                self.cancel(Kind::Spots);
             }
             if actions.clear_spots
                 && let Some(scene) = self.scene.as_mut()
             {
                 scene.clear_spots();
             }
-            if actions.cancel_analysis {
-                self.analysis = None;
-                self.analysis_progress = None;
-            }
             if actions.export_spots {
                 self.export_spots();
+            }
+            if actions.detect_surfaces {
+                let channel = self.scene.as_ref().expect("the scene is alive").selected;
+                self.start_surfaces(channel);
+            }
+            if actions.cancel_surfaces {
+                self.cancel(Kind::Surfaces);
+            }
+            if actions.clear_surfaces
+                && let Some(scene) = self.scene.as_mut()
+            {
+                scene.clear_surfaces();
+                self.surface_dirty = true;
+            }
+            if actions.export_surfaces {
+                self.export_surfaces();
             }
         }
         let scale = self
@@ -192,7 +212,7 @@ impl App {
 
     fn streaming(&self) -> bool {
         self.loading.is_some()
-            || self.analysis.is_some()
+            || !self.analysis.is_empty()
             || !self.in_flight.is_empty()
             || (self.source.is_some()
                 && (!self.volume_requests.is_empty() || !self.section_requests.is_empty()))
@@ -215,7 +235,7 @@ impl App {
         let message = self.message.as_ref();
         let frame = self.frame;
         let pending = self.in_flight.len();
-        let analysis = self.analysis_progress;
+        let analysis = self.progress.as_slice();
         let viewport = &mut self.viewport;
         let mut actions = ui::Actions::new();
         let output = egui.run(window, |root| {
@@ -259,6 +279,14 @@ impl App {
             .unwrap_or(Duration::MAX);
         let params = scene.params();
         scene.markers(&mut self.markers);
+        scene.surface_styles(&mut self.styles);
+        if self.surface_dirty {
+            renderer.set_surface(&gpu.device, scene.surfaces().map(SurfaceSet::mesh));
+            self.surface_dirty = false;
+        }
+        let surface_view = (!self.styles.is_empty()).then_some(SurfaceFrame {
+            styles: &self.styles,
+        });
         let frame = gpu.acquire()?;
         let view = frame
             .texture
@@ -278,13 +306,14 @@ impl App {
             Frame {
                 encoder: &mut encoder,
                 target: &view,
-                surface: size,
+                size,
                 volume_region,
                 section_region,
                 camera,
                 section,
                 params: &params,
                 markers: &self.markers,
+                surface: surface_view,
                 volume_requests: &mut self.volume_requests,
                 section_requests: &mut self.section_requests,
             },
@@ -311,8 +340,9 @@ impl App {
                             .set_pyramid(&surface.gpu.device, dataset.pyramid());
                     }
                     self.scene = Some(Scene::new(dataset));
-                    self.analysis = None;
-                    self.analysis_progress = None;
+                    self.analysis.clear();
+                    self.progress.clear();
+                    self.surface_dirty = true;
                     self.loading = None;
                     self.message = None;
                     self.in_flight.clear();
@@ -336,8 +366,8 @@ impl App {
                 LoaderEvent::ReadFailed { request, detail } => {
                     self.in_flight.remove(&request);
                     self.message = Some(Message::error(detail));
-                    self.analysis = None;
-                    self.analysis_progress = None;
+                    self.analysis.clear();
+                    self.progress.clear();
                     self.source = None;
                     self.in_flight.clear();
                     self.volume_requests.clear();
@@ -346,8 +376,8 @@ impl App {
                 LoaderEvent::Failed(detail) => {
                     self.loading = None;
                     self.message = Some(Message::error(detail));
-                    self.analysis = None;
-                    self.analysis_progress = None;
+                    self.analysis.clear();
+                    self.progress.clear();
                     self.source = None;
                     self.in_flight.clear();
                     self.volume_requests.clear();
@@ -391,80 +421,183 @@ impl App {
     }
 
     fn poll_analysis(&mut self) {
-        let mut outcome = None;
-        if let Some(job) = self.analysis.as_ref() {
+        enum Update {
+            Progress(usize, usize),
+            Finished(Outcome),
+            Failed(String),
+        }
+        let mut updates: Vec<(usize, Kind, usize, Update)> = Vec::new();
+        for (index, job) in self.analysis.iter().enumerate() {
             loop {
                 match job.poll() {
-                    Poll::Event(Event::Started { total }) => {
-                        self.analysis_progress = Some(Progress {
-                            channel: job.channel(),
-                            done: 0,
-                            total,
-                        });
+                    Poll::Event(Event::Started { total })
+                    | Poll::Event(Event::Progress { done: 0, total }) => {
+                        updates.push((
+                            index,
+                            job.kind(),
+                            job.channel(),
+                            Update::Progress(0, total),
+                        ));
                     }
                     Poll::Event(Event::Progress { done, total }) => {
-                        self.analysis_progress = Some(Progress {
-                            channel: job.channel(),
-                            done,
-                            total,
-                        });
+                        updates.push((
+                            index,
+                            job.kind(),
+                            job.channel(),
+                            Update::Progress(done, total),
+                        ));
                     }
-                    Poll::Event(Event::Finished(set)) => {
-                        outcome = Some(Ok(set));
+                    Poll::Event(Event::Finished(outcome)) => {
+                        updates.push((index, job.kind(), job.channel(), Update::Finished(outcome)));
                         break;
                     }
                     Poll::Event(Event::Failed(detail)) => {
-                        outcome = Some(Err(detail));
+                        updates.push((index, job.kind(), job.channel(), Update::Failed(detail)));
                         break;
                     }
                     Poll::Empty => break,
                     Poll::Closed => {
-                        outcome = Some(Err("the analysis worker stopped".to_string()));
+                        updates.push((
+                            index,
+                            job.kind(),
+                            job.channel(),
+                            Update::Failed("the analysis worker stopped".to_string()),
+                        ));
                         break;
                     }
                 }
             }
         }
-        if let Some(outcome) = outcome {
-            self.analysis = None;
-            self.analysis_progress = None;
+        let mut finished = Vec::new();
+        let mut removed = Vec::new();
+        for (index, kind, channel, update) in updates {
+            match update {
+                Update::Progress(done, total) => {
+                    self.record_progress(kind, channel, done, total);
+                }
+                Update::Finished(outcome) => {
+                    self.progress.retain(|progress| progress.kind != kind);
+                    removed.push(index);
+                    finished.push(outcome);
+                }
+                Update::Failed(detail) => {
+                    self.progress.retain(|progress| progress.kind != kind);
+                    removed.push(index);
+                    self.message = Some(Message::error(detail));
+                }
+            }
+        }
+        removed.sort_unstable();
+        removed.dedup();
+        for index in removed.into_iter().rev() {
+            self.analysis.remove(index);
+        }
+        for outcome in finished {
             match outcome {
-                Ok(set) => {
+                Outcome::Spots(set) => {
                     if let Some(scene) = self.scene.as_mut() {
                         scene.install_spots(set);
                     }
                 }
-                Err(detail) => {
-                    self.message = Some(Message::error(detail));
+                Outcome::Surfaces(set) => {
+                    if let Some(scene) = self.scene.as_mut() {
+                        scene.install_surfaces(set);
+                    }
+                    self.surface_dirty = true;
                 }
             }
         }
     }
 
-    fn start_analysis(&mut self) {
+    fn record_progress(&mut self, kind: Kind, channel: usize, done: usize, total: usize) {
+        let progress = Progress {
+            kind,
+            channel,
+            done,
+            total,
+        };
+        if let Some(existing) = self
+            .progress
+            .iter_mut()
+            .find(|progress| progress.kind == kind)
+        {
+            *existing = progress;
+        } else {
+            self.progress.push(progress);
+        }
+    }
+
+    fn cancel(&mut self, kind: Kind) {
+        self.analysis.retain(|job| job.kind() != kind);
+        self.progress.retain(|progress| progress.kind != kind);
+    }
+
+    fn start_spots(&mut self) {
         if self.loading.is_some() {
+            return;
+        }
+        if self.analysis.iter().any(|job| job.kind() == Kind::Spots) {
             return;
         }
         let Some(source) = self.source.as_ref().map(Loader::source) else {
             return;
         };
-        let Some(scene) = self.scene.as_ref() else {
-            return;
+        let (channel, params, span) = {
+            let Some(scene) = self.scene.as_ref() else {
+                return;
+            };
+            let channel = scene.selected;
+            (
+                channel,
+                scene.spot_params,
+                scene.dataset.channels()[channel].intensity().span(),
+            )
         };
-        let channel = scene.selected;
-        if scene.dataset.channels()[channel].intensity().span() <= 0.0 {
+        if span <= 0.0 {
             self.message = Some(Message::error(
                 "the selected channel has no intensity range to detect",
             ));
             return;
         }
         self.message = None;
-        self.analysis_progress = Some(Progress {
-            channel,
-            done: 0,
-            total: 0,
-        });
-        self.analysis = Some(analysis::start(source, channel, scene.spot_params));
+        self.record_progress(Kind::Spots, channel, 0, 0);
+        self.analysis
+            .push(analysis::start_spots(source, channel, params));
+    }
+
+    fn start_surfaces(&mut self, channel: usize) {
+        if self.loading.is_some() {
+            return;
+        }
+        if self.analysis.iter().any(|job| job.kind() == Kind::Surfaces) {
+            return;
+        }
+        let Some(source) = self.source.as_ref().map(Loader::source) else {
+            return;
+        };
+        let (params, span) = {
+            let Some(scene) = self.scene.as_ref() else {
+                return;
+            };
+            assert!(
+                channel < scene.dataset.channels().len(),
+                "the surface channel exists"
+            );
+            (
+                scene.surface_params,
+                scene.dataset.channels()[channel].intensity().span(),
+            )
+        };
+        if span <= 0.0 {
+            self.message = Some(Message::error(
+                "the selected channel has no intensity range to extract",
+            ));
+            return;
+        }
+        self.message = None;
+        self.record_progress(Kind::Surfaces, channel, 0, 0);
+        self.analysis
+            .push(analysis::start_surfaces(source, channel, params));
     }
 
     fn export_spots(&mut self) {
@@ -495,14 +628,46 @@ impl App {
         }
     }
 
+    fn export_surfaces(&mut self) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(surfaces) = scene.surfaces() else {
+            return;
+        };
+        let channel = scene.dataset.channels()[surfaces.channel()].name();
+        let file_name = format!(
+            "{}-{}-surfaces.csv",
+            slug(scene.dataset.name()),
+            slug(channel)
+        );
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Export surfaces")
+            .set_file_name(file_name)
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            return;
+        };
+        match std::fs::write(&path, surfaces_csv(surfaces)) {
+            Ok(()) => self.message = None,
+            Err(error) => {
+                self.message = Some(Message::error(format!(
+                    "failed to export surfaces to {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+
     fn begin_load(&mut self, path: PathBuf) {
         if self.loading.is_some() {
             return;
         }
         self.loading = Some(file_name(&path));
         self.source = Some(Loader::file(path));
-        self.analysis = None;
-        self.analysis_progress = None;
+        self.analysis.clear();
+        self.progress.clear();
         self.message = None;
         self.in_flight.clear();
         self.volume_requests.clear();
@@ -517,18 +682,27 @@ impl App {
         };
         let ndc = self.viewport.ndc(pane, point);
         let aspect = self.viewport.aspect(pane);
-        let index = match pane {
+        let selection = match pane {
             Pane::Volume => {
                 let ray = self.viewport.camera().ray(ndc, aspect);
                 scene.pick_ray(&ray)
             }
             Pane::Section => {
                 let section = self.viewport.section();
-                let target = section.point(self.viewport.camera().focus(), ndc, aspect);
-                scene.pick_slice(section.axis(), target)
+                let axis = section.axis();
+                let focus = self.viewport.camera().focus();
+                let mut target = section.point(focus, ndc, aspect);
+                let extent = scene.dataset.extent();
+                let world = scene.dataset.world_size()[axis.index()];
+                let layers = axis.extent(extent) as f32;
+                let layer = ((focus[axis.index()] / world + 0.5) * layers)
+                    .floor()
+                    .clamp(0.0, layers - 1.0);
+                target[axis.index()] = ((layer + 0.5) / layers - 0.5) * world;
+                scene.pick_slice(axis, target)
             }
         };
-        scene.select_spot(index);
+        scene.select(selection);
         if let Some(surface) = &self.surface {
             surface.window.request_redraw();
         }
@@ -560,6 +734,41 @@ fn spots_csv(spots: &SpotSet) -> String {
             center[2],
             spot.radius() * 2.0,
             spot.quality()
+        ));
+    }
+    csv
+}
+
+fn surfaces_csv(surfaces: &SurfaceSet) -> String {
+    let mut csv = String::from(
+        "id,voxels,volume_um3,area_um2,sphericity,centroid_x_um,centroid_y_um,centroid_z_um,min_x_um,min_y_um,min_z_um,max_x_um,max_y_um,max_z_um,mean_intensity,min_intensity,max_intensity,intensity_std\n",
+    );
+    for (index, object) in surfaces.objects().iter().enumerate() {
+        let centroid = object.centroid();
+        let bounds = object.bounds();
+        let min = bounds.min();
+        let max = bounds.max();
+        let intensity = object.intensity();
+        csv.push_str(&format!(
+            "{},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.2},{:.2},{:.2},{:.2}\n",
+            index + 1,
+            object.voxel_count(),
+            object.volume(),
+            object.area(),
+            object.sphericity(),
+            centroid[0],
+            centroid[1],
+            centroid[2],
+            min[0],
+            min[1],
+            min[2],
+            max[0],
+            max[1],
+            max[2],
+            intensity.mean(),
+            intensity.min(),
+            intensity.max(),
+            intensity.deviation(),
         ));
     }
     csv

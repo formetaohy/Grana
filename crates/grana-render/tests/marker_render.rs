@@ -1,7 +1,7 @@
 use glam::Vec3;
 use grana_render::{
-    BrickRequest, Camera, ChannelDisplay, ChannelParams, Frame, Marker, RenderParams, Renderer,
-    SectionCamera, Stop, TransferFunction,
+    BrickRequest, Camera, ChannelParams, Frame, Marker, RenderParams, Renderer, SectionCamera,
+    Stop, TransferFunction,
 };
 use grana_volume::{Axis, BrickGrid, Channel, Extent, Spacing, Volume, VoxelData};
 
@@ -136,7 +136,6 @@ fn render(
                 Stop::new(0.0, [0.0, 0.0, 0.0], 0.0),
                 Stop::new(1.0, [1.0, 1.0, 1.0], 1.0),
             ]),
-            display: ChannelDisplay::Volume,
         }],
     };
     let grid = BrickGrid::new(volume.extent());
@@ -246,13 +245,14 @@ fn draw(
         Frame {
             encoder: &mut encoder,
             target: view,
-            surface: [SIDE, SIDE],
+            size: [SIDE, SIDE],
             volume_region,
             section_region,
             camera,
             section,
             params,
             markers,
+            surface: None,
             volume_requests,
             section_requests,
         },

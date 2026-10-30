@@ -1086,6 +1086,7 @@ dependencies = [
  "egui-winit",
  "glam",
  "grana-analysis",
+ "grana-object",
  "grana-render",
  "grana-volume",
  "grana-zarr",
@@ -1099,7 +1100,16 @@ dependencies = [
 name = "grana-analysis"
 version = "0.1.0"
 dependencies = [
+ "glam",
+ "grana-object",
  "grana-volume",
+]
+
+[[package]]
+name = "grana-object"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
 ]
 
 [[package]]
@@ -1108,6 +1118,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "glam",
+ "grana-object",
  "grana-volume",
  "half",
  "pollster",

@@ -6,17 +6,20 @@ use half::f16;
 use wgpu::{
     BindGroup, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType,
     BlendComponent, BlendFactor, BlendOperation, BlendState, Buffer, BufferBindingType,
-    BufferUsages, ColorTargetState, ColorWrites, Device, FragmentState, MultisampleState, Origin3d,
-    PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPipeline, RenderPipelineDescriptor,
-    Sampler, SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource,
-    ShaderStages, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect,
-    TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
-    TextureView, TextureViewDescriptor, TextureViewDimension, VertexState,
+    BufferUsages, ColorTargetState, ColorWrites, CommandEncoder, Device, FragmentState,
+    MultisampleState, Origin3d, PipelineLayoutDescriptor, PrimitiveState, Queue,
+    RenderPassDepthStencilAttachment, RenderPassDescriptor, RenderPipeline,
+    RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor,
+    ShaderModuleDescriptor, ShaderSource, ShaderStages, TexelCopyBufferLayout,
+    TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor, TextureDimension,
+    TextureFormat, TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor,
+    TextureViewDimension, VertexState,
 };
 
 use crate::cache::Cache;
 use crate::level::Resources;
 use crate::marker::Markers;
+use crate::mesh::Surfaces;
 use crate::screen::Screen;
 use crate::target::{SCENE_FORMAT, SceneTarget, depth_layout};
 use crate::transfer::TransferFunction;
@@ -61,6 +64,7 @@ pub(crate) struct Backend {
     pub volume_pipeline: RenderPipeline,
     pub section_pipeline: RenderPipeline,
     pub markers: Markers,
+    pub surfaces: Surfaces,
     pub screen: Screen,
     pub uniforms: Buffer,
     pub section_uniforms: Buffer,
@@ -208,6 +212,7 @@ impl Backend {
             cache: None,
         });
         let markers = Markers::new(device, &frame_layout);
+        let surfaces = Surfaces::new(device, &frame_layout);
         let screen = Screen::new(device, format);
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.volume.uniforms"),
@@ -299,6 +304,7 @@ impl Backend {
             volume_pipeline,
             section_pipeline,
             markers,
+            surfaces,
             screen,
             uniforms,
             section_uniforms,
@@ -368,6 +374,22 @@ impl Backend {
             .as_ref()
             .expect("the scene target is ready")
             .depth_group()
+    }
+
+    pub fn clear_depth(&self, encoder: &mut CommandEncoder) {
+        let _ = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("grana.depth.clear"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                view: self.depth(),
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
     }
 
     pub fn present(&self) -> &BindGroup {

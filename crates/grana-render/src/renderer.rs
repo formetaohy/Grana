@@ -1,4 +1,5 @@
 use glam::Vec3;
+use grana_object::Mesh;
 use grana_volume::{BrickCoord, BrickData, Pyramid};
 use wgpu::{
     Color, CommandEncoder, Device, LoadOp, Operations, Queue, RenderPassColorAttachment,
@@ -9,6 +10,7 @@ use crate::backend::Backend;
 use crate::cache::Cache;
 use crate::level::{LevelCache, Resources};
 use crate::marker::{SectionFrame, VolumeFrame};
+use crate::mesh::SurfaceFrame;
 use crate::residency::{self, Residency};
 use crate::transfer::TransferFunction;
 use crate::uniforms;
@@ -37,13 +39,14 @@ pub struct FrameInfo {
 pub struct Frame<'a> {
     pub encoder: &'a mut CommandEncoder,
     pub target: &'a TextureView,
-    pub surface: [u32; 2],
+    pub size: [u32; 2],
     pub volume_region: [u32; 4],
     pub section_region: [u32; 4],
     pub camera: &'a Camera,
     pub section: &'a SectionCamera,
     pub params: &'a RenderParams,
     pub markers: &'a [Marker],
+    pub surface: Option<SurfaceFrame<'a>>,
     pub volume_requests: &'a mut Vec<BrickRequest>,
     pub section_requests: &'a mut Vec<BrickRequest>,
 }
@@ -70,6 +73,10 @@ impl Renderer {
     pub fn set_pyramid(&mut self, device: &Device, pyramid: &Pyramid) {
         self.cache = Some(self.backend.cache(device, pyramid, self.budget));
         self.transfers.fill(None);
+    }
+
+    pub fn set_surface(&mut self, device: &Device, mesh: Option<&Mesh>) {
+        self.backend.surfaces.set(device, mesh);
     }
 
     pub fn upload(
@@ -99,13 +106,14 @@ impl Renderer {
         let Frame {
             encoder,
             target,
-            surface,
+            size,
             volume_region,
             section_region,
             camera,
             section,
             params,
             markers,
+            surface,
             volume_requests,
             section_requests,
         } = frame;
@@ -126,15 +134,18 @@ impl Renderer {
             cache.channels,
             "every rendered channel needs parameters"
         );
-        assert!(surface[0] > 0 && surface[1] > 0, "the surface is not empty");
+        assert!(size[0] > 0 && size[1] > 0, "the surface is not empty");
         assert!(
-            inside(volume_region, surface) && inside(section_region, surface),
+            inside(volume_region, size) && inside(section_region, size),
             "the panes lie on the surface"
         );
         backend.write_transfers(queue, transfers, &params.channels);
-        backend.ensure_target(device, surface);
+        backend.ensure_target(device, size);
         backend.screen.write(queue);
         backend.markers.prepare(device, queue, markers);
+        if let Some(surface) = &surface {
+            backend.surfaces.write_styles(queue, surface.styles);
+        }
         backend
             .screen
             .background(encoder, backend.scene(), volume_region);
@@ -204,6 +215,21 @@ impl Renderer {
 
         let scene_radius =
             0.5 * Vec3::from(cache.pyramid.level(volume_render).world_extent()).length();
+        backend.clear_depth(encoder);
+        if surface.is_some() {
+            backend.surfaces.draw_volume(
+                encoder,
+                queue,
+                crate::mesh::VolumeFrame {
+                    target: backend.scene(),
+                    depth: backend.depth(),
+                    region: volume_region,
+                    camera,
+                    shading: params.shading,
+                    scene_radius,
+                },
+            );
+        }
         backend.markers.draw_volume(
             encoder,
             queue,
@@ -321,6 +347,16 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
 
+        if surface.is_some() {
+            backend.surfaces.draw_section(
+                encoder,
+                backend.scene(),
+                backend.depth(),
+                section_region,
+                section_cache.section_group(),
+            );
+        }
+
         backend.markers.draw_section(
             encoder,
             SectionFrame {
@@ -348,11 +384,11 @@ impl Renderer {
     }
 }
 
-fn inside(region: [u32; 4], surface: [u32; 2]) -> bool {
+fn inside(region: [u32; 4], size: [u32; 2]) -> bool {
     region[2] > 0
         && region[3] > 0
-        && region[0] + region[2] <= surface[0]
-        && region[1] + region[3] <= surface[1]
+        && region[0] + region[2] <= size[0]
+        && region[1] + region[3] <= size[1]
 }
 
 fn clear_target(encoder: &mut CommandEncoder, target: &TextureView) {

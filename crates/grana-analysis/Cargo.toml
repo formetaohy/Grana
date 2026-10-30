@@ -7,7 +7,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+grana-object = { workspace = true }
 grana-volume = { workspace = true }
+glam = { workspace = true }
 
 [lints]
 workspace = true
