@@ -185,6 +185,7 @@ fn render(
                 size: [SIDE, SIDE],
                 volume_region,
                 section_region,
+                time: 0,
                 camera: &camera,
                 section: &section,
                 params: &params,
@@ -201,7 +202,7 @@ fn render(
         assert!(round < 63, "the stream never settled");
         for request in volume_requests.iter().chain(section_requests.iter()) {
             let brick = volume.brick(&grid, request.coord);
-            assert!(renderer.upload(device, queue, request.level, request.coord, &brick));
+            assert!(renderer.upload(device, queue, *request, &brick));
         }
     }
     let mut encoder = device.create_command_encoder(&Default::default());
@@ -214,6 +215,7 @@ fn render(
             size: [SIDE, SIDE],
             volume_region,
             section_region,
+            time: 0,
             camera: &camera,
             section: &section,
             params: &params,

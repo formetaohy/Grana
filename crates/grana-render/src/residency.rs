@@ -3,7 +3,6 @@ use grana_volume::{Axis, BRICK_SIDE, BrickCoord, BrickGrid, Pyramid};
 
 use crate::BrickRequest;
 use crate::atlas::Atlas;
-use crate::level::LevelCache;
 
 const SUPERCELL: u32 = 4;
 
@@ -75,10 +74,10 @@ fn section_spacing(pyramid: &Pyramid, level: usize, axis: Axis) -> f32 {
 
 pub(crate) struct Residency<'a> {
     pub pyramid: &'a Pyramid,
-    pub levels: &'a mut [Option<LevelCache>],
     pub atlas: &'a mut Atlas,
     pub capacity: usize,
-    pub frame: u64,
+    pub tick: u64,
+    pub time: u32,
 }
 
 impl Residency<'_> {
@@ -113,7 +112,13 @@ impl Residency<'_> {
                 Some(list) => {
                     let fits = list.len() + target_visible.len() <= self.capacity;
                     let ready = !target_visible.is_empty()
-                        && count_missing(self.levels, target_level, &target_visible) == 0;
+                        && count_missing(
+                            self.atlas,
+                            self.pyramid,
+                            target_level,
+                            self.time,
+                            &target_visible,
+                        ) == 0;
                     if !fits || ready {
                         switch = true;
                     } else {
@@ -127,29 +132,32 @@ impl Residency<'_> {
             *active = Some(target_level);
             render_level = target_level;
             let (visible, resident) = collect(
-                self.levels,
                 self.atlas,
+                self.pyramid,
                 render_level,
+                self.time,
                 &target_visible,
-                self.frame,
+                self.tick,
                 requests,
             );
             (render_level, visible, resident)
         } else {
             collect(
-                self.levels,
                 self.atlas,
+                self.pyramid,
                 target_level,
+                self.time,
                 &target_visible,
-                self.frame,
+                self.tick,
                 requests,
             );
             let (visible, resident) = collect(
-                self.levels,
                 self.atlas,
+                self.pyramid,
                 render_level,
+                self.time,
                 &active_visible,
-                self.frame,
+                self.tick,
                 requests,
             );
             (render_level, visible, resident)
@@ -158,42 +166,43 @@ impl Residency<'_> {
 }
 
 fn collect(
-    levels: &mut [Option<LevelCache>],
     atlas: &mut Atlas,
+    pyramid: &Pyramid,
     level: usize,
+    time: u32,
     visible: &[(BrickCoord, f32)],
-    frame: u64,
+    tick: u64,
     requests: &mut Vec<BrickRequest>,
 ) -> (usize, usize) {
+    let grid = BrickGrid::new(pyramid.level(level).extent());
     let mut resident = 0;
     for (coord, _) in visible {
-        let slot = levels[level]
-            .as_ref()
-            .map_or(0, |cache| cache.slot(cache.grid.index(*coord)));
-        if slot == 0 {
-            requests.push(BrickRequest {
+        match atlas.slot(time, level, grid.index(*coord)) {
+            Some(slot) => {
+                resident += 1;
+                atlas.mark(slot, tick);
+            }
+            None => requests.push(BrickRequest {
+                time,
                 level,
                 coord: *coord,
-            });
-        } else {
-            resident += 1;
-            atlas.mark(slot - 1, frame);
+            }),
         }
     }
     (visible.len(), resident)
 }
 
 fn count_missing(
-    levels: &[Option<LevelCache>],
+    atlas: &Atlas,
+    pyramid: &Pyramid,
     level: usize,
+    time: u32,
     visible: &[(BrickCoord, f32)],
 ) -> usize {
-    let Some(cache) = &levels[level] else {
-        return visible.len();
-    };
+    let grid = BrickGrid::new(pyramid.level(level).extent());
     visible
         .iter()
-        .filter(|(coord, _)| cache.slot(cache.grid.index(*coord)) == 0)
+        .filter(|(coord, _)| atlas.slot(time, level, grid.index(*coord)).is_none())
         .count()
 }
 

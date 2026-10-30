@@ -1,16 +1,36 @@
 use grana_analysis::{SpotParams, SurfaceParams};
-use grana_volume::{Channel, Extent, Spacing, Volume, VoxelData};
+use grana_volume::{Channel, Extent, Movie, Spacing, Volume, VoxelData};
 
 use crate::scene::Scene;
 
-const CELL_COUNT: usize = 30;
-const PUNCTUM_COUNT: usize = 34;
-const MARGIN: f32 = 42.0;
+const FRAMES: u32 = 6;
+const FRAME_INTERVAL: f32 = 1.0;
+const EXTENT: Extent = Extent::new(256, 256, 48);
+const CELL_COUNT: usize = 12;
+const PUNCTUM_COUNT: usize = 26;
+const MARGIN: f32 = 36.0;
 const NUCLEUS_THRESHOLD: f32 = 0.25;
 const MEMBRANE_OPACITY: f32 = 0.35;
+const MEMBRANE_RADIAL: f32 = 1.24;
+const MEMBRANE_AXIAL: f32 = 1.35;
 const SURFACE_VOLUME: f32 = 2.0;
 
 pub const SURFACE_CHANNEL: usize = 0;
+
+struct Cell {
+    centre: [f32; 3],
+    drift: [f32; 3],
+    radii: [f32; 3],
+    brightness: f32,
+    membrane: f32,
+    phase: f32,
+}
+
+struct Punctum {
+    centre: [f32; 3],
+    drift: [f32; 3],
+    radius: f32,
+}
 
 pub fn stage(scene: &mut Scene) {
     scene.channels[1].opacity = MEMBRANE_OPACITY;
@@ -25,89 +45,122 @@ pub fn stage(scene: &mut Scene) {
     );
 }
 
-pub fn volume() -> Volume {
-    let extent = Extent::new(512, 512, 64);
-    let spacing = Spacing::new(0.1, 0.1, 0.35);
-    let count = extent.voxel_count() as usize;
-    let mut nuclei = background(extent);
-    let mut membrane = vec![0u16; count];
-    let mut puncta = vec![0u16; count];
-
+pub fn movie() -> Movie {
+    let spacing = spacing();
     let mut random = Random::new(0x9E37_79B9_7F4A_7C15);
-    for _ in 0..CELL_COUNT {
-        let centre = [
-            MARGIN + random.unit() * (extent.x() as f32 - 2.0 * MARGIN),
-            MARGIN + random.unit() * (extent.y() as f32 - 2.0 * MARGIN),
-            MARGIN * 0.2 + random.unit() * (extent.z() as f32 - 2.0 * MARGIN * 0.2),
-        ];
-        let radius_x = 14.0 + random.unit() * 16.0;
-        let radius_y = radius_x * (0.8 + random.unit() * 0.4);
-        let radius_z = (radius_x * 0.32).max(3.0);
-        let brightness = 26000.0 + random.unit() * 36000.0;
-        let phase = random.unit() * std::f32::consts::TAU;
-        paint_nucleus(
-            &mut nuclei,
-            extent,
-            centre,
-            [radius_x, radius_y, radius_z],
-            brightness,
-            phase,
-        );
-        paint_membrane(
-            &mut membrane,
-            extent,
-            centre,
-            [radius_x * 1.24, radius_y * 1.24, radius_z * 1.35],
-            15000.0 + random.unit() * 12000.0,
-        );
-    }
+    let cells = (0..CELL_COUNT)
+        .map(|_| {
+            let radius_x = 10.0 + random.unit() * 11.0;
+            let radius_y = radius_x * (0.8 + random.unit() * 0.4);
+            Cell {
+                centre: [
+                    MARGIN + random.unit() * (EXTENT.x() as f32 - 2.0 * MARGIN),
+                    MARGIN + random.unit() * (EXTENT.y() as f32 - 2.0 * MARGIN),
+                    8.0 + random.unit() * (EXTENT.z() as f32 - 16.0),
+                ],
+                drift: [
+                    (random.unit() - 0.5) * 2.0,
+                    (random.unit() - 0.5) * 2.0,
+                    (random.unit() - 0.5) * 0.6,
+                ],
+                radii: [radius_x, radius_y, (radius_x * 0.32).max(3.0)],
+                brightness: 26000.0 + random.unit() * 36000.0,
+                membrane: 15000.0 + random.unit() * 12000.0,
+                phase: random.unit() * std::f32::consts::TAU,
+            }
+        })
+        .collect::<Vec<_>>();
+    let puncta = (0..PUNCTUM_COUNT)
+        .map(|_| Punctum {
+            centre: [
+                18.0 + random.unit() * (EXTENT.x() as f32 - 36.0),
+                18.0 + random.unit() * (EXTENT.y() as f32 - 36.0),
+                2.0 + random.unit() * (EXTENT.z() as f32 - 4.0),
+            ],
+            drift: [
+                (random.unit() - 0.5) * 4.0,
+                (random.unit() - 0.5) * 4.0,
+                (random.unit() - 0.5) * 1.2,
+            ],
+            radius: 1.2 + random.unit() * 1.4,
+        })
+        .collect::<Vec<_>>();
 
-    for _ in 0..PUNCTUM_COUNT {
-        let centre = [
-            MARGIN * 0.5 + random.unit() * (extent.x() as f32 - MARGIN),
-            MARGIN * 0.5 + random.unit() * (extent.y() as f32 - MARGIN),
-            2.0 + random.unit() * (extent.z() as f32 - 4.0),
-        ];
-        let radius = 1.6 + random.unit() * 2.6;
-        paint_nucleus(
-            &mut puncta,
-            extent,
-            centre,
-            [radius, radius, radius * 0.7],
-            58000.0,
-            random.unit() * std::f32::consts::TAU,
-        );
+    let count = EXTENT.voxel_count() as usize;
+    let mut frames = Vec::with_capacity(FRAMES as usize);
+    for frame in 0..FRAMES {
+        let time = frame as f32;
+        let mut nuclei = background(frame);
+        let mut membrane = vec![0u16; count];
+        let mut puncta_data = vec![0u16; count];
+        for cell in &cells {
+            let centre = moved(cell.centre, cell.drift, time);
+            paint_nucleus(
+                &mut nuclei,
+                centre,
+                cell.radii,
+                cell.brightness,
+                cell.phase + 0.3 * time,
+            );
+            paint_membrane(
+                &mut membrane,
+                centre,
+                [
+                    cell.radii[0] * MEMBRANE_RADIAL,
+                    cell.radii[1] * MEMBRANE_RADIAL,
+                    cell.radii[2] * MEMBRANE_AXIAL,
+                ],
+                cell.membrane,
+            );
+        }
+        for punctum in &puncta {
+            let centre = moved(punctum.centre, punctum.drift, time);
+            paint_nucleus(
+                &mut puncta_data,
+                centre,
+                [punctum.radius, punctum.radius, punctum.radius * 0.7],
+                58000.0,
+                0.7 * time + punctum.radius,
+            );
+        }
+        frames.push(Volume::new(
+            EXTENT,
+            spacing,
+            vec![
+                Channel::new("Nuclei", [0.28, 0.45, 1.00], VoxelData::U16(nuclei)),
+                Channel::new("Membrane", [0.25, 1.00, 0.40], VoxelData::U16(membrane)),
+                Channel::new("Puncta", [1.00, 0.30, 0.65], VoxelData::U16(puncta_data)),
+            ],
+        ));
     }
-
-    Volume::new(
-        extent,
-        spacing,
-        vec![
-            Channel::new("Nuclei", [0.28, 0.45, 1.00], VoxelData::U16(nuclei)),
-            Channel::new("Membrane", [0.25, 1.00, 0.40], VoxelData::U16(membrane)),
-            Channel::new("Puncta", [1.00, 0.30, 0.65], VoxelData::U16(puncta)),
-        ],
-    )
+    Movie::new(frames, FRAME_INTERVAL)
 }
 
-fn background(extent: Extent) -> Vec<u16> {
-    let mut random = Random::new(0x2545_F491_4F6C_DD1D);
-    let mut voxels = vec![0u16; extent.voxel_count() as usize];
+fn spacing() -> Spacing {
+    Spacing::new(0.1, 0.1, 0.35)
+}
+
+fn background(frame: u32) -> Vec<u16> {
+    let mut random = Random::new(0x2545_F491_4F6C_DD1D ^ u64::from(frame));
+    let mut voxels = vec![0u16; EXTENT.voxel_count() as usize];
     for voxel in &mut voxels {
         *voxel = (random.unit() * 70.0) as u16;
     }
     voxels
 }
 
+fn moved(centre: [f32; 3], drift: [f32; 3], time: f32) -> [f32; 3] {
+    [0, 1, 2].map(|axis| centre[axis] + drift[axis] * time)
+}
+
 fn paint_nucleus(
     voxels: &mut [u16],
-    extent: Extent,
     centre: [f32; 3],
     radii: [f32; 3],
     brightness: f32,
     phase: f32,
 ) {
-    for_each_voxel(extent, centre, radii, 2.4, |index, squared| {
+    for_each_voxel(centre, radii, 2.4, |index, squared| {
         let profile = (-squared * 1.7).exp();
         let texture = 0.84 + 0.16 * (squared * 9.0 + phase).sin();
         let value = brightness * profile * texture;
@@ -116,14 +169,8 @@ fn paint_nucleus(
     });
 }
 
-fn paint_membrane(
-    voxels: &mut [u16],
-    extent: Extent,
-    centre: [f32; 3],
-    radii: [f32; 3],
-    brightness: f32,
-) {
-    for_each_voxel(extent, centre, radii, 2.0, |index, squared| {
+fn paint_membrane(voxels: &mut [u16], centre: [f32; 3], radii: [f32; 3], brightness: f32) {
+    for_each_voxel(centre, radii, 2.0, |index, squared| {
         let distance = squared.sqrt();
         let shell = (-((distance - 1.0) / 0.16).powi(2)).exp();
         if shell < 0.02 {
@@ -135,7 +182,6 @@ fn paint_membrane(
 }
 
 fn for_each_voxel(
-    extent: Extent,
     centre: [f32; 3],
     radii: [f32; 3],
     reach: f32,
@@ -147,9 +193,9 @@ fn for_each_voxel(
         let high = (((centre[axis] + extent).ceil()) as u32).min(size - 1);
         (low, high)
     };
-    let (low_x, high_x) = bounds(0, extent.x());
-    let (low_y, high_y) = bounds(1, extent.y());
-    let (low_z, high_z) = bounds(2, extent.z());
+    let (low_x, high_x) = bounds(0, EXTENT.x());
+    let (low_y, high_y) = bounds(1, EXTENT.y());
+    let (low_z, high_z) = bounds(2, EXTENT.z());
     for z in low_z..=high_z {
         let nz = (z as f32 - centre[2]) / radii[2];
         for y in low_y..=high_y {
@@ -160,7 +206,7 @@ fn for_each_voxel(
                 if squared > reach * reach {
                     continue;
                 }
-                visit(extent.index(x, y, z) as usize, squared);
+                visit(EXTENT.index(x, y, z) as usize, squared);
             }
         }
     }

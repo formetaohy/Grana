@@ -2,7 +2,7 @@ use grana_volume::{BRICK_SIDE, BrickData, BrickGrid, PADDED_SIDE, Pyramid};
 use wgpu::{BindGroupLayout, Device, Queue, Sampler, TextureView};
 
 use crate::MAX_CHANNEL;
-use crate::atlas::Atlas;
+use crate::atlas::{Atlas, ResidentBrick};
 use crate::level::{BrickRecord, LevelCache, Resources};
 use crate::renderer::BrickRequest;
 
@@ -60,12 +60,15 @@ impl Cache {
         device: &Device,
         queue: &Queue,
         resources: &Resources<'_>,
-        frame: u64,
+        tick: u64,
         request: BrickRequest,
         data: &BrickData,
     ) -> bool {
-        let BrickRequest { level, coord } = request;
-        if level >= self.pyramid.level_count() || data.channels().len() != self.channels {
+        let BrickRequest { time, level, coord } = request;
+        if level >= self.pyramid.level_count()
+            || time >= self.pyramid.frame_count()
+            || data.channels().len() != self.channels
+        {
             return false;
         }
         let extent = self.pyramid.level(level).extent();
@@ -75,33 +78,26 @@ impl Cache {
         {
             return false;
         }
+        let grid = BrickGrid::new(extent);
+        let index = grid.index(coord);
+        if self.atlas.slot(time, level, index).is_some() {
+            return true;
+        }
         if self.levels[level].is_none() {
             self.levels[level] = Some(LevelCache::new(
                 device,
                 resources,
+                level,
                 self.pyramid.level(level),
             ));
         }
-        let index = self.levels[level]
-            .as_ref()
-            .expect("the level cache has just been created")
-            .grid
-            .index(coord);
-        if self.levels[level]
-            .as_ref()
-            .expect("the level cache exists")
-            .slot(index)
-            != 0
-        {
-            return true;
-        }
-        let Some((slot, evicted)) = self.atlas.allocate(frame) else {
+        let Some((slot, evicted)) = self.atlas.allocate(tick) else {
             return false;
         };
-        if let Some((old_level, old_index)) = evicted
-            && let Some(old_cache) = self.levels[old_level].as_mut()
+        if let Some(brick) = evicted
+            && let Some(cache) = self.levels[brick.level].as_mut()
         {
-            old_cache.set_record(queue, old_index, BrickRecord::new(0, [[0.0; 4]; 2]));
+            cache.clear_record(queue, brick.time, brick.index);
         }
         let mut maxima = [[0.0f32; 4]; 2];
         for channel in 0..self.channels {
@@ -112,11 +108,17 @@ impl Cache {
             self.atlas.write(queue, channel, slot, &units);
             maxima[channel / 4][channel % 4] = source.unit_max(intensity);
         }
+        let brick = ResidentBrick {
+            time,
+            level,
+            index,
+            maxima,
+        };
+        self.atlas.assign(slot, brick, tick);
         self.levels[level]
             .as_mut()
             .expect("the level cache exists")
-            .set_record(queue, index, BrickRecord::new(slot + 1, maxima));
-        self.atlas.assign(slot, level, index, frame);
+            .set_record(queue, time, index, BrickRecord::new(slot + 1, maxima));
         true
     }
 }

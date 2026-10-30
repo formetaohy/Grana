@@ -6,6 +6,8 @@ use wgpu::{
     BufferUsages, Device, Sampler, TextureView, util::DeviceExt,
 };
 
+use crate::atlas::Atlas;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct BrickRecord {
@@ -20,7 +22,7 @@ const _: () = {
 };
 
 impl BrickRecord {
-    const EMPTY: Self = Self {
+    pub(crate) const EMPTY: Self = Self {
         slot: 0,
         reserved: [0; 3],
         maxima: [[0.0; 4]; 2],
@@ -48,6 +50,8 @@ pub struct LevelCache {
     pub world: Vec3,
     pub voxel: Vec3,
     pub dims: Vec3,
+    level: usize,
+    time: Option<u32>,
     records: Vec<BrickRecord>,
     buffer: Buffer,
     group: BindGroup,
@@ -55,7 +59,12 @@ pub struct LevelCache {
 }
 
 impl LevelCache {
-    pub fn new(device: &Device, resources: &Resources<'_>, level: Level) -> Self {
+    pub fn new(
+        device: &Device,
+        resources: &Resources<'_>,
+        level_index: usize,
+        level: Level,
+    ) -> Self {
         let grid = BrickGrid::new(level.extent());
         let records = vec![BrickRecord::EMPTY; grid.count()];
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -88,6 +97,8 @@ impl LevelCache {
             world,
             voxel,
             dims,
+            level: level_index,
+            time: None,
             records,
             buffer,
             group,
@@ -103,18 +114,39 @@ impl LevelCache {
         &self.section_group
     }
 
-    pub fn slot(&self, index: usize) -> u32 {
-        self.records[index].slot
+    pub fn sync(&mut self, queue: &wgpu::Queue, time: u32, atlas: &Atlas) {
+        if self.time == Some(time) {
+            return;
+        }
+        self.records.fill(BrickRecord::EMPTY);
+        for (slot, index, maxima) in atlas.bricks(time, self.level) {
+            self.records[index] = BrickRecord::new(slot + 1, maxima);
+        }
+        queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&self.records));
+        self.time = Some(time);
     }
 
-    pub fn set_record(&mut self, queue: &wgpu::Queue, index: usize, record: BrickRecord) {
+    pub fn set_record(
+        &mut self,
+        queue: &wgpu::Queue,
+        time: u32,
+        index: usize,
+        record: BrickRecord,
+    ) {
+        if self.time != Some(time) {
+            return;
+        }
         self.records[index] = record;
-        queue.write_buffer(
-            &self.buffer,
-            (index * size_of::<BrickRecord>()) as u64,
-            bytemuck::bytes_of(&record),
-        );
+        queue.write_buffer(&self.buffer, offset(index), bytemuck::bytes_of(&record));
     }
+
+    pub fn clear_record(&mut self, queue: &wgpu::Queue, time: u32, index: usize) {
+        self.set_record(queue, time, index, BrickRecord::EMPTY);
+    }
+}
+
+fn offset(index: usize) -> u64 {
+    (index * size_of::<BrickRecord>()) as u64
 }
 
 fn bind_group(

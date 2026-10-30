@@ -29,6 +29,7 @@ const PALETTE: [[f32; 3]; 8] = [
 
 const RANGE_SAMPLE_VOXELS: u64 = 4 << 20;
 const RANGE_PROBE_SIDE: u32 = 32;
+const RANGE_SAMPLE_FRAMES: u32 = 4;
 
 struct LevelArray {
     path: String,
@@ -57,6 +58,8 @@ impl Image {
         let metadata = metadata::parse(path, group.attributes())?;
         let mut levels = Vec::with_capacity(metadata.datasets.len());
         let mut channel_count = None;
+        let mut frames = None;
+        let mut interval = None;
         let mut format = None;
         for dataset in &metadata.datasets {
             let array_path = array_path(&dataset.path);
@@ -93,6 +96,26 @@ impl Image {
                 }
                 Some(_) => {}
             }
+            match frames {
+                None => frames = Some(layout.frame_count()),
+                Some(known) if known != layout.frame_count() => {
+                    return Err(Error::Unsupported {
+                        path: path.to_path_buf(),
+                        detail: "the resolution levels disagree on the frame count".to_string(),
+                    });
+                }
+                Some(_) => {}
+            }
+            match interval {
+                None => interval = Some(layout.frame_interval()),
+                Some(known) if known != layout.frame_interval() => {
+                    return Err(Error::Unsupported {
+                        path: path.to_path_buf(),
+                        detail: "the resolution levels disagree on the frame interval".to_string(),
+                    });
+                }
+                Some(_) => {}
+            }
             levels.push(LevelArray {
                 path: array_path,
                 array,
@@ -100,6 +123,8 @@ impl Image {
             });
         }
         let channel_count = channel_count.expect("a multiscale image has at least one dataset");
+        let frames = frames.expect("a multiscale image has at least one dataset");
+        let interval = interval.expect("a multiscale image has at least one dataset");
         if !levels_ordered(&levels) {
             return Err(Error::Unsupported {
                 path: path.to_path_buf(),
@@ -107,7 +132,14 @@ impl Image {
             });
         }
         let format = format.expect("a multiscale image has at least one dataset");
-        let channels = channels(path, &metadata.channels, channel_count, format, &levels)?;
+        let channels = channels(
+            path,
+            &metadata.channels,
+            channel_count,
+            format,
+            &levels,
+            frames,
+        )?;
         let name = metadata
             .name
             .filter(|name| !name.is_empty())
@@ -120,7 +152,7 @@ impl Image {
             path: path.to_path_buf(),
             name,
             levels,
-            pyramid: Pyramid::new(level_metadata, channels),
+            pyramid: Pyramid::new(level_metadata, channels, frames, interval),
         })
     }
 
@@ -132,15 +164,21 @@ impl Image {
         &self.pyramid
     }
 
-    pub fn read_brick(&self, level: usize, coord: BrickCoord) -> Result<BrickData, Error> {
+    pub fn read_brick(
+        &self,
+        time: u32,
+        level: usize,
+        coord: BrickCoord,
+    ) -> Result<BrickData, Error> {
         let channels = (0..self.pyramid.channel_count())
-            .map(|channel| self.read_channel_brick(level, channel, coord))
+            .map(|channel| self.read_channel_brick(time, level, channel, coord))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(BrickData::new(channels))
     }
 
     pub fn read_channel_brick(
         &self,
+        time: u32,
         level: usize,
         channel: usize,
         coord: BrickCoord,
@@ -157,6 +195,12 @@ impl Image {
                 detail: "the requested channel does not exist".to_string(),
             });
         }
+        if time >= self.pyramid.frame_count() {
+            return Err(Error::Unsupported {
+                path: self.path.clone(),
+                detail: "the requested frame does not exist".to_string(),
+            });
+        }
         let grid = BrickGrid::new(level_array.layout.extent);
         let spatial = grid.padded_range(coord);
         let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
@@ -166,6 +210,7 @@ impl Image {
             spatial[2].end - spatial[2].start,
         );
         let data = self.read_region(
+            time,
             level,
             channel,
             spatial[0].clone(),
@@ -183,6 +228,7 @@ impl Image {
 
     pub fn read_region(
         &self,
+        time: u32,
         level: usize,
         channel: usize,
         x: Range<u32>,
@@ -195,6 +241,12 @@ impl Image {
                 detail: "the requested resolution level does not exist".to_string(),
             });
         };
+        if time >= self.pyramid.frame_count() {
+            return Err(Error::Region {
+                array: level.path.clone(),
+                detail: "the requested frame does not exist".to_string(),
+            });
+        }
         if channel >= self.pyramid.channel_count() {
             return Err(Error::Region {
                 array: level.path.clone(),
@@ -217,9 +269,13 @@ impl Image {
                 detail: "the region lies outside the array extent".to_string(),
             });
         }
-        let ranges = level
-            .layout
-            .ranges(channel as u64, x.clone(), y.clone(), z.clone());
+        let ranges = level.layout.ranges(
+            u64::from(time),
+            channel as u64,
+            x.clone(),
+            y.clone(),
+            z.clone(),
+        );
         let subset = ArraySubset::new_with_ranges(&ranges);
         let data = retrieve(&level.array, &subset, &level.path)?;
         let expected =
@@ -323,6 +379,7 @@ fn channels(
     count: u32,
     format: VoxelFormat,
     levels: &[LevelArray],
+    frames: u32,
 ) -> Result<Vec<ChannelInfo>, Error> {
     if !metadata.is_empty() && metadata.len() != count as usize {
         return Err(Error::Metadata {
@@ -348,7 +405,7 @@ fn channels(
                 .and_then(|metadata| metadata.window)
                 .and_then(valid);
             let sampled = if data_range.is_none() && omero_window.is_none() {
-                sample_range(levels, index as usize)?
+                sample_range(levels, index as usize, frames)?
             } else {
                 None
             };
@@ -370,27 +427,44 @@ fn channels(
         .collect()
 }
 
-fn sample_range(levels: &[LevelArray], channel: usize) -> Result<Option<Intensity>, Error> {
+fn sample_range(
+    levels: &[LevelArray],
+    channel: usize,
+    frames: u32,
+) -> Result<Option<Intensity>, Error> {
     let level = levels.last().expect("a multiscale image has a level");
     let extent = level.layout.extent;
+    let samples = frames.clamp(1, RANGE_SAMPLE_FRAMES);
+    let budget = (RANGE_SAMPLE_VOXELS / u64::from(samples)).max(1);
     let probe = |limit: u32| {
         let side = limit.min(RANGE_PROBE_SIDE);
         let start = (limit - side) / 2;
         start..start + side
     };
-    let spatial = if extent.voxel_count() <= RANGE_SAMPLE_VOXELS {
+    let spatial = if extent.voxel_count() <= budget {
         (0..extent.x(), 0..extent.y(), 0..extent.z())
     } else {
         (probe(extent.x()), probe(extent.y()), probe(extent.z()))
     };
-    let ranges = level
-        .layout
-        .ranges(channel as u64, spatial.0, spatial.1, spatial.2);
-    let subset = ArraySubset::new_with_ranges(&ranges);
-    let data = retrieve(&level.array, &subset, &level.path)?;
-    let range = data.range();
-    if range.span() > 0.0 {
-        Ok(Some(range))
+    let mut low = f32::INFINITY;
+    let mut high = f32::NEG_INFINITY;
+    for sample in 0..samples {
+        let time = u64::from(sample) * u64::from(frames) / u64::from(samples);
+        let ranges = level.layout.ranges(
+            time,
+            channel as u64,
+            spatial.0.clone(),
+            spatial.1.clone(),
+            spatial.2.clone(),
+        );
+        let subset = ArraySubset::new_with_ranges(&ranges);
+        let data = retrieve(&level.array, &subset, &level.path)?;
+        let range = data.range();
+        low = low.min(range.min());
+        high = high.max(range.max());
+    }
+    if high > low {
+        Ok(Some(Intensity::new(low, high)))
     } else {
         Ok(None)
     }

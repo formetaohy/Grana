@@ -4,12 +4,24 @@ use crate::{ChannelInfo, Level};
 pub struct Pyramid {
     levels: Vec<Level>,
     channels: Vec<ChannelInfo>,
+    frames: u32,
+    frame_interval: f32,
 }
 
 impl Pyramid {
-    pub fn new(levels: Vec<Level>, channels: Vec<ChannelInfo>) -> Self {
+    pub fn new(
+        levels: Vec<Level>,
+        channels: Vec<ChannelInfo>,
+        frames: u32,
+        frame_interval: f32,
+    ) -> Self {
         assert!(!levels.is_empty(), "a pyramid needs at least one level");
         assert!(!channels.is_empty(), "a pyramid needs at least one channel");
+        assert!(frames > 0, "a pyramid holds at least one frame");
+        assert!(
+            frame_interval.is_finite() && frame_interval > 0.0,
+            "the frame interval is a positive duration"
+        );
         for pair in levels.windows(2) {
             let (fine, coarse) = (pair[0], pair[1]);
             let fine_extent = fine.extent();
@@ -29,7 +41,12 @@ impl Pyramid {
                 "pyramid voxels must grow with every step"
             );
         }
-        Self { levels, channels }
+        Self {
+            levels,
+            channels,
+            frames,
+            frame_interval,
+        }
     }
 
     pub fn levels(&self) -> &[Level] {
@@ -50,5 +67,13 @@ impl Pyramid {
 
     pub fn channel_count(&self) -> usize {
         self.channels.len()
+    }
+
+    pub fn frame_count(&self) -> u32 {
+        self.frames
+    }
+
+    pub fn frame_interval(&self) -> f32 {
+        self.frame_interval
     }
 }

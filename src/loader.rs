@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use grana_render::BrickRequest;
-use grana_volume::{BrickData, BrickGrid, Pyramid, Volume};
+use grana_volume::{BrickData, BrickGrid, Movie, Pyramid};
 use grana_zarr::Image;
 
 use crate::source::Source;
@@ -27,20 +28,27 @@ pub enum Event {
 pub struct Loader {
     events: Receiver<Event>,
     requests: Sender<BrickRequest>,
+    time: Arc<AtomicU32>,
     source: Source,
 }
 
 impl Loader {
-    pub fn memory(volume: Volume) -> (Self, Pyramid) {
-        let pyramid = volume.pyramid();
-        let volume = Arc::new(volume);
-        let worker = Arc::clone(&volume);
+    pub fn memory(movie: Movie) -> (Self, Pyramid) {
+        let pyramid = movie.pyramid().clone();
+        let movie = Arc::new(movie);
+        let worker = Arc::clone(&movie);
+        let time = Arc::new(AtomicU32::new(0));
+        let worker_time = Arc::clone(&time);
         let (requests, request_queue) = mpsc::channel::<BrickRequest>();
         let (event_sender, events) = mpsc::channel();
         std::thread::spawn(move || {
-            let grid = BrickGrid::new(worker.extent());
+            let pyramid = worker.pyramid();
+            let grid = BrickGrid::new(pyramid.level(0).extent());
             while let Ok(request) = request_queue.recv() {
-                let data = worker.brick(&grid, request.coord);
+                if request.time != worker_time.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let data = worker.brick(request.time, &grid, request.coord);
                 if event_sender.send(Event::Brick { request, data }).is_err() {
                     break;
                 }
@@ -50,7 +58,8 @@ impl Loader {
             Self {
                 events,
                 requests,
-                source: Source::Memory(volume),
+                time,
+                source: Source::Memory(movie),
             },
             pyramid,
         )
@@ -58,6 +67,8 @@ impl Loader {
 
     pub fn file(path: PathBuf) -> Self {
         let source = Source::File(path.clone());
+        let time = Arc::new(AtomicU32::new(0));
+        let worker_time = Arc::clone(&time);
         let (requests, request_queue) = mpsc::channel::<BrickRequest>();
         let (event_sender, events) = mpsc::channel();
         std::thread::spawn(move || {
@@ -84,7 +95,10 @@ impl Loader {
                 return;
             }
             while let Ok(request) = request_queue.recv() {
-                match image.read_brick(request.level, request.coord) {
+                if request.time != worker_time.load(Ordering::Relaxed) {
+                    continue;
+                }
+                match image.read_brick(request.time, request.level, request.coord) {
                     Ok(data) => {
                         if event_sender.send(Event::Brick { request, data }).is_err() {
                             return;
@@ -107,6 +121,7 @@ impl Loader {
         Self {
             events,
             requests,
+            time,
             source,
         }
     }
@@ -117,6 +132,10 @@ impl Loader {
 
     pub fn request(&self, request: BrickRequest) -> bool {
         self.requests.send(request).is_ok()
+    }
+
+    pub fn set_time(&self, time: u32) {
+        self.time.store(time, Ordering::Relaxed);
     }
 
     pub fn source(&self) -> Source {

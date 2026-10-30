@@ -18,6 +18,7 @@ use crate::{Camera, Marker, RenderParams, SectionCamera};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BrickRequest {
+    pub time: u32,
     pub level: usize,
     pub coord: BrickCoord,
 }
@@ -42,6 +43,7 @@ pub struct Frame<'a> {
     pub size: [u32; 2],
     pub volume_region: [u32; 4],
     pub section_region: [u32; 4],
+    pub time: u32,
     pub camera: &'a Camera,
     pub section: &'a SectionCamera,
     pub params: &'a RenderParams,
@@ -56,7 +58,7 @@ pub struct Renderer {
     cache: Option<Cache>,
     transfers: Vec<Option<TransferFunction>>,
     budget: u64,
-    frame: u64,
+    tick: u64,
 }
 
 impl Renderer {
@@ -66,7 +68,7 @@ impl Renderer {
             cache: None,
             transfers: vec![None; crate::MAX_CHANNEL],
             budget,
-            frame: 0,
+            tick: 0,
         }
     }
 
@@ -83,23 +85,15 @@ impl Renderer {
         &mut self,
         device: &Device,
         queue: &Queue,
-        level: usize,
-        coord: BrickCoord,
+        request: BrickRequest,
         data: &BrickData,
     ) -> bool {
-        let frame = self.frame;
+        let tick = self.tick;
         let resources = self.backend.resources();
         let Some(cache) = self.cache.as_mut() else {
             return false;
         };
-        cache.upload(
-            device,
-            queue,
-            &resources,
-            frame,
-            BrickRequest { level, coord },
-            data,
-        )
+        cache.upload(device, queue, &resources, tick, request, data)
     }
 
     pub fn draw(&mut self, device: &Device, queue: &Queue, frame: Frame<'_>) -> FrameInfo {
@@ -109,6 +103,7 @@ impl Renderer {
             size,
             volume_region,
             section_region,
+            time,
             camera,
             section,
             params,
@@ -117,8 +112,8 @@ impl Renderer {
             volume_requests,
             section_requests,
         } = frame;
-        self.frame += 1;
-        let frame_index = self.frame;
+        self.tick += 1;
+        let tick = self.tick;
         let Renderer {
             backend,
             cache: cache_slot,
@@ -133,6 +128,10 @@ impl Renderer {
             params.channels.len(),
             cache.channels,
             "every rendered channel needs parameters"
+        );
+        assert!(
+            time < cache.pyramid.frame_count(),
+            "the requested frame lies inside the time series"
         );
         assert!(size[0] > 0 && size[1] > 0, "the surface is not empty");
         assert!(
@@ -162,10 +161,10 @@ impl Renderer {
         );
         let (section_render, section_visible, section_resident) = Residency {
             pyramid: &cache.pyramid,
-            levels: &mut cache.levels,
             atlas: &mut cache.atlas,
             capacity: slots,
-            frame: frame_index,
+            tick,
+            time,
         }
         .stabilize(
             &mut cache.section_level,
@@ -199,10 +198,10 @@ impl Renderer {
         };
         let (volume_render, volume_visible, volume_resident) = Residency {
             pyramid: &cache.pyramid,
-            levels: &mut cache.levels,
             atlas: &mut cache.atlas,
             capacity: volume_capacity,
-            frame: frame_index,
+            tick,
+            time,
         }
         .stabilize(
             &mut cache.volume_level,
@@ -251,6 +250,7 @@ impl Renderer {
             &cache.pyramid,
             volume_render,
         );
+        volume_cache.sync(queue, time, &cache.atlas);
         let uniforms = uniforms::volume_uniforms(
             &cache.pyramid,
             volume_cache,
@@ -303,6 +303,7 @@ impl Renderer {
             &cache.pyramid,
             section_render,
         );
+        section_cache.sync(queue, time, &cache.atlas);
         let uniforms = uniforms::section_uniforms(
             &cache.pyramid,
             section_cache,
@@ -413,9 +414,14 @@ fn ensure_level<'a>(
     levels: &'a mut [Option<LevelCache>],
     pyramid: &Pyramid,
     level: usize,
-) -> &'a LevelCache {
+) -> &'a mut LevelCache {
     if levels[level].is_none() {
-        levels[level] = Some(LevelCache::new(device, resources, pyramid.level(level)));
+        levels[level] = Some(LevelCache::new(
+            device,
+            resources,
+            level,
+            pyramid.level(level),
+        ));
     }
-    levels[level].as_ref().expect("the level cache exists")
+    levels[level].as_mut().expect("the level cache exists")
 }

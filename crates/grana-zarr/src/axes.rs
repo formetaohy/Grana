@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use grana_volume::{Extent, Spacing};
-use ome_zarr_metadata::v0_4::{Axis, AxisType, AxisUnit, AxisUnitSpace};
+use ome_zarr_metadata::v0_4::{Axis, AxisType, AxisUnit, AxisUnitSpace, AxisUnitTime};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -18,6 +18,8 @@ pub struct Layout {
     space_count: usize,
     pub extent: Extent,
     pub spacing: Spacing,
+    frames: u32,
+    frame_interval: f32,
 }
 
 impl Layout {
@@ -25,13 +27,26 @@ impl Layout {
         self.channel.map_or(1, |axis| self.shape[axis])
     }
 
+    pub fn frame_count(&self) -> u32 {
+        self.frames
+    }
+
+    pub fn frame_interval(&self) -> f32 {
+        self.frame_interval
+    }
+
     pub fn ranges(
         &self,
+        time: u64,
         channel: u64,
         x: Range<u32>,
         y: Range<u32>,
         z: Range<u32>,
     ) -> Vec<Range<u64>> {
+        assert!(
+            time < u64::from(self.frames),
+            "the frame lies inside the layout"
+        );
         let first_space = self.shape.len() - self.space_count;
         let spatial = if self.space_count == 3 {
             [z, y, x]
@@ -41,7 +56,7 @@ impl Layout {
         (0..self.shape.len())
             .map(|axis| {
                 if Some(axis) == self.time {
-                    0..1
+                    time..time + 1
                 } else if Some(axis) == self.channel {
                     channel..channel + 1
                 } else {
@@ -100,14 +115,6 @@ pub fn layout(axes: &[Axis], shape: &[u64], scale: &[f32]) -> Result<Layout, Str
     let x = axes.len() - 1;
     let y = axes.len() - 2;
     let z = (space_count == 3).then_some(axes.len() - 3);
-    if let Some(time) = time
-        && shape[time] != 1
-    {
-        return Err(format!(
-            "time series with {} frames are not supported",
-            shape[time]
-        ));
-    }
 
     let extent = Extent::new(
         dimension(shape[x])?,
@@ -125,6 +132,11 @@ pub fn layout(axes: &[Axis], shape: &[u64], scale: &[f32]) -> Result<Layout, Str
         None => spacing_x.min(spacing_y),
     };
 
+    let frames = match time {
+        Some(time) => dimension(shape[time])?,
+        None => 1,
+    };
+
     Ok(Layout {
         shape: shape.to_vec(),
         time,
@@ -132,6 +144,8 @@ pub fn layout(axes: &[Axis], shape: &[u64], scale: &[f32]) -> Result<Layout, Str
         space_count,
         extent,
         spacing: Spacing::new(spacing_x, spacing_y, spacing_z),
+        frames,
+        frame_interval: frame_interval(axes, scale, time)?,
     })
 }
 
@@ -233,4 +247,69 @@ fn space_factor(unit: AxisUnitSpace) -> Result<f64, String> {
         _ => return Err("the physical unit is not supported".to_string()),
     };
     Ok(micrometer)
+}
+
+fn frame_interval(axes: &[Axis], scale: &[f32], time: Option<usize>) -> Result<f32, String> {
+    let Some(time) = time else {
+        return Ok(1.0);
+    };
+    let factor = match &axes[time].unit {
+        Some(AxisUnit::Time(unit)) => time_factor(*unit)?,
+        Some(AxisUnit::Space(_)) => {
+            return Err(format!(
+                "the time axis `{}` carries a space unit",
+                axes[time].name
+            ));
+        }
+        Some(AxisUnit::Custom(unit)) => {
+            return Err(format!("the unit `{unit}` is not supported"));
+        }
+        None => 1.0,
+        Some(_) => return Err("the time unit is not supported".to_string()),
+    };
+    let value = f64::from(scale[time]) * factor;
+    if !value.is_finite() || value <= 0.0 {
+        return Err(format!(
+            "the scale of the axis `{}` is not a positive duration",
+            axes[time].name
+        ));
+    }
+    let value = value as f32;
+    if !value.is_finite() {
+        return Err(format!(
+            "the scale of the axis `{}` is outside the supported range",
+            axes[time].name
+        ));
+    }
+    Ok(value)
+}
+
+fn time_factor(unit: AxisUnitTime) -> Result<f64, String> {
+    let second = match unit {
+        AxisUnitTime::Attosecond => 1e-18,
+        AxisUnitTime::Centisecond => 1e-2,
+        AxisUnitTime::Day => 86_400.0,
+        AxisUnitTime::Decisecond => 1e-1,
+        AxisUnitTime::Exasecond => 1e18,
+        AxisUnitTime::Femtosecond => 1e-15,
+        AxisUnitTime::Gigasecond => 1e9,
+        AxisUnitTime::Hectosecond => 1e2,
+        AxisUnitTime::Hour => 3_600.0,
+        AxisUnitTime::Kilosecond => 1e3,
+        AxisUnitTime::Megasecond => 1e6,
+        AxisUnitTime::Microsecond => 1e-6,
+        AxisUnitTime::Millisecond => 1e-3,
+        AxisUnitTime::Minute => 60.0,
+        AxisUnitTime::Nanosecond => 1e-9,
+        AxisUnitTime::Petasecond => 1e15,
+        AxisUnitTime::Picosecond => 1e-12,
+        AxisUnitTime::Second => 1.0,
+        AxisUnitTime::Terasecond => 1e12,
+        AxisUnitTime::Yoctosecond => 1e-24,
+        AxisUnitTime::Yottasecond => 1e24,
+        AxisUnitTime::Zeptosecond => 1e-21,
+        AxisUnitTime::Zettasecond => 1e21,
+        _ => return Err("the time unit is not supported".to_string()),
+    };
+    Ok(second)
 }

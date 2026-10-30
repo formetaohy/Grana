@@ -114,6 +114,7 @@ fn section_render(
                 size: [SIDE, SIDE],
                 volume_region: [0, 0, SIDE, SIDE],
                 section_region: [0, 0, SIDE, SIDE],
+                time: 0,
                 camera: &camera,
                 section: &section,
                 params: &params,
@@ -131,7 +132,7 @@ fn section_render(
         assert!(round < 31, "the section stream never settled");
         for request in &section_requests {
             let brick = volume.brick(&grid, request.coord);
-            assert!(renderer.upload(device, queue, request.level, request.coord, &brick));
+            assert!(renderer.upload(device, queue, *request, &brick));
         }
     }
 
@@ -145,6 +146,7 @@ fn section_render(
             size: [SIDE, SIDE],
             volume_region: [0, 0, SIDE, SIDE],
             section_region: [0, 0, SIDE, SIDE],
+            time: 0,
             camera: &camera,
             section: &section,
             params: &params,

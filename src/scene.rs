@@ -34,14 +34,41 @@ pub struct ChannelView {
     transfer: TransferEditor,
 }
 
-struct SpotLayer {
+struct ObjectLayer<T> {
     visible: bool,
-    set: SpotSet,
+    frames: Vec<Option<T>>,
 }
 
-struct SurfaceLayer {
-    visible: bool,
-    set: SurfaceSet,
+impl<T> ObjectLayer<T> {
+    fn new(frames: u32) -> Self {
+        Self {
+            visible: true,
+            frames: (0..frames).map(|_| None).collect(),
+        }
+    }
+
+    fn get(&self, time: u32) -> Option<&T> {
+        self.frames.get(time as usize).and_then(Option::as_ref)
+    }
+
+    fn set(&mut self, time: u32, value: T) {
+        assert!(
+            (time as usize) < self.frames.len(),
+            "the object frame lies inside the time series"
+        );
+        self.frames[time as usize] = Some(value);
+    }
+
+    fn detected(&self) -> usize {
+        self.frames.iter().filter(|frame| frame.is_some()).count()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (u32, &T)> + '_ {
+        self.frames
+            .iter()
+            .enumerate()
+            .filter_map(|(time, frame)| frame.as_ref().map(|set| (time as u32, set)))
+    }
 }
 
 pub struct Scene {
@@ -52,8 +79,9 @@ pub struct Scene {
     pub step_scale: f32,
     pub spot_params: SpotParams,
     pub surface_params: SurfaceParams,
-    spots: Option<SpotLayer>,
-    surfaces: Option<SurfaceLayer>,
+    time: u32,
+    spots: Option<ObjectLayer<SpotSet>>,
+    surfaces: Option<ObjectLayer<SurfaceSet>>,
     selection: Option<Selection>,
 }
 
@@ -80,6 +108,7 @@ impl Scene {
             step_scale: 1.0,
             spot_params,
             surface_params,
+            time: 0,
             spots: None,
             surfaces: None,
             selection: None,
@@ -88,6 +117,22 @@ impl Scene {
 
     pub fn channel(&self, index: usize) -> &ChannelInfo {
         &self.dataset.channels()[index]
+    }
+
+    pub fn time(&self) -> u32 {
+        self.time
+    }
+
+    pub fn frame_count(&self) -> u32 {
+        self.dataset.frame_count()
+    }
+
+    pub fn set_time(&mut self, time: u32) {
+        assert!(time < self.frame_count(), "the frame lies inside the scene");
+        if time != self.time {
+            self.time = time;
+            self.selection = None;
+        }
     }
 
     pub fn params(&self) -> RenderParams {
@@ -137,13 +182,19 @@ impl Scene {
     }
 
     pub fn spots(&self) -> Option<&SpotSet> {
-        self.spots.as_ref().map(|layer| &layer.set)
+        self.spots.as_ref().and_then(|layer| layer.get(self.time))
+    }
+
+    pub fn spot_frames(&self) -> impl Iterator<Item = (u32, &SpotSet)> + '_ {
+        self.spots.iter().flat_map(|layer| layer.iter())
+    }
+
+    pub fn spot_frame_count(&self) -> usize {
+        self.spots.as_ref().map_or(0, ObjectLayer::detected)
     }
 
     pub fn spot(&self, index: usize) -> Option<Spot> {
-        self.spots
-            .as_ref()
-            .and_then(|layer| layer.set.spots().get(index).copied())
+        self.spots().and_then(|set| set.spots().get(index).copied())
     }
 
     pub fn spot_visible(&self) -> bool {
@@ -156,13 +207,15 @@ impl Scene {
         }
     }
 
-    pub fn install_spots(&mut self, set: SpotSet) {
+    pub fn install_spots(&mut self, time: u32, set: SpotSet) {
         assert!(
             set.channel() < self.channels.len(),
             "the spot set belongs to an existing channel"
         );
-        self.spots = Some(SpotLayer { visible: true, set });
-        if matches!(self.selection, Some(Selection::Spot(_))) {
+        let frames = self.frame_count();
+        let layer = self.spots.get_or_insert_with(|| ObjectLayer::new(frames));
+        layer.set(time, set);
+        if time == self.time && matches!(self.selection, Some(Selection::Spot(_))) {
             self.selection = None;
         }
     }
@@ -175,13 +228,21 @@ impl Scene {
     }
 
     pub fn surfaces(&self) -> Option<&SurfaceSet> {
-        self.surfaces.as_ref().map(|layer| &layer.set)
+        self.surfaces
+            .as_ref()
+            .and_then(|layer| layer.get(self.time))
+    }
+
+    pub fn surface_frames(&self) -> impl Iterator<Item = (u32, &SurfaceSet)> + '_ {
+        self.surfaces.iter().flat_map(|layer| layer.iter())
+    }
+
+    pub fn surface_frame_count(&self) -> usize {
+        self.surfaces.as_ref().map_or(0, ObjectLayer::detected)
     }
 
     pub fn surface(&self, index: usize) -> Option<SurfaceStatistics> {
-        self.surfaces
-            .as_ref()
-            .and_then(|layer| layer.set.object(index))
+        self.surfaces().and_then(|set| set.object(index))
     }
 
     pub fn surface_visible(&self) -> bool {
@@ -194,13 +255,17 @@ impl Scene {
         }
     }
 
-    pub fn install_surfaces(&mut self, set: SurfaceSet) {
+    pub fn install_surfaces(&mut self, time: u32, set: SurfaceSet) {
         assert!(
             set.channel() < self.channels.len(),
             "the surface set belongs to an existing channel"
         );
-        self.surfaces = Some(SurfaceLayer { visible: true, set });
-        if matches!(self.selection, Some(Selection::Surface(_))) {
+        let frames = self.frame_count();
+        let layer = self
+            .surfaces
+            .get_or_insert_with(|| ObjectLayer::new(frames));
+        layer.set(time, set);
+        if time == self.time && matches!(self.selection, Some(Selection::Surface(_))) {
             self.selection = None;
         }
     }
@@ -228,12 +293,15 @@ impl Scene {
         if !layer.visible {
             return;
         }
-        let channel = layer.set.channel();
+        let Some(set) = layer.get(self.time) else {
+            return;
+        };
+        let channel = set.channel();
         if !self.channels[channel].enabled {
             return;
         }
         let color = self.dataset.channels()[channel].tint();
-        for (index, spot) in layer.set.spots().iter().enumerate() {
+        for (index, spot) in set.spots().iter().enumerate() {
             if self.selection == Some(Selection::Spot(index)) {
                 out.push(Marker::new(
                     spot.center(),
@@ -252,8 +320,11 @@ impl Scene {
         let Some(layer) = &self.surfaces else {
             return;
         };
-        let enabled = self.channels[layer.set.channel()].enabled;
-        for index in 0..layer.set.object_count() {
+        let Some(set) = layer.get(self.time) else {
+            return;
+        };
+        let enabled = self.channels[set.channel()].enabled;
+        for index in 0..set.object_count() {
             let selected = self.selection == Some(Selection::Surface(index));
             out.push(SurfaceStyle::new(
                 Self::object_color(index),
@@ -344,18 +415,26 @@ impl Scene {
 
     fn pickable_spots(&self) -> Option<&SpotSet> {
         let layer = self.spots.as_ref()?;
-        if !layer.visible || !self.channels[layer.set.channel()].enabled {
+        if !layer.visible {
             return None;
         }
-        Some(&layer.set)
+        let set = layer.get(self.time)?;
+        if !self.channels[set.channel()].enabled {
+            return None;
+        }
+        Some(set)
     }
 
     fn pickable_surfaces(&self) -> Option<&SurfaceSet> {
         let layer = self.surfaces.as_ref()?;
-        if !layer.visible || !self.channels[layer.set.channel()].enabled {
+        if !layer.visible {
             return None;
         }
-        Some(&layer.set)
+        let set = layer.get(self.time)?;
+        if !self.channels[set.channel()].enabled {
+            return None;
+        }
+        Some(set)
     }
 }
 

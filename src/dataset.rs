@@ -64,6 +64,14 @@ impl Dataset {
         self.pyramid.level_count()
     }
 
+    pub fn frame_count(&self) -> u32 {
+        self.pyramid.frame_count()
+    }
+
+    pub fn frame_interval(&self) -> f32 {
+        self.pyramid.frame_interval()
+    }
+
     pub fn channels(&self) -> &[ChannelInfo] {
         self.pyramid.channels()
     }

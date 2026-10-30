@@ -59,6 +59,8 @@ fn switches_levels() {
             .map(|(extent, spacing)| Level::new(*extent, *spacing))
             .collect(),
         volumes[0].pyramid().channels().to_vec(),
+        1,
+        1.0,
     );
     let grids = levels
         .iter()
@@ -155,6 +157,7 @@ impl Stream<'_> {
                     size: [SIDE, SIDE],
                     volume_region: [0, 0, SIDE, SIDE],
                     section_region: [0, 0, 1, 1],
+                    time: 0,
                     camera,
                     section: &self.section,
                     params: self.params,
@@ -175,13 +178,10 @@ impl Stream<'_> {
             for request in self.volume_requests.iter() {
                 let brick =
                     self.volumes[request.level].brick(&self.grids[request.level], request.coord);
-                assert!(self.renderer.upload(
-                    self.device,
-                    self.queue,
-                    request.level,
-                    request.coord,
-                    &brick
-                ));
+                assert!(
+                    self.renderer
+                        .upload(self.device, self.queue, *request, &brick)
+                );
             }
         }
         panic!("the stream never settled");

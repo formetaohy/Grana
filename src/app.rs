@@ -4,13 +4,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use glam::Vec2;
-use grana_object::{SpotSet, SurfaceSet};
 use grana_render::{BrickRequest, Frame, FrameInfo, Marker, Renderer, SurfaceFrame, SurfaceStyle};
 use grana_volume::Spacing;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
+use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 use crate::analysis::{self, Analysis, Event, Kind, Outcome, Poll, Progress};
@@ -27,6 +27,7 @@ const TEXTURE_BUDGET: u64 = 512 << 20;
 const UPLOAD_BATCH: usize = 32;
 const MAX_IN_FLIGHT: usize = 64;
 const STREAM_POLL: Duration = Duration::from_millis(16);
+const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
 
 struct Surface {
@@ -54,6 +55,8 @@ pub struct App {
     message: Option<Message>,
     repaint_at: Option<Instant>,
     needs_fit: bool,
+    playing: bool,
+    last_advance: Option<Instant>,
 }
 
 impl App {
@@ -76,6 +79,8 @@ impl App {
             message: None,
             repaint_at: None,
             needs_fit: true,
+            playing: false,
+            last_advance: None,
         }
     }
 
@@ -91,8 +96,7 @@ impl App {
         );
         let gpu = Gpu::new(window.clone());
         let egui = EguiLayer::new(&window, &gpu.device, gpu.format());
-        let volume = demo::volume();
-        let (source, pyramid) = Loader::memory(volume);
+        let (source, pyramid) = Loader::memory(demo::movie());
         let mut scene = Scene::new(Dataset::synthetic("synthetic fluorescence", pyramid));
         demo::stage(&mut scene);
         let mut renderer = Renderer::new(&gpu.device, &gpu.queue, gpu.format(), TEXTURE_BUDGET);
@@ -124,6 +128,12 @@ impl App {
             opened = true;
         }
         if !opened {
+            if actions.toggle_play {
+                self.toggle_play();
+            }
+            if let Some(time) = actions.time {
+                self.scrub(time);
+            }
             if actions.detect_spots {
                 self.start_spots();
             }
@@ -134,6 +144,7 @@ impl App {
                 && let Some(scene) = self.scene.as_mut()
             {
                 scene.clear_spots();
+                self.surface_dirty = true;
             }
             if actions.export_spots {
                 self.export_spots();
@@ -155,6 +166,7 @@ impl App {
                 self.export_surfaces();
             }
         }
+        self.advance_playback();
         let scale = self
             .surface
             .as_ref()
@@ -198,6 +210,9 @@ impl App {
         if self.streaming() {
             delay = delay.min(STREAM_POLL);
         }
+        if self.playing {
+            delay = delay.min(PLAYBACK_INTERVAL);
+        }
         if delay.is_zero() {
             self.repaint_at = None;
             if let Some(surface) = &self.surface {
@@ -210,8 +225,79 @@ impl App {
         }
     }
 
+    fn toggle_play(&mut self) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        if scene.frame_count() <= 1 {
+            return;
+        }
+        self.playing = !self.playing;
+        self.last_advance = self.playing.then(Instant::now);
+    }
+
+    fn scrub(&mut self, time: u32) {
+        self.playing = false;
+        self.last_advance = None;
+        self.set_time(time);
+    }
+
+    fn set_time(&mut self, time: u32) {
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        if time == scene.time() {
+            return;
+        }
+        scene.set_time(time);
+        self.surface_dirty = true;
+        self.in_flight.clear();
+        self.volume_requests.clear();
+        self.section_requests.clear();
+        if let Some(source) = &self.source {
+            source.set_time(time);
+        }
+    }
+
+    fn advance_playback(&mut self) {
+        if !self.playing {
+            return;
+        }
+        let Some(scene) = self.scene.as_ref() else {
+            self.playing = false;
+            return;
+        };
+        if scene.frame_count() <= 1 {
+            self.playing = false;
+            return;
+        }
+        let now = Instant::now();
+        let due = self
+            .last_advance
+            .is_none_or(|last| now.duration_since(last) >= PLAYBACK_INTERVAL);
+        if !due {
+            return;
+        }
+        let next = (scene.time() + 1) % scene.frame_count();
+        self.set_time(next);
+        self.last_advance = Some(now);
+    }
+
+    fn step_time(&mut self, delta: i64) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let frames = scene.frame_count();
+        if frames <= 1 {
+            return;
+        }
+        let time = (i64::from(scene.time()) + delta).rem_euclid(i64::from(frames)) as u32;
+        self.scrub(time);
+    }
+
     fn streaming(&self) -> bool {
-        self.loading.is_some()
+        self.playing
+            || self.loading.is_some()
             || !self.analysis.is_empty()
             || !self.in_flight.is_empty()
             || (self.source.is_some()
@@ -236,6 +322,7 @@ impl App {
         let frame = self.frame;
         let pending = self.in_flight.len();
         let analysis = self.progress.as_slice();
+        let playing = self.playing;
         let viewport = &mut self.viewport;
         let mut actions = ui::Actions::new();
         let output = egui.run(window, |root| {
@@ -249,6 +336,7 @@ impl App {
                     message,
                     frame,
                     pending,
+                    playing,
                     analysis,
                 },
             );
@@ -281,7 +369,7 @@ impl App {
         scene.markers(&mut self.markers);
         scene.surface_styles(&mut self.styles);
         if self.surface_dirty {
-            renderer.set_surface(&gpu.device, scene.surfaces().map(SurfaceSet::mesh));
+            renderer.set_surface(&gpu.device, scene.surfaces().map(|set| set.mesh()));
             self.surface_dirty = false;
         }
         let surface_view = (!self.styles.is_empty()).then_some(SurfaceFrame {
@@ -309,6 +397,7 @@ impl App {
                 size,
                 volume_region,
                 section_region,
+                time: scene.time(),
                 camera,
                 section,
                 params: &params,
@@ -350,6 +439,11 @@ impl App {
                     self.section_requests.clear();
                     self.frame = FrameInfo::default();
                     self.needs_fit = true;
+                    self.playing = false;
+                    self.last_advance = None;
+                    if let Some(source) = &self.source {
+                        source.set_time(0);
+                    }
                 }
                 LoaderEvent::Brick { request, data } => {
                     self.in_flight.remove(&request);
@@ -357,8 +451,7 @@ impl App {
                         surface.renderer.upload(
                             &surface.gpu.device,
                             &surface.gpu.queue,
-                            request.level,
-                            request.coord,
+                            request,
                             &data,
                         );
                     }
@@ -372,6 +465,7 @@ impl App {
                     self.in_flight.clear();
                     self.volume_requests.clear();
                     self.section_requests.clear();
+                    self.playing = false;
                 }
                 LoaderEvent::Failed(detail) => {
                     self.loading = None;
@@ -382,6 +476,7 @@ impl App {
                     self.in_flight.clear();
                     self.volume_requests.clear();
                     self.section_requests.clear();
+                    self.playing = false;
                 }
             }
         }
@@ -422,33 +517,33 @@ impl App {
 
     fn poll_analysis(&mut self) {
         enum Update {
-            Progress(usize, usize),
-            Finished(Outcome),
+            Progress(u32, usize, usize),
+            Frame(u32, Outcome),
+            Done,
             Failed(String),
         }
         let mut updates: Vec<(usize, Kind, usize, Update)> = Vec::new();
         for (index, job) in self.analysis.iter().enumerate() {
             loop {
                 match job.poll() {
-                    Poll::Event(Event::Started { total })
-                    | Poll::Event(Event::Progress { done: 0, total }) => {
+                    Poll::Event(Event::Progress { time, done, total }) => {
                         updates.push((
                             index,
                             job.kind(),
                             job.channel(),
-                            Update::Progress(0, total),
+                            Update::Progress(time, done, total),
                         ));
                     }
-                    Poll::Event(Event::Progress { done, total }) => {
+                    Poll::Event(Event::Frame { time, outcome }) => {
                         updates.push((
                             index,
                             job.kind(),
                             job.channel(),
-                            Update::Progress(done, total),
+                            Update::Frame(time, outcome),
                         ));
                     }
-                    Poll::Event(Event::Finished(outcome)) => {
-                        updates.push((index, job.kind(), job.channel(), Update::Finished(outcome)));
+                    Poll::Event(Event::Done) => {
+                        updates.push((index, job.kind(), job.channel(), Update::Done));
                         break;
                     }
                     Poll::Event(Event::Failed(detail)) => {
@@ -468,17 +563,36 @@ impl App {
                 }
             }
         }
-        let mut finished = Vec::new();
         let mut removed = Vec::new();
         for (index, kind, channel, update) in updates {
             match update {
-                Update::Progress(done, total) => {
-                    self.record_progress(kind, channel, done, total);
+                Update::Progress(time, done, total) => {
+                    self.record_progress(kind, time, channel, done, total);
                 }
-                Update::Finished(outcome) => {
+                Update::Frame(time, outcome) => {
+                    let current = self
+                        .scene
+                        .as_ref()
+                        .is_some_and(|scene| scene.time() == time);
+                    match outcome {
+                        Outcome::Spots(set) => {
+                            if let Some(scene) = self.scene.as_mut() {
+                                scene.install_spots(time, set);
+                            }
+                        }
+                        Outcome::Surfaces(set) => {
+                            if let Some(scene) = self.scene.as_mut() {
+                                scene.install_surfaces(time, set);
+                            }
+                            if current {
+                                self.surface_dirty = true;
+                            }
+                        }
+                    }
+                }
+                Update::Done => {
                     self.progress.retain(|progress| progress.kind != kind);
                     removed.push(index);
-                    finished.push(outcome);
                 }
                 Update::Failed(detail) => {
                     self.progress.retain(|progress| progress.kind != kind);
@@ -492,26 +606,19 @@ impl App {
         for index in removed.into_iter().rev() {
             self.analysis.remove(index);
         }
-        for outcome in finished {
-            match outcome {
-                Outcome::Spots(set) => {
-                    if let Some(scene) = self.scene.as_mut() {
-                        scene.install_spots(set);
-                    }
-                }
-                Outcome::Surfaces(set) => {
-                    if let Some(scene) = self.scene.as_mut() {
-                        scene.install_surfaces(set);
-                    }
-                    self.surface_dirty = true;
-                }
-            }
-        }
     }
 
-    fn record_progress(&mut self, kind: Kind, channel: usize, done: usize, total: usize) {
+    fn record_progress(
+        &mut self,
+        kind: Kind,
+        time: u32,
+        channel: usize,
+        done: usize,
+        total: usize,
+    ) {
         let progress = Progress {
             kind,
+            time,
             channel,
             done,
             total,
@@ -560,7 +667,7 @@ impl App {
             return;
         }
         self.message = None;
-        self.record_progress(Kind::Spots, channel, 0, 0);
+        self.record_progress(Kind::Spots, 0, channel, 0, 0);
         self.analysis
             .push(analysis::start_spots(source, channel, params));
     }
@@ -595,7 +702,7 @@ impl App {
             return;
         }
         self.message = None;
-        self.record_progress(Kind::Surfaces, channel, 0, 0);
+        self.record_progress(Kind::Surfaces, 0, channel, 0, 0);
         self.analysis
             .push(analysis::start_surfaces(source, channel, params));
     }
@@ -604,10 +711,10 @@ impl App {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        let Some(spots) = scene.spots() else {
+        let Some((_, first)) = scene.spot_frames().next() else {
             return;
         };
-        let channel = scene.dataset.channels()[spots.channel()].name();
+        let channel = scene.dataset.channels()[first.channel()].name();
         let file_name = format!("{}-{}-spots.csv", slug(scene.dataset.name()), slug(channel));
         let Some(path) = rfd::FileDialog::new()
             .set_title("Export spots")
@@ -617,7 +724,7 @@ impl App {
         else {
             return;
         };
-        match std::fs::write(&path, spots_csv(spots)) {
+        match std::fs::write(&path, spots_csv(scene)) {
             Ok(()) => self.message = None,
             Err(error) => {
                 self.message = Some(Message::error(format!(
@@ -632,10 +739,10 @@ impl App {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        let Some(surfaces) = scene.surfaces() else {
+        let Some((_, first)) = scene.surface_frames().next() else {
             return;
         };
-        let channel = scene.dataset.channels()[surfaces.channel()].name();
+        let channel = scene.dataset.channels()[first.channel()].name();
         let file_name = format!(
             "{}-{}-surfaces.csv",
             slug(scene.dataset.name()),
@@ -649,7 +756,7 @@ impl App {
         else {
             return;
         };
-        match std::fs::write(&path, surfaces_csv(surfaces)) {
+        match std::fs::write(&path, surfaces_csv(scene)) {
             Ok(()) => self.message = None,
             Err(error) => {
                 self.message = Some(Message::error(format!(
@@ -674,6 +781,8 @@ impl App {
         self.section_requests.clear();
         self.frame = FrameInfo::default();
         self.repaint_at = Some(Instant::now());
+        self.playing = false;
+        self.last_advance = None;
     }
 
     fn pick(&mut self, pane: Pane, point: Vec2) {
@@ -713,6 +822,21 @@ impl App {
             .set_title("Open an OME-Zarr dataset")
             .pick_folder()
     }
+
+    fn on_key(&mut self, event: &winit::event::KeyEvent) {
+        if event.state != ElementState::Pressed || event.repeat {
+            return;
+        }
+        match event.logical_key {
+            Key::Named(NamedKey::Space) => self.toggle_play(),
+            Key::Named(NamedKey::ArrowRight) => self.step_time(1),
+            Key::Named(NamedKey::ArrowLeft) => self.step_time(-1),
+            _ => return,
+        }
+        if let Some(surface) = &self.surface {
+            surface.window.request_redraw();
+        }
+    }
 }
 
 fn file_name(path: &Path) -> String {
@@ -722,54 +846,62 @@ fn file_name(path: &Path) -> String {
         .to_string()
 }
 
-fn spots_csv(spots: &SpotSet) -> String {
-    let mut csv = String::from("id,x_um,y_um,z_um,diameter_um,quality\n");
-    for (index, spot) in spots.spots().iter().enumerate() {
-        let center = spot.center();
-        csv.push_str(&format!(
-            "{},{:.4},{:.4},{:.4},{:.4},{:.4}\n",
-            index + 1,
-            center[0],
-            center[1],
-            center[2],
-            spot.radius() * 2.0,
-            spot.quality()
-        ));
+fn spots_csv(scene: &Scene) -> String {
+    let interval = f64::from(scene.dataset.frame_interval());
+    let mut csv = String::from("frame,time_s,id,x_um,y_um,z_um,diameter_um,quality\n");
+    for (time, spots) in scene.spot_frames() {
+        let seconds = f64::from(time) * interval;
+        for (index, spot) in spots.spots().iter().enumerate() {
+            let center = spot.center();
+            csv.push_str(&format!(
+                "{time},{seconds:.4},{},{:.4},{:.4},{:.4},{:.4},{:.4}\n",
+                index + 1,
+                center[0],
+                center[1],
+                center[2],
+                spot.radius() * 2.0,
+                spot.quality()
+            ));
+        }
     }
     csv
 }
 
-fn surfaces_csv(surfaces: &SurfaceSet) -> String {
+fn surfaces_csv(scene: &Scene) -> String {
+    let interval = f64::from(scene.dataset.frame_interval());
     let mut csv = String::from(
-        "id,voxels,volume_um3,area_um2,sphericity,centroid_x_um,centroid_y_um,centroid_z_um,min_x_um,min_y_um,min_z_um,max_x_um,max_y_um,max_z_um,mean_intensity,min_intensity,max_intensity,intensity_std\n",
+        "frame,time_s,id,voxels,volume_um3,area_um2,sphericity,centroid_x_um,centroid_y_um,centroid_z_um,min_x_um,min_y_um,min_z_um,max_x_um,max_y_um,max_z_um,mean_intensity,min_intensity,max_intensity,intensity_std\n",
     );
-    for (index, object) in surfaces.objects().iter().enumerate() {
-        let centroid = object.centroid();
-        let bounds = object.bounds();
-        let min = bounds.min();
-        let max = bounds.max();
-        let intensity = object.intensity();
-        csv.push_str(&format!(
-            "{},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.2},{:.2},{:.2},{:.2}\n",
-            index + 1,
-            object.voxel_count(),
-            object.volume(),
-            object.area(),
-            object.sphericity(),
-            centroid[0],
-            centroid[1],
-            centroid[2],
-            min[0],
-            min[1],
-            min[2],
-            max[0],
-            max[1],
-            max[2],
-            intensity.mean(),
-            intensity.min(),
-            intensity.max(),
-            intensity.deviation(),
-        ));
+    for (time, surfaces) in scene.surface_frames() {
+        let seconds = f64::from(time) * interval;
+        for (index, object) in surfaces.objects().iter().enumerate() {
+            let centroid = object.centroid();
+            let bounds = object.bounds();
+            let min = bounds.min();
+            let max = bounds.max();
+            let intensity = object.intensity();
+            csv.push_str(&format!(
+                "{time},{seconds:.4},{},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.2},{:.2},{:.2},{:.2}\n",
+                index + 1,
+                object.voxel_count(),
+                object.volume(),
+                object.area(),
+                object.sphericity(),
+                centroid[0],
+                centroid[1],
+                centroid[2],
+                min[0],
+                min[1],
+                min[2],
+                max[0],
+                max[1],
+                max[2],
+                intensity.mean(),
+                intensity.min(),
+                intensity.max(),
+                intensity.deviation(),
+            ));
+        }
     }
     csv
 }
@@ -822,11 +954,14 @@ impl ApplicationHandler for App {
             .scene
             .as_ref()
             .map_or(Spacing::new(1.0, 1.0, 1.0), |scene| scene.dataset.spacing());
-        let camera_changed = {
+        let (camera_changed, consumed) = {
             let surface = self.surface.as_mut().expect("the surface is alive");
             let response = surface.egui.event(&surface.window, &event);
-            self.viewport
-                .on_window_event(&event, response.consumed, spacing)
+            (
+                self.viewport
+                    .on_window_event(&event, response.consumed, spacing),
+                response.consumed,
+            )
         };
         if camera_changed.camera {
             if let Some(scene) = &self.scene {
@@ -866,14 +1001,21 @@ impl ApplicationHandler for App {
                     surface.window.request_redraw();
                 }
             }
+            WindowEvent::KeyboardInput { event, .. } if !consumed => {
+                self.on_key(&event);
+            }
             WindowEvent::RedrawRequested => self.redraw(),
             _ => {}
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.streaming() && self.repaint_at.is_none() {
-            self.repaint_at = Some(Instant::now() + STREAM_POLL);
+        if self.repaint_at.is_none() {
+            if self.playing {
+                self.repaint_at = Some(Instant::now() + PLAYBACK_INTERVAL);
+            } else if self.streaming() {
+                self.repaint_at = Some(Instant::now() + STREAM_POLL);
+            }
         }
         let Some(deadline) = self.repaint_at else {
             event_loop.set_control_flow(ControlFlow::Wait);

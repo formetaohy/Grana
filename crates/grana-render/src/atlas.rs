@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bytemuck::cast_slice;
 use grana_volume::PADDED_SIDE;
 use wgpu::{
@@ -10,8 +12,16 @@ use wgpu::{
 const BYTES_PER_VOXEL: u64 = size_of::<u16>() as u64;
 
 #[derive(Clone, Copy)]
+pub(crate) struct ResidentBrick {
+    pub time: u32,
+    pub level: usize,
+    pub index: usize,
+    pub maxima: [[f32; 4]; 2],
+}
+
+#[derive(Clone, Copy)]
 struct Slot {
-    brick: Option<(usize, usize)>,
+    brick: Option<ResidentBrick>,
     used: u64,
 }
 
@@ -22,12 +32,13 @@ impl Slot {
     };
 }
 
-pub struct Atlas {
+pub(crate) struct Atlas {
     textures: Vec<Texture>,
     group: BindGroup,
     slot_grid: [u32; 3],
     free: Vec<u32>,
     slots: Vec<Slot>,
+    identity: HashMap<(u32, usize, usize), u32>,
     bytes: u64,
 }
 
@@ -109,6 +120,7 @@ impl Atlas {
             slot_grid,
             free: (0..capacity as u32).rev().collect(),
             slots: vec![Slot::EMPTY; capacity],
+            identity: HashMap::new(),
             bytes,
         }
     }
@@ -129,11 +141,33 @@ impl Atlas {
         self.bytes
     }
 
-    pub fn mark(&mut self, slot: u32, frame: u64) {
-        self.slots[slot as usize].used = frame;
+    pub fn slot(&self, time: u32, level: usize, index: usize) -> Option<u32> {
+        self.identity.get(&(time, level, index)).copied()
     }
 
-    pub fn allocate(&mut self, frame: u64) -> Option<(u32, Option<(usize, usize)>)> {
+    pub fn bricks(
+        &self,
+        time: u32,
+        level: usize,
+    ) -> impl Iterator<Item = (u32, usize, [[f32; 4]; 2])> + '_ {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(move |(slot, entry)| {
+                let brick = entry.brick?;
+                (brick.time == time && brick.level == level).then_some((
+                    slot as u32,
+                    brick.index,
+                    brick.maxima,
+                ))
+            })
+    }
+
+    pub fn mark(&mut self, slot: u32, tick: u64) {
+        self.slots[slot as usize].used = tick;
+    }
+
+    pub fn allocate(&mut self, tick: u64) -> Option<(u32, Option<ResidentBrick>)> {
         if let Some(slot) = self.free.pop() {
             return Some((slot, None));
         }
@@ -141,20 +175,28 @@ impl Atlas {
             .slots
             .iter()
             .enumerate()
-            .filter(|(_, slot)| slot.brick.is_some() && slot.used < frame)
+            .filter(|(_, slot)| slot.brick.is_some() && slot.used < tick)
             .min_by_key(|(_, slot)| slot.used)
             .map(|(index, _)| index)?;
         let brick = self.slots[victim]
             .brick
             .expect("the eviction candidate holds a brick");
         self.slots[victim].brick = None;
+        self.identity
+            .remove(&(brick.time, brick.level, brick.index));
         Some((victim as u32, Some(brick)))
     }
 
-    pub fn assign(&mut self, slot: u32, level: usize, index: usize, frame: u64) {
+    pub fn assign(&mut self, slot: u32, brick: ResidentBrick, tick: u64) {
+        if let Some(previous) = self.slots[slot as usize].brick {
+            self.identity
+                .remove(&(previous.time, previous.level, previous.index));
+        }
+        self.identity
+            .insert((brick.time, brick.level, brick.index), slot);
         self.slots[slot as usize] = Slot {
-            brick: Some((level, index)),
-            used: frame,
+            brick: Some(brick),
+            used: tick,
         };
     }
 
