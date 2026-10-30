@@ -1,4 +1,4 @@
-use crate::{Extent, Intensity};
+use crate::Intensity;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum VoxelFormat {
@@ -50,59 +50,46 @@ impl VoxelData {
         Intensity::new(min, max)
     }
 
-    pub fn for_each_unit(&self, intensity: Intensity, mut visit: impl FnMut(f32)) {
-        self.for_each_value(|value| visit(intensity.unit(value)));
+    pub fn unit_max(&self, intensity: Intensity) -> f32 {
+        let mut max = 0.0f32;
+        self.for_each_value(|value| {
+            let unit = intensity.unit(value);
+            if unit > max {
+                max = unit;
+            }
+        });
+        max
     }
 
-    pub fn downsampled(&self, extent: Extent) -> Self {
+    pub fn write_units(&self, intensity: Intensity, out: &mut [u16]) {
         assert_eq!(
-            self.voxel_count() as u64,
-            extent.voxel_count(),
-            "voxel count must match extent"
+            out.len(),
+            self.voxel_count(),
+            "the destination must hold every voxel"
         );
-        match self {
-            Self::U8(data) => Self::U8(reduce(data, extent, |v| v as f32, |v| v.round() as u8)),
-            Self::U16(data) => Self::U16(reduce(data, extent, |v| v as f32, |v| v.round() as u16)),
-            Self::F32(data) => Self::F32(reduce(data, extent, |v| v, |v| v)),
-        }
+        let span = intensity.span();
+        let scale = if span > 0.0 {
+            f32::from(u16::MAX) / span
+        } else {
+            0.0
+        };
+        let mut index = 0;
+        self.for_each_value(|value| {
+            let unit = if span > 0.0 && value.is_finite() {
+                ((value - intensity.min()) * scale).clamp(0.0, f32::from(u16::MAX))
+            } else {
+                0.0
+            };
+            out[index] = unit.round() as u16;
+            index += 1;
+        });
     }
 
     fn for_each_value(&self, mut visit: impl FnMut(f32)) {
         match self {
-            Self::U8(data) => data.iter().for_each(|&value| visit(value as f32)),
-            Self::U16(data) => data.iter().for_each(|&value| visit(value as f32)),
+            Self::U8(data) => data.iter().for_each(|&value| visit(f32::from(value))),
+            Self::U16(data) => data.iter().for_each(|&value| visit(f32::from(value))),
             Self::F32(data) => data.iter().for_each(|&value| visit(value)),
         }
     }
-}
-
-fn reduce<T: Copy, U>(
-    source: &[T],
-    extent: Extent,
-    to_f32: impl Fn(T) -> f32,
-    from_f32: impl Fn(f32) -> U,
-) -> Vec<U> {
-    let target = extent.halve();
-    let mut reduced = Vec::with_capacity(target.voxel_count() as usize);
-    for z in 0..target.z() {
-        for y in 0..target.y() {
-            for x in 0..target.x() {
-                let mut sum = 0.0;
-                let mut taps = 0.0;
-                for dz in 0..2 {
-                    let sz = (2 * z + dz).min(extent.z() - 1);
-                    for dy in 0..2 {
-                        let sy = (2 * y + dy).min(extent.y() - 1);
-                        for dx in 0..2 {
-                            let sx = (2 * x + dx).min(extent.x() - 1);
-                            sum += to_f32(source[extent.index(sx, sy, sz) as usize]);
-                            taps += 1.0;
-                        }
-                    }
-                }
-                reduced.push(from_f32(sum / taps));
-            }
-        }
-    }
-    reduced
 }

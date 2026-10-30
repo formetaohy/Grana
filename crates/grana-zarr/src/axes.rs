@@ -15,6 +15,7 @@ pub struct Layout {
     shape: Vec<u64>,
     time: Option<usize>,
     channel: Option<usize>,
+    space_count: usize,
     pub extent: Extent,
     pub spacing: Spacing,
 }
@@ -24,7 +25,19 @@ impl Layout {
         self.channel.map_or(1, |axis| self.shape[axis])
     }
 
-    pub fn ranges(&self, channel: u64) -> Vec<Range<u64>> {
+    pub fn ranges(
+        &self,
+        channel: u64,
+        x: Range<u32>,
+        y: Range<u32>,
+        z: Range<u32>,
+    ) -> Vec<Range<u64>> {
+        let first_space = self.shape.len() - self.space_count;
+        let spatial = if self.space_count == 3 {
+            [z, y, x]
+        } else {
+            [y, x, 0..0]
+        };
         (0..self.shape.len())
             .map(|axis| {
                 if Some(axis) == self.time {
@@ -32,7 +45,8 @@ impl Layout {
                 } else if Some(axis) == self.channel {
                     channel..channel + 1
                 } else {
-                    0..self.shape[axis]
+                    let range = &spatial[axis - first_space];
+                    u64::from(range.start)..u64::from(range.end)
                 }
             })
             .collect()
@@ -115,6 +129,7 @@ pub fn layout(axes: &[Axis], shape: &[u64], scale: &[f32]) -> Result<Layout, Str
         shape: shape.to_vec(),
         time,
         channel,
+        space_count,
         extent,
         spacing: Spacing::new(spacing_x, spacing_y, spacing_z),
     })

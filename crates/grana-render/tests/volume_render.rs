@@ -1,12 +1,13 @@
-use grana_render::{Camera, ChannelParams, RenderParams, Renderer, TransferFunction};
-use grana_volume::{Channel, Extent, Spacing, Volume, VoxelData};
+use grana_render::{Camera, ChannelParams, Frame, RenderParams, Renderer, TransferFunction};
+use grana_volume::{BrickGrid, Channel, Extent, Spacing, Volume, VoxelData};
 
 const SIDE: u32 = 256;
 const FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_ARRAY
-    .union(wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING);
+    .union(wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING)
+    .union(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
 
 #[test]
-fn renders_two_channels() {
+fn streams_two_channels() {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let options = |fallback: bool| wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -21,7 +22,7 @@ fn renders_two_channels() {
         return;
     };
     if !adapter.features().contains(FEATURES) {
-        println!("the adapter lacks binding arrays, skipping");
+        println!("the adapter lacks packed brick streaming, skipping");
         return;
     }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -51,35 +52,68 @@ fn renders_two_channels() {
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
     let volume = two_channel_volume();
-    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, &volume);
+    let pyramid = volume.pyramid();
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 512 << 20);
+    renderer.set_pyramid(&device, &pyramid);
 
     let mut camera = Camera::new(35.0);
     camera.fit(glam::Vec3::from(volume.world_extent()), 1.0);
     let params = RenderParams {
         shading: Default::default(),
         step_scale: 0.5,
-        channels: vec![
-            ChannelParams {
+        channels: pyramid
+            .channels()
+            .iter()
+            .map(|channel| ChannelParams {
                 visible: true,
                 opacity: 1.0,
-                transfer: TransferFunction::tinted([0.2, 0.4, 1.0]),
-            },
-            ChannelParams {
-                visible: true,
-                opacity: 1.0,
-                transfer: TransferFunction::tinted([0.2, 1.0, 0.3]),
-            },
-        ],
+                window: channel.window(),
+                transfer: TransferFunction::tinted(channel.tint()),
+            })
+            .collect(),
     };
+
+    let grid = BrickGrid::new(volume.extent());
+    let mut requests = Vec::new();
+    for round in 0..10 {
+        requests.clear();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let info = renderer.draw(
+            &device,
+            &queue,
+            Frame {
+                encoder: &mut encoder,
+                target: &view,
+                region: [0, 0, SIDE, SIDE],
+                camera: &camera,
+                params: &params,
+                requests: &mut requests,
+            },
+        );
+        queue.submit([encoder.finish()]);
+        assert_eq!(info.resident + requests.len(), info.visible);
+        if requests.is_empty() {
+            break;
+        }
+        assert!(round < 9, "the stream never settled");
+        for request in &requests {
+            let brick = volume.brick(&grid, request.coord);
+            assert!(renderer.upload(&device, &queue, request.level, request.coord, &brick));
+        }
+    }
 
     let mut encoder = device.create_command_encoder(&Default::default());
     renderer.draw(
+        &device,
         &queue,
-        &mut encoder,
-        &view,
-        [0, 0, SIDE, SIDE],
-        &camera,
-        &params,
+        Frame {
+            encoder: &mut encoder,
+            target: &view,
+            region: [0, 0, SIDE, SIDE],
+            camera: &camera,
+            params: &params,
+            requests: &mut requests,
+        },
     );
 
     let row_bytes = SIDE * 4;
@@ -168,8 +202,8 @@ fn two_channel_volume() -> Volume {
         extent,
         Spacing::new(0.1, 0.1, 0.13),
         vec![
-            Channel::new("nuclei", [0.2, 0.4, 1.0], extent, VoxelData::U16(blue)),
-            Channel::new("membrane", [0.2, 1.0, 0.3], extent, VoxelData::U16(green)),
+            Channel::new("nuclei", [0.2, 0.4, 1.0], VoxelData::U16(blue)),
+            Channel::new("membrane", [0.2, 1.0, 0.3], VoxelData::U16(green)),
         ],
     )
 }

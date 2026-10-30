@@ -1,40 +1,103 @@
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 
-use grana_volume::Volume;
+use grana_render::BrickRequest;
+use grana_volume::{BrickData, BrickGrid, Pyramid, Volume};
+use grana_zarr::Image;
 
-use crate::dataset::{Dataset, LoadLimit};
-
-pub struct Loaded {
-    pub dataset: Dataset,
-    pub volume: Volume,
+pub enum Event {
+    Opened {
+        name: String,
+        pyramid: Pyramid,
+    },
+    Brick {
+        request: BrickRequest,
+        data: BrickData,
+    },
+    ReadFailed {
+        request: BrickRequest,
+        detail: String,
+    },
+    Failed(String),
 }
 
 pub struct Loader {
-    path: PathBuf,
-    receiver: Receiver<Result<Loaded, String>>,
+    events: Receiver<Event>,
+    requests: Sender<BrickRequest>,
 }
 
 impl Loader {
-    pub fn spawn(path: PathBuf, limit: LoadLimit) -> Self {
-        let (sender, receiver) = mpsc::channel();
-        let worker = path.clone();
+    pub fn memory(volume: Volume) -> (Self, Pyramid) {
+        let pyramid = volume.pyramid();
+        let (requests, request_queue) = mpsc::channel::<BrickRequest>();
+        let (event_sender, events) = mpsc::channel();
         std::thread::spawn(move || {
-            let result =
-                Dataset::open(&worker, limit).map(|(dataset, volume)| Loaded { dataset, volume });
-            let _ = sender.send(result);
+            let grid = BrickGrid::new(volume.extent());
+            while let Ok(request) = request_queue.recv() {
+                let data = volume.brick(&grid, request.coord);
+                if event_sender.send(Event::Brick { request, data }).is_err() {
+                    break;
+                }
+            }
         });
-        Self { path, receiver }
+        (Self { events, requests }, pyramid)
     }
 
-    pub fn name(&self) -> &str {
-        self.path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("OME-Zarr dataset")
+    pub fn file(path: PathBuf) -> Self {
+        let (requests, request_queue) = mpsc::channel::<BrickRequest>();
+        let (event_sender, events) = mpsc::channel();
+        std::thread::spawn(move || {
+            let image = match Image::open(&path) {
+                Ok(image) => image,
+                Err(error) => {
+                    let _ = event_sender.send(Event::Failed(error.to_string()));
+                    return;
+                }
+            };
+            if image.pyramid().channel_count() > grana_render::MAX_CHANNEL {
+                let _ = event_sender.send(Event::Failed(format!(
+                    "the dataset has {} channels, grana displays at most {}",
+                    image.pyramid().channel_count(),
+                    grana_render::MAX_CHANNEL
+                )));
+                return;
+            }
+            let opened = Event::Opened {
+                name: image.name().to_string(),
+                pyramid: image.pyramid().clone(),
+            };
+            if event_sender.send(opened).is_err() {
+                return;
+            }
+            while let Ok(request) = request_queue.recv() {
+                match image.read_brick(request.level, request.coord) {
+                    Ok(data) => {
+                        if event_sender.send(Event::Brick { request, data }).is_err() {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        if event_sender
+                            .send(Event::ReadFailed {
+                                request,
+                                detail: error.to_string(),
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        Self { events, requests }
     }
 
-    pub fn poll(&self) -> Option<Result<Loaded, String>> {
-        self.receiver.try_recv().ok()
+    pub fn poll(&self) -> Option<Event> {
+        self.events.try_recv().ok()
+    }
+
+    pub fn request(&self, request: BrickRequest) -> bool {
+        self.requests.send(request).is_ok()
     }
 }

@@ -1,7 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use grana_volume::{Channel, Extent, Intensity, Spacing, Volume, VoxelData};
+use grana_volume::{
+    BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid, VoxelData,
+    VoxelFormat, pad_brick,
+};
 use zarrs::array::data_type::{float32, uint8, uint16};
 use zarrs::array::{Array, ArraySubset};
 use zarrs::filesystem::FilesystemStore;
@@ -23,31 +26,20 @@ const PALETTE: [[f32; 3]; 8] = [
     [0.85, 0.85, 0.30],
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LevelInfo {
-    pub extent: Extent,
-    pub spacing: Spacing,
-}
+const RANGE_SAMPLE_VOXELS: u64 = 4 << 20;
+const RANGE_PROBE_SIDE: u32 = 32;
 
-#[derive(Clone, Debug)]
-pub struct ChannelInfo {
-    pub name: String,
-    pub tint: [f32; 3],
-    pub window: Option<[f32; 2]>,
-}
-
-struct Level {
-    array_path: String,
-    info: LevelInfo,
+struct LevelArray {
+    path: String,
+    array: Array<dyn ReadableWritableListableStorageTraits>,
     layout: Layout,
 }
 
 pub struct Image {
     path: PathBuf,
-    store: ReadableWritableListableStorage,
     name: String,
-    levels: Vec<Level>,
-    channels: Vec<ChannelInfo>,
+    levels: Vec<LevelArray>,
+    pyramid: Pyramid,
 }
 
 impl Image {
@@ -64,10 +56,21 @@ impl Image {
         let metadata = metadata::parse(path, group.attributes())?;
         let mut levels = Vec::with_capacity(metadata.datasets.len());
         let mut channel_count = None;
+        let mut format = None;
         for dataset in &metadata.datasets {
             let array_path = array_path(&dataset.path);
             let array = open_array(&store, &array_path)?;
-            ensure_supported(path, &array)?;
+            let level_format = supported_format(path, &array)?;
+            match format {
+                None => format = Some(level_format),
+                Some(known) if known != level_format => {
+                    return Err(Error::Unsupported {
+                        path: path.to_path_buf(),
+                        detail: "the resolution levels disagree on the voxel data type".to_string(),
+                    });
+                }
+                Some(_) => {}
+            }
             let layout =
                 axes::layout(&metadata.axes, array.shape(), &dataset.scale).map_err(|detail| {
                     Error::Unsupported {
@@ -89,27 +92,34 @@ impl Image {
                 }
                 Some(_) => {}
             }
-            levels.push(Level {
-                array_path,
-                info: LevelInfo {
-                    extent: layout.extent,
-                    spacing: layout.spacing,
-                },
+            levels.push(LevelArray {
+                path: array_path,
+                array,
                 layout,
             });
         }
         let channel_count = channel_count.expect("a multiscale image has at least one dataset");
-        let channels = channels(path, &metadata.channels, channel_count)?;
+        if !levels_ordered(&levels) {
+            return Err(Error::Unsupported {
+                path: path.to_path_buf(),
+                detail: "the multiscale levels are not ordered from fine to coarse".to_string(),
+            });
+        }
+        let format = format.expect("a multiscale image has at least one dataset");
+        let channels = channels(path, &metadata.channels, channel_count, format, &levels)?;
         let name = metadata
             .name
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| dataset_name(path));
+        let level_metadata = levels
+            .iter()
+            .map(|level| Level::new(level.layout.extent, level.layout.spacing))
+            .collect();
         Ok(Self {
             path: path.to_path_buf(),
-            store,
             name,
             levels,
-            channels,
+            pyramid: Pyramid::new(level_metadata, channels),
         })
     }
 
@@ -117,43 +127,66 @@ impl Image {
         &self.name
     }
 
-    pub fn channels(&self) -> &[ChannelInfo] {
-        &self.channels
+    pub fn pyramid(&self) -> &Pyramid {
+        &self.pyramid
     }
 
-    pub fn levels(&self) -> impl ExactSizeIterator<Item = LevelInfo> + '_ {
-        self.levels.iter().map(|level| level.info)
-    }
-
-    pub fn read(&self, level: usize) -> Result<Volume, Error> {
+    pub fn read_brick(&self, level: usize, coord: BrickCoord) -> Result<BrickData, Error> {
         let Some(level) = self.levels.get(level) else {
             return Err(Error::Unsupported {
                 path: self.path.clone(),
                 detail: "the requested resolution level does not exist".to_string(),
             });
         };
-        let array = open_array(&self.store, &level.array_path)?;
-        let mut channels = Vec::with_capacity(self.channels.len());
-        for (index, info) in self.channels.iter().enumerate() {
-            let subset = ArraySubset::new_with_ranges(&level.layout.ranges(index as u64));
-            let data = retrieve(&array, &subset, &level.array_path)?;
-            if data.voxel_count() as u64 != level.info.extent.voxel_count() {
+        let grid = BrickGrid::new(level.layout.extent);
+        let spatial = grid.padded_range(coord);
+        let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
+        let extent = Extent::new(
+            spatial[0].end - spatial[0].start,
+            spatial[1].end - spatial[1].start,
+            spatial[2].end - spatial[2].start,
+        );
+        let mut channels = Vec::with_capacity(self.pyramid.channel_count());
+        for index in 0..self.pyramid.channel_count() {
+            let ranges = level.layout.ranges(
+                index as u64,
+                spatial[0].clone(),
+                spatial[1].clone(),
+                spatial[2].clone(),
+            );
+            let subset = ArraySubset::new_with_ranges(&ranges);
+            let data = retrieve(&level.array, &subset, &level.path)?;
+            if data.voxel_count() as u64 != extent.voxel_count() {
                 return Err(Error::Read {
-                    array: level.array_path.clone(),
+                    array: level.path.clone(),
                     detail: "the decoded array has an unexpected voxel count".to_string(),
                 });
             }
-            let channel = Channel::new(&info.name, info.tint, level.info.extent, data);
-            let channel = match info.window {
-                Some([start, end]) if end > start => {
-                    channel.with_window(Intensity::new(start, end))
-                }
-                _ => channel,
-            };
-            channels.push(channel);
+            channels.push(pad_brick(
+                &data,
+                origin,
+                extent,
+                grid.origin(coord),
+                level.layout.extent,
+            ));
         }
-        Ok(Volume::new(level.info.extent, level.info.spacing, channels))
+        Ok(BrickData::new(channels))
     }
+}
+
+fn levels_ordered(levels: &[LevelArray]) -> bool {
+    levels.windows(2).all(|pair| {
+        let fine = &pair[0].layout;
+        let coarse = &pair[1].layout;
+        let (fine_extent, coarse_extent) = (fine.extent, coarse.extent);
+        let (fine_spacing, coarse_spacing) = (fine.spacing, coarse.spacing);
+        fine_extent.x() >= coarse_extent.x()
+            && fine_extent.y() >= coarse_extent.y()
+            && fine_extent.z() >= coarse_extent.z()
+            && fine_spacing.x() <= coarse_spacing.x()
+            && fine_spacing.y() <= coarse_spacing.y()
+            && fine_spacing.z() <= coarse_spacing.z()
+    })
 }
 
 fn array_path(path: &str) -> String {
@@ -174,13 +207,17 @@ fn open_array(
     })
 }
 
-fn ensure_supported(
+fn supported_format(
     path: &Path,
     array: &Array<dyn ReadableWritableListableStorageTraits>,
-) -> Result<(), Error> {
+) -> Result<VoxelFormat, Error> {
     let data_type = array.data_type();
-    if data_type == &uint8() || data_type == &uint16() || data_type == &float32() {
-        Ok(())
+    if data_type == &uint8() {
+        Ok(VoxelFormat::U8)
+    } else if data_type == &uint16() {
+        Ok(VoxelFormat::U16)
+    } else if data_type == &float32() {
+        Ok(VoxelFormat::F32)
     } else {
         Err(Error::Unsupported {
             path: path.to_path_buf(),
@@ -224,6 +261,8 @@ fn channels(
     path: &Path,
     metadata: &[ChannelMetadata],
     count: u32,
+    format: VoxelFormat,
+    levels: &[LevelArray],
 ) -> Result<Vec<ChannelInfo>, Error> {
     if !metadata.is_empty() && metadata.len() != count as usize {
         return Err(Error::Metadata {
@@ -234,7 +273,7 @@ fn channels(
             ),
         });
     }
-    Ok((0..count)
+    (0..count)
         .map(|index| {
             let metadata = metadata.get(index as usize);
             let name = metadata
@@ -244,10 +283,62 @@ fn channels(
             let tint = metadata
                 .map(|metadata| metadata.tint)
                 .unwrap_or(PALETTE[index as usize % PALETTE.len()]);
-            let window = metadata.and_then(|metadata| metadata.window);
-            ChannelInfo { name, tint, window }
+            let data_range = metadata.and_then(|metadata| metadata.data).and_then(valid);
+            let omero_window = metadata
+                .and_then(|metadata| metadata.window)
+                .and_then(valid);
+            let sampled = if data_range.is_none() && omero_window.is_none() {
+                sample_range(levels, index as usize)?
+            } else {
+                None
+            };
+            let intensity = match format {
+                VoxelFormat::U8 => Intensity::new(0.0, f32::from(u8::MAX)),
+                VoxelFormat::U16 => Intensity::new(0.0, f32::from(u16::MAX)),
+                VoxelFormat::F32 => data_range
+                    .or(omero_window)
+                    .or(sampled)
+                    .unwrap_or_else(|| Intensity::new(0.0, 1.0)),
+            };
+            let window = omero_window
+                .or(data_range)
+                .or(sampled)
+                .or_else(|| (intensity.span() > 0.0).then_some(intensity))
+                .unwrap_or_else(|| Intensity::new(0.0, 1.0));
+            Ok(ChannelInfo::new(name, tint, intensity, window, format))
         })
-        .collect())
+        .collect()
+}
+
+fn sample_range(levels: &[LevelArray], channel: usize) -> Result<Option<Intensity>, Error> {
+    let level = levels.last().expect("a multiscale image has a level");
+    let extent = level.layout.extent;
+    let probe = |limit: u32| {
+        let side = limit.min(RANGE_PROBE_SIDE);
+        let start = (limit - side) / 2;
+        start..start + side
+    };
+    let spatial = if extent.voxel_count() <= RANGE_SAMPLE_VOXELS {
+        (0..extent.x(), 0..extent.y(), 0..extent.z())
+    } else {
+        (probe(extent.x()), probe(extent.y()), probe(extent.z()))
+    };
+    let ranges = level
+        .layout
+        .ranges(channel as u64, spatial.0, spatial.1, spatial.2);
+    let subset = ArraySubset::new_with_ranges(&ranges);
+    let data = retrieve(&level.array, &subset, &level.path)?;
+    let range = data.range();
+    if range.span() > 0.0 {
+        Ok(Some(range))
+    } else {
+        Ok(None)
+    }
+}
+
+fn valid(range: [f32; 2]) -> Option<Intensity> {
+    (range[0].is_finite() && range[1].is_finite() && range[0] < range[1])
+        .then(|| Intensity::new(range[0], range[1]))
 }
 
 fn dataset_name(path: &Path) -> String {

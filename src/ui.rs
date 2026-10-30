@@ -1,6 +1,7 @@
-use crate::dataset::{Dataset, SourceLevel};
+use crate::dataset::{Dataset, Origin};
 use crate::scene::Scene;
 use egui::{RichText, Ui};
+use grana_render::FrameInfo;
 
 pub struct Message(String);
 
@@ -19,6 +20,8 @@ pub struct UiState<'a> {
     pub adapter: &'a str,
     pub loading: Option<&'a str>,
     pub message: Option<&'a Message>,
+    pub frame: FrameInfo,
+    pub pending: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -56,9 +59,16 @@ pub fn build(root: &mut Ui, state: &mut UiState<'_>) -> Actions {
                     ui.separator();
                     channels_section(ui, state.scene);
                     ui.separator();
-                    transfer_section(ui, state.scene);
+                    display_section(ui, state.scene);
                     ui.separator();
                     rendering_section(ui, state.scene);
+                    ui.separator();
+                    streaming_section(
+                        ui,
+                        state.frame,
+                        state.pending,
+                        state.scene.dataset.level_count(),
+                    );
                     ui.separator();
                     camera_section(ui, &mut actions);
                     ui.separator();
@@ -90,7 +100,7 @@ fn open_section(
         }
     });
     ui.label(
-        RichText::new("drop a .zarr folder onto the viewport")
+        RichText::new("streams bricks of a multiscale .zarr folder")
             .small()
             .weak(),
     );
@@ -104,18 +114,18 @@ fn open_section(
 }
 
 fn dataset_section(ui: &mut Ui, dataset: &Dataset) {
-    ui.strong(&dataset.name);
+    ui.strong(dataset.name());
     egui::Grid::new("dataset")
         .num_columns(2)
         .spacing([12.0, 3.0])
         .show(ui, |ui| {
-            let extent = dataset.extent;
+            let extent = dataset.extent();
             row(
                 ui,
                 "dimensions",
                 format!("{} × {} × {}", extent.x(), extent.y(), extent.z()),
             );
-            let spacing = dataset.spacing;
+            let spacing = dataset.spacing();
             row(
                 ui,
                 "voxel size",
@@ -132,7 +142,7 @@ fn dataset_section(ui: &mut Ui, dataset: &Dataset) {
                 "field of view",
                 format!("{:.1} × {:.1} × {:.1} µm", world.x, world.y, world.z),
             );
-            row(ui, "channels", dataset.channels.len().to_string());
+            row(ui, "channels", dataset.channels().len().to_string());
             row(
                 ui,
                 "format",
@@ -140,22 +150,15 @@ fn dataset_section(ui: &mut Ui, dataset: &Dataset) {
                     .format()
                     .map_or_else(|| "mixed".to_string(), |format| format!("{format:?}")),
             );
-            row(ui, "pyramid", dataset.level_count.to_string());
-            match dataset.source {
-                Some(SourceLevel {
-                    extent,
-                    level,
-                    level_count,
-                }) => {
-                    row(
-                        ui,
-                        "source",
-                        format!("{} × {} × {}", extent.x(), extent.y(), extent.z()),
-                    );
-                    row(ui, "level", format!("{} of {}", level + 1, level_count));
-                }
-                None => row(ui, "source", "synthetic".to_string()),
-            }
+            row(ui, "pyramid", dataset.level_count().to_string());
+            row(
+                ui,
+                "source",
+                match dataset.origin() {
+                    Origin::Synthetic => "synthetic".to_string(),
+                    Origin::Zarr => "OME-Zarr".to_string(),
+                },
+            );
         });
 }
 
@@ -163,20 +166,20 @@ fn channels_section(ui: &mut Ui, scene: &mut Scene) {
     ui.strong("Channels");
     let selected = scene.selected;
     let mut clicked = None;
-    for (index, channel) in scene.channels.iter_mut().enumerate() {
-        let summary = &scene.dataset.channels[index];
+    for (index, view) in scene.channels.iter_mut().enumerate() {
+        let channel = &scene.dataset.channels()[index];
         ui.horizontal(|ui| {
-            ui.checkbox(&mut channel.enabled, "");
-            color_swatch(ui, summary.tint);
+            ui.checkbox(&mut view.enabled, "");
+            color_swatch(ui, channel.tint());
             if ui
-                .selectable_label(selected == index, &summary.name)
+                .selectable_label(selected == index, channel.name())
                 .clicked()
             {
                 clicked = Some(index);
             }
         });
         ui.add(
-            egui::Slider::new(&mut channel.opacity, 0.0..=1.0)
+            egui::Slider::new(&mut view.opacity, 0.0..=1.0)
                 .text("opacity")
                 .show_value(false),
         );
@@ -186,23 +189,36 @@ fn channels_section(ui: &mut Ui, scene: &mut Scene) {
     }
 }
 
-fn transfer_section(ui: &mut Ui, scene: &mut Scene) {
+fn display_section(ui: &mut Ui, scene: &mut Scene) {
     let index = scene.selected;
-    let name = scene.dataset.channels[index].name.clone();
-    let window = scene.dataset.channels[index].window;
-    let intensity = scene.dataset.channels[index].intensity;
-    ui.strong(format!("Transfer · {name}"));
-    ui.label(
-        RichText::new(format!(
-            "display {:.0} … {:.0} · data {:.0} … {:.0}",
-            window.min(),
-            window.max(),
-            intensity.min(),
-            intensity.max()
-        ))
-        .small()
-        .weak(),
-    );
+    let name = scene.channel(index).name().to_string();
+    let data = scene.channel(index).intensity();
+    let current = scene.channels[index].window;
+    let mut start = current.min();
+    let mut end = current.max();
+    let available = data.min()..=data.max();
+    ui.strong(format!("Display · {name}"));
+    let mut changed = false;
+    changed |= ui
+        .add(egui::Slider::new(&mut start, available.clone()).text("black"))
+        .changed();
+    changed |= ui
+        .add(egui::Slider::new(&mut end, available).text("white"))
+        .changed();
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!("data {:.0} … {:.0}", data.min(), data.max()))
+                .small()
+                .weak(),
+        );
+        if ui.small_button("Auto").clicked() {
+            scene.reset_window(index);
+        }
+    });
+    if changed {
+        scene.set_window(index, start, end);
+    }
+    let window = scene.channels[index].window;
     scene.selected_transfer().ui(ui, window);
 }
 
@@ -222,6 +238,40 @@ fn rendering_section(ui: &mut Ui, scene: &mut Scene) {
             .text("shininess")
             .logarithmic(true),
     );
+}
+
+fn streaming_section(ui: &mut Ui, frame: FrameInfo, pending: usize, levels: usize) {
+    ui.strong("Streaming");
+    egui::Grid::new("streaming")
+        .num_columns(2)
+        .spacing([12.0, 3.0])
+        .show(ui, |ui| {
+            row(ui, "level", format!("{} of {levels}", frame.level + 1));
+            row(
+                ui,
+                "resident",
+                format!("{} / {} bricks", frame.resident, frame.visible),
+            );
+            row(
+                ui,
+                "cache",
+                format!(
+                    "{:.0} MiB · {} slots",
+                    frame.bytes as f64 / (1024.0 * 1024.0),
+                    frame.slots
+                ),
+            );
+        });
+    if pending > 0 {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(
+                RichText::new(format!("{pending} bricks in flight"))
+                    .small()
+                    .weak(),
+            );
+        });
+    }
 }
 
 fn camera_section(ui: &mut Ui, actions: &mut Actions) {

@@ -62,14 +62,9 @@ pub fn volume() -> Volume {
         extent,
         spacing,
         vec![
-            Channel::new("Nuclei", [0.28, 0.45, 1.00], extent, VoxelData::U16(nuclei)),
-            Channel::new(
-                "Membrane",
-                [0.25, 1.00, 0.40],
-                extent,
-                VoxelData::U16(membrane),
-            ),
-            Channel::new("Puncta", [1.00, 0.30, 0.65], extent, VoxelData::U16(puncta)),
+            Channel::new("Nuclei", [0.28, 0.45, 1.00], VoxelData::U16(nuclei)),
+            Channel::new("Membrane", [0.25, 1.00, 0.40], VoxelData::U16(membrane)),
+            Channel::new("Puncta", [1.00, 0.30, 0.65], VoxelData::U16(puncta)),
         ],
     )
 }

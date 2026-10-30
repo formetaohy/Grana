@@ -1,33 +1,25 @@
-use crate::{Extent, VoxelData};
+use crate::{Extent, Spacing};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Level {
     extent: Extent,
-    data: VoxelData,
+    spacing: Spacing,
 }
 
 impl Level {
-    pub fn new(extent: Extent, data: VoxelData) -> Self {
-        assert_eq!(
-            data.voxel_count() as u64,
-            extent.voxel_count(),
-            "voxel count must match extent"
-        );
-        Self { extent, data }
+    pub fn new(extent: Extent, spacing: Spacing) -> Self {
+        Self { extent, spacing }
     }
 
-    pub fn extent(&self) -> Extent {
+    pub fn extent(self) -> Extent {
         self.extent
     }
 
-    pub fn data(&self) -> &VoxelData {
-        &self.data
+    pub fn spacing(self) -> Spacing {
+        self.spacing
     }
 
-    pub fn downsampled(&self) -> Self {
-        Self {
-            extent: self.extent.halve(),
-            data: self.data.downsampled(self.extent),
-        }
+    pub fn world_extent(self) -> [f32; 3] {
+        self.spacing.world_extent(self.extent)
     }
 }

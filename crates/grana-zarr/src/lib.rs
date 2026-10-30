@@ -4,4 +4,4 @@ mod image;
 mod metadata;
 
 pub use error::Error;
-pub use image::{ChannelInfo, Image, LevelInfo};
+pub use image::Image;

@@ -2,8 +2,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use grana_volume::{Extent, Intensity, Spacing, VoxelData};
+use grana_volume::{BrickCoord, Extent, Intensity, Spacing, VoxelData, VoxelFormat};
 use grana_zarr::Image;
+
+const SIDE: u32 = 34;
 
 #[test]
 fn reads_ome_zarr_v04_and_v05() {
@@ -15,61 +17,78 @@ fn reads_ome_zarr_v04_and_v05() {
 
     let image = Image::open(&v4).expect("the v0.4 dataset opens");
     assert_eq!(image.name(), "fixture");
-    assert_eq!(image.channels().len(), 2);
-    assert_eq!(image.channels()[0].name, "DAPI");
-    assert_eq!(image.channels()[0].tint, [0.0, 0.0, 1.0]);
-    assert_eq!(image.channels()[0].window, Some([0.0, 65535.0]));
-    let levels = image.levels().collect::<Vec<_>>();
-    assert_eq!(levels.len(), 2);
-    assert_eq!(levels[0].extent, Extent::new(5, 4, 3));
-    assert_eq!(levels[0].spacing, Spacing::new(0.5, 0.5, 4.0));
-    assert_eq!(levels[1].extent, Extent::new(3, 2, 2));
-    assert_eq!(levels[1].spacing, Spacing::new(1.0, 1.0, 4.0));
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.channel_count(), 2);
+    assert_eq!(pyramid.channels()[0].name(), "DAPI");
+    assert_eq!(pyramid.channels()[0].tint(), [0.0, 0.0, 1.0]);
+    assert_eq!(
+        pyramid.channels()[0].intensity(),
+        Intensity::new(0.0, 65535.0)
+    );
+    assert_eq!(pyramid.channels()[0].window(), Intensity::new(0.0, 65535.0));
+    assert_eq!(pyramid.channels()[0].format(), VoxelFormat::U16);
+    assert_eq!(pyramid.level_count(), 2);
+    assert_eq!(pyramid.level(0).extent(), Extent::new(5, 4, 3));
+    assert_eq!(pyramid.level(0).spacing(), Spacing::new(0.5, 0.5, 4.0));
+    assert_eq!(pyramid.level(1).extent(), Extent::new(3, 2, 2));
+    assert_eq!(pyramid.level(1).spacing(), Spacing::new(1.0, 1.0, 4.0));
 
-    let volume = image.read(0).expect("the v0.4 volume reads");
-    assert_eq!(volume.extent(), Extent::new(5, 4, 3));
-    assert_eq!(volume.spacing(), Spacing::new(0.5, 0.5, 4.0));
-    assert_eq!(volume.channel_count(), 2);
-    assert_eq!(volume.channels()[0].name(), "DAPI");
-    assert_eq!(volume.channels()[0].tint(), [0.0, 0.0, 1.0]);
-    assert_eq!(volume.channels()[0].window(), Intensity::new(0.0, 65535.0));
-    assert_eq!(volume.channels()[0].intensity().max(), 234.0);
-    let first = volume.channels()[0].levels()[0].data();
-    let VoxelData::U16(data) = first else {
+    let brick = image
+        .read_brick(0, BrickCoord::new(0, 0, 0))
+        .expect("the v0.4 brick reads");
+    let VoxelData::U16(first) = &brick.channels()[0] else {
         panic!("the fixture stores uint16 voxels");
     };
-    for z in 0..3 {
-        for y in 0..4 {
-            for x in 0..5 {
-                let index = (z * 4 * 5 + y * 5 + x) as usize;
-                assert_eq!(data[index], (100 * z + 10 * y + x) as u16);
+    assert_eq!(first.len(), (SIDE * SIDE * SIDE) as usize);
+    for z in 0..3u32 {
+        for y in 0..4u32 {
+            for x in 0..5u32 {
+                assert_eq!(voxel(first, x, y, z), (100 * z + 10 * y + x) as u16);
             }
         }
     }
-    let VoxelData::U16(second) = volume.channels()[1].levels()[0].data() else {
+    assert_eq!(voxel(first, 0, 0, 0), 0);
+    assert_eq!(first[0], 0);
+    assert_eq!(voxel(first, SIDE - 2, SIDE - 2, SIDE - 2), 234);
+    let VoxelData::U16(second) = &brick.channels()[1] else {
         panic!("the fixture stores uint16 voxels");
     };
-    assert_eq!(second[0], 1000);
+    assert_eq!(voxel(second, 0, 0, 0), 1000);
 
     let image = Image::open(&v5).expect("the v0.5 dataset opens");
     assert_eq!(image.name(), "fixture-v5");
-    assert_eq!(image.channels().len(), 1);
-    assert_eq!(image.channels()[0].name, "RFP");
-    assert_eq!(image.channels()[0].tint, [1.0, 0.0, 0.0]);
-    let volume = image.read(0).expect("the v0.5 volume reads");
-    assert_eq!(volume.extent(), Extent::new(4, 3, 2));
-    assert_eq!(volume.spacing(), Spacing::new(0.5, 0.5, 4.0));
-    let VoxelData::U8(data) = volume.channels()[0].levels()[0].data() else {
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.channel_count(), 1);
+    assert_eq!(pyramid.channels()[0].name(), "RFP");
+    assert_eq!(pyramid.channels()[0].tint(), [1.0, 0.0, 0.0]);
+    assert_eq!(
+        pyramid.channels()[0].intensity(),
+        Intensity::new(0.0, 255.0)
+    );
+    assert_eq!(pyramid.level(0).extent(), Extent::new(4, 3, 2));
+    assert_eq!(pyramid.level(0).spacing(), Spacing::new(0.5, 0.5, 4.0));
+    let brick = image
+        .read_brick(0, BrickCoord::new(0, 0, 0))
+        .expect("the v0.5 brick reads");
+    let VoxelData::U8(data) = &brick.channels()[0] else {
         panic!("the fixture stores uint8 voxels");
     };
-    for z in 0..2 {
-        for y in 0..3 {
-            for x in 0..4 {
-                let index = (z * 3 * 4 + y * 4 + x) as usize;
-                assert_eq!(data[index], (20 * z + 5 * y + x) as u8);
+    for z in 0..2u32 {
+        for y in 0..3u32 {
+            for x in 0..4u32 {
+                assert_eq!(voxel(data, x, y, z), (20 * z + 5 * y + x) as u8);
             }
         }
     }
+    assert_eq!(voxel(data, 3, 2, 1), 33);
+    assert_eq!(voxel(data, SIDE - 2, SIDE - 2, SIDE - 2), 33);
+}
+
+fn voxel<T: Copy>(data: &[T], x: u32, y: u32, z: u32) -> T {
+    let x = (x + 1).min(SIDE - 1);
+    let y = (y + 1).min(SIDE - 1);
+    let z = (z + 1).min(SIDE - 1);
+    data[(x + SIDE * (y + SIDE * z)) as usize]
 }
 
 fn write_v04(root: &Path) {

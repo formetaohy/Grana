@@ -1,15 +1,21 @@
+mod brick;
 mod channel;
 mod extent;
 mod intensity;
 mod level;
+mod pyramid;
 mod spacing;
 mod volume;
 mod voxel;
 
-pub use channel::Channel;
+pub use brick::{
+    BRICK_APRON, BRICK_SIDE, BrickCoord, BrickData, BrickGrid, PADDED_SIDE, pad_brick,
+};
+pub use channel::ChannelInfo;
 pub use extent::Extent;
 pub use intensity::Intensity;
 pub use level::Level;
+pub use pyramid::Pyramid;
 pub use spacing::Spacing;
-pub use volume::Volume;
+pub use volume::{Channel, Volume};
 pub use voxel::{VoxelData, VoxelFormat};

@@ -3,7 +3,8 @@ use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 const REQUIRED_FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_ARRAY
-    .union(wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING);
+    .union(wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING)
+    .union(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
 
 pub struct Gpu {
     pub surface: wgpu::Surface<'static>,
@@ -31,7 +32,7 @@ impl Gpu {
             .expect("no graphics adapter can present to this window");
         assert!(
             adapter.features().contains(REQUIRED_FEATURES),
-            "the graphics adapter cannot sample texture binding arrays"
+            "the graphics adapter cannot stream packed volume bricks"
         );
 
         let info = adapter.get_info();

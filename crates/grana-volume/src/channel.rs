@@ -1,51 +1,37 @@
-use crate::{Extent, Intensity, Level, VoxelData, VoxelFormat};
+use crate::{Intensity, VoxelFormat};
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Channel {
+pub struct ChannelInfo {
     name: String,
     tint: [f32; 3],
     intensity: Intensity,
     window: Intensity,
-    levels: Vec<Level>,
+    format: VoxelFormat,
 }
 
-impl Channel {
-    pub fn new(name: impl Into<String>, tint: [f32; 3], extent: Extent, data: VoxelData) -> Self {
+impl ChannelInfo {
+    pub fn new(
+        name: impl Into<String>,
+        tint: [f32; 3],
+        intensity: Intensity,
+        window: Intensity,
+        format: VoxelFormat,
+    ) -> Self {
         assert!(
             tint.iter().all(|component| (0.0..=1.0).contains(component)),
             "a channel tint is an srgb triple"
         );
-        let intensity = data.range();
-        let mut levels = vec![Level::new(extent, data)];
-        while levels
-            .last()
-            .expect("a channel always holds level zero")
-            .extent()
-            .max_dimension()
-            > 1
-        {
-            let next = levels
-                .last()
-                .expect("a channel always holds level zero")
-                .downsampled();
-            levels.push(next);
-        }
-        Self {
-            name: name.into(),
-            tint,
-            intensity,
-            window: intensity,
-            levels,
-        }
-    }
-
-    pub fn with_window(mut self, window: Intensity) -> Self {
         assert!(
             window.span() > 0.0,
             "a display window needs a positive span"
         );
-        self.window = window;
-        self
+        Self {
+            name: name.into(),
+            tint,
+            intensity,
+            window,
+            format,
+        }
     }
 
     pub fn name(&self) -> &str {
@@ -64,19 +50,7 @@ impl Channel {
         self.window
     }
 
-    pub fn extent(&self) -> Extent {
-        self.levels[0].extent()
-    }
-
-    pub fn levels(&self) -> &[Level] {
-        &self.levels
-    }
-
-    pub fn level_count(&self) -> u32 {
-        self.levels.len() as u32
-    }
-
     pub fn format(&self) -> VoxelFormat {
-        self.levels[0].data().format()
+        self.format
     }
 }

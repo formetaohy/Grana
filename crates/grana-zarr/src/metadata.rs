@@ -28,6 +28,7 @@ pub struct Dataset {
 pub struct ChannelMetadata {
     pub label: Option<String>,
     pub tint: [f32; 3],
+    pub data: Option<[f32; 2]>,
     pub window: Option<[f32; 2]>,
 }
 
@@ -156,9 +157,8 @@ fn assemble(
 }
 
 fn channel(channel: Channel) -> ChannelMetadata {
-    let window = [channel.window.start, channel.window.end];
-    let window = (window[0].is_finite() && window[1].is_finite() && window[0] < window[1])
-        .then_some([window[0] as f32, window[1] as f32]);
+    let data = valid_range(channel.window.min, channel.window.max);
+    let window = valid_range(channel.window.start, channel.window.end);
     ChannelMetadata {
         label: channel
             .other
@@ -170,8 +170,14 @@ fn channel(channel: Channel) -> ChannelMetadata {
             f32::from(channel.color.g) / 255.0,
             f32::from(channel.color.b) / 255.0,
         ],
+        data,
         window,
     }
+}
+
+fn valid_range(min: f64, max: f64) -> Option<[f32; 2]> {
+    let range = [min as f32, max as f32];
+    (range[0].is_finite() && range[1].is_finite() && range[0] < range[1]).then_some(range)
 }
 
 fn scale(path: &Path, transforms: &[CoordinateTransform]) -> Result<Option<Vec<f32>>, Error> {

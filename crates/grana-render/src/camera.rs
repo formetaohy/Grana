@@ -32,6 +32,10 @@ impl Camera {
         self.fov_y
     }
 
+    pub fn distance(&self) -> f32 {
+        self.distance
+    }
+
     pub fn eye(&self) -> Vec3 {
         let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
         let (sin_pitch, cos_pitch) = self.pitch.sin_cos();

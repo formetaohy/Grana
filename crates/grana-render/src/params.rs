@@ -1,4 +1,5 @@
 use crate::TransferFunction;
+use grana_volume::Intensity;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shading {
@@ -23,6 +24,7 @@ impl Default for Shading {
 pub struct ChannelParams {
     pub visible: bool,
     pub opacity: f32,
+    pub window: Intensity,
     pub transfer: TransferFunction,
 }
 
