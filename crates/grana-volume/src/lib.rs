@@ -1,3 +1,4 @@
+mod axis;
 mod brick;
 mod channel;
 mod extent;
@@ -8,6 +9,7 @@ mod spacing;
 mod volume;
 mod voxel;
 
+pub use axis::Axis;
 pub use brick::{
     BRICK_APRON, BRICK_SIDE, BrickCoord, BrickData, BrickGrid, PADDED_SIDE, pad_brick,
 };

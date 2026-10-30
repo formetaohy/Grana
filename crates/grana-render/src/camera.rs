@@ -1,4 +1,5 @@
 use glam::{Mat4, Vec2, Vec3};
+use grana_volume::Axis;
 
 const PITCH_LIMIT: f32 = 1.45;
 const ORBIT_SENSITIVITY: f32 = 0.007;
@@ -106,5 +107,38 @@ impl Camera {
 
     pub fn zoom(&mut self, scroll: f32) {
         self.distance = (self.distance * (1.0 - scroll * ZOOM_SENSITIVITY)).clamp(1e-4, 1.0e7);
+    }
+
+    pub fn focus(&self) -> Vec3 {
+        self.pivot
+    }
+
+    pub fn focus_along(&self, axis: Axis) -> f32 {
+        self.pivot[axis.index()]
+    }
+
+    pub fn set_focus_along(&mut self, axis: Axis, value: f32) {
+        self.pivot[axis.index()] = value;
+    }
+
+    pub fn move_along(&mut self, axis: Axis, distance: f32) {
+        self.pivot[axis.index()] += distance;
+    }
+
+    pub fn pan_in_plane(&mut self, axis: Axis, delta: Vec2, world_per_pixel: f32) {
+        let (right, up) = plane_basis(axis);
+        self.pivot += (right * -delta.x + up * delta.y) * world_per_pixel;
+    }
+
+    pub fn clamp_focus(&mut self, half: Vec3) {
+        self.pivot = self.pivot.clamp(-half, half);
+    }
+}
+
+pub fn plane_basis(axis: Axis) -> (Vec3, Vec3) {
+    match axis {
+        Axis::X => (Vec3::Y, Vec3::Z),
+        Axis::Y => (Vec3::X, Vec3::Z),
+        Axis::Z => (Vec3::X, Vec3::Y),
     }
 }

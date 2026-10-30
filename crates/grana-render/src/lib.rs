@@ -3,11 +3,13 @@ mod camera;
 mod level;
 mod params;
 mod renderer;
+mod section;
 mod transfer;
 
 pub const MAX_CHANNEL: usize = 8;
 
-pub use camera::Camera;
+pub use camera::{Camera, plane_basis};
 pub use params::{ChannelParams, RenderParams, Shading};
-pub use renderer::{BrickRequest, Frame, FrameInfo, Renderer};
+pub use renderer::{BrickRequest, Frame, FrameInfo, Renderer, ViewInfo};
+pub use section::SectionCamera;
 pub use transfer::{Stop, TransferFunction};

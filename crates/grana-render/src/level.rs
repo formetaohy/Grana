@@ -43,6 +43,7 @@ pub struct LevelCache {
     records: Vec<BrickRecord>,
     buffer: Buffer,
     group: BindGroup,
+    section_group: BindGroup,
 }
 
 impl LevelCache {
@@ -50,6 +51,7 @@ impl LevelCache {
         device: &Device,
         layout: &BindGroupLayout,
         uniforms: &Buffer,
+        section_uniforms: &Buffer,
         lut: &TextureView,
         lut_sampler: &Sampler,
         level: Level,
@@ -61,28 +63,8 @@ impl LevelCache {
             contents: bytemuck::cast_slice(&records),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
-        let group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.frame.group"),
-            layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: uniforms.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::TextureView(lut),
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: BindingResource::Sampler(lut_sampler),
-                },
-                BindGroupEntry {
-                    binding: 3,
-                    resource: buffer.as_entire_binding(),
-                },
-            ],
-        });
+        let group = bind_group(device, layout, uniforms, &buffer, lut, lut_sampler);
+        let section_group = bind_group(device, layout, section_uniforms, &buffer, lut, lut_sampler);
         let world = Vec3::from(level.world_extent());
         let extent = level.extent();
         let dims = Vec3::new(extent.x() as f32, extent.y() as f32, extent.z() as f32);
@@ -95,11 +77,16 @@ impl LevelCache {
             records,
             buffer,
             group,
+            section_group,
         }
     }
 
     pub fn group(&self) -> &BindGroup {
         &self.group
+    }
+
+    pub fn section_group(&self) -> &BindGroup {
+        &self.section_group
     }
 
     pub fn slot(&self, index: usize) -> u32 {
@@ -114,4 +101,36 @@ impl LevelCache {
             bytemuck::bytes_of(&record),
         );
     }
+}
+
+fn bind_group(
+    device: &Device,
+    layout: &BindGroupLayout,
+    uniforms: &Buffer,
+    records: &Buffer,
+    lut: &TextureView,
+    lut_sampler: &Sampler,
+) -> BindGroup {
+    device.create_bind_group(&BindGroupDescriptor {
+        label: Some("grana.frame.group"),
+        layout,
+        entries: &[
+            BindGroupEntry {
+                binding: 0,
+                resource: uniforms.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 1,
+                resource: BindingResource::TextureView(lut),
+            },
+            BindGroupEntry {
+                binding: 2,
+                resource: BindingResource::Sampler(lut_sampler),
+            },
+            BindGroupEntry {
+                binding: 3,
+                resource: records.as_entire_binding(),
+            },
+        ],
+    })
 }

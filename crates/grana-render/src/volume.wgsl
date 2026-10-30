@@ -1,17 +1,3 @@
-enable wgpu_binding_array;
-
-const MAX_CHANNEL: u32 = 8u;
-const BRICK_SIDE: f32 = 32.0;
-const PADDED_SIDE: f32 = 34.0;
-
-struct BrickRecord {
-    slot: u32,
-    reserved0: u32,
-    reserved1: u32,
-    reserved2: u32,
-    maxima: array<vec4<f32>, 2>,
-}
-
 struct Uniforms {
     inv_view_projection: mat4x4<f32>,
     eye: vec4<f32>,
@@ -54,18 +40,6 @@ fn unproject(ndc: vec3<f32>) -> vec3<f32> {
     return homogeneous.xyz / homogeneous.w;
 }
 
-fn srgb_encode(linear: vec3<f32>) -> vec3<f32> {
-    let clamped = clamp(linear, vec3<f32>(0.0), vec3<f32>(1.0));
-    let low = clamped * 12.92;
-    let high = 1.055 * pow(clamped, vec3<f32>(1.0 / 2.4)) - 0.055;
-    return select(high, low, clamped <= vec3<f32>(0.0031308));
-}
-
-fn background(ndc: vec2<f32>) -> vec3<f32> {
-    let height = clamp(ndc.y * 0.5 + 0.5, 0.0, 1.0);
-    return mix(vec3<f32>(0.004, 0.005, 0.008), vec3<f32>(0.030, 0.038, 0.055), height);
-}
-
 fn channel_opacity(index: u32) -> f32 {
     return uniforms.channel_opacity[index / 4u][index % 4u];
 }
@@ -78,54 +52,28 @@ fn channel_inverse(index: u32) -> f32 {
     return uniforms.channel_inverse[index / 4u][index % 4u];
 }
 
-fn lut_row(index: u32) -> f32 {
-    return (f32(index) + 0.5) / f32(MAX_CHANNEL);
-}
-
-fn windowed(index: u32, unit: f32) -> f32 {
-    return clamp((unit - channel_window(index)) * channel_inverse(index), 0.0, 1.0);
-}
-
-fn lut_sample(index: u32, unit: f32) -> vec4<f32> {
-    return textureSampleLevel(lut, lut_sampler, vec2<f32>(windowed(index, unit), lut_row(index)), 0.0);
-}
-
-fn brick_cell(uvw: vec3<f32>) -> vec3<u32> {
-    let grid = uniforms.grid.xyz;
-    let scaled = clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0))
-        * vec3<f32>(f32(grid.x), f32(grid.y), f32(grid.z));
-    let rounded = floor(scaled);
-    let cell = vec3<u32>(u32(rounded.x), u32(rounded.y), u32(rounded.z));
-    return min(cell, grid - vec3<u32>(1u));
-}
-
-fn brick_index(cell: vec3<u32>) -> u32 {
-    let grid = uniforms.grid.xyz;
-    return cell.x + grid.x * (cell.y + grid.y * cell.z);
-}
-
-fn slot_origin(slot: u32) -> vec3<f32> {
-    let grid = uniforms.atlas.xyz;
-    let layer = slot / (grid.x * grid.y);
-    let remainder = slot % (grid.x * grid.y);
-    let row = remainder / grid.x;
-    let column = remainder % grid.x;
-    return vec3<f32>(f32(column), f32(row), f32(layer)) * PADDED_SIDE;
+fn channel_sample(index: u32, unit: f32) -> vec4<f32> {
+    let position = windowed_unit(
+        channel_window(index),
+        channel_inverse(index),
+        unit,
+    );
+    return textureSampleLevel(lut, lut_sampler, vec2<f32>(position, lut_row(index)), 0.0);
 }
 
 fn sample_channel(index: u32, uvw: vec3<f32>) -> f32 {
-    let clamped = clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0));
-    let cell = brick_cell(clamped);
-    let record = bricks[brick_index(cell)];
+    let cell = brick_cell(uniforms.grid.xyz, uvw);
+    let record = bricks[brick_index(uniforms.grid.xyz, cell)];
     if (record.slot == 0u) {
         return 0.0;
     }
-    let position = clamped
-        * vec3<f32>(f32(uniforms.dims.x), f32(uniforms.dims.y), f32(uniforms.dims.z));
-    let cell_position = vec3<f32>(f32(cell.x), f32(cell.y), f32(cell.z)) * BRICK_SIDE;
-    let local = position - cell_position;
-    let atlas_size = vec3<f32>(f32(uniforms.atlas.x), f32(uniforms.atlas.y), f32(uniforms.atlas.z)) * PADDED_SIDE;
-    let texel = (slot_origin(record.slot - 1u) + local + vec3<f32>(1.5)) / atlas_size;
+    let texel = atlas_texel(
+        uniforms.grid.xyz,
+        uniforms.atlas.xyz,
+        uniforms.dims.xyz,
+        record.slot - 1u,
+        uvw,
+    );
     return textureSampleLevel(atlases[index], atlas_sampler, texel, 0.0).r;
 }
 
@@ -134,7 +82,7 @@ fn brick_transparent(record: BrickRecord) -> bool {
     for (var channel = 0u; channel < count; channel += 1u) {
         if (channel_opacity(channel) > 0.0) {
             let maximum = record.maxima[channel / 4u][channel % 4u];
-            let sample = lut_sample(channel, maximum);
+            let sample = channel_sample(channel, maximum);
             if (sample.a > 0.004) {
                 return false;
             }
@@ -218,8 +166,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         while (t < exit && steps < max_steps && cells < 4096u) {
             cells += 1u;
             let uvw = (eye + direction * t - box_min) / box_size;
-            let cell = brick_cell(uvw);
-            let record = bricks[brick_index(cell)];
+            let cell = brick_cell(uniforms.grid.xyz, uvw);
+            let record = bricks[brick_index(uniforms.grid.xyz, cell)];
             let boundary = min(t + boundary_delta(uvw, direction_uvw, step_length * 0.25), exit);
             if (record.slot == 0u || brick_transparent(record)) {
                 t = boundary;
@@ -234,7 +182,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                     let opacity = channel_opacity(channel);
                     if (opacity > 0.0) {
                         let unit = sample_channel(channel, position);
-                        let sample = lut_sample(channel, unit);
+                        let sample = channel_sample(channel, unit);
                         let per_voxel = clamp(sample.a, 0.0, 0.999);
                         if (per_voxel > 1.0e-4) {
                             let tau = -log(1.0 - per_voxel) * voxels_per_step * opacity;

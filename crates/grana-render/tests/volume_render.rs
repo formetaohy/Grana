@@ -1,5 +1,8 @@
-use grana_render::{Camera, ChannelParams, Frame, RenderParams, Renderer, TransferFunction};
-use grana_volume::{BrickGrid, Channel, Extent, Spacing, Volume, VoxelData};
+use grana_render::{
+    Camera, ChannelParams, Frame, FrameInfo, RenderParams, Renderer, SectionCamera,
+    TransferFunction,
+};
+use grana_volume::{Axis, BrickGrid, Channel, Extent, Spacing, Volume, VoxelData};
 
 const SIDE: u32 = 256;
 const FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_ARRAY
@@ -58,6 +61,7 @@ fn streams_two_channels() {
 
     let mut camera = Camera::new(35.0);
     camera.fit(glam::Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
     let params = RenderParams {
         shading: Default::default(),
         step_scale: 0.5,
@@ -74,9 +78,11 @@ fn streams_two_channels() {
     };
 
     let grid = BrickGrid::new(volume.extent());
-    let mut requests = Vec::new();
+    let mut volume_requests = Vec::new();
+    let mut section_requests = Vec::new();
     for round in 0..10 {
-        requests.clear();
+        volume_requests.clear();
+        section_requests.clear();
         let mut encoder = device.create_command_encoder(&Default::default());
         let info = renderer.draw(
             &device,
@@ -84,37 +90,47 @@ fn streams_two_channels() {
             Frame {
                 encoder: &mut encoder,
                 target: &view,
-                region: [0, 0, SIDE, SIDE],
+                volume_region: [0, 0, SIDE, SIDE],
+                section_region: [0, 0, 1, 1],
                 camera: &camera,
+                section: &section,
                 params: &params,
-                requests: &mut requests,
+                volume_requests: &mut volume_requests,
+                section_requests: &mut section_requests,
             },
         );
         queue.submit([encoder.finish()]);
-        assert_eq!(info.resident + requests.len(), info.visible);
-        if requests.is_empty() {
+        assert_eq!(
+            info.volume.resident + volume_requests.len(),
+            info.volume.visible
+        );
+        if volume_requests.is_empty() {
             break;
         }
         assert!(round < 9, "the stream never settled");
-        for request in &requests {
+        for request in &volume_requests {
             let brick = volume.brick(&grid, request.coord);
             assert!(renderer.upload(&device, &queue, request.level, request.coord, &brick));
         }
     }
 
     let mut encoder = device.create_command_encoder(&Default::default());
-    renderer.draw(
+    let info: FrameInfo = renderer.draw(
         &device,
         &queue,
         Frame {
             encoder: &mut encoder,
             target: &view,
-            region: [0, 0, SIDE, SIDE],
+            volume_region: [0, 0, SIDE, SIDE],
+            section_region: [0, 0, 1, 1],
             camera: &camera,
+            section: &section,
             params: &params,
-            requests: &mut requests,
+            volume_requests: &mut volume_requests,
+            section_requests: &mut section_requests,
         },
     );
+    assert_eq!(info.volume.resident, info.volume.visible);
 
     let row_bytes = SIDE * 4;
     let readback = device.create_buffer(&wgpu::BufferDescriptor {

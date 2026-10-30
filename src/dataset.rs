@@ -55,6 +55,11 @@ impl Dataset {
         Vec3::from(self.pyramid.level(0).world_extent())
     }
 
+    pub fn voxel_size(&self) -> Vec3 {
+        let spacing = self.spacing();
+        Vec3::new(spacing.x(), spacing.y(), spacing.z())
+    }
+
     pub fn level_count(&self) -> usize {
         self.pyramid.level_count()
     }

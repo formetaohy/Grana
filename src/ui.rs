@@ -1,7 +1,10 @@
 use crate::dataset::{Dataset, Origin};
+use crate::overlay::{self, Overlay};
 use crate::scene::Scene;
+use crate::viewport::Viewport;
 use egui::{RichText, Ui};
 use grana_render::FrameInfo;
+use grana_volume::Axis;
 
 pub struct Message(String);
 
@@ -17,6 +20,7 @@ impl Message {
 
 pub struct UiState<'a> {
     pub scene: &'a mut Scene,
+    pub view: &'a mut Viewport,
     pub adapter: &'a str,
     pub loading: Option<&'a str>,
     pub message: Option<&'a Message>,
@@ -28,7 +32,11 @@ pub struct UiState<'a> {
 pub struct Actions {
     pub open: bool,
     pub fit: bool,
-    pub viewport: egui::Rect,
+    pub fit_section: bool,
+    pub section_axis: Option<Axis>,
+    pub split: Option<f32>,
+    pub volume: egui::Rect,
+    pub section: egui::Rect,
 }
 
 impl Actions {
@@ -36,7 +44,11 @@ impl Actions {
         Self {
             open: false,
             fit: false,
-            viewport: egui::Rect::ZERO,
+            fit_section: false,
+            section_axis: None,
+            split: None,
+            volume: egui::Rect::ZERO,
+            section: egui::Rect::ZERO,
         }
     }
 }
@@ -57,27 +69,63 @@ pub fn build(root: &mut Ui, state: &mut UiState<'_>) -> Actions {
                     ui.separator();
                     dataset_section(ui, &state.scene.dataset);
                     ui.separator();
+                    section_section(ui, state, &mut actions);
+                    ui.separator();
                     channels_section(ui, state.scene);
                     ui.separator();
                     display_section(ui, state.scene);
                     ui.separator();
                     rendering_section(ui, state.scene);
                     ui.separator();
-                    streaming_section(
-                        ui,
-                        state.frame,
-                        state.pending,
-                        state.scene.dataset.level_count(),
-                    );
+                    streaming_section(ui, state);
                     ui.separator();
                     camera_section(ui, &mut actions);
                     ui.separator();
                     ui.label(RichText::new(state.adapter).small().weak());
                 });
         });
-    actions.viewport = egui::CentralPanel::no_frame()
-        .show(root, |ui| ui.max_rect())
+    let rect = egui::CentralPanel::no_frame()
+        .show(root, |ui| {
+            let rect = ui.max_rect();
+            let split = rect.left() + rect.width() * state.view.split();
+            let handle = egui::Rect::from_min_max(
+                egui::pos2(split - 3.0, rect.top()),
+                egui::pos2(split + 3.0, rect.bottom()),
+            );
+            let response = ui.interact(
+                handle,
+                ui.make_persistent_id("grana.split"),
+                egui::Sense::click_and_drag(),
+            );
+            if response.hovered() || response.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+            if response.dragged()
+                && let Some(pointer) = response.interact_pointer_pos()
+            {
+                actions.split = Some(((pointer.x - rect.left()) / rect.width()).clamp(0.25, 0.8));
+            }
+            rect
+        })
         .inner;
+    let split = rect.left() + rect.width() * state.view.split();
+    actions.volume =
+        egui::Rect::from_min_max(rect.left_top(), egui::pos2(split - 1.0, rect.bottom()));
+    actions.section =
+        egui::Rect::from_min_max(egui::pos2(split + 1.0, rect.top()), rect.right_bottom());
+    overlay::paint(
+        root,
+        &Overlay {
+            camera: state.view.camera(),
+            section: state.view.section(),
+            world: state.scene.dataset.world_size(),
+            levels: state.scene.dataset.level_count(),
+            volume_level: state.frame.volume.level,
+            section_level: state.frame.section.level,
+            volume_rect: actions.volume,
+            section_rect: actions.section,
+        },
+    );
     actions
 }
 
@@ -222,6 +270,47 @@ fn display_section(ui: &mut Ui, scene: &mut Scene) {
     scene.selected_transfer().ui(ui, window);
 }
 
+fn section_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
+    ui.strong("Section");
+    let axis = state.view.section().axis();
+    ui.horizontal(|ui| {
+        for (name, candidate) in [("XY", Axis::Z), ("XZ", Axis::Y), ("YZ", Axis::X)] {
+            if ui.selectable_label(axis == candidate, name).clicked() {
+                actions.section_axis = Some(candidate);
+            }
+        }
+        if ui.small_button("Fit").clicked() {
+            actions.fit_section = true;
+        }
+    });
+    let extent = state.scene.dataset.world_size()[axis.index()];
+    let mut position = state.view.camera().focus_along(axis) + 0.5 * extent;
+    if ui
+        .add(egui::Slider::new(&mut position, 0.0..=extent).text("plane"))
+        .changed()
+    {
+        state
+            .view
+            .camera_mut()
+            .set_focus_along(axis, position - 0.5 * extent);
+    }
+    let spacing = state.scene.dataset.spacing();
+    ui.label(
+        RichText::new(format!(
+            "{} plane · {:.3} µm steps",
+            axis.name(),
+            axis.spacing(spacing)
+        ))
+        .small()
+        .weak(),
+    );
+    ui.label(
+        RichText::new("drag pans · wheel steps · ctrl+wheel zooms")
+            .small()
+            .weak(),
+    );
+}
+
 fn rendering_section(ui: &mut Ui, scene: &mut Scene) {
     ui.strong("Volume");
     ui.add(
@@ -240,33 +329,50 @@ fn rendering_section(ui: &mut Ui, scene: &mut Scene) {
     );
 }
 
-fn streaming_section(ui: &mut Ui, frame: FrameInfo, pending: usize, levels: usize) {
+fn streaming_section(ui: &mut Ui, state: &UiState<'_>) {
     ui.strong("Streaming");
+    let levels = state.scene.dataset.level_count();
+    let volume = state.frame.volume;
+    let section = state.frame.section;
     egui::Grid::new("streaming")
         .num_columns(2)
         .spacing([12.0, 3.0])
         .show(ui, |ui| {
-            row(ui, "level", format!("{} of {levels}", frame.level + 1));
             row(
                 ui,
-                "resident",
-                format!("{} / {} bricks", frame.resident, frame.visible),
+                "volume",
+                format!(
+                    "level {} · {}/{} bricks",
+                    volume.level + 1,
+                    volume.resident,
+                    volume.visible
+                ),
             );
+            row(
+                ui,
+                "section",
+                format!(
+                    "level {} · {}/{} bricks",
+                    section.level + 1,
+                    section.resident,
+                    section.visible
+                ),
+            );
+            row(ui, "pyramid", levels.to_string());
             row(
                 ui,
                 "cache",
                 format!(
-                    "{:.0} MiB · {} slots",
-                    frame.bytes as f64 / (1024.0 * 1024.0),
-                    frame.slots
+                    "{:.0} MiB of brick cache",
+                    state.frame.bytes as f64 / (1024.0 * 1024.0)
                 ),
             );
         });
-    if pending > 0 {
+    if state.pending > 0 {
         ui.horizontal(|ui| {
             ui.spinner();
             ui.label(
-                RichText::new(format!("{pending} bricks in flight"))
+                RichText::new(format!("{} bricks in flight", state.pending))
                     .small()
                     .weak(),
             );
@@ -275,7 +381,7 @@ fn streaming_section(ui: &mut Ui, frame: FrameInfo, pending: usize, levels: usiz
 }
 
 fn camera_section(ui: &mut Ui, actions: &mut Actions) {
-    ui.strong("Camera");
+    ui.strong("View");
     if ui.button("Fit volume").clicked() {
         actions.fit = true;
     }

@@ -1,7 +1,8 @@
 use grana_render::{
-    BrickRequest, Camera, ChannelParams, Frame, FrameInfo, RenderParams, Renderer, TransferFunction,
+    BrickRequest, Camera, ChannelParams, Frame, RenderParams, Renderer, SectionCamera,
+    TransferFunction, ViewInfo,
 };
-use grana_volume::{BrickGrid, Channel, Extent, Level, Pyramid, Spacing, Volume, VoxelData};
+use grana_volume::{Axis, BrickGrid, Channel, Extent, Level, Pyramid, Spacing, Volume, VoxelData};
 
 const SIDE: u32 = 256;
 
@@ -87,10 +88,12 @@ fn switches_levels() {
         device: &device,
         queue: &queue,
         view: &view,
+        section: SectionCamera::new(Axis::Z),
         volumes: &volumes,
         grids: &grids,
         params: &params,
-        requests: Vec::new(),
+        volume_requests: Vec::new(),
+        section_requests: Vec::new(),
     };
 
     let fitted = stream.settle(&camera);
@@ -129,16 +132,19 @@ struct Stream<'a> {
     device: &'a wgpu::Device,
     queue: &'a wgpu::Queue,
     view: &'a wgpu::TextureView,
+    section: SectionCamera,
     volumes: &'a [Volume],
     grids: &'a [BrickGrid],
     params: &'a RenderParams,
-    requests: Vec<BrickRequest>,
+    volume_requests: Vec<BrickRequest>,
+    section_requests: Vec<BrickRequest>,
 }
 
 impl Stream<'_> {
-    fn settle(&mut self, camera: &Camera) -> FrameInfo {
+    fn settle(&mut self, camera: &Camera) -> ViewInfo {
         for _ in 0..50 {
-            self.requests.clear();
+            self.volume_requests.clear();
+            self.section_requests.clear();
             let mut encoder = self.device.create_command_encoder(&Default::default());
             let info = self.renderer.draw(
                 self.device,
@@ -146,18 +152,24 @@ impl Stream<'_> {
                 Frame {
                     encoder: &mut encoder,
                     target: self.view,
-                    region: [0, 0, SIDE, SIDE],
+                    volume_region: [0, 0, SIDE, SIDE],
+                    section_region: [0, 0, 1, 1],
                     camera,
+                    section: &self.section,
                     params: self.params,
-                    requests: &mut self.requests,
+                    volume_requests: &mut self.volume_requests,
+                    section_requests: &mut self.section_requests,
                 },
             );
             self.queue.submit([encoder.finish()]);
-            if self.requests.is_empty() {
-                assert_eq!(info.resident, info.visible, "the view must be complete");
-                return info;
+            if self.volume_requests.is_empty() {
+                assert_eq!(
+                    info.volume.resident, info.volume.visible,
+                    "the view must be complete"
+                );
+                return info.volume;
             }
-            for request in self.requests.iter() {
+            for request in self.volume_requests.iter() {
                 let brick =
                     self.volumes[request.level].brick(&self.grids[request.level], request.coord);
                 assert!(self.renderer.upload(

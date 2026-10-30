@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use grana_render::{BrickRequest, FrameInfo, Renderer};
+use grana_render::{BrickRequest, Frame, FrameInfo, Renderer};
+use grana_volume::Spacing;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
@@ -37,7 +38,8 @@ pub struct App {
     viewport: Viewport,
     scene: Option<Scene>,
     source: Option<Loader>,
-    requests: Vec<BrickRequest>,
+    volume_requests: Vec<BrickRequest>,
+    section_requests: Vec<BrickRequest>,
     in_flight: HashSet<BrickRequest>,
     frame: FrameInfo,
     loading: Option<String>,
@@ -53,7 +55,8 @@ impl App {
             viewport: Viewport::new(),
             scene: None,
             source: None,
-            requests: Vec::new(),
+            volume_requests: Vec::new(),
+            section_requests: Vec::new(),
             in_flight: HashSet::new(),
             frame: FrameInfo::default(),
             loading: None,
@@ -101,11 +104,44 @@ impl App {
         {
             self.begin_load(path);
         }
-        if actions.fit {
-            self.needs_fit = true;
+        let scale = self
+            .surface
+            .as_ref()
+            .expect("the surface is alive")
+            .window
+            .scale_factor() as f32;
+        let size = self
+            .surface
+            .as_ref()
+            .expect("the surface is alive")
+            .gpu
+            .size();
+        let volume_region = physical_region(actions.volume, scale, size);
+        let section_region = physical_region(actions.section, scale, size);
+        self.viewport.set_regions(volume_region, section_region);
+        if let Some(split) = actions.split {
+            self.viewport.set_split(split);
+        }
+        let volume_aspect = volume_region[2] as f32 / volume_region[3] as f32;
+        let section_aspect = section_region[2] as f32 / section_region[3] as f32;
+        let (world, voxel) = {
+            let scene = self.scene.as_ref().expect("the scene is alive");
+            (scene.dataset.world_size(), scene.dataset.voxel_size())
+        };
+        if let Some(axis) = actions.section_axis {
+            self.viewport.section_mut().set_axis(axis);
+            self.viewport.fit_section(world, voxel, section_aspect);
+        }
+        if actions.fit_section {
+            self.viewport.fit_section(world, voxel, section_aspect);
+        }
+        if self.needs_fit || actions.fit {
+            self.viewport
+                .fit(world, voxel, volume_aspect, section_aspect);
+            self.needs_fit = false;
         }
         let mut delay = self
-            .render(output, actions.viewport)
+            .render(output, volume_region, section_region)
             .unwrap_or(Duration::MAX);
         self.service_requests();
         if self.streaming() {
@@ -126,8 +162,11 @@ impl App {
     fn streaming(&self) -> bool {
         self.loading.is_some()
             || !self.in_flight.is_empty()
-            || (self.source.is_some() && !self.requests.is_empty())
-            || (self.source.is_some() && self.frame.resident < self.frame.visible)
+            || (self.source.is_some()
+                && (!self.volume_requests.is_empty() || !self.section_requests.is_empty()))
+            || (self.source.is_some()
+                && (self.frame.volume.resident < self.frame.volume.visible
+                    || self.frame.section.resident < self.frame.section.visible))
     }
 
     fn run_ui(&mut self) -> (egui::FullOutput, ui::Actions) {
@@ -144,12 +183,14 @@ impl App {
         let message = self.message.as_ref();
         let frame = self.frame;
         let pending = self.in_flight.len();
+        let viewport = &mut self.viewport;
         let mut actions = ui::Actions::new();
         let output = egui.run(window, |root| {
             actions = ui::build(
                 root,
                 &mut UiState {
                     scene,
+                    view: viewport,
                     adapter,
                     loading,
                     message,
@@ -161,24 +202,21 @@ impl App {
         (output, actions)
     }
 
-    fn render(&mut self, output: egui::FullOutput, viewport_rect: egui::Rect) -> Option<Duration> {
+    fn render(
+        &mut self,
+        output: egui::FullOutput,
+        volume_region: [u32; 4],
+        section_region: [u32; 4],
+    ) -> Option<Duration> {
         let surface = self.surface.as_mut()?;
-        let scene = self.scene.as_mut()?;
+        let scene = self.scene.as_ref()?;
         let Surface {
-            window,
             gpu,
             egui,
             renderer,
+            ..
         } = surface;
         let size = gpu.size();
-        let region = physical_region(viewport_rect, window.scale_factor() as f32, size);
-        let aspect = region[2] as f32 / region[3] as f32;
-        self.viewport.resize(region[3] as f32);
-        if self.needs_fit {
-            self.viewport
-                .fit(scene.dataset.world_size().to_array(), aspect);
-            self.needs_fit = false;
-        }
         let repaint_delay = output
             .viewport_output
             .values()
@@ -195,17 +233,23 @@ impl App {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("grana.frame"),
             });
-        self.requests.clear();
+        self.volume_requests.clear();
+        self.section_requests.clear();
+        let camera = self.viewport.camera();
+        let section = self.viewport.section();
         self.frame = renderer.draw(
             &gpu.device,
             &gpu.queue,
-            grana_render::Frame {
+            Frame {
                 encoder: &mut encoder,
                 target: &view,
-                region,
-                camera: self.viewport.camera(),
+                volume_region,
+                section_region,
+                camera,
+                section,
                 params: &params,
-                requests: &mut self.requests,
+                volume_requests: &mut self.volume_requests,
+                section_requests: &mut self.section_requests,
             },
         );
         egui.paint(&gpu.device, &gpu.queue, &mut encoder, &view, size, output);
@@ -233,7 +277,9 @@ impl App {
                     self.loading = None;
                     self.message = None;
                     self.in_flight.clear();
-                    self.requests.clear();
+                    self.volume_requests.clear();
+                    self.section_requests.clear();
+                    self.frame = FrameInfo::default();
                     self.needs_fit = true;
                 }
                 Event::Brick { request, data } => {
@@ -253,14 +299,16 @@ impl App {
                     self.message = Some(Message::error(detail));
                     self.source = None;
                     self.in_flight.clear();
-                    self.requests.clear();
+                    self.volume_requests.clear();
+                    self.section_requests.clear();
                 }
                 Event::Failed(detail) => {
                     self.loading = None;
                     self.message = Some(Message::error(detail));
                     self.source = None;
                     self.in_flight.clear();
-                    self.requests.clear();
+                    self.volume_requests.clear();
+                    self.section_requests.clear();
                 }
             }
         }
@@ -274,7 +322,11 @@ impl App {
             return;
         };
         let mut stopped = false;
-        for request in &self.requests {
+        for request in self
+            .section_requests
+            .iter()
+            .chain(self.volume_requests.iter())
+        {
             if self.in_flight.len() >= MAX_IN_FLIGHT {
                 break;
             }
@@ -303,7 +355,9 @@ impl App {
         self.source = Some(Loader::file(path));
         self.message = None;
         self.in_flight.clear();
-        self.requests.clear();
+        self.volume_requests.clear();
+        self.section_requests.clear();
+        self.frame = FrameInfo::default();
         self.repaint_at = Some(Instant::now());
     }
 
@@ -347,13 +401,23 @@ impl ApplicationHandler for App {
         if self.surface.is_none() {
             return;
         }
+        let spacing = self
+            .scene
+            .as_ref()
+            .map_or(Spacing::new(1.0, 1.0, 1.0), |scene| scene.dataset.spacing());
         let camera_changed = {
             let surface = self.surface.as_mut().expect("the surface is alive");
             let response = surface.egui.event(&surface.window, &event);
-            self.viewport.on_window_event(&event, response.consumed)
+            self.viewport
+                .on_window_event(&event, response.consumed, spacing)
         };
-        if camera_changed && let Some(surface) = &self.surface {
-            surface.window.request_redraw();
+        if camera_changed {
+            if let Some(scene) = &self.scene {
+                self.viewport.clamp_focus(0.5 * scene.dataset.world_size());
+            }
+            if let Some(surface) = &self.surface {
+                surface.window.request_redraw();
+            }
         }
 
         match event {
