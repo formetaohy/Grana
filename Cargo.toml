@@ -1,0 +1,63 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+description = "Next-generation microscopy image visualization and analysis platform"
+license = "MIT"
+repository = "https://github.com/formetaohy/Grana"
+
+[workspace.dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+glam = { version = "0.30", features = ["bytemuck"] }
+half = "2"
+wgpu = "30"
+egui = { version = "0.37", features = ["default_fonts"] }
+egui-wgpu = "0.37"
+egui-winit = { version = "0.37", default-features = false, features = ["clipboard", "links"] }
+winit = "0.30"
+pollster = "0.4"
+thiserror = "2"
+grana-volume = { version = "0.1.0", path = "crates/grana-volume" }
+grana-render = { version = "0.1.0", path = "crates/grana-render" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[package]
+name = "grana"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "grana"
+path = "src/main.rs"
+
+[dependencies]
+grana-render = { workspace = true }
+grana-volume = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+egui-winit = { workspace = true }
+glam = { workspace = true }
+pollster = { workspace = true }
+wgpu = { workspace = true }
+winit = { workspace = true }
+
+[lints]
+workspace = true
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
