@@ -12,18 +12,6 @@ struct BrickRecord {
     maxima: array<vec4<f32>, 2>,
 }
 
-fn srgb_encode(linear: vec3<f32>) -> vec3<f32> {
-    let clamped = clamp(linear, vec3<f32>(0.0), vec3<f32>(1.0));
-    let low = clamped * 12.92;
-    let high = 1.055 * pow(clamped, vec3<f32>(1.0 / 2.4)) - 0.055;
-    return select(high, low, clamped <= vec3<f32>(0.0031308));
-}
-
-fn background(ndc: vec2<f32>) -> vec3<f32> {
-    let height = clamp(ndc.y * 0.5 + 0.5, 0.0, 1.0);
-    return mix(vec3<f32>(0.004, 0.005, 0.008), vec3<f32>(0.030, 0.038, 0.055), height);
-}
-
 fn brick_cell(grid: vec3<u32>, uvw: vec3<f32>) -> vec3<u32> {
     let scaled = clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0))
         * vec3<f32>(f32(grid.x), f32(grid.y), f32(grid.z));

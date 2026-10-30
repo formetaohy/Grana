@@ -6,6 +6,9 @@ struct Uniforms {
     grid: vec4<u32>,
     atlas: vec4<u32>,
     dims: vec4<f32>,
+    box_min: vec4<f32>,
+    world: vec4<f32>,
+    mapping: vec4<u32>,
     channel_opacity: array<vec4<f32>, 2>,
     channel_window: array<vec4<f32>, 2>,
     channel_inverse: array<vec4<f32>, 2>,
@@ -64,7 +67,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let u = uniforms.uv_center.x + input.ndc.x * uniforms.uv_scale.x;
     let v = uniforms.uv_center.y + input.ndc.y * uniforms.uv_scale.y;
     if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0) {
-        return vec4<f32>(srgb_encode(background(input.ndc)), 1.0);
+        return vec4<f32>(background(input.ndc), 1.0);
     }
     let axis = uniforms.axes.x;
     var uvw = vec3<f32>(0.0);
@@ -88,5 +91,5 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             color += sample.rgb * opacity;
         }
     }
-    return vec4<f32>(srgb_encode(color + background(input.ndc)), 1.0);
+    return vec4<f32>(color + background(input.ndc), 1.0);
 }

@@ -153,6 +153,7 @@ impl Stream<'_> {
                 Frame {
                     encoder: &mut encoder,
                     target: self.view,
+                    surface: [SIDE, SIDE],
                     volume_region: [0, 0, SIDE, SIDE],
                     section_region: [0, 0, 1, 1],
                     camera,

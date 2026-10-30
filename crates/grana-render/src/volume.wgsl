@@ -23,6 +23,7 @@ struct Uniforms {
 @group(0) @binding(3) var<storage, read> bricks: array<BrickRecord>;
 @group(1) @binding(0) var atlases: binding_array<texture_3d<f32>, 8>;
 @group(1) @binding(1) var atlas_sampler: sampler;
+@group(2) @binding(0) var object_depth: texture_depth_2d;
 
 const SURFACE_MODE: u32 = 1u;
 const REFINEMENT_STEPS: u32 = 6u;
@@ -55,6 +56,13 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 fn unproject(ndc: vec3<f32>) -> vec3<f32> {
     let homogeneous = uniforms.inv_view_projection * vec4<f32>(ndc, 1.0);
     return homogeneous.xyz / homogeneous.w;
+}
+
+fn object_distance(depth: f32, ndc: vec2<f32>) -> f32 {
+    if (depth >= 1.0) {
+        return 1.0e20;
+    }
+    return length(unproject(vec3<f32>(ndc, depth)) - uniforms.eye.xyz);
 }
 
 fn channel_opacity(index: u32) -> f32 {
@@ -227,7 +235,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let lowest_t = min(near_t, far_t);
     let highest_t = max(near_t, far_t);
     let entry = max(max(lowest_t.x, lowest_t.y), lowest_t.z);
-    let exit = min(min(highest_t.x, highest_t.y), highest_t.z);
+    let object = object_distance(textureLoad(object_depth, vec2<i32>(input.clip_position.xy), 0), input.ndc);
+    let exit = min(min(min(highest_t.x, highest_t.y), highest_t.z), object);
     let start = max(entry, 0.0);
 
     var radiance = vec3<f32>(0.0);
@@ -360,5 +369,5 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    return vec4<f32>(srgb_encode(radiance + transmittance * background(input.ndc)), 1.0);
+    return vec4<f32>(radiance, transmittance);
 }

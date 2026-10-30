@@ -405,6 +405,37 @@ fn analysis_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions)
         if ui.button("Export CSV").clicked() {
             actions.export_spots = true;
         }
+        let picked = state.scene.selection();
+        let measured = picked.and_then(|index| {
+            let spot = state.scene.spot(index)?;
+            Some((index, spot))
+        });
+        match measured {
+            Some((index, spot)) => {
+                ui.separator();
+                egui::Grid::new("object")
+                    .num_columns(2)
+                    .spacing([12.0, 3.0])
+                    .show(ui, |ui| {
+                        let centre = spot.center();
+                        row(ui, "object", format!("#{}", index + 1));
+                        row(
+                            ui,
+                            "position",
+                            format!("{:.2} · {:.2} · {:.2} µm", centre[0], centre[1], centre[2]),
+                        );
+                        row(ui, "diameter", format!("{:.3} µm", spot.radius() * 2.0));
+                        row(ui, "contrast", format!("{:.3}", spot.quality()));
+                    });
+            }
+            None => {
+                ui.label(
+                    RichText::new("click an object to measure it")
+                        .small()
+                        .weak(),
+                );
+            }
+        }
     } else {
         ui.label(
             RichText::new(format!(
@@ -451,7 +482,7 @@ fn section_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) 
         .weak(),
     );
     ui.label(
-        RichText::new("drag pans · wheel steps · ctrl+wheel zooms")
+        RichText::new("drag pans · wheel steps · ctrl+wheel zooms · click selects")
             .small()
             .weak(),
     );
@@ -532,7 +563,7 @@ fn camera_section(ui: &mut Ui, actions: &mut Actions) {
         actions.fit = true;
     }
     ui.label(
-        RichText::new("drag orbits · middle or right drag pans · wheel zooms")
+        RichText::new("drag orbits · middle or right drag pans · wheel zooms · click selects")
             .small()
             .weak(),
     );

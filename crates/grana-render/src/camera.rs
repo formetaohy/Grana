@@ -1,9 +1,15 @@
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Mat4, Vec2, Vec3, Vec4};
 use grana_volume::Axis;
 
 const PITCH_LIMIT: f32 = 1.45;
 const ORBIT_SENSITIVITY: f32 = 0.007;
 const ZOOM_SENSITIVITY: f32 = 0.15;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ray {
+    pub origin: Vec3,
+    pub direction: Vec3,
+}
 
 #[derive(Clone, Debug)]
 pub struct Camera {
@@ -68,6 +74,17 @@ impl Camera {
         let far = self.distance + scene_radius * 4.0;
         let projection = Mat4::perspective_rh(self.fov_y, aspect, near, far);
         projection * Mat4::look_at_rh(self.eye(), self.pivot, Vec3::Y)
+    }
+
+    pub fn ray(&self, ndc: Vec2, aspect: f32) -> Ray {
+        assert!(aspect > 0.0, "aspect ratio must be positive");
+        let projection = self.view_projection(aspect, self.distance.max(1.0e-4));
+        let clipped = projection.inverse() * Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
+        let origin = self.eye();
+        Ray {
+            origin,
+            direction: (clipped.truncate() / clipped.w - origin).normalize(),
+        }
     }
 
     pub fn fit(&mut self, world_size: Vec3, aspect: f32) {

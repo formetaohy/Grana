@@ -54,4 +54,13 @@ impl SectionCamera {
         self.span =
             (self.span * (1.0 - scroll * ZOOM_SENSITIVITY)).clamp(self.min_span, self.max_span);
     }
+
+    pub fn point(&self, focus: Vec3, ndc: glam::Vec2, aspect: f32) -> Vec3 {
+        assert!(aspect > 0.0, "aspect ratio must be positive");
+        let (u_axis, v_axis) = self.axis.in_plane();
+        let mut point = focus;
+        point[u_axis.index()] += 0.5 * ndc.x * self.span * aspect;
+        point[v_axis.index()] += 0.5 * ndc.y * self.span;
+        point
+    }
 }

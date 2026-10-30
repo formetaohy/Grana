@@ -5,11 +5,18 @@ use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::keyboard::ModifiersState;
 
 const SECTION_STEP_VOXELS: f32 = 1.0;
+const CLICK_SLOP: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pane {
     Volume,
     Section,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Interaction {
+    pub camera: bool,
+    pub pick: Option<(Pane, Vec2)>,
 }
 
 #[derive(Clone, Copy)]
@@ -19,10 +26,19 @@ enum Drag {
     Section,
 }
 
+#[derive(Clone, Copy)]
+struct Press {
+    pane: Pane,
+    cursor: Vec2,
+    button: MouseButton,
+    dragged: bool,
+}
+
 pub struct Viewport {
     camera: Camera,
     section: SectionCamera,
     drag: Option<Drag>,
+    press: Option<Press>,
     cursor: Option<Vec2>,
     hovered: Option<Pane>,
     volume_region: [u32; 4],
@@ -37,6 +53,7 @@ impl Viewport {
             camera: Camera::new(35.0),
             section: SectionCamera::new(Axis::Z),
             drag: None,
+            press: None,
             cursor: None,
             hovered: None,
             volume_region: [0, 0, 1, 1],
@@ -75,6 +92,19 @@ impl Viewport {
         self.section_region = section;
     }
 
+    pub fn ndc(&self, pane: Pane, point: Vec2) -> Vec2 {
+        let region = self.region(pane);
+        Vec2::new(
+            (point.x - region[0] as f32) / region[2] as f32 * 2.0 - 1.0,
+            1.0 - (point.y - region[1] as f32) / region[3] as f32 * 2.0,
+        )
+    }
+
+    pub fn aspect(&self, pane: Pane) -> f32 {
+        let region = self.region(pane);
+        region[2] as f32 / region[3] as f32
+    }
+
     pub fn fit(&mut self, world: Vec3, voxel: Vec3, volume_aspect: f32, section_aspect: f32) {
         self.camera.fit(world, volume_aspect);
         self.section.fit(world, voxel, section_aspect);
@@ -93,21 +123,26 @@ impl Viewport {
         event: &WindowEvent,
         consumed: bool,
         spacing: Spacing,
-    ) -> bool {
+    ) -> Interaction {
+        let mut interaction = Interaction::default();
         match event {
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers.state();
-                false
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let current = Vec2::new(position.x as f32, position.y as f32);
                 let previous = self.cursor.replace(current);
                 self.hovered = self.pane_at(current);
+                if let Some(press) = self.press.as_mut()
+                    && (current - press.cursor).length() > CLICK_SLOP
+                {
+                    press.dragged = true;
+                }
                 if consumed {
-                    return false;
+                    return interaction;
                 }
                 let (Some(previous), Some(drag)) = (previous, self.drag) else {
-                    return false;
+                    return interaction;
                 };
                 let delta = current - previous;
                 match drag {
@@ -119,11 +154,11 @@ impl Viewport {
                             .pan_in_plane(self.section.axis(), delta, world_per_pixel);
                     }
                 }
-                true
+                interaction.camera = true;
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 if consumed {
-                    return false;
+                    return interaction;
                 }
                 match state {
                     ElementState::Pressed => {
@@ -132,14 +167,30 @@ impl Viewport {
                             (Pane::Volume, _) => Drag::Pan,
                             (Pane::Section, _) => Drag::Section,
                         });
+                        if let (Some(pane), Some(cursor)) = (self.hovered, self.cursor) {
+                            self.press = Some(Press {
+                                pane,
+                                cursor,
+                                button: *button,
+                                dragged: false,
+                            });
+                        }
                     }
-                    ElementState::Released => self.drag = None,
+                    ElementState::Released => {
+                        self.drag = None;
+                        if let Some(press) = self.press.take()
+                            && press.button == *button
+                            && press.button == MouseButton::Left
+                            && !press.dragged
+                        {
+                            interaction.pick = Some((press.pane, press.cursor));
+                        }
+                    }
                 }
-                false
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 if consumed {
-                    return false;
+                    return interaction;
                 }
                 let scroll = match delta {
                     MouseScrollDelta::LineDelta(_, lines) => *lines,
@@ -156,11 +207,19 @@ impl Viewport {
                             self.camera.move_along(self.section.axis(), scroll * step);
                         }
                     }
-                    None => return false,
+                    None => return interaction,
                 }
-                true
+                interaction.camera = true;
             }
-            _ => false,
+            _ => {}
+        }
+        interaction
+    }
+
+    fn region(&self, pane: Pane) -> [u32; 4] {
+        match pane {
+            Pane::Volume => self.volume_region,
+            Pane::Section => self.section_region,
         }
     }
 

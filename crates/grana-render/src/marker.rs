@@ -1,17 +1,20 @@
 use bytemuck::{Pod, Zeroable};
-use glam::Vec3;
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
     BindGroupLayoutEntry, BindingType, BlendState, Buffer, BufferBindingType, BufferUsages,
-    ColorTargetState, ColorWrites, CommandEncoder, Device, FragmentState, LoadOp, MultisampleState,
-    Operations, PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPassColorAttachment,
-    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor,
-    ShaderSource, ShaderStages, StoreOp, TextureView, VertexAttribute, VertexBufferLayout,
-    VertexFormat, VertexState, VertexStepMode,
+    ColorTargetState, ColorWrites, CommandEncoder, CompareFunction, DepthBiasState,
+    DepthStencilState, Device, FragmentState, LoadOp, MultisampleState, Operations,
+    PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPassColorAttachment,
+    RenderPassDepthStencilAttachment, RenderPassDescriptor, RenderPipeline,
+    RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages, StencilState,
+    StoreOp, TextureView, VertexAttribute, VertexBufferLayout, VertexFormat, VertexState,
+    VertexStepMode,
 };
 
+use crate::Camera;
+use crate::params::Shading;
+use crate::target::{DEPTH_FORMAT, SCENE_FORMAT};
 use crate::transfer::srgb_to_linear;
-use crate::{Camera, RenderParams};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -52,7 +55,7 @@ impl Marker {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct Uniforms {
+struct VolumeUniforms {
     view_projection: [[f32; 4]; 4],
     eye: [f32; 4],
     light: [f32; 4],
@@ -65,37 +68,41 @@ struct Uniforms {
 
 const _: () = {
     assert!(size_of::<Marker>() == 32);
-    assert!(size_of::<Uniforms>() == 176);
-    assert!(std::mem::offset_of!(Uniforms, viewport) == 160);
+    assert!(size_of::<VolumeUniforms>() == 176);
+    assert!(std::mem::offset_of!(VolumeUniforms, viewport) == 160);
 };
 
-const SHADER: &str = concat!(
-    include_str!("sampling.wgsl"),
-    "\n",
-    include_str!("marker.wgsl")
-);
+const VOLUME_SHADER: &str = include_str!("marker.wgsl");
+const SECTION_SHADER: &str = include_str!("section_marker.wgsl");
 const INITIAL_CAPACITY: usize = 64;
 
-pub(crate) struct MarkerFrame<'a> {
-    pub encoder: &'a mut CommandEncoder,
+pub(crate) struct VolumeFrame<'a> {
     pub target: &'a TextureView,
+    pub depth: &'a TextureView,
     pub region: [u32; 4],
     pub camera: &'a Camera,
-    pub params: &'a RenderParams,
+    pub shading: Shading,
     pub scene_radius: f32,
 }
 
+pub(crate) struct SectionFrame<'a> {
+    pub target: &'a TextureView,
+    pub region: [u32; 4],
+    pub uniforms: &'a BindGroup,
+}
+
 pub(crate) struct Markers {
-    pipeline: RenderPipeline,
-    uniforms: Buffer,
-    group: BindGroup,
     instances: Buffer,
     capacity: usize,
-    staging: Vec<Marker>,
+    count: usize,
+    volume_pipeline: RenderPipeline,
+    volume_uniforms: Buffer,
+    volume_group: BindGroup,
+    section_pipeline: RenderPipeline,
 }
 
 impl Markers {
-    pub fn new(device: &Device, format: wgpu::TextureFormat) -> Self {
+    pub fn new(device: &Device, frame_layout: &BindGroupLayout) -> Self {
         let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.marker.layout"),
             entries: &[BindGroupLayoutEntry {
@@ -109,38 +116,60 @@ impl Markers {
                 count: None,
             }],
         });
-        let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+        let volume_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.marker.pipeline_layout"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let shader = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("grana.marker"),
-            source: ShaderSource::Wgsl(SHADER.into()),
+        let section_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.marker.section.pipeline_layout"),
+            bind_group_layouts: &[Some(frame_layout)],
+            immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+        let volume_shader = shader(device, "grana.marker", VOLUME_SHADER);
+        let section_shader = shader(device, "grana.marker.section", SECTION_SHADER);
+        let volume_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.marker"),
-            layout: Some(&pipeline_layout),
+            layout: Some(&volume_layout),
             vertex: VertexState {
-                module: &shader,
+                module: &volume_shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[Some(VertexBufferLayout {
-                    array_stride: size_of::<Marker>() as u64,
-                    step_mode: VertexStepMode::Instance,
-                    attributes: &[
-                        VertexAttribute {
-                            format: VertexFormat::Float32x4,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        VertexAttribute {
-                            format: VertexFormat::Float32x4,
-                            offset: 16,
-                            shader_location: 1,
-                        },
-                    ],
+                buffers: &[Some(instance_layout())],
+            },
+            primitive: PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(CompareFunction::Less),
+                stencil: StencilState::default(),
+                bias: DepthBiasState::default(),
+            }),
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &volume_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(ColorTargetState {
+                    format: SCENE_FORMAT,
+                    blend: Some(BlendState::ALPHA_BLENDING),
+                    write_mask: ColorWrites::ALL,
                 })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let section_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.marker.section"),
+            layout: Some(&section_layout),
+            vertex: VertexState {
+                module: &section_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(instance_layout())],
             },
             primitive: PrimitiveState {
                 cull_mode: None,
@@ -149,11 +178,11 @@ impl Markers {
             depth_stencil: None,
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
-                module: &shader,
+                module: &section_shader,
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(ColorTargetState {
-                    format,
+                    format: SCENE_FORMAT,
                     blend: Some(BlendState::ALPHA_BLENDING),
                     write_mask: ColorWrites::ALL,
                 })],
@@ -161,91 +190,112 @@ impl Markers {
             multiview_mask: None,
             cache: None,
         });
-        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+        let volume_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.marker.uniforms"),
-            size: size_of::<Uniforms>() as u64,
+            size: size_of::<VolumeUniforms>() as u64,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let group = device.create_bind_group(&BindGroupDescriptor {
+        let volume_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.marker.group"),
             layout: &layout,
             entries: &[BindGroupEntry {
                 binding: 0,
-                resource: uniforms.as_entire_binding(),
+                resource: volume_uniforms.as_entire_binding(),
             }],
         });
-        let instances = marker_buffer(device, INITIAL_CAPACITY);
+        let instances = instance_buffer(device, INITIAL_CAPACITY);
         Self {
-            pipeline,
-            uniforms,
-            group,
             instances,
             capacity: INITIAL_CAPACITY,
-            staging: Vec::new(),
+            count: 0,
+            volume_pipeline,
+            volume_uniforms,
+            volume_group,
+            section_pipeline,
         }
     }
 
-    pub fn draw(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        frame: MarkerFrame<'_>,
-        markers: &[Marker],
-    ) {
-        if markers.is_empty() {
-            return;
+    pub fn prepare(&mut self, device: &Device, queue: &Queue, markers: &[Marker]) {
+        if markers.len() > self.capacity {
+            self.capacity = markers.len().next_power_of_two();
+            self.instances = instance_buffer(device, self.capacity);
         }
-        let MarkerFrame {
-            encoder,
-            target,
-            region,
-            camera,
-            params,
-            scene_radius,
-        } = frame;
-        let width = region[2].max(1);
-        let height = region[3].max(1);
+        self.count = markers.len();
+        if !markers.is_empty() {
+            queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(markers));
+        }
+    }
+
+    pub fn draw_volume(&self, encoder: &mut CommandEncoder, queue: &Queue, frame: VolumeFrame<'_>) {
+        let width = frame.region[2].max(1);
+        let height = frame.region[3].max(1);
         let aspect = width as f32 / height as f32;
-        self.staging.clear();
-        self.staging.extend_from_slice(markers);
-        let eye = camera.eye();
-        let forward = camera.forward();
-        self.staging.sort_by(|left, right| {
-            let left = (Vec3::from(left.center) - eye).dot(forward);
-            let right = (Vec3::from(right.center) - eye).dot(forward);
-            right.total_cmp(&left)
-        });
-        if self.staging.len() > self.capacity {
-            self.capacity = self.staging.len().next_power_of_two();
-            self.instances = marker_buffer(device, self.capacity);
-        }
-        queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&self.staging));
-        let view_projection = camera.view_projection(aspect, scene_radius);
-        let right = camera.right();
-        let up = camera.up();
-        let light = camera.light_direction();
-        let pixel_scale = 0.5 * height as f32 / (0.5 * camera.fov_y()).tan();
-        let uniforms = Uniforms {
+        let eye = frame.camera.eye();
+        let view_projection = frame.camera.view_projection(aspect, frame.scene_radius);
+        let pixel_scale = 0.5 * height as f32 / (0.5 * frame.camera.fov_y()).tan();
+        let uniforms = VolumeUniforms {
             view_projection: view_projection.to_cols_array_2d(),
             eye: eye.extend(0.0).to_array(),
-            light: light.extend(0.0).to_array(),
-            right: right.extend(0.0).to_array(),
-            up: up.extend(0.0).to_array(),
-            forward: forward.extend(0.0).to_array(),
+            light: frame.camera.light_direction().extend(0.0).to_array(),
+            right: frame.camera.right().extend(0.0).to_array(),
+            up: frame.camera.up().extend(0.0).to_array(),
+            forward: frame.camera.forward().extend(0.0).to_array(),
             shading: [
-                params.shading.ambient,
-                params.shading.diffuse,
-                params.shading.specular,
-                params.shading.shininess,
+                frame.shading.ambient,
+                frame.shading.diffuse,
+                frame.shading.specular,
+                frame.shading.shininess,
             ],
             viewport: [pixel_scale, height as f32, 0.0, 0.0],
         };
-        queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&self.volume_uniforms, 0, bytemuck::bytes_of(&uniforms));
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.marker.pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: target,
+                view: frame.target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Load,
+                    store: StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                view: frame.depth,
+                depth_ops: Some(Operations {
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        pass.set_viewport(
+            frame.region[0] as f32,
+            frame.region[1] as f32,
+            width as f32,
+            height as f32,
+            0.0,
+            1.0,
+        );
+        pass.set_scissor_rect(frame.region[0], frame.region[1], width, height);
+        pass.set_pipeline(&self.volume_pipeline);
+        pass.set_bind_group(0, &self.volume_group, &[]);
+        pass.set_vertex_buffer(0, self.instances.slice(..));
+        pass.draw(0..6, 0..self.count as u32);
+    }
+
+    pub fn draw_section(&self, encoder: &mut CommandEncoder, frame: SectionFrame<'_>) {
+        if self.count == 0 {
+            return;
+        }
+        let width = frame.region[2].max(1);
+        let height = frame.region[3].max(1);
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("grana.marker.section.pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: frame.target,
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations {
@@ -256,22 +306,48 @@ impl Markers {
             ..Default::default()
         });
         pass.set_viewport(
-            region[0] as f32,
-            region[1] as f32,
+            frame.region[0] as f32,
+            frame.region[1] as f32,
             width as f32,
             height as f32,
             0.0,
             1.0,
         );
-        pass.set_scissor_rect(region[0], region[1], width, height);
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.group, &[]);
+        pass.set_scissor_rect(frame.region[0], frame.region[1], width, height);
+        pass.set_pipeline(&self.section_pipeline);
+        pass.set_bind_group(0, frame.uniforms, &[]);
         pass.set_vertex_buffer(0, self.instances.slice(..));
-        pass.draw(0..6, 0..self.staging.len() as u32);
+        pass.draw(0..6, 0..self.count as u32);
     }
 }
 
-fn marker_buffer(device: &Device, capacity: usize) -> Buffer {
+fn shader(device: &Device, label: &str, source: &str) -> wgpu::ShaderModule {
+    device.create_shader_module(ShaderModuleDescriptor {
+        label: Some(label),
+        source: ShaderSource::Wgsl(source.into()),
+    })
+}
+
+fn instance_layout() -> VertexBufferLayout<'static> {
+    VertexBufferLayout {
+        array_stride: size_of::<Marker>() as u64,
+        step_mode: VertexStepMode::Instance,
+        attributes: &[
+            VertexAttribute {
+                format: VertexFormat::Float32x4,
+                offset: 0,
+                shader_location: 0,
+            },
+            VertexAttribute {
+                format: VertexFormat::Float32x4,
+                offset: 16,
+                shader_location: 1,
+            },
+        ],
+    }
+}
+
+fn instance_buffer(device: &Device, capacity: usize) -> Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("grana.marker.instances"),
         size: (capacity * size_of::<Marker>()) as u64,

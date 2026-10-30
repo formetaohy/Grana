@@ -35,6 +35,14 @@ impl BrickRecord {
     }
 }
 
+pub struct Resources<'a> {
+    pub layout: &'a BindGroupLayout,
+    pub uniforms: &'a Buffer,
+    pub section_uniforms: &'a Buffer,
+    pub lut: &'a TextureView,
+    pub lut_sampler: &'a Sampler,
+}
+
 pub struct LevelCache {
     pub grid: BrickGrid,
     pub world: Vec3,
@@ -47,15 +55,7 @@ pub struct LevelCache {
 }
 
 impl LevelCache {
-    pub fn new(
-        device: &Device,
-        layout: &BindGroupLayout,
-        uniforms: &Buffer,
-        section_uniforms: &Buffer,
-        lut: &TextureView,
-        lut_sampler: &Sampler,
-        level: Level,
-    ) -> Self {
+    pub fn new(device: &Device, resources: &Resources<'_>, level: Level) -> Self {
         let grid = BrickGrid::new(level.extent());
         let records = vec![BrickRecord::EMPTY; grid.count()];
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -63,8 +63,22 @@ impl LevelCache {
             contents: bytemuck::cast_slice(&records),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
-        let group = bind_group(device, layout, uniforms, &buffer, lut, lut_sampler);
-        let section_group = bind_group(device, layout, section_uniforms, &buffer, lut, lut_sampler);
+        let group = bind_group(
+            device,
+            resources.layout,
+            resources.uniforms,
+            &buffer,
+            resources.lut,
+            resources.lut_sampler,
+        );
+        let section_group = bind_group(
+            device,
+            resources.layout,
+            resources.section_uniforms,
+            &buffer,
+            resources.lut,
+            resources.lut_sampler,
+        );
         let world = Vec3::from(level.world_extent());
         let extent = level.extent();
         let dims = Vec3::new(extent.x() as f32, extent.y() as f32, extent.z() as f32);

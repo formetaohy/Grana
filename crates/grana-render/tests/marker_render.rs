@@ -1,42 +1,21 @@
+use glam::Vec3;
 use grana_render::{
-    Camera, ChannelDisplay, ChannelParams, Frame, Marker, RenderParams, Renderer, SectionCamera,
-    TransferFunction,
+    BrickRequest, Camera, ChannelDisplay, ChannelParams, Frame, Marker, RenderParams, Renderer,
+    SectionCamera, Stop, TransferFunction,
 };
-use grana_volume::{Axis, Channel, Extent, Spacing, Volume, VoxelData};
+use grana_volume::{Axis, BrickGrid, Channel, Extent, Spacing, Volume, VoxelData};
 
 const SIDE: u32 = 256;
+const BUDGET: u64 = 64 << 20;
 const FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_ARRAY
     .union(wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING)
     .union(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
 
 #[test]
-fn draws_markers_over_the_background() {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let options = |fallback: bool| wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: fallback,
-        compatible_surface: None,
-        apply_limit_buckets: false,
-    };
-    let adapter = pollster::block_on(instance.request_adapter(&options(false)))
-        .or_else(|_| pollster::block_on(instance.request_adapter(&options(true))));
-    let Ok(adapter) = adapter else {
-        println!("no graphics adapter available, skipping");
+fn composites_objects_into_the_volume() {
+    let Some((device, queue)) = gpu() else {
         return;
     };
-    if !adapter.features().contains(FEATURES) {
-        println!("the adapter lacks packed brick streaming, skipping");
-        return;
-    }
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("grana.marker.test"),
-        required_features: FEATURES,
-        required_limits: adapter.limits(),
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: wgpu::MemoryHints::Performance,
-        trace: wgpu::Trace::Off,
-    }))
-    .expect("failed to create a test device");
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("grana.marker.test.target"),
         size: wgpu::Extent3d {
@@ -51,13 +30,101 @@ fn draws_markers_over_the_background() {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    let view = target.create_view(&Default::default());
-    let volume = empty_volume();
-    let pyramid = volume.pyramid();
-    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 32 << 20);
-    renderer.set_pyramid(&device, &pyramid);
+    let empty = volume(0);
+    let dense = volume(60_000);
     let mut camera = Camera::new(35.0);
-    camera.fit(glam::Vec3::from(volume.world_extent()), 1.0);
+    camera.fit(Vec3::from(empty.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let origin = [Marker::new([0.0, 0.0, 0.0], 0.4, [1.0, 0.1, 0.1], 1.0)];
+    let whole = [0, 0, SIDE, SIDE];
+    let corner = [0, 0, 1, 1];
+
+    let visible = render(
+        &device, &queue, &target, &empty, &camera, &section, &origin, whole, corner,
+    );
+    assert!(red(&visible, whole) > 200, "the object is not drawn");
+
+    let hidden = render(
+        &device, &queue, &target, &dense, &camera, &section, &origin, whole, corner,
+    );
+    assert!(
+        red(&hidden, whole) < 20,
+        "the volume does not occlude the object"
+    );
+
+    let sliced = render(
+        &device, &queue, &target, &empty, &camera, &section, &origin, corner, whole,
+    );
+    assert!(
+        red(&sliced, whole) > 200,
+        "the section does not mark the object"
+    );
+
+    let mut moved = camera.clone();
+    moved.set_focus_along(Axis::Z, 2.0 * section.span());
+    let missed = render(
+        &device, &queue, &target, &empty, &moved, &section, &origin, corner, whole,
+    );
+    assert_eq!(
+        red(&missed, whole),
+        0,
+        "the section marks an object it does not intersect"
+    );
+
+    let background = pixel(&visible, 4, SIDE - 4);
+    assert!(
+        background
+            .iter()
+            .map(|value| u32::from(*value))
+            .sum::<u32>()
+            < 120,
+        "the background must stay dark: {background:?}"
+    );
+}
+
+fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let options = |fallback: bool| wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: fallback,
+        compatible_surface: None,
+        apply_limit_buckets: false,
+    };
+    let adapter = pollster::block_on(instance.request_adapter(&options(false)))
+        .or_else(|_| pollster::block_on(instance.request_adapter(&options(true))))
+        .ok()?;
+    if !adapter.features().contains(FEATURES) {
+        println!("the adapter lacks packed brick streaming, skipping");
+        return None;
+    }
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("grana.marker.test"),
+        required_features: FEATURES,
+        required_limits: adapter.limits(),
+        experimental_features: wgpu::ExperimentalFeatures::disabled(),
+        memory_hints: wgpu::MemoryHints::Performance,
+        trace: wgpu::Trace::Off,
+    }))
+    .expect("failed to create a test device");
+    Some((device, queue))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    target: &wgpu::Texture,
+    volume: &Volume,
+    camera: &Camera,
+    section: &SectionCamera,
+    markers: &[Marker],
+    volume_region: [u32; 4],
+    section_region: [u32; 4],
+) -> Vec<u8> {
+    let view = target.create_view(&Default::default());
+    let pyramid = volume.pyramid();
+    let mut renderer = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_pyramid(device, &pyramid);
     let params = RenderParams {
         shading: Default::default(),
         step_scale: 1.0,
@@ -65,27 +132,56 @@ fn draws_markers_over_the_background() {
             visible: true,
             opacity: 1.0,
             window: pyramid.channels()[0].window(),
-            transfer: TransferFunction::tinted([0.3, 0.6, 1.0]),
+            transfer: TransferFunction::new(vec![
+                Stop::new(0.0, [0.0, 0.0, 0.0], 0.0),
+                Stop::new(1.0, [1.0, 1.0, 1.0], 1.0),
+            ]),
             display: ChannelDisplay::Volume,
         }],
     };
-    let markers = [Marker::new([0.0, 0.0, 0.0], 0.25, [1.0, 0.0, 0.0], 1.0)];
-    let mut encoder = device.create_command_encoder(&Default::default());
-    renderer.draw(
-        &device,
-        &queue,
-        Frame {
-            encoder: &mut encoder,
-            target: &view,
-            volume_region: [0, 0, SIDE, SIDE],
-            section_region: [0, 0, 1, 1],
-            camera: &camera,
-            section: &SectionCamera::new(Axis::Z),
-            params: &params,
-            markers: &markers,
-            volume_requests: &mut Vec::new(),
-            section_requests: &mut Vec::new(),
-        },
+    let grid = BrickGrid::new(volume.extent());
+    let mut volume_requests = Vec::new();
+    let mut section_requests = Vec::new();
+    for round in 0..64 {
+        volume_requests.clear();
+        section_requests.clear();
+        let encoder = draw(
+            device,
+            &mut renderer,
+            queue,
+            &view,
+            camera,
+            section,
+            &params,
+            markers,
+            volume_region,
+            section_region,
+            &mut volume_requests,
+            &mut section_requests,
+        );
+        queue.submit([encoder.finish()]);
+        if volume_requests.is_empty() && section_requests.is_empty() {
+            break;
+        }
+        assert!(round < 63, "the stream never settled");
+        for request in volume_requests.iter().chain(section_requests.iter()) {
+            let brick = volume.brick(&grid, request.coord);
+            assert!(renderer.upload(device, queue, request.level, request.coord, &brick));
+        }
+    }
+    let mut encoder = draw(
+        device,
+        &mut renderer,
+        queue,
+        &view,
+        camera,
+        section,
+        &params,
+        markers,
+        volume_region,
+        section_region,
+        &mut volume_requests,
+        &mut section_requests,
     );
     let row_bytes = SIDE * 4;
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
@@ -96,7 +192,7 @@ fn draws_markers_over_the_background() {
     });
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
-            texture: &target,
+            texture: target,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
@@ -125,26 +221,43 @@ fn draws_markers_over_the_background() {
         .poll(wgpu::PollType::wait_indefinitely())
         .expect("failed to wait for the gpu");
     receiver.recv().expect("map callback").expect("map failed");
-    let pixels = slice.get_mapped_range().expect("mapped range").to_vec();
+    slice.get_mapped_range().expect("mapped range").to_vec()
+}
 
-    let red = pixels
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .filter(|pixel| pixel[0] > pixel[2] + 40 && pixel[0] > 40)
-        .count();
-    assert!(red > 200, "the marker barely rendered: {red} pixels");
-    assert!(
-        red < (SIDE * SIDE / 2) as usize,
-        "the marker covers too much: {red} pixels"
+#[allow(clippy::too_many_arguments)]
+fn draw(
+    device: &wgpu::Device,
+    renderer: &mut Renderer,
+    queue: &wgpu::Queue,
+    view: &wgpu::TextureView,
+    camera: &Camera,
+    section: &SectionCamera,
+    params: &RenderParams,
+    markers: &[Marker],
+    volume_region: [u32; 4],
+    section_region: [u32; 4],
+    volume_requests: &mut Vec<BrickRequest>,
+    section_requests: &mut Vec<BrickRequest>,
+) -> wgpu::CommandEncoder {
+    let mut encoder = device.create_command_encoder(&Default::default());
+    renderer.draw(
+        device,
+        queue,
+        Frame {
+            encoder: &mut encoder,
+            target: view,
+            surface: [SIDE, SIDE],
+            volume_region,
+            section_region,
+            camera,
+            section,
+            params,
+            markers,
+            volume_requests,
+            section_requests,
+        },
     );
-    let centre = pixel(&pixels, SIDE / 2, SIDE / 2);
-    assert!(centre[0] > 120, "the marker centre is not lit: {centre:?}");
-    let corner = pixel(&pixels, 4, SIDE - 4);
-    assert!(
-        corner.iter().map(|value| *value as u32).sum::<u32>() < 120,
-        "the background must stay dark: {corner:?}"
-    );
+    encoder
 }
 
 fn pixel(pixels: &[u8], x: u32, y: u32) -> [u8; 3] {
@@ -152,15 +265,30 @@ fn pixel(pixels: &[u8], x: u32, y: u32) -> [u8; 3] {
     [pixels[index], pixels[index + 1], pixels[index + 2]]
 }
 
-fn empty_volume() -> Volume {
-    let extent = Extent::new(32, 32, 32);
+fn red(pixels: &[u8], region: [u32; 4]) -> usize {
+    let mut count = 0;
+    for y in region[1]..region[1] + region[3] {
+        for x in region[0]..region[0] + region[2] {
+            let [red, green, blue] = pixel(pixels, x, y).map(u32::from);
+            if red > green + 40 && red > blue + 40 {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn volume(value: u16) -> Volume {
+    let extent = Extent::new(64, 64, 16);
+    let mut voxels = vec![value; extent.voxel_count() as usize];
+    voxels[0] = 0;
     Volume::new(
         extent,
-        Spacing::new(0.1, 0.1, 0.1),
+        Spacing::new(0.1, 0.1, 0.5),
         vec![Channel::new(
-            "empty",
+            "density",
             [0.3, 0.6, 1.0],
-            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+            VoxelData::U16(voxels),
         )],
     )
 }

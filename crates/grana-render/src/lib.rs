@@ -1,15 +1,21 @@
 mod atlas;
+mod backend;
+mod cache;
 mod camera;
 mod level;
 mod marker;
 mod params;
 mod renderer;
+mod residency;
+mod screen;
 mod section;
+mod target;
 mod transfer;
+mod uniforms;
 
 pub const MAX_CHANNEL: usize = 8;
 
-pub use camera::{Camera, plane_basis};
+pub use camera::{Camera, Ray, plane_basis};
 pub use marker::Marker;
 pub use params::{ChannelDisplay, ChannelParams, RenderParams, Shading, Surface};
 pub use renderer::{BrickRequest, Frame, FrameInfo, Renderer, ViewInfo};

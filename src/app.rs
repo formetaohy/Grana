@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use glam::Vec2;
 use grana_analysis::SpotSet;
 use grana_render::{BrickRequest, Frame, FrameInfo, Marker, Renderer};
 use grana_volume::Spacing;
@@ -20,7 +21,7 @@ use crate::gpu::Gpu;
 use crate::loader::{Event as LoaderEvent, Loader};
 use crate::scene::Scene;
 use crate::ui::{self, Message, UiState};
-use crate::viewport::Viewport;
+use crate::viewport::{Pane, Viewport};
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
 const UPLOAD_BATCH: usize = 32;
@@ -277,6 +278,7 @@ impl App {
             Frame {
                 encoder: &mut encoder,
                 target: &view,
+                surface: size,
                 volume_region,
                 section_region,
                 camera,
@@ -509,6 +511,29 @@ impl App {
         self.repaint_at = Some(Instant::now());
     }
 
+    fn pick(&mut self, pane: Pane, point: Vec2) {
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        let ndc = self.viewport.ndc(pane, point);
+        let aspect = self.viewport.aspect(pane);
+        let index = match pane {
+            Pane::Volume => {
+                let ray = self.viewport.camera().ray(ndc, aspect);
+                scene.pick_ray(&ray)
+            }
+            Pane::Section => {
+                let section = self.viewport.section();
+                let target = section.point(self.viewport.camera().focus(), ndc, aspect);
+                scene.pick_slice(section.axis(), target)
+            }
+        };
+        scene.select_spot(index);
+        if let Some(surface) = &self.surface {
+            surface.window.request_redraw();
+        }
+    }
+
     fn pick_folder() -> Option<PathBuf> {
         rfd::FileDialog::new()
             .set_title("Open an OME-Zarr dataset")
@@ -594,13 +619,16 @@ impl ApplicationHandler for App {
             self.viewport
                 .on_window_event(&event, response.consumed, spacing)
         };
-        if camera_changed {
+        if camera_changed.camera {
             if let Some(scene) = &self.scene {
                 self.viewport.clamp_focus(0.5 * scene.dataset.world_size());
             }
             if let Some(surface) = &self.surface {
                 surface.window.request_redraw();
             }
+        }
+        if let Some((pane, point)) = camera_changed.pick {
+            self.pick(pane, point);
         }
 
         match event {

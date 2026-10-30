@@ -23,6 +23,11 @@ struct MarkerOutput {
     @location(2) local: vec2<f32>,
 }
 
+struct MarkerFragment {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+}
+
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32, instance: MarkerInstance) -> MarkerOutput {
     let corners = array<vec2<f32>, 6>(
@@ -48,7 +53,7 @@ fn vs_main(@builtin(vertex_index) index: u32, instance: MarkerInstance) -> Marke
 }
 
 @fragment
-fn fs_main(input: MarkerOutput) -> @location(0) vec4<f32> {
+fn fs_main(input: MarkerOutput) -> MarkerFragment {
     let local = input.local;
     let squared = dot(local, local);
     if (squared > 1.0) {
@@ -67,5 +72,9 @@ fn fs_main(input: MarkerOutput) -> @location(0) vec4<f32> {
         + vec3<f32>(marker.shading.z * specular);
     let pixel = max(fwidth(local.x), fwidth(local.y));
     let coverage = clamp((1.0 - sqrt(squared)) / max(pixel, 1.0e-6) + 0.5, 0.0, 1.0);
-    return vec4<f32>(srgb_encode(color), input.color_alpha.a * coverage);
+    let clip = marker.view_projection * vec4<f32>(surface, 1.0);
+    var output: MarkerFragment;
+    output.color = vec4<f32>(color, input.color_alpha.a * coverage);
+    output.depth = clip.z / clip.w;
+    return output;
 }

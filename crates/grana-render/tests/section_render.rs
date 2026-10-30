@@ -114,6 +114,7 @@ fn section_render(
             Frame {
                 encoder: &mut encoder,
                 target: &view,
+                surface: [SIDE, SIDE],
                 volume_region: [0, 0, SIDE, SIDE],
                 section_region: [0, 0, SIDE, SIDE],
                 camera: &camera,
@@ -143,6 +144,7 @@ fn section_render(
         Frame {
             encoder: &mut encoder,
             target: &view,
+            surface: [SIDE, SIDE],
             volume_region: [0, 0, SIDE, SIDE],
             section_region: [0, 0, SIDE, SIDE],
             camera: &camera,

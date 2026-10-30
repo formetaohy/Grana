@@ -118,6 +118,7 @@ fn surface_render(
             Frame {
                 encoder: &mut frame,
                 target: &view,
+                surface: [SIDE, SIDE],
                 volume_region: [0, 0, SIDE, SIDE],
                 section_region: [0, 0, 1, 1],
                 camera: &camera,
@@ -144,6 +145,7 @@ fn surface_render(
         Frame {
             encoder: &mut encoder,
             target: &view,
+            surface: [SIDE, SIDE],
             volume_region: [0, 0, SIDE, SIDE],
             section_region: [0, 0, 1, 1],
             camera: &camera,
