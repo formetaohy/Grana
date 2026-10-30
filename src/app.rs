@@ -1,20 +1,25 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use grana_render::{RenderParams, Renderer};
+use grana_render::Renderer;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::window::{Window, WindowId};
 
-use crate::dataset::Dataset;
+use crate::dataset::{Dataset, LoadLimit, TEXTURE_BUDGET};
+use crate::demo;
 use crate::egui_layer::EguiLayer;
 use crate::gpu::Gpu;
-use crate::scene;
-use crate::transfer_editor::TransferEditor;
-use crate::ui::{self, UiState};
+use crate::loader::Loader;
+use crate::scene::Scene;
+use crate::ui::{self, Message, UiState};
 use crate::viewport::Viewport;
+
+const POLL_INTERVAL: Duration = Duration::from_millis(80);
+const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
 
 struct Surface {
     window: Arc<Window>,
@@ -26,9 +31,9 @@ struct Surface {
 pub struct App {
     surface: Option<Surface>,
     viewport: Viewport,
-    transfer: TransferEditor,
-    params: RenderParams,
-    dataset: Option<Dataset>,
+    scene: Option<Scene>,
+    loader: Option<Loader>,
+    message: Option<Message>,
     repaint_at: Option<Instant>,
     needs_fit: bool,
 }
@@ -38,9 +43,9 @@ impl App {
         Self {
             surface: None,
             viewport: Viewport::new(),
-            transfer: TransferEditor::new(),
-            params: RenderParams::default(),
-            dataset: None,
+            scene: None,
+            loader: None,
+            message: None,
             repaint_at: None,
             needs_fit: true,
         }
@@ -58,13 +63,10 @@ impl App {
         );
         let gpu = Gpu::new(window.clone());
         let egui = EguiLayer::new(&window, &gpu.device, gpu.format());
-        let mut renderer = Renderer::new(&gpu.device, &gpu.queue, gpu.format());
-
-        let volume = scene::demo_volume();
-        renderer.set_volume(&gpu.device, &gpu.queue, &volume);
-        renderer.set_transfer_function(&gpu.queue, &self.transfer.transfer());
-
-        self.dataset = Some(Dataset::new("synthetic fluorescence", &volume));
+        let volume = demo::volume();
+        let scene = Scene::new(Dataset::synthetic("synthetic fluorescence", &volume));
+        let renderer = Renderer::new(&gpu.device, &gpu.queue, gpu.format(), &volume);
+        self.scene = Some(scene);
         self.surface = Some(Surface {
             window,
             gpu,
@@ -74,52 +76,93 @@ impl App {
     }
 
     fn redraw(&mut self) {
-        let App {
-            surface,
-            viewport,
-            transfer,
-            params,
-            dataset,
-            repaint_at,
-            needs_fit,
-        } = self;
-        let (Some(surface), Some(dataset)) = (surface.as_mut(), dataset.as_ref()) else {
+        if self.surface.is_none() || self.scene.is_none() {
             return;
-        };
+        }
+        self.poll_loader();
+        if self.surface.is_none() || self.scene.is_none() {
+            return;
+        }
+        let (output, actions) = self.run_ui();
+        if actions.open
+            && let Some(path) = Self::pick_folder()
+        {
+            self.begin_load(path);
+        }
+        if actions.fit {
+            self.needs_fit = true;
+        }
+        let mut delay = self
+            .render(output, actions.viewport)
+            .unwrap_or(Duration::MAX);
+        if self.loader.is_some() {
+            delay = delay.min(POLL_INTERVAL);
+        }
+        if delay.is_zero() {
+            self.repaint_at = None;
+            if let Some(surface) = &self.surface {
+                surface.window.request_redraw();
+            }
+        } else if delay < MAX_REPAINT_DELAY {
+            self.repaint_at = Some(Instant::now() + delay);
+        } else {
+            self.repaint_at = None;
+        }
+    }
+
+    fn run_ui(&mut self) -> (egui::FullOutput, ui::Actions) {
+        let surface = self.surface.as_mut().expect("the surface is alive");
+        let scene = self.scene.as_mut().expect("the scene is alive");
+        let Surface {
+            window,
+            gpu,
+            egui,
+            renderer: _,
+        } = surface;
+        let adapter = gpu.adapter_description.as_str();
+        let loading = self.loader.as_ref().map(Loader::name);
+        let message = self.message.as_ref();
+        let mut actions = ui::Actions::new();
+        let output = egui.run(window, |root| {
+            actions = ui::build(
+                root,
+                &mut UiState {
+                    scene,
+                    adapter,
+                    loading,
+                    message,
+                },
+            );
+        });
+        (output, actions)
+    }
+
+    fn render(&mut self, output: egui::FullOutput, viewport_rect: egui::Rect) -> Option<Duration> {
+        let surface = self.surface.as_mut()?;
+        let scene = self.scene.as_mut()?;
         let Surface {
             window,
             gpu,
             egui,
             renderer,
         } = surface;
-
         let size = gpu.size();
-
-        let mut actions = ui::Actions::new();
-        let output = egui.run(window, |root| {
-            let mut state = UiState {
-                transfer,
-                params,
-                dataset,
-                adapter: &gpu.adapter_description,
-            };
-            actions = ui::build(root, &mut state);
-        });
-        if transfer.take_dirty() {
-            renderer.set_transfer_function(&gpu.queue, &transfer.transfer());
-        }
-
-        let region = physical_region(actions.viewport, window.scale_factor() as f32, size);
+        let region = physical_region(viewport_rect, window.scale_factor() as f32, size);
         let aspect = region[2] as f32 / region[3] as f32;
-        viewport.resize(region[3] as f32);
-        if actions.fit || *needs_fit {
-            viewport.fit(dataset.world_size.to_array(), aspect);
-            *needs_fit = false;
+        self.viewport.resize(region[3] as f32);
+        if self.needs_fit {
+            self.viewport
+                .fit(scene.dataset.world_size().to_array(), aspect);
+            self.needs_fit = false;
         }
-
-        let Some(frame) = gpu.acquire() else {
-            return;
-        };
+        let repaint_delay = output
+            .viewport_output
+            .values()
+            .map(|viewport| viewport.repaint_delay)
+            .min()
+            .unwrap_or(Duration::MAX);
+        let params = scene.params();
+        let frame = gpu.acquire()?;
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -133,30 +176,64 @@ impl App {
             &mut encoder,
             &view,
             region,
-            viewport.camera(),
-            params,
+            self.viewport.camera(),
+            &params,
         );
-        let repaint_delay = output
-            .viewport_output
-            .values()
-            .map(|viewport| viewport.repaint_delay)
-            .min()
-            .unwrap_or(Duration::MAX);
         egui.paint(&gpu.device, &gpu.queue, &mut encoder, &view, size, output);
         gpu.queue.submit([encoder.finish()]);
         gpu.queue.present(frame);
+        Some(repaint_delay)
+    }
 
-        if repaint_delay.is_zero() {
-            window.request_redraw();
-        } else if repaint_delay < Duration::from_secs(3600) {
-            *repaint_at = Some(Instant::now() + repaint_delay);
+    fn poll_loader(&mut self) {
+        let Some(result) = self.loader.as_ref().and_then(Loader::poll) else {
+            return;
+        };
+        self.loader = None;
+        match result {
+            Ok(loaded) => {
+                let Some(surface) = self.surface.as_mut() else {
+                    return;
+                };
+                surface.renderer.set_volume(
+                    &surface.gpu.device,
+                    &surface.gpu.queue,
+                    &loaded.volume,
+                );
+                self.scene = Some(Scene::new(loaded.dataset));
+                self.needs_fit = true;
+                self.message = None;
+            }
+            Err(message) => self.message = Some(Message::error(message)),
         }
+    }
+
+    fn begin_load(&mut self, path: PathBuf) {
+        let Some(surface) = self.surface.as_ref() else {
+            return;
+        };
+        if self.loader.is_some() {
+            return;
+        }
+        let limit = LoadLimit {
+            max_dimension: surface.gpu.device.limits().max_texture_dimension_3d,
+            budget: TEXTURE_BUDGET,
+        };
+        self.loader = Some(Loader::spawn(path, limit));
+        self.message = None;
+        self.repaint_at = Some(Instant::now() + POLL_INTERVAL);
+    }
+
+    fn pick_folder() -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Open an OME-Zarr dataset")
+            .pick_folder()
     }
 }
 
 fn physical_region(rect: egui::Rect, scale: f32, surface: [u32; 2]) -> [u32; 4] {
-    let x = ((rect.left() * scale).round() as i64).clamp(0, surface[0] as i64) as u32;
-    let y = ((rect.top() * scale).round() as i64).clamp(0, surface[1] as i64) as u32;
+    let x = ((rect.left() * scale).round() as i64).clamp(0, surface[0] as i64 - 1) as u32;
+    let y = ((rect.top() * scale).round() as i64).clamp(0, surface[1] as i64 - 1) as u32;
     let width = ((rect.width() * scale).round() as u32)
         .min(surface[0] - x)
         .max(1);
@@ -177,38 +254,53 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let Some(surface) = self.surface.as_mut() else {
+        if self.surface.is_none() {
             return;
+        }
+        let camera_changed = {
+            let surface = self.surface.as_mut().expect("the surface is alive");
+            let response = surface.egui.event(&surface.window, &event);
+            self.viewport.on_window_event(&event, response.consumed)
         };
-        let Surface {
-            window,
-            gpu,
-            egui,
-            renderer: _,
-        } = surface;
-
-        let response = egui.event(window, &event);
-        let camera_changed = self.viewport.on_window_event(&event, response.consumed);
-        if camera_changed {
-            window.request_redraw();
+        if camera_changed && let Some(surface) = &self.surface {
+            surface.window.request_redraw();
         }
 
-        let redraw_requested = matches!(event, WindowEvent::RedrawRequested);
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                gpu.resize(size);
-                window.request_redraw();
+                if let Some(surface) = self.surface.as_mut() {
+                    surface.gpu.resize(size);
+                    surface.window.request_redraw();
+                }
             }
-            WindowEvent::ScaleFactorChanged { .. } => window.request_redraw(),
+            WindowEvent::ScaleFactorChanged { .. } => {
+                if let Some(surface) = &self.surface {
+                    surface.window.request_redraw();
+                }
+            }
+            WindowEvent::DroppedFile(path) => {
+                if path.is_dir() {
+                    self.begin_load(path);
+                } else {
+                    self.message = Some(Message::error(format!(
+                        "{} is not an OME-Zarr folder",
+                        path.display()
+                    )));
+                }
+                if let Some(surface) = &self.surface {
+                    surface.window.request_redraw();
+                }
+            }
+            WindowEvent::RedrawRequested => self.redraw(),
             _ => {}
-        }
-        if redraw_requested {
-            self.redraw();
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.loader.is_some() && self.repaint_at.is_none() {
+            self.repaint_at = Some(Instant::now() + POLL_INTERVAL);
+        }
         let Some(deadline) = self.repaint_at else {
             event_loop.set_control_flow(ControlFlow::Wait);
             return;

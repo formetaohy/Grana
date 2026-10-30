@@ -1,35 +1,23 @@
-use crate::{Extent, Intensity, Level, Spacing, VoxelData, VoxelFormat};
+use crate::{Channel, Extent, Spacing};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Volume {
     extent: Extent,
     spacing: Spacing,
-    intensity: Intensity,
-    levels: Vec<Level>,
+    channels: Vec<Channel>,
 }
 
 impl Volume {
-    pub fn new(extent: Extent, spacing: Spacing, data: VoxelData) -> Self {
-        let intensity = data.range();
-        let mut levels = vec![Level::new(extent, data)];
-        while levels
-            .last()
-            .expect("a volume always holds level zero")
-            .extent()
-            .max_dimension()
-            > 1
-        {
-            let next = levels
-                .last()
-                .expect("a volume always holds level zero")
-                .downsampled();
-            levels.push(next);
-        }
+    pub fn new(extent: Extent, spacing: Spacing, channels: Vec<Channel>) -> Self {
+        assert!(!channels.is_empty(), "a volume needs at least one channel");
+        assert!(
+            channels.iter().all(|channel| channel.extent() == extent),
+            "every channel shares the volume extent"
+        );
         Self {
             extent,
             spacing,
-            intensity,
-            levels,
+            channels,
         }
     }
 
@@ -41,20 +29,16 @@ impl Volume {
         self.spacing
     }
 
-    pub fn intensity(&self) -> Intensity {
-        self.intensity
+    pub fn channels(&self) -> &[Channel] {
+        &self.channels
     }
 
-    pub fn format(&self) -> VoxelFormat {
-        self.levels[0].data().format()
-    }
-
-    pub fn levels(&self) -> &[Level] {
-        &self.levels
+    pub fn channel_count(&self) -> u32 {
+        self.channels.len() as u32
     }
 
     pub fn level_count(&self) -> u32 {
-        self.levels.len() as u32
+        self.channels[0].level_count()
     }
 
     pub fn world_extent(&self) -> [f32; 3] {

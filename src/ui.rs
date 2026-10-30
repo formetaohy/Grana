@@ -1,17 +1,29 @@
-use crate::dataset::Dataset;
-use crate::transfer_editor::TransferEditor;
+use crate::dataset::{Dataset, SourceLevel};
+use crate::scene::Scene;
 use egui::{RichText, Ui};
-use grana_render::RenderParams;
+
+pub struct Message(String);
+
+impl Message {
+    pub fn error(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+
+    pub fn text(&self) -> &str {
+        &self.0
+    }
+}
 
 pub struct UiState<'a> {
-    pub transfer: &'a mut TransferEditor,
-    pub params: &'a mut RenderParams,
-    pub dataset: &'a Dataset,
+    pub scene: &'a mut Scene,
     pub adapter: &'a str,
+    pub loading: Option<&'a str>,
+    pub message: Option<&'a Message>,
 }
 
 #[derive(Clone, Copy)]
 pub struct Actions {
+    pub open: bool,
     pub fit: bool,
     pub viewport: egui::Rect,
 }
@@ -19,6 +31,7 @@ pub struct Actions {
 impl Actions {
     pub fn new() -> Self {
         Self {
+            open: false,
             fit: false,
             viewport: egui::Rect::ZERO,
         }
@@ -28,42 +41,66 @@ impl Actions {
 pub fn build(root: &mut Ui, state: &mut UiState<'_>) -> Actions {
     let mut actions = Actions::new();
     egui::Panel::left("controls")
-        .exact_size(330.0)
+        .exact_size(340.0)
         .resizable(true)
         .show(root, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.heading("grana");
-                ui.label(RichText::new("microscopy volume viewer").small().weak());
-                ui.separator();
-
-                dataset_section(ui, state.dataset);
-                ui.separator();
-
-                ui.strong("Transfer function");
-                ui.add_space(2.0);
-                state.transfer.ui(ui, state.dataset.intensity);
-                ui.separator();
-
-                rendering_section(ui, state.params);
-                ui.separator();
-
-                ui.strong("Camera");
-                if ui.button("Fit volume").clicked() {
-                    actions.fit = true;
-                }
-                ui.label(
-                    RichText::new("drag orbits · middle or right drag pans · wheel zooms")
-                        .small()
-                        .weak(),
-                );
-                ui.separator();
-                ui.label(RichText::new(state.adapter).small().weak());
-            });
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.heading("grana");
+                    ui.label(RichText::new("microscopy volume workspace").small().weak());
+                    ui.separator();
+                    open_section(ui, &mut actions, state.loading, state.message);
+                    ui.separator();
+                    dataset_section(ui, &state.scene.dataset);
+                    ui.separator();
+                    channels_section(ui, state.scene);
+                    ui.separator();
+                    transfer_section(ui, state.scene);
+                    ui.separator();
+                    rendering_section(ui, state.scene);
+                    ui.separator();
+                    camera_section(ui, &mut actions);
+                    ui.separator();
+                    ui.label(RichText::new(state.adapter).small().weak());
+                });
         });
     actions.viewport = egui::CentralPanel::no_frame()
         .show(root, |ui| ui.max_rect())
         .inner;
     actions
+}
+
+fn open_section(
+    ui: &mut Ui,
+    actions: &mut Actions,
+    loading: Option<&str>,
+    message: Option<&Message>,
+) {
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(loading.is_none(), egui::Button::new("Open OME-Zarr"))
+            .clicked()
+        {
+            actions.open = true;
+        }
+        if let Some(name) = loading {
+            ui.spinner();
+            ui.label(RichText::new(name).small().weak());
+        }
+    });
+    ui.label(
+        RichText::new("drop a .zarr folder onto the viewport")
+            .small()
+            .weak(),
+    );
+    if let Some(message) = message {
+        ui.label(
+            RichText::new(message.text())
+                .color(egui::Color32::from_rgb(255, 138, 112))
+                .small(),
+        );
+    }
 }
 
 fn dataset_section(ui: &mut Ui, dataset: &Dataset) {
@@ -89,46 +126,128 @@ fn dataset_section(ui: &mut Ui, dataset: &Dataset) {
                     spacing.z()
                 ),
             );
-            let world = dataset.world_size;
+            let world = dataset.world_size();
             row(
                 ui,
                 "field of view",
                 format!("{:.1} × {:.1} × {:.1} µm", world.x, world.y, world.z),
             );
-            row(ui, "format", format!("{:?}", dataset.format));
+            row(ui, "channels", dataset.channels.len().to_string());
             row(
                 ui,
-                "intensity",
-                format!(
-                    "{:.0} … {:.0}",
-                    dataset.intensity.min(),
-                    dataset.intensity.max()
-                ),
+                "format",
+                dataset
+                    .format()
+                    .map_or_else(|| "mixed".to_string(), |format| format!("{format:?}")),
             );
-            row(ui, "levels", dataset.level_count.to_string());
+            row(ui, "pyramid", dataset.level_count.to_string());
+            match dataset.source {
+                Some(SourceLevel {
+                    extent,
+                    level,
+                    level_count,
+                }) => {
+                    row(
+                        ui,
+                        "source",
+                        format!("{} × {} × {}", extent.x(), extent.y(), extent.z()),
+                    );
+                    row(ui, "level", format!("{} of {}", level + 1, level_count));
+                }
+                None => row(ui, "source", "synthetic".to_string()),
+            }
         });
 }
 
-fn rendering_section(ui: &mut Ui, params: &mut RenderParams) {
+fn channels_section(ui: &mut Ui, scene: &mut Scene) {
+    ui.strong("Channels");
+    let selected = scene.selected;
+    let mut clicked = None;
+    for (index, channel) in scene.channels.iter_mut().enumerate() {
+        let summary = &scene.dataset.channels[index];
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut channel.enabled, "");
+            color_swatch(ui, summary.tint);
+            if ui
+                .selectable_label(selected == index, &summary.name)
+                .clicked()
+            {
+                clicked = Some(index);
+            }
+        });
+        ui.add(
+            egui::Slider::new(&mut channel.opacity, 0.0..=1.0)
+                .text("opacity")
+                .show_value(false),
+        );
+    }
+    if let Some(index) = clicked {
+        scene.select(index);
+    }
+}
+
+fn transfer_section(ui: &mut Ui, scene: &mut Scene) {
+    let index = scene.selected;
+    let name = scene.dataset.channels[index].name.clone();
+    let window = scene.dataset.channels[index].window;
+    let intensity = scene.dataset.channels[index].intensity;
+    ui.strong(format!("Transfer · {name}"));
+    ui.label(
+        RichText::new(format!(
+            "display {:.0} … {:.0} · data {:.0} … {:.0}",
+            window.min(),
+            window.max(),
+            intensity.min(),
+            intensity.max()
+        ))
+        .small()
+        .weak(),
+    );
+    scene.selected_transfer().ui(ui, window);
+}
+
+fn rendering_section(ui: &mut Ui, scene: &mut Scene) {
     ui.strong("Volume");
     ui.add(
-        egui::Slider::new(&mut params.step_scale, 0.25..=2.0)
+        egui::Slider::new(&mut scene.step_scale, 0.25..=2.0)
             .text("sampling distance")
             .logarithmic(true),
     );
-    ui.add(egui::Slider::new(&mut params.opacity, 0.0..=1.0).text("opacity"));
-    ui.add(egui::Slider::new(&mut params.shading.ambient, 0.0..=1.0).text("ambient"));
-    ui.add(egui::Slider::new(&mut params.shading.diffuse, 0.0..=1.0).text("diffuse"));
-    ui.add(egui::Slider::new(&mut params.shading.specular, 0.0..=1.0).text("specular"));
+    let shading = &mut scene.shading;
+    ui.add(egui::Slider::new(&mut shading.ambient, 0.0..=1.0).text("ambient"));
+    ui.add(egui::Slider::new(&mut shading.diffuse, 0.0..=1.0).text("diffuse"));
+    ui.add(egui::Slider::new(&mut shading.specular, 0.0..=1.0).text("specular"));
     ui.add(
-        egui::Slider::new(&mut params.shading.shininess, 1.0..=128.0)
+        egui::Slider::new(&mut shading.shininess, 1.0..=128.0)
             .text("shininess")
             .logarithmic(true),
     );
+}
+
+fn camera_section(ui: &mut Ui, actions: &mut Actions) {
+    ui.strong("Camera");
+    if ui.button("Fit volume").clicked() {
+        actions.fit = true;
+    }
+    ui.label(
+        RichText::new("drag orbits · middle or right drag pans · wheel zooms")
+            .small()
+            .weak(),
+    );
+}
+
+fn color_swatch(ui: &mut Ui, tint: [f32; 3]) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 12.0), egui::Sense::hover());
+    let color = egui::Color32::from_rgb(to_byte(tint[0]), to_byte(tint[1]), to_byte(tint[2]));
+    ui.painter().rect_filled(rect, 2.0, color);
 }
 
 fn row(ui: &mut Ui, name: &str, value: String) {
     ui.label(RichText::new(name).weak());
     ui.monospace(value);
     ui.end_row();
+}
+
+fn to_byte(channel: f32) -> u8 {
+    (channel.clamp(0.0, 1.0) * 255.0).round() as u8
 }

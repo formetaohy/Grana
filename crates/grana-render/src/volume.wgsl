@@ -1,3 +1,7 @@
+enable wgpu_binding_array;
+
+const MAX_CHANNEL: u32 = 8u;
+
 struct Uniforms {
     inv_view_projection: mat4x4<f32>,
     eye: vec4<f32>,
@@ -7,13 +11,14 @@ struct Uniforms {
     screen: vec4<f32>,
     march: vec4<f32>,
     light: vec4<f32>,
+    channel_opacity: array<vec4<f32>, 2>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-@group(0) @binding(1) var volume_texture: texture_3d<f32>;
-@group(0) @binding(2) var volume_sampler: sampler;
-@group(0) @binding(3) var lut_texture: texture_2d<f32>;
-@group(0) @binding(4) var lut_sampler: sampler;
+@group(0) @binding(1) var lut: texture_2d<f32>;
+@group(0) @binding(2) var lut_sampler: sampler;
+@group(1) @binding(0) var volumes: binding_array<texture_3d<f32>, 8>;
+@group(1) @binding(1) var volume_sampler: sampler;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -50,26 +55,32 @@ fn interleaved_gradient_noise(position: vec2<f32>) -> f32 {
     return fract(52.9829189 * fract(dot(position, vec2<f32>(0.06711056, 0.00583715))));
 }
 
-fn gradient(uvw: vec3<f32>, texel: vec3<f32>) -> vec3<f32> {
-    let step_x = vec3<f32>(texel.x, 0.0, 0.0);
-    let step_y = vec3<f32>(0.0, texel.y, 0.0);
-    let step_z = vec3<f32>(0.0, 0.0, texel.z);
-    let x = textureSampleLevel(volume_texture, volume_sampler, uvw + step_x, 0.0).r
-        - textureSampleLevel(volume_texture, volume_sampler, uvw - step_x, 0.0).r;
-    let y = textureSampleLevel(volume_texture, volume_sampler, uvw + step_y, 0.0).r
-        - textureSampleLevel(volume_texture, volume_sampler, uvw - step_y, 0.0).r;
-    let z = textureSampleLevel(volume_texture, volume_sampler, uvw + step_z, 0.0).r
-        - textureSampleLevel(volume_texture, volume_sampler, uvw - step_z, 0.0).r;
+fn channel_opacity(index: u32) -> f32 {
+    let word = uniforms.channel_opacity[index / 4u];
+    return word[index % 4u];
+}
+
+fn lut_row(index: u32) -> f32 {
+    return (f32(index) + 0.5) / f32(MAX_CHANNEL);
+}
+
+fn density_gradient(channel: u32, uvw: vec3<f32>, step: vec3<f32>, lod: f32) -> vec3<f32> {
+    let x = textureSampleLevel(volumes[channel], volume_sampler, uvw + vec3<f32>(step.x, 0.0, 0.0), lod).r
+        - textureSampleLevel(volumes[channel], volume_sampler, uvw - vec3<f32>(step.x, 0.0, 0.0), lod).r;
+    let y = textureSampleLevel(volumes[channel], volume_sampler, uvw + vec3<f32>(0.0, step.y, 0.0), lod).r
+        - textureSampleLevel(volumes[channel], volume_sampler, uvw - vec3<f32>(0.0, step.y, 0.0), lod).r;
+    let z = textureSampleLevel(volumes[channel], volume_sampler, uvw + vec3<f32>(0.0, 0.0, step.z), lod).r
+        - textureSampleLevel(volumes[channel], volume_sampler, uvw - vec3<f32>(0.0, 0.0, step.z), lod).r;
     return vec3<f32>(x, y, z);
 }
 
-fn shade(color: vec3<f32>, uvw: vec3<f32>, texel: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
-    let density_gradient = gradient(uvw, texel);
-    let magnitude = length(density_gradient);
+fn shade(channel: u32, color: vec3<f32>, uvw: vec3<f32>, step: vec3<f32>, lod: f32, direction: vec3<f32>) -> vec3<f32> {
+    let density_gradient_value = density_gradient(channel, uvw, step, lod);
+    let magnitude = length(density_gradient_value);
     if (magnitude < 1e-5) {
         return color;
     }
-    var normal = -density_gradient / uniforms.box_size.xyz;
+    var normal = -density_gradient_value / uniforms.box_size.xyz;
     normal = normal / length(normal);
     if (dot(normal, direction) > 0.0) {
         normal = -normal;
@@ -78,7 +89,7 @@ fn shade(color: vec3<f32>, uvw: vec3<f32>, texel: vec3<f32>, direction: vec3<f32
     let half_vector = normalize(uniforms.light.xyz + to_eye);
     let diffuse = max(dot(normal, uniforms.light.xyz), 0.0);
     let specular = pow(max(dot(normal, half_vector), 0.0), uniforms.shading.w);
-    return color * (uniforms.shading.x + uniforms.shading.y * diffuse) + specular * uniforms.shading.z;
+    return color * (uniforms.shading.x + uniforms.shading.y * diffuse) + vec3<f32>(specular * uniforms.shading.z);
 }
 
 @fragment
@@ -101,15 +112,18 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     var transmittance = 1.0;
 
     if (exit > start) {
-        let voxel = uniforms.box_size.xyz / vec3<f32>(textureDimensions(volume_texture));
+        let dimensions = vec3<f32>(textureDimensions(volumes[0]));
+        let voxel = uniforms.box_size.xyz / dimensions;
         let min_voxel = uniforms.screen.w;
         let pixel_world = 2.0 * max(start, 1e-4) * uniforms.screen.z / max(uniforms.screen.y, 1.0);
         let step_length = max(pixel_world * 0.5, min_voxel * uniforms.march.x);
         let lod = clamp(log2(step_length / min_voxel), 0.0, uniforms.march.y);
         let voxels_per_step = step_length * length(direction / voxel);
-        let texel = vec3<f32>(1.0) / vec3<f32>(textureDimensions(volume_texture));
+        let texel = vec3<f32>(1.0) / dimensions;
+        let gradient_step = texel * exp2(lod);
         let jitter = interleaved_gradient_noise(input.clip_position.xy) * step_length;
         let steps = min(u32(ceil((exit - start) / step_length)), u32(uniforms.march.w));
+        let channel_count = u32(uniforms.march.z);
 
         var t = start + jitter;
         for (var index = 0u; index < steps; index += 1u) {
@@ -117,17 +131,29 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 break;
             }
             let uvw = (eye + direction * t - box_min) / uniforms.box_size.xyz;
-            let value = textureSampleLevel(volume_texture, volume_sampler, uvw, lod).r;
-            let sample = textureSampleLevel(lut_texture, lut_sampler, vec2<f32>(value, 0.5), 0.0);
-            let per_voxel = clamp(sample.a * uniforms.march.z, 0.0, 0.999);
-            let alpha = 1.0 - exp(log(1.0 - per_voxel) * voxels_per_step);
-            if (alpha > 1e-4) {
-                var color = sample.rgb;
-                if (per_voxel > 0.02) {
-                    color = shade(color, uvw, texel, direction);
+            var optical_depth = 0.0;
+            var emission = vec3<f32>(0.0);
+            for (var channel = 0u; channel < channel_count; channel += 1u) {
+                let opacity = channel_opacity(channel);
+                if (opacity > 0.0) {
+                    let density = textureSampleLevel(volumes[channel], volume_sampler, uvw, lod).r;
+                    let sample = textureSampleLevel(lut, lut_sampler, vec2<f32>(density, lut_row(channel)), 0.0);
+                    let per_voxel = clamp(sample.a, 0.0, 0.999);
+                    if (per_voxel > 1e-4) {
+                        let tau = -log(1.0 - per_voxel) * voxels_per_step * opacity;
+                        var color = sample.rgb;
+                        if (per_voxel > 0.02) {
+                            color = shade(channel, color, uvw, gradient_step, lod, direction);
+                        }
+                        optical_depth += tau;
+                        emission += tau * color;
+                    }
                 }
-                radiance += transmittance * alpha * color;
-                transmittance *= 1.0 - alpha;
+            }
+            if (optical_depth > 0.0) {
+                let step_transmittance = exp(-optical_depth);
+                radiance += transmittance * (1.0 - step_transmittance) * emission / optical_depth;
+                transmittance *= step_transmittance;
             }
             t += step_length;
         }

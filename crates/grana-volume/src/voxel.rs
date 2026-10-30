@@ -35,13 +35,18 @@ impl VoxelData {
         let mut min = f32::INFINITY;
         let mut max = f32::NEG_INFINITY;
         self.for_each_value(|value| {
-            if value < min {
-                min = value;
-            }
-            if value > max {
-                max = value;
+            if value.is_finite() {
+                if value < min {
+                    min = value;
+                }
+                if value > max {
+                    max = value;
+                }
             }
         });
+        if min > max {
+            return Intensity::new(0.0, 0.0);
+        }
         Intensity::new(min, max)
     }
 

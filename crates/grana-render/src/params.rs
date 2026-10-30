@@ -1,3 +1,5 @@
+use crate::TransferFunction;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shading {
     pub ambient: f32,
@@ -17,19 +19,16 @@ impl Default for Shading {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChannelParams {
+    pub visible: bool,
+    pub opacity: f32,
+    pub transfer: TransferFunction,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct RenderParams {
     pub shading: Shading,
     pub step_scale: f32,
-    pub opacity: f32,
-}
-
-impl Default for RenderParams {
-    fn default() -> Self {
-        Self {
-            shading: Shading::default(),
-            step_scale: 0.5,
-            opacity: 1.0,
-        }
-    }
+    pub channels: Vec<ChannelParams>,
 }

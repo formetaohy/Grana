@@ -1,3 +1,4 @@
+mod channel;
 mod extent;
 mod intensity;
 mod level;
@@ -5,6 +6,7 @@ mod spacing;
 mod volume;
 mod voxel;
 
+pub use channel::Channel;
 pub use extent::Extent;
 pub use intensity::Intensity;
 pub use level::Level;

@@ -46,14 +46,25 @@ impl TransferFunction {
         Self { stops }
     }
 
-    pub fn fluorescence() -> Self {
+    pub fn tinted(tint: [f32; 3]) -> Self {
+        assert!(
+            tint.iter().all(|channel| (0.0..=1.0).contains(channel)),
+            "a channel tint is an srgb triple"
+        );
+        let dim = |factor: f32| [tint[0] * factor, tint[1] * factor, tint[2] * factor];
+        let lighten = |amount: f32| {
+            [
+                tint[0] + (1.0 - tint[0]) * amount,
+                tint[1] + (1.0 - tint[1]) * amount,
+                tint[2] + (1.0 - tint[2]) * amount,
+            ]
+        };
         Self::new(vec![
-            Stop::new(0.00, [0.02, 0.01, 0.08], 0.00),
-            Stop::new(0.20, [0.20, 0.03, 0.30], 0.06),
-            Stop::new(0.40, [0.65, 0.08, 0.25], 0.20),
-            Stop::new(0.60, [0.95, 0.40, 0.10], 0.42),
-            Stop::new(0.80, [1.00, 0.78, 0.25], 0.66),
-            Stop::new(1.00, [1.00, 1.00, 0.95], 1.00),
+            Stop::new(0.00, [0.0, 0.0, 0.0], 0.00),
+            Stop::new(0.25, dim(0.35), 0.04),
+            Stop::new(0.50, dim(0.75), 0.22),
+            Stop::new(0.75, tint, 0.55),
+            Stop::new(1.00, lighten(0.45), 1.00),
         ])
     }
 
@@ -106,7 +117,7 @@ impl TransferFunction {
 }
 
 fn lerp(from: f32, to: f32, t: f32) -> f32 {
-    from + (to - from) * t
+    (from + (to - from) * t).clamp(0.0, 1.0)
 }
 
 fn srgb_to_linear(srgb: [f32; 3]) -> [f32; 3] {

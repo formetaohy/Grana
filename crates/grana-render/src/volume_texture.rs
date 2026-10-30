@@ -1,4 +1,4 @@
-use grana_volume::Volume;
+use grana_volume::Channel;
 use half::f16;
 use wgpu::{
     Device, Extent3d, Origin3d, Queue, TexelCopyBufferLayout, TexelCopyTextureInfo, TextureAspect,
@@ -6,17 +6,20 @@ use wgpu::{
     TextureViewDescriptor, TextureViewDimension,
 };
 
-pub struct VolumeTexture {
+const UPLOAD_SLAB_BYTES: usize = 16 << 20;
+
+pub struct ChannelTexture {
     view: TextureView,
     level_count: u32,
 }
 
-impl VolumeTexture {
-    pub fn new(device: &Device, queue: &Queue, volume: &Volume) -> Self {
-        let extent = volume.extent();
-        let level_count = volume.level_count();
+impl ChannelTexture {
+    pub fn new(device: &Device, queue: &Queue, channel: &Channel) -> Self {
+        let levels = channel.levels();
+        let extent = levels[0].extent();
+        let level_count = channel.level_count();
         let texture = device.create_texture(&TextureDescriptor {
-            label: Some("grana.volume"),
+            label: Some("grana.channel"),
             size: Extent3d {
                 width: extent.x(),
                 height: extent.y(),
@@ -30,39 +33,48 @@ impl VolumeTexture {
             view_formats: &[],
         });
 
-        let mut quantized = Vec::new();
-        for (index, level) in volume.levels().iter().enumerate() {
-            let level_extent = level.extent();
-            quantized.clear();
-            quantized.resize(level.data().voxel_count(), 0u16);
-            let mut cursor = 0;
-            level.data().for_each_unit(volume.intensity(), |unit| {
-                quantized[cursor] = f16::from_f32(unit).to_bits();
-                cursor += 1;
+        for (index, level) in levels.iter().enumerate() {
+            let width = level.extent().x() as usize;
+            let height = level.extent().y() as usize;
+            let depth = level.extent().z() as usize;
+            let mut quantized = Vec::with_capacity(width * height * depth);
+            level.data().for_each_unit(channel.window(), |unit| {
+                quantized.push(f16::from_f32(unit).to_bits());
             });
-            queue.write_texture(
-                TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: index as u32,
-                    origin: Origin3d::ZERO,
-                    aspect: TextureAspect::All,
-                },
-                bytemuck::cast_slice(&quantized),
-                TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(level_extent.x() * 2),
-                    rows_per_image: Some(level_extent.y()),
-                },
-                Extent3d {
-                    width: level_extent.x(),
-                    height: level_extent.y(),
-                    depth_or_array_layers: level_extent.z(),
-                },
-            );
+            let slab_depth =
+                (UPLOAD_SLAB_BYTES / (width * height * size_of::<u16>())).clamp(1, depth);
+            for z in (0..depth).step_by(slab_depth) {
+                let rows = slab_depth.min(depth - z);
+                let start = z * width * height;
+                let end = (z + rows) * width * height;
+                queue.write_texture(
+                    TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: index as u32,
+                        origin: Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: z as u32,
+                        },
+                        aspect: TextureAspect::All,
+                    },
+                    bytemuck::cast_slice(&quantized[start..end]),
+                    TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some((width * size_of::<u16>()) as u32),
+                        rows_per_image: Some(height as u32),
+                    },
+                    Extent3d {
+                        width: width as u32,
+                        height: height as u32,
+                        depth_or_array_layers: rows as u32,
+                    },
+                );
+            }
         }
 
         let view = texture.create_view(&TextureViewDescriptor {
-            label: Some("grana.volume.view"),
+            label: Some("grana.channel.view"),
             dimension: Some(TextureViewDimension::D3),
             ..Default::default()
         });

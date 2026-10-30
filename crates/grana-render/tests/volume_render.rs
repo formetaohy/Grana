@@ -1,10 +1,12 @@
-use grana_render::{Camera, RenderParams, Renderer, TransferFunction};
-use grana_volume::{Extent, Spacing, Volume, VoxelData};
+use grana_render::{Camera, ChannelParams, RenderParams, Renderer, TransferFunction};
+use grana_volume::{Channel, Extent, Spacing, Volume, VoxelData};
 
 const SIDE: u32 = 256;
+const FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_ARRAY
+    .union(wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING);
 
 #[test]
-fn renders_a_volume() {
+fn renders_two_channels() {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let options = |fallback: bool| wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -18,9 +20,13 @@ fn renders_a_volume() {
         println!("no graphics adapter available, skipping");
         return;
     };
+    if !adapter.features().contains(FEATURES) {
+        println!("the adapter lacks binding arrays, skipping");
+        return;
+    }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("grana.test"),
-        required_features: wgpu::Features::empty(),
+        required_features: FEATURES,
         required_limits: adapter.limits(),
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::Performance,
@@ -44,13 +50,27 @@ fn renders_a_volume() {
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let volume = sphere_volume();
-    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
-    renderer.set_volume(&device, &queue, &volume);
-    renderer.set_transfer_function(&queue, &TransferFunction::fluorescence());
+    let volume = two_channel_volume();
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, &volume);
 
     let mut camera = Camera::new(35.0);
     camera.fit(glam::Vec3::from(volume.world_extent()), 1.0);
+    let params = RenderParams {
+        shading: Default::default(),
+        step_scale: 0.5,
+        channels: vec![
+            ChannelParams {
+                visible: true,
+                opacity: 1.0,
+                transfer: TransferFunction::tinted([0.2, 0.4, 1.0]),
+            },
+            ChannelParams {
+                visible: true,
+                opacity: 1.0,
+                transfer: TransferFunction::tinted([0.2, 1.0, 0.3]),
+            },
+        ],
+    };
 
     let mut encoder = device.create_command_encoder(&Default::default());
     renderer.draw(
@@ -59,7 +79,7 @@ fn renders_a_volume() {
         &view,
         [0, 0, SIDE, SIDE],
         &camera,
-        &RenderParams::default(),
+        &params,
     );
 
     let row_bytes = SIDE * 4;
@@ -103,32 +123,61 @@ fn renders_a_volume() {
     receiver.recv().expect("map callback").expect("map failed");
     let pixels = slice.get_mapped_range().expect("mapped range").to_vec();
 
+    let pixels = pixels.as_chunks::<4>().0;
     let lit = pixels
-        .as_chunks::<4>()
-        .0
         .iter()
         .filter(|pixel| pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32 > 120)
+        .count();
+    let blue = pixels
+        .iter()
+        .filter(|pixel| pixel[2] > pixel[0] + 20 && pixel[2] > 40)
+        .count();
+    let green = pixels
+        .iter()
+        .filter(|pixel| pixel[1] > pixel[0] + 20 && pixel[1] > 40)
         .count();
     assert!(
         lit > (SIDE * SIDE / 20) as usize,
         "the volume barely rendered: {lit} lit pixels"
     );
+    assert!(
+        blue > 200,
+        "the blue channel barely rendered: {blue} pixels"
+    );
+    assert!(
+        green > 200,
+        "the green channel barely rendered: {green} pixels"
+    );
 }
 
-fn sphere_volume() -> Volume {
-    let extent = Extent::new(128, 128, 128);
-    let mut data = vec![0u16; extent.voxel_count() as usize];
+fn two_channel_volume() -> Volume {
+    let extent = Extent::new(128, 128, 96);
+    let count = extent.voxel_count() as usize;
+    let mut blue = vec![0u16; count];
+    let mut green = vec![0u16; count];
     for z in 0..extent.z() {
         for y in 0..extent.y() {
             for x in 0..extent.x() {
-                let radius = ((x as f32 - 64.0).powi(2)
-                    + (y as f32 - 64.0).powi(2)
-                    + (z as f32 - 64.0).powi(2))
-                .sqrt();
-                let density = (1.0 - radius / 44.0).max(0.0);
-                data[extent.index(x, y, z) as usize] = (density * density * 60000.0) as u16;
+                let index = extent.index(x, y, z) as usize;
+                blue[index] = density(x, y, z, 40.0);
+                green[index] = density(x, y, z, 88.0);
             }
         }
     }
-    Volume::new(extent, Spacing::new(0.1, 0.1, 0.1), VoxelData::U16(data))
+    Volume::new(
+        extent,
+        Spacing::new(0.1, 0.1, 0.13),
+        vec![
+            Channel::new("nuclei", [0.2, 0.4, 1.0], extent, VoxelData::U16(blue)),
+            Channel::new("membrane", [0.2, 1.0, 0.3], extent, VoxelData::U16(green)),
+        ],
+    )
+}
+
+fn density(x: u32, y: u32, z: u32, centre_x: f32) -> u16 {
+    let radius =
+        ((x as f32 - centre_x).powi(2) + (y as f32 - 64.0).powi(2) + (z as f32 - 48.0).powi(2))
+            .sqrt();
+    let density = (1.0 - radius / 30.0).max(0.0);
+    (density * density * 60000.0) as u16
 }

@@ -1,7 +1,9 @@
 mod app;
 mod dataset;
+mod demo;
 mod egui_layer;
 mod gpu;
+mod loader;
 mod scene;
 mod transfer_editor;
 mod ui;

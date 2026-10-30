@@ -1,8 +1,11 @@
-use crate::{Camera, RenderParams, TransferFunction, volume_texture::VolumeTexture};
+use crate::{
+    Camera, ChannelParams, RenderParams, TransferFunction, volume_texture::ChannelTexture,
+};
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
-use grana_volume::{Extent, Spacing, Volume, VoxelData};
+use grana_volume::Volume;
 use half::f16;
+use std::num::NonZeroU32;
 use wgpu::{
     BindGroup, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
     BindingResource, BindingType, Buffer, BufferBindingType, BufferUsages, Color, ColorTargetState,
@@ -15,8 +18,11 @@ use wgpu::{
     TextureView, TextureViewDescriptor, TextureViewDimension, VertexState,
 };
 
+pub const MAX_CHANNEL: usize = 8;
+
 const LUT_SIZE: u32 = 1024;
 const MAX_STEPS: f32 = 2048.0;
+const DUMMY_VOXEL: [u16; 1] = [0];
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -29,31 +35,27 @@ struct Uniforms {
     screen: [f32; 4],
     march: [f32; 4],
     light: [f32; 4],
+    channel_opacity: [[f32; 4]; 2],
 }
 
-pub struct Renderer {
+struct Backend {
     pipeline: RenderPipeline,
-    layout: BindGroupLayout,
+    channel_layout: BindGroupLayout,
     uniforms: Buffer,
-    volume: VolumeTexture,
+    frame_group: BindGroup,
     volume_sampler: Sampler,
     lut: Texture,
-    lut_view: TextureView,
-    lut_sampler: Sampler,
-    bind_group: BindGroup,
-    world_size: Vec3,
-    voxel_size: Vec3,
+    dummy_view: TextureView,
 }
 
-impl Renderer {
-    pub fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
+impl Backend {
+    fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
         let shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.volume.shader"),
             source: ShaderSource::Wgsl(include_str!("volume.wgsl").into()),
         });
-
-        let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.volume.layout"),
+        let frame_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.volume.frame_layout"),
             entries: &[
                 BindGroupLayoutEntry {
                     binding: 0,
@@ -70,7 +72,7 @@ impl Renderer {
                     visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Texture {
                         sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D3,
+                        view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
                     count: None,
@@ -81,31 +83,34 @@ impl Renderer {
                     ty: BindingType::Sampler(SamplerBindingType::Filtering),
                     count: None,
                 },
+            ],
+        });
+        let channel_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.volume.channel_layout"),
+            entries: &[
                 BindGroupLayoutEntry {
-                    binding: 3,
+                    binding: 0,
                     visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Texture {
                         sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D2,
+                        view_dimension: TextureViewDimension::D3,
                         multisampled: false,
                     },
-                    count: None,
+                    count: NonZeroU32::new(MAX_CHANNEL as u32),
                 },
                 BindGroupLayoutEntry {
-                    binding: 4,
+                    binding: 1,
                     visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Sampler(SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
         });
-
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.volume.pipeline_layout"),
-            bind_group_layouts: &[Some(&layout)],
+            bind_group_layouts: &[Some(&frame_layout), Some(&channel_layout)],
             immediate_size: 0,
         });
-
         let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.volume.pipeline"),
             layout: Some(&pipeline_layout),
@@ -131,14 +136,12 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
-
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.volume.uniforms"),
-            size: std::mem::size_of::<Uniforms>() as u64,
+            size: size_of::<Uniforms>() as u64,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
         let volume_sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("grana.volume.sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -149,12 +152,11 @@ impl Renderer {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
-
         let lut = device.create_texture(&TextureDescriptor {
             label: Some("grana.volume.lut"),
             size: Extent3d {
                 width: LUT_SIZE,
-                height: 1,
+                height: MAX_CHANNEL as u32,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -177,62 +179,97 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-
-        let volume = VolumeTexture::new(
-            device,
-            queue,
-            &Volume::new(
-                Extent::new(1, 1, 1),
-                Spacing::new(1.0, 1.0, 1.0),
-                VoxelData::U8(vec![0]),
-            ),
+        let dummy = device.create_texture(&TextureDescriptor {
+            label: Some("grana.volume.dummy"),
+            size: Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D3,
+            format: TextureFormat::R16Float,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: &dummy,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            bytemuck::cast_slice(&DUMMY_VOXEL),
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(2),
+                rows_per_image: Some(1),
+            },
+            Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
         );
-
-        let bind_group = Self::create_bind_group(
-            device,
-            &layout,
-            &uniforms,
-            &volume,
-            &volume_sampler,
-            &lut_view,
-            &lut_sampler,
-        );
-
+        let dummy_view = dummy.create_view(&TextureViewDescriptor {
+            label: Some("grana.volume.dummy.view"),
+            ..Default::default()
+        });
+        let frame_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("grana.volume.frame_group"),
+            layout: &frame_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: uniforms.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&lut_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::Sampler(&lut_sampler),
+                },
+            ],
+        });
         Self {
             pipeline,
-            layout,
+            channel_layout,
             uniforms,
-            volume,
+            frame_group,
             volume_sampler,
             lut,
-            lut_view,
-            lut_sampler,
-            bind_group,
-            world_size: Vec3::ONE,
-            voxel_size: Vec3::ONE,
+            dummy_view,
         }
     }
 
-    pub fn set_volume(&mut self, device: &Device, queue: &Queue, volume: &Volume) {
-        self.volume = VolumeTexture::new(device, queue, volume);
-        self.world_size = Vec3::from(volume.world_extent());
-        self.voxel_size = Vec3::new(
-            volume.spacing().x(),
-            volume.spacing().y(),
-            volume.spacing().z(),
-        );
-        self.bind_group = Self::create_bind_group(
-            device,
-            &self.layout,
-            &self.uniforms,
-            &self.volume,
-            &self.volume_sampler,
-            &self.lut_view,
-            &self.lut_sampler,
-        );
+    fn channel_group(&self, device: &Device, textures: &[ChannelTexture]) -> BindGroup {
+        let views = (0..MAX_CHANNEL)
+            .map(|index| {
+                textures
+                    .get(index)
+                    .map_or(&self.dummy_view, ChannelTexture::view)
+            })
+            .collect::<Vec<_>>();
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("grana.volume.channel_group"),
+            layout: &self.channel_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureViewArray(&views),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Sampler(&self.volume_sampler),
+                },
+            ],
+        })
     }
 
-    pub fn set_transfer_function(&self, queue: &Queue, transfer: &TransferFunction) {
+    fn write_transfer(&self, queue: &Queue, index: usize, transfer: &TransferFunction) {
         let lut = transfer.lut(LUT_SIZE as usize);
         let mut quantized = Vec::with_capacity(lut.len() * 4);
         for [red, green, blue, opacity] in lut {
@@ -244,7 +281,11 @@ impl Renderer {
             TexelCopyTextureInfo {
                 texture: &self.lut,
                 mip_level: 0,
-                origin: Origin3d::ZERO,
+                origin: Origin3d {
+                    x: 0,
+                    y: index as u32,
+                    z: 0,
+                },
                 aspect: TextureAspect::All,
             },
             bytemuck::cast_slice(&quantized),
@@ -260,9 +301,43 @@ impl Renderer {
             },
         );
     }
+}
+
+pub struct Renderer {
+    backend: Backend,
+    channel_textures: Vec<ChannelTexture>,
+    channel_group: BindGroup,
+    world_size: Vec3,
+    voxel_size: Vec3,
+    transfers: Vec<Option<TransferFunction>>,
+}
+
+impl Renderer {
+    pub fn new(device: &Device, queue: &Queue, format: TextureFormat, volume: &Volume) -> Self {
+        let backend = Backend::new(device, queue, format);
+        let channel_textures = channel_textures(device, queue, volume);
+        let channel_group = backend.channel_group(device, &channel_textures);
+        let (world_size, voxel_size) = world(volume);
+        Self {
+            backend,
+            channel_textures,
+            channel_group,
+            world_size,
+            voxel_size,
+            transfers: vec![None; MAX_CHANNEL],
+        }
+    }
+
+    pub fn set_volume(&mut self, device: &Device, queue: &Queue, volume: &Volume) {
+        let channel_textures = channel_textures(device, queue, volume);
+        self.channel_group = self.backend.channel_group(device, &channel_textures);
+        self.channel_textures = channel_textures;
+        (self.world_size, self.voxel_size) = world(volume);
+        self.transfers.fill(None);
+    }
 
     pub fn draw(
-        &self,
+        &mut self,
         queue: &Queue,
         encoder: &mut CommandEncoder,
         target: &TextureView,
@@ -270,13 +345,27 @@ impl Renderer {
         camera: &Camera,
         params: &RenderParams,
     ) {
+        assert_eq!(
+            params.channels.len(),
+            self.channel_textures.len(),
+            "every rendered channel needs parameters"
+        );
+        self.write_transfers(queue, &params.channels);
+
         let [width, height] = [region[2].max(1), region[3].max(1)];
         let aspect = width as f32 / height as f32;
         let scene_radius = 0.5 * self.world_size.length();
         let view_projection = camera.view_projection(aspect, scene_radius);
         let eye = camera.eye();
         let light = camera.light_direction();
-
+        let mut channel_opacity = [[0.0f32; 4]; 2];
+        for (index, channel) in params.channels.iter().enumerate() {
+            channel_opacity[index / 4][index % 4] = if channel.visible {
+                channel.opacity.clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+        }
         let uniforms = Uniforms {
             inv_view_projection: view_projection.inverse().to_cols_array_2d(),
             eye: [eye.x, eye.y, eye.z, 0.0],
@@ -301,13 +390,14 @@ impl Renderer {
             ],
             march: [
                 params.step_scale,
-                (self.volume.level_count() - 1) as f32,
-                params.opacity,
+                (self.channel_textures[0].level_count() - 1) as f32,
+                params.channels.len() as f32,
                 MAX_STEPS,
             ],
             light: [light.x, light.y, light.z, 0.0],
+            channel_opacity,
         };
-        queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&self.backend.uniforms, 0, bytemuck::bytes_of(&uniforms));
 
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.volume.pass"),
@@ -331,45 +421,40 @@ impl Renderer {
             1.0,
         );
         pass.set_scissor_rect(region[0], region[1], width, height);
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_pipeline(&self.backend.pipeline);
+        pass.set_bind_group(0, &self.backend.frame_group, &[]);
+        pass.set_bind_group(1, &self.channel_group, &[]);
         pass.draw(0..3, 0..1);
     }
 
-    fn create_bind_group(
-        device: &Device,
-        layout: &BindGroupLayout,
-        uniforms: &Buffer,
-        volume: &VolumeTexture,
-        volume_sampler: &Sampler,
-        lut_view: &TextureView,
-        lut_sampler: &Sampler,
-    ) -> BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("grana.volume.bind_group"),
-            layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: uniforms.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::TextureView(volume.view()),
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: BindingResource::Sampler(volume_sampler),
-                },
-                BindGroupEntry {
-                    binding: 3,
-                    resource: BindingResource::TextureView(lut_view),
-                },
-                BindGroupEntry {
-                    binding: 4,
-                    resource: BindingResource::Sampler(lut_sampler),
-                },
-            ],
-        })
+    fn write_transfers(&mut self, queue: &Queue, channels: &[ChannelParams]) {
+        for (index, channel) in channels.iter().enumerate() {
+            if self.transfers[index].as_ref() == Some(&channel.transfer) {
+                continue;
+            }
+            self.backend.write_transfer(queue, index, &channel.transfer);
+            self.transfers[index] = Some(channel.transfer.clone());
+        }
     }
+}
+
+fn channel_textures(device: &Device, queue: &Queue, volume: &Volume) -> Vec<ChannelTexture> {
+    let count = volume.channel_count() as usize;
+    assert!(
+        (1..=MAX_CHANNEL).contains(&count),
+        "a volume holds between one and {MAX_CHANNEL} channels"
+    );
+    volume
+        .channels()
+        .iter()
+        .map(|channel| ChannelTexture::new(device, queue, channel))
+        .collect()
+}
+
+fn world(volume: &Volume) -> (Vec3, Vec3) {
+    let spacing = volume.spacing();
+    (
+        Vec3::from(volume.world_extent()),
+        Vec3::new(spacing.x(), spacing.y(), spacing.z()),
+    )
 }

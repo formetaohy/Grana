@@ -2,6 +2,9 @@ use std::sync::Arc;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
+const REQUIRED_FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_ARRAY
+    .union(wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING);
+
 pub struct Gpu {
     pub surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,
@@ -26,6 +29,10 @@ impl Gpu {
         let adapter = pollster::block_on(instance.request_adapter(&options(false)))
             .or_else(|_| pollster::block_on(instance.request_adapter(&options(true))))
             .expect("no graphics adapter can present to this window");
+        assert!(
+            adapter.features().contains(REQUIRED_FEATURES),
+            "the graphics adapter cannot sample texture binding arrays"
+        );
 
         let info = adapter.get_info();
         let adapter_description = format!("{} · {:?}", info.name, info.backend);
@@ -33,7 +40,7 @@ impl Gpu {
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("grana"),
-            required_features: wgpu::Features::empty(),
+            required_features: REQUIRED_FEATURES,
             required_limits: adapter.limits(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::Performance,

@@ -20,8 +20,13 @@ egui-winit = { version = "0.37", default-features = false, features = ["clipboar
 winit = "0.30"
 pollster = "0.4"
 thiserror = "2"
+serde_json = "1"
+rfd = "0.17"
+zarrs = { version = "0.23", default-features = false, features = ["filesystem", "blosc", "zstd", "gzip", "sharding", "crc32c"] }
+ome_zarr_metadata = "0.3"
 grana-volume = { version = "0.1.0", path = "crates/grana-volume" }
 grana-render = { version = "0.1.0", path = "crates/grana-render" }
+grana-zarr = { version = "0.1.0", path = "crates/grana-zarr" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -45,11 +50,13 @@ path = "src/main.rs"
 [dependencies]
 grana-render = { workspace = true }
 grana-volume = { workspace = true }
+grana-zarr = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
 egui-winit = { workspace = true }
 glam = { workspace = true }
 pollster = { workspace = true }
+rfd = { workspace = true }
 wgpu = { workspace = true }
 winit = { workspace = true }
 

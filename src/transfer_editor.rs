@@ -3,15 +3,15 @@ use grana_render::{Stop, TransferFunction};
 use grana_volume::Intensity;
 
 pub struct TransferEditor {
+    tint: [f32; 3],
     stops: Vec<Stop>,
-    dirty: bool,
 }
 
 impl TransferEditor {
-    pub fn new() -> Self {
+    pub fn new(tint: [f32; 3]) -> Self {
         Self {
-            stops: TransferFunction::fluorescence().stops().to_vec(),
-            dirty: true,
+            tint,
+            stops: TransferFunction::tinted(tint).stops().to_vec(),
         }
     }
 
@@ -19,20 +19,16 @@ impl TransferEditor {
         TransferFunction::new(self.stops.clone())
     }
 
-    pub fn take_dirty(&mut self) -> bool {
-        std::mem::take(&mut self.dirty)
-    }
-
     pub fn ui(&mut self, ui: &mut Ui, intensity: Intensity) {
         ui.horizontal(|ui| {
-            if ui.button("Fluorescence").clicked() {
-                self.replace(TransferFunction::fluorescence());
+            if ui.button("Tinted").clicked() {
+                self.stops = TransferFunction::tinted(self.tint).stops().to_vec();
             }
             if ui.button("Grayscale").clicked() {
-                self.replace(TransferFunction::grayscale());
+                self.stops = TransferFunction::grayscale().stops().to_vec();
             }
         });
-        self.preview(ui, intensity);
+        self.preview(ui);
 
         let mut changed = false;
         let mut removed = None;
@@ -74,7 +70,7 @@ impl TransferEditor {
         }
         if ui.button("Add stop").clicked() {
             let midpoint = self.midpoint();
-            self.stops.push(Stop::new(midpoint, [0.9, 0.9, 0.9], 0.5));
+            self.stops.push(Stop::new(midpoint, self.tint, 0.5));
             changed = true;
         }
         if changed {
@@ -83,13 +79,7 @@ impl TransferEditor {
                     .partial_cmp(&right.position)
                     .expect("stop positions are finite")
             });
-            self.dirty = true;
         }
-    }
-
-    fn replace(&mut self, transfer: TransferFunction) {
-        self.stops = transfer.stops().to_vec();
-        self.dirty = true;
     }
 
     fn midpoint(&self) -> f32 {
@@ -105,13 +95,13 @@ impl TransferEditor {
         midpoint
     }
 
-    fn preview(&self, ui: &mut Ui, intensity: Intensity) {
+    fn preview(&self, ui: &mut Ui) {
         let width = ui.available_width();
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::hover());
         let painter = ui.painter();
         painter.rect_filled(rect, 4.0, egui::Color32::from_gray(18));
 
-        let lut = self.transfer().lut(128);
+        let lut = self.transfer().lut(160);
         let segments = lut.len();
         for (index, [red, green, blue, opacity]) in lut.into_iter().enumerate() {
             let start = rect.left() + rect.width() * index as f32 / segments as f32;
@@ -131,15 +121,6 @@ impl TransferEditor {
                 color,
             );
         }
-
-        let marker = rect.left() + rect.width() * intensity.unit(intensity.max());
-        painter.line_segment(
-            [
-                egui::pos2(marker, rect.top()),
-                egui::pos2(marker, rect.bottom()),
-            ],
-            egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
-        );
     }
 }
 
