@@ -1085,6 +1085,7 @@ dependencies = [
  "egui-wgpu",
  "egui-winit",
  "glam",
+ "grana-analysis",
  "grana-render",
  "grana-volume",
  "grana-zarr",
@@ -1092,6 +1093,13 @@ dependencies = [
  "rfd",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "grana-analysis"
+version = "0.1.0"
+dependencies = [
+ "grana-volume",
 ]
 
 [[package]]

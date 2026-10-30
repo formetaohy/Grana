@@ -55,6 +55,17 @@ fn reads_ome_zarr_v04_and_v05() {
     };
     assert_eq!(voxel(second, 0, 0, 0), 1000);
 
+    let region = image
+        .read_region(0, 1, 1..4, 1..3, 0..2)
+        .expect("a v0.4 region reads");
+    let VoxelData::U16(values) = &region else {
+        panic!("the fixture stores uint16 voxels");
+    };
+    assert_eq!(values.len(), 3 * 2 * 2);
+    assert_eq!(values[0], 1011);
+    assert_eq!(values[values.len() - 1], 1123);
+    assert!(image.read_region(0, 0, 0..6, 0..1, 0..1).is_err());
+
     let image = Image::open(&v5).expect("the v0.5 dataset opens");
     assert_eq!(image.name(), "fixture-v5");
     let pyramid = image.pyramid();

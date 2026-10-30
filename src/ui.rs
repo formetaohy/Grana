@@ -1,3 +1,4 @@
+use crate::analysis::Progress;
 use crate::dataset::{Dataset, Origin};
 use crate::overlay::{self, Overlay};
 use crate::scene::Scene;
@@ -26,6 +27,7 @@ pub struct UiState<'a> {
     pub message: Option<&'a Message>,
     pub frame: FrameInfo,
     pub pending: usize,
+    pub analysis: Option<Progress>,
 }
 
 #[derive(Clone, Copy)]
@@ -35,6 +37,10 @@ pub struct Actions {
     pub fit_section: bool,
     pub section_axis: Option<Axis>,
     pub split: Option<f32>,
+    pub detect_spots: bool,
+    pub clear_spots: bool,
+    pub cancel_analysis: bool,
+    pub export_spots: bool,
     pub volume: egui::Rect,
     pub section: egui::Rect,
 }
@@ -47,6 +53,10 @@ impl Actions {
             fit_section: false,
             section_axis: None,
             split: None,
+            detect_spots: false,
+            clear_spots: false,
+            cancel_analysis: false,
+            export_spots: false,
             volume: egui::Rect::ZERO,
             section: egui::Rect::ZERO,
         }
@@ -74,6 +84,8 @@ pub fn build(root: &mut Ui, state: &mut UiState<'_>) -> Actions {
                     channels_section(ui, state.scene);
                     ui.separator();
                     display_section(ui, state.scene);
+                    ui.separator();
+                    analysis_section(ui, state, &mut actions);
                     ui.separator();
                     rendering_section(ui, state.scene);
                     ui.separator();
@@ -305,6 +317,103 @@ fn display_section(ui: &mut Ui, scene: &mut Scene) {
         }
     }
     scene.channels[index].display = display;
+}
+
+fn analysis_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
+    ui.strong("Objects");
+    let selected = state.scene.selected;
+    let name = state.scene.channel(selected).name().to_string();
+    let minimum = state.scene.dataset.voxel_size().min_element();
+    let mut params = state.scene.spot_params;
+    let mut diameter = params.diameter();
+    if ui
+        .add(
+            egui::Slider::new(&mut diameter, minimum..=16.0 * minimum)
+                .logarithmic(true)
+                .text("diameter")
+                .suffix(" µm"),
+        )
+        .changed()
+    {
+        params.set_diameter(diameter);
+    }
+    let mut threshold = params.threshold();
+    if ui
+        .add(egui::Slider::new(&mut threshold, 0.0..=1.0).text("contrast"))
+        .changed()
+    {
+        params.set_threshold(threshold);
+    }
+    state.scene.spot_params = params;
+
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(state.analysis.is_none(), egui::Button::new("Detect spots"))
+            .clicked()
+        {
+            actions.detect_spots = true;
+        }
+        if state.analysis.is_some() {
+            if ui.button("Cancel").clicked() {
+                actions.cancel_analysis = true;
+            }
+            ui.spinner();
+        }
+        if let Some(progress) = state.analysis {
+            if progress.total > 0 {
+                ui.label(
+                    RichText::new(format!(
+                        "{} · {}/{} blocks",
+                        state.scene.dataset.channels()[progress.channel].name(),
+                        progress.done,
+                        progress.total
+                    ))
+                    .small()
+                    .weak(),
+                );
+            } else {
+                ui.label(RichText::new("preparing").small().weak());
+            }
+        }
+    });
+
+    let summary = state.scene.spots().map(|spots| {
+        (
+            spots.channel(),
+            spots.len(),
+            spots.level(),
+            spots.mean_quality(),
+        )
+    });
+    if let Some((channel, count, level, mean)) = summary {
+        let channel_name = state.scene.dataset.channels()[channel].name().to_string();
+        ui.label(format!(
+            "{channel_name} · {count} spots · level {}",
+            level + 1
+        ));
+        if let Some(mean) = mean {
+            ui.label(
+                RichText::new(format!("mean contrast {mean:.2}"))
+                    .small()
+                    .weak(),
+            );
+        }
+        let mut visible = state.scene.spot_visible();
+        if ui.checkbox(&mut visible, "visible").changed() {
+            state.scene.set_spot_visible(visible);
+        }
+        if ui.button("Export CSV").clicked() {
+            actions.export_spots = true;
+        }
+    } else {
+        ui.label(
+            RichText::new(format!(
+                "detects intensity maxima in {name} at the chosen diameter"
+            ))
+            .small()
+            .weak(),
+        );
+    }
 }
 
 fn section_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {

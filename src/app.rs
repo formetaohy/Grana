@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use grana_render::{BrickRequest, Frame, FrameInfo, Renderer};
+use grana_analysis::SpotSet;
+use grana_render::{BrickRequest, Frame, FrameInfo, Marker, Renderer};
 use grana_volume::Spacing;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -11,11 +12,12 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::window::{Window, WindowId};
 
+use crate::analysis::{self, Analysis, Event, Poll, Progress};
 use crate::dataset::Dataset;
 use crate::demo;
 use crate::egui_layer::EguiLayer;
 use crate::gpu::Gpu;
-use crate::loader::{Event, Loader};
+use crate::loader::{Event as LoaderEvent, Loader};
 use crate::scene::Scene;
 use crate::ui::{self, Message, UiState};
 use crate::viewport::Viewport;
@@ -38,6 +40,9 @@ pub struct App {
     viewport: Viewport,
     scene: Option<Scene>,
     source: Option<Loader>,
+    analysis: Option<Analysis>,
+    analysis_progress: Option<Progress>,
+    markers: Vec<Marker>,
     volume_requests: Vec<BrickRequest>,
     section_requests: Vec<BrickRequest>,
     in_flight: HashSet<BrickRequest>,
@@ -55,6 +60,9 @@ impl App {
             viewport: Viewport::new(),
             scene: None,
             source: None,
+            analysis: None,
+            analysis_progress: None,
+            markers: Vec::new(),
             volume_requests: Vec::new(),
             section_requests: Vec::new(),
             in_flight: HashSet::new(),
@@ -92,18 +100,39 @@ impl App {
             egui,
             renderer,
         });
+        self.start_analysis();
     }
 
     fn redraw(&mut self) {
         self.poll_source();
+        self.poll_analysis();
         if self.surface.is_none() || self.scene.is_none() {
             return;
         }
         let (output, actions) = self.run_ui();
+        let mut opened = false;
         if actions.open
             && let Some(path) = Self::pick_folder()
         {
             self.begin_load(path);
+            opened = true;
+        }
+        if !opened {
+            if actions.detect_spots {
+                self.start_analysis();
+            }
+            if actions.clear_spots
+                && let Some(scene) = self.scene.as_mut()
+            {
+                scene.clear_spots();
+            }
+            if actions.cancel_analysis {
+                self.analysis = None;
+                self.analysis_progress = None;
+            }
+            if actions.export_spots {
+                self.export_spots();
+            }
         }
         let scale = self
             .surface
@@ -162,6 +191,7 @@ impl App {
 
     fn streaming(&self) -> bool {
         self.loading.is_some()
+            || self.analysis.is_some()
             || !self.in_flight.is_empty()
             || (self.source.is_some()
                 && (!self.volume_requests.is_empty() || !self.section_requests.is_empty()))
@@ -184,6 +214,7 @@ impl App {
         let message = self.message.as_ref();
         let frame = self.frame;
         let pending = self.in_flight.len();
+        let analysis = self.analysis_progress;
         let viewport = &mut self.viewport;
         let mut actions = ui::Actions::new();
         let output = egui.run(window, |root| {
@@ -197,6 +228,7 @@ impl App {
                     message,
                     frame,
                     pending,
+                    analysis,
                 },
             );
         });
@@ -225,6 +257,7 @@ impl App {
             .min()
             .unwrap_or(Duration::MAX);
         let params = scene.params();
+        scene.markers(&mut self.markers);
         let frame = gpu.acquire()?;
         let view = frame
             .texture
@@ -249,6 +282,7 @@ impl App {
                 camera,
                 section,
                 params: &params,
+                markers: &self.markers,
                 volume_requests: &mut self.volume_requests,
                 section_requests: &mut self.section_requests,
             },
@@ -267,7 +301,7 @@ impl App {
             };
             processed += 1;
             match event {
-                Event::Opened { name, pyramid } => {
+                LoaderEvent::Opened { name, pyramid } => {
                     let dataset = Dataset::zarr(name, pyramid);
                     if let Some(surface) = self.surface.as_mut() {
                         surface
@@ -275,6 +309,8 @@ impl App {
                             .set_pyramid(&surface.gpu.device, dataset.pyramid());
                     }
                     self.scene = Some(Scene::new(dataset));
+                    self.analysis = None;
+                    self.analysis_progress = None;
                     self.loading = None;
                     self.message = None;
                     self.in_flight.clear();
@@ -283,7 +319,7 @@ impl App {
                     self.frame = FrameInfo::default();
                     self.needs_fit = true;
                 }
-                Event::Brick { request, data } => {
+                LoaderEvent::Brick { request, data } => {
                     self.in_flight.remove(&request);
                     if let Some(surface) = self.surface.as_mut() {
                         surface.renderer.upload(
@@ -295,17 +331,21 @@ impl App {
                         );
                     }
                 }
-                Event::ReadFailed { request, detail } => {
+                LoaderEvent::ReadFailed { request, detail } => {
                     self.in_flight.remove(&request);
                     self.message = Some(Message::error(detail));
+                    self.analysis = None;
+                    self.analysis_progress = None;
                     self.source = None;
                     self.in_flight.clear();
                     self.volume_requests.clear();
                     self.section_requests.clear();
                 }
-                Event::Failed(detail) => {
+                LoaderEvent::Failed(detail) => {
                     self.loading = None;
                     self.message = Some(Message::error(detail));
+                    self.analysis = None;
+                    self.analysis_progress = None;
                     self.source = None;
                     self.in_flight.clear();
                     self.volume_requests.clear();
@@ -348,12 +388,119 @@ impl App {
         }
     }
 
+    fn poll_analysis(&mut self) {
+        let mut outcome = None;
+        if let Some(job) = self.analysis.as_ref() {
+            loop {
+                match job.poll() {
+                    Poll::Event(Event::Started { total }) => {
+                        self.analysis_progress = Some(Progress {
+                            channel: job.channel(),
+                            done: 0,
+                            total,
+                        });
+                    }
+                    Poll::Event(Event::Progress { done, total }) => {
+                        self.analysis_progress = Some(Progress {
+                            channel: job.channel(),
+                            done,
+                            total,
+                        });
+                    }
+                    Poll::Event(Event::Finished(set)) => {
+                        outcome = Some(Ok(set));
+                        break;
+                    }
+                    Poll::Event(Event::Failed(detail)) => {
+                        outcome = Some(Err(detail));
+                        break;
+                    }
+                    Poll::Empty => break,
+                    Poll::Closed => {
+                        outcome = Some(Err("the analysis worker stopped".to_string()));
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(outcome) = outcome {
+            self.analysis = None;
+            self.analysis_progress = None;
+            match outcome {
+                Ok(set) => {
+                    if let Some(scene) = self.scene.as_mut() {
+                        scene.install_spots(set);
+                    }
+                }
+                Err(detail) => {
+                    self.message = Some(Message::error(detail));
+                }
+            }
+        }
+    }
+
+    fn start_analysis(&mut self) {
+        if self.loading.is_some() {
+            return;
+        }
+        let Some(source) = self.source.as_ref().map(Loader::source) else {
+            return;
+        };
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let channel = scene.selected;
+        if scene.dataset.channels()[channel].intensity().span() <= 0.0 {
+            self.message = Some(Message::error(
+                "the selected channel has no intensity range to detect",
+            ));
+            return;
+        }
+        self.message = None;
+        self.analysis_progress = Some(Progress {
+            channel,
+            done: 0,
+            total: 0,
+        });
+        self.analysis = Some(analysis::start(source, channel, scene.spot_params));
+    }
+
+    fn export_spots(&mut self) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(spots) = scene.spots() else {
+            return;
+        };
+        let channel = scene.dataset.channels()[spots.channel()].name();
+        let file_name = format!("{}-{}-spots.csv", slug(scene.dataset.name()), slug(channel));
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Export spots")
+            .set_file_name(file_name)
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            return;
+        };
+        match std::fs::write(&path, spots_csv(spots)) {
+            Ok(()) => self.message = None,
+            Err(error) => {
+                self.message = Some(Message::error(format!(
+                    "failed to export spots to {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+
     fn begin_load(&mut self, path: PathBuf) {
         if self.loading.is_some() {
             return;
         }
         self.loading = Some(file_name(&path));
         self.source = Some(Loader::file(path));
+        self.analysis = None;
+        self.analysis_progress = None;
         self.message = None;
         self.in_flight.clear();
         self.volume_requests.clear();
@@ -374,6 +521,41 @@ fn file_name(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .unwrap_or("OME-Zarr dataset")
         .to_string()
+}
+
+fn spots_csv(spots: &SpotSet) -> String {
+    let mut csv = String::from("id,x_um,y_um,z_um,diameter_um,quality\n");
+    for (index, spot) in spots.spots().iter().enumerate() {
+        let center = spot.center();
+        csv.push_str(&format!(
+            "{},{:.4},{:.4},{:.4},{:.4},{:.4}\n",
+            index + 1,
+            center[0],
+            center[1],
+            center[2],
+            spot.radius() * 2.0,
+            spot.quality()
+        ));
+    }
+    csv
+}
+
+fn slug(name: &str) -> String {
+    let slug = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    if slug.is_empty() {
+        "dataset".to_string()
+    } else {
+        slug
+    }
 }
 
 fn physical_region(rect: egui::Rect, scale: f32, surface: [u32; 2]) -> [u32; 4] {

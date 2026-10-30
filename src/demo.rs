@@ -1,3 +1,4 @@
+use grana_analysis::SpotParams;
 use grana_render::{ChannelDisplay, Surface};
 use grana_volume::{Channel, Extent, Spacing, Volume, VoxelData};
 
@@ -14,6 +15,8 @@ pub fn stage(scene: &mut Scene) {
     stage_surface(scene, 0, NUCLEUS_THRESHOLD);
     stage_surface(scene, 1, MEMBRANE_THRESHOLD);
     scene.channels[1].opacity = MEMBRANE_OPACITY;
+    scene.select(2);
+    scene.spot_params = SpotParams::new(0.45, 0.1);
 }
 
 fn stage_surface(scene: &mut Scene, index: usize, fraction: f32) {

@@ -10,6 +10,8 @@ pub enum Error {
     Metadata { path: PathBuf, detail: String },
     #[error("the OME-Zarr dataset `{path}` is not supported: {detail}")]
     Unsupported { path: PathBuf, detail: String },
+    #[error("the OME-Zarr region of `{array}` is invalid: {detail}")]
+    Region { array: String, detail: String },
     #[error("failed to read the OME-Zarr array `{array}`: {detail}")]
     Read { array: String, detail: String },
 }

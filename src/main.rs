@@ -1,3 +1,4 @@
+mod analysis;
 mod app;
 mod dataset;
 mod demo;
@@ -6,6 +7,7 @@ mod gpu;
 mod loader;
 mod overlay;
 mod scene;
+mod source;
 mod transfer_editor;
 mod ui;
 mod viewport;

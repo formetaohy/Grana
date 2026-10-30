@@ -1,9 +1,12 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use grana_render::BrickRequest;
 use grana_volume::{BrickData, BrickGrid, Pyramid, Volume};
 use grana_zarr::Image;
+
+use crate::source::Source;
 
 pub enum Event {
     Opened {
@@ -24,26 +27,37 @@ pub enum Event {
 pub struct Loader {
     events: Receiver<Event>,
     requests: Sender<BrickRequest>,
+    source: Source,
 }
 
 impl Loader {
     pub fn memory(volume: Volume) -> (Self, Pyramid) {
         let pyramid = volume.pyramid();
+        let volume = Arc::new(volume);
+        let worker = Arc::clone(&volume);
         let (requests, request_queue) = mpsc::channel::<BrickRequest>();
         let (event_sender, events) = mpsc::channel();
         std::thread::spawn(move || {
-            let grid = BrickGrid::new(volume.extent());
+            let grid = BrickGrid::new(worker.extent());
             while let Ok(request) = request_queue.recv() {
-                let data = volume.brick(&grid, request.coord);
+                let data = worker.brick(&grid, request.coord);
                 if event_sender.send(Event::Brick { request, data }).is_err() {
                     break;
                 }
             }
         });
-        (Self { events, requests }, pyramid)
+        (
+            Self {
+                events,
+                requests,
+                source: Source::Memory(volume),
+            },
+            pyramid,
+        )
     }
 
     pub fn file(path: PathBuf) -> Self {
+        let source = Source::File(path.clone());
         let (requests, request_queue) = mpsc::channel::<BrickRequest>();
         let (event_sender, events) = mpsc::channel();
         std::thread::spawn(move || {
@@ -90,7 +104,11 @@ impl Loader {
                 }
             }
         });
-        Self { events, requests }
+        Self {
+            events,
+            requests,
+            source,
+        }
     }
 
     pub fn poll(&self) -> Option<Event> {
@@ -99,5 +117,9 @@ impl Loader {
 
     pub fn request(&self, request: BrickRequest) -> bool {
         self.requests.send(request).is_ok()
+    }
+
+    pub fn source(&self) -> Source {
+        self.source.clone()
     }
 }

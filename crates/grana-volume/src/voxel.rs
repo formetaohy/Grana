@@ -1,4 +1,6 @@
-use crate::Intensity;
+use std::ops::Range;
+
+use crate::{Extent, Intensity};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum VoxelFormat {
@@ -85,6 +87,39 @@ impl VoxelData {
         });
     }
 
+    pub fn write_values(&self, out: &mut [f32]) {
+        assert_eq!(
+            out.len(),
+            self.voxel_count(),
+            "the destination must hold every voxel"
+        );
+        let mut index = 0;
+        self.for_each_value(|value| {
+            out[index] = value;
+            index += 1;
+        });
+    }
+
+    pub fn region(&self, extent: Extent, x: Range<u32>, y: Range<u32>, z: Range<u32>) -> Self {
+        assert!(
+            x.start < x.end && x.end <= extent.x(),
+            "the x range lies inside the extent"
+        );
+        assert!(
+            y.start < y.end && y.end <= extent.y(),
+            "the y range lies inside the extent"
+        );
+        assert!(
+            z.start < z.end && z.end <= extent.z(),
+            "the z range lies inside the extent"
+        );
+        match self {
+            Self::U8(data) => Self::U8(extract(data, extent, &x, &y, &z)),
+            Self::U16(data) => Self::U16(extract(data, extent, &x, &y, &z)),
+            Self::F32(data) => Self::F32(extract(data, extent, &x, &y, &z)),
+        }
+    }
+
     fn for_each_value(&self, mut visit: impl FnMut(f32)) {
         match self {
             Self::U8(data) => data.iter().for_each(|&value| visit(f32::from(value))),
@@ -92,4 +127,23 @@ impl VoxelData {
             Self::F32(data) => data.iter().for_each(|&value| visit(value)),
         }
     }
+}
+
+fn extract<T: Copy>(
+    source: &[T],
+    extent: Extent,
+    x: &Range<u32>,
+    y: &Range<u32>,
+    z: &Range<u32>,
+) -> Vec<T> {
+    let width = (x.end - x.start) as usize;
+    let mut values =
+        Vec::with_capacity(width * (y.end - y.start) as usize * (z.end - z.start) as usize);
+    for z in z.clone() {
+        for y in y.clone() {
+            let start = extent.index(x.start, y, z) as usize;
+            values.extend_from_slice(&source[start..start + width]);
+        }
+    }
+    values
 }

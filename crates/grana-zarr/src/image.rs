@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -132,13 +133,13 @@ impl Image {
     }
 
     pub fn read_brick(&self, level: usize, coord: BrickCoord) -> Result<BrickData, Error> {
-        let Some(level) = self.levels.get(level) else {
+        let Some(level_array) = self.levels.get(level) else {
             return Err(Error::Unsupported {
                 path: self.path.clone(),
                 detail: "the requested resolution level does not exist".to_string(),
             });
         };
-        let grid = BrickGrid::new(level.layout.extent);
+        let grid = BrickGrid::new(level_array.layout.extent);
         let spatial = grid.padded_range(coord);
         let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
         let extent = Extent::new(
@@ -148,29 +149,74 @@ impl Image {
         );
         let mut channels = Vec::with_capacity(self.pyramid.channel_count());
         for index in 0..self.pyramid.channel_count() {
-            let ranges = level.layout.ranges(
-                index as u64,
+            let data = self.read_region(
+                level,
+                index,
                 spatial[0].clone(),
                 spatial[1].clone(),
                 spatial[2].clone(),
-            );
-            let subset = ArraySubset::new_with_ranges(&ranges);
-            let data = retrieve(&level.array, &subset, &level.path)?;
-            if data.voxel_count() as u64 != extent.voxel_count() {
-                return Err(Error::Read {
-                    array: level.path.clone(),
-                    detail: "the decoded array has an unexpected voxel count".to_string(),
-                });
-            }
+            )?;
             channels.push(pad_brick(
                 &data,
                 origin,
                 extent,
                 grid.origin(coord),
-                level.layout.extent,
+                level_array.layout.extent,
             ));
         }
         Ok(BrickData::new(channels))
+    }
+
+    pub fn read_region(
+        &self,
+        level: usize,
+        channel: usize,
+        x: Range<u32>,
+        y: Range<u32>,
+        z: Range<u32>,
+    ) -> Result<VoxelData, Error> {
+        let Some(level) = self.levels.get(level) else {
+            return Err(Error::Region {
+                array: self.path.display().to_string(),
+                detail: "the requested resolution level does not exist".to_string(),
+            });
+        };
+        if channel >= self.pyramid.channel_count() {
+            return Err(Error::Region {
+                array: level.path.clone(),
+                detail: format!(
+                    "the channel {channel} lies outside the {} available channels",
+                    self.pyramid.channel_count()
+                ),
+            });
+        }
+        let extent = level.layout.extent;
+        if x.start >= x.end
+            || x.end > extent.x()
+            || y.start >= y.end
+            || y.end > extent.y()
+            || z.start >= z.end
+            || z.end > extent.z()
+        {
+            return Err(Error::Region {
+                array: level.path.clone(),
+                detail: "the region lies outside the array extent".to_string(),
+            });
+        }
+        let ranges = level
+            .layout
+            .ranges(channel as u64, x.clone(), y.clone(), z.clone());
+        let subset = ArraySubset::new_with_ranges(&ranges);
+        let data = retrieve(&level.array, &subset, &level.path)?;
+        let expected =
+            u64::from(x.end - x.start) * u64::from(y.end - y.start) * u64::from(z.end - z.start);
+        if data.voxel_count() as u64 != expected {
+            return Err(Error::Read {
+                array: level.path.clone(),
+                detail: "the decoded region has an unexpected voxel count".to_string(),
+            });
+        }
+        Ok(data)
     }
 }
 

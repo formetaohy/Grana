@@ -17,9 +17,10 @@ use wgpu::{
 
 use crate::atlas::Atlas;
 use crate::level::{BrickRecord, LevelCache};
+use crate::marker::{MarkerFrame, Markers};
 use crate::transfer::srgb_to_linear;
 use crate::{
-    Camera, ChannelDisplay, ChannelParams, MAX_CHANNEL, RenderParams, SectionCamera,
+    Camera, ChannelDisplay, ChannelParams, MAX_CHANNEL, Marker, RenderParams, SectionCamera,
     TransferFunction,
 };
 
@@ -118,6 +119,7 @@ pub struct Frame<'a> {
     pub camera: &'a Camera,
     pub section: &'a SectionCamera,
     pub params: &'a RenderParams,
+    pub markers: &'a [Marker],
     pub volume_requests: &'a mut Vec<BrickRequest>,
     pub section_requests: &'a mut Vec<BrickRequest>,
 }
@@ -134,6 +136,7 @@ struct ChannelFields {
 struct Backend {
     volume_pipeline: RenderPipeline,
     section_pipeline: RenderPipeline,
+    markers: Markers,
     frame_layout: BindGroupLayout,
     channel_layout: BindGroupLayout,
     uniforms: Buffer,
@@ -228,6 +231,7 @@ impl Backend {
             &pipeline_layout,
             format,
         );
+        let markers = Markers::new(device, format);
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.volume.uniforms"),
             size: size_of::<Uniforms>() as u64,
@@ -317,6 +321,7 @@ impl Backend {
         Self {
             volume_pipeline,
             section_pipeline,
+            markers,
             frame_layout,
             channel_layout,
             uniforms,
@@ -554,6 +559,7 @@ impl Renderer {
             camera,
             section,
             params,
+            markers,
             volume_requests,
             section_requests,
         } = frame;
@@ -719,6 +725,21 @@ impl Renderer {
             pass.set_bind_group(1, atlas.group(), &[]);
             pass.draw(0..3, 0..1);
         }
+
+        let scene_radius = 0.5 * Vec3::from(pyramid.level(volume_render).world_extent()).length();
+        backend.markers.draw(
+            device,
+            queue,
+            MarkerFrame {
+                encoder,
+                target,
+                region: volume_region,
+                camera,
+                params,
+                scene_radius,
+            },
+            markers,
+        );
 
         FrameInfo {
             volume: ViewInfo {

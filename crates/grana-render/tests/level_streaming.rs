@@ -158,6 +158,7 @@ impl Stream<'_> {
                     camera,
                     section: &self.section,
                     params: self.params,
+                    markers: &[],
                     volume_requests: &mut self.volume_requests,
                     section_requests: &mut self.section_requests,
                 },

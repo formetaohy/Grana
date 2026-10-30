@@ -1,4 +1,5 @@
-use grana_render::{ChannelDisplay, ChannelParams, RenderParams, Shading};
+use grana_analysis::{SpotParams, SpotSet};
+use grana_render::{ChannelDisplay, ChannelParams, Marker, RenderParams, Shading};
 use grana_volume::{ChannelInfo, Intensity};
 
 use crate::dataset::Dataset;
@@ -13,12 +14,19 @@ pub struct ChannelView {
     transfer: TransferEditor,
 }
 
+struct SpotLayer {
+    visible: bool,
+    set: SpotSet,
+}
+
 pub struct Scene {
     pub dataset: Dataset,
     pub channels: Vec<ChannelView>,
     pub selected: usize,
     pub shading: Shading,
     pub step_scale: f32,
+    pub spot_params: SpotParams,
+    spots: Option<SpotLayer>,
 }
 
 impl Scene {
@@ -35,12 +43,15 @@ impl Scene {
                 transfer: TransferEditor::new(channel.tint()),
             })
             .collect();
+        let spot_params = SpotParams::new(4.0 * dataset.voxel_size().min_element(), 0.2);
         Self {
             dataset,
             channels,
             selected: 0,
             shading: Shading::default(),
             step_scale: 1.0,
+            spot_params,
+            spots: None,
         }
     }
 
@@ -98,5 +109,49 @@ impl Scene {
 
     pub fn reset_window(&mut self, index: usize) {
         self.channels[index].window = self.channels[index].default_window;
+    }
+
+    pub fn spots(&self) -> Option<&SpotSet> {
+        self.spots.as_ref().map(|layer| &layer.set)
+    }
+
+    pub fn spot_visible(&self) -> bool {
+        self.spots.as_ref().is_some_and(|layer| layer.visible)
+    }
+
+    pub fn set_spot_visible(&mut self, visible: bool) {
+        if let Some(layer) = &mut self.spots {
+            layer.visible = visible;
+        }
+    }
+
+    pub fn install_spots(&mut self, set: SpotSet) {
+        assert!(
+            set.channel() < self.channels.len(),
+            "the spot set belongs to an existing channel"
+        );
+        self.spots = Some(SpotLayer { visible: true, set });
+    }
+
+    pub fn clear_spots(&mut self) {
+        self.spots = None;
+    }
+
+    pub fn markers(&self, out: &mut Vec<Marker>) {
+        out.clear();
+        let Some(layer) = &self.spots else {
+            return;
+        };
+        if !layer.visible {
+            return;
+        }
+        let channel = layer.set.channel();
+        if !self.channels[channel].enabled {
+            return;
+        }
+        let color = self.dataset.channels()[channel].tint();
+        for spot in layer.set.spots() {
+            out.push(Marker::new(spot.center(), spot.radius(), color, 1.0));
+        }
     }
 }
