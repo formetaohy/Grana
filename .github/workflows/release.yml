@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  version:
+    name: Tag & Version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Match the tag against the workspace version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          versions=$(cargo metadata --no-deps --format-version 1 --locked | jq -r '[.packages[].version] | unique | join(" ")')
+          if [ "$versions" != "$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match workspace versions: $versions" >&2
+            exit 1
+          fi
+
+  check:
+    uses: ./.github/workflows/ci.yml
+    needs: version
+
+  build:
+    name: ${{ matrix.platform }} Binary
+    needs: check
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Windows
+            runner: windows-latest
+            archive: grana-windows-x86_64.zip
+          - platform: macOS
+            runner: macos-latest
+            archive: grana-macos-aarch64.tar.gz
+          - platform: Linux
+            runner: ubuntu-latest
+            archive: grana-linux-x86_64.tar.gz
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --workspace --all-features --release --locked
+
+      - name: Package Windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path stage, dist -Force | Out-Null
+          Copy-Item target/release/grana.exe stage
+          Copy-Item LICENSE stage
+          Compress-Archive -Path stage/* -DestinationPath dist/${{ matrix.archive }}
+
+      - name: Package Unix archive
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p stage dist
+          cp target/release/grana stage
+          cp LICENSE stage
+          tar -czf "dist/${{ matrix.archive }}" -C stage .
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: dist/${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          (cd dist && sha256sum grana-* > SHA256SUMS.txt)
+
+      - name: Generate notes
+        run: |
+          if previous=$(git describe --tags --abbrev=0 --match 'v*' "$GITHUB_REF_NAME^" 2>/dev/null); then
+            compare="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$previous...$GITHUB_REF_NAME"
+          else
+            compare="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME"
+          fi
+          {
+            echo "**Full Changelog**: $compare"
+            echo
+            echo "### Downloads"
+            echo
+            for archive in dist/grana-*; do
+              printf -- '- %s\n' "$(basename "$archive")"
+            done
+            echo
+            echo "Checksums are listed in SHA256SUMS.txt."
+          } > notes.md
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag dist/*
+          fi
