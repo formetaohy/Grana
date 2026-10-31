@@ -93,7 +93,7 @@ pub struct SurfaceBuilder {
     accumulators: Vec<SampleAccumulator>,
     vertices: Vec<MeshVertex>,
     indices: Vec<u32>,
-    edges: HashMap<u64, u32>,
+    edges: HashMap<(u64, u32), u32>,
     x_face: Option<Vec<u32>>,
     y_face: Vec<Option<Vec<u32>>>,
     z_face: Vec<Option<Vec<u32>>>,
@@ -555,7 +555,7 @@ impl SurfaceBuilder {
         let linear = voxel[0] as u64 * self.stride[0]
             + voxel[1] as u64 * self.stride[1]
             + voxel[2] as u64 * self.stride[2];
-        let key = (linear << 2) | axis as u64;
+        let key = ((linear << 2) | axis as u64, object);
         if let Some(vertex) = self.edges.get(&key) {
             return *vertex;
         }

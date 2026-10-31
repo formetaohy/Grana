@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use grana_analysis::TrackParams;
 use grana_object::TrackSet;
 
@@ -32,7 +34,7 @@ pub enum Visibility {
 
 struct FrameSlot {
     stamp: u64,
-    data: Option<ObjectFrame>,
+    data: Option<Arc<ObjectFrame>>,
 }
 
 impl FrameSlot {
@@ -159,7 +161,7 @@ impl ObjectSet {
     pub fn frame(&self, time: u32) -> Option<&ObjectFrame> {
         self.frames
             .get(time as usize)
-            .and_then(|slot| slot.data.as_ref())
+            .and_then(|slot| slot.data.as_deref())
     }
 
     pub fn frame_stamp(&self, time: u32) -> Option<u64> {
@@ -172,7 +174,7 @@ impl ObjectSet {
         self.frames
             .iter()
             .enumerate()
-            .filter_map(|(time, slot)| slot.data.as_ref().map(|data| (time as u32, data)))
+            .filter_map(|(time, slot)| slot.data.as_deref().map(|data| (time as u32, data)))
     }
 
     pub fn detected(&self) -> usize {
@@ -208,9 +210,7 @@ impl ObjectSet {
             track_thickness: self.tracks.as_ref().map(TrackLayer::thickness),
             track_visible: self.tracks.as_ref().map(TrackLayer::visible),
             visibility: self.visibility.clone(),
-            frames: (0..self.frames.len())
-                .map(|time| self.frame(time as u32).cloned())
-                .collect(),
+            frames: self.frames.iter().map(|slot| slot.data.clone()).collect(),
         }
     }
 
@@ -269,7 +269,7 @@ impl ObjectSet {
         );
         for (time, frame) in frames.into_iter().enumerate() {
             if let Some(frame) = frame {
-                set.install(time as u32, frame);
+                set.install_shared(time as u32, frame);
             }
         }
         if let Some(tracks) = tracks {
@@ -298,7 +298,7 @@ impl ObjectSet {
                 for (mask, slot) in frames.iter().zip(&self.frames) {
                     assert_eq!(
                         mask.len(),
-                        slot.data.as_ref().map_or(0, ObjectFrame::object_count),
+                        slot.data.as_deref().map_or(0, ObjectFrame::object_count),
                         "the visibility covers every object"
                     );
                 }
@@ -337,6 +337,10 @@ impl ObjectSet {
     }
 
     pub fn install(&mut self, time: u32, frame: ObjectFrame) {
+        self.install_shared(time, Arc::new(frame));
+    }
+
+    fn install_shared(&mut self, time: u32, frame: Arc<ObjectFrame>) {
         assert_eq!(
             frame.kind(),
             self.kind,

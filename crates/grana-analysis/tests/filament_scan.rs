@@ -58,7 +58,7 @@ fn traces_branching_filaments() {
         "the traced diameter {diameter:.2} µm follows the painted tube"
     );
     assert!(
-        set.mesh().triangle_count() > 0,
+        set.geometry().triangle_count() > 0,
         "the filament carries a mesh"
     );
     let intensity = set.intensities().object(0, 0).mean();

@@ -394,8 +394,10 @@ impl App {
             .unwrap_or(Duration::MAX);
         let info = {
             let surface = self.surface.as_mut()?;
-            let scene = self.scene.as_ref()?;
+            let scene = self.scene.as_mut()?;
             let size = surface.gpu.size();
+            let time = scene.time();
+            let region = scene.region;
             let rendered = scene.rendered();
             let frame = surface.gpu.acquire()?;
             let view = frame
@@ -409,10 +411,10 @@ impl App {
                     size,
                     volume_region,
                     section_region,
-                    time: scene.time(),
+                    time,
                     camera: self.viewport.camera(),
                     section: self.viewport.section(),
-                    region: scene.region,
+                    region,
                     scene: &rendered.frame(),
                     prefetch: self.playing,
                 },

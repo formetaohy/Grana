@@ -1,8 +1,8 @@
 use grana_measure::Filter;
 use grana_object::{
     Bounds, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocThresholds, FilamentSet,
-    FilamentStatistics, FilamentTopology, IntensityTable, Mesh, MeshVertex, SampleStatistics, Spot,
-    SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
+    FilamentStatistics, FilamentTopology, GeometryGroup, IntensityTable, PackedMesh, PackedVertex,
+    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_render::{CameraState, SectionState, Shading, Stop, TransferFunction};
 use grana_scene::{
@@ -291,7 +291,7 @@ impl Encode for SurfaceSet {
     fn encode(&self, writer: &mut Writer) {
         writer.count(self.level());
         self.objects().encode(writer);
-        self.mesh().encode(writer);
+        self.geometry().encode(writer);
         self.intensities().encode(writer);
     }
 }
@@ -312,7 +312,7 @@ impl Encode for FilamentSet {
     fn encode(&self, writer: &mut Writer) {
         writer.count(self.level());
         self.objects().encode(writer);
-        self.mesh().encode(writer);
+        self.geometry().encode(writer);
         self.intensities().encode(writer);
     }
 }
@@ -350,22 +350,39 @@ impl Encode for Bounds {
     }
 }
 
-impl Encode for Mesh {
+impl Encode for PackedMesh {
     fn encode(&self, writer: &mut Writer) {
+        self.groups().encode(writer);
         self.vertices().encode(writer);
-        self.indices().encode(writer);
+        self.narrow().encode(writer);
+        self.wide().encode(writer);
     }
 }
 
-impl Encode for MeshVertex {
+impl Encode for GeometryGroup {
+    fn encode(&self, writer: &mut Writer) {
+        for value in self.min() {
+            writer.f32(value);
+        }
+        for value in self.scale() {
+            writer.f32(value);
+        }
+        writer.u32(self.first_vertex());
+        writer.u32(self.vertex_count());
+        writer.u32(self.first_index());
+        writer.u32(self.index_count());
+        writer.bool(self.wide());
+    }
+}
+
+impl Encode for PackedVertex {
     fn encode(&self, writer: &mut Writer) {
         for value in self.position() {
-            writer.f32(value);
+            writer.u16(value);
         }
         for value in self.normal() {
-            writer.f32(value);
+            writer.u16(value);
         }
-        writer.u32(self.object());
     }
 }
 

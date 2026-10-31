@@ -1,4 +1,4 @@
-use crate::{Bounds, IntensityTable, Mesh};
+use crate::{Bounds, IntensityTable, Mesh, PackedMesh};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceStatistics {
@@ -71,7 +71,7 @@ impl SurfaceStatistics {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SurfaceSet {
     level: usize,
-    mesh: Mesh,
+    geometry: PackedMesh,
     objects: Vec<SurfaceStatistics>,
     intensities: IntensityTable,
 }
@@ -83,14 +83,14 @@ impl SurfaceSet {
         objects: Vec<SurfaceStatistics>,
         intensities: IntensityTable,
     ) -> Self {
-        assert!(
-            mesh.vertices()
-                .iter()
-                .all(|vertex| (vertex.object() as usize) < objects.len()),
-            "every mesh vertex names an object"
+        let geometry = PackedMesh::new(mesh);
+        assert_eq!(
+            geometry.object_count(),
+            objects.len(),
+            "every packed surface names an object"
         );
         assert_eq!(
-            mesh.is_empty(),
+            geometry.is_empty(),
             objects.is_empty(),
             "the mesh and the object list agree on emptiness"
         );
@@ -101,18 +101,38 @@ impl SurfaceSet {
         );
         Self {
             level,
-            mesh,
+            geometry,
             objects,
             intensities,
         }
+    }
+
+    pub fn from_parts(
+        level: usize,
+        geometry: PackedMesh,
+        objects: Vec<SurfaceStatistics>,
+        intensities: IntensityTable,
+    ) -> Option<Self> {
+        if geometry.object_count() != objects.len()
+            || geometry.is_empty() != objects.is_empty()
+            || intensities.objects() != objects.len()
+        {
+            return None;
+        }
+        Some(Self {
+            level,
+            geometry,
+            objects,
+            intensities,
+        })
     }
 
     pub fn level(&self) -> usize {
         self.level
     }
 
-    pub fn mesh(&self) -> &Mesh {
-        &self.mesh
+    pub fn geometry(&self) -> &PackedMesh {
+        &self.geometry
     }
 
     pub fn objects(&self) -> &[SurfaceStatistics] {

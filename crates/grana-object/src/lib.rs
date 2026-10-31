@@ -3,6 +3,7 @@ mod coloc;
 mod filament;
 mod intensity;
 mod mesh;
+mod packed;
 mod spot;
 mod surface;
 mod track;
@@ -16,6 +17,7 @@ pub use coloc::{
 pub use filament::{FilamentSet, FilamentStatistics, FilamentTopology};
 pub use intensity::{IntensityTable, SampleAccumulator, SampleStatistics};
 pub use mesh::{Mesh, MeshVertex};
+pub use packed::{GeometryGroup, PackedMesh, PackedVertex};
 pub use spot::{Spot, SpotSet};
 pub use surface::{SurfaceSet, SurfaceStatistics};
 pub use track::{Track, TrackNode, TrackSet, TrackStatistics};

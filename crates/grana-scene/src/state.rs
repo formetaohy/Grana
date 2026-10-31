@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use grana_object::TrackSet;
 use grana_render::{Shading, TransferFunction};
 use grana_volume::{Intensity, Region};
@@ -57,7 +59,7 @@ pub struct SetState {
     pub track_thickness: Option<f32>,
     pub track_visible: Option<bool>,
     pub visibility: Visibility,
-    pub frames: Vec<Option<ObjectFrame>>,
+    pub frames: Vec<Option<Arc<ObjectFrame>>>,
 }
 
 impl SceneState {

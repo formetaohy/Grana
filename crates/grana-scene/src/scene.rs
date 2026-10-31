@@ -1,5 +1,5 @@
 use glam::Vec3;
-use grana_object::{Spot, TrackSet};
+use grana_object::{Mesh, Spot, TrackSet};
 use grana_render::{
     ChannelRow, Layer, LayerKey, Marker, Ray, SceneFrame, Shading, Style, TransferFunction,
 };
@@ -12,6 +12,7 @@ use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
 use crate::pick;
+use crate::state::{HASH_OFFSET, mix};
 
 const SELECTED_COLOR: [f32; 3] = [1.00, 0.93, 0.62];
 const SELECTED_SCALE: f32 = 1.3;
@@ -50,6 +51,27 @@ impl<'a> RenderedScene<'a> {
     }
 }
 
+pub(crate) struct Geometry {
+    key: Option<u64>,
+    meshes: Vec<(ObjectSetId, Mesh)>,
+}
+
+impl Geometry {
+    fn new() -> Self {
+        Self {
+            key: None,
+            meshes: Vec::new(),
+        }
+    }
+
+    pub(crate) fn mesh(&self, id: ObjectSetId) -> Option<&Mesh> {
+        self.meshes
+            .iter()
+            .find(|(candidate, _)| *candidate == id)
+            .map(|(_, mesh)| mesh)
+    }
+}
+
 pub struct Scene {
     pub dataset: Dataset,
     pub channels: Vec<Channel>,
@@ -61,6 +83,7 @@ pub struct Scene {
     pub coloc: Coloc,
     time: u32,
     selection: Option<Selection>,
+    geometry: Geometry,
 }
 
 impl Scene {
@@ -89,6 +112,7 @@ impl Scene {
             coloc: Coloc::new(channel_count),
             time: 0,
             selection: None,
+            geometry: Geometry::new(),
         }
     }
 
@@ -239,12 +263,14 @@ impl Scene {
         }
     }
 
-    pub fn rendered(&self) -> RenderedScene<'_> {
+    pub fn rendered(&mut self) -> RenderedScene<'_> {
+        self.prepare_geometry();
+        let geometry = &self.geometry;
         let mut styles = Vec::new();
         let mut layers = Vec::new();
         let mut markers = Vec::new();
         for set in self.objects.iter() {
-            if !set.visible() || !self.channels[set.channel()].enabled {
+            if !self.shown(set) {
                 continue;
             }
             let Some(frame) = set.frame(self.time) else {
@@ -258,7 +284,8 @@ impl Scene {
                     markers.push(self.marker(set, index, *spot));
                 }
             }
-            if let (Some(mesh), Some(stamp)) = (frame.mesh(), set.frame_stamp(self.time)) {
+            if let (Some(mesh), Some(stamp)) = (geometry.mesh(set.id()), set.frame_stamp(self.time))
+            {
                 let start = styles.len();
                 for index in 0..frame.object_count() {
                     styles.push(Style::new(
@@ -313,19 +340,74 @@ impl Scene {
         }
     }
 
-    pub fn pick_ray(&self, ray: &Ray) -> Option<Selection> {
-        pick::ray(self, self.time, ray)
+    pub fn pick_ray(&mut self, ray: &Ray) -> Option<Selection> {
+        self.prepare_geometry();
+        pick::ray(self, &self.geometry, self.time, ray)
     }
 
-    pub fn pick_slice(&self, axis: Axis, point: Vec3) -> Option<Selection> {
-        pick::slice(self, self.time, axis, point)
+    pub fn pick_slice(&mut self, axis: Axis, point: Vec3) -> Option<Selection> {
+        self.prepare_geometry();
+        pick::slice(self, &self.geometry, self.time, axis, point)
+    }
+
+    pub fn geometry_bytes(&self) -> u64 {
+        self.objects
+            .iter()
+            .map(|set| {
+                set.frames()
+                    .map(|(_, frame)| frame.geometry_bytes())
+                    .sum::<u64>()
+            })
+            .sum()
+    }
+
+    fn geometry_key(&self) -> u64 {
+        let mut key = mix(HASH_OFFSET, u64::from(self.time));
+        for set in self.objects.iter() {
+            if !self.shown(set) {
+                continue;
+            }
+            if let Some(stamp) = set.frame_stamp(self.time) {
+                key = mix(key, set.id().raw());
+                key = mix(key, stamp);
+            }
+        }
+        key
+    }
+
+    fn prepare_geometry(&mut self) {
+        let key = self.geometry_key();
+        if self.geometry.key == Some(key) {
+            return;
+        }
+        let mut meshes = Vec::new();
+        for set in self.objects.iter() {
+            if !self.shown(set) {
+                continue;
+            }
+            let Some(frame) = set.frame(self.time) else {
+                continue;
+            };
+            let Some(geometry) = frame.geometry() else {
+                continue;
+            };
+            if geometry.is_empty() {
+                continue;
+            }
+            meshes.push((set.id(), geometry.expand()));
+        }
+        self.geometry = Geometry {
+            key: Some(key),
+            meshes,
+        };
     }
 
     pub fn pickable(&self) -> impl Iterator<Item = &ObjectSet> + '_ {
-        self.objects
-            .iter()
-            .filter(|set| set.visible())
-            .filter(|set| self.channels[set.channel()].enabled)
+        self.objects.iter().filter(|set| self.shown(set))
+    }
+
+    fn shown(&self, set: &ObjectSet) -> bool {
+        set.visible() && self.channels[set.channel()].enabled
     }
 
     fn object_selected(&self, set: ObjectSetId, index: usize) -> bool {

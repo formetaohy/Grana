@@ -534,6 +534,14 @@ fn streaming_section(ui: &mut Ui, state: &State<'_>) {
                     state.frame.bytes as f64 / (1024.0 * 1024.0)
                 ),
             );
+            row(
+                ui,
+                "geometry",
+                format!(
+                    "{:.0} MiB of packed geometry",
+                    state.scene.geometry_bytes() as f64 / (1024.0 * 1024.0)
+                ),
+            );
         });
     if state.pending > 0 {
         ui.horizontal(|ui| {

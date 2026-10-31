@@ -1,5 +1,5 @@
 use grana_analysis::{FilamentParams, SpotParams, SurfaceParams, TrackParams};
-use grana_object::{FilamentSet, IntensityTable, Mesh, Spot, SpotSet, SurfaceSet};
+use grana_object::{FilamentSet, IntensityTable, PackedMesh, Spot, SpotSet, SurfaceSet};
 use grana_volume::ChannelInfo;
 
 const SPOT_STEP: f32 = 8.0;
@@ -275,12 +275,16 @@ impl ObjectFrame {
         }
     }
 
-    pub fn mesh(&self) -> Option<&Mesh> {
+    pub fn geometry(&self) -> Option<&PackedMesh> {
         match self {
             Self::Spots(_) => None,
-            Self::Surfaces(set) => Some(set.mesh()),
-            Self::Filaments(set) => Some(set.mesh()),
+            Self::Surfaces(set) => Some(set.geometry()),
+            Self::Filaments(set) => Some(set.geometry()),
         }
+    }
+
+    pub fn geometry_bytes(&self) -> u64 {
+        self.geometry().map_or(0, PackedMesh::bytes)
     }
 
     pub fn intensities(&self) -> &IntensityTable {

@@ -1,11 +1,12 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use grana_measure::{Aggregate, Filter, Group};
 use grana_object::{
     Bounds, COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocMoments, ColocPair, ColocSeries,
-    ColocThresholds, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Mesh,
-    MeshVertex, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode,
-    TrackSet,
+    ColocThresholds, FilamentSet, FilamentStatistics, FilamentTopology, GeometryGroup,
+    IntensityTable, PackedMesh, PackedVertex, SampleStatistics, Spot, SpotSet, SurfaceSet,
+    SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_render::{CameraState, SectionState, Shading, Stop, TransferFunction};
 use grana_scene::{
@@ -263,7 +264,7 @@ impl Decode for SetState {
             track_thickness: Option::<f32>::decode(reader)?.map(positive).transpose()?,
             track_visible: Option::<bool>::decode(reader)?,
             visibility: Visibility::decode(reader)?,
-            frames: Vec::<Option<ObjectFrame>>::decode(reader)?,
+            frames: Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?,
         };
         if kind.trackable() != state.track_style.is_some()
             || state.tracks.is_some() != state.track_thickness.is_some()
@@ -413,17 +414,9 @@ impl Decode for SurfaceSet {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let level = reader.count(1)?;
         let objects = Vec::<SurfaceStatistics>::decode(reader)?;
-        let mesh = Mesh::decode(reader)?;
+        let geometry = PackedMesh::decode(reader)?;
         let intensities = IntensityTable::decode(reader)?;
-        validate_set(mesh.is_empty(), objects.len(), intensities.objects())?;
-        if mesh
-            .vertices()
-            .iter()
-            .any(|vertex| vertex.object() as usize >= objects.len())
-        {
-            return Err(FAULT_SHAPE);
-        }
-        Ok(Self::new(level, mesh, objects, intensities))
+        Self::from_parts(level, geometry, objects, intensities).ok_or(FAULT_SHAPE)
     }
 }
 
@@ -456,17 +449,9 @@ impl Decode for FilamentSet {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let level = reader.count(1)?;
         let objects = Vec::<FilamentStatistics>::decode(reader)?;
-        let mesh = Mesh::decode(reader)?;
+        let geometry = PackedMesh::decode(reader)?;
         let intensities = IntensityTable::decode(reader)?;
-        validate_set(mesh.is_empty(), objects.len(), intensities.objects())?;
-        if mesh
-            .vertices()
-            .iter()
-            .any(|vertex| vertex.object() as usize >= objects.len())
-        {
-            return Err(FAULT_SHAPE);
-        }
-        Ok(Self::new(level, mesh, objects, intensities))
+        Self::from_parts(level, geometry, objects, intensities).ok_or(FAULT_SHAPE)
     }
 }
 
@@ -523,36 +508,49 @@ impl Decode for Bounds {
     }
 }
 
-impl Decode for Mesh {
+impl Decode for PackedMesh {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let vertices = Vec::<MeshVertex>::decode(reader)?;
-        let indices = Vec::<u32>::decode(reader)?;
-        if !indices.len().is_multiple_of(3)
-            || indices
-                .iter()
-                .any(|index| *index as usize >= vertices.len())
-        {
-            return Err(FAULT_SHAPE);
-        }
-        Ok(Self::new(vertices, indices))
+        let groups = Vec::<GeometryGroup>::decode(reader)?;
+        let vertices = Vec::<PackedVertex>::decode(reader)?;
+        let narrow = Vec::<u16>::decode(reader)?;
+        let wide = Vec::<u32>::decode(reader)?;
+        Self::from_parts(groups, vertices, narrow, wide).ok_or(FAULT_SHAPE)
     }
 }
 
-impl Decode for MeshVertex {
+impl Decode for GeometryGroup {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let mut position = [0.0; 3];
+        let mut min = [0.0; 3];
+        for value in &mut min {
+            *value = finite(reader.f32()?)?;
+        }
+        let mut scale = [0.0; 3];
+        for value in &mut scale {
+            *value = finite(reader.f32()?)?;
+        }
+        Ok(Self::new(
+            min,
+            scale,
+            reader.u32()?,
+            reader.u32()?,
+            reader.u32()?,
+            reader.u32()?,
+            reader.bool()?,
+        ))
+    }
+}
+
+impl Decode for PackedVertex {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let mut position = [0; 3];
         for value in &mut position {
-            *value = finite(reader.f32()?)?;
+            *value = reader.u16()?;
         }
-        let mut normal = [0.0; 3];
+        let mut normal = [0; 2];
         for value in &mut normal {
-            *value = finite(reader.f32()?)?;
+            *value = reader.u16()?;
         }
-        let length_squared = normal.iter().map(|value| value * value).sum::<f32>();
-        if (length_squared - 1.0).abs() >= 1.0e-3 {
-            return Err(FAULT_VALUE);
-        }
-        Ok(Self::new(position, normal, reader.u32()?))
+        Ok(Self::new(position, normal))
     }
 }
 
@@ -739,13 +737,6 @@ impl<T: Decode> Decode for Option<T> {
             false => Ok(None),
         }
     }
-}
-
-fn validate_set(empty: bool, objects: usize, measured: usize) -> Result<(), &'static str> {
-    if empty != (objects == 0) || measured != objects {
-        return Err(FAULT_SHAPE);
-    }
-    Ok(())
 }
 
 fn group(tag: u8) -> Result<Group, &'static str> {

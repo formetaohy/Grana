@@ -3,9 +3,9 @@ use grana_object::{Mesh, MeshVertex, Spot};
 use grana_render::Ray;
 use grana_volume::Axis;
 
-use crate::scene::{Item, Scene, Selection};
+use crate::scene::{Geometry, Item, Scene, Selection};
 
-pub(crate) fn ray(scene: &Scene, time: u32, ray: &Ray) -> Option<Selection> {
+pub(crate) fn ray(scene: &Scene, geometry: &Geometry, time: u32, ray: &Ray) -> Option<Selection> {
     let (low, high) = scene.region.interval(ray.origin, ray.direction)?;
     let mut best: Option<(f32, Selection)> = None;
     for set in scene.pickable() {
@@ -31,9 +31,7 @@ pub(crate) fn ray(scene: &Scene, time: u32, ray: &Ray) -> Option<Selection> {
                     }
                 }
             }
-            if let Some(mesh) = frame.mesh()
-                && !frame.is_empty()
-            {
+            if let Some(mesh) = geometry.mesh(set.id()).filter(|mesh| !mesh.is_empty()) {
                 for index in 0..mesh.triangle_count() {
                     let triangle = mesh.triangle(index);
                     let object = triangle[0].object() as usize;
@@ -83,7 +81,13 @@ pub(crate) fn ray(scene: &Scene, time: u32, ray: &Ray) -> Option<Selection> {
     best.map(|(_, selection)| selection)
 }
 
-pub(crate) fn slice(scene: &Scene, time: u32, axis: Axis, point: Vec3) -> Option<Selection> {
+pub(crate) fn slice(
+    scene: &Scene,
+    geometry: &Geometry,
+    time: u32,
+    axis: Axis,
+    point: Vec3,
+) -> Option<Selection> {
     if !scene.region.contains(point) {
         return None;
     }
@@ -117,8 +121,7 @@ pub(crate) fn slice(scene: &Scene, time: u32, axis: Axis, point: Vec3) -> Option
                     }
                 }
             }
-            if let Some(mesh) = frame.mesh()
-                && !frame.is_empty()
+            if let Some(mesh) = geometry.mesh(set.id()).filter(|mesh| !mesh.is_empty())
                 && let Some((offset, object)) =
                     slice_mesh(mesh, axis, point, |object| set.visible_object(time, object))
                 && best.is_none_or(|(nearest, _)| offset < nearest)

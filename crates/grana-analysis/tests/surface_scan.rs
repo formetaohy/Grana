@@ -34,7 +34,7 @@ fn extracts_measured_surfaces() {
     }
     let set = builder.finish();
     assert_eq!(set.object_count(), centres.len(), "each blob is one object");
-    assert!(!set.mesh().is_empty(), "the mesh holds triangles");
+    assert!(!set.geometry().is_empty(), "the mesh holds triangles");
     assert_eq!(set.intensities().channels(), channels);
 
     let spacing = [0.1f64, 0.1, 0.2];
@@ -135,7 +135,7 @@ fn extracts_measured_surfaces() {
         "the kept blob lies inside the region"
     );
     assert!(
-        restricted.mesh().triangle_count() > 0,
+        restricted.geometry().triangle_count() > 0,
         "the restricted surface carries triangles"
     );
 }
