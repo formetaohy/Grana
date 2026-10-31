@@ -6,6 +6,7 @@ use grana_volume::{BrickData, Pyramid, Region};
 
 pub const SIDE: u32 = 256;
 
+#[derive(Clone, Copy)]
 pub struct Session<'a> {
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
@@ -26,41 +27,56 @@ pub fn settle(
 ) -> Requests {
     let mut latest = Requests::default();
     for _ in 0..96 {
-        renderer.draw(
-            session.device,
-            session.queue,
-            Frame {
-                target: session.target,
-                size: [SIDE, SIDE],
-                volume_region: session.volume_region,
-                section_region: session.section_region,
-                time: session.time,
-                camera: session.camera,
-                section: session.section,
-                region: session.region,
-                scene: session.scene,
-            },
-        );
+        renderer.draw(session.device, session.queue, frame(&session));
         if !renderer.requests_pending() {
             return latest;
         }
-        for _ in 0..4 {
-            let Some(requests) = renderer.poll_requests(session.device) else {
-                session
-                    .device
-                    .poll(wgpu::PollType::wait_indefinitely())
-                    .expect("failed to wait for the gpu");
-                continue;
-            };
+        if let Some(requests) = next_demand(renderer, &session) {
             for request in requests.volume.iter().chain(requests.section.iter()) {
                 let brick = source(*request);
                 let _ = renderer.upload(session.device, session.queue, *request, &brick);
             }
             latest = requests;
-            break;
         }
     }
     panic!("the stream never settled");
+}
+
+pub fn next_demand(renderer: &mut Renderer, session: &Session<'_>) -> Option<Requests> {
+    for _ in 0..4 {
+        match renderer.poll_requests(session.device) {
+            Some(requests) => return Some(requests),
+            None => {
+                session
+                    .device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .expect("failed to wait for the gpu");
+            }
+        }
+    }
+    None
+}
+
+pub fn frame<'a>(session: &Session<'a>) -> Frame<'a, 'a> {
+    Frame {
+        target: session.target,
+        size: [SIDE, SIDE],
+        volume_region: session.volume_region,
+        section_region: session.section_region,
+        time: session.time,
+        camera: session.camera,
+        section: session.section,
+        region: session.region,
+        scene: session.scene,
+        prefetch: false,
+    }
+}
+
+pub fn prefetch_frame<'a>(session: &Session<'a>) -> Frame<'a, 'a> {
+    Frame {
+        prefetch: true,
+        ..frame(session)
+    }
 }
 
 pub fn device() -> Option<(wgpu::Device, wgpu::Queue)> {

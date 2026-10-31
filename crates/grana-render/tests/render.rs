@@ -76,7 +76,7 @@ fn streams_two_channels() {
     );
     assert!(requests.volume_view.visible > 0, "the view sees no brick");
     assert_eq!(
-        requests.volume_view.resident, requests.volume_view.visible,
+        requests.volume_view.resident, requests.volume_view.demand,
         "the stream never completed"
     );
     let pixels = read_pixels(&device, &queue, &texture, SIDE);
@@ -87,6 +87,190 @@ fn streams_two_channels() {
     );
     assert!(blue(&pixels) > 200, "the blue channel barely rendered");
     assert!(green(&pixels) > 200, "the green channel barely rendered");
+}
+
+#[test]
+fn bounds_the_demand_to_the_cache() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = sphere(Extent::new(256, 256, 128), Spacing::new(0.1, 0.1, 0.2));
+    let pyramid = volume.pyramid();
+    let transfers = vec![TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = Renderer::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        100 * 78_608,
+    );
+    renderer.set_dataset(&device, &pyramid);
+    let session = Session {
+        device: &device,
+        queue: &queue,
+        target: &view,
+        camera: &camera,
+        section: &section,
+        scene: &scene,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        region: Region::none(),
+        time: 0,
+    };
+    renderer.draw(&device, &queue, common::frame(&session));
+    let first =
+        common::next_demand(&mut renderer, &session).expect("the stream produced no demand");
+    assert!(
+        first.volume_view.visible > first.volume_view.demand,
+        "the cache must bound the demand: {:?}",
+        first.volume_view
+    );
+    assert!(
+        !first.volume.is_empty(),
+        "the bounded cache requested nothing"
+    );
+    let grid = BrickGrid::new(volume.extent());
+    let half = 0.5 * Vec3::from(volume.world_extent());
+    let dims = Vec3::new(
+        volume.extent().x() as f32,
+        volume.extent().y() as f32,
+        volume.extent().z() as f32,
+    );
+    let eye = camera.eye();
+    let mut far = 0.0f32;
+    for index in 0..8u32 {
+        let corner = Vec3::new(
+            if index & 1 == 0 { -half.x } else { half.x },
+            if index & 2 == 0 { -half.y } else { half.y },
+            if index & 4 == 0 { -half.z } else { half.z },
+        );
+        far = far.max((corner - eye).length());
+    }
+    let bucket = |request: &grana_render::BrickRequest| {
+        let origin = grid.origin(request.coord);
+        let centre = Vec3::new(
+            origin[0] as f32 + 16.0,
+            origin[1] as f32 + 16.0,
+            origin[2] as f32 + 16.0,
+        );
+        let position = -half + centre / dims * (2.0 * half);
+        let depth = (position - eye).length() / far * grana_render::DEPTH_BUCKETS as f32;
+        (depth as u32).min(grana_render::DEPTH_BUCKETS as u32 - 1)
+    };
+    let mut previous = 0;
+    for request in &first.volume {
+        let bucket = bucket(request);
+        assert!(
+            bucket >= previous,
+            "the demand is not ordered by view depth"
+        );
+        previous = bucket;
+    }
+    let settled = settle(&mut renderer, session, |request| {
+        volume.brick(&grid, request.coord)
+    });
+    assert_eq!(
+        settled.volume_view.resident, settled.volume_view.demand,
+        "the bounded demand never settled"
+    );
+    assert!(
+        settled.volume_view.demand > 0,
+        "the cache admitted no brick"
+    );
+}
+
+#[test]
+fn prefetches_the_next_frame() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let movie = two_frame_movie();
+    let pyramid = movie.pyramid().clone();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(movie.frame(0).world_extent()), 1.0);
+    for _ in 0..16 {
+        camera.zoom(1.0);
+    }
+    let section = SectionCamera::new(Axis::Z);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    let grid = BrickGrid::new(movie.frame(0).extent());
+    let source =
+        |request: grana_render::BrickRequest| movie.brick(request.time, &grid, request.coord);
+    let session = Session {
+        device: &device,
+        queue: &queue,
+        target: &view,
+        camera: &camera,
+        section: &section,
+        scene: &scene,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        region: Region::none(),
+        time: 0,
+    };
+    let mut prefetched = 0;
+    for _ in 0..64 {
+        renderer.draw(&device, &queue, common::prefetch_frame(&session));
+        if !renderer.requests_pending() {
+            break;
+        }
+        let Some(requests) = common::next_demand(&mut renderer, &session) else {
+            continue;
+        };
+        prefetched += requests.prefetch.len();
+        for request in requests
+            .volume
+            .iter()
+            .chain(&requests.section)
+            .chain(&requests.prefetch)
+        {
+            let brick = source(*request);
+            let _ = renderer.upload(&device, &queue, *request, &brick);
+        }
+    }
+    assert!(prefetched > 0, "playback issued no prefetch");
+    let next = Session { time: 1, ..session };
+    renderer.draw(&device, &queue, common::frame(&next));
+    let first =
+        common::next_demand(&mut renderer, &next).expect("the next frame produced no demand");
+    assert!(
+        first.volume.is_empty() && first.section.is_empty(),
+        "the next frame was not prefetched"
+    );
+    assert!(
+        first.volume_view.demand > 0,
+        "the next frame demands no brick"
+    );
 }
 
 #[test]

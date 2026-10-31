@@ -165,31 +165,24 @@ impl Atlas {
             })
     }
 
-    pub fn touch(
-        &mut self,
-        time: u32,
-        level: usize,
-        indices: impl Iterator<Item = u32>,
-        tick: u64,
-    ) {
+    pub fn touch(&mut self, time: u32, level: usize, indices: impl Iterator<Item = u32>, pin: u64) {
         for index in indices {
             if let Some(slot) = self.identity.get(&(time, level, index as usize)) {
-                self.slots[*slot as usize].used = tick;
+                self.slots[*slot as usize].used = pin;
             }
         }
     }
 
-    pub fn allocate(&mut self, tick: u64) -> Option<(u32, Option<ResidentBrick>)> {
+    pub fn allocate(
+        &mut self,
+        pin: u64,
+        now: u32,
+        request: u32,
+    ) -> Option<(u32, Option<ResidentBrick>)> {
         if let Some(slot) = self.free.pop() {
             return Some((slot, None));
         }
-        let victim = self
-            .slots
-            .iter()
-            .enumerate()
-            .filter(|(_, slot)| slot.brick.is_some() && slot.used < tick)
-            .min_by_key(|(_, slot)| slot.used)
-            .map(|(index, _)| index)?;
+        let victim = self.victim(pin, now, request <= now)?;
         let brick = self.slots[victim]
             .brick
             .expect("the eviction candidate holds a brick");
@@ -199,7 +192,28 @@ impl Atlas {
         Some((victim as u32, Some(brick)))
     }
 
-    pub fn assign(&mut self, slot: u32, brick: ResidentBrick, tick: u64) {
+    fn victim(&self, pin: u64, now: u32, allow_future: bool) -> Option<usize> {
+        let current = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| {
+                slot.used < pin && slot.brick.is_some_and(|brick| brick.time <= now)
+            })
+            .min_by_key(|(_, slot)| slot.used)
+            .map(|(index, _)| index);
+        if current.is_some() || !allow_future {
+            return current;
+        }
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.brick.is_some_and(|brick| brick.time > now))
+            .min_by_key(|(_, slot)| slot.used)
+            .map(|(index, _)| index)
+    }
+
+    pub fn assign(&mut self, slot: u32, brick: ResidentBrick, pin: u64) {
         if let Some(previous) = self.slots[slot as usize].brick {
             self.identity
                 .remove(&(previous.time, previous.level, previous.index));
@@ -208,7 +222,7 @@ impl Atlas {
             .insert((brick.time, brick.level, brick.index), slot);
         self.slots[slot as usize] = Slot {
             brick: Some(brick),
-            used: tick,
+            used: pin,
         };
     }
 

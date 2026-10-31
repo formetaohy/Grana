@@ -1,4 +1,5 @@
 use egui::{RichText, Ui};
+use grana_render::ViewInfo;
 use grana_scene::{Dataset, Job, ObjectKind, ObjectSetId, Progress, Scene};
 use grana_volume::Axis;
 
@@ -456,26 +457,8 @@ fn streaming_section(ui: &mut Ui, state: &State<'_>) {
         .num_columns(2)
         .spacing([12.0, 3.0])
         .show(ui, |ui| {
-            row(
-                ui,
-                "volume",
-                format!(
-                    "level {} · {}/{} bricks",
-                    volume.level + 1,
-                    volume.resident,
-                    volume.visible
-                ),
-            );
-            row(
-                ui,
-                "section",
-                format!(
-                    "level {} · {}/{} bricks",
-                    section.level + 1,
-                    section.resident,
-                    section.visible
-                ),
-            );
+            row(ui, "volume", bricks(volume));
+            row(ui, "section", bricks(section));
             row(ui, "pyramid", levels.to_string());
             row(
                 ui,
@@ -495,6 +478,25 @@ fn streaming_section(ui: &mut Ui, state: &State<'_>) {
                     .weak(),
             );
         });
+    }
+}
+
+fn bricks(view: ViewInfo) -> String {
+    if view.demand == view.visible {
+        format!(
+            "level {} · {}/{} bricks",
+            view.level + 1,
+            view.resident,
+            view.demand
+        )
+    } else {
+        format!(
+            "level {} · {}/{} of {} bricks",
+            view.level + 1,
+            view.resident,
+            view.demand,
+            view.visible
+        )
     }
 }
 

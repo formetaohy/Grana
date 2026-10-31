@@ -55,13 +55,15 @@ pub(crate) struct ScheduleData {
     pub v0: u32,
     pub u_count: u32,
     pub v_count: u32,
+    pub bucket_scale: f32,
+    pub reserved: [u32; 3],
 }
 
 const _: () = {
     assert!(size_of::<FrameData>() == 464);
     assert!(std::mem::offset_of!(FrameData, planes) == 368);
     assert!(size_of::<SectionData>() == 160);
-    assert!(size_of::<ScheduleData>() == 32);
+    assert!(size_of::<ScheduleData>() == 48);
 };
 pub(crate) struct VolumeView<'a> {
     pub camera: &'a Camera,

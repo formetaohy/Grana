@@ -20,12 +20,12 @@ use crate::frame::{FrameData, SectionData, VolumeView};
 use crate::layout::Layouts;
 use crate::marker::MarkerPasses;
 use crate::mesh::MeshPasses;
-use crate::present::Present;
-use crate::schedule::{
-    Cull, CullPass, Scheduler, SectionRange, VIEW_WORDS, resolve_section_level,
-    resolve_volume_level, section_range, select_section_level, select_volume_level, view_requests,
-    view_visible, volume_dispatch,
+use crate::planner::{
+    self, Demand, Planner, Schedule, SectionRange, bucket_scale, decode_plan,
+    resolve_section_level, resolve_volume_level, section_range, select_section_level,
+    select_volume_level, volume_dispatch,
 };
+use crate::present::Present;
 use crate::schema::SceneFrame;
 use crate::section::SectionPass;
 use crate::target::SceneTarget;
@@ -34,9 +34,8 @@ use crate::volume::VolumePass;
 const DUMMY_VOXEL: [u16; 1] = [0];
 const FEEDBACK_SLOTS: usize = 4;
 const SECTION_BUDGET_DIVISOR: usize = 2;
-const VIEW_BYTES: u64 = (VIEW_WORDS * size_of::<u32>()) as u64;
+const PREFETCH_LIMIT: usize = 1024;
 const CENSUS_BYTES: u64 = (CENSUS_LEVELS * size_of::<u32>()) as u64;
-const FEEDBACK_WORDS: usize = 2 * VIEW_WORDS + CENSUS_LEVELS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BrickRequest {
@@ -49,6 +48,7 @@ pub struct BrickRequest {
 pub struct ViewInfo {
     pub level: usize,
     pub visible: usize,
+    pub demand: usize,
     pub resident: usize,
 }
 
@@ -64,6 +64,7 @@ pub struct Requests {
     pub time: u32,
     pub volume: Vec<BrickRequest>,
     pub section: Vec<BrickRequest>,
+    pub prefetch: Vec<BrickRequest>,
     pub volume_view: ViewInfo,
     pub section_view: ViewInfo,
 }
@@ -78,6 +79,7 @@ pub struct Frame<'a, 'b> {
     pub section: &'a SectionCamera,
     pub region: Region,
     pub scene: &'a SceneFrame<'b>,
+    pub prefetch: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -92,6 +94,8 @@ struct Levels {
 struct Residency {
     epoch: u64,
     content: u64,
+    style: u64,
+    prefetch: bool,
     time: u32,
     eye: [f32; 3],
     focus: [f32; 3],
@@ -113,10 +117,20 @@ struct ResidencyView<'a> {
 }
 
 impl Residency {
-    fn of(epoch: u64, content: u64, time: u32, view: ResidencyView<'_>, levels: Levels) -> Self {
+    fn of(
+        epoch: u64,
+        content: u64,
+        style: u64,
+        prefetch: bool,
+        time: u32,
+        view: ResidencyView<'_>,
+        levels: Levels,
+    ) -> Self {
         Self {
             epoch,
             content,
+            style,
+            prefetch,
             time,
             eye: view.camera.eye().to_array(),
             focus: view.camera.focus().to_array(),
@@ -139,7 +153,7 @@ pub struct Renderer {
     scene: Option<crate::table::SceneTable>,
     atlas: Option<Atlas>,
     bricks: Vec<Option<BrickTable>>,
-    scheduler: Option<Scheduler>,
+    planner: Option<Planner>,
     census: Option<Census>,
     volume: VolumePass,
     section: SectionPass,
@@ -149,13 +163,17 @@ pub struct Renderer {
     atlas_sampler: Sampler,
     pyramid: Option<Pyramid>,
     channels: usize,
-    tick: u64,
+    time: u32,
     budget: u64,
-    feedback: Readback,
+    feedback: Option<Readback>,
     frames: Vec<Option<Residency>>,
     counts: Vec<u32>,
+    view_words: usize,
+    view_bytes: u64,
     epoch: u64,
     content: u64,
+    pin: u64,
+    prefetch: bool,
     settled: Option<Residency>,
     info: FrameInfo,
 }
@@ -181,7 +199,7 @@ impl Renderer {
             scene: None,
             atlas: None,
             bricks: Vec::new(),
-            scheduler: None,
+            planner: None,
             census: None,
             volume: VolumePass::new(device, &layouts),
             section: SectionPass::new(device, &layouts),
@@ -192,18 +210,17 @@ impl Renderer {
             atlas_sampler,
             pyramid: None,
             channels: 0,
-            tick: 0,
+            time: 0,
             budget,
-            feedback: Readback::new(
-                device,
-                "grana.feedback",
-                (FEEDBACK_WORDS * size_of::<u32>()) as u64,
-                FEEDBACK_SLOTS,
-            ),
+            feedback: None,
             frames: vec![None; FEEDBACK_SLOTS],
             counts: vec![0; CENSUS_LEVELS],
+            view_words: 0,
+            view_bytes: 0,
             epoch: 0,
             content: 0,
+            pin: 0,
+            prefetch: false,
             settled: None,
             info: FrameInfo::default(),
         }
@@ -231,8 +248,18 @@ impl Renderer {
             requested,
             device.limits().max_texture_dimension_3d,
         );
+        let slots = atlas.slots();
+        self.view_words = planner::plan_words(slots);
+        self.view_bytes = (self.view_words * size_of::<u32>()) as u64;
+        self.feedback = Some(Readback::new(
+            device,
+            "grana.feedback",
+            (2 * self.view_words + CENSUS_LEVELS) as u64 * size_of::<u32>() as u64,
+            FEEDBACK_SLOTS,
+        ));
+        self.frames = vec![None; FEEDBACK_SLOTS];
         self.bricks = (0..pyramid.level_count()).map(|_| None).collect();
-        self.scheduler = Some(Scheduler::new(device, &self.layouts));
+        self.planner = Some(Planner::new(device, &self.layouts, slots));
         self.census = Some(Census::new(device, &self.layouts, pyramid));
         self.scene = Some(crate::table::SceneTable::new(
             device,
@@ -242,9 +269,10 @@ impl Renderer {
         self.atlas = Some(atlas);
         self.pyramid = Some(pyramid.clone());
         self.channels = channels;
-        self.tick = 0;
+        self.time = 0;
         self.counts.fill(0);
         self.epoch += 1;
+        self.pin = 0;
         self.settled = None;
         self.info = FrameInfo::default();
     }
@@ -262,8 +290,9 @@ impl Renderer {
             atlas,
             pyramid,
             channels,
-            tick,
+            time: now,
             content,
+            pin,
             ..
         } = self;
         let (Some(pyramid), Some(atlas)) = (pyramid.as_ref(), atlas.as_mut()) else {
@@ -297,18 +326,7 @@ impl Renderer {
             level,
             slot_grid,
         );
-        if bricks[level]
-            .as_ref()
-            .expect("the level table exists")
-            .time()
-            != Some(time)
-        {
-            bricks[level]
-                .as_mut()
-                .expect("the level table exists")
-                .sync(queue, time, atlas);
-        }
-        let Some((slot, evicted)) = atlas.allocate(*tick) else {
+        let Some((slot, evicted)) = atlas.allocate(*pin, *now, time) else {
             return false;
         };
         if let Some(brick) = evicted
@@ -334,12 +352,13 @@ impl Renderer {
                 index,
                 maxima,
             },
-            *tick,
+            *pin,
         );
-        bricks[level]
-            .as_mut()
-            .expect("the level table exists")
-            .set_record(queue, index, BrickRecord::new(slot + 1, maxima));
+        if let Some(table) = bricks[level].as_mut()
+            && table.time() == Some(time)
+        {
+            table.set_record(queue, index, BrickRecord::new(slot + 1, maxima));
+        }
         *content += 1;
         true
     }
@@ -355,6 +374,7 @@ impl Renderer {
             section,
             region,
             scene,
+            prefetch,
         } = frame;
         assert!(size[0] > 0 && size[1] > 0, "the surface is not empty");
         assert!(
@@ -370,7 +390,8 @@ impl Renderer {
             self.present_group = Some(self.present.bind(device, scene_target.color()));
             self.target = Some(scene_target);
         }
-        self.tick += 1;
+        self.time = time;
+        self.prefetch = prefetch;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("grana.frame"),
         });
@@ -382,7 +403,7 @@ impl Renderer {
             scene: scene_table,
             atlas,
             bricks,
-            scheduler,
+            planner,
             census,
             volume,
             section: section_pass,
@@ -393,17 +414,18 @@ impl Renderer {
             feedback,
             frames,
             counts,
+            view_bytes,
             epoch,
             content,
             settled,
             info,
             ..
         } = self;
-        let (Some(pyramid), Some(atlas), Some(scene_table), Some(scheduler), Some(census)) = (
+        let (Some(pyramid), Some(atlas), Some(scene_table), Some(planner), Some(census)) = (
             pyramid.as_ref(),
             atlas.as_mut(),
             scene_table.as_mut(),
-            scheduler.as_mut(),
+            planner.as_mut(),
             census.as_ref(),
         ) else {
             clear(&mut encoder, target);
@@ -440,10 +462,10 @@ impl Renderer {
             region,
         );
         let volume_target_level = select_volume_level(pyramid, camera, volume_height as f32);
-        let volume_capacity = slots.saturating_sub(section_count).max(1);
+        let section_capacity = section_count.clamp(1, slots.saturating_sub(1).max(1));
+        let volume_capacity = slots.saturating_sub(section_capacity).max(1);
         let volume_level =
             resolve_volume_level(volume_target_level, level_count, volume_capacity, counts);
-        let section_capacity = section_count.clamp(1, slots);
         let levels = Levels {
             volume: volume_level,
             section: section_level,
@@ -453,6 +475,8 @@ impl Renderer {
         let residency = Residency::of(
             *epoch,
             *content,
+            channel_style(scene.channels),
+            prefetch,
             time,
             ResidencyView {
                 camera,
@@ -531,9 +555,6 @@ impl Renderer {
             frame_data,
             section_data,
         );
-        if unsettled {
-            census.prepare(queue);
-        }
         let range = section_range(
             pyramid,
             section_level,
@@ -542,59 +563,43 @@ impl Renderer {
             section_aspect,
             region,
         );
-        scheduler.section.prepare(
-            queue,
-            Cull {
-                time,
-                level: section_level,
-                capacity: section_capacity as u32,
-                layer: range.layer,
-                range,
-                dispatch: range.dispatch(),
-            },
-        );
-        scheduler.volume.prepare(
-            queue,
-            Cull {
-                time,
-                level: volume_level,
-                capacity: volume_capacity as u32,
-                layer: 0,
-                range: SectionRange::default(),
-                dispatch: volume_dispatch(volume_table),
-            },
-        );
-        scheduler.section.bind_level(device, layouts, section_table);
-        scheduler.volume.bind_level(device, layouts, volume_table);
+        if unsettled {
+            census.prepare(queue);
+            planner.volume.prepare(
+                queue,
+                Schedule {
+                    time,
+                    level: volume_level,
+                    capacity: volume_capacity as u32,
+                    layer: 0,
+                    range: SectionRange::default(),
+                    dispatch: volume_dispatch(volume_table),
+                    bucket_scale: bucket_scale(camera, volume_table.world.to_array()),
+                },
+            );
+            planner.section.prepare(
+                queue,
+                Schedule {
+                    time,
+                    level: section_level,
+                    capacity: section_capacity as u32,
+                    layer: range.layer,
+                    range,
+                    dispatch: range.dispatch(),
+                    bucket_scale: 0.0,
+                },
+            );
+            planner.volume.bind_level(device, layouts, volume_table);
+            planner.section.bind_level(device, layouts, section_table);
+        }
         meshes.set(device, queue, layouts, scene);
         meshes.write_uniforms(queue, &frame_data, scene.shading);
         markers.prepare(device, queue, layouts, scene.markers);
         let scene_group = scene_table.group();
         if unsettled {
             census.encode(&mut encoder, scene_group);
+            planner.encode(&mut encoder, scene_group, &planner.volume, &planner.section);
         }
-        CullPass {
-            pipeline: &scheduler.section_cull,
-            scene: scene_group,
-            level: scheduler
-                .section
-                .level_group()
-                .expect("the section level group exists"),
-            requests: scheduler.section.requests_group(),
-            count: scheduler.section.dispatch(),
-        }
-        .encode(&mut encoder);
-        CullPass {
-            pipeline: &scheduler.volume_cull,
-            scene: scene_group,
-            level: scheduler
-                .volume
-                .level_group()
-                .expect("the volume level group exists"),
-            requests: scheduler.volume.requests_group(),
-            count: scheduler.volume.dispatch(),
-        }
-        .encode(&mut encoder);
         meshes.cull_volume(&mut encoder, scene_group);
         meshes.cull_section(&mut encoder, scene_group);
         markers.cull_volume(&mut encoder, scene_group);
@@ -650,35 +655,40 @@ impl Renderer {
             scene_group,
         );
         present.present(&mut encoder, target, present_group);
-        if unsettled && let Some(slot) = feedback.reserve() {
-            feedback.stage(&mut encoder, slot, 0, scheduler.volume.buffer(), VIEW_BYTES);
+        if unsettled
+            && let Some(feedback) = feedback.as_mut()
+            && let Some(slot) = feedback.reserve()
+        {
+            feedback.stage(&mut encoder, slot, 0, planner.volume.buffer(), *view_bytes);
             feedback.stage(
                 &mut encoder,
                 slot,
-                VIEW_BYTES,
-                scheduler.section.buffer(),
-                VIEW_BYTES,
+                *view_bytes,
+                planner.section.buffer(),
+                *view_bytes,
             );
             feedback.stage(
                 &mut encoder,
                 slot,
-                2 * VIEW_BYTES,
+                2 * *view_bytes,
                 census.counts(),
                 CENSUS_BYTES,
             );
             frames[slot] = Some(residency);
         }
         queue.submit([encoder.finish()]);
-        feedback.register();
-        info.volume = scheduler.volume.info();
-        info.section = scheduler.section.info();
+        if let Some(feedback) = feedback.as_mut() {
+            feedback.register();
+        }
+        info.volume.level = volume_level;
+        info.section.level = section_level;
         info.bytes = atlas.bytes();
         *info
     }
 
     pub fn poll_requests(&mut self, device: &Device) -> Option<Requests> {
         let mut latest = None;
-        while let Some((slot, bytes)) = self.feedback.take(device) {
+        while let Some((slot, bytes)) = self.take_feedback(device) {
             let Some(meta) = self.frames[slot].take() else {
                 continue;
             };
@@ -689,84 +699,153 @@ impl Renderer {
         latest
     }
 
+    fn take_feedback(&mut self, device: &Device) -> Option<(usize, Vec<u8>)> {
+        self.feedback
+            .as_mut()
+            .and_then(|feedback| feedback.take(device))
+    }
+
     pub fn requests_pending(&self) -> bool {
-        self.feedback.pending()
+        self.feedback.as_ref().is_some_and(Readback::pending)
     }
 
     fn decode(&mut self, meta: Residency, bytes: &[u8]) -> Option<Requests> {
         if meta.epoch != self.epoch {
             return None;
         }
-        let pyramid = self.pyramid.as_ref()?;
+        let Self {
+            pyramid,
+            planner,
+            atlas,
+            counts,
+            view_words,
+            info,
+            settled,
+            pin,
+            prefetch,
+            ..
+        } = self;
+        let pyramid = pyramid.as_ref()?;
+        let planner = planner.as_ref()?;
+        let atlas = atlas.as_mut()?;
         let words = feedback_words(bytes);
-        if words.len() < FEEDBACK_WORDS {
+        if words.len() < 2 * *view_words + CENSUS_LEVELS {
             return None;
         }
-        let volume_words = &words[..VIEW_WORDS];
-        let section_words = &words[VIEW_WORDS..2 * VIEW_WORDS];
-        let census_words = &words[2 * VIEW_WORDS..FEEDBACK_WORDS];
-        let volume = view_requests(
+        let (volume_words, rest) = words.split_at(*view_words);
+        let (section_words, census_words) = rest.split_at(*view_words);
+        let volume = decode_plan(
             volume_words,
+            planner.volume.capacity(),
             meta.time,
             meta.levels.volume,
-            meta.levels.volume_capacity,
             pyramid,
-        );
-        let section = view_requests(
+        )?;
+        let section = decode_plan(
             section_words,
+            planner.section.capacity(),
             meta.time,
             meta.levels.section,
-            meta.levels.section_capacity,
             pyramid,
+        )?;
+        *pin += 1;
+        atlas.touch(
+            meta.time,
+            meta.levels.volume,
+            volume.indices.iter().copied(),
+            *pin,
         );
-        let volume_view = ViewInfo {
-            level: meta.levels.volume,
-            visible: volume_words[0] as usize,
-            resident: volume_words[1] as usize,
-        };
-        let section_view = ViewInfo {
-            level: meta.levels.section,
-            visible: section_words[0] as usize,
-            resident: section_words[1] as usize,
-        };
-        if let Some(scheduler) = self.scheduler.as_mut() {
-            scheduler
-                .volume
-                .record(volume_view.visible, volume_view.resident);
-            scheduler
-                .section
-                .record(section_view.visible, section_view.resident);
-        }
-        if let Some(atlas) = self.atlas.as_mut() {
-            atlas.touch(
-                meta.time,
-                meta.levels.volume,
-                view_visible(volume_words, meta.levels.volume_capacity),
-                self.tick,
-            );
-            atlas.touch(
-                meta.time,
-                meta.levels.section,
-                view_visible(section_words, meta.levels.section_capacity),
-                self.tick,
-            );
-        }
-        self.counts.copy_from_slice(census_words);
-        self.info.volume = volume_view;
-        self.info.section = section_view;
-        self.settled = (volume.is_empty()
-            && section.is_empty()
-            && volume_view.resident == volume_view.visible
-            && section_view.resident == section_view.visible)
-            .then_some(meta);
+        atlas.touch(
+            meta.time,
+            meta.levels.section,
+            section.indices.iter().copied(),
+            *pin,
+        );
+        counts.copy_from_slice(census_words);
+        info.volume = volume.info;
+        info.section = section.info;
+        let settled_now = volume.requests.is_empty()
+            && section.requests.is_empty()
+            && volume.info.resident == volume.info.demand
+            && section.info.resident == section.info.demand;
+        *settled = settled_now.then_some(meta);
+        let prefetched = prefetch_requests(*prefetch, atlas, meta.time, &volume, &section, pyramid);
         Some(Requests {
             time: meta.time,
-            volume,
-            section,
-            volume_view,
-            section_view,
+            volume: volume.requests,
+            section: section.requests,
+            prefetch: prefetched,
+            volume_view: volume.info,
+            section_view: section.info,
         })
     }
+}
+
+fn channel_style(channels: &[crate::ChannelRow<'_>]) -> u64 {
+    let mut key = channels.len() as u64;
+    for channel in channels {
+        let mut row = (channel.visible as u64) ^ ((channel.opacity.to_bits() as u64) << 1);
+        row = row.rotate_left(17) ^ (channel.window.min().to_bits() as u64);
+        row = row.rotate_left(17) ^ (channel.window.max().to_bits() as u64);
+        for stop in channel.transfer.stops() {
+            row = row.rotate_left(11) ^ (stop.position().to_bits() as u64);
+            row = row.rotate_left(11) ^ (stop.opacity().to_bits() as u64);
+            row = row.rotate_left(11) ^ (stop.color()[0].to_bits() as u64);
+            row = row.rotate_left(11) ^ (stop.color()[1].to_bits() as u64);
+            row = row.rotate_left(11) ^ (stop.color()[2].to_bits() as u64);
+        }
+        key = key.rotate_left(13) ^ row;
+    }
+    key
+}
+
+fn prefetch_requests(
+    enabled: bool,
+    atlas: &Atlas,
+    time: u32,
+    volume: &Demand,
+    section: &Demand,
+    pyramid: &Pyramid,
+) -> Vec<BrickRequest> {
+    if !enabled {
+        return Vec::new();
+    }
+    let next = time + 1;
+    if next >= pyramid.frame_count() {
+        return Vec::new();
+    }
+    let resident = if volume.info.level == section.info.level {
+        atlas.bricks(next, volume.info.level).count()
+    } else {
+        atlas.bricks(next, volume.info.level).count()
+            + atlas.bricks(next, section.info.level).count()
+    };
+    let mut spare = atlas
+        .slots()
+        .saturating_sub(volume.info.demand + section.info.demand + resident)
+        .min(PREFETCH_LIMIT);
+    let mut requests = Vec::new();
+    for (demand, level) in [(volume, volume.info.level), (section, section.info.level)] {
+        if spare == 0 {
+            break;
+        }
+        let grid = BrickGrid::new(pyramid.level(level).extent());
+        for index in &demand.indices {
+            if spare == 0 {
+                break;
+            }
+            if atlas.slot(next, level, *index as usize).is_some() {
+                continue;
+            }
+            requests.push(BrickRequest {
+                time: next,
+                level,
+                coord: grid.coord(*index as usize),
+            });
+            spare -= 1;
+        }
+    }
+    requests
 }
 
 fn feedback_words(bytes: &[u8]) -> Vec<u32> {

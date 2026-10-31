@@ -12,7 +12,8 @@ pub(crate) struct Layouts {
     pub scene: BindGroupLayout,
     pub level: BindGroupLayout,
     pub level_write: BindGroupLayout,
-    pub requests: BindGroupLayout,
+    pub plan_storage: BindGroupLayout,
+    pub plan_data: BindGroupLayout,
     pub atlas: BindGroupLayout,
     pub depth: BindGroupLayout,
     pub styles: BindGroupLayout,
@@ -23,8 +24,8 @@ pub(crate) struct Layouts {
     pub census_level: BindGroupLayout,
     pub volume: PipelineLayout,
     pub section: PipelineLayout,
-    pub volume_cull: PipelineLayout,
-    pub section_cull: PipelineLayout,
+    pub cull: PipelineLayout,
+    pub plan_pipeline: PipelineLayout,
     pub mesh_cull: PipelineLayout,
     pub marker_volume: PipelineLayout,
     pub marker_section: PipelineLayout,
@@ -61,9 +62,16 @@ impl Layouts {
                 uniform(1, ShaderStages::COMPUTE),
             ],
         });
-        let requests = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.requests.layout"),
+        let plan_storage = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.plan.storage.layout"),
             entries: &[storage(0, ShaderStages::COMPUTE, false)],
+        });
+        let plan_data = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.plan.data.layout"),
+            entries: &[
+                uniform(0, ShaderStages::COMPUTE),
+                storage(1, ShaderStages::COMPUTE, false),
+            ],
         });
         let census_level = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.census.level.layout"),
@@ -138,16 +146,12 @@ impl Layouts {
             &[&scene, &level, &atlas, &depth],
         );
         let section = pipeline_layout(device, "grana.section.layout", &[&scene, &level, &atlas]);
-        let volume_cull = pipeline_layout(
+        let cull = pipeline_layout(
             device,
-            "grana.volume.cull.layout",
-            &[&scene, &level_write, &requests],
+            "grana.cull.layout",
+            &[&scene, &level_write, &plan_storage],
         );
-        let section_cull = pipeline_layout(
-            device,
-            "grana.section.cull.layout",
-            &[&scene, &level_write, &requests],
-        );
+        let plan_pipeline = pipeline_layout(device, "grana.plan.layout", &[&plan_data]);
         let mesh_cull = pipeline_layout(
             device,
             "grana.mesh.cull.layout",
@@ -170,7 +174,8 @@ impl Layouts {
             scene,
             level,
             level_write,
-            requests,
+            plan_storage,
+            plan_data,
             atlas,
             depth,
             styles,
@@ -181,8 +186,8 @@ impl Layouts {
             census_level,
             volume,
             section,
-            volume_cull,
-            section_cull,
+            cull,
+            plan_pipeline,
             mesh_cull,
             marker_volume,
             marker_section,

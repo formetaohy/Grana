@@ -6,9 +6,9 @@ mod frame;
 mod layout;
 mod marker;
 mod mesh;
+mod planner;
 mod present;
 mod renderer;
-mod schedule;
 mod schema;
 mod section;
 mod table;
@@ -17,6 +17,7 @@ mod transfer;
 mod volume;
 
 pub const CHANNEL_LIMIT: usize = 16;
+pub const DEPTH_BUCKETS: usize = planner::BUCKETS;
 
 pub use camera::{Camera, Ray, SectionCamera, plane_basis};
 pub use marker::Marker;

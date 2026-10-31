@@ -109,6 +109,7 @@ impl App {
     }
 
     fn redraw(&mut self) {
+        self.poll_requests();
         self.poll_source();
         self.poll_analysis();
         if self.surface.is_none() || self.scene.is_none() {
@@ -252,7 +253,7 @@ impl App {
             return;
         }
         scene.set_time(time);
-        self.in_flight.clear();
+        self.in_flight.retain(|request| request.time >= time);
         if let Some(source) = &self.source {
             source.set_time(time);
         }
@@ -304,8 +305,8 @@ impl App {
                 .as_ref()
                 .is_some_and(|surface| surface.renderer.requests_pending())
             || (self.source.is_some()
-                && (self.frame.volume.resident < self.frame.volume.visible
-                    || self.frame.section.resident < self.frame.section.visible))
+                && (self.frame.volume.resident < self.frame.volume.demand
+                    || self.frame.section.resident < self.frame.section.demand))
     }
 
     fn run_ui(&mut self) -> (egui::FullOutput, Vec<Action>) {
@@ -358,8 +359,7 @@ impl App {
             .map(|viewport| viewport.repaint_delay)
             .min()
             .unwrap_or(Duration::MAX);
-        let serviceable = self.loading.is_none() && self.in_flight.len() < MAX_IN_FLIGHT;
-        let (info, requests) = {
+        let info = {
             let surface = self.surface.as_mut()?;
             let scene = self.scene.as_ref()?;
             let size = surface.gpu.size();
@@ -381,6 +381,7 @@ impl App {
                     section: self.viewport.section(),
                     region: scene.region,
                     scene: &rendered.frame(),
+                    prefetch: self.playing,
                 },
             );
             let mut encoder =
@@ -400,20 +401,30 @@ impl App {
             );
             surface.gpu.queue.submit([encoder.finish()]);
             surface.gpu.queue.present(frame);
-            let requests = serviceable
-                .then(|| surface.renderer.poll_requests(&surface.gpu.device))
-                .flatten();
-            (info, requests)
+            info
         };
         self.frame = info;
-        if let Some(requests) = requests
-            && requests.time == self.scene.as_ref().map_or(0, |scene| scene.time())
-        {
-            self.frame.volume = requests.volume_view;
-            self.frame.section = requests.section_view;
-            self.service_requests(&requests);
-        }
         Some(repaint_delay)
+    }
+
+    fn poll_requests(&mut self) {
+        let Some(requests) = self
+            .surface
+            .as_mut()
+            .and_then(|surface| surface.renderer.poll_requests(&surface.gpu.device))
+        else {
+            return;
+        };
+        if self
+            .scene
+            .as_ref()
+            .is_none_or(|scene| scene.time() != requests.time)
+        {
+            return;
+        }
+        self.frame.volume = requests.volume_view;
+        self.frame.section = requests.section_view;
+        self.service_requests(&requests);
     }
 
     fn poll_source(&mut self) {
@@ -487,7 +498,12 @@ impl App {
             return;
         };
         let mut stopped = false;
-        for request in requests.section.iter().chain(requests.volume.iter()) {
+        for request in requests
+            .section
+            .iter()
+            .chain(&requests.volume)
+            .chain(&requests.prefetch)
+        {
             if self.in_flight.len() >= MAX_IN_FLIGHT {
                 break;
             }

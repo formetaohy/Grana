@@ -45,7 +45,7 @@ impl Loader {
             let pyramid = worker.pyramid();
             let grid = BrickGrid::new(pyramid.level(0).extent());
             while let Ok(request) = request_queue.recv() {
-                if request.time != worker_time.load(Ordering::Relaxed) {
+                if request.time < worker_time.load(Ordering::Relaxed) {
                     continue;
                 }
                 let data = worker.brick(request.time, &grid, request.coord);
@@ -95,7 +95,7 @@ impl Loader {
                 return;
             }
             while let Ok(request) = request_queue.recv() {
-                if request.time != worker_time.load(Ordering::Relaxed) {
+                if request.time < worker_time.load(Ordering::Relaxed) {
                     continue;
                 }
                 match image.read_brick(request.time, request.level, request.coord) {
