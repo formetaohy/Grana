@@ -7,20 +7,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-grana-analysis = { workspace = true }
-grana-animation = { workspace = true }
-grana-measure = { workspace = true }
-grana-object = { workspace = true }
-grana-render = { workspace = true }
-grana-scene = { workspace = true }
-grana-volume = { workspace = true }
-egui = { workspace = true }
-egui-wgpu = { workspace = true }
-egui-winit = { workspace = true }
-egui_extras = { workspace = true }
+bytemuck = { workspace = true }
 glam = { workspace = true }
+swash = "0.2"
 wgpu = { workspace = true }
-winit = { workspace = true }
+
 
 [lints]
 workspace = true

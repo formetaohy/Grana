@@ -14,10 +14,6 @@ bytemuck = { version = "1", features = ["derive"] }
 glam = { version = "0.30", features = ["bytemuck"] }
 half = "2"
 wgpu = "30"
-egui = { version = "0.37", features = ["default_fonts"] }
-egui-wgpu = "0.37"
-egui-winit = { version = "0.37", default-features = false, features = ["clipboard", "links"] }
-egui_extras = { version = "0.37", default-features = false }
 winit = "0.30"
 pollster = "0.4"
 thiserror = "2"
@@ -35,6 +31,7 @@ grana-gpu = { version = "0.1.1", path = "crates/grana-gpu" }
 grana-scene = { version = "0.1.1", path = "crates/grana-scene" }
 grana-project = { version = "0.1.1", path = "crates/grana-project" }
 grana-ui = { version = "0.1.1", path = "crates/grana-ui" }
+grana-workbench = { version = "0.1.1", path = "crates/grana-workbench" }
 grana-analysis = { version = "0.1.1", path = "crates/grana-analysis" }
 grana-render = { version = "0.1.1", path = "crates/grana-render" }
 grana-zarr = { version = "0.1.1", path = "crates/grana-zarr" }
@@ -72,10 +69,10 @@ grana-project = { workspace = true }
 grana-render = { workspace = true }
 grana-scene = { workspace = true }
 grana-ui = { workspace = true }
+grana-workbench = { workspace = true }
 grana-video = { workspace = true }
 grana-volume = { workspace = true }
 grana-zarr = { workspace = true }
-egui = { workspace = true }
 glam = { workspace = true }
 png = "0.18"
 pollster = { workspace = true }

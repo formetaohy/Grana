@@ -12,17 +12,18 @@ use grana_pipeline::{
 use grana_project::{Project, Source as ProjectSource, ViewState};
 use grana_render::{BrickRequest, Camera, Frame, FrameInfo, Renderer, Requests, SectionCamera};
 use grana_scene::{Dataset, Job, Measure, ObjectSetId, Origin, Progress, Scene};
-use grana_ui::Target as FigureTarget;
 use grana_ui::{
-    Action, BatchDataset, Caption, EguiLayer, Figure, Message, Pane, Panel, State, Viewport,
+    Button as UiButton, Event as UiEvent, Modifiers as UiModifiers, Rect as UiRect, Ui,
+    Vec2 as UiVec2,
 };
 use grana_volume::Spacing;
+use grana_workbench::{Action, BatchDataset, Message, Pane, Panel, State, Viewport};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorIcon, Window, WindowId};
 
 use crate::demo;
 use crate::gpu::Gpu;
@@ -49,8 +50,7 @@ const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
 struct Surface {
     window: Arc<Window>,
     gpu: Gpu,
-    egui: EguiLayer,
-    figure: Figure,
+    ui: Ui,
     renderer: Renderer,
 }
 
@@ -105,6 +105,10 @@ impl Animation {
 
 pub struct App {
     surface: Option<Surface>,
+    start: Instant,
+    capture: Option<PathBuf>,
+    elapsed_frames: u32,
+    exiting: bool,
     scene: Option<Scene>,
     measure: Measure,
     panel: Option<Panel>,
@@ -140,9 +144,13 @@ pub struct App {
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(capture: Option<PathBuf>) -> Self {
         Self {
             surface: None,
+            start: Instant::now(),
+            capture,
+            elapsed_frames: 0,
+            exiting: false,
             scene: None,
             measure: Measure::new(),
             panel: Some(Panel::Statistics),
@@ -189,8 +197,7 @@ impl App {
                 .expect("failed to create the window"),
         );
         let gpu = Gpu::new(window.clone());
-        let egui = EguiLayer::new(&window, &gpu.device, gpu.format());
-        let figure = Figure::new(&gpu.device, gpu.format());
+        let ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
         let (source, pyramid) = Loader::memory(demo::movie());
         let mut scene = Scene::new(Dataset::synthetic("synthetic fluorescence", pyramid));
         let staged = demo::stage(&mut scene);
@@ -201,14 +208,14 @@ impl App {
         self.surface = Some(Surface {
             window,
             gpu,
-            egui,
-            figure,
+            ui,
             renderer,
         });
         if let Some(scene) = self.scene.as_ref() {
             self.animation
                 .reset(scene.dataset.frame_count(), scene.dataset.frame_interval());
         }
+
         self.start_detect(staged.spots);
         self.start_detect(staged.surfaces);
         self.start_detect(staged.filaments);
@@ -230,7 +237,8 @@ impl App {
             });
             self.measure.sync(scene, busy);
         }
-        let (output, actions) = self.run_ui();
+        let (actions, frame) = self.run_ui();
+        self.interact_viewport();
         if self.apply(actions) {
             return;
         }
@@ -254,22 +262,25 @@ impl App {
             let scene = self.scene.as_ref().expect("the scene is alive");
             (scene.dataset.world_size(), scene.dataset.voxel_size())
         };
-        if self.fit_section {
+        let sized = volume_region[2] > 64
+            && volume_region[3] > 64
+            && section_region[2] > 64
+            && section_region[3] > 64;
+        if self.fit_section && sized {
             self.viewport.fit_section(world, voxel, section_aspect);
             self.fit_section = false;
         }
-        if self.needs_fit {
+        if self.needs_fit && sized {
             self.viewport
                 .fit(world, voxel, volume_aspect, section_aspect);
             self.needs_fit = false;
         }
         let mut delay = if self.movie.is_some() {
-            self.record(output).unwrap_or(Duration::MAX)
+            self.record().unwrap_or(Duration::MAX)
         } else {
-            self.render(output, volume_region, section_region)
-                .unwrap_or(Duration::MAX)
+            self.render().unwrap_or(Duration::MAX)
         };
-        if self.movie.is_some() {
+        if self.movie.is_some() || frame.animating {
             delay = Duration::ZERO;
         } else if self.animation.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
@@ -282,6 +293,17 @@ impl App {
         if self.playing {
             delay = delay.min(PLAYBACK_INTERVAL);
         }
+        self.elapsed_frames += 1;
+        let streamed = self.frame.volume.resident >= self.frame.volume.demand
+            && self.frame.section.resident >= self.frame.section.demand;
+        if let Some(path) = self.capture.clone()
+            && ((self.elapsed_frames > 30 && streamed && self.frame.samples >= SAMPLE_LIMIT)
+                || self.elapsed_frames > 150)
+        {
+            self.capture = None;
+            self.write_capture(&path);
+            self.exiting = true;
+        }
         if delay.is_zero() {
             self.repaint_at = None;
             if let Some(surface) = &self.surface {
@@ -291,6 +313,53 @@ impl App {
             self.repaint_at = Some(Instant::now() + delay);
         } else {
             self.repaint_at = None;
+        }
+    }
+
+    fn write_capture(&mut self, path: &Path) {
+        let Some(surface) = self.surface.as_mut() else {
+            return;
+        };
+        let (pixels, size, format) = surface.ui.renderer_mut().read_color();
+        let pixels = if format == wgpu::TextureFormat::Bgra8Unorm {
+            let mut swapped = pixels;
+            for pixel in swapped.chunks_mut(4) {
+                pixel.swap(0, 2);
+            }
+            swapped
+        } else {
+            pixels
+        };
+        match snapshot::write_rgba(path, size[0], size[1], &pixels) {
+            Ok(()) => eprintln!("grana: saved {}", path.display()),
+            Err(detail) => eprintln!("{detail}"),
+        }
+    }
+
+    fn interact_viewport(&mut self) {
+        let Some(surface) = self.surface.as_mut() else {
+            return;
+        };
+        let spacing = self
+            .scene
+            .as_ref()
+            .map_or(Spacing::new(1.0, 1.0, 1.0), |scene| scene.dataset.spacing());
+        let mut viewport = std::mem::replace(&mut self.viewport, Viewport::new());
+        let interaction = viewport.input(&mut surface.ui, spacing);
+        self.viewport = viewport;
+        surface
+            .window
+            .set_cursor(interface_cursor(surface.ui.cursor()));
+        if interaction.camera {
+            if let Some(scene) = &self.scene {
+                self.viewport.clamp_focus(0.5 * scene.dataset.world_size());
+            }
+            surface.window.request_redraw();
+        }
+        let pick = interaction.pick;
+        if let Some((pane, point)) = pick {
+            self.pick(pane, point);
+            self.request_redraw();
         }
     }
 
@@ -563,101 +632,105 @@ impl App {
                     || self.frame.section.resident < self.frame.section.demand))
     }
 
-    fn run_ui(&mut self) -> (egui::FullOutput, Vec<Action>) {
-        let size = self
+    fn run_ui(&mut self) -> (Vec<Action>, grana_ui::Frame) {
+        let movie_size = self
             .movie_layout()
             .map_or([MOVIE_WIDTH, MOVIE_WIDTH * 9 / 16], |layout| layout.0);
         let project = self.project.as_ref().map(|path| file_name(path));
         let dirty = self.dirty();
-        let surface = self.surface.as_mut().expect("the surface is alive");
-        let scene = self.scene.as_mut().expect("the scene is alive");
-        let Surface {
-            window,
-            gpu,
-            egui,
-            figure: _,
-            renderer: _,
-        } = surface;
-        let adapter = gpu.adapter_description.as_str();
-        let loading = self.loading.as_deref();
-        let message = self.message.as_ref();
-        let frame = self.frame;
-        let pending = self.in_flight.len();
-        let analysis = self.progress.as_slice();
-        let playing = self.playing;
-        let scene_frames = scene.frame_count();
-        let frame_interval = scene.dataset.frame_interval();
         let output_text = self
             .batch_output
             .as_ref()
             .map(|path| path.display().to_string());
         let movie = self.movie.as_ref().map(|movie| (movie.frame, movie.frames));
-        let mut actions = Vec::new();
-        let output = egui.run(window, |root| {
-            actions = grana_ui::build(
-                root,
-                &mut State {
-                    scene,
-                    measure: &mut self.measure,
-                    panel: &mut self.panel,
-                    viewport: &mut self.viewport,
-                    animation: grana_ui::Animation {
-                        timeline: &mut self.animation.timeline,
-                        position: self.animation.position,
-                        previewing: self.animation.previewing,
-                        selected: self.animation.selected,
-                        width: self.animation.width,
-                        size,
-                        movie,
-                        message: self.animation.message.as_deref(),
-                        frames: scene_frames,
-                        frame_interval,
-                    },
-                    adapter,
-                    loading,
-                    message,
-                    project: project.as_deref(),
-                    dirty,
-                    frame,
-                    pending,
-                    playing,
-                    analysis,
-                    batch_protocol: self.protocol_text.as_deref(),
-                    batch_datasets: &self.batch_rows,
-                    batch_output: output_text.as_deref(),
-                    batch_running: self.batch_running,
-                    batch_message: self.batch_message.as_deref(),
+        let Self {
+            surface,
+            scene,
+            measure,
+            panel,
+            viewport,
+            animation,
+            analysis: _,
+            progress,
+            in_flight,
+            frame: frame_info,
+            loading,
+            message,
+            playing,
+            protocol_text,
+            batch_rows,
+            batch_running,
+            batch_message,
+            ..
+        } = self;
+        let surface = surface.as_mut().expect("the surface is alive");
+        let scene = scene.as_mut().expect("the scene is alive");
+        let scale = surface.window.scale_factor() as f32;
+        let size = surface.gpu.size();
+        let points = UiVec2::new(size[0] as f32 / scale, size[1] as f32 / scale);
+        surface.ui.resize(size);
+        surface
+            .ui
+            .begin(points, scale, self.start.elapsed().as_secs_f64());
+        let adapter = surface.gpu.adapter_description.as_str();
+        let scene_frames = scene.frame_count();
+        let frame_interval = scene.dataset.frame_interval();
+        let actions = grana_workbench::build(
+            &mut surface.ui,
+            &mut State {
+                scene,
+                measure,
+                panel,
+                viewport,
+                animation: grana_workbench::Animation {
+                    timeline: &mut animation.timeline,
+                    position: animation.position,
+                    previewing: animation.previewing,
+                    selected: animation.selected,
+                    width: animation.width,
+                    size: movie_size,
+                    movie,
+                    message: animation.message.as_deref(),
+                    frames: scene_frames,
+                    frame_interval,
                 },
-            );
-        });
-        (output, actions)
+                adapter,
+                loading: loading.as_deref(),
+                message: message.as_ref(),
+                project: project.as_deref(),
+                dirty,
+                frame: *frame_info,
+                pending: in_flight.len(),
+                playing: *playing,
+                analysis: progress.as_slice(),
+                batch_protocol: protocol_text.as_deref(),
+                batch_datasets: batch_rows,
+                batch_output: output_text.as_deref(),
+                batch_running: *batch_running,
+                batch_message: batch_message.as_deref(),
+            },
+        );
+        let frame = surface.ui.end();
+        (actions, frame)
     }
 
-    fn render(
-        &mut self,
-        output: egui::FullOutput,
-        volume_region: [u32; 4],
-        section_region: [u32; 4],
-    ) -> Option<Duration> {
+    fn render(&mut self) -> Option<Duration> {
         if self.snapshot.is_some() {
             let delay = self.capture();
-            self.present_ui(output);
+            self.present_ui();
             return delay;
         }
-        let repaint_delay = output
-            .viewport_output
-            .values()
-            .map(|viewport| viewport.repaint_delay)
-            .min()
-            .unwrap_or(Duration::MAX);
         let info = {
             let surface = self.surface.as_mut()?;
             let scene = self.scene.as_mut()?;
             let size = surface.gpu.size();
+            let scale = surface.window.scale_factor() as f32;
             let time = scene.time();
             let region = scene.region;
             let exposure = scene.exposure;
             let rendered = scene.rendered();
+            let volume_region = physical_region(self.viewport.volume_rect(), scale, size);
+            let section_region = physical_region(self.viewport.section_rect(), scale, size);
             let frame = surface.gpu.acquire()?;
             let view = frame
                 .texture
@@ -666,7 +739,7 @@ impl App {
                 &surface.gpu.device,
                 &surface.gpu.queue,
                 Frame {
-                    target: &view,
+                    target: surface.ui.scene_view(),
                     size,
                     volume_region,
                     section_region,
@@ -685,22 +758,15 @@ impl App {
                     .gpu
                     .device
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("grana.egui"),
+                        label: Some("grana.ui.paint"),
                     });
-            surface.egui.paint(
-                &surface.gpu.device,
-                &surface.gpu.queue,
-                &mut encoder,
-                &view,
-                size,
-                output,
-            );
+            surface.ui.paint(&mut encoder, &view);
             surface.gpu.queue.submit([encoder.finish()]);
             surface.gpu.queue.present(frame);
             info
         };
         self.frame = info;
-        Some(repaint_delay)
+        Some(Duration::MAX)
     }
 
     fn capture(&mut self) -> Option<Duration> {
@@ -755,23 +821,25 @@ impl App {
                             label: Some("grana.snapshot.figure"),
                         },
                     );
-                    let legends = grana_ui::legends(scene);
+                    let legends = grana_workbench::legends(scene);
                     let pane = self.viewport.volume_rect();
                     let world_per_point = 2.0 * camera.distance() * (camera.fov_y() * 0.5).tan()
                         / pane.height().max(1.0);
-                    surface.figure.paint(
-                        &surface.gpu.device,
-                        &surface.gpu.queue,
+                    let pixels_per_point = job.size[0] as f32 / pane.width().max(1.0);
+                    let instances = grana_workbench::figure_instances(
+                        &mut surface.ui,
+                        job.size,
+                        pixels_per_point,
+                        world_per_point,
+                        &legends,
+                    );
+                    surface.ui.renderer().paint_figure(
                         &mut encoder,
-                        FigureTarget {
-                            texture: &job.view,
-                            size: job.size,
-                        },
-                        Caption {
-                            world_per_point,
-                            pixels_per_point: job.size[0] as f32 / pane.width().max(1.0),
-                            legends: &legends,
-                        },
+                        &job.view,
+                        job.size,
+                        pixels_per_point,
+                        surface.ui.atlas(),
+                        &instances,
                     );
                     surface.gpu.queue.submit([encoder.finish()]);
                     let image = grana_render::read_image(
@@ -949,14 +1017,14 @@ impl App {
         self.animation.position = position.clamp(0.0, self.animation.timeline.duration());
     }
 
-    fn record(&mut self, output: egui::FullOutput) -> Option<Duration> {
+    fn record(&mut self) -> Option<Duration> {
         let Some(frame) = self.movie.as_ref().map(|movie| movie.frame) else {
-            self.present_ui(output);
+            self.present_ui();
             return Some(Duration::ZERO);
         };
         let Some(sample) = self.animation.timeline.sample_frame(frame) else {
             self.stop_movie(Some("the timeline ended before the movie did".to_string()));
-            self.present_ui(output);
+            self.present_ui();
             return Some(Duration::ZERO);
         };
         self.set_time(sample.time);
@@ -972,7 +1040,7 @@ impl App {
                 self.scene.as_mut(),
                 self.movie.as_mut(),
             ) else {
-                self.present_ui(output);
+                self.present_ui();
                 return Some(Duration::ZERO);
             };
             let rendered = scene.rendered();
@@ -1009,7 +1077,7 @@ impl App {
                 failure = Some("the movie could not resolve the streamed volume".to_string());
             }
         }
-        self.present_ui(output);
+        self.present_ui();
         if let Some(detail) = failure {
             self.stop_movie(Some(detail));
             return Some(Duration::ZERO);
@@ -1020,17 +1088,13 @@ impl App {
         Some(Duration::ZERO)
     }
 
-    fn present_ui(&mut self, output: egui::FullOutput) {
+    fn present_ui(&mut self) {
         let Some(surface) = self.surface.as_mut() else {
             return;
         };
         let Some(frame) = surface.gpu.acquire() else {
-            surface
-                .egui
-                .discard(&surface.gpu.device, &surface.gpu.queue, output);
             return;
         };
-        let size = surface.gpu.size();
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1041,27 +1105,7 @@ impl App {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("grana.ui.present"),
                 });
-        let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("grana.ui.clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
-        surface.egui.paint(
-            &surface.gpu.device,
-            &surface.gpu.queue,
-            &mut encoder,
-            &view,
-            size,
-            output,
-        );
+        surface.ui.paint(&mut encoder, &view);
         surface.gpu.queue.submit([encoder.finish()]);
         surface.gpu.queue.present(frame);
     }
@@ -2052,9 +2096,9 @@ fn file_name(path: &Path) -> String {
         .to_string()
 }
 
-fn physical_region(rect: egui::Rect, scale: f32, surface: [u32; 2]) -> [u32; 4] {
-    let x = ((rect.left() * scale).round() as i64).clamp(0, surface[0] as i64 - 1) as u32;
-    let y = ((rect.top() * scale).round() as i64).clamp(0, surface[1] as i64 - 1) as u32;
+fn physical_region(rect: UiRect, scale: f32, surface: [u32; 2]) -> [u32; 4] {
+    let x = ((rect.min.x * scale).round() as i64).clamp(0, surface[0] as i64 - 1) as u32;
+    let y = ((rect.min.y * scale).round() as i64).clamp(0, surface[1] as i64 - 1) as u32;
     let width = ((rect.width() * scale).round() as u32)
         .min(surface[0] - x)
         .max(1);
@@ -2062,6 +2106,39 @@ fn physical_region(rect: egui::Rect, scale: f32, surface: [u32; 2]) -> [u32; 4] 
         .min(surface[1] - y)
         .max(1);
     [x, y, width, height]
+}
+
+fn interface_key(key: &Key) -> Option<grana_ui::Key> {
+    match key {
+        Key::Named(NamedKey::Escape) => Some(grana_ui::Key::Escape),
+        Key::Named(NamedKey::Enter) => Some(grana_ui::Key::Enter),
+        Key::Named(NamedKey::Tab) => Some(grana_ui::Key::Tab),
+        Key::Named(NamedKey::Space) => Some(grana_ui::Key::Space),
+        Key::Named(NamedKey::ArrowLeft) => Some(grana_ui::Key::Left),
+        Key::Named(NamedKey::ArrowRight) => Some(grana_ui::Key::Right),
+        Key::Named(NamedKey::ArrowUp) => Some(grana_ui::Key::Up),
+        Key::Named(NamedKey::ArrowDown) => Some(grana_ui::Key::Down),
+        Key::Named(NamedKey::Home) => Some(grana_ui::Key::Home),
+        Key::Named(NamedKey::End) => Some(grana_ui::Key::End),
+        Key::Named(NamedKey::PageUp) => Some(grana_ui::Key::PageUp),
+        Key::Named(NamedKey::PageDown) => Some(grana_ui::Key::PageDown),
+        Key::Named(NamedKey::Backspace) => Some(grana_ui::Key::Backspace),
+        Key::Named(NamedKey::Delete) => Some(grana_ui::Key::Delete),
+        Key::Character(text) => text.chars().next().map(grana_ui::Key::Character),
+        _ => None,
+    }
+}
+
+fn interface_cursor(cursor: grana_ui::Cursor) -> CursorIcon {
+    match cursor {
+        grana_ui::Cursor::Arrow => CursorIcon::Default,
+        grana_ui::Cursor::Pointing => CursorIcon::Pointer,
+        grana_ui::Cursor::Grab => CursorIcon::Grab,
+        grana_ui::Cursor::Grabbing => CursorIcon::Grabbing,
+        grana_ui::Cursor::ResizeHorizontal => CursorIcon::ColResize,
+        grana_ui::Cursor::ResizeVertical => CursorIcon::RowResize,
+        grana_ui::Cursor::Move => CursorIcon::Move,
+    }
 }
 
 fn even(value: u32) -> u32 {
@@ -2074,6 +2151,64 @@ fn scale_region(region: [u32; 4], origin: [u32; 2], factor: f32, size: [u32; 2])
     let width = ((region[2] as f32 * factor).round() as u32).clamp(1, size[0] - x);
     let height = ((region[3] as f32 * factor).round() as u32).clamp(1, size[1] - y);
     [x, y, width, height]
+}
+
+impl App {
+    fn push_event(&mut self, event: &WindowEvent) {
+        let Some(surface) = self.surface.as_mut() else {
+            return;
+        };
+        let scale = surface.window.scale_factor() as f32;
+        let input = surface.ui.input_mut();
+        match event {
+            WindowEvent::CursorMoved { position, .. } => input.push(UiEvent::Moved(UiVec2::new(
+                position.x as f32 / scale,
+                position.y as f32 / scale,
+            ))),
+            WindowEvent::CursorLeft { .. } => input.push(UiEvent::Leave),
+            WindowEvent::MouseInput { state, button, .. } => {
+                let button = match button {
+                    MouseButton::Left => UiButton::Primary,
+                    MouseButton::Right => UiButton::Secondary,
+                    MouseButton::Middle => UiButton::Middle,
+                    _ => return,
+                };
+                input.push(match state {
+                    ElementState::Pressed => UiEvent::Down(button),
+                    ElementState::Released => UiEvent::Up(button),
+                });
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => UiVec2::new(*x, *y),
+                    MouseScrollDelta::PixelDelta(position) => {
+                        UiVec2::new(position.x as f32, position.y as f32) / 48.0
+                    }
+                };
+                input.push(UiEvent::Wheel(lines));
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                let state = modifiers.state();
+                input.push(UiEvent::Modifiers(UiModifiers {
+                    shift: state.shift_key(),
+                    control: state.control_key(),
+                    alt: state.alt_key(),
+                    logo: state.super_key(),
+                }));
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                let Some(key) = interface_key(&event.logical_key) else {
+                    return;
+                };
+                input.push(UiEvent::Key {
+                    key,
+                    pressed: event.state == ElementState::Pressed,
+                    repeat: event.repeat,
+                });
+            }
+            _ => {}
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -2090,31 +2225,7 @@ impl ApplicationHandler for App {
         if self.surface.is_none() {
             return;
         }
-        let spacing = self
-            .scene
-            .as_ref()
-            .map_or(Spacing::new(1.0, 1.0, 1.0), |scene| scene.dataset.spacing());
-        let (camera_changed, consumed) = {
-            let surface = self.surface.as_mut().expect("the surface is alive");
-            let response = surface.egui.event(&surface.window, &event);
-            (
-                self.viewport
-                    .on_window_event(&event, response.consumed, spacing),
-                response.consumed,
-            )
-        };
-        if camera_changed.camera {
-            if let Some(scene) = &self.scene {
-                self.viewport.clamp_focus(0.5 * scene.dataset.world_size());
-            }
-            if let Some(surface) = &self.surface {
-                surface.window.request_redraw();
-            }
-        }
-        if let Some((pane, point)) = camera_changed.pick {
-            self.pick(pane, point);
-        }
-
+        self.push_event(&event);
         match event {
             WindowEvent::CloseRequested => {
                 if !self.dirty() || self.confirm_close() {
@@ -2151,7 +2262,7 @@ impl ApplicationHandler for App {
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers.state();
             }
-            WindowEvent::KeyboardInput { event, .. } if !consumed => {
+            WindowEvent::KeyboardInput { event, .. } => {
                 self.on_key(&event);
             }
             WindowEvent::RedrawRequested => self.redraw(),
@@ -2160,6 +2271,10 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.exiting {
+            event_loop.exit();
+            return;
+        }
         if self.repaint_at.is_none() {
             if self.playing {
                 self.repaint_at = Some(Instant::now() + PLAYBACK_INTERVAL);

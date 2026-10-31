@@ -1,0 +1,21 @@
+[package]
+name = "grana-workbench"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+grana-analysis = { workspace = true }
+grana-animation = { workspace = true }
+grana-measure = { workspace = true }
+grana-object = { workspace = true }
+grana-render = { workspace = true }
+grana-scene = { workspace = true }
+grana-ui = { workspace = true }
+grana-volume = { workspace = true }
+glam = { workspace = true }
+
+[lints]
+workspace = true

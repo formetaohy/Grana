@@ -10,15 +10,24 @@ use std::process::ExitCode;
 
 use grana_pipeline::{Batch, BatchEvent, Outcome, Plan, Protocol, discover};
 
-const USAGE: &str = "usage: grana [--batch <protocol.json> <datasets> <output>]";
+const USAGE: &str =
+    "usage: grana [--batch <protocol.json> <datasets> <output>] | grana [--capture <image.png>]";
 
 fn main() -> ExitCode {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
-    if arguments.is_empty() {
+    if arguments.is_empty() || arguments[0] == "--capture" {
+        let capture = match arguments.as_slice() {
+            [] => None,
+            [flag, path] if flag == "--capture" => Some(PathBuf::from(path)),
+            _ => {
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            }
+        };
         let event_loop =
             winit::event_loop::EventLoop::new().expect("failed to create the event loop");
         event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
-        let mut app = app::App::new();
+        let mut app = app::App::new(capture);
         event_loop
             .run_app(&mut app)
             .expect("the event loop terminated abnormally");
