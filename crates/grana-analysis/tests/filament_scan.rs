@@ -1,0 +1,94 @@
+use glam::Vec3;
+use grana_analysis::{FilamentParams, FilamentScan};
+use grana_volume::{Extent, Level, Spacing, VoxelData};
+
+const EXTENT: Extent = Extent::new(72, 72, 32);
+const SPACING: f32 = 0.25;
+const PEAK: f32 = 40_000.0;
+const BACKGROUND: f32 = 50.0;
+const RADIUS: f32 = 2.0;
+const THRESHOLD: f32 = 8_000.0;
+const MIN_LENGTH: f32 = 2.5;
+
+const SEGMENTS: [([f32; 3], [f32; 3]); 4] = [
+    ([12.0, 12.0, 10.0], [40.0, 40.0, 10.0]),
+    ([40.0, 40.0, 10.0], [58.0, 60.0, 18.0]),
+    ([40.0, 40.0, 10.0], [62.0, 30.0, 22.0]),
+    ([26.0, 26.0, 10.0], [26.0, 26.0, 13.0]),
+];
+
+#[test]
+fn traces_branching_filaments() {
+    let data = tubes(&SEGMENTS);
+    let level = Level::new(EXTENT, Spacing::new(SPACING, SPACING, SPACING));
+    let mut scan = FilamentScan::new(0, level, FilamentParams::new(THRESHOLD, MIN_LENGTH), 1, 0);
+    let set = scan
+        .frame(&data, |_| Ok(data.clone()))
+        .expect("the filament scan traces the frame");
+    assert_eq!(set.object_count(), 1, "the spur merges into one filament");
+    let statistics = set.object(0).expect("the filament exists");
+    let expected = (distance(SEGMENTS[0]) + distance(SEGMENTS[1]) + distance(SEGMENTS[2]))
+        * f64::from(SPACING);
+    let length = statistics.length();
+    assert!(
+        (length - expected).abs() <= 0.2 * expected,
+        "the traced length {length:.2} µm leaves the expected {expected:.2} µm"
+    );
+    assert_eq!(
+        statistics.branches(),
+        3,
+        "the traced filament counts branches"
+    );
+    assert_eq!(
+        statistics.terminals(),
+        3,
+        "the spur is pruned from the tips"
+    );
+    assert_eq!(statistics.junctions(), 1, "the traced filament splits once");
+    let diameter = statistics.diameter();
+    assert!(
+        (1.0..=2.6).contains(&diameter),
+        "the traced diameter {diameter:.2} µm follows the painted tube"
+    );
+    assert!(
+        set.mesh().triangle_count() > 0,
+        "the filament carries a mesh"
+    );
+    let intensity = set.intensities().object(0, 0).mean();
+    assert!(
+        intensity > THRESHOLD,
+        "the filament is measured along its centerline: {intensity}"
+    );
+}
+
+fn tubes(segments: &[([f32; 3], [f32; 3])]) -> VoxelData {
+    let count = EXTENT.voxel_count() as usize;
+    let mut values = vec![0u16; count];
+    for z in 0..EXTENT.z() {
+        for y in 0..EXTENT.y() {
+            for x in 0..EXTENT.x() {
+                let point = Vec3::new(x as f32, y as f32, z as f32);
+                let closest = segments
+                    .iter()
+                    .map(|(start, end)| {
+                        segment_distance(point, Vec3::from(*start), Vec3::from(*end))
+                    })
+                    .fold(f32::INFINITY, f32::min);
+                let intensity = BACKGROUND + PEAK * (-0.5 * (closest / RADIUS).powi(2)).exp();
+                values[EXTENT.index(x, y, z) as usize] =
+                    (intensity.min(f32::from(u16::MAX))) as u16;
+            }
+        }
+    }
+    VoxelData::U16(values)
+}
+
+fn segment_distance(point: Vec3, start: Vec3, end: Vec3) -> f32 {
+    let direction = end - start;
+    let fraction = ((point - start).dot(direction) / direction.length_squared()).clamp(0.0, 1.0);
+    point.distance(start + direction * fraction)
+}
+
+fn distance(segment: ([f32; 3], [f32; 3])) -> f64 {
+    f64::from(Vec3::from(segment.1).distance(Vec3::from(segment.0)))
+}

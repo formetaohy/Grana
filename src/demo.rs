@@ -1,4 +1,5 @@
-use grana_analysis::{SpotParams, SurfaceParams};
+use glam::Vec3;
+use grana_analysis::{FilamentParams, SpotParams, SurfaceParams};
 use grana_volume::{Channel, Extent, Movie, Spacing, Volume, VoxelData};
 
 use crate::objects::{ObjectKind, ObjectParams, ObjectSetId};
@@ -17,15 +18,28 @@ const MEMBRANE_AXIAL: f32 = 1.35;
 const SURFACE_VOLUME: f32 = 2.0;
 const SPOT_DIAMETER: f32 = 0.45;
 const SPOT_CONTRAST: f32 = 0.1;
+const VESSEL_OPACITY: f32 = 0.18;
+const VESSEL_TREES: usize = 2;
+const VESSEL_DEPTH: u32 = 3;
+const VESSEL_BRIGHTNESS: f32 = 38_000.0;
+const VESSEL_THRESHOLD: f32 = 23_000.0;
+const VESSEL_MIN_LENGTH: f32 = 3.0;
+const VESSEL_ROOT_RADIUS: f32 = 1.3;
+const VESSEL_TAPER: f32 = 0.8;
+const VESSEL_REACH: f32 = 2.2;
+const VESSEL_FLOOR: f32 = 30.0;
 
 pub const SURFACE_CHANNEL: usize = 0;
 pub const SPOT_CHANNEL: usize = 2;
+const VESSEL_CHANNEL: usize = 3;
 const SPOT_COLOR: [f32; 3] = [0.42, 0.74, 1.00];
 const SURFACE_COLOR: [f32; 3] = [1.00, 0.72, 0.28];
+const VESSEL_COLOR: [f32; 3] = [0.45, 0.95, 0.70];
 
 pub struct Staged {
     pub spots: ObjectSetId,
     pub surfaces: ObjectSetId,
+    pub filaments: ObjectSetId,
 }
 
 struct Cell {
@@ -45,9 +59,11 @@ struct Punctum {
 
 pub fn stage(scene: &mut Scene) -> Staged {
     scene.channels[1].opacity = MEMBRANE_OPACITY;
+    scene.channels[VESSEL_CHANNEL].opacity = VESSEL_OPACITY;
     scene.select_channel(SPOT_CHANNEL);
     let spots = scene.add_object(ObjectKind::Spots, SPOT_CHANNEL);
     let surfaces = scene.add_object(ObjectKind::Surfaces, SURFACE_CHANNEL);
+    let filaments = scene.add_object(ObjectKind::Filaments, VESSEL_CHANNEL);
     let threshold = scene
         .channel(SURFACE_CHANNEL)
         .intensity()
@@ -66,7 +82,18 @@ pub fn stage(scene: &mut Scene) -> Staged {
             SURFACE_VOLUME,
         )));
     }
-    Staged { spots, surfaces }
+    if let Some(set) = scene.objects.get_mut(filaments) {
+        set.set_color(VESSEL_COLOR);
+        set.set_params(ObjectParams::Filaments(FilamentParams::new(
+            VESSEL_THRESHOLD,
+            VESSEL_MIN_LENGTH,
+        )));
+    }
+    Staged {
+        spots,
+        surfaces,
+        filaments,
+    }
 }
 
 pub fn movie() -> Movie {
@@ -111,12 +138,14 @@ pub fn movie() -> Movie {
         .collect::<Vec<_>>();
 
     let count = EXTENT.voxel_count() as usize;
+    let vessels = vessels(&mut random);
     let mut frames = Vec::with_capacity(FRAMES as usize);
     for frame in 0..FRAMES {
         let time = frame as f32;
         let mut nuclei = background(frame);
         let mut membrane = vec![0u16; count];
         let mut puncta_data = vec![0u16; count];
+        let mut vessel_data = vec![0u16; count];
         for cell in &cells {
             let centre = moved(cell.centre, cell.drift, time);
             paint_nucleus(
@@ -147,6 +176,7 @@ pub fn movie() -> Movie {
                 0.7 * time + punctum.radius,
             );
         }
+        paint_vessels(&mut vessel_data, &vessels);
         frames.push(Volume::new(
             EXTENT,
             spacing,
@@ -154,10 +184,133 @@ pub fn movie() -> Movie {
                 Channel::new("Nuclei", [0.28, 0.45, 1.00], VoxelData::U16(nuclei)),
                 Channel::new("Membrane", [0.25, 1.00, 0.40], VoxelData::U16(membrane)),
                 Channel::new("Puncta", [1.00, 0.30, 0.65], VoxelData::U16(puncta_data)),
+                Channel::new("Vessels", VESSEL_COLOR, VoxelData::U16(vessel_data)),
             ],
         ));
     }
     Movie::new(frames, FRAME_INTERVAL)
+}
+
+struct Vessel {
+    start: [f32; 3],
+    end: [f32; 3],
+    start_radius: f32,
+    end_radius: f32,
+}
+
+fn vessels(random: &mut Random) -> Vec<Vessel> {
+    let spacing = spacing();
+    let world = [
+        EXTENT.x() as f32 * spacing.x(),
+        EXTENT.y() as f32 * spacing.y(),
+        EXTENT.z() as f32 * spacing.z(),
+    ];
+    let mut vessels = Vec::new();
+    for tree in 0..VESSEL_TREES {
+        let lane = (tree as f32 + 0.5) / VESSEL_TREES as f32;
+        let start = [
+            1.5,
+            world[1] * (0.2 + 0.6 * lane),
+            world[2] * (0.25 + 0.5 * random.unit()),
+        ];
+        let direction = Vec3::new(1.0, (random.unit() - 0.5) * 0.5, 0.0).normalize();
+        grow(
+            &mut vessels,
+            random,
+            start,
+            direction,
+            VESSEL_ROOT_RADIUS,
+            VESSEL_DEPTH,
+            world,
+        );
+    }
+    vessels
+}
+
+fn grow(
+    vessels: &mut Vec<Vessel>,
+    random: &mut Random,
+    start: [f32; 3],
+    direction: Vec3,
+    radius: f32,
+    depth: u32,
+    world: [f32; 3],
+) {
+    if depth == 0 {
+        return;
+    }
+    let length = 4.0 + random.unit() * 3.0;
+    let end = Vec3::from(start) + direction * length;
+    if end.x > world[0] - 1.0
+        || end.y < 1.0
+        || end.y > world[1] - 1.0
+        || end.z < 0.5
+        || end.z > world[2] - 0.5
+    {
+        return;
+    }
+    let end_radius = radius * VESSEL_TAPER;
+    vessels.push(Vessel {
+        start,
+        end: end.to_array(),
+        start_radius: radius,
+        end_radius,
+    });
+    let angle = direction.y.atan2(direction.x);
+    for branch in 0..2 {
+        let side = if branch == 0 { 1.0 } else { -1.0 };
+        let turned = angle + side * (0.25 + random.unit() * 0.25);
+        let tilt = (random.unit() - 0.5) * 0.12;
+        let direction = Vec3::new(turned.cos(), turned.sin(), tilt).normalize();
+        grow(
+            vessels,
+            random,
+            end.to_array(),
+            direction,
+            end_radius,
+            depth - 1,
+            world,
+        );
+    }
+}
+
+fn paint_vessels(voxels: &mut [u16], vessels: &[Vessel]) {
+    let spacing = spacing();
+    let step = [spacing.x(), spacing.y(), spacing.z()];
+    let size = [EXTENT.x(), EXTENT.y(), EXTENT.z()];
+    for vessel in vessels {
+        let mut low = [0u32; 3];
+        let mut high = [0u32; 3];
+        for axis in 0..3 {
+            let reach = vessel.start_radius.max(vessel.end_radius) * VESSEL_REACH;
+            let minimum = (vessel.start[axis].min(vessel.end[axis]) - reach) / step[axis];
+            let maximum = (vessel.start[axis].max(vessel.end[axis]) + reach) / step[axis];
+            low[axis] = minimum.floor().max(0.0) as u32;
+            high[axis] = (maximum.ceil() as u32).min(size[axis] - 1);
+        }
+        let start = Vec3::from(vessel.start);
+        let end = Vec3::from(vessel.end);
+        let direction = end - start;
+        let squared = direction.length_squared();
+        for z in low[2]..=high[2] {
+            for y in low[1]..=high[1] {
+                for x in low[0]..=high[0] {
+                    let point =
+                        Vec3::new(x as f32 * step[0], y as f32 * step[1], z as f32 * step[2]);
+                    let fraction = ((point - start).dot(direction) / squared).clamp(0.0, 1.0);
+                    let radius =
+                        vessel.start_radius + (vessel.end_radius - vessel.start_radius) * fraction;
+                    let distance = point.distance(start + direction * fraction);
+                    let value = VESSEL_BRIGHTNESS * (-0.5 * (distance / radius).powi(2)).exp();
+                    if value < VESSEL_FLOOR {
+                        continue;
+                    }
+                    let voxel = &mut voxels[EXTENT.index(x, y, z) as usize];
+                    *voxel = (*voxel as f32 + value).min(u16::MAX as f32) as u16;
+                }
+            }
+        }
+    }
 }
 
 fn spacing() -> Spacing {

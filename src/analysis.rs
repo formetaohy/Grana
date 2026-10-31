@@ -4,9 +4,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use grana_analysis::{
-    SpotParams, SpotScan, SurfaceBuilder, SurfaceParams, TrackBuilder, TrackParams,
+    FilamentParams, FilamentScan, SpotParams, SpotScan, SurfaceBuilder, SurfaceParams,
+    TrackBuilder, TrackParams, filament_level,
 };
-use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet, SurfaceSet, TrackSet};
+use grana_object::{
+    FilamentSet, IntensityTable, SampleAccumulator, Spot, SpotSet, SurfaceSet, TrackSet,
+};
 use grana_volume::{BrickCoord, BrickData, BrickGrid, Pyramid, VoxelData};
 use grana_zarr::Image;
 
@@ -31,6 +34,7 @@ pub struct Progress {
 pub enum Outcome {
     Spots(SpotSet),
     Surfaces(SurfaceSet),
+    Filaments(FilamentSet),
 }
 
 pub enum Event {
@@ -132,6 +136,9 @@ fn run_detect(
         ObjectParams::Surfaces(params) => {
             detect_surfaces(source, channel, params, &cancel, &events)
         }
+        ObjectParams::Filaments(params) => {
+            detect_filaments(source, channel, params, &cancel, &events)
+        }
     };
     if let Err(detail) = result {
         let _ = events.send(Event::Failed(detail));
@@ -220,6 +227,105 @@ fn detect_surfaces(
             Err(error) => Err(error.to_string()),
         },
     }
+}
+
+fn detect_filaments(
+    source: Source,
+    channel: usize,
+    params: FilamentParams,
+    cancel: &AtomicBool,
+    events: &Sender<Event>,
+) -> Result<(), String> {
+    match source {
+        Source::Memory(movie) => {
+            let pyramid = movie.pyramid().clone();
+            run_filaments(
+                &pyramid,
+                channel,
+                params,
+                cancel,
+                events,
+                |time, level, measured| {
+                    let extent = pyramid.level(level).extent();
+                    Ok(movie.region(time, measured, 0..extent.x(), 0..extent.y(), 0..extent.z()))
+                },
+            )
+        }
+        Source::File(path) => match Image::open(&path) {
+            Ok(image) => {
+                let pyramid = image.pyramid().clone();
+                run_filaments(
+                    &pyramid,
+                    channel,
+                    params,
+                    cancel,
+                    events,
+                    |time, level, measured| {
+                        let extent = pyramid.level(level).extent();
+                        image
+                            .read_region(
+                                time,
+                                level,
+                                measured,
+                                0..extent.x(),
+                                0..extent.y(),
+                                0..extent.z(),
+                            )
+                            .map_err(|error| error.to_string())
+                    },
+                )
+            }
+            Err(error) => Err(error.to_string()),
+        },
+    }
+}
+
+fn run_filaments(
+    pyramid: &Pyramid,
+    channel: usize,
+    params: FilamentParams,
+    cancel: &AtomicBool,
+    events: &Sender<Event>,
+    mut read: impl FnMut(u32, usize, usize) -> Result<VoxelData, String>,
+) -> Result<(), String> {
+    if channel >= pyramid.channel_count() {
+        return Err(format!(
+            "the dataset has {} channels but channel {channel} was requested",
+            pyramid.channel_count()
+        ));
+    }
+    if pyramid.channels()[channel].intensity().span() <= 0.0 {
+        return Err("the selected channel has no intensity range to detect".to_string());
+    }
+    let level = filament_level(pyramid).ok_or_else(|| {
+        "the dataset is too large to trace filaments at any resolution level".to_string()
+    })?;
+    let channels = pyramid.channel_count();
+    let mut scan = FilamentScan::new(level, pyramid.level(level), params, channels, channel);
+    let total = pyramid.frame_count();
+    for time in 0..total {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let _ = events.send(Event::Progress {
+            time,
+            done: time as usize,
+            total: total as usize,
+        });
+        let detection = read(time, level, channel)?;
+        let set = scan.frame(&detection, |measured| read(time, level, measured))?;
+        let _ = events.send(Event::Frame {
+            time,
+            outcome: Outcome::Filaments(set),
+        });
+        let _ = events.send(Event::Progress {
+            time,
+            done: time as usize + 1,
+            total: total as usize,
+        });
+    }
+    let _ = events.send(Event::Done);
+    Ok(())
 }
 
 fn run_tracks(

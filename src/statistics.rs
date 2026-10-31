@@ -60,6 +60,13 @@ impl Statistics {
             return;
         }
         self.set = Some(set);
+        if !scene
+            .objects
+            .get(set)
+            .is_some_and(|object| object.kind().trackable())
+        {
+            self.group = Group::Object;
+        }
         self.filters.clear();
         self.sort = None;
         self.rebuild(scene);
@@ -71,6 +78,13 @@ impl Statistics {
 
     pub fn set_group(&mut self, group: Group, scene: &Scene) {
         if self.group == group {
+            return;
+        }
+        let trackable = self
+            .set
+            .and_then(|set| scene.objects.get(set))
+            .is_some_and(|object| object.kind().trackable());
+        if group == Group::Track && !trackable {
             return;
         }
         self.group = group;
@@ -308,6 +322,7 @@ impl Statistics {
                     match frame {
                         ObjectFrame::Spots(set) => Objects::Spots(set),
                         ObjectFrame::Surfaces(set) => Objects::Surfaces(set),
+                        ObjectFrame::Filaments(set) => Objects::Filaments(set),
                     },
                 )
             })
@@ -362,7 +377,10 @@ fn default_visibility(table: &Table) -> Vec<bool> {
                 !matches!(key, "first_frame" | "last_frame" | "nodes" | "straightness")
             } else {
                 key.starts_with("diameter_um")
+                    || key.starts_with("length_um")
                     || key.starts_with("contrast")
+                    || key.starts_with("branches")
+                    || key.starts_with("terminals")
                     || key.starts_with("volume_um3")
                     || key.starts_with("area_um2")
                     || key.starts_with("sphericity")

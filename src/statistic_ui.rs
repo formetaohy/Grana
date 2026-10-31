@@ -59,9 +59,14 @@ fn header(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
             state.statistics.select(id, state.scene);
         }
         ui.separator();
+        let trackable = chosen
+            .and_then(|id| state.scene.objects.get(id))
+            .is_some_and(|object| object.kind().trackable());
         let mut group = state.statistics.group();
         ui.selectable_value(&mut group, Group::Object, "objects");
-        ui.selectable_value(&mut group, Group::Track, "tracks");
+        if trackable {
+            ui.selectable_value(&mut group, Group::Track, "tracks");
+        }
         ui.selectable_value(&mut group, Group::Timepoint, "timepoints");
         if group != state.statistics.group() {
             state.statistics.set_group(group, state.scene);

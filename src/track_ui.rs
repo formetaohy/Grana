@@ -20,7 +20,10 @@ pub fn build(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions, id: Ob
         .frames()
         .map(|(_, frame)| frame.object_count())
         .sum::<usize>();
-    let params = object.track_params();
+    let params = object
+        .track_style()
+        .expect("the track view belongs to a trackable object")
+        .params();
     let min_thickness = object.min_thickness();
     let max_thickness = object.max_thickness();
     let view = object

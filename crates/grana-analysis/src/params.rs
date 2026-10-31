@@ -93,6 +93,53 @@ impl SurfaceParams {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FilamentParams {
+    threshold: f32,
+    min_length: f32,
+}
+
+impl FilamentParams {
+    pub fn new(threshold: f32, min_length: f32) -> Self {
+        assert!(
+            threshold.is_finite(),
+            "a filament threshold must be a finite intensity"
+        );
+        assert!(
+            min_length.is_finite() && min_length > 0.0,
+            "a filament length filter must be a positive length"
+        );
+        Self {
+            threshold,
+            min_length,
+        }
+    }
+
+    pub fn threshold(self) -> f32 {
+        self.threshold
+    }
+
+    pub fn min_length(self) -> f32 {
+        self.min_length
+    }
+
+    pub fn set_threshold(&mut self, threshold: f32) {
+        assert!(
+            threshold.is_finite(),
+            "a filament threshold must be a finite intensity"
+        );
+        self.threshold = threshold;
+    }
+
+    pub fn set_min_length(&mut self, min_length: f32) {
+        assert!(
+            min_length.is_finite() && min_length > 0.0,
+            "a filament length filter must be a positive length"
+        );
+        self.min_length = min_length;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrackParams {
     max_step: f32,
     max_gap: u32,

@@ -10,7 +10,7 @@ pub fn build(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
     let channel = state.scene.selected;
     let channel_name = state.scene.channel(channel).name().to_string();
     let loading = state.loading.is_some();
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if ui
             .add_enabled(!loading, egui::Button::new("+ Spots"))
             .clicked()
@@ -22,6 +22,12 @@ pub fn build(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
             .clicked()
         {
             actions.add_object = Some(ObjectKind::Surfaces);
+        }
+        if ui
+            .add_enabled(!loading, egui::Button::new("+ Filaments"))
+            .clicked()
+        {
+            actions.add_object = Some(ObjectKind::Filaments);
         }
     });
     ui.label(
@@ -111,7 +117,9 @@ fn object(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions, id: Objec
             }
         });
         measure(ui, state, id, time);
-        crate::track_ui::build(ui, state, actions, id);
+        if kind.trackable() {
+            crate::track_ui::build(ui, state, actions, id);
+        }
     });
     if remove {
         actions.remove_object = Some(id);
@@ -185,6 +193,30 @@ fn params(ui: &mut Ui, state: &mut UiState<'_>, id: ObjectSetId) {
                 changed = true;
             }
         }
+        ObjectParams::Filaments(filaments) => {
+            let mut threshold = filaments.threshold().clamp(data.min(), data.max());
+            if ui
+                .add(egui::Slider::new(&mut threshold, data.min()..=data.max()).text("threshold"))
+                .changed()
+            {
+                filaments.set_threshold(threshold);
+                changed = true;
+            }
+            let world = state.scene.dataset.world_size().max_element();
+            let mut min_length = filaments.min_length();
+            if ui
+                .add(
+                    egui::Slider::new(&mut min_length, voxel..=0.25 * world)
+                        .logarithmic(true)
+                        .text("min length")
+                        .suffix(" µm"),
+                )
+                .changed()
+            {
+                filaments.set_min_length(min_length);
+                changed = true;
+            }
+        }
     }
     if changed && let Some(set) = state.scene.objects.get_mut(id) {
         set.set_params(params);
@@ -248,6 +280,7 @@ fn summary_rows(ui: &mut Ui, summary: &Summary) {
             let noun = match kind {
                 ObjectKind::Spots => "spots",
                 ObjectKind::Surfaces => "objects",
+                ObjectKind::Filaments => "filaments",
             };
             ui.label(format!("{count} {noun} · level {}", level + 1));
             if let Some(mean) = mean {
@@ -262,6 +295,7 @@ fn summary_rows(ui: &mut Ui, summary: &Summary) {
             let verb = match kind {
                 ObjectKind::Spots => "detects intensity maxima in",
                 ObjectKind::Surfaces => "extracts connected surfaces of",
+                ObjectKind::Filaments => "traces centerlines through",
             };
             ui.label(
                 RichText::new(format!("{verb} {channel} in every frame"))
@@ -419,6 +453,100 @@ fn measure(ui: &mut Ui, state: &mut UiState<'_>, id: ObjectSetId, time: u32) {
                         format!("{:.2} × {:.2} × {:.2} µm", size[0], size[1], size[2]),
                     );
                     row(ui, "voxels", object.voxel_count().to_string());
+                    row(
+                        ui,
+                        "intensity",
+                        format!(
+                            "{:.0} mean · {:.0} … {:.0} · σ {:.0}",
+                            intensity.mean(),
+                            intensity.minimum(),
+                            intensity.maximum(),
+                            intensity.deviation()
+                        ),
+                    );
+                });
+        }
+        ObjectFrame::Filaments(filaments) => {
+            let mut entries = filaments
+                .objects()
+                .iter()
+                .enumerate()
+                .map(|(index, object)| (index, object.length()))
+                .collect::<Vec<_>>();
+            entries.sort_by(|left, right| right.1.total_cmp(&left.1));
+            let measured = selected.and_then(|index| filaments.object(index));
+            let intensity = measured.map(|_| {
+                filaments
+                    .intensities()
+                    .object(selected.unwrap_or(0), channel)
+            });
+            let selection = state.scene.selection();
+            let mut clicked = None;
+            egui::ScrollArea::vertical()
+                .id_salt(("grana.filaments", id.raw()))
+                .max_height(150.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for (index, length) in &entries {
+                        let selected = selection
+                            == Some(Selection {
+                                set: id,
+                                item: Item::Object(*index),
+                            });
+                        if ui
+                            .selectable_label(selected, format!("#{} · {length:.1} µm", index + 1))
+                            .clicked()
+                        {
+                            clicked = Some(*index);
+                        }
+                    }
+                });
+            if let Some(index) = clicked {
+                state.scene.select(Some(Selection {
+                    set: id,
+                    item: Item::Object(index),
+                }));
+            }
+            let Some(object) = measured else {
+                ui.label(
+                    RichText::new("click a filament to measure it")
+                        .small()
+                        .weak(),
+                );
+                return;
+            };
+            let Some(intensity) = intensity else {
+                return;
+            };
+            egui::Grid::new(("grana.filament", id.raw()))
+                .num_columns(2)
+                .spacing([12.0, 3.0])
+                .show(ui, |ui| {
+                    if let Some(index) = selected {
+                        row(ui, "object", format!("#{}", index + 1));
+                    }
+                    row(ui, "length", format!("{:.2} µm", object.length()));
+                    row(ui, "diameter", format!("{:.2} µm", object.diameter()));
+                    row(ui, "volume", format!("{:.2} µm³", object.volume()));
+                    row(ui, "branches", object.branches().to_string());
+                    row(ui, "terminals", object.terminals().to_string());
+                    row(ui, "junctions", object.junctions().to_string());
+                    row(ui, "nodes", object.nodes().to_string());
+                    let centroid = object.centroid();
+                    row(
+                        ui,
+                        "centroid",
+                        format!(
+                            "{:.2} · {:.2} · {:.2} µm",
+                            centroid[0], centroid[1], centroid[2]
+                        ),
+                    );
+                    let size = object.bounds().size();
+                    row(
+                        ui,
+                        "extent",
+                        format!("{:.2} × {:.2} × {:.2} µm", size[0], size[1], size[2]),
+                    );
                     row(
                         ui,
                         "intensity",

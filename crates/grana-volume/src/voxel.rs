@@ -100,6 +100,23 @@ impl VoxelData {
         });
     }
 
+    pub fn value(&self, index: usize) -> f32 {
+        match self {
+            Self::U8(data) => {
+                assert!(index < data.len(), "the voxel lies inside the volume");
+                f32::from(data[index])
+            }
+            Self::U16(data) => {
+                assert!(index < data.len(), "the voxel lies inside the volume");
+                f32::from(data[index])
+            }
+            Self::F32(data) => {
+                assert!(index < data.len(), "the voxel lies inside the volume");
+                data[index]
+            }
+        }
+    }
+
     pub fn region(&self, extent: Extent, x: Range<u32>, y: Range<u32>, z: Range<u32>) -> Self {
         assert!(
             x.start < x.end && x.end <= extent.x(),

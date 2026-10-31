@@ -515,6 +515,7 @@ pub(crate) fn caption(kind: ObjectKind, job: Job, progress: Progress, frames: u3
     let unit = match (job, kind) {
         (Job::Detect, ObjectKind::Spots) => "blocks",
         (Job::Detect, ObjectKind::Surfaces) => "bricks",
+        (Job::Detect, ObjectKind::Filaments) => "frames",
         (Job::Track, _) => "frames",
     };
     let prefix = match job {

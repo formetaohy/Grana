@@ -113,6 +113,7 @@ impl App {
         });
         self.start_detect(staged.spots);
         self.start_detect(staged.surfaces);
+        self.start_detect(staged.filaments);
     }
 
     fn redraw(&mut self) {
@@ -607,6 +608,9 @@ impl App {
                             Outcome::Surfaces(surfaces) => {
                                 crate::objects::ObjectFrame::Surfaces(surfaces)
                             }
+                            Outcome::Filaments(filaments) => {
+                                crate::objects::ObjectFrame::Filaments(filaments)
+                            }
                         };
                         scene.install(set, time, frame);
                     }
@@ -729,6 +733,9 @@ impl App {
         let Some(object) = scene.objects.get(set) else {
             return;
         };
+        if !object.kind().trackable() {
+            return;
+        }
         if object.detected() == 0 {
             return;
         }
@@ -736,7 +743,10 @@ impl App {
         for (time, frame) in object.frames() {
             detections[time as usize] = frame.centroids();
         }
-        let params = object.track_params();
+        let params = object
+            .track_style()
+            .expect("a trackable object carries track parameters")
+            .params();
         let frame_interval = scene.dataset.frame_interval();
         self.message = None;
         self.record_progress(set, Job::Track, 0, 0, detections.len());

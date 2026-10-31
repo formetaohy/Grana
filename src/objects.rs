@@ -1,5 +1,5 @@
-use grana_analysis::{SpotParams, SurfaceParams, TrackParams};
-use grana_object::{IntensityTable, Mesh, SpotSet, SurfaceSet, TrackSet};
+use grana_analysis::{FilamentParams, SpotParams, SurfaceParams, TrackParams};
+use grana_object::{FilamentSet, IntensityTable, Mesh, SpotSet, SurfaceSet, TrackSet};
 use grana_volume::ChannelInfo;
 
 use crate::dataset::Dataset;
@@ -17,6 +17,8 @@ const SPOT_DIAMETER: f32 = 4.0;
 const SPOT_CONTRAST: f32 = 0.2;
 const SURFACE_THRESHOLD: f32 = 0.5;
 const SURFACE_MIN_VOLUME: f32 = 0.0;
+const FILAMENT_THRESHOLD: f32 = 0.5;
+const FILAMENT_MIN_LENGTH: f32 = 2.0;
 
 const PALETTE: [[f32; 3]; 8] = [
     [0.35, 0.70, 1.00],
@@ -42,6 +44,7 @@ impl ObjectSetId {
 pub enum ObjectKind {
     Spots,
     Surfaces,
+    Filaments,
 }
 
 impl ObjectKind {
@@ -49,6 +52,7 @@ impl ObjectKind {
         match self {
             Self::Spots => "Spots",
             Self::Surfaces => "Surfaces",
+            Self::Filaments => "Filaments",
         }
     }
 
@@ -56,21 +60,12 @@ impl ObjectKind {
         match self {
             Self::Spots => 0,
             Self::Surfaces => 1,
+            Self::Filaments => 2,
         }
     }
 
-    pub fn track_step(self) -> f32 {
-        match self {
-            Self::Spots => SPOT_STEP,
-            Self::Surfaces => SURFACE_STEP,
-        }
-    }
-
-    pub fn tube_thickness(self) -> f32 {
-        match self {
-            Self::Spots => SPOT_THICKNESS,
-            Self::Surfaces => SURFACE_THICKNESS,
-        }
+    pub fn trackable(self) -> bool {
+        !matches!(self, Self::Filaments)
     }
 
     pub fn default_params(self, channel: &ChannelInfo, voxel: f32) -> ObjectParams {
@@ -82,7 +77,48 @@ impl ObjectKind {
                 channel.intensity().value(SURFACE_THRESHOLD),
                 SURFACE_MIN_VOLUME,
             )),
+            Self::Filaments => ObjectParams::Filaments(FilamentParams::new(
+                channel.intensity().value(FILAMENT_THRESHOLD),
+                FILAMENT_MIN_LENGTH,
+            )),
         }
+    }
+
+    pub fn track_style(self, voxel: f32) -> Option<TrackStyle> {
+        let (step, thickness) = match self {
+            Self::Spots => (SPOT_STEP, SPOT_THICKNESS),
+            Self::Surfaces => (SURFACE_STEP, SURFACE_THICKNESS),
+            Self::Filaments => return None,
+        };
+        let step = step * voxel;
+        Some(TrackStyle::new(
+            TrackParams::new(step, MAX_GAP, true, DIVISION_SCALE * step),
+            thickness * voxel,
+        ))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrackStyle {
+    params: TrackParams,
+    thickness: f32,
+}
+
+impl TrackStyle {
+    pub fn new(params: TrackParams, thickness: f32) -> Self {
+        assert!(
+            thickness.is_finite() && thickness > 0.0,
+            "a track tube is a positive thickness"
+        );
+        Self { params, thickness }
+    }
+
+    pub fn params(self) -> TrackParams {
+        self.params
+    }
+
+    pub fn thickness(self) -> f32 {
+        self.thickness
     }
 }
 
@@ -90,6 +126,7 @@ impl ObjectKind {
 pub enum ObjectParams {
     Spots(SpotParams),
     Surfaces(SurfaceParams),
+    Filaments(FilamentParams),
 }
 
 impl ObjectParams {
@@ -97,6 +134,7 @@ impl ObjectParams {
         match self {
             Self::Spots(_) => ObjectKind::Spots,
             Self::Surfaces(_) => ObjectKind::Surfaces,
+            Self::Filaments(_) => ObjectKind::Filaments,
         }
     }
 }
@@ -105,6 +143,7 @@ impl ObjectParams {
 pub enum ObjectFrame {
     Spots(SpotSet),
     Surfaces(SurfaceSet),
+    Filaments(FilamentSet),
 }
 
 impl ObjectFrame {
@@ -112,6 +151,7 @@ impl ObjectFrame {
         match self {
             Self::Spots(_) => ObjectKind::Spots,
             Self::Surfaces(_) => ObjectKind::Surfaces,
+            Self::Filaments(_) => ObjectKind::Filaments,
         }
     }
 
@@ -119,6 +159,7 @@ impl ObjectFrame {
         match self {
             Self::Spots(set) => set.level(),
             Self::Surfaces(set) => set.level(),
+            Self::Filaments(set) => set.level(),
         }
     }
 
@@ -126,6 +167,7 @@ impl ObjectFrame {
         match self {
             Self::Spots(set) => set.len(),
             Self::Surfaces(set) => set.object_count(),
+            Self::Filaments(set) => set.object_count(),
         }
     }
 
@@ -136,7 +178,7 @@ impl ObjectFrame {
     pub fn spots(&self) -> Option<&SpotSet> {
         match self {
             Self::Spots(set) => Some(set),
-            Self::Surfaces(_) => None,
+            Self::Surfaces(_) | Self::Filaments(_) => None,
         }
     }
 
@@ -144,6 +186,7 @@ impl ObjectFrame {
         match self {
             Self::Spots(_) => None,
             Self::Surfaces(set) => Some(set.mesh()),
+            Self::Filaments(set) => Some(set.mesh()),
         }
     }
 
@@ -151,6 +194,7 @@ impl ObjectFrame {
         match self {
             Self::Spots(set) => set.intensities(),
             Self::Surfaces(set) => set.intensities(),
+            Self::Filaments(set) => set.intensities(),
         }
     }
 
@@ -158,6 +202,11 @@ impl ObjectFrame {
         match self {
             Self::Spots(set) => set.spots().iter().map(|spot| spot.center()).collect(),
             Self::Surfaces(set) => set
+                .objects()
+                .iter()
+                .map(|object| object.centroid())
+                .collect(),
+            Self::Filaments(set) => set
                 .objects()
                 .iter()
                 .map(|object| object.centroid())
@@ -196,7 +245,7 @@ pub struct ObjectSet {
     visible: bool,
     voxel: f32,
     params: ObjectParams,
-    track_params: TrackParams,
+    track_style: Option<TrackStyle>,
     frames: Vec<FrameSlot>,
     stamp: u64,
     revision: u64,
@@ -215,8 +264,7 @@ impl ObjectSet {
     ) -> Self {
         let voxel = dataset.voxel_size().min_element();
         let params = kind.default_params(&dataset.channels()[channel], voxel);
-        let step = kind.track_step() * voxel;
-        let track_params = TrackParams::new(step, MAX_GAP, true, DIVISION_SCALE * step);
+        let track_style = kind.track_style(voxel);
         Self {
             id,
             kind,
@@ -226,7 +274,7 @@ impl ObjectSet {
             visible: true,
             voxel,
             params,
-            track_params,
+            track_style,
             frames: (0..dataset.frame_count())
                 .map(|_| FrameSlot::new())
                 .collect(),
@@ -399,20 +447,25 @@ impl ObjectSet {
         self.tracks.as_ref()
     }
 
-    pub fn track_params(&self) -> TrackParams {
-        self.track_params
+    pub fn track_style(&self) -> Option<TrackStyle> {
+        self.track_style
     }
 
     pub fn set_track_params(&mut self, params: TrackParams) {
-        self.track_params = params;
+        if let Some(style) = self.track_style {
+            self.track_style = Some(TrackStyle::new(params, style.thickness()));
+        }
     }
 
     pub fn install_tracks(&mut self, set: TrackSet) {
+        let style = self
+            .track_style
+            .expect("only trackable objects install tracks");
         let visible = self.tracks.as_ref().is_none_or(TrackLayer::visible);
         let thickness = self
             .tracks
             .as_ref()
-            .map_or_else(|| self.default_thickness(), TrackLayer::thickness);
+            .map_or(style.thickness(), TrackLayer::thickness);
         let mut layer = TrackLayer::new(set, thickness);
         layer.set_visible(visible);
         self.tracks = Some(layer);
@@ -450,16 +503,12 @@ impl ObjectSet {
     pub fn track_at(&self, time: u32, object: usize) -> Option<usize> {
         self.tracks.as_ref()?.set().track_at(time, object)
     }
-
-    fn default_thickness(&self) -> f32 {
-        self.kind.tube_thickness() * self.voxel
-    }
 }
 
 pub struct Objects {
     sets: Vec<ObjectSet>,
     next_id: u64,
-    ordinals: [u64; 2],
+    ordinals: [u64; 3],
 }
 
 impl Objects {
@@ -467,7 +516,7 @@ impl Objects {
         Self {
             sets: Vec::new(),
             next_id: 1,
-            ordinals: [0; 2],
+            ordinals: [0; 3],
         }
     }
 

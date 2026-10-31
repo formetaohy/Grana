@@ -1,5 +1,5 @@
 use grana_object::{
-    IntensityTable, SampleAccumulator, SampleStatistics, SpotSet, SurfaceSet, TrackSet,
+    FilamentSet, IntensityTable, SampleAccumulator, SampleStatistics, SpotSet, SurfaceSet, TrackSet,
 };
 
 use crate::column::{Column, Unit};
@@ -79,6 +79,7 @@ impl Observation {
 pub enum Objects<'a> {
     Spots(&'a SpotSet),
     Surfaces(&'a SurfaceSet),
+    Filaments(&'a FilamentSet),
 }
 
 impl<'a> Objects<'a> {
@@ -86,6 +87,7 @@ impl<'a> Objects<'a> {
         match self {
             Self::Spots(set) => set.len(),
             Self::Surfaces(set) => set.object_count(),
+            Self::Filaments(set) => set.object_count(),
         }
     }
 
@@ -97,6 +99,7 @@ impl<'a> Objects<'a> {
         match self {
             Self::Spots(set) => set.intensities(),
             Self::Surfaces(set) => set.intensities(),
+            Self::Filaments(set) => set.intensities(),
         }
     }
 
@@ -115,7 +118,12 @@ impl<'a> Objects<'a> {
                     Measurement::Volume
                     | Measurement::Area
                     | Measurement::Sphericity
-                    | Measurement::Voxels => {
+                    | Measurement::Voxels
+                    | Measurement::Length
+                    | Measurement::Branches
+                    | Measurement::Terminals
+                    | Measurement::Junctions
+                    | Measurement::Nodes => {
                         panic!("the surface measurement {measurement:?} is read from spots")
                     }
                 }
@@ -131,8 +139,36 @@ impl<'a> Objects<'a> {
                     Measurement::Intensity { channel, statistic } => {
                         statistic.value(intensities.object(object, channel))
                     }
-                    Measurement::Diameter | Measurement::Contrast => {
+                    Measurement::Diameter
+                    | Measurement::Contrast
+                    | Measurement::Length
+                    | Measurement::Branches
+                    | Measurement::Terminals
+                    | Measurement::Junctions
+                    | Measurement::Nodes => {
                         panic!("the spot measurement {measurement:?} is read from surfaces")
+                    }
+                }
+            }
+            Self::Filaments(set) => {
+                let statistics = set.objects()[object];
+                match measurement {
+                    Measurement::Position(axis) => statistics.centroid()[axis],
+                    Measurement::Length => statistics.length() as f32,
+                    Measurement::Diameter => statistics.diameter() as f32,
+                    Measurement::Volume => statistics.volume() as f32,
+                    Measurement::Branches => statistics.branches() as f32,
+                    Measurement::Terminals => statistics.terminals() as f32,
+                    Measurement::Junctions => statistics.junctions() as f32,
+                    Measurement::Nodes => statistics.nodes() as f32,
+                    Measurement::Intensity { channel, statistic } => {
+                        statistic.value(intensities.object(object, channel))
+                    }
+                    Measurement::Contrast
+                    | Measurement::Area
+                    | Measurement::Sphericity
+                    | Measurement::Voxels => {
+                        panic!("the filament measurement {measurement:?} is read from filaments")
                     }
                 }
             }
@@ -217,6 +253,11 @@ enum Measurement {
     Area,
     Sphericity,
     Voxels,
+    Length,
+    Branches,
+    Terminals,
+    Junctions,
+    Nodes,
     Intensity {
         channel: usize,
         statistic: Statistic,
@@ -233,6 +274,11 @@ impl Measurement {
             Self::Area => "area".to_string(),
             Self::Sphericity => "sphericity".to_string(),
             Self::Voxels => "voxels".to_string(),
+            Self::Length => "length".to_string(),
+            Self::Branches => "branches".to_string(),
+            Self::Terminals => "terminals".to_string(),
+            Self::Junctions => "junctions".to_string(),
+            Self::Nodes => "nodes".to_string(),
             Self::Intensity { channel, statistic } => {
                 format!("{} · {}", channels[channel], statistic.name())
             }
@@ -248,6 +294,11 @@ impl Measurement {
             Self::Area => "area_um2".to_string(),
             Self::Sphericity => "sphericity".to_string(),
             Self::Voxels => "voxels".to_string(),
+            Self::Length => "length_um".to_string(),
+            Self::Branches => "branches".to_string(),
+            Self::Terminals => "terminals".to_string(),
+            Self::Junctions => "junctions".to_string(),
+            Self::Nodes => "nodes".to_string(),
             Self::Intensity { channel, statistic } => {
                 format!("{}_intensity_{}", keys[channel], statistic.key())
             }
@@ -256,21 +307,26 @@ impl Measurement {
 
     fn unit(self) -> Unit {
         match self {
-            Self::Position(_) | Self::Diameter => Unit::Micrometer,
+            Self::Position(_) | Self::Diameter | Self::Length => Unit::Micrometer,
             Self::Volume => Unit::CubicMicrometer,
             Self::Area => Unit::SquareMicrometer,
-            Self::Contrast | Self::Sphericity | Self::Voxels | Self::Intensity { .. } => {
-                Unit::Count
-            }
+            Self::Contrast
+            | Self::Sphericity
+            | Self::Voxels
+            | Self::Branches
+            | Self::Terminals
+            | Self::Junctions
+            | Self::Nodes
+            | Self::Intensity { .. } => Unit::Count,
         }
     }
 
     fn decimals(self) -> u8 {
         match self {
-            Self::Position(_) | Self::Diameter => 3,
+            Self::Position(_) | Self::Diameter | Self::Length => 3,
             Self::Contrast | Self::Sphericity => 4,
             Self::Volume | Self::Area => 3,
-            Self::Voxels => 0,
+            Self::Voxels | Self::Branches | Self::Terminals | Self::Junctions | Self::Nodes => 0,
             Self::Intensity { .. } => 2,
         }
     }
@@ -717,6 +773,15 @@ fn measurements(objects: Objects<'_>, channels: usize) -> Vec<Measurement> {
             list.push(Measurement::Sphericity);
             list.push(Measurement::Voxels);
         }
+        Objects::Filaments(_) => {
+            list.push(Measurement::Length);
+            list.push(Measurement::Diameter);
+            list.push(Measurement::Volume);
+            list.push(Measurement::Branches);
+            list.push(Measurement::Terminals);
+            list.push(Measurement::Junctions);
+            list.push(Measurement::Nodes);
+        }
     }
     for channel in 0..channels {
         for statistic in Statistic::ALL {
@@ -736,7 +801,9 @@ fn aggregated_measurements(objects: Objects<'_>, channels: usize) -> Vec<Measure
 fn same_kind(left: Objects<'_>, right: Objects<'_>) -> bool {
     matches!(
         (left, right),
-        (Objects::Spots(_), Objects::Spots(_)) | (Objects::Surfaces(_), Objects::Surfaces(_))
+        (Objects::Spots(_), Objects::Spots(_))
+            | (Objects::Surfaces(_), Objects::Surfaces(_))
+            | (Objects::Filaments(_), Objects::Filaments(_))
     )
 }
 
