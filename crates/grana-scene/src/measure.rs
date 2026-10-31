@@ -1,4 +1,4 @@
-use grana_measure::{Aggregate, Filter, Frame, Group, Objects, Table};
+use grana_measure::{Aggregate, Filter, Frame, Group, Table};
 
 use crate::object::ObjectFrame;
 use crate::object_set::{ObjectSetId, Visibility};
@@ -398,16 +398,7 @@ impl Measure {
         self.revision = Some((id, object.revision()));
         let frames = object
             .frames()
-            .map(|(time, frame)| {
-                Frame::new(
-                    time,
-                    match frame {
-                        ObjectFrame::Spots(set) => Objects::Spots(set),
-                        ObjectFrame::Surfaces(set) => Objects::Surfaces(set),
-                        ObjectFrame::Filaments(set) => Objects::Filaments(set),
-                    },
-                )
-            })
+            .map(|(time, frame)| Frame::new(time, frame.objects()))
             .collect::<Vec<_>>();
         if frames.is_empty() {
             return;

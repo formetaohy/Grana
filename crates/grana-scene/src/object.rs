@@ -1,4 +1,5 @@
 use grana_analysis::{FilamentParams, SpotParams, SurfaceParams, TrackParams};
+use grana_measure::{Measurement, Objects};
 use grana_object::{FilamentSet, IntensityTable, PackedMesh, Spot, SpotSet, SurfaceSet};
 
 const SPOT_STEP: f32 = 8.0;
@@ -125,6 +126,14 @@ impl ObjectKind {
 
     pub fn trackable(self) -> bool {
         !matches!(self, Self::Filaments)
+    }
+
+    pub fn measurements(self, channels: usize) -> Vec<Measurement> {
+        match self {
+            Self::Spots => Measurement::spots(channels),
+            Self::Surfaces => Measurement::surfaces(channels),
+            Self::Filaments => Measurement::filaments(channels),
+        }
     }
 
     pub fn fields(self) -> &'static [ParamField] {
@@ -289,6 +298,14 @@ impl ObjectFrame {
             Self::Spots(set) => set.intensities(),
             Self::Surfaces(set) => set.intensities(),
             Self::Filaments(set) => set.intensities(),
+        }
+    }
+
+    pub(crate) fn objects(&self) -> Objects<'_> {
+        match self {
+            Self::Spots(set) => Objects::Spots(set),
+            Self::Surfaces(set) => Objects::Surfaces(set),
+            Self::Filaments(set) => Objects::Filaments(set),
         }
     }
 

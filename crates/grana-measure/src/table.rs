@@ -5,6 +5,7 @@ use grana_object::{
 use crate::column::{Column, Unit};
 use crate::csv;
 use crate::filter::Filter;
+use crate::metric::{Measurement, TrackMeasurement};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
@@ -125,83 +126,11 @@ impl<'a> Objects<'a> {
         self.intensities().channels()
     }
 
-    fn intensities(self) -> &'a IntensityTable {
+    pub(crate) fn intensities(self) -> &'a IntensityTable {
         match self {
             Self::Spots(set) => set.intensities(),
             Self::Surfaces(set) => set.intensities(),
             Self::Filaments(set) => set.intensities(),
-        }
-    }
-
-    fn value(self, object: usize, measurement: Measurement) -> f32 {
-        let intensities = self.intensities();
-        match self {
-            Self::Spots(set) => {
-                let spot = set.spots()[object];
-                match measurement {
-                    Measurement::Position(axis) => spot.center()[axis],
-                    Measurement::Diameter => 2.0 * spot.radius(),
-                    Measurement::Contrast => spot.quality(),
-                    Measurement::Intensity { channel, statistic } => {
-                        statistic.value(intensities.object(object, channel))
-                    }
-                    Measurement::Volume
-                    | Measurement::Area
-                    | Measurement::Sphericity
-                    | Measurement::Voxels
-                    | Measurement::Length
-                    | Measurement::Branches
-                    | Measurement::Terminals
-                    | Measurement::Junctions
-                    | Measurement::Nodes => {
-                        panic!("the surface measurement {measurement:?} is read from spots")
-                    }
-                }
-            }
-            Self::Surfaces(set) => {
-                let statistics = set.objects()[object];
-                match measurement {
-                    Measurement::Position(axis) => statistics.centroid()[axis],
-                    Measurement::Volume => statistics.volume() as f32,
-                    Measurement::Area => statistics.area() as f32,
-                    Measurement::Sphericity => statistics.sphericity() as f32,
-                    Measurement::Voxels => statistics.voxel_count() as f32,
-                    Measurement::Intensity { channel, statistic } => {
-                        statistic.value(intensities.object(object, channel))
-                    }
-                    Measurement::Diameter
-                    | Measurement::Contrast
-                    | Measurement::Length
-                    | Measurement::Branches
-                    | Measurement::Terminals
-                    | Measurement::Junctions
-                    | Measurement::Nodes => {
-                        panic!("the spot measurement {measurement:?} is read from surfaces")
-                    }
-                }
-            }
-            Self::Filaments(set) => {
-                let statistics = set.objects()[object];
-                match measurement {
-                    Measurement::Position(axis) => statistics.centroid()[axis],
-                    Measurement::Length => statistics.length() as f32,
-                    Measurement::Diameter => statistics.diameter() as f32,
-                    Measurement::Volume => statistics.volume() as f32,
-                    Measurement::Branches => statistics.branches() as f32,
-                    Measurement::Terminals => statistics.terminals() as f32,
-                    Measurement::Junctions => statistics.junctions() as f32,
-                    Measurement::Nodes => statistics.nodes() as f32,
-                    Measurement::Intensity { channel, statistic } => {
-                        statistic.value(intensities.object(object, channel))
-                    }
-                    Measurement::Contrast
-                    | Measurement::Area
-                    | Measurement::Sphericity
-                    | Measurement::Voxels => {
-                        panic!("the filament measurement {measurement:?} is read from filaments")
-                    }
-                }
-            }
         }
     }
 }
@@ -222,170 +151,6 @@ impl<'a> Frame<'a> {
 
     pub fn objects(&self) -> Objects<'a> {
         self.objects
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Statistic {
-    Mean,
-    Sum,
-    Minimum,
-    Maximum,
-    Deviation,
-}
-
-impl Statistic {
-    const ALL: [Self; 5] = [
-        Self::Mean,
-        Self::Sum,
-        Self::Minimum,
-        Self::Maximum,
-        Self::Deviation,
-    ];
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Mean => "mean",
-            Self::Sum => "sum",
-            Self::Minimum => "minimum",
-            Self::Maximum => "maximum",
-            Self::Deviation => "deviation",
-        }
-    }
-
-    fn key(self) -> &'static str {
-        match self {
-            Self::Mean => "mean",
-            Self::Sum => "sum",
-            Self::Minimum => "min",
-            Self::Maximum => "max",
-            Self::Deviation => "std",
-        }
-    }
-
-    fn value(self, statistics: SampleStatistics) -> f32 {
-        match self {
-            Self::Mean => statistics.mean(),
-            Self::Sum => statistics.sum() as f32,
-            Self::Minimum => statistics.minimum(),
-            Self::Maximum => statistics.maximum(),
-            Self::Deviation => statistics.deviation(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Measurement {
-    Position(usize),
-    Diameter,
-    Contrast,
-    Volume,
-    Area,
-    Sphericity,
-    Voxels,
-    Length,
-    Branches,
-    Terminals,
-    Junctions,
-    Nodes,
-    Intensity {
-        channel: usize,
-        statistic: Statistic,
-    },
-}
-
-impl Measurement {
-    fn label(self, channels: &[String]) -> String {
-        match self {
-            Self::Position(axis) => ["x", "y", "z"][axis].to_string(),
-            Self::Diameter => "diameter".to_string(),
-            Self::Contrast => "contrast".to_string(),
-            Self::Volume => "volume".to_string(),
-            Self::Area => "area".to_string(),
-            Self::Sphericity => "sphericity".to_string(),
-            Self::Voxels => "voxels".to_string(),
-            Self::Length => "length".to_string(),
-            Self::Branches => "branches".to_string(),
-            Self::Terminals => "terminals".to_string(),
-            Self::Junctions => "junctions".to_string(),
-            Self::Nodes => "nodes".to_string(),
-            Self::Intensity { channel, statistic } => {
-                format!("{} · {}", channels[channel], statistic.name())
-            }
-        }
-    }
-
-    fn key(self, keys: &[String]) -> String {
-        match self {
-            Self::Position(axis) => format!("{}_um", ["x", "y", "z"][axis]),
-            Self::Diameter => "diameter_um".to_string(),
-            Self::Contrast => "contrast".to_string(),
-            Self::Volume => "volume_um3".to_string(),
-            Self::Area => "area_um2".to_string(),
-            Self::Sphericity => "sphericity".to_string(),
-            Self::Voxels => "voxels".to_string(),
-            Self::Length => "length_um".to_string(),
-            Self::Branches => "branches".to_string(),
-            Self::Terminals => "terminals".to_string(),
-            Self::Junctions => "junctions".to_string(),
-            Self::Nodes => "nodes".to_string(),
-            Self::Intensity { channel, statistic } => {
-                format!("{}_intensity_{}", keys[channel], statistic.key())
-            }
-        }
-    }
-
-    fn unit(self) -> Unit {
-        match self {
-            Self::Position(_) | Self::Diameter | Self::Length => Unit::Micrometer,
-            Self::Volume => Unit::CubicMicrometer,
-            Self::Area => Unit::SquareMicrometer,
-            Self::Contrast
-            | Self::Sphericity
-            | Self::Voxels
-            | Self::Branches
-            | Self::Terminals
-            | Self::Junctions
-            | Self::Nodes
-            | Self::Intensity { .. } => Unit::Count,
-        }
-    }
-
-    fn decimals(self) -> u8 {
-        match self {
-            Self::Position(_) | Self::Diameter | Self::Length => 3,
-            Self::Contrast | Self::Sphericity => 4,
-            Self::Volume | Self::Area => 3,
-            Self::Voxels | Self::Branches | Self::Terminals | Self::Junctions | Self::Nodes => 0,
-            Self::Intensity { .. } => 2,
-        }
-    }
-
-    fn aggregates(self) -> bool {
-        !matches!(self, Self::Position(_))
-    }
-
-    fn column(self, channels: &[String], keys: &[String]) -> Column {
-        Column::new(
-            self.label(channels),
-            self.key(keys),
-            self.unit(),
-            self.decimals(),
-        )
-    }
-
-    fn aggregate_column(
-        self,
-        channels: &[String],
-        keys: &[String],
-        aggregate: Aggregate,
-    ) -> Column {
-        Column::new(
-            self.label(channels),
-            format!("{}_{}", self.key(keys), aggregate.key()),
-            self.unit(),
-            self.decimals(),
-        )
     }
 }
 
@@ -422,78 +187,7 @@ impl ObjectCell {
             Self::Track => tracks
                 .and_then(|set| set.track_at(frame.time, object))
                 .map_or(0.0, |track| (track + 1) as f32),
-            Self::Measure(measurement) => frame.objects.value(object, *measurement),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TrackField {
-    Track,
-    Parent,
-    Daughters,
-    First,
-    Last,
-    Nodes,
-    Frames,
-    Duration,
-    Length,
-    Displacement,
-    Speed,
-    Straightness,
-}
-
-impl TrackField {
-    const ALL: [Self; 12] = [
-        Self::Track,
-        Self::Parent,
-        Self::Daughters,
-        Self::First,
-        Self::Last,
-        Self::Nodes,
-        Self::Frames,
-        Self::Duration,
-        Self::Length,
-        Self::Displacement,
-        Self::Speed,
-        Self::Straightness,
-    ];
-
-    fn column(self) -> Column {
-        match self {
-            Self::Track => Column::new("track", "track", Unit::Count, 0),
-            Self::Parent => Column::new("parent", "parent", Unit::Count, 0),
-            Self::Daughters => Column::new("daughters", "daughters", Unit::Count, 0),
-            Self::First => Column::new("first frame", "first_frame", Unit::Count, 0),
-            Self::Last => Column::new("last frame", "last_frame", Unit::Count, 0),
-            Self::Nodes => Column::new("nodes", "nodes", Unit::Count, 0),
-            Self::Frames => Column::new("frames", "frames", Unit::Count, 0),
-            Self::Duration => Column::new("duration", "duration_s", Unit::Second, 3),
-            Self::Length => Column::new("length", "length_um", Unit::Micrometer, 3),
-            Self::Displacement => {
-                Column::new("displacement", "displacement_um", Unit::Micrometer, 3)
-            }
-            Self::Speed => Column::new("speed", "speed_um_s", Unit::MicrometerPerSecond, 4),
-            Self::Straightness => Column::new("straightness", "straightness", Unit::Count, 4),
-        }
-    }
-
-    fn value(self, track: usize, set: &TrackSet) -> f32 {
-        let entry = set.track(track).expect("the track exists");
-        let statistics = set.statistics(track).expect("the track has statistics");
-        match self {
-            Self::Track => (track + 1) as f32,
-            Self::Parent => entry.parent().map_or(0.0, |parent| (parent + 1) as f32),
-            Self::Daughters => set.children(track).count() as f32,
-            Self::First => (entry.start() + 1) as f32,
-            Self::Last => (entry.end() + 1) as f32,
-            Self::Nodes => entry.nodes().len() as f32,
-            Self::Frames => statistics.frames() as f32,
-            Self::Duration => statistics.duration() as f32,
-            Self::Length => statistics.length() as f32,
-            Self::Displacement => statistics.displacement() as f32,
-            Self::Speed => statistics.speed() as f32,
-            Self::Straightness => statistics.straightness() as f32,
+            Self::Measure(measurement) => measurement.value(frame.objects, object),
         }
     }
 }
@@ -702,7 +396,7 @@ fn track_table(
     aggregate: Aggregate,
 ) -> Table {
     let measurements = aggregated_measurements(frames[0].objects, channels.len());
-    let mut columns = TrackField::ALL
+    let mut columns = TrackMeasurement::ALL
         .iter()
         .map(|field| field.column())
         .collect::<Vec<_>>();
@@ -712,7 +406,7 @@ fn track_table(
             .map(|measurement| measurement.aggregate_column(channels, keys, aggregate)),
     );
     let Some(set) = tracks else {
-        return Table::new(columns, TrackField::ALL.len(), Vec::new(), Vec::new());
+        return Table::new(columns, TrackMeasurement::ALL.len(), Vec::new(), Vec::new());
     };
     let rows = set.len();
     let mut accumulators = vec![SampleAccumulator::new(); rows * measurements.len()];
@@ -723,7 +417,7 @@ fn track_table(
             };
             for (index, measurement) in measurements.iter().enumerate() {
                 accumulators[track * measurements.len() + index]
-                    .push(frame.objects.value(object, *measurement));
+                    .push(measurement.value(frame.objects, object));
             }
         }
     }
@@ -735,7 +429,7 @@ fn track_table(
             object: None,
             track: Some(track),
         });
-        for field in &TrackField::ALL {
+        for field in &TrackMeasurement::ALL {
             values.push(field.value(track, set));
         }
         for index in 0..measurements.len() {
@@ -744,7 +438,7 @@ fn track_table(
             );
         }
     }
-    Table::new(columns, TrackField::ALL.len(), observations, values)
+    Table::new(columns, TrackMeasurement::ALL.len(), observations, values)
 }
 
 fn timepoint_table(
@@ -778,7 +472,7 @@ fn timepoint_table(
         for measurement in &measurements {
             let mut accumulator = SampleAccumulator::new();
             for object in 0..frame.objects.count() {
-                accumulator.push(frame.objects.value(object, *measurement));
+                accumulator.push(measurement.value(frame.objects, object));
             }
             values.push(aggregate.apply(accumulator.statistics()));
         }
@@ -787,38 +481,11 @@ fn timepoint_table(
 }
 
 fn measurements(objects: Objects<'_>, channels: usize) -> Vec<Measurement> {
-    let mut list = vec![
-        Measurement::Position(0),
-        Measurement::Position(1),
-        Measurement::Position(2),
-    ];
     match objects {
-        Objects::Spots(_) => {
-            list.push(Measurement::Diameter);
-            list.push(Measurement::Contrast);
-        }
-        Objects::Surfaces(_) => {
-            list.push(Measurement::Volume);
-            list.push(Measurement::Area);
-            list.push(Measurement::Sphericity);
-            list.push(Measurement::Voxels);
-        }
-        Objects::Filaments(_) => {
-            list.push(Measurement::Length);
-            list.push(Measurement::Diameter);
-            list.push(Measurement::Volume);
-            list.push(Measurement::Branches);
-            list.push(Measurement::Terminals);
-            list.push(Measurement::Junctions);
-            list.push(Measurement::Nodes);
-        }
+        Objects::Spots(_) => Measurement::spots(channels),
+        Objects::Surfaces(_) => Measurement::surfaces(channels),
+        Objects::Filaments(_) => Measurement::filaments(channels),
     }
-    for channel in 0..channels {
-        for statistic in Statistic::ALL {
-            list.push(Measurement::Intensity { channel, statistic });
-        }
-    }
-    list
 }
 
 fn aggregated_measurements(objects: Objects<'_>, channels: usize) -> Vec<Measurement> {

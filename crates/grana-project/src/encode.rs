@@ -1,13 +1,13 @@
-use grana_measure::Filter;
+use grana_measure::{Filter, Measurement, TrackMeasurement};
 use grana_object::{
     Bounds, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocThresholds, FilamentSet,
     FilamentStatistics, FilamentTopology, GeometryGroup, IntensityTable, PackedMesh, PackedVertex,
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
-use grana_render::{CameraState, SectionState, Shading, Stop, TransferFunction};
+use grana_render::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
 use grana_scene::{
-    ChannelState, ColocState, ItemState, MeasureState, ObjectFrame, ObjectParams, SceneState,
-    SelectionState, SetState, TrackStyle, Visibility,
+    ChannelState, ColocState, ColorState, ItemState, MeasureState, ObjectFrame, ObjectParams,
+    SceneState, SelectionState, SetState, TrackStyle, Visibility,
 };
 use grana_volume::{Intensity, Region};
 
@@ -187,6 +187,8 @@ impl Encode for SetState {
         self.tracks.encode(writer);
         self.track_thickness.encode(writer);
         self.track_visible.encode(writer);
+        self.object_color.encode(writer);
+        self.track_color.encode(writer);
         self.visibility.encode(writer);
         self.frames.encode(writer);
     }
@@ -248,6 +250,61 @@ impl Encode for Visibility {
                 tracks.encode(writer);
             }
         }
+    }
+}
+
+impl Encode for Palette {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u8(self.index());
+    }
+}
+
+impl<M: Encode + Copy> Encode for ColorState<M> {
+    fn encode(&self, writer: &mut Writer) {
+        self.metric.encode(writer);
+        self.palette.encode(writer);
+        writer.bool(self.reversed);
+        match self.manual {
+            Some((minimum, maximum)) => {
+                writer.bool(true);
+                writer.f32(minimum);
+                writer.f32(maximum);
+            }
+            None => writer.bool(false),
+        }
+    }
+}
+
+impl Encode for Measurement {
+    fn encode(&self, writer: &mut Writer) {
+        match self {
+            Self::Position(axis) => {
+                writer.u8(0);
+                writer.u8(*axis as u8);
+            }
+            Self::Diameter => writer.u8(1),
+            Self::Contrast => writer.u8(2),
+            Self::Volume => writer.u8(3),
+            Self::Area => writer.u8(4),
+            Self::Sphericity => writer.u8(5),
+            Self::Voxels => writer.u8(6),
+            Self::Length => writer.u8(7),
+            Self::Branches => writer.u8(8),
+            Self::Terminals => writer.u8(9),
+            Self::Junctions => writer.u8(10),
+            Self::Nodes => writer.u8(11),
+            Self::Intensity { channel, statistic } => {
+                writer.u8(12);
+                writer.count(*channel);
+                writer.u8(statistic.index());
+            }
+        }
+    }
+}
+
+impl Encode for TrackMeasurement {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u8(self.index());
     }
 }
 

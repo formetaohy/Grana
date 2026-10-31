@@ -85,8 +85,16 @@ fn object(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>, id: Obj
     let header_id = ui.make_persistent_id(("grana.object", id.raw()));
     let collapse =
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), header_id, true);
+    let coloring = set.object_coloring();
+    let palette = coloring.palette();
+    let reversed = coloring.reversed();
+    let colored = coloring.metric().is_some();
     let header = collapse.show_header(ui, |ui| {
-        ui.color_edit_button_rgb(&mut color);
+        if colored {
+            crate::coloring::swatch(ui, palette, reversed);
+        } else {
+            ui.color_edit_button_rgb(&mut color);
+        }
         ui.label(RichText::new(&name).strong());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.small_button("Remove").clicked() {
@@ -107,6 +115,7 @@ fn object(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>, id: Obj
         params(ui, state, id);
         detect(ui, state, actions, id, kind, frames);
         summary_rows(ui, &summary);
+        appearance(ui, state, id);
         ui.horizontal(|ui| {
             if ui.button("Clear").clicked() {
                 actions.push(Action::ClearObject(id));
@@ -256,6 +265,38 @@ fn summary_rows(ui: &mut Ui, summary: &Summary) {
                 .small()
                 .weak(),
         );
+    }
+}
+
+fn appearance(ui: &mut Ui, state: &mut State<'_>, id: ObjectSetId) {
+    let Some(set) = state.scene.objects.get(id) else {
+        return;
+    };
+    let names = state
+        .scene
+        .dataset
+        .channels()
+        .iter()
+        .map(|channel| channel.name().to_string())
+        .collect::<Vec<_>>();
+    let measurements = set
+        .colorable_measurements()
+        .into_iter()
+        .map(|measurement| (measurement, measurement.label(&names)))
+        .collect::<Vec<_>>();
+    let extent = set.object_extent();
+    let mut coloring = set.object_coloring().clone();
+    let coloring_id = ui.make_persistent_id(("grana.object.coloring", id.raw()));
+    if crate::coloring::edit(
+        ui,
+        coloring_id,
+        &mut coloring,
+        &measurements,
+        extent,
+        |measurement| (measurement.unit(), measurement.decimals()),
+    ) && let Some(set) = state.scene.objects.get_mut(id)
+    {
+        set.set_object_coloring(coloring);
     }
 }
 

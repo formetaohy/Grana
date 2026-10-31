@@ -1,6 +1,7 @@
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke};
 use glam::{Mat4, Vec3};
-use grana_render::{Camera, SectionCamera, plane_basis};
+use grana_measure::Unit;
+use grana_render::{Camera, Palette, SectionCamera, plane_basis};
 use grana_volume::{Axis, Region};
 
 const LABEL_COLOR: Color32 = Color32::from_gray(196);
@@ -13,6 +14,11 @@ const HANDLE_SIDE: f32 = 9.0;
 const HANDLE_MINIMUM: f32 = 1.0e-3;
 const SEPARATOR_COLOR: Color32 = Color32::from_gray(44);
 const SCALE_TARGET: f32 = 116.0;
+const LEGEND_WIDTH: f32 = 196.0;
+const LEGEND_BAR_WIDTH: f32 = 12.0;
+const LEGEND_BAR_HEIGHT: f32 = 84.0;
+const LEGEND_MARGIN: f32 = 14.0;
+const LEGEND_SAMPLES: usize = 64;
 
 const REGION_EDGES: [(usize, usize); 12] = [
     (0, 1),
@@ -29,6 +35,15 @@ const REGION_EDGES: [(usize, usize); 12] = [
     (3, 7),
 ];
 
+pub struct Legend {
+    pub title: String,
+    pub palette: Palette,
+    pub reversed: bool,
+    pub extent: (f32, f32),
+    pub unit: Unit,
+    pub decimals: u8,
+}
+
 pub struct Overlay<'a> {
     pub camera: &'a Camera,
     pub section: &'a SectionCamera,
@@ -39,6 +54,7 @@ pub struct Overlay<'a> {
     pub volume_rect: Rect,
     pub section_rect: Rect,
     pub region: &'a mut Region,
+    pub legends: &'a [Legend],
 }
 
 pub fn paint(ui: &egui::Ui, overlay: &mut Overlay<'_>) {
@@ -94,6 +110,7 @@ fn paint_volume(ui: &egui::Ui, overlay: &mut Overlay<'_>) {
     let world_per_point = 2.0 * overlay.camera.distance() * (overlay.camera.fov_y() * 0.5).tan()
         / overlay.volume_rect.height();
     scale_bar(&painter, overlay.volume_rect, world_per_point);
+    paint_legends(&painter, overlay.volume_rect, overlay.legends);
     let level = overlay.volume_level + 1;
     label(
         &painter,
@@ -282,6 +299,89 @@ fn scale_bar(painter: &Painter, rect: Rect, world_per_point: f32) {
         FontId::proportional(12.0),
         LABEL_COLOR,
     );
+}
+
+fn paint_legends(painter: &Painter, rect: Rect, legends: &[Legend]) {
+    if legends.is_empty() || rect.width() < 340.0 || rect.height() < 260.0 {
+        return;
+    }
+    let left = rect.right() - LEGEND_MARGIN - LEGEND_WIDTH;
+    let mut title_top = rect.top() + 46.0;
+    for legend in legends {
+        let bar_top = title_top + 16.0;
+        let bar_bottom = bar_top + LEGEND_BAR_HEIGHT;
+        if bar_bottom + 12.0 > rect.bottom() {
+            break;
+        }
+        painter.rect_filled(
+            Rect::from_min_max(
+                Pos2::new(left - 8.0, title_top - 8.0),
+                Pos2::new(left + LEGEND_WIDTH, bar_bottom + 10.0),
+            ),
+            4.0,
+            Color32::from_black_alpha(150),
+        );
+        painter.text(
+            Pos2::new(left, title_top),
+            Align2::LEFT_TOP,
+            truncated(&legend.title),
+            FontId::proportional(11.0),
+            LABEL_COLOR,
+        );
+        let step = LEGEND_BAR_HEIGHT / LEGEND_SAMPLES as f32;
+        for index in 0..LEGEND_SAMPLES {
+            let position = (index as f32 + 0.5) / LEGEND_SAMPLES as f32;
+            let position = if legend.reversed {
+                1.0 - position
+            } else {
+                position
+            };
+            let [red, green, blue] = legend.palette.sample(position);
+            let bottom = bar_bottom - index as f32 * step;
+            painter.rect_filled(
+                Rect::from_min_max(
+                    Pos2::new(left, bottom - step),
+                    Pos2::new(left + LEGEND_BAR_WIDTH, bottom + 0.5),
+                ),
+                0.0,
+                Color32::from_rgb(to_byte(red), to_byte(green), to_byte(blue)),
+            );
+        }
+        let (minimum, maximum) = legend.extent;
+        let text_left = left + LEGEND_BAR_WIDTH + 8.0;
+        for (align, y, value) in [
+            (Align2::LEFT_TOP, bar_top, maximum),
+            (
+                Align2::LEFT_CENTER,
+                0.5 * (bar_top + bar_bottom),
+                0.5 * (minimum + maximum),
+            ),
+            (Align2::LEFT_BOTTOM, bar_bottom, minimum),
+        ] {
+            painter.text(
+                Pos2::new(text_left, y),
+                align,
+                crate::coloring::value(value, legend.unit, legend.decimals),
+                FontId::proportional(11.0),
+                LABEL_COLOR,
+            );
+        }
+        title_top = bar_bottom + 34.0;
+    }
+}
+
+fn truncated(title: &str) -> String {
+    let mut characters = title.chars();
+    let prefix = characters.by_ref().take(26).collect::<String>();
+    if characters.next().is_some() {
+        format!("{prefix}…")
+    } else {
+        prefix
+    }
+}
+
+fn to_byte(channel: f32) -> u8 {
+    (channel.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 fn label(painter: &Painter, rect: Rect, text: String) {

@@ -2,6 +2,7 @@ use glam::Vec3;
 use grana_object::{Spot, TrackSet};
 use grana_render::{
     ChannelRow, Layer, LayerKey, Marker, Ray, SceneFrame, Shading, Style, TransferFunction,
+    srgb_to_linear,
 };
 use grana_volume::{Axis, ChannelInfo, Intensity, Region};
 
@@ -250,12 +251,24 @@ impl Scene {
             let Some(frame) = set.frame(self.time) else {
                 continue;
             };
+            let extent = set.object_extent();
+            let metric = set.object_coloring().metric();
+            let objects = frame.objects();
+            let color = |index: usize| {
+                extent
+                    .zip(metric)
+                    .map(|(extent, metric)| {
+                        set.object_coloring()
+                            .color(extent, metric.value(objects, index))
+                    })
+                    .unwrap_or_else(|| set.color())
+            };
             if let Some(spots) = frame.spots() {
                 for (index, spot) in spots.spots().iter().enumerate() {
                     if !set.visible_object(self.time, index) {
                         continue;
                     }
-                    markers.push(self.marker(set, index, *spot));
+                    markers.push(self.marker(set, index, *spot, color(index)));
                 }
             }
             if let (Some(mesh), Some(stamp)) = (frame.geometry(), set.frame_stamp(self.time))
@@ -264,7 +277,7 @@ impl Scene {
                 let start = styles.len();
                 for index in 0..frame.object_count() {
                     styles.push(Style::new(
-                        set.color(),
+                        srgb_to_linear(color(index)),
                         set.visible_object(self.time, index),
                         self.object_selected(set.id(), index),
                     ));
@@ -279,10 +292,21 @@ impl Scene {
             if let Some(tracks) = set.tracks()
                 && !tracks.set().is_empty()
             {
+                let extent = set.track_extent();
+                let metric = set.track_coloring().metric();
+                let color = |index: usize| {
+                    extent
+                        .zip(metric)
+                        .map(|(extent, metric)| {
+                            set.track_coloring()
+                                .color(extent, metric.value(index, tracks.set()))
+                        })
+                        .unwrap_or_else(|| set.color())
+                };
                 let start = styles.len();
                 for index in 0..tracks.set().len() {
                     styles.push(Style::new(
-                        set.color(),
+                        srgb_to_linear(color(index)),
                         tracks.visible() && set.visible_track(index),
                         self.track_selected(set.id(), index),
                     ));
@@ -358,16 +382,16 @@ impl Scene {
             })
     }
 
-    fn marker(&self, set: &ObjectSet, index: usize, spot: Spot) -> Marker {
+    fn marker(&self, set: &ObjectSet, index: usize, spot: Spot, color: [f32; 3]) -> Marker {
         if self.object_selected(set.id(), index) {
             Marker::new(
                 spot.center(),
                 SELECTED_SCALE * spot.radius(),
-                SELECTED_COLOR,
+                srgb_to_linear(SELECTED_COLOR),
                 1.0,
             )
         } else {
-            Marker::new(spot.center(), spot.radius(), set.color(), 1.0)
+            Marker::new(spot.center(), spot.radius(), srgb_to_linear(color), 1.0)
         }
     }
 }

@@ -7,6 +7,7 @@ mod layout;
 mod light;
 mod marker;
 mod mesh;
+mod palette;
 mod planner;
 mod present;
 mod renderer;
@@ -22,6 +23,7 @@ pub const DEPTH_BUCKETS: usize = planner::BUCKETS;
 
 pub use camera::{Camera, CameraState, Ray, SectionCamera, SectionState, plane_basis};
 pub use marker::Marker;
+pub use palette::Palette;
 pub use renderer::{BrickRequest, Frame, FrameInfo, Renderer, Requests, ViewInfo};
 pub use schema::{ChannelRow, Layer, LayerKey, SceneFrame, Shading, Style};
-pub use transfer::{Stop, TransferFunction};
+pub use transfer::{Stop, TransferFunction, srgb_to_linear};

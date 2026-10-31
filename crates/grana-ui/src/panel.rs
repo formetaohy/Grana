@@ -4,7 +4,7 @@ use grana_scene::{Dataset, Job, ObjectKind, Progress, Scene};
 use grana_volume::Axis;
 
 use crate::action::Action;
-use crate::overlay::{self, Overlay};
+use crate::overlay::{self, Legend, Overlay};
 use crate::state::State;
 
 const TIMELINE_HEIGHT: f32 = 36.0;
@@ -120,6 +120,7 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
         state.viewport.set_rects(volume, section);
         let world = state.scene.dataset.world_size();
         let levels = state.scene.dataset.level_count();
+        let legends = legends(state);
         let mut overlay = Overlay {
             camera: state.viewport.camera(),
             section: state.viewport.section(),
@@ -130,6 +131,7 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
             volume_rect: volume,
             section_rect: section,
             region: &mut state.scene.region,
+            legends: &legends,
         };
         overlay::paint(ui, &mut overlay);
         if let Some(bar) = timeline {
@@ -596,6 +598,49 @@ fn camera_section(ui: &mut Ui, actions: &mut Vec<Action>) {
             .small()
             .weak(),
     );
+}
+
+fn legends(state: &State<'_>) -> Vec<Legend> {
+    let names = state
+        .scene
+        .dataset
+        .channels()
+        .iter()
+        .map(|channel| channel.name().to_string())
+        .collect::<Vec<_>>();
+    let mut legends = Vec::new();
+    for set in state.scene.objects.iter() {
+        if !set.visible() || !state.scene.channels[set.channel()].enabled {
+            continue;
+        }
+        if set.detected() > 0
+            && let Some(measurement) = set.object_coloring().metric()
+            && let Some(extent) = set.object_extent()
+        {
+            legends.push(Legend {
+                title: format!("{} · {}", set.name(), measurement.label(&names)),
+                palette: set.object_coloring().palette(),
+                reversed: set.object_coloring().reversed(),
+                extent,
+                unit: measurement.unit(),
+                decimals: measurement.decimals(),
+            });
+        }
+        if let Some(measurement) = set.track_coloring().metric()
+            && set.tracks().is_some_and(|layer| layer.visible())
+            && let Some(extent) = set.track_extent()
+        {
+            legends.push(Legend {
+                title: format!("{} tracks · {}", set.name(), measurement.label()),
+                palette: set.track_coloring().palette(),
+                reversed: set.track_coloring().reversed(),
+                extent,
+                unit: measurement.unit(),
+                decimals: measurement.decimals(),
+            });
+        }
+    }
+    legends
 }
 
 pub(crate) fn progress(analysis: &[Progress], job: Job) -> Option<Progress> {

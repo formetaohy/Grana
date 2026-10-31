@@ -122,6 +122,7 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>, id: 
     {
         object.set_track_thickness(thickness);
     }
+    track_appearance(ui, state, id);
     ui.horizontal(|ui| {
         if ui.button("Clear").clicked() {
             actions.push(Action::ClearTracks(id));
@@ -213,6 +214,31 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>, id: 
                 format!("{:.3}", selected.statistics.straightness()),
             );
         });
+}
+
+fn track_appearance(ui: &mut Ui, state: &mut State<'_>, id: ObjectSetId) {
+    let Some(object) = state.scene.objects.get(id) else {
+        return;
+    };
+    let measurements = object
+        .colorable_track_measurements()
+        .into_iter()
+        .map(|measurement| (measurement, measurement.label().to_string()))
+        .collect::<Vec<_>>();
+    let extent = object.track_extent();
+    let mut coloring = object.track_coloring().clone();
+    let coloring_id = ui.make_persistent_id(("grana.track.coloring", id.raw()));
+    if crate::coloring::edit(
+        ui,
+        coloring_id,
+        &mut coloring,
+        &measurements,
+        extent,
+        |measurement| (measurement.unit(), measurement.decimals()),
+    ) && let Some(object) = state.scene.objects.get_mut(id)
+    {
+        object.set_track_coloring(coloring);
+    }
 }
 
 struct TrackView {

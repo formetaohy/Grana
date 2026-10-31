@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use grana_analysis::TrackParams;
+use grana_measure::{Measurement, TrackMeasurement};
 use grana_object::TrackSet;
 
+use crate::color::{ColorState, Coloring, Extent, merged};
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::state::SetState;
@@ -51,12 +53,17 @@ pub struct ObjectSet {
     kind: ObjectKind,
     name: String,
     channel: usize,
+    channels: usize,
     color: [f32; 3],
     visible: bool,
     voxel: f32,
     params: ObjectParams,
     track_style: Option<TrackStyle>,
     frames: Vec<FrameSlot>,
+    frame_bounds: Vec<Option<Extent>>,
+    object_coloring: Coloring<Measurement>,
+    track_coloring: Coloring<TrackMeasurement>,
+    track_bounds: Option<Extent>,
     stamp: u64,
     revision: u64,
     document: u64,
@@ -76,19 +83,25 @@ impl ObjectSet {
         let voxel = dataset.voxel_size().min_element();
         let params = kind.default_params(voxel);
         let track_style = kind.track_style(voxel);
+        let frames = (0..dataset.frame_count())
+            .map(|_| FrameSlot::new())
+            .collect::<Vec<_>>();
         Self {
             id,
             kind,
             name,
             channel,
+            channels: dataset.channels().len(),
             color,
             visible: true,
             voxel,
             params,
             track_style,
-            frames: (0..dataset.frame_count())
-                .map(|_| FrameSlot::new())
-                .collect(),
+            frame_bounds: vec![None; frames.len()],
+            frames,
+            object_coloring: Coloring::new(),
+            track_coloring: Coloring::new(),
+            track_bounds: None,
             stamp: 1,
             revision: 1,
             document: 1,
@@ -127,6 +140,83 @@ impl ObjectSet {
         }
         self.color = color;
         self.document += 1;
+    }
+
+    pub fn object_coloring(&self) -> &Coloring<Measurement> {
+        &self.object_coloring
+    }
+
+    pub fn colorable_measurements(&self) -> Vec<Measurement> {
+        self.kind
+            .measurements(self.channels)
+            .into_iter()
+            .filter(|measurement| measurement.colorable())
+            .collect()
+    }
+
+    pub fn set_object_coloring(&mut self, coloring: Coloring<Measurement>) -> bool {
+        if let Some(metric) = coloring.metric() {
+            assert!(
+                self.colorable_measurements().contains(&metric),
+                "the measurement colors the objects of this set"
+            );
+        }
+        if self.object_coloring == coloring {
+            return false;
+        }
+        let metric_changed = self.object_coloring.metric() != coloring.metric();
+        self.object_coloring = coloring;
+        if metric_changed {
+            self.rebuild_frame_bounds();
+        }
+        self.document += 1;
+        true
+    }
+
+    pub fn object_extent(&self) -> Option<Extent> {
+        self.object_coloring.metric()?;
+        self.object_coloring
+            .manual()
+            .or_else(|| merged(self.frame_bounds.iter().flatten().copied()))
+    }
+
+    pub fn track_coloring(&self) -> &Coloring<TrackMeasurement> {
+        &self.track_coloring
+    }
+
+    pub fn colorable_track_measurements(&self) -> Vec<TrackMeasurement> {
+        TrackMeasurement::ALL
+            .into_iter()
+            .filter(|measurement| measurement.colorable())
+            .collect()
+    }
+
+    pub fn set_track_coloring(&mut self, coloring: Coloring<TrackMeasurement>) -> bool {
+        if let Some(metric) = coloring.metric() {
+            assert!(
+                self.kind.trackable(),
+                "only trackable objects carry track colors"
+            );
+            assert!(
+                metric.colorable(),
+                "an identity column does not color tracks"
+            );
+        }
+        if self.track_coloring == coloring {
+            return false;
+        }
+        let metric_changed = self.track_coloring.metric() != coloring.metric();
+        self.track_coloring = coloring;
+        if metric_changed {
+            self.rebuild_track_bounds();
+        }
+        self.document += 1;
+        true
+    }
+
+    pub fn track_extent(&self) -> Option<Extent> {
+        self.track_coloring.metric()?;
+        self.track_coloring.manual().or(self.track_bounds)
     }
 
     pub fn visible(&self) -> bool {
@@ -209,6 +299,8 @@ impl ObjectSet {
             tracks: self.tracks.as_ref().map(|layer| layer.set().clone()),
             track_thickness: self.tracks.as_ref().map(TrackLayer::thickness),
             track_visible: self.tracks.as_ref().map(TrackLayer::visible),
+            object_color: self.object_coloring.state(),
+            track_color: self.track_coloring.state(),
             visibility: self.visibility.clone(),
             frames: self.frames.iter().map(|slot| slot.data.clone()).collect(),
         }
@@ -227,6 +319,8 @@ impl ObjectSet {
             tracks,
             track_thickness,
             track_visible,
+            object_color,
+            track_color,
             visibility,
             frames,
         } = state;
@@ -245,17 +339,23 @@ impl ObjectSet {
             track_thickness.is_some() && track_visible.is_some(),
             "a restored track layer carries its thickness and visibility"
         );
+        let frame_count = frames.len();
         let mut set = Self {
             id: ObjectSetId::new(id),
             kind,
             name,
             channel,
+            channels: dataset.channels().len(),
             color,
             visible,
             voxel: dataset.voxel_size().min_element(),
             params,
             track_style,
-            frames: (0..frames.len()).map(|_| FrameSlot::new()).collect(),
+            frame_bounds: vec![None; frame_count],
+            frames: (0..frame_count).map(|_| FrameSlot::new()).collect(),
+            object_coloring: Coloring::new(),
+            track_coloring: Coloring::new(),
+            track_bounds: None,
             stamp: 1,
             revision: 1,
             document: 1,
@@ -279,8 +379,35 @@ impl ObjectSet {
             layer.set_visible(visible);
             set.tracks = Some(layer);
         }
+        set.restore_coloring(object_color, track_color);
         set.set_visibility(visibility);
         set
+    }
+
+    fn restore_coloring(
+        &mut self,
+        object: ColorState<Measurement>,
+        track: ColorState<TrackMeasurement>,
+    ) {
+        let object = Coloring::restore(object);
+        if let Some(metric) = object.metric() {
+            assert!(
+                self.colorable_measurements().contains(&metric),
+                "a restored measurement colors the objects of its set"
+            );
+        }
+        self.object_coloring = object;
+        self.rebuild_frame_bounds();
+        let track = Coloring::restore(track);
+        if let Some(metric) = track.metric() {
+            assert!(
+                self.kind.trackable(),
+                "only trackable objects carry track colors"
+            );
+            assert!(metric.colorable(), "a restored measurement colors tracks");
+        }
+        self.track_coloring = track;
+        self.rebuild_track_bounds();
     }
 
     pub fn set_visibility(&mut self, visibility: Visibility) {
@@ -346,6 +473,10 @@ impl ObjectSet {
             self.kind,
             "an object frame matches its object set"
         );
+        let bounds = self
+            .object_coloring
+            .metric()
+            .and_then(|metric| frame_extent(&frame, metric));
         let slot = self
             .frames
             .get_mut(time as usize)
@@ -356,12 +487,15 @@ impl ObjectSet {
         self.visibility = Visibility::All;
         slot.stamp = self.stamp;
         slot.data = Some(frame);
+        self.frame_bounds[time as usize] = bounds;
     }
 
     pub fn clear(&mut self) {
         for slot in &mut self.frames {
             slot.data = None;
         }
+        self.frame_bounds.fill(None);
+        self.track_bounds = None;
         self.revision += 1;
         self.document += 1;
         self.visibility = Visibility::All;
@@ -394,9 +528,14 @@ impl ObjectSet {
             .tracks
             .as_ref()
             .map_or(style.thickness(), TrackLayer::thickness);
+        let bounds = self
+            .track_coloring
+            .metric()
+            .and_then(|metric| track_extent(&set, metric));
         let mut layer = TrackLayer::new(set, thickness);
         layer.set_visible(visible);
         self.tracks = Some(layer);
+        self.track_bounds = bounds;
         self.revision += 1;
         self.document += 1;
         self.visibility = Visibility::All;
@@ -407,6 +546,25 @@ impl ObjectSet {
         self.document += 1;
         self.visibility = Visibility::All;
         self.tracks = None;
+        self.track_bounds = None;
+    }
+
+    fn rebuild_frame_bounds(&mut self) {
+        let metric = self.object_coloring.metric();
+        for (slot, bounds) in self.frames.iter().zip(self.frame_bounds.iter_mut()) {
+            *bounds = slot
+                .data
+                .as_deref()
+                .and_then(|frame| metric.and_then(|metric| frame_extent(frame, metric)));
+        }
+    }
+
+    fn rebuild_track_bounds(&mut self) {
+        self.track_bounds = self.track_coloring.metric().and_then(|metric| {
+            self.tracks
+                .as_ref()
+                .and_then(|layer| track_extent(layer.set(), metric))
+        });
     }
 
     pub fn min_thickness(&self) -> f32 {
@@ -441,4 +599,27 @@ impl ObjectSet {
     pub fn track_at(&self, time: u32, object: usize) -> Option<usize> {
         self.tracks.as_ref()?.set().track_at(time, object)
     }
+}
+
+fn frame_extent(frame: &ObjectFrame, metric: Measurement) -> Option<Extent> {
+    let objects = frame.objects();
+    (0..frame.object_count()).fold(None, |accumulated, object| {
+        accumulate(accumulated, metric.value(objects, object))
+    })
+}
+
+fn track_extent(set: &TrackSet, metric: TrackMeasurement) -> Option<Extent> {
+    (0..set.len()).fold(None, |accumulated, track| {
+        accumulate(accumulated, metric.value(track, set))
+    })
+}
+
+fn accumulate(accumulated: Option<Extent>, value: f32) -> Option<Extent> {
+    if !value.is_finite() {
+        return accumulated;
+    }
+    Some(match accumulated {
+        None => (value, value),
+        Some((minimum, maximum)) => (minimum.min(value), maximum.max(value)),
+    })
 }

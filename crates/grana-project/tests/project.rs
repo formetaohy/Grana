@@ -2,13 +2,14 @@ use std::fs;
 
 use glam::Vec3;
 use grana_analysis::SpotParams;
+use grana_measure::{Measurement, TrackMeasurement};
 use grana_object::{
     Bounds, COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocPair, ColocSeries, FilamentSet,
     FilamentStatistics, FilamentTopology, IntensityTable, Mesh, MeshVertex, SampleAccumulator,
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_project::{Project, Source, ViewState};
-use grana_render::{CameraState, SectionState, TransferFunction};
+use grana_render::{CameraState, Palette, SectionState, TransferFunction};
 use grana_scene::{
     Dataset, Item, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene, Selection, Visibility,
 };
@@ -239,6 +240,16 @@ fn stage(scene: &mut Scene) {
     spots.set_color([0.1, 0.2, 0.3]);
     spots.set_params(ObjectParams::Spots(SpotParams::new(3.0, 0.3)));
     spots.set_track_thickness(2.0);
+    let mut coloring = spots.object_coloring().clone();
+    coloring.set_metric(Some(Measurement::Contrast));
+    coloring.set_palette(Palette::Inferno);
+    coloring.set_reversed(true);
+    coloring.set_manual(Some((0.2, 0.8)));
+    spots.set_object_coloring(coloring);
+    let mut track_coloring = spots.track_coloring().clone();
+    track_coloring.set_metric(Some(TrackMeasurement::Speed));
+    track_coloring.set_palette(Palette::Plasma);
+    spots.set_track_coloring(track_coloring);
     let spot_set = spots.id();
     let nodes = vec![
         TrackNode::new(0, 0, [0.0, 0.0, 0.0]),

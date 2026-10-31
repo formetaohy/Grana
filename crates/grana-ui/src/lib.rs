@@ -1,6 +1,7 @@
 mod action;
 mod batch_panel;
 mod coloc_panel;
+mod coloring;
 mod egui;
 mod measure_panel;
 mod object_panel;

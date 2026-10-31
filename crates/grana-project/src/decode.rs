@@ -1,17 +1,17 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use grana_measure::{Aggregate, Filter, Group};
+use grana_measure::{Aggregate, Filter, Group, Measurement, Statistic, TrackMeasurement};
 use grana_object::{
     Bounds, COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocMoments, ColocPair, ColocSeries,
     ColocThresholds, FilamentSet, FilamentStatistics, FilamentTopology, GeometryGroup,
     IntensityTable, PackedMesh, PackedVertex, SampleStatistics, Spot, SpotSet, SurfaceSet,
     SurfaceStatistics, Track, TrackNode, TrackSet,
 };
-use grana_render::{CameraState, SectionState, Shading, Stop, TransferFunction};
+use grana_render::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
 use grana_scene::{
-    ChannelState, ColocState, ItemState, MeasureState, ObjectFrame, ObjectKind, ObjectParams,
-    SceneState, SelectionState, SetState, TrackStyle, Visibility,
+    ChannelState, ColocState, ColorState, ItemState, MeasureState, ObjectFrame, ObjectKind,
+    ObjectParams, SceneState, SelectionState, SetState, TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Intensity, Region};
 
@@ -123,6 +123,21 @@ impl Decode for SceneState {
             coloc: ColocState::decode(reader)?,
         };
         if state.sets.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+            return Err(FAULT_SHAPE);
+        }
+        let channels = state.channels.len();
+        if state.sets.iter().any(|set| {
+            set.channel >= channels
+                || (!set.kind.trackable() && set.track_color.metric.is_some())
+                || set
+                    .object_color
+                    .metric
+                    .is_some_and(|metric| !color_applies(set.kind, channels, metric))
+                || set
+                    .track_color
+                    .metric
+                    .is_some_and(|metric| !metric.colorable())
+        }) {
             return Err(FAULT_SHAPE);
         }
         Ok(state)
@@ -264,6 +279,8 @@ impl Decode for SetState {
             tracks: Option::<TrackSet>::decode(reader)?,
             track_thickness: Option::<f32>::decode(reader)?.map(positive).transpose()?,
             track_visible: Option::<bool>::decode(reader)?,
+            object_color: ColorState::<Measurement>::decode(reader)?,
+            track_color: ColorState::<TrackMeasurement>::decode(reader)?,
             visibility: Visibility::decode(reader)?,
             frames: Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?,
         };
@@ -371,6 +388,73 @@ impl Decode for Visibility {
             2 => Ok(Self::Track(Vec::<bool>::decode(reader)?)),
             _ => Err(FAULT_SHAPE),
         }
+    }
+}
+
+impl Decode for Palette {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        Palette::from_index(reader.u8()?).ok_or(FAULT_SHAPE)
+    }
+}
+
+impl<M: Decode> Decode for ColorState<M> {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let metric = Option::<M>::decode(reader)?;
+        let palette = Palette::decode(reader)?;
+        let reversed = reader.bool()?;
+        let manual = match reader.bool()? {
+            true => {
+                let minimum = finite(reader.f32()?)?;
+                let maximum = finite(reader.f32()?)?;
+                if minimum > maximum {
+                    return Err(FAULT_VALUE);
+                }
+                Some((minimum, maximum))
+            }
+            false => None,
+        };
+        Ok(Self {
+            metric,
+            palette,
+            reversed,
+            manual,
+        })
+    }
+}
+
+impl Decode for Measurement {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let measurement = match reader.u8()? {
+            0 => Self::Position(reader.u8()? as usize),
+            1 => Self::Diameter,
+            2 => Self::Contrast,
+            3 => Self::Volume,
+            4 => Self::Area,
+            5 => Self::Sphericity,
+            6 => Self::Voxels,
+            7 => Self::Length,
+            8 => Self::Branches,
+            9 => Self::Terminals,
+            10 => Self::Junctions,
+            11 => Self::Nodes,
+            12 => Self::Intensity {
+                channel: reader.u32()? as usize,
+                statistic: Statistic::from_index(reader.u8()?).ok_or(FAULT_SHAPE)?,
+            },
+            _ => return Err(FAULT_SHAPE),
+        };
+        if let Self::Position(axis) = measurement
+            && axis >= 3
+        {
+            return Err(FAULT_VALUE);
+        }
+        Ok(measurement)
+    }
+}
+
+impl Decode for TrackMeasurement {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        TrackMeasurement::from_index(reader.u8()?).ok_or(FAULT_SHAPE)
     }
 }
 
@@ -738,6 +822,10 @@ impl<T: Decode> Decode for Option<T> {
             false => Ok(None),
         }
     }
+}
+
+fn color_applies(kind: ObjectKind, channels: usize, measurement: Measurement) -> bool {
+    measurement.colorable() && kind.measurements(channels).contains(&measurement)
 }
 
 fn group(tag: u8) -> Result<Group, &'static str> {
