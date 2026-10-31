@@ -26,6 +26,7 @@ pub(crate) struct FrameData {
     pub shading: [f32; 4],
     pub march: [f32; 4],
     pub viewport: [f32; 4],
+    pub jitter: [f32; 4],
     pub planes: [[f32; 4]; 6],
 }
 
@@ -60,8 +61,8 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 464);
-    assert!(std::mem::offset_of!(FrameData, planes) == 368);
+    assert!(size_of::<FrameData>() == 480);
+    assert!(std::mem::offset_of!(FrameData, planes) == 384);
     assert!(size_of::<SectionData>() == 160);
     assert!(size_of::<ScheduleData>() == 48);
 };
@@ -79,7 +80,6 @@ impl FrameData {
         shading: Shading,
         step_scale: f32,
         channels: usize,
-        supersample: u32,
     ) -> Self {
         let VolumeView {
             camera,
@@ -91,7 +91,7 @@ impl FrameData {
         let world = table.world;
         let grid = table.grid.counts();
         let step = step_length(camera, table, step_scale, height as f32);
-        let pixel_scale = 0.5 * (height * supersample) as f32 / (0.5 * camera.fov_y()).tan();
+        let pixel_scale = 0.5 * height as f32 / (0.5 * camera.fov_y()).tan();
         let eye = camera.eye();
         let light = camera.light_direction();
         Self {
@@ -122,6 +122,7 @@ impl FrameData {
             ],
             march: [step, shading.shadows, channels as f32, pixel_scale],
             viewport: [aspect * height as f32, height as f32, 0.0, 0.0],
+            jitter: [0.0; 4],
             planes: planes(view_projection),
         }
     }

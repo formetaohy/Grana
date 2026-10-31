@@ -11,7 +11,10 @@ use grana_pipeline::{
 use grana_project::{Project, Source as ProjectSource, ViewState};
 use grana_render::{BrickRequest, Frame, FrameInfo, Renderer, Requests};
 use grana_scene::{Dataset, Job, Measure, ObjectSetId, Origin, Progress, Scene};
-use grana_ui::{Action, BatchDataset, EguiLayer, Message, Pane, Panel, State, Viewport};
+use grana_ui::Target as FigureTarget;
+use grana_ui::{
+    Action, BatchDataset, Caption, EguiLayer, Figure, Message, Pane, Panel, State, Viewport,
+};
 use grana_volume::Spacing;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -23,9 +26,14 @@ use winit::window::{Window, WindowId};
 use crate::demo;
 use crate::gpu::Gpu;
 use crate::loader::{Event as LoaderEvent, Loader};
+use crate::snapshot;
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
-const SUPERSAMPLE: u32 = 2;
+const SAMPLE_LIMIT: u32 = 32;
+const SNAPSHOT_SCALE: u32 = 4;
+const SNAPSHOT_SAMPLES: u32 = 8;
+const SNAPSHOT_LIMIT: u32 = 8192;
+const SNAPSHOT_ATTEMPTS: u32 = 512;
 const UPLOAD_BATCH: usize = 32;
 const MAX_IN_FLIGHT: usize = 64;
 const STREAM_POLL: Duration = Duration::from_millis(16);
@@ -36,12 +44,21 @@ struct Surface {
     window: Arc<Window>,
     gpu: Gpu,
     egui: EguiLayer,
+    figure: Figure,
     renderer: Renderer,
 }
 
 struct Pending {
     path: PathBuf,
     project: Project,
+}
+
+struct Snapshot {
+    path: PathBuf,
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    size: [u32; 2],
+    attempts: u32,
 }
 
 pub struct App {
@@ -64,6 +81,7 @@ pub struct App {
     last_advance: Option<Instant>,
     project: Option<PathBuf>,
     pending: Option<Pending>,
+    snapshot: Option<Snapshot>,
     saved: Option<u64>,
     title: Option<String>,
     modifiers: ModifiersState,
@@ -99,6 +117,7 @@ impl App {
             last_advance: None,
             project: None,
             pending: None,
+            snapshot: None,
             saved: None,
             title: None,
             modifiers: ModifiersState::default(),
@@ -125,16 +144,11 @@ impl App {
         );
         let gpu = Gpu::new(window.clone());
         let egui = EguiLayer::new(&window, &gpu.device, gpu.format());
+        let figure = Figure::new(&gpu.device, gpu.format());
         let (source, pyramid) = Loader::memory(demo::movie());
         let mut scene = Scene::new(Dataset::synthetic("synthetic fluorescence", pyramid));
         let staged = demo::stage(&mut scene);
-        let mut renderer = Renderer::new(
-            &gpu.device,
-            &gpu.queue,
-            gpu.format(),
-            TEXTURE_BUDGET,
-            SUPERSAMPLE,
-        );
+        let mut renderer = Renderer::new(&gpu.device, &gpu.queue, gpu.format(), TEXTURE_BUDGET);
         renderer.set_dataset(&gpu.device, scene.dataset.pyramid());
         self.scene = Some(scene);
         self.source = Some(source);
@@ -142,6 +156,7 @@ impl App {
             window,
             gpu,
             egui,
+            figure,
             renderer,
         });
         self.start_detect(staged.spots);
@@ -200,6 +215,9 @@ impl App {
         let mut delay = self
             .render(output, volume_region, section_region)
             .unwrap_or(Duration::MAX);
+        if self.frame.samples < SAMPLE_LIMIT {
+            delay = Duration::ZERO;
+        }
         if self.streaming() {
             delay = delay.min(STREAM_POLL);
         }
@@ -235,6 +253,7 @@ impl App {
                 }
                 Action::SaveProject => self.save_project(false),
                 Action::SaveProjectAs => self.save_project(true),
+                Action::SaveSnapshot => self.begin_snapshot(),
                 Action::Fit => self.needs_fit = true,
                 Action::FitSection => self.fit_section = true,
                 Action::SetSectionAxis(axis) => {
@@ -389,6 +408,7 @@ impl App {
             window,
             gpu,
             egui,
+            figure: _,
             renderer: _,
         } = surface;
         let adapter = gpu.adapter_description.as_str();
@@ -437,6 +457,9 @@ impl App {
         volume_region: [u32; 4],
         section_region: [u32; 4],
     ) -> Option<Duration> {
+        if self.snapshot.is_some() {
+            return self.capture();
+        }
         let repaint_delay = output
             .viewport_output
             .values()
@@ -449,6 +472,7 @@ impl App {
             let size = surface.gpu.size();
             let time = scene.time();
             let region = scene.region;
+            let exposure = scene.exposure;
             let rendered = scene.rendered();
             let frame = surface.gpu.acquire()?;
             let view = frame
@@ -466,6 +490,8 @@ impl App {
                     camera: self.viewport.camera(),
                     section: self.viewport.section(),
                     region,
+                    exposure,
+                    samples: SAMPLE_LIMIT,
                     scene: &rendered.frame(),
                     prefetch: self.playing,
                 },
@@ -491,6 +517,139 @@ impl App {
         };
         self.frame = info;
         Some(repaint_delay)
+    }
+
+    fn capture(&mut self) -> Option<Duration> {
+        let Some(surface) = self.surface.as_mut() else {
+            self.snapshot = None;
+            return None;
+        };
+        let Some(scene) = self.scene.as_mut() else {
+            self.snapshot = None;
+            return None;
+        };
+        let time = scene.time();
+        let region = scene.region;
+        let exposure = scene.exposure;
+        let rendered = scene.rendered();
+        let camera = self.viewport.camera();
+        let section = self.viewport.section();
+        let outcome =
+            {
+                let job = self.snapshot.as_mut()?;
+                job.attempts += 1;
+                let exhausted = job.attempts > SNAPSHOT_ATTEMPTS;
+                let info = surface.renderer.draw(
+                    &surface.gpu.device,
+                    &surface.gpu.queue,
+                    Frame {
+                        target: &job.view,
+                        size: job.size,
+                        volume_region: [0, 0, job.size[0], job.size[1]],
+                        section_region: [0, 0, 1, 1],
+                        time,
+                        camera,
+                        section,
+                        region,
+                        exposure,
+                        samples: SNAPSHOT_SAMPLES,
+                        scene: &rendered.frame(),
+                        prefetch: false,
+                    },
+                );
+                if info.samples < SNAPSHOT_SAMPLES {
+                    if exhausted {
+                        self.message = Some(Message::error(
+                            "the snapshot could not resolve the volume being streamed",
+                        ));
+                        self.snapshot = None;
+                    }
+                    None
+                } else {
+                    let mut encoder = surface.gpu.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor {
+                            label: Some("grana.snapshot.figure"),
+                        },
+                    );
+                    let legends = grana_ui::legends(scene);
+                    let pane = self.viewport.volume_rect();
+                    let world_per_point = 2.0 * camera.distance() * (camera.fov_y() * 0.5).tan()
+                        / pane.height().max(1.0);
+                    surface.figure.paint(
+                        &surface.gpu.device,
+                        &surface.gpu.queue,
+                        &mut encoder,
+                        FigureTarget {
+                            texture: &job.view,
+                            size: job.size,
+                        },
+                        Caption {
+                            world_per_point,
+                            pixels_per_point: job.size[0] as f32 / pane.width().max(1.0),
+                            legends: &legends,
+                        },
+                    );
+                    surface.gpu.queue.submit([encoder.finish()]);
+                    let image = grana_render::read_image(
+                        &surface.gpu.device,
+                        &surface.gpu.queue,
+                        &job.texture,
+                        job.size,
+                        surface.gpu.format(),
+                    );
+                    Some((job.path.clone(), image))
+                }
+            };
+        if let Some((path, image)) = outcome {
+            self.snapshot = None;
+            if let Err(detail) = snapshot::write(&path, &image) {
+                self.message = Some(Message::error(detail));
+            }
+        }
+        Some(Duration::ZERO)
+    }
+
+    fn begin_snapshot(&mut self) {
+        let (Some(surface), Some(scene)) = (self.surface.as_ref(), self.scene.as_ref()) else {
+            return;
+        };
+        let pixels = surface.window.scale_factor() as f32;
+        let pane = physical_region(self.viewport.volume_rect(), pixels, surface.gpu.size());
+        let longest = pane[2].max(pane[3]).max(1);
+        let scale = SNAPSHOT_SCALE.min((SNAPSHOT_LIMIT / longest).max(1));
+        let size = [(pane[2] * scale).max(1), (pane[3] * scale).max(1)];
+        let suggested = format!("{}-snapshot.png", pipeline::slug(scene.dataset.name()));
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Save a snapshot")
+            .set_file_name(suggested)
+            .add_filter("PNG", &["png"])
+            .save_file()
+        else {
+            return;
+        };
+        let texture = surface.gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("grana.snapshot"),
+            size: wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: surface.gpu.format(),
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.snapshot = Some(Snapshot {
+            path,
+            texture,
+            view,
+            size,
+            attempts: 0,
+        });
+        self.message = None;
     }
 
     fn poll_requests(&mut self) {
@@ -1219,6 +1378,7 @@ impl App {
         self.progress.clear();
         self.message = None;
         self.in_flight.clear();
+        self.snapshot = None;
         self.frame = FrameInfo::default();
         self.repaint_at = Some(Instant::now());
         self.playing = false;

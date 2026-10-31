@@ -72,6 +72,7 @@ grana-volume = { workspace = true }
 grana-zarr = { workspace = true }
 egui = { workspace = true }
 glam = { workspace = true }
+png = "0.18"
 pollster = { workspace = true }
 rfd = { workspace = true }
 wgpu = { workspace = true }

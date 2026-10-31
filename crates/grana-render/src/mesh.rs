@@ -78,13 +78,14 @@ struct MeshUniforms {
     shading: [f32; 4],
     region_min: [f32; 4],
     region_max: [f32; 4],
+    jitter: [f32; 4],
 }
 
 const _: () = {
     assert!(size_of::<PointData>() == 16);
     assert!(size_of::<ObjectData>() == 80);
     assert!(size_of::<StyleData>() == 32);
-    assert!(size_of::<MeshUniforms>() == 144);
+    assert!(size_of::<MeshUniforms>() == 160);
 };
 
 pub(crate) struct MeshPasses {
@@ -353,6 +354,7 @@ impl MeshPasses {
             ],
             region_min: frame.region_min,
             region_max: frame.region_max,
+            jitter: frame.jitter,
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }

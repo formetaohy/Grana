@@ -1,3 +1,5 @@
+use std::hash::{Hash, Hasher};
+
 use bytemuck::{Pod, Zeroable};
 use grana_gpu::{InstanceCommands, Table};
 use wgpu::{
@@ -60,6 +62,13 @@ impl Marker {
             center_radius: [center[0], center[1], center[2], radius],
             color_alpha: [red, green, blue, alpha],
         }
+    }
+}
+
+impl Hash for Marker {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.center_radius.map(f32::to_bits).hash(state);
+        self.color_alpha.map(f32::to_bits).hash(state);
     }
 }
 

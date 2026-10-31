@@ -8,6 +8,7 @@ pub enum Action {
     OpenProject,
     SaveProject,
     SaveProjectAs,
+    SaveSnapshot,
     Fit,
     FitSection,
     SetSectionAxis(Axis),

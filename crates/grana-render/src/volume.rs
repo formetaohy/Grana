@@ -25,12 +25,12 @@ const SHADER: &str = concat!(
 const BLEND: BlendState = BlendState {
     color: BlendComponent {
         src_factor: BlendFactor::One,
-        dst_factor: BlendFactor::SrcAlpha,
+        dst_factor: BlendFactor::OneMinusSrcAlpha,
         operation: BlendOperation::Add,
     },
     alpha: BlendComponent {
         src_factor: BlendFactor::One,
-        dst_factor: BlendFactor::Zero,
+        dst_factor: BlendFactor::OneMinusSrcAlpha,
         operation: BlendOperation::Add,
     },
 };

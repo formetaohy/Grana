@@ -115,7 +115,8 @@ fn shade_volume(
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let eye = frame.eye.xyz;
-    let direction = normalize(unproject(vec3<f32>(input.ndc, 1.0)) - eye);
+    let ndc = input.ndc + frame.jitter.xy;
+    let direction = normalize(unproject(vec3<f32>(ndc, 1.0)) - eye);
     let box_min = frame.box_min.xyz;
     let box_size = frame.box_size.xyz;
     let box_max = box_min + box_size;
@@ -128,7 +129,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let entry = max(max(lowest_t.x, lowest_t.y), lowest_t.z);
     let object = object_distance(
         textureLoad(object_depth, vec2<i32>(input.clip_position.xy), 0),
-        input.ndc,
+        ndc,
     );
     let clip = region_interval(eye, direction);
     let exit = min(
@@ -148,7 +149,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let gradient_step = vec3<f32>(1.0) / frame.dims.xyz;
         let direction_uvw = direction / box_size;
         let voxels_per_world = length(direction / voxel_world);
-        let jitter = interleaved_gradient(input.clip_position.xy) * step_length;
+        let jitter = sample_noise(input.clip_position.xy, frame.jitter.z) * step_length;
 
         var t = start + min(jitter, exit - start);
         var steps = 0u;
@@ -209,5 +210,5 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    return vec4<f32>(radiance, transmittance);
+    return vec4<f32>(radiance, 1.0 - transmittance);
 }

@@ -34,6 +34,12 @@ fn dither(position: vec2<f32>) -> f32 {
     return fract(52.9829189 * fract(dot(position, vec2<f32>(0.06711056, 0.00583715))));
 }
 
-fn interleaved_gradient(position: vec2<f32>) -> f32 {
-    return fract(52.9829189 * fract(dot(position, vec2<f32>(0.06711056, 0.00583715))));
+fn sample_noise(position: vec2<f32>, sample: f32) -> f32 {
+    var seed = u32(position.x) * 1973u + u32(position.y) * 9277u + u32(sample) * 26699u + 1u;
+    seed = (seed ^ 61u) ^ (seed >> 16u);
+    seed = seed * 9u;
+    seed = seed ^ (seed >> 4u);
+    seed = seed * 0x27d4ebu;
+    seed = seed ^ (seed >> 15u);
+    return f32(seed) * 2.3283064e-10;
 }

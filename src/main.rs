@@ -2,6 +2,7 @@ mod app;
 mod demo;
 mod gpu;
 mod loader;
+mod snapshot;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

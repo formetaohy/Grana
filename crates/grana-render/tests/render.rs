@@ -1,8 +1,8 @@
 mod common;
 
 use common::{
-    SIDE, Session, blue, bright_fraction, channels, dark_fraction, device, green, green_pixels,
-    green_sum, lit, pixel, read_pixels, red_count, red_pixels, settle, target,
+    SAMPLES, SIDE, Session, blue, bright_fraction, channels, dark_fraction, device, green,
+    green_pixels, green_sum, lit, pixel, read_pixels, red_count, red_pixels, settle, target,
 };
 use glam::Vec3;
 use grana_object::{Mesh, MeshVertex, PackedMesh, Track, TrackNode, TrackSet};
@@ -15,7 +15,6 @@ use grana_volume::{
 };
 
 const BUDGET: u64 = 512 << 20;
-const SAMPLES: u32 = 2;
 const WHOLE: [u32; 4] = [0, 0, SIDE, SIDE];
 const CORNER: [u32; 4] = [0, 0, 1, 1];
 
@@ -54,13 +53,7 @@ fn streams_two_channels() {
         layers: &[],
         markers: &[],
     };
-    let mut renderer = Renderer::new(
-        &device,
-        &queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        BUDGET,
-        SAMPLES,
-    );
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
     renderer.set_dataset(&device, &pyramid);
     let requests = settle(
         &mut renderer,
@@ -123,7 +116,6 @@ fn bounds_the_demand_to_the_cache() {
         &queue,
         wgpu::TextureFormat::Rgba8Unorm,
         100 * 78_608,
-        SAMPLES,
     );
     renderer.set_dataset(&device, &pyramid);
     let session = Session {
@@ -229,13 +221,7 @@ fn prefetches_the_next_frame() {
         layers: &[],
         markers: &[],
     };
-    let mut renderer = Renderer::new(
-        &device,
-        &queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        BUDGET,
-        SAMPLES,
-    );
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
     renderer.set_dataset(&device, &pyramid);
     let grid = BrickGrid::new(movie.frame(0).extent());
     let source =
@@ -313,13 +299,7 @@ fn switches_frames() {
         layers: &[],
         markers: &[],
     };
-    let mut renderer = Renderer::new(
-        &device,
-        &queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        BUDGET,
-        SAMPLES,
-    );
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
     renderer.set_dataset(&device, &pyramid);
     let source = |request: grana_render::BrickRequest| {
         let grid = BrickGrid::new(movie.frame(0).extent());
@@ -433,13 +413,7 @@ fn clips_to_a_region_box() {
         layers: &[],
         markers: &[],
     };
-    let mut renderer = Renderer::new(
-        &device,
-        &queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        BUDGET,
-        SAMPLES,
-    );
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
     renderer.set_dataset(&device, &pyramid);
     let source = |request: grana_render::BrickRequest| {
         let grid = BrickGrid::new(volume.extent());
@@ -859,7 +833,6 @@ fn switches_levels() {
         &queue,
         wgpu::TextureFormat::Rgba8Unorm,
         100 * 78_608,
-        SAMPLES,
     );
     renderer.set_dataset(&device, &pyramid);
     let source = |request: grana_render::BrickRequest| {
@@ -972,13 +945,7 @@ fn section_render(
         layers: &[],
         markers: &[],
     };
-    let mut renderer = Renderer::new(
-        device,
-        queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        BUDGET,
-        SAMPLES,
-    );
+    let mut renderer = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
     renderer.set_dataset(device, &pyramid);
     settle(
         &mut renderer,
@@ -1106,13 +1073,7 @@ fn render(setup: Setup<'_>) -> Vec<[u8; 4]> {
         layers: &layers,
         markers,
     };
-    let mut renderer = Renderer::new(
-        device,
-        queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        BUDGET,
-        SAMPLES,
-    );
+    let mut renderer = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
     renderer.set_dataset(device, &pyramid);
     settle(
         &mut renderer,
@@ -1330,13 +1291,7 @@ fn keeps_object_geometry_resident() {
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
     let section = SectionCamera::new(Axis::Z);
-    let mut renderer = Renderer::new(
-        &device,
-        &queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        BUDGET,
-        SAMPLES,
-    );
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
     renderer.set_dataset(&device, &pyramid);
     let first = [Layer {
         key: LayerKey::stable(1, 0, 1),
@@ -1400,6 +1355,8 @@ impl Resident<'_> {
                     camera: self.camera,
                     section: self.section,
                     region: Region::none(),
+                    exposure: 1.0,
+                    samples: SAMPLES,
                     scene: &scene,
                     prefetch: false,
                 },
@@ -1501,71 +1458,61 @@ fn tracks() -> TrackSet {
 }
 
 #[test]
-fn supersamples_object_edges() {
+fn accumulates_samples_until_the_view_changes() {
     let Some((device, queue)) = device() else {
         return;
     };
     let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
     let volume = volume(0);
     let pyramid = volume.pyramid();
-    let mesh = PackedMesh::new(cubes());
-    let styles = [Style::new([1.0, 1.0, 1.0], true, false); 2];
-    let layers = [Layer {
-        key: LayerKey::stable(1, 0, 1),
-        mesh: &mesh,
-        style_start: 0,
-        style_count: 2,
-    }];
     let transfer = TransferFunction::tinted([0.3, 0.6, 1.0]);
     let transfers = [transfer];
     let channels = channels(&pyramid, &transfers);
-    let mut camera = Camera::new(35.0);
-    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let camera = Camera::new(35.0);
     let section = SectionCamera::new(Axis::Z);
     let scene = SceneFrame {
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,
-        styles: &styles,
-        layers: &layers,
+        styles: &[],
+        layers: &[],
         markers: &[],
     };
-    let mut edges = [0usize; 2];
-    for (slot, samples) in [1u32, 2].into_iter().enumerate() {
-        let view = texture.create_view(&Default::default());
-        let pixels = render_samples(
-            &texture,
-            &volume,
-            Session {
-                device: &device,
-                queue: &queue,
-                target: &view,
-                camera: &camera,
-                section: &section,
-                scene: &scene,
-                volume_region: WHOLE,
-                section_region: CORNER,
-                region: Region::none(),
-                time: 0,
-            },
-            samples,
-        );
-        edges[slot] = pixels
-            .iter()
-            .filter(|pixel| {
-                let sum = pixel
-                    .iter()
-                    .take(3)
-                    .map(|value| u32::from(*value))
-                    .sum::<u32>();
-                (140..620).contains(&sum)
-            })
-            .count();
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    let session = Session {
+        device: &device,
+        queue: &queue,
+        target: &view,
+        camera: &camera,
+        section: &section,
+        scene: &scene,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        region: Region::none(),
+        time: 0,
+    };
+    let first = renderer.draw(&device, &queue, common::frame(&session));
+    assert_eq!(first.samples, 1, "a new view resolves one sample");
+    let second = renderer.draw(&device, &queue, common::frame(&session));
+    assert_eq!(second.samples, 2, "a still view accumulates another sample");
+    for _ in 2..SAMPLES {
+        renderer.draw(&device, &queue, common::frame(&session));
     }
-    assert!(
-        edges[1] > edges[0],
-        "supersampling leaves the silhouettes as hard as before: {edges:?}"
+    let settled = renderer.draw(&device, &queue, common::frame(&session));
+    assert_eq!(settled.samples, SAMPLES, "accumulation stops at the limit");
+    let mut moved = Camera::new(35.0);
+    moved.zoom(0.25);
+    let departed = renderer.draw(
+        &device,
+        &queue,
+        common::frame(&Session {
+            camera: &moved,
+            ..session
+        }),
     );
+    assert_eq!(departed.samples, 1, "a moved camera restarts accumulation");
 }
 
 #[test]
@@ -1611,7 +1558,6 @@ fn shadows_darken_the_volume() {
                 region: Region::none(),
                 time: 0,
             },
-            SAMPLES,
         );
         lit[slot] = green_sum(&pixels);
     }
@@ -1621,18 +1567,12 @@ fn shadows_darken_the_volume() {
     );
 }
 
-fn render_samples(
-    texture: &wgpu::Texture,
-    volume: &Volume,
-    session: Session<'_>,
-    samples: u32,
-) -> Vec<[u8; 4]> {
+fn render_samples(texture: &wgpu::Texture, volume: &Volume, session: Session<'_>) -> Vec<[u8; 4]> {
     let mut renderer = Renderer::new(
         session.device,
         session.queue,
         wgpu::TextureFormat::Rgba8Unorm,
         BUDGET,
-        samples,
     );
     renderer.set_dataset(session.device, &volume.pyramid());
     settle(&mut renderer, session, |request| {

@@ -116,6 +116,7 @@ impl Decode for SceneState {
             selected: reader.count(1)?,
             shading: Shading::decode(reader)?,
             step_scale: positive(reader.f32()?)?,
+            exposure: positive(reader.f32()?)?,
             region: Region::decode(reader)?,
             time: reader.u32()?,
             selection: Option::<SelectionState>::decode(reader)?,

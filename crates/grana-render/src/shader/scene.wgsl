@@ -16,6 +16,7 @@ struct FrameData {
     shading: vec4<f32>,
     march: vec4<f32>,
     viewport: vec4<f32>,
+    jitter: vec4<f32>,
     planes: array<vec4<f32>, 6>,
 }
 

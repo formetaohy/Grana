@@ -128,6 +128,7 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
             levels,
             volume_level: state.frame.volume.level,
             section_level: state.frame.section.level,
+            samples: state.frame.samples,
             volume_rect: volume,
             section_rect: section,
             region: &mut state.scene.region,
@@ -218,6 +219,12 @@ fn file_section(ui: &mut Ui, actions: &mut Vec<Action>, state: &State<'_>) {
             actions.push(Action::SaveProjectAs);
         }
     });
+    if ui
+        .add_enabled(!busy, egui::Button::new("Save snapshot"))
+        .clicked()
+    {
+        actions.push(Action::SaveSnapshot);
+    }
     match state.project {
         Some(name) => {
             let marker = if state.dirty { " •" } else { "" };
@@ -504,6 +511,11 @@ fn region_section(ui: &mut Ui, state: &mut State<'_>) {
 fn rendering_section(ui: &mut Ui, scene: &mut Scene) {
     ui.strong("Rendering");
     ui.add(
+        egui::Slider::new(&mut scene.exposure, 0.05..=20.0)
+            .text("exposure")
+            .logarithmic(true),
+    );
+    ui.add(
         egui::Slider::new(&mut scene.step_scale, 0.25..=2.0)
             .text("sampling distance")
             .logarithmic(true),
@@ -601,46 +613,7 @@ fn camera_section(ui: &mut Ui, actions: &mut Vec<Action>) {
 }
 
 fn legends(state: &State<'_>) -> Vec<Legend> {
-    let names = state
-        .scene
-        .dataset
-        .channels()
-        .iter()
-        .map(|channel| channel.name().to_string())
-        .collect::<Vec<_>>();
-    let mut legends = Vec::new();
-    for set in state.scene.objects.iter() {
-        if !set.visible() || !state.scene.channels[set.channel()].enabled {
-            continue;
-        }
-        if set.detected() > 0
-            && let Some(measurement) = set.object_coloring().metric()
-            && let Some(extent) = set.object_extent()
-        {
-            legends.push(Legend {
-                title: format!("{} · {}", set.name(), measurement.label(&names)),
-                palette: set.object_coloring().palette(),
-                reversed: set.object_coloring().reversed(),
-                extent,
-                unit: measurement.unit(),
-                decimals: measurement.decimals(),
-            });
-        }
-        if let Some(measurement) = set.track_coloring().metric()
-            && set.tracks().is_some_and(|layer| layer.visible())
-            && let Some(extent) = set.track_extent()
-        {
-            legends.push(Legend {
-                title: format!("{} tracks · {}", set.name(), measurement.label()),
-                palette: set.track_coloring().palette(),
-                reversed: set.track_coloring().reversed(),
-                extent,
-                unit: measurement.unit(),
-                decimals: measurement.decimals(),
-            });
-        }
-    }
-    legends
+    overlay::legends(state.scene)
 }
 
 pub(crate) fn progress(analysis: &[Progress], job: Job) -> Option<Progress> {

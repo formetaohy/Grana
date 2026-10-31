@@ -88,6 +88,7 @@ impl Encode for SceneState {
         writer.count(self.selected);
         self.shading.encode(writer);
         writer.f32(self.step_scale);
+        writer.f32(self.exposure);
         self.region.encode(writer);
         writer.u32(self.time);
         self.selection.encode(writer);

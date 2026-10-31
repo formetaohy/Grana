@@ -5,6 +5,7 @@ struct MeshUniforms {
     shading: vec4<f32>,
     region_min: vec4<f32>,
     region_max: vec4<f32>,
+    jitter: vec4<f32>,
 }
 
 struct ObjectData {
@@ -64,8 +65,9 @@ fn decode_normal(packed: vec2<f32>) -> vec3<f32> {
 fn vs_main(input: VertexInput) -> VertexOutput {
     let object = objects[input.object];
     let position = object.minimum.xyz + input.position.xyz * object.extent.xyz;
+    let clip = mesh.view_projection * vec4<f32>(position, 1.0);
     var output: VertexOutput;
-    output.clip_position = mesh.view_projection * vec4<f32>(position, 1.0);
+    output.clip_position = vec4<f32>(clip.xy + mesh.jitter.xy * clip.w, clip.zw);
     output.normal = decode_normal(input.normal);
     output.position = position;
     output.object = input.object;

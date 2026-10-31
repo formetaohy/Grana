@@ -1128,6 +1128,7 @@ dependencies = [
  "grana-ui",
  "grana-volume",
  "grana-zarr",
+ "png",
  "pollster",
  "rfd",
  "wgpu",

@@ -20,6 +20,7 @@ pub struct SceneState {
     pub selected: usize,
     pub shading: Shading,
     pub step_scale: f32,
+    pub exposure: f32,
     pub region: Region,
     pub time: u32,
     pub selection: Option<SelectionState>,
@@ -103,6 +104,7 @@ impl Scene {
             selected: self.selected,
             shading: self.shading,
             step_scale: self.step_scale,
+            exposure: self.exposure,
             region: self.region,
             time: self.time(),
             selection: self.selection().map(|selection| SelectionState {
@@ -131,6 +133,7 @@ impl Scene {
         self.selected = state.selected;
         self.shading = state.shading;
         self.step_scale = state.step_scale;
+        self.exposure = state.exposure;
         self.region = state.region;
         self.objects.restore(state.sets, &self.dataset);
         self.coloc
@@ -163,6 +166,7 @@ impl Scene {
         }
         hash = mix(hash, self.selected as u64);
         hash = mix(hash, u64::from(self.step_scale.to_bits()));
+        hash = mix(hash, u64::from(self.exposure.to_bits()));
         for value in [
             self.shading.ambient,
             self.shading.diffuse,

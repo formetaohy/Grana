@@ -5,6 +5,7 @@ use grana_render::{
 use grana_volume::{BrickData, Pyramid, Region};
 
 pub const SIDE: u32 = 256;
+pub const SAMPLES: u32 = 4;
 
 #[derive(Clone, Copy)]
 pub struct Session<'a> {
@@ -67,6 +68,8 @@ pub fn frame<'a>(session: &Session<'a>) -> Frame<'a, 'a> {
         camera: session.camera,
         section: session.section,
         region: session.region,
+        exposure: 1.0,
+        samples: SAMPLES,
         scene: session.scene,
         prefetch: false,
     }

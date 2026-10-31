@@ -1,3 +1,6 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use bytemuck::cast_slice;
 use grana_gpu::Readback;
 use grana_volume::{
@@ -27,9 +30,10 @@ use crate::planner::{
     select_volume_level, volume_dispatch,
 };
 use crate::present::Present;
+use crate::sample;
 use crate::schema::SceneFrame;
 use crate::section::SectionPass;
-use crate::target::SceneTarget;
+use crate::target::{self, SceneTarget};
 use crate::volume::VolumePass;
 
 const DUMMY_VOXEL: [u16; 1] = [0];
@@ -59,6 +63,7 @@ pub struct FrameInfo {
     pub section: ViewInfo,
     pub bytes: u64,
     pub geometry: u64,
+    pub samples: u32,
 }
 
 #[derive(Default)]
@@ -80,6 +85,8 @@ pub struct Frame<'a, 'b> {
     pub camera: &'a Camera,
     pub section: &'a SectionCamera,
     pub region: Region,
+    pub exposure: f32,
+    pub samples: u32,
     pub scene: &'a SceneFrame<'b>,
     pub prefetch: bool,
 }
@@ -147,11 +154,43 @@ impl Residency {
     }
 }
 
+struct FrameTarget {
+    scene: SceneTarget,
+    accumulation: TextureView,
+    accumulate_group: BindGroup,
+    present_group: BindGroup,
+    size: [u32; 2],
+    samples: u32,
+    signature: Option<u64>,
+}
+
+impl FrameTarget {
+    fn new(
+        device: &Device,
+        depth_layout: &BindGroupLayout,
+        present: &Present,
+        size: [u32; 2],
+    ) -> Self {
+        let scene = SceneTarget::new(device, depth_layout, size);
+        let accumulation = target::accumulation(device, size);
+        let accumulate_group = present.bind(device, scene.color());
+        let present_group = present.bind(device, &accumulation);
+        Self {
+            scene,
+            accumulation,
+            accumulate_group,
+            present_group,
+            size,
+            samples: 0,
+            signature: None,
+        }
+    }
+}
+
 pub struct Renderer {
     layouts: Layouts,
     present: Present,
-    present_group: Option<BindGroup>,
-    target: Option<SceneTarget>,
+    frame_target: Option<FrameTarget>,
     scene: Option<crate::table::SceneTable>,
     atlas: Option<Atlas>,
     bricks: Vec<Option<BrickTable>>,
@@ -168,7 +207,6 @@ pub struct Renderer {
     channels: usize,
     time: u32,
     budget: u64,
-    supersample: u32,
     feedback: Option<Readback>,
     frames: Vec<Option<Residency>>,
     counts: Vec<u32>,
@@ -183,17 +221,8 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(
-        device: &Device,
-        queue: &Queue,
-        format: TextureFormat,
-        budget: u64,
-        supersample: u32,
-    ) -> Self {
-        assert!(
-            (1..=4).contains(&supersample),
-            "a renderer resolves one to four samples per axis"
-        );
+    pub fn new(device: &Device, queue: &Queue, format: TextureFormat, budget: u64) -> Self {
+        assert!(budget > 0, "a renderer needs a residency budget");
         let layouts = Layouts::new(device);
         let dummy = dummy_texture(device, queue);
         let atlas_sampler = device.create_sampler(&SamplerDescriptor {
@@ -208,8 +237,7 @@ impl Renderer {
         });
         Self {
             present: Present::new(device, format),
-            present_group: None,
-            target: None,
+            frame_target: None,
             scene: None,
             atlas: None,
             bricks: Vec::new(),
@@ -227,7 +255,6 @@ impl Renderer {
             channels: 0,
             time: 0,
             budget,
-            supersample,
             feedback: None,
             frames: vec![None; FEEDBACK_SLOTS],
             counts: vec![0; CENSUS_LEVELS],
@@ -240,6 +267,10 @@ impl Renderer {
             settled: None,
             info: FrameInfo::default(),
         }
+    }
+
+    pub fn format(&self) -> TextureFormat {
+        self.present.format()
     }
 
     pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) {
@@ -293,6 +324,7 @@ impl Renderer {
         self.time = 0;
         self.counts.fill(0);
         self.meshes.clear();
+        self.frame_target = None;
         self.epoch += 1;
         self.pin = 0;
         self.settled = None;
@@ -386,8 +418,43 @@ impl Renderer {
     }
 
     pub fn draw(&mut self, device: &Device, queue: &Queue, frame: Frame<'_, '_>) -> FrameInfo {
+        assert!(
+            frame.size[0] > 0 && frame.size[1] > 0,
+            "the surface is not empty"
+        );
+        assert!(
+            frame.exposure.is_finite() && frame.exposure > 0.0,
+            "an exposure scales radiance by a positive factor"
+        );
+        assert!(frame.samples > 0, "a target resolves at least one sample");
+        if self
+            .frame_target
+            .as_ref()
+            .is_none_or(|target| target.size != frame.size)
+        {
+            self.frame_target = Some(FrameTarget::new(
+                device,
+                &self.layouts.depth,
+                &self.present,
+                frame.size,
+            ));
+            self.settled = None;
+        }
+        let mut target = self.frame_target.take().expect("the frame target is ready");
+        let info = self.render(device, queue, &mut target, frame);
+        self.frame_target = Some(target);
+        info
+    }
+
+    fn render(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        target: &mut FrameTarget,
+        frame: Frame<'_, '_>,
+    ) -> FrameInfo {
         let Frame {
-            target,
+            target: surface,
             size,
             volume_region,
             section_region,
@@ -395,26 +462,15 @@ impl Renderer {
             camera,
             section,
             region,
+            exposure,
+            samples,
             scene,
             prefetch,
         } = frame;
-        assert!(size[0] > 0 && size[1] > 0, "the surface is not empty");
         assert!(
             inside(volume_region, size) && inside(section_region, size),
             "the panes lie on the surface"
         );
-        if self
-            .target
-            .as_ref()
-            .is_none_or(|scene_target| scene_target.size() != size)
-        {
-            let scene_target =
-                SceneTarget::new(device, &self.layouts.depth, size, self.supersample);
-            self.present_group = Some(self.present.bind(device, scene_target.color()));
-            self.target = Some(scene_target);
-        }
-        let render_volume = supersampled(volume_region, self.supersample);
-        let render_section = supersampled(section_region, self.supersample);
         self.time = time;
         self.prefetch = prefetch;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -423,8 +479,6 @@ impl Renderer {
         let Self {
             layouts,
             present,
-            present_group,
-            target: scene_target,
             scene: scene_table,
             atlas,
             bricks,
@@ -436,7 +490,6 @@ impl Renderer {
             markers,
             pyramid,
             channels,
-            supersample,
             feedback,
             frames,
             counts,
@@ -448,7 +501,6 @@ impl Renderer {
             info,
             ..
         } = self;
-        let supersample = *supersample;
         let (Some(pyramid), Some(atlas), Some(scene_table), Some(planner), Some(census)) = (
             pyramid.as_ref(),
             atlas.as_mut(),
@@ -456,7 +508,7 @@ impl Renderer {
             planner.as_mut(),
             census.as_ref(),
         ) else {
-            clear(&mut encoder, target);
+            clear(&mut encoder, surface);
             queue.submit([encoder.finish()]);
             return *info;
         };
@@ -469,13 +521,6 @@ impl Renderer {
             time < pyramid.frame_count(),
             "the requested frame lies inside the time series"
         );
-        let scene_target = scene_target.as_ref().expect("the scene target is ready");
-        assert!(
-            inside(render_volume, scene_target.render())
-                && inside(render_section, scene_target.render()),
-            "the supersampled panes lie on the render target"
-        );
-        let present_group = present_group.as_ref().expect("the present group is ready");
         let volume_width = volume_region[2].max(1);
         let volume_height = volume_region[3].max(1);
         let section_width = section_region[2].max(1);
@@ -568,7 +613,7 @@ impl Renderer {
             .expect("the volume level table exists");
         let section_data =
             SectionData::new(camera, section, section_aspect, section_table, *channels);
-        let frame_data = FrameData::new(
+        let mut frame_data = FrameData::new(
             VolumeView {
                 camera,
                 region,
@@ -579,131 +624,162 @@ impl Renderer {
             scene.shading,
             scene.step_scale,
             *channels,
-            supersample,
         );
-        scene_table.write(
-            device,
-            queue,
-            pyramid,
-            scene.channels,
-            frame_data,
-            section_data,
-        );
-        let range = section_range(
-            pyramid,
-            section_level,
-            camera,
-            section,
-            section_aspect,
-            region,
-        );
-        if unsettled {
-            census.prepare(queue);
-            planner.volume.prepare(
-                queue,
-                Schedule {
-                    time,
-                    level: volume_level,
-                    capacity: volume_capacity as u32,
-                    layer: 0,
-                    range: SectionRange::default(),
-                    dispatch: volume_dispatch(volume_table),
-                    bucket_scale: bucket_scale(camera, volume_table.world.to_array()),
-                },
-            );
-            planner.section.prepare(
-                queue,
-                Schedule {
-                    time,
-                    level: section_level,
-                    capacity: section_capacity as u32,
-                    layer: range.layer,
-                    range,
-                    dispatch: range.dispatch(),
-                    bucket_scale: 0.0,
-                },
-            );
-            planner.volume.bind_level(device, layouts, volume_table);
-            planner.section.bind_level(device, layouts, section_table);
+        let signature = Signature {
+            scene,
+            data: &frame_data,
+            levels,
+            time,
+            exposure,
+            epoch: *epoch,
+            content: *content,
+            size,
+            volume_region,
+            section_region,
         }
-        meshes.set(device, queue, layouts, scene);
-        meshes.write_uniforms(queue, &frame_data, scene.shading);
-        markers.prepare(device, queue, layouts, scene.markers);
-        let scene_group = scene_table.group();
-        if unsettled {
-            census.encode(&mut encoder, scene_group);
-            planner.encode(&mut encoder, scene_group, &planner.volume, &planner.section);
+        .digest();
+        if target.signature != Some(signature) {
+            target.signature = Some(signature);
+            target.samples = 0;
         }
-        if scene.shading.shadows > 0.0
-            && let Some(light) = light.as_ref()
-        {
-            light.encode(
+        let reset = target.samples == 0;
+        info.samples = target.samples;
+        if target.samples < samples {
+            target.samples += 1;
+            info.samples = target.samples;
+            let offset = sample::offset(target.samples - 1, size);
+            frame_data.jitter = [offset.x, offset.y, (target.samples - 1) as f32, 0.0];
+            let range = section_range(
+                pyramid,
+                section_level,
+                camera,
+                section,
+                section_aspect,
+                region,
+            );
+            scene_table.write(
+                device,
+                queue,
+                pyramid,
+                scene.channels,
+                frame_data,
+                section_data,
+            );
+            if unsettled {
+                census.prepare(queue);
+                planner.volume.prepare(
+                    queue,
+                    Schedule {
+                        time,
+                        level: volume_level,
+                        capacity: volume_capacity as u32,
+                        layer: 0,
+                        range: SectionRange::default(),
+                        dispatch: volume_dispatch(volume_table),
+                        bucket_scale: bucket_scale(camera, volume_table.world.to_array()),
+                    },
+                );
+                planner.section.prepare(
+                    queue,
+                    Schedule {
+                        time,
+                        level: section_level,
+                        capacity: section_capacity as u32,
+                        layer: range.layer,
+                        range,
+                        dispatch: range.dispatch(),
+                        bucket_scale: 0.0,
+                    },
+                );
+                planner.volume.bind_level(device, layouts, volume_table);
+                planner.section.bind_level(device, layouts, section_table);
+            }
+            meshes.set(device, queue, layouts, scene);
+            meshes.write_uniforms(queue, &frame_data, scene.shading);
+            markers.prepare(device, queue, layouts, scene.markers);
+            let scene_group = scene_table.group();
+            if unsettled {
+                census.encode(&mut encoder, scene_group);
+                planner.encode(&mut encoder, scene_group, &planner.volume, &planner.section);
+            }
+            if (reset || unsettled)
+                && scene.shading.shadows > 0.0
+                && let Some(light) = light.as_ref()
+            {
+                light.encode(
+                    &mut encoder,
+                    scene_group,
+                    volume_table.group(),
+                    atlas.group(),
+                );
+            }
+            meshes.cull_volume(&mut encoder, scene_group);
+            meshes.cull_section(&mut encoder, scene_group);
+            markers.cull_volume(&mut encoder, scene_group);
+            markers.cull_section(&mut encoder, scene_group);
+            present.clear(&mut encoder, target.scene.color());
+            clear_depth(&mut encoder, target.scene.depth());
+            meshes.draw_volume(
                 &mut encoder,
+                target.scene.color(),
+                target.scene.depth(),
+                volume_region,
+            );
+            markers.draw_volume(
+                &mut encoder,
+                target.scene.color(),
+                target.scene.depth(),
+                volume_region,
                 scene_group,
-                volume_table.group(),
-                atlas.group(),
+            );
+            let light_group = light
+                .as_ref()
+                .map(Light::group)
+                .expect("the light is ready");
+            volume.draw(
+                &mut encoder,
+                crate::volume::VolumeFrame {
+                    target: target.scene.color(),
+                    region: volume_region,
+                    scene: scene_group,
+                    level: volume_table.group(),
+                    atlas: atlas.group(),
+                    depth_group: target.scene.depth_group(),
+                    light: light_group,
+                },
+            );
+            section_pass.draw(
+                &mut encoder,
+                crate::section::SectionFrame {
+                    target: target.scene.color(),
+                    region: section_region,
+                    scene: scene_group,
+                    level: section_table.group(),
+                    atlas: atlas.group(),
+                },
+            );
+            meshes.draw_section(
+                &mut encoder,
+                target.scene.color(),
+                target.scene.depth(),
+                section_region,
+                scene_group,
+            );
+            markers.draw_section(
+                &mut encoder,
+                target.scene.color(),
+                section_region,
+                scene_group,
+            );
+            present.accumulate(
+                &mut encoder,
+                &target.accumulation,
+                &target.accumulate_group,
+                reset,
             );
         }
-        meshes.cull_volume(&mut encoder, scene_group);
-        meshes.cull_section(&mut encoder, scene_group);
-        markers.cull_volume(&mut encoder, scene_group);
-        markers.cull_section(&mut encoder, scene_group);
-        present.background(&mut encoder, scene_target.color(), render_volume);
-        present.write(queue, supersample);
-        clear_depth(&mut encoder, scene_target.depth());
-        meshes.draw_volume(
-            &mut encoder,
-            scene_target.color(),
-            scene_target.depth(),
-            render_volume,
-        );
-        markers.draw_volume(
-            &mut encoder,
-            scene_target.color(),
-            scene_target.depth(),
-            render_volume,
-            scene_group,
-        );
-        let light_group = light
-            .as_ref()
-            .map(Light::group)
-            .expect("the light is ready");
-        volume.draw(
-            &mut encoder,
-            crate::volume::VolumeFrame {
-                target: scene_target.color(),
-                region: render_volume,
-                scene: scene_group,
-                level: volume_table.group(),
-                atlas: atlas.group(),
-                depth_group: scene_target.depth_group(),
-                light: light_group,
-            },
-        );
-        section_pass.draw(
-            &mut encoder,
-            crate::section::SectionFrame {
-                target: scene_target.color(),
-                region: render_section,
-                scene: scene_group,
-                level: section_table.group(),
-                atlas: atlas.group(),
-            },
-        );
-        meshes.draw_section(
-            &mut encoder,
-            scene_target.color(),
-            scene_target.depth(),
-            render_section,
-            scene_group,
-        );
-        markers.draw_section(
-            &mut encoder,
-            scene_target.color(),
-            render_section,
-            scene_group,
-        );
-        present.present(&mut encoder, target, present_group);
+        present.write(queue, exposure, target.samples);
+        present.present(&mut encoder, surface, &target.present_group);
         if unsettled
             && let Some(feedback) = feedback.as_mut()
             && let Some(slot) = feedback.reserve()
@@ -831,6 +907,79 @@ impl Renderer {
     }
 }
 
+struct Signature<'a, 'b> {
+    scene: &'a SceneFrame<'b>,
+    data: &'a FrameData,
+    levels: Levels,
+    time: u32,
+    exposure: f32,
+    epoch: u64,
+    content: u64,
+    size: [u32; 2],
+    volume_region: [u32; 4],
+    section_region: [u32; 4],
+}
+
+impl Signature<'_, '_> {
+    fn digest(self) -> u64 {
+        let Self {
+            scene,
+            data,
+            levels,
+            time,
+            exposure,
+            epoch,
+            content,
+            size,
+            volume_region,
+            section_region,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        bytemuck::bytes_of(data).hash(&mut hasher);
+        exposure.to_bits().hash(&mut hasher);
+        time.hash(&mut hasher);
+        epoch.hash(&mut hasher);
+        content.hash(&mut hasher);
+        size.hash(&mut hasher);
+        volume_region.hash(&mut hasher);
+        section_region.hash(&mut hasher);
+        levels.volume.hash(&mut hasher);
+        levels.section.hash(&mut hasher);
+        levels.volume_capacity.hash(&mut hasher);
+        levels.section_capacity.hash(&mut hasher);
+        scene.channels.len().hash(&mut hasher);
+        for channel in scene.channels {
+            channel.visible.hash(&mut hasher);
+            channel.opacity.to_bits().hash(&mut hasher);
+            channel.window.min().to_bits().hash(&mut hasher);
+            channel.window.max().to_bits().hash(&mut hasher);
+            channel.transfer.stops().len().hash(&mut hasher);
+            for stop in channel.transfer.stops() {
+                stop.position().to_bits().hash(&mut hasher);
+                stop.opacity().to_bits().hash(&mut hasher);
+                stop.color().map(f32::to_bits).hash(&mut hasher);
+            }
+        }
+        scene.layers.len().hash(&mut hasher);
+        for layer in scene.layers {
+            layer.key.hash(&mut hasher);
+            layer.style_start.hash(&mut hasher);
+            layer.style_count.hash(&mut hasher);
+        }
+        scene.styles.len().hash(&mut hasher);
+        for style in scene.styles {
+            style.color().map(f32::to_bits).hash(&mut hasher);
+            style.visible().hash(&mut hasher);
+            style.selected().hash(&mut hasher);
+        }
+        scene.markers.len().hash(&mut hasher);
+        for marker in scene.markers {
+            marker.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+}
+
 fn channel_style(channels: &[crate::ChannelRow<'_>]) -> u64 {
     let mut key = channels.len() as u64;
     for channel in channels {
@@ -953,15 +1102,6 @@ fn inside(region: [u32; 4], size: [u32; 2]) -> bool {
         && region[3] > 0
         && region[0] + region[2] <= size[0]
         && region[1] + region[3] <= size[1]
-}
-
-fn supersampled(region: [u32; 4], supersample: u32) -> [u32; 4] {
-    [
-        region[0] * supersample,
-        region[1] * supersample,
-        region[2] * supersample,
-        region[3] * supersample,
-    ]
 }
 
 fn dummy_texture(device: &Device, queue: &Queue) -> TextureView {

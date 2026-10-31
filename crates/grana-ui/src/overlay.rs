@@ -2,6 +2,7 @@ use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke};
 use glam::{Mat4, Vec3};
 use grana_measure::Unit;
 use grana_render::{Camera, Palette, SectionCamera, plane_basis};
+use grana_scene::Scene;
 use grana_volume::{Axis, Region};
 
 const LABEL_COLOR: Color32 = Color32::from_gray(196);
@@ -51,6 +52,7 @@ pub struct Overlay<'a> {
     pub levels: usize,
     pub volume_level: usize,
     pub section_level: usize,
+    pub samples: u32,
     pub volume_rect: Rect,
     pub section_rect: Rect,
     pub region: &'a mut Region,
@@ -109,13 +111,20 @@ fn paint_volume(ui: &egui::Ui, overlay: &mut Overlay<'_>) {
     );
     let world_per_point = 2.0 * overlay.camera.distance() * (overlay.camera.fov_y() * 0.5).tan()
         / overlay.volume_rect.height();
-    scale_bar(&painter, overlay.volume_rect, world_per_point);
-    paint_legends(&painter, overlay.volume_rect, overlay.legends);
+    figure(
+        &painter,
+        overlay.volume_rect,
+        world_per_point,
+        overlay.legends,
+    );
     let level = overlay.volume_level + 1;
     label(
         &painter,
         overlay.volume_rect,
-        format!("3D · level {level} / {}", overlay.levels),
+        format!(
+            "3D · level {level} / {} · {} samples",
+            overlay.levels, overlay.samples
+        ),
     );
 }
 
@@ -140,6 +149,53 @@ fn paint_section(ui: &egui::Ui, overlay: &Overlay<'_>) {
             overlay.levels,
         ),
     );
+}
+
+pub fn figure(painter: &Painter, rect: Rect, world_per_point: f32, legends: &[Legend]) {
+    scale_bar(painter, rect, world_per_point);
+    paint_legends(painter, rect, legends);
+}
+
+pub fn legends(scene: &Scene) -> Vec<Legend> {
+    let names = scene
+        .dataset
+        .channels()
+        .iter()
+        .map(|channel| channel.name().to_string())
+        .collect::<Vec<_>>();
+    let mut legends = Vec::new();
+    for set in scene.objects.iter() {
+        if !set.visible() || !scene.channels[set.channel()].enabled {
+            continue;
+        }
+        if set.detected() > 0
+            && let Some(measurement) = set.object_coloring().metric()
+            && let Some(extent) = set.object_extent()
+        {
+            legends.push(Legend {
+                title: format!("{} · {}", set.name(), measurement.label(&names)),
+                palette: set.object_coloring().palette(),
+                reversed: set.object_coloring().reversed(),
+                extent,
+                unit: measurement.unit(),
+                decimals: measurement.decimals(),
+            });
+        }
+        if let Some(measurement) = set.track_coloring().metric()
+            && set.tracks().is_some_and(|layer| layer.visible())
+            && let Some(extent) = set.track_extent()
+        {
+            legends.push(Legend {
+                title: format!("{} tracks · {}", set.name(), measurement.label()),
+                palette: set.track_coloring().palette(),
+                reversed: set.track_coloring().reversed(),
+                extent,
+                unit: measurement.unit(),
+                decimals: measurement.decimals(),
+            });
+        }
+    }
+    legends
 }
 
 fn region_box(painter: &Painter, view_projection: Mat4, region: Region, rect: Rect) {

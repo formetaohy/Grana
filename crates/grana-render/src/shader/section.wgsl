@@ -41,7 +41,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let u = section.uv_center.x + input.ndc.x * section.uv_scale.x;
     let v = section.uv_center.y + input.ndc.y * section.uv_scale.y;
     if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0) {
-        return vec4<f32>(background(input.ndc), 1.0);
+        return vec4<f32>(0.0);
     }
     let axis = section.mapping.z;
     var uvw = vec3<f32>(0.0);
@@ -49,7 +49,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     uvw[section.mapping.x] = u;
     uvw[section.mapping.y] = v;
     if (outside_region(section.box_min.xyz + uvw * section.world.xyz)) {
-        return vec4<f32>(background(input.ndc), 1.0);
+        return vec4<f32>(0.0);
     }
     var color = vec3<f32>(0.0);
     let count = section.axes.x;
@@ -60,5 +60,5 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             color += sample.rgb * opacity;
         }
     }
-    return vec4<f32>(color + background(input.ndc), 1.0);
+    return vec4<f32>(color, 1.0);
 }
