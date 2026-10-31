@@ -15,7 +15,7 @@ fn extracts_measured_surfaces() {
     let grid = BrickGrid::new(volume.extent());
     let threshold = 0.5 * f32::from(HIGH);
 
-    let mut builder = SurfaceBuilder::new(0, 0, level, SurfaceParams::new(threshold, 0.0));
+    let mut builder = SurfaceBuilder::new(0, level, SurfaceParams::new(threshold, 0.0));
     for index in 0..builder.coord_count() {
         let coord = builder.coord(index);
         let values = volume.channel_brick(&grid, coord, 0);
@@ -65,7 +65,6 @@ fn extracts_measured_surfaces() {
     }
 
     let mut filtered = SurfaceBuilder::new(
-        0,
         0,
         level,
         SurfaceParams::new(threshold, (1.5 * expected_volume) as f32),

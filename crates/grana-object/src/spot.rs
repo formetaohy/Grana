@@ -41,22 +41,13 @@ impl Spot {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpotSet {
-    channel: usize,
     level: usize,
     spots: Vec<Spot>,
 }
 
 impl SpotSet {
-    pub fn new(channel: usize, level: usize, spots: Vec<Spot>) -> Self {
-        Self {
-            channel,
-            level,
-            spots,
-        }
-    }
-
-    pub fn channel(&self) -> usize {
-        self.channel
+    pub fn new(level: usize, spots: Vec<Spot>) -> Self {
+        Self { level, spots }
     }
 
     pub fn level(&self) -> usize {

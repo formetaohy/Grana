@@ -16,10 +16,39 @@ use crate::params::Shading;
 use crate::target::{DEPTH_FORMAT, SCENE_FORMAT};
 use crate::transfer::srgb_to_linear;
 
-pub(crate) const SURFACE_LAYER: usize = 0;
-pub(crate) const SPOT_TRACK_LAYER: usize = 1;
-pub(crate) const SURFACE_TRACK_LAYER: usize = 2;
-const LAYER_COUNT: usize = 3;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MeshKey {
+    owner: u64,
+    part: u32,
+    frame: Option<u32>,
+    version: u64,
+}
+
+impl MeshKey {
+    pub fn of_frame(owner: u64, part: u32, frame: u32, version: u64) -> Self {
+        Self {
+            owner,
+            part,
+            frame: Some(frame),
+            version,
+        }
+    }
+
+    pub fn timeless(owner: u64, part: u32, version: u64) -> Self {
+        Self {
+            owner,
+            part,
+            frame: None,
+            version,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct MeshUpload<'a> {
+    pub key: MeshKey,
+    pub mesh: Option<&'a Mesh>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeshStyle {
@@ -106,6 +135,7 @@ struct MeshLayer {
     objects: usize,
     style_buffer: Option<Buffer>,
     style_group: Option<BindGroup>,
+    key: Option<MeshKey>,
 }
 
 impl MeshLayer {
@@ -117,12 +147,17 @@ impl MeshLayer {
             objects: 0,
             style_buffer: None,
             style_group: None,
+            key: None,
         }
     }
 
-    fn set(&mut self, device: &Device, layout: &BindGroupLayout, mesh: Option<&Mesh>) {
-        let Some(mesh) = mesh.filter(|mesh| !mesh.is_empty()) else {
-            *self = Self::empty();
+    fn set(&mut self, device: &Device, layout: &BindGroupLayout, upload: MeshUpload<'_>) {
+        if self.key == Some(upload.key) {
+            return;
+        }
+        self.key = Some(upload.key);
+        self.reset();
+        let Some(mesh) = upload.mesh.filter(|mesh| !mesh.is_empty()) else {
             return;
         };
         let objects = mesh
@@ -161,6 +196,15 @@ impl MeshLayer {
         self.objects = objects;
         self.style_buffer = Some(style_buffer);
         self.style_group = Some(style_group);
+    }
+
+    fn reset(&mut self) {
+        self.vertices = None;
+        self.indices = None;
+        self.count = 0;
+        self.objects = 0;
+        self.style_buffer = None;
+        self.style_group = None;
     }
 
     fn write_styles(&self, queue: &Queue, styles: &[MeshStyle]) {
@@ -306,7 +350,7 @@ impl MeshLayer {
 }
 
 pub(crate) struct Meshes {
-    layers: [MeshLayer; LAYER_COUNT],
+    layers: Vec<MeshLayer>,
     uniforms: Buffer,
     uniform_group: BindGroup,
     style_layout: BindGroupLayout,
@@ -445,7 +489,7 @@ impl Meshes {
             }],
         });
         Self {
-            layers: [MeshLayer::empty(), MeshLayer::empty(), MeshLayer::empty()],
+            layers: Vec::new(),
             uniforms,
             uniform_group,
             style_layout,
@@ -455,15 +499,20 @@ impl Meshes {
         }
     }
 
-    pub fn set(&mut self, layer: usize, device: &Device, mesh: Option<&Mesh>) {
-        self.layers[layer].set(device, &self.style_layout, mesh);
+    pub fn len(&self) -> usize {
+        self.layers.len()
     }
 
-    pub fn write_styles(&self, queue: &Queue, styles: [Option<&[MeshStyle]>; LAYER_COUNT]) {
-        for (layer, styles) in self.layers.iter().zip(styles) {
-            if let Some(styles) = styles {
-                layer.write_styles(queue, styles);
-            }
+    pub fn set(&mut self, device: &Device, uploads: &[MeshUpload<'_>]) {
+        self.layers.resize_with(uploads.len(), MeshLayer::empty);
+        for (layer, upload) in self.layers.iter_mut().zip(uploads) {
+            layer.set(device, &self.style_layout, *upload);
+        }
+    }
+
+    fn write_styles(&self, queue: &Queue, frames: &[MeshFrame<'_>]) {
+        for (layer, frame) in self.layers.iter().zip(frames) {
+            layer.write_styles(queue, frame.styles);
         }
     }
 
@@ -472,11 +521,12 @@ impl Meshes {
         encoder: &mut wgpu::CommandEncoder,
         queue: &Queue,
         frame: VolumeFrame<'_>,
-        styles: [Option<&[MeshStyle]>; LAYER_COUNT],
+        frames: &[MeshFrame<'_>],
     ) {
-        if styles.iter().all(Option::is_none) {
+        if frames.is_empty() {
             return;
         }
+        self.write_styles(queue, frames);
         let width = frame.region[2].max(1);
         let height = frame.region[3].max(1);
         let aspect = width as f32 / height as f32;
@@ -497,23 +547,24 @@ impl Meshes {
             ],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
-        for (layer, styles) in self.layers.iter().zip(styles) {
-            if styles.is_some() {
-                layer.draw_volume(encoder, &self.volume_pipeline, &self.uniform_group, &frame);
-            }
+        for layer in &self.layers {
+            layer.draw_volume(encoder, &self.volume_pipeline, &self.uniform_group, &frame);
         }
     }
 
     pub fn draw_section(
         &self,
         encoder: &mut wgpu::CommandEncoder,
+        queue: &Queue,
         frame: SectionFrame<'_>,
-        styles: [Option<&[MeshStyle]>; LAYER_COUNT],
+        frames: &[MeshFrame<'_>],
     ) {
-        for (layer, styles) in self.layers.iter().zip(styles) {
-            if styles.is_some() {
-                layer.draw_section(encoder, &self.depth_pipeline, &self.color_pipeline, &frame);
-            }
+        if frames.is_empty() {
+            return;
+        }
+        self.write_styles(queue, frames);
+        for layer in &self.layers {
+            layer.draw_section(encoder, &self.depth_pipeline, &self.color_pipeline, &frame);
         }
     }
 }

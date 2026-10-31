@@ -6,35 +6,26 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use grana_analysis::{
     SpotParams, SpotScan, SurfaceBuilder, SurfaceParams, TrackBuilder, TrackParams,
 };
-use grana_object::{Spot, SpotSet, SurfaceSet, TrackSet, TrackSource};
-use grana_volume::{BrickCoord, Pyramid, VoxelData};
+use grana_object::{Spot, SpotSet, SurfaceSet, TrackSet};
+use grana_volume::{BrickCoord, BrickGrid, Pyramid, VoxelData};
 use grana_zarr::Image;
 
+use crate::objects::{ObjectParams, ObjectSetId};
 use crate::source::Source;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    Spots,
-    Surfaces,
-    SpotTracks,
-    SurfaceTracks,
+pub enum Job {
+    Detect,
+    Track,
 }
 
-impl Kind {
-    pub fn source(self) -> Option<TrackSource> {
-        match self {
-            Self::SpotTracks => Some(TrackSource::Spots),
-            Self::SurfaceTracks => Some(TrackSource::Surfaces),
-            Self::Spots | Self::Surfaces => None,
-        }
-    }
-
-    pub fn track(source: TrackSource) -> Self {
-        match source {
-            TrackSource::Spots => Self::SpotTracks,
-            TrackSource::Surfaces => Self::SurfaceTracks,
-        }
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Progress {
+    pub set: ObjectSetId,
+    pub job: Job,
+    pub time: u32,
+    pub done: usize,
+    pub total: usize,
 }
 
 pub enum Outcome {
@@ -63,29 +54,20 @@ pub enum Poll {
     Closed,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Progress {
-    pub kind: Kind,
-    pub time: u32,
-    pub channel: usize,
-    pub done: usize,
-    pub total: usize,
-}
-
 pub struct Analysis {
-    kind: Kind,
-    channel: usize,
+    set: ObjectSetId,
+    job: Job,
     events: Receiver<Event>,
     cancel: Arc<AtomicBool>,
 }
 
 impl Analysis {
-    pub fn kind(&self) -> Kind {
-        self.kind
+    pub fn set(&self) -> ObjectSetId {
+        self.set
     }
 
-    pub fn channel(&self) -> usize {
-        self.channel
+    pub fn job(&self) -> Job {
+        self.job
     }
 
     pub fn poll(&self) -> Poll {
@@ -107,167 +89,126 @@ impl Drop for Analysis {
     }
 }
 
-pub fn start_spots(source: Source, channel: usize, params: SpotParams) -> Analysis {
+pub fn detect(source: Source, set: ObjectSetId, channel: usize, params: ObjectParams) -> Analysis {
     let cancel = Arc::new(AtomicBool::new(false));
     let token = Arc::clone(&cancel);
     let (events, receiver) = mpsc::channel();
-    std::thread::spawn(move || run_spots(source, channel, params, token, events));
+    std::thread::spawn(move || run_detect(source, channel, params, token, events));
     Analysis {
-        kind: Kind::Spots,
-        channel,
+        set,
+        job: Job::Detect,
         events: receiver,
         cancel,
     }
 }
 
-pub fn start_surfaces(source: Source, channel: usize, params: SurfaceParams) -> Analysis {
-    let cancel = Arc::new(AtomicBool::new(false));
-    let token = Arc::clone(&cancel);
-    let (events, receiver) = mpsc::channel();
-    std::thread::spawn(move || run_surfaces(source, channel, params, token, events));
-    Analysis {
-        kind: Kind::Surfaces,
-        channel,
-        events: receiver,
-        cancel,
-    }
-}
-
-pub fn start_tracks(
-    source: TrackSource,
-    channel: usize,
+pub fn track(
+    set: ObjectSetId,
     frames: Vec<Vec<[f32; 3]>>,
     params: TrackParams,
     frame_interval: f32,
 ) -> Analysis {
-    let kind = Kind::track(source);
     let cancel = Arc::new(AtomicBool::new(false));
     let token = Arc::clone(&cancel);
     let (events, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
-        run_tracks(
-            source,
-            channel,
-            frames,
-            params,
-            frame_interval,
-            token,
-            events,
-        );
-    });
+    std::thread::spawn(move || run_tracks(frames, params, frame_interval, token, events));
     Analysis {
-        kind,
-        channel,
+        set,
+        job: Job::Track,
         events: receiver,
         cancel,
     }
 }
 
-fn run_spots(
+fn run_detect(
     source: Source,
     channel: usize,
-    params: SpotParams,
+    params: ObjectParams,
     cancel: Arc<AtomicBool>,
     events: Sender<Event>,
 ) {
-    let result = match source {
-        Source::Memory(movie) => {
-            let pyramid = movie.pyramid().clone();
-            scan_spots(
-                &pyramid,
-                channel,
-                params,
-                &cancel,
-                &events,
-                |time, range| {
-                    Ok(movie.region(
-                        time,
-                        channel,
-                        range[0].clone(),
-                        range[1].clone(),
-                        range[2].clone(),
-                    ))
-                },
-            )
+    let result = match params {
+        ObjectParams::Spots(params) => detect_spots(source, channel, params, &cancel, &events),
+        ObjectParams::Surfaces(params) => {
+            detect_surfaces(source, channel, params, &cancel, &events)
         }
-        Source::File(path) => match Image::open(&path) {
-            Ok(image) => {
-                let pyramid = image.pyramid().clone();
-                scan_spots(
-                    &pyramid,
-                    channel,
-                    params,
-                    &cancel,
-                    &events,
-                    |time, range| {
-                        image
-                            .read_region(
-                                time,
-                                0,
-                                channel,
-                                range[0].clone(),
-                                range[1].clone(),
-                                range[2].clone(),
-                            )
-                            .map_err(|error| error.to_string())
-                    },
-                )
-            }
-            Err(error) => Err(error.to_string()),
-        },
     };
     if let Err(detail) = result {
         let _ = events.send(Event::Failed(detail));
     }
 }
 
-fn run_surfaces(
+fn detect_spots(
     source: Source,
     channel: usize,
-    params: SurfaceParams,
-    cancel: Arc<AtomicBool>,
-    events: Sender<Event>,
-) {
-    let result = match source {
+    params: SpotParams,
+    cancel: &AtomicBool,
+    events: &Sender<Event>,
+) -> Result<(), String> {
+    match source {
         Source::Memory(movie) => {
             let pyramid = movie.pyramid().clone();
-            let grid = grana_volume::BrickGrid::new(pyramid.level(0).extent());
-            scan_surfaces(
-                &pyramid,
-                channel,
-                params,
-                &cancel,
-                &events,
-                |time, coord| Ok(movie.channel_brick(time, &grid, coord, channel)),
-            )
+            scan_spots(&pyramid, channel, params, cancel, events, |time, range| {
+                Ok(movie.region(
+                    time,
+                    channel,
+                    range[0].clone(),
+                    range[1].clone(),
+                    range[2].clone(),
+                ))
+            })
         }
         Source::File(path) => match Image::open(&path) {
             Ok(image) => {
                 let pyramid = image.pyramid().clone();
-                scan_surfaces(
-                    &pyramid,
-                    channel,
-                    params,
-                    &cancel,
-                    &events,
-                    |time, coord| {
-                        image
-                            .read_channel_brick(time, 0, channel, coord)
-                            .map_err(|error| error.to_string())
-                    },
-                )
+                scan_spots(&pyramid, channel, params, cancel, events, |time, range| {
+                    image
+                        .read_region(
+                            time,
+                            0,
+                            channel,
+                            range[0].clone(),
+                            range[1].clone(),
+                            range[2].clone(),
+                        )
+                        .map_err(|error| error.to_string())
+                })
             }
             Err(error) => Err(error.to_string()),
         },
-    };
-    if let Err(detail) = result {
-        let _ = events.send(Event::Failed(detail));
+    }
+}
+
+fn detect_surfaces(
+    source: Source,
+    channel: usize,
+    params: SurfaceParams,
+    cancel: &AtomicBool,
+    events: &Sender<Event>,
+) -> Result<(), String> {
+    match source {
+        Source::Memory(movie) => {
+            let pyramid = movie.pyramid().clone();
+            let grid = BrickGrid::new(pyramid.level(0).extent());
+            scan_surfaces(&pyramid, channel, params, cancel, events, |time, coord| {
+                Ok(movie.channel_brick(time, &grid, coord, channel))
+            })
+        }
+        Source::File(path) => match Image::open(&path) {
+            Ok(image) => {
+                let pyramid = image.pyramid().clone();
+                scan_surfaces(&pyramid, channel, params, cancel, events, |time, coord| {
+                    image
+                        .read_channel_brick(time, 0, channel, coord)
+                        .map_err(|error| error.to_string())
+                })
+            }
+            Err(error) => Err(error.to_string()),
+        },
     }
 }
 
 fn run_tracks(
-    source: TrackSource,
-    channel: usize,
     frames: Vec<Vec<[f32; 3]>>,
     params: TrackParams,
     frame_interval: f32,
@@ -280,7 +221,7 @@ fn run_tracks(
         done: 0,
         total,
     });
-    let mut builder = TrackBuilder::new(source, params);
+    let mut builder = TrackBuilder::new(params);
     for (time, centroids) in frames.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return;
@@ -297,7 +238,7 @@ fn run_tracks(
     if cancel.load(Ordering::Relaxed) {
         return;
     }
-    let _ = events.send(Event::Tracks(builder.finish(channel, frame_interval)));
+    let _ = events.send(Event::Tracks(builder.finish(frame_interval)));
     let _ = events.send(Event::Done);
 }
 
@@ -352,7 +293,7 @@ fn scan_spots(
         }
         let _ = events.send(Event::Frame {
             time,
-            outcome: Outcome::Spots(SpotSet::new(channel, 0, spots)),
+            outcome: Outcome::Spots(SpotSet::new(0, spots)),
         });
     }
     let _ = events.send(Event::Done);
@@ -381,7 +322,7 @@ fn scan_surfaces(
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let mut builder = SurfaceBuilder::new(channel, 0, pyramid.level(0), params);
+        let mut builder = SurfaceBuilder::new(0, pyramid.level(0), params);
         let total = builder.coord_count();
         let _ = events.send(Event::Progress {
             time,

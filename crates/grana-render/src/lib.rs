@@ -19,7 +19,7 @@ pub const MAX_CHANNEL: usize = 8;
 
 pub use camera::{Camera, Ray, plane_basis};
 pub use marker::Marker;
-pub use mesh::{MeshFrame, MeshStyle};
+pub use mesh::{MeshFrame, MeshKey, MeshStyle, MeshUpload};
 pub use params::{ChannelParams, RenderParams, Shading};
 pub use renderer::{BrickRequest, Frame, FrameInfo, Renderer, ViewInfo};
 pub use section::SectionCamera;

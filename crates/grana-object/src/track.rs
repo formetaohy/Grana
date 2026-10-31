@@ -1,18 +1,3 @@
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TrackSource {
-    Spots,
-    Surfaces,
-}
-
-impl TrackSource {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Spots => "spots",
-            Self::Surfaces => "surfaces",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrackNode {
     time: u32,
@@ -154,8 +139,6 @@ impl Track {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TrackSet {
-    source: TrackSource,
-    channel: usize,
     frame_interval: f32,
     tracks: Vec<Track>,
     links: Vec<(u32, usize, u32)>,
@@ -163,12 +146,7 @@ pub struct TrackSet {
 }
 
 impl TrackSet {
-    pub fn new(
-        source: TrackSource,
-        channel: usize,
-        frame_interval: f32,
-        tracks: Vec<Track>,
-    ) -> Self {
+    pub fn new(frame_interval: f32, tracks: Vec<Track>) -> Self {
         assert!(
             frame_interval.is_finite() && frame_interval > 0.0,
             "the frame interval is a positive duration"
@@ -206,21 +184,11 @@ impl TrackSet {
             "every detection belongs to one track"
         );
         Self {
-            source,
-            channel,
             frame_interval,
             tracks,
             links,
             divisions,
         }
-    }
-
-    pub fn source(&self) -> TrackSource {
-        self.source
-    }
-
-    pub fn channel(&self) -> usize {
-        self.channel
     }
 
     pub fn frame_interval(&self) -> f32 {

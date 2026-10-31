@@ -123,14 +123,13 @@ impl SurfaceStatistics {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SurfaceSet {
-    channel: usize,
     level: usize,
     mesh: Mesh,
     objects: Vec<SurfaceStatistics>,
 }
 
 impl SurfaceSet {
-    pub fn new(channel: usize, level: usize, mesh: Mesh, objects: Vec<SurfaceStatistics>) -> Self {
+    pub fn new(level: usize, mesh: Mesh, objects: Vec<SurfaceStatistics>) -> Self {
         assert!(
             mesh.vertices()
                 .iter()
@@ -143,15 +142,10 @@ impl SurfaceSet {
             "the mesh and the object list agree on emptiness"
         );
         Self {
-            channel,
             level,
             mesh,
             objects,
         }
-    }
-
-    pub fn channel(&self) -> usize {
-        self.channel
     }
 
     pub fn level(&self) -> usize {

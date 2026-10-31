@@ -1,5 +1,5 @@
 use glam::Vec3;
-use grana_object::{Track, TrackNode, TrackSet, TrackSource};
+use grana_object::{Track, TrackNode, TrackSet};
 
 use crate::TrackParams;
 use crate::assignment::{self, rejected};
@@ -34,16 +34,14 @@ struct Division {
 }
 
 pub struct TrackBuilder {
-    source: TrackSource,
     params: TrackParams,
     segments: Vec<Segment>,
     time: Option<u32>,
 }
 
 impl TrackBuilder {
-    pub fn new(source: TrackSource, params: TrackParams) -> Self {
+    pub fn new(params: TrackParams) -> Self {
         Self {
-            source,
             params,
             segments: Vec::new(),
             time: None,
@@ -108,13 +106,13 @@ impl TrackBuilder {
         }
     }
 
-    pub fn finish(self, channel: usize, frame_interval: f32) -> TrackSet {
+    pub fn finish(self, frame_interval: f32) -> TrackSet {
         let tracks = self
             .segments
             .into_iter()
             .map(|segment| Track::new(segment.parent.map(|parent| parent as u32), segment.nodes))
             .collect();
-        TrackSet::new(self.source, channel, frame_interval, tracks)
+        TrackSet::new(frame_interval, tracks)
     }
 
     fn close_expired(&mut self, time: u32) {

@@ -6,6 +6,8 @@ mod egui_layer;
 mod export;
 mod gpu;
 mod loader;
+mod objects;
+mod objects_ui;
 mod overlay;
 mod scene;
 mod source;

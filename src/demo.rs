@@ -1,6 +1,7 @@
 use grana_analysis::{SpotParams, SurfaceParams};
 use grana_volume::{Channel, Extent, Movie, Spacing, Volume, VoxelData};
 
+use crate::objects::{ObjectKind, ObjectParams, ObjectSetId};
 use crate::scene::Scene;
 
 const FRAMES: u32 = 6;
@@ -14,8 +15,18 @@ const MEMBRANE_OPACITY: f32 = 0.35;
 const MEMBRANE_RADIAL: f32 = 1.24;
 const MEMBRANE_AXIAL: f32 = 1.35;
 const SURFACE_VOLUME: f32 = 2.0;
+const SPOT_DIAMETER: f32 = 0.45;
+const SPOT_CONTRAST: f32 = 0.1;
 
 pub const SURFACE_CHANNEL: usize = 0;
+pub const SPOT_CHANNEL: usize = 2;
+const SPOT_COLOR: [f32; 3] = [0.42, 0.74, 1.00];
+const SURFACE_COLOR: [f32; 3] = [1.00, 0.72, 0.28];
+
+pub struct Staged {
+    pub spots: ObjectSetId,
+    pub surfaces: ObjectSetId,
+}
 
 struct Cell {
     centre: [f32; 3],
@@ -32,17 +43,30 @@ struct Punctum {
     radius: f32,
 }
 
-pub fn stage(scene: &mut Scene) {
+pub fn stage(scene: &mut Scene) -> Staged {
     scene.channels[1].opacity = MEMBRANE_OPACITY;
-    scene.select_channel(2);
-    scene.spot_params = SpotParams::new(0.45, 0.1);
-    scene.surface_params = SurfaceParams::new(
-        scene
-            .channel(SURFACE_CHANNEL)
-            .intensity()
-            .value(NUCLEUS_THRESHOLD),
-        SURFACE_VOLUME,
-    );
+    scene.select_channel(SPOT_CHANNEL);
+    let spots = scene.add_object(ObjectKind::Spots, SPOT_CHANNEL);
+    let surfaces = scene.add_object(ObjectKind::Surfaces, SURFACE_CHANNEL);
+    let threshold = scene
+        .channel(SURFACE_CHANNEL)
+        .intensity()
+        .value(NUCLEUS_THRESHOLD);
+    if let Some(set) = scene.objects.get_mut(spots) {
+        set.set_color(SPOT_COLOR);
+        set.set_params(ObjectParams::Spots(SpotParams::new(
+            SPOT_DIAMETER,
+            SPOT_CONTRAST,
+        )));
+    }
+    if let Some(set) = scene.objects.get_mut(surfaces) {
+        set.set_color(SURFACE_COLOR);
+        set.set_params(ObjectParams::Surfaces(SurfaceParams::new(
+            threshold,
+            SURFACE_VOLUME,
+        )));
+    }
+    Staged { spots, surfaces }
 }
 
 pub fn movie() -> Movie {

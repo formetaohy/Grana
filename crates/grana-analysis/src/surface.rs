@@ -57,7 +57,6 @@ struct Node {
 }
 
 pub struct SurfaceBuilder {
-    channel: usize,
     level_index: usize,
     extent: [u32; 3],
     stride: [u64; 3],
@@ -82,7 +81,7 @@ pub struct SurfaceBuilder {
 }
 
 impl SurfaceBuilder {
-    pub fn new(channel: usize, level_index: usize, level: Level, params: SurfaceParams) -> Self {
+    pub fn new(level_index: usize, level: Level, params: SurfaceParams) -> Self {
         let extent = level.extent();
         let grid = BrickGrid::new(extent);
         let counts = grid.counts().map(|count| count as usize);
@@ -97,7 +96,6 @@ impl SurfaceBuilder {
         ];
         let voxel_volume = f64::from(spacing[0]) * f64::from(spacing[1]) * f64::from(spacing[2]);
         Self {
-            channel,
             level_index,
             extent,
             stride,
@@ -247,12 +245,7 @@ impl SurfaceBuilder {
                 indices.extend_from_slice(&mapped);
             }
         }
-        SurfaceSet::new(
-            self.channel,
-            self.level_index,
-            Mesh::new(vertices, indices),
-            objects,
-        )
+        SurfaceSet::new(self.level_index, Mesh::new(vertices, indices), objects)
     }
 
     fn fill_gradients(&mut self) {

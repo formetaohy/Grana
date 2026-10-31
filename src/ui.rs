@@ -1,10 +1,10 @@
-use crate::analysis::{Kind, Progress};
+use crate::analysis::{Job, Progress};
 use crate::dataset::{Dataset, Origin};
+use crate::objects::{ObjectKind, ObjectSetId};
 use crate::overlay::{self, Overlay};
-use crate::scene::{Scene, Selection};
+use crate::scene::Scene;
 use crate::viewport::Viewport;
 use egui::{RichText, Ui};
-use grana_object::TrackSource;
 use grana_render::FrameInfo;
 use grana_volume::Axis;
 
@@ -43,18 +43,16 @@ pub struct Actions {
     pub split: Option<f32>,
     pub time: Option<u32>,
     pub toggle_play: bool,
-    pub detect_spots: bool,
-    pub clear_spots: bool,
-    pub cancel_spots: bool,
-    pub export_spots: bool,
-    pub detect_surfaces: bool,
-    pub clear_surfaces: bool,
-    pub cancel_surfaces: bool,
-    pub export_surfaces: bool,
-    pub track: Option<TrackSource>,
-    pub cancel_tracks: Option<TrackSource>,
-    pub clear_tracks: Option<TrackSource>,
-    pub export_tracks: Option<TrackSource>,
+    pub add_object: Option<ObjectKind>,
+    pub remove_object: Option<ObjectSetId>,
+    pub detect: Option<ObjectSetId>,
+    pub cancel_detect: Option<ObjectSetId>,
+    pub clear_object: Option<ObjectSetId>,
+    pub export_object: Option<ObjectSetId>,
+    pub track: Option<ObjectSetId>,
+    pub cancel_track: Option<ObjectSetId>,
+    pub clear_tracks: Option<ObjectSetId>,
+    pub export_tracks: Option<ObjectSetId>,
     pub volume: egui::Rect,
     pub section: egui::Rect,
 }
@@ -69,16 +67,14 @@ impl Actions {
             split: None,
             time: None,
             toggle_play: false,
-            detect_spots: false,
-            clear_spots: false,
-            cancel_spots: false,
-            export_spots: false,
-            detect_surfaces: false,
-            clear_surfaces: false,
-            cancel_surfaces: false,
-            export_surfaces: false,
+            add_object: None,
+            remove_object: None,
+            detect: None,
+            cancel_detect: None,
+            clear_object: None,
+            export_object: None,
             track: None,
-            cancel_tracks: None,
+            cancel_track: None,
             clear_tracks: None,
             export_tracks: None,
             volume: egui::Rect::ZERO,
@@ -108,9 +104,9 @@ pub fn build(root: &mut Ui, state: &mut UiState<'_>) -> Actions {
                     ui.separator();
                     channels_section(ui, state.scene);
                     ui.separator();
-                    display_section(ui, state.scene);
+                    crate::objects_ui::build(ui, state, &mut actions);
                     ui.separator();
-                    objects_section(ui, state, &mut actions);
+                    display_section(ui, state.scene);
                     ui.separator();
                     rendering_section(ui, state.scene);
                     ui.separator();
@@ -357,353 +353,6 @@ fn display_section(ui: &mut Ui, scene: &mut Scene) {
     scene.selected_transfer().ui(ui, window);
 }
 
-fn objects_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
-    ui.strong("Objects");
-    spots_section(ui, state, actions);
-    ui.separator();
-    surfaces_section(ui, state, actions);
-    if state.scene.frame_count() > 1 {
-        ui.separator();
-        crate::track_ui::build(ui, state, actions, TrackSource::Spots);
-        ui.separator();
-        crate::track_ui::build(ui, state, actions, TrackSource::Surfaces);
-    }
-}
-
-fn spots_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
-    let selected = state.scene.selected;
-    let name = state.scene.channel(selected).name().to_string();
-    let time = state.scene.time();
-    let frames = state.scene.frame_count();
-    let minimum = state.scene.dataset.voxel_size().min_element();
-    let mut params = state.scene.spot_params;
-    let mut diameter = params.diameter();
-    if ui
-        .add(
-            egui::Slider::new(&mut diameter, minimum..=16.0 * minimum)
-                .logarithmic(true)
-                .text("diameter")
-                .suffix(" µm"),
-        )
-        .changed()
-    {
-        params.set_diameter(diameter);
-    }
-    let mut threshold = params.threshold();
-    if ui
-        .add(egui::Slider::new(&mut threshold, 0.0..=1.0).text("contrast"))
-        .changed()
-    {
-        params.set_threshold(threshold);
-    }
-    state.scene.spot_params = params;
-
-    let progress = progress(state.analysis, Kind::Spots);
-    ui.horizontal(|ui| {
-        if ui
-            .add_enabled(progress.is_none(), egui::Button::new("Detect spots"))
-            .clicked()
-        {
-            actions.detect_spots = true;
-        }
-        if progress.is_some() {
-            if ui.button("Cancel").clicked() {
-                actions.cancel_spots = true;
-            }
-            ui.spinner();
-        }
-        if let Some(progress) = progress {
-            ui.label(RichText::new(caption(state, progress)).small().weak());
-        }
-    });
-
-    let summary = state.scene.spots().map(|spots| {
-        (
-            spots.channel(),
-            spots.len(),
-            spots.level(),
-            spots.mean_quality(),
-        )
-    });
-    let detected = state.scene.spot_frame_count();
-    match summary {
-        Some((channel, count, level, mean)) => {
-            let channel_name = state.scene.dataset.channels()[channel].name().to_string();
-            ui.label(format!(
-                "{channel_name} · {count} spots · level {}",
-                level + 1
-            ));
-            if let Some(mean) = mean {
-                ui.label(
-                    RichText::new(format!("mean contrast {mean:.2}"))
-                        .small()
-                        .weak(),
-                );
-            }
-        }
-        None if detected == 0 => {
-            ui.label(
-                RichText::new(format!("detects intensity maxima in {name} in every frame"))
-                    .small()
-                    .weak(),
-            );
-            return;
-        }
-        None => {
-            ui.label(
-                RichText::new(format!("no spots on frame {} of {}", time + 1, frames))
-                    .small()
-                    .weak(),
-            );
-        }
-    }
-    if frames > 1 {
-        ui.label(
-            RichText::new(format!("detected in {detected} frames"))
-                .small()
-                .weak(),
-        );
-    }
-    let mut visible = state.scene.spot_visible();
-    if ui.checkbox(&mut visible, "visible").changed() {
-        state.scene.set_spot_visible(visible);
-    }
-    ui.horizontal(|ui| {
-        if ui.button("Export CSV").clicked() {
-            actions.export_spots = true;
-        }
-        if ui.button("Clear").clicked() {
-            actions.clear_spots = true;
-        }
-    });
-    let measured = match state.scene.selection() {
-        Some(Selection::Spot(index)) => state.scene.spot(index),
-        _ => None,
-    };
-    match measured {
-        Some(spot) => {
-            ui.separator();
-            egui::Grid::new("spot")
-                .num_columns(2)
-                .spacing([12.0, 3.0])
-                .show(ui, |ui| {
-                    if let Some(Selection::Spot(index)) = state.scene.selection() {
-                        row(ui, "object", format!("#{}", index + 1));
-                    }
-                    let centre = spot.center();
-                    row(
-                        ui,
-                        "position",
-                        format!("{:.2} · {:.2} · {:.2} µm", centre[0], centre[1], centre[2]),
-                    );
-                    row(ui, "diameter", format!("{:.3} µm", spot.radius() * 2.0));
-                    row(ui, "contrast", format!("{:.3}", spot.quality()));
-                });
-        }
-        None => {
-            ui.label(RichText::new("click a spot to measure it").small().weak());
-        }
-    }
-}
-
-fn surfaces_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
-    let selected = state.scene.selected;
-    let name = state.scene.channel(selected).name().to_string();
-    let time = state.scene.time();
-    let frames = state.scene.frame_count();
-    let data = state.scene.channel(selected).intensity();
-    let available = data.min()..=data.max();
-    let mut params = state.scene.surface_params;
-    let mut threshold = params.threshold().clamp(data.min(), data.max());
-    if ui
-        .add(egui::Slider::new(&mut threshold, available).text("threshold"))
-        .changed()
-    {
-        params.set_threshold(threshold);
-    }
-    let mut min_volume = params.min_volume();
-    if ui
-        .add(
-            egui::Slider::new(&mut min_volume, 0.0..=200.0)
-                .text("min volume")
-                .suffix(" µm³"),
-        )
-        .changed()
-    {
-        params.set_min_volume(min_volume);
-    }
-    params.set_threshold(threshold);
-    state.scene.surface_params = params;
-
-    let progress = progress(state.analysis, Kind::Surfaces);
-    ui.horizontal(|ui| {
-        if ui
-            .add_enabled(progress.is_none(), egui::Button::new("Detect surfaces"))
-            .clicked()
-        {
-            actions.detect_surfaces = true;
-        }
-        if progress.is_some() {
-            if ui.button("Cancel").clicked() {
-                actions.cancel_surfaces = true;
-            }
-            ui.spinner();
-        }
-        if let Some(progress) = progress {
-            ui.label(RichText::new(caption(state, progress)).small().weak());
-        }
-    });
-
-    let summary = state.scene.surfaces().map(|surfaces| {
-        (
-            surfaces.channel(),
-            surfaces.level(),
-            surfaces.object_count(),
-        )
-    });
-    let detected = state.scene.surface_frame_count();
-    match summary {
-        Some((channel, level, count)) => {
-            let channel_name = state.scene.dataset.channels()[channel].name().to_string();
-            ui.label(format!(
-                "{channel_name} · {count} objects · level {}",
-                level + 1
-            ));
-        }
-        None if detected == 0 => {
-            ui.label(
-                RichText::new(format!(
-                    "extracts connected surfaces of {name} in every frame"
-                ))
-                .small()
-                .weak(),
-            );
-            return;
-        }
-        None => {
-            ui.label(
-                RichText::new(format!("no surfaces on frame {} of {}", time + 1, frames))
-                    .small()
-                    .weak(),
-            );
-        }
-    }
-    if frames > 1 {
-        ui.label(
-            RichText::new(format!("detected in {detected} frames"))
-                .small()
-                .weak(),
-        );
-    }
-    let mut visible = state.scene.surface_visible();
-    if ui.checkbox(&mut visible, "visible").changed() {
-        state.scene.set_surface_visible(visible);
-    }
-    ui.horizontal(|ui| {
-        if ui.button("Export CSV").clicked() {
-            actions.export_surfaces = true;
-        }
-        if ui.button("Clear").clicked() {
-            actions.clear_surfaces = true;
-        }
-    });
-    if state.scene.surfaces().is_none() {
-        return;
-    }
-
-    let mut entries = state
-        .scene
-        .surfaces()
-        .map(|surfaces| {
-            surfaces
-                .objects()
-                .iter()
-                .enumerate()
-                .map(|(index, object)| (index, object.volume()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    entries.sort_by(|left, right| right.1.total_cmp(&left.1));
-    let selection = state.scene.selection();
-    let mut clicked = None;
-    egui::ScrollArea::vertical()
-        .id_salt("grana.surfaces")
-        .max_height(150.0)
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            for (index, volume) in &entries {
-                ui.horizontal(|ui| {
-                    color_swatch(ui, Scene::object_color(*index));
-                    if ui
-                        .selectable_label(
-                            selection == Some(Selection::Surface(*index)),
-                            format!("#{} · {volume:.1} µm³", index + 1),
-                        )
-                        .clicked()
-                    {
-                        clicked = Some(*index);
-                    }
-                });
-            }
-        });
-    if let Some(index) = clicked {
-        state.scene.select(Some(Selection::Surface(index)));
-    }
-
-    let measured = match state.scene.selection() {
-        Some(Selection::Surface(index)) => state.scene.surface(index),
-        _ => None,
-    };
-    let Some(object) = measured else {
-        ui.label(
-            RichText::new("click a surface to measure it")
-                .small()
-                .weak(),
-        );
-        return;
-    };
-    let bounds = object.bounds();
-    let size = bounds.size();
-    let intensity = object.intensity();
-    egui::Grid::new("surface")
-        .num_columns(2)
-        .spacing([12.0, 3.0])
-        .show(ui, |ui| {
-            if let Some(Selection::Surface(index)) = state.scene.selection() {
-                row(ui, "object", format!("#{}", index + 1));
-            }
-            row(ui, "volume", format!("{:.2} µm³", object.volume()));
-            row(ui, "area", format!("{:.2} µm²", object.area()));
-            row(ui, "sphericity", format!("{:.3}", object.sphericity()));
-            let centroid = object.centroid();
-            row(
-                ui,
-                "centroid",
-                format!(
-                    "{:.2} · {:.2} · {:.2} µm",
-                    centroid[0], centroid[1], centroid[2]
-                ),
-            );
-            row(
-                ui,
-                "extent",
-                format!("{:.2} × {:.2} × {:.2} µm", size[0], size[1], size[2]),
-            );
-            row(ui, "voxels", object.voxel_count().to_string());
-            row(
-                ui,
-                "intensity",
-                format!(
-                    "{:.0} mean · {:.0} … {:.0} · σ {:.0}",
-                    intensity.mean(),
-                    intensity.min(),
-                    intensity.max(),
-                    intensity.deviation()
-                ),
-            );
-        });
-}
-
 fn section_section(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions) {
     ui.strong("Section");
     let axis = state.view.section().axis();
@@ -826,39 +475,27 @@ fn camera_section(ui: &mut Ui, actions: &mut Actions) {
     );
 }
 
-pub(crate) fn progress(analysis: &[Progress], kind: Kind) -> Option<Progress> {
+pub(crate) fn progress(analysis: &[Progress], set: ObjectSetId, job: Job) -> Option<Progress> {
     analysis
         .iter()
         .copied()
-        .find(|progress| progress.kind == kind)
+        .find(|progress| progress.set == set && progress.job == job)
 }
 
-pub(crate) fn caption(state: &UiState<'_>, progress: Progress) -> String {
-    let name = state
-        .scene
-        .dataset
-        .channels()
-        .get(progress.channel)
-        .map_or("object", |channel| channel.name());
-    let prefix = match progress.kind {
-        Kind::SpotTracks | Kind::SurfaceTracks => String::new(),
-        Kind::Spots | Kind::Surfaces if state.scene.frame_count() > 1 => {
-            format!("frame {} · ", progress.time + 1)
-        }
-        Kind::Spots | Kind::Surfaces => String::new(),
+pub(crate) fn caption(kind: ObjectKind, job: Job, progress: Progress, frames: u32) -> String {
+    let unit = match (job, kind) {
+        (Job::Detect, ObjectKind::Spots) => "blocks",
+        (Job::Detect, ObjectKind::Surfaces) => "bricks",
+        (Job::Track, _) => "frames",
+    };
+    let prefix = match job {
+        Job::Detect if frames > 1 => format!("frame {} · ", progress.time + 1),
+        Job::Detect | Job::Track => String::new(),
     };
     if progress.total > 0 {
-        let unit = match progress.kind {
-            Kind::Spots => "blocks",
-            Kind::Surfaces => "bricks",
-            Kind::SpotTracks | Kind::SurfaceTracks => "frames",
-        };
-        format!(
-            "{prefix}{name} · {}/{} {unit}",
-            progress.done, progress.total
-        )
+        format!("{prefix}{}/{} {unit}", progress.done, progress.total)
     } else {
-        format!("{prefix}{name} · preparing")
+        format!("{prefix}preparing")
     }
 }
 

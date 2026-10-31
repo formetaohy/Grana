@@ -1,8 +1,8 @@
 use glam::Vec3;
-use grana_object::{Mesh, MeshVertex, Track, TrackNode, TrackSet, TrackSource};
+use grana_object::{Mesh, MeshVertex, Track, TrackNode, TrackSet};
 use grana_render::{
-    Camera, ChannelParams, Frame, MeshFrame, MeshStyle, RenderParams, Renderer, SectionCamera,
-    TransferFunction, track_mesh,
+    Camera, ChannelParams, Frame, MeshFrame, MeshKey, MeshStyle, MeshUpload, RenderParams,
+    Renderer, SectionCamera, TransferFunction, track_mesh,
 };
 use grana_volume::{Axis, BrickGrid, Channel, Extent, Spacing, Volume, VoxelData};
 
@@ -241,7 +241,7 @@ fn tracks() -> TrackSet {
             TrackNode::new(2, 1, [0.7, 0.1, 0.0]),
         ],
     );
-    TrackSet::new(TrackSource::Spots, 0, 1.0, vec![first, second])
+    TrackSet::new(1.0, vec![first, second])
 }
 
 fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
@@ -293,12 +293,28 @@ fn render(
     );
     let mut renderer = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
     renderer.set_pyramid(device, &pyramid);
+    let mut uploads = Vec::new();
     if let Some((mesh, _)) = surface {
-        renderer.set_surface(device, Some(mesh));
+        uploads.push(MeshUpload {
+            key: MeshKey::of_frame(1, 0, 0, 1),
+            mesh: Some(mesh),
+        });
     }
     if let Some((mesh, _)) = tracks {
-        renderer.set_spot_tracks(device, Some(mesh));
+        uploads.push(MeshUpload {
+            key: MeshKey::timeless(2, 1, 1),
+            mesh: Some(mesh),
+        });
     }
+    renderer.set_meshes(device, &uploads);
+    let mut styles = Vec::new();
+    if let Some((_, style)) = surface {
+        styles.push(MeshFrame { styles: style });
+    }
+    if let Some((_, style)) = tracks {
+        styles.push(MeshFrame { styles: style });
+    }
+    let meshes = styles.as_slice();
     let mut camera = Camera::new(35.0);
     camera.fit(world, 1.0);
     camera.set_focus_along(Axis::Z, focus_z);
@@ -338,9 +354,7 @@ fn render(
                 section: &section,
                 params: &params,
                 markers: &[],
-                surface: surface.map(|(_, styles)| MeshFrame { styles }),
-                spot_tracks: tracks.map(|(_, styles)| MeshFrame { styles }),
-                surface_tracks: None,
+                meshes,
                 volume_requests: &mut volume_requests,
                 section_requests: &mut section_requests,
             },
@@ -370,9 +384,7 @@ fn render(
             section: &section,
             params: &params,
             markers: &[],
-            surface: surface.map(|(_, styles)| MeshFrame { styles }),
-            spot_tracks: tracks.map(|(_, styles)| MeshFrame { styles }),
-            surface_tracks: None,
+            meshes,
             volume_requests: &mut volume_requests,
             section_requests: &mut section_requests,
         },

@@ -1,35 +1,15 @@
 use glam::Vec3;
-use grana_analysis::{SpotParams, SurfaceParams};
-use grana_object::{
-    Mesh, MeshVertex, Spot, SpotSet, SurfaceSet, SurfaceStatistics, TrackSet, TrackSource,
-};
-use grana_render::{ChannelParams, Marker, MeshStyle, Ray, RenderParams, Shading};
+use grana_object::{Mesh, MeshVertex, Spot, TrackSet};
+use grana_render::{ChannelParams, Marker, MeshKey, MeshStyle, Ray, RenderParams, Shading};
 use grana_volume::{Axis, ChannelInfo, Intensity};
 
 use crate::dataset::Dataset;
-use crate::tracks::{Layer, Tracks};
+use crate::objects::{ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, Objects};
+use crate::tracks::TrackLayer;
 use crate::transfer_editor::TransferEditor;
 
 const SELECTED_COLOR: [f32; 3] = [1.00, 0.93, 0.62];
-
-const OBJECT_PALETTE: [[f32; 3]; 8] = [
-    [0.35, 0.70, 1.00],
-    [0.35, 0.90, 0.55],
-    [1.00, 0.55, 0.35],
-    [0.80, 0.55, 1.00],
-    [1.00, 0.80, 0.35],
-    [0.35, 0.90, 0.90],
-    [1.00, 0.45, 0.70],
-    [0.75, 0.85, 0.45],
-];
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Selection {
-    Spot(usize),
-    Surface(usize),
-    SpotTrack(usize),
-    SurfaceTrack(usize),
-}
+const SELECTED_SCALE: f32 = 1.3;
 
 pub struct ChannelView {
     pub enabled: bool,
@@ -39,41 +19,22 @@ pub struct ChannelView {
     transfer: TransferEditor,
 }
 
-struct ObjectLayer<T> {
-    visible: bool,
-    frames: Vec<Option<T>>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Selection {
+    pub set: ObjectSetId,
+    pub item: Item,
 }
 
-impl<T> ObjectLayer<T> {
-    fn new(frames: u32) -> Self {
-        Self {
-            visible: true,
-            frames: (0..frames).map(|_| None).collect(),
-        }
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Item {
+    Object(usize),
+    Track(usize),
+}
 
-    fn get(&self, time: u32) -> Option<&T> {
-        self.frames.get(time as usize).and_then(Option::as_ref)
-    }
-
-    fn set(&mut self, time: u32, value: T) {
-        assert!(
-            (time as usize) < self.frames.len(),
-            "the object frame lies inside the time series"
-        );
-        self.frames[time as usize] = Some(value);
-    }
-
-    fn detected(&self) -> usize {
-        self.frames.iter().filter(|frame| frame.is_some()).count()
-    }
-
-    fn iter(&self) -> impl Iterator<Item = (u32, &T)> + '_ {
-        self.frames
-            .iter()
-            .enumerate()
-            .filter_map(|(time, frame)| frame.as_ref().map(|set| (time as u32, set)))
-    }
+pub struct SceneLayer<'a> {
+    pub key: MeshKey,
+    pub mesh: Option<&'a Mesh>,
+    pub styles: Vec<MeshStyle>,
 }
 
 pub struct Scene {
@@ -82,12 +43,8 @@ pub struct Scene {
     pub selected: usize,
     pub shading: Shading,
     pub step_scale: f32,
-    pub spot_params: SpotParams,
-    pub surface_params: SurfaceParams,
-    pub tracks: Tracks,
+    pub objects: Objects,
     time: u32,
-    spots: Option<ObjectLayer<SpotSet>>,
-    surfaces: Option<ObjectLayer<SurfaceSet>>,
     selection: Option<Selection>,
 }
 
@@ -104,21 +61,14 @@ impl Scene {
                 transfer: TransferEditor::new(channel.tint()),
             })
             .collect();
-        let spot_params = SpotParams::new(4.0 * dataset.voxel_size().min_element(), 0.2);
-        let surface_params = SurfaceParams::new(dataset.channels()[0].intensity().value(0.5), 0.0);
-        let tracks = Tracks::new(dataset.voxel_size().min_element());
         Self {
             dataset,
             channels,
             selected: 0,
             shading: Shading::default(),
             step_scale: 1.0,
-            spot_params,
-            surface_params,
-            tracks,
+            objects: Objects::new(),
             time: 0,
-            spots: None,
-            surfaces: None,
             selection: None,
         }
     }
@@ -137,14 +87,15 @@ impl Scene {
 
     pub fn set_time(&mut self, time: u32) {
         assert!(time < self.frame_count(), "the frame lies inside the scene");
-        if time != self.time {
-            self.time = time;
-            if matches!(
-                self.selection,
-                Some(Selection::Spot(_) | Selection::Surface(_))
-            ) {
-                self.selection = None;
-            }
+        if time == self.time {
+            return;
+        }
+        self.time = time;
+        if self
+            .selection
+            .is_some_and(|selection| matches!(selection.item, Item::Object(_)))
+        {
+            self.selection = None;
         }
     }
 
@@ -194,106 +145,62 @@ impl Scene {
         self.channels[index].window = self.channels[index].default_window;
     }
 
-    pub fn spots(&self) -> Option<&SpotSet> {
-        self.spots.as_ref().and_then(|layer| layer.get(self.time))
+    pub fn add_object(&mut self, kind: ObjectKind, channel: usize) -> ObjectSetId {
+        self.objects.add(kind, channel, &self.dataset)
     }
 
-    pub fn spot_frames(&self) -> impl Iterator<Item = (u32, &SpotSet)> + '_ {
-        self.spots.iter().flat_map(|layer| layer.iter())
-    }
-
-    pub fn spot_frame_count(&self) -> usize {
-        self.spots.as_ref().map_or(0, ObjectLayer::detected)
-    }
-
-    pub fn spot(&self, index: usize) -> Option<Spot> {
-        self.spots().and_then(|set| set.spots().get(index).copied())
-    }
-
-    pub fn spot_visible(&self) -> bool {
-        self.spots.as_ref().is_some_and(|layer| layer.visible)
-    }
-
-    pub fn set_spot_visible(&mut self, visible: bool) {
-        if let Some(layer) = &mut self.spots {
-            layer.visible = visible;
-        }
-    }
-
-    pub fn install_spots(&mut self, time: u32, set: SpotSet) {
-        assert!(
-            set.channel() < self.channels.len(),
-            "the spot set belongs to an existing channel"
-        );
-        let frames = self.frame_count();
-        let layer = self.spots.get_or_insert_with(|| ObjectLayer::new(frames));
-        layer.set(time, set);
-        if time == self.time && matches!(self.selection, Some(Selection::Spot(_))) {
+    pub fn remove_object(&mut self, id: ObjectSetId) {
+        self.objects.remove(id);
+        if self.selection.is_some_and(|selection| selection.set == id) {
             self.selection = None;
         }
     }
 
-    pub fn clear_spots(&mut self) {
-        self.spots = None;
-        self.tracks.clear(TrackSource::Spots);
-        if matches!(
-            self.selection,
-            Some(Selection::Spot(_) | Selection::SpotTrack(_))
-        ) {
+    pub fn install(&mut self, id: ObjectSetId, time: u32, frame: ObjectFrame) {
+        let Some(set) = self.objects.get_mut(id) else {
+            return;
+        };
+        set.install(time, frame);
+        if time == self.time {
+            let stale = self.selection.is_some_and(|selection| {
+                selection.set == id && matches!(selection.item, Item::Object(_))
+            });
+            if stale {
+                self.selection = None;
+            }
+        }
+    }
+
+    pub fn clear_object(&mut self, id: ObjectSetId) {
+        if let Some(set) = self.objects.get_mut(id) {
+            set.clear();
+        }
+        if self.selection.is_some_and(|selection| selection.set == id) {
             self.selection = None;
         }
     }
 
-    pub fn surfaces(&self) -> Option<&SurfaceSet> {
-        self.surfaces
-            .as_ref()
-            .and_then(|layer| layer.get(self.time))
-    }
-
-    pub fn surface_frames(&self) -> impl Iterator<Item = (u32, &SurfaceSet)> + '_ {
-        self.surfaces.iter().flat_map(|layer| layer.iter())
-    }
-
-    pub fn surface_frame_count(&self) -> usize {
-        self.surfaces.as_ref().map_or(0, ObjectLayer::detected)
-    }
-
-    pub fn surface(&self, index: usize) -> Option<SurfaceStatistics> {
-        self.surfaces().and_then(|set| set.object(index))
-    }
-
-    pub fn surface_visible(&self) -> bool {
-        self.surfaces.as_ref().is_some_and(|layer| layer.visible)
-    }
-
-    pub fn set_surface_visible(&mut self, visible: bool) {
-        if let Some(layer) = &mut self.surfaces {
-            layer.visible = visible;
-        }
-    }
-
-    pub fn install_surfaces(&mut self, time: u32, set: SurfaceSet) {
-        assert!(
-            set.channel() < self.channels.len(),
-            "the surface set belongs to an existing channel"
-        );
-        let frames = self.frame_count();
-        let layer = self
-            .surfaces
-            .get_or_insert_with(|| ObjectLayer::new(frames));
-        layer.set(time, set);
-        if time == self.time && matches!(self.selection, Some(Selection::Surface(_))) {
+    pub fn install_tracks(&mut self, id: ObjectSetId, set: TrackSet) {
+        let Some(object) = self.objects.get_mut(id) else {
+            return;
+        };
+        object.install_tracks(set);
+        let stale = self.selection.is_some_and(|selection| {
+            selection.set == id && matches!(selection.item, Item::Track(_))
+        });
+        if stale {
             self.selection = None;
         }
     }
 
-    pub fn clear_surfaces(&mut self) {
-        self.surfaces = None;
-        self.tracks.clear(TrackSource::Surfaces);
-        if matches!(
-            self.selection,
-            Some(Selection::Surface(_) | Selection::SurfaceTrack(_))
-        ) {
+    pub fn clear_tracks(&mut self, id: ObjectSetId) {
+        if let Some(set) = self.objects.get_mut(id) {
+            set.clear_tracks();
+        }
+        let stale = self.selection.is_some_and(|selection| {
+            selection.set == id && matches!(selection.item, Item::Track(_))
+        });
+        if stale {
             self.selection = None;
         }
     }
@@ -302,185 +209,165 @@ impl Scene {
         self.selection
     }
 
-    pub fn install_tracks(&mut self, set: TrackSet) {
-        assert!(
-            set.channel() < self.channels.len(),
-            "the track set belongs to an existing channel"
-        );
-        let source = set.source();
-        let stale = match source {
-            TrackSource::Spots => matches!(self.selection, Some(Selection::SpotTrack(_))),
-            TrackSource::Surfaces => matches!(self.selection, Some(Selection::SurfaceTrack(_))),
-        };
-        self.tracks.install(set);
-        if stale {
-            self.selection = None;
-        }
-    }
-
-    pub fn clear_tracks(&mut self, source: TrackSource) {
-        self.tracks.clear(source);
-        let stale = match source {
-            TrackSource::Spots => matches!(self.selection, Some(Selection::SpotTrack(_))),
-            TrackSource::Surfaces => matches!(self.selection, Some(Selection::SurfaceTrack(_))),
-        };
-        if stale {
-            self.selection = None;
-        }
-    }
-
-    pub fn spot_track(&self, time: u32, object: usize) -> Option<usize> {
-        self.tracks
-            .layer(TrackSource::Spots)?
-            .set()
-            .track_at(time, object)
-    }
-
-    pub fn surface_track(&self, time: u32, object: usize) -> Option<usize> {
-        self.tracks
-            .layer(TrackSource::Surfaces)?
-            .set()
-            .track_at(time, object)
-    }
-
     pub fn select(&mut self, selection: Option<Selection>) {
         self.selection = selection;
     }
 
-    pub fn selected_track(&self, source: TrackSource) -> Option<usize> {
-        match (source, self.selection) {
-            (TrackSource::Spots, Some(Selection::SpotTrack(index))) => Some(index),
-            (TrackSource::Surfaces, Some(Selection::SurfaceTrack(index))) => Some(index),
+    pub fn select_track(&mut self, id: ObjectSetId, index: usize) {
+        assert!(
+            self.objects
+                .get(id)
+                .and_then(ObjectSet::tracks)
+                .is_some_and(|layer| index < layer.set().len()),
+            "the selected track exists"
+        );
+        self.selection = Some(Selection {
+            set: id,
+            item: Item::Track(index),
+        });
+    }
+
+    pub fn selected_track(&self, id: ObjectSetId) -> Option<usize> {
+        match self.selection {
+            Some(Selection {
+                set,
+                item: Item::Track(index),
+            }) if set == id => Some(index),
             _ => None,
         }
     }
 
-    pub fn select_track(&mut self, source: TrackSource, index: usize) {
-        assert!(
-            self.tracks
-                .layer(source)
-                .is_some_and(|layer| index < layer.set().len()),
-            "the selected track exists"
-        );
-        self.selection = Some(track_selection(source, index));
-    }
-
     pub fn markers(&self, out: &mut Vec<Marker>) {
         out.clear();
-        let Some(layer) = &self.spots else {
-            return;
-        };
-        if !layer.visible {
-            return;
-        }
-        let Some(set) = layer.get(self.time) else {
-            return;
-        };
-        let channel = set.channel();
-        if !self.channels[channel].enabled {
-            return;
-        }
-        let color = self.dataset.channels()[channel].tint();
-        for (index, spot) in set.spots().iter().enumerate() {
-            if self.selection == Some(Selection::Spot(index)) {
-                out.push(Marker::new(
-                    spot.center(),
-                    1.3 * spot.radius(),
-                    SELECTED_COLOR,
-                    1.0,
-                ));
-            } else {
-                out.push(Marker::new(spot.center(), spot.radius(), color, 1.0));
+        for set in self.objects.iter() {
+            if !set.visible() || !self.channels[set.channel()].enabled {
+                continue;
+            }
+            let Some(frame) = set.frame(self.time) else {
+                continue;
+            };
+            let Some(spots) = frame.spots() else {
+                continue;
+            };
+            for (index, spot) in spots.spots().iter().enumerate() {
+                let selected = self.selection
+                    == Some(Selection {
+                        set: set.id(),
+                        item: Item::Object(index),
+                    });
+                if selected {
+                    out.push(Marker::new(
+                        spot.center(),
+                        SELECTED_SCALE * spot.radius(),
+                        SELECTED_COLOR,
+                        1.0,
+                    ));
+                } else {
+                    out.push(Marker::new(spot.center(), spot.radius(), set.color(), 1.0));
+                }
             }
         }
     }
 
-    pub fn surface_styles(&self, out: &mut Vec<MeshStyle>) {
-        out.clear();
-        let Some(layer) = &self.surfaces else {
-            return;
-        };
-        let Some(set) = layer.get(self.time) else {
-            return;
-        };
-        let enabled = self.channels[set.channel()].enabled;
-        for index in 0..set.object_count() {
-            let selected = self.selection == Some(Selection::Surface(index));
-            out.push(MeshStyle::new(
-                Self::object_color(index),
-                layer.visible && enabled,
-                selected,
-            ));
+    pub fn layers(&self) -> Vec<SceneLayer<'_>> {
+        let mut layers = Vec::new();
+        for set in self.objects.iter() {
+            let id = set.id();
+            let enabled = self.channels[set.channel()].enabled;
+            let visible = set.visible() && enabled;
+            if let (Some(frame), Some(stamp)) = (set.frame(self.time), set.frame_stamp(self.time))
+                && let Some(mesh) = frame.mesh()
+                && !frame.is_empty()
+            {
+                let styles = (0..frame.object_count())
+                    .map(|index| {
+                        let selected = self.selection
+                            == Some(Selection {
+                                set: id,
+                                item: Item::Object(index),
+                            });
+                        MeshStyle::new(set.color(), visible, selected)
+                    })
+                    .collect();
+                layers.push(SceneLayer {
+                    key: MeshKey::of_frame(id.raw(), 0, self.time, stamp),
+                    mesh: Some(mesh),
+                    styles,
+                });
+            }
+            if let Some(tracks) = set.tracks()
+                && !tracks.set().is_empty()
+            {
+                let styles = (0..tracks.set().len())
+                    .map(|index| {
+                        let selected = self.selection
+                            == Some(Selection {
+                                set: id,
+                                item: Item::Track(index),
+                            });
+                        MeshStyle::new(set.color(), visible && tracks.visible(), selected)
+                    })
+                    .collect();
+                layers.push(SceneLayer {
+                    key: MeshKey::timeless(id.raw(), 1, tracks.revision()),
+                    mesh: Some(tracks.mesh()),
+                    styles,
+                });
+            }
         }
-    }
-
-    pub fn spot_track_styles(&self, out: &mut Vec<MeshStyle>) {
-        self.track_styles(TrackSource::Spots, out);
-    }
-
-    pub fn surface_track_styles(&self, out: &mut Vec<MeshStyle>) {
-        self.track_styles(TrackSource::Surfaces, out);
-    }
-
-    fn track_styles(&self, source: TrackSource, out: &mut Vec<MeshStyle>) {
-        out.clear();
-        let Some(layer) = self.tracks.layer(source) else {
-            return;
-        };
-        let set = layer.set();
-        let enabled = self.channels[set.channel()].enabled;
-        for index in 0..set.len() {
-            let selected = self.selection == Some(track_selection(source, index));
-            out.push(MeshStyle::new(
-                Self::object_color(index),
-                layer.visible() && enabled,
-                selected,
-            ));
-        }
-    }
-
-    pub fn object_color(index: usize) -> [f32; 3] {
-        OBJECT_PALETTE[index % OBJECT_PALETTE.len()]
+        layers
     }
 
     pub fn pick_ray(&self, ray: &Ray) -> Option<Selection> {
         let mut best: Option<(f32, Selection)> = None;
-        if let Some(spots) = self.pickable_spots() {
-            for (index, spot) in spots.spots().iter().enumerate() {
-                let Some(distance) = ray_sphere(ray, *spot) else {
-                    continue;
-                };
-                if best.is_none_or(|(nearest, _)| distance < nearest) {
-                    best = Some((distance, Selection::Spot(index)));
+        for set in self.pickable() {
+            if let Some(frame) = set.frame(self.time) {
+                if let Some(spots) = frame.spots() {
+                    for (index, spot) in spots.spots().iter().enumerate() {
+                        let Some(distance) = ray_sphere(ray, *spot) else {
+                            continue;
+                        };
+                        let selection = Selection {
+                            set: set.id(),
+                            item: Item::Object(index),
+                        };
+                        if best.is_none_or(|(nearest, _)| distance < nearest) {
+                            best = Some((distance, selection));
+                        }
+                    }
+                }
+                if let Some(mesh) = frame.mesh()
+                    && !frame.is_empty()
+                {
+                    for index in 0..mesh.triangle_count() {
+                        let triangle = mesh.triangle(index);
+                        let Some(distance) = ray_triangle(ray, triangle) else {
+                            continue;
+                        };
+                        let selection = Selection {
+                            set: set.id(),
+                            item: Item::Object(triangle[0].object() as usize),
+                        };
+                        if best.is_none_or(|(nearest, _)| distance < nearest) {
+                            best = Some((distance, selection));
+                        }
+                    }
                 }
             }
-        }
-        if let Some(surfaces) = self.pickable_surfaces() {
-            for index in 0..surfaces.mesh().triangle_count() {
-                let triangle = surfaces.mesh().triangle(index);
-                let Some(distance) = ray_triangle(ray, triangle) else {
-                    continue;
-                };
-                if best.is_none_or(|(nearest, _)| distance < nearest) {
-                    best = Some((distance, Selection::Surface(triangle[0].object() as usize)));
-                }
-            }
-        }
-        for source in [TrackSource::Spots, TrackSource::Surfaces] {
-            let Some(layer) = self.pickable_track(source) else {
-                continue;
-            };
-            let mesh = layer.mesh();
-            for index in 0..mesh.triangle_count() {
-                let triangle = mesh.triangle(index);
-                let Some(distance) = ray_triangle(ray, triangle) else {
-                    continue;
-                };
-                if best.is_none_or(|(nearest, _)| distance < nearest) {
-                    best = Some((
-                        distance,
-                        track_selection(source, triangle[0].object() as usize),
-                    ));
+            if let Some(tracks) = self.pickable_tracks(set) {
+                let mesh = tracks.mesh();
+                for index in 0..mesh.triangle_count() {
+                    let triangle = mesh.triangle(index);
+                    let Some(distance) = ray_triangle(ray, triangle) else {
+                        continue;
+                    };
+                    let selection = Selection {
+                        set: set.id(),
+                        item: Item::Track(triangle[0].object() as usize),
+                    };
+                    if best.is_none_or(|(nearest, _)| distance < nearest) {
+                        best = Some((distance, selection));
+                    }
                 }
             }
         }
@@ -489,85 +376,71 @@ impl Scene {
 
     pub fn pick_slice(&self, axis: Axis, point: Vec3) -> Option<Selection> {
         let mut best: Option<(f32, Selection)> = None;
-        if let Some(spots) = self.pickable_spots() {
-            let plane = axis.index();
-            let (u_axis, v_axis) = axis.in_plane();
-            let (u, v) = (u_axis.index(), v_axis.index());
-            for (index, spot) in spots.spots().iter().enumerate() {
-                let offset = Vec3::from(spot.center()) - point;
-                let depth = offset[plane].abs();
-                let radius = spot.radius();
-                if depth > radius {
-                    continue;
+        for set in self.pickable() {
+            if let Some(frame) = set.frame(self.time) {
+                if let Some(spots) = frame.spots() {
+                    let plane = axis.index();
+                    let (u_axis, v_axis) = axis.in_plane();
+                    let (u, v) = (u_axis.index(), v_axis.index());
+                    for (index, spot) in spots.spots().iter().enumerate() {
+                        let offset = Vec3::from(spot.center()) - point;
+                        let depth = offset[plane].abs();
+                        let radius = spot.radius();
+                        if depth > radius {
+                            continue;
+                        }
+                        let planar = Vec3::new(offset[u], offset[v], 0.0).length();
+                        if planar > (radius * radius - depth * depth).sqrt() {
+                            continue;
+                        }
+                        let selection = Selection {
+                            set: set.id(),
+                            item: Item::Object(index),
+                        };
+                        if best.is_none_or(|(nearest, _)| depth < nearest) {
+                            best = Some((depth, selection));
+                        }
+                    }
                 }
-                let planar = Vec3::new(offset[u], offset[v], 0.0).length();
-                if planar > (radius * radius - depth * depth).sqrt() {
-                    continue;
-                }
-                if best.is_none_or(|(nearest, _)| depth < nearest) {
-                    best = Some((depth, Selection::Spot(index)));
+                if let Some(mesh) = frame.mesh()
+                    && !frame.is_empty()
+                    && let Some((offset, object)) = slice_mesh(mesh, axis, point)
+                    && best.is_none_or(|(nearest, _)| offset < nearest)
+                {
+                    best = Some((
+                        offset,
+                        Selection {
+                            set: set.id(),
+                            item: Item::Object(object),
+                        },
+                    ));
                 }
             }
-        }
-        if let Some(surfaces) = self.pickable_surfaces()
-            && let Some((offset, object)) = slice_mesh(surfaces.mesh(), axis, point)
-            && best.is_none_or(|(nearest, _)| offset < nearest)
-        {
-            best = Some((offset, Selection::Surface(object)));
-        }
-        for source in [TrackSource::Spots, TrackSource::Surfaces] {
-            let Some(layer) = self.pickable_track(source) else {
-                continue;
-            };
-            if let Some((offset, object)) = slice_mesh(layer.mesh(), axis, point)
+            if let Some(tracks) = self.pickable_tracks(set)
+                && let Some((offset, object)) = slice_mesh(tracks.mesh(), axis, point)
                 && best.is_none_or(|(nearest, _)| offset < nearest)
             {
-                best = Some((offset, track_selection(source, object)));
+                best = Some((
+                    offset,
+                    Selection {
+                        set: set.id(),
+                        item: Item::Track(object),
+                    },
+                ));
             }
         }
         best.map(|(_, selection)| selection)
     }
 
-    fn pickable_spots(&self) -> Option<&SpotSet> {
-        let layer = self.spots.as_ref()?;
-        if !layer.visible {
-            return None;
-        }
-        let set = layer.get(self.time)?;
-        if !self.channels[set.channel()].enabled {
-            return None;
-        }
-        Some(set)
+    fn pickable(&self) -> impl Iterator<Item = &ObjectSet> + '_ {
+        self.objects
+            .iter()
+            .filter(|set| set.visible())
+            .filter(|set| self.channels[set.channel()].enabled)
     }
 
-    fn pickable_surfaces(&self) -> Option<&SurfaceSet> {
-        let layer = self.surfaces.as_ref()?;
-        if !layer.visible {
-            return None;
-        }
-        let set = layer.get(self.time)?;
-        if !self.channels[set.channel()].enabled {
-            return None;
-        }
-        Some(set)
-    }
-
-    fn pickable_track(&self, source: TrackSource) -> Option<&Layer> {
-        let layer = self.tracks.layer(source)?;
-        if !layer.visible() {
-            return None;
-        }
-        if !self.channels[layer.set().channel()].enabled {
-            return None;
-        }
-        Some(layer)
-    }
-}
-
-fn track_selection(source: TrackSource, index: usize) -> Selection {
-    match source {
-        TrackSource::Spots => Selection::SpotTrack(index),
-        TrackSource::Surfaces => Selection::SurfaceTrack(index),
+    fn pickable_tracks<'a>(&self, set: &'a ObjectSet) -> Option<&'a TrackLayer> {
+        set.tracks().filter(|tracks| tracks.visible())
     }
 }
 

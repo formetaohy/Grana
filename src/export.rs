@@ -1,15 +1,18 @@
-use crate::scene::Scene;
+use crate::objects::ObjectSet;
 use grana_object::TrackSet;
 
-pub fn spots(scene: &Scene) -> String {
-    let interval = f64::from(scene.dataset.frame_interval());
+pub fn spots(frame_interval: f32, set: &ObjectSet) -> String {
+    let interval = f64::from(frame_interval);
     let mut csv = String::from("frame,time_s,id,track_id,x_um,y_um,z_um,diameter_um,quality\n");
-    for (time, spots) in scene.spot_frames() {
+    for (time, frame) in set.frames() {
+        let Some(spots) = frame.spots() else {
+            continue;
+        };
         let seconds = f64::from(time) * interval;
         for (index, spot) in spots.spots().iter().enumerate() {
             let center = spot.center();
-            let track = scene
-                .spot_track(time, index)
+            let track = set
+                .track_at(time, index)
                 .map_or(String::new(), |track| (track + 1).to_string());
             csv.push_str(&format!(
                 "{time},{seconds:.4},{},{track},{:.4},{:.4},{:.4},{:.4},{:.4}\n",
@@ -25,12 +28,15 @@ pub fn spots(scene: &Scene) -> String {
     csv
 }
 
-pub fn surfaces(scene: &Scene) -> String {
-    let interval = f64::from(scene.dataset.frame_interval());
+pub fn surfaces(frame_interval: f32, set: &ObjectSet) -> String {
+    let interval = f64::from(frame_interval);
     let mut csv = String::from(
         "frame,time_s,id,track_id,voxels,volume_um3,area_um2,sphericity,centroid_x_um,centroid_y_um,centroid_z_um,min_x_um,min_y_um,min_z_um,max_x_um,max_y_um,max_z_um,mean_intensity,min_intensity,max_intensity,intensity_std\n",
     );
-    for (time, surfaces) in scene.surface_frames() {
+    for (time, frame) in set.frames() {
+        let Some(surfaces) = frame.surfaces() else {
+            continue;
+        };
         let seconds = f64::from(time) * interval;
         for (index, object) in surfaces.objects().iter().enumerate() {
             let centroid = object.centroid();
@@ -38,8 +44,8 @@ pub fn surfaces(scene: &Scene) -> String {
             let min = bounds.min();
             let max = bounds.max();
             let intensity = object.intensity();
-            let track = scene
-                .surface_track(time, index)
+            let track = set
+                .track_at(time, index)
                 .map_or(String::new(), |track| (track + 1).to_string());
             csv.push_str(&format!(
                 "{time},{seconds:.4},{},{track},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.2},{:.2},{:.2},{:.2}\n",

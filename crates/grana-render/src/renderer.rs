@@ -1,5 +1,4 @@
 use glam::Vec3;
-use grana_object::Mesh;
 use grana_volume::{BrickCoord, BrickData, Pyramid};
 use wgpu::{
     Color, CommandEncoder, Device, LoadOp, Operations, Queue, RenderPassColorAttachment,
@@ -10,7 +9,7 @@ use crate::backend::Backend;
 use crate::cache::Cache;
 use crate::level::{LevelCache, Resources};
 use crate::marker::{SectionFrame, VolumeFrame};
-use crate::mesh::{MeshFrame, MeshStyle, SPOT_TRACK_LAYER, SURFACE_LAYER, SURFACE_TRACK_LAYER};
+use crate::mesh::{MeshFrame, MeshUpload};
 use crate::residency::{self, Residency};
 use crate::transfer::TransferFunction;
 use crate::uniforms;
@@ -48,9 +47,7 @@ pub struct Frame<'a> {
     pub section: &'a SectionCamera,
     pub params: &'a RenderParams,
     pub markers: &'a [Marker],
-    pub surface: Option<MeshFrame<'a>>,
-    pub spot_tracks: Option<MeshFrame<'a>>,
-    pub surface_tracks: Option<MeshFrame<'a>>,
+    pub meshes: &'a [MeshFrame<'a>],
     pub volume_requests: &'a mut Vec<BrickRequest>,
     pub section_requests: &'a mut Vec<BrickRequest>,
 }
@@ -79,16 +76,8 @@ impl Renderer {
         self.transfers.fill(None);
     }
 
-    pub fn set_surface(&mut self, device: &Device, mesh: Option<&Mesh>) {
-        self.backend.meshes.set(SURFACE_LAYER, device, mesh);
-    }
-
-    pub fn set_spot_tracks(&mut self, device: &Device, mesh: Option<&Mesh>) {
-        self.backend.meshes.set(SPOT_TRACK_LAYER, device, mesh);
-    }
-
-    pub fn set_surface_tracks(&mut self, device: &Device, mesh: Option<&Mesh>) {
-        self.backend.meshes.set(SURFACE_TRACK_LAYER, device, mesh);
+    pub fn set_meshes(&mut self, device: &Device, uploads: &[MeshUpload<'_>]) {
+        self.backend.meshes.set(device, uploads);
     }
 
     pub fn upload(
@@ -118,9 +107,7 @@ impl Renderer {
             section,
             params,
             markers,
-            surface,
-            spot_tracks,
-            surface_tracks,
+            meshes,
             volume_requests,
             section_requests,
         } = frame;
@@ -154,12 +141,11 @@ impl Renderer {
         backend.ensure_target(device, size);
         backend.screen.write(queue);
         backend.markers.prepare(device, queue, markers);
-        let mesh_styles: [Option<&[MeshStyle]>; 3] = [
-            surface.map(|frame| frame.styles),
-            spot_tracks.map(|frame| frame.styles),
-            surface_tracks.map(|frame| frame.styles),
-        ];
-        backend.meshes.write_styles(queue, mesh_styles);
+        assert_eq!(
+            meshes.len(),
+            backend.meshes.len(),
+            "every mesh layer has a frame"
+        );
         backend
             .screen
             .background(encoder, backend.scene(), volume_region);
@@ -241,7 +227,7 @@ impl Renderer {
                 shading: params.shading,
                 scene_radius,
             },
-            mesh_styles,
+            meshes,
         );
         backend.markers.draw_volume(
             encoder,
@@ -364,13 +350,14 @@ impl Renderer {
 
         backend.meshes.draw_section(
             encoder,
+            queue,
             crate::mesh::SectionFrame {
                 target: backend.scene(),
                 depth: backend.depth(),
                 region: section_region,
                 uniforms: section_cache.section_group(),
             },
-            mesh_styles,
+            meshes,
         );
 
         backend.markers.draw_section(
