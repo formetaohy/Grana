@@ -1,6 +1,6 @@
 use glam::Vec3;
 use grana_analysis::{FilamentParams, FilamentScan};
-use grana_volume::{Extent, Level, Spacing, VoxelData};
+use grana_volume::{Extent, Level, Region, Spacing, VoxelData};
 
 const EXTENT: Extent = Extent::new(72, 72, 32);
 const SPACING: f32 = 0.25;
@@ -21,7 +21,14 @@ const SEGMENTS: [([f32; 3], [f32; 3]); 4] = [
 fn traces_branching_filaments() {
     let data = tubes(&SEGMENTS);
     let level = Level::new(EXTENT, Spacing::new(SPACING, SPACING, SPACING));
-    let mut scan = FilamentScan::new(0, level, FilamentParams::new(THRESHOLD, MIN_LENGTH), 1, 0);
+    let mut scan = FilamentScan::new(
+        0,
+        level,
+        FilamentParams::new(THRESHOLD, MIN_LENGTH),
+        1,
+        0,
+        Region::none(),
+    );
     let set = scan
         .frame(&data, |_| Ok(data.clone()))
         .expect("the filament scan traces the frame");
@@ -58,6 +65,32 @@ fn traces_branching_filaments() {
     assert!(
         intensity > THRESHOLD,
         "the filament is measured along its centerline: {intensity}"
+    );
+
+    let region = Region::new(Vec3::new(-9.0, -9.0, -4.0), Vec3::new(-2.0, 9.0, 4.0));
+    let mut restricted = FilamentScan::new(
+        0,
+        level,
+        FilamentParams::new(THRESHOLD, MIN_LENGTH),
+        1,
+        0,
+        region,
+    );
+    let restricted = restricted
+        .frame(&data, |_| Ok(data.clone()))
+        .expect("the restricted filament scan traces the frame");
+    assert_eq!(
+        restricted.object_count(),
+        1,
+        "the region keeps the cut filament"
+    );
+    let cut = restricted
+        .object(0)
+        .expect("the cut filament exists")
+        .length();
+    assert!(
+        cut > 0.0 && cut < 0.9 * length,
+        "the region shortens the filament: {cut:.2} of {length:.2} µm"
     );
 }
 

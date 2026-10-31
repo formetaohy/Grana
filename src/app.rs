@@ -379,7 +379,7 @@ impl App {
                     time: scene.time(),
                     camera: self.viewport.camera(),
                     section: self.viewport.section(),
-                    crop: scene.crop,
+                    region: scene.region,
                     scene: &rendered.frame(),
                 },
             );
@@ -657,16 +657,25 @@ impl App {
         };
         let channel = object.channel();
         let params = object.params();
+        let region = scene.region;
         if scene.dataset.channels()[channel].intensity().span() <= 0.0 {
             self.message = Some(Message::error(
                 "the selected channel has no intensity range to detect",
             ));
             return;
         }
+        if region.enabled()
+            && region
+                .voxel_range(scene.dataset.pyramid().level(0))
+                .is_none()
+        {
+            self.message = Some(Message::error("the region does not overlap the dataset"));
+            return;
+        }
         self.message = None;
         self.record_progress(set, Job::Detect, 0, 0, 0);
         self.analysis
-            .push(job::detect(source, set, channel, params));
+            .push(job::detect(source, set, channel, params, region));
     }
 
     fn start_tracks(&mut self, set: ObjectSetId) {

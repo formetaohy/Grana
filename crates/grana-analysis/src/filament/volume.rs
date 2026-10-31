@@ -1,4 +1,5 @@
-use grana_volume::VoxelData;
+use glam::Vec3;
+use grana_volume::{Region, VoxelData};
 
 use super::Grid;
 
@@ -25,12 +26,13 @@ pub(super) fn mask(
     step: [u32; 3],
     grid: &Grid,
     threshold: f32,
+    region: Region,
     mask: &mut [u8],
 ) {
     match data {
-        VoxelData::U8(values) => fill(values, extent, step, grid, threshold, mask),
-        VoxelData::U16(values) => fill(values, extent, step, grid, threshold, mask),
-        VoxelData::F32(values) => fill(values, extent, step, grid, threshold, mask),
+        VoxelData::U8(values) => fill(values, extent, step, grid, threshold, region, mask),
+        VoxelData::U16(values) => fill(values, extent, step, grid, threshold, region, mask),
+        VoxelData::F32(values) => fill(values, extent, step, grid, threshold, region, mask),
     }
 }
 
@@ -48,6 +50,7 @@ fn fill<T: Sample>(
     step: [u32; 3],
     grid: &Grid,
     threshold: f32,
+    region: Region,
     mask: &mut [u8],
 ) {
     let width = extent[0] as usize;
@@ -61,6 +64,11 @@ fn fill<T: Sample>(
             let low_y = y * step[1] as usize;
             let high_y = (low_y + step[1] as usize).min(height);
             for x in 0..grid.dims[0] as usize {
+                let cell = stride[2] * (z + 1) + stride[1] * (y + 1) + x + 1;
+                if !region.contains(Vec3::from(grid.position([x as f32, y as f32, z as f32]))) {
+                    mask[cell] = 0;
+                    continue;
+                }
                 let low_x = x * step[0] as usize;
                 let high_x = (low_x + step[0] as usize).min(width);
                 let mut maximum = f32::NEG_INFINITY;
@@ -73,8 +81,7 @@ fn fill<T: Sample>(
                         }
                     }
                 }
-                mask[stride[2] * (z + 1) + stride[1] * (y + 1) + x + 1] =
-                    u8::from(maximum > threshold);
+                mask[cell] = u8::from(maximum > threshold);
             }
         }
     }

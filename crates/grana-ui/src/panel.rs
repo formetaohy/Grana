@@ -36,7 +36,7 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
                     ui.separator();
                     section_section(ui, state, &mut actions);
                     ui.separator();
-                    clip_section(ui, state);
+                    region_section(ui, state);
                     ui.separator();
                     channels_section(ui, state.scene);
                     ui.separator();
@@ -94,20 +94,20 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
         let section =
             egui::Rect::from_min_max(egui::pos2(split + 1.0, panes.top()), panes.right_bottom());
         state.viewport.set_rects(volume, section);
-        overlay::paint(
-            ui,
-            &Overlay {
-                camera: state.viewport.camera(),
-                section: state.viewport.section(),
-                world: state.scene.dataset.world_size(),
-                levels: state.scene.dataset.level_count(),
-                volume_level: state.frame.volume.level,
-                section_level: state.frame.section.level,
-                volume_rect: volume,
-                section_rect: section,
-                crop: state.scene.crop,
-            },
-        );
+        let world = state.scene.dataset.world_size();
+        let levels = state.scene.dataset.level_count();
+        let mut overlay = Overlay {
+            camera: state.viewport.camera(),
+            section: state.viewport.section(),
+            world,
+            levels,
+            volume_level: state.frame.volume.level,
+            section_level: state.frame.section.level,
+            volume_rect: volume,
+            section_rect: section,
+            region: &mut state.scene.region,
+        };
+        overlay::paint(ui, &mut overlay);
         if let Some(bar) = timeline {
             timeline_bar(ui, bar, state, &mut actions);
         }
@@ -353,36 +353,57 @@ fn section_section(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>
     );
 }
 
-fn clip_section(ui: &mut Ui, state: &mut State<'_>) {
-    ui.strong("Clip");
+fn region_section(ui: &mut Ui, state: &mut State<'_>) {
+    ui.strong("Region");
     let world = state.scene.dataset.world_size();
     let half = 0.5 * world;
-    let mut crop = state.scene.crop;
-    let mut enabled = crop.enabled();
+    let mut region = state.scene.region;
+    let mut enabled = region.enabled();
     ui.horizontal(|ui| {
-        if ui.checkbox(&mut enabled, "clip to a box").changed() {
-            crop.set_enabled(enabled);
+        if ui
+            .checkbox(&mut enabled, "limit analysis and display")
+            .changed()
+        {
+            region.set_enabled(enabled);
         }
         if ui.small_button("Reset").clicked() {
-            crop.set_bounds(-half, half);
+            region.set_bounds(-half, half);
         }
     });
+    ui.label(
+        RichText::new(if enabled {
+            "detection, tracking and picking stay inside the box; re-detect after moving it"
+        } else {
+            "detection, tracking and picking cover the whole dataset"
+        })
+        .small()
+        .weak(),
+    );
     let minimum = (0.001 * world.min_element()).max(1.0e-4);
-    let mut low = crop.min();
-    let mut high = crop.max();
+    let mut low = region.min();
+    let mut high = region.max();
     ui.add_enabled_ui(enabled, |ui| {
         for (axis, name) in [(Axis::X, "x"), (Axis::Y, "y"), (Axis::Z, "z")] {
             let index = axis.index();
             let limit = half[index];
+            let speed = (0.01 * world[index]).max(minimum);
             ui.horizontal(|ui| {
                 ui.label(name);
-                ui.spacing_mut().slider_width = 70.0;
+                ui.spacing_mut().slider_width = 56.0;
                 let mut start = low[index];
                 let mut end = high[index];
                 let changed = ui
                     .add(egui::Slider::new(&mut start, -limit..=limit).show_value(false))
                     .changed()
                     | ui.add(egui::Slider::new(&mut end, -limit..=limit).show_value(false))
+                        .changed()
+                    | ui.add(
+                        egui::DragValue::new(&mut start)
+                            .speed(speed)
+                            .max_decimals(3),
+                    )
+                    .changed()
+                    | ui.add(egui::DragValue::new(&mut end).speed(speed).max_decimals(3))
                         .changed();
                 if changed {
                     start = start.clamp(-limit, (end - minimum).max(-limit));
@@ -390,22 +411,22 @@ fn clip_section(ui: &mut Ui, state: &mut State<'_>) {
                     low[index] = start;
                     high[index] = end;
                 }
-                ui.monospace(format!("{start:.2} … {end:.2}"));
+                ui.label(RichText::new("µm").small().weak());
             });
         }
     });
-    if low != crop.min() || high != crop.max() {
-        crop.set_bounds(low, high);
+    if low != region.min() || high != region.max() {
+        region.set_bounds(low, high);
     }
     if enabled {
-        let size = crop.size();
+        let size = region.size();
         ui.label(
             RichText::new(format!("{:.2} × {:.2} × {:.2} µm", size.x, size.y, size.z))
                 .small()
                 .weak(),
         );
     }
-    state.scene.crop = crop;
+    state.scene.region = region;
 }
 
 fn rendering_section(ui: &mut Ui, scene: &mut Scene) {

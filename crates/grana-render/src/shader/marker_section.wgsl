@@ -59,7 +59,7 @@ fn fs_main(input: MarkerOutput) -> @location(0) vec4<f32> {
     var world = input.center;
     world[section.mapping.x] += input.local.x * input.cross;
     world[section.mapping.y] += input.local.y * input.cross;
-    if (outside_crop(world)) {
+    if (outside_region(world)) {
         discard;
     }
     let width = fwidth(distance);

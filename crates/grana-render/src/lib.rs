@@ -2,7 +2,6 @@ mod atlas;
 mod brick;
 mod camera;
 mod census;
-mod crop;
 mod frame;
 mod layout;
 mod marker;
@@ -20,7 +19,6 @@ mod volume;
 pub const CHANNEL_LIMIT: usize = 16;
 
 pub use camera::{Camera, Ray, SectionCamera, plane_basis};
-pub use crop::Crop;
 pub use marker::Marker;
 pub use renderer::{BrickRequest, Frame, FrameInfo, Renderer, Requests, ViewInfo};
 pub use schema::{ChannelRow, Layer, LayerKey, SceneFrame, Shading, Style};

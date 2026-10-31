@@ -1,7 +1,10 @@
 use std::f64::consts::PI;
 
+use glam::Vec3;
 use grana_analysis::{SurfaceBuilder, SurfaceParams};
-use grana_volume::{BrickData, BrickGrid, Channel, Extent, Level, Spacing, Volume, VoxelData};
+use grana_volume::{
+    BrickData, BrickGrid, Channel, Extent, Level, Region, Spacing, Volume, VoxelData,
+};
 
 const EXTENT: Extent = Extent::new(120, 96, 72);
 const RADIUS: f32 = 12.0;
@@ -17,8 +20,14 @@ fn extracts_measured_surfaces() {
     let threshold = 0.5 * f32::from(HIGH);
     let channels = volume.channel_count();
 
-    let mut builder =
-        SurfaceBuilder::new(0, level, SurfaceParams::new(threshold, 0.0), channels, 0);
+    let mut builder = SurfaceBuilder::new(
+        0,
+        level,
+        SurfaceParams::new(threshold, 0.0),
+        channels,
+        0,
+        Region::none(),
+    );
     for index in 0..builder.coord_count() {
         let coord = builder.coord(index);
         builder.add(coord, &brick(&volume, &grid, coord));
@@ -89,6 +98,7 @@ fn extracts_measured_surfaces() {
         SurfaceParams::new(threshold, (1.5 * expected_volume) as f32),
         channels,
         0,
+        Region::none(),
     );
     for index in 0..filtered.coord_count() {
         let coord = filtered.coord(index);
@@ -100,6 +110,34 @@ fn extracts_measured_surfaces() {
         "the volume filter must drop small objects"
     );
     assert_eq!(filtered.intensities().objects(), 0);
+
+    let region = Region::new(Vec3::new(-6.0, -4.8, -7.2), Vec3::new(0.5, 4.8, 7.2));
+    let mut restricted = SurfaceBuilder::new(
+        0,
+        level,
+        SurfaceParams::new(threshold, 0.0),
+        channels,
+        0,
+        region,
+    );
+    for index in 0..restricted.coord_count() {
+        let coord = restricted.coord(index);
+        restricted.add(coord, &brick(&volume, &grid, coord));
+    }
+    let restricted = restricted.finish();
+    assert_eq!(
+        restricted.object_count(),
+        1,
+        "the region keeps a single blob"
+    );
+    assert!(
+        restricted.objects()[0].centroid()[0] < 0.0,
+        "the kept blob lies inside the region"
+    );
+    assert!(
+        restricted.mesh().triangle_count() > 0,
+        "the restricted surface carries triangles"
+    );
 }
 
 fn brick(volume: &Volume, grid: &BrickGrid, coord: grana_volume::BrickCoord) -> BrickData {

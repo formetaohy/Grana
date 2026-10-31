@@ -1,6 +1,7 @@
+use glam::Vec3;
 use grana_analysis::{SpotParams, SpotScan};
 use grana_object::Spot;
-use grana_volume::{Extent, Level, Spacing, VoxelData};
+use grana_volume::{Extent, Level, Region, Spacing, VoxelData};
 
 const EXTENT: Extent = Extent::new(200, 96, 40);
 const DIAMETER: f32 = 0.4;
@@ -31,7 +32,7 @@ fn detects_blobs_across_blocks() {
     let data = volume(&blobs);
     let level = Level::new(EXTENT, spacing());
     let span = data.range().span();
-    let mut scan = SpotScan::new(level, span, SpotParams::new(DIAMETER, 0.2));
+    let mut scan = SpotScan::new(level, span, SpotParams::new(DIAMETER, 0.2), Region::none());
     let spots = scan_all(&mut scan, &data, level);
 
     assert_eq!(spots.len(), blobs.len(), "every blob is detected once");
@@ -62,14 +63,28 @@ fn detects_blobs_across_blocks() {
         );
     }
 
-    let mut strict = SpotScan::new(level, span, SpotParams::new(DIAMETER, 1.0));
+    let mut strict = SpotScan::new(level, span, SpotParams::new(DIAMETER, 1.0), Region::none());
     assert!(scan_all(&mut strict, &data, level).is_empty());
+
+    let region = Region::new(Vec3::new(-1.0, -6.0, -6.0), Vec3::new(2.0, 6.0, 6.0));
+    let mut restricted = SpotScan::new(level, span, SpotParams::new(DIAMETER, 0.2), region);
+    let inside = scan_all(&mut restricted, &data, level);
+    assert_eq!(inside.len(), 1, "the region holds a single blob");
+    assert!(
+        (inside[0].center()[0] - blobs[0].world[0]).abs() < 0.2,
+        "the region keeps the blob it covers"
+    );
 }
 
 #[test]
 fn measures_spot_intensity() {
     let level = Level::new(EXTENT, spacing());
-    let scan = SpotScan::new(level, 1000.0, SpotParams::new(DIAMETER, 0.2));
+    let scan = SpotScan::new(
+        level,
+        1000.0,
+        SpotParams::new(DIAMETER, 0.2),
+        Region::none(),
+    );
     let range = scan.read_range(0);
     let dims = [
         (range[0].end - range[0].start) as usize,

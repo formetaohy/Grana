@@ -7,11 +7,11 @@ use common::{
 use glam::Vec3;
 use grana_object::{Mesh, MeshVertex, Track, TrackNode, TrackSet};
 use grana_render::{
-    Camera, Crop, Layer, LayerKey, Marker, Renderer, SceneFrame, SectionCamera, Shading, Stop,
-    Style, TransferFunction,
+    Camera, Layer, LayerKey, Marker, Renderer, SceneFrame, SectionCamera, Shading, Stop, Style,
+    TransferFunction,
 };
 use grana_volume::{
-    Axis, BrickGrid, Channel, Extent, Level, Movie, Pyramid, Spacing, Volume, VoxelData,
+    Axis, BrickGrid, Channel, Extent, Level, Movie, Pyramid, Region, Spacing, Volume, VoxelData,
 };
 
 const BUDGET: u64 = 512 << 20;
@@ -66,7 +66,7 @@ fn streams_two_channels() {
             scene: &scene,
             volume_region: WHOLE,
             section_region: CORNER,
-            crop: Crop::none(),
+            region: Region::none(),
             time: 0,
         },
         |request| {
@@ -132,7 +132,7 @@ fn switches_frames() {
             scene: &scene,
             volume_region: WHOLE,
             section_region: CORNER,
-            crop: Crop::none(),
+            region: Region::none(),
             time: 0,
         },
         source,
@@ -159,7 +159,7 @@ fn switches_frames() {
             scene: &scene,
             volume_region: WHOLE,
             section_region: CORNER,
-            crop: Crop::none(),
+            region: Region::none(),
             time: 1,
         },
         source,
@@ -196,7 +196,7 @@ fn sections_planes_and_layers() {
 }
 
 #[test]
-fn clips_to_a_crop_box() {
+fn clips_to_a_region_box() {
     let Some((device, queue)) = device() else {
         return;
     };
@@ -235,7 +235,7 @@ fn clips_to_a_crop_box() {
         let grid = BrickGrid::new(volume.extent());
         volume.brick(&grid, request.coord)
     };
-    let session = |crop: Crop| Session {
+    let session = |region: Region| Session {
         device: &device,
         queue: &queue,
         target: &view,
@@ -244,35 +244,35 @@ fn clips_to_a_crop_box() {
         scene: &scene,
         volume_region: WHOLE,
         section_region: CORNER,
-        crop,
+        region,
         time: 0,
     };
 
-    settle(&mut renderer, session(Crop::none()), source);
+    settle(&mut renderer, session(Region::none()), source);
     let full = bright_pixels(&read_pixels(&device, &queue, &texture, SIDE));
 
-    let left = Crop::new(
+    let left = Region::new(
         Vec3::new(-half.x, -half.y, -half.z),
         Vec3::new(0.0, half.y, half.z),
     );
     settle(&mut renderer, session(left), source);
     let cropped = bright_pixels(&read_pixels(&device, &queue, &texture, SIDE));
 
-    let corner = Crop::new(Vec3::splat(0.75 * half.x), Vec3::splat(half.x));
+    let corner = Region::new(Vec3::splat(0.75 * half.x), Vec3::splat(half.x));
     settle(&mut renderer, session(corner), source);
     let erased = bright_pixels(&read_pixels(&device, &queue, &texture, SIDE));
 
-    assert!(full > 0, "the uncropped volume is empty");
+    assert!(full > 0, "the unrestricted volume is empty");
     assert!(
         cropped > 0 && cropped < full,
-        "the crop does not cut the volume: {cropped} of {full}"
+        "the region does not cut the volume: {cropped} of {full}"
     );
     assert_eq!(
         erased, 0,
-        "a crop away from the volume still renders bricks"
+        "a region away from the volume still renders bricks"
     );
 
-    let plane_out = Crop::new(
+    let plane_out = Region::new(
         Vec3::new(-half.x, -half.y, 0.5 * half.z),
         Vec3::new(half.x, half.y, half.z),
     );
@@ -281,15 +281,15 @@ fn clips_to_a_crop_box() {
         Session {
             volume_region: CORNER,
             section_region: WHOLE,
-            crop: plane_out,
-            ..session(Crop::none())
+            region: plane_out,
+            ..session(Region::none())
         },
         source,
     );
     let section = read_pixels(&device, &queue, &texture, SIDE);
     assert!(
         dark_fraction(&section, 0.0, 1.0, 0.0, 1.0) > 0.9,
-        "the section ignores the crop"
+        "the section ignores the region"
     );
 }
 
@@ -666,7 +666,7 @@ fn switches_levels() {
             scene: &scene,
             volume_region: WHOLE,
             section_region: CORNER,
-            crop: Crop::none(),
+            region: Region::none(),
             time: 0,
         },
         source,
@@ -690,7 +690,7 @@ fn switches_levels() {
             scene: &scene,
             volume_region: WHOLE,
             section_region: CORNER,
-            crop: Crop::none(),
+            region: Region::none(),
             time: 0,
         },
         source,
@@ -711,7 +711,7 @@ fn switches_levels() {
             scene: &scene,
             volume_region: WHOLE,
             section_region: CORNER,
-            crop: Crop::none(),
+            region: Region::none(),
             time: 0,
         },
         source,
@@ -774,7 +774,7 @@ fn section_render(
             scene: &scene,
             volume_region: CORNER,
             section_region: WHOLE,
-            crop: Crop::none(),
+            region: Region::none(),
             time: 0,
         },
         |request| {
@@ -902,7 +902,7 @@ fn render(setup: Setup<'_>) -> Vec<[u8; 4]> {
             scene: &scene,
             volume_region: job.volume_region,
             section_region: job.section_region,
-            crop: Crop::none(),
+            region: Region::none(),
             time: 0,
         },
         |request| {

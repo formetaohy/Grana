@@ -4,7 +4,7 @@ use glam::Vec3;
 use grana_object::{
     Bounds, IntensityTable, Mesh, MeshVertex, SampleAccumulator, SurfaceSet, SurfaceStatistics,
 };
-use grana_volume::{BrickCoord, BrickData, BrickGrid, Level, PADDED_SIDE};
+use grana_volume::{BRICK_SIDE, BrickCoord, BrickData, BrickGrid, Level, PADDED_SIDE, Region};
 
 use crate::SurfaceParams;
 use crate::table::{EDGE_TABLE, TRIANGLE_TABLE};
@@ -81,7 +81,10 @@ pub struct SurfaceBuilder {
     grid: BrickGrid,
     params: SurfaceParams,
     next: usize,
+    first: [u32; 3],
     counts: [usize; 3],
+    grid_counts: [usize; 3],
+    ranges: [std::ops::Range<u32>; 3],
     values: Vec<Vec<f32>>,
     gradients: Vec<[f32; 3]>,
     mask: Vec<bool>,
@@ -103,6 +106,7 @@ impl SurfaceBuilder {
         params: SurfaceParams,
         channels: usize,
         detection: usize,
+        region: Region,
     ) -> Self {
         assert!(
             channels > 0 && detection < channels,
@@ -110,7 +114,16 @@ impl SurfaceBuilder {
         );
         let extent = level.extent();
         let grid = BrickGrid::new(extent);
-        let counts = grid.counts().map(|count| count as usize);
+        let grid_counts = grid.counts().map(|count| count as usize);
+        let (ranges, first, counts) = match region.voxel_range(level) {
+            Some(ranges) => {
+                let first = [0, 1, 2].map(|axis| ranges[axis].start / BRICK_SIDE);
+                let last = [0, 1, 2].map(|axis| (ranges[axis].end - 1) / BRICK_SIDE);
+                let counts = [0, 1, 2].map(|axis| (last[axis] - first[axis] + 1) as usize);
+                (ranges, first, counts)
+            }
+            None => ([0..0, 0..0, 0..0], [0; 3], [0; 3]),
+        };
         let world = level.world_extent();
         let spacing = level.spacing();
         let spacing = [spacing.x(), spacing.y(), spacing.z()];
@@ -133,7 +146,10 @@ impl SurfaceBuilder {
             grid,
             params,
             next: 0,
+            first,
             counts,
+            grid_counts,
+            ranges,
             values: vec![vec![0.0; PADDED_VOXELS]; channels],
             gradients: vec![[0.0; 3]; PADDED_VOXELS],
             mask: Vec::new(),
@@ -144,8 +160,8 @@ impl SurfaceBuilder {
             indices: Vec::new(),
             edges: HashMap::new(),
             x_face: None,
-            y_face: vec![None; counts[0]],
-            z_face: vec![None; counts[0] * counts[1]],
+            y_face: vec![None; grid_counts[0]],
+            z_face: vec![None; grid_counts[0] * grid_counts[1]],
         }
     }
 
@@ -158,7 +174,11 @@ impl SurfaceBuilder {
         let x = index % self.counts[0];
         let y = (index / self.counts[0]) % self.counts[1];
         let z = index / (self.counts[0] * self.counts[1]);
-        BrickCoord::new(x as u32, y as u32, z as u32)
+        BrickCoord::new(
+            self.first[0] + x as u32,
+            self.first[1] + y as u32,
+            self.first[2] + z as u32,
+        )
     }
 
     pub fn add(&mut self, coord: BrickCoord, data: &BrickData) {
@@ -198,9 +218,16 @@ impl SurfaceBuilder {
         for rz in 0..es[2] {
             for ry in 0..es[1] {
                 for rx in 0..es[0] {
-                    let inside = origin[0] + (rx as i64) < i64::from(self.extent[0])
-                        && origin[1] + (ry as i64) < i64::from(self.extent[1])
-                        && origin[2] + (rz as i64) < i64::from(self.extent[2]);
+                    let voxel = [
+                        origin[0] + rx as i64,
+                        origin[1] + ry as i64,
+                        origin[2] + rz as i64,
+                    ];
+                    let inside = (0..3).all(|axis| {
+                        voxel[axis] < i64::from(self.extent[axis])
+                            && voxel[axis] >= i64::from(self.ranges[axis].start)
+                            && voxel[axis] < i64::from(self.ranges[axis].end)
+                    });
                     let index = rx + es[0] * (ry + es[1] * rz);
                     self.mask[index] = inside && self.value(rx, ry, rz) >= threshold;
                 }
@@ -373,7 +400,7 @@ impl SurfaceBuilder {
     }
 
     fn join(&mut self, coord: BrickCoord, cs: [usize; 3], es: &[usize; 3]) {
-        if coord.x() > 0
+        if coord.x() > self.first[0]
             && let Some(face) = self.x_face.take()
         {
             for ry in 0..cs[1] {
@@ -386,7 +413,7 @@ impl SurfaceBuilder {
                 }
             }
         }
-        if coord.y() > 0
+        if coord.y() > self.first[1]
             && let Some(face) = self.y_face[coord.x() as usize].take()
         {
             for rx in 0..cs[0] {
@@ -399,8 +426,8 @@ impl SurfaceBuilder {
                 }
             }
         }
-        if coord.z() > 0 {
-            let index = coord.y() as usize * self.counts[0] + coord.x() as usize;
+        if coord.z() > self.first[2] {
+            let index = coord.y() as usize * self.grid_counts[0] + coord.x() as usize;
             if let Some(face) = self.z_face[index].take() {
                 for rx in 0..cs[0] {
                     for ry in 0..cs[1] {
@@ -436,18 +463,24 @@ impl SurfaceBuilder {
                 face[rx + FACE_SIDE * ry] = self.labels[rx + es[0] * ry + es[0] * es[1] * cs[2]];
             }
         }
-        let index = coord.y() as usize * self.counts[0] + coord.x() as usize;
+        let index = coord.y() as usize * self.grid_counts[0] + coord.x() as usize;
         self.z_face[index] = Some(face);
     }
 
     fn emit(&mut self, cs: [usize; 3], es: &[usize; 3], origin: [i64; 3]) {
         let threshold = self.params.threshold();
+        let low = [0, 1, 2].map(|axis| {
+            (i64::from(self.ranges[axis].start) - origin[axis]).clamp(0, cs[axis] as i64) as usize
+        });
+        let high = [0, 1, 2].map(|axis| {
+            (i64::from(self.ranges[axis].end) - origin[axis] - 1).clamp(0, cs[axis] as i64) as usize
+        });
         self.edges.clear();
         let mut values = [0.0f32; 8];
         let mut corners = [[0usize; 3]; 8];
-        for bz in 0..cs[2] {
-            for by in 0..cs[1] {
-                for bx in 0..cs[0] {
+        for bz in low[2]..high[2] {
+            for by in low[1]..high[1] {
+                for bx in low[0]..high[0] {
                     let mut index = 0u32;
                     for (corner, offset) in CORNER.iter().enumerate() {
                         let rx = bx + offset[0];

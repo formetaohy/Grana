@@ -8,8 +8,8 @@ struct FrameData {
     forward: vec4<f32>,
     box_min: vec4<f32>,
     box_size: vec4<f32>,
-    crop_min: vec4<f32>,
-    crop_max: vec4<f32>,
+    region_min: vec4<f32>,
+    region_max: vec4<f32>,
     dims: vec4<f32>,
     grid: vec4<u32>,
     atlas: vec4<u32>,
@@ -60,28 +60,28 @@ fn channel_sample(index: u32, unit: f32) -> vec4<f32> {
     );
 }
 
-fn crop_active() -> bool {
-    return frame.crop_min.w > 0.5;
+fn region_active() -> bool {
+    return frame.region_min.w > 0.5;
 }
 
-fn outside_crop(point: vec3<f32>) -> bool {
-    if (!crop_active()) {
+fn outside_region(point: vec3<f32>) -> bool {
+    if (!region_active()) {
         return false;
     }
-    return any(point < frame.crop_min.xyz) || any(point > frame.crop_max.xyz);
+    return any(point < frame.region_min.xyz) || any(point > frame.region_max.xyz);
 }
 
-fn outside_crop_bounds(low: vec3<f32>, high: vec3<f32>) -> bool {
-    if (!crop_active()) {
+fn outside_region_bounds(low: vec3<f32>, high: vec3<f32>) -> bool {
+    if (!region_active()) {
         return false;
     }
-    return any(high < frame.crop_min.xyz) || any(low > frame.crop_max.xyz);
+    return any(high < frame.region_min.xyz) || any(low > frame.region_max.xyz);
 }
 
-fn outside_crop_sphere(center: vec3<f32>, radius: f32) -> bool {
-    if (!crop_active()) {
+fn outside_region_sphere(center: vec3<f32>, radius: f32) -> bool {
+    if (!region_active()) {
         return false;
     }
     let reach = vec3<f32>(radius);
-    return outside_crop_bounds(center - reach, center + reach);
+    return outside_region_bounds(center - reach, center + reach);
 }

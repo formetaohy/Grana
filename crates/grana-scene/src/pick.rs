@@ -6,7 +6,7 @@ use grana_volume::Axis;
 use crate::scene::{Item, Scene, Selection};
 
 pub(crate) fn ray(scene: &Scene, time: u32, ray: &Ray) -> Option<Selection> {
-    let (low, high) = scene.crop.interval(ray)?;
+    let (low, high) = scene.region.interval(ray.origin, ray.direction)?;
     let mut best: Option<(f32, Selection)> = None;
     for set in scene.pickable() {
         if let Some(frame) = set.frame(time) {
@@ -84,7 +84,7 @@ pub(crate) fn ray(scene: &Scene, time: u32, ray: &Ray) -> Option<Selection> {
 }
 
 pub(crate) fn slice(scene: &Scene, time: u32, axis: Axis, point: Vec3) -> Option<Selection> {
-    if !scene.crop.contains(point) {
+    if !scene.region.contains(point) {
         return None;
     }
     let mut best: Option<(f32, Selection)> = None;

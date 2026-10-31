@@ -26,7 +26,7 @@ fn census_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let voxel = census.box_size.xyz / census.dims.xyz;
     let low = census.box_min.xyz + origin * voxel;
     let high = low + size * voxel;
-    if (outside_frustum(low, high) || outside_crop_bounds(low, high)) {
+    if (outside_frustum(low, high) || outside_region_bounds(low, high)) {
         return;
     }
     atomicAdd(&counts[census.index.x], 1u);

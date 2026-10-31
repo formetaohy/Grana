@@ -9,7 +9,7 @@ use grana_analysis::{
 };
 use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet, TrackSet};
 use grana_scene::{Job, ObjectFrame, ObjectParams, ObjectSetId};
-use grana_volume::{BrickCoord, BrickData, BrickGrid, Pyramid, VoxelData};
+use grana_volume::{BrickCoord, BrickData, BrickGrid, Pyramid, Region, VoxelData};
 use grana_zarr::Image;
 
 use crate::source::Source;
@@ -70,11 +70,17 @@ impl Drop for Analysis {
     }
 }
 
-pub fn detect(source: Source, set: ObjectSetId, channel: usize, params: ObjectParams) -> Analysis {
+pub fn detect(
+    source: Source,
+    set: ObjectSetId,
+    channel: usize,
+    params: ObjectParams,
+    region: Region,
+) -> Analysis {
     let cancel = Arc::new(AtomicBool::new(false));
     let token = Arc::clone(&cancel);
     let (events, receiver) = mpsc::channel();
-    std::thread::spawn(move || run_detect(source, channel, params, token, events));
+    std::thread::spawn(move || run_detect(source, channel, params, region, token, events));
     Analysis {
         set,
         job: Job::Detect,
@@ -105,16 +111,19 @@ fn run_detect(
     source: Source,
     channel: usize,
     params: ObjectParams,
+    region: Region,
     cancel: Arc<AtomicBool>,
     events: Sender<Event>,
 ) {
     let result = match params {
-        ObjectParams::Spots(params) => detect_spots(source, channel, params, &cancel, &events),
+        ObjectParams::Spots(params) => {
+            detect_spots(source, channel, params, region, &cancel, &events)
+        }
         ObjectParams::Surfaces(params) => {
-            detect_surfaces(source, channel, params, &cancel, &events)
+            detect_surfaces(source, channel, params, region, &cancel, &events)
         }
         ObjectParams::Filaments(params) => {
-            detect_filaments(source, channel, params, &cancel, &events)
+            detect_filaments(source, channel, params, region, &cancel, &events)
         }
     };
     if let Err(detail) = result {
@@ -126,6 +135,7 @@ fn detect_spots(
     source: Source,
     channel: usize,
     params: SpotParams,
+    region: Region,
     cancel: &AtomicBool,
     events: &Sender<Event>,
 ) -> Result<(), String> {
@@ -136,6 +146,7 @@ fn detect_spots(
                 &pyramid,
                 channel,
                 params,
+                region,
                 cancel,
                 events,
                 |time, channel, range| {
@@ -156,6 +167,7 @@ fn detect_spots(
                     &pyramid,
                     channel,
                     params,
+                    region,
                     cancel,
                     events,
                     |time, channel, range| {
@@ -181,6 +193,7 @@ fn detect_surfaces(
     source: Source,
     channel: usize,
     params: SurfaceParams,
+    region: Region,
     cancel: &AtomicBool,
     events: &Sender<Event>,
 ) -> Result<(), String> {
@@ -188,18 +201,32 @@ fn detect_surfaces(
         Source::Memory(movie) => {
             let pyramid = movie.pyramid().clone();
             let grid = BrickGrid::new(pyramid.level(0).extent());
-            scan_surfaces(&pyramid, channel, params, cancel, events, |time, coord| {
-                Ok(movie.brick(time, &grid, coord))
-            })
+            scan_surfaces(
+                &pyramid,
+                channel,
+                params,
+                region,
+                cancel,
+                events,
+                |time, coord| Ok(movie.brick(time, &grid, coord)),
+            )
         }
         Source::File(path) => match Image::open(&path) {
             Ok(image) => {
                 let pyramid = image.pyramid().clone();
-                scan_surfaces(&pyramid, channel, params, cancel, events, |time, coord| {
-                    image
-                        .read_brick(time, 0, coord)
-                        .map_err(|error| error.to_string())
-                })
+                scan_surfaces(
+                    &pyramid,
+                    channel,
+                    params,
+                    region,
+                    cancel,
+                    events,
+                    |time, coord| {
+                        image
+                            .read_brick(time, 0, coord)
+                            .map_err(|error| error.to_string())
+                    },
+                )
             }
             Err(error) => Err(error.to_string()),
         },
@@ -210,6 +237,7 @@ fn detect_filaments(
     source: Source,
     channel: usize,
     params: FilamentParams,
+    region: Region,
     cancel: &AtomicBool,
     events: &Sender<Event>,
 ) -> Result<(), String> {
@@ -220,6 +248,7 @@ fn detect_filaments(
                 &pyramid,
                 channel,
                 params,
+                region,
                 cancel,
                 events,
                 |time, level, measured| {
@@ -235,6 +264,7 @@ fn detect_filaments(
                     &pyramid,
                     channel,
                     params,
+                    region,
                     cancel,
                     events,
                     |time, level, measured| {
@@ -261,6 +291,7 @@ fn run_filaments(
     pyramid: &Pyramid,
     channel: usize,
     params: FilamentParams,
+    region: Region,
     cancel: &AtomicBool,
     events: &Sender<Event>,
     mut read: impl FnMut(u32, usize, usize) -> Result<VoxelData, String>,
@@ -278,7 +309,14 @@ fn run_filaments(
         "the dataset is too large to trace filaments at any resolution level".to_string()
     })?;
     let channels = pyramid.channel_count();
-    let mut scan = FilamentScan::new(level, pyramid.level(level), params, channels, channel);
+    let mut scan = FilamentScan::new(
+        level,
+        pyramid.level(level),
+        params,
+        channels,
+        channel,
+        region,
+    );
     let total = pyramid.frame_count();
     for time in 0..total {
         if cancel.load(Ordering::Relaxed) {
@@ -343,6 +381,7 @@ fn scan_spots(
     pyramid: &Pyramid,
     channel: usize,
     params: SpotParams,
+    region: Region,
     cancel: &AtomicBool,
     events: &Sender<Event>,
     mut read: impl FnMut(u32, usize, [Range<u32>; 3]) -> Result<VoxelData, String>,
@@ -358,7 +397,7 @@ fn scan_spots(
         return Err("the selected channel has no intensity range to detect".to_string());
     }
     let channels = pyramid.channel_count();
-    let mut scanner = SpotScan::new(pyramid.level(0), span, params);
+    let mut scanner = SpotScan::new(pyramid.level(0), span, params, region);
     let total = scanner.block_count();
     let mut values = Vec::new();
     for time in 0..pyramid.frame_count() {
@@ -436,6 +475,7 @@ fn scan_surfaces(
     pyramid: &Pyramid,
     channel: usize,
     params: SurfaceParams,
+    region: Region,
     cancel: &AtomicBool,
     events: &Sender<Event>,
     mut read: impl FnMut(u32, BrickCoord) -> Result<BrickData, String>,
@@ -455,7 +495,8 @@ fn scan_surfaces(
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let mut builder = SurfaceBuilder::new(0, pyramid.level(0), params, channels, channel);
+        let mut builder =
+            SurfaceBuilder::new(0, pyramid.level(0), params, channels, channel, region);
         let total = builder.coord_count();
         let _ = events.send(Event::Progress {
             time,

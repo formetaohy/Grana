@@ -1,17 +1,20 @@
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke};
 use glam::{Mat4, Vec3};
-use grana_render::{Camera, Crop, SectionCamera, plane_basis};
-use grana_volume::Axis;
+use grana_render::{Camera, SectionCamera, plane_basis};
+use grana_volume::{Axis, Region};
 
 const LABEL_COLOR: Color32 = Color32::from_gray(196);
 const BAR_COLOR: Color32 = Color32::from_gray(225);
 const CROSS_COLOR: Color32 = Color32::from_rgba_premultiplied(220, 230, 240, 150);
 const PLANE_COLOR: Color32 = Color32::from_rgba_premultiplied(110, 190, 255, 110);
-const CROP_COLOR: Color32 = Color32::from_rgba_premultiplied(255, 196, 92, 140);
+const REGION_COLOR: Color32 = Color32::from_rgba_premultiplied(255, 196, 92, 140);
+const REGION_ACTIVE_COLOR: Color32 = Color32::from_rgba_premultiplied(255, 224, 148, 220);
+const HANDLE_SIDE: f32 = 9.0;
+const HANDLE_MINIMUM: f32 = 1.0e-3;
 const SEPARATOR_COLOR: Color32 = Color32::from_gray(44);
 const SCALE_TARGET: f32 = 116.0;
 
-const CROP_EDGES: [(usize, usize); 12] = [
+const REGION_EDGES: [(usize, usize); 12] = [
     (0, 1),
     (1, 3),
     (3, 2),
@@ -35,10 +38,10 @@ pub struct Overlay<'a> {
     pub section_level: usize,
     pub volume_rect: Rect,
     pub section_rect: Rect,
-    pub crop: Crop,
+    pub region: &'a mut Region,
 }
 
-pub fn paint(ui: &egui::Ui, overlay: &Overlay<'_>) {
+pub fn paint(ui: &egui::Ui, overlay: &mut Overlay<'_>) {
     let painter = ui.painter();
     painter.line_segment(
         [
@@ -54,7 +57,7 @@ pub fn paint(ui: &egui::Ui, overlay: &Overlay<'_>) {
     paint_section(ui, overlay);
 }
 
-fn paint_volume(ui: &egui::Ui, overlay: &Overlay<'_>) {
+fn paint_volume(ui: &egui::Ui, overlay: &mut Overlay<'_>) {
     let painter = ui.painter().with_clip_rect(overlay.volume_rect);
     let aspect = overlay.volume_rect.width() / overlay.volume_rect.height();
     let view_projection = overlay
@@ -75,7 +78,19 @@ fn paint_volume(ui: &egui::Ui, overlay: &Overlay<'_>) {
     if let Some(focus) = project(view_projection, overlay.camera.focus(), overlay.volume_rect) {
         cross(&painter, focus, 5.0, 1.0, CROSS_COLOR);
     }
-    crop_box(&painter, view_projection, overlay.crop, overlay.volume_rect);
+    region_box(
+        &painter,
+        view_projection,
+        *overlay.region,
+        overlay.volume_rect,
+    );
+    region_handles(
+        ui,
+        view_projection,
+        overlay.region,
+        overlay.volume_rect,
+        overlay.world,
+    );
     let world_per_point = 2.0 * overlay.camera.distance() * (overlay.camera.fov_y() * 0.5).tan()
         / overlay.volume_rect.height();
     scale_bar(&painter, overlay.volume_rect, world_per_point);
@@ -110,12 +125,12 @@ fn paint_section(ui: &egui::Ui, overlay: &Overlay<'_>) {
     );
 }
 
-fn crop_box(painter: &Painter, view_projection: Mat4, crop: Crop, rect: Rect) {
-    if !crop.enabled() {
+fn region_box(painter: &Painter, view_projection: Mat4, region: Region, rect: Rect) {
+    if !region.enabled() {
         return;
     }
-    let min = crop.min();
-    let max = crop.max();
+    let min = region.min();
+    let max = region.max();
     let corners: [Vec3; 8] = std::array::from_fn(|index: usize| {
         Vec3::new(
             if index & 1 == 0 { min.x } else { max.x },
@@ -124,11 +139,73 @@ fn crop_box(painter: &Painter, view_projection: Mat4, crop: Crop, rect: Rect) {
         )
     });
     let projected = corners.map(|corner| project(view_projection, corner, rect));
-    let stroke = Stroke::new(1.0, CROP_COLOR);
-    for (from, to) in CROP_EDGES {
+    let stroke = Stroke::new(1.0, REGION_COLOR);
+    for (from, to) in REGION_EDGES {
         if let (Some(from), Some(to)) = (projected[from], projected[to]) {
             painter.line_segment([from, to], stroke);
         }
+    }
+}
+
+fn region_handles(
+    ui: &egui::Ui,
+    view_projection: Mat4,
+    region: &mut Region,
+    rect: Rect,
+    world: Vec3,
+) {
+    if !region.enabled() {
+        return;
+    }
+    let painter = ui.painter().with_clip_rect(rect);
+    let half = 0.5 * world;
+    let minimum = (HANDLE_MINIMUM * world.min_element()).max(1.0e-5);
+    let mut low = region.min();
+    let mut high = region.max();
+    for axis in 0..3 {
+        let step = (0.05 * world[axis]).max(minimum);
+        for side in 0..2 {
+            let mut point = 0.5 * (low + high);
+            point[axis] = if side == 0 { low[axis] } else { high[axis] };
+            let Some(anchor) = project(view_projection, point, rect) else {
+                continue;
+            };
+            let mut direction = Vec3::ZERO;
+            direction[axis] = step;
+            let Some(ahead) = project(view_projection, point + direction, rect) else {
+                continue;
+            };
+            let screen = ahead - anchor;
+            let length = screen.length();
+            if length < 1.0e-3 {
+                continue;
+            }
+            let world_per_point = step / length;
+            let handle = Rect::from_center_size(anchor, egui::Vec2::splat(HANDLE_SIDE));
+            let id = ui.make_persistent_id(("grana.region.handle", axis, side));
+            let response = ui.interact(handle, id, egui::Sense::click_and_drag());
+            if response.dragged() {
+                let delta = response.drag_delta().dot(screen / length) * world_per_point;
+                if side == 0 {
+                    low[axis] = (low[axis] + delta).clamp(-half[axis], high[axis] - minimum);
+                } else {
+                    high[axis] = (high[axis] + delta).clamp(low[axis] + minimum, half[axis]);
+                }
+            }
+            let active = response.hovered() || response.dragged();
+            painter.rect_filled(
+                handle,
+                1.0,
+                if active {
+                    REGION_ACTIVE_COLOR
+                } else {
+                    REGION_COLOR
+                },
+            );
+        }
+    }
+    if low != region.min() || high != region.max() {
+        region.set_bounds(low, high);
     }
 }
 

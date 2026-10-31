@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use grana_object::{SampleAccumulator, Spot};
-use grana_volume::Level;
+use grana_volume::{Level, Region as VolumeRegion};
 
 use crate::SpotParams;
 
@@ -23,7 +23,9 @@ pub struct SpotScan {
     truncate: [usize; 3],
     halo: [u32; 3],
     core_side: u32,
+    first: [u32; 3],
     counts: [u32; 3],
+    ranges: [Range<u32>; 3],
     weights: [f32; 3],
     kernels: [Vec<f32>; 3],
     threshold: f32,
@@ -34,7 +36,7 @@ pub struct SpotScan {
 }
 
 impl SpotScan {
-    pub fn new(level: Level, span: f32, params: SpotParams) -> Self {
+    pub fn new(level: Level, span: f32, params: SpotParams, region: VolumeRegion) -> Self {
         assert!(
             span.is_finite() && span > 0.0,
             "a spot scan needs a positive intensity span"
@@ -52,14 +54,24 @@ impl SpotScan {
             .clamp(CORE_MIN, CORE_MAX)
             .div_ceil(CORE_STEP)
             * CORE_STEP;
-        let counts = extent.map(|length| length.div_ceil(core_side));
-        let maximum_read = (0..3)
-            .map(|axis| u64::from(extent[axis].min(core_side) + 2 * halo[axis]))
-            .product::<u64>();
-        assert!(
-            maximum_read <= MAX_READ_VOXELS,
-            "the spot diameter needs more than {MAX_READ_VOXELS} voxels per block"
-        );
+        let (ranges, first, counts) = match region.voxel_range(level) {
+            Some(ranges) => {
+                let first = [0, 1, 2].map(|axis| ranges[axis].start / core_side);
+                let last = [0, 1, 2].map(|axis| (ranges[axis].end - 1) / core_side);
+                let counts = [0, 1, 2].map(|axis| last[axis] - first[axis] + 1);
+                (ranges, first, counts)
+            }
+            None => ([0..0, 0..0, 0..0], [0; 3], [0; 3]),
+        };
+        if counts.iter().all(|count| *count > 0) {
+            let maximum_read = (0..3)
+                .map(|axis| u64::from(extent[axis].min(core_side) + 2 * halo[axis]))
+                .product::<u64>();
+            assert!(
+                maximum_read <= MAX_READ_VOXELS,
+                "the spot diameter needs more than {MAX_READ_VOXELS} voxels per block"
+            );
+        }
         let kernels = [0, 1, 2].map(|axis| gaussian(sigma[axis], truncate[axis]));
         let weights = spacing.map(|step| 1.0 / (step * step));
         Self {
@@ -70,7 +82,9 @@ impl SpotScan {
             truncate,
             halo,
             core_side,
+            first,
             counts,
+            ranges,
             weights,
             kernels,
             threshold: params.threshold(),
@@ -311,9 +325,10 @@ impl SpotScan {
             "the spot scan block index is out of bounds"
         );
         [0, 1, 2].map(|axis| {
-            let cell = [x, y, z][axis] as u32;
-            let start = cell * self.core_side;
-            start..(start + self.core_side).min(self.extent[axis])
+            let cell = self.first[axis] + [x, y, z][axis] as u32;
+            let start = (cell * self.core_side).max(self.ranges[axis].start);
+            let end = (cell * self.core_side + self.core_side).min(self.ranges[axis].end);
+            start..end
         })
     }
 }

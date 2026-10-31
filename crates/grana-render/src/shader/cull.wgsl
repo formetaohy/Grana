@@ -80,7 +80,7 @@ fn volume_cull(@builtin(global_invocation_id) id: vec3<u32>) {
         index / (grid.x * grid.y),
     );
     let bounds = brick_box(cell);
-    if (outside_frustum(bounds[0], bounds[1]) || outside_crop_bounds(bounds[0], bounds[1])) {
+    if (outside_frustum(bounds[0], bounds[1]) || outside_region_bounds(bounds[0], bounds[1])) {
         return;
     }
     request(index);
@@ -102,7 +102,7 @@ fn section_cull(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let bounds = section_brick_box(cell);
-    if (outside_crop_bounds(bounds[0], bounds[1])) {
+    if (outside_region_bounds(bounds[0], bounds[1])) {
         return;
     }
     let brick = cell.x + grid.x * (cell.y + grid.y * cell.z);

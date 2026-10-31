@@ -48,7 +48,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     uvw[axis] = section.plane.x;
     uvw[section.mapping.x] = u;
     uvw[section.mapping.y] = v;
-    if (outside_crop(section.box_min.xyz + uvw * section.world.xyz)) {
+    if (outside_region(section.box_min.xyz + uvw * section.world.xyz)) {
         return vec4<f32>(background(input.ndc), 1.0);
     }
     var color = vec3<f32>(0.0);

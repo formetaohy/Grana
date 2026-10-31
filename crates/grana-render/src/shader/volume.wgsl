@@ -58,16 +58,16 @@ fn ray_uvw(t: f32, direction: vec3<f32>) -> vec3<f32> {
     return (frame.eye.xyz + direction * t - frame.box_min.xyz) / frame.box_size.xyz;
 }
 
-fn crop_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
-    if (!crop_active()) {
+fn region_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
+    if (!region_active()) {
         return vec2<f32>(-1.0e20, 1.0e20);
     }
     var entry = -1.0e20;
     var exit = 1.0e20;
     for (var axis = 0u; axis < 3u; axis += 1u) {
         let step = direction[axis];
-        let low = frame.crop_min[axis];
-        let high = frame.crop_max[axis];
+        let low = frame.region_min[axis];
+        let high = frame.region_max[axis];
         if (abs(step) < 1.0e-9) {
             if (origin[axis] < low || origin[axis] > high) {
                 return vec2<f32>(1.0, -1.0);
@@ -163,12 +163,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         textureLoad(object_depth, vec2<i32>(input.clip_position.xy), 0),
         input.ndc,
     );
-    let crop = crop_interval(eye, direction);
+    let clip = region_interval(eye, direction);
     let exit = min(
         min(min(highest_t.x, highest_t.y), highest_t.z),
-        min(object, crop.y),
+        min(object, clip.y),
     );
-    let start = max(max(entry, 0.0), crop.x);
+    let start = max(max(entry, 0.0), clip.x);
 
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;

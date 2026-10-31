@@ -1,9 +1,9 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
+use grana_volume::Region;
 
 use crate::brick::BrickTable;
 use crate::camera::{Camera, SectionCamera};
-use crate::crop::Crop;
 use crate::schema::Shading;
 
 #[repr(C)]
@@ -18,8 +18,8 @@ pub(crate) struct FrameData {
     pub forward: [f32; 4],
     pub box_min: [f32; 4],
     pub box_size: [f32; 4],
-    pub crop_min: [f32; 4],
-    pub crop_max: [f32; 4],
+    pub region_min: [f32; 4],
+    pub region_max: [f32; 4],
     pub dims: [f32; 4],
     pub grid: [u32; 4],
     pub atlas: [u32; 4],
@@ -65,7 +65,7 @@ const _: () = {
 };
 pub(crate) struct VolumeView<'a> {
     pub camera: &'a Camera,
-    pub crop: Crop,
+    pub region: Region,
     pub aspect: f32,
     pub height: u32,
 }
@@ -80,7 +80,7 @@ impl FrameData {
     ) -> Self {
         let VolumeView {
             camera,
-            crop,
+            region,
             aspect,
             height,
         } = view;
@@ -101,13 +101,13 @@ impl FrameData {
             forward: camera.forward().extend(0.0).to_array(),
             box_min: [-0.5 * world.x, -0.5 * world.y, -0.5 * world.z, 0.0],
             box_size: [world.x, world.y, world.z, 0.0],
-            crop_min: [
-                crop.min().x,
-                crop.min().y,
-                crop.min().z,
-                if crop.enabled() { 1.0 } else { 0.0 },
+            region_min: [
+                region.min().x,
+                region.min().y,
+                region.min().z,
+                if region.enabled() { 1.0 } else { 0.0 },
             ],
-            crop_max: [crop.max().x, crop.max().y, crop.max().z, 0.0],
+            region_max: [region.max().x, region.max().y, region.max().z, 0.0],
             dims: [table.dims.x, table.dims.y, table.dims.z, 0.0],
             grid: [grid[0], grid[1], grid[2], 0],
             atlas: [table.atlas[0], table.atlas[1], table.atlas[2], 0],

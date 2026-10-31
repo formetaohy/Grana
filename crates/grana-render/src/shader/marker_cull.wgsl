@@ -55,7 +55,7 @@ fn marker_cull_volume(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let data = markers[index];
     if (!outside_sphere(data.center_radius.xyz, data.center_radius.w)
-        && !outside_crop_sphere(data.center_radius.xyz, data.center_radius.w)) {
+        && !outside_region_sphere(data.center_radius.xyz, data.center_radius.w)) {
         append(index);
     }
 }
@@ -68,7 +68,7 @@ fn marker_cull_section(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let data = markers[index];
     if (!outside_section(data.center_radius.xyz, data.center_radius.w)
-        && !outside_crop_sphere(data.center_radius.xyz, data.center_radius.w)) {
+        && !outside_region_sphere(data.center_radius.xyz, data.center_radius.w)) {
         append(index);
     }
 }

@@ -54,8 +54,8 @@ struct MeshUniforms {
     eye: [f32; 4],
     light: [f32; 4],
     shading: [f32; 4],
-    crop_min: [f32; 4],
-    crop_max: [f32; 4],
+    region_min: [f32; 4],
+    region_max: [f32; 4],
 }
 
 const _: () = {
@@ -254,8 +254,8 @@ impl MeshPasses {
                 shading.specular,
                 shading.shininess,
             ],
-            crop_min: frame.crop_min,
-            crop_max: frame.crop_max,
+            region_min: frame.region_min,
+            region_max: frame.region_max,
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }

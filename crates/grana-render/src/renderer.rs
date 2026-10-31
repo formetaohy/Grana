@@ -1,6 +1,8 @@
 use bytemuck::cast_slice;
 use grana_gpu::Readback;
-use grana_volume::{BRICK_SIDE, BrickCoord, BrickData, BrickGrid, Level, PADDED_SIDE, Pyramid};
+use grana_volume::{
+    BRICK_SIDE, BrickCoord, BrickData, BrickGrid, Level, PADDED_SIDE, Pyramid, Region,
+};
 use wgpu::{
     BindGroup, BindGroupLayout, CommandEncoder, Device, LoadOp, Operations, Queue,
     RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor, Sampler,
@@ -14,7 +16,6 @@ use crate::atlas::{Atlas, ResidentBrick};
 use crate::brick::{BrickRecord, BrickTable};
 use crate::camera::{Camera, SectionCamera};
 use crate::census::{CENSUS_LEVELS, Census};
-use crate::crop::Crop;
 use crate::frame::{FrameData, SectionData, VolumeView};
 use crate::layout::Layouts;
 use crate::marker::MarkerPasses;
@@ -75,7 +76,7 @@ pub struct Frame<'a, 'b> {
     pub time: u32,
     pub camera: &'a Camera,
     pub section: &'a SectionCamera,
-    pub crop: Crop,
+    pub region: Region,
     pub scene: &'a SceneFrame<'b>,
 }
 
@@ -99,7 +100,7 @@ struct Residency {
     span: f32,
     volume: [u32; 2],
     section: [u32; 2],
-    crop: Crop,
+    region: Region,
     levels: Levels,
 }
 
@@ -108,7 +109,7 @@ struct ResidencyView<'a> {
     section: &'a SectionCamera,
     volume_region: [u32; 4],
     section_region: [u32; 4],
-    crop: Crop,
+    region: Region,
 }
 
 impl Residency {
@@ -124,7 +125,7 @@ impl Residency {
             span: view.section.span(),
             volume: [view.volume_region[2], view.volume_region[3]],
             section: [view.section_region[2], view.section_region[3]],
-            crop: view.crop,
+            region: view.region,
             levels,
         }
     }
@@ -352,7 +353,7 @@ impl Renderer {
             time,
             camera,
             section,
-            crop,
+            region,
             scene,
         } = frame;
         assert!(size[0] > 0 && size[1] > 0, "the surface is not empty");
@@ -436,7 +437,7 @@ impl Renderer {
             section_aspect,
             section_target_level,
             (slots / SECTION_BUDGET_DIVISOR).max(1),
-            crop,
+            region,
         );
         let volume_target_level = select_volume_level(pyramid, camera, volume_height as f32);
         let volume_capacity = slots.saturating_sub(section_count).max(1);
@@ -458,7 +459,7 @@ impl Renderer {
                 section,
                 volume_region,
                 section_region,
-                crop,
+                region,
             },
             levels,
         );
@@ -513,7 +514,7 @@ impl Renderer {
         let frame_data = FrameData::new(
             VolumeView {
                 camera,
-                crop,
+                region,
                 aspect: volume_aspect,
                 height: volume_height,
             },
@@ -539,7 +540,7 @@ impl Renderer {
             camera,
             section,
             section_aspect,
-            crop,
+            region,
         );
         scheduler.section.prepare(
             queue,

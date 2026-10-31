@@ -5,7 +5,7 @@ mod spanning;
 mod volume;
 
 use grana_object::{FilamentSet, IntensityTable, Mesh, SampleAccumulator, push_sphere, push_tube};
-use grana_volume::{Level, Pyramid, VoxelData};
+use grana_volume::{Level, Pyramid, Region, VoxelData};
 
 use crate::FilamentParams;
 
@@ -56,6 +56,8 @@ pub struct FilamentScan {
     params: FilamentParams,
     channels: usize,
     grid: Grid,
+    region: Region,
+    empty: bool,
     mask: Vec<u8>,
     distance: Vec<u16>,
 }
@@ -67,11 +69,13 @@ impl FilamentScan {
         params: FilamentParams,
         channels: usize,
         detection: usize,
+        region: Region,
     ) -> Self {
         assert!(
             channels > 0 && detection < channels,
             "the detection channel is one of the measured channels"
         );
+        let empty = region.voxel_range(info).is_none();
         let extent = info.extent();
         let extent = [extent.x(), extent.y(), extent.z()];
         let spacing = info.spacing();
@@ -118,6 +122,8 @@ impl FilamentScan {
                 spacing: working,
                 world,
             },
+            region,
+            empty,
             mask: vec![0; voxel_count as usize],
             distance: vec![0; voxel_count as usize],
         }
@@ -128,6 +134,14 @@ impl FilamentScan {
         detection: &VoxelData,
         mut read: impl FnMut(usize) -> Result<VoxelData, String>,
     ) -> Result<FilamentSet, String> {
+        if self.empty {
+            return Ok(FilamentSet::new(
+                self.level,
+                Mesh::new(Vec::new(), Vec::new()),
+                Vec::new(),
+                IntensityTable::empty(self.channels),
+            ));
+        }
         let expected = self
             .extent
             .iter()
@@ -142,6 +156,7 @@ impl FilamentScan {
             self.step,
             &self.grid,
             self.params.threshold(),
+            self.region,
             &mut self.mask,
         );
         volume::distance(&self.mask, &self.grid, &mut self.distance);

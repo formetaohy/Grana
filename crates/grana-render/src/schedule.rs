@@ -1,5 +1,5 @@
 use bytemuck::bytes_of;
-use grana_volume::{BRICK_SIDE, BrickGrid, Pyramid};
+use grana_volume::{BRICK_SIDE, BrickGrid, Pyramid, Region};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, Buffer, BufferDescriptor, BufferUsages,
     CommandEncoder, ComputePipeline, ComputePipelineDescriptor, Device, Queue,
@@ -9,7 +9,6 @@ use wgpu::{
 use crate::ViewInfo;
 use crate::brick::BrickTable;
 use crate::camera::{Camera, SectionCamera};
-use crate::crop::Crop;
 use crate::frame::ScheduleData;
 use crate::layout::Layouts;
 
@@ -231,7 +230,7 @@ pub(crate) fn section_range(
     camera: &Camera,
     section: &SectionCamera,
     aspect: f32,
-    crop: Crop,
+    region: Region,
 ) -> SectionRange {
     let level = pyramid.level(level_index);
     let extent = level.extent();
@@ -252,20 +251,20 @@ pub(crate) fn section_range(
     let mut umax = (center_u + half_u).clamp(0.0, 1.0);
     let mut vmin = (center_v - half_v).clamp(0.0, 1.0);
     let mut vmax = (center_v + half_v).clamp(0.0, 1.0);
-    if crop.enabled() {
-        let crop_min = crop.min();
-        let crop_max = crop.max();
-        if focus[axis] < crop_min[axis] || focus[axis] > crop_max[axis] {
+    if region.enabled() {
+        let region_min = region.min();
+        let region_max = region.max();
+        if focus[axis] < region_min[axis] || focus[axis] > region_max[axis] {
             return SectionRange::default();
         }
-        let crop_umin = (crop_min[u] / world[u] + 0.5).clamp(0.0, 1.0);
-        let crop_umax = (crop_max[u] / world[u] + 0.5).clamp(0.0, 1.0);
-        let crop_vmin = (crop_min[v] / world[v] + 0.5).clamp(0.0, 1.0);
-        let crop_vmax = (crop_max[v] / world[v] + 0.5).clamp(0.0, 1.0);
-        umin = umin.max(crop_umin);
-        umax = umax.min(crop_umax);
-        vmin = vmin.max(crop_vmin);
-        vmax = vmax.min(crop_vmax);
+        let region_umin = (region_min[u] / world[u] + 0.5).clamp(0.0, 1.0);
+        let region_umax = (region_max[u] / world[u] + 0.5).clamp(0.0, 1.0);
+        let region_vmin = (region_min[v] / world[v] + 0.5).clamp(0.0, 1.0);
+        let region_vmax = (region_max[v] / world[v] + 0.5).clamp(0.0, 1.0);
+        umin = umin.max(region_umin);
+        umax = umax.min(region_umax);
+        vmin = vmin.max(region_vmin);
+        vmax = vmax.min(region_vmax);
     }
     if umin >= umax || vmin >= vmax {
         return SectionRange::default();
@@ -331,13 +330,13 @@ pub(crate) fn resolve_section_level(
     aspect: f32,
     target: usize,
     capacity: usize,
-    crop: Crop,
+    region: Region,
 ) -> (usize, usize) {
     let levels = pyramid.level_count();
     let mut level = target.min(levels - 1);
     loop {
         let count =
-            section_range(pyramid, level, camera, section, aspect, crop).dispatch() as usize;
+            section_range(pyramid, level, camera, section, aspect, region).dispatch() as usize;
         if count <= capacity || level + 1 == levels {
             return (level, count);
         }

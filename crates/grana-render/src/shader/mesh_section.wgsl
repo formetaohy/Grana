@@ -50,7 +50,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 }
 
 fn hidden(input: VertexOutput) -> bool {
-    if (outside_crop(input.position)) {
+    if (outside_region(input.position)) {
         return true;
     }
     if (input.uv.x < 0.0 || input.uv.x > 1.0 || input.uv.y < 0.0 || input.uv.y > 1.0) {
