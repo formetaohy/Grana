@@ -1,0 +1,172 @@
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SampleStatistics {
+    mean: f32,
+    minimum: f32,
+    maximum: f32,
+    deviation: f32,
+    sum: f64,
+}
+
+impl SampleStatistics {
+    pub fn new(mean: f32, minimum: f32, maximum: f32, deviation: f32, sum: f64) -> Self {
+        assert!(
+            [mean, minimum, maximum, deviation]
+                .iter()
+                .all(|value| value.is_finite()),
+            "intensity statistics are finite"
+        );
+        assert!(
+            minimum <= mean && mean <= maximum,
+            "intensity statistics are ordered"
+        );
+        assert!(deviation >= 0.0, "an intensity deviation is non negative");
+        assert!(
+            sum.is_finite() && sum >= 0.0,
+            "an intensity sum is a non negative total"
+        );
+        Self {
+            mean,
+            minimum,
+            maximum,
+            deviation,
+            sum,
+        }
+    }
+
+    pub fn mean(self) -> f32 {
+        self.mean
+    }
+
+    pub fn minimum(self) -> f32 {
+        self.minimum
+    }
+
+    pub fn maximum(self) -> f32 {
+        self.maximum
+    }
+
+    pub fn deviation(self) -> f32 {
+        self.deviation
+    }
+
+    pub fn sum(self) -> f64 {
+        self.sum
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SampleAccumulator {
+    count: u64,
+    mean: f64,
+    squared: f64,
+    minimum: f32,
+    maximum: f32,
+    sum: f64,
+}
+
+impl SampleAccumulator {
+    pub fn new() -> Self {
+        Self {
+            count: 0,
+            mean: 0.0,
+            squared: 0.0,
+            minimum: f32::INFINITY,
+            maximum: f32::NEG_INFINITY,
+            sum: 0.0,
+        }
+    }
+
+    pub fn push(&mut self, value: f32) {
+        if !value.is_finite() {
+            return;
+        }
+        self.count += 1;
+        self.sum += f64::from(value);
+        self.minimum = self.minimum.min(value);
+        self.maximum = self.maximum.max(value);
+        let delta = f64::from(value) - self.mean;
+        self.mean += delta / self.count as f64;
+        self.squared += delta * (f64::from(value) - self.mean);
+    }
+
+    pub fn merge(&mut self, other: &Self) {
+        if other.count == 0 {
+            return;
+        }
+        if self.count == 0 {
+            *self = *other;
+            return;
+        }
+        let total = self.count + other.count;
+        let delta = other.mean - self.mean;
+        self.mean += delta * other.count as f64 / total as f64;
+        self.squared +=
+            other.squared + delta * delta * (self.count as f64 * other.count as f64 / total as f64);
+        self.count = total;
+        self.sum += other.sum;
+        self.minimum = self.minimum.min(other.minimum);
+        self.maximum = self.maximum.max(other.maximum);
+    }
+
+    pub fn statistics(self) -> SampleStatistics {
+        if self.count == 0 {
+            return SampleStatistics::new(0.0, 0.0, 0.0, 0.0, 0.0);
+        }
+        let mean = self
+            .mean
+            .clamp(f64::from(self.minimum), f64::from(self.maximum)) as f32;
+        let deviation = (self.squared / self.count as f64).max(0.0).sqrt() as f32;
+        SampleStatistics::new(mean, self.minimum, self.maximum, deviation, self.sum)
+    }
+}
+
+impl Default for SampleAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct IntensityTable {
+    channels: usize,
+    values: Vec<SampleStatistics>,
+}
+
+impl IntensityTable {
+    pub fn new(channels: usize, values: Vec<SampleStatistics>) -> Self {
+        assert!(
+            channels > 0,
+            "an intensity table measures at least one channel"
+        );
+        assert_eq!(
+            values.len() % channels,
+            0,
+            "every object is measured in every channel"
+        );
+        Self { channels, values }
+    }
+
+    pub fn empty(channels: usize) -> Self {
+        Self::new(channels, Vec::new())
+    }
+
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    pub fn objects(&self) -> usize {
+        self.values.len() / self.channels
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    pub fn object(&self, object: usize, channel: usize) -> SampleStatistics {
+        assert!(
+            object < self.objects() && channel < self.channels,
+            "the measured object lies inside the intensity table"
+        );
+        self.values[object * self.channels + channel]
+    }
+}

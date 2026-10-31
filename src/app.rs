@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use glam::Vec2;
 use grana_object::TrackSet;
 use grana_render::{BrickRequest, Frame, FrameInfo, Marker, MeshFrame, MeshUpload, Renderer};
+use grana_statistic::Group;
 use grana_volume::Spacing;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -18,11 +19,11 @@ use crate::analysis::{self, Analysis, Event, Job, Outcome, Poll, Progress};
 use crate::dataset::Dataset;
 use crate::demo;
 use crate::egui_layer::EguiLayer;
-use crate::export;
 use crate::gpu::Gpu;
 use crate::loader::{Event as LoaderEvent, Loader};
 use crate::objects::ObjectSetId;
 use crate::scene::Scene;
+use crate::statistics::Statistics;
 use crate::ui::{self, Message, UiState};
 use crate::viewport::{Pane, Viewport};
 
@@ -44,6 +45,7 @@ pub struct App {
     surface: Option<Surface>,
     viewport: Viewport,
     scene: Option<Scene>,
+    statistics: Statistics,
     source: Option<Loader>,
     analysis: Vec<Analysis>,
     progress: Vec<Progress>,
@@ -66,6 +68,7 @@ impl App {
             surface: None,
             viewport: Viewport::new(),
             scene: None,
+            statistics: Statistics::new(),
             source: None,
             analysis: Vec::new(),
             progress: Vec::new(),
@@ -118,6 +121,13 @@ impl App {
         if self.surface.is_none() || self.scene.is_none() {
             return;
         }
+        if let Some(scene) = self.scene.as_ref() {
+            let busy = self
+                .statistics
+                .set()
+                .is_some_and(|set| self.analysis.iter().any(|job| job.set() == set));
+            self.statistics.sync(scene, busy);
+        }
         let (output, actions) = self.run_ui();
         let mut opened = false;
         if actions.open
@@ -132,6 +142,11 @@ impl App {
             }
             if let Some(time) = actions.time {
                 self.scrub(time);
+            }
+            if let Some(selection) = actions.select
+                && let Some(scene) = self.scene.as_mut()
+            {
+                scene.select(Some(selection));
             }
             if let Some(set) = actions.remove_object {
                 self.remove_object(set);
@@ -155,9 +170,6 @@ impl App {
                     scene.clear_object(set);
                 }
             }
-            if let Some(set) = actions.export_object {
-                self.export_object(set);
-            }
             if let Some(set) = actions.track {
                 self.start_tracks(set);
             }
@@ -169,9 +181,14 @@ impl App {
             {
                 scene.clear_tracks(set);
             }
-            if let Some(set) = actions.export_tracks {
-                self.export_tracks(set);
+            if actions.export_statistics {
+                self.export_statistics();
             }
+        }
+        if self.statistics.take_dirty()
+            && let Some(scene) = self.scene.as_mut()
+        {
+            self.statistics.apply(scene);
         }
         self.advance_playback();
         let scale = self
@@ -337,6 +354,7 @@ impl App {
                 &mut UiState {
                     scene,
                     view: viewport,
+                    statistics: &mut self.statistics,
                     adapter,
                     loading,
                     message,
@@ -442,6 +460,7 @@ impl App {
                             .set_pyramid(&surface.gpu.device, dataset.pyramid());
                     }
                     self.scene = Some(Scene::new(dataset));
+                    self.statistics.reset();
                     self.analysis.clear();
                     self.progress.clear();
                     self.loading = None;
@@ -733,24 +752,32 @@ impl App {
         }
     }
 
-    fn export_object(&mut self, set: ObjectSetId) {
+    fn export_statistics(&mut self) {
         let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(set) = self.statistics.set() else {
             return;
         };
         let Some(object) = scene.objects.get(set) else {
             return;
         };
-        let Some((_, first)) = object.frames().next() else {
+        let Some(csv) = self.statistics.csv() else {
             return;
         };
         let channel = scene.dataset.channels()[object.channel()].name();
+        let group = match self.statistics.group() {
+            Group::Object => "objects",
+            Group::Track => "tracks",
+            Group::Timepoint => "timepoints",
+        };
         let file_name = format!(
-            "{}-{}-{}.csv",
-            export::slug(scene.dataset.name()),
-            export::slug(channel),
-            export::slug(object.name())
+            "{}-{}-{}-{group}.csv",
+            slug(scene.dataset.name()),
+            slug(channel),
+            slug(object.name())
         );
-        let title = format!("Export {}", object.name());
+        let title = format!("Export {} statistics", object.name());
         let Some(path) = rfd::FileDialog::new()
             .set_title(title)
             .set_file_name(file_name)
@@ -758,57 +785,12 @@ impl App {
             .save_file()
         else {
             return;
-        };
-        let csv = match first {
-            crate::objects::ObjectFrame::Spots(_) => {
-                export::spots(scene.dataset.frame_interval(), object)
-            }
-            crate::objects::ObjectFrame::Surfaces(_) => {
-                export::surfaces(scene.dataset.frame_interval(), object)
-            }
         };
         match std::fs::write(&path, csv) {
             Ok(()) => self.message = None,
             Err(error) => {
                 self.message = Some(Message::error(format!(
-                    "failed to export objects to {}: {error}",
-                    path.display()
-                )));
-            }
-        }
-    }
-
-    fn export_tracks(&mut self, set: ObjectSetId) {
-        let Some(scene) = self.scene.as_ref() else {
-            return;
-        };
-        let Some(object) = scene.objects.get(set) else {
-            return;
-        };
-        let Some(layer) = object.tracks() else {
-            return;
-        };
-        let channel = scene.dataset.channels()[object.channel()].name();
-        let file_name = format!(
-            "{}-{}-{}-tracks.csv",
-            export::slug(scene.dataset.name()),
-            export::slug(channel),
-            export::slug(object.name())
-        );
-        let title = format!("Export {} tracks", object.name());
-        let Some(path) = rfd::FileDialog::new()
-            .set_title(title)
-            .set_file_name(file_name)
-            .add_filter("CSV", &["csv"])
-            .save_file()
-        else {
-            return;
-        };
-        match std::fs::write(&path, export::tracks(layer.set())) {
-            Ok(()) => self.message = None,
-            Err(error) => {
-                self.message = Some(Message::error(format!(
-                    "failed to export tracks to {}: {error}",
+                    "failed to export statistics to {}: {error}",
                     path.display()
                 )));
             }
@@ -821,6 +803,7 @@ impl App {
         }
         self.loading = Some(file_name(&path));
         self.source = Some(Loader::file(path));
+        self.statistics.reset();
         self.analysis.clear();
         self.progress.clear();
         self.message = None;
@@ -892,6 +875,24 @@ fn file_name(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .unwrap_or("OME-Zarr dataset")
         .to_string()
+}
+
+fn slug(name: &str) -> String {
+    let slug = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    if slug.is_empty() {
+        "dataset".to_string()
+    } else {
+        slug
+    }
 }
 
 fn physical_region(rect: egui::Rect, scale: f32, surface: [u32; 2]) -> [u32; 4] {

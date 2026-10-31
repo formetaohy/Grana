@@ -106,9 +106,6 @@ fn object(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions, id: Objec
         detect(ui, state, actions, id, kind, frames);
         summary_rows(ui, &summary);
         ui.horizontal(|ui| {
-            if ui.button("Export CSV").clicked() {
-                actions.export_object = Some(id);
-            }
             if ui.button("Clear").clicked() {
                 actions.clear_object = Some(id);
             }
@@ -305,6 +302,7 @@ fn measure(ui: &mut Ui, state: &mut UiState<'_>, id: ObjectSetId, time: u32) {
     let Some(frame) = object.frame(time) else {
         return;
     };
+    let channel = object.channel();
     match frame {
         ObjectFrame::Spots(spots) => {
             let Some(index) = selected else {
@@ -328,6 +326,18 @@ fn measure(ui: &mut Ui, state: &mut UiState<'_>, id: ObjectSetId, time: u32) {
                     );
                     row(ui, "diameter", format!("{:.3} µm", spot.radius() * 2.0));
                     row(ui, "contrast", format!("{:.3}", spot.quality()));
+                    let intensity = frame.intensities().object(index, channel);
+                    row(
+                        ui,
+                        "intensity",
+                        format!(
+                            "{:.0} mean · {:.0} … {:.0} · σ {:.0}",
+                            intensity.mean(),
+                            intensity.minimum(),
+                            intensity.maximum(),
+                            intensity.deviation()
+                        ),
+                    );
                 });
         }
         ObjectFrame::Surfaces(surfaces) => {
@@ -339,6 +349,11 @@ fn measure(ui: &mut Ui, state: &mut UiState<'_>, id: ObjectSetId, time: u32) {
                 .collect::<Vec<_>>();
             entries.sort_by(|left, right| right.1.total_cmp(&left.1));
             let measured = selected.and_then(|index| surfaces.objects().get(index).copied());
+            let intensity = measured.map(|_| {
+                surfaces
+                    .intensities()
+                    .object(selected.unwrap_or(0), channel)
+            });
             let selection = state.scene.selection();
             let mut clicked = None;
             egui::ScrollArea::vertical()
@@ -374,9 +389,11 @@ fn measure(ui: &mut Ui, state: &mut UiState<'_>, id: ObjectSetId, time: u32) {
                 );
                 return;
             };
+            let Some(intensity) = intensity else {
+                return;
+            };
             let bounds = object.bounds();
             let size = bounds.size();
-            let intensity = object.intensity();
             let centroid = object.centroid();
             egui::Grid::new(("grana.surface", id.raw()))
                 .num_columns(2)
@@ -408,8 +425,8 @@ fn measure(ui: &mut Ui, state: &mut UiState<'_>, id: ObjectSetId, time: u32) {
                         format!(
                             "{:.0} mean · {:.0} … {:.0} · σ {:.0}",
                             intensity.mean(),
-                            intensity.min(),
-                            intensity.max(),
+                            intensity.minimum(),
+                            intensity.maximum(),
                             intensity.deviation()
                         ),
                     );

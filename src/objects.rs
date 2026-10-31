@@ -1,5 +1,5 @@
 use grana_analysis::{SpotParams, SurfaceParams, TrackParams};
-use grana_object::{Mesh, SpotSet, SurfaceSet, TrackSet};
+use grana_object::{IntensityTable, Mesh, SpotSet, SurfaceSet, TrackSet};
 use grana_volume::ChannelInfo;
 
 use crate::dataset::Dataset;
@@ -140,17 +140,17 @@ impl ObjectFrame {
         }
     }
 
-    pub fn surfaces(&self) -> Option<&SurfaceSet> {
-        match self {
-            Self::Surfaces(set) => Some(set),
-            Self::Spots(_) => None,
-        }
-    }
-
     pub fn mesh(&self) -> Option<&Mesh> {
         match self {
             Self::Spots(_) => None,
             Self::Surfaces(set) => Some(set.mesh()),
+        }
+    }
+
+    pub fn intensities(&self) -> &IntensityTable {
+        match self {
+            Self::Spots(set) => set.intensities(),
+            Self::Surfaces(set) => set.intensities(),
         }
     }
 
@@ -180,6 +180,13 @@ impl FrameSlot {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum Visibility {
+    All,
+    Object(Vec<Vec<bool>>),
+    Track(Vec<bool>),
+}
+
 pub struct ObjectSet {
     id: ObjectSetId,
     kind: ObjectKind,
@@ -192,6 +199,8 @@ pub struct ObjectSet {
     track_params: TrackParams,
     frames: Vec<FrameSlot>,
     stamp: u64,
+    revision: u64,
+    visibility: Visibility,
     tracks: Option<TrackLayer>,
 }
 
@@ -222,6 +231,8 @@ impl ObjectSet {
                 .map(|_| FrameSlot::new())
                 .collect(),
             stamp: 1,
+            revision: 1,
+            visibility: Visibility::All,
             tracks: None,
         }
     }
@@ -301,6 +312,63 @@ impl ObjectSet {
             .count()
     }
 
+    pub fn frame_count(&self) -> u32 {
+        self.frames.len() as u32
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn set_visibility(&mut self, visibility: Visibility) {
+        match &visibility {
+            Visibility::All => {}
+            Visibility::Object(frames) => {
+                assert_eq!(
+                    frames.len(),
+                    self.frames.len(),
+                    "the visibility covers every frame"
+                );
+                for (mask, slot) in frames.iter().zip(&self.frames) {
+                    assert_eq!(
+                        mask.len(),
+                        slot.data.as_ref().map_or(0, ObjectFrame::object_count),
+                        "the visibility covers every object"
+                    );
+                }
+            }
+            Visibility::Track(tracks) => {
+                assert_eq!(
+                    tracks.len(),
+                    self.tracks.as_ref().map_or(0, |layer| layer.set().len()),
+                    "the visibility covers every track"
+                );
+            }
+        }
+        self.visibility = visibility;
+    }
+
+    pub fn visible_object(&self, time: u32, object: usize) -> bool {
+        match &self.visibility {
+            Visibility::All => true,
+            Visibility::Object(frames) => frames
+                .get(time as usize)
+                .and_then(|mask| mask.get(object))
+                .copied()
+                .unwrap_or(false),
+            Visibility::Track(tracks) => self
+                .track_at(time, object)
+                .is_some_and(|track| tracks.get(track).copied().unwrap_or(false)),
+        }
+    }
+
+    pub fn visible_track(&self, track: usize) -> bool {
+        match &self.visibility {
+            Visibility::All | Visibility::Object(_) => true,
+            Visibility::Track(tracks) => tracks.get(track).copied().unwrap_or(false),
+        }
+    }
+
     pub fn install(&mut self, time: u32, frame: ObjectFrame) {
         assert_eq!(
             frame.kind(),
@@ -312,6 +380,8 @@ impl ObjectSet {
             .get_mut(time as usize)
             .expect("the object frame lies inside the time series");
         self.stamp += 1;
+        self.revision += 1;
+        self.visibility = Visibility::All;
         slot.stamp = self.stamp;
         slot.data = Some(frame);
     }
@@ -320,6 +390,8 @@ impl ObjectSet {
         for slot in &mut self.frames {
             slot.data = None;
         }
+        self.revision += 1;
+        self.visibility = Visibility::All;
         self.tracks = None;
     }
 
@@ -344,9 +416,13 @@ impl ObjectSet {
         let mut layer = TrackLayer::new(set, thickness);
         layer.set_visible(visible);
         self.tracks = Some(layer);
+        self.revision += 1;
+        self.visibility = Visibility::All;
     }
 
     pub fn clear_tracks(&mut self) {
+        self.revision += 1;
+        self.visibility = Visibility::All;
         self.tracks = None;
     }
 

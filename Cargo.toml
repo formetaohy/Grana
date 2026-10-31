@@ -17,6 +17,7 @@ wgpu = "30"
 egui = { version = "0.37", features = ["default_fonts"] }
 egui-wgpu = "0.37"
 egui-winit = { version = "0.37", default-features = false, features = ["clipboard", "links"] }
+egui_extras = { version = "0.37", default-features = false }
 winit = "0.30"
 pollster = "0.4"
 thiserror = "2"
@@ -29,6 +30,7 @@ grana-object = { version = "0.1.0", path = "crates/grana-object" }
 grana-analysis = { version = "0.1.0", path = "crates/grana-analysis" }
 grana-render = { version = "0.1.0", path = "crates/grana-render" }
 grana-zarr = { version = "0.1.0", path = "crates/grana-zarr" }
+grana-statistic = { version = "0.1.0", path = "crates/grana-statistic" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -53,11 +55,13 @@ path = "src/main.rs"
 grana-analysis = { workspace = true }
 grana-object = { workspace = true }
 grana-render = { workspace = true }
+grana-statistic = { workspace = true }
 grana-volume = { workspace = true }
 grana-zarr = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
 egui-winit = { workspace = true }
+egui_extras = { workspace = true }
 glam = { workspace = true }
 pollster = { workspace = true }
 rfd = { workspace = true }

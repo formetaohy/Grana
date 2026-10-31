@@ -6,8 +6,8 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use grana_analysis::{
     SpotParams, SpotScan, SurfaceBuilder, SurfaceParams, TrackBuilder, TrackParams,
 };
-use grana_object::{Spot, SpotSet, SurfaceSet, TrackSet};
-use grana_volume::{BrickCoord, BrickGrid, Pyramid, VoxelData};
+use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet, SurfaceSet, TrackSet};
+use grana_volume::{BrickCoord, BrickData, BrickGrid, Pyramid, VoxelData};
 use grana_zarr::Image;
 
 use crate::objects::{ObjectParams, ObjectSetId};
@@ -148,31 +148,45 @@ fn detect_spots(
     match source {
         Source::Memory(movie) => {
             let pyramid = movie.pyramid().clone();
-            scan_spots(&pyramid, channel, params, cancel, events, |time, range| {
-                Ok(movie.region(
-                    time,
-                    channel,
-                    range[0].clone(),
-                    range[1].clone(),
-                    range[2].clone(),
-                ))
-            })
+            scan_spots(
+                &pyramid,
+                channel,
+                params,
+                cancel,
+                events,
+                |time, channel, range| {
+                    Ok(movie.region(
+                        time,
+                        channel,
+                        range[0].clone(),
+                        range[1].clone(),
+                        range[2].clone(),
+                    ))
+                },
+            )
         }
         Source::File(path) => match Image::open(&path) {
             Ok(image) => {
                 let pyramid = image.pyramid().clone();
-                scan_spots(&pyramid, channel, params, cancel, events, |time, range| {
-                    image
-                        .read_region(
-                            time,
-                            0,
-                            channel,
-                            range[0].clone(),
-                            range[1].clone(),
-                            range[2].clone(),
-                        )
-                        .map_err(|error| error.to_string())
-                })
+                scan_spots(
+                    &pyramid,
+                    channel,
+                    params,
+                    cancel,
+                    events,
+                    |time, channel, range| {
+                        image
+                            .read_region(
+                                time,
+                                0,
+                                channel,
+                                range[0].clone(),
+                                range[1].clone(),
+                                range[2].clone(),
+                            )
+                            .map_err(|error| error.to_string())
+                    },
+                )
             }
             Err(error) => Err(error.to_string()),
         },
@@ -191,7 +205,7 @@ fn detect_surfaces(
             let pyramid = movie.pyramid().clone();
             let grid = BrickGrid::new(pyramid.level(0).extent());
             scan_surfaces(&pyramid, channel, params, cancel, events, |time, coord| {
-                Ok(movie.channel_brick(time, &grid, coord, channel))
+                Ok(movie.brick(time, &grid, coord))
             })
         }
         Source::File(path) => match Image::open(&path) {
@@ -199,7 +213,7 @@ fn detect_surfaces(
                 let pyramid = image.pyramid().clone();
                 scan_surfaces(&pyramid, channel, params, cancel, events, |time, coord| {
                     image
-                        .read_channel_brick(time, 0, channel, coord)
+                        .read_brick(time, 0, coord)
                         .map_err(|error| error.to_string())
                 })
             }
@@ -248,7 +262,7 @@ fn scan_spots(
     params: SpotParams,
     cancel: &AtomicBool,
     events: &Sender<Event>,
-    mut read: impl FnMut(u32, [Range<u32>; 3]) -> Result<VoxelData, String>,
+    mut read: impl FnMut(u32, usize, [Range<u32>; 3]) -> Result<VoxelData, String>,
 ) -> Result<(), String> {
     if channel >= pyramid.channel_count() {
         return Err(format!(
@@ -260,6 +274,7 @@ fn scan_spots(
     if span <= 0.0 {
         return Err("the selected channel has no intensity range to detect".to_string());
     }
+    let channels = pyramid.channel_count();
     let mut scanner = SpotScan::new(pyramid.level(0), span, params);
     let total = scanner.block_count();
     let mut values = Vec::new();
@@ -273,16 +288,42 @@ fn scan_spots(
             total,
         });
         let mut spots: Vec<Spot> = Vec::new();
+        let mut accumulators: Vec<SampleAccumulator> = Vec::new();
         for index in 0..total {
             if cancel.load(Ordering::Relaxed) {
                 return Ok(());
             }
             let range = scanner.read_range(index);
-            let data = read(time, range)?;
+            let start = spots.len();
+            let data = read(time, channel, range.clone())?;
             values.clear();
             values.resize(data.voxel_count(), 0.0);
             data.write_values(&mut values);
             spots.extend(scanner.detect(index, &values));
+            accumulators.resize(spots.len() * channels, SampleAccumulator::new());
+            for (slot, accumulator) in scanner
+                .measure(index, &spots[start..], &values)
+                .into_iter()
+                .enumerate()
+            {
+                accumulators[(start + slot) * channels + channel] = accumulator;
+            }
+            for measured in 0..channels {
+                if measured == channel {
+                    continue;
+                }
+                let data = read(time, measured, range.clone())?;
+                values.clear();
+                values.resize(data.voxel_count(), 0.0);
+                data.write_values(&mut values);
+                for (slot, accumulator) in scanner
+                    .measure(index, &spots[start..], &values)
+                    .into_iter()
+                    .enumerate()
+                {
+                    accumulators[(start + slot) * channels + measured] = accumulator;
+                }
+            }
             if index % 8 == 0 || index + 1 == total {
                 let _ = events.send(Event::Progress {
                     time,
@@ -291,9 +332,17 @@ fn scan_spots(
                 });
             }
         }
+        let intensities = accumulators
+            .into_iter()
+            .map(SampleAccumulator::statistics)
+            .collect();
         let _ = events.send(Event::Frame {
             time,
-            outcome: Outcome::Spots(SpotSet::new(0, spots)),
+            outcome: Outcome::Spots(SpotSet::new(
+                0,
+                spots,
+                IntensityTable::new(channels, intensities),
+            )),
         });
     }
     let _ = events.send(Event::Done);
@@ -306,7 +355,7 @@ fn scan_surfaces(
     params: SurfaceParams,
     cancel: &AtomicBool,
     events: &Sender<Event>,
-    mut read: impl FnMut(u32, BrickCoord) -> Result<VoxelData, String>,
+    mut read: impl FnMut(u32, BrickCoord) -> Result<BrickData, String>,
 ) -> Result<(), String> {
     if channel >= pyramid.channel_count() {
         return Err(format!(
@@ -318,11 +367,12 @@ fn scan_surfaces(
     if span <= 0.0 {
         return Err("the selected channel has no intensity range to detect".to_string());
     }
+    let channels = pyramid.channel_count();
     for time in 0..pyramid.frame_count() {
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let mut builder = SurfaceBuilder::new(0, pyramid.level(0), params);
+        let mut builder = SurfaceBuilder::new(0, pyramid.level(0), params, channels, channel);
         let total = builder.coord_count();
         let _ = events.send(Event::Progress {
             time,
@@ -334,8 +384,8 @@ fn scan_surfaces(
                 return Ok(());
             }
             let coord = builder.coord(index);
-            let values = read(time, coord)?;
-            builder.add(coord, &values);
+            let data = read(time, coord)?;
+            builder.add(coord, &data);
             if index % 16 == 0 || index + 1 == total {
                 let _ = events.send(Event::Progress {
                     time,

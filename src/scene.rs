@@ -250,6 +250,9 @@ impl Scene {
                 continue;
             };
             for (index, spot) in spots.spots().iter().enumerate() {
+                if !set.visible_object(self.time, index) {
+                    continue;
+                }
                 let selected = self.selection
                     == Some(Selection {
                         set: set.id(),
@@ -286,7 +289,11 @@ impl Scene {
                                 set: id,
                                 item: Item::Object(index),
                             });
-                        MeshStyle::new(set.color(), visible, selected)
+                        MeshStyle::new(
+                            set.color(),
+                            visible && set.visible_object(self.time, index),
+                            selected,
+                        )
                     })
                     .collect();
                 layers.push(SceneLayer {
@@ -305,7 +312,11 @@ impl Scene {
                                 set: id,
                                 item: Item::Track(index),
                             });
-                        MeshStyle::new(set.color(), visible && tracks.visible(), selected)
+                        MeshStyle::new(
+                            set.color(),
+                            visible && tracks.visible() && set.visible_track(index),
+                            selected,
+                        )
                     })
                     .collect();
                 layers.push(SceneLayer {
@@ -324,6 +335,9 @@ impl Scene {
             if let Some(frame) = set.frame(self.time) {
                 if let Some(spots) = frame.spots() {
                     for (index, spot) in spots.spots().iter().enumerate() {
+                        if !set.visible_object(self.time, index) {
+                            continue;
+                        }
                         let Some(distance) = ray_sphere(ray, *spot) else {
                             continue;
                         };
@@ -341,12 +355,16 @@ impl Scene {
                 {
                     for index in 0..mesh.triangle_count() {
                         let triangle = mesh.triangle(index);
+                        let object = triangle[0].object() as usize;
+                        if !set.visible_object(self.time, object) {
+                            continue;
+                        }
                         let Some(distance) = ray_triangle(ray, triangle) else {
                             continue;
                         };
                         let selection = Selection {
                             set: set.id(),
-                            item: Item::Object(triangle[0].object() as usize),
+                            item: Item::Object(object),
                         };
                         if best.is_none_or(|(nearest, _)| distance < nearest) {
                             best = Some((distance, selection));
@@ -358,12 +376,16 @@ impl Scene {
                 let mesh = tracks.mesh();
                 for index in 0..mesh.triangle_count() {
                     let triangle = mesh.triangle(index);
+                    let track = triangle[0].object() as usize;
+                    if !set.visible_track(track) {
+                        continue;
+                    }
                     let Some(distance) = ray_triangle(ray, triangle) else {
                         continue;
                     };
                     let selection = Selection {
                         set: set.id(),
-                        item: Item::Track(triangle[0].object() as usize),
+                        item: Item::Track(track),
                     };
                     if best.is_none_or(|(nearest, _)| distance < nearest) {
                         best = Some((distance, selection));
@@ -383,6 +405,9 @@ impl Scene {
                     let (u_axis, v_axis) = axis.in_plane();
                     let (u, v) = (u_axis.index(), v_axis.index());
                     for (index, spot) in spots.spots().iter().enumerate() {
+                        if !set.visible_object(self.time, index) {
+                            continue;
+                        }
                         let offset = Vec3::from(spot.center()) - point;
                         let depth = offset[plane].abs();
                         let radius = spot.radius();
@@ -404,7 +429,9 @@ impl Scene {
                 }
                 if let Some(mesh) = frame.mesh()
                     && !frame.is_empty()
-                    && let Some((offset, object)) = slice_mesh(mesh, axis, point)
+                    && let Some((offset, object)) = slice_mesh(mesh, axis, point, |object| {
+                        set.visible_object(self.time, object)
+                    })
                     && best.is_none_or(|(nearest, _)| offset < nearest)
                 {
                     best = Some((
@@ -417,7 +444,8 @@ impl Scene {
                 }
             }
             if let Some(tracks) = self.pickable_tracks(set)
-                && let Some((offset, object)) = slice_mesh(tracks.mesh(), axis, point)
+                && let Some((offset, object)) =
+                    slice_mesh(tracks.mesh(), axis, point, |track| set.visible_track(track))
                 && best.is_none_or(|(nearest, _)| offset < nearest)
             {
                 best = Some((
@@ -444,13 +472,22 @@ impl Scene {
     }
 }
 
-fn slice_mesh(mesh: &Mesh, axis: Axis, point: Vec3) -> Option<(f32, usize)> {
+fn slice_mesh(
+    mesh: &Mesh,
+    axis: Axis,
+    point: Vec3,
+    visible: impl Fn(usize) -> bool,
+) -> Option<(f32, usize)> {
     let plane = axis.index();
     let (u_axis, v_axis) = axis.in_plane();
     let (u, v) = (u_axis.index(), v_axis.index());
     let mut nearest: Option<(f32, bool, usize)> = None;
     for index in 0..mesh.triangle_count() {
         let triangle = mesh.triangle(index);
+        let object = triangle[0].object() as usize;
+        if !visible(object) {
+            continue;
+        }
         let Some((offset, exit)) = slice_triangle(triangle, plane, u, v, point, axis) else {
             continue;
         };
@@ -458,7 +495,7 @@ fn slice_mesh(mesh: &Mesh, axis: Axis, point: Vec3) -> Option<(f32, usize)> {
             continue;
         }
         if nearest.is_none_or(|(nearest_offset, _, _)| offset < nearest_offset) {
-            nearest = Some((offset, exit, triangle[0].object() as usize));
+            nearest = Some((offset, exit, object));
         }
     }
     match nearest {

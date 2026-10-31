@@ -2,7 +2,8 @@ use crate::analysis::{Job, Progress};
 use crate::dataset::{Dataset, Origin};
 use crate::objects::{ObjectKind, ObjectSetId};
 use crate::overlay::{self, Overlay};
-use crate::scene::Scene;
+use crate::scene::{Scene, Selection};
+use crate::statistics::Statistics;
 use crate::viewport::Viewport;
 use egui::{RichText, Ui};
 use grana_render::FrameInfo;
@@ -25,6 +26,7 @@ impl Message {
 pub struct UiState<'a> {
     pub scene: &'a mut Scene,
     pub view: &'a mut Viewport,
+    pub statistics: &'a mut Statistics,
     pub adapter: &'a str,
     pub loading: Option<&'a str>,
     pub message: Option<&'a Message>,
@@ -42,17 +44,17 @@ pub struct Actions {
     pub section_axis: Option<Axis>,
     pub split: Option<f32>,
     pub time: Option<u32>,
+    pub select: Option<Selection>,
     pub toggle_play: bool,
     pub add_object: Option<ObjectKind>,
     pub remove_object: Option<ObjectSetId>,
     pub detect: Option<ObjectSetId>,
     pub cancel_detect: Option<ObjectSetId>,
     pub clear_object: Option<ObjectSetId>,
-    pub export_object: Option<ObjectSetId>,
     pub track: Option<ObjectSetId>,
     pub cancel_track: Option<ObjectSetId>,
     pub clear_tracks: Option<ObjectSetId>,
-    pub export_tracks: Option<ObjectSetId>,
+    pub export_statistics: bool,
     pub volume: egui::Rect,
     pub section: egui::Rect,
 }
@@ -66,17 +68,17 @@ impl Actions {
             section_axis: None,
             split: None,
             time: None,
+            select: None,
             toggle_play: false,
             add_object: None,
             remove_object: None,
             detect: None,
             cancel_detect: None,
             clear_object: None,
-            export_object: None,
             track: None,
             cancel_track: None,
             clear_tracks: None,
-            export_tracks: None,
+            export_statistics: false,
             volume: egui::Rect::ZERO,
             section: egui::Rect::ZERO,
         }
@@ -85,6 +87,15 @@ impl Actions {
 
 pub fn build(root: &mut Ui, state: &mut UiState<'_>) -> Actions {
     let mut actions = Actions::new();
+    if state.statistics.open() {
+        egui::Panel::bottom("statistics")
+            .resizable(true)
+            .default_size(280.0)
+            .min_size(280.0)
+            .show(root, |ui| {
+                crate::statistic_ui::build(ui, state, &mut actions);
+            });
+    }
     egui::Panel::left("controls")
         .exact_size(340.0)
         .resizable(true)
@@ -105,6 +116,8 @@ pub fn build(root: &mut Ui, state: &mut UiState<'_>) -> Actions {
                     channels_section(ui, state.scene);
                     ui.separator();
                     crate::objects_ui::build(ui, state, &mut actions);
+                    ui.separator();
+                    statistics_section(ui, state);
                     ui.separator();
                     display_section(ui, state.scene);
                     ui.separator();
@@ -290,6 +303,22 @@ fn dataset_section(ui: &mut Ui, dataset: &Dataset) {
                 },
             );
         });
+}
+
+fn statistics_section(ui: &mut Ui, state: &mut UiState<'_>) {
+    ui.horizontal(|ui| {
+        if ui
+            .selectable_label(state.statistics.open(), "Statistics")
+            .clicked()
+        {
+            state.statistics.set_open(!state.statistics.open());
+        }
+        ui.label(
+            RichText::new("measure objects across channels")
+                .small()
+                .weak(),
+        );
+    });
 }
 
 fn channels_section(ui: &mut Ui, scene: &mut Scene) {

@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
 use glam::Vec3;
-use grana_object::{Bounds, IntensityStatistics, Mesh, MeshVertex, SurfaceSet, SurfaceStatistics};
-use grana_volume::{BrickCoord, BrickGrid, Level, PADDED_SIDE, VoxelData};
+use grana_object::{
+    Bounds, IntensityTable, Mesh, MeshVertex, SampleAccumulator, SurfaceSet, SurfaceStatistics,
+};
+use grana_volume::{BrickCoord, BrickData, BrickGrid, Level, PADDED_SIDE};
 
 use crate::SurfaceParams;
 use crate::table::{EDGE_TABLE, TRIANGLE_TABLE};
@@ -46,18 +48,31 @@ struct Node {
     rank: u8,
     voxels: u64,
     sum: [f64; 3],
-    intensity_sum: f64,
-    intensity_square_sum: f64,
-    intensity_min: f32,
-    intensity_max: f32,
     low: [u32; 3],
     high: [u32; 3],
     area: f64,
     triangles: u64,
 }
 
+impl Node {
+    fn new() -> Self {
+        Self {
+            parent: 0,
+            rank: 0,
+            voxels: 0,
+            sum: [0.0; 3],
+            low: [u32::MAX; 3],
+            high: [0; 3],
+            area: 0.0,
+            triangles: 0,
+        }
+    }
+}
+
 pub struct SurfaceBuilder {
     level_index: usize,
+    detection: usize,
+    channels: usize,
     extent: [u32; 3],
     stride: [u64; 3],
     spacing: [f32; 3],
@@ -67,11 +82,12 @@ pub struct SurfaceBuilder {
     params: SurfaceParams,
     next: usize,
     counts: [usize; 3],
-    values: Vec<f32>,
+    values: Vec<Vec<f32>>,
     gradients: Vec<[f32; 3]>,
     mask: Vec<bool>,
     labels: Vec<u32>,
     nodes: Vec<Node>,
+    accumulators: Vec<SampleAccumulator>,
     vertices: Vec<MeshVertex>,
     indices: Vec<u32>,
     edges: HashMap<u64, u32>,
@@ -81,7 +97,17 @@ pub struct SurfaceBuilder {
 }
 
 impl SurfaceBuilder {
-    pub fn new(level_index: usize, level: Level, params: SurfaceParams) -> Self {
+    pub fn new(
+        level_index: usize,
+        level: Level,
+        params: SurfaceParams,
+        channels: usize,
+        detection: usize,
+    ) -> Self {
+        assert!(
+            channels > 0 && detection < channels,
+            "the detection channel is one of the measured channels"
+        );
         let extent = level.extent();
         let grid = BrickGrid::new(extent);
         let counts = grid.counts().map(|count| count as usize);
@@ -97,6 +123,8 @@ impl SurfaceBuilder {
         let voxel_volume = f64::from(spacing[0]) * f64::from(spacing[1]) * f64::from(spacing[2]);
         Self {
             level_index,
+            detection,
+            channels,
             extent,
             stride,
             spacing,
@@ -106,11 +134,12 @@ impl SurfaceBuilder {
             params,
             next: 0,
             counts,
-            values: vec![0.0; PADDED_VOXELS],
+            values: vec![vec![0.0; PADDED_VOXELS]; channels],
             gradients: vec![[0.0; 3]; PADDED_VOXELS],
             mask: Vec::new(),
             labels: Vec::new(),
             nodes: Vec::new(),
+            accumulators: Vec::new(),
             vertices: Vec::new(),
             indices: Vec::new(),
             edges: HashMap::new(),
@@ -132,18 +161,25 @@ impl SurfaceBuilder {
         BrickCoord::new(x as u32, y as u32, z as u32)
     }
 
-    pub fn add(&mut self, coord: BrickCoord, values: &VoxelData) {
+    pub fn add(&mut self, coord: BrickCoord, data: &BrickData) {
         assert_eq!(
             coord,
             self.coord(self.next),
             "surface bricks arrive in raster order"
         );
         assert_eq!(
-            values.voxel_count(),
-            PADDED_VOXELS,
-            "a surface brick is a padded cube"
+            data.channels().len(),
+            self.channels,
+            "a surface brick carries every measured channel"
         );
-        values.write_values(&mut self.values);
+        for (source, values) in data.channels().iter().zip(self.values.iter_mut()) {
+            assert_eq!(
+                source.voxel_count(),
+                PADDED_VOXELS,
+                "a surface brick is a padded cube"
+            );
+            source.write_values(values);
+        }
         self.fill_gradients();
         let extent = self.grid.extent_of(coord);
         let cs = [
@@ -184,6 +220,7 @@ impl SurfaceBuilder {
             "every surface brick has been added"
         );
         let mut objects = Vec::new();
+        let mut intensities = Vec::new();
         let mut map = vec![EMPTY; self.nodes.len()];
         for (index, slot) in map.iter_mut().enumerate() {
             let node = self.nodes[index];
@@ -207,16 +244,6 @@ impl SurfaceBuilder {
                 ((f64::from(node.high[axis]) + 1.0) * f64::from(self.spacing[axis])
                     - 0.5 * f64::from(self.world[axis])) as f32
             });
-            let mean = (node.intensity_sum / count) as f32;
-            let mean = mean.clamp(node.intensity_min, node.intensity_max);
-            let variance =
-                (node.intensity_square_sum / count - f64::from(mean) * f64::from(mean)).max(0.0);
-            let intensity = IntensityStatistics::new(
-                mean,
-                node.intensity_min,
-                node.intensity_max,
-                variance.sqrt() as f32,
-            );
             *slot = objects.len() as u32;
             objects.push(SurfaceStatistics::new(
                 node.voxels,
@@ -224,8 +251,10 @@ impl SurfaceBuilder {
                 node.area,
                 centroid,
                 Bounds::new(low, high),
-                intensity,
             ));
+            for channel in 0..self.channels {
+                intensities.push(self.accumulators[index * self.channels + channel].statistics());
+            }
         }
         let mut vertex_map = vec![EMPTY; self.vertices.len()];
         let mut vertices = Vec::new();
@@ -245,7 +274,12 @@ impl SurfaceBuilder {
                 indices.extend_from_slice(&mapped);
             }
         }
-        SurfaceSet::new(self.level_index, Mesh::new(vertices, indices), objects)
+        SurfaceSet::new(
+            self.level_index,
+            Mesh::new(vertices, indices),
+            objects,
+            IntensityTable::new(self.channels, intensities),
+        )
     }
 
     fn fill_gradients(&mut self) {
@@ -283,18 +317,11 @@ impl SurfaceBuilder {
             let node = self.nodes.len() as u32;
             self.nodes.push(Node {
                 parent: node,
-                rank: 0,
-                voxels: 0,
-                sum: [0.0; 3],
-                intensity_sum: 0.0,
-                intensity_square_sum: 0.0,
-                intensity_min: f32::INFINITY,
-                intensity_max: f32::NEG_INFINITY,
-                low: [u32::MAX; 3],
-                high: [0; 3],
-                area: 0.0,
-                triangles: 0,
+                ..Node::new()
             });
+            for _ in 0..self.channels {
+                self.accumulators.push(SampleAccumulator::new());
+            }
             self.labels[start] = node;
             stack.clear();
             stack.push(start);
@@ -304,7 +331,6 @@ impl SurfaceBuilder {
                 let rz = cell / (es[0] * es[1]);
                 let core = rx < cs[0] && ry < cs[1] && rz < cs[2];
                 if core {
-                    let value = self.value(rx, ry, rz);
                     let voxel = [
                         (origin[0] + rx as i64) as u32,
                         (origin[1] + ry as i64) as u32,
@@ -317,10 +343,11 @@ impl SurfaceBuilder {
                         stats.low[axis] = stats.low[axis].min(*coordinate);
                         stats.high[axis] = stats.high[axis].max(*coordinate);
                     }
-                    stats.intensity_sum += f64::from(value);
-                    stats.intensity_square_sum += f64::from(value) * f64::from(value);
-                    stats.intensity_min = stats.intensity_min.min(value);
-                    stats.intensity_max = stats.intensity_max.max(value);
+                    let index = rx + 1 + PADDED * (ry + 1 + PADDED * (rz + 1));
+                    for channel in 0..self.channels {
+                        let value = self.values[channel][index];
+                        self.accumulators[node as usize * self.channels + channel].push(value);
+                    }
                 }
                 for axis in 0..3 {
                     let coordinate = [rx, ry, rz][axis];
@@ -354,7 +381,7 @@ impl SurfaceBuilder {
                     let local = self.labels[ry * es[0] + rz * es[0] * es[1]];
                     let cached = face[ry + FACE_SIDE * rz];
                     if local != EMPTY && cached != EMPTY {
-                        merge(&mut self.nodes, local, cached);
+                        self.merge(local, cached);
                     }
                 }
             }
@@ -367,7 +394,7 @@ impl SurfaceBuilder {
                     let local = self.labels[rx + rz * es[0] * es[1]];
                     let cached = face[rx + FACE_SIDE * rz];
                     if local != EMPTY && cached != EMPTY {
-                        merge(&mut self.nodes, local, cached);
+                        self.merge(local, cached);
                     }
                 }
             }
@@ -380,7 +407,7 @@ impl SurfaceBuilder {
                         let local = self.labels[rx + ry * es[0]];
                         let cached = face[rx + FACE_SIDE * ry];
                         if local != EMPTY && cached != EMPTY {
-                            merge(&mut self.nodes, local, cached);
+                            self.merge(local, cached);
                         }
                     }
                 }
@@ -547,6 +574,37 @@ impl SurfaceBuilder {
         stats.triangles += 1;
     }
 
+    fn merge(&mut self, left: u32, right: u32) -> u32 {
+        let mut left = find(&mut self.nodes, left);
+        let mut right = find(&mut self.nodes, right);
+        if left == right {
+            return left;
+        }
+        if self.nodes[left as usize].rank < self.nodes[right as usize].rank {
+            std::mem::swap(&mut left, &mut right);
+        }
+        let winner = self.nodes[left as usize];
+        let loser = self.nodes[right as usize];
+        for channel in 0..self.channels {
+            let other = self.accumulators[right as usize * self.channels + channel];
+            self.accumulators[left as usize * self.channels + channel].merge(&other);
+        }
+        let target = &mut self.nodes[left as usize];
+        target.voxels += loser.voxels;
+        for axis in 0..3 {
+            target.sum[axis] += loser.sum[axis];
+            target.low[axis] = target.low[axis].min(loser.low[axis]);
+            target.high[axis] = target.high[axis].max(loser.high[axis]);
+        }
+        target.area += loser.area;
+        target.triangles += loser.triangles;
+        if winner.rank == loser.rank {
+            target.rank += 1;
+        }
+        self.nodes[right as usize].parent = left;
+        left
+    }
+
     fn normal(&self, point: [f32; 3], rising: bool, axis: usize) -> Vec3 {
         let gradient = self.gradient(point);
         if gradient.length_squared() > 1.0e-20 {
@@ -599,7 +657,7 @@ impl SurfaceBuilder {
     }
 
     fn padded(&self, x: usize, y: usize, z: usize) -> f32 {
-        self.values[x + PADDED * (y + PADDED * z)]
+        self.values[self.detection][x + PADDED * (y + PADDED * z)]
     }
 }
 
@@ -615,35 +673,4 @@ fn find(nodes: &mut [Node], node: u32) -> u32 {
         current = next;
     }
     root
-}
-
-fn merge(nodes: &mut [Node], left: u32, right: u32) -> u32 {
-    let mut left = find(nodes, left);
-    let mut right = find(nodes, right);
-    if left == right {
-        return left;
-    }
-    if nodes[left as usize].rank < nodes[right as usize].rank {
-        std::mem::swap(&mut left, &mut right);
-    }
-    let winner = nodes[left as usize];
-    let loser = nodes[right as usize];
-    let target = &mut nodes[left as usize];
-    target.voxels += loser.voxels;
-    for axis in 0..3 {
-        target.sum[axis] += loser.sum[axis];
-        target.low[axis] = target.low[axis].min(loser.low[axis]);
-        target.high[axis] = target.high[axis].max(loser.high[axis]);
-    }
-    target.intensity_sum += loser.intensity_sum;
-    target.intensity_square_sum += loser.intensity_square_sum;
-    target.intensity_min = target.intensity_min.min(loser.intensity_min);
-    target.intensity_max = target.intensity_max.max(loser.intensity_max);
-    target.area += loser.area;
-    target.triangles += loser.triangles;
-    if winner.rank == loser.rank {
-        target.rank += 1;
-    }
-    nodes[right as usize].parent = left;
-    left
 }

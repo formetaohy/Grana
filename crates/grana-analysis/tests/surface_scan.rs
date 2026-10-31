@@ -1,11 +1,12 @@
 use std::f64::consts::PI;
 
 use grana_analysis::{SurfaceBuilder, SurfaceParams};
-use grana_volume::{BrickGrid, Channel, Extent, Level, Spacing, Volume, VoxelData};
+use grana_volume::{BrickData, BrickGrid, Channel, Extent, Level, Spacing, Volume, VoxelData};
 
 const EXTENT: Extent = Extent::new(120, 96, 72);
 const RADIUS: f32 = 12.0;
 const HIGH: u16 = 65_535;
+const MARKER: u16 = 7;
 
 #[test]
 fn extracts_measured_surfaces() {
@@ -14,16 +15,18 @@ fn extracts_measured_surfaces() {
     let level = Level::new(volume.extent(), volume.spacing());
     let grid = BrickGrid::new(volume.extent());
     let threshold = 0.5 * f32::from(HIGH);
+    let channels = volume.channel_count();
 
-    let mut builder = SurfaceBuilder::new(0, level, SurfaceParams::new(threshold, 0.0));
+    let mut builder =
+        SurfaceBuilder::new(0, level, SurfaceParams::new(threshold, 0.0), channels, 0);
     for index in 0..builder.coord_count() {
         let coord = builder.coord(index);
-        let values = volume.channel_brick(&grid, coord, 0);
-        builder.add(coord, &values);
+        builder.add(coord, &brick(&volume, &grid, coord));
     }
     let set = builder.finish();
     assert_eq!(set.object_count(), centres.len(), "each blob is one object");
     assert!(!set.mesh().is_empty(), "the mesh holds triangles");
+    assert_eq!(set.intensities().channels(), channels);
 
     let spacing = [0.1f64, 0.1, 0.2];
     let radius = f64::from(RADIUS) * (spacing[0] * spacing[1] * spacing[2]).cbrt();
@@ -34,7 +37,7 @@ fn extracts_measured_surfaces() {
         [0, 1, 2].map(|axis| (centre[axis] + 0.5) * spacing[axis] as f32 - 0.5 * world[axis])
     });
 
-    for object in set.objects() {
+    for (index, object) in set.objects().iter().enumerate() {
         let relative = (object.volume() - expected_volume).abs() / expected_volume;
         assert!(
             relative < 0.08,
@@ -62,22 +65,49 @@ fn extracts_measured_surfaces() {
         assert!(placed, "the object centroid {centre:?} is misplaced");
         let bounds = object.bounds();
         assert!(bounds.contains(centre), "the centroid lies in the bounds");
+
+        let detection = set.intensities().object(index, 0);
+        assert!(
+            (detection.mean() - f32::from(HIGH)).abs() < 1.0,
+            "the detection channel inside a blob is saturated"
+        );
+        let marker = set.intensities().object(index, 1);
+        assert!(
+            (marker.mean() - f32::from(MARKER)).abs() < 1.0e-6,
+            "the marker channel is measured inside the object"
+        );
+        assert!(
+            (marker.sum() - f64::from(MARKER) * object.voxel_count() as f64).abs() < 1.0,
+            "the marker sum covers every object voxel"
+        );
+        assert_eq!(marker.deviation(), 0.0, "a constant channel is flat");
     }
 
     let mut filtered = SurfaceBuilder::new(
         0,
         level,
         SurfaceParams::new(threshold, (1.5 * expected_volume) as f32),
+        channels,
+        0,
     );
     for index in 0..filtered.coord_count() {
         let coord = filtered.coord(index);
-        let values = volume.channel_brick(&grid, coord, 0);
-        filtered.add(coord, &values);
+        filtered.add(coord, &brick(&volume, &grid, coord));
     }
+    let filtered = filtered.finish();
     assert!(
-        filtered.finish().is_empty(),
+        filtered.is_empty(),
         "the volume filter must drop small objects"
     );
+    assert_eq!(filtered.intensities().objects(), 0);
+}
+
+fn brick(volume: &Volume, grid: &BrickGrid, coord: grana_volume::BrickCoord) -> BrickData {
+    BrickData::new(
+        (0..volume.channel_count())
+            .map(|channel| volume.channel_brick(grid, coord, channel))
+            .collect(),
+    )
 }
 
 fn blobs(centres: &[[f32; 3]]) -> Volume {
@@ -101,11 +131,14 @@ fn blobs(centres: &[[f32; 3]]) -> Volume {
     Volume::new(
         EXTENT,
         spacing(),
-        vec![Channel::new(
-            "blobs",
-            [0.3, 0.8, 1.0],
-            VoxelData::U16(values),
-        )],
+        vec![
+            Channel::new("blobs", [0.3, 0.8, 1.0], VoxelData::U16(values)),
+            Channel::new(
+                "marker",
+                [0.8, 0.3, 0.3],
+                VoxelData::U16(vec![MARKER; count]),
+            ),
+        ],
     )
 }
 

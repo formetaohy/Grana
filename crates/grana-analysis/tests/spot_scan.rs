@@ -66,6 +66,43 @@ fn detects_blobs_across_blocks() {
     assert!(scan_all(&mut strict, &data, level).is_empty());
 }
 
+#[test]
+fn measures_spot_intensity() {
+    let level = Level::new(EXTENT, spacing());
+    let scan = SpotScan::new(level, 1000.0, SpotParams::new(DIAMETER, 0.2));
+    let range = scan.read_range(0);
+    let dims = [
+        (range[0].end - range[0].start) as usize,
+        (range[1].end - range[1].start) as usize,
+        (range[2].end - range[2].start) as usize,
+    ];
+    let values = vec![500.0f32; dims[0] * dims[1] * dims[2]];
+    let world = level.world_extent();
+    let spacing = spacing();
+    let axis_spacing = [spacing.x(), spacing.y(), spacing.z()];
+    let voxel = [
+        range[0].start as f32 + 0.5 * dims[0] as f32,
+        range[1].start as f32 + 0.5 * dims[1] as f32,
+        range[2].start as f32 + 0.5 * dims[2] as f32,
+    ];
+    let center = [0, 1, 2].map(|axis| (voxel[axis] + 0.5) * axis_spacing[axis] - 0.5 * world[axis]);
+    let spot = Spot::new(center, 0.5, 1.0);
+    let statistics = scan.measure(0, &[spot], &values)[0].statistics();
+    assert_eq!(statistics.mean(), 500.0);
+    assert_eq!(statistics.minimum(), 500.0);
+    assert_eq!(statistics.maximum(), 500.0);
+    assert_eq!(statistics.deviation(), 0.0);
+    assert!(statistics.sum() >= 500.0, "the sphere samples voxels");
+
+    let small = Spot::new(center, 1.0e-3, 1.0);
+    let statistics = scan.measure(0, &[small], &values)[0].statistics();
+    assert_eq!(
+        statistics.sum(),
+        500.0,
+        "a sub voxel spot measures its containing voxel"
+    );
+}
+
 fn scan_all(scan: &mut SpotScan, data: &VoxelData, level: Level) -> Vec<Spot> {
     let mut spots = Vec::new();
     let mut values = Vec::new();

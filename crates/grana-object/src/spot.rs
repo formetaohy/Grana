@@ -1,3 +1,5 @@
+use crate::IntensityTable;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spot {
     center: [f32; 3],
@@ -43,11 +45,21 @@ impl Spot {
 pub struct SpotSet {
     level: usize,
     spots: Vec<Spot>,
+    intensities: IntensityTable,
 }
 
 impl SpotSet {
-    pub fn new(level: usize, spots: Vec<Spot>) -> Self {
-        Self { level, spots }
+    pub fn new(level: usize, spots: Vec<Spot>, intensities: IntensityTable) -> Self {
+        assert_eq!(
+            intensities.objects(),
+            spots.len(),
+            "every spot is measured in every channel"
+        );
+        Self {
+            level,
+            spots,
+            intensities,
+        }
     }
 
     pub fn level(&self) -> usize {
@@ -56,6 +68,10 @@ impl SpotSet {
 
     pub fn spots(&self) -> &[Spot] {
         &self.spots
+    }
+
+    pub fn intensities(&self) -> &IntensityTable {
+        &self.intensities
     }
 
     pub fn len(&self) -> usize {

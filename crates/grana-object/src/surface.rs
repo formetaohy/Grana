@@ -1,50 +1,4 @@
-use crate::{Bounds, Mesh};
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct IntensityStatistics {
-    mean: f32,
-    min: f32,
-    max: f32,
-    deviation: f32,
-}
-
-impl IntensityStatistics {
-    pub fn new(mean: f32, min: f32, max: f32, deviation: f32) -> Self {
-        assert!(
-            [mean, min, max, deviation]
-                .iter()
-                .all(|value| value.is_finite()),
-            "intensity statistics are finite"
-        );
-        assert!(
-            min <= mean && mean <= max,
-            "intensity statistics are ordered"
-        );
-        assert!(deviation >= 0.0, "an intensity deviation is non negative");
-        Self {
-            mean,
-            min,
-            max,
-            deviation,
-        }
-    }
-
-    pub fn mean(self) -> f32 {
-        self.mean
-    }
-
-    pub fn min(self) -> f32 {
-        self.min
-    }
-
-    pub fn max(self) -> f32 {
-        self.max
-    }
-
-    pub fn deviation(self) -> f32 {
-        self.deviation
-    }
-}
+use crate::{Bounds, IntensityTable, Mesh};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceStatistics {
@@ -54,7 +8,6 @@ pub struct SurfaceStatistics {
     sphericity: f64,
     centroid: [f32; 3],
     bounds: Bounds,
-    intensity: IntensityStatistics,
 }
 
 impl SurfaceStatistics {
@@ -64,7 +17,6 @@ impl SurfaceStatistics {
         area: f64,
         centroid: [f32; 3],
         bounds: Bounds,
-        intensity: IntensityStatistics,
     ) -> Self {
         assert!(voxel_count > 0, "a surface encloses at least one voxel");
         assert!(
@@ -88,7 +40,6 @@ impl SurfaceStatistics {
             sphericity,
             centroid,
             bounds,
-            intensity,
         }
     }
 
@@ -115,10 +66,6 @@ impl SurfaceStatistics {
     pub fn bounds(self) -> Bounds {
         self.bounds
     }
-
-    pub fn intensity(self) -> IntensityStatistics {
-        self.intensity
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -126,10 +73,16 @@ pub struct SurfaceSet {
     level: usize,
     mesh: Mesh,
     objects: Vec<SurfaceStatistics>,
+    intensities: IntensityTable,
 }
 
 impl SurfaceSet {
-    pub fn new(level: usize, mesh: Mesh, objects: Vec<SurfaceStatistics>) -> Self {
+    pub fn new(
+        level: usize,
+        mesh: Mesh,
+        objects: Vec<SurfaceStatistics>,
+        intensities: IntensityTable,
+    ) -> Self {
         assert!(
             mesh.vertices()
                 .iter()
@@ -141,10 +94,16 @@ impl SurfaceSet {
             objects.is_empty(),
             "the mesh and the object list agree on emptiness"
         );
+        assert_eq!(
+            intensities.objects(),
+            objects.len(),
+            "every surface is measured in every channel"
+        );
         Self {
             level,
             mesh,
             objects,
+            intensities,
         }
     }
 
@@ -158,6 +117,10 @@ impl SurfaceSet {
 
     pub fn objects(&self) -> &[SurfaceStatistics] {
         &self.objects
+    }
+
+    pub fn intensities(&self) -> &IntensityTable {
+        &self.intensities
     }
 
     pub fn object(&self, index: usize) -> Option<SurfaceStatistics> {

@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use grana_object::Spot;
+use grana_object::{SampleAccumulator, Spot};
 use grana_volume::Level;
 
 use crate::SpotParams;
@@ -235,6 +235,73 @@ impl SpotScan {
         spots
     }
 
+    pub fn measure(&self, index: usize, spots: &[Spot], values: &[f32]) -> Vec<SampleAccumulator> {
+        let read = self.read_range(index);
+        let dims = dimensions(&read);
+        assert_eq!(
+            values.len(),
+            dims[0] * dims[1] * dims[2],
+            "the block values cover the measured region"
+        );
+        let origin = [read[0].start, read[1].start, read[2].start];
+        spots
+            .iter()
+            .map(|spot| {
+                let center = spot.center();
+                let radius = spot.radius();
+                let mut accumulator = SampleAccumulator::new();
+                let mut low = [0u32; 3];
+                let mut high = [0u32; 3];
+                for axis in 0..3 {
+                    let voxel = (center[axis] + 0.5 * self.world[axis]) / self.spacing[axis] - 0.5;
+                    let reach = radius / self.spacing[axis];
+                    let minimum = origin[axis] as f32;
+                    let maximum = (origin[axis] + dims[axis] as u32 - 1) as f32;
+                    low[axis] = (voxel - reach).floor().clamp(minimum, maximum) as u32;
+                    high[axis] = (voxel + reach).ceil().clamp(minimum, maximum) as u32;
+                }
+                let squared_radius = radius * radius;
+                let mut sampled = false;
+                for z in low[2]..=high[2] {
+                    for y in low[1]..=high[1] {
+                        for x in low[0]..=high[0] {
+                            let squared = (0..3)
+                                .map(|axis| {
+                                    let voxel = [x, y, z][axis];
+                                    let world = (voxel as f32 + 0.5) * self.spacing[axis]
+                                        - 0.5 * self.world[axis];
+                                    (world - center[axis]).powi(2)
+                                })
+                                .sum::<f32>();
+                            if squared > squared_radius {
+                                continue;
+                            }
+                            let index = (x - origin[0]) as usize
+                                + dims[0]
+                                    * ((y - origin[1]) as usize
+                                        + dims[1] * (z - origin[2]) as usize);
+                            accumulator.push(values[index]);
+                            sampled = true;
+                        }
+                    }
+                }
+                if !sampled {
+                    let mut index = 0;
+                    for axis in 0..3 {
+                        let voxel =
+                            (center[axis] + 0.5 * self.world[axis]) / self.spacing[axis] - 0.5;
+                        let minimum = origin[axis] as f32;
+                        let maximum = (origin[axis] + dims[axis] as u32 - 1) as f32;
+                        let nearest = voxel.round().clamp(minimum, maximum) as usize;
+                        index += (nearest - origin[axis] as usize) * strides_for(&dims, axis);
+                    }
+                    accumulator.push(values[index]);
+                }
+                accumulator
+            })
+            .collect()
+    }
+
     fn core(&self, index: usize) -> [Range<u32>; 3] {
         let x = index % self.counts[0] as usize;
         let y = (index / self.counts[0] as usize) % self.counts[1] as usize;
@@ -257,6 +324,14 @@ fn dimensions(ranges: &[Range<u32>; 3]) -> [usize; 3] {
         (ranges[1].end - ranges[1].start) as usize,
         (ranges[2].end - ranges[2].start) as usize,
     ]
+}
+
+fn strides_for(dims: &[usize; 3], axis: usize) -> usize {
+    match axis {
+        0 => 1,
+        1 => dims[0],
+        _ => dims[0] * dims[1],
+    }
 }
 
 fn gaussian(sigma: f32, truncate: usize) -> Vec<f32> {

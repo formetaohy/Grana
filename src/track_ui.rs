@@ -119,9 +119,6 @@ pub fn build(ui: &mut Ui, state: &mut UiState<'_>, actions: &mut Actions, id: Ob
         object.set_track_thickness(thickness);
     }
     ui.horizontal(|ui| {
-        if ui.button("Export CSV").clicked() {
-            actions.export_tracks = Some(id);
-        }
         if ui.button("Clear").clicked() {
             actions.clear_tracks = Some(id);
         }
