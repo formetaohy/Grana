@@ -9,6 +9,8 @@ use wgpu::{
     TextureViewDescriptor, TextureViewDimension,
 };
 
+use crate::CHANNEL_LIMIT;
+
 const BYTES_PER_VOXEL: u64 = size_of::<u16>() as u64;
 
 #[derive(Clone, Copy)]
@@ -16,7 +18,7 @@ pub(crate) struct ResidentBrick {
     pub time: u32,
     pub level: usize,
     pub index: usize,
-    pub maxima: [[f32; 4]; 2],
+    pub maxima: [[f32; 4]; CHANNEL_LIMIT / 4],
 }
 
 #[derive(Clone, Copy)]
@@ -54,9 +56,9 @@ impl Atlas {
     ) -> Self {
         let slot_side = PADDED_SIDE;
         assert!(
-            (1..=crate::MAX_CHANNEL).contains(&channel_count),
+            (1..=CHANNEL_LIMIT).contains(&channel_count),
             "an atlas binds one to {} channels",
-            crate::MAX_CHANNEL
+            CHANNEL_LIMIT
         );
         assert!(
             max_dimension >= slot_side,
@@ -97,7 +99,7 @@ impl Atlas {
             })
             .collect::<Vec<_>>();
         let mut bindings = views.iter().collect::<Vec<&TextureView>>();
-        bindings.resize(crate::MAX_CHANNEL, dummy);
+        bindings.resize(CHANNEL_LIMIT, dummy);
         let group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.atlas.group"),
             layout,
@@ -149,7 +151,7 @@ impl Atlas {
         &self,
         time: u32,
         level: usize,
-    ) -> impl Iterator<Item = (u32, usize, [[f32; 4]; 2])> + '_ {
+    ) -> impl Iterator<Item = (u32, usize, [[f32; 4]; CHANNEL_LIMIT / 4])> + '_ {
         self.slots
             .iter()
             .enumerate()
@@ -163,8 +165,15 @@ impl Atlas {
             })
     }
 
-    pub fn mark(&mut self, slot: u32, tick: u64) {
-        self.slots[slot as usize].used = tick;
+    pub fn mark_view(&mut self, time: u32, level: usize, tick: u64) {
+        for slot in &mut self.slots {
+            if let Some(brick) = slot.brick
+                && brick.time == time
+                && brick.level == level
+            {
+                slot.used = tick;
+            }
+        }
     }
 
     pub fn allocate(&mut self, tick: u64) -> Option<(u32, Option<ResidentBrick>)> {

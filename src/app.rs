@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 
 use glam::Vec2;
 use grana_object::TrackSet;
-use grana_render::{BrickRequest, Frame, FrameInfo, Marker, MeshFrame, MeshUpload, Renderer};
-use grana_statistic::Group;
+use grana_render::{BrickRequest, Frame, FrameInfo, Renderer, Requests};
+use grana_scene::{Dataset, Job, Measure, ObjectSetId, Progress, Scene};
+use grana_ui::{Action, EguiLayer, Message, Pane, State, Viewport};
 use grana_volume::Spacing;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -15,17 +16,10 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
-use crate::analysis::{self, Analysis, Event, Job, Outcome, Poll, Progress};
-use crate::dataset::Dataset;
 use crate::demo;
-use crate::egui_layer::EguiLayer;
 use crate::gpu::Gpu;
+use crate::job::{self, Analysis, Event, Poll};
 use crate::loader::{Event as LoaderEvent, Loader};
-use crate::objects::ObjectSetId;
-use crate::scene::Scene;
-use crate::statistics::Statistics;
-use crate::ui::{self, Message, UiState};
-use crate::viewport::{Pane, Viewport};
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
 const UPLOAD_BATCH: usize = 32;
@@ -43,21 +37,20 @@ struct Surface {
 
 pub struct App {
     surface: Option<Surface>,
-    viewport: Viewport,
     scene: Option<Scene>,
-    statistics: Statistics,
+    measure: Measure,
+    measure_open: bool,
+    viewport: Viewport,
     source: Option<Loader>,
     analysis: Vec<Analysis>,
     progress: Vec<Progress>,
-    markers: Vec<Marker>,
-    volume_requests: Vec<BrickRequest>,
-    section_requests: Vec<BrickRequest>,
     in_flight: HashSet<BrickRequest>,
     frame: FrameInfo,
     loading: Option<String>,
     message: Option<Message>,
     repaint_at: Option<Instant>,
     needs_fit: bool,
+    fit_section: bool,
     playing: bool,
     last_advance: Option<Instant>,
 }
@@ -66,21 +59,20 @@ impl App {
     pub fn new() -> Self {
         Self {
             surface: None,
-            viewport: Viewport::new(),
             scene: None,
-            statistics: Statistics::new(),
+            measure: Measure::new(),
+            measure_open: true,
+            viewport: Viewport::new(),
             source: None,
             analysis: Vec::new(),
             progress: Vec::new(),
-            markers: Vec::new(),
-            volume_requests: Vec::new(),
-            section_requests: Vec::new(),
             in_flight: HashSet::new(),
             frame: FrameInfo::default(),
             loading: None,
             message: None,
             repaint_at: None,
             needs_fit: true,
+            fit_section: false,
             playing: false,
             last_advance: None,
         }
@@ -102,7 +94,7 @@ impl App {
         let mut scene = Scene::new(Dataset::synthetic("synthetic fluorescence", pyramid));
         let staged = demo::stage(&mut scene);
         let mut renderer = Renderer::new(&gpu.device, &gpu.queue, gpu.format(), TEXTURE_BUDGET);
-        renderer.set_pyramid(&gpu.device, scene.dataset.pyramid());
+        renderer.set_dataset(&gpu.device, scene.dataset.pyramid());
         self.scene = Some(scene);
         self.source = Some(source);
         self.surface = Some(Surface {
@@ -124,106 +116,38 @@ impl App {
         }
         if let Some(scene) = self.scene.as_ref() {
             let busy = self
-                .statistics
+                .measure
                 .set()
                 .is_some_and(|set| self.analysis.iter().any(|job| job.set() == set));
-            self.statistics.sync(scene, busy);
+            self.measure.sync(scene, busy);
         }
         let (output, actions) = self.run_ui();
-        let mut opened = false;
-        if actions.open
-            && let Some(path) = Self::pick_folder()
-        {
-            self.begin_load(path);
-            opened = true;
+        if self.apply(actions) {
+            return;
         }
-        if !opened {
-            if actions.toggle_play {
-                self.toggle_play();
-            }
-            if let Some(time) = actions.time {
-                self.scrub(time);
-            }
-            if let Some(selection) = actions.select
-                && let Some(scene) = self.scene.as_mut()
-            {
-                scene.select(Some(selection));
-            }
-            if let Some(set) = actions.remove_object {
-                self.remove_object(set);
-            }
-            if let Some(kind) = actions.add_object {
-                let channel = self.scene.as_ref().expect("the scene is alive").selected;
-                self.scene
-                    .as_mut()
-                    .expect("the scene is alive")
-                    .add_object(kind, channel);
-            }
-            if let Some(set) = actions.detect {
-                self.start_detect(set);
-            }
-            if let Some(set) = actions.cancel_detect {
-                self.cancel(set, Job::Detect);
-            }
-            if let Some(set) = actions.clear_object {
-                self.cancel(set, Job::Track);
-                if let Some(scene) = self.scene.as_mut() {
-                    scene.clear_object(set);
-                }
-            }
-            if let Some(set) = actions.track {
-                self.start_tracks(set);
-            }
-            if let Some(set) = actions.cancel_track {
-                self.cancel(set, Job::Track);
-            }
-            if let Some(set) = actions.clear_tracks
-                && let Some(scene) = self.scene.as_mut()
-            {
-                scene.clear_tracks(set);
-            }
-            if actions.export_statistics {
-                self.export_statistics();
-            }
-        }
-        if self.statistics.take_dirty()
+        if self.measure.take_dirty()
             && let Some(scene) = self.scene.as_mut()
         {
-            self.statistics.apply(scene);
+            self.measure.apply(scene);
         }
         self.advance_playback();
-        let scale = self
-            .surface
-            .as_ref()
-            .expect("the surface is alive")
-            .window
-            .scale_factor() as f32;
-        let size = self
-            .surface
-            .as_ref()
-            .expect("the surface is alive")
-            .gpu
-            .size();
-        let volume_region = physical_region(actions.volume, scale, size);
-        let section_region = physical_region(actions.section, scale, size);
+        let surface = self.surface.as_ref().expect("the surface is alive");
+        let scale = surface.window.scale_factor() as f32;
+        let size = surface.gpu.size();
+        let volume_region = physical_region(self.viewport.volume_rect(), scale, size);
+        let section_region = physical_region(self.viewport.section_rect(), scale, size);
         self.viewport.set_regions(volume_region, section_region);
-        if let Some(split) = actions.split {
-            self.viewport.set_split(split);
-        }
         let volume_aspect = volume_region[2] as f32 / volume_region[3] as f32;
         let section_aspect = section_region[2] as f32 / section_region[3] as f32;
         let (world, voxel) = {
             let scene = self.scene.as_ref().expect("the scene is alive");
             (scene.dataset.world_size(), scene.dataset.voxel_size())
         };
-        if let Some(axis) = actions.section_axis {
-            self.viewport.section_mut().set_axis(axis);
+        if self.fit_section {
             self.viewport.fit_section(world, voxel, section_aspect);
+            self.fit_section = false;
         }
-        if actions.fit_section {
-            self.viewport.fit_section(world, voxel, section_aspect);
-        }
-        if self.needs_fit || actions.fit {
+        if self.needs_fit {
             self.viewport
                 .fit(world, voxel, volume_aspect, section_aspect);
             self.needs_fit = false;
@@ -231,7 +155,6 @@ impl App {
         let mut delay = self
             .render(output, volume_region, section_region)
             .unwrap_or(Duration::MAX);
-        self.service_requests();
         if self.streaming() {
             delay = delay.min(STREAM_POLL);
         }
@@ -248,6 +171,60 @@ impl App {
         } else {
             self.repaint_at = None;
         }
+    }
+
+    fn apply(&mut self, actions: Vec<Action>) -> bool {
+        if actions.iter().any(|action| matches!(action, Action::Open))
+            && let Some(path) = Self::pick_folder()
+        {
+            self.begin_load(path);
+            return true;
+        }
+        for action in actions {
+            match action {
+                Action::Open => {}
+                Action::Fit => self.needs_fit = true,
+                Action::FitSection => self.fit_section = true,
+                Action::SetSectionAxis(axis) => {
+                    self.viewport.section_mut().set_axis(axis);
+                    self.fit_section = true;
+                }
+                Action::SetSplit(split) => self.viewport.set_split(split),
+                Action::SetTime(time) => self.scrub(time),
+                Action::Select(selection) => {
+                    if let Some(scene) = self.scene.as_mut() {
+                        scene.select(selection);
+                    }
+                }
+                Action::TogglePlay => self.toggle_play(),
+                Action::AddObject(kind) => {
+                    let channel = self.scene.as_ref().expect("the scene is alive").selected;
+                    self.scene
+                        .as_mut()
+                        .expect("the scene is alive")
+                        .add_object(kind, channel);
+                }
+                Action::RemoveObject(set) => self.remove_object(set),
+                Action::Detect(set) => self.start_detect(set),
+                Action::CancelDetect(set) => self.cancel(set, Job::Detect),
+                Action::ClearObject(set) => {
+                    self.cancel(set, Job::Detect);
+                    self.cancel(set, Job::Track);
+                    if let Some(scene) = self.scene.as_mut() {
+                        scene.clear_object(set);
+                    }
+                }
+                Action::Track(set) => self.start_tracks(set),
+                Action::CancelTrack(set) => self.cancel(set, Job::Track),
+                Action::ClearTracks(set) => {
+                    if let Some(scene) = self.scene.as_mut() {
+                        scene.clear_tracks(set);
+                    }
+                }
+                Action::ExportMeasure => self.export_measure(),
+            }
+        }
+        false
     }
 
     fn toggle_play(&mut self) {
@@ -276,8 +253,6 @@ impl App {
         }
         scene.set_time(time);
         self.in_flight.clear();
-        self.volume_requests.clear();
-        self.section_requests.clear();
         if let Some(source) = &self.source {
             source.set_time(time);
         }
@@ -325,13 +300,11 @@ impl App {
             || !self.analysis.is_empty()
             || !self.in_flight.is_empty()
             || (self.source.is_some()
-                && (!self.volume_requests.is_empty() || !self.section_requests.is_empty()))
-            || (self.source.is_some()
                 && (self.frame.volume.resident < self.frame.volume.visible
                     || self.frame.section.resident < self.frame.section.visible))
     }
 
-    fn run_ui(&mut self) -> (egui::FullOutput, ui::Actions) {
+    fn run_ui(&mut self) -> (egui::FullOutput, Vec<Action>) {
         let surface = self.surface.as_mut().expect("the surface is alive");
         let scene = self.scene.as_mut().expect("the scene is alive");
         let Surface {
@@ -347,15 +320,15 @@ impl App {
         let pending = self.in_flight.len();
         let analysis = self.progress.as_slice();
         let playing = self.playing;
-        let viewport = &mut self.viewport;
-        let mut actions = ui::Actions::new();
+        let mut actions = Vec::new();
         let output = egui.run(window, |root| {
-            actions = ui::build(
+            actions = grana_ui::build(
                 root,
-                &mut UiState {
+                &mut State {
                     scene,
-                    view: viewport,
-                    statistics: &mut self.statistics,
+                    measure: &mut self.measure,
+                    measure_open: &mut self.measure_open,
+                    viewport: &mut self.viewport,
                     adapter,
                     loading,
                     message,
@@ -375,73 +348,70 @@ impl App {
         volume_region: [u32; 4],
         section_region: [u32; 4],
     ) -> Option<Duration> {
-        let surface = self.surface.as_mut()?;
-        let scene = self.scene.as_ref()?;
-        let Surface {
-            gpu,
-            egui,
-            renderer,
-            ..
-        } = surface;
-        let size = gpu.size();
         let repaint_delay = output
             .viewport_output
             .values()
             .map(|viewport| viewport.repaint_delay)
             .min()
             .unwrap_or(Duration::MAX);
-        let params = scene.params();
-        scene.markers(&mut self.markers);
-        let layers = scene.layers();
-        let uploads = layers
-            .iter()
-            .map(|layer| MeshUpload {
-                key: layer.key,
-                mesh: layer.mesh,
-            })
-            .collect::<Vec<_>>();
-        renderer.set_meshes(&gpu.device, &uploads);
-        let frames = layers
-            .iter()
-            .map(|layer| MeshFrame {
-                styles: &layer.styles,
-            })
-            .collect::<Vec<_>>();
-        let frame = gpu.acquire()?;
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("grana.frame"),
-            });
-        self.volume_requests.clear();
-        self.section_requests.clear();
-        let camera = self.viewport.camera();
-        let section = self.viewport.section();
-        self.frame = renderer.draw(
-            &gpu.device,
-            &gpu.queue,
-            Frame {
-                encoder: &mut encoder,
-                target: &view,
+        let mut pulled = false;
+        let (info, requests) = {
+            let surface = self.surface.as_mut()?;
+            let scene = self.scene.as_ref()?;
+            let size = surface.gpu.size();
+            let rendered = scene.rendered();
+            let frame = surface.gpu.acquire()?;
+            let view = frame
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let mut encoder =
+                surface
+                    .gpu
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("grana.frame"),
+                    });
+            let info = surface.renderer.draw(
+                &surface.gpu.device,
+                &surface.gpu.queue,
+                Frame {
+                    encoder: &mut encoder,
+                    target: &view,
+                    size,
+                    volume_region,
+                    section_region,
+                    time: scene.time(),
+                    camera: self.viewport.camera(),
+                    section: self.viewport.section(),
+                    scene: &rendered.frame(),
+                },
+            );
+            surface.egui.paint(
+                &surface.gpu.device,
+                &surface.gpu.queue,
+                &mut encoder,
+                &view,
                 size,
-                volume_region,
-                section_region,
-                time: scene.time(),
-                camera,
-                section,
-                params: &params,
-                markers: &self.markers,
-                meshes: &frames,
-                volume_requests: &mut self.volume_requests,
-                section_requests: &mut self.section_requests,
-            },
-        );
-        egui.paint(&gpu.device, &gpu.queue, &mut encoder, &view, size, output);
-        gpu.queue.submit([encoder.finish()]);
-        gpu.queue.present(frame);
+                output,
+            );
+            surface.gpu.queue.submit([encoder.finish()]);
+            surface.gpu.queue.present(frame);
+            let requests = if self.loading.is_none() && self.in_flight.len() < MAX_IN_FLIGHT {
+                pulled = true;
+                surface
+                    .renderer
+                    .take_requests(&surface.gpu.device, &surface.gpu.queue)
+            } else {
+                Requests::default()
+            };
+            (info, requests)
+        };
+        self.frame = info;
+        if pulled {
+            self.frame.volume = requests.volume_view;
+            self.frame.section = requests.section_view;
+            self.service_requests(&requests);
+        }
         Some(repaint_delay)
     }
 
@@ -458,17 +428,15 @@ impl App {
                     if let Some(surface) = self.surface.as_mut() {
                         surface
                             .renderer
-                            .set_pyramid(&surface.gpu.device, dataset.pyramid());
+                            .set_dataset(&surface.gpu.device, dataset.pyramid());
                     }
                     self.scene = Some(Scene::new(dataset));
-                    self.statistics.reset();
+                    self.measure.reset();
                     self.analysis.clear();
                     self.progress.clear();
                     self.loading = None;
                     self.message = None;
                     self.in_flight.clear();
-                    self.volume_requests.clear();
-                    self.section_requests.clear();
                     self.frame = FrameInfo::default();
                     self.needs_fit = true;
                     self.playing = false;
@@ -495,8 +463,6 @@ impl App {
                     self.progress.clear();
                     self.source = None;
                     self.in_flight.clear();
-                    self.volume_requests.clear();
-                    self.section_requests.clear();
                     self.playing = false;
                 }
                 LoaderEvent::Failed(detail) => {
@@ -506,15 +472,13 @@ impl App {
                     self.progress.clear();
                     self.source = None;
                     self.in_flight.clear();
-                    self.volume_requests.clear();
-                    self.section_requests.clear();
                     self.playing = false;
                 }
             }
         }
     }
 
-    fn service_requests(&mut self) {
+    fn service_requests(&mut self, requests: &Requests) {
         if self.loading.is_some() {
             return;
         }
@@ -522,11 +486,7 @@ impl App {
             return;
         };
         let mut stopped = false;
-        for request in self
-            .section_requests
-            .iter()
-            .chain(self.volume_requests.iter())
-        {
+        for request in requests.section.iter().chain(requests.volume.iter()) {
             if self.in_flight.len() >= MAX_IN_FLIGHT {
                 break;
             }
@@ -550,7 +510,7 @@ impl App {
     fn poll_analysis(&mut self) {
         enum Update {
             Progress(u32, usize, usize),
-            Frame(u32, Outcome),
+            Frame(u32, grana_scene::ObjectFrame),
             Tracks(TrackSet),
             Done,
             Failed(String),
@@ -567,8 +527,8 @@ impl App {
                             Update::Progress(time, done, total),
                         ));
                     }
-                    Poll::Event(Event::Frame { time, outcome }) => {
-                        updates.push((index, job.set(), job.job(), Update::Frame(time, outcome)));
+                    Poll::Event(Event::Frame { time, frame }) => {
+                        updates.push((index, job.set(), job.job(), Update::Frame(time, frame)));
                     }
                     Poll::Event(Event::Tracks(set)) => {
                         updates.push((index, job.set(), job.job(), Update::Tracks(set)));
@@ -601,17 +561,8 @@ impl App {
                 Update::Progress(time, done, total) => {
                     self.record_progress(set, job, time, done, total);
                 }
-                Update::Frame(time, outcome) => {
+                Update::Frame(time, frame) => {
                     if let Some(scene) = self.scene.as_mut() {
-                        let frame = match outcome {
-                            Outcome::Spots(spots) => crate::objects::ObjectFrame::Spots(spots),
-                            Outcome::Surfaces(surfaces) => {
-                                crate::objects::ObjectFrame::Surfaces(surfaces)
-                            }
-                            Outcome::Filaments(filaments) => {
-                                crate::objects::ObjectFrame::Filaments(filaments)
-                            }
-                        };
                         scene.install(set, time, frame);
                     }
                 }
@@ -714,7 +665,7 @@ impl App {
         self.message = None;
         self.record_progress(set, Job::Detect, 0, 0, 0);
         self.analysis
-            .push(analysis::detect(source, set, channel, params));
+            .push(job::detect(source, set, channel, params));
     }
 
     fn start_tracks(&mut self, set: ObjectSetId) {
@@ -751,7 +702,7 @@ impl App {
         self.message = None;
         self.record_progress(set, Job::Track, 0, 0, detections.len());
         self.analysis
-            .push(analysis::track(set, detections, params, frame_interval));
+            .push(job::track(set, detections, params, frame_interval));
     }
 
     fn remove_object(&mut self, set: ObjectSetId) {
@@ -762,24 +713,24 @@ impl App {
         }
     }
 
-    fn export_statistics(&mut self) {
+    fn export_measure(&mut self) {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        let Some(set) = self.statistics.set() else {
+        let Some(set) = self.measure.set() else {
             return;
         };
         let Some(object) = scene.objects.get(set) else {
             return;
         };
-        let Some(csv) = self.statistics.csv() else {
+        let Some(csv) = self.measure.csv() else {
             return;
         };
         let channel = scene.dataset.channels()[object.channel()].name();
-        let group = match self.statistics.group() {
-            Group::Object => "objects",
-            Group::Track => "tracks",
-            Group::Timepoint => "timepoints",
+        let group = match self.measure.group() {
+            grana_measure::Group::Object => "objects",
+            grana_measure::Group::Track => "tracks",
+            grana_measure::Group::Timepoint => "timepoints",
         };
         let file_name = format!(
             "{}-{}-{}-{group}.csv",
@@ -813,13 +764,11 @@ impl App {
         }
         self.loading = Some(file_name(&path));
         self.source = Some(Loader::file(path));
-        self.statistics.reset();
+        self.measure.reset();
         self.analysis.clear();
         self.progress.clear();
         self.message = None;
         self.in_flight.clear();
-        self.volume_requests.clear();
-        self.section_requests.clear();
         self.frame = FrameInfo::default();
         self.repaint_at = Some(Instant::now());
         self.playing = false;

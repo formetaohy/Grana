@@ -1,0 +1,25 @@
+[package]
+name = "grana-ui"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+grana-analysis = { workspace = true }
+grana-measure = { workspace = true }
+grana-object = { workspace = true }
+grana-render = { workspace = true }
+grana-scene = { workspace = true }
+grana-volume = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+egui-winit = { workspace = true }
+egui_extras = { workspace = true }
+glam = { workspace = true }
+wgpu = { workspace = true }
+winit = { workspace = true }
+
+[lints]
+workspace = true

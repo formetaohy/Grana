@@ -27,10 +27,13 @@ zarrs = { version = "0.23", default-features = false, features = ["filesystem", 
 ome_zarr_metadata = "0.3"
 grana-volume = { version = "0.1.0", path = "crates/grana-volume" }
 grana-object = { version = "0.1.0", path = "crates/grana-object" }
+grana-gpu = { version = "0.1.0", path = "crates/grana-gpu" }
+grana-scene = { version = "0.1.0", path = "crates/grana-scene" }
+grana-ui = { version = "0.1.0", path = "crates/grana-ui" }
 grana-analysis = { version = "0.1.0", path = "crates/grana-analysis" }
 grana-render = { version = "0.1.0", path = "crates/grana-render" }
 grana-zarr = { version = "0.1.0", path = "crates/grana-zarr" }
-grana-statistic = { version = "0.1.0", path = "crates/grana-statistic" }
+grana-measure = { version = "0.1.0", path = "crates/grana-measure" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -53,15 +56,15 @@ path = "src/main.rs"
 
 [dependencies]
 grana-analysis = { workspace = true }
+grana-gpu = { workspace = true }
+grana-measure = { workspace = true }
 grana-object = { workspace = true }
 grana-render = { workspace = true }
-grana-statistic = { workspace = true }
+grana-scene = { workspace = true }
+grana-ui = { workspace = true }
 grana-volume = { workspace = true }
 grana-zarr = { workspace = true }
 egui = { workspace = true }
-egui-wgpu = { workspace = true }
-egui-winit = { workspace = true }
-egui_extras = { workspace = true }
 glam = { workspace = true }
 pollster = { workspace = true }
 rfd = { workspace = true }

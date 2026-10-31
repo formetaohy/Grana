@@ -1116,14 +1116,14 @@ name = "grana"
 version = "0.1.0"
 dependencies = [
  "egui",
- "egui-wgpu",
- "egui-winit",
- "egui_extras",
  "glam",
  "grana-analysis",
+ "grana-gpu",
+ "grana-measure",
  "grana-object",
  "grana-render",
- "grana-statistic",
+ "grana-scene",
+ "grana-ui",
  "grana-volume",
  "grana-zarr",
  "pollster",
@@ -1142,6 +1142,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-gpu"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "wgpu",
+]
+
+[[package]]
+name = "grana-measure"
+version = "0.1.0"
+dependencies = [
+ "grana-object",
+]
+
+[[package]]
 name = "grana-object"
 version = "0.1.0"
 dependencies = [
@@ -1155,6 +1170,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "glam",
+ "grana-gpu",
  "grana-object",
  "grana-volume",
  "half",
@@ -1163,10 +1179,34 @@ dependencies = [
 ]
 
 [[package]]
-name = "grana-statistic"
+name = "grana-scene"
 version = "0.1.0"
 dependencies = [
+ "glam",
+ "grana-analysis",
+ "grana-measure",
  "grana-object",
+ "grana-render",
+ "grana-volume",
+]
+
+[[package]]
+name = "grana-ui"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "egui-wgpu",
+ "egui-winit",
+ "egui_extras",
+ "glam",
+ "grana-analysis",
+ "grana-measure",
+ "grana-object",
+ "grana-render",
+ "grana-scene",
+ "grana-volume",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]

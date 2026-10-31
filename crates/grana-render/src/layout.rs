@@ -1,0 +1,240 @@
+use std::num::NonZeroU32;
+
+use wgpu::{
+    BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType,
+    BufferBindingType, Device, PipelineLayout, PipelineLayoutDescriptor, SamplerBindingType,
+    ShaderStages, TextureSampleType, TextureViewDimension,
+};
+
+use crate::CHANNEL_LIMIT;
+
+pub(crate) struct Layouts {
+    pub scene: BindGroupLayout,
+    pub level: BindGroupLayout,
+    pub level_write: BindGroupLayout,
+    pub requests: BindGroupLayout,
+    pub atlas: BindGroupLayout,
+    pub depth: BindGroupLayout,
+    pub styles: BindGroupLayout,
+    pub objects: BindGroupLayout,
+    pub commands: BindGroupLayout,
+    pub marker_cull: BindGroupLayout,
+    pub marker_render: BindGroupLayout,
+    pub volume: PipelineLayout,
+    pub section: PipelineLayout,
+    pub volume_cull: PipelineLayout,
+    pub section_cull: PipelineLayout,
+    pub mesh_cull: PipelineLayout,
+    pub marker_volume: PipelineLayout,
+    pub marker_section: PipelineLayout,
+    pub marker_cull_pipeline: PipelineLayout,
+}
+
+impl Layouts {
+    pub fn new(device: &Device) -> Self {
+        let scene = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.scene.layout"),
+            entries: &[
+                uniform(
+                    0,
+                    ShaderStages::VERTEX_FRAGMENT.union(ShaderStages::COMPUTE),
+                ),
+                uniform(
+                    1,
+                    ShaderStages::VERTEX_FRAGMENT.union(ShaderStages::COMPUTE),
+                ),
+                storage(2, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE), true),
+                texture(3, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
+                sampler(4, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
+            ],
+        });
+        let level = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.level.layout"),
+            entries: &[storage(0, ShaderStages::FRAGMENT, true)],
+        });
+        let level_write = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.level.write.layout"),
+            entries: &[
+                storage(0, ShaderStages::COMPUTE, false),
+                uniform(1, ShaderStages::COMPUTE),
+            ],
+        });
+        let requests = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.requests.layout"),
+            entries: &[storage(0, ShaderStages::COMPUTE, false)],
+        });
+        let atlas = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.atlas.layout"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: NonZeroU32::new(CHANNEL_LIMIT as u32),
+                },
+                sampler(1, ShaderStages::FRAGMENT),
+            ],
+        });
+        let depth = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.depth.layout"),
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Texture {
+                    sample_type: TextureSampleType::Depth,
+                    view_dimension: TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let styles = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.styles.layout"),
+            entries: &[storage(
+                0,
+                ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE),
+                true,
+            )],
+        });
+        let objects = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.objects.layout"),
+            entries: &[storage(0, ShaderStages::COMPUTE, true)],
+        });
+        let commands = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.commands.layout"),
+            entries: &[storage(0, ShaderStages::COMPUTE, false)],
+        });
+        let marker_cull = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.marker.cull.layout"),
+            entries: &[
+                storage(0, ShaderStages::COMPUTE, true),
+                storage(1, ShaderStages::COMPUTE, false),
+                storage(2, ShaderStages::COMPUTE, false),
+            ],
+        });
+        let marker_render = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.marker.render.layout"),
+            entries: &[
+                storage(0, ShaderStages::VERTEX, true),
+                storage(1, ShaderStages::VERTEX, true),
+            ],
+        });
+        let volume = pipeline_layout(
+            device,
+            "grana.volume.layout",
+            &[&scene, &level, &atlas, &depth],
+        );
+        let section = pipeline_layout(device, "grana.section.layout", &[&scene, &level, &atlas]);
+        let volume_cull = pipeline_layout(
+            device,
+            "grana.volume.cull.layout",
+            &[&scene, &level_write, &requests],
+        );
+        let section_cull = pipeline_layout(
+            device,
+            "grana.section.cull.layout",
+            &[&scene, &level_write, &requests],
+        );
+        let mesh_cull = pipeline_layout(
+            device,
+            "grana.mesh.cull.layout",
+            &[&scene, &objects, &styles, &commands],
+        );
+        let marker_volume =
+            pipeline_layout(device, "grana.marker.layout", &[&scene, &marker_render]);
+        let marker_section = pipeline_layout(
+            device,
+            "grana.marker.section.layout",
+            &[&scene, &marker_render],
+        );
+        let marker_cull_pipeline = pipeline_layout(
+            device,
+            "grana.marker.cull.pipeline.layout",
+            &[&scene, &marker_cull],
+        );
+        Self {
+            scene,
+            level,
+            level_write,
+            requests,
+            atlas,
+            depth,
+            styles,
+            objects,
+            commands,
+            marker_cull,
+            marker_render,
+            volume,
+            section,
+            volume_cull,
+            section_cull,
+            mesh_cull,
+            marker_volume,
+            marker_section,
+            marker_cull_pipeline,
+        }
+    }
+}
+
+fn uniform(binding: u32, visibility: ShaderStages) -> BindGroupLayoutEntry {
+    BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: BindingType::Buffer {
+            ty: BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+fn storage(binding: u32, visibility: ShaderStages, read_only: bool) -> BindGroupLayoutEntry {
+    BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: BindingType::Buffer {
+            ty: BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+fn texture(binding: u32, visibility: ShaderStages) -> BindGroupLayoutEntry {
+    BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: BindingType::Texture {
+            sample_type: TextureSampleType::Float { filterable: true },
+            view_dimension: TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+fn sampler(binding: u32, visibility: ShaderStages) -> BindGroupLayoutEntry {
+    BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: BindingType::Sampler(SamplerBindingType::Filtering),
+        count: None,
+    }
+}
+
+fn pipeline_layout(device: &Device, label: &str, layouts: &[&BindGroupLayout]) -> PipelineLayout {
+    device.create_pipeline_layout(&PipelineLayoutDescriptor {
+        label: Some(label),
+        bind_group_layouts: &layouts
+            .iter()
+            .map(|layout| Some(*layout))
+            .collect::<Vec<_>>(),
+        immediate_size: 0,
+    })
+}

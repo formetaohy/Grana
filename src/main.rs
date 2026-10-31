@@ -1,22 +1,9 @@
-mod analysis;
 mod app;
-mod dataset;
 mod demo;
-mod egui_layer;
 mod gpu;
+mod job;
 mod loader;
-mod objects;
-mod objects_ui;
-mod overlay;
-mod scene;
 mod source;
-mod statistic_ui;
-mod statistics;
-mod track_ui;
-mod tracks;
-mod transfer_editor;
-mod ui;
-mod viewport;
 
 fn main() {
     let event_loop = winit::event_loop::EventLoop::new().expect("failed to create the event loop");

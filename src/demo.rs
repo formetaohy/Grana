@@ -1,9 +1,7 @@
 use glam::Vec3;
 use grana_analysis::{FilamentParams, SpotParams, SurfaceParams};
+use grana_scene::{ObjectKind, ObjectParams, ObjectSetId, Scene};
 use grana_volume::{Channel, Extent, Movie, Spacing, Volume, VoxelData};
-
-use crate::objects::{ObjectKind, ObjectParams, ObjectSetId};
-use crate::scene::Scene;
 
 const FRAMES: u32 = 6;
 const FRAME_INTERVAL: f32 = 1.0;

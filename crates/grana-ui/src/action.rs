@@ -1,0 +1,22 @@
+use grana_scene::{ObjectKind, ObjectSetId, Selection};
+use grana_volume::Axis;
+
+pub enum Action {
+    Open,
+    Fit,
+    FitSection,
+    SetSectionAxis(Axis),
+    SetSplit(f32),
+    SetTime(u32),
+    Select(Option<Selection>),
+    TogglePlay,
+    AddObject(ObjectKind),
+    RemoveObject(ObjectSetId),
+    Detect(ObjectSetId),
+    CancelDetect(ObjectSetId),
+    ClearObject(ObjectSetId),
+    Track(ObjectSetId),
+    CancelTrack(ObjectSetId),
+    ClearTracks(ObjectSetId),
+    ExportMeasure,
+}

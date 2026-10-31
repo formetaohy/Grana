@@ -1,8 +1,8 @@
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Stop {
-    pub position: f32,
-    pub color: [f32; 3],
-    pub opacity: f32,
+    position: f32,
+    color: [f32; 3],
+    opacity: f32,
 }
 
 impl Stop {
@@ -25,6 +25,42 @@ impl Stop {
             opacity,
         }
     }
+
+    pub fn position(self) -> f32 {
+        self.position
+    }
+
+    pub fn color(self) -> [f32; 3] {
+        self.color
+    }
+
+    pub fn opacity(self) -> f32 {
+        self.opacity
+    }
+
+    pub fn set_position(&mut self, position: f32) {
+        assert!(
+            (0.0..=1.0).contains(&position),
+            "stop position must lie in the unit interval"
+        );
+        self.position = position;
+    }
+
+    pub fn set_color(&mut self, color: [f32; 3]) {
+        assert!(
+            color.iter().all(|channel| (0.0..=1.0).contains(channel)),
+            "stop color must be an srgb triple"
+        );
+        self.color = color;
+    }
+
+    pub fn set_opacity(&mut self, opacity: f32) {
+        assert!(
+            (0.0..=1.0).contains(&opacity),
+            "stop opacity must lie in the unit interval"
+        );
+        self.opacity = opacity;
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,11 +74,7 @@ impl TransferFunction {
             !stops.is_empty(),
             "a transfer function needs at least one stop"
         );
-        stops.sort_by(|left, right| {
-            left.position
-                .partial_cmp(&right.position)
-                .expect("stop positions are finite")
-        });
+        sort(&mut stops);
         Self { stops }
     }
 
@@ -81,6 +113,29 @@ impl TransferFunction {
         &self.stops
     }
 
+    pub fn stop_mut(&mut self, index: usize) -> &mut Stop {
+        self.stops
+            .get_mut(index)
+            .expect("the transfer stop lies inside the function")
+    }
+
+    pub fn add_stop(&mut self, stop: Stop) {
+        self.stops.push(stop);
+        sort(&mut self.stops);
+    }
+
+    pub fn remove_stop(&mut self, index: usize) {
+        assert!(
+            self.stops.len() > 1,
+            "a transfer function keeps at least one stop"
+        );
+        assert!(
+            index < self.stops.len(),
+            "the removed stop lies inside the function"
+        );
+        self.stops.remove(index);
+    }
+
     pub fn lut(&self, size: usize) -> Vec<[f32; 4]> {
         assert!(size >= 2, "a lookup table needs at least two entries");
         let last = (size - 1) as f32;
@@ -114,6 +169,14 @@ impl TransferFunction {
         let [red, green, blue] = srgb_to_linear(color);
         [red, green, blue, lerp(left.opacity, right.opacity, t)]
     }
+}
+
+fn sort(stops: &mut [Stop]) {
+    stops.sort_by(|left, right| {
+        left.position
+            .partial_cmp(&right.position)
+            .expect("stop positions are finite")
+    });
 }
 
 fn lerp(from: f32, to: f32, t: f32) -> f32 {

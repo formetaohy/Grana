@@ -1,66 +1,100 @@
-use glam::Vec3;
-use grana_volume::Axis;
+use wgpu::{
+    BindGroup, ColorTargetState, ColorWrites, CommandEncoder, Device, FragmentState, LoadOp,
+    MultisampleState, Operations, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
+    RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, StoreOp,
+    TextureView, VertexState,
+};
 
-const ZOOM_SENSITIVITY: f32 = 0.15;
-const FIT_MARGIN: f32 = 1.05;
-const MIN_SPAN_VOXELS: f32 = 8.0;
+use crate::layout::Layouts;
+use crate::target::SCENE_FORMAT;
 
-#[derive(Clone, Debug)]
-pub struct SectionCamera {
-    axis: Axis,
-    span: f32,
-    min_span: f32,
-    max_span: f32,
+const SHADER: &str = concat!(
+    "enable wgpu_binding_array;\n",
+    include_str!("shader/scene.wgsl"),
+    "\n",
+    include_str!("shader/brick.wgsl"),
+    "\n",
+    include_str!("shader/color.wgsl"),
+    "\n",
+    include_str!("shader/section.wgsl")
+);
+
+pub(crate) struct SectionPass {
+    pipeline: RenderPipeline,
 }
 
-impl SectionCamera {
-    pub fn new(axis: Axis) -> Self {
-        Self {
-            axis,
-            span: 1.0,
-            min_span: 1.0e-4,
-            max_span: 1.0e4,
-        }
+pub(crate) struct SectionFrame<'a> {
+    pub target: &'a TextureView,
+    pub region: [u32; 4],
+    pub scene: &'a BindGroup,
+    pub level: &'a BindGroup,
+    pub atlas: &'a BindGroup,
+}
+
+impl SectionPass {
+    pub fn new(device: &Device, layouts: &Layouts) -> Self {
+        let shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("grana.section"),
+            source: ShaderSource::Wgsl(SHADER.into()),
+        });
+        let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.section"),
+            layout: Some(&layouts.section),
+            vertex: VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(ColorTargetState {
+                    format: SCENE_FORMAT,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        Self { pipeline }
     }
 
-    pub fn axis(&self) -> Axis {
-        self.axis
-    }
-
-    pub fn span(&self) -> f32 {
-        self.span
-    }
-
-    pub fn set_axis(&mut self, axis: Axis) {
-        self.axis = axis;
-    }
-
-    pub fn fit(&mut self, world: Vec3, voxel: Vec3, aspect: f32) {
-        assert!(
-            world.x > 0.0 && world.y > 0.0 && world.z > 0.0,
-            "the volume world size must be positive"
+    pub fn draw(&self, encoder: &mut CommandEncoder, frame: SectionFrame<'_>) {
+        let region = frame.region;
+        let width = region[2].max(1);
+        let height = region[3].max(1);
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("grana.section.pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: frame.target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Load,
+                    store: StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_viewport(
+            region[0] as f32,
+            region[1] as f32,
+            width as f32,
+            height as f32,
+            0.0,
+            1.0,
         );
-        assert!(aspect > 0.0, "aspect ratio must be positive");
-        let (u, v) = self.axis.in_plane();
-        let world_u = world[u.index()];
-        let world_v = world[v.index()];
-        let span = world_v.max(world_u / aspect) * FIT_MARGIN;
-        self.min_span = MIN_SPAN_VOXELS * voxel[u.index()].min(voxel[v.index()]);
-        self.max_span = (4.0 * world.length()).max(self.min_span);
-        self.span = span.clamp(self.min_span, self.max_span);
-    }
-
-    pub fn zoom(&mut self, scroll: f32) {
-        self.span =
-            (self.span * (1.0 - scroll * ZOOM_SENSITIVITY)).clamp(self.min_span, self.max_span);
-    }
-
-    pub fn point(&self, focus: Vec3, ndc: glam::Vec2, aspect: f32) -> Vec3 {
-        assert!(aspect > 0.0, "aspect ratio must be positive");
-        let (u_axis, v_axis) = self.axis.in_plane();
-        let mut point = focus;
-        point[u_axis.index()] += 0.5 * ndc.x * self.span * aspect;
-        point[v_axis.index()] += 0.5 * ndc.y * self.span;
-        point
+        pass.set_scissor_rect(region[0], region[1], width, height);
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, frame.scene, &[]);
+        pass.set_bind_group(1, frame.level, &[]);
+        pass.set_bind_group(2, frame.atlas, &[]);
+        pass.draw(0..3, 0..1);
     }
 }

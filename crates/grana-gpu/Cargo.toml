@@ -1,0 +1,14 @@
+[package]
+name = "grana-gpu"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytemuck = { workspace = true }
+wgpu = { workspace = true }
+
+[lints]
+workspace = true

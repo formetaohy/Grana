@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+grana-gpu = { workspace = true }
 grana-object = { workspace = true }
 grana-volume = { workspace = true }
 bytemuck = { workspace = true }
@@ -16,7 +17,6 @@ wgpu = { workspace = true }
 
 [dev-dependencies]
 pollster = { workspace = true }
-grana-object = { workspace = true }
 
 [lints]
 workspace = true

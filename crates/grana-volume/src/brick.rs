@@ -64,6 +64,16 @@ impl BrickGrid {
         (coord.x + self.counts[0] * (coord.y + self.counts[1] * coord.z)) as usize
     }
 
+    pub fn coord(self, index: usize) -> BrickCoord {
+        assert!(index < self.count(), "brick index out of bounds");
+        let index = index as u32;
+        BrickCoord {
+            x: index % self.counts[0],
+            y: (index / self.counts[0]) % self.counts[1],
+            z: index / (self.counts[0] * self.counts[1]),
+        }
+    }
+
     pub fn origin(self, coord: BrickCoord) -> [u32; 3] {
         [
             coord.x * BRICK_SIDE,

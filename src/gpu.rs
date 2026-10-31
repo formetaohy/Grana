@@ -1,10 +1,8 @@
 use std::sync::Arc;
+
+use grana_gpu::REQUIRED_FEATURES;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
-
-const REQUIRED_FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_ARRAY
-    .union(wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING)
-    .union(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
 
 pub struct Gpu {
     pub surface: wgpu::Surface<'static>,

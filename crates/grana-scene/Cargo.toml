@@ -1,0 +1,18 @@
+[package]
+name = "grana-scene"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+grana-analysis = { workspace = true }
+grana-measure = { workspace = true }
+grana-object = { workspace = true }
+grana-render = { workspace = true }
+grana-volume = { workspace = true }
+glam = { workspace = true }
+
+[lints]
+workspace = true

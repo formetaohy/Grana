@@ -79,11 +79,11 @@ impl Loader {
                     return;
                 }
             };
-            if image.pyramid().channel_count() > grana_render::MAX_CHANNEL {
+            if image.pyramid().channel_count() > grana_render::CHANNEL_LIMIT {
                 let _ = event_sender.send(Event::Failed(format!(
                     "the dataset has {} channels, grana displays at most {}",
                     image.pyramid().channel_count(),
-                    grana_render::MAX_CHANNEL
+                    grana_render::CHANNEL_LIMIT
                 )));
                 return;
             }

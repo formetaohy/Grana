@@ -1,0 +1,473 @@
+use egui::{RichText, Ui};
+use grana_scene::{Dataset, Job, ObjectKind, ObjectSetId, Progress, Scene};
+use grana_volume::Axis;
+
+use crate::action::Action;
+use crate::overlay::{self, Overlay};
+use crate::state::{Message, State};
+
+const TIMELINE_HEIGHT: f32 = 36.0;
+
+pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
+    let mut actions = Vec::new();
+    if *state.measure_open {
+        egui::Panel::bottom("measure")
+            .resizable(true)
+            .default_size(280.0)
+            .min_size(280.0)
+            .show(root, |ui| {
+                crate::measure_panel::build(ui, state, &mut actions);
+            });
+    }
+    egui::Panel::left("controls")
+        .exact_size(340.0)
+        .resizable(true)
+        .show(root, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("grana.controls")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.heading("grana");
+                    ui.label(RichText::new("microscopy volume workspace").small().weak());
+                    ui.separator();
+                    open_section(ui, &mut actions, state.loading, state.message);
+                    ui.separator();
+                    dataset_section(ui, &state.scene.dataset);
+                    ui.separator();
+                    section_section(ui, state, &mut actions);
+                    ui.separator();
+                    channels_section(ui, state.scene);
+                    ui.separator();
+                    crate::object_panel::build(ui, state, &mut actions);
+                    ui.separator();
+                    measure_section(ui, state);
+                    ui.separator();
+                    display_section(ui, state.scene);
+                    ui.separator();
+                    rendering_section(ui, state.scene);
+                    ui.separator();
+                    streaming_section(ui, state);
+                    ui.separator();
+                    camera_section(ui, &mut actions);
+                    ui.separator();
+                    ui.label(RichText::new(state.adapter).small().weak());
+                });
+        });
+    egui::CentralPanel::no_frame().show(root, |ui| {
+        let full = ui.max_rect();
+        let timeline = (state.scene.frame_count() > 1).then(|| {
+            egui::Rect::from_min_max(
+                egui::pos2(full.left(), full.bottom() - TIMELINE_HEIGHT),
+                full.right_bottom(),
+            )
+        });
+        let panes = match timeline {
+            Some(bar) => {
+                egui::Rect::from_min_max(full.left_top(), egui::pos2(full.right(), bar.top()))
+            }
+            None => full,
+        };
+        let split = panes.left() + panes.width() * state.viewport.split();
+        let handle = egui::Rect::from_min_max(
+            egui::pos2(split - 3.0, panes.top()),
+            egui::pos2(split + 3.0, panes.bottom()),
+        );
+        let response = ui.interact(
+            handle,
+            ui.make_persistent_id("grana.split"),
+            egui::Sense::click_and_drag(),
+        );
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        if response.dragged()
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            actions.push(Action::SetSplit(
+                ((pointer.x - panes.left()) / panes.width()).clamp(0.25, 0.8),
+            ));
+        }
+        let volume =
+            egui::Rect::from_min_max(panes.left_top(), egui::pos2(split - 1.0, panes.bottom()));
+        let section =
+            egui::Rect::from_min_max(egui::pos2(split + 1.0, panes.top()), panes.right_bottom());
+        state.viewport.set_rects(volume, section);
+        overlay::paint(
+            ui,
+            &Overlay {
+                camera: state.viewport.camera(),
+                section: state.viewport.section(),
+                world: state.scene.dataset.world_size(),
+                levels: state.scene.dataset.level_count(),
+                volume_level: state.frame.volume.level,
+                section_level: state.frame.section.level,
+                volume_rect: volume,
+                section_rect: section,
+            },
+        );
+        if let Some(bar) = timeline {
+            timeline_bar(ui, bar, state, &mut actions);
+        }
+    });
+    actions
+}
+
+fn timeline_bar(ui: &mut Ui, rect: egui::Rect, state: &State<'_>, actions: &mut Vec<Action>) {
+    ui.painter().line_segment(
+        [
+            egui::pos2(rect.left(), rect.top()),
+            egui::pos2(rect.right(), rect.top()),
+        ],
+        egui::Stroke::new(1.0, egui::Color32::from_gray(44)),
+    );
+    ui.scope_builder(
+        egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(12.0, 3.0))),
+        |ui| {
+            ui.horizontal_centered(|ui| {
+                let label = if state.playing { "Pause" } else { "Play" };
+                if ui.button(label).clicked() {
+                    actions.push(Action::TogglePlay);
+                }
+                let frames = state.scene.frame_count();
+                let mut time = state.scene.time();
+                let width = (ui.available_width() - 148.0).max(80.0);
+                let slider = egui::Slider::new(&mut time, 0..=(frames - 1)).show_value(false);
+                if ui.add_sized([width, 18.0], slider).changed() {
+                    actions.push(Action::SetTime(time));
+                }
+                let seconds = time as f32 * state.scene.dataset.frame_interval();
+                ui.monospace(format!("{:>3} / {} · {seconds:.1} s", time + 1, frames));
+            });
+        },
+    );
+}
+
+fn open_section(
+    ui: &mut Ui,
+    actions: &mut Vec<Action>,
+    loading: Option<&str>,
+    message: Option<&Message>,
+) {
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(loading.is_none(), egui::Button::new("Open OME-Zarr"))
+            .clicked()
+        {
+            actions.push(Action::Open);
+        }
+        if let Some(name) = loading {
+            ui.spinner();
+            ui.label(RichText::new(name).small().weak());
+        }
+    });
+    ui.label(
+        RichText::new("streams bricks of a multiscale .zarr folder")
+            .small()
+            .weak(),
+    );
+    if let Some(message) = message {
+        ui.label(
+            RichText::new(message.text())
+                .color(egui::Color32::from_rgb(255, 138, 112))
+                .small(),
+        );
+    }
+}
+
+fn dataset_section(ui: &mut Ui, dataset: &Dataset) {
+    ui.strong(dataset.name());
+    egui::Grid::new("dataset")
+        .num_columns(2)
+        .spacing([12.0, 3.0])
+        .show(ui, |ui| {
+            let extent = dataset.extent();
+            row(
+                ui,
+                "dimensions",
+                format!("{} × {} × {}", extent.x(), extent.y(), extent.z()),
+            );
+            let spacing = dataset.spacing();
+            row(
+                ui,
+                "voxel size",
+                format!(
+                    "{:.3} × {:.3} × {:.3} µm",
+                    spacing.x(),
+                    spacing.y(),
+                    spacing.z()
+                ),
+            );
+            let world = dataset.world_size();
+            row(
+                ui,
+                "field of view",
+                format!("{:.1} × {:.1} × {:.1} µm", world.x, world.y, world.z),
+            );
+            row(ui, "channels", dataset.channels().len().to_string());
+            row(ui, "frames", dataset.frame_count().to_string());
+            if dataset.frame_count() > 1 {
+                row(
+                    ui,
+                    "frame interval",
+                    format!("{:.3} s", dataset.frame_interval()),
+                );
+            }
+            row(
+                ui,
+                "format",
+                dataset
+                    .format()
+                    .map_or_else(|| "mixed".to_string(), |format| format!("{format:?}")),
+            );
+            row(ui, "pyramid", dataset.level_count().to_string());
+            row(
+                ui,
+                "source",
+                match dataset.origin() {
+                    grana_scene::Origin::Synthetic => "synthetic".to_string(),
+                    grana_scene::Origin::Zarr => "OME-Zarr".to_string(),
+                },
+            );
+        });
+}
+
+fn measure_section(ui: &mut Ui, state: &mut State<'_>) {
+    ui.horizontal(|ui| {
+        if ui
+            .selectable_label(*state.measure_open, "Statistics")
+            .clicked()
+        {
+            *state.measure_open = !*state.measure_open;
+        }
+        ui.label(
+            RichText::new("measure objects across channels")
+                .small()
+                .weak(),
+        );
+    });
+}
+
+fn channels_section(ui: &mut Ui, scene: &mut Scene) {
+    ui.strong("Channels");
+    let selected = scene.selected;
+    let mut clicked = None;
+    for (index, channel) in scene.channels.iter_mut().enumerate() {
+        let info = &scene.dataset.channels()[index];
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut channel.enabled, "");
+            color_swatch(ui, info.tint());
+            if ui
+                .selectable_label(selected == index, info.name())
+                .clicked()
+            {
+                clicked = Some(index);
+            }
+        });
+        ui.add(
+            egui::Slider::new(&mut channel.opacity, 0.0..=1.0)
+                .text("opacity")
+                .show_value(false),
+        );
+    }
+    if let Some(index) = clicked {
+        scene.select_channel(index);
+    }
+}
+
+fn display_section(ui: &mut Ui, scene: &mut Scene) {
+    let index = scene.selected;
+    let name = scene.channel(index).name().to_string();
+    let data = scene.channel(index).intensity();
+    let current = scene.channels[index].window;
+    let mut start = current.min();
+    let mut end = current.max();
+    let available = data.min()..=data.max();
+    ui.strong(format!("Display · {name}"));
+    let mut changed = false;
+    changed |= ui
+        .add(egui::Slider::new(&mut start, available.clone()).text("black"))
+        .changed();
+    changed |= ui
+        .add(egui::Slider::new(&mut end, available.clone()).text("white"))
+        .changed();
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!("data {:.0} … {:.0}", data.min(), data.max()))
+                .small()
+                .weak(),
+        );
+        if ui.small_button("Auto").clicked() {
+            scene.reset_window(index);
+            changed = false;
+        }
+    });
+    if changed {
+        scene.set_window(index, start, end);
+    }
+    let window = scene.channels[index].window;
+    let tint = scene.channel(index).tint();
+    crate::transfer::edit(ui, scene.channels[index].transfer_mut(), tint, window);
+}
+
+fn section_section(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>) {
+    ui.strong("Section");
+    let axis = state.viewport.section().axis();
+    ui.horizontal(|ui| {
+        for (name, candidate) in [("XY", Axis::Z), ("XZ", Axis::Y), ("YZ", Axis::X)] {
+            if ui.selectable_label(axis == candidate, name).clicked() {
+                actions.push(Action::SetSectionAxis(candidate));
+            }
+        }
+        if ui.small_button("Fit").clicked() {
+            actions.push(Action::FitSection);
+        }
+    });
+    let extent = state.scene.dataset.world_size()[axis.index()];
+    let mut position = state.viewport.camera().focus_along(axis) + 0.5 * extent;
+    if ui
+        .add(egui::Slider::new(&mut position, 0.0..=extent).text("plane"))
+        .changed()
+    {
+        state
+            .viewport
+            .camera_mut()
+            .set_focus_along(axis, position - 0.5 * extent);
+    }
+    let spacing = state.scene.dataset.spacing();
+    ui.label(
+        RichText::new(format!(
+            "{} plane · {:.3} µm steps",
+            axis.name(),
+            axis.spacing(spacing)
+        ))
+        .small()
+        .weak(),
+    );
+    ui.label(
+        RichText::new("drag pans · wheel steps · ctrl+wheel zooms · click selects")
+            .small()
+            .weak(),
+    );
+}
+
+fn rendering_section(ui: &mut Ui, scene: &mut Scene) {
+    ui.strong("Rendering");
+    ui.add(
+        egui::Slider::new(&mut scene.step_scale, 0.25..=2.0)
+            .text("sampling distance")
+            .logarithmic(true),
+    );
+    let shading = &mut scene.shading;
+    ui.add(egui::Slider::new(&mut shading.ambient, 0.0..=1.0).text("ambient"));
+    ui.add(egui::Slider::new(&mut shading.diffuse, 0.0..=1.0).text("diffuse"));
+    ui.add(egui::Slider::new(&mut shading.specular, 0.0..=1.0).text("specular"));
+    ui.add(
+        egui::Slider::new(&mut shading.shininess, 1.0..=128.0)
+            .text("shininess")
+            .logarithmic(true),
+    );
+}
+
+fn streaming_section(ui: &mut Ui, state: &State<'_>) {
+    ui.strong("Streaming");
+    let levels = state.scene.dataset.level_count();
+    let volume = state.frame.volume;
+    let section = state.frame.section;
+    egui::Grid::new("streaming")
+        .num_columns(2)
+        .spacing([12.0, 3.0])
+        .show(ui, |ui| {
+            row(
+                ui,
+                "volume",
+                format!(
+                    "level {} · {}/{} bricks",
+                    volume.level + 1,
+                    volume.resident,
+                    volume.visible
+                ),
+            );
+            row(
+                ui,
+                "section",
+                format!(
+                    "level {} · {}/{} bricks",
+                    section.level + 1,
+                    section.resident,
+                    section.visible
+                ),
+            );
+            row(ui, "pyramid", levels.to_string());
+            row(
+                ui,
+                "cache",
+                format!(
+                    "{:.0} MiB of brick cache",
+                    state.frame.bytes as f64 / (1024.0 * 1024.0)
+                ),
+            );
+        });
+    if state.pending > 0 {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(
+                RichText::new(format!("{} bricks in flight", state.pending))
+                    .small()
+                    .weak(),
+            );
+        });
+    }
+}
+
+fn camera_section(ui: &mut Ui, actions: &mut Vec<Action>) {
+    ui.strong("View");
+    if ui.button("Fit volume").clicked() {
+        actions.push(Action::Fit);
+    }
+    ui.label(
+        RichText::new("drag orbits · middle or right drag pans · wheel zooms · click selects")
+            .small()
+            .weak(),
+    );
+}
+
+pub(crate) fn progress(analysis: &[Progress], set: ObjectSetId, job: Job) -> Option<Progress> {
+    analysis
+        .iter()
+        .copied()
+        .find(|progress| progress.set == set && progress.job == job)
+}
+
+pub(crate) fn caption(kind: ObjectKind, job: Job, progress: Progress, frames: u32) -> String {
+    let unit = match (job, kind) {
+        (Job::Detect, ObjectKind::Spots) => "blocks",
+        (Job::Detect, ObjectKind::Surfaces) => "bricks",
+        (Job::Detect, ObjectKind::Filaments) => "frames",
+        (Job::Track, _) => "frames",
+    };
+    let prefix = match job {
+        Job::Detect if frames > 1 => format!("frame {} · ", progress.time + 1),
+        Job::Detect | Job::Track => String::new(),
+    };
+    if progress.total > 0 {
+        format!("{prefix}{}/{} {unit}", progress.done, progress.total)
+    } else {
+        format!("{prefix}preparing")
+    }
+}
+
+pub(crate) fn color_swatch(ui: &mut Ui, tint: [f32; 3]) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 12.0), egui::Sense::hover());
+    let color = egui::Color32::from_rgb(to_byte(tint[0]), to_byte(tint[1]), to_byte(tint[2]));
+    ui.painter().rect_filled(rect, 2.0, color);
+}
+
+pub(crate) fn row(ui: &mut Ui, name: &str, value: String) {
+    ui.label(RichText::new(name).weak());
+    ui.monospace(value);
+    ui.end_row();
+}
+
+fn to_byte(channel: f32) -> u8 {
+    (channel.clamp(0.0, 1.0) * 255.0).round() as u8
+}

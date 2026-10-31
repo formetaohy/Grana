@@ -238,6 +238,65 @@ impl TrackSet {
             .filter(move |(_, track)| track.parent() == Some(index as u32))
             .map(|(child, _)| child)
     }
+
+    pub fn mesh(&self, radius: f32) -> crate::Mesh {
+        assert!(
+            radius.is_finite() && radius > 0.0,
+            "a track tube radius must be a positive length"
+        );
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for (index, track) in self.tracks.iter().enumerate() {
+            let object = index as u32;
+            let mut points = Vec::with_capacity(track.nodes().len() + 1);
+            if let Some(parent) = track.parent() {
+                let parent = self
+                    .track(parent as usize)
+                    .expect("the parent track exists");
+                let end = parent.nodes().last().expect("the parent holds nodes");
+                points.push(glam::Vec3::from(end.centroid()));
+            }
+            points.extend(
+                track
+                    .nodes()
+                    .iter()
+                    .map(|node| glam::Vec3::from(node.centroid())),
+            );
+            deduplicate(&mut points);
+            match points.len() {
+                0 => {}
+                1 => crate::push_sphere(
+                    &mut vertices,
+                    &mut indices,
+                    points[0].to_array(),
+                    radius,
+                    object,
+                ),
+                _ => {
+                    let positions = points
+                        .iter()
+                        .map(|point| point.to_array())
+                        .collect::<Vec<_>>();
+                    let radii = vec![radius; positions.len()];
+                    crate::push_tube(&mut vertices, &mut indices, &positions, &radii, object);
+                }
+            }
+        }
+        crate::Mesh::new(vertices, indices)
+    }
+}
+
+fn deduplicate(points: &mut Vec<glam::Vec3>) {
+    let mut unique = Vec::with_capacity(points.len());
+    for point in points.drain(..) {
+        if unique
+            .last()
+            .is_none_or(|last: &glam::Vec3| last.distance_squared(point) > 1.0e-12)
+        {
+            unique.push(point);
+        }
+    }
+    *points = unique;
 }
 
 fn distance(left: [f32; 3], right: [f32; 3]) -> f64 {
