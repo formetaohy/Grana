@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use grana_animation::{Keyframe, Timeline};
 use grana_measure::{Aggregate, Filter, Group, Measurement, Statistic, TrackMeasurement};
 use grana_object::{
     Bounds, COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocMoments, ColocPair, ColocSeries,
@@ -72,11 +73,32 @@ impl Decode for ViewState {
             camera: CameraState::decode(reader)?,
             section: SectionState::decode(reader)?,
             split: finite(reader.f32()?)?,
+            timeline: Timeline::decode(reader)?,
         };
         if !(0.0..=1.0).contains(&view.split) {
             return Err(FAULT_VALUE);
         }
         Ok(view)
+    }
+}
+
+impl Decode for Timeline {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let fps = reader.u32()?;
+        let duration = reader.f32()?;
+        let keys = Vec::<Keyframe>::decode(reader)?;
+        Timeline::from_parts(fps, duration, keys).map_err(|_| FAULT_VALUE)
+    }
+}
+
+impl Decode for Keyframe {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        Ok(Self {
+            at: finite(reader.f32()?)?,
+            time: reader.u32()?,
+            camera: CameraState::decode(reader)?,
+            section: SectionState::decode(reader)?,
+        })
     }
 }
 

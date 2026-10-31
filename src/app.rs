@@ -4,12 +4,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use glam::Vec2;
+use grana_animation::{Keyframe, Sample, Timeline};
 use grana_object::TrackSet;
 use grana_pipeline::{
     self as pipeline, Analysis, BatchEvent, Event, Outcome, Plan, Poll, Protocol,
 };
 use grana_project::{Project, Source as ProjectSource, ViewState};
-use grana_render::{BrickRequest, Frame, FrameInfo, Renderer, Requests};
+use grana_render::{BrickRequest, Camera, Frame, FrameInfo, Renderer, Requests, SectionCamera};
 use grana_scene::{Dataset, Job, Measure, ObjectSetId, Origin, Progress, Scene};
 use grana_ui::Target as FigureTarget;
 use grana_ui::{
@@ -26,6 +27,7 @@ use winit::window::{Window, WindowId};
 use crate::demo;
 use crate::gpu::Gpu;
 use crate::loader::{Event as LoaderEvent, Loader};
+use crate::movie::{self, Movie};
 use crate::snapshot;
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
@@ -34,10 +36,14 @@ const SNAPSHOT_SCALE: u32 = 4;
 const SNAPSHOT_SAMPLES: u32 = 8;
 const SNAPSHOT_LIMIT: u32 = 8192;
 const SNAPSHOT_ATTEMPTS: u32 = 512;
+const MOVIE_SAMPLES: u32 = 16;
+const MOVIE_ATTEMPTS: u32 = 4096;
+const MOVIE_WIDTH: u32 = 1920;
 const UPLOAD_BATCH: usize = 32;
 const MAX_IN_FLIGHT: usize = 64;
 const STREAM_POLL: Duration = Duration::from_millis(16);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
+const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
 
 struct Surface {
@@ -61,12 +67,50 @@ struct Snapshot {
     attempts: u32,
 }
 
+struct Animation {
+    timeline: Timeline,
+    position: f32,
+    previewing: bool,
+    last: Option<Instant>,
+    selected: Option<usize>,
+    width: u32,
+    message: Option<String>,
+}
+
+impl Animation {
+    fn new(frames: u32, interval: f32) -> Self {
+        let duration = (frames as f32 * interval).clamp(1.0, Timeline::MAX_DURATION);
+        Self {
+            timeline: Timeline::new(30, duration),
+            position: 0.0,
+            previewing: false,
+            last: None,
+            selected: None,
+            width: MOVIE_WIDTH,
+            message: None,
+        }
+    }
+
+    fn reset(&mut self, frames: u32, interval: f32) {
+        let width = self.width;
+        *self = Self::new(frames, interval);
+        self.width = width;
+    }
+
+    fn stop(&mut self) {
+        self.previewing = false;
+        self.last = None;
+    }
+}
+
 pub struct App {
     surface: Option<Surface>,
     scene: Option<Scene>,
     measure: Measure,
     panel: Option<Panel>,
     viewport: Viewport,
+    animation: Animation,
+    movie: Option<Movie>,
     source: Option<Loader>,
     analysis: Vec<Analysis>,
     progress: Vec<Progress>,
@@ -103,6 +147,8 @@ impl App {
             measure: Measure::new(),
             panel: Some(Panel::Statistics),
             viewport: Viewport::new(),
+            animation: Animation::new(1, 0.0),
+            movie: None,
             source: None,
             analysis: Vec::new(),
             progress: Vec::new(),
@@ -159,6 +205,10 @@ impl App {
             figure,
             renderer,
         });
+        if let Some(scene) = self.scene.as_ref() {
+            self.animation
+                .reset(scene.dataset.frame_count(), scene.dataset.frame_interval());
+        }
         self.start_detect(staged.spots);
         self.start_detect(staged.surfaces);
         self.start_detect(staged.filaments);
@@ -191,6 +241,7 @@ impl App {
         }
         self.sync_title();
         self.advance_playback();
+        self.advance_animation();
         let surface = self.surface.as_ref().expect("the surface is alive");
         let scale = surface.window.scale_factor() as f32;
         let size = surface.gpu.size();
@@ -212,10 +263,17 @@ impl App {
                 .fit(world, voxel, volume_aspect, section_aspect);
             self.needs_fit = false;
         }
-        let mut delay = self
-            .render(output, volume_region, section_region)
-            .unwrap_or(Duration::MAX);
-        if self.frame.samples < SAMPLE_LIMIT {
+        let mut delay = if self.movie.is_some() {
+            self.record(output).unwrap_or(Duration::MAX)
+        } else {
+            self.render(output, volume_region, section_region)
+                .unwrap_or(Duration::MAX)
+        };
+        if self.movie.is_some() {
+            delay = Duration::ZERO;
+        } else if self.animation.previewing {
+            delay = delay.min(ANIMATION_INTERVAL);
+        } else if self.frame.samples < SAMPLE_LIMIT {
             delay = Duration::ZERO;
         }
         if self.streaming() {
@@ -312,9 +370,111 @@ impl App {
                         batch.cancel();
                     }
                 }
+                Action::ToggleAnimation => self.toggle_animation(),
+                Action::ScrubAnimation(position) => self.scrub_animation(position),
+                Action::SetKeyframe => self.set_keyframe(),
+                Action::ClearKeyframes => {
+                    self.animation.timeline.clear();
+                    self.animation.selected = None;
+                }
+                Action::SelectKeyframe(index) => self.animation.selected = Some(index),
+                Action::DeleteKeyframe(index) => self.delete_keyframe(index),
+                Action::SetMovieWidth(width) => self.animation.width = width,
+                Action::ExportMovie => self.begin_movie(),
+                Action::CancelMovie => self.cancel_movie(),
             }
         }
         false
+    }
+
+    fn toggle_animation(&mut self) {
+        if self.animation.previewing {
+            self.animation.stop();
+            self.request_redraw();
+            return;
+        }
+        if self.animation.timeline.is_empty() {
+            self.animation.message = Some("set a keyframe before previewing".to_string());
+            return;
+        }
+        self.playing = false;
+        self.last_advance = None;
+        if self.animation.position >= self.animation.timeline.duration() {
+            self.animation.position = 0.0;
+        }
+        self.animation.message = None;
+        self.animation.previewing = true;
+        self.animation.last = Some(Instant::now());
+        self.pose_animation();
+        self.request_redraw();
+    }
+
+    fn scrub_animation(&mut self, position: f32) {
+        self.animation.stop();
+        self.playing = false;
+        self.last_advance = None;
+        self.animation.position = position.clamp(0.0, self.animation.timeline.duration());
+        self.pose_animation();
+        self.request_redraw();
+    }
+
+    fn pose_animation(&mut self) {
+        let position = self.animation.position;
+        if let Some(sample) = self.animation.timeline.sample(position) {
+            self.apply_sample(sample);
+        }
+    }
+
+    fn apply_sample(&mut self, sample: Sample) {
+        self.viewport.restore_view(sample.camera, sample.section);
+        self.set_time(sample.time);
+    }
+
+    fn advance_animation(&mut self) {
+        if !self.animation.previewing {
+            return;
+        }
+        let now = Instant::now();
+        let Some(last) = self.animation.last.replace(now) else {
+            return;
+        };
+        let duration = self.animation.timeline.duration();
+        let elapsed = now.duration_since(last).as_secs_f32().min(0.25);
+        self.animation.position = (self.animation.position + elapsed) % duration;
+        self.pose_animation();
+    }
+
+    fn set_keyframe(&mut self) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let at = self
+            .animation
+            .position
+            .clamp(0.0, self.animation.timeline.duration());
+        let key = Keyframe {
+            at,
+            time: scene.time(),
+            camera: self.viewport.camera_state(),
+            section: self.viewport.section_state(),
+        };
+        let index = self.animation.timeline.insert(key);
+        self.animation.position = at;
+        self.animation.selected = Some(index);
+        self.animation.message = None;
+        self.request_redraw();
+    }
+
+    fn delete_keyframe(&mut self, index: usize) {
+        if self.animation.timeline.remove(index).is_none() {
+            return;
+        }
+        self.animation.selected = match self.animation.selected {
+            Some(selected) if selected == index => None,
+            Some(selected) if selected > index => Some(selected - 1),
+            selected => selected,
+        };
+        self.request_redraw();
     }
 
     fn toggle_play(&mut self) {
@@ -326,11 +486,15 @@ impl App {
         }
         self.playing = !self.playing;
         self.last_advance = self.playing.then(Instant::now);
+        if self.playing {
+            self.animation.stop();
+        }
     }
 
     fn scrub(&mut self, time: u32) {
         self.playing = false;
         self.last_advance = None;
+        self.animation.stop();
         self.set_time(time);
     }
 
@@ -400,6 +564,9 @@ impl App {
     }
 
     fn run_ui(&mut self) -> (egui::FullOutput, Vec<Action>) {
+        let size = self
+            .movie_layout()
+            .map_or([MOVIE_WIDTH, MOVIE_WIDTH * 9 / 16], |layout| layout.0);
         let project = self.project.as_ref().map(|path| file_name(path));
         let dirty = self.dirty();
         let surface = self.surface.as_mut().expect("the surface is alive");
@@ -418,10 +585,13 @@ impl App {
         let pending = self.in_flight.len();
         let analysis = self.progress.as_slice();
         let playing = self.playing;
+        let scene_frames = scene.frame_count();
+        let frame_interval = scene.dataset.frame_interval();
         let output_text = self
             .batch_output
             .as_ref()
             .map(|path| path.display().to_string());
+        let movie = self.movie.as_ref().map(|movie| (movie.frame, movie.frames));
         let mut actions = Vec::new();
         let output = egui.run(window, |root| {
             actions = grana_ui::build(
@@ -431,6 +601,18 @@ impl App {
                     measure: &mut self.measure,
                     panel: &mut self.panel,
                     viewport: &mut self.viewport,
+                    animation: grana_ui::Animation {
+                        timeline: &mut self.animation.timeline,
+                        position: self.animation.position,
+                        previewing: self.animation.previewing,
+                        selected: self.animation.selected,
+                        width: self.animation.width,
+                        size,
+                        movie,
+                        message: self.animation.message.as_deref(),
+                        frames: scene_frames,
+                        frame_interval,
+                    },
                     adapter,
                     loading,
                     message,
@@ -458,7 +640,9 @@ impl App {
         section_region: [u32; 4],
     ) -> Option<Duration> {
         if self.snapshot.is_some() {
-            return self.capture();
+            let delay = self.capture();
+            self.present_ui(output);
+            return delay;
         }
         let repaint_delay = output
             .viewport_output
@@ -610,6 +794,9 @@ impl App {
     }
 
     fn begin_snapshot(&mut self) {
+        if self.movie.is_some() {
+            return;
+        }
         let (Some(surface), Some(scene)) = (self.surface.as_ref(), self.scene.as_ref()) else {
             return;
         };
@@ -650,6 +837,246 @@ impl App {
             attempts: 0,
         });
         self.message = None;
+    }
+
+    fn begin_movie(&mut self) {
+        if self.movie.is_some() || self.snapshot.is_some() || self.loading.is_some() {
+            return;
+        }
+        if self.animation.timeline.is_empty() {
+            self.animation.message = Some("set a keyframe before exporting".to_string());
+            return;
+        }
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let suggested = format!("{}-movie.mp4", pipeline::slug(scene.dataset.name()));
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Save a movie")
+            .set_file_name(suggested)
+            .add_filter("MP4", &["mp4"])
+            .save_file()
+        else {
+            return;
+        };
+        self.start_movie(path);
+    }
+
+    fn start_movie(&mut self, path: PathBuf) {
+        if self.movie.is_some() || self.snapshot.is_some() || self.loading.is_some() {
+            return;
+        }
+        if self.animation.timeline.is_empty() {
+            self.animation.message = Some("set a keyframe before exporting".to_string());
+            return;
+        }
+        let (Some(surface), Some(scene)) = (self.surface.as_ref(), self.scene.as_ref()) else {
+            return;
+        };
+        let Some((size, volume)) = self.movie_layout() else {
+            return;
+        };
+        let limit = surface.gpu.device.limits().max_texture_dimension_2d;
+        if size[0] > limit || size[1] > limit {
+            self.animation.message = Some(format!(
+                "a {} × {} movie exceeds the {limit} pixel limit of this device",
+                size[0], size[1]
+            ));
+            return;
+        }
+        let plan = movie::Plan {
+            path,
+            size,
+            volume,
+            fps: self.animation.timeline.fps(),
+            frames: self.animation.timeline.frames(),
+            resume: scene.time(),
+            position: self.animation.position,
+        };
+        match Movie::start(&surface.gpu.device, surface.gpu.format(), plan) {
+            Ok(started) => {
+                self.movie = Some(started);
+                self.animation.stop();
+                self.playing = false;
+                self.last_advance = None;
+                self.animation.message = None;
+                self.message = None;
+                self.repaint_at = Some(Instant::now());
+            }
+            Err(detail) => self.message = Some(Message::error(detail)),
+        }
+    }
+
+    fn cancel_movie(&mut self) {
+        if self.movie.is_none() {
+            return;
+        }
+        self.stop_movie(None);
+        self.animation.message = Some("the movie was cancelled".to_string());
+    }
+
+    fn stop_movie(&mut self, detail: Option<String>) {
+        let Some(movie) = self.movie.take() else {
+            return;
+        };
+        let (resume, position) = movie.resume();
+        drop(movie);
+        self.restore_time(resume, position);
+        if let Some(detail) = detail {
+            self.message = Some(Message::error(detail));
+        }
+        self.repaint_at = Some(Instant::now());
+    }
+
+    fn finish_movie(&mut self) {
+        let Some(movie) = self.movie.take() else {
+            return;
+        };
+        let (resume, position) = movie.resume();
+        match movie.finish() {
+            Ok(path) => {
+                self.animation.message = Some(format!("saved {}", movie::name(&path)));
+                self.message = None;
+            }
+            Err(detail) => self.message = Some(Message::error(detail)),
+        }
+        self.restore_time(resume, position);
+        self.repaint_at = Some(Instant::now());
+    }
+
+    fn restore_time(&mut self, time: u32, position: f32) {
+        self.set_time(time);
+        self.animation.position = position.clamp(0.0, self.animation.timeline.duration());
+    }
+
+    fn record(&mut self, output: egui::FullOutput) -> Option<Duration> {
+        let Some(frame) = self.movie.as_ref().map(|movie| movie.frame) else {
+            self.present_ui(output);
+            return Some(Duration::ZERO);
+        };
+        let Some(sample) = self.animation.timeline.sample_frame(frame) else {
+            self.stop_movie(Some("the timeline ended before the movie did".to_string()));
+            self.present_ui(output);
+            return Some(Duration::ZERO);
+        };
+        self.set_time(sample.time);
+        let mut camera = Camera::new(35.0);
+        camera.restore(sample.camera);
+        let mut section = SectionCamera::new(sample.section.axis);
+        section.restore(sample.section);
+        let mut complete = false;
+        let mut failure = None;
+        {
+            let (Some(surface), Some(scene), Some(movie)) = (
+                self.surface.as_mut(),
+                self.scene.as_mut(),
+                self.movie.as_mut(),
+            ) else {
+                self.present_ui(output);
+                return Some(Duration::ZERO);
+            };
+            let rendered = scene.rendered();
+            let info = surface.renderer.draw(
+                &surface.gpu.device,
+                &surface.gpu.queue,
+                Frame {
+                    target: movie.target(),
+                    size: movie.size,
+                    volume_region: movie.volume,
+                    section_region: [0, 0, 1, 1],
+                    time: sample.time,
+                    camera: &camera,
+                    section: &section,
+                    region: scene.region,
+                    exposure: scene.exposure,
+                    samples: MOVIE_SAMPLES,
+                    scene: &rendered.frame(),
+                    prefetch: false,
+                },
+            );
+            movie.attempts += 1;
+            if info.samples >= MOVIE_SAMPLES && info.settled {
+                let image = movie.capture(
+                    &surface.gpu.device,
+                    &surface.gpu.queue,
+                    surface.gpu.format(),
+                );
+                match movie.push(&image) {
+                    Ok(()) => complete = movie.complete(),
+                    Err(detail) => failure = Some(detail),
+                }
+            } else if movie.attempts > MOVIE_ATTEMPTS {
+                failure = Some("the movie could not resolve the streamed volume".to_string());
+            }
+        }
+        self.present_ui(output);
+        if let Some(detail) = failure {
+            self.stop_movie(Some(detail));
+            return Some(Duration::ZERO);
+        }
+        if complete {
+            self.finish_movie();
+        }
+        Some(Duration::ZERO)
+    }
+
+    fn present_ui(&mut self, output: egui::FullOutput) {
+        let Some(surface) = self.surface.as_mut() else {
+            return;
+        };
+        let Some(frame) = surface.gpu.acquire() else {
+            surface
+                .egui
+                .discard(&surface.gpu.device, &surface.gpu.queue, output);
+            return;
+        };
+        let size = surface.gpu.size();
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder =
+            surface
+                .gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("grana.ui.present"),
+                });
+        let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("grana.ui.clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        surface.egui.paint(
+            &surface.gpu.device,
+            &surface.gpu.queue,
+            &mut encoder,
+            &view,
+            size,
+            output,
+        );
+        surface.gpu.queue.submit([encoder.finish()]);
+        surface.gpu.queue.present(frame);
+    }
+
+    fn movie_layout(&self) -> Option<([u32; 2], [u32; 4])> {
+        let surface = self.surface.as_ref()?;
+        let scale = surface.window.scale_factor() as f32;
+        let surface_size = surface.gpu.size();
+        let pane = physical_region(self.viewport.volume_rect(), scale, surface_size);
+        let factor = self.animation.width as f32 / pane[2] as f32;
+        let size = [
+            even((pane[2] as f32 * factor).round() as u32),
+            even((pane[3] as f32 * factor).round() as u32),
+        ];
+        Some((size, scale_region(pane, [pane[0], pane[1]], factor, size)))
     }
 
     fn poll_requests(&mut self) {
@@ -1379,6 +1806,9 @@ impl App {
         self.message = None;
         self.in_flight.clear();
         self.snapshot = None;
+        self.movie = None;
+        self.animation.stop();
+        self.animation.message = None;
         self.frame = FrameInfo::default();
         self.repaint_at = Some(Instant::now());
         self.playing = false;
@@ -1403,6 +1833,8 @@ impl App {
         self.last_advance = None;
         self.needs_fit = true;
         self.fit_section = false;
+        self.animation
+            .reset(scene.dataset.frame_count(), scene.dataset.frame_interval());
         if let Some(pending) = self.pending.take() {
             if pending.project.matches(&scene.dataset) {
                 scene.restore(pending.project.scene);
@@ -1410,7 +1842,11 @@ impl App {
                 self.apply_view(pending.project.view);
                 self.project = Some(pending.path);
                 self.needs_fit = false;
-                self.saved = Some(scene.document_hash() ^ self.measure.document_hash());
+                self.saved = Some(
+                    scene.document_hash()
+                        ^ self.measure.document_hash()
+                        ^ self.animation.timeline.document(),
+                );
             } else {
                 self.message = Some(Message::error(
                     "the project was saved from a dataset with a different shape, channels or duration",
@@ -1473,17 +1909,31 @@ impl App {
             camera: self.viewport.camera_state(),
             section: self.viewport.section_state(),
             split: self.viewport.split(),
+            timeline: self.animation.timeline.clone(),
         }
     }
 
     fn apply_view(&mut self, view: ViewState) {
-        self.viewport.restore_view(view.camera, view.section);
-        self.viewport.set_split(view.split);
+        let ViewState {
+            camera,
+            section,
+            split,
+            timeline,
+        } = view;
+        self.viewport.restore_view(camera, section);
+        self.viewport.set_split(split);
+        self.animation.timeline = timeline;
+        self.animation.selected = None;
+        self.animation.position = 0.0;
     }
 
     fn document_hash(&self) -> Option<u64> {
         let scene = self.scene.as_ref()?;
-        Some(scene.document_hash() ^ self.measure.document_hash())
+        Some(
+            scene.document_hash()
+                ^ self.measure.document_hash()
+                ^ self.animation.timeline.document(),
+        )
     }
 
     fn dirty(&self) -> bool {
@@ -1611,6 +2061,18 @@ fn physical_region(rect: egui::Rect, scale: f32, surface: [u32; 2]) -> [u32; 4] 
     let height = ((rect.height() * scale).round() as u32)
         .min(surface[1] - y)
         .max(1);
+    [x, y, width, height]
+}
+
+fn even(value: u32) -> u32 {
+    (value.max(2) / 2) * 2
+}
+
+fn scale_region(region: [u32; 4], origin: [u32; 2], factor: f32, size: [u32; 2]) -> [u32; 4] {
+    let x = ((region[0].saturating_sub(origin[0]) as f32 * factor).round() as u32).min(size[0] - 1);
+    let y = ((region[1].saturating_sub(origin[1]) as f32 * factor).round() as u32).min(size[1] - 1);
+    let width = ((region[2] as f32 * factor).round() as u32).clamp(1, size[0] - x);
+    let height = ((region[3] as f32 * factor).round() as u32).clamp(1, size[1] - y);
     [x, y, width, height]
 }
 

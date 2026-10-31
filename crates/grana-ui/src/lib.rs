@@ -1,4 +1,5 @@
 mod action;
+mod animation_panel;
 mod batch_panel;
 mod coloc_panel;
 mod coloring;
@@ -18,5 +19,5 @@ pub use egui::EguiLayer;
 pub use figure::{Caption, Figure, Target};
 pub use overlay::{Legend, legends};
 pub use panel::{Panel, build};
-pub use state::{BatchDataset, Message, State};
+pub use state::{Animation, BatchDataset, Message, State};
 pub use viewport::{Interaction, Pane, Viewport};

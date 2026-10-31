@@ -2,6 +2,7 @@ use std::fs;
 
 use glam::Vec3;
 use grana_analysis::SpotParams;
+use grana_animation::{Keyframe, Timeline};
 use grana_measure::{Measurement, TrackMeasurement};
 use grana_object::{
     Bounds, COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocPair, ColocSeries, FilamentSet,
@@ -74,6 +75,7 @@ fn round_trips_a_project() {
             span: 30.0,
         },
         split: 0.42,
+        timeline: timeline(),
     };
     let source = Source::Synthetic {
         name: "fixture".to_string(),
@@ -117,6 +119,7 @@ fn rejects_damaged_projects() {
                 span: 1.0,
             },
             split: 0.5,
+            timeline: Timeline::default(),
         },
     );
     let path = std::env::temp_dir().join(format!("grana-damaged-{}.grana", std::process::id()));
@@ -127,6 +130,41 @@ fn rejects_damaged_projects() {
     fs::write(&path, &bytes[..bytes.len() / 2]).expect("the truncated file writes");
     assert!(Project::read(&path).is_err());
     fs::remove_file(&path).ok();
+}
+
+fn timeline() -> Timeline {
+    let mut timeline = Timeline::new(24, 6.0);
+    timeline.insert(Keyframe {
+        at: 0.0,
+        time: 0,
+        camera: CameraState {
+            pivot: [0.5, 0.0, -1.0],
+            yaw: 0.2,
+            pitch: 0.1,
+            distance: 9.0,
+            fov_y: 0.7,
+        },
+        section: SectionState {
+            axis: Axis::Z,
+            span: 4.0,
+        },
+    });
+    timeline.insert(Keyframe {
+        at: 6.0,
+        time: 1,
+        camera: CameraState {
+            pivot: [0.0, 1.0, 0.0],
+            yaw: 3.6,
+            pitch: -0.4,
+            distance: 4.0,
+            fov_y: 0.7,
+        },
+        section: SectionState {
+            axis: Axis::X,
+            span: 2.5,
+        },
+    });
+    timeline
 }
 
 fn fixture() -> Scene {

@@ -65,12 +65,8 @@ impl EguiLayer {
             pixels_per_point,
             ..
         } = output;
+        self.upload(device, queue, &mut textures_delta);
         let shapes = self.context.tessellate(shapes, pixels_per_point);
-        for (id, deltas) in &textures_delta.set {
-            for delta in deltas {
-                self.renderer.update_texture(device, queue, *id, delta);
-            }
-        }
 
         let screen_descriptor = egui_wgpu::ScreenDescriptor {
             size_in_pixels: size,
@@ -97,6 +93,35 @@ impl EguiLayer {
             self.renderer.render(&mut pass, &shapes, &screen_descriptor);
         }
 
+        self.release(&mut textures_delta);
+    }
+
+    pub fn discard(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        output: egui::FullOutput,
+    ) {
+        let mut textures_delta = output.textures_delta;
+        self.upload(device, queue, &mut textures_delta);
+        self.release(&mut textures_delta);
+    }
+
+    fn upload(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        textures_delta: &mut egui::TexturesDelta,
+    ) {
+        for (id, deltas) in &textures_delta.set {
+            for delta in deltas {
+                self.renderer.update_texture(device, queue, *id, delta);
+            }
+        }
+        textures_delta.set.clear();
+    }
+
+    fn release(&mut self, textures_delta: &mut egui::TexturesDelta) {
         for id in &textures_delta.free {
             self.renderer.free_texture(id);
         }

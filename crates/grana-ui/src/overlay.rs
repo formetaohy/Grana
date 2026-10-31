@@ -14,6 +14,7 @@ const REGION_ACTIVE_COLOR: Color32 = Color32::from_rgba_premultiplied(255, 224, 
 const HANDLE_SIDE: f32 = 9.0;
 const HANDLE_MINIMUM: f32 = 1.0e-3;
 const SEPARATOR_COLOR: Color32 = Color32::from_gray(44);
+const PANEL_COLOR: Color32 = Color32::from_rgba_premultiplied(24, 24, 27, 235);
 const SCALE_TARGET: f32 = 116.0;
 const LEGEND_WIDTH: f32 = 196.0;
 const LEGEND_BAR_WIDTH: f32 = 12.0;
@@ -57,6 +58,7 @@ pub struct Overlay<'a> {
     pub section_rect: Rect,
     pub region: &'a mut Region,
     pub legends: &'a [Legend],
+    pub recording: Option<(u32, u32)>,
 }
 
 pub fn paint(ui: &egui::Ui, overlay: &mut Overlay<'_>) {
@@ -73,6 +75,22 @@ pub fn paint(ui: &egui::Ui, overlay: &mut Overlay<'_>) {
     );
     paint_volume(ui, overlay);
     paint_section(ui, overlay);
+    if let Some((frame, frames)) = overlay.recording {
+        paint_recording(ui, overlay.volume_rect, frame, frames);
+    }
+}
+
+fn paint_recording(ui: &egui::Ui, rect: Rect, frame: u32, frames: u32) {
+    let painter = ui.painter().with_clip_rect(rect);
+    let text = format!("rendering movie · {frame} / {frames}");
+    let galley = painter.layout_no_wrap(text, FontId::monospace(13.0), LABEL_COLOR);
+    let padding = egui::vec2(22.0, 10.0);
+    let pill = Rect::from_center_size(
+        Pos2::new(rect.center().x, rect.top() + 30.0),
+        galley.size() + padding,
+    );
+    painter.rect_filled(pill, pill.height() * 0.5, PANEL_COLOR);
+    painter.galley(pill.center() - 0.5 * galley.size(), galley, BAR_COLOR);
 }
 
 fn paint_volume(ui: &egui::Ui, overlay: &mut Overlay<'_>) {

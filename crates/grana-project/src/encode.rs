@@ -1,3 +1,4 @@
+use grana_animation::{Keyframe, Timeline};
 use grana_measure::{Filter, Measurement, TrackMeasurement};
 use grana_object::{
     Bounds, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocThresholds, FilamentSet,
@@ -60,6 +61,24 @@ impl Encode for ViewState {
         self.camera.encode(writer);
         self.section.encode(writer);
         writer.f32(self.split);
+        self.timeline.encode(writer);
+    }
+}
+
+impl Encode for Timeline {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u32(self.fps());
+        writer.f32(self.duration());
+        self.keys().encode(writer);
+    }
+}
+
+impl Encode for Keyframe {
+    fn encode(&self, writer: &mut Writer) {
+        writer.f32(self.at);
+        writer.u32(self.time);
+        self.camera.encode(writer);
+        self.section.encode(writer);
     }
 }
 

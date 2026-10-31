@@ -37,4 +37,13 @@ pub enum Action {
     ChooseBatchOutput,
     RunBatch,
     CancelBatch,
+    ToggleAnimation,
+    ScrubAnimation(f32),
+    SetKeyframe,
+    ClearKeyframes,
+    SelectKeyframe(usize),
+    DeleteKeyframe(usize),
+    SetMovieWidth(u32),
+    ExportMovie,
+    CancelMovie,
 }

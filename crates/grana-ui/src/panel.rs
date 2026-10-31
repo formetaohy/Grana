@@ -14,6 +14,7 @@ pub enum Panel {
     Statistics,
     Colocalization,
     Batch,
+    Animation,
 }
 
 impl Panel {
@@ -22,6 +23,7 @@ impl Panel {
             Self::Statistics => "Statistics",
             Self::Colocalization => "Colocalization",
             Self::Batch => "Batch",
+            Self::Animation => "Animation",
         }
     }
 }
@@ -40,6 +42,7 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
                     Panel::Statistics => crate::measure_panel::build(ui, state, &mut actions),
                     Panel::Colocalization => crate::coloc_panel::build(ui, state, &mut actions),
                     Panel::Batch => crate::batch_panel::build(ui, state, &mut actions),
+                    Panel::Animation => crate::animation_panel::build(ui, state, &mut actions),
                 }
             });
     }
@@ -67,6 +70,8 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
                     crate::object_panel::build(ui, state, &mut actions);
                     ui.separator();
                     measure_section(ui, state, &mut actions);
+                    ui.separator();
+                    animation_section(ui, state, &mut actions);
                     ui.separator();
                     display_section(ui, state.scene);
                     ui.separator();
@@ -133,6 +138,7 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
             section_rect: section,
             region: &mut state.scene.region,
             legends: &legends,
+            recording: state.animation.movie,
         };
         overlay::paint(ui, &mut overlay);
         if let Some(bar) = timeline {
@@ -144,7 +150,12 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
 
 fn tabs(ui: &mut Ui, actions: &mut Vec<Action>, panel: Panel) {
     ui.horizontal(|ui| {
-        for candidate in [Panel::Statistics, Panel::Colocalization, Panel::Batch] {
+        for candidate in [
+            Panel::Statistics,
+            Panel::Colocalization,
+            Panel::Batch,
+            Panel::Animation,
+        ] {
             if ui
                 .selectable_label(panel == candidate, candidate.name())
                 .clicked()
@@ -325,6 +336,28 @@ fn measure_section(ui: &mut Ui, state: &State<'_>, actions: &mut Vec<Action>) {
             RichText::new("statistics and colocalization")
                 .small()
                 .weak(),
+        );
+    });
+}
+
+fn animation_section(ui: &mut Ui, state: &State<'_>, actions: &mut Vec<Action>) {
+    ui.horizontal(|ui| {
+        let open = *state.panel == Some(Panel::Animation);
+        if ui.selectable_label(open, "Animation").clicked() {
+            actions.push(Action::SetPanel((!open).then_some(Panel::Animation)));
+        }
+        let keys = state.animation.timeline.keys().len();
+        ui.label(
+            RichText::new(if keys == 0 {
+                "a keyframed camera movie".to_string()
+            } else {
+                format!(
+                    "{keys} keyframes · {} frames",
+                    state.animation.timeline.frames()
+                )
+            })
+            .small()
+            .weak(),
         );
     });
 }

@@ -64,6 +64,7 @@ pub struct FrameInfo {
     pub bytes: u64,
     pub geometry: u64,
     pub samples: u32,
+    pub settled: bool,
 }
 
 #[derive(Default)]
@@ -566,6 +567,7 @@ impl Renderer {
             levels,
         );
         let unsettled = *settled != Some(residency);
+        info.settled = !unsettled;
         let slot_grid = atlas.slot_grid();
         ensure_brick(
             device,

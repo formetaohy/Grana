@@ -26,7 +26,9 @@ serde_json = "1"
 rfd = "0.17"
 zarrs = { version = "0.23", default-features = false, features = ["filesystem", "blosc", "zstd", "gzip", "sharding", "crc32c"] }
 ome_zarr_metadata = "0.3"
+openh264 = "0.9"
 zstd = "0.13"
+grana-animation = { version = "0.1.0", path = "crates/grana-animation" }
 grana-volume = { version = "0.1.0", path = "crates/grana-volume" }
 grana-object = { version = "0.1.0", path = "crates/grana-object" }
 grana-gpu = { version = "0.1.0", path = "crates/grana-gpu" }
@@ -38,6 +40,7 @@ grana-render = { version = "0.1.0", path = "crates/grana-render" }
 grana-zarr = { version = "0.1.0", path = "crates/grana-zarr" }
 grana-measure = { version = "0.1.0", path = "crates/grana-measure" }
 grana-pipeline = { version = "0.1.0", path = "crates/grana-pipeline" }
+grana-video = { version = "0.1.0", path = "crates/grana-video" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -60,6 +63,7 @@ path = "src/main.rs"
 
 [dependencies]
 grana-analysis = { workspace = true }
+grana-animation = { workspace = true }
 grana-gpu = { workspace = true }
 grana-measure = { workspace = true }
 grana-object = { workspace = true }
@@ -68,6 +72,7 @@ grana-project = { workspace = true }
 grana-render = { workspace = true }
 grana-scene = { workspace = true }
 grana-ui = { workspace = true }
+grana-video = { workspace = true }
 grana-volume = { workspace = true }
 grana-zarr = { workspace = true }
 egui = { workspace = true }

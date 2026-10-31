@@ -1,13 +1,14 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+use grana_animation::Timeline;
 use grana_render::{CameraState, SectionState};
 use grana_scene::{Dataset, Measure, MeasureState, Scene, SceneState};
 
 use crate::binary::{Decode, Encode, Reader, Writer};
 use crate::error::Error;
 
-const MAGIC: &[u8; 10] = b"granaproj3";
+const MAGIC: &[u8; 10] = b"granaproj4";
 const HEADER: usize = MAGIC.len() + size_of::<u64>();
 const COMPRESSION_LEVEL: i32 = 6;
 const RAW_LIMIT: u64 = 16 << 30;
@@ -38,6 +39,7 @@ pub struct ViewState {
     pub camera: CameraState,
     pub section: SectionState,
     pub split: f32,
+    pub timeline: Timeline,
 }
 
 impl Project {

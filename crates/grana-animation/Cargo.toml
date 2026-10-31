@@ -1,0 +1,14 @@
+[package]
+name = "grana-animation"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+grana-render = { workspace = true }
+grana-volume = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,14 @@
+[package]
+name = "grana-video"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+openh264 = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

@@ -2,6 +2,7 @@ mod app;
 mod demo;
 mod gpu;
 mod loader;
+mod movie;
 mod snapshot;
 
 use std::path::{Path, PathBuf};
