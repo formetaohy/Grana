@@ -64,8 +64,8 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>, id: 
         object.set_track_params(updated);
     }
 
-    let tracking = progress(state.analysis, id, Job::Track);
-    let detecting = progress(state.analysis, id, Job::Detect);
+    let tracking = progress(state.analysis, Job::Track(id));
+    let detecting = progress(state.analysis, Job::Detect(id));
     ui.horizontal(|ui| {
         let enabled = tracking.is_none() && detecting.is_none() && detected > 0;
         if ui
@@ -83,7 +83,7 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>, id: 
     });
     if let Some(tracking) = tracking {
         ui.label(
-            RichText::new(caption(kind, Job::Track, tracking, frame_count))
+            RichText::new(caption(kind, Job::Track(id), tracking, frame_count))
                 .small()
                 .weak(),
         );

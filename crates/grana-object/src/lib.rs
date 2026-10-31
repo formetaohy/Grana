@@ -1,4 +1,5 @@
 mod bounds;
+mod coloc;
 mod filament;
 mod intensity;
 mod mesh;
@@ -8,6 +9,10 @@ mod track;
 mod tube;
 
 pub use bounds::Bounds;
+pub use coloc::{
+    COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocStatistics,
+    ColocThresholds,
+};
 pub use filament::{FilamentSet, FilamentStatistics, FilamentTopology};
 pub use intensity::{IntensityTable, SampleAccumulator, SampleStatistics};
 pub use mesh::{Mesh, MeshVertex};

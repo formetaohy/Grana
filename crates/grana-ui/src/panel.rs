@@ -1,6 +1,6 @@
 use egui::{RichText, Ui};
 use grana_render::ViewInfo;
-use grana_scene::{Dataset, Job, ObjectKind, ObjectSetId, Progress, Scene};
+use grana_scene::{Dataset, Job, ObjectKind, Progress, Scene};
 use grana_volume::Axis;
 
 use crate::action::Action;
@@ -9,15 +9,35 @@ use crate::state::State;
 
 const TIMELINE_HEIGHT: f32 = 36.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Panel {
+    Statistics,
+    Colocalization,
+}
+
+impl Panel {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Statistics => "Statistics",
+            Self::Colocalization => "Colocalization",
+        }
+    }
+}
+
 pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
     let mut actions = Vec::new();
-    if *state.measure_open {
-        egui::Panel::bottom("measure")
+    if let Some(panel) = *state.panel {
+        egui::Panel::bottom("analysis")
             .resizable(true)
-            .default_size(280.0)
-            .min_size(280.0)
+            .default_size(300.0)
+            .min_size(220.0)
             .show(root, |ui| {
-                crate::measure_panel::build(ui, state, &mut actions);
+                tabs(ui, &mut actions, panel);
+                ui.separator();
+                match panel {
+                    Panel::Statistics => crate::measure_panel::build(ui, state, &mut actions),
+                    Panel::Colocalization => crate::coloc_panel::build(ui, state, &mut actions),
+                }
             });
     }
     egui::Panel::left("controls")
@@ -43,7 +63,7 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
                     ui.separator();
                     crate::object_panel::build(ui, state, &mut actions);
                     ui.separator();
-                    measure_section(ui, state);
+                    measure_section(ui, state, &mut actions);
                     ui.separator();
                     display_section(ui, state.scene);
                     ui.separator();
@@ -116,6 +136,23 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
     actions
 }
 
+fn tabs(ui: &mut Ui, actions: &mut Vec<Action>, panel: Panel) {
+    ui.horizontal(|ui| {
+        for candidate in [Panel::Statistics, Panel::Colocalization] {
+            if ui
+                .selectable_label(panel == candidate, candidate.name())
+                .clicked()
+            {
+                actions.push(Action::SetPanel(Some(candidate)));
+            }
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Hide").clicked() {
+                actions.push(Action::SetPanel(None));
+            }
+        });
+    });
+}
 fn timeline_bar(ui: &mut Ui, rect: egui::Rect, state: &State<'_>, actions: &mut Vec<Action>) {
     ui.painter().line_segment(
         [
@@ -266,16 +303,14 @@ fn dataset_section(ui: &mut Ui, dataset: &Dataset) {
         });
 }
 
-fn measure_section(ui: &mut Ui, state: &mut State<'_>) {
+fn measure_section(ui: &mut Ui, state: &State<'_>, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
-        if ui
-            .selectable_label(*state.measure_open, "Statistics")
-            .clicked()
-        {
-            *state.measure_open = !*state.measure_open;
+        let open = state.panel.is_some();
+        if ui.selectable_label(open, "Analysis").clicked() {
+            actions.push(Action::SetPanel((!open).then_some(Panel::Statistics)));
         }
         ui.label(
-            RichText::new("measure objects across channels")
+            RichText::new("statistics and colocalization")
                 .small()
                 .weak(),
         );
@@ -543,23 +578,25 @@ fn camera_section(ui: &mut Ui, actions: &mut Vec<Action>) {
     );
 }
 
-pub(crate) fn progress(analysis: &[Progress], set: ObjectSetId, job: Job) -> Option<Progress> {
+pub(crate) fn progress(analysis: &[Progress], job: Job) -> Option<Progress> {
     analysis
         .iter()
         .copied()
-        .find(|progress| progress.set == set && progress.job == job)
+        .find(|progress| progress.job == job)
 }
 
 pub(crate) fn caption(kind: ObjectKind, job: Job, progress: Progress, frames: u32) -> String {
-    let unit = match (job, kind) {
-        (Job::Detect, ObjectKind::Spots) => "blocks",
-        (Job::Detect, ObjectKind::Surfaces) => "bricks",
-        (Job::Detect, ObjectKind::Filaments) => "frames",
-        (Job::Track, _) => "frames",
+    let unit = match job {
+        Job::Detect(_) => match kind {
+            ObjectKind::Spots => "blocks",
+            ObjectKind::Surfaces => "bricks",
+            ObjectKind::Filaments => "frames",
+        },
+        Job::Track(_) | Job::Coloc => "frames",
     };
     let prefix = match job {
-        Job::Detect if frames > 1 => format!("frame {} · ", progress.time + 1),
-        Job::Detect | Job::Track => String::new(),
+        Job::Detect(_) if frames > 1 => format!("frame {} · ", progress.time + 1),
+        Job::Detect(_) | Job::Track(_) | Job::Coloc => String::new(),
     };
     if progress.total > 0 {
         format!("{prefix}{}/{} {unit}", progress.done, progress.total)

@@ -6,6 +6,7 @@ use grana_render::{
 use grana_volume::{Axis, ChannelInfo, Intensity, Region};
 
 use crate::channel::Channel;
+use crate::coloc::Coloc;
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
@@ -57,6 +58,7 @@ pub struct Scene {
     pub step_scale: f32,
     pub region: Region,
     pub objects: Objects,
+    pub coloc: Coloc,
     time: u32,
     selection: Option<Selection>,
 }
@@ -73,8 +75,9 @@ impl Scene {
                     TransferFunction::tinted(channel.tint()),
                 )
             })
-            .collect();
+            .collect::<Vec<Channel>>();
         let half = 0.5 * dataset.world_size();
+        let channel_count = channels.len();
         Self {
             dataset,
             channels,
@@ -83,6 +86,7 @@ impl Scene {
             step_scale: 1.0,
             region: Region::full(-half, half),
             objects: Objects::new(),
+            coloc: Coloc::new(channel_count),
             time: 0,
             selection: None,
         }

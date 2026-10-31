@@ -1,6 +1,7 @@
 use grana_render::FrameInfo;
 use grana_scene::{Measure, Progress, Scene};
 
+use crate::panel::Panel;
 use crate::viewport::Viewport;
 
 pub struct Message(String);
@@ -18,7 +19,7 @@ impl Message {
 pub struct State<'a> {
     pub scene: &'a mut Scene,
     pub measure: &'a mut Measure,
-    pub measure_open: &'a mut bool,
+    pub panel: &'a mut Option<Panel>,
     pub viewport: &'a mut Viewport,
     pub adapter: &'a str,
     pub loading: Option<&'a str>,

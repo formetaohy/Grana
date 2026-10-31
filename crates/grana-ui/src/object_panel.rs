@@ -179,7 +179,7 @@ fn detect(
     kind: ObjectKind,
     frames: u32,
 ) {
-    let running = progress(state.analysis, id, Job::Detect);
+    let running = progress(state.analysis, Job::Detect(id));
     ui.horizontal(|ui| {
         if ui
             .add_enabled(running.is_none(), egui::Button::new("Detect"))
@@ -196,7 +196,7 @@ fn detect(
     });
     if let Some(running) = running {
         ui.label(
-            RichText::new(caption(kind, Job::Detect, running, frames))
+            RichText::new(caption(kind, Job::Detect(id), running, frames))
                 .small()
                 .weak(),
         );

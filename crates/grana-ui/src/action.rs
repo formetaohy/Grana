@@ -1,6 +1,8 @@
 use grana_scene::{ObjectKind, ObjectSetId, Selection};
 use grana_volume::Axis;
 
+use crate::panel::Panel;
+
 pub enum Action {
     OpenDataset,
     OpenProject,
@@ -22,4 +24,8 @@ pub enum Action {
     CancelTrack(ObjectSetId),
     ClearTracks(ObjectSetId),
     ExportMeasure,
+    SetPanel(Option<Panel>),
+    ComputeColoc,
+    CancelColoc,
+    ExportColoc,
 }

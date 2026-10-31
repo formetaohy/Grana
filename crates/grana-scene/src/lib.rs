@@ -1,4 +1,5 @@
 mod channel;
+mod coloc;
 mod dataset;
 mod job;
 mod measure;
@@ -11,6 +12,7 @@ mod state;
 mod track_layer;
 
 pub use channel::Channel;
+pub use coloc::{Coloc, ColocState};
 pub use dataset::{Dataset, Origin};
 pub use job::{Job, Progress};
 pub use measure::{Measure, MeasureState};

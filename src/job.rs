@@ -4,10 +4,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use grana_analysis::{
-    FilamentParams, FilamentScan, SpotParams, SpotScan, SurfaceBuilder, SurfaceParams,
+    ColocScan, FilamentParams, FilamentScan, SpotParams, SpotScan, SurfaceBuilder, SurfaceParams,
     TrackBuilder, TrackParams, filament_level,
 };
-use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet, TrackSet};
+use grana_object::{
+    ColocPair, ColocSeries, IntensityTable, SampleAccumulator, Spot, SpotSet, TrackSet,
+};
 use grana_scene::{Job, ObjectFrame, ObjectParams, ObjectSetId};
 use grana_volume::{BrickCoord, BrickData, BrickGrid, Pyramid, Region, VoxelData};
 use grana_zarr::Image;
@@ -25,6 +27,10 @@ pub enum Event {
         frame: ObjectFrame,
     },
     Tracks(TrackSet),
+    Coloc {
+        series: Box<ColocSeries>,
+        region: Region,
+    },
     Done,
     Failed(String),
 }
@@ -36,17 +42,12 @@ pub enum Poll {
 }
 
 pub struct Analysis {
-    set: ObjectSetId,
     job: Job,
     events: Receiver<Event>,
     cancel: Arc<AtomicBool>,
 }
 
 impl Analysis {
-    pub fn set(&self) -> ObjectSetId {
-        self.set
-    }
-
     pub fn job(&self) -> Job {
         self.job
     }
@@ -82,8 +83,7 @@ pub fn detect(
     let (events, receiver) = mpsc::channel();
     std::thread::spawn(move || run_detect(source, channel, params, region, token, events));
     Analysis {
-        set,
-        job: Job::Detect,
+        job: Job::Detect(set),
         events: receiver,
         cancel,
     }
@@ -100,8 +100,23 @@ pub fn track(
     let (events, receiver) = mpsc::channel();
     std::thread::spawn(move || run_tracks(frames, params, frame_interval, token, events));
     Analysis {
-        set,
-        job: Job::Track,
+        job: Job::Track(set),
+        events: receiver,
+        cancel,
+    }
+}
+
+pub fn coloc(source: Source, pair: ColocPair, region: Region) -> Analysis {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let token = Arc::clone(&cancel);
+    let (events, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        if let Err(detail) = run_coloc(source, pair, region, &token, &events) {
+            let _ = events.send(Event::Failed(detail));
+        }
+    });
+    Analysis {
+        job: Job::Coloc,
         events: receiver,
         cancel,
     }
@@ -523,6 +538,121 @@ fn scan_surfaces(
             frame: ObjectFrame::Surfaces(builder.finish()),
         });
     }
+    let _ = events.send(Event::Done);
+    Ok(())
+}
+
+fn run_coloc(
+    source: Source,
+    pair: ColocPair,
+    region: Region,
+    cancel: &AtomicBool,
+    events: &Sender<Event>,
+) -> Result<(), String> {
+    match source {
+        Source::Memory(movie) => {
+            let pyramid = movie.pyramid().clone();
+            scan_coloc(
+                &pyramid,
+                pair,
+                region,
+                cancel,
+                events,
+                |time, channel, ranges| {
+                    Ok(movie.region(
+                        time,
+                        channel,
+                        ranges[0].clone(),
+                        ranges[1].clone(),
+                        ranges[2].clone(),
+                    ))
+                },
+            )
+        }
+        Source::File(path) => match Image::open(&path) {
+            Ok(image) => {
+                let pyramid = image.pyramid().clone();
+                scan_coloc(
+                    &pyramid,
+                    pair,
+                    region,
+                    cancel,
+                    events,
+                    |time, channel, ranges| {
+                        image
+                            .read_region(
+                                time,
+                                0,
+                                channel,
+                                ranges[0].clone(),
+                                ranges[1].clone(),
+                                ranges[2].clone(),
+                            )
+                            .map_err(|error| error.to_string())
+                    },
+                )
+            }
+            Err(error) => Err(error.to_string()),
+        },
+    }
+}
+
+fn scan_coloc(
+    pyramid: &Pyramid,
+    pair: ColocPair,
+    region: Region,
+    cancel: &AtomicBool,
+    events: &Sender<Event>,
+    mut read: impl FnMut(u32, usize, &[Range<u32>; 3]) -> Result<VoxelData, String>,
+) -> Result<(), String> {
+    let channels = pyramid.channel_count();
+    if pair.a() >= channels || pair.b() >= channels {
+        return Err(format!(
+            "the dataset has {channels} channels but the pair names {} and {}",
+            pair.a(),
+            pair.b()
+        ));
+    }
+    let intensities = [pair.a(), pair.b()].map(|channel| pyramid.channels()[channel].intensity());
+    if intensities.iter().any(|intensity| intensity.span() <= 0.0) {
+        return Err("the selected channels have no intensity range to colocalize".to_string());
+    }
+    if region.enabled() && region.voxel_range(pyramid.level(0)).is_none() {
+        return Err("the region does not overlap the dataset".to_string());
+    }
+    let frames = pyramid.frame_count();
+    let mut scan = ColocScan::new(
+        pyramid.level(0),
+        frames,
+        channels,
+        intensities,
+        pair,
+        region,
+    );
+    let tiles = scan.tile_count();
+    let total = tiles * frames as usize;
+    for time in 0..frames {
+        for index in 0..tiles {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            let ranges = scan.tile(index);
+            let first = read(time, pair.a(), &ranges)?;
+            let second = read(time, pair.b(), &ranges)?;
+            scan.add(time, index, &first, &second);
+            if index % 16 == 0 || index + 1 == tiles {
+                let _ = events.send(Event::Progress {
+                    time,
+                    done: time as usize * tiles + index + 1,
+                    total,
+                });
+            }
+        }
+    }
+    let _ = events.send(Event::Coloc {
+        series: Box::new(scan.finish()),
+        region,
+    });
     let _ = events.send(Event::Done);
     Ok(())
 }

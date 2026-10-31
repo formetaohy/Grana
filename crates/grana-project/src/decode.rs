@@ -2,13 +2,15 @@ use std::path::PathBuf;
 
 use grana_measure::{Aggregate, Filter, Group};
 use grana_object::{
-    Bounds, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Mesh, MeshVertex,
-    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
+    Bounds, COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocMoments, ColocPair, ColocSeries,
+    ColocThresholds, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Mesh,
+    MeshVertex, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode,
+    TrackSet,
 };
 use grana_render::{CameraState, SectionState, Shading, Stop, TransferFunction};
 use grana_scene::{
-    ChannelState, ItemState, MeasureState, ObjectFrame, ObjectKind, ObjectParams, SceneState,
-    SelectionState, SetState, TrackStyle, Visibility,
+    ChannelState, ColocState, ItemState, MeasureState, ObjectFrame, ObjectKind, ObjectParams,
+    SceneState, SelectionState, SetState, TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Intensity, Region};
 
@@ -117,6 +119,7 @@ impl Decode for SceneState {
             time: reader.u32()?,
             selection: Option::<SelectionState>::decode(reader)?,
             sets: Vec::<SetState>::decode(reader)?,
+            coloc: ColocState::decode(reader)?,
         };
         if state.sets.windows(2).any(|pair| pair[0].id >= pair[1].id) {
             return Err(FAULT_SHAPE);
@@ -632,6 +635,100 @@ impl<T: Decode> Decode for Vec<T> {
             values.push(T::decode(reader)?);
         }
         Ok(values)
+    }
+}
+
+impl Decode for ColocState {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let state = Self {
+            pair: Option::<ColocPair>::decode(reader)?,
+            thresholds: ColocThresholds::decode(reader)?,
+            region: Option::<Region>::decode(reader)?,
+            series: Option::<ColocSeries>::decode(reader)?,
+        };
+        if let Some(series) = &state.series
+            && (state.pair != Some(series.pair()) || state.region.is_none())
+        {
+            return Err(FAULT_SHAPE);
+        }
+        Ok(state)
+    }
+}
+
+impl Decode for ColocPair {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let a = reader.count(1)?;
+        let b = reader.count(1)?;
+        if a == b {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self::new(a, b))
+    }
+}
+
+impl Decode for ColocThresholds {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        Ok(Self::new(unit(reader.f32()?)?, unit(reader.f32()?)?))
+    }
+}
+
+impl Decode for ColocSeries {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let pair = ColocPair::decode(reader)?;
+        let frames = Vec::<ColocFrame>::decode(reader)?;
+        let counts_a = Vec::<u64>::decode(reader)?;
+        let counts_b = Vec::<u64>::decode(reader)?;
+        let scatter = Vec::<u64>::decode(reader)?;
+        let total = ColocFrame::decode(reader)?;
+        if counts_a.len() != COLOC_BINS
+            || counts_b.len() != COLOC_BINS
+            || scatter.len() != COLOC_SCATTER * COLOC_SCATTER
+        {
+            return Err(FAULT_SHAPE);
+        }
+        let voxels = total.moments().voxels();
+        let counted: u64 = counts_a.iter().copied().sum();
+        let scattered: u64 = scatter.iter().copied().sum();
+        let framed: u64 = frames.iter().map(|frame| frame.moments().voxels()).sum();
+        if counted != voxels || scattered != voxels || framed != voxels {
+            return Err(FAULT_SHAPE);
+        }
+        Ok(Self::from_parts(
+            pair, frames, counts_a, counts_b, scatter, total,
+        ))
+    }
+}
+
+impl Decode for ColocFrame {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let moments = ColocMoments::decode(reader)?;
+        let a_by_b = Vec::<f64>::decode(reader)?;
+        let b_by_a = Vec::<f64>::decode(reader)?;
+        if a_by_b.len() != COLOC_BINS || b_by_a.len() != COLOC_BINS {
+            return Err(FAULT_SHAPE);
+        }
+        if a_by_b
+            .iter()
+            .chain(&b_by_a)
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self::from_parts(moments, a_by_b, b_by_a))
+    }
+}
+
+impl Decode for ColocMoments {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let voxels = reader.u64()?;
+        let mut sums = [0.0; 5];
+        for value in &mut sums {
+            *value = reader.f64()?;
+        }
+        if sums.iter().any(|value| !value.is_finite() || *value < 0.0) {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self::new(voxels, sums))
     }
 }
 

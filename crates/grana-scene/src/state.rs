@@ -2,6 +2,7 @@ use grana_object::TrackSet;
 use grana_render::{Shading, TransferFunction};
 use grana_volume::{Intensity, Region};
 
+use crate::coloc::ColocState;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::scene::{Item, Scene, Selection};
@@ -19,6 +20,7 @@ pub struct SceneState {
     pub time: u32,
     pub selection: Option<SelectionState>,
     pub sets: Vec<SetState>,
+    pub coloc: ColocState,
 }
 
 #[derive(Debug, PartialEq)]
@@ -67,6 +69,15 @@ impl SceneState {
                 .sets
                 .iter()
                 .all(|set| set.channel < channel_count && set.frames.len() == frame_count as usize)
+            && self
+                .coloc
+                .pair
+                .is_none_or(|pair| pair.a() < channel_count && pair.b() < channel_count)
+            && self
+                .coloc
+                .series
+                .as_ref()
+                .is_none_or(|series| series.frames().len() == frame_count as usize)
     }
 }
 
@@ -96,6 +107,7 @@ impl Scene {
                 },
             }),
             sets: self.objects.iter().map(|set| set.state()).collect(),
+            coloc: self.coloc.state(),
         }
     }
 
@@ -115,6 +127,8 @@ impl Scene {
         self.step_scale = state.step_scale;
         self.region = state.region;
         self.objects.restore(state.sets, &self.dataset);
+        self.coloc
+            .restore(state.coloc, self.channels.len(), self.frame_count());
         self.set_time(state.time);
         self.select(state.selection.map(|selection| Selection {
             set: ObjectSetId::new(selection.set),
@@ -161,6 +175,7 @@ impl Scene {
             hash = mix(hash, set.kind().index() as u64);
             hash = mix(hash, set.document());
         }
+        hash = mix(hash, self.coloc.document());
         hash
     }
 

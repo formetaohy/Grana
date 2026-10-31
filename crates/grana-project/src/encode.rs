@@ -1,12 +1,13 @@
 use grana_measure::Filter;
 use grana_object::{
-    Bounds, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Mesh, MeshVertex,
-    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
+    Bounds, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocThresholds, FilamentSet,
+    FilamentStatistics, FilamentTopology, IntensityTable, Mesh, MeshVertex, SampleStatistics, Spot,
+    SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_render::{CameraState, SectionState, Shading, Stop, TransferFunction};
 use grana_scene::{
-    ChannelState, ItemState, MeasureState, ObjectFrame, ObjectParams, SceneState, SelectionState,
-    SetState, TrackStyle, Visibility,
+    ChannelState, ColocState, ItemState, MeasureState, ObjectFrame, ObjectParams, SceneState,
+    SelectionState, SetState, TrackStyle, Visibility,
 };
 use grana_volume::{Intensity, Region};
 
@@ -91,6 +92,7 @@ impl Encode for SceneState {
         writer.u32(self.time);
         self.selection.encode(writer);
         self.sets.encode(writer);
+        self.coloc.encode(writer);
     }
 }
 
@@ -413,6 +415,57 @@ impl Encode for Filter {
         writer.count(self.column());
         writer.f32(self.minimum());
         writer.f32(self.maximum());
+    }
+}
+
+impl Encode for ColocState {
+    fn encode(&self, writer: &mut Writer) {
+        self.pair.encode(writer);
+        self.thresholds.encode(writer);
+        self.region.encode(writer);
+        self.series.encode(writer);
+    }
+}
+
+impl Encode for ColocPair {
+    fn encode(&self, writer: &mut Writer) {
+        writer.count(self.a());
+        writer.count(self.b());
+    }
+}
+
+impl Encode for ColocThresholds {
+    fn encode(&self, writer: &mut Writer) {
+        writer.f32(self.a());
+        writer.f32(self.b());
+    }
+}
+
+impl Encode for ColocSeries {
+    fn encode(&self, writer: &mut Writer) {
+        self.pair().encode(writer);
+        self.frames().encode(writer);
+        self.counts_a().encode(writer);
+        self.counts_b().encode(writer);
+        self.scatter().encode(writer);
+        self.total().encode(writer);
+    }
+}
+
+impl Encode for ColocFrame {
+    fn encode(&self, writer: &mut Writer) {
+        self.moments().encode(writer);
+        self.a_by_b().encode(writer);
+        self.b_by_a().encode(writer);
+    }
+}
+
+impl Encode for ColocMoments {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u64(self.voxels());
+        for value in self.sums() {
+            writer.f64(value);
+        }
     }
 }
 

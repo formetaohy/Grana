@@ -1,4 +1,5 @@
 mod assignment;
+mod coloc;
 mod filament;
 mod params;
 mod scan;
@@ -6,6 +7,7 @@ mod surface;
 mod table;
 mod track;
 
+pub use coloc::ColocScan;
 pub use filament::{FilamentScan, filament_level};
 pub use params::{FilamentParams, SpotParams, SurfaceParams, TrackParams};
 pub use scan::SpotScan;

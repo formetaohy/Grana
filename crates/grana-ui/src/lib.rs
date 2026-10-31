@@ -1,4 +1,5 @@
 mod action;
+mod coloc_panel;
 mod egui;
 mod measure_panel;
 mod object_panel;
@@ -11,6 +12,6 @@ mod viewport;
 
 pub use action::Action;
 pub use egui::EguiLayer;
-pub use panel::build;
+pub use panel::{Panel, build};
 pub use state::{Message, State};
 pub use viewport::{Interaction, Pane, Viewport};

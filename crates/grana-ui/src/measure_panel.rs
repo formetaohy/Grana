@@ -26,16 +26,12 @@ fn header(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>) {
         .map(|set| (set.id(), set.name().to_string()))
         .collect::<Vec<_>>();
     ui.horizontal(|ui| {
-        ui.strong("Statistics");
         if sets.is_empty() {
             ui.label(
                 RichText::new("add an object set and detect it to quantify it")
                     .small()
                     .weak(),
             );
-            if ui.button("Hide").clicked() {
-                *state.measure_open = false;
-            }
             return;
         }
         let current = state.measure.set();
@@ -100,9 +96,6 @@ fn header(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>) {
                 .weak(),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Hide").clicked() {
-                *state.measure_open = false;
-            }
             if ui.button("Export CSV").clicked() {
                 actions.push(Action::ExportMeasure);
             }

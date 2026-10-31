@@ -3,16 +3,16 @@ use std::fs;
 use glam::Vec3;
 use grana_analysis::SpotParams;
 use grana_object::{
-    Bounds, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Mesh, MeshVertex,
-    SampleAccumulator, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track,
-    TrackNode, TrackSet,
+    Bounds, COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocPair, ColocSeries, FilamentSet,
+    FilamentStatistics, FilamentTopology, IntensityTable, Mesh, MeshVertex, SampleAccumulator,
+    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_project::{Project, Source, ViewState};
 use grana_render::{CameraState, SectionState, TransferFunction};
 use grana_scene::{
     Dataset, Item, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene, Selection, Visibility,
 };
-use grana_volume::{Axis, Channel, Extent, Movie, Spacing, Volume, VoxelData};
+use grana_volume::{Axis, Channel, Extent, Movie, Region, Spacing, Volume, VoxelData};
 
 const EXTENT: Extent = Extent::new(8, 8, 4);
 
@@ -214,6 +214,27 @@ fn stage(scene: &mut Scene) {
             vec![Track::new(None, vec![node(0, 0.0), node(1, 1.0)])],
         ),
     );
+    let mut frame = ColocFrame::new();
+    frame.push(0.25, 0.75);
+    frame.push(0.5, 0.5);
+    let mut counts_a = vec![0; COLOC_BINS];
+    let mut counts_b = vec![0; COLOC_BINS];
+    counts_a[256] += 1;
+    counts_a[512] += 1;
+    counts_b[768] += 1;
+    counts_b[512] += 1;
+    let mut scatter = vec![0; COLOC_SCATTER * COLOC_SCATTER];
+    scatter[32 + COLOC_SCATTER * 96] += 1;
+    scatter[64 + COLOC_SCATTER * 64] += 1;
+    let series = ColocSeries::new(
+        ColocPair::new(0, 1),
+        vec![frame, ColocFrame::new()],
+        counts_a,
+        counts_b,
+        scatter,
+    );
+    let region = Region::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
+    scene.coloc.install(series, region, 2);
     let spots = scene.objects.get_mut(spots).expect("the spots exist");
     spots.set_color([0.1, 0.2, 0.3]);
     spots.set_params(ObjectParams::Spots(SpotParams::new(3.0, 0.3)));

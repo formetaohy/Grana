@@ -8,7 +8,7 @@ use grana_object::TrackSet;
 use grana_project::{Project, Source, ViewState};
 use grana_render::{BrickRequest, Frame, FrameInfo, Renderer, Requests};
 use grana_scene::{Dataset, Job, Measure, ObjectSetId, Origin, Progress, Scene};
-use grana_ui::{Action, EguiLayer, Message, Pane, State, Viewport};
+use grana_ui::{Action, EguiLayer, Message, Pane, Panel, State, Viewport};
 use grana_volume::Spacing;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -45,7 +45,7 @@ pub struct App {
     surface: Option<Surface>,
     scene: Option<Scene>,
     measure: Measure,
-    measure_open: bool,
+    panel: Option<Panel>,
     viewport: Viewport,
     source: Option<Loader>,
     analysis: Vec<Analysis>,
@@ -72,7 +72,7 @@ impl App {
             surface: None,
             scene: None,
             measure: Measure::new(),
-            measure_open: true,
+            panel: Some(Panel::Statistics),
             viewport: Viewport::new(),
             source: None,
             analysis: Vec::new(),
@@ -132,10 +132,11 @@ impl App {
             return;
         }
         if let Some(scene) = self.scene.as_ref() {
-            let busy = self
-                .measure
-                .set()
-                .is_some_and(|set| self.analysis.iter().any(|job| job.set() == set));
+            let busy = self.measure.set().is_some_and(|set| {
+                self.analysis
+                    .iter()
+                    .any(|analysis| analysis.job().set() == Some(set))
+            });
             self.measure.sync(scene, busy);
         }
         let (output, actions) = self.run_ui();
@@ -231,22 +232,26 @@ impl App {
                 }
                 Action::RemoveObject(set) => self.remove_object(set),
                 Action::Detect(set) => self.start_detect(set),
-                Action::CancelDetect(set) => self.cancel(set, Job::Detect),
+                Action::CancelDetect(set) => self.cancel(Job::Detect(set)),
                 Action::ClearObject(set) => {
-                    self.cancel(set, Job::Detect);
-                    self.cancel(set, Job::Track);
+                    self.cancel(Job::Detect(set));
+                    self.cancel(Job::Track(set));
                     if let Some(scene) = self.scene.as_mut() {
                         scene.clear_object(set);
                     }
                 }
                 Action::Track(set) => self.start_tracks(set),
-                Action::CancelTrack(set) => self.cancel(set, Job::Track),
+                Action::CancelTrack(set) => self.cancel(Job::Track(set)),
                 Action::ClearTracks(set) => {
                     if let Some(scene) = self.scene.as_mut() {
                         scene.clear_tracks(set);
                     }
                 }
                 Action::ExportMeasure => self.export_measure(),
+                Action::SetPanel(panel) => self.panel = panel,
+                Action::ComputeColoc => self.start_coloc(),
+                Action::CancelColoc => self.cancel(Job::Coloc),
+                Action::ExportColoc => self.export_coloc(),
             }
         }
         false
@@ -358,7 +363,7 @@ impl App {
                 &mut State {
                     scene,
                     measure: &mut self.measure,
-                    measure_open: &mut self.measure_open,
+                    panel: &mut self.panel,
                     viewport: &mut self.viewport,
                     adapter,
                     loading,
@@ -542,41 +547,40 @@ impl App {
             Progress(u32, usize, usize),
             Frame(u32, grana_scene::ObjectFrame),
             Tracks(TrackSet),
+            Coloc(grana_object::ColocSeries, grana_volume::Region),
             Done,
             Failed(String),
         }
-        let mut updates: Vec<(usize, ObjectSetId, Job, Update)> = Vec::new();
-        for (index, job) in self.analysis.iter().enumerate() {
+        let mut updates: Vec<(usize, Job, Update)> = Vec::new();
+        for (index, analysis) in self.analysis.iter().enumerate() {
+            let job = analysis.job();
             loop {
-                match job.poll() {
+                match analysis.poll() {
                     Poll::Event(Event::Progress { time, done, total }) => {
-                        updates.push((
-                            index,
-                            job.set(),
-                            job.job(),
-                            Update::Progress(time, done, total),
-                        ));
+                        updates.push((index, job, Update::Progress(time, done, total)));
                     }
                     Poll::Event(Event::Frame { time, frame }) => {
-                        updates.push((index, job.set(), job.job(), Update::Frame(time, frame)));
+                        updates.push((index, job, Update::Frame(time, frame)));
                     }
                     Poll::Event(Event::Tracks(set)) => {
-                        updates.push((index, job.set(), job.job(), Update::Tracks(set)));
+                        updates.push((index, job, Update::Tracks(set)));
+                    }
+                    Poll::Event(Event::Coloc { series, region }) => {
+                        updates.push((index, job, Update::Coloc(*series, region)));
                     }
                     Poll::Event(Event::Done) => {
-                        updates.push((index, job.set(), job.job(), Update::Done));
+                        updates.push((index, job, Update::Done));
                         break;
                     }
                     Poll::Event(Event::Failed(detail)) => {
-                        updates.push((index, job.set(), job.job(), Update::Failed(detail)));
+                        updates.push((index, job, Update::Failed(detail)));
                         break;
                     }
                     Poll::Empty => break,
                     Poll::Closed => {
                         updates.push((
                             index,
-                            job.set(),
-                            job.job(),
+                            job,
                             Update::Failed("the analysis worker stopped".to_string()),
                         ));
                         break;
@@ -586,32 +590,38 @@ impl App {
         }
         let mut removed = Vec::new();
         let mut detected = Vec::new();
-        for (index, set, job, update) in updates {
+        for (index, job, update) in updates {
             match update {
                 Update::Progress(time, done, total) => {
-                    self.record_progress(set, job, time, done, total);
+                    self.record_progress(job, time, done, total);
                 }
                 Update::Frame(time, frame) => {
-                    if let Some(scene) = self.scene.as_mut() {
+                    if let (Job::Detect(set), Some(scene)) = (job, self.scene.as_mut()) {
                         scene.install(set, time, frame);
                     }
                 }
                 Update::Tracks(tracks) => {
-                    if let Some(scene) = self.scene.as_mut() {
+                    if let (Job::Track(set), Some(scene)) = (job, self.scene.as_mut()) {
                         scene.install_tracks(set, tracks);
                     }
                 }
+                Update::Coloc(series, region) => {
+                    if let Some(scene) = self.scene.as_mut()
+                        && scene.coloc.pair() == Some(series.pair())
+                    {
+                        let frames = scene.frame_count();
+                        scene.coloc.install(series, region, frames);
+                    }
+                }
                 Update::Done => {
-                    self.progress
-                        .retain(|progress| progress.set != set || progress.job != job);
+                    self.progress.retain(|progress| progress.job != job);
                     removed.push(index);
-                    if job == Job::Detect {
+                    if let Job::Detect(set) = job {
                         detected.push(set);
                     }
                 }
                 Update::Failed(detail) => {
-                    self.progress
-                        .retain(|progress| progress.set != set || progress.job != job);
+                    self.progress.retain(|progress| progress.job != job);
                     removed.push(index);
                     self.message = Some(Message::error(detail));
                 }
@@ -627,16 +637,8 @@ impl App {
         }
     }
 
-    fn record_progress(
-        &mut self,
-        set: ObjectSetId,
-        job: Job,
-        time: u32,
-        done: usize,
-        total: usize,
-    ) {
+    fn record_progress(&mut self, job: Job, time: u32, done: usize, total: usize) {
         let progress = Progress {
-            set,
             job,
             time,
             done,
@@ -645,7 +647,7 @@ impl App {
         if let Some(existing) = self
             .progress
             .iter_mut()
-            .find(|progress| progress.set == set && progress.job == job)
+            .find(|progress| progress.job == job)
         {
             *existing = progress;
         } else {
@@ -653,13 +655,10 @@ impl App {
         }
     }
 
-    fn cancel(&mut self, set: ObjectSetId, job: Job) {
-        self.analysis
-            .retain(|analysis| analysis.set() != set || analysis.job() != job);
-        self.progress
-            .retain(|progress| progress.set != set || progress.job != job);
+    fn cancel(&mut self, job: Job) {
+        self.analysis.retain(|analysis| analysis.job() != job);
+        self.progress.retain(|progress| progress.job != job);
     }
-
     fn start_detect(&mut self, set: ObjectSetId) {
         if self.loading.is_some() {
             return;
@@ -667,11 +666,11 @@ impl App {
         if self
             .analysis
             .iter()
-            .any(|job| job.set() == set && job.job() == Job::Detect)
+            .any(|analysis| analysis.job() == Job::Detect(set))
         {
             return;
         }
-        self.cancel(set, Job::Track);
+        self.cancel(Job::Track(set));
         if let Some(scene) = self.scene.as_mut() {
             scene.clear_tracks(set);
         }
@@ -702,7 +701,7 @@ impl App {
             return;
         }
         self.message = None;
-        self.record_progress(set, Job::Detect, 0, 0, 0);
+        self.record_progress(Job::Detect(set), 0, 0, 0);
         self.analysis
             .push(job::detect(source, set, channel, params, region));
     }
@@ -711,7 +710,11 @@ impl App {
         if self.loading.is_some() {
             return;
         }
-        if self.analysis.iter().any(|job| job.set() == set) {
+        if self
+            .analysis
+            .iter()
+            .any(|analysis| analysis.job().set() == Some(set))
+        {
             return;
         }
         let Some(scene) = self.scene.as_ref() else {
@@ -739,14 +742,94 @@ impl App {
             .params();
         let frame_interval = scene.dataset.frame_interval();
         self.message = None;
-        self.record_progress(set, Job::Track, 0, 0, detections.len());
+        self.record_progress(Job::Track(set), 0, 0, detections.len());
         self.analysis
             .push(job::track(set, detections, params, frame_interval));
     }
 
+    fn start_coloc(&mut self) {
+        if self.loading.is_some()
+            || self
+                .analysis
+                .iter()
+                .any(|analysis| analysis.job() == Job::Coloc)
+        {
+            return;
+        }
+        let Some(source) = self.source.as_ref().map(Loader::source) else {
+            return;
+        };
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(pair) = scene.coloc.pair() else {
+            self.message = Some(Message::error(
+                "the dataset needs two channels to colocalize",
+            ));
+            return;
+        };
+        if [pair.a(), pair.b()]
+            .iter()
+            .any(|channel| scene.dataset.channels()[*channel].intensity().span() <= 0.0)
+        {
+            self.message = Some(Message::error(
+                "the selected channels have no intensity range to colocalize",
+            ));
+            return;
+        }
+        let region = scene.region;
+        if region.enabled()
+            && region
+                .voxel_range(scene.dataset.pyramid().level(0))
+                .is_none()
+        {
+            self.message = Some(Message::error("the region does not overlap the dataset"));
+            return;
+        }
+        self.message = None;
+        self.record_progress(Job::Coloc, 0, 0, 0);
+        self.analysis.push(job::coloc(source, pair, region));
+    }
+
+    fn export_coloc(&mut self) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(series) = scene.coloc.series() else {
+            return;
+        };
+        let Some(pair) = scene.coloc.pair() else {
+            return;
+        };
+        let csv = series.csv(scene.coloc.thresholds());
+        let file_name = format!(
+            "{}-{}-{}-colocalization.csv",
+            slug(scene.dataset.name()),
+            slug(scene.dataset.channels()[pair.a()].name()),
+            slug(scene.dataset.channels()[pair.b()].name())
+        );
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Export colocalization statistics")
+            .set_file_name(file_name)
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            return;
+        };
+        match std::fs::write(&path, csv) {
+            Ok(()) => self.message = None,
+            Err(error) => {
+                self.message = Some(Message::error(format!(
+                    "failed to export colocalization to {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+
     fn remove_object(&mut self, set: ObjectSetId) {
-        self.cancel(set, Job::Detect);
-        self.cancel(set, Job::Track);
+        self.cancel(Job::Detect(set));
+        self.cancel(Job::Track(set));
         if let Some(scene) = self.scene.as_mut() {
             scene.remove_object(set);
         }
