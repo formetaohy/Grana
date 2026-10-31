@@ -1,14 +1,23 @@
 use glam::Vec3;
 use grana_analysis::{FilamentParams, FilamentScan};
-use grana_volume::{Extent, Level, Region, Spacing, VoxelData};
+use grana_volume::{Extent, Intensity, Level, Region, Spacing, VoxelData};
 
 const EXTENT: Extent = Extent::new(72, 72, 32);
 const SPACING: f32 = 0.25;
 const PEAK: f32 = 40_000.0;
 const BACKGROUND: f32 = 50.0;
 const RADIUS: f32 = 2.0;
+const INTENSITY_MAX: f32 = 65_535.0;
 const THRESHOLD: f32 = 8_000.0;
 const MIN_LENGTH: f32 = 2.5;
+
+fn params() -> FilamentParams {
+    FilamentParams::new(THRESHOLD / INTENSITY_MAX, MIN_LENGTH)
+}
+
+fn channel_intensity() -> Intensity {
+    Intensity::new(0.0, INTENSITY_MAX)
+}
 
 const SEGMENTS: [([f32; 3], [f32; 3]); 4] = [
     ([12.0, 12.0, 10.0], [40.0, 40.0, 10.0]),
@@ -24,10 +33,11 @@ fn traces_branching_filaments() {
     let mut scan = FilamentScan::new(
         0,
         level,
-        FilamentParams::new(THRESHOLD, MIN_LENGTH),
+        params(),
         1,
         0,
         Region::none(),
+        channel_intensity(),
     );
     let set = scan
         .frame(&data, |_| Ok(data.clone()))
@@ -68,14 +78,7 @@ fn traces_branching_filaments() {
     );
 
     let region = Region::new(Vec3::new(-9.0, -9.0, -4.0), Vec3::new(-2.0, 9.0, 4.0));
-    let mut restricted = FilamentScan::new(
-        0,
-        level,
-        FilamentParams::new(THRESHOLD, MIN_LENGTH),
-        1,
-        0,
-        region,
-    );
+    let mut restricted = FilamentScan::new(0, level, params(), 1, 0, region, channel_intensity());
     let restricted = restricted
         .frame(&data, |_| Ok(data.clone()))
         .expect("the restricted filament scan traces the frame");

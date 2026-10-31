@@ -74,7 +74,7 @@ impl ObjectSet {
         dataset: &Dataset,
     ) -> Self {
         let voxel = dataset.voxel_size().min_element();
-        let params = kind.default_params(&dataset.channels()[channel], voxel);
+        let params = kind.default_params(voxel);
         let track_style = kind.track_style(voxel);
         Self {
             id,

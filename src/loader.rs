@@ -3,11 +3,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 
+use grana_pipeline::Source;
 use grana_render::BrickRequest;
 use grana_volume::{BrickData, BrickGrid, Movie, Pyramid};
 use grana_zarr::Image;
-
-use crate::source::Source;
 
 pub enum Event {
     Opened {

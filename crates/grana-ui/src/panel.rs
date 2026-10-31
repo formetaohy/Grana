@@ -13,6 +13,7 @@ const TIMELINE_HEIGHT: f32 = 36.0;
 pub enum Panel {
     Statistics,
     Colocalization,
+    Batch,
 }
 
 impl Panel {
@@ -20,6 +21,7 @@ impl Panel {
         match self {
             Self::Statistics => "Statistics",
             Self::Colocalization => "Colocalization",
+            Self::Batch => "Batch",
         }
     }
 }
@@ -37,6 +39,7 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
                 match panel {
                     Panel::Statistics => crate::measure_panel::build(ui, state, &mut actions),
                     Panel::Colocalization => crate::coloc_panel::build(ui, state, &mut actions),
+                    Panel::Batch => crate::batch_panel::build(ui, state, &mut actions),
                 }
             });
     }
@@ -138,7 +141,7 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
 
 fn tabs(ui: &mut Ui, actions: &mut Vec<Action>, panel: Panel) {
     ui.horizontal(|ui| {
-        for candidate in [Panel::Statistics, Panel::Colocalization] {
+        for candidate in [Panel::Statistics, Panel::Colocalization, Panel::Batch] {
             if ui
                 .selectable_label(panel == candidate, candidate.name())
                 .clicked()

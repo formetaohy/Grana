@@ -3,7 +3,7 @@ use std::f64::consts::PI;
 use glam::Vec3;
 use grana_analysis::{SurfaceBuilder, SurfaceParams};
 use grana_volume::{
-    BrickData, BrickGrid, Channel, Extent, Level, Region, Spacing, Volume, VoxelData,
+    BrickData, BrickGrid, Channel, Extent, Intensity, Level, Region, Spacing, Volume, VoxelData,
 };
 
 const EXTENT: Extent = Extent::new(120, 96, 72);
@@ -17,7 +17,8 @@ fn extracts_measured_surfaces() {
     let volume = blobs(&centres);
     let level = Level::new(volume.extent(), volume.spacing());
     let grid = BrickGrid::new(volume.extent());
-    let threshold = 0.5 * f32::from(HIGH);
+    let threshold = 0.5;
+    let intensity = Intensity::new(0.0, f32::from(HIGH));
     let channels = volume.channel_count();
 
     let mut builder = SurfaceBuilder::new(
@@ -27,6 +28,7 @@ fn extracts_measured_surfaces() {
         channels,
         0,
         Region::none(),
+        intensity,
     );
     for index in 0..builder.coord_count() {
         let coord = builder.coord(index);
@@ -99,6 +101,7 @@ fn extracts_measured_surfaces() {
         channels,
         0,
         Region::none(),
+        intensity,
     );
     for index in 0..filtered.coord_count() {
         let coord = filtered.coord(index);
@@ -119,6 +122,7 @@ fn extracts_measured_surfaces() {
         channels,
         0,
         region,
+        intensity,
     );
     for index in 0..restricted.coord_count() {
         let coord = restricted.coord(index);

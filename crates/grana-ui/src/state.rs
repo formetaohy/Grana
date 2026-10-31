@@ -16,6 +16,12 @@ impl Message {
     }
 }
 
+pub struct BatchDataset {
+    pub name: String,
+    pub state: String,
+    pub detail: String,
+}
+
 pub struct State<'a> {
     pub scene: &'a mut Scene,
     pub measure: &'a mut Measure,
@@ -30,4 +36,9 @@ pub struct State<'a> {
     pub pending: usize,
     pub playing: bool,
     pub analysis: &'a [Progress],
+    pub batch_protocol: Option<&'a str>,
+    pub batch_datasets: &'a [BatchDataset],
+    pub batch_output: Option<&'a str>,
+    pub batch_running: bool,
+    pub batch_message: Option<&'a str>,
 }

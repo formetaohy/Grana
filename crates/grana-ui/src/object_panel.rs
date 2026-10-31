@@ -2,7 +2,6 @@ use egui::{RichText, Ui};
 use grana_scene::{
     Item, Job, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, ParamBound, ParamField, Selection,
 };
-use grana_volume::ChannelInfo;
 
 use crate::action::Action;
 use crate::panel::{caption, progress, row};
@@ -136,14 +135,12 @@ fn params(ui: &mut Ui, state: &mut State<'_>, id: ObjectSetId) {
         return;
     };
     let kind = set.kind();
-    let channel = set.channel();
-    let info = &state.scene.dataset.channels()[channel];
     let voxel = state.scene.dataset.voxel_size().min_element();
     let world = state.scene.dataset.world_size().max_element();
     let mut params = set.params();
     let mut changed = false;
     for (index, field) in kind.fields().iter().enumerate() {
-        let (minimum, maximum) = bounds(field, info, voxel, world);
+        let (minimum, maximum) = bounds(field, voxel, world);
         let mut value = params.value(index).clamp(minimum, maximum);
         let mut slider = egui::Slider::new(&mut value, minimum..=maximum)
             .text(field.label)
@@ -161,11 +158,10 @@ fn params(ui: &mut Ui, state: &mut State<'_>, id: ObjectSetId) {
     }
 }
 
-fn bounds(field: &ParamField, channel: &ChannelInfo, voxel: f32, world: f32) -> (f32, f32) {
+fn bounds(field: &ParamField, voxel: f32, world: f32) -> (f32, f32) {
     match field.bound {
         ParamBound::Voxel(factor) => (voxel, factor * voxel),
         ParamBound::Unit => (0.0, 1.0),
-        ParamBound::Intensity => (channel.intensity().min(), channel.intensity().max()),
         ParamBound::Volume => (0.0, 200.0),
         ParamBound::Length(fraction) => (voxel, fraction * world),
     }

@@ -5,10 +5,13 @@ use std::time::{Duration, Instant};
 
 use glam::Vec2;
 use grana_object::TrackSet;
-use grana_project::{Project, Source, ViewState};
+use grana_pipeline::{
+    self as pipeline, Analysis, BatchEvent, Event, Outcome, Plan, Poll, Protocol,
+};
+use grana_project::{Project, Source as ProjectSource, ViewState};
 use grana_render::{BrickRequest, Frame, FrameInfo, Renderer, Requests};
 use grana_scene::{Dataset, Job, Measure, ObjectSetId, Origin, Progress, Scene};
-use grana_ui::{Action, EguiLayer, Message, Pane, Panel, State, Viewport};
+use grana_ui::{Action, BatchDataset, EguiLayer, Message, Pane, Panel, State, Viewport};
 use grana_volume::Spacing;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -19,7 +22,6 @@ use winit::window::{Window, WindowId};
 
 use crate::demo;
 use crate::gpu::Gpu;
-use crate::job::{self, Analysis, Event, Poll};
 use crate::loader::{Event as LoaderEvent, Loader};
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
@@ -65,6 +67,14 @@ pub struct App {
     saved: Option<u64>,
     title: Option<String>,
     modifiers: ModifiersState,
+    protocol: Option<Protocol>,
+    protocol_text: Option<String>,
+    batch: Option<pipeline::Batch>,
+    batch_datasets: Vec<PathBuf>,
+    batch_rows: Vec<BatchDataset>,
+    batch_output: Option<PathBuf>,
+    batch_running: bool,
+    batch_message: Option<String>,
 }
 
 impl App {
@@ -92,6 +102,14 @@ impl App {
             saved: None,
             title: None,
             modifiers: ModifiersState::default(),
+            protocol: None,
+            protocol_text: None,
+            batch: None,
+            batch_datasets: Vec::new(),
+            batch_rows: Vec::new(),
+            batch_output: None,
+            batch_running: false,
+            batch_message: None,
         }
     }
 
@@ -135,6 +153,7 @@ impl App {
         self.poll_requests();
         self.poll_source();
         self.poll_analysis();
+        self.poll_batch();
         if self.surface.is_none() || self.scene.is_none() {
             return;
         }
@@ -259,6 +278,21 @@ impl App {
                 Action::ComputeColoc => self.start_coloc(),
                 Action::CancelColoc => self.cancel(Job::Coloc),
                 Action::ExportColoc => self.export_coloc(),
+                Action::CaptureProtocol => self.capture_protocol(),
+                Action::LoadProtocol => self.load_protocol(),
+                Action::SaveProtocol => self.save_protocol(),
+                Action::AddBatchDatasets => self.add_batch_datasets(),
+                Action::ClearBatchDatasets => {
+                    self.batch_datasets.clear();
+                    self.batch_rows.clear();
+                }
+                Action::ChooseBatchOutput => self.choose_batch_output(),
+                Action::RunBatch => self.run_batch(),
+                Action::CancelBatch => {
+                    if let Some(batch) = &self.batch {
+                        batch.cancel();
+                    }
+                }
             }
         }
         false
@@ -332,7 +366,8 @@ impl App {
     }
 
     fn streaming(&self) -> bool {
-        self.playing
+        self.batch_running
+            || self.playing
             || self.loading.is_some()
             || !self.analysis.is_empty()
             || !self.in_flight.is_empty()
@@ -363,6 +398,10 @@ impl App {
         let pending = self.in_flight.len();
         let analysis = self.progress.as_slice();
         let playing = self.playing;
+        let output_text = self
+            .batch_output
+            .as_ref()
+            .map(|path| path.display().to_string());
         let mut actions = Vec::new();
         let output = egui.run(window, |root| {
             actions = grana_ui::build(
@@ -381,6 +420,11 @@ impl App {
                     pending,
                     playing,
                     analysis,
+                    batch_protocol: self.protocol_text.as_deref(),
+                    batch_datasets: &self.batch_rows,
+                    batch_output: output_text.as_deref(),
+                    batch_running: self.batch_running,
+                    batch_message: self.batch_message.as_deref(),
                 },
             );
         });
@@ -711,8 +755,13 @@ impl App {
         }
         self.message = None;
         self.record_progress(Job::Detect(set), 0, 0, 0);
-        self.analysis
-            .push(job::detect(source, set, channel, params, region));
+        self.analysis.push(pipeline::detect(
+            Job::Detect(set),
+            source,
+            channel,
+            params,
+            region,
+        ));
     }
 
     fn start_tracks(&mut self, set: ObjectSetId) {
@@ -752,8 +801,12 @@ impl App {
         let frame_interval = scene.dataset.frame_interval();
         self.message = None;
         self.record_progress(Job::Track(set), 0, 0, detections.len());
-        self.analysis
-            .push(job::track(set, detections, params, frame_interval));
+        self.analysis.push(pipeline::track(
+            Job::Track(set),
+            detections,
+            params,
+            frame_interval,
+        ));
     }
 
     fn start_coloc(&mut self) {
@@ -797,7 +850,8 @@ impl App {
         }
         self.message = None;
         self.record_progress(Job::Coloc, 0, 0, 0);
-        self.analysis.push(job::coloc(source, pair, region));
+        self.analysis
+            .push(pipeline::coloc(Job::Coloc, source, pair, region));
     }
 
     fn export_coloc(&mut self) {
@@ -813,9 +867,9 @@ impl App {
         let csv = series.csv(scene.coloc.thresholds());
         let file_name = format!(
             "{}-{}-{}-colocalization.csv",
-            slug(scene.dataset.name()),
-            slug(scene.dataset.channels()[pair.a()].name()),
-            slug(scene.dataset.channels()[pair.b()].name())
+            pipeline::slug(scene.dataset.name()),
+            pipeline::slug(scene.dataset.channels()[pair.a()].name()),
+            pipeline::slug(scene.dataset.channels()[pair.b()].name())
         );
         let Some(path) = rfd::FileDialog::new()
             .set_title("Export colocalization statistics")
@@ -833,6 +887,215 @@ impl App {
                     path.display()
                 )));
             }
+        }
+    }
+
+    fn capture_protocol(&mut self) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        match Protocol::capture(scene) {
+            Ok(protocol) => {
+                self.protocol_text = Some(protocol.summary());
+                self.protocol = Some(protocol);
+                self.reset_batch_rows();
+                self.batch_message = None;
+            }
+            Err(error) => self.batch_message = Some(error.to_string()),
+        }
+    }
+
+    fn load_protocol(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Open an analysis protocol")
+            .add_filter("grana protocol", &["json"])
+            .pick_file()
+        else {
+            return;
+        };
+        match Protocol::read(&path) {
+            Ok(protocol) => {
+                self.protocol_text = Some(protocol.summary());
+                self.protocol = Some(protocol);
+                self.reset_batch_rows();
+                self.batch_message = None;
+            }
+            Err(error) => self.batch_message = Some(error.to_string()),
+        }
+    }
+
+    fn save_protocol(&mut self) {
+        if self.protocol.is_none() {
+            self.capture_protocol();
+        }
+        let Some(protocol) = self.protocol.as_ref() else {
+            return;
+        };
+        let suggested = format!(
+            "{}-protocol.json",
+            pipeline::slug(
+                self.scene
+                    .as_ref()
+                    .map_or("grana", |scene| scene.dataset.name())
+            )
+        );
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Save the analysis protocol")
+            .set_file_name(suggested)
+            .add_filter("grana protocol", &["json"])
+            .save_file()
+        else {
+            return;
+        };
+        match protocol.write(&path) {
+            Ok(()) => self.batch_message = None,
+            Err(error) => self.batch_message = Some(error.to_string()),
+        }
+    }
+
+    fn add_batch_datasets(&mut self) {
+        let Some(root) = rfd::FileDialog::new()
+            .set_title("Choose a folder of OME-Zarr datasets")
+            .pick_folder()
+        else {
+            return;
+        };
+        match pipeline::discover(&root) {
+            Ok(found) => {
+                let mut added = 0;
+                for path in found {
+                    if !self.batch_datasets.contains(&path) {
+                        self.batch_datasets.push(path);
+                        added += 1;
+                    }
+                }
+                if added == 0 {
+                    self.batch_message =
+                        Some("the folder holds no new OME-Zarr dataset".to_string());
+                } else {
+                    self.batch_message = None;
+                }
+                self.reset_batch_rows();
+            }
+            Err(error) => self.batch_message = Some(error.to_string()),
+        }
+    }
+
+    fn choose_batch_output(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Choose a folder for the batch statistics")
+            .pick_folder()
+        else {
+            return;
+        };
+        self.batch_output = Some(path);
+        self.batch_message = None;
+    }
+
+    fn run_batch(&mut self) {
+        if self.batch_running {
+            return;
+        }
+        let Some(protocol) = self.protocol.clone() else {
+            self.batch_message = Some("capture or load a protocol first".to_string());
+            return;
+        };
+        if self.batch_datasets.is_empty() {
+            self.batch_message = Some("add a folder of datasets first".to_string());
+            return;
+        }
+        let Some(output) = self.batch_output.clone() else {
+            self.batch_message = Some("choose an output folder first".to_string());
+            return;
+        };
+        self.reset_batch_rows();
+        self.batch_running = true;
+        self.batch_message = None;
+        self.batch = Some(pipeline::Batch::start(Plan {
+            protocol,
+            datasets: self.batch_datasets.clone(),
+            output,
+        }));
+        self.repaint_at = Some(Instant::now());
+    }
+
+    fn reset_batch_rows(&mut self) {
+        self.batch_rows = self
+            .batch_datasets
+            .iter()
+            .map(|path| BatchDataset {
+                name: pipeline::dataset_name(path),
+                state: "queued".to_string(),
+                detail: String::new(),
+            })
+            .collect();
+    }
+
+    fn poll_batch(&mut self) {
+        let Some(batch) = self.batch.take() else {
+            return;
+        };
+        let mut finished = false;
+        let mut fatal = false;
+        loop {
+            let event = match batch.poll() {
+                pipeline::BatchPoll::Event(event) => event,
+                pipeline::BatchPoll::Empty => break,
+                pipeline::BatchPoll::Closed => {
+                    if !finished {
+                        self.batch_running = false;
+                        self.batch_message = Some("the batch worker stopped".to_string());
+                    }
+                    return;
+                }
+            };
+            match event {
+                BatchEvent::Started { index, name } => {
+                    if let Some(row) = self.batch_rows.get_mut(index) {
+                        row.name = name;
+                        row.state = "running".to_string();
+                    }
+                }
+                BatchEvent::Step { index, label } => {
+                    if let Some(row) = self.batch_rows.get_mut(index) {
+                        row.state = label;
+                    }
+                }
+                BatchEvent::Progress { index, done, total } => {
+                    if let Some(row) = self.batch_rows.get_mut(index) {
+                        row.detail = format!("{done}/{total}");
+                    }
+                }
+                BatchEvent::Dataset { index, outcome } => {
+                    if let Some(row) = self.batch_rows.get_mut(index) {
+                        match outcome {
+                            Outcome::Complete { objects, .. } => {
+                                row.state = "done".to_string();
+                                row.detail = format!("{objects} objects");
+                            }
+                            Outcome::Failed { detail } => {
+                                row.state = "failed".to_string();
+                                row.detail = detail;
+                            }
+                        }
+                    }
+                }
+                BatchEvent::Failed(detail) => {
+                    fatal = true;
+                    self.batch_message = Some(detail);
+                }
+                BatchEvent::Done { cancelled } => {
+                    finished = true;
+                    self.batch_running = false;
+                    if !fatal {
+                        self.batch_message =
+                            cancelled.then(|| "the batch was cancelled".to_string());
+                    }
+                }
+            }
+        }
+        if !finished {
+            self.batch = Some(batch);
         }
     }
 
@@ -865,9 +1128,9 @@ impl App {
         };
         let file_name = format!(
             "{}-{}-{}-{group}.csv",
-            slug(scene.dataset.name()),
-            slug(channel),
-            slug(object.name())
+            pipeline::slug(scene.dataset.name()),
+            pipeline::slug(channel),
+            pipeline::slug(object.name())
         );
         let title = format!("Export {} statistics", object.name());
         let Some(path) = rfd::FileDialog::new()
@@ -918,8 +1181,8 @@ impl App {
             Zarr(PathBuf),
         }
         let target = match &project.source {
-            Source::Synthetic { name } => Target::Synthetic(name.clone()),
-            Source::Zarr { path, .. } => Target::Zarr(path.clone()),
+            ProjectSource::Synthetic { name } => Target::Synthetic(name.clone()),
+            ProjectSource::Zarr { path, .. } => Target::Zarr(path.clone()),
         };
         match target {
             Target::Synthetic(name) => {
@@ -1008,7 +1271,7 @@ impl App {
         let (Some(scene), Some(source)) = (self.scene.as_ref(), self.source_ref()) else {
             return;
         };
-        let suggested = format!("{}.grana", slug(scene.dataset.name()));
+        let suggested = format!("{}.grana", pipeline::slug(scene.dataset.name()));
         let path = match (choose, self.project.clone()) {
             (false, Some(path)) => path,
             _ => match rfd::FileDialog::new()
@@ -1033,14 +1296,14 @@ impl App {
         }
     }
 
-    fn source_ref(&self) -> Option<Source> {
+    fn source_ref(&self) -> Option<ProjectSource> {
         let scene = self.scene.as_ref()?;
         let name = scene.dataset.name().to_string();
         match scene.dataset.origin() {
-            Origin::Synthetic => Some(Source::Synthetic { name }),
+            Origin::Synthetic => Some(ProjectSource::Synthetic { name }),
             Origin::Zarr => match self.source.as_ref()?.source() {
-                crate::source::Source::File(path) => Some(Source::Zarr { name, path }),
-                crate::source::Source::Memory(_) => None,
+                pipeline::Source::File(path) => Some(ProjectSource::Zarr { name, path }),
+                pipeline::Source::Memory(_) => None,
             },
         }
     }
@@ -1177,24 +1440,6 @@ fn file_name(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .unwrap_or("OME-Zarr dataset")
         .to_string()
-}
-
-fn slug(name: &str) -> String {
-    let slug = name
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    if slug.is_empty() {
-        "dataset".to_string()
-    } else {
-        slug
-    }
 }
 
 fn physical_region(rect: egui::Rect, scale: f32, surface: [u32; 2]) -> [u32; 4] {

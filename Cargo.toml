@@ -21,6 +21,7 @@ egui_extras = { version = "0.37", default-features = false }
 winit = "0.30"
 pollster = "0.4"
 thiserror = "2"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rfd = "0.17"
 zarrs = { version = "0.23", default-features = false, features = ["filesystem", "blosc", "zstd", "gzip", "sharding", "crc32c"] }
@@ -36,6 +37,7 @@ grana-analysis = { version = "0.1.0", path = "crates/grana-analysis" }
 grana-render = { version = "0.1.0", path = "crates/grana-render" }
 grana-zarr = { version = "0.1.0", path = "crates/grana-zarr" }
 grana-measure = { version = "0.1.0", path = "crates/grana-measure" }
+grana-pipeline = { version = "0.1.0", path = "crates/grana-pipeline" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -61,6 +63,7 @@ grana-analysis = { workspace = true }
 grana-gpu = { workspace = true }
 grana-measure = { workspace = true }
 grana-object = { workspace = true }
+grana-pipeline = { workspace = true }
 grana-project = { workspace = true }
 grana-render = { workspace = true }
 grana-scene = { workspace = true }

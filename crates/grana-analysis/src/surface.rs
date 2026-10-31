@@ -4,7 +4,9 @@ use glam::Vec3;
 use grana_object::{
     Bounds, IntensityTable, Mesh, MeshVertex, SampleAccumulator, SurfaceSet, SurfaceStatistics,
 };
-use grana_volume::{BRICK_SIDE, BrickCoord, BrickData, BrickGrid, Level, PADDED_SIDE, Region};
+use grana_volume::{
+    BRICK_SIDE, BrickCoord, BrickData, BrickGrid, Intensity, Level, PADDED_SIDE, Region,
+};
 
 use crate::SurfaceParams;
 use crate::table::{EDGE_TABLE, TRIANGLE_TABLE};
@@ -80,6 +82,7 @@ pub struct SurfaceBuilder {
     voxel_volume: f64,
     grid: BrickGrid,
     params: SurfaceParams,
+    threshold: f32,
     next: usize,
     first: [u32; 3],
     counts: [usize; 3],
@@ -107,11 +110,13 @@ impl SurfaceBuilder {
         channels: usize,
         detection: usize,
         region: Region,
+        intensity: Intensity,
     ) -> Self {
         assert!(
             channels > 0 && detection < channels,
             "the detection channel is one of the measured channels"
         );
+        let threshold = intensity.value(params.threshold());
         let extent = level.extent();
         let grid = BrickGrid::new(extent);
         let grid_counts = grid.counts().map(|count| count as usize);
@@ -145,6 +150,7 @@ impl SurfaceBuilder {
             voxel_volume,
             grid,
             params,
+            threshold,
             next: 0,
             first,
             counts,
@@ -214,7 +220,7 @@ impl SurfaceBuilder {
         self.mask.resize(count, false);
         self.labels.clear();
         self.labels.resize(count, EMPTY);
-        let threshold = self.params.threshold();
+        let threshold = self.threshold;
         for rz in 0..es[2] {
             for ry in 0..es[1] {
                 for rx in 0..es[0] {
@@ -468,7 +474,7 @@ impl SurfaceBuilder {
     }
 
     fn emit(&mut self, cs: [usize; 3], es: &[usize; 3], origin: [i64; 3]) {
-        let threshold = self.params.threshold();
+        let threshold = self.threshold;
         let low = [0, 1, 2].map(|axis| {
             (i64::from(self.ranges[axis].start) - origin[axis]).clamp(0, cs[axis] as i64) as usize
         });
@@ -561,7 +567,7 @@ impl SurfaceBuilder {
         }
         let low = values[a];
         let high = values[b];
-        let threshold = self.params.threshold();
+        let threshold = self.threshold;
         let fraction = if (high - low).abs() > f32::EPSILON {
             ((threshold - low) / (high - low)).clamp(0.0, 1.0)
         } else {

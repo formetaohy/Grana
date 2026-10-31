@@ -5,7 +5,7 @@ mod spanning;
 mod volume;
 
 use grana_object::{FilamentSet, IntensityTable, Mesh, SampleAccumulator, push_sphere, push_tube};
-use grana_volume::{Level, Pyramid, Region, VoxelData};
+use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
 use crate::FilamentParams;
 
@@ -54,6 +54,7 @@ pub struct FilamentScan {
     extent: [u32; 3],
     step: [u32; 3],
     params: FilamentParams,
+    threshold: f32,
     channels: usize,
     grid: Grid,
     region: Region,
@@ -70,6 +71,7 @@ impl FilamentScan {
         channels: usize,
         detection: usize,
         region: Region,
+        intensity: Intensity,
     ) -> Self {
         assert!(
             channels > 0 && detection < channels,
@@ -114,6 +116,7 @@ impl FilamentScan {
             extent,
             step,
             params,
+            threshold: intensity.value(params.threshold()),
             channels,
             grid: Grid {
                 dims,
@@ -155,7 +158,7 @@ impl FilamentScan {
             self.extent,
             self.step,
             &self.grid,
-            self.params.threshold(),
+            self.threshold,
             self.region,
             &mut self.mask,
         );

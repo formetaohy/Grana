@@ -1,6 +1,5 @@
 use grana_analysis::{FilamentParams, SpotParams, SurfaceParams, TrackParams};
 use grana_object::{FilamentSet, IntensityTable, PackedMesh, Spot, SpotSet, SurfaceSet};
-use grana_volume::ChannelInfo;
 
 const SPOT_STEP: f32 = 8.0;
 const SURFACE_STEP: f32 = 12.0;
@@ -26,7 +25,6 @@ pub enum ObjectKind {
 pub enum ParamBound {
     Voxel(f32),
     Unit,
-    Intensity,
     Volume,
     Length(f32),
 }
@@ -58,7 +56,7 @@ const SURFACE_FIELDS: [ParamField; 2] = [
     ParamField {
         label: "threshold",
         suffix: "",
-        bound: ParamBound::Intensity,
+        bound: ParamBound::Unit,
         logarithmic: false,
     },
     ParamField {
@@ -73,7 +71,7 @@ const FILAMENT_FIELDS: [ParamField; 2] = [
     ParamField {
         label: "threshold",
         suffix: "",
-        bound: ParamBound::Intensity,
+        bound: ParamBound::Unit,
         logarithmic: false,
     },
     ParamField {
@@ -137,17 +135,16 @@ impl ObjectKind {
         }
     }
 
-    pub fn default_params(self, channel: &ChannelInfo, voxel: f32) -> ObjectParams {
+    pub fn default_params(self, voxel: f32) -> ObjectParams {
         match self {
             Self::Spots => {
                 ObjectParams::Spots(SpotParams::new(SPOT_DIAMETER * voxel, SPOT_CONTRAST))
             }
-            Self::Surfaces => ObjectParams::Surfaces(SurfaceParams::new(
-                channel.intensity().value(SURFACE_THRESHOLD),
-                SURFACE_MIN_VOLUME,
-            )),
+            Self::Surfaces => {
+                ObjectParams::Surfaces(SurfaceParams::new(SURFACE_THRESHOLD, SURFACE_MIN_VOLUME))
+            }
             Self::Filaments => ObjectParams::Filaments(FilamentParams::new(
-                channel.intensity().value(FILAMENT_THRESHOLD),
+                FILAMENT_THRESHOLD,
                 FILAMENT_MIN_LENGTH,
             )),
         }

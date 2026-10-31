@@ -54,8 +54,8 @@ pub struct SurfaceParams {
 impl SurfaceParams {
     pub fn new(threshold: f32, min_volume: f32) -> Self {
         assert!(
-            threshold.is_finite(),
-            "a surface threshold must be a finite intensity"
+            (0.0..=1.0).contains(&threshold),
+            "a surface threshold is a fraction of the channel intensity range"
         );
         assert!(
             min_volume.is_finite() && min_volume >= 0.0,
@@ -77,8 +77,8 @@ impl SurfaceParams {
 
     pub fn set_threshold(&mut self, threshold: f32) {
         assert!(
-            threshold.is_finite(),
-            "a surface threshold must be a finite intensity"
+            (0.0..=1.0).contains(&threshold),
+            "a surface threshold is a fraction of the channel intensity range"
         );
         self.threshold = threshold;
     }
@@ -101,8 +101,8 @@ pub struct FilamentParams {
 impl FilamentParams {
     pub fn new(threshold: f32, min_length: f32) -> Self {
         assert!(
-            threshold.is_finite(),
-            "a filament threshold must be a finite intensity"
+            (0.0..=1.0).contains(&threshold),
+            "a filament threshold is a fraction of the channel intensity range"
         );
         assert!(
             min_length.is_finite() && min_length > 0.0,
@@ -124,8 +124,8 @@ impl FilamentParams {
 
     pub fn set_threshold(&mut self, threshold: f32) {
         assert!(
-            threshold.is_finite(),
-            "a filament threshold must be a finite intensity"
+            (0.0..=1.0).contains(&threshold),
+            "a filament threshold is a fraction of the channel intensity range"
         );
         self.threshold = threshold;
     }

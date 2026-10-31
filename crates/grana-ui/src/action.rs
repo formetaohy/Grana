@@ -28,4 +28,12 @@ pub enum Action {
     ComputeColoc,
     CancelColoc,
     ExportColoc,
+    CaptureProtocol,
+    LoadProtocol,
+    SaveProtocol,
+    AddBatchDatasets,
+    ClearBatchDatasets,
+    ChooseBatchOutput,
+    RunBatch,
+    CancelBatch,
 }

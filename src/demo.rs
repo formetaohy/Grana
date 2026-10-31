@@ -20,7 +20,7 @@ const VESSEL_OPACITY: f32 = 0.18;
 const VESSEL_TREES: usize = 2;
 const VESSEL_DEPTH: u32 = 3;
 const VESSEL_BRIGHTNESS: f32 = 38_000.0;
-const VESSEL_THRESHOLD: f32 = 23_000.0;
+const VESSEL_THRESHOLD: f32 = 0.35;
 const VESSEL_MIN_LENGTH: f32 = 3.0;
 const VESSEL_ROOT_RADIUS: f32 = 1.3;
 const VESSEL_TAPER: f32 = 0.8;
@@ -62,10 +62,6 @@ pub fn stage(scene: &mut Scene) -> Staged {
     let spots = scene.add_object(ObjectKind::Spots, SPOT_CHANNEL);
     let surfaces = scene.add_object(ObjectKind::Surfaces, SURFACE_CHANNEL);
     let filaments = scene.add_object(ObjectKind::Filaments, VESSEL_CHANNEL);
-    let threshold = scene
-        .channel(SURFACE_CHANNEL)
-        .intensity()
-        .value(NUCLEUS_THRESHOLD);
     if let Some(set) = scene.objects.get_mut(spots) {
         set.set_color(SPOT_COLOR);
         set.set_params(ObjectParams::Spots(SpotParams::new(
@@ -76,7 +72,7 @@ pub fn stage(scene: &mut Scene) -> Staged {
     if let Some(set) = scene.objects.get_mut(surfaces) {
         set.set_color(SURFACE_COLOR);
         set.set_params(ObjectParams::Surfaces(SurfaceParams::new(
-            threshold,
+            NUCLEUS_THRESHOLD,
             SURFACE_VOLUME,
         )));
     }

@@ -1,0 +1,21 @@
+[package]
+name = "grana-pipeline"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+grana-analysis = { workspace = true }
+grana-measure = { workspace = true }
+grana-object = { workspace = true }
+grana-scene = { workspace = true }
+grana-volume = { workspace = true }
+grana-zarr = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

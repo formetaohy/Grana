@@ -288,15 +288,15 @@ impl Decode for ObjectParams {
         let first = finite(reader.f32()?)?;
         let second = finite(reader.f32()?)?;
         match tag {
-            0 if first > 0.0 && second >= 0.0 => {
+            0 if first > 0.0 && (0.0..=1.0).contains(&second) => {
                 Ok(Self::Spots(grana_analysis::SpotParams::new(first, second)))
             }
-            1 if second >= 0.0 => Ok(Self::Surfaces(grana_analysis::SurfaceParams::new(
-                first, second,
-            ))),
-            2 if second > 0.0 => Ok(Self::Filaments(grana_analysis::FilamentParams::new(
-                first, second,
-            ))),
+            1 if (0.0..=1.0).contains(&first) && second >= 0.0 => Ok(Self::Surfaces(
+                grana_analysis::SurfaceParams::new(first, second),
+            )),
+            2 if (0.0..=1.0).contains(&first) && second > 0.0 => Ok(Self::Filaments(
+                grana_analysis::FilamentParams::new(first, second),
+            )),
             _ => Err(FAULT_VALUE),
         }
     }
