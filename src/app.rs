@@ -23,6 +23,7 @@ use crate::job::{self, Analysis, Event, Poll};
 use crate::loader::{Event as LoaderEvent, Loader};
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
+const SUPERSAMPLE: u32 = 2;
 const UPLOAD_BATCH: usize = 32;
 const MAX_IN_FLIGHT: usize = 64;
 const STREAM_POLL: Duration = Duration::from_millis(16);
@@ -109,7 +110,13 @@ impl App {
         let (source, pyramid) = Loader::memory(demo::movie());
         let mut scene = Scene::new(Dataset::synthetic("synthetic fluorescence", pyramid));
         let staged = demo::stage(&mut scene);
-        let mut renderer = Renderer::new(&gpu.device, &gpu.queue, gpu.format(), TEXTURE_BUDGET);
+        let mut renderer = Renderer::new(
+            &gpu.device,
+            &gpu.queue,
+            gpu.format(),
+            TEXTURE_BUDGET,
+            SUPERSAMPLE,
+        );
         renderer.set_dataset(&gpu.device, scene.dataset.pyramid());
         self.scene = Some(scene);
         self.source = Some(source);

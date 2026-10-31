@@ -12,17 +12,28 @@ pub(crate) struct SceneTarget {
     depth: TextureView,
     depth_group: BindGroup,
     size: [u32; 2],
+    render: [u32; 2],
 }
 
 impl SceneTarget {
-    pub fn new(device: &Device, depth_layout: &BindGroupLayout, size: [u32; 2]) -> Self {
+    pub fn new(
+        device: &Device,
+        depth_layout: &BindGroupLayout,
+        size: [u32; 2],
+        supersample: u32,
+    ) -> Self {
         assert!(
             size[0] > 0 && size[1] > 0,
             "the scene target needs a non empty surface"
         );
+        assert!(
+            (1..=4).contains(&supersample),
+            "a scene target resolves one to four samples per axis"
+        );
+        let render = [size[0] * supersample, size[1] * supersample];
         let extent = Extent3d {
-            width: size[0],
-            height: size[1],
+            width: render[0],
+            height: render[1],
             depth_or_array_layers: 1,
         };
         let color = device
@@ -62,11 +73,16 @@ impl SceneTarget {
             depth,
             depth_group,
             size,
+            render,
         }
     }
 
     pub fn size(&self) -> [u32; 2] {
         self.size
+    }
+
+    pub fn render(&self) -> [u32; 2] {
+        self.render
     }
 
     pub fn color(&self) -> &TextureView {

@@ -1,12 +1,14 @@
-@group(1) @binding(0) var<storage, read> bricks: array<BrickRecord>;
-@group(2) @binding(0) var atlases: binding_array<texture_3d<f32>, 16>;
-@group(2) @binding(1) var atlas_sampler: sampler;
 @group(3) @binding(0) var object_depth: texture_depth_2d;
+@group(4) @binding(0) var light_volume: texture_3d<f32>;
+@group(4) @binding(1) var light_sampler: sampler;
 
 const MAX_CELL_STEPS: u32 = 4096u;
 const MINIMUM_TRANSMITTANCE: f32 = 0.003;
 const MINIMUM_VOXEL_ALPHA: f32 = 1.0e-4;
-const GRADIENT_EPSILON: f32 = 1.0e-8;
+const AMBIENT_OCCLUSION: f32 = 0.55;
+const SHADING_THRESHOLD: f32 = 0.02;
+const SHADING_FLOOR: f32 = 0.02;
+const SHADING_CEIL: f32 = 0.10;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -26,36 +28,11 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
     return output;
 }
 
-fn unproject(ndc: vec3<f32>) -> vec3<f32> {
-    let homogeneous = frame.inv_view_projection * vec4<f32>(ndc, 1.0);
-    return homogeneous.xyz / homogeneous.w;
-}
-
 fn object_distance(depth: f32, ndc: vec2<f32>) -> f32 {
     if (depth >= 1.0) {
         return 1.0e20;
     }
     return length(unproject(vec3<f32>(ndc, depth)) - frame.eye.xyz);
-}
-
-fn sample_volume(channel: u32, uvw: vec3<f32>) -> f32 {
-    let cell = brick_cell(frame.grid.xyz, uvw);
-    let record = bricks[brick_index(frame.grid.xyz, cell)];
-    if (record.slot == 0u) {
-        return 0.0;
-    }
-    let texel = atlas_texel(
-        frame.grid.xyz,
-        frame.atlas.xyz,
-        frame.dims.xyz,
-        record.slot - 1u,
-        uvw,
-    );
-    return textureSampleLevel(atlases[channel], atlas_sampler, texel, 0.0).r;
-}
-
-fn ray_uvw(t: f32, direction: vec3<f32>) -> vec3<f32> {
-    return (frame.eye.xyz + direction * t - frame.box_min.xyz) / frame.box_size.xyz;
 }
 
 fn region_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
@@ -83,52 +60,29 @@ fn region_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(entry, exit);
 }
 
-fn boundary_delta(uvw: vec3<f32>, direction: vec3<f32>, minimum: f32) -> f32 {
-    let grid = vec3<f32>(f32(frame.grid.x), f32(frame.grid.y), f32(frame.grid.z));
-    var delta = 1.0e20;
-    for (var axis = 0u; axis < 3u; axis += 1u) {
-        let step = direction[axis];
-        if (abs(step) > 1.0e-9) {
-            let cell = uvw[axis] * grid[axis];
-            let next = select(floor(cell) + 1.0, ceil(cell) - 1.0, step < 0.0);
-            delta = min(delta, (next / grid[axis] - uvw[axis]) / step);
-        }
+fn lighting(uvw: vec3<f32>) -> vec2<f32> {
+    let strength = clamp(frame.march.y, 0.0, 1.0);
+    if (strength <= 0.0) {
+        return vec2<f32>(1.0, 0.0);
     }
-    return max(delta, minimum);
+    let sampled = textureSampleLevel(
+        light_volume,
+        light_sampler,
+        clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0)),
+        0.0,
+    );
+    return vec2<f32>(mix(1.0, sampled.r, strength), sampled.g * strength);
 }
 
-fn density_gradient(channel: u32, uvw: vec3<f32>, step: vec3<f32>) -> vec3<f32> {
-    let dx = sample_volume(channel, uvw + vec3<f32>(step.x, 0.0, 0.0))
-        - sample_volume(channel, uvw - vec3<f32>(step.x, 0.0, 0.0));
-    let dy = sample_volume(channel, uvw + vec3<f32>(0.0, step.y, 0.0))
-        - sample_volume(channel, uvw - vec3<f32>(0.0, step.y, 0.0));
-    let dz = sample_volume(channel, uvw + vec3<f32>(0.0, 0.0, step.z))
-        - sample_volume(channel, uvw - vec3<f32>(0.0, 0.0, step.z));
-    return vec3<f32>(dx, dy, dz);
-}
-
-fn shaded_normal(gradient: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
-    let voxel = frame.box_size.xyz / frame.dims.xyz;
-    var normal = -gradient / voxel;
-    if (length(normal) < GRADIENT_EPSILON) {
-        return vec3<f32>(0.0);
-    }
-    normal = normalize(normal);
-    if (dot(normal, direction) > 0.0) {
-        normal = -normal;
-    }
-    return normal;
-}
-
-fn lit(color: vec3<f32>, normal: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+fn lit(color: vec3<f32>, normal: vec3<f32>, direction: vec3<f32>, light: vec2<f32>) -> vec3<f32> {
     if (length(normal) < 0.5) {
         return color;
     }
     let half_vector = normalize(frame.light.xyz - direction);
-    let diffuse = max(dot(normal, frame.light.xyz), 0.0);
-    let specular = pow(max(dot(normal, half_vector), 0.0), frame.shading.w);
-    return color * (frame.shading.x + frame.shading.y * diffuse)
-        + vec3<f32>(frame.shading.z * specular);
+    let diffuse = max(dot(normal, frame.light.xyz), 0.0) * light.x;
+    let specular = pow(max(dot(normal, half_vector), 0.0), frame.shading.w) * light.x;
+    let ambient = frame.shading.x * (1.0 - AMBIENT_OCCLUSION * light.y);
+    return color * (ambient + frame.shading.y * diffuse) + vec3<f32>(frame.shading.z * specular);
 }
 
 fn shade_volume(
@@ -139,10 +93,23 @@ fn shade_volume(
     direction: vec3<f32>,
 ) -> vec3<f32> {
     let gradient = density_gradient(channel, uvw, step);
-    if (length(gradient) < GRADIENT_EPSILON) {
+    let magnitude = length(gradient);
+    if (magnitude < GRADIENT_EPSILON) {
         return color;
     }
-    return lit(color, shaded_normal(gradient, direction), direction);
+    let weight = clamp(
+        (magnitude - SHADING_FLOOR) / (SHADING_CEIL - SHADING_FLOOR),
+        0.0,
+        1.0,
+    );
+    if (weight <= 0.0) {
+        return color;
+    }
+    return mix(
+        color,
+        lit(color, shaded_normal(gradient, direction), direction, lighting(uvw)),
+        weight,
+    );
 }
 
 @fragment
@@ -181,8 +148,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let gradient_step = vec3<f32>(1.0) / frame.dims.xyz;
         let direction_uvw = direction / box_size;
         let voxels_per_world = length(direction / voxel_world);
+        let jitter = interleaved_gradient(input.clip_position.xy) * step_length;
 
-        var t = start;
+        var t = start + min(jitter, exit - start);
         var steps = 0u;
         var cells = 0u;
         var complete = false;
@@ -213,7 +181,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                     if (per_voxel > MINIMUM_VOXEL_ALPHA) {
                         let tau = -log(1.0 - per_voxel) * segment * voxels_per_world * opacity;
                         var color = sample.rgb;
-                        if (per_voxel > 0.02) {
+                        if (per_voxel > SHADING_THRESHOLD) {
                             color = shade_volume(channel, color, position, gradient_step, direction);
                         }
                         optical_depth += tau;

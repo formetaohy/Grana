@@ -164,6 +164,7 @@ impl Scene {
             self.shading.diffuse,
             self.shading.specular,
             self.shading.shininess,
+            self.shading.shadows,
         ] {
             hash = mix(hash, u64::from(value.to_bits()));
         }

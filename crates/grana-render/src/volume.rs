@@ -13,7 +13,11 @@ const SHADER: &str = concat!(
     "enable wgpu_binding_array;\n",
     include_str!("shader/scene.wgsl"),
     "\n",
+    include_str!("shader/color.wgsl"),
+    "\n",
     include_str!("shader/brick.wgsl"),
+    "\n",
+    include_str!("shader/volume_sample.wgsl"),
     "\n",
     include_str!("shader/volume.wgsl")
 );
@@ -42,6 +46,7 @@ pub(crate) struct VolumeFrame<'a> {
     pub level: &'a BindGroup,
     pub atlas: &'a BindGroup,
     pub depth_group: &'a BindGroup,
+    pub light: &'a BindGroup,
 }
 
 impl VolumePass {
@@ -109,6 +114,7 @@ impl VolumePass {
         pass.set_bind_group(1, frame.level, &[]);
         pass.set_bind_group(2, frame.atlas, &[]);
         pass.set_bind_group(3, frame.depth_group, &[]);
+        pass.set_bind_group(4, frame.light, &[]);
         pass.draw(0..3, 0..1);
     }
 }

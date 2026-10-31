@@ -4,6 +4,7 @@ mod camera;
 mod census;
 mod frame;
 mod layout;
+mod light;
 mod marker;
 mod mesh;
 mod planner;

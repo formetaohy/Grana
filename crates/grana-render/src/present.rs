@@ -17,6 +17,8 @@ const SHADER: &str = concat!(
     include_str!("shader/present.wgsl")
 );
 
+const EXPOSURE: f32 = 1.0;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct Uniforms {
@@ -120,9 +122,18 @@ impl Present {
         })
     }
 
-    pub fn write(&self, queue: &Queue) {
+    pub fn write(&self, queue: &Queue, supersample: u32) {
+        assert!(
+            (1..=4).contains(&supersample),
+            "a present pass resolves one to four samples per axis"
+        );
         let uniforms = Uniforms {
-            flags: [if self.encode { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+            flags: [
+                if self.encode { 1.0 } else { 0.0 },
+                EXPOSURE,
+                supersample as f32,
+                0.0,
+            ],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }

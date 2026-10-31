@@ -168,6 +168,7 @@ impl Decode for Shading {
             diffuse: unit(reader.f32()?)?,
             specular: unit(reader.f32()?)?,
             shininess: positive(reader.f32()?)?,
+            shadows: unit(reader.f32()?)?,
         })
     }
 }

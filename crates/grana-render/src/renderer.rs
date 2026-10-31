@@ -18,6 +18,7 @@ use crate::camera::{Camera, SectionCamera};
 use crate::census::{CENSUS_LEVELS, Census};
 use crate::frame::{FrameData, SectionData, VolumeView};
 use crate::layout::Layouts;
+use crate::light::Light;
 use crate::marker::MarkerPasses;
 use crate::mesh::MeshPasses;
 use crate::planner::{
@@ -155,6 +156,7 @@ pub struct Renderer {
     bricks: Vec<Option<BrickTable>>,
     planner: Option<Planner>,
     census: Option<Census>,
+    light: Option<Light>,
     volume: VolumePass,
     section: SectionPass,
     meshes: MeshPasses,
@@ -165,6 +167,7 @@ pub struct Renderer {
     channels: usize,
     time: u32,
     budget: u64,
+    supersample: u32,
     feedback: Option<Readback>,
     frames: Vec<Option<Residency>>,
     counts: Vec<u32>,
@@ -179,7 +182,17 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(device: &Device, queue: &Queue, format: TextureFormat, budget: u64) -> Self {
+    pub fn new(
+        device: &Device,
+        queue: &Queue,
+        format: TextureFormat,
+        budget: u64,
+        supersample: u32,
+    ) -> Self {
+        assert!(
+            (1..=4).contains(&supersample),
+            "a renderer resolves one to four samples per axis"
+        );
         let layouts = Layouts::new(device);
         let dummy = dummy_texture(device, queue);
         let atlas_sampler = device.create_sampler(&SamplerDescriptor {
@@ -201,6 +214,7 @@ impl Renderer {
             bricks: Vec::new(),
             planner: None,
             census: None,
+            light: None,
             volume: VolumePass::new(device, &layouts),
             section: SectionPass::new(device, &layouts),
             meshes: MeshPasses::new(device, &layouts),
@@ -212,6 +226,7 @@ impl Renderer {
             channels: 0,
             time: 0,
             budget,
+            supersample,
             feedback: None,
             frames: vec![None; FEEDBACK_SLOTS],
             counts: vec![0; CENSUS_LEVELS],
@@ -261,6 +276,11 @@ impl Renderer {
         self.bricks = (0..pyramid.level_count()).map(|_| None).collect();
         self.planner = Some(Planner::new(device, &self.layouts, slots));
         self.census = Some(Census::new(device, &self.layouts, pyramid));
+        self.light = Some(Light::new(
+            device,
+            &self.layouts,
+            pyramid.level(0).world_extent(),
+        ));
         self.scene = Some(crate::table::SceneTable::new(
             device,
             &self.layouts,
@@ -386,10 +406,13 @@ impl Renderer {
             .as_ref()
             .is_none_or(|scene_target| scene_target.size() != size)
         {
-            let scene_target = SceneTarget::new(device, &self.layouts.depth, size);
+            let scene_target =
+                SceneTarget::new(device, &self.layouts.depth, size, self.supersample);
             self.present_group = Some(self.present.bind(device, scene_target.color()));
             self.target = Some(scene_target);
         }
+        let render_volume = supersampled(volume_region, self.supersample);
+        let render_section = supersampled(section_region, self.supersample);
         self.time = time;
         self.prefetch = prefetch;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -411,6 +434,7 @@ impl Renderer {
             markers,
             pyramid,
             channels,
+            supersample,
             feedback,
             frames,
             counts,
@@ -418,9 +442,11 @@ impl Renderer {
             epoch,
             content,
             settled,
+            light,
             info,
             ..
         } = self;
+        let supersample = *supersample;
         let (Some(pyramid), Some(atlas), Some(scene_table), Some(planner), Some(census)) = (
             pyramid.as_ref(),
             atlas.as_mut(),
@@ -442,6 +468,11 @@ impl Renderer {
             "the requested frame lies inside the time series"
         );
         let scene_target = scene_target.as_ref().expect("the scene target is ready");
+        assert!(
+            inside(render_volume, scene_target.render())
+                && inside(render_section, scene_target.render()),
+            "the supersampled panes lie on the render target"
+        );
         let present_group = present_group.as_ref().expect("the present group is ready");
         let volume_width = volume_region[2].max(1);
         let volume_height = volume_region[3].max(1);
@@ -546,6 +577,7 @@ impl Renderer {
             scene.shading,
             scene.step_scale,
             *channels,
+            supersample,
         );
         scene_table.write(
             device,
@@ -600,42 +632,57 @@ impl Renderer {
             census.encode(&mut encoder, scene_group);
             planner.encode(&mut encoder, scene_group, &planner.volume, &planner.section);
         }
+        if scene.shading.shadows > 0.0
+            && let Some(light) = light.as_ref()
+        {
+            light.encode(
+                &mut encoder,
+                scene_group,
+                volume_table.group(),
+                atlas.group(),
+            );
+        }
         meshes.cull_volume(&mut encoder, scene_group);
         meshes.cull_section(&mut encoder, scene_group);
         markers.cull_volume(&mut encoder, scene_group);
         markers.cull_section(&mut encoder, scene_group);
-        present.background(&mut encoder, scene_target.color(), volume_region);
-        present.write(queue);
+        present.background(&mut encoder, scene_target.color(), render_volume);
+        present.write(queue, supersample);
         clear_depth(&mut encoder, scene_target.depth());
         meshes.draw_volume(
             &mut encoder,
             scene_target.color(),
             scene_target.depth(),
-            volume_region,
+            render_volume,
         );
         markers.draw_volume(
             &mut encoder,
             scene_target.color(),
             scene_target.depth(),
-            volume_region,
+            render_volume,
             scene_group,
         );
+        let light_group = light
+            .as_ref()
+            .map(Light::group)
+            .expect("the light is ready");
         volume.draw(
             &mut encoder,
             crate::volume::VolumeFrame {
                 target: scene_target.color(),
-                region: volume_region,
+                region: render_volume,
                 scene: scene_group,
                 level: volume_table.group(),
                 atlas: atlas.group(),
                 depth_group: scene_target.depth_group(),
+                light: light_group,
             },
         );
         section_pass.draw(
             &mut encoder,
             crate::section::SectionFrame {
                 target: scene_target.color(),
-                region: section_region,
+                region: render_section,
                 scene: scene_group,
                 level: section_table.group(),
                 atlas: atlas.group(),
@@ -645,13 +692,13 @@ impl Renderer {
             &mut encoder,
             scene_target.color(),
             scene_target.depth(),
-            section_region,
+            render_section,
             scene_group,
         );
         markers.draw_section(
             &mut encoder,
             scene_target.color(),
-            section_region,
+            render_section,
             scene_group,
         );
         present.present(&mut encoder, target, present_group);
@@ -903,6 +950,15 @@ fn inside(region: [u32; 4], size: [u32; 2]) -> bool {
         && region[3] > 0
         && region[0] + region[2] <= size[0]
         && region[1] + region[3] <= size[1]
+}
+
+fn supersampled(region: [u32; 4], supersample: u32) -> [u32; 4] {
+    [
+        region[0] * supersample,
+        region[1] * supersample,
+        region[2] * supersample,
+        region[3] * supersample,
+    ]
 }
 
 fn dummy_texture(device: &Device, queue: &Queue) -> TextureView {

@@ -127,6 +127,7 @@ impl Encode for Shading {
         writer.f32(self.diffuse);
         writer.f32(self.specular);
         writer.f32(self.shininess);
+        writer.f32(self.shadows);
     }
 }
 

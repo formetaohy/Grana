@@ -512,6 +512,7 @@ fn rendering_section(ui: &mut Ui, scene: &mut Scene) {
             .text("shininess")
             .logarithmic(true),
     );
+    ui.add(egui::Slider::new(&mut shading.shadows, 0.0..=1.0).text("shadows"));
 }
 
 fn streaming_section(ui: &mut Ui, state: &State<'_>) {

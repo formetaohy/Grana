@@ -9,6 +9,7 @@ pub struct Shading {
     pub diffuse: f32,
     pub specular: f32,
     pub shininess: f32,
+    pub shadows: f32,
 }
 
 impl Default for Shading {
@@ -18,6 +19,7 @@ impl Default for Shading {
             diffuse: 0.75,
             specular: 0.30,
             shininess: 28.0,
+            shadows: 0.7,
         }
     }
 }
