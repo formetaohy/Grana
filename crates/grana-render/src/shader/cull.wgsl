@@ -9,24 +9,11 @@ struct ScheduleData {
     v_count: u32,
 }
 
+const REQUEST_CAPACITY: u32 = 4096u;
+
 @group(1) @binding(0) var<storage, read_write> bricks: array<BrickRecord>;
 @group(1) @binding(1) var<uniform> schedule: ScheduleData;
 @group(2) @binding(0) var<storage, read_write> requests: array<atomic<u32>>;
-
-fn outside_frustum(low: vec3<f32>, high: vec3<f32>) -> bool {
-    for (var index = 0u; index < 6u; index += 1u) {
-        let plane = frame.planes[index];
-        let positive = vec3<f32>(
-            select(low.x, high.x, plane.x >= 0.0),
-            select(low.y, high.y, plane.y >= 0.0),
-            select(low.z, high.z, plane.z >= 0.0),
-        );
-        if (dot(plane.xyz, positive) + plane.w < 0.0) {
-            return true;
-        }
-    }
-    return false;
-}
 
 fn brick_opacity(index: u32) -> u32 {
     let channels_count = u32(frame.march.z);
@@ -51,7 +38,10 @@ fn request(index: u32) {
             atomicStore(&requests[4u + slot], index);
         }
     } else {
-        atomicAdd(&requests[1], 1u);
+        let slot = atomicAdd(&requests[1], 1u);
+        if (slot < schedule.capacity) {
+            atomicStore(&requests[4u + REQUEST_CAPACITY + slot], index);
+        }
         bricks[index].flags = brick_opacity(index);
     }
 }

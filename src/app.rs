@@ -299,6 +299,10 @@ impl App {
             || self.loading.is_some()
             || !self.analysis.is_empty()
             || !self.in_flight.is_empty()
+            || self
+                .surface
+                .as_ref()
+                .is_some_and(|surface| surface.renderer.requests_pending())
             || (self.source.is_some()
                 && (self.frame.volume.resident < self.frame.volume.visible
                     || self.frame.section.resident < self.frame.section.visible))
@@ -354,7 +358,7 @@ impl App {
             .map(|viewport| viewport.repaint_delay)
             .min()
             .unwrap_or(Duration::MAX);
-        let mut pulled = false;
+        let serviceable = self.loading.is_none() && self.in_flight.len() < MAX_IN_FLIGHT;
         let (info, requests) = {
             let surface = self.surface.as_mut()?;
             let scene = self.scene.as_ref()?;
@@ -364,18 +368,10 @@ impl App {
             let view = frame
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
-            let mut encoder =
-                surface
-                    .gpu
-                    .device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("grana.frame"),
-                    });
             let info = surface.renderer.draw(
                 &surface.gpu.device,
                 &surface.gpu.queue,
                 Frame {
-                    encoder: &mut encoder,
                     target: &view,
                     size,
                     volume_region,
@@ -386,6 +382,13 @@ impl App {
                     scene: &rendered.frame(),
                 },
             );
+            let mut encoder =
+                surface
+                    .gpu
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("grana.egui"),
+                    });
             surface.egui.paint(
                 &surface.gpu.device,
                 &surface.gpu.queue,
@@ -396,18 +399,15 @@ impl App {
             );
             surface.gpu.queue.submit([encoder.finish()]);
             surface.gpu.queue.present(frame);
-            let requests = if self.loading.is_none() && self.in_flight.len() < MAX_IN_FLIGHT {
-                pulled = true;
-                surface
-                    .renderer
-                    .take_requests(&surface.gpu.device, &surface.gpu.queue)
-            } else {
-                Requests::default()
-            };
+            let requests = serviceable
+                .then(|| surface.renderer.poll_requests(&surface.gpu.device))
+                .flatten();
             (info, requests)
         };
         self.frame = info;
-        if pulled {
+        if let Some(requests) = requests
+            && requests.time == self.scene.as_ref().map_or(0, |scene| scene.time())
+        {
             self.frame.volume = requests.volume_view;
             self.frame.section = requests.section_view;
             self.service_requests(&requests);

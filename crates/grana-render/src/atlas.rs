@@ -165,13 +165,16 @@ impl Atlas {
             })
     }
 
-    pub fn mark_view(&mut self, time: u32, level: usize, tick: u64) {
-        for slot in &mut self.slots {
-            if let Some(brick) = slot.brick
-                && brick.time == time
-                && brick.level == level
-            {
-                slot.used = tick;
+    pub fn touch(
+        &mut self,
+        time: u32,
+        level: usize,
+        indices: impl Iterator<Item = u32>,
+        tick: u64,
+    ) {
+        for index in indices {
+            if let Some(slot) = self.identity.get(&(time, level, index as usize)) {
+                self.slots[*slot as usize].used = tick;
             }
         }
     }

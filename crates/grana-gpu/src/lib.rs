@@ -1,5 +1,5 @@
 mod command;
-mod download;
+mod readback;
 mod table;
 
 pub const REQUIRED_FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_ARRAY
@@ -7,5 +7,5 @@ pub const REQUIRED_FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_AR
     .union(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
 
 pub use command::{IndexedCommands, InstanceCommands};
-pub use download::download;
+pub use readback::Readback;
 pub use table::Table;

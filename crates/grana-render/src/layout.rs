@@ -20,6 +20,7 @@ pub(crate) struct Layouts {
     pub commands: BindGroupLayout,
     pub marker_cull: BindGroupLayout,
     pub marker_render: BindGroupLayout,
+    pub census_level: BindGroupLayout,
     pub volume: PipelineLayout,
     pub section: PipelineLayout,
     pub volume_cull: PipelineLayout,
@@ -28,6 +29,7 @@ pub(crate) struct Layouts {
     pub marker_volume: PipelineLayout,
     pub marker_section: PipelineLayout,
     pub marker_cull_pipeline: PipelineLayout,
+    pub census: PipelineLayout,
 }
 
 impl Layouts {
@@ -62,6 +64,13 @@ impl Layouts {
         let requests = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.requests.layout"),
             entries: &[storage(0, ShaderStages::COMPUTE, false)],
+        });
+        let census_level = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.census.level.layout"),
+            entries: &[
+                uniform(0, ShaderStages::COMPUTE),
+                storage(1, ShaderStages::COMPUTE, false),
+            ],
         });
         let atlas = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.atlas.layout"),
@@ -156,6 +165,7 @@ impl Layouts {
             "grana.marker.cull.pipeline.layout",
             &[&scene, &marker_cull],
         );
+        let census = pipeline_layout(device, "grana.census.layout", &[&scene, &census_level]);
         Self {
             scene,
             level,
@@ -168,6 +178,7 @@ impl Layouts {
             commands,
             marker_cull,
             marker_render,
+            census_level,
             volume,
             section,
             volume_cull,
@@ -176,6 +187,7 @@ impl Layouts {
             marker_volume,
             marker_section,
             marker_cull_pipeline,
+            census,
         }
     }
 }

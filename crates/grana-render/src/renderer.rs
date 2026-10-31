@@ -1,4 +1,5 @@
 use bytemuck::cast_slice;
+use grana_gpu::Readback;
 use grana_volume::{BRICK_SIDE, BrickCoord, BrickData, BrickGrid, Level, PADDED_SIDE, Pyramid};
 use wgpu::{
     BindGroup, BindGroupLayout, CommandEncoder, Device, LoadOp, Operations, Queue,
@@ -12,14 +13,16 @@ use crate::CHANNEL_LIMIT;
 use crate::atlas::{Atlas, ResidentBrick};
 use crate::brick::{BrickRecord, BrickTable};
 use crate::camera::{Camera, SectionCamera};
+use crate::census::{CENSUS_LEVELS, Census};
 use crate::frame::{FrameData, SectionData};
 use crate::layout::Layouts;
 use crate::marker::MarkerPasses;
 use crate::mesh::MeshPasses;
 use crate::present::Present;
 use crate::schedule::{
-    Cull, CullPass, Scheduler, SectionRange, section_range, select_section_level,
-    select_volume_level, volume_dispatch,
+    Cull, CullPass, Scheduler, SectionRange, VIEW_WORDS, resolve_section_level,
+    resolve_volume_level, section_range, select_section_level, select_volume_level, view_requests,
+    view_visible, volume_dispatch,
 };
 use crate::schema::SceneFrame;
 use crate::section::SectionPass;
@@ -27,6 +30,11 @@ use crate::target::SceneTarget;
 use crate::volume::VolumePass;
 
 const DUMMY_VOXEL: [u16; 1] = [0];
+const FEEDBACK_SLOTS: usize = 4;
+const SECTION_BUDGET_DIVISOR: usize = 2;
+const VIEW_BYTES: u64 = (VIEW_WORDS * size_of::<u32>()) as u64;
+const CENSUS_BYTES: u64 = (CENSUS_LEVELS * size_of::<u32>()) as u64;
+const FEEDBACK_WORDS: usize = 2 * VIEW_WORDS + CENSUS_LEVELS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BrickRequest {
@@ -51,6 +59,7 @@ pub struct FrameInfo {
 
 #[derive(Default)]
 pub struct Requests {
+    pub time: u32,
     pub volume: Vec<BrickRequest>,
     pub section: Vec<BrickRequest>,
     pub volume_view: ViewInfo,
@@ -58,7 +67,6 @@ pub struct Requests {
 }
 
 pub struct Frame<'a, 'b> {
-    pub encoder: &'a mut CommandEncoder,
     pub target: &'a TextureView,
     pub size: [u32; 2],
     pub volume_region: [u32; 4],
@@ -67,6 +75,54 @@ pub struct Frame<'a, 'b> {
     pub camera: &'a Camera,
     pub section: &'a SectionCamera,
     pub scene: &'a SceneFrame<'b>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct Levels {
+    volume: usize,
+    section: usize,
+    volume_capacity: usize,
+    section_capacity: usize,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct Residency {
+    epoch: u64,
+    content: u64,
+    time: u32,
+    eye: [f32; 3],
+    focus: [f32; 3],
+    field_of_view: f32,
+    axis: grana_volume::Axis,
+    span: f32,
+    volume: [u32; 2],
+    section: [u32; 2],
+    levels: Levels,
+}
+
+struct ResidencyView<'a> {
+    camera: &'a Camera,
+    section: &'a SectionCamera,
+    volume_region: [u32; 4],
+    section_region: [u32; 4],
+}
+
+impl Residency {
+    fn of(epoch: u64, content: u64, time: u32, view: ResidencyView<'_>, levels: Levels) -> Self {
+        Self {
+            epoch,
+            content,
+            time,
+            eye: view.camera.eye().to_array(),
+            focus: view.camera.focus().to_array(),
+            field_of_view: view.camera.fov_y(),
+            axis: view.section.axis(),
+            span: view.section.span(),
+            volume: [view.volume_region[2], view.volume_region[3]],
+            section: [view.section_region[2], view.section_region[3]],
+            levels,
+        }
+    }
 }
 
 pub struct Renderer {
@@ -78,6 +134,7 @@ pub struct Renderer {
     atlas: Option<Atlas>,
     bricks: Vec<Option<BrickTable>>,
     scheduler: Option<Scheduler>,
+    census: Option<Census>,
     volume: VolumePass,
     section: SectionPass,
     meshes: MeshPasses,
@@ -88,30 +145,13 @@ pub struct Renderer {
     channels: usize,
     tick: u64,
     budget: u64,
-    signature: Option<Signature>,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-struct Signature {
-    distance: f32,
-    span: f32,
-    axis: grana_volume::Axis,
-}
-
-impl Signature {
-    fn of(camera: &Camera, section: &SectionCamera) -> Self {
-        Self {
-            distance: camera.distance(),
-            span: section.span(),
-            axis: section.axis(),
-        }
-    }
-
-    fn refines(self, previous: Self) -> bool {
-        self.axis != previous.axis
-            || self.distance < previous.distance * 0.98
-            || self.span < previous.span * 0.98
-    }
+    feedback: Readback,
+    frames: Vec<Option<Residency>>,
+    counts: Vec<u32>,
+    epoch: u64,
+    content: u64,
+    settled: Option<Residency>,
+    info: FrameInfo,
 }
 
 impl Renderer {
@@ -136,6 +176,7 @@ impl Renderer {
             atlas: None,
             bricks: Vec::new(),
             scheduler: None,
+            census: None,
             volume: VolumePass::new(device, &layouts),
             section: SectionPass::new(device, &layouts),
             meshes: MeshPasses::new(device, &layouts),
@@ -147,7 +188,18 @@ impl Renderer {
             channels: 0,
             tick: 0,
             budget,
-            signature: None,
+            feedback: Readback::new(
+                device,
+                "grana.feedback",
+                (FEEDBACK_WORDS * size_of::<u32>()) as u64,
+                FEEDBACK_SLOTS,
+            ),
+            frames: vec![None; FEEDBACK_SLOTS],
+            counts: vec![0; CENSUS_LEVELS],
+            epoch: 0,
+            content: 0,
+            settled: None,
+            info: FrameInfo::default(),
         }
     }
 
@@ -174,7 +226,8 @@ impl Renderer {
             device.limits().max_texture_dimension_3d,
         );
         self.bricks = (0..pyramid.level_count()).map(|_| None).collect();
-        self.scheduler = Some(Scheduler::new(device, &self.layouts, pyramid.level_count()));
+        self.scheduler = Some(Scheduler::new(device, &self.layouts));
+        self.census = Some(Census::new(device, &self.layouts, pyramid));
         self.scene = Some(crate::table::SceneTable::new(
             device,
             &self.layouts,
@@ -184,6 +237,10 @@ impl Renderer {
         self.pyramid = Some(pyramid.clone());
         self.channels = channels;
         self.tick = 0;
+        self.counts.fill(0);
+        self.epoch += 1;
+        self.settled = None;
+        self.info = FrameInfo::default();
     }
 
     pub fn upload(
@@ -200,6 +257,7 @@ impl Renderer {
             pyramid,
             channels,
             tick,
+            content,
             ..
         } = self;
         let (Some(pyramid), Some(atlas)) = (pyramid.as_ref(), atlas.as_mut()) else {
@@ -276,12 +334,12 @@ impl Renderer {
             .as_mut()
             .expect("the level table exists")
             .set_record(queue, index, BrickRecord::new(slot + 1, maxima));
+        *content += 1;
         true
     }
 
     pub fn draw(&mut self, device: &Device, queue: &Queue, frame: Frame<'_, '_>) -> FrameInfo {
         let Frame {
-            encoder,
             target,
             size,
             volume_region,
@@ -306,12 +364,9 @@ impl Renderer {
             self.target = Some(scene_target);
         }
         self.tick += 1;
-        let tick = self.tick;
-        let signature = Signature::of(camera, section);
-        let refines = self
-            .signature
-            .is_none_or(|previous| signature.refines(previous));
-        self.signature = Some(signature);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("grana.frame"),
+        });
         let Self {
             layouts,
             present,
@@ -321,22 +376,32 @@ impl Renderer {
             atlas,
             bricks,
             scheduler,
+            census,
             volume,
             section: section_pass,
             meshes,
             markers,
             pyramid,
             channels,
+            feedback,
+            frames,
+            counts,
+            epoch,
+            content,
+            settled,
+            info,
             ..
         } = self;
-        let (Some(pyramid), Some(atlas), Some(scene_table), Some(scheduler)) = (
+        let (Some(pyramid), Some(atlas), Some(scene_table), Some(scheduler), Some(census)) = (
             pyramid.as_ref(),
             atlas.as_mut(),
             scene_table.as_mut(),
             scheduler.as_mut(),
+            census.as_ref(),
         ) else {
-            clear(encoder, target);
-            return FrameInfo::default();
+            clear(&mut encoder, target);
+            queue.submit([encoder.finish()]);
+            return *info;
         };
         assert_eq!(
             scene.channels.len(),
@@ -355,28 +420,41 @@ impl Renderer {
         let section_height = section_region[3].max(1);
         let volume_aspect = volume_width as f32 / volume_height as f32;
         let section_aspect = section_width as f32 / section_height as f32;
-        if refines {
-            scheduler.volume.clear_counts();
-            scheduler.section.clear_counts();
-        }
         let slots = atlas.slots();
+        let level_count = pyramid.level_count();
         let section_target_level = select_section_level(pyramid, section, section_height as f32);
-        let section_level =
-            scheduler
-                .section
-                .select(section_target_level, pyramid.level_count(), slots);
+        let (section_level, section_count) = resolve_section_level(
+            pyramid,
+            camera,
+            section,
+            section_aspect,
+            section_target_level,
+            (slots / SECTION_BUDGET_DIVISOR).max(1),
+        );
         let volume_target_level = select_volume_level(pyramid, camera, volume_height as f32);
-        let volume_capacity = if section_level == volume_target_level {
-            slots
-        } else {
-            slots
-                .saturating_sub(scheduler.section.info().visible)
-                .max(1)
-        };
+        let volume_capacity = slots.saturating_sub(section_count).max(1);
         let volume_level =
-            scheduler
-                .volume
-                .select(volume_target_level, pyramid.level_count(), volume_capacity);
+            resolve_volume_level(volume_target_level, level_count, volume_capacity, counts);
+        let section_capacity = section_count.clamp(1, slots);
+        let levels = Levels {
+            volume: volume_level,
+            section: section_level,
+            volume_capacity,
+            section_capacity,
+        };
+        let residency = Residency::of(
+            *epoch,
+            *content,
+            time,
+            ResidencyView {
+                camera,
+                section,
+                volume_region,
+                section_region,
+            },
+            levels,
+        );
+        let unsettled = *settled != Some(residency);
         let slot_grid = atlas.slot_grid();
         ensure_brick(
             device,
@@ -416,8 +494,6 @@ impl Renderer {
                 .expect("the volume level table exists")
                 .sync(queue, time, atlas);
         }
-        atlas.mark_view(time, section_level, tick);
-        atlas.mark_view(time, volume_level, tick);
         let section_table = bricks[section_level]
             .as_ref()
             .expect("the section level table exists");
@@ -443,13 +519,16 @@ impl Renderer {
             frame_data,
             section_data,
         );
+        if unsettled {
+            census.prepare(queue);
+        }
         let range = section_range(pyramid, section_level, camera, section, section_aspect);
         scheduler.section.prepare(
             queue,
             Cull {
                 time,
                 level: section_level,
-                capacity: slots as u32,
+                capacity: section_capacity as u32,
                 layer: range.layer,
                 range,
                 dispatch: range.dispatch(),
@@ -472,6 +551,9 @@ impl Renderer {
         meshes.write_uniforms(queue, &frame_data, scene.shading);
         markers.prepare(device, queue, layouts, scene.markers);
         let scene_group = scene_table.group();
+        if unsettled {
+            census.encode(&mut encoder, scene_group);
+        }
         CullPass {
             pipeline: &scheduler.section_cull,
             scene: scene_group,
@@ -482,7 +564,7 @@ impl Renderer {
             requests: scheduler.section.requests_group(),
             count: scheduler.section.dispatch(),
         }
-        .encode(encoder);
+        .encode(&mut encoder);
         CullPass {
             pipeline: &scheduler.volume_cull,
             scene: scene_group,
@@ -493,29 +575,29 @@ impl Renderer {
             requests: scheduler.volume.requests_group(),
             count: scheduler.volume.dispatch(),
         }
-        .encode(encoder);
-        meshes.cull_volume(encoder, scene_group);
-        meshes.cull_section(encoder, scene_group);
-        markers.cull_volume(encoder, scene_group);
-        markers.cull_section(encoder, scene_group);
-        present.background(encoder, scene_target.color(), volume_region);
+        .encode(&mut encoder);
+        meshes.cull_volume(&mut encoder, scene_group);
+        meshes.cull_section(&mut encoder, scene_group);
+        markers.cull_volume(&mut encoder, scene_group);
+        markers.cull_section(&mut encoder, scene_group);
+        present.background(&mut encoder, scene_target.color(), volume_region);
         present.write(queue);
-        clear_depth(encoder, scene_target.depth());
+        clear_depth(&mut encoder, scene_target.depth());
         meshes.draw_volume(
-            encoder,
+            &mut encoder,
             scene_target.color(),
             scene_target.depth(),
             volume_region,
         );
         markers.draw_volume(
-            encoder,
+            &mut encoder,
             scene_target.color(),
             scene_target.depth(),
             volume_region,
             scene_group,
         );
         volume.draw(
-            encoder,
+            &mut encoder,
             crate::volume::VolumeFrame {
                 target: scene_target.color(),
                 region: volume_region,
@@ -526,7 +608,7 @@ impl Renderer {
             },
         );
         section_pass.draw(
-            encoder,
+            &mut encoder,
             crate::section::SectionFrame {
                 target: scene_target.color(),
                 region: section_region,
@@ -536,37 +618,141 @@ impl Renderer {
             },
         );
         meshes.draw_section(
-            encoder,
+            &mut encoder,
             scene_target.color(),
             scene_target.depth(),
             section_region,
             scene_group,
         );
-        markers.draw_section(encoder, scene_target.color(), section_region, scene_group);
-        present.present(encoder, target, present_group);
-        FrameInfo {
-            volume: scheduler.volume.info(),
-            section: scheduler.section.info(),
-            bytes: atlas.bytes(),
+        markers.draw_section(
+            &mut encoder,
+            scene_target.color(),
+            section_region,
+            scene_group,
+        );
+        present.present(&mut encoder, target, present_group);
+        if unsettled && let Some(slot) = feedback.reserve() {
+            feedback.stage(&mut encoder, slot, 0, scheduler.volume.buffer(), VIEW_BYTES);
+            feedback.stage(
+                &mut encoder,
+                slot,
+                VIEW_BYTES,
+                scheduler.section.buffer(),
+                VIEW_BYTES,
+            );
+            feedback.stage(
+                &mut encoder,
+                slot,
+                2 * VIEW_BYTES,
+                census.counts(),
+                CENSUS_BYTES,
+            );
+            frames[slot] = Some(residency);
         }
+        queue.submit([encoder.finish()]);
+        feedback.register();
+        info.volume = scheduler.volume.info();
+        info.section = scheduler.section.info();
+        info.bytes = atlas.bytes();
+        *info
     }
 
-    pub fn take_requests(&mut self, device: &Device, queue: &Queue) -> Requests {
-        let Self {
-            scheduler, pyramid, ..
-        } = self;
-        let (Some(scheduler), Some(pyramid)) = (scheduler.as_mut(), pyramid.as_ref()) else {
-            return Requests::default();
+    pub fn poll_requests(&mut self, device: &Device) -> Option<Requests> {
+        let mut latest = None;
+        while let Some((slot, bytes)) = self.feedback.take(device) {
+            let Some(meta) = self.frames[slot].take() else {
+                continue;
+            };
+            if let Some(requests) = self.decode(meta, &bytes) {
+                latest = Some(requests);
+            }
+        }
+        latest
+    }
+
+    pub fn requests_pending(&self) -> bool {
+        self.feedback.pending()
+    }
+
+    fn decode(&mut self, meta: Residency, bytes: &[u8]) -> Option<Requests> {
+        if meta.epoch != self.epoch {
+            return None;
+        }
+        let pyramid = self.pyramid.as_ref()?;
+        let words = feedback_words(bytes);
+        if words.len() < FEEDBACK_WORDS {
+            return None;
+        }
+        let volume_words = &words[..VIEW_WORDS];
+        let section_words = &words[VIEW_WORDS..2 * VIEW_WORDS];
+        let census_words = &words[2 * VIEW_WORDS..FEEDBACK_WORDS];
+        let volume = view_requests(
+            volume_words,
+            meta.time,
+            meta.levels.volume,
+            meta.levels.volume_capacity,
+            pyramid,
+        );
+        let section = view_requests(
+            section_words,
+            meta.time,
+            meta.levels.section,
+            meta.levels.section_capacity,
+            pyramid,
+        );
+        let volume_view = ViewInfo {
+            level: meta.levels.volume,
+            visible: volume_words[0] as usize,
+            resident: volume_words[1] as usize,
         };
-        let volume = scheduler.volume.read(device, queue, pyramid);
-        let section = scheduler.section.read(device, queue, pyramid);
-        Requests {
+        let section_view = ViewInfo {
+            level: meta.levels.section,
+            visible: section_words[0] as usize,
+            resident: section_words[1] as usize,
+        };
+        if let Some(scheduler) = self.scheduler.as_mut() {
+            scheduler
+                .volume
+                .record(volume_view.visible, volume_view.resident);
+            scheduler
+                .section
+                .record(section_view.visible, section_view.resident);
+        }
+        if let Some(atlas) = self.atlas.as_mut() {
+            atlas.touch(
+                meta.time,
+                meta.levels.volume,
+                view_visible(volume_words, meta.levels.volume_capacity),
+                self.tick,
+            );
+            atlas.touch(
+                meta.time,
+                meta.levels.section,
+                view_visible(section_words, meta.levels.section_capacity),
+                self.tick,
+            );
+        }
+        self.counts.copy_from_slice(census_words);
+        self.info.volume = volume_view;
+        self.info.section = section_view;
+        self.settled = (volume.is_empty()
+            && section.is_empty()
+            && volume_view.resident == volume_view.visible
+            && section_view.resident == section_view.visible)
+            .then_some(meta);
+        Some(Requests {
+            time: meta.time,
             volume,
             section,
-            volume_view: scheduler.volume.info(),
-            section_view: scheduler.section.info(),
-        }
+            volume_view,
+            section_view,
+        })
     }
+}
+
+fn feedback_words(bytes: &[u8]) -> Vec<u32> {
+    let (words, _) = bytes.as_chunks::<4>();
+    words.iter().map(|word| u32::from_ne_bytes(*word)).collect()
 }
 
 fn ensure_brick(

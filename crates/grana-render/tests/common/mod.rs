@@ -23,13 +23,12 @@ pub fn settle(
     session: Session<'_>,
     source: impl Fn(BrickRequest) -> BrickData,
 ) -> Requests {
-    for _ in 0..48 {
-        let mut encoder = session.device.create_command_encoder(&Default::default());
+    let mut latest = Requests::default();
+    for _ in 0..96 {
         renderer.draw(
             session.device,
             session.queue,
             Frame {
-                encoder: &mut encoder,
                 target: session.target,
                 size: [SIDE, SIDE],
                 volume_region: session.volume_region,
@@ -40,14 +39,23 @@ pub fn settle(
                 scene: session.scene,
             },
         );
-        session.queue.submit([encoder.finish()]);
-        let requests = renderer.take_requests(session.device, session.queue);
-        if requests.volume.is_empty() && requests.section.is_empty() {
-            return requests;
+        if !renderer.requests_pending() {
+            return latest;
         }
-        for request in requests.volume.iter().chain(requests.section.iter()) {
-            let brick = source(*request);
-            let _ = renderer.upload(session.device, session.queue, *request, &brick);
+        for _ in 0..4 {
+            let Some(requests) = renderer.poll_requests(session.device) else {
+                session
+                    .device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .expect("failed to wait for the gpu");
+                continue;
+            };
+            for request in requests.volume.iter().chain(requests.section.iter()) {
+                let brick = source(*request);
+                let _ = renderer.upload(session.device, session.queue, *request, &brick);
+            }
+            latest = requests;
+            break;
         }
     }
     panic!("the stream never settled");

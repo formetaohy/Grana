@@ -1,20 +1,21 @@
 use bytemuck::bytes_of;
-use grana_gpu::download;
 use grana_volume::{BRICK_SIDE, BrickGrid, Pyramid};
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, Buffer, BufferUsages, CommandEncoder,
-    ComputePipeline, ComputePipelineDescriptor, Device, Queue, ShaderModuleDescriptor,
-    ShaderSource,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, Buffer, BufferDescriptor, BufferUsages,
+    CommandEncoder, ComputePipeline, ComputePipelineDescriptor, Device, Queue,
+    ShaderModuleDescriptor, ShaderSource,
 };
 
+use crate::ViewInfo;
 use crate::brick::BrickTable;
 use crate::camera::{Camera, SectionCamera};
 use crate::frame::ScheduleData;
 use crate::layout::Layouts;
-use crate::{BrickRequest, ViewInfo};
 
 pub(crate) const REQUEST_CAPACITY: usize = 4096;
-const HEADER: usize = 4;
+pub(crate) const REQUEST_HEADER: usize = 4;
+pub(crate) const VISIBLE_OFFSET: usize = REQUEST_HEADER + REQUEST_CAPACITY;
+pub(crate) const VIEW_WORDS: usize = REQUEST_HEADER + 2 * REQUEST_CAPACITY;
 const WORKGROUP: u32 = 64;
 
 #[derive(Clone, Copy, Default)]
@@ -74,7 +75,7 @@ pub(crate) struct Scheduler {
 }
 
 impl Scheduler {
-    pub fn new(device: &Device, layouts: &Layouts, levels: usize) -> Self {
+    pub fn new(device: &Device, layouts: &Layouts) -> Self {
         let module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.cull"),
             source: ShaderSource::Wgsl(
@@ -82,6 +83,8 @@ impl Scheduler {
                     include_str!("shader/scene.wgsl"),
                     "\n",
                     include_str!("shader/brick.wgsl"),
+                    "\n",
+                    include_str!("shader/frustum.wgsl"),
                     "\n",
                     include_str!("shader/cull.wgsl")
                 )
@@ -107,8 +110,8 @@ impl Scheduler {
         Self {
             volume_cull,
             section_cull,
-            volume: View::new(device, layouts, "grana.volume", levels),
-            section: View::new(device, layouts, "grana.section", levels),
+            volume: View::new(device, layouts, "grana.volume"),
+            section: View::new(device, layouts, "grana.section"),
         }
     }
 }
@@ -118,24 +121,19 @@ pub(crate) struct View {
     uniform: Buffer,
     request_group: BindGroup,
     level_group: Option<(usize, BindGroup)>,
-    visible: Vec<Option<u32>>,
-    active: Option<usize>,
-    level: usize,
-    time: u32,
     dispatch: u32,
-    capacity: u32,
     info: ViewInfo,
 }
 
 impl View {
-    fn new(device: &Device, layouts: &Layouts, label: &'static str, levels: usize) -> Self {
-        let requests = device.create_buffer(&wgpu::BufferDescriptor {
+    fn new(device: &Device, layouts: &Layouts, label: &'static str) -> Self {
+        let requests = device.create_buffer(&BufferDescriptor {
             label: Some(label),
-            size: ((HEADER + REQUEST_CAPACITY) * size_of::<u32>()) as u64,
+            size: (VIEW_WORDS * size_of::<u32>()) as u64,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+        let uniform = device.create_buffer(&BufferDescriptor {
             label: Some(label),
             size: size_of::<ScheduleData>() as u64,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
@@ -154,12 +152,7 @@ impl View {
             uniform,
             request_group,
             level_group: None,
-            visible: vec![None; levels],
-            active: None,
-            level: 0,
-            time: 0,
             dispatch: 0,
-            capacity: REQUEST_CAPACITY as u32,
             info: ViewInfo::default(),
         }
     }
@@ -168,12 +161,12 @@ impl View {
         self.info
     }
 
-    pub fn clear_counts(&mut self) {
-        self.visible.fill(None);
-    }
-
     pub fn dispatch(&self) -> u32 {
         self.dispatch
+    }
+
+    pub fn buffer(&self) -> &Buffer {
+        &self.requests
     }
 
     pub fn requests_group(&self) -> &BindGroup {
@@ -184,34 +177,13 @@ impl View {
         self.level_group.as_ref().map(|(_, group)| group)
     }
 
-    pub fn select(&mut self, target: usize, levels: usize, capacity: usize) -> usize {
-        let mut active = self.active.unwrap_or(target);
-        if target > active {
-            active = target;
-        } else if target < active {
-            let fits = self.visible[target].is_none_or(|count| count as usize <= capacity);
-            if fits {
-                active = target;
-            }
-        }
-        while active + 1 < levels
-            && self.visible[active].is_some_and(|count| count as usize > capacity)
-        {
-            active += 1;
-        }
-        self.active = Some(active);
-        active
-    }
-
     pub fn prepare(&mut self, queue: &Queue, cull: Cull) {
-        self.time = cull.time;
-        self.level = cull.level;
         self.dispatch = cull.dispatch;
-        self.capacity = cull.capacity.min(REQUEST_CAPACITY as u32);
+        self.info.level = cull.level;
         let data = ScheduleData {
             time: cull.time,
             level: cull.level as u32,
-            capacity: cull.capacity,
+            capacity: cull.capacity.min(REQUEST_CAPACITY as u32),
             layer: cull.layer,
             u0: cull.range.u0,
             v0: cull.range.v0,
@@ -219,7 +191,7 @@ impl View {
             v_count: cull.range.v_count,
         };
         queue.write_buffer(&self.uniform, 0, bytes_of(&data));
-        queue.write_buffer(&self.requests, 0, bytes_of(&[0u32; HEADER]));
+        queue.write_buffer(&self.requests, 0, bytes_of(&[0u32; REQUEST_HEADER]));
     }
 
     pub fn bind_level(&mut self, device: &Device, layouts: &Layouts, table: &BrickTable) {
@@ -246,26 +218,9 @@ impl View {
         }
     }
 
-    pub fn read(&mut self, device: &Device, queue: &Queue, pyramid: &Pyramid) -> Vec<BrickRequest> {
-        let data = download::<u32>(device, queue, &self.requests, HEADER + REQUEST_CAPACITY);
-        let count = (data[3] as usize)
-            .min(self.capacity as usize)
-            .min(REQUEST_CAPACITY);
-        self.info = ViewInfo {
-            level: self.level,
-            visible: data[0] as usize,
-            resident: data[1] as usize,
-        };
-        self.visible[self.level] = Some(data[0]);
-        let grid = BrickGrid::new(pyramid.level(self.level).extent());
-        data[HEADER..HEADER + count]
-            .iter()
-            .map(|index| BrickRequest {
-                time: self.time,
-                level: self.level,
-                coord: grid.coord(*index as usize),
-            })
-            .collect()
+    pub fn record(&mut self, visible: usize, resident: usize) {
+        self.info.visible = visible;
+        self.info.resident = resident;
     }
 }
 
@@ -352,6 +307,38 @@ pub(crate) fn select_section_level(
     level
 }
 
+pub(crate) fn resolve_section_level(
+    pyramid: &Pyramid,
+    camera: &Camera,
+    section: &SectionCamera,
+    aspect: f32,
+    target: usize,
+    capacity: usize,
+) -> (usize, usize) {
+    let levels = pyramid.level_count();
+    let mut level = target.min(levels - 1);
+    loop {
+        let count = section_range(pyramid, level, camera, section, aspect).dispatch() as usize;
+        if count <= capacity || level + 1 == levels {
+            return (level, count);
+        }
+        level += 1;
+    }
+}
+
+pub(crate) fn resolve_volume_level(
+    target: usize,
+    levels: usize,
+    capacity: usize,
+    counts: &[u32],
+) -> usize {
+    let mut level = target.min(levels - 1);
+    while level + 1 < levels && counts.get(level).copied().unwrap_or(0) as usize > capacity {
+        level += 1;
+    }
+    level
+}
+
 fn minimum_spacing(pyramid: &Pyramid, level: usize) -> f32 {
     let spacing = pyramid.level(level).spacing();
     spacing.x().min(spacing.y()).min(spacing.z())
@@ -361,4 +348,39 @@ fn section_spacing(pyramid: &Pyramid, level: usize, axis: grana_volume::Axis) ->
     let spacing = pyramid.level(level).spacing();
     let (u, v) = axis.in_plane();
     u.spacing(spacing).max(v.spacing(spacing))
+}
+
+pub(crate) fn view_requests(
+    words: &[u32],
+    time: u32,
+    level: usize,
+    capacity: usize,
+    pyramid: &Pyramid,
+) -> Vec<crate::BrickRequest> {
+    let count = (words[3] as usize)
+        .min(capacity)
+        .min(REQUEST_CAPACITY)
+        .min(words.len().saturating_sub(REQUEST_HEADER));
+    let grid = BrickGrid::new(pyramid.level(level).extent());
+    words[REQUEST_HEADER..REQUEST_HEADER + count]
+        .iter()
+        .map(|index| crate::BrickRequest {
+            time,
+            level,
+            coord: grid.coord(*index as usize),
+        })
+        .collect()
+}
+
+pub(crate) fn view_visible<'a>(
+    words: &'a [u32],
+    capacity: usize,
+) -> impl Iterator<Item = u32> + 'a {
+    let count = (words[1] as usize)
+        .min(capacity)
+        .min(REQUEST_CAPACITY)
+        .min(words.len().saturating_sub(VISIBLE_OFFSET));
+    words[VISIBLE_OFFSET..VISIBLE_OFFSET + count]
+        .iter()
+        .copied()
 }
