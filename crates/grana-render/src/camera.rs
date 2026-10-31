@@ -14,6 +14,21 @@ pub struct Ray {
     pub direction: Vec3,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CameraState {
+    pub pivot: [f32; 3],
+    pub yaw: f32,
+    pub pitch: f32,
+    pub distance: f32,
+    pub fov_y: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SectionState {
+    pub axis: Axis,
+    pub span: f32,
+}
+
 #[derive(Clone, Debug)]
 pub struct Camera {
     pivot: Vec3,
@@ -153,6 +168,41 @@ impl Camera {
     pub fn clamp_focus(&mut self, half: Vec3) {
         self.pivot = self.pivot.clamp(-half, half);
     }
+
+    pub fn state(&self) -> CameraState {
+        CameraState {
+            pivot: self.pivot.to_array(),
+            yaw: self.yaw,
+            pitch: self.pitch,
+            distance: self.distance,
+            fov_y: self.fov_y,
+        }
+    }
+
+    pub fn restore(&mut self, state: CameraState) {
+        let CameraState {
+            pivot,
+            yaw,
+            pitch,
+            distance,
+            fov_y,
+        } = state;
+        assert!(
+            pivot.iter().all(|value| value.is_finite())
+                && yaw.is_finite()
+                && pitch.is_finite()
+                && distance.is_finite()
+                && distance > 0.0
+                && fov_y > 1.0f32.to_radians()
+                && fov_y < 179.0f32.to_radians(),
+            "a camera state describes a plausible view"
+        );
+        self.pivot = Vec3::from(pivot);
+        self.yaw = yaw;
+        self.pitch = pitch.clamp(-PITCH_LIMIT, PITCH_LIMIT);
+        self.distance = distance;
+        self.fov_y = fov_y;
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -212,6 +262,23 @@ impl SectionCamera {
         point[u_axis.index()] += 0.5 * ndc.x * self.span * aspect;
         point[v_axis.index()] += 0.5 * ndc.y * self.span;
         point
+    }
+
+    pub fn state(&self) -> SectionState {
+        SectionState {
+            axis: self.axis,
+            span: self.span,
+        }
+    }
+
+    pub fn restore(&mut self, state: SectionState) {
+        let SectionState { axis, span } = state;
+        assert!(
+            span.is_finite() && span > 0.0,
+            "a section state describes a positive span"
+        );
+        self.axis = axis;
+        self.span = span.clamp(self.min_span, self.max_span);
     }
 }
 

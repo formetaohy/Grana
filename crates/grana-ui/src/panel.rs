@@ -5,7 +5,7 @@ use grana_volume::Axis;
 
 use crate::action::Action;
 use crate::overlay::{self, Overlay};
-use crate::state::{Message, State};
+use crate::state::State;
 
 const TIMELINE_HEIGHT: f32 = 36.0;
 
@@ -31,7 +31,7 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
                     ui.heading("grana");
                     ui.label(RichText::new("microscopy volume workspace").small().weak());
                     ui.separator();
-                    open_section(ui, &mut actions, state.loading, state.message);
+                    file_section(ui, &mut actions, state);
                     ui.separator();
                     dataset_section(ui, &state.scene.dataset);
                     ui.separator();
@@ -146,36 +146,67 @@ fn timeline_bar(ui: &mut Ui, rect: egui::Rect, state: &State<'_>, actions: &mut 
     );
 }
 
-fn open_section(
-    ui: &mut Ui,
-    actions: &mut Vec<Action>,
-    loading: Option<&str>,
-    message: Option<&Message>,
-) {
+fn file_section(ui: &mut Ui, actions: &mut Vec<Action>, state: &State<'_>) {
+    let busy = state.loading.is_some();
     ui.horizontal(|ui| {
         if ui
-            .add_enabled(loading.is_none(), egui::Button::new("Open OME-Zarr"))
+            .add_enabled(!busy, egui::Button::new("Open dataset"))
             .clicked()
         {
-            actions.push(Action::Open);
+            actions.push(Action::OpenDataset);
         }
-        if let Some(name) = loading {
-            ui.spinner();
-            ui.label(RichText::new(name).small().weak());
+        if ui
+            .add_enabled(!busy, egui::Button::new("Open project"))
+            .clicked()
+        {
+            actions.push(Action::OpenProject);
         }
     });
-    ui.label(
-        RichText::new("streams bricks of a multiscale .zarr folder")
-            .small()
-            .weak(),
-    );
-    if let Some(message) = message {
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(!busy, egui::Button::new("Save project"))
+            .clicked()
+        {
+            actions.push(Action::SaveProject);
+        }
+        if ui
+            .add_enabled(!busy, egui::Button::new("Save as"))
+            .clicked()
+        {
+            actions.push(Action::SaveProjectAs);
+        }
+    });
+    match state.project {
+        Some(name) => {
+            let marker = if state.dirty { " •" } else { "" };
+            ui.label(RichText::new(format!("{name}{marker}")).small());
+        }
+        None => {
+            ui.label(
+                RichText::new("an untitled project: save it to keep every analysis")
+                    .small()
+                    .weak(),
+            );
+        }
+    }
+    if let Some(name) = state.loading {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(RichText::new(name).small().weak());
+        });
+    }
+    if let Some(message) = state.message {
         ui.label(
             RichText::new(message.text())
                 .color(egui::Color32::from_rgb(255, 138, 112))
                 .small(),
         );
     }
+    ui.label(
+        RichText::new("streams bricks of a multiscale .zarr folder into a .grana project")
+            .small()
+            .weak(),
+    );
 }
 
 fn dataset_section(ui: &mut Ui, dataset: &Dataset) {

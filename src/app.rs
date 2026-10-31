@@ -5,15 +5,16 @@ use std::time::{Duration, Instant};
 
 use glam::Vec2;
 use grana_object::TrackSet;
+use grana_project::{Project, Source, ViewState};
 use grana_render::{BrickRequest, Frame, FrameInfo, Renderer, Requests};
-use grana_scene::{Dataset, Job, Measure, ObjectSetId, Progress, Scene};
+use grana_scene::{Dataset, Job, Measure, ObjectSetId, Origin, Progress, Scene};
 use grana_ui::{Action, EguiLayer, Message, Pane, State, Viewport};
 use grana_volume::Spacing;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
 use crate::demo;
@@ -35,6 +36,11 @@ struct Surface {
     renderer: Renderer,
 }
 
+struct Pending {
+    path: PathBuf,
+    project: Project,
+}
+
 pub struct App {
     surface: Option<Surface>,
     scene: Option<Scene>,
@@ -53,6 +59,11 @@ pub struct App {
     fit_section: bool,
     playing: bool,
     last_advance: Option<Instant>,
+    project: Option<PathBuf>,
+    pending: Option<Pending>,
+    saved: Option<u64>,
+    title: Option<String>,
+    modifiers: ModifiersState,
 }
 
 impl App {
@@ -75,6 +86,11 @@ impl App {
             fit_section: false,
             playing: false,
             last_advance: None,
+            project: None,
+            pending: None,
+            saved: None,
+            title: None,
+            modifiers: ModifiersState::default(),
         }
     }
 
@@ -131,6 +147,7 @@ impl App {
         {
             self.measure.apply(scene);
         }
+        self.sync_title();
         self.advance_playback();
         let surface = self.surface.as_ref().expect("the surface is alive");
         let scale = surface.window.scale_factor() as f32;
@@ -175,15 +192,22 @@ impl App {
     }
 
     fn apply(&mut self, actions: Vec<Action>) -> bool {
-        if actions.iter().any(|action| matches!(action, Action::Open))
-            && let Some(path) = Self::pick_folder()
-        {
-            self.begin_load(path);
-            return true;
-        }
         for action in actions {
             match action {
-                Action::Open => {}
+                Action::OpenDataset => {
+                    if let Some(path) = Self::pick_folder() {
+                        self.begin_load(path);
+                        return true;
+                    }
+                }
+                Action::OpenProject => {
+                    if let Some(path) = Self::pick_project() {
+                        self.begin_project(path);
+                        return true;
+                    }
+                }
+                Action::SaveProject => self.save_project(false),
+                Action::SaveProjectAs => self.save_project(true),
                 Action::Fit => self.needs_fit = true,
                 Action::FitSection => self.fit_section = true,
                 Action::SetSectionAxis(axis) => {
@@ -310,6 +334,8 @@ impl App {
     }
 
     fn run_ui(&mut self) -> (egui::FullOutput, Vec<Action>) {
+        let project = self.project.as_ref().map(|path| file_name(path));
+        let dirty = self.dirty();
         let surface = self.surface.as_mut().expect("the surface is alive");
         let scene = self.scene.as_mut().expect("the scene is alive");
         let Surface {
@@ -337,6 +363,8 @@ impl App {
                     adapter,
                     loading,
                     message,
+                    project: project.as_deref(),
+                    dirty,
                     frame,
                     pending,
                     playing,
@@ -436,26 +464,7 @@ impl App {
             processed += 1;
             match event {
                 LoaderEvent::Opened { name, pyramid } => {
-                    let dataset = Dataset::zarr(name, pyramid);
-                    if let Some(surface) = self.surface.as_mut() {
-                        surface
-                            .renderer
-                            .set_dataset(&surface.gpu.device, dataset.pyramid());
-                    }
-                    self.scene = Some(Scene::new(dataset));
-                    self.measure.reset();
-                    self.analysis.clear();
-                    self.progress.clear();
-                    self.loading = None;
-                    self.message = None;
-                    self.in_flight.clear();
-                    self.frame = FrameInfo::default();
-                    self.needs_fit = true;
-                    self.playing = false;
-                    self.last_advance = None;
-                    if let Some(source) = &self.source {
-                        source.set_time(0);
-                    }
+                    self.open_dataset(Dataset::zarr(name, pyramid));
                 }
                 LoaderEvent::Brick { request, data } => {
                     self.in_flight.remove(&request);
@@ -475,6 +484,7 @@ impl App {
                     self.progress.clear();
                     self.source = None;
                     self.in_flight.clear();
+                    self.pending = None;
                     self.playing = false;
                 }
                 LoaderEvent::Failed(detail) => {
@@ -484,6 +494,9 @@ impl App {
                     self.progress.clear();
                     self.source = None;
                     self.in_flight.clear();
+                    self.pending = None;
+                    self.project = None;
+                    self.saved = None;
                     self.playing = false;
                 }
             }
@@ -790,6 +803,62 @@ impl App {
         }
         self.loading = Some(file_name(&path));
         self.source = Some(Loader::file(path));
+        self.pending = None;
+        self.project = None;
+        self.saved = None;
+        self.reset_session();
+    }
+
+    fn begin_project(&mut self, path: PathBuf) {
+        if self.loading.is_some() {
+            return;
+        }
+        let project = match Project::read(&path) {
+            Ok(project) => project,
+            Err(error) => {
+                self.message = Some(Message::error(error.to_string()));
+                return;
+            }
+        };
+        self.message = None;
+        enum Target {
+            Synthetic(String),
+            Zarr(PathBuf),
+        }
+        let target = match &project.source {
+            Source::Synthetic { name } => Target::Synthetic(name.clone()),
+            Source::Zarr { path, .. } => Target::Zarr(path.clone()),
+        };
+        match target {
+            Target::Synthetic(name) => {
+                let (source, pyramid) = Loader::memory(demo::movie());
+                self.source = Some(source);
+                self.loading = None;
+                self.pending = Some(Pending { path, project });
+                self.project = None;
+                self.saved = None;
+                self.reset_session();
+                self.open_dataset(Dataset::synthetic(name, pyramid));
+            }
+            Target::Zarr(data) => {
+                if !data.is_dir() {
+                    self.message = Some(Message::error(format!(
+                        "{} is not an OME-Zarr folder",
+                        data.display()
+                    )));
+                    return;
+                }
+                self.source = Some(Loader::file(data.clone()));
+                self.loading = Some(file_name(&data));
+                self.pending = Some(Pending { path, project });
+                self.project = None;
+                self.saved = None;
+                self.reset_session();
+            }
+        }
+    }
+
+    fn reset_session(&mut self) {
         self.measure.reset();
         self.analysis.clear();
         self.progress.clear();
@@ -799,6 +868,128 @@ impl App {
         self.repaint_at = Some(Instant::now());
         self.playing = false;
         self.last_advance = None;
+    }
+
+    fn open_dataset(&mut self, dataset: Dataset) {
+        if let Some(surface) = self.surface.as_mut() {
+            surface
+                .renderer
+                .set_dataset(&surface.gpu.device, dataset.pyramid());
+        }
+        let mut scene = Scene::new(dataset);
+        self.loading = None;
+        self.message = None;
+        self.analysis.clear();
+        self.progress.clear();
+        self.measure.reset();
+        self.in_flight.clear();
+        self.frame = FrameInfo::default();
+        self.playing = false;
+        self.last_advance = None;
+        self.needs_fit = true;
+        self.fit_section = false;
+        if let Some(pending) = self.pending.take() {
+            if pending.project.matches(&scene.dataset) {
+                scene.restore(pending.project.scene);
+                self.measure.restore(pending.project.measure, &scene);
+                self.apply_view(pending.project.view);
+                self.project = Some(pending.path);
+                self.needs_fit = false;
+                self.saved = Some(scene.document_hash() ^ self.measure.document_hash());
+            } else {
+                self.message = Some(Message::error(
+                    "the project was saved from a dataset with a different shape, channels or duration",
+                ));
+            }
+        }
+        if let Some(source) = &self.source {
+            source.set_time(scene.time());
+        }
+        self.scene = Some(scene);
+        self.repaint_at = Some(Instant::now());
+    }
+
+    fn save_project(&mut self, choose: bool) {
+        if self.loading.is_some() {
+            return;
+        }
+        let (Some(scene), Some(source)) = (self.scene.as_ref(), self.source_ref()) else {
+            return;
+        };
+        let suggested = format!("{}.grana", slug(scene.dataset.name()));
+        let path = match (choose, self.project.clone()) {
+            (false, Some(path)) => path,
+            _ => match rfd::FileDialog::new()
+                .set_title("Save a grana project")
+                .set_file_name(suggested)
+                .add_filter("grana project", &["grana"])
+                .save_file()
+            {
+                Some(path) => path,
+                None => return,
+            },
+        };
+        let project = Project::capture(scene, &self.measure, source, self.view_state());
+        let hash = self.document_hash();
+        match project.write(&path) {
+            Ok(()) => {
+                self.project = Some(path);
+                self.saved = hash;
+                self.message = None;
+            }
+            Err(error) => self.message = Some(Message::error(error.to_string())),
+        }
+    }
+
+    fn source_ref(&self) -> Option<Source> {
+        let scene = self.scene.as_ref()?;
+        let name = scene.dataset.name().to_string();
+        match scene.dataset.origin() {
+            Origin::Synthetic => Some(Source::Synthetic { name }),
+            Origin::Zarr => match self.source.as_ref()?.source() {
+                crate::source::Source::File(path) => Some(Source::Zarr { name, path }),
+                crate::source::Source::Memory(_) => None,
+            },
+        }
+    }
+
+    fn view_state(&self) -> ViewState {
+        ViewState {
+            camera: self.viewport.camera_state(),
+            section: self.viewport.section_state(),
+            split: self.viewport.split(),
+        }
+    }
+
+    fn apply_view(&mut self, view: ViewState) {
+        self.viewport.restore_view(view.camera, view.section);
+        self.viewport.set_split(view.split);
+    }
+
+    fn document_hash(&self) -> Option<u64> {
+        let scene = self.scene.as_ref()?;
+        Some(scene.document_hash() ^ self.measure.document_hash())
+    }
+
+    fn dirty(&self) -> bool {
+        self.project.is_some() && self.document_hash() != self.saved
+    }
+
+    fn sync_title(&mut self) {
+        let name = self
+            .project
+            .as_ref()
+            .map(|path| file_name(path))
+            .unwrap_or_else(|| "untitled".to_string());
+        let marker = if self.dirty() { " •" } else { "" };
+        let title = format!("grana — {name}{marker}");
+        if self.title.as_deref() == Some(title.as_str()) {
+            return;
+        }
+        self.title = Some(title.clone());
+        if let Some(surface) = &self.surface {
+            surface.window.set_title(&title);
+        }
     }
 
     fn pick(&mut self, pane: Pane, point: Vec2) {
@@ -839,8 +1030,28 @@ impl App {
             .pick_folder()
     }
 
+    fn pick_project() -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Open a grana project")
+            .add_filter("grana project", &["grana"])
+            .pick_file()
+    }
+
     fn on_key(&mut self, event: &winit::event::KeyEvent) {
         if event.state != ElementState::Pressed || event.repeat {
+            return;
+        }
+        if self.modifiers.control_key() {
+            if let Key::Character(text) = &event.logical_key {
+                if text.as_str().eq_ignore_ascii_case("s") {
+                    self.save_project(self.modifiers.shift_key());
+                } else if text.as_str().eq_ignore_ascii_case("o")
+                    && let Some(path) = Self::pick_project()
+                {
+                    self.begin_project(path);
+                }
+            }
+            self.request_redraw();
             return;
         }
         match event.logical_key {
@@ -849,6 +1060,20 @@ impl App {
             Key::Named(NamedKey::ArrowLeft) => self.step_time(-1),
             _ => return,
         }
+        self.request_redraw();
+    }
+
+    fn confirm_close(&self) -> bool {
+        rfd::MessageDialog::new()
+            .set_title("Unsaved analysis")
+            .set_description("The project has unsaved changes. Close grana without saving them?")
+            .set_level(rfd::MessageLevel::Warning)
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show()
+            == rfd::MessageDialogResult::Yes
+    }
+
+    fn request_redraw(&self) {
         if let Some(surface) = &self.surface {
             surface.window.request_redraw();
         }
@@ -932,7 +1157,11 @@ impl ApplicationHandler for App {
         }
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                if !self.dirty() || self.confirm_close() {
+                    event_loop.exit();
+                }
+            }
             WindowEvent::Resized(size) => {
                 if let Some(surface) = self.surface.as_mut() {
                     surface.gpu.resize(size);
@@ -947,15 +1176,21 @@ impl ApplicationHandler for App {
             WindowEvent::DroppedFile(path) => {
                 if path.is_dir() {
                     self.begin_load(path);
+                } else if path
+                    .extension()
+                    .is_some_and(|extension| extension == "grana")
+                {
+                    self.begin_project(path);
                 } else {
                     self.message = Some(Message::error(format!(
-                        "{} is not an OME-Zarr folder",
+                        "{} is neither an OME-Zarr folder nor a grana project",
                         path.display()
                     )));
                 }
-                if let Some(surface) = &self.surface {
-                    surface.window.request_redraw();
-                }
+                self.request_redraw();
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers.state();
             }
             WindowEvent::KeyboardInput { event, .. } if !consumed => {
                 self.on_key(&event);

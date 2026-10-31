@@ -1,0 +1,444 @@
+use grana_measure::Filter;
+use grana_object::{
+    Bounds, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Mesh, MeshVertex,
+    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
+};
+use grana_render::{CameraState, SectionState, Shading, Stop, TransferFunction};
+use grana_scene::{
+    ChannelState, ItemState, MeasureState, ObjectFrame, ObjectParams, SceneState, SelectionState,
+    SetState, TrackStyle, Visibility,
+};
+use grana_volume::{Intensity, Region};
+
+use crate::binary::{Encode, Writer};
+use crate::project::{Project, Shape, Source, ViewState};
+
+pub(crate) const TAG_SPOTS: u8 = 0;
+pub(crate) const TAG_SURFACES: u8 = 1;
+pub(crate) const TAG_FILAMENTS: u8 = 2;
+
+impl Encode for Project {
+    fn encode(&self, writer: &mut Writer) {
+        self.shape.encode(writer);
+        self.source.encode(writer);
+        self.scene.encode(writer);
+        self.measure.encode(writer);
+        self.view.encode(writer);
+    }
+}
+
+impl Encode for Shape {
+    fn encode(&self, writer: &mut Writer) {
+        for value in self.extent {
+            writer.u32(value);
+        }
+        for value in self.spacing {
+            writer.f32(value);
+        }
+    }
+}
+
+impl Encode for Source {
+    fn encode(&self, writer: &mut Writer) {
+        match self {
+            Self::Synthetic { name } => {
+                writer.u8(0);
+                writer.string(name);
+            }
+            Self::Zarr { name, path } => {
+                writer.u8(1);
+                writer.string(name);
+                writer.string(&path.to_string_lossy());
+            }
+        }
+    }
+}
+
+impl Encode for ViewState {
+    fn encode(&self, writer: &mut Writer) {
+        self.camera.encode(writer);
+        self.section.encode(writer);
+        writer.f32(self.split);
+    }
+}
+
+impl Encode for CameraState {
+    fn encode(&self, writer: &mut Writer) {
+        for value in self.pivot {
+            writer.f32(value);
+        }
+        writer.f32(self.yaw);
+        writer.f32(self.pitch);
+        writer.f32(self.distance);
+        writer.f32(self.fov_y);
+    }
+}
+
+impl Encode for SectionState {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u8(self.axis.index() as u8);
+        writer.f32(self.span);
+    }
+}
+
+impl Encode for SceneState {
+    fn encode(&self, writer: &mut Writer) {
+        self.channels.encode(writer);
+        writer.count(self.selected);
+        self.shading.encode(writer);
+        writer.f32(self.step_scale);
+        self.region.encode(writer);
+        writer.u32(self.time);
+        self.selection.encode(writer);
+        self.sets.encode(writer);
+    }
+}
+
+impl Encode for ChannelState {
+    fn encode(&self, writer: &mut Writer) {
+        writer.bool(self.enabled);
+        writer.f32(self.opacity);
+        self.window.encode(writer);
+        self.transfer.encode(writer);
+    }
+}
+
+impl Encode for TransferFunction {
+    fn encode(&self, writer: &mut Writer) {
+        self.stops().encode(writer);
+    }
+}
+
+impl Encode for Stop {
+    fn encode(&self, writer: &mut Writer) {
+        writer.f32(self.position());
+        for value in self.color() {
+            writer.f32(value);
+        }
+        writer.f32(self.opacity());
+    }
+}
+
+impl Encode for Shading {
+    fn encode(&self, writer: &mut Writer) {
+        writer.f32(self.ambient);
+        writer.f32(self.diffuse);
+        writer.f32(self.specular);
+        writer.f32(self.shininess);
+    }
+}
+
+impl Encode for Intensity {
+    fn encode(&self, writer: &mut Writer) {
+        writer.f32(self.min());
+        writer.f32(self.max());
+    }
+}
+
+impl Encode for Region {
+    fn encode(&self, writer: &mut Writer) {
+        for value in self.min().to_array() {
+            writer.f32(value);
+        }
+        for value in self.max().to_array() {
+            writer.f32(value);
+        }
+        writer.bool(self.enabled());
+    }
+}
+
+impl Encode for SelectionState {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u64(self.set);
+        self.item.encode(writer);
+    }
+}
+
+impl Encode for ItemState {
+    fn encode(&self, writer: &mut Writer) {
+        match self {
+            Self::Object(index) => {
+                writer.u8(0);
+                writer.count(*index);
+            }
+            Self::Track(index) => {
+                writer.u8(1);
+                writer.count(*index);
+            }
+        }
+    }
+}
+
+impl Encode for SetState {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u64(self.id);
+        writer.u8(self.kind.index() as u8);
+        writer.string(&self.name);
+        writer.count(self.channel);
+        for value in self.color {
+            writer.f32(value);
+        }
+        writer.bool(self.visible);
+        self.params.encode(writer);
+        self.track_style.encode(writer);
+        self.tracks.encode(writer);
+        self.track_thickness.encode(writer);
+        self.track_visible.encode(writer);
+        self.visibility.encode(writer);
+        self.frames.encode(writer);
+    }
+}
+
+impl Encode for ObjectParams {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u8(self.kind().index() as u8);
+        writer.f32(self.value(0));
+        writer.f32(self.value(1));
+    }
+}
+
+impl Encode for TrackStyle {
+    fn encode(&self, writer: &mut Writer) {
+        let params = self.params();
+        writer.f32(params.max_step());
+        writer.u32(params.max_gap());
+        writer.bool(params.division());
+        writer.f32(params.division_range());
+        writer.f32(self.thickness());
+    }
+}
+
+impl Encode for TrackSet {
+    fn encode(&self, writer: &mut Writer) {
+        writer.f32(self.frame_interval());
+        self.tracks().encode(writer);
+    }
+}
+
+impl Encode for Track {
+    fn encode(&self, writer: &mut Writer) {
+        self.parent().encode(writer);
+        self.nodes().encode(writer);
+    }
+}
+
+impl Encode for TrackNode {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u32(self.time());
+        writer.count(self.object());
+        for value in self.centroid() {
+            writer.f32(value);
+        }
+    }
+}
+
+impl Encode for Visibility {
+    fn encode(&self, writer: &mut Writer) {
+        match self {
+            Self::All => writer.u8(0),
+            Self::Object(frames) => {
+                writer.u8(1);
+                frames.encode(writer);
+            }
+            Self::Track(tracks) => {
+                writer.u8(2);
+                tracks.encode(writer);
+            }
+        }
+    }
+}
+
+impl Encode for ObjectFrame {
+    fn encode(&self, writer: &mut Writer) {
+        match self {
+            Self::Spots(set) => {
+                writer.u8(TAG_SPOTS);
+                set.encode(writer);
+            }
+            Self::Surfaces(set) => {
+                writer.u8(TAG_SURFACES);
+                set.encode(writer);
+            }
+            Self::Filaments(set) => {
+                writer.u8(TAG_FILAMENTS);
+                set.encode(writer);
+            }
+        }
+    }
+}
+
+impl Encode for SpotSet {
+    fn encode(&self, writer: &mut Writer) {
+        writer.count(self.level());
+        self.spots().encode(writer);
+        self.intensities().encode(writer);
+    }
+}
+
+impl Encode for Spot {
+    fn encode(&self, writer: &mut Writer) {
+        for value in self.center() {
+            writer.f32(value);
+        }
+        writer.f32(self.radius());
+        writer.f32(self.quality());
+    }
+}
+
+impl Encode for SurfaceSet {
+    fn encode(&self, writer: &mut Writer) {
+        writer.count(self.level());
+        self.objects().encode(writer);
+        self.mesh().encode(writer);
+        self.intensities().encode(writer);
+    }
+}
+
+impl Encode for SurfaceStatistics {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u64(self.voxel_count());
+        writer.f64(self.volume());
+        writer.f64(self.area());
+        for value in self.centroid() {
+            writer.f32(value);
+        }
+        self.bounds().encode(writer);
+    }
+}
+
+impl Encode for FilamentSet {
+    fn encode(&self, writer: &mut Writer) {
+        writer.count(self.level());
+        self.objects().encode(writer);
+        self.mesh().encode(writer);
+        self.intensities().encode(writer);
+    }
+}
+
+impl Encode for FilamentStatistics {
+    fn encode(&self, writer: &mut Writer) {
+        writer.f64(self.length());
+        writer.f64(self.diameter());
+        writer.f64(self.volume());
+        self.topology().encode(writer);
+        for value in self.centroid() {
+            writer.f32(value);
+        }
+        self.bounds().encode(writer);
+    }
+}
+
+impl Encode for FilamentTopology {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u32(self.branches());
+        writer.u32(self.terminals());
+        writer.u32(self.junctions());
+        writer.u32(self.nodes());
+    }
+}
+
+impl Encode for Bounds {
+    fn encode(&self, writer: &mut Writer) {
+        for value in self.min() {
+            writer.f32(value);
+        }
+        for value in self.max() {
+            writer.f32(value);
+        }
+    }
+}
+
+impl Encode for Mesh {
+    fn encode(&self, writer: &mut Writer) {
+        self.vertices().encode(writer);
+        self.indices().encode(writer);
+    }
+}
+
+impl Encode for MeshVertex {
+    fn encode(&self, writer: &mut Writer) {
+        for value in self.position() {
+            writer.f32(value);
+        }
+        for value in self.normal() {
+            writer.f32(value);
+        }
+        writer.u32(self.object());
+    }
+}
+
+impl Encode for IntensityTable {
+    fn encode(&self, writer: &mut Writer) {
+        writer.count(self.channels());
+        writer.count(self.objects());
+        for object in 0..self.objects() {
+            for channel in 0..self.channels() {
+                self.object(object, channel).encode(writer);
+            }
+        }
+    }
+}
+
+impl Encode for SampleStatistics {
+    fn encode(&self, writer: &mut Writer) {
+        writer.f32(self.mean());
+        writer.f32(self.minimum());
+        writer.f32(self.maximum());
+        writer.f32(self.deviation());
+        writer.f64(self.sum());
+    }
+}
+
+impl Encode for MeasureState {
+    fn encode(&self, writer: &mut Writer) {
+        self.set.encode(writer);
+        writer.u8(self.group.index());
+        writer.u8(self.aggregate.index());
+        self.filters.encode(writer);
+        match self.sort {
+            Some((column, descending)) => {
+                writer.u8(1);
+                writer.count(column);
+                writer.bool(descending);
+            }
+            None => writer.u8(0),
+        }
+        self.columns.encode(writer);
+        writer.bool(self.visibility);
+    }
+}
+
+impl Encode for Filter {
+    fn encode(&self, writer: &mut Writer) {
+        writer.count(self.column());
+        writer.f32(self.minimum());
+        writer.f32(self.maximum());
+    }
+}
+
+impl<T: Encode> Encode for [T] {
+    fn encode(&self, writer: &mut Writer) {
+        writer.count(self.len());
+        for value in self {
+            value.encode(writer);
+        }
+    }
+}
+
+impl<T: Encode> Encode for Vec<T> {
+    fn encode(&self, writer: &mut Writer) {
+        self.as_slice().encode(writer);
+    }
+}
+
+impl<T: Encode> Encode for Option<T> {
+    fn encode(&self, writer: &mut Writer) {
+        match self {
+            Some(value) => {
+                writer.bool(true);
+                value.encode(writer);
+            }
+            None => writer.bool(false),
+        }
+    }
+}

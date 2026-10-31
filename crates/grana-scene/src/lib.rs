@@ -7,14 +7,16 @@ mod object_set;
 mod objects;
 mod pick;
 mod scene;
+mod state;
 mod track_layer;
 
 pub use channel::Channel;
 pub use dataset::{Dataset, Origin};
 pub use job::{Job, Progress};
-pub use measure::Measure;
+pub use measure::{Measure, MeasureState};
 pub use object::{ObjectFrame, ObjectKind, ObjectParams, ParamBound, ParamField, TrackStyle};
 pub use object_set::{ObjectSet, ObjectSetId, Visibility};
 pub use objects::Objects;
 pub use scene::{Item, RenderedScene, Scene, Selection};
+pub use state::{ChannelState, ItemState, SceneState, SelectionState, SetState};
 pub use track_layer::TrackLayer;

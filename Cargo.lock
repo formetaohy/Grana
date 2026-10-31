@@ -1121,6 +1121,7 @@ dependencies = [
  "grana-gpu",
  "grana-measure",
  "grana-object",
+ "grana-project",
  "grana-render",
  "grana-scene",
  "grana-ui",
@@ -1162,6 +1163,21 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "glam",
+]
+
+[[package]]
+name = "grana-project"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "grana-analysis",
+ "grana-measure",
+ "grana-object",
+ "grana-render",
+ "grana-scene",
+ "grana-volume",
+ "thiserror 2.0.21",
+ "zstd",
 ]
 
 [[package]]

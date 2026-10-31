@@ -3,6 +3,7 @@ use grana_object::TrackSet;
 
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
+use crate::state::SetState;
 use crate::track_layer::TrackLayer;
 
 const MIN_THICKNESS: f32 = 0.25;
@@ -56,6 +57,7 @@ pub struct ObjectSet {
     frames: Vec<FrameSlot>,
     stamp: u64,
     revision: u64,
+    document: u64,
     visibility: Visibility,
     tracks: Option<TrackLayer>,
 }
@@ -87,6 +89,7 @@ impl ObjectSet {
                 .collect(),
             stamp: 1,
             revision: 1,
+            document: 1,
             visibility: Visibility::All,
             tracks: None,
         }
@@ -117,7 +120,11 @@ impl ObjectSet {
             color.iter().all(|value| (0.0..=1.0).contains(value)),
             "an object color is an srgb triple"
         );
+        if self.color == color {
+            return;
+        }
         self.color = color;
+        self.document += 1;
     }
 
     pub fn visible(&self) -> bool {
@@ -125,7 +132,11 @@ impl ObjectSet {
     }
 
     pub fn set_visible(&mut self, visible: bool) {
+        if self.visible == visible {
+            return;
+        }
         self.visible = visible;
+        self.document += 1;
     }
 
     pub fn params(&self) -> ObjectParams {
@@ -138,7 +149,11 @@ impl ObjectSet {
             self.kind,
             "the parameters match the object kind"
         );
+        if self.params == params {
+            return;
+        }
         self.params = params;
+        self.document += 1;
     }
 
     pub fn frame(&self, time: u32) -> Option<&ObjectFrame> {
@@ -175,7 +190,103 @@ impl ObjectSet {
         self.revision
     }
 
+    pub fn document(&self) -> u64 {
+        self.document
+    }
+
+    pub(crate) fn state(&self) -> SetState {
+        SetState {
+            id: self.id.raw(),
+            kind: self.kind,
+            name: self.name.clone(),
+            channel: self.channel,
+            color: self.color,
+            visible: self.visible,
+            params: self.params,
+            track_style: self.track_style,
+            tracks: self.tracks.as_ref().map(|layer| layer.set().clone()),
+            track_thickness: self.tracks.as_ref().map(TrackLayer::thickness),
+            track_visible: self.tracks.as_ref().map(TrackLayer::visible),
+            visibility: self.visibility.clone(),
+            frames: (0..self.frames.len())
+                .map(|time| self.frame(time as u32).cloned())
+                .collect(),
+        }
+    }
+
+    pub(crate) fn restore(state: SetState, dataset: &Dataset) -> Self {
+        let SetState {
+            id,
+            kind,
+            name,
+            channel,
+            color,
+            visible,
+            params,
+            track_style,
+            tracks,
+            track_thickness,
+            track_visible,
+            visibility,
+            frames,
+        } = state;
+        assert_eq!(
+            params.kind(),
+            kind,
+            "an object set state names parameters of its own kind"
+        );
+        assert_eq!(
+            kind.trackable(),
+            track_style.is_some(),
+            "only trackable object sets carry track parameters"
+        );
+        assert_eq!(
+            tracks.is_some(),
+            track_thickness.is_some() && track_visible.is_some(),
+            "a restored track layer carries its thickness and visibility"
+        );
+        let mut set = Self {
+            id: ObjectSetId::new(id),
+            kind,
+            name,
+            channel,
+            color,
+            visible,
+            voxel: dataset.voxel_size().min_element(),
+            params,
+            track_style,
+            frames: (0..frames.len()).map(|_| FrameSlot::new()).collect(),
+            stamp: 1,
+            revision: 1,
+            document: 1,
+            visibility: Visibility::All,
+            tracks: None,
+        };
+        assert_eq!(
+            set.frames.len(),
+            dataset.frame_count() as usize,
+            "an object set state covers every frame of the dataset"
+        );
+        for (time, frame) in frames.into_iter().enumerate() {
+            if let Some(frame) = frame {
+                set.install(time as u32, frame);
+            }
+        }
+        if let Some(tracks) = tracks {
+            let thickness = track_thickness.expect("a restored track layer carries a thickness");
+            let visible = track_visible.expect("a restored track layer carries visibility");
+            let mut layer = TrackLayer::new(tracks, thickness);
+            layer.set_visible(visible);
+            set.tracks = Some(layer);
+        }
+        set.set_visibility(visibility);
+        set
+    }
+
     pub fn set_visibility(&mut self, visibility: Visibility) {
+        if self.visibility == visibility {
+            return;
+        }
         match &visibility {
             Visibility::All => {}
             Visibility::Object(frames) => {
@@ -201,6 +312,7 @@ impl ObjectSet {
             }
         }
         self.visibility = visibility;
+        self.document += 1;
     }
 
     pub fn visible_object(&self, time: u32, object: usize) -> bool {
@@ -236,6 +348,7 @@ impl ObjectSet {
             .expect("the object frame lies inside the time series");
         self.stamp += 1;
         self.revision += 1;
+        self.document += 1;
         self.visibility = Visibility::All;
         slot.stamp = self.stamp;
         slot.data = Some(frame);
@@ -246,6 +359,7 @@ impl ObjectSet {
             slot.data = None;
         }
         self.revision += 1;
+        self.document += 1;
         self.visibility = Visibility::All;
         self.tracks = None;
     }
@@ -259,8 +373,11 @@ impl ObjectSet {
     }
 
     pub fn set_track_params(&mut self, params: TrackParams) {
-        if let Some(style) = self.track_style {
+        if let Some(style) = self.track_style
+            && style.params() != params
+        {
             self.track_style = Some(TrackStyle::new(params, style.thickness()));
+            self.document += 1;
         }
     }
 
@@ -277,11 +394,13 @@ impl ObjectSet {
         layer.set_visible(visible);
         self.tracks = Some(layer);
         self.revision += 1;
+        self.document += 1;
         self.visibility = Visibility::All;
     }
 
     pub fn clear_tracks(&mut self) {
         self.revision += 1;
+        self.document += 1;
         self.visibility = Visibility::All;
         self.tracks = None;
     }
@@ -297,13 +416,21 @@ impl ObjectSet {
     pub fn set_track_thickness(&mut self, thickness: f32) {
         let thickness = thickness.clamp(self.min_thickness(), self.max_thickness());
         if let Some(layer) = self.tracks.as_mut() {
+            let previous = layer.thickness();
             layer.set_thickness(thickness);
+            if layer.thickness() != previous {
+                self.document += 1;
+            }
         }
     }
 
     pub fn set_track_visible(&mut self, visible: bool) {
         if let Some(layer) = self.tracks.as_mut() {
+            let previous = layer.visible();
             layer.set_visible(visible);
+            if layer.visible() != previous {
+                self.document += 1;
+            }
         }
     }
 

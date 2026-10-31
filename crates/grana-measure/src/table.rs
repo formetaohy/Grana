@@ -13,6 +13,18 @@ pub enum Group {
     Timepoint,
 }
 
+impl Group {
+    pub const ALL: [Self; 3] = [Self::Object, Self::Track, Self::Timepoint];
+
+    pub fn index(self) -> u8 {
+        match self {
+            Self::Object => 0,
+            Self::Track => 1,
+            Self::Timepoint => 2,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Aggregate {
     Mean,
@@ -23,6 +35,24 @@ pub enum Aggregate {
 }
 
 impl Aggregate {
+    pub const ALL: [Self; 5] = [
+        Self::Mean,
+        Self::Sum,
+        Self::Minimum,
+        Self::Maximum,
+        Self::Deviation,
+    ];
+
+    pub fn index(self) -> u8 {
+        match self {
+            Self::Mean => 0,
+            Self::Sum => 1,
+            Self::Minimum => 2,
+            Self::Maximum => 3,
+            Self::Deviation => 4,
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Self::Mean => "mean",

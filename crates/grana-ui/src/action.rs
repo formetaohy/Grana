@@ -2,7 +2,10 @@ use grana_scene::{ObjectKind, ObjectSetId, Selection};
 use grana_volume::Axis;
 
 pub enum Action {
-    Open,
+    OpenDataset,
+    OpenProject,
+    SaveProject,
+    SaveProjectAs,
     Fit,
     FitSection,
     SetSectionAxis(Axis),

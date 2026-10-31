@@ -3,6 +3,18 @@ use grana_measure::{Aggregate, Filter, Frame, Group, Objects, Table};
 use crate::object::ObjectFrame;
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::scene::Scene;
+use crate::state::{HASH_OFFSET, mix};
+
+#[derive(Debug, PartialEq)]
+pub struct MeasureState {
+    pub set: Option<u64>,
+    pub group: Group,
+    pub aggregate: Aggregate,
+    pub filters: Vec<Filter>,
+    pub sort: Option<(usize, bool)>,
+    pub columns: Vec<bool>,
+    pub visibility: bool,
+}
 
 pub struct Measure {
     set: Option<ObjectSetId>,
@@ -288,6 +300,86 @@ impl Measure {
 
     pub fn csv(&self) -> Option<String> {
         Some(self.table.as_ref()?.csv(&self.rows))
+    }
+
+    pub fn state(&self) -> MeasureState {
+        MeasureState {
+            set: self.set.map(ObjectSetId::raw),
+            group: self.group,
+            aggregate: self.aggregate,
+            filters: self.filters.clone(),
+            sort: self.sort,
+            columns: self.visible.clone(),
+            visibility: self.visibility,
+        }
+    }
+
+    pub fn restore(&mut self, state: MeasureState, scene: &Scene) {
+        let MeasureState {
+            set,
+            group,
+            aggregate,
+            filters,
+            sort,
+            columns,
+            visibility,
+        } = state;
+        self.set = None;
+        self.group = group;
+        self.aggregate = aggregate;
+        self.table = None;
+        self.rows.clear();
+        self.visible.clear();
+        self.filters.clear();
+        self.sort = None;
+        self.visibility = visibility;
+        self.revision = None;
+        self.dirty = true;
+        let Some(set) = set else {
+            assert!(
+                columns.is_empty() && filters.is_empty() && sort.is_none(),
+                "a measure state without an object set carries no table state"
+            );
+            return;
+        };
+        self.set = Some(ObjectSetId::new(set));
+        self.rebuild(scene);
+        let count = self.table.as_ref().map_or(0, |table| table.columns().len());
+        assert_eq!(
+            columns.len(),
+            count,
+            "a measure state covers every column of its table"
+        );
+        assert!(
+            filters.iter().all(|filter| filter.column() < count)
+                && sort.is_none_or(|(column, _)| column < count),
+            "a measure state names columns inside its table"
+        );
+        self.visible = columns;
+        self.filters = filters;
+        self.sort = sort;
+        self.refresh();
+        self.dirty = true;
+    }
+
+    pub fn document_hash(&self) -> u64 {
+        let mut hash = HASH_OFFSET;
+        hash = mix(hash, self.set.map_or(0, ObjectSetId::raw));
+        hash = mix(hash, u64::from(self.group.index()));
+        hash = mix(hash, u64::from(self.aggregate.index()));
+        for filter in &self.filters {
+            hash = mix(hash, filter.column() as u64);
+            hash = mix(hash, u64::from(filter.minimum().to_bits()));
+            hash = mix(hash, u64::from(filter.maximum().to_bits()));
+        }
+        if let Some((column, descending)) = self.sort {
+            hash = mix(hash, column as u64);
+            hash = mix(hash, u64::from(u8::from(descending)));
+        }
+        for visible in &self.visible {
+            hash = mix(hash, u64::from(u8::from(*visible)));
+        }
+        mix(hash, u64::from(u8::from(self.visibility)))
     }
 
     fn rebuild(&mut self, scene: &Scene) {

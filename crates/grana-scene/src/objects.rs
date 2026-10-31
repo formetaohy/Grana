@@ -1,6 +1,7 @@
 use crate::dataset::Dataset;
 use crate::object::ObjectKind;
 use crate::object_set::{ObjectSet, ObjectSetId};
+use crate::state::SetState;
 
 const PALETTE: [[f32; 3]; 8] = [
     [0.35, 0.70, 1.00],
@@ -52,6 +53,18 @@ impl Objects {
 
     pub fn remove(&mut self, id: ObjectSetId) {
         self.sets.retain(|set| set.id() != id);
+    }
+
+    pub(crate) fn restore(&mut self, states: Vec<SetState>, dataset: &Dataset) {
+        self.sets.clear();
+        self.next_id = 1;
+        self.ordinals = [0; 3];
+        for state in states {
+            assert!(state.id >= self.next_id, "object set ids ascend from one");
+            self.next_id = state.id + 1;
+            self.ordinals[state.kind.index()] += 1;
+            self.sets.push(ObjectSet::restore(state, dataset));
+        }
     }
 
     pub fn get(&self, id: ObjectSetId) -> Option<&ObjectSet> {

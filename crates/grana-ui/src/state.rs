@@ -23,6 +23,8 @@ pub struct State<'a> {
     pub adapter: &'a str,
     pub loading: Option<&'a str>,
     pub message: Option<&'a Message>,
+    pub project: Option<&'a str>,
+    pub dirty: bool,
     pub frame: FrameInfo,
     pub pending: usize,
     pub playing: bool,

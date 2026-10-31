@@ -25,10 +25,12 @@ serde_json = "1"
 rfd = "0.17"
 zarrs = { version = "0.23", default-features = false, features = ["filesystem", "blosc", "zstd", "gzip", "sharding", "crc32c"] }
 ome_zarr_metadata = "0.3"
+zstd = "0.13"
 grana-volume = { version = "0.1.0", path = "crates/grana-volume" }
 grana-object = { version = "0.1.0", path = "crates/grana-object" }
 grana-gpu = { version = "0.1.0", path = "crates/grana-gpu" }
 grana-scene = { version = "0.1.0", path = "crates/grana-scene" }
+grana-project = { version = "0.1.0", path = "crates/grana-project" }
 grana-ui = { version = "0.1.0", path = "crates/grana-ui" }
 grana-analysis = { version = "0.1.0", path = "crates/grana-analysis" }
 grana-render = { version = "0.1.0", path = "crates/grana-render" }
@@ -59,6 +61,7 @@ grana-analysis = { workspace = true }
 grana-gpu = { workspace = true }
 grana-measure = { workspace = true }
 grana-object = { workspace = true }
+grana-project = { workspace = true }
 grana-render = { workspace = true }
 grana-scene = { workspace = true }
 grana-ui = { workspace = true }

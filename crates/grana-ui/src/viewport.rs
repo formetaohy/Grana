@@ -1,5 +1,5 @@
 use glam::{Vec2, Vec3};
-use grana_render::{Camera, SectionCamera};
+use grana_render::{Camera, CameraState, SectionCamera, SectionState};
 use grana_volume::{Axis, Spacing};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::keyboard::ModifiersState;
@@ -104,6 +104,19 @@ impl Viewport {
 
     pub fn split(&self) -> f32 {
         self.split
+    }
+
+    pub fn camera_state(&self) -> CameraState {
+        self.camera.state()
+    }
+
+    pub fn section_state(&self) -> SectionState {
+        self.section.state()
+    }
+
+    pub fn restore_view(&mut self, camera: CameraState, section: SectionState) {
+        self.camera.restore(camera);
+        self.section.restore(section);
     }
 
     pub fn set_split(&mut self, split: f32) {

@@ -1,0 +1,287 @@
+use std::fs;
+
+use glam::Vec3;
+use grana_analysis::SpotParams;
+use grana_object::{
+    Bounds, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Mesh, MeshVertex,
+    SampleAccumulator, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track,
+    TrackNode, TrackSet,
+};
+use grana_project::{Project, Source, ViewState};
+use grana_render::{CameraState, SectionState, TransferFunction};
+use grana_scene::{
+    Dataset, Item, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene, Selection, Visibility,
+};
+use grana_volume::{Axis, Channel, Extent, Movie, Spacing, Volume, VoxelData};
+
+const EXTENT: Extent = Extent::new(8, 8, 4);
+
+#[test]
+fn round_trips_a_project() {
+    let mut scene = fixture();
+    stage(&mut scene);
+    let mut measure = Measure::new();
+    let spots = scene
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Spots)
+        .expect("the fixture stages spots")
+        .id();
+    let surfaces = scene
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Surfaces)
+        .expect("the fixture stages surfaces")
+        .id();
+    scene
+        .objects
+        .get_mut(spots)
+        .expect("the spots exist")
+        .set_visibility(Visibility::Object(vec![
+            vec![true, false],
+            vec![false, true],
+        ]));
+    scene
+        .objects
+        .get_mut(surfaces)
+        .expect("the surfaces exist")
+        .set_visibility(Visibility::Track(vec![true, false, true]));
+    scene.select(Some(Selection {
+        set: surfaces,
+        item: Item::Track(2),
+    }));
+    measure.select(spots, &scene);
+    measure.set_group(grana_measure::Group::Track, &scene);
+    measure.add_filter();
+    let columns = measure
+        .table()
+        .expect("the track table builds")
+        .columns()
+        .len();
+    measure.toggle_sort(columns - 1);
+    measure.set_column_visible(0, false);
+    let view = ViewState {
+        camera: CameraState {
+            pivot: [1.0, -2.0, 0.5],
+            yaw: 0.4,
+            pitch: -0.3,
+            distance: 12.0,
+            fov_y: 0.6,
+        },
+        section: SectionState {
+            axis: Axis::Y,
+            span: 30.0,
+        },
+        split: 0.42,
+    };
+    let source = Source::Synthetic {
+        name: "fixture".to_string(),
+    };
+    let project = Project::capture(&scene, &measure, source, view);
+    let path = std::env::temp_dir().join(format!("grana-project-{}.grana", std::process::id()));
+    project.write(&path).expect("the project writes");
+    let loaded = Project::read(&path).expect("the project reads");
+    fs::remove_file(&path).ok();
+    assert_eq!(loaded, project);
+
+    let mut restored = fixture();
+    restored.restore(loaded.scene);
+    let mut restored_measure = Measure::new();
+    restored_measure.restore(loaded.measure, &restored);
+    assert_eq!(restored.state(), project.scene);
+    assert_eq!(restored_measure.state(), project.measure);
+    assert_eq!(loaded.view, project.view);
+}
+
+#[test]
+fn rejects_damaged_projects() {
+    let mut scene = fixture();
+    stage(&mut scene);
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "fixture".to_string(),
+        },
+        ViewState {
+            camera: CameraState {
+                pivot: [0.0; 3],
+                yaw: 0.0,
+                pitch: 0.0,
+                distance: 1.0,
+                fov_y: 0.6,
+            },
+            section: SectionState {
+                axis: Axis::Z,
+                span: 1.0,
+            },
+            split: 0.5,
+        },
+    );
+    let path = std::env::temp_dir().join(format!("grana-damaged-{}.grana", std::process::id()));
+    project.write(&path).expect("the project writes");
+    let bytes = fs::read(&path).expect("the project reads");
+    fs::write(&path, b"not a grana project").expect("the damaged file writes");
+    assert!(Project::read(&path).is_err());
+    fs::write(&path, &bytes[..bytes.len() / 2]).expect("the truncated file writes");
+    assert!(Project::read(&path).is_err());
+    fs::remove_file(&path).ok();
+}
+
+fn fixture() -> Scene {
+    let spacing = Spacing::new(0.5, 0.5, 2.0);
+    let frames = (0..2)
+        .map(|frame| {
+            let value = frame as u16 + 1;
+            Volume::new(
+                EXTENT,
+                spacing,
+                vec![
+                    Channel::new(
+                        "nuclei",
+                        [0.3, 0.6, 1.0],
+                        VoxelData::U16(vec![value; EXTENT.voxel_count() as usize]),
+                    ),
+                    Channel::new(
+                        "signal",
+                        [1.0, 0.4, 0.2],
+                        VoxelData::F32(vec![0.5; EXTENT.voxel_count() as usize]),
+                    ),
+                ],
+            )
+        })
+        .collect();
+    let movie = Movie::new(frames, 1.5);
+    Scene::new(Dataset::synthetic("fixture", movie.pyramid().clone()))
+}
+
+fn stage(scene: &mut Scene) {
+    let spots = scene.add_object(ObjectKind::Spots, 0);
+    let surfaces = scene.add_object(ObjectKind::Surfaces, 1);
+    let filaments = scene.add_object(ObjectKind::Filaments, 0);
+    for time in 0..2 {
+        scene.install(
+            spots,
+            time,
+            ObjectFrame::Spots(SpotSet::new(
+                0,
+                vec![
+                    Spot::new([time as f32, 0.0, 0.0], 1.5, 0.4),
+                    Spot::new([2.0, time as f32, 1.0], 0.75, 0.25),
+                ],
+                intensities(2, 2),
+            )),
+        );
+        scene.install(
+            surfaces,
+            time,
+            ObjectFrame::Surfaces(SurfaceSet::new(
+                0,
+                triangle(),
+                vec![SurfaceStatistics::new(
+                    4,
+                    3.0,
+                    6.0,
+                    [0.0, 0.0, 0.0],
+                    Bounds::new([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]),
+                )],
+                intensities(2, 1),
+            )),
+        );
+        scene.install(
+            filaments,
+            time,
+            ObjectFrame::Filaments(FilamentSet::new(
+                0,
+                triangle(),
+                vec![FilamentStatistics::new(
+                    2.0,
+                    0.6,
+                    1.2,
+                    FilamentTopology::new(1, 2, 0, 3),
+                    [0.5, 0.5, 0.5],
+                    Bounds::new([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]),
+                )],
+                intensities(2, 1),
+            )),
+        );
+    }
+    let node = |time: u32, x: f32| TrackNode::new(time, time as usize, [x, 0.0, 0.0]);
+    scene.install_tracks(
+        spots,
+        TrackSet::new(
+            1.5,
+            vec![Track::new(None, vec![node(0, 0.0), node(1, 1.0)])],
+        ),
+    );
+    let spots = scene.objects.get_mut(spots).expect("the spots exist");
+    spots.set_color([0.1, 0.2, 0.3]);
+    spots.set_params(ObjectParams::Spots(SpotParams::new(3.0, 0.3)));
+    spots.set_track_thickness(2.0);
+    let spot_set = spots.id();
+    let nodes = vec![
+        TrackNode::new(0, 0, [0.0, 0.0, 0.0]),
+        TrackNode::new(1, 0, [1.0, 0.0, 0.0]),
+    ];
+    let children = vec![
+        TrackNode::new(2, 0, [5.0, 0.0, 0.0]),
+        TrackNode::new(3, 0, [6.0, 0.0, 0.0]),
+    ];
+    let siblings = vec![
+        TrackNode::new(2, 1, [4.0, 0.0, 0.0]),
+        TrackNode::new(3, 1, [4.5, 0.0, 0.0]),
+    ];
+    scene.install_tracks(
+        surfaces,
+        TrackSet::new(
+            1.5,
+            vec![
+                Track::new(None, nodes),
+                Track::new(Some(0), children),
+                Track::new(Some(0), siblings),
+            ],
+        ),
+    );
+    let surfaces = scene.objects.get_mut(surfaces).expect("the surfaces exist");
+    surfaces.set_visible(false);
+    scene.channels[1].opacity = 0.35;
+    scene.channels[0].enabled = false;
+    scene.set_window(0, 100.0, 200.0);
+    scene.set_transfer(1, TransferFunction::grayscale());
+    scene.select_channel(1);
+    scene.shading.diffuse = 0.5;
+    scene.step_scale = 0.5;
+    scene.region.set_enabled(true);
+    scene
+        .region
+        .set_bounds(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.5, 1.5, 1.5));
+    scene.set_time(1);
+    scene.select(Some(Selection {
+        set: spot_set,
+        item: Item::Object(1),
+    }));
+}
+
+fn intensities(channels: usize, objects: usize) -> IntensityTable {
+    let values = (0..channels * objects)
+        .map(|index| statistics(&[index as f32, index as f32 + 1.0, index as f32 + 2.0]))
+        .collect();
+    IntensityTable::new(channels, values)
+}
+
+fn statistics(values: &[f32]) -> SampleStatistics {
+    let mut accumulator = SampleAccumulator::new();
+    for value in values {
+        accumulator.push(*value);
+    }
+    accumulator.statistics()
+}
+
+fn triangle() -> Mesh {
+    let vertices = [
+        MeshVertex::new([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0),
+        MeshVertex::new([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0),
+        MeshVertex::new([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 0),
+    ];
+    Mesh::new(vertices.to_vec(), vec![0, 1, 2])
+}
