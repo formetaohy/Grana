@@ -1113,7 +1113,7 @@ dependencies = [
 
 [[package]]
 name = "grana"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "egui",
  "glam",
@@ -1139,7 +1139,7 @@ dependencies = [
 
 [[package]]
 name = "grana-analysis"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam",
  "grana-object",
@@ -1148,7 +1148,7 @@ dependencies = [
 
 [[package]]
 name = "grana-animation"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "grana-render",
  "grana-volume",
@@ -1156,7 +1156,7 @@ dependencies = [
 
 [[package]]
 name = "grana-gpu"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "wgpu",
@@ -1164,14 +1164,14 @@ dependencies = [
 
 [[package]]
 name = "grana-measure"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "grana-object",
 ]
 
 [[package]]
 name = "grana-object"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "glam",
@@ -1179,7 +1179,7 @@ dependencies = [
 
 [[package]]
 name = "grana-pipeline"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "grana-analysis",
  "grana-measure",
@@ -1194,7 +1194,7 @@ dependencies = [
 
 [[package]]
 name = "grana-project"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam",
  "grana-analysis",
@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "grana-render"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "glam",
@@ -1224,7 +1224,7 @@ dependencies = [
 
 [[package]]
 name = "grana-scene"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam",
  "grana-analysis",
@@ -1236,7 +1236,7 @@ dependencies = [
 
 [[package]]
 name = "grana-ui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "egui",
  "egui-wgpu",
@@ -1256,7 +1256,7 @@ dependencies = [
 
 [[package]]
 name = "grana-video"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "openh264",
  "thiserror 2.0.21",
@@ -1264,14 +1264,14 @@ dependencies = [
 
 [[package]]
 name = "grana-volume"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam",
 ]
 
 [[package]]
 name = "grana-zarr"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "grana-volume",
  "ome_zarr_metadata",

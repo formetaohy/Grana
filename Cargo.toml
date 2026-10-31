@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Next-generation microscopy image visualization and analysis platform"
 license = "MIT"
@@ -28,19 +28,19 @@ zarrs = { version = "0.23", default-features = false, features = ["filesystem", 
 ome_zarr_metadata = "0.3"
 openh264 = "0.9"
 zstd = "0.13"
-grana-animation = { version = "0.1.0", path = "crates/grana-animation" }
-grana-volume = { version = "0.1.0", path = "crates/grana-volume" }
-grana-object = { version = "0.1.0", path = "crates/grana-object" }
-grana-gpu = { version = "0.1.0", path = "crates/grana-gpu" }
-grana-scene = { version = "0.1.0", path = "crates/grana-scene" }
-grana-project = { version = "0.1.0", path = "crates/grana-project" }
-grana-ui = { version = "0.1.0", path = "crates/grana-ui" }
-grana-analysis = { version = "0.1.0", path = "crates/grana-analysis" }
-grana-render = { version = "0.1.0", path = "crates/grana-render" }
-grana-zarr = { version = "0.1.0", path = "crates/grana-zarr" }
-grana-measure = { version = "0.1.0", path = "crates/grana-measure" }
-grana-pipeline = { version = "0.1.0", path = "crates/grana-pipeline" }
-grana-video = { version = "0.1.0", path = "crates/grana-video" }
+grana-animation = { version = "0.1.1", path = "crates/grana-animation" }
+grana-volume = { version = "0.1.1", path = "crates/grana-volume" }
+grana-object = { version = "0.1.1", path = "crates/grana-object" }
+grana-gpu = { version = "0.1.1", path = "crates/grana-gpu" }
+grana-scene = { version = "0.1.1", path = "crates/grana-scene" }
+grana-project = { version = "0.1.1", path = "crates/grana-project" }
+grana-ui = { version = "0.1.1", path = "crates/grana-ui" }
+grana-analysis = { version = "0.1.1", path = "crates/grana-analysis" }
+grana-render = { version = "0.1.1", path = "crates/grana-render" }
+grana-zarr = { version = "0.1.1", path = "crates/grana-zarr" }
+grana-measure = { version = "0.1.1", path = "crates/grana-measure" }
+grana-pipeline = { version = "0.1.1", path = "crates/grana-pipeline" }
+grana-video = { version = "0.1.1", path = "crates/grana-video" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
