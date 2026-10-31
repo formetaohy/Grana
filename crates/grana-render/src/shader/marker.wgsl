@@ -54,6 +54,9 @@ fn fs_main(input: MarkerOutput) -> MarkerFragment {
     let radius = input.center_radius.w;
     let surface = input.center_radius.xyz
         + (frame.right.xyz * local.x + frame.up.xyz * local.y - frame.forward.xyz * depth) * radius;
+    if (outside_crop(surface)) {
+        discard;
+    }
     let normal = normalize(
         frame.right.xyz * local.x + frame.up.xyz * local.y - frame.forward.xyz * depth,
     );

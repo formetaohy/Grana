@@ -1,7 +1,7 @@
 use glam::Vec3;
 use grana_object::{Spot, TrackSet};
 use grana_render::{
-    ChannelRow, Layer, LayerKey, Marker, Ray, SceneFrame, Shading, Style, TransferFunction,
+    ChannelRow, Crop, Layer, LayerKey, Marker, Ray, SceneFrame, Shading, Style, TransferFunction,
 };
 use grana_volume::{Axis, ChannelInfo, Intensity};
 
@@ -55,6 +55,7 @@ pub struct Scene {
     pub selected: usize,
     pub shading: Shading,
     pub step_scale: f32,
+    pub crop: Crop,
     pub objects: Objects,
     time: u32,
     selection: Option<Selection>,
@@ -73,12 +74,14 @@ impl Scene {
                 )
             })
             .collect();
+        let half = 0.5 * dataset.world_size();
         Self {
             dataset,
             channels,
             selected: 0,
             shading: Shading::default(),
             step_scale: 1.0,
+            crop: Crop::full(-half, half),
             objects: Objects::new(),
             time: 0,
             selection: None,

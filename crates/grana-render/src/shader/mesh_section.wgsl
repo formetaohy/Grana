@@ -17,6 +17,7 @@ struct VertexOutput {
     @location(1) height: f32,
     @location(2) uv: vec2<f32>,
     @location(3) @interpolate(flat) object: u32,
+    @location(4) position: vec3<f32>,
 }
 
 struct DepthOutput {
@@ -44,10 +45,14 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.height = uvw[axis];
     output.uv = vec2<f32>(uvw[u], uvw[v]);
     output.object = input.object;
+    output.position = input.position;
     return output;
 }
 
 fn hidden(input: VertexOutput) -> bool {
+    if (outside_crop(input.position)) {
+        return true;
+    }
     if (input.uv.x < 0.0 || input.uv.x > 1.0 || input.uv.y < 0.0 || input.uv.y > 1.0) {
         return true;
     }

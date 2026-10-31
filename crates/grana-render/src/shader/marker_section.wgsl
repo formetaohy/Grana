@@ -10,6 +10,8 @@ struct MarkerOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) @interpolate(flat) color_alpha: vec4<f32>,
     @location(1) local: vec2<f32>,
+    @location(2) @interpolate(flat) center: vec3<f32>,
+    @location(3) @interpolate(flat) cross: f32,
 }
 
 @vertex
@@ -43,6 +45,8 @@ fn vs_main(@builtin(vertex_index) index: u32, @builtin(instance_index) instance:
     output.clip_position = vec4<f32>(center + local * extent, 0.0, 1.0);
     output.color_alpha = data.color_alpha;
     output.local = local;
+    output.center = data.center_radius.xyz;
+    output.cross = cross;
     return output;
 }
 
@@ -50,6 +54,12 @@ fn vs_main(@builtin(vertex_index) index: u32, @builtin(instance_index) instance:
 fn fs_main(input: MarkerOutput) -> @location(0) vec4<f32> {
     let distance = length(input.local);
     if (distance > 1.0) {
+        discard;
+    }
+    var world = input.center;
+    world[section.mapping.x] += input.local.x * input.cross;
+    world[section.mapping.y] += input.local.y * input.cross;
+    if (outside_crop(world)) {
         discard;
     }
     let width = fwidth(distance);

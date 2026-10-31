@@ -3,6 +3,7 @@ use glam::Mat4;
 
 use crate::brick::BrickTable;
 use crate::camera::{Camera, SectionCamera};
+use crate::crop::Crop;
 use crate::schema::Shading;
 
 #[repr(C)]
@@ -17,6 +18,8 @@ pub(crate) struct FrameData {
     pub forward: [f32; 4],
     pub box_min: [f32; 4],
     pub box_size: [f32; 4],
+    pub crop_min: [f32; 4],
+    pub crop_max: [f32; 4],
     pub dims: [f32; 4],
     pub grid: [u32; 4],
     pub atlas: [u32; 4],
@@ -55,21 +58,32 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 432);
-    assert!(std::mem::offset_of!(FrameData, planes) == 336);
+    assert!(size_of::<FrameData>() == 464);
+    assert!(std::mem::offset_of!(FrameData, planes) == 368);
     assert!(size_of::<SectionData>() == 160);
     assert!(size_of::<ScheduleData>() == 32);
 };
+pub(crate) struct VolumeView<'a> {
+    pub camera: &'a Camera,
+    pub crop: Crop,
+    pub aspect: f32,
+    pub height: u32,
+}
+
 impl FrameData {
     pub fn new(
-        camera: &Camera,
-        aspect: f32,
-        height: u32,
+        view: VolumeView<'_>,
         table: &BrickTable,
         shading: Shading,
         step_scale: f32,
         channels: usize,
     ) -> Self {
+        let VolumeView {
+            camera,
+            crop,
+            aspect,
+            height,
+        } = view;
         let view_projection = camera.view_projection(aspect, 0.5 * table.world.length());
         let world = table.world;
         let grid = table.grid.counts();
@@ -87,6 +101,13 @@ impl FrameData {
             forward: camera.forward().extend(0.0).to_array(),
             box_min: [-0.5 * world.x, -0.5 * world.y, -0.5 * world.z, 0.0],
             box_size: [world.x, world.y, world.z, 0.0],
+            crop_min: [
+                crop.min().x,
+                crop.min().y,
+                crop.min().z,
+                if crop.enabled() { 1.0 } else { 0.0 },
+            ],
+            crop_max: [crop.max().x, crop.max().y, crop.max().z, 0.0],
             dims: [table.dims.x, table.dims.y, table.dims.z, 0.0],
             grid: [grid[0], grid[1], grid[2], 0],
             atlas: [table.atlas[0], table.atlas[1], table.atlas[2], 0],

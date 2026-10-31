@@ -3,6 +3,8 @@ struct MeshUniforms {
     eye: vec4<f32>,
     light: vec4<f32>,
     shading: vec4<f32>,
+    crop_min: vec4<f32>,
+    crop_max: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> mesh: MeshUniforms;
@@ -39,6 +41,10 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    if (mesh.crop_min.w > 0.5
+        && (any(input.position < mesh.crop_min.xyz) || any(input.position > mesh.crop_max.xyz))) {
+        discard;
+    }
     let style = styles[input.object];
     var normal = normalize(input.normal);
     let view = normalize(mesh.eye.xyz - input.position);

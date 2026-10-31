@@ -1,14 +1,30 @@
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke};
 use glam::{Mat4, Vec3};
-use grana_render::{Camera, SectionCamera, plane_basis};
+use grana_render::{Camera, Crop, SectionCamera, plane_basis};
 use grana_volume::Axis;
 
 const LABEL_COLOR: Color32 = Color32::from_gray(196);
 const BAR_COLOR: Color32 = Color32::from_gray(225);
 const CROSS_COLOR: Color32 = Color32::from_rgba_premultiplied(220, 230, 240, 150);
 const PLANE_COLOR: Color32 = Color32::from_rgba_premultiplied(110, 190, 255, 110);
+const CROP_COLOR: Color32 = Color32::from_rgba_premultiplied(255, 196, 92, 140);
 const SEPARATOR_COLOR: Color32 = Color32::from_gray(44);
 const SCALE_TARGET: f32 = 116.0;
+
+const CROP_EDGES: [(usize, usize); 12] = [
+    (0, 1),
+    (1, 3),
+    (3, 2),
+    (2, 0),
+    (4, 5),
+    (5, 7),
+    (7, 6),
+    (6, 4),
+    (0, 4),
+    (1, 5),
+    (2, 6),
+    (3, 7),
+];
 
 pub struct Overlay<'a> {
     pub camera: &'a Camera,
@@ -19,6 +35,7 @@ pub struct Overlay<'a> {
     pub section_level: usize,
     pub volume_rect: Rect,
     pub section_rect: Rect,
+    pub crop: Crop,
 }
 
 pub fn paint(ui: &egui::Ui, overlay: &Overlay<'_>) {
@@ -58,6 +75,7 @@ fn paint_volume(ui: &egui::Ui, overlay: &Overlay<'_>) {
     if let Some(focus) = project(view_projection, overlay.camera.focus(), overlay.volume_rect) {
         cross(&painter, focus, 5.0, 1.0, CROSS_COLOR);
     }
+    crop_box(&painter, view_projection, overlay.crop, overlay.volume_rect);
     let world_per_point = 2.0 * overlay.camera.distance() * (overlay.camera.fov_y() * 0.5).tan()
         / overlay.volume_rect.height();
     scale_bar(&painter, overlay.volume_rect, world_per_point);
@@ -90,6 +108,28 @@ fn paint_section(ui: &egui::Ui, overlay: &Overlay<'_>) {
             overlay.levels,
         ),
     );
+}
+
+fn crop_box(painter: &Painter, view_projection: Mat4, crop: Crop, rect: Rect) {
+    if !crop.enabled() {
+        return;
+    }
+    let min = crop.min();
+    let max = crop.max();
+    let corners: [Vec3; 8] = std::array::from_fn(|index: usize| {
+        Vec3::new(
+            if index & 1 == 0 { min.x } else { max.x },
+            if index & 2 == 0 { min.y } else { max.y },
+            if index & 4 == 0 { min.z } else { max.z },
+        )
+    });
+    let projected = corners.map(|corner| project(view_projection, corner, rect));
+    let stroke = Stroke::new(1.0, CROP_COLOR);
+    for (from, to) in CROP_EDGES {
+        if let (Some(from), Some(to)) = (projected[from], projected[to]) {
+            painter.line_segment([from, to], stroke);
+        }
+    }
 }
 
 fn plane_corners(focus: Vec3, axis: Axis, world: Vec3) -> [Vec3; 4] {

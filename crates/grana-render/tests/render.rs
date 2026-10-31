@@ -7,8 +7,8 @@ use common::{
 use glam::Vec3;
 use grana_object::{Mesh, MeshVertex, Track, TrackNode, TrackSet};
 use grana_render::{
-    Camera, Layer, LayerKey, Marker, Renderer, SceneFrame, SectionCamera, Shading, Stop, Style,
-    TransferFunction,
+    Camera, Crop, Layer, LayerKey, Marker, Renderer, SceneFrame, SectionCamera, Shading, Stop,
+    Style, TransferFunction,
 };
 use grana_volume::{
     Axis, BrickGrid, Channel, Extent, Level, Movie, Pyramid, Spacing, Volume, VoxelData,
@@ -66,6 +66,7 @@ fn streams_two_channels() {
             scene: &scene,
             volume_region: WHOLE,
             section_region: CORNER,
+            crop: Crop::none(),
             time: 0,
         },
         |request| {
@@ -131,6 +132,7 @@ fn switches_frames() {
             scene: &scene,
             volume_region: WHOLE,
             section_region: CORNER,
+            crop: Crop::none(),
             time: 0,
         },
         source,
@@ -157,6 +159,7 @@ fn switches_frames() {
             scene: &scene,
             volume_region: WHOLE,
             section_region: CORNER,
+            crop: Crop::none(),
             time: 1,
         },
         source,
@@ -190,6 +193,118 @@ fn sections_planes_and_layers() {
     let plane = section_render(&device, &queue, &texture, &half, Axis::X, [0.0, 0.0, 0.0]);
     assert!(dark_fraction(&plane, 0.0, 0.33, 0.0, 1.0) > 0.98);
     assert!(bright_fraction(&plane, 0.67, 1.0, 0.2, 0.8) > 0.30);
+}
+
+#[test]
+fn clips_to_a_crop_box() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = sphere(Extent::new(128, 128, 64), Spacing::new(0.1, 0.1, 0.2));
+    let pyramid = volume.pyramid();
+    let world = Vec3::from(volume.world_extent());
+    let half = 0.5 * world;
+    let mut camera = Camera::new(35.0);
+    camera.fit(world, 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let transfer = TransferFunction::new(vec![
+        Stop::new(0.0, [0.0, 0.0, 0.0], 0.0),
+        Stop::new(0.49, [0.0, 0.0, 0.0], 0.0),
+        Stop::new(0.51, [1.0, 1.0, 1.0], 1.0),
+        Stop::new(1.0, [1.0, 1.0, 1.0], 1.0),
+    ]);
+    let channels = vec![grana_render::ChannelRow {
+        visible: true,
+        opacity: 1.0,
+        window: pyramid.channels()[0].window(),
+        transfer: &transfer,
+    }];
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    let source = |request: grana_render::BrickRequest| {
+        let grid = BrickGrid::new(volume.extent());
+        volume.brick(&grid, request.coord)
+    };
+    let session = |crop: Crop| Session {
+        device: &device,
+        queue: &queue,
+        target: &view,
+        camera: &camera,
+        section: &section,
+        scene: &scene,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        crop,
+        time: 0,
+    };
+
+    settle(&mut renderer, session(Crop::none()), source);
+    let full = bright_pixels(&read_pixels(&device, &queue, &texture, SIDE));
+
+    let left = Crop::new(
+        Vec3::new(-half.x, -half.y, -half.z),
+        Vec3::new(0.0, half.y, half.z),
+    );
+    settle(&mut renderer, session(left), source);
+    let cropped = bright_pixels(&read_pixels(&device, &queue, &texture, SIDE));
+
+    let corner = Crop::new(Vec3::splat(0.75 * half.x), Vec3::splat(half.x));
+    settle(&mut renderer, session(corner), source);
+    let erased = bright_pixels(&read_pixels(&device, &queue, &texture, SIDE));
+
+    assert!(full > 0, "the uncropped volume is empty");
+    assert!(
+        cropped > 0 && cropped < full,
+        "the crop does not cut the volume: {cropped} of {full}"
+    );
+    assert_eq!(
+        erased, 0,
+        "a crop away from the volume still renders bricks"
+    );
+
+    let plane_out = Crop::new(
+        Vec3::new(-half.x, -half.y, 0.5 * half.z),
+        Vec3::new(half.x, half.y, half.z),
+    );
+    settle(
+        &mut renderer,
+        Session {
+            volume_region: CORNER,
+            section_region: WHOLE,
+            crop: plane_out,
+            ..session(Crop::none())
+        },
+        source,
+    );
+    let section = read_pixels(&device, &queue, &texture, SIDE);
+    assert!(
+        dark_fraction(&section, 0.0, 1.0, 0.0, 1.0) > 0.9,
+        "the section ignores the crop"
+    );
+}
+
+fn bright_pixels(pixels: &[[u8; 4]]) -> usize {
+    pixels
+        .iter()
+        .filter(|pixel| {
+            pixel
+                .iter()
+                .take(3)
+                .map(|value| u32::from(*value))
+                .sum::<u32>()
+                > 400
+        })
+        .count()
 }
 
 #[test]
@@ -551,6 +666,7 @@ fn switches_levels() {
             scene: &scene,
             volume_region: WHOLE,
             section_region: CORNER,
+            crop: Crop::none(),
             time: 0,
         },
         source,
@@ -574,6 +690,7 @@ fn switches_levels() {
             scene: &scene,
             volume_region: WHOLE,
             section_region: CORNER,
+            crop: Crop::none(),
             time: 0,
         },
         source,
@@ -594,6 +711,7 @@ fn switches_levels() {
             scene: &scene,
             volume_region: WHOLE,
             section_region: CORNER,
+            crop: Crop::none(),
             time: 0,
         },
         source,
@@ -656,6 +774,7 @@ fn section_render(
             scene: &scene,
             volume_region: CORNER,
             section_region: WHOLE,
+            crop: Crop::none(),
             time: 0,
         },
         |request| {
@@ -783,6 +902,7 @@ fn render(setup: Setup<'_>) -> Vec<[u8; 4]> {
             scene: &scene,
             volume_region: job.volume_region,
             section_region: job.section_region,
+            crop: Crop::none(),
             time: 0,
         },
         |request| {

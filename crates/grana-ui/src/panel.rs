@@ -36,6 +36,8 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
                     ui.separator();
                     section_section(ui, state, &mut actions);
                     ui.separator();
+                    clip_section(ui, state);
+                    ui.separator();
                     channels_section(ui, state.scene);
                     ui.separator();
                     crate::object_panel::build(ui, state, &mut actions);
@@ -103,6 +105,7 @@ pub fn build(root: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
                 section_level: state.frame.section.level,
                 volume_rect: volume,
                 section_rect: section,
+                crop: state.scene.crop,
             },
         );
         if let Some(bar) = timeline {
@@ -348,6 +351,61 @@ fn section_section(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>
             .small()
             .weak(),
     );
+}
+
+fn clip_section(ui: &mut Ui, state: &mut State<'_>) {
+    ui.strong("Clip");
+    let world = state.scene.dataset.world_size();
+    let half = 0.5 * world;
+    let mut crop = state.scene.crop;
+    let mut enabled = crop.enabled();
+    ui.horizontal(|ui| {
+        if ui.checkbox(&mut enabled, "clip to a box").changed() {
+            crop.set_enabled(enabled);
+        }
+        if ui.small_button("Reset").clicked() {
+            crop.set_bounds(-half, half);
+        }
+    });
+    let minimum = (0.001 * world.min_element()).max(1.0e-4);
+    let mut low = crop.min();
+    let mut high = crop.max();
+    ui.add_enabled_ui(enabled, |ui| {
+        for (axis, name) in [(Axis::X, "x"), (Axis::Y, "y"), (Axis::Z, "z")] {
+            let index = axis.index();
+            let limit = half[index];
+            ui.horizontal(|ui| {
+                ui.label(name);
+                ui.spacing_mut().slider_width = 70.0;
+                let mut start = low[index];
+                let mut end = high[index];
+                let changed = ui
+                    .add(egui::Slider::new(&mut start, -limit..=limit).show_value(false))
+                    .changed()
+                    | ui.add(egui::Slider::new(&mut end, -limit..=limit).show_value(false))
+                        .changed();
+                if changed {
+                    start = start.clamp(-limit, (end - minimum).max(-limit));
+                    end = end.clamp((start + minimum).min(limit), limit);
+                    low[index] = start;
+                    high[index] = end;
+                }
+                ui.monospace(format!("{start:.2} … {end:.2}"));
+            });
+        }
+    });
+    if low != crop.min() || high != crop.max() {
+        crop.set_bounds(low, high);
+    }
+    if enabled {
+        let size = crop.size();
+        ui.label(
+            RichText::new(format!("{:.2} × {:.2} × {:.2} µm", size.x, size.y, size.z))
+                .small()
+                .weak(),
+        );
+    }
+    state.scene.crop = crop;
 }
 
 fn rendering_section(ui: &mut Ui, scene: &mut Scene) {

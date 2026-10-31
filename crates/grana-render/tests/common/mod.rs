@@ -1,6 +1,7 @@
 use grana_gpu::REQUIRED_FEATURES;
 use grana_render::{
-    BrickRequest, Camera, Frame, Renderer, Requests, SceneFrame, SectionCamera, TransferFunction,
+    BrickRequest, Camera, Crop, Frame, Renderer, Requests, SceneFrame, SectionCamera,
+    TransferFunction,
 };
 use grana_volume::{BrickData, Pyramid};
 
@@ -15,6 +16,7 @@ pub struct Session<'a> {
     pub scene: &'a SceneFrame<'a>,
     pub volume_region: [u32; 4],
     pub section_region: [u32; 4],
+    pub crop: Crop,
     pub time: u32,
 }
 
@@ -36,6 +38,7 @@ pub fn settle(
                 time: session.time,
                 camera: session.camera,
                 section: session.section,
+                crop: session.crop,
                 scene: session.scene,
             },
         );

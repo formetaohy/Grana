@@ -6,6 +6,7 @@ use grana_volume::Axis;
 use crate::scene::{Item, Scene, Selection};
 
 pub(crate) fn ray(scene: &Scene, time: u32, ray: &Ray) -> Option<Selection> {
+    let (low, high) = scene.crop.interval(ray)?;
     let mut best: Option<(f32, Selection)> = None;
     for set in scene.pickable() {
         if let Some(frame) = set.frame(time) {
@@ -14,9 +15,13 @@ pub(crate) fn ray(scene: &Scene, time: u32, ray: &Ray) -> Option<Selection> {
                     if !set.visible_object(time, index) {
                         continue;
                     }
-                    let Some(distance) = ray_sphere(ray, *spot) else {
+                    let Some((near, far)) = ray_sphere(ray, *spot) else {
                         continue;
                     };
+                    if far < low || near > high {
+                        continue;
+                    }
+                    let distance = near.max(low);
                     let selection = Selection {
                         set: set.id(),
                         item: Item::Object(index),
@@ -38,6 +43,9 @@ pub(crate) fn ray(scene: &Scene, time: u32, ray: &Ray) -> Option<Selection> {
                     let Some(distance) = ray_triangle(ray, triangle) else {
                         continue;
                     };
+                    if distance < low || distance > high {
+                        continue;
+                    }
                     let selection = Selection {
                         set: set.id(),
                         item: Item::Object(object),
@@ -59,6 +67,9 @@ pub(crate) fn ray(scene: &Scene, time: u32, ray: &Ray) -> Option<Selection> {
                 let Some(distance) = ray_triangle(ray, triangle) else {
                     continue;
                 };
+                if distance < low || distance > high {
+                    continue;
+                }
                 let selection = Selection {
                     set: set.id(),
                     item: Item::Track(track),
@@ -73,6 +84,9 @@ pub(crate) fn ray(scene: &Scene, time: u32, ray: &Ray) -> Option<Selection> {
 }
 
 pub(crate) fn slice(scene: &Scene, time: u32, axis: Axis, point: Vec3) -> Option<Selection> {
+    if !scene.crop.contains(point) {
+        return None;
+    }
     let mut best: Option<(f32, Selection)> = None;
     for set in scene.pickable() {
         if let Some(frame) = set.frame(time) {
@@ -167,7 +181,7 @@ fn slice_mesh(
     }
 }
 
-fn ray_sphere(ray: &Ray, spot: Spot) -> Option<f32> {
+fn ray_sphere(ray: &Ray, spot: Spot) -> Option<(f32, f32)> {
     let offset = Vec3::from(spot.center()) - ray.origin;
     let projection = offset.dot(ray.direction);
     let radius = spot.radius();
@@ -180,7 +194,7 @@ fn ray_sphere(ray: &Ray, spot: Spot) -> Option<f32> {
     if projection + half < 0.0 {
         return None;
     }
-    Some((projection - half).max(0.0))
+    Some((projection - half, projection + half))
 }
 
 fn ray_triangle(ray: &Ray, triangle: [MeshVertex; 3]) -> Option<f32> {

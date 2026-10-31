@@ -379,6 +379,7 @@ impl App {
                     time: scene.time(),
                     camera: self.viewport.camera(),
                     section: self.viewport.section(),
+                    crop: scene.crop,
                     scene: &rendered.frame(),
                 },
             );

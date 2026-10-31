@@ -61,7 +61,8 @@ fn mesh_cull_volume(@builtin(global_invocation_id) id: vec3<u32>) {
     var args = IndexedArgs(0u, 0u, 0u, 0, 0u);
     if (styles[index].flags.x >= 0.5
         && object.index_count > 0u
-        && !outside_sphere(object.center.xyz, object.radius)) {
+        && !outside_sphere(object.center.xyz, object.radius)
+        && !outside_crop_sphere(object.center.xyz, object.radius)) {
         args.index_count = object.index_count;
         args.instance_count = 1u;
         args.first_index = object.first_index;
@@ -79,7 +80,8 @@ fn mesh_cull_section(@builtin(global_invocation_id) id: vec3<u32>) {
     var args = IndexedArgs(0u, 0u, 0u, 0, 0u);
     if (styles[index].flags.x >= 0.5
         && object.index_count > 0u
-        && !outside_section(object.center.xyz, object.radius)) {
+        && !outside_section(object.center.xyz, object.radius)
+        && !outside_crop_sphere(object.center.xyz, object.radius)) {
         args.index_count = object.index_count;
         args.instance_count = 1u;
         args.first_index = object.first_index;

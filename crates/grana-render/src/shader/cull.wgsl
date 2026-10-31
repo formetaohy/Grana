@@ -56,6 +56,16 @@ fn brick_box(cell: vec3<u32>) -> array<vec3<f32>, 2> {
     return array<vec3<f32>, 2>(low, high);
 }
 
+fn section_brick_box(cell: vec3<u32>) -> array<vec3<f32>, 2> {
+    let dims = vec3<u32>(section.dims.xyz);
+    let origin = cell * 32u;
+    let size = min(vec3<u32>(32u), dims - origin);
+    let voxel = section.world.xyz / section.dims.xyz;
+    let low = section.box_min.xyz + vec3<f32>(origin) * voxel;
+    let high = low + vec3<f32>(size) * voxel;
+    return array<vec3<f32>, 2>(low, high);
+}
+
 @compute @workgroup_size(64)
 fn volume_cull(@builtin(global_invocation_id) id: vec3<u32>) {
     let grid = vec3<u32>(frame.grid.xyz);
@@ -70,7 +80,7 @@ fn volume_cull(@builtin(global_invocation_id) id: vec3<u32>) {
         index / (grid.x * grid.y),
     );
     let bounds = brick_box(cell);
-    if (outside_frustum(bounds[0], bounds[1])) {
+    if (outside_frustum(bounds[0], bounds[1]) || outside_crop_bounds(bounds[0], bounds[1])) {
         return;
     }
     request(index);
@@ -89,6 +99,10 @@ fn section_cull(@builtin(global_invocation_id) id: vec3<u32>) {
     cell[section.mapping.z] = schedule.layer;
     let grid = vec3<u32>(section.grid.xyz);
     if (any(cell >= grid)) {
+        return;
+    }
+    let bounds = section_brick_box(cell);
+    if (outside_crop_bounds(bounds[0], bounds[1])) {
         return;
     }
     let brick = cell.x + grid.x * (cell.y + grid.y * cell.z);

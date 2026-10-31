@@ -54,12 +54,14 @@ struct MeshUniforms {
     eye: [f32; 4],
     light: [f32; 4],
     shading: [f32; 4],
+    crop_min: [f32; 4],
+    crop_max: [f32; 4],
 }
 
 const _: () = {
     assert!(size_of::<ObjectData>() == 32);
     assert!(size_of::<StyleData>() == 32);
-    assert!(size_of::<MeshUniforms>() == 112);
+    assert!(size_of::<MeshUniforms>() == 144);
 };
 
 pub(crate) struct MeshPasses {
@@ -252,6 +254,8 @@ impl MeshPasses {
                 shading.specular,
                 shading.shininess,
             ],
+            crop_min: frame.crop_min,
+            crop_max: frame.crop_max,
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }

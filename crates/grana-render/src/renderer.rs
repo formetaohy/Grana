@@ -14,7 +14,8 @@ use crate::atlas::{Atlas, ResidentBrick};
 use crate::brick::{BrickRecord, BrickTable};
 use crate::camera::{Camera, SectionCamera};
 use crate::census::{CENSUS_LEVELS, Census};
-use crate::frame::{FrameData, SectionData};
+use crate::crop::Crop;
+use crate::frame::{FrameData, SectionData, VolumeView};
 use crate::layout::Layouts;
 use crate::marker::MarkerPasses;
 use crate::mesh::MeshPasses;
@@ -74,6 +75,7 @@ pub struct Frame<'a, 'b> {
     pub time: u32,
     pub camera: &'a Camera,
     pub section: &'a SectionCamera,
+    pub crop: Crop,
     pub scene: &'a SceneFrame<'b>,
 }
 
@@ -97,6 +99,7 @@ struct Residency {
     span: f32,
     volume: [u32; 2],
     section: [u32; 2],
+    crop: Crop,
     levels: Levels,
 }
 
@@ -105,6 +108,7 @@ struct ResidencyView<'a> {
     section: &'a SectionCamera,
     volume_region: [u32; 4],
     section_region: [u32; 4],
+    crop: Crop,
 }
 
 impl Residency {
@@ -120,6 +124,7 @@ impl Residency {
             span: view.section.span(),
             volume: [view.volume_region[2], view.volume_region[3]],
             section: [view.section_region[2], view.section_region[3]],
+            crop: view.crop,
             levels,
         }
     }
@@ -347,6 +352,7 @@ impl Renderer {
             time,
             camera,
             section,
+            crop,
             scene,
         } = frame;
         assert!(size[0] > 0 && size[1] > 0, "the surface is not empty");
@@ -430,6 +436,7 @@ impl Renderer {
             section_aspect,
             section_target_level,
             (slots / SECTION_BUDGET_DIVISOR).max(1),
+            crop,
         );
         let volume_target_level = select_volume_level(pyramid, camera, volume_height as f32);
         let volume_capacity = slots.saturating_sub(section_count).max(1);
@@ -451,6 +458,7 @@ impl Renderer {
                 section,
                 volume_region,
                 section_region,
+                crop,
             },
             levels,
         );
@@ -503,9 +511,12 @@ impl Renderer {
         let section_data =
             SectionData::new(camera, section, section_aspect, section_table, *channels);
         let frame_data = FrameData::new(
-            camera,
-            volume_aspect,
-            volume_height,
+            VolumeView {
+                camera,
+                crop,
+                aspect: volume_aspect,
+                height: volume_height,
+            },
             volume_table,
             scene.shading,
             scene.step_scale,
@@ -522,7 +533,14 @@ impl Renderer {
         if unsettled {
             census.prepare(queue);
         }
-        let range = section_range(pyramid, section_level, camera, section, section_aspect);
+        let range = section_range(
+            pyramid,
+            section_level,
+            camera,
+            section,
+            section_aspect,
+            crop,
+        );
         scheduler.section.prepare(
             queue,
             Cull {
