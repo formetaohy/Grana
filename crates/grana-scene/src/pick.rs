@@ -1,11 +1,11 @@
 use glam::Vec3;
-use grana_object::{Mesh, MeshVertex, Spot};
+use grana_object::{PackedMesh, Spot};
 use grana_render::Ray;
 use grana_volume::Axis;
 
-use crate::scene::{Geometry, Item, Scene, Selection};
+use crate::scene::{Item, Scene, Selection};
 
-pub(crate) fn ray(scene: &Scene, geometry: &Geometry, time: u32, ray: &Ray) -> Option<Selection> {
+pub(crate) fn ray(scene: &Scene, time: u32, ray: &Ray) -> Option<Selection> {
     let (low, high) = scene.region.interval(ray.origin, ray.direction)?;
     let mut best: Option<(f32, Selection)> = None;
     for set in scene.pickable() {
@@ -31,22 +31,39 @@ pub(crate) fn ray(scene: &Scene, geometry: &Geometry, time: u32, ray: &Ray) -> O
                     }
                 }
             }
-            if let Some(mesh) = geometry.mesh(set.id()).filter(|mesh| !mesh.is_empty()) {
-                for index in 0..mesh.triangle_count() {
-                    let triangle = mesh.triangle(index);
-                    let object = triangle[0].object() as usize;
+            if let Some(mesh) = frame.geometry().filter(|mesh| !mesh.is_empty()) {
+                for object in 0..mesh.object_count() {
                     if !set.visible_object(time, object) {
                         continue;
                     }
-                    let Some(distance) = ray_triangle(ray, triangle) else {
-                        continue;
-                    };
-                    if distance < low || distance > high {
-                        continue;
+                    for distance in mesh_triangles(mesh, object).filter_map(|triangle| {
+                        ray_triangle(ray, triangle)
+                            .filter(|distance| *distance >= low && *distance <= high)
+                    }) {
+                        let selection = Selection {
+                            set: set.id(),
+                            item: Item::Object(object),
+                        };
+                        if best.is_none_or(|(nearest, _)| distance < nearest) {
+                            best = Some((distance, selection));
+                        }
                     }
+                }
+            }
+        }
+        if let Some(tracks) = set.tracks().filter(|tracks| tracks.visible()) {
+            let mesh = tracks.mesh();
+            for track in 0..mesh.object_count() {
+                if !set.visible_track(track) {
+                    continue;
+                }
+                for distance in mesh_triangles(mesh, track).filter_map(|triangle| {
+                    ray_triangle(ray, triangle)
+                        .filter(|distance| *distance >= low && *distance <= high)
+                }) {
                     let selection = Selection {
                         set: set.id(),
-                        item: Item::Object(object),
+                        item: Item::Track(track),
                     };
                     if best.is_none_or(|(nearest, _)| distance < nearest) {
                         best = Some((distance, selection));
@@ -54,40 +71,11 @@ pub(crate) fn ray(scene: &Scene, geometry: &Geometry, time: u32, ray: &Ray) -> O
                 }
             }
         }
-        if let Some(tracks) = set.tracks().filter(|tracks| tracks.visible()) {
-            let mesh = tracks.mesh();
-            for index in 0..mesh.triangle_count() {
-                let triangle = mesh.triangle(index);
-                let track = triangle[0].object() as usize;
-                if !set.visible_track(track) {
-                    continue;
-                }
-                let Some(distance) = ray_triangle(ray, triangle) else {
-                    continue;
-                };
-                if distance < low || distance > high {
-                    continue;
-                }
-                let selection = Selection {
-                    set: set.id(),
-                    item: Item::Track(track),
-                };
-                if best.is_none_or(|(nearest, _)| distance < nearest) {
-                    best = Some((distance, selection));
-                }
-            }
-        }
     }
     best.map(|(_, selection)| selection)
 }
 
-pub(crate) fn slice(
-    scene: &Scene,
-    geometry: &Geometry,
-    time: u32,
-    axis: Axis,
-    point: Vec3,
-) -> Option<Selection> {
+pub(crate) fn slice(scene: &Scene, time: u32, axis: Axis, point: Vec3) -> Option<Selection> {
     if !scene.region.contains(point) {
         return None;
     }
@@ -121,65 +109,71 @@ pub(crate) fn slice(
                     }
                 }
             }
-            if let Some(mesh) = geometry.mesh(set.id()).filter(|mesh| !mesh.is_empty())
-                && let Some((offset, object)) =
-                    slice_mesh(mesh, axis, point, |object| set.visible_object(time, object))
-                && best.is_none_or(|(nearest, _)| offset < nearest)
-            {
-                best = Some((
-                    offset,
-                    Selection {
-                        set: set.id(),
-                        item: Item::Object(object),
-                    },
-                ));
+            if let Some(mesh) = frame.geometry().filter(|mesh| !mesh.is_empty()) {
+                for object in 0..mesh.object_count() {
+                    if !set.visible_object(time, object) {
+                        continue;
+                    }
+                    if let Some(offset) = slice_mesh(mesh, object, axis, point)
+                        && best.is_none_or(|(nearest, _)| offset < nearest)
+                    {
+                        best = Some((
+                            offset,
+                            Selection {
+                                set: set.id(),
+                                item: Item::Object(object),
+                            },
+                        ));
+                    }
+                }
             }
         }
-        if let Some(tracks) = set.tracks().filter(|tracks| tracks.visible())
-            && let Some((offset, object)) =
-                slice_mesh(tracks.mesh(), axis, point, |track| set.visible_track(track))
-            && best.is_none_or(|(nearest, _)| offset < nearest)
-        {
-            best = Some((
-                offset,
-                Selection {
-                    set: set.id(),
-                    item: Item::Track(object),
-                },
-            ));
+        if let Some(tracks) = set.tracks().filter(|tracks| tracks.visible()) {
+            let mesh = tracks.mesh();
+            for track in 0..mesh.object_count() {
+                if !set.visible_track(track) {
+                    continue;
+                }
+                if let Some(offset) = slice_mesh(mesh, track, axis, point)
+                    && best.is_none_or(|(nearest, _)| offset < nearest)
+                {
+                    best = Some((
+                        offset,
+                        Selection {
+                            set: set.id(),
+                            item: Item::Track(track),
+                        },
+                    ));
+                }
+            }
         }
     }
     best.map(|(_, selection)| selection)
 }
 
-fn slice_mesh(
-    mesh: &Mesh,
-    axis: Axis,
-    point: Vec3,
-    visible: impl Fn(usize) -> bool,
-) -> Option<(f32, usize)> {
+fn mesh_triangles(mesh: &PackedMesh, object: usize) -> impl Iterator<Item = [[f32; 3]; 3]> + '_ {
+    let count = mesh.groups()[object].index_count() as usize / 3;
+    (0..count).map(move |triangle| mesh.triangle(object, triangle))
+}
+
+fn slice_mesh(mesh: &PackedMesh, object: usize, axis: Axis, point: Vec3) -> Option<f32> {
     let plane = axis.index();
     let (u_axis, v_axis) = axis.in_plane();
     let (u, v) = (u_axis.index(), v_axis.index());
-    let mut nearest: Option<(f32, bool, usize)> = None;
-    for index in 0..mesh.triangle_count() {
-        let triangle = mesh.triangle(index);
-        let object = triangle[0].object() as usize;
-        if !visible(object) {
-            continue;
-        }
+    let mut nearest: Option<(f32, bool)> = None;
+    for triangle in mesh_triangles(mesh, object) {
         let Some((offset, exit)) = slice_triangle(triangle, plane, u, v, point, axis) else {
             continue;
         };
         if offset < 0.0 {
             continue;
         }
-        if nearest.is_none_or(|(nearest_offset, _, _)| offset < nearest_offset) {
-            nearest = Some((offset, exit, object));
+        if nearest.is_none_or(|(nearest_offset, _)| offset < nearest_offset) {
+            nearest = Some((offset, exit));
         }
     }
     match nearest {
-        Some((offset, true, object)) => Some((offset, object)),
+        Some((offset, true)) => Some(offset),
         _ => None,
     }
 }
@@ -200,8 +194,8 @@ fn ray_sphere(ray: &Ray, spot: Spot) -> Option<(f32, f32)> {
     Some((projection - half, projection + half))
 }
 
-fn ray_triangle(ray: &Ray, triangle: [MeshVertex; 3]) -> Option<f32> {
-    let [first, second, third] = triangle.map(|vertex| Vec3::from(vertex.position()));
+fn ray_triangle(ray: &Ray, triangle: [[f32; 3]; 3]) -> Option<f32> {
+    let [first, second, third] = triangle.map(Vec3::from);
     let edge = second - first;
     let across = third - first;
     let h = ray.direction.cross(across);
@@ -225,14 +219,14 @@ fn ray_triangle(ray: &Ray, triangle: [MeshVertex; 3]) -> Option<f32> {
 }
 
 fn slice_triangle(
-    triangle: [MeshVertex; 3],
+    triangle: [[f32; 3]; 3],
     plane: usize,
     u: usize,
     v: usize,
     point: Vec3,
     axis: Axis,
 ) -> Option<(f32, bool)> {
-    let positions = triangle.map(|vertex| Vec3::from(vertex.position()));
+    let positions = triangle.map(Vec3::from);
     let (a, b, c) = (positions[0], positions[1], positions[2]);
     let denominator = (b[u] - a[u]) * (c[v] - a[v]) - (c[u] - a[u]) * (b[v] - a[v]);
     if denominator.abs() < 1.0e-12 {

@@ -543,6 +543,14 @@ fn streaming_section(ui: &mut Ui, state: &State<'_>) {
                     state.scene.geometry_bytes() as f64 / (1024.0 * 1024.0)
                 ),
             );
+            row(
+                ui,
+                "resident",
+                format!(
+                    "{:.0} MiB of gpu geometry",
+                    state.frame.geometry as f64 / (1024.0 * 1024.0)
+                ),
+            );
         });
     if state.pending > 0 {
         ui.horizontal(|ui| {

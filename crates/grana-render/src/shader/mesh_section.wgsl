@@ -1,13 +1,25 @@
+struct ObjectData {
+    center_radius: vec4<f32>,
+    minimum: vec4<f32>,
+    extent: vec4<f32>,
+    narrow_first: u32,
+    narrow_count: u32,
+    wide_first: u32,
+    wide_count: u32,
+    vertex_base: u32,
+}
+
 struct Style {
     color: vec4<f32>,
     flags: vec4<f32>,
 }
 
-@group(1) @binding(0) var<storage, read> styles: array<Style>;
+@group(1) @binding(0) var<storage, read> objects: array<ObjectData>;
+@group(2) @binding(0) var<storage, read> styles: array<Style>;
 
 struct VertexInput {
-    @location(0) position: vec3<f32>,
-    @location(1) normal: vec3<f32>,
+    @location(0) position: vec4<f32>,
+    @location(1) normal: vec2<f32>,
     @location(2) object: u32,
 }
 
@@ -29,23 +41,45 @@ fn plane_depth(height: f32) -> f32 {
     return (height - plane) / max(1.0 - plane, 1.0e-4);
 }
 
+fn sgn(value: f32) -> f32 {
+    if (value < 0.0) {
+        return -1.0;
+    }
+    return 1.0;
+}
+
+fn decode_normal(packed: vec2<f32>) -> vec3<f32> {
+    var x = packed.x * 2.0 - 1.0;
+    var y = packed.y * 2.0 - 1.0;
+    let z = 1.0 - abs(x) - abs(y);
+    if (z < 0.0) {
+        let across = (1.0 - abs(y)) * sgn(x);
+        let down = (1.0 - abs(x)) * sgn(y);
+        x = across;
+        y = down;
+    }
+    return normalize(vec3<f32>(x, y, z));
+}
+
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
+    let object = objects[input.object];
+    let position = object.minimum.xyz + input.position.xyz * object.extent.xyz;
     let axis = section.mapping.z;
     let u = section.mapping.x;
     let v = section.mapping.y;
-    let uvw = (input.position - section.box_min.xyz) / section.world.xyz;
+    let uvw = (position - section.box_min.xyz) / section.world.xyz;
     let ndc = vec2<f32>(
         (uvw[u] - section.uv_center.x) / section.uv_scale.x,
         (uvw[v] - section.uv_center.y) / section.uv_scale.y,
     );
     var output: VertexOutput;
     output.clip_position = vec4<f32>(ndc, 0.5, 1.0);
-    output.normal = input.normal;
+    output.normal = decode_normal(input.normal);
     output.height = uvw[axis];
     output.uv = vec2<f32>(uvw[u], uvw[v]);
     output.object = input.object;
-    output.position = input.position;
+    output.position = position;
     return output;
 }
 

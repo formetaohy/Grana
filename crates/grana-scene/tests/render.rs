@@ -17,7 +17,7 @@ fn renders_and_picks_packed_geometry() {
         assert_eq!(rendered.layers.len(), 1, "the surface layer renders");
         assert_eq!(rendered.styles.len(), 2, "every surface carries a style");
         let layer = rendered.layers[0];
-        let mesh = layer.mesh.expect("the layer carries geometry");
+        let mesh = layer.mesh;
         assert_eq!(mesh.triangle_count(), 4);
         assert_eq!(mesh.vertex_count(), 8);
         assert_eq!(layer.style_count, 2);

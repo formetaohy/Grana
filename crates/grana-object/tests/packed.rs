@@ -10,7 +10,7 @@ fn packs_objects_with_bounded_error() {
     assert_eq!(packed.triangle_count(), mesh.triangle_count());
     assert!(packed.wide().is_empty());
     assert!(packed.bytes() < raw as u64);
-    assert_geometry(&mesh, &packed.expand());
+    assert_geometry(&mesh, &packed);
 }
 
 #[test]
@@ -22,12 +22,12 @@ fn widens_objects_above_the_narrow_index_range() {
         "a wide object uses wide indices"
     );
     assert!(!packed.wide().is_empty());
-    assert_geometry(&mesh, &packed.expand());
+    assert_geometry(&mesh, &packed);
 }
 
-fn assert_geometry(source: &Mesh, expanded: &Mesh) {
-    assert_eq!(expanded.vertex_count(), source.vertex_count());
-    assert_eq!(expanded.triangle_count(), source.triangle_count());
+fn assert_geometry(source: &Mesh, packed: &PackedMesh) {
+    assert_eq!(packed.vertex_count(), source.vertex_count());
+    assert_eq!(packed.triangle_count(), source.triangle_count());
     let objects = source
         .vertices()
         .iter()
@@ -45,31 +45,26 @@ fn assert_geometry(source: &Mesh, expanded: &Mesh) {
     }
     let tolerance =
         |object: usize, axis: usize| (high[object][axis] - low[object][axis]) / 65535.0 + 1.0e-6;
-    for (original, vertex) in source.vertices().iter().zip(expanded.vertices()) {
-        assert_eq!(original.object(), vertex.object());
-        let dot = (0..3)
-            .map(|axis| original.normal()[axis] * vertex.normal()[axis])
-            .sum::<f32>();
-        assert!(dot > 0.999, "the packed normal drifts to {dot}");
-        for axis in 0..3 {
-            let offset = (original.position()[axis] - vertex.position()[axis]).abs();
-            assert!(
-                offset <= tolerance(original.object() as usize, axis),
-                "the packed position drifts by {offset}"
-            );
-        }
-    }
-    for index in 0..source.triangle_count() {
-        let original = source.triangle(index);
-        let decoded = expanded.triangle(index);
-        for (a, b) in original.iter().zip(decoded.iter()) {
-            assert_eq!(a.object(), b.object(), "a packed triangle changes object");
-            for axis in 0..3 {
-                let offset = (a.position()[axis] - b.position()[axis]).abs();
-                assert!(
-                    offset <= tolerance(a.object() as usize, axis),
-                    "a packed triangle drifts by {offset}"
-                );
+    for object in 0..objects {
+        let triangles = (0..source.triangle_count())
+            .map(|index| source.triangle(index))
+            .filter(|triangle| triangle[0].object() as usize == object)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            triangles.len(),
+            packed.groups()[object].index_count() as usize / 3,
+            "every source triangle is packed into its object"
+        );
+        for (index, triangle) in triangles.iter().enumerate() {
+            let decoded = packed.triangle(object, index);
+            for (corner, position) in decoded.iter().enumerate() {
+                for (axis, value) in triangle[corner].position().iter().enumerate() {
+                    let offset = (value - position[axis]).abs();
+                    assert!(
+                        offset <= tolerance(object, axis),
+                        "a packed triangle drifts by {offset}"
+                    );
+                }
             }
         }
     }

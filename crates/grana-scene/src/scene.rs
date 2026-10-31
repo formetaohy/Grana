@@ -1,5 +1,5 @@
 use glam::Vec3;
-use grana_object::{Mesh, Spot, TrackSet};
+use grana_object::{Spot, TrackSet};
 use grana_render::{
     ChannelRow, Layer, LayerKey, Marker, Ray, SceneFrame, Shading, Style, TransferFunction,
 };
@@ -12,7 +12,6 @@ use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
 use crate::pick;
-use crate::state::{HASH_OFFSET, mix};
 
 const SELECTED_COLOR: [f32; 3] = [1.00, 0.93, 0.62];
 const SELECTED_SCALE: f32 = 1.3;
@@ -51,27 +50,6 @@ impl<'a> RenderedScene<'a> {
     }
 }
 
-pub(crate) struct Geometry {
-    key: Option<u64>,
-    meshes: Vec<(ObjectSetId, Mesh)>,
-}
-
-impl Geometry {
-    fn new() -> Self {
-        Self {
-            key: None,
-            meshes: Vec::new(),
-        }
-    }
-
-    pub(crate) fn mesh(&self, id: ObjectSetId) -> Option<&Mesh> {
-        self.meshes
-            .iter()
-            .find(|(candidate, _)| *candidate == id)
-            .map(|(_, mesh)| mesh)
-    }
-}
-
 pub struct Scene {
     pub dataset: Dataset,
     pub channels: Vec<Channel>,
@@ -83,7 +61,6 @@ pub struct Scene {
     pub coloc: Coloc,
     time: u32,
     selection: Option<Selection>,
-    geometry: Geometry,
 }
 
 impl Scene {
@@ -112,7 +89,6 @@ impl Scene {
             coloc: Coloc::new(channel_count),
             time: 0,
             selection: None,
-            geometry: Geometry::new(),
         }
     }
 
@@ -263,9 +239,7 @@ impl Scene {
         }
     }
 
-    pub fn rendered(&mut self) -> RenderedScene<'_> {
-        self.prepare_geometry();
-        let geometry = &self.geometry;
+    pub fn rendered(&self) -> RenderedScene<'_> {
         let mut styles = Vec::new();
         let mut layers = Vec::new();
         let mut markers = Vec::new();
@@ -284,7 +258,8 @@ impl Scene {
                     markers.push(self.marker(set, index, *spot));
                 }
             }
-            if let (Some(mesh), Some(stamp)) = (geometry.mesh(set.id()), set.frame_stamp(self.time))
+            if let (Some(mesh), Some(stamp)) = (frame.geometry(), set.frame_stamp(self.time))
+                && !mesh.is_empty()
             {
                 let start = styles.len();
                 for index in 0..frame.object_count() {
@@ -296,7 +271,7 @@ impl Scene {
                 }
                 layers.push(Layer {
                     key: LayerKey::at_frame(set.id().raw(), 0, self.time, stamp),
-                    mesh: Some(mesh),
+                    mesh,
                     style_start: start,
                     style_count: frame.object_count(),
                 });
@@ -314,7 +289,7 @@ impl Scene {
                 }
                 layers.push(Layer {
                     key: LayerKey::stable(set.id().raw(), 1, tracks.revision()),
-                    mesh: Some(tracks.mesh()),
+                    mesh: tracks.mesh(),
                     style_start: start,
                     style_count: tracks.set().len(),
                 });
@@ -340,14 +315,12 @@ impl Scene {
         }
     }
 
-    pub fn pick_ray(&mut self, ray: &Ray) -> Option<Selection> {
-        self.prepare_geometry();
-        pick::ray(self, &self.geometry, self.time, ray)
+    pub fn pick_ray(&self, ray: &Ray) -> Option<Selection> {
+        pick::ray(self, self.time, ray)
     }
 
-    pub fn pick_slice(&mut self, axis: Axis, point: Vec3) -> Option<Selection> {
-        self.prepare_geometry();
-        pick::slice(self, &self.geometry, self.time, axis, point)
+    pub fn pick_slice(&self, axis: Axis, point: Vec3) -> Option<Selection> {
+        pick::slice(self, self.time, axis, point)
     }
 
     pub fn geometry_bytes(&self) -> u64 {
@@ -359,47 +332,6 @@ impl Scene {
                     .sum::<u64>()
             })
             .sum()
-    }
-
-    fn geometry_key(&self) -> u64 {
-        let mut key = mix(HASH_OFFSET, u64::from(self.time));
-        for set in self.objects.iter() {
-            if !self.shown(set) {
-                continue;
-            }
-            if let Some(stamp) = set.frame_stamp(self.time) {
-                key = mix(key, set.id().raw());
-                key = mix(key, stamp);
-            }
-        }
-        key
-    }
-
-    fn prepare_geometry(&mut self) {
-        let key = self.geometry_key();
-        if self.geometry.key == Some(key) {
-            return;
-        }
-        let mut meshes = Vec::new();
-        for set in self.objects.iter() {
-            if !self.shown(set) {
-                continue;
-            }
-            let Some(frame) = set.frame(self.time) else {
-                continue;
-            };
-            let Some(geometry) = frame.geometry() else {
-                continue;
-            };
-            if geometry.is_empty() {
-                continue;
-            }
-            meshes.push((set.id(), geometry.expand()));
-        }
-        self.geometry = Geometry {
-            key: Some(key),
-            meshes,
-        };
     }
 
     pub fn pickable(&self) -> impl Iterator<Item = &ObjectSet> + '_ {

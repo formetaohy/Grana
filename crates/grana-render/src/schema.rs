@@ -1,6 +1,6 @@
 use crate::marker::Marker;
 use crate::transfer::TransferFunction;
-use grana_object::Mesh;
+use grana_object::PackedMesh;
 use grana_volume::Intensity;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -96,7 +96,7 @@ pub struct ChannelRow<'a> {
 #[derive(Clone, Copy)]
 pub struct Layer<'a> {
     pub key: LayerKey,
-    pub mesh: Option<&'a Mesh>,
+    pub mesh: &'a PackedMesh,
     pub style_start: usize,
     pub style_count: usize,
 }

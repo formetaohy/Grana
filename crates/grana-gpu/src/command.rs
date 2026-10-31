@@ -14,23 +14,27 @@ struct IndexedArgs {
 pub struct IndexedCommands {
     buffer: Buffer,
     count: u32,
+    stride: u64,
 }
 
 impl IndexedCommands {
-    pub fn new(device: &Device, label: &'static str, count: usize) -> Self {
+    pub fn new(device: &Device, label: &'static str, count: usize, regions: usize) -> Self {
         assert!(
             count > 0,
             "an indirect draw table holds at least one command"
         );
+        assert!(regions > 0, "an indirect draw table holds a region");
+        let stride = (count * size_of::<IndexedArgs>()) as u64;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
-            size: (count * size_of::<IndexedArgs>()) as u64,
+            size: stride * regions as u64,
             usage: BufferUsages::INDIRECT | BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         Self {
             buffer,
             count: count as u32,
+            stride,
         }
     }
 
@@ -40,6 +44,10 @@ impl IndexedCommands {
 
     pub fn count(&self) -> u32 {
         self.count
+    }
+
+    pub fn offset(&self, region: usize) -> u64 {
+        self.stride * region as u64
     }
 }
 

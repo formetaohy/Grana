@@ -5,10 +5,10 @@ use common::{
     green_sum, lit, pixel, read_pixels, red_count, red_pixels, settle, target,
 };
 use glam::Vec3;
-use grana_object::{Mesh, MeshVertex, Track, TrackNode, TrackSet};
+use grana_object::{Mesh, MeshVertex, PackedMesh, Track, TrackNode, TrackSet};
 use grana_render::{
-    Camera, Layer, LayerKey, Marker, Renderer, SceneFrame, SectionCamera, Shading, Stop, Style,
-    TransferFunction,
+    Camera, Frame, Layer, LayerKey, Marker, Renderer, SceneFrame, SectionCamera, Shading, Stop,
+    Style, TransferFunction,
 };
 use grana_volume::{
     Axis, BrickGrid, Channel, Extent, Level, Movie, Pyramid, Region, Spacing, Volume, VoxelData,
@@ -25,7 +25,7 @@ struct Job<'a> {
     volume_region: [u32; 4],
     section_region: [u32; 4],
     focus_z: f32,
-    mesh: Option<(&'a Mesh, &'a [Style])>,
+    mesh: Option<(&'a PackedMesh, &'a [Style])>,
 }
 
 #[test]
@@ -629,7 +629,7 @@ fn renders_surface_objects_and_sections() {
     };
     let texture = target(&device, SIDE);
     let volume = empty_volume();
-    let mesh = cubes();
+    let mesh = PackedMesh::new(cubes());
     let visible = [
         Style::new([1.0, 0.12, 0.12], true, false),
         Style::new([0.12, 1.0, 0.12], true, false),
@@ -749,7 +749,7 @@ fn renders_track_tubes_and_sections() {
     };
     let texture = target(&device, SIDE);
     let volume = empty_volume();
-    let mesh = tracks().mesh(0.15);
+    let mesh = PackedMesh::new(tracks().mesh(0.15));
     let visible = [
         Style::new([1.0, 0.12, 0.12], true, false),
         Style::new([0.12, 1.0, 0.12], true, false),
@@ -1089,7 +1089,7 @@ fn render(setup: Setup<'_>) -> Vec<[u8; 4]> {
         .mesh
         .map(|(mesh, styles)| Layer {
             key: LayerKey::at_frame(1, 0, 0, 1),
-            mesh: Some(mesh),
+            mesh,
             style_start: 0,
             style_count: styles.len(),
         })
@@ -1281,6 +1281,160 @@ fn sphere(extent: Extent, spacing: Spacing) -> Volume {
     )
 }
 
+#[test]
+fn draws_wide_packed_objects() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = empty_volume();
+    let mesh = PackedMesh::new(grid());
+    assert!(
+        !mesh.wide().is_empty(),
+        "the grid is packed with wide indices"
+    );
+    let styles = [Style::new([1.0, 0.12, 0.12], true, false)];
+    let pixels = scene_render(
+        &device,
+        &queue,
+        Job {
+            texture: &texture,
+            volume: &volume,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            focus_z: 0.0,
+            mesh: Some((&mesh, &styles)),
+        },
+    );
+    assert!(
+        red_pixels(&pixels) > 4000,
+        "the wide object barely rendered: {} pixels",
+        red_pixels(&pixels)
+    );
+}
+
+#[test]
+fn keeps_object_geometry_resident() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = empty_volume();
+    let pyramid = volume.pyramid();
+    let mesh = PackedMesh::new(cubes());
+    let styles = [Style::new([1.0, 1.0, 1.0], true, false); 2];
+    let transfer = TransferFunction::tinted([0.3, 0.6, 1.0]);
+    let transfers = [transfer];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let mut renderer = Renderer::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        BUDGET,
+        SAMPLES,
+    );
+    renderer.set_dataset(&device, &pyramid);
+    let first = [Layer {
+        key: LayerKey::stable(1, 0, 1),
+        mesh: &mesh,
+        style_start: 0,
+        style_count: 2,
+    }];
+    let second = [Layer {
+        key: LayerKey::stable(1, 0, 2),
+        mesh: &mesh,
+        style_start: 0,
+        style_count: 2,
+    }];
+    let resident = Resident {
+        device: &device,
+        queue: &queue,
+        target: &view,
+        camera: &camera,
+        section: &section,
+        channels: &channels,
+        styles: &styles,
+    };
+    let a = resident.geometry(&mut renderer, &first);
+    let b = resident.geometry(&mut renderer, &second);
+    let c = resident.geometry(&mut renderer, &first);
+    assert!(a > 0, "the frame carries no geometry");
+    assert!(b > a, "the second frame adds its geometry");
+    assert_eq!(c, b, "the first frame stays resident");
+}
+
+struct Resident<'a> {
+    device: &'a wgpu::Device,
+    queue: &'a wgpu::Queue,
+    target: &'a wgpu::TextureView,
+    camera: &'a Camera,
+    section: &'a SectionCamera,
+    channels: &'a [grana_render::ChannelRow<'a>],
+    styles: &'a [Style],
+}
+
+impl Resident<'_> {
+    fn geometry(&self, renderer: &mut Renderer, layers: &[Layer<'_>]) -> u64 {
+        let scene = SceneFrame {
+            channels: self.channels,
+            shading: Shading::default(),
+            step_scale: 1.0,
+            styles: self.styles,
+            layers,
+            markers: &[],
+        };
+        renderer
+            .draw(
+                self.device,
+                self.queue,
+                Frame {
+                    target: self.target,
+                    size: [SIDE, SIDE],
+                    volume_region: WHOLE,
+                    section_region: CORNER,
+                    time: 0,
+                    camera: self.camera,
+                    section: self.section,
+                    region: Region::none(),
+                    scene: &scene,
+                    prefetch: false,
+                },
+            )
+            .geometry
+    }
+}
+
+fn grid() -> Mesh {
+    let side = 266u32;
+    let mut vertices = Vec::with_capacity((side * side) as usize);
+    for y in 0..side {
+        for x in 0..side {
+            let u = x as f32 / (side - 1) as f32 * 2.0 - 1.0;
+            let v = y as f32 / (side - 1) as f32 * 2.0 - 1.0;
+            vertices.push(MeshVertex::new([u, v, 0.0], [0.0, 0.0, 1.0], 0));
+        }
+    }
+    let mut indices = Vec::new();
+    for y in 0..side - 1 {
+        for x in 0..side - 1 {
+            let corner = y * side + x;
+            indices.extend([
+                corner,
+                corner + 1,
+                corner + side,
+                corner + 1,
+                corner + side + 1,
+                corner + side,
+            ]);
+        }
+    }
+    Mesh::new(vertices, indices)
+}
+
 fn cubes() -> Mesh {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
@@ -1354,11 +1508,11 @@ fn supersamples_object_edges() {
     let texture = target(&device, SIDE);
     let volume = volume(0);
     let pyramid = volume.pyramid();
-    let mesh = cubes();
+    let mesh = PackedMesh::new(cubes());
     let styles = [Style::new([1.0, 1.0, 1.0], true, false); 2];
     let layers = [Layer {
         key: LayerKey::stable(1, 0, 1),
-        mesh: Some(&mesh),
+        mesh: &mesh,
         style_start: 0,
         style_count: 2,
     }];

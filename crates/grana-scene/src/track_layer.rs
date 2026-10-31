@@ -1,8 +1,8 @@
-use grana_object::{Mesh, TrackSet};
+use grana_object::{PackedMesh, TrackSet};
 
 pub struct TrackLayer {
     set: TrackSet,
-    mesh: Mesh,
+    mesh: PackedMesh,
     visible: bool,
     thickness: f32,
     revision: u64,
@@ -10,7 +10,7 @@ pub struct TrackLayer {
 
 impl TrackLayer {
     pub fn new(set: TrackSet, thickness: f32) -> Self {
-        let mesh = set.mesh(thickness);
+        let mesh = PackedMesh::new(set.mesh(thickness));
         Self {
             set,
             mesh,
@@ -24,7 +24,7 @@ impl TrackLayer {
         &self.set
     }
 
-    pub fn mesh(&self) -> &Mesh {
+    pub fn mesh(&self) -> &PackedMesh {
         &self.mesh
     }
 
@@ -49,7 +49,7 @@ impl TrackLayer {
             return;
         }
         self.thickness = thickness;
-        self.mesh = self.set.mesh(thickness);
+        self.mesh = PackedMesh::new(self.set.mesh(thickness));
         self.revision += 1;
     }
 }

@@ -155,7 +155,11 @@ impl Layouts {
         });
         let objects = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.objects.layout"),
-            entries: &[storage(0, ShaderStages::COMPUTE, true)],
+            entries: &[storage(
+                0,
+                ShaderStages::VERTEX.union(ShaderStages::COMPUTE),
+                true,
+            )],
         });
         let commands = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.commands.layout"),

@@ -1,6 +1,8 @@
+use std::collections::{HashMap, HashSet};
+
 use bytemuck::{Pod, Zeroable};
 use grana_gpu::{IndexedCommands, Table};
-use grana_object::{Mesh, MeshVertex};
+use grana_object::PackedMesh;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Buffer, BufferUsages,
     ColorTargetState, ColorWrites, CommandEncoder, CompareFunction, ComputePipeline,
@@ -13,7 +15,7 @@ use wgpu::{
 };
 
 use crate::layout::Layouts;
-use crate::schema::{Layer, LayerKey, SceneFrame, Shading, Style};
+use crate::schema::{LayerKey, SceneFrame, Shading, Style};
 use crate::target::SCENE_FORMAT;
 use crate::transfer::srgb_to_linear;
 use crate::volume::depth_state;
@@ -30,14 +32,34 @@ const SECTION_SHADER: &str = concat!(
     include_str!("shader/mesh_section.wgsl")
 );
 
+const VOLUME_NARROW: usize = 0;
+const VOLUME_WIDE: usize = 1;
+const SECTION_NARROW: usize = 2;
+const SECTION_WIDE: usize = 3;
+const REGIONS: usize = 4;
+const UNIT: f32 = 65535.0;
+const WORKGROUP: u32 = 64;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct PointData {
+    position: [u16; 4],
+    normal: [u16; 2],
+    object: u32,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct ObjectData {
-    center: [f32; 4],
-    radius: f32,
-    first_index: u32,
-    index_count: u32,
-    reserved: u32,
+    center_radius: [f32; 4],
+    minimum: [f32; 4],
+    extent: [f32; 4],
+    narrow_first: u32,
+    narrow_count: u32,
+    wide_first: u32,
+    wide_count: u32,
+    vertex_base: u32,
+    reserved: [u32; 3],
 }
 
 #[repr(C)]
@@ -59,13 +81,18 @@ struct MeshUniforms {
 }
 
 const _: () = {
-    assert!(size_of::<ObjectData>() == 32);
+    assert!(size_of::<PointData>() == 16);
+    assert!(size_of::<ObjectData>() == 80);
     assert!(size_of::<StyleData>() == 32);
     assert!(size_of::<MeshUniforms>() == 144);
 };
 
 pub(crate) struct MeshPasses {
-    layers: Vec<MeshLayer>,
+    slots: HashMap<LayerKey, MeshSlot>,
+    active: Vec<LayerKey>,
+    order: u64,
+    budget: u64,
+    resident: u64,
     cull: ComputePipeline,
     section_cull: ComputePipeline,
     volume_pipeline: RenderPipeline,
@@ -76,7 +103,7 @@ pub(crate) struct MeshPasses {
 }
 
 impl MeshPasses {
-    pub fn new(device: &Device, layouts: &Layouts) -> Self {
+    pub fn new(device: &Device, layouts: &Layouts, budget: u64) -> Self {
         let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("grana.mesh.uniform.layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -92,12 +119,20 @@ impl MeshPasses {
         });
         let volume_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.mesh.pipeline_layout"),
-            bind_group_layouts: &[Some(&uniform_layout), Some(&layouts.styles)],
+            bind_group_layouts: &[
+                Some(&uniform_layout),
+                Some(&layouts.objects),
+                Some(&layouts.styles),
+            ],
             immediate_size: 0,
         });
         let section_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.mesh.section.pipeline_layout"),
-            bind_group_layouts: &[Some(&layouts.scene), Some(&layouts.styles)],
+            bind_group_layouts: &[
+                Some(&layouts.scene),
+                Some(&layouts.objects),
+                Some(&layouts.styles),
+            ],
             immediate_size: 0,
         });
         let cull_module = device.create_shader_module(ShaderModuleDescriptor {
@@ -218,7 +253,11 @@ impl MeshPasses {
             }],
         });
         Self {
-            layers: Vec::new(),
+            slots: HashMap::new(),
+            active: Vec::new(),
+            order: 0,
+            budget,
+            resident: 0,
             cull,
             section_cull,
             volume_pipeline,
@@ -229,6 +268,16 @@ impl MeshPasses {
         }
     }
 
+    pub fn bytes(&self) -> u64 {
+        self.resident
+    }
+
+    pub fn clear(&mut self) {
+        self.slots.clear();
+        self.active.clear();
+        self.resident = 0;
+    }
+
     pub fn set(
         &mut self,
         device: &Device,
@@ -236,10 +285,58 @@ impl MeshPasses {
         layouts: &Layouts,
         scene: &SceneFrame<'_>,
     ) {
-        self.layers
-            .resize_with(scene.layers.len(), || MeshLayer::new(device, layouts));
-        for (layer, source) in self.layers.iter_mut().zip(scene.layers) {
-            layer.set(device, queue, layouts, *source, scene.styles);
+        self.active.clear();
+        self.order += 1;
+        let order = self.order;
+        let mut keys = HashSet::new();
+        for layer in scene.layers {
+            assert!(
+                !layer.mesh.is_empty(),
+                "a mesh layer carries packed geometry"
+            );
+            assert_eq!(
+                layer.style_count,
+                layer.mesh.object_count(),
+                "every mesh object carries one style"
+            );
+            assert!(keys.insert(layer.key), "a scene names each mesh layer once");
+            assert!(
+                layer.style_start + layer.style_count <= scene.styles.len(),
+                "a mesh layer names its style rows"
+            );
+            if !self.slots.contains_key(&layer.key) {
+                let slot = MeshSlot::new(device, queue, layouts, layer.mesh);
+                self.resident += slot.bytes;
+                self.slots.insert(layer.key, slot);
+            }
+            let slot = self
+                .slots
+                .get_mut(&layer.key)
+                .expect("the mesh slot exists");
+            slot.touch(order);
+            slot.write_styles(
+                queue,
+                &scene.styles[layer.style_start..layer.style_start + layer.style_count],
+            );
+            self.active.push(layer.key);
+        }
+        self.evict();
+    }
+
+    fn evict(&mut self) {
+        while self.resident > self.budget {
+            let evicted = self
+                .slots
+                .iter()
+                .filter(|(key, _)| !self.active.contains(key))
+                .min_by_key(|(_, slot)| slot.used)
+                .map(|(key, _)| *key);
+            let Some(key) = evicted else {
+                break;
+            };
+            if let Some(slot) = self.slots.remove(&key) {
+                self.resident = self.resident.saturating_sub(slot.bytes);
+            }
         }
     }
 
@@ -267,17 +364,12 @@ impl MeshPasses {
         });
         pass.set_pipeline(&self.cull);
         pass.set_bind_group(0, scene, &[]);
-        for layer in &self.layers {
-            if layer.volume_commands.is_none() {
-                continue;
-            }
-            let Some(group) = layer.volume_command_group.as_ref() else {
-                continue;
-            };
-            pass.set_bind_group(1, &layer.object_group, &[]);
-            pass.set_bind_group(2, &layer.style_group, &[]);
-            pass.set_bind_group(3, group, &[]);
-            pass.dispatch_workgroups(layer.object_count.div_ceil(64), 1, 1);
+        for key in &self.active {
+            let slot = &self.slots[key];
+            pass.set_bind_group(1, &slot.object_group, &[]);
+            pass.set_bind_group(2, &slot.style_group, &[]);
+            pass.set_bind_group(3, &slot.command_group, &[]);
+            pass.dispatch_workgroups(slot.object_count.div_ceil(WORKGROUP), 1, 1);
         }
     }
 
@@ -288,17 +380,12 @@ impl MeshPasses {
         });
         pass.set_pipeline(&self.section_cull);
         pass.set_bind_group(0, scene, &[]);
-        for layer in &self.layers {
-            if layer.section_commands.is_none() {
-                continue;
-            }
-            let Some(group) = layer.section_command_group.as_ref() else {
-                continue;
-            };
-            pass.set_bind_group(1, &layer.object_group, &[]);
-            pass.set_bind_group(2, &layer.style_group, &[]);
-            pass.set_bind_group(3, group, &[]);
-            pass.dispatch_workgroups(layer.object_count.div_ceil(64), 1, 1);
+        for key in &self.active {
+            let slot = &self.slots[key];
+            pass.set_bind_group(1, &slot.object_group, &[]);
+            pass.set_bind_group(2, &slot.style_group, &[]);
+            pass.set_bind_group(3, &slot.command_group, &[]);
+            pass.dispatch_workgroups(slot.object_count.div_ceil(WORKGROUP), 1, 1);
         }
     }
 
@@ -343,8 +430,8 @@ impl MeshPasses {
         pass.set_scissor_rect(region[0], region[1], width, height);
         pass.set_pipeline(&self.volume_pipeline);
         pass.set_bind_group(0, &self.uniform_group, &[]);
-        for layer in &self.layers {
-            layer.draw(&mut pass);
+        for key in &self.active {
+            self.slots[key].draw(&mut pass, VOLUME_NARROW, VOLUME_WIDE);
         }
     }
 
@@ -389,184 +476,171 @@ impl MeshPasses {
         );
         pass.set_scissor_rect(region[0], region[1], width, height);
         pass.set_bind_group(0, scene, &[]);
-        for layer in &self.layers {
-            layer.draw_section(&mut pass, &self.section_depth, &self.section_color);
+        pass.set_pipeline(&self.section_depth);
+        for key in &self.active {
+            self.slots[key].draw(&mut pass, SECTION_NARROW, SECTION_WIDE);
+        }
+        pass.set_pipeline(&self.section_color);
+        for key in &self.active {
+            self.slots[key].draw(&mut pass, SECTION_NARROW, SECTION_WIDE);
         }
     }
 }
 
-struct MeshLayer {
-    key: Option<LayerKey>,
-    vertices: Option<Buffer>,
-    indices: Option<Buffer>,
-    objects: Table<ObjectData>,
-    styles: Table<StyleData>,
+struct MeshSlot {
+    vertices: Buffer,
+    narrow: Option<Buffer>,
+    wide: Option<Buffer>,
     object_group: BindGroup,
+    styles: Table<StyleData>,
     style_group: BindGroup,
-    volume_commands: Option<IndexedCommands>,
-    section_commands: Option<IndexedCommands>,
-    volume_command_group: Option<BindGroup>,
-    section_command_group: Option<BindGroup>,
+    commands: IndexedCommands,
+    command_group: BindGroup,
     object_count: u32,
     cached_styles: Vec<StyleData>,
+    bytes: u64,
+    used: u64,
 }
 
-impl MeshLayer {
-    fn new(device: &Device, layouts: &Layouts) -> Self {
-        let objects = Table::new(device, "grana.mesh.objects");
-        let styles = Table::new(device, "grana.mesh.styles");
+impl MeshSlot {
+    fn new(device: &Device, queue: &Queue, layouts: &Layouts, mesh: &PackedMesh) -> Self {
+        let object_count = mesh.object_count();
+        assert!(object_count > 0, "a mesh slot carries an object");
+        let object_count = u32::try_from(object_count).expect("a mesh holds u32 objects");
+        let mut points = Vec::with_capacity(mesh.vertex_count());
+        let mut objects = Vec::with_capacity(object_count as usize);
+        for (object, group) in mesh.groups().iter().enumerate() {
+            let first = group.first_vertex() as usize;
+            let end = first + group.vertex_count() as usize;
+            for vertex in &mesh.vertices()[first..end] {
+                points.push(PointData {
+                    position: [
+                        vertex.position()[0],
+                        vertex.position()[1],
+                        vertex.position()[2],
+                        0,
+                    ],
+                    normal: vertex.normal(),
+                    object: object as u32,
+                });
+            }
+            let extent = [0, 1, 2].map(|axis| group.scale()[axis] * UNIT);
+            let low = group.min();
+            let center = [0, 1, 2].map(|axis| low[axis] + 0.5 * extent[axis]);
+            let radius = 0.5 * glam::Vec3::new(extent[0], extent[1], extent[2]).length();
+            let wide = group.wide();
+            objects.push(ObjectData {
+                center_radius: [center[0], center[1], center[2], radius],
+                minimum: [low[0], low[1], low[2], 0.0],
+                extent: [extent[0], extent[1], extent[2], 0.0],
+                narrow_first: if wide { 0 } else { group.first_index() },
+                narrow_count: if wide { 0 } else { group.index_count() },
+                wide_first: if wide { group.first_index() } else { 0 },
+                wide_count: if wide { group.index_count() } else { 0 },
+                vertex_base: group.first_vertex(),
+                reserved: [0; 3],
+            });
+        }
+        assert_eq!(
+            points.len(),
+            mesh.vertex_count(),
+            "every packed vertex reaches the gpu"
+        );
+        let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("grana.mesh.vertices"),
+            contents: bytemuck::cast_slice(&points),
+            usage: BufferUsages::VERTEX,
+        });
+        let narrow = (!mesh.narrow().is_empty()).then(|| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("grana.mesh.indices.narrow"),
+                contents: bytemuck::cast_slice(mesh.narrow()),
+                usage: BufferUsages::INDEX,
+            })
+        });
+        let wide = (!mesh.wide().is_empty()).then(|| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("grana.mesh.indices.wide"),
+                contents: bytemuck::cast_slice(mesh.wide()),
+                usage: BufferUsages::INDEX,
+            })
+        });
+        let mut object_table =
+            Table::with_capacity(device, "grana.mesh.objects", object_count as usize);
+        let grown = object_table.write(device, queue, &objects);
+        assert!(!grown, "the object table holds every mesh object");
+        let object_group = bind_group(device, &layouts.objects, object_table.buffer());
+        let styles = Table::with_capacity(device, "grana.mesh.styles", object_count as usize);
+        let style_group = bind_group(device, &layouts.styles, styles.buffer());
+        let commands = IndexedCommands::new(
+            device,
+            "grana.mesh.commands",
+            object_count as usize,
+            REGIONS,
+        );
+        let command_group = bind_group(device, &layouts.commands, commands.buffer());
+        let bytes = (points.len() * size_of::<PointData>()
+            + size_of_val(mesh.narrow())
+            + size_of_val(mesh.wide())
+            + object_count as usize * size_of::<ObjectData>()
+            + object_count as usize * size_of::<StyleData>()) as u64
+            + commands.buffer().size();
         Self {
-            key: None,
-            vertices: None,
-            indices: None,
-            object_group: bind_group(device, &layouts.objects, objects.buffer()),
-            style_group: bind_group(device, &layouts.styles, styles.buffer()),
-            objects,
+            vertices,
+            narrow,
+            wide,
+            object_group,
             styles,
-            volume_commands: None,
-            section_commands: None,
-            volume_command_group: None,
-            section_command_group: None,
-            object_count: 0,
+            style_group,
+            commands,
+            command_group,
+            object_count,
             cached_styles: Vec::new(),
+            bytes,
+            used: 0,
         }
     }
 
-    fn set(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        layouts: &Layouts,
-        layer: Layer<'_>,
-        styles: &[Style],
-    ) {
-        let (start, count) = (layer.style_start, layer.style_count);
-        assert!(
-            start + count <= styles.len(),
-            "a mesh layer names its style rows"
-        );
-        if self.key != Some(layer.key) {
-            self.key = Some(layer.key);
-            self.upload(device, queue, layouts, layer.mesh);
-        }
+    fn touch(&mut self, order: u64) {
+        self.used = order;
+    }
+
+    fn write_styles(&mut self, queue: &Queue, styles: &[Style]) {
         assert_eq!(
-            count, self.object_count as usize,
+            styles.len(),
+            self.object_count as usize,
             "every mesh object carries one style"
         );
-        let data = styles[start..start + count]
+        let data = styles
             .iter()
             .map(|style| style_data(*style))
             .collect::<Vec<_>>();
         if data != self.cached_styles {
-            let grown = self.styles.write(device, queue, &data);
+            queue.write_buffer(self.styles.buffer(), 0, bytemuck::cast_slice(&data));
             self.cached_styles = data;
-            if grown {
-                self.style_group = bind_group(device, &layouts.styles, self.styles.buffer());
-            }
         }
     }
 
-    fn upload(&mut self, device: &Device, queue: &Queue, layouts: &Layouts, mesh: Option<&Mesh>) {
-        self.reset();
-        let Some(mesh) = mesh.filter(|mesh| !mesh.is_empty()) else {
-            return;
-        };
-        let vertices = mesh.vertices();
-        let objects = object_count(vertices);
-        assert!(objects > 0, "a non empty mesh names at least one object");
-        let (indices, ranges) = group_indices(vertices, mesh.indices(), objects);
-        self.vertices = Some(
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("grana.mesh.vertices"),
-                contents: bytemuck::cast_slice(vertices),
-                usage: BufferUsages::VERTEX,
-            }),
-        );
-        self.indices = Some(
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("grana.mesh.indices"),
-                contents: bytemuck::cast_slice(&indices),
-                usage: BufferUsages::INDEX,
-            }),
-        );
-        self.object_count = objects as u32;
-        let volume_commands = IndexedCommands::new(device, "grana.mesh.volume.commands", objects);
-        let section_commands = IndexedCommands::new(device, "grana.mesh.section.commands", objects);
-        self.volume_command_group = Some(bind_group(
-            device,
-            &layouts.commands,
-            volume_commands.buffer(),
-        ));
-        self.section_command_group = Some(bind_group(
-            device,
-            &layouts.commands,
-            section_commands.buffer(),
-        ));
-        self.volume_commands = Some(volume_commands);
-        self.section_commands = Some(section_commands);
-        let bounds = bounds(vertices, objects);
-        let data = ranges
-            .iter()
-            .zip(bounds)
-            .map(|(range, bound)| ObjectData {
-                center: [bound.center.x, bound.center.y, bound.center.z, 0.0],
-                radius: bound.radius,
-                first_index: range.0,
-                index_count: range.1,
-                reserved: 0,
-            })
-            .collect::<Vec<_>>();
-        let grown = self.objects.write(device, queue, &data);
-        if grown {
-            self.object_group = bind_group(device, &layouts.objects, self.objects.buffer());
+    fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, narrow: usize, wide: usize) {
+        pass.set_bind_group(1, &self.object_group, &[]);
+        pass.set_bind_group(2, &self.style_group, &[]);
+        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        if let Some(indices) = &self.narrow {
+            pass.set_index_buffer(indices.slice(..), IndexFormat::Uint16);
+            pass.multi_draw_indexed_indirect(
+                self.commands.buffer(),
+                self.commands.offset(narrow),
+                self.object_count,
+            );
         }
-    }
-
-    fn reset(&mut self) {
-        self.vertices = None;
-        self.indices = None;
-        self.volume_commands = None;
-        self.section_commands = None;
-        self.volume_command_group = None;
-        self.section_command_group = None;
-        self.object_count = 0;
-        self.cached_styles.clear();
-    }
-
-    fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
-        let (Some(vertices), Some(indices), Some(commands)) = (
-            self.vertices.as_ref(),
-            self.indices.as_ref(),
-            self.volume_commands.as_ref(),
-        ) else {
-            return;
-        };
-        pass.set_bind_group(1, &self.style_group, &[]);
-        pass.set_vertex_buffer(0, vertices.slice(..));
-        pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
-        pass.multi_draw_indexed_indirect(commands.buffer(), 0, self.object_count);
-    }
-
-    fn draw_section<'a>(
-        &'a self,
-        pass: &mut wgpu::RenderPass<'a>,
-        depth_pipeline: &RenderPipeline,
-        color_pipeline: &RenderPipeline,
-    ) {
-        let (Some(vertices), Some(indices), Some(commands)) = (
-            self.vertices.as_ref(),
-            self.indices.as_ref(),
-            self.section_commands.as_ref(),
-        ) else {
-            return;
-        };
-        pass.set_bind_group(1, &self.style_group, &[]);
-        pass.set_vertex_buffer(0, vertices.slice(..));
-        pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
-        pass.set_pipeline(depth_pipeline);
-        pass.multi_draw_indexed_indirect(commands.buffer(), 0, self.object_count);
-        pass.set_pipeline(color_pipeline);
-        pass.multi_draw_indexed_indirect(commands.buffer(), 0, self.object_count);
+        if let Some(indices) = &self.wide {
+            pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
+            pass.multi_draw_indexed_indirect(
+                self.commands.buffer(),
+                self.commands.offset(wide),
+                self.object_count,
+            );
+        }
     }
 }
 
@@ -579,79 +653,6 @@ fn bind_group(device: &Device, layout: &BindGroupLayout, buffer: &Buffer) -> Bin
             resource: buffer.as_entire_binding(),
         }],
     })
-}
-
-fn object_count(vertices: &[MeshVertex]) -> usize {
-    vertices
-        .iter()
-        .map(|vertex| vertex.object())
-        .max()
-        .map_or(0, |object| object as usize + 1)
-}
-
-fn group_indices(
-    vertices: &[MeshVertex],
-    indices: &[u32],
-    objects: usize,
-) -> (Vec<u32>, Vec<(u32, u32)>) {
-    let mut counts = vec![0u32; objects];
-    for triangle in indices.as_chunks::<3>().0 {
-        let object = vertices[triangle[0] as usize].object() as usize;
-        counts[object] += 1;
-    }
-    let mut starts = vec![0u32; objects];
-    let mut next = 0u32;
-    for (start, count) in starts.iter_mut().zip(&counts) {
-        *start = next;
-        next += count * 3;
-    }
-    let mut grouped = vec![0u32; indices.len()];
-    let mut cursor = starts.clone();
-    for triangle in indices.as_chunks::<3>().0 {
-        let object = vertices[triangle[0] as usize].object() as usize;
-        let at = cursor[object] as usize;
-        grouped[at..at + 3].copy_from_slice(triangle);
-        cursor[object] += 3;
-    }
-    let ranges = starts
-        .iter()
-        .zip(&counts)
-        .map(|(start, count)| (*start, *count * 3))
-        .collect();
-    (grouped, ranges)
-}
-
-#[derive(Clone, Copy)]
-struct Bounds {
-    center: glam::Vec3,
-    radius: f32,
-}
-
-fn bounds(vertices: &[MeshVertex], objects: usize) -> Vec<Bounds> {
-    let mut low = vec![glam::Vec3::splat(f32::INFINITY); objects];
-    let mut high = vec![glam::Vec3::splat(f32::NEG_INFINITY); objects];
-    for vertex in vertices {
-        let object = vertex.object() as usize;
-        let position = glam::Vec3::from(vertex.position());
-        low[object] = low[object].min(position);
-        high[object] = high[object].max(position);
-    }
-    low.iter()
-        .zip(&high)
-        .map(|(low, high)| {
-            if low.is_finite() && high.is_finite() {
-                Bounds {
-                    center: 0.5 * (*low + *high),
-                    radius: (0.5 * (*high - *low)).length(),
-                }
-            } else {
-                Bounds {
-                    center: glam::Vec3::ZERO,
-                    radius: 0.0,
-                }
-            }
-        })
-        .collect()
 }
 
 fn style_data(style: Style) -> StyleData {
@@ -669,22 +670,22 @@ fn style_data(style: Style) -> StyleData {
 
 fn vertex_layout() -> VertexBufferLayout<'static> {
     VertexBufferLayout {
-        array_stride: size_of::<grana_object::MeshVertex>() as u64,
+        array_stride: size_of::<PointData>() as u64,
         step_mode: VertexStepMode::Vertex,
         attributes: &[
             VertexAttribute {
-                format: VertexFormat::Float32x3,
+                format: VertexFormat::Unorm16x4,
                 offset: 0,
                 shader_location: 0,
             },
             VertexAttribute {
-                format: VertexFormat::Float32x3,
-                offset: 12,
+                format: VertexFormat::Unorm16x2,
+                offset: 8,
                 shader_location: 1,
             },
             VertexAttribute {
                 format: VertexFormat::Uint32,
-                offset: 24,
+                offset: 12,
                 shader_location: 2,
             },
         ],

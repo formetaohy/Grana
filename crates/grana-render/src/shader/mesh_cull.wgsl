@@ -1,9 +1,12 @@
 struct ObjectData {
-    center: vec4<f32>,
-    radius: f32,
-    first_index: u32,
-    index_count: u32,
-    reserved: u32,
+    center_radius: vec4<f32>,
+    minimum: vec4<f32>,
+    extent: vec4<f32>,
+    narrow_first: u32,
+    narrow_count: u32,
+    wide_first: u32,
+    wide_count: u32,
+    vertex_base: u32,
 }
 
 struct StyleData {
@@ -18,6 +21,11 @@ struct IndexedArgs {
     base_vertex: i32,
     first_instance: u32,
 }
+
+const VOLUME_NARROW: u32 = 0u;
+const VOLUME_WIDE: u32 = 1u;
+const SECTION_NARROW: u32 = 2u;
+const SECTION_WIDE: u32 = 3u;
 
 @group(1) @binding(0) var<storage, read> objects: array<ObjectData>;
 @group(2) @binding(0) var<storage, read> styles: array<StyleData>;
@@ -51,23 +59,42 @@ fn outside_section(center: vec3<f32>, radius: f32) -> bool {
     return false;
 }
 
+fn command(first_index: u32, index_count: u32, base_vertex: u32) -> IndexedArgs {
+    return IndexedArgs(index_count, 1u, first_index, i32(base_vertex), 0u);
+}
+
+fn narrow_command(object: ObjectData, base_vertex: u32) -> IndexedArgs {
+    if (object.narrow_count == 0u) {
+        return IndexedArgs(0u, 0u, 0u, 0, 0u);
+    }
+    return command(object.narrow_first, object.narrow_count, base_vertex);
+}
+
+fn wide_command(object: ObjectData, base_vertex: u32) -> IndexedArgs {
+    if (object.wide_count == 0u) {
+        return IndexedArgs(0u, 0u, 0u, 0, 0u);
+    }
+    return command(object.wide_first, object.wide_count, base_vertex);
+}
+
 @compute @workgroup_size(64)
 fn mesh_cull_volume(@builtin(global_invocation_id) id: vec3<u32>) {
     let index = id.x;
     if (index >= arrayLength(&objects)) {
         return;
     }
+    let count = arrayLength(&objects);
     let object = objects[index];
-    var args = IndexedArgs(0u, 0u, 0u, 0, 0u);
+    var narrow = IndexedArgs(0u, 0u, 0u, 0, 0u);
+    var wide = IndexedArgs(0u, 0u, 0u, 0, 0u);
     if (styles[index].flags.x >= 0.5
-        && object.index_count > 0u
-        && !outside_sphere(object.center.xyz, object.radius)
-        && !outside_region_sphere(object.center.xyz, object.radius)) {
-        args.index_count = object.index_count;
-        args.instance_count = 1u;
-        args.first_index = object.first_index;
+        && !outside_sphere(object.center_radius.xyz, object.center_radius.w)
+        && !outside_region_sphere(object.center_radius.xyz, object.center_radius.w)) {
+        narrow = narrow_command(object, object.vertex_base);
+        wide = wide_command(object, object.vertex_base);
     }
-    commands[index] = args;
+    commands[index + count * VOLUME_NARROW] = narrow;
+    commands[index + count * VOLUME_WIDE] = wide;
 }
 
 @compute @workgroup_size(64)
@@ -76,15 +103,16 @@ fn mesh_cull_section(@builtin(global_invocation_id) id: vec3<u32>) {
     if (index >= arrayLength(&objects)) {
         return;
     }
+    let count = arrayLength(&objects);
     let object = objects[index];
-    var args = IndexedArgs(0u, 0u, 0u, 0, 0u);
+    var narrow = IndexedArgs(0u, 0u, 0u, 0, 0u);
+    var wide = IndexedArgs(0u, 0u, 0u, 0, 0u);
     if (styles[index].flags.x >= 0.5
-        && object.index_count > 0u
-        && !outside_section(object.center.xyz, object.radius)
-        && !outside_region_sphere(object.center.xyz, object.radius)) {
-        args.index_count = object.index_count;
-        args.instance_count = 1u;
-        args.first_index = object.first_index;
+        && !outside_section(object.center_radius.xyz, object.center_radius.w)
+        && !outside_region_sphere(object.center_radius.xyz, object.center_radius.w)) {
+        narrow = narrow_command(object, object.vertex_base);
+        wide = wide_command(object, object.vertex_base);
     }
-    commands[index] = args;
+    commands[index + count * SECTION_NARROW] = narrow;
+    commands[index + count * SECTION_WIDE] = wide;
 }

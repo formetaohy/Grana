@@ -58,6 +58,7 @@ pub struct FrameInfo {
     pub volume: ViewInfo,
     pub section: ViewInfo,
     pub bytes: u64,
+    pub geometry: u64,
 }
 
 #[derive(Default)]
@@ -217,7 +218,7 @@ impl Renderer {
             light: None,
             volume: VolumePass::new(device, &layouts),
             section: SectionPass::new(device, &layouts),
-            meshes: MeshPasses::new(device, &layouts),
+            meshes: MeshPasses::new(device, &layouts, budget / 2),
             markers: MarkerPasses::new(device, &layouts),
             layouts,
             dummy,
@@ -291,6 +292,7 @@ impl Renderer {
         self.channels = channels;
         self.time = 0;
         self.counts.fill(0);
+        self.meshes.clear();
         self.epoch += 1;
         self.pin = 0;
         self.settled = None;
@@ -730,6 +732,7 @@ impl Renderer {
         info.volume.level = volume_level;
         info.section.level = section_level;
         info.bytes = atlas.bytes();
+        info.geometry = meshes.bytes();
         *info
     }
 

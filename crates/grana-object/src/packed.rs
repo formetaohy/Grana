@@ -1,7 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
-use crate::{Mesh, MeshVertex};
+use crate::Mesh;
 
 const UNIT: f32 = 65535.0;
 const NARROW_LIMIT: usize = u16::MAX as usize;
@@ -342,38 +342,26 @@ impl PackedMesh {
             + self.wide.len() * size_of::<u32>()) as u64
     }
 
-    pub fn expand(&self) -> Mesh {
-        let mut vertices = Vec::with_capacity(self.vertices.len());
-        let mut indices = Vec::with_capacity(self.narrow.len() + self.wide.len());
-        for (object, group) in self.groups.iter().enumerate() {
-            let first = group.first_vertex as usize;
-            for vertex in &self.vertices[first..first + group.vertex_count as usize] {
-                let position = [0, 1, 2].map(|axis| {
-                    group.min[axis] + f32::from(vertex.position()[axis]) * group.scale[axis]
-                });
-                vertices.push(MeshVertex::new(
-                    position,
-                    decode_normal(vertex.normal()),
-                    object as u32,
-                ));
-            }
-            let start = group.first_index as usize;
-            let count = group.index_count as usize;
-            if group.wide {
-                indices.extend(
-                    self.wide[start..start + count]
-                        .iter()
-                        .map(|index| group.first_vertex + *index),
-                );
+    pub fn triangle(&self, object: usize, triangle: usize) -> [[f32; 3]; 3] {
+        let group = self
+            .groups
+            .get(object)
+            .expect("the triangle names a packed object");
+        assert!(
+            triangle < group.index_count as usize / 3,
+            "the triangle lies inside its packed object"
+        );
+        let start = group.first_index as usize + triangle * 3;
+        [0, 1, 2].map(|corner| {
+            let index = if group.wide {
+                self.wide[start + corner]
             } else {
-                indices.extend(
-                    self.narrow[start..start + count]
-                        .iter()
-                        .map(|index| group.first_vertex + u32::from(*index)),
-                );
-            }
-        }
-        Mesh::new(vertices, indices)
+                u32::from(self.narrow[start + corner])
+            };
+            let vertex = self.vertices[group.first_vertex as usize + index as usize];
+            [0, 1, 2]
+                .map(|axis| group.min[axis] + f32::from(vertex.position[axis]) * group.scale[axis])
+        })
     }
 }
 
@@ -403,25 +391,8 @@ fn encode_normal(normal: [f32; 3]) -> [u16; 2] {
     [quantize_unit(x), quantize_unit(y)]
 }
 
-fn decode_normal(packed: [u16; 2]) -> [f32; 3] {
-    let mut x = unquantize_unit(packed[0]);
-    let mut y = unquantize_unit(packed[1]);
-    let z = 1.0 - x.abs() - y.abs();
-    if z < 0.0 {
-        let across = (1.0 - y.abs()) * sign(x);
-        let down = (1.0 - x.abs()) * sign(y);
-        x = across;
-        y = down;
-    }
-    Vec3::new(x, y, z).normalize().to_array()
-}
-
 fn quantize_unit(value: f32) -> u16 {
     (((value * 0.5 + 0.5).clamp(0.0, 1.0)) * UNIT).round() as u16
-}
-
-fn unquantize_unit(value: u16) -> f32 {
-    f32::from(value) / UNIT * 2.0 - 1.0
 }
 
 fn sign(value: f32) -> f32 {
