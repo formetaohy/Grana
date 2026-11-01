@@ -17,8 +17,8 @@ use crate::{
     Protocol, Source,
 };
 
-const MAX_IN_FLIGHT: usize = 64;
-const UPLOAD_BATCH: usize = 32;
+const MAX_IN_FLIGHT: usize = 8192;
+const UPLOAD_BATCH: usize = 64;
 
 struct Pending {
     path: PathBuf,
@@ -45,6 +45,7 @@ pub struct Session {
     analysis: Vec<Analysis>,
     progress: Vec<Progress>,
     in_flight: HashSet<BrickRequest>,
+    failed: HashSet<BrickRequest>,
     bricks: Vec<(BrickRequest, BrickData)>,
     pending: Option<Pending>,
     loading: Option<String>,
@@ -79,6 +80,7 @@ impl Session {
             analysis: Vec::new(),
             progress: Vec::new(),
             in_flight: HashSet::new(),
+            failed: HashSet::new(),
             bricks: Vec::new(),
             pending: None,
             loading: None,
@@ -237,25 +239,25 @@ impl Session {
         let Some(source) = self.source.as_ref() else {
             return;
         };
-        let mut stopped = false;
+        let mut batch = Vec::with_capacity(bricks.len().min(MAX_IN_FLIGHT));
         for request in bricks {
-            if request.time != time {
+            if request.time != time || self.in_flight.contains(request) {
                 continue;
             }
-            if self.in_flight.len() >= MAX_IN_FLIGHT {
-                break;
-            }
-            if self.in_flight.contains(request) {
+            if self.failed.contains(request) {
                 continue;
             }
-            if source.request(*request) {
-                self.in_flight.insert(*request);
-            } else {
-                stopped = true;
+            if batch.len() >= MAX_IN_FLIGHT {
                 break;
             }
+            batch.push(*request);
         }
-        if stopped {
+        if batch.is_empty() {
+            return;
+        }
+        if source.request(&batch) {
+            self.in_flight.extend(batch);
+        } else {
             self.source = None;
             self.in_flight.clear();
             self.message = Some(Message::error("the dataset reader stopped"));
@@ -619,6 +621,7 @@ impl Session {
         self.progress.clear();
         self.message = None;
         self.in_flight.clear();
+        self.failed.clear();
         self.bricks.clear();
         self.timeline = Timeline::new(30, 1.0);
         self.view = None;
@@ -632,6 +635,7 @@ impl Session {
         self.progress.clear();
         self.measure.reset();
         self.in_flight.clear();
+        self.failed.clear();
         self.bricks.clear();
         self.timeline = Timeline::new(30, self.frame_duration());
         if let Some(pending) = self.pending.take() {
@@ -685,11 +689,10 @@ impl Session {
                 }
                 LoaderEvent::ReadFailed { request, detail } => {
                     self.in_flight.remove(&request);
-                    self.message = Some(Message::error(detail));
-                    self.analysis.clear();
-                    self.progress.clear();
-                    self.source = None;
-                    self.in_flight.clear();
+                    self.failed.insert(request);
+                    self.message = Some(Message::error(format!(
+                        "a volume region could not be read: {detail}"
+                    )));
                 }
                 LoaderEvent::Failed(detail) => {
                     self.loading = None;

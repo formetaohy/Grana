@@ -11,6 +11,8 @@ use grana_volume::CHANNEL_LIMIT;
 
 const MAXIMA_PLANE: usize = CHANNEL_LIMIT / 4;
 
+pub(crate) const HOLLOW_FLAG: u32 = 2;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub(crate) struct BrickRecord {
@@ -26,9 +28,16 @@ const _: () = {
 };
 
 impl BrickRecord {
-    pub const EMPTY: Self = Self {
+    pub const MISSING: Self = Self {
         slot: 0,
         flags: 0,
+        reserved: [0; 2],
+        maxima: [[0.0; 4]; MAXIMA_PLANE],
+    };
+
+    pub const HOLLOW: Self = Self {
+        slot: 0,
+        flags: HOLLOW_FLAG,
         reserved: [0; 2],
         maxima: [[0.0; 4]; MAXIMA_PLANE],
     };
@@ -65,7 +74,7 @@ impl BrickTable {
         atlas: [u32; 3],
     ) -> Self {
         let grid = BrickGrid::new(source.extent());
-        let records = vec![BrickRecord::EMPTY; grid.count()];
+        let records = vec![BrickRecord::MISSING; grid.count()];
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("grana.brick.records"),
             contents: bytemuck::cast_slice(&records),
@@ -110,9 +119,12 @@ impl BrickTable {
     }
 
     pub fn sync(&mut self, queue: &Queue, time: u32, atlas: &Atlas) {
-        self.records.fill(BrickRecord::EMPTY);
-        for (slot, index, maxima) in atlas.bricks(time, self.level) {
-            self.records[index] = BrickRecord::new(slot + 1, maxima);
+        self.records.fill(BrickRecord::MISSING);
+        for resident in atlas.residents(time, self.level) {
+            self.records[resident.index] = match resident.slot {
+                Some(slot) => BrickRecord::new(slot + 1, resident.maxima),
+                None => BrickRecord::HOLLOW,
+            };
         }
         queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&self.records));
         self.time = Some(time);

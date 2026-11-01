@@ -11,25 +11,18 @@ pub(crate) struct Reader {
 }
 
 enum Kind {
-    Memory {
-        series: Arc<VolumeSeries>,
-        grid: BrickGrid,
-    },
+    Memory { series: Arc<VolumeSeries> },
     Zarr(Image),
 }
 
 impl Reader {
     pub fn open(source: &Source) -> Result<Self, String> {
         match source {
-            Source::Memory(series) => {
-                let grid = BrickGrid::new(series.pyramid().level(0).extent());
-                Ok(Self {
-                    kind: Kind::Memory {
-                        series: Arc::clone(series),
-                        grid,
-                    },
-                })
-            }
+            Source::Memory(series) => Ok(Self {
+                kind: Kind::Memory {
+                    series: Arc::clone(series),
+                },
+            }),
             Source::File(path) => Image::open(path)
                 .map(|image| Self {
                     kind: Kind::Zarr(image),
@@ -47,7 +40,7 @@ impl Reader {
 
     pub fn pyramid(&self) -> &Pyramid {
         match &self.kind {
-            Kind::Memory { series, .. } => series.pyramid(),
+            Kind::Memory { series } => series.pyramid(),
             Kind::Zarr(image) => image.pyramid(),
         }
     }
@@ -60,7 +53,7 @@ impl Reader {
         ranges: &[Range<u32>; 3],
     ) -> Result<VoxelData, String> {
         match &self.kind {
-            Kind::Memory { series, .. } => Ok(series.region(
+            Kind::Memory { series } => Ok(series.region(
                 time,
                 channel,
                 ranges[0].clone(),
@@ -80,11 +73,14 @@ impl Reader {
         }
     }
 
-    pub fn brick(&self, time: u32, coord: BrickCoord) -> Result<BrickData, String> {
+    pub fn brick(&self, time: u32, level: usize, coord: BrickCoord) -> Result<BrickData, String> {
         match &self.kind {
-            Kind::Memory { series, grid } => Ok(series.brick(time, grid, coord)),
+            Kind::Memory { series } => {
+                let grid = BrickGrid::new(series.pyramid().level(level).extent());
+                Ok(series.brick(time, &grid, coord))
+            }
             Kind::Zarr(image) => image
-                .read_brick(time, 0, coord)
+                .read_brick(time, level, coord)
                 .map_err(|error| error.to_string()),
         }
     }

@@ -875,6 +875,82 @@ fn renders_track_tubes_and_sections() {
 }
 
 #[test]
+fn keeps_hollow_bricks_out_of_the_cache() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = corner_brick();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 8 * 78_608);
+    renderer.set_dataset(&device, &pyramid);
+    let session = Session {
+        device: &device,
+        queue: &queue,
+        target: &view,
+        camera: &camera,
+        section: &section,
+        scene: &scene,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        region: Region::none(),
+        time: 0,
+    };
+    let grid = BrickGrid::new(volume.extent());
+    for _ in 0..96 {
+        renderer.draw(&device, &queue, common::frame(&session));
+        let Some(requests) = common::next_demand(&mut renderer, &session) else {
+            continue;
+        };
+        for request in requests.volume.iter().chain(&requests.section) {
+            let brick = volume.brick(&grid, request.coord);
+            let _ = renderer.upload(&device, &queue, *request, &brick);
+        }
+    }
+    let pixels = read_pixels(&device, &queue, &texture, SIDE);
+    assert!(
+        lit(&pixels) > 100,
+        "a cache of empty bricks hides the only solid brick: {} lit pixels",
+        lit(&pixels)
+    );
+}
+
+fn corner_brick() -> Volume {
+    let extent = Extent::new(128, 128, 128);
+    let mut data = vec![0u16; extent.voxel_count() as usize];
+    for z in 0..32 {
+        for y in 0..32 {
+            for x in 0..32 {
+                data[extent.index(x, y, z) as usize] = 60_000;
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        Spacing::new(0.1, 0.1, 0.1),
+        vec![Channel::new(
+            "corner",
+            [0.3, 0.6, 1.0],
+            VoxelData::U16(data),
+        )],
+    )
+}
+
+#[test]
 fn switches_levels() {
     let Some((device, queue)) = device() else {
         return;

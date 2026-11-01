@@ -1,5 +1,6 @@
 const BRICK_SIDE: f32 = 32.0;
 const PADDED_SIDE: f32 = 34.0;
+const HOLLOW: u32 = 2u;
 
 struct BrickRecord {
     slot: u32,

@@ -1,12 +1,18 @@
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Condvar, Mutex};
 
 use grana_volume::{BrickData, BrickRequest, CHANNEL_LIMIT, Pyramid, VolumeSeries};
 
 use crate::Source;
 use crate::reader::Reader;
+
+const ATTEMPTS: u8 = 3;
+const WORKER_LIMIT: usize = 8;
+const RETRY_PRIORITY: u64 = 0;
 
 pub enum Event {
     Opened {
@@ -26,9 +32,155 @@ pub enum Event {
 
 pub struct Loader {
     events: Receiver<Event>,
-    requests: Sender<BrickRequest>,
+    queue: Arc<Queue>,
     time: Arc<AtomicU32>,
     source: Source,
+}
+
+struct Queue {
+    state: Mutex<State>,
+    ready: Condvar,
+}
+
+struct State {
+    tasks: BinaryHeap<Task>,
+    pending: HashMap<BrickRequest, Reservation>,
+    priority: u64,
+    closed: bool,
+}
+
+#[derive(Clone, Copy)]
+struct Reservation {
+    priority: u64,
+    attempts: u8,
+}
+
+struct Task {
+    priority: u64,
+    request: BrickRequest,
+}
+
+impl PartialEq for Task {
+    fn eq(&self, other: &Self) -> bool {
+        self.priority == other.priority
+    }
+}
+
+impl Eq for Task {}
+
+impl Ord for Task {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.priority.cmp(&other.priority)
+    }
+}
+
+impl PartialOrd for Task {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Queue {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(State {
+                tasks: BinaryHeap::new(),
+                pending: HashMap::new(),
+                priority: 0,
+                closed: false,
+            }),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn submit(&self, requests: &[BrickRequest]) -> bool {
+        let mut state = self.state.lock().expect("the loader queue is not poisoned");
+        if state.closed {
+            return false;
+        }
+        for request in requests.iter().rev() {
+            state.priority += 1;
+            let priority = state.priority;
+            state.pending.insert(
+                *request,
+                Reservation {
+                    priority,
+                    attempts: 0,
+                },
+            );
+            state.tasks.push(Task {
+                priority,
+                request: *request,
+            });
+        }
+        drop(state);
+        self.ready.notify_all();
+        true
+    }
+
+    fn take(&self, time: u32) -> Option<(BrickRequest, u8)> {
+        let mut state = self.state.lock().expect("the loader queue is not poisoned");
+        loop {
+            if state.closed {
+                return None;
+            }
+            let Some(task) = state.tasks.pop() else {
+                state = self
+                    .ready
+                    .wait(state)
+                    .expect("the loader queue is not poisoned");
+                continue;
+            };
+            let matches = state
+                .pending
+                .get(&task.request)
+                .is_some_and(|reservation| reservation.priority == task.priority);
+            if !matches {
+                continue;
+            }
+            let reservation = state
+                .pending
+                .remove(&task.request)
+                .expect("the reservation is ready");
+            if task.request.time < time {
+                continue;
+            }
+            return Some((task.request, reservation.attempts));
+        }
+    }
+
+    fn retry(&self, request: BrickRequest, attempts: u8) -> bool {
+        let mut state = self.state.lock().expect("the loader queue is not poisoned");
+        if state.closed || attempts + 1 >= ATTEMPTS {
+            return false;
+        }
+        state.pending.insert(
+            request,
+            Reservation {
+                priority: RETRY_PRIORITY,
+                attempts: attempts + 1,
+            },
+        );
+        state.tasks.push(Task {
+            priority: RETRY_PRIORITY,
+            request,
+        });
+        drop(state);
+        self.ready.notify_all();
+        true
+    }
+
+    fn prune(&self, time: u32) {
+        let mut state = self.state.lock().expect("the loader queue is not poisoned");
+        state.pending.retain(|request, _| request.time >= time);
+    }
+
+    fn close(&self) {
+        let mut state = self.state.lock().expect("the loader queue is not poisoned");
+        state.closed = true;
+        drop(state);
+        self.ready.notify_all();
+    }
 }
 
 impl Loader {
@@ -36,63 +188,64 @@ impl Loader {
         let source = Source::memory(series);
         let reader = Reader::open(&source).expect("an in-memory volume opens");
         let pyramid = reader.pyramid().clone();
-        let loader = Self::spawn(source, reader);
-        (loader, pyramid)
+        let (sender, events) = mpsc::channel();
+        let queue = Arc::new(Queue::new());
+        let time = Arc::new(AtomicU32::new(0));
+        spawn(Arc::new(reader), &queue, &time, &sender);
+        (
+            Self {
+                events,
+                queue,
+                time,
+                source,
+            },
+            pyramid,
+        )
     }
 
     pub fn file(path: PathBuf) -> Self {
         let source = Source::file(path);
-        let (event_sender, events) = mpsc::channel();
-        let (requests, request_queue) = mpsc::channel();
+        let (sender, events) = mpsc::channel();
+        let queue = Arc::new(Queue::new());
         let time = Arc::new(AtomicU32::new(0));
-        let worker_time = Arc::clone(&time);
-        let worker_source = source.clone();
+        let opened = source.clone();
+        let opening_sender = sender.clone();
+        let opening_queue = Arc::clone(&queue);
+        let opening_time = Arc::clone(&time);
         std::thread::spawn(move || {
-            let reader = match Reader::open(&worker_source) {
+            let reader = match Reader::open(&opened) {
                 Ok(reader) => reader,
                 Err(detail) => {
-                    let _ = event_sender.send(Event::Failed(detail));
+                    let _ = opening_sender.send(Event::Failed(detail));
+                    opening_queue.close();
                     return;
                 }
             };
             let channels = reader.pyramid().channel_count();
             if channels > CHANNEL_LIMIT {
-                let _ = event_sender.send(Event::Failed(format!(
+                let _ = opening_sender.send(Event::Failed(format!(
                     "the dataset has {channels} channels, grana displays at most {CHANNEL_LIMIT}"
                 )));
+                opening_queue.close();
                 return;
             }
-            let name = reader.name().to_string();
-            if event_sender
-                .send(Event::Opened {
-                    name,
-                    pyramid: reader.pyramid().clone(),
-                })
-                .is_err()
-            {
+            let opened = Event::Opened {
+                name: reader.name().to_string(),
+                pyramid: reader.pyramid().clone(),
+            };
+            if opening_sender.send(opened).is_err() {
                 return;
             }
-            serve(reader, &request_queue, &worker_time, &event_sender);
+            spawn(
+                Arc::new(reader),
+                &opening_queue,
+                &opening_time,
+                &opening_sender,
+            );
         });
         Self {
             events,
-            requests,
-            time,
-            source,
-        }
-    }
-
-    fn spawn(source: Source, reader: Reader) -> Self {
-        let (event_sender, events) = mpsc::channel();
-        let (requests, request_queue) = mpsc::channel();
-        let time = Arc::new(AtomicU32::new(0));
-        let worker_time = Arc::clone(&time);
-        std::thread::spawn(move || {
-            serve(reader, &request_queue, &worker_time, &event_sender);
-        });
-        Self {
-            events,
-            requests,
+            queue,
             time,
             source,
         }
@@ -102,12 +255,13 @@ impl Loader {
         self.events.try_recv().ok()
     }
 
-    pub fn request(&self, request: BrickRequest) -> bool {
-        self.requests.send(request).is_ok()
+    pub fn request(&self, requests: &[BrickRequest]) -> bool {
+        self.queue.submit(requests)
     }
 
     pub fn set_time(&self, time: u32) {
-        self.time.store(time, Ordering::Relaxed);
+        self.time.store(time, AtomicOrdering::Relaxed);
+        self.queue.prune(time);
     }
 
     pub fn source(&self) -> Source {
@@ -115,27 +269,43 @@ impl Loader {
     }
 }
 
-fn serve(
-    reader: Reader,
-    requests: &Receiver<BrickRequest>,
-    time: &AtomicU32,
-    events: &Sender<Event>,
-) {
-    while let Ok(request) = requests.recv() {
-        if request.time < time.load(Ordering::Relaxed) {
-            continue;
-        }
-        match reader.brick(request.time, request.coord) {
+impl Drop for Loader {
+    fn drop(&mut self) {
+        self.queue.close();
+    }
+}
+
+fn spawn(reader: Arc<Reader>, queue: &Arc<Queue>, time: &Arc<AtomicU32>, events: &Sender<Event>) {
+    for _ in 0..workers() {
+        let reader = Arc::clone(&reader);
+        let queue = Arc::clone(queue);
+        let time = Arc::clone(time);
+        let events = events.clone();
+        std::thread::spawn(move || serve(reader, queue, time, events));
+    }
+}
+
+fn serve(reader: Arc<Reader>, queue: Arc<Queue>, time: Arc<AtomicU32>, events: Sender<Event>) {
+    while let Some((request, attempts)) = queue.take(time.load(AtomicOrdering::Relaxed)) {
+        match reader.brick(request.time, request.level, request.coord) {
             Ok(data) => {
                 if events.send(Event::Brick { request, data }).is_err() {
                     return;
                 }
             }
             Err(detail) => {
+                if queue.retry(request, attempts) {
+                    continue;
+                }
                 if events.send(Event::ReadFailed { request, detail }).is_err() {
                     return;
                 }
             }
         }
     }
+}
+
+fn workers() -> usize {
+    let available = std::thread::available_parallelism().map_or(1, |count| count.get());
+    (available - 1).clamp(1, WORKER_LIMIT)
 }

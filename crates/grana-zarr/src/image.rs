@@ -6,11 +6,12 @@ use grana_volume::{
     BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid, VoxelData,
     VoxelFormat, pad_brick,
 };
+use zarrs::array::chunk_cache::{ChunkCache, ChunkCacheLruSizeLimit, ChunkCacheTypeDecoded};
 use zarrs::array::data_type::{float32, uint8, uint16};
-use zarrs::array::{Array, ArraySubset};
+use zarrs::array::{Array, ArraySubset, CodecOptions};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::group::Group;
-use zarrs::storage::{ReadableWritableListableStorage, ReadableWritableListableStorageTraits};
+use zarrs::storage::ReadableStorageTraits;
 
 use crate::Error;
 use crate::axes::{self, Layout};
@@ -30,10 +31,14 @@ const PALETTE: [[f32; 3]; 8] = [
 const RANGE_SAMPLE_VOXELS: u64 = 4 << 20;
 const RANGE_PROBE_SIDE: u32 = 32;
 const RANGE_SAMPLE_FRAMES: u32 = 4;
+const CHUNK_CACHE_BYTES: u64 = 128 << 20;
+const CHUNK_CACHE_MINIMUM: u64 = 8 << 20;
+
+type Cache = ChunkCacheLruSizeLimit<ChunkCacheTypeDecoded>;
 
 struct LevelArray {
     path: String,
-    array: Array<dyn ReadableWritableListableStorageTraits>,
+    cache: Cache,
     layout: Layout,
 }
 
@@ -46,16 +51,18 @@ pub struct Image {
 
 impl Image {
     pub fn open(path: &Path) -> Result<Self, Error> {
-        let store: ReadableWritableListableStorage =
-            Arc::new(FilesystemStore::new(path).map_err(|error| Error::Open {
-                path: path.to_path_buf(),
-                detail: error.to_string(),
-            })?);
+        let store = Arc::new(FilesystemStore::new(path).map_err(|error| Error::Open {
+            path: path.to_path_buf(),
+            detail: error.to_string(),
+        })?);
         let group = Group::open(store.clone(), "/").map_err(|error| Error::Open {
             path: path.to_path_buf(),
             detail: error.to_string(),
         })?;
         let metadata = metadata::parse(path, group.attributes())?;
+        let readable: Arc<dyn ReadableStorageTraits> = store;
+        let cache_bytes =
+            (CHUNK_CACHE_BYTES / metadata.datasets.len() as u64).max(CHUNK_CACHE_MINIMUM);
         let mut levels = Vec::with_capacity(metadata.datasets.len());
         let mut channel_count = None;
         let mut frames = None;
@@ -63,7 +70,7 @@ impl Image {
         let mut format = None;
         for dataset in &metadata.datasets {
             let array_path = array_path(&dataset.path);
-            let array = open_array(&store, &array_path)?;
+            let array = Arc::new(open_array(readable.clone(), &array_path)?);
             let level_format = supported_format(path, &array)?;
             match format {
                 None => format = Some(level_format),
@@ -118,7 +125,7 @@ impl Image {
             }
             levels.push(LevelArray {
                 path: array_path,
-                array,
+                cache: Cache::new(array, cache_bytes),
                 layout,
             });
         }
@@ -277,7 +284,7 @@ impl Image {
             z.clone(),
         );
         let subset = ArraySubset::new_with_ranges(&ranges);
-        let data = retrieve(&level.array, &subset, &level.path)?;
+        let data = retrieve(&level.cache, &subset, &level.path)?;
         let expected =
             u64::from(x.end - x.start) * u64::from(y.end - y.start) * u64::from(z.end - z.start);
         if data.voxel_count() as u64 != expected {
@@ -314,10 +321,10 @@ fn array_path(path: &str) -> String {
 }
 
 fn open_array(
-    store: &ReadableWritableListableStorage,
+    store: Arc<dyn ReadableStorageTraits>,
     path: &str,
-) -> Result<Array<dyn ReadableWritableListableStorageTraits>, Error> {
-    Array::open(store.clone(), path).map_err(|error| Error::Open {
+) -> Result<Array<dyn ReadableStorageTraits>, Error> {
+    Array::open(store, path).map_err(|error| Error::Open {
         path: PathBuf::from(path),
         detail: error.to_string(),
     })
@@ -325,7 +332,7 @@ fn open_array(
 
 fn supported_format(
     path: &Path,
-    array: &Array<dyn ReadableWritableListableStorageTraits>,
+    array: &Array<dyn ReadableStorageTraits>,
 ) -> Result<VoxelFormat, Error> {
     let data_type = array.data_type();
     if data_type == &uint8() {
@@ -342,32 +349,30 @@ fn supported_format(
     }
 }
 
-fn retrieve(
-    array: &Array<dyn ReadableWritableListableStorageTraits>,
-    subset: &ArraySubset,
-    path: &str,
-) -> Result<VoxelData, Error> {
+fn retrieve(cache: &Cache, subset: &ArraySubset, path: &str) -> Result<VoxelData, Error> {
     let mut read = |error: zarrs::array::ArrayError| Error::Read {
         array: path.to_string(),
         detail: error.to_string(),
     };
+    let options = CodecOptions::default();
+    let array = cache.array();
     let data_type = array.data_type();
     if data_type == &uint8() {
         Ok(VoxelData::U8(
-            array
-                .retrieve_array_subset::<Vec<u8>>(subset)
+            cache
+                .retrieve_array_subset::<Vec<u8>>(subset, &options)
                 .map_err(&mut read)?,
         ))
     } else if data_type == &uint16() {
         Ok(VoxelData::U16(
-            array
-                .retrieve_array_subset::<Vec<u16>>(subset)
+            cache
+                .retrieve_array_subset::<Vec<u16>>(subset, &options)
                 .map_err(&mut read)?,
         ))
     } else {
         Ok(VoxelData::F32(
-            array
-                .retrieve_array_subset::<Vec<f32>>(subset)
+            cache
+                .retrieve_array_subset::<Vec<f32>>(subset, &options)
                 .map_err(&mut read)?,
         ))
     }
@@ -458,7 +463,7 @@ fn sample_range(
             spatial.2.clone(),
         );
         let subset = ArraySubset::new_with_ranges(&ranges);
-        let data = retrieve(&level.array, &subset, &level.path)?;
+        let data = retrieve(&level.cache, &subset, &level.path)?;
         let range = data.range();
         low = low.min(range.min());
         high = high.max(range.max());

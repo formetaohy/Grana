@@ -258,7 +258,7 @@ fn surfaces(
                 return Ok(());
             }
             let coord = builder.coord(index);
-            let data = reader.brick(time, coord)?;
+            let data = reader.brick(time, 0, coord)?;
             builder.add(coord, &data);
             if index % 16 == 0 || index + 1 == total {
                 sink(Event::Progress {

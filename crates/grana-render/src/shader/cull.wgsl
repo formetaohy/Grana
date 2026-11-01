@@ -66,13 +66,17 @@ fn section_cell(index: u32) -> vec3<u32> {
 }
 
 fn emit(bucket: u32, index: u32) {
+    let record = bricks[index];
+    if (record.slot == 0u && (record.flags & HOLLOW) != 0u) {
+        return;
+    }
     let base = atomicLoad(&plan[BASE_BASE + bucket]);
     if (base == EXCLUDED) {
         return;
     }
     let offset = atomicAdd(&plan[FILL_BASE + bucket], 1u);
     var entry = index;
-    if (bricks[index].slot == 0u) {
+    if (record.slot == 0u) {
         entry = index | MISSING;
     }
     atomicStore(&plan[DEMAND_BASE + base + offset], entry);
@@ -83,6 +87,9 @@ fn volume_count(@builtin(global_invocation_id) id: vec3<u32>) {
     let grid = vec3<u32>(frame.grid.xyz);
     let index = id.x;
     if (index >= grid.x * grid.y * grid.z) {
+        return;
+    }
+    if (bricks[index].slot == 0u && (bricks[index].flags & HOLLOW) != 0u) {
         return;
     }
     let bounds = brick_box(volume_cell(index));
@@ -128,6 +135,9 @@ fn section_count(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let brick = cell.x + grid.x * (cell.y + grid.y * cell.z);
+    if (bricks[brick].slot == 0u && (bricks[brick].flags & HOLLOW) != 0u) {
+        return;
+    }
     let bucket = section_bucket(0.5 * (bounds[0] + bounds[1]));
     atomicAdd(&plan[0], 1u);
     atomicAdd(&plan[VISIBLE_BASE + bucket], 1u);

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bytemuck::cast_slice;
 use grana_volume::PADDED_SIDE;
@@ -18,6 +18,12 @@ pub(crate) struct ResidentBrick {
     pub time: u32,
     pub level: usize,
     pub index: usize,
+    pub maxima: [[f32; 4]; CHANNEL_LIMIT / 4],
+}
+
+pub(crate) struct Resident {
+    pub index: usize,
+    pub slot: Option<u32>,
     pub maxima: [[f32; 4]; CHANNEL_LIMIT / 4],
 }
 
@@ -41,6 +47,8 @@ pub(crate) struct Atlas {
     free: Vec<u32>,
     slots: Vec<Slot>,
     identity: HashMap<(u32, usize, usize), u32>,
+    hollow: HashSet<(u32, usize, usize)>,
+    pruned: Option<u32>,
     bytes: u64,
 }
 
@@ -123,6 +131,8 @@ impl Atlas {
             free: (0..capacity as u32).rev().collect(),
             slots: vec![Slot::EMPTY; capacity],
             identity: HashMap::new(),
+            hollow: HashSet::new(),
+            pruned: None,
             bytes,
         }
     }
@@ -147,22 +157,49 @@ impl Atlas {
         self.identity.get(&(time, level, index)).copied()
     }
 
-    pub fn bricks(
-        &self,
-        time: u32,
-        level: usize,
-    ) -> impl Iterator<Item = (u32, usize, [[f32; 4]; CHANNEL_LIMIT / 4])> + '_ {
-        self.slots
+    pub fn is_hollow(&self, time: u32, level: usize, index: usize) -> bool {
+        self.hollow.contains(&(time, level, index))
+    }
+
+    pub fn assign_hollow(&mut self, time: u32, level: usize, index: usize) {
+        self.hollow.insert((time, level, index));
+    }
+
+    pub fn prune(&mut self, now: u32) {
+        if self.pruned == Some(now) {
+            return;
+        }
+        self.hollow.retain(|(time, _, _)| *time >= now);
+        self.pruned = Some(now);
+    }
+
+    pub fn residents(&self, time: u32, level: usize) -> Vec<Resident> {
+        let mut residents = self
+            .slots
             .iter()
             .enumerate()
-            .filter_map(move |(slot, entry)| {
+            .filter_map(|(slot, entry)| {
                 let brick = entry.brick?;
-                (brick.time == time && brick.level == level).then_some((
-                    slot as u32,
-                    brick.index,
-                    brick.maxima,
-                ))
+                (brick.time == time && brick.level == level).then_some(Resident {
+                    index: brick.index,
+                    slot: Some(slot as u32),
+                    maxima: brick.maxima,
+                })
             })
+            .collect::<Vec<_>>();
+        residents.extend(
+            self.hollow
+                .iter()
+                .filter(|(hollow_time, hollow_level, _)| {
+                    *hollow_time == time && *hollow_level == level
+                })
+                .map(|(_, _, index)| Resident {
+                    index: *index,
+                    slot: None,
+                    maxima: [[0.0; 4]; CHANNEL_LIMIT / 4],
+                }),
+        );
+        residents
     }
 
     pub fn touch(&mut self, time: u32, level: usize, indices: impl Iterator<Item = u32>, pin: u64) {
@@ -218,6 +255,7 @@ impl Atlas {
             self.identity
                 .remove(&(previous.time, previous.level, previous.index));
         }
+        self.hollow.remove(&(brick.time, brick.level, brick.index));
         self.identity
             .insert((brick.time, brick.level, brick.index), slot);
         self.slots[slot as usize] = Slot {

@@ -40,6 +40,7 @@ const DUMMY_VOXEL: [u16; 1] = [0];
 const FEEDBACK_SLOTS: usize = 4;
 const SECTION_BUDGET_DIVISOR: usize = 2;
 const PREFETCH_LIMIT: usize = 1024;
+const PREFETCH_SHARE: usize = 4;
 const CENSUS_BYTES: u64 = (CENSUS_LEVELS * size_of::<u32>()) as u64;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -362,7 +363,22 @@ impl Renderer {
         }
         let grid = BrickGrid::new(extent);
         let index = grid.index(coord);
-        if atlas.slot(time, level, index).is_some() {
+        if atlas.slot(time, level, index).is_some() || atlas.is_hollow(time, level, index) {
+            return true;
+        }
+        let mut maxima = [[0.0f32; 4]; CHANNEL_LIMIT / 4];
+        for channel in 0..*channels {
+            let intensity = pyramid.channels()[channel].intensity();
+            maxima[channel / 4][channel % 4] = data.channels()[channel].unit_max(intensity);
+        }
+        if maxima.iter().flatten().all(|maximum| *maximum <= 0.0) {
+            atlas.assign_hollow(time, level, index);
+            if let Some(table) = bricks[level].as_mut()
+                && table.time() == Some(time)
+            {
+                table.set_record(queue, index, BrickRecord::HOLLOW);
+            }
+            *content += 1;
             return true;
         }
         let slot_grid = atlas.slot_grid();
@@ -381,16 +397,14 @@ impl Renderer {
             && let Some(other) = bricks.get_mut(brick.level).and_then(Option::as_mut)
             && other.time() == Some(brick.time)
         {
-            other.set_record(queue, brick.index, BrickRecord::EMPTY);
+            other.set_record(queue, brick.index, BrickRecord::MISSING);
         }
-        let mut maxima = [[0.0f32; 4]; CHANNEL_LIMIT / 4];
         for channel in 0..*channels {
             let intensity = pyramid.channels()[channel].intensity();
             let source = &data.channels()[channel];
             let mut units = vec![0u16; source.voxel_count()];
             source.write_units(intensity, &mut units);
             atlas.write(queue, channel, slot, &units);
-            maxima[channel / 4][channel % 4] = source.unit_max(intensity);
         }
         atlas.assign(
             slot,
@@ -515,6 +529,7 @@ impl Renderer {
             time < pyramid.frame_count(),
             "the requested frame lies inside the time series"
         );
+        atlas.prune(time);
         let volume_width = volume_region[2].max(1);
         let volume_height = volume_region[3].max(1);
         let section_width = section_region[2].max(1);
@@ -1008,27 +1023,20 @@ fn prefetch_requests(
     if next >= pyramid.frame_count() {
         return Vec::new();
     }
-    let resident = if volume.info.level == section.info.level {
-        atlas.bricks(next, volume.info.level).count()
-    } else {
-        atlas.bricks(next, volume.info.level).count()
-            + atlas.bricks(next, section.info.level).count()
-    };
-    let mut spare = atlas
-        .slots()
-        .saturating_sub(volume.info.demand + section.info.demand + resident)
-        .min(PREFETCH_LIMIT);
+    let mut budget = (atlas.slots() / PREFETCH_SHARE).min(PREFETCH_LIMIT);
     let mut requests = Vec::new();
     for (demand, level) in [(volume, volume.info.level), (section, section.info.level)] {
-        if spare == 0 {
+        if budget == 0 {
             break;
         }
         let grid = BrickGrid::new(pyramid.level(level).extent());
         for index in &demand.indices {
-            if spare == 0 {
+            if budget == 0 {
                 break;
             }
-            if atlas.slot(next, level, *index as usize).is_some() {
+            if atlas.slot(next, level, *index as usize).is_some()
+                || atlas.is_hollow(next, level, *index as usize)
+            {
                 continue;
             }
             requests.push(BrickRequest {
@@ -1036,7 +1044,7 @@ fn prefetch_requests(
                 level,
                 coord: grid.coord(*index as usize),
             });
-            spare -= 1;
+            budget -= 1;
         }
     }
     requests
