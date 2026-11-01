@@ -365,7 +365,7 @@ fn chip(
     let width = title_layout.size.x.max(detail_layout.size.x).min(maximum) + 52.0;
     let height = 44.0;
     let rect = Rect::from_min_size(origin, Vec2::new(width, height));
-    let look = ui.theme().look(Role::Hud, grana_ui::State::Rest);
+    let look = ui.theme().look(Role::Chip, grana_ui::State::Rest);
     let mut painter = ui.painter_in(clip);
     painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
     icon::paint(

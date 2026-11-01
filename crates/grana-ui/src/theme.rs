@@ -11,6 +11,7 @@ pub enum Role {
     Toolbar,
     Popover,
     Hud,
+    Chip,
     Card,
     Row,
     Control,
@@ -258,9 +259,9 @@ impl Theme {
             Role::Panel => Look {
                 fill: Fill::Glass(Glass {
                     tint: if dark {
-                        Color::rgba(0.014, 0.020, 0.032, 0.42)
+                        Color::rgba(0.014, 0.020, 0.032, 0.14)
                     } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.52)
+                        Color::rgba(1.0, 1.0, 1.0, 0.36)
                     },
                     ..Glass::PANEL
                 }),
@@ -268,9 +269,9 @@ impl Theme {
                 border: Border {
                     width: metrics.hairline,
                     color: if dark {
-                        Color::rgba(1.0, 1.0, 1.0, 0.32)
+                        Color::rgba(1.0, 1.0, 1.0, 0.30)
                     } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.72)
+                        Color::rgba(1.0, 1.0, 1.0, 0.65)
                     },
                 },
                 shadow: Shadow::new(
@@ -283,9 +284,9 @@ impl Theme {
             Role::Sheet => Look {
                 fill: Fill::Glass(Glass {
                     tint: if dark {
-                        Color::rgba(0.012, 0.017, 0.028, 0.82)
+                        Color::rgba(0.014, 0.020, 0.032, 0.14)
                     } else {
-                        Color::rgba(0.98, 0.98, 0.99, 0.88)
+                        Color::rgba(1.0, 1.0, 1.0, 0.36)
                     },
                     ..Glass::SHEET
                 }),
@@ -293,7 +294,7 @@ impl Theme {
                 border: Border {
                     width: metrics.hairline,
                     color: if dark {
-                        Color::rgba(1.0, 1.0, 1.0, 0.22)
+                        Color::rgba(1.0, 1.0, 1.0, 0.30)
                     } else {
                         Color::rgba(0.0, 0.0, 0.0, 0.06)
                     },
@@ -353,6 +354,25 @@ impl Theme {
                     42.0,
                     16.0,
                 ),
+                text: palette.text_primary,
+            },
+            Role::Chip => Look {
+                fill: Fill::Glass(Glass {
+                    tint: if dark {
+                        Color::rgba(0.82, 0.87, 0.96, 0.16)
+                    } else {
+                        Color::rgba(1.0, 1.0, 1.0, 0.26)
+                    },
+                    rim: 1.0,
+                    specular: 0.90,
+                    ..Glass::BAR
+                }),
+                corners: Corners::all(metrics.radius + 1.0),
+                border: Border {
+                    width: metrics.hairline,
+                    color: white(0.34),
+                },
+                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.24), 22.0, 7.0),
                 text: palette.text_primary,
             },
             Role::Hud => Look {

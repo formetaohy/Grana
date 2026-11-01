@@ -19,14 +19,6 @@ pub(super) fn toolbar_bar(ui: &mut Ui, rect: Rect, state: &State<'_>, actions: &
     let height = rect.height();
     let left = Rect::from_min_size(rect.min, Vec2::new(430.0, height));
     let left_width = {
-        let mut width = 0.0;
-        let brand = ui.measure_text(
-            "Grana",
-            TextStyle::new(
-                TypeStyle::new(14.5, 650.0, 18.0),
-                ui.theme().palette.text_primary,
-            ),
-        );
         let open = ui.measure_text(
             "Open",
             TextStyle::new(ui.theme().font(Level::Body), Color::WHITE),
@@ -35,12 +27,7 @@ pub(super) fn toolbar_bar(ui: &mut Ui, rect: Rect, state: &State<'_>, actions: &
             "Project",
             TextStyle::new(ui.theme().font(Level::Body), Color::WHITE),
         );
-        width += 16.0 + 26.0 + 9.0 + brand.x + 16.0;
-        width += 1.0 + 12.0;
-        width += open.x + 42.0 + 4.0;
-        width += project.x + 30.0;
-        width += 14.0;
-        width
+        16.0 + 26.0 + 1.0 + 6.0 + open.x + 42.0 + project.x + 34.0 + 32.0 + 16.0
     };
     let left = left.with_width(left_width);
     let right_width = {
@@ -73,17 +60,8 @@ pub(super) fn toolbar_bar(ui: &mut Ui, rect: Rect, state: &State<'_>, actions: &
                 .height(Length::Fill),
             |ui| {
                 brand(ui);
-                ui.space(1.0);
-                ui.text_style(
-                    "Grana",
-                    TextStyle::new(
-                        TypeStyle::new(14.5, 650.0, 18.0),
-                        ui.theme().palette.text_primary,
-                    ),
-                );
-                ui.space(8.0);
                 vertical_rule(ui, 18.0);
-                ui.space(4.0);
+                ui.space(6.0);
                 if widget::action_button(ui, "open", Icon::Folder, "Open", Role::Quiet).clicked {
                     actions.push(Action::OpenDataset);
                 }
@@ -149,32 +127,20 @@ pub(super) fn toolbar_bar(ui: &mut Ui, rect: Rect, state: &State<'_>, actions: &
     });
 }
 
-fn brand(ui: &mut Ui) -> Rect {
+fn brand(ui: &mut Ui) {
     let rect = ui.allocate(Vec2::splat(26.0));
     let brand = ui.theme().palette.brand;
-    let mut painter = ui.painter();
-    painter.rect(rect, Corners::all(7.5), Color::rgb(0.043, 0.106, 0.075));
-    painter.outlined(
-        rect,
-        Corners::all(7.5),
-        Fill::None,
-        Border {
-            width: 0.5,
-            color: Color::white_alpha(0.18),
-        },
-        Shadow::NONE,
-    );
     let widths = [7.0, 8.2, 9.4, 10.6, 11.8];
-    let mut y = rect.min.y + 5.2;
+    let mut y = rect.center().y - 7.75;
+    let mut painter = ui.painter();
     for width in widths {
         painter.rect(
-            Rect::from_min_size(Vec2::new(rect.min.x + 6.2, y), Vec2::new(width, 2.1)),
+            Rect::from_min_size(Vec2::new(rect.center().x - 5.9, y), Vec2::new(width, 2.1)),
             Corners::capsule(),
             brand,
         );
         y += 3.35;
     }
-    rect
 }
 
 fn vertical_rule(ui: &mut Ui, height: f32) {
