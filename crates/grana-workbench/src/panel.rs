@@ -138,6 +138,12 @@ fn inspector_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut
     {
         let mut painter = ui.painter();
         painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
+        painter.gradient(
+            Rect::from_min_size(rect.min, Vec2::new(rect.width(), 168.0)),
+            Corners::top(24.0),
+            Color::black_alpha(0.30),
+            Color::TRANSPARENT,
+        );
     }
     ui.stacked(rect, true, |ui| {
         let footer_height = 30.0;

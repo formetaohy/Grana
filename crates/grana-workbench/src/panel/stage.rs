@@ -34,10 +34,10 @@ pub(super) fn paint_backdrop(ui: &mut Ui, layout: &Layout, state: &State<'_>) {
                     ),
                     full.size(),
                 ),
-                tint: Color::rgba(0.010, 0.016, 0.028, 0.34),
-                blur: 92.0,
-                saturation: 1.2,
-                brightness: 0.86,
+                tint: Color::rgba(0.010, 0.016, 0.028, 0.15),
+                blur: 0.0,
+                saturation: 1.05,
+                brightness: 0.85,
                 opacity: 1.0,
             },
         );
@@ -68,7 +68,8 @@ pub(super) fn paint_backdrop(ui: &mut Ui, layout: &Layout, state: &State<'_>) {
                 0.12,
             );
         }
-        painter.rect(full, Corners::ZERO, Color::black_alpha(0.18));
+        calibration_grid(&mut painter, full);
+        painter.rect(full, Corners::ZERO, Color::black_alpha(0.24));
         painter.gradient(
             Rect::from_min_size(full.min, Vec2::new(full.width(), 150.0)),
             Corners::ZERO,
@@ -84,6 +85,38 @@ pub(super) fn paint_backdrop(ui: &mut Ui, layout: &Layout, state: &State<'_>) {
             Color::TRANSPARENT,
             Color::black_alpha(0.26),
         );
+    }
+}
+
+fn calibration_grid(painter: &mut grana_ui::Painter<'_>, full: Rect) {
+    let step = 28.0;
+    let minor = Color::white_alpha(0.10);
+    let major = Color::white_alpha(0.16);
+    let mut index = 0;
+    let mut x = full.min.x;
+    while x <= full.max.x {
+        let color = if index % 5 == 0 { major } else { minor };
+        painter.segment(
+            Vec2::new(x, full.min.y),
+            Vec2::new(x, full.max.y),
+            0.5,
+            color,
+        );
+        x += step;
+        index += 1;
+    }
+    index = 0;
+    let mut y = full.min.y;
+    while y <= full.max.y {
+        let color = if index % 5 == 0 { major } else { minor };
+        painter.segment(
+            Vec2::new(full.min.x, y),
+            Vec2::new(full.max.x, y),
+            0.5,
+            color,
+        );
+        y += step;
+        index += 1;
     }
 }
 

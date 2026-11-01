@@ -11,6 +11,8 @@ pub struct Glass {
     pub blur: f32,
     pub tint: Color,
     pub rim: f32,
+    pub refraction: f32,
+    pub specular: f32,
 }
 
 impl Glass {
@@ -21,42 +23,52 @@ impl Glass {
         blur: 6.0,
         tint: Color::TRANSPARENT,
         rim: 1.0,
+        refraction: 0.0,
+        specular: 0.0,
     };
 
     pub const PANEL: Self = Self {
-        displacement: 52.0,
-        aberration: 2.1,
+        displacement: 72.0,
+        aberration: 2.2,
         saturation: 1.36,
         blur: 6.0,
         tint: Color::TRANSPARENT,
-        rim: 0.95,
+        rim: 0.82,
+        refraction: 1.0,
+        specular: 0.65,
     };
 
     pub const SHEET: Self = Self {
-        displacement: 26.0,
-        aberration: 1.3,
+        displacement: 44.0,
+        aberration: 1.5,
         saturation: 1.28,
         blur: 6.0,
         tint: Color::TRANSPARENT,
-        rim: 0.8,
+        rim: 0.64,
+        refraction: 1.0,
+        specular: 0.38,
     };
 
     pub const BAR: Self = Self {
-        displacement: 24.0,
-        aberration: 1.4,
+        displacement: 64.0,
+        aberration: 1.8,
         saturation: 1.38,
         blur: 6.0,
         tint: Color::TRANSPARENT,
-        rim: 0.95,
+        rim: 0.80,
+        refraction: 1.0,
+        specular: 0.65,
     };
 
     pub const POPOVER: Self = Self {
-        displacement: 18.0,
-        aberration: 1.1,
+        displacement: 32.0,
+        aberration: 1.2,
         saturation: 1.28,
         blur: 6.0,
         tint: Color::TRANSPARENT,
-        rim: 0.85,
+        rim: 0.68,
+        refraction: 0.8,
+        specular: 0.42,
     };
 
     pub const CONTROL: Self = Self {
@@ -66,6 +78,8 @@ impl Glass {
         blur: 6.0,
         tint: Color::TRANSPARENT,
         rim: 0.5,
+        refraction: 0.0,
+        specular: 0.0,
     };
 
     pub fn lerp(self, other: Self, t: f32) -> Self {
@@ -77,6 +91,8 @@ impl Glass {
             blur: self.blur + (other.blur - self.blur) * t,
             tint: self.tint.lerp(other.tint, t),
             rim: self.rim + (other.rim - self.rim) * t,
+            refraction: self.refraction + (other.refraction - self.refraction) * t,
+            specular: self.specular + (other.specular - self.specular) * t,
         }
     }
 }

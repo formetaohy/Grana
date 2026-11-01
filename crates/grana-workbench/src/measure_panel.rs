@@ -389,7 +389,7 @@ fn table(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>) {
         painter.outlined(
             surface,
             Corners::all(10.0),
-            grana_ui::Fill::Solid(Color::black_alpha(0.20)),
+            grana_ui::Fill::Solid(Color::rgba(0.025, 0.032, 0.045, 0.88)),
             grana_ui::Border {
                 width: 0.5,
                 color: Color::white_alpha(0.06),

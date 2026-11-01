@@ -22,7 +22,7 @@ const MAP_BYTES: &[u8] = include_bytes!("../assets/displacement-map.png");
 const MINIMUM_INSTANCES: usize = 512;
 const BLUR_PASSES: usize = 6;
 const BLUR_STRIDE: u64 = 256;
-const BLUR_RADIUS: f32 = 6.0;
+const BLUR_RADIUS: f32 = 4.0;
 const BLUR_SATURATION: f32 = 1.4;
 
 const PREMULTIPLIED: BlendState = BlendState {
@@ -158,6 +158,7 @@ impl Renderer {
                 sampler_entry(7),
                 texture_entry(8),
                 sampler_entry(9),
+                texture_entry(10),
             ],
         });
         let blit_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -506,6 +507,7 @@ impl Renderer {
                     &color,
                     &scene,
                     &scene,
+                    &scene,
                     content,
                     0,
                     self.base.clone(),
@@ -542,6 +544,7 @@ impl Renderer {
                 encoder,
                 &color,
                 &backdrop.1,
+                &backdrop.1,
                 &scene,
                 chrome,
                 start,
@@ -556,6 +559,7 @@ impl Renderer {
                     encoder,
                     &color,
                     &color,
+                    &backdrop.1,
                     &scene,
                     overlay,
                     0,
@@ -574,6 +578,7 @@ impl Renderer {
                 &color,
                 &color,
                 &scene,
+                &scene,
                 base,
                 0,
                 self.base.clone(),
@@ -587,6 +592,7 @@ impl Renderer {
                     encoder,
                     &color,
                     &color,
+                    &scene,
                     &scene,
                     overlay,
                     0,
@@ -712,6 +718,7 @@ impl Renderer {
         encoder: &mut CommandEncoder,
         target: &TextureView,
         source: &TextureView,
+        sharp: &TextureView,
         scene: &TextureView,
         instances: &[Instance],
         instance_base: usize,
@@ -729,7 +736,8 @@ impl Renderer {
         for segment in segments(instances) {
             match segment {
                 Segment::Batch { start, len } => {
-                    let group = self.bind_group(atlas, scene, scene, &buffer, &self.uniforms);
+                    let group =
+                        self.bind_group(atlas, scene, scene, sharp, &buffer, &self.uniforms);
                     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                         label: Some("grana.ui.pass"),
                         color_attachments: &[Some(RenderPassColorAttachment {
@@ -761,7 +769,8 @@ impl Renderer {
                     let (a, b) = self.element_pair(rect);
                     self.blur_element(encoder, source, a, b, rect, uniform_base + element - 1);
                     let backdrop = self.elements[b].view.clone();
-                    let group = self.bind_group(atlas, &backdrop, scene, &buffer, &self.uniforms);
+                    let group =
+                        self.bind_group(atlas, &backdrop, scene, sharp, &buffer, &self.uniforms);
                     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                         label: Some("grana.ui.glass.pass"),
                         color_attachments: &[Some(RenderPassColorAttachment {
@@ -905,7 +914,14 @@ impl Renderer {
         });
         self.queue
             .write_buffer(&uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
-        let group = self.bind_group(atlas, &scene.view, &scene.view, &buffer, &uniform_buffer);
+        let group = self.bind_group(
+            atlas,
+            &scene.view,
+            &scene.view,
+            &scene.view,
+            &buffer,
+            &uniform_buffer,
+        );
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.ui.figure.pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
@@ -929,6 +945,7 @@ impl Renderer {
         atlas: &Atlas,
         backdrop: &TextureView,
         scene: &TextureView,
+        sharp: &TextureView,
         instances: &Buffer,
         uniforms: &Buffer,
     ) -> wgpu::BindGroup {
@@ -975,6 +992,10 @@ impl Renderer {
                 BindGroupEntry {
                     binding: 9,
                     resource: BindingResource::Sampler(&self.map_sampler),
+                },
+                BindGroupEntry {
+                    binding: 10,
+                    resource: BindingResource::TextureView(sharp),
                 },
             ],
         })

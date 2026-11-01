@@ -258,9 +258,9 @@ impl Theme {
             Role::Panel => Look {
                 fill: Fill::Glass(Glass {
                     tint: if dark {
-                        Color::rgba(0.014, 0.020, 0.032, 0.46)
+                        Color::rgba(0.014, 0.020, 0.032, 0.22)
                     } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.38)
+                        Color::rgba(1.0, 1.0, 1.0, 0.32)
                     },
                     ..Glass::PANEL
                 }),
@@ -268,7 +268,7 @@ impl Theme {
                 border: Border {
                     width: metrics.hairline,
                     color: if dark {
-                        Color::rgba(1.0, 1.0, 1.0, 0.20)
+                        Color::rgba(1.0, 1.0, 1.0, 0.32)
                     } else {
                         Color::rgba(1.0, 1.0, 1.0, 0.72)
                     },
@@ -283,9 +283,9 @@ impl Theme {
             Role::Sheet => Look {
                 fill: Fill::Glass(Glass {
                     tint: if dark {
-                        Color::rgba(0.016, 0.022, 0.034, 0.70)
+                        Color::rgba(0.012, 0.017, 0.028, 0.82)
                     } else {
-                        Color::rgba(0.98, 0.98, 0.99, 0.82)
+                        Color::rgba(0.98, 0.98, 0.99, 0.88)
                     },
                     ..Glass::SHEET
                 }),
@@ -293,7 +293,7 @@ impl Theme {
                 border: Border {
                     width: metrics.hairline,
                     color: if dark {
-                        Color::rgba(1.0, 1.0, 1.0, 0.14)
+                        Color::rgba(1.0, 1.0, 1.0, 0.22)
                     } else {
                         Color::rgba(0.0, 0.0, 0.0, 0.06)
                     },
@@ -308,9 +308,9 @@ impl Theme {
             Role::Toolbar => Look {
                 fill: Fill::Glass(Glass {
                     tint: if dark {
-                        Color::rgba(0.014, 0.020, 0.032, 0.30)
+                        Color::rgba(0.014, 0.020, 0.032, 0.12)
                     } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.28)
+                        Color::rgba(1.0, 1.0, 1.0, 0.26)
                     },
                     ..Glass::BAR
                 }),
@@ -318,7 +318,7 @@ impl Theme {
                 border: Border {
                     width: metrics.hairline,
                     color: if dark {
-                        Color::rgba(1.0, 1.0, 1.0, 0.22)
+                        Color::rgba(1.0, 1.0, 1.0, 0.30)
                     } else {
                         Color::rgba(1.0, 1.0, 1.0, 0.65)
                     },
@@ -343,7 +343,7 @@ impl Theme {
                 border: Border {
                     width: metrics.hairline,
                     color: if dark {
-                        Color::rgba(1.0, 1.0, 1.0, 0.14)
+                        Color::rgba(1.0, 1.0, 1.0, 0.20)
                     } else {
                         Color::rgba(0.0, 0.0, 0.0, 0.06)
                     },
@@ -371,7 +371,11 @@ impl Theme {
                 text: palette.text_secondary,
             },
             Role::Card => Look {
-                fill: Fill::Solid(white(0.045)),
+                fill: Fill::Solid(if dark {
+                    Color::rgba(0.035, 0.043, 0.060, 0.94)
+                } else {
+                    Color::rgba(1.0, 1.0, 1.0, 0.94)
+                }),
                 corners: Corners::all(metrics.radius + 4.0),
                 border: Border {
                     width: metrics.hairline,
