@@ -2,7 +2,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use grana_animation::Timeline;
-use grana_render::{CameraState, SectionState};
+use grana_display::{CameraState, SectionState};
 use grana_scene::{Dataset, Measure, MeasureState, Scene, SceneState};
 
 use crate::binary::{Decode, Encode, Reader, Writer};

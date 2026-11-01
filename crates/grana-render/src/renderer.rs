@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use bytemuck::cast_slice;
 use grana_gpu::Readback;
 use grana_volume::{
-    BRICK_SIDE, BrickCoord, BrickData, BrickGrid, Level, PADDED_SIDE, Pyramid, Region,
+    BRICK_SIDE, BrickData, BrickGrid, BrickRequest, Level, PADDED_SIDE, Pyramid, Region,
 };
 use wgpu::{
     BindGroup, BindGroupLayout, CommandEncoder, Device, LoadOp, Operations, Queue,
@@ -14,10 +14,8 @@ use wgpu::{
     TextureViewDescriptor,
 };
 
-use crate::CHANNEL_LIMIT;
 use crate::atlas::{Atlas, ResidentBrick};
 use crate::brick::{BrickRecord, BrickTable};
-use crate::camera::{Camera, SectionCamera};
 use crate::census::{CENSUS_LEVELS, Census};
 use crate::frame::{FrameData, SectionData, VolumeView};
 use crate::layout::Layouts;
@@ -35,19 +33,14 @@ use crate::schema::SceneFrame;
 use crate::section::SectionPass;
 use crate::target::{self, SceneTarget};
 use crate::volume::VolumePass;
+use grana_display::{Camera, SectionCamera};
+use grana_volume::CHANNEL_LIMIT;
 
 const DUMMY_VOXEL: [u16; 1] = [0];
 const FEEDBACK_SLOTS: usize = 4;
 const SECTION_BUDGET_DIVISOR: usize = 2;
 const PREFETCH_LIMIT: usize = 1024;
 const CENSUS_BYTES: u64 = (CENSUS_LEVELS * size_of::<u32>()) as u64;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct BrickRequest {
-    pub time: u32,
-    pub level: usize,
-    pub coord: BrickCoord,
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ViewInfo {

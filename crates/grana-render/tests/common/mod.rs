@@ -1,7 +1,7 @@
+use grana_display::{Camera, SectionCamera, TransferFunction};
 use grana_gpu::REQUIRED_FEATURES;
-use grana_render::{
-    BrickRequest, Camera, Frame, Renderer, Requests, SceneFrame, SectionCamera, TransferFunction,
-};
+use grana_render::{Frame, Renderer, Requests, SceneFrame};
+use grana_volume::BrickRequest;
 use grana_volume::{BrickData, Pyramid, Region};
 
 pub const SIDE: u32 = 256;

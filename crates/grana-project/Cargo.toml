@@ -9,9 +9,10 @@ repository.workspace = true
 [dependencies]
 grana-analysis = { workspace = true }
 grana-animation = { workspace = true }
+grana-display = { workspace = true }
+grana-geometry = { workspace = true }
 grana-measure = { workspace = true }
 grana-object = { workspace = true }
-grana-render = { workspace = true }
 grana-scene = { workspace = true }
 grana-volume = { workspace = true }
 thiserror = { workspace = true }

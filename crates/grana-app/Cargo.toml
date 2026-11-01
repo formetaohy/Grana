@@ -1,0 +1,26 @@
+[package]
+name = "grana-app"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+glam = { workspace = true }
+grana-animation = { workspace = true }
+grana-display = { workspace = true }
+grana-editor = { workspace = true }
+grana-engine = { workspace = true }
+grana-gpu = { workspace = true }
+grana-project = { workspace = true }
+grana-render = { workspace = true }
+grana-session = { workspace = true }
+grana-ui = { workspace = true }
+grana-volume = { workspace = true }
+rfd = { workspace = true }
+wgpu = { workspace = true }
+winit = { workspace = true }
+
+[lints]
+workspace = true

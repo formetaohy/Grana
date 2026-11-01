@@ -1,6 +1,5 @@
 mod channel;
 mod coloc;
-mod color;
 mod dataset;
 mod job;
 mod measure;
@@ -14,13 +13,13 @@ mod track_layer;
 
 pub use channel::Channel;
 pub use coloc::{Coloc, ColocState};
-pub use color::{ColorState, Coloring, Extent};
 pub use dataset::{Dataset, Origin};
+pub use grana_display::{ColorState, Coloring, Extent};
 pub use job::{Job, Progress};
 pub use measure::{Measure, MeasureState};
 pub use object::{ObjectFrame, ObjectKind, ObjectParams, ParamBound, ParamField, TrackStyle};
 pub use object_set::{ObjectSet, ObjectSetId, Visibility};
 pub use objects::Objects;
-pub use scene::{Item, RenderedScene, Scene, Selection};
+pub use scene::{Item, Scene, Selection};
 pub use state::{ChannelState, ItemState, SceneState, SelectionState, SetState};
 pub use track_layer::TrackLayer;

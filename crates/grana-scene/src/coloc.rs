@@ -1,4 +1,4 @@
-use grana_object::{ColocPair, ColocSeries, ColocStatistics, ColocThresholds};
+use grana_measure::{ColocPair, ColocSeries, ColocStatistics, ColocThresholds};
 use grana_volume::Region;
 
 #[derive(Debug, PartialEq)]

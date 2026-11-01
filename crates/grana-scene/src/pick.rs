@@ -1,6 +1,7 @@
 use glam::Vec3;
-use grana_object::{PackedMesh, Spot};
-use grana_render::Ray;
+use grana_display::Ray;
+use grana_geometry::PackedMesh;
+use grana_object::Spot;
 use grana_volume::Axis;
 
 use crate::scene::{Item, Scene, Selection};

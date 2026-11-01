@@ -4,11 +4,11 @@ use grana_analysis::TrackParams;
 use grana_measure::{Measurement, TrackMeasurement};
 use grana_object::TrackSet;
 
-use crate::color::{ColorState, Coloring, Extent, merged};
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::state::SetState;
 use crate::track_layer::TrackLayer;
+use grana_display::{ColorState, Coloring, Extent, merged};
 
 const MIN_THICKNESS: f32 = 0.25;
 const MAX_THICKNESS: f32 = 40.0;

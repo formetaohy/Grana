@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use grana_object::{COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocPair, ColocSeries};
+use grana_measure::{COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocPair, ColocSeries};
 use grana_volume::{Intensity, Level, Region, VoxelData};
 
 const TILE: [u32; 3] = [256, 256, 32];

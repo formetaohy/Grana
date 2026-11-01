@@ -1,4 +1,4 @@
-use grana_render::{CameraState, SectionState};
+use grana_display::{CameraState, SectionState};
 
 const KEY_EPSILON: f32 = 1.0e-3;
 const MAX_FPS: u32 = 240;

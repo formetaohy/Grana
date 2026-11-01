@@ -2,6 +2,15 @@ use std::ops::Range;
 
 use crate::{Extent, VoxelData};
 
+pub const CHANNEL_LIMIT: usize = 16;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BrickRequest {
+    pub time: u32,
+    pub level: usize,
+    pub coord: BrickCoord,
+}
+
 pub const BRICK_SIDE: u32 = 32;
 pub const BRICK_APRON: u32 = 1;
 pub const PADDED_SIDE: u32 = BRICK_SIDE + 2 * BRICK_APRON;

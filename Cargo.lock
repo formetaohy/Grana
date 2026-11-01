@@ -829,26 +829,7 @@ dependencies = [
 name = "grana"
 version = "0.1.1"
 dependencies = [
- "glam",
- "grana-analysis",
- "grana-animation",
- "grana-gpu",
- "grana-measure",
- "grana-object",
- "grana-pipeline",
- "grana-project",
- "grana-render",
- "grana-scene",
- "grana-ui",
- "grana-video",
- "grana-volume",
- "grana-workbench",
- "grana-zarr",
- "png",
- "pollster",
- "rfd",
- "wgpu",
- "winit",
+ "grana-app",
 ]
 
 [[package]]
@@ -856,6 +837,8 @@ name = "grana-analysis"
 version = "0.1.1"
 dependencies = [
  "glam",
+ "grana-geometry",
+ "grana-measure",
  "grana-object",
  "grana-volume",
 ]
@@ -864,20 +847,93 @@ dependencies = [
 name = "grana-animation"
 version = "0.1.1"
 dependencies = [
- "grana-render",
+ "grana-display",
  "grana-volume",
 ]
 
 [[package]]
-name = "grana-glass-demo"
+name = "grana-app"
+version = "0.1.1"
+dependencies = [
+ "glam",
+ "grana-animation",
+ "grana-display",
+ "grana-editor",
+ "grana-engine",
+ "grana-gpu",
+ "grana-project",
+ "grana-render",
+ "grana-session",
+ "grana-ui",
+ "grana-volume",
+ "rfd",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
+name = "grana-display"
+version = "0.1.1"
+dependencies = [
+ "glam",
+ "grana-volume",
+]
+
+[[package]]
+name = "grana-editor"
+version = "0.1.1"
+dependencies = [
+ "glam",
+ "grana-analysis",
+ "grana-animation",
+ "grana-display",
+ "grana-figure",
+ "grana-measure",
+ "grana-object",
+ "grana-scene",
+ "grana-session",
+ "grana-ui",
+ "grana-volume",
+]
+
+[[package]]
+name = "grana-engine"
+version = "0.1.1"
+dependencies = [
+ "glam",
+ "grana-display",
+ "grana-figure",
+ "grana-geometry",
+ "grana-gpu",
+ "grana-object",
+ "grana-render",
+ "grana-scene",
+ "grana-ui",
+ "grana-video",
+ "grana-volume",
+ "png",
+ "wgpu",
+]
+
+[[package]]
+name = "grana-figure"
+version = "0.1.1"
+dependencies = [
+ "glam",
+ "grana-display",
+ "grana-measure",
+ "grana-object",
+ "grana-scene",
+ "grana-ui",
+ "grana-volume",
+]
+
+[[package]]
+name = "grana-geometry"
 version = "0.1.1"
 dependencies = [
  "bytemuck",
  "glam",
- "grana-ui",
- "png",
- "pollster",
- "wgpu",
 ]
 
 [[package]]
@@ -885,6 +941,7 @@ name = "grana-gpu"
 version = "0.1.1"
 dependencies = [
  "bytemuck",
+ "pollster",
  "wgpu",
 ]
 
@@ -901,21 +958,7 @@ version = "0.1.1"
 dependencies = [
  "bytemuck",
  "glam",
-]
-
-[[package]]
-name = "grana-pipeline"
-version = "0.1.1"
-dependencies = [
- "grana-analysis",
- "grana-measure",
- "grana-object",
- "grana-scene",
- "grana-volume",
- "grana-zarr",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
+ "grana-geometry",
 ]
 
 [[package]]
@@ -925,9 +968,10 @@ dependencies = [
  "glam",
  "grana-analysis",
  "grana-animation",
+ "grana-display",
+ "grana-geometry",
  "grana-measure",
  "grana-object",
- "grana-render",
  "grana-scene",
  "grana-volume",
  "thiserror 2.0.21",
@@ -940,6 +984,8 @@ version = "0.1.1"
 dependencies = [
  "bytemuck",
  "glam",
+ "grana-display",
+ "grana-geometry",
  "grana-gpu",
  "grana-object",
  "grana-volume",
@@ -954,10 +1000,31 @@ version = "0.1.1"
 dependencies = [
  "glam",
  "grana-analysis",
+ "grana-display",
+ "grana-geometry",
  "grana-measure",
  "grana-object",
- "grana-render",
  "grana-volume",
+]
+
+[[package]]
+name = "grana-session"
+version = "0.1.1"
+dependencies = [
+ "glam",
+ "grana-analysis",
+ "grana-animation",
+ "grana-display",
+ "grana-measure",
+ "grana-object",
+ "grana-project",
+ "grana-scene",
+ "grana-volume",
+ "grana-zarr",
+ "rfd",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -966,6 +1033,7 @@ version = "0.1.1"
 dependencies = [
  "bytemuck",
  "glam",
+ "grana-gpu",
  "png",
  "swash",
  "wgpu",
@@ -984,21 +1052,6 @@ name = "grana-volume"
 version = "0.1.1"
 dependencies = [
  "glam",
-]
-
-[[package]]
-name = "grana-workbench"
-version = "0.1.1"
-dependencies = [
- "glam",
- "grana-analysis",
- "grana-animation",
- "grana-measure",
- "grana-object",
- "grana-render",
- "grana-scene",
- "grana-ui",
- "grana-volume",
 ]
 
 [[package]]

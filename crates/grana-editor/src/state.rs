@@ -1,0 +1,87 @@
+use grana_animation::Timeline;
+use grana_display::Viewport;
+use grana_scene::{Measure, Progress, Scene};
+use grana_session::{BatchView, IoView};
+
+use crate::panel::Panel;
+use crate::stage::Stage;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ViewStats {
+    pub level: usize,
+    pub visible: usize,
+    pub demand: usize,
+    pub resident: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameStats {
+    pub volume: ViewStats,
+    pub section: ViewStats,
+    pub bytes: u64,
+    pub geometry: u64,
+    pub samples: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Playback {
+    pub playing: bool,
+    pub position: f32,
+    pub previewing: bool,
+    pub selected: Option<usize>,
+    pub width: u32,
+}
+
+impl Default for Playback {
+    fn default() -> Self {
+        Self {
+            playing: false,
+            position: 0.0,
+            previewing: false,
+            selected: None,
+            width: 1920,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct Workspace {
+    pub panel: Option<Panel>,
+    pub playback: Playback,
+    pub movie_size: [u32; 2],
+}
+
+pub struct State<'a> {
+    pub scene: &'a Scene,
+    pub measure: &'a Measure,
+    pub timeline: &'a Timeline,
+    pub jobs: &'a [Progress],
+    pub io: &'a IoView<'a>,
+    pub batch: Option<&'a BatchView<'a>>,
+    pub viewport: &'a mut Viewport,
+    pub stage: &'a mut Stage,
+    pub workspace: &'a mut Workspace,
+    pub frame: FrameStats,
+}
+
+impl State<'_> {
+    pub fn batch_protocol(&self) -> Option<&str> {
+        self.batch.and_then(|batch| batch.protocol)
+    }
+
+    pub fn batch_datasets(&self) -> &[grana_session::BatchDataset] {
+        self.batch.map_or(&[], |batch| batch.datasets)
+    }
+
+    pub fn batch_output(&self) -> Option<&str> {
+        self.batch.and_then(|batch| batch.output.as_deref())
+    }
+
+    pub fn batch_running(&self) -> bool {
+        self.batch.is_some_and(|batch| batch.running)
+    }
+
+    pub fn batch_message(&self) -> Option<&str> {
+        self.batch.and_then(|batch| batch.message.as_deref())
+    }
+}

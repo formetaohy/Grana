@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
 use glam::Vec3;
-use grana_object::{
-    Bounds, IntensityTable, Mesh, MeshVertex, SampleAccumulator, SurfaceSet, SurfaceStatistics,
-};
+use grana_geometry::{Bounds, Mesh, MeshVertex};
+use grana_object::{IntensityTable, SampleAccumulator, SurfaceSet, SurfaceStatistics};
 use grana_volume::{
     BRICK_SIDE, BrickCoord, BrickData, BrickGrid, Intensity, Level, PADDED_SIDE, Region,
 };

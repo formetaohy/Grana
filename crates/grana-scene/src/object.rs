@@ -1,6 +1,7 @@
 use grana_analysis::{FilamentParams, SpotParams, SurfaceParams, TrackParams};
+use grana_geometry::PackedMesh;
 use grana_measure::{Measurement, Objects};
-use grana_object::{FilamentSet, IntensityTable, PackedMesh, Spot, SpotSet, SurfaceSet};
+use grana_object::{FilamentSet, IntensityTable, Spot, SpotSet, SurfaceSet};
 
 const SPOT_STEP: f32 = 8.0;
 const SURFACE_STEP: f32 = 12.0;
@@ -301,7 +302,7 @@ impl ObjectFrame {
         }
     }
 
-    pub(crate) fn objects(&self) -> Objects<'_> {
+    pub fn objects(&self) -> Objects<'_> {
         match self {
             Self::Spots(set) => Objects::Spots(set),
             Self::Surfaces(set) => Objects::Surfaces(set),

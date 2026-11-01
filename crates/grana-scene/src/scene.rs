@@ -1,9 +1,6 @@
 use glam::Vec3;
-use grana_object::{Spot, TrackSet};
-use grana_render::{
-    ChannelRow, Layer, LayerKey, Marker, Ray, SceneFrame, Shading, Style, TransferFunction,
-    srgb_to_linear,
-};
+use grana_display::{Ray, Shading, TransferFunction};
+use grana_object::TrackSet;
 use grana_volume::{Axis, ChannelInfo, Intensity, Region};
 
 use crate::channel::Channel;
@@ -13,9 +10,6 @@ use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
 use crate::pick;
-
-const SELECTED_COLOR: [f32; 3] = [1.00, 0.93, 0.62];
-const SELECTED_SCALE: f32 = 1.3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Selection {
@@ -27,28 +21,6 @@ pub struct Selection {
 pub enum Item {
     Object(usize),
     Track(usize),
-}
-
-pub struct RenderedScene<'a> {
-    pub channels: Vec<ChannelRow<'a>>,
-    pub styles: Vec<Style>,
-    pub layers: Vec<Layer<'a>>,
-    pub markers: Vec<Marker>,
-    pub shading: Shading,
-    pub step_scale: f32,
-}
-
-impl<'a> RenderedScene<'a> {
-    pub fn frame(&self) -> SceneFrame<'_> {
-        SceneFrame {
-            channels: &self.channels,
-            shading: self.shading,
-            step_scale: self.step_scale,
-            styles: &self.styles,
-            layers: &self.layers,
-            markers: &self.markers,
-        }
-    }
 }
 
 pub struct Scene {
@@ -242,105 +214,6 @@ impl Scene {
         }
     }
 
-    pub fn rendered(&self) -> RenderedScene<'_> {
-        let mut styles = Vec::new();
-        let mut layers = Vec::new();
-        let mut markers = Vec::new();
-        for set in self.objects.iter() {
-            if !self.shown(set) {
-                continue;
-            }
-            let Some(frame) = set.frame(self.time) else {
-                continue;
-            };
-            let extent = set.object_extent();
-            let metric = set.object_coloring().metric();
-            let objects = frame.objects();
-            let color = |index: usize| {
-                extent
-                    .zip(metric)
-                    .map(|(extent, metric)| {
-                        set.object_coloring()
-                            .color(extent, metric.value(objects, index))
-                    })
-                    .unwrap_or_else(|| set.color())
-            };
-            if let Some(spots) = frame.spots() {
-                for (index, spot) in spots.spots().iter().enumerate() {
-                    if !set.visible_object(self.time, index) {
-                        continue;
-                    }
-                    markers.push(self.marker(set, index, *spot, color(index)));
-                }
-            }
-            if let (Some(mesh), Some(stamp)) = (frame.geometry(), set.frame_stamp(self.time))
-                && !mesh.is_empty()
-            {
-                let start = styles.len();
-                for index in 0..frame.object_count() {
-                    styles.push(Style::new(
-                        srgb_to_linear(color(index)),
-                        set.visible_object(self.time, index),
-                        self.object_selected(set.id(), index),
-                    ));
-                }
-                layers.push(Layer {
-                    key: LayerKey::at_frame(set.id().raw(), 0, self.time, stamp),
-                    mesh,
-                    style_start: start,
-                    style_count: frame.object_count(),
-                });
-            }
-            if let Some(tracks) = set.tracks()
-                && !tracks.set().is_empty()
-            {
-                let extent = set.track_extent();
-                let metric = set.track_coloring().metric();
-                let color = |index: usize| {
-                    extent
-                        .zip(metric)
-                        .map(|(extent, metric)| {
-                            set.track_coloring()
-                                .color(extent, metric.value(index, tracks.set()))
-                        })
-                        .unwrap_or_else(|| set.color())
-                };
-                let start = styles.len();
-                for index in 0..tracks.set().len() {
-                    styles.push(Style::new(
-                        srgb_to_linear(color(index)),
-                        tracks.visible() && set.visible_track(index),
-                        self.track_selected(set.id(), index),
-                    ));
-                }
-                layers.push(Layer {
-                    key: LayerKey::stable(set.id().raw(), 1, tracks.revision()),
-                    mesh: tracks.mesh(),
-                    style_start: start,
-                    style_count: tracks.set().len(),
-                });
-            }
-        }
-        let channels = self
-            .channels
-            .iter()
-            .map(|channel| ChannelRow {
-                visible: channel.enabled,
-                opacity: channel.opacity,
-                window: channel.window,
-                transfer: channel.transfer(),
-            })
-            .collect();
-        RenderedScene {
-            channels,
-            styles,
-            layers,
-            markers,
-            shading: self.shading,
-            step_scale: self.step_scale,
-        }
-    }
-
     pub fn pick_ray(&self, ray: &Ray) -> Option<Selection> {
         pick::ray(self, self.time, ray)
     }
@@ -364,11 +237,11 @@ impl Scene {
         self.objects.iter().filter(|set| self.shown(set))
     }
 
-    fn shown(&self, set: &ObjectSet) -> bool {
+    pub fn shown(&self, set: &ObjectSet) -> bool {
         set.visible() && self.channels[set.channel()].enabled
     }
 
-    fn object_selected(&self, set: ObjectSetId, index: usize) -> bool {
+    pub fn object_selected(&self, set: ObjectSetId, index: usize) -> bool {
         self.selection
             == Some(Selection {
                 set,
@@ -376,24 +249,11 @@ impl Scene {
             })
     }
 
-    fn track_selected(&self, set: ObjectSetId, index: usize) -> bool {
+    pub fn track_selected(&self, set: ObjectSetId, index: usize) -> bool {
         self.selection
             == Some(Selection {
                 set,
                 item: Item::Track(index),
             })
-    }
-
-    fn marker(&self, set: &ObjectSet, index: usize, spot: Spot, color: [f32; 3]) -> Marker {
-        if self.object_selected(set.id(), index) {
-            Marker::new(
-                spot.center(),
-                SELECTED_SCALE * spot.radius(),
-                srgb_to_linear(SELECTED_COLOR),
-                1.0,
-            )
-        } else {
-            Marker::new(spot.center(), spot.radius(), srgb_to_linear(color), 1.0)
-        }
     }
 }

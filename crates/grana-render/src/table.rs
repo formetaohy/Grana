@@ -8,11 +8,11 @@ use wgpu::{
     TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor,
 };
 
-use crate::CHANNEL_LIMIT;
 use crate::frame::{FrameData, SectionData};
 use crate::layout::Layouts;
 use crate::schema::ChannelRow;
-use crate::transfer::TransferFunction;
+use grana_display::TransferFunction;
+use grana_volume::CHANNEL_LIMIT;
 
 const LUT_SIZE: usize = 1024;
 

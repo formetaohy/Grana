@@ -1,12 +1,13 @@
 use std::num::NonZeroU32;
 
+use grana_gpu::layout::{sampler, storage, texture, uniform};
 use wgpu::{
-    BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType,
-    BufferBindingType, Device, PipelineLayout, PipelineLayoutDescriptor, SamplerBindingType,
-    ShaderStages, StorageTextureAccess, TextureFormat, TextureSampleType, TextureViewDimension,
+    BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType, Device,
+    PipelineLayout, PipelineLayoutDescriptor, ShaderStages, StorageTextureAccess, TextureFormat,
+    TextureSampleType, TextureViewDimension,
 };
 
-use crate::CHANNEL_LIMIT;
+use grana_volume::CHANNEL_LIMIT;
 
 pub(crate) struct Layouts {
     pub scene: BindGroupLayout,
@@ -242,54 +243,6 @@ impl Layouts {
             census,
             light_pipeline,
         }
-    }
-}
-
-fn uniform(binding: u32, visibility: ShaderStages) -> BindGroupLayoutEntry {
-    BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: BindingType::Buffer {
-            ty: BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    }
-}
-
-fn storage(binding: u32, visibility: ShaderStages, read_only: bool) -> BindGroupLayoutEntry {
-    BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: BindingType::Buffer {
-            ty: BufferBindingType::Storage { read_only },
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    }
-}
-
-fn texture(binding: u32, visibility: ShaderStages) -> BindGroupLayoutEntry {
-    BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: BindingType::Texture {
-            sample_type: TextureSampleType::Float { filterable: true },
-            view_dimension: TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
-}
-
-fn sampler(binding: u32, visibility: ShaderStages) -> BindGroupLayoutEntry {
-    BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: BindingType::Sampler(SamplerBindingType::Filtering),
-        count: None,
     }
 }
 

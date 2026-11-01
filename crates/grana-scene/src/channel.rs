@@ -1,4 +1,4 @@
-use grana_render::TransferFunction;
+use grana_display::TransferFunction;
 use grana_volume::Intensity;
 
 pub struct Channel {

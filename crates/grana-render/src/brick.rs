@@ -6,8 +6,8 @@ use wgpu::{
     Queue, util::DeviceExt,
 };
 
-use crate::CHANNEL_LIMIT;
 use crate::atlas::Atlas;
+use grana_volume::CHANNEL_LIMIT;
 
 const MAXIMA_PLANE: usize = CHANNEL_LIMIT / 4;
 

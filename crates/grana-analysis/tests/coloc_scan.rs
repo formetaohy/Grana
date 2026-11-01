@@ -1,6 +1,6 @@
 use glam::Vec3;
 use grana_analysis::ColocScan;
-use grana_object::{COLOC_BINS, COLOC_SCATTER, ColocPair, ColocSeries, ColocThresholds};
+use grana_measure::{COLOC_BINS, COLOC_SCATTER, ColocPair, ColocSeries, ColocThresholds};
 use grana_volume::{Extent, Intensity, Level, Region, Spacing, VoxelData};
 
 const EXTENT: Extent = Extent::new(64, 48, 8);

@@ -3,18 +3,19 @@ use std::fs;
 use glam::Vec3;
 use grana_analysis::SpotParams;
 use grana_animation::{Keyframe, Timeline};
+use grana_display::{CameraState, Palette, SectionState, TransferFunction};
+use grana_geometry::{Bounds, Mesh, MeshVertex};
+use grana_measure::{COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocPair, ColocSeries};
 use grana_measure::{Measurement, TrackMeasurement};
 use grana_object::{
-    Bounds, COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocPair, ColocSeries, FilamentSet,
-    FilamentStatistics, FilamentTopology, IntensityTable, Mesh, MeshVertex, SampleAccumulator,
+    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, SampleAccumulator,
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_project::{Project, Source, ViewState};
-use grana_render::{CameraState, Palette, SectionState, TransferFunction};
 use grana_scene::{
     Dataset, Item, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene, Selection, Visibility,
 };
-use grana_volume::{Axis, Channel, Extent, Movie, Region, Spacing, Volume, VoxelData};
+use grana_volume::{Axis, Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
 const EXTENT: Extent = Extent::new(8, 8, 4);
 
@@ -190,7 +191,7 @@ fn fixture() -> Scene {
             )
         })
         .collect();
-    let movie = Movie::new(frames, 1.5);
+    let movie = VolumeSeries::new(frames, 1.5);
     Scene::new(Dataset::synthetic("fixture", movie.pyramid().clone()))
 }
 

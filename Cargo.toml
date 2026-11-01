@@ -28,15 +28,20 @@ grana-animation = { version = "0.1.1", path = "crates/grana-animation" }
 grana-volume = { version = "0.1.1", path = "crates/grana-volume" }
 grana-object = { version = "0.1.1", path = "crates/grana-object" }
 grana-gpu = { version = "0.1.1", path = "crates/grana-gpu" }
+grana-figure = { version = "0.1.1", path = "crates/grana-figure" }
+grana-engine = { version = "0.1.1", path = "crates/grana-engine" }
+grana-app = { version = "0.1.1", path = "crates/grana-app" }
+grana-geometry = { version = "0.1.1", path = "crates/grana-geometry" }
+grana-display = { version = "0.1.1", path = "crates/grana-display" }
 grana-scene = { version = "0.1.1", path = "crates/grana-scene" }
 grana-project = { version = "0.1.1", path = "crates/grana-project" }
 grana-ui = { version = "0.1.1", path = "crates/grana-ui" }
-grana-workbench = { version = "0.1.1", path = "crates/grana-workbench" }
+grana-editor = { version = "0.1.1", path = "crates/grana-editor" }
 grana-analysis = { version = "0.1.1", path = "crates/grana-analysis" }
 grana-render = { version = "0.1.1", path = "crates/grana-render" }
 grana-zarr = { version = "0.1.1", path = "crates/grana-zarr" }
 grana-measure = { version = "0.1.1", path = "crates/grana-measure" }
-grana-pipeline = { version = "0.1.1", path = "crates/grana-pipeline" }
+grana-session = { version = "0.1.1", path = "crates/grana-session" }
 grana-video = { version = "0.1.1", path = "crates/grana-video" }
 
 [workspace.lints.rust]
@@ -59,26 +64,7 @@ name = "grana"
 path = "src/main.rs"
 
 [dependencies]
-grana-analysis = { workspace = true }
-grana-animation = { workspace = true }
-grana-gpu = { workspace = true }
-grana-measure = { workspace = true }
-grana-object = { workspace = true }
-grana-pipeline = { workspace = true }
-grana-project = { workspace = true }
-grana-render = { workspace = true }
-grana-scene = { workspace = true }
-grana-ui = { workspace = true }
-grana-workbench = { workspace = true }
-grana-video = { workspace = true }
-grana-volume = { workspace = true }
-grana-zarr = { workspace = true }
-glam = { workspace = true }
-png = "0.18"
-pollster = { workspace = true }
-rfd = { workspace = true }
-wgpu = { workspace = true }
-winit = { workspace = true }
+grana-app = { workspace = true }
 
 [lints]
 workspace = true

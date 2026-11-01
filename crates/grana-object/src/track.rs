@@ -239,7 +239,7 @@ impl TrackSet {
             .map(|(child, _)| child)
     }
 
-    pub fn mesh(&self, radius: f32) -> crate::Mesh {
+    pub fn mesh(&self, radius: f32) -> grana_geometry::Mesh {
         assert!(
             radius.is_finite() && radius > 0.0,
             "a track tube radius must be a positive length"
@@ -265,7 +265,7 @@ impl TrackSet {
             deduplicate(&mut points);
             match points.len() {
                 0 => {}
-                1 => crate::push_sphere(
+                1 => grana_geometry::push_sphere(
                     &mut vertices,
                     &mut indices,
                     points[0].to_array(),
@@ -278,11 +278,17 @@ impl TrackSet {
                         .map(|point| point.to_array())
                         .collect::<Vec<_>>();
                     let radii = vec![radius; positions.len()];
-                    crate::push_tube(&mut vertices, &mut indices, &positions, &radii, object);
+                    grana_geometry::push_tube(
+                        &mut vertices,
+                        &mut indices,
+                        &positions,
+                        &radii,
+                        object,
+                    );
                 }
             }
         }
-        crate::Mesh::new(vertices, indices)
+        grana_geometry::Mesh::new(vertices, indices)
     }
 }
 

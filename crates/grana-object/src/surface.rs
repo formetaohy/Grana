@@ -1,4 +1,5 @@
-use crate::{Bounds, IntensityTable, Mesh, PackedMesh};
+use crate::IntensityTable;
+use grana_geometry::{Bounds, Mesh, PackedMesh};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceStatistics {

@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
+use grana_display::{Shading, TransferFunction};
 use grana_measure::{Measurement, TrackMeasurement};
 use grana_object::TrackSet;
-use grana_render::{Shading, TransferFunction};
 use grana_volume::{Intensity, Region};
 
 use crate::coloc::ColocState;
-use crate::color::ColorState;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::scene::{Item, Scene, Selection};
+use grana_display::ColorState;
 
 pub(crate) const HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const HASH_PRIME: u64 = 0x0000_0100_0000_01b3;

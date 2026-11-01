@@ -5,13 +5,13 @@ use common::{
     green_pixels, green_sum, lit, pixel, read_pixels, red_count, red_pixels, settle, target,
 };
 use glam::Vec3;
-use grana_object::{Mesh, MeshVertex, PackedMesh, Track, TrackNode, TrackSet};
-use grana_render::{
-    Camera, Frame, Layer, LayerKey, Marker, Renderer, SceneFrame, SectionCamera, Shading, Stop,
-    Style, TransferFunction,
-};
+use grana_display::{Camera, SectionCamera, Shading, Stop, TransferFunction};
+use grana_geometry::{Mesh, MeshVertex, PackedMesh};
+use grana_object::{Track, TrackNode, TrackSet};
+use grana_render::{Frame, Layer, LayerKey, Marker, Renderer, SceneFrame, Style};
 use grana_volume::{
-    Axis, BrickGrid, Channel, Extent, Level, Movie, Pyramid, Region, Spacing, Volume, VoxelData,
+    Axis, BrickGrid, Channel, Extent, Level, Pyramid, Region, Spacing, Volume, VolumeSeries,
+    VoxelData,
 };
 
 const BUDGET: u64 = 512 << 20;
@@ -159,7 +159,7 @@ fn bounds_the_demand_to_the_cache() {
         );
         far = far.max((corner - eye).length());
     }
-    let bucket = |request: &grana_render::BrickRequest| {
+    let bucket = |request: &grana_volume::BrickRequest| {
         let origin = grid.origin(request.coord);
         let centre = Vec3::new(
             origin[0] as f32 + 16.0,
@@ -225,7 +225,7 @@ fn prefetches_the_next_frame() {
     renderer.set_dataset(&device, &pyramid);
     let grid = BrickGrid::new(movie.frame(0).extent());
     let source =
-        |request: grana_render::BrickRequest| movie.brick(request.time, &grid, request.coord);
+        |request: grana_volume::BrickRequest| movie.brick(request.time, &grid, request.coord);
     let session = Session {
         device: &device,
         queue: &queue,
@@ -301,7 +301,7 @@ fn switches_frames() {
     };
     let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
     renderer.set_dataset(&device, &pyramid);
-    let source = |request: grana_render::BrickRequest| {
+    let source = |request: grana_volume::BrickRequest| {
         let grid = BrickGrid::new(movie.frame(0).extent());
         movie.brick(request.time, &grid, request.coord)
     };
@@ -415,7 +415,7 @@ fn clips_to_a_region_box() {
     };
     let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
     renderer.set_dataset(&device, &pyramid);
-    let source = |request: grana_render::BrickRequest| {
+    let source = |request: grana_volume::BrickRequest| {
         let grid = BrickGrid::new(volume.extent());
         volume.brick(&grid, request.coord)
     };
@@ -835,7 +835,7 @@ fn switches_levels() {
         100 * 78_608,
     );
     renderer.set_dataset(&device, &pyramid);
-    let source = |request: grana_render::BrickRequest| {
+    let source = |request: grana_volume::BrickRequest| {
         let volume = &volumes[request.level];
         volume.brick(&grids[request.level], request.coord)
     };
@@ -1129,7 +1129,7 @@ fn density(x: u32, y: u32, z: u32, centre_x: f32) -> u16 {
     (density * density * 60000.0) as u16
 }
 
-fn two_frame_movie() -> Movie {
+fn two_frame_movie() -> VolumeSeries {
     let extent = Extent::new(96, 96, 64);
     let spacing = Spacing::new(0.1, 0.1, 0.13);
     let count = extent.voxel_count() as usize;
@@ -1157,7 +1157,7 @@ fn two_frame_movie() -> Movie {
             ],
         )
     };
-    Movie::new(
+    VolumeSeries::new(
         vec![frame(blob.clone(), zeros.clone()), frame(zeros, blob)],
         1.0,
     )

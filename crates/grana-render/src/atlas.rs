@@ -9,7 +9,7 @@ use wgpu::{
     TextureViewDescriptor, TextureViewDimension,
 };
 
-use crate::CHANNEL_LIMIT;
+use grana_volume::CHANNEL_LIMIT;
 
 const BYTES_PER_VOXEL: u64 = size_of::<u16>() as u64;
 

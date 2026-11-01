@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::f64::consts::PI;
 
 use glam::Vec3;
-use grana_object::{Bounds, FilamentStatistics, FilamentTopology};
+use grana_geometry::Bounds;
+use grana_object::{FilamentStatistics, FilamentTopology};
 
 use super::Grid;
 use super::spanning::Spanning;

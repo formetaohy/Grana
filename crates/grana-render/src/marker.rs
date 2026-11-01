@@ -13,8 +13,8 @@ use wgpu::{
 
 use crate::layout::Layouts;
 use crate::target::SCENE_FORMAT;
-use crate::transfer::srgb_to_linear;
 use crate::volume::depth_state;
+use grana_display::srgb_to_linear;
 
 const CULL_SHADER: &str = concat!(
     include_str!("shader/scene.wgsl"),

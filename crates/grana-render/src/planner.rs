@@ -7,11 +7,12 @@ use wgpu::{
     ShaderModuleDescriptor, ShaderSource,
 };
 
+use crate::ViewInfo;
 use crate::brick::BrickTable;
-use crate::camera::{Camera, SectionCamera};
 use crate::frame::ScheduleData;
 use crate::layout::Layouts;
-use crate::{BrickRequest, ViewInfo};
+use grana_display::{Camera, SectionCamera};
+use grana_volume::BrickRequest;
 
 pub(crate) const BUCKETS: usize = 128;
 const HEADER_WORDS: usize = 4;

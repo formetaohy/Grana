@@ -1,11 +1,12 @@
 use grana_animation::{Keyframe, Timeline};
+use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
+use grana_geometry::{Bounds, GeometryGroup, PackedMesh, PackedVertex};
+use grana_measure::{ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocThresholds};
 use grana_measure::{Filter, Measurement, TrackMeasurement};
 use grana_object::{
-    Bounds, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocThresholds, FilamentSet,
-    FilamentStatistics, FilamentTopology, GeometryGroup, IntensityTable, PackedMesh, PackedVertex,
-    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
+    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, SampleStatistics, Spot,
+    SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
-use grana_render::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
 use grana_scene::{
     ChannelState, ColocState, ColorState, ItemState, MeasureState, ObjectFrame, ObjectParams,
     SceneState, SelectionState, SetState, TrackStyle, Visibility,

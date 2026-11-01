@@ -1,0 +1,23 @@
+[package]
+name = "grana-editor"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+glam = { workspace = true }
+grana-analysis = { workspace = true }
+grana-animation = { workspace = true }
+grana-display = { workspace = true }
+grana-figure = { workspace = true }
+grana-measure = { workspace = true }
+grana-object = { workspace = true }
+grana-scene = { workspace = true }
+grana-session = { workspace = true }
+grana-ui = { workspace = true }
+grana-volume = { workspace = true }
+
+[lints]
+workspace = true

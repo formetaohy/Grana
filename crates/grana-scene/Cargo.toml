@@ -7,12 +7,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+glam = { workspace = true }
 grana-analysis = { workspace = true }
+grana-display = { workspace = true }
+grana-geometry = { workspace = true }
 grana-measure = { workspace = true }
 grana-object = { workspace = true }
-grana-render = { workspace = true }
 grana-volume = { workspace = true }
-glam = { workspace = true }
 
 [lints]
 workspace = true

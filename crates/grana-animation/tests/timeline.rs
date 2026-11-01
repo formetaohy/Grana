@@ -1,5 +1,5 @@
 use grana_animation::{Keyframe, Timeline};
-use grana_render::{CameraState, SectionState};
+use grana_display::{CameraState, SectionState};
 use grana_volume::Axis;
 
 #[test]

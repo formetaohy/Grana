@@ -4,7 +4,8 @@ mod skeleton;
 mod spanning;
 mod volume;
 
-use grana_object::{FilamentSet, IntensityTable, Mesh, SampleAccumulator, push_sphere, push_tube};
+use grana_geometry::{Mesh, push_sphere, push_tube};
+use grana_object::{FilamentSet, IntensityTable, SampleAccumulator};
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
 use crate::FilamentParams;

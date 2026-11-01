@@ -1,0 +1,28 @@
+[package]
+name = "grana-engine"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+grana-display = { workspace = true }
+grana-figure = { workspace = true }
+grana-gpu = { workspace = true }
+grana-object = { workspace = true }
+grana-render = { workspace = true }
+grana-scene = { workspace = true }
+grana-ui = { workspace = true }
+grana-video = { workspace = true }
+grana-volume = { workspace = true }
+png = "0.18"
+wgpu = { workspace = true }
+
+[dev-dependencies]
+glam = { workspace = true }
+grana-geometry = { workspace = true }
+grana-volume = { workspace = true }
+
+[lints]
+workspace = true

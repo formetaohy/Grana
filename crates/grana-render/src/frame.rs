@@ -3,8 +3,8 @@ use glam::Mat4;
 use grana_volume::Region;
 
 use crate::brick::BrickTable;
-use crate::camera::{Camera, SectionCamera};
-use crate::schema::Shading;
+use grana_display::Shading;
+use grana_display::{Camera, SectionCamera};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]

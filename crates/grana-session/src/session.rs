@@ -1,0 +1,1278 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+use grana_animation::{Keyframe, Timeline};
+use grana_display::Shading;
+use grana_measure::Group;
+use grana_object::TrackSet;
+use grana_project::{Project, Source as ProjectSource, ViewState};
+use grana_scene::{Dataset, Job, Measure, ObjectFrame, ObjectSetId, Origin, Progress, Scene};
+use grana_volume::{BrickData, BrickRequest, Region};
+
+use crate::loader::{Event as LoaderEvent, Loader};
+use crate::sample;
+use crate::view::{BatchDataset, BatchView, IoView, Message};
+use crate::{
+    Analysis, Batch, BatchEvent, BatchPoll, Command, Event, Outcome, Plan as BatchPlan, Poll,
+    Protocol, Source,
+};
+
+const MAX_IN_FLIGHT: usize = 64;
+const UPLOAD_BATCH: usize = 32;
+
+struct Pending {
+    path: PathBuf,
+    project: Project,
+}
+
+#[derive(Default)]
+pub struct Effects {
+    pub open_dataset: bool,
+    pub open_project: bool,
+    pub save_project: Option<bool>,
+    pub snapshot: bool,
+    pub export_movie: Option<u32>,
+    pub cancel_movie: bool,
+    pub keyframe: bool,
+    pub repaint: bool,
+}
+
+pub struct Session {
+    scene: Option<Scene>,
+    measure: Measure,
+    timeline: Timeline,
+    source: Option<Loader>,
+    analysis: Vec<Analysis>,
+    progress: Vec<Progress>,
+    in_flight: HashSet<BrickRequest>,
+    bricks: Vec<(BrickRequest, BrickData)>,
+    pending: Option<Pending>,
+    loading: Option<String>,
+    message: Option<Message>,
+    project: Option<PathBuf>,
+    saved: Option<u64>,
+    protocol: Option<Protocol>,
+    protocol_text: Option<String>,
+    batch: Option<Batch>,
+    batch_datasets: Vec<PathBuf>,
+    batch_rows: Vec<BatchDataset>,
+    batch_output: Option<PathBuf>,
+    batch_running: bool,
+    batch_message: Option<String>,
+    generation: u64,
+    view: Option<ViewState>,
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Session {
+    pub fn new() -> Self {
+        Self {
+            scene: None,
+            measure: Measure::new(),
+            timeline: Timeline::new(30, 1.0),
+            source: None,
+            analysis: Vec::new(),
+            progress: Vec::new(),
+            in_flight: HashSet::new(),
+            bricks: Vec::new(),
+            pending: None,
+            loading: None,
+            message: None,
+            project: None,
+            saved: None,
+            protocol: None,
+            protocol_text: None,
+            batch: None,
+            batch_datasets: Vec::new(),
+            batch_rows: Vec::new(),
+            batch_output: None,
+            batch_running: false,
+            batch_message: None,
+            generation: 0,
+            view: None,
+        }
+    }
+
+    pub fn open_sample(&mut self) {
+        let (source, pyramid) = Loader::memory(sample::series());
+        let mut scene = Scene::new(Dataset::synthetic("synthetic fluorescence", pyramid));
+        let staged = sample::stage(&mut scene);
+        self.source = Some(source);
+        self.scene = Some(scene);
+        self.timeline = Timeline::new(30, self.frame_duration());
+        self.message = None;
+        self.loading = None;
+        self.generation += 1;
+        for set in [staged.spots, staged.surfaces, staged.filaments] {
+            self.start_detect(set);
+        }
+    }
+
+    pub fn scene(&self) -> Option<&Scene> {
+        self.scene.as_ref()
+    }
+
+    pub fn measure(&self) -> &Measure {
+        &self.measure
+    }
+
+    pub fn timeline(&self) -> &Timeline {
+        &self.timeline
+    }
+
+    pub fn progress(&self) -> &[Progress] {
+        &self.progress
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn pending(&self) -> usize {
+        self.in_flight.len()
+    }
+
+    pub fn loading(&self) -> Option<&str> {
+        self.loading.as_deref()
+    }
+
+    pub fn message(&self) -> Option<&Message> {
+        self.message.as_ref()
+    }
+
+    pub fn project_name(&self) -> Option<String> {
+        self.project.as_ref().map(|path| file_name(path))
+    }
+
+    pub fn dirty(&self) -> bool {
+        self.project.is_some() && self.document_hash() != self.saved
+    }
+
+    pub fn batch(&self) -> Option<BatchView<'_>> {
+        Some(BatchView {
+            protocol: self.protocol_text.as_deref(),
+            datasets: &self.batch_rows,
+            output: self
+                .batch_output
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            running: self.batch_running,
+            message: self.batch_message.clone(),
+        })
+    }
+
+    pub fn io<'a>(
+        &'a self,
+        adapter: &'a str,
+        movie: Option<(u32, u32)>,
+        movie_message: Option<String>,
+    ) -> IoView<'a> {
+        let frames = self.scene.as_ref().map_or(0, |scene| scene.frame_count());
+        let interval = self
+            .scene
+            .as_ref()
+            .map_or(0.0, |scene| scene.dataset.frame_interval());
+        IoView {
+            adapter,
+            loading: self.loading.as_deref(),
+            message: self.message.as_ref(),
+            project: self.project_name(),
+            dirty: self.dirty(),
+            pending: self.in_flight.len(),
+            frames,
+            frame_interval: interval,
+            movie,
+            movie_message,
+        }
+    }
+
+    pub fn restore_timeline(&mut self, timeline: Timeline) {
+        self.timeline = timeline;
+    }
+
+    pub fn take_view(&mut self) -> Option<ViewState> {
+        self.view.take()
+    }
+
+    pub fn take_bricks(&mut self) -> Vec<(BrickRequest, BrickData)> {
+        std::mem::take(&mut self.bricks)
+    }
+
+    pub fn sync_measure(&mut self) {
+        let busy = self.scene.is_some()
+            && self.measure.set().is_some_and(|set| {
+                self.analysis
+                    .iter()
+                    .any(|analysis| analysis.job().set() == Some(set))
+            });
+        if let Some(scene) = self.scene.as_ref() {
+            self.measure.sync(scene, busy);
+        }
+    }
+
+    pub fn apply_measure(&mut self) {
+        if self.measure.take_dirty()
+            && let Some(scene) = self.scene.as_mut()
+        {
+            self.measure.apply(scene);
+        }
+    }
+
+    pub fn poll(&mut self) -> bool {
+        let mut repaint = self.poll_source();
+        repaint |= self.poll_analysis();
+        repaint |= self.poll_batch();
+        repaint
+    }
+
+    pub fn request(&mut self, time: u32, bricks: &[BrickRequest]) {
+        if self.loading.is_some() {
+            return;
+        }
+        let Some(source) = self.source.as_ref() else {
+            return;
+        };
+        let mut stopped = false;
+        for request in bricks {
+            if request.time != time {
+                continue;
+            }
+            if self.in_flight.len() >= MAX_IN_FLIGHT {
+                break;
+            }
+            if self.in_flight.contains(request) {
+                continue;
+            }
+            if source.request(*request) {
+                self.in_flight.insert(*request);
+            } else {
+                stopped = true;
+                break;
+            }
+        }
+        if stopped {
+            self.source = None;
+            self.in_flight.clear();
+            self.message = Some(Message::error("the dataset reader stopped"));
+        }
+    }
+
+    pub fn set_time(&mut self, time: u32) {
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        if time == scene.time() {
+            return;
+        }
+        scene.set_time(time);
+        self.in_flight.retain(|request| request.time >= time);
+        if let Some(source) = &self.source {
+            source.set_time(time);
+        }
+    }
+
+    pub fn insert_keyframe(&mut self, key: Keyframe) -> usize {
+        self.timeline.insert(key)
+    }
+
+    pub fn remove_keyframe(&mut self, index: usize) -> bool {
+        self.timeline.remove(index).is_some()
+    }
+
+    pub fn clear_keyframes(&mut self) {
+        self.timeline.clear();
+    }
+
+    pub fn execute(&mut self, command: Command) -> Effects {
+        let mut effects = Effects::default();
+        match command {
+            Command::OpenDataset => effects.open_dataset = true,
+            Command::OpenDemo => self.open_sample(),
+            Command::OpenProject => effects.open_project = true,
+            Command::SaveProject => effects.save_project = Some(false),
+            Command::SaveProjectAs => effects.save_project = Some(true),
+            Command::SaveSnapshot => effects.snapshot = true,
+            Command::SetTime(time) => self.set_time(time),
+            Command::Select(selection) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.select(selection);
+                }
+            }
+            Command::AddObject(kind) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    let channel = scene.selected;
+                    scene.add_object(kind, channel);
+                }
+            }
+            Command::RemoveObject(set) => self.remove_object(set),
+            Command::Detect(set) => self.start_detect(set),
+            Command::CancelDetect(set) => self.cancel(Job::Detect(set)),
+            Command::ClearObject(set) => {
+                self.cancel(Job::Detect(set));
+                self.cancel(Job::Track(set));
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.clear_object(set);
+                }
+            }
+            Command::Track(set) => self.start_tracks(set),
+            Command::CancelTrack(set) => self.cancel(Job::Track(set)),
+            Command::ClearTracks(set) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.clear_tracks(set);
+                }
+            }
+            Command::SelectChannel(index) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.select_channel(index);
+                }
+            }
+            Command::SetChannelEnabled { channel, enabled } => {
+                if let Some(scene) = self.scene.as_mut()
+                    && let Some(target) = scene.channels.get_mut(channel)
+                {
+                    target.enabled = enabled;
+                }
+            }
+            Command::SetChannelOpacity { channel, opacity } => {
+                if let Some(scene) = self.scene.as_mut()
+                    && let Some(target) = scene.channels.get_mut(channel)
+                {
+                    target.opacity = opacity.clamp(0.0, 1.0);
+                }
+            }
+            Command::SetWindow { channel, window } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_window(channel, window.min(), window.max());
+                }
+            }
+            Command::ResetWindow(channel) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.reset_window(channel);
+                }
+            }
+            Command::SetTransfer { channel, transfer } => {
+                if let Some(scene) = self.scene.as_mut()
+                    && let Some(target) = scene.channels.get_mut(channel)
+                {
+                    target.set_transfer(transfer);
+                }
+            }
+            Command::SetObjectVisible { set, visible } => {
+                if let Some(target) = self.object_mut(set) {
+                    target.set_visible(visible);
+                }
+            }
+            Command::SetObjectColor { set, color } => {
+                if let Some(target) = self.object_mut(set) {
+                    target.set_color(color);
+                }
+            }
+            Command::SetObjectParams { set, params } => {
+                if let Some(target) = self.object_mut(set) {
+                    target.set_params(params);
+                }
+            }
+            Command::SetObjectColoring { set, coloring } => {
+                if let Some(target) = self.object_mut(set) {
+                    target.set_object_coloring(coloring);
+                }
+            }
+            Command::SetTrackParams { set, params } => {
+                if let Some(target) = self.object_mut(set) {
+                    target.set_track_params(params);
+                }
+            }
+            Command::SetTrackVisible { set, visible } => {
+                if let Some(target) = self.object_mut(set) {
+                    target.set_track_visible(visible);
+                }
+            }
+            Command::SetTrackThickness { set, thickness } => {
+                if let Some(target) = self.object_mut(set) {
+                    target.set_track_thickness(thickness);
+                }
+            }
+            Command::SetTrackColoring { set, coloring } => {
+                if let Some(target) = self.object_mut(set) {
+                    target.set_track_coloring(coloring);
+                }
+            }
+            Command::SelectTrack { set, index } => {
+                if let Some(index) = index
+                    && let Some(scene) = self.scene.as_mut()
+                {
+                    scene.select_track(set, index);
+                }
+            }
+            Command::SetRegion(region) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.region = region;
+                }
+            }
+            Command::SetExposure(exposure) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.exposure = exposure;
+                }
+            }
+            Command::SetStepScale(step) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.step_scale = step;
+                }
+            }
+            Command::SetShading(shading) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.shading = shading;
+                }
+            }
+            Command::ResetRendering => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.shading = Shading::default();
+                    scene.exposure = 1.0;
+                    scene.step_scale = 1.0;
+                }
+            }
+            Command::SetMeasureSet(set) => {
+                if let (Some(set), Some(scene)) = (set, self.scene.as_mut()) {
+                    self.measure.select(set, scene);
+                }
+            }
+            Command::SetMeasureGroup(group) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    self.measure.set_group(group, scene);
+                }
+            }
+            Command::SetMeasureAggregate(aggregate) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    self.measure.set_aggregate(aggregate, scene);
+                }
+            }
+            Command::AddFilter => self.measure.add_filter(),
+            Command::RemoveFilter(index) => self.measure.remove_filter(index),
+            Command::SetFilter { index, filter } => self.measure.set_filter(index, filter),
+            Command::RetargetFilter { index, column } => {
+                self.measure.retarget_filter(index, column);
+            }
+            Command::SetColumnVisible { index, visible } => {
+                self.measure.set_column_visible(index, visible);
+            }
+            Command::ShowAllColumns => self.measure.show_all_columns(),
+            Command::SetMeasureVisibility(visible) => self.measure.set_visibility(visible),
+            Command::ToggleSort(index) => self.measure.toggle_sort(index),
+            Command::SetColocPair(pair) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.coloc.set_pair(pair);
+                }
+            }
+            Command::SetColocThresholds(thresholds) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.coloc.set_thresholds(thresholds);
+                }
+            }
+            Command::ComputeColoc => self.start_coloc(),
+            Command::CancelColoc => self.cancel(Job::Coloc),
+            Command::ExportColoc => self.export_coloc(),
+            Command::ExportMeasure => self.export_measure(),
+            Command::CaptureProtocol => self.capture_protocol(),
+            Command::LoadProtocol => self.load_protocol(),
+            Command::SaveProtocol => self.save_protocol(),
+            Command::AddBatchDatasets => self.add_batch_datasets(),
+            Command::ClearBatchDatasets => {
+                self.batch_datasets.clear();
+                self.batch_rows.clear();
+            }
+            Command::ChooseBatchOutput => self.choose_batch_output(),
+            Command::RunBatch => self.run_batch(),
+            Command::CancelBatch => {
+                if let Some(batch) = &self.batch {
+                    batch.cancel();
+                }
+            }
+            Command::SetKeyframe => effects.keyframe = true,
+            Command::ClearKeyframes => self.timeline.clear(),
+            Command::DeleteKeyframe(index) => {
+                self.timeline.remove(index);
+            }
+            Command::SetTimelineFps(fps) => self.timeline.set_fps(fps),
+            Command::SetTimelineDuration(duration) => self.timeline.set_duration(duration),
+            Command::ExportMovie { width } => effects.export_movie = Some(width),
+            Command::CancelMovie => effects.cancel_movie = true,
+        }
+        effects
+    }
+
+    fn object_mut(&mut self, set: ObjectSetId) -> Option<&mut grana_scene::ObjectSet> {
+        self.scene.as_mut()?.objects.get_mut(set)
+    }
+
+    pub fn begin_load(&mut self, path: PathBuf) {
+        if self.loading.is_some() {
+            return;
+        }
+        self.loading = Some(file_name(&path));
+        self.source = Some(Loader::file(path));
+        self.pending = None;
+        self.project = None;
+        self.saved = None;
+        self.reset();
+    }
+
+    pub fn begin_project(&mut self, path: PathBuf) {
+        if self.loading.is_some() {
+            return;
+        }
+        let project = match Project::read(&path) {
+            Ok(project) => project,
+            Err(error) => {
+                self.message = Some(Message::error(error.to_string()));
+                return;
+            }
+        };
+        self.message = None;
+        match &project.source {
+            ProjectSource::Synthetic { name } => {
+                let name = name.clone();
+                let (source, pyramid) = Loader::memory(sample::series());
+                self.source = Some(source);
+                self.loading = None;
+                self.pending = Some(Pending { path, project });
+                self.project = None;
+                self.saved = None;
+                self.reset();
+                self.open_dataset(Dataset::synthetic(name, pyramid));
+            }
+            ProjectSource::Zarr { path: data, .. } => {
+                let data = data.clone();
+                if !data.is_dir() {
+                    self.message = Some(Message::error(format!(
+                        "{} is not an OME-Zarr folder",
+                        data.display()
+                    )));
+                    return;
+                }
+                self.source = Some(Loader::file(data.clone()));
+                self.loading = Some(file_name(&data));
+                self.pending = Some(Pending { path, project });
+                self.project = None;
+                self.saved = None;
+                self.reset();
+            }
+        }
+    }
+
+    pub fn save_project(&mut self, choose: bool, view: ViewState) {
+        if self.loading.is_some() {
+            return;
+        }
+        let (Some(scene), Some(source)) = (self.scene.as_ref(), self.source_ref()) else {
+            return;
+        };
+        let suggested = format!("{}.grana", crate::slug(scene.dataset.name()));
+        let path = match (choose, self.project.clone()) {
+            (false, Some(path)) => path,
+            _ => match rfd::FileDialog::new()
+                .set_title("Save a grana project")
+                .set_file_name(suggested)
+                .add_filter("grana project", &["grana"])
+                .save_file()
+            {
+                Some(path) => path,
+                None => return,
+            },
+        };
+        let project = Project::capture(scene, &self.measure, source, view);
+        let hash = self.document_hash();
+        match project.write(&path) {
+            Ok(()) => {
+                self.project = Some(path);
+                self.saved = hash;
+                self.message = None;
+            }
+            Err(error) => self.message = Some(Message::error(error.to_string())),
+        }
+    }
+
+    fn source_ref(&self) -> Option<ProjectSource> {
+        let scene = self.scene.as_ref()?;
+        let name = scene.dataset.name().to_string();
+        match scene.dataset.origin() {
+            Origin::Synthetic => Some(ProjectSource::Synthetic { name }),
+            Origin::Zarr => match self.source.as_ref()?.source() {
+                Source::File(path) => Some(ProjectSource::Zarr { name, path }),
+                Source::Memory(_) => None,
+            },
+        }
+    }
+
+    pub fn document_hash(&self) -> Option<u64> {
+        let scene = self.scene.as_ref()?;
+        Some(scene.document_hash() ^ self.measure.document_hash() ^ self.timeline.document())
+    }
+
+    fn reset(&mut self) {
+        self.measure.reset();
+        self.analysis.clear();
+        self.progress.clear();
+        self.message = None;
+        self.in_flight.clear();
+        self.bricks.clear();
+        self.timeline = Timeline::new(30, 1.0);
+        self.view = None;
+    }
+
+    fn open_dataset(&mut self, dataset: Dataset) {
+        let mut scene = Scene::new(dataset);
+        self.loading = None;
+        self.message = None;
+        self.analysis.clear();
+        self.progress.clear();
+        self.measure.reset();
+        self.in_flight.clear();
+        self.bricks.clear();
+        self.timeline = Timeline::new(30, self.frame_duration());
+        if let Some(pending) = self.pending.take() {
+            if pending.project.matches(&scene.dataset) {
+                scene.restore(pending.project.scene);
+                self.measure.restore(pending.project.measure, &scene);
+                self.view = Some(pending.project.view);
+                self.project = Some(pending.path);
+                self.saved = Some(
+                    scene.document_hash() ^ self.measure.document_hash() ^ self.timeline.document(),
+                );
+            } else {
+                self.message = Some(Message::error(
+                    "the project was saved from a dataset with a different shape, channels or duration",
+                ));
+            }
+        }
+        self.scene = Some(scene);
+        self.generation += 1;
+        if let Some(source) = &self.source {
+            source.set_time(0);
+        }
+    }
+
+    fn frame_duration(&self) -> f32 {
+        self.scene
+            .as_ref()
+            .map(|scene| {
+                (scene.dataset.frame_count() as f32 * scene.dataset.frame_interval())
+                    .clamp(1.0, Timeline::MAX_DURATION)
+            })
+            .unwrap_or(1.0)
+    }
+
+    fn poll_source(&mut self) -> bool {
+        let mut repaint = false;
+        let mut processed = 0;
+        while processed < UPLOAD_BATCH {
+            let Some(event) = self.source.as_ref().and_then(Loader::poll) else {
+                break;
+            };
+            processed += 1;
+            repaint = true;
+            match event {
+                LoaderEvent::Opened { name, pyramid } => {
+                    self.open_dataset(Dataset::zarr(name, pyramid));
+                }
+                LoaderEvent::Brick { request, data } => {
+                    self.in_flight.remove(&request);
+                    self.bricks.push((request, data));
+                }
+                LoaderEvent::ReadFailed { request, detail } => {
+                    self.in_flight.remove(&request);
+                    self.message = Some(Message::error(detail));
+                    self.analysis.clear();
+                    self.progress.clear();
+                    self.source = None;
+                    self.in_flight.clear();
+                }
+                LoaderEvent::Failed(detail) => {
+                    self.loading = None;
+                    self.message = Some(Message::error(detail));
+                    self.analysis.clear();
+                    self.progress.clear();
+                    self.source = None;
+                    self.in_flight.clear();
+                    self.project = None;
+                    self.saved = None;
+                }
+            }
+        }
+        repaint
+    }
+
+    fn poll_analysis(&mut self) -> bool {
+        enum Update {
+            Progress(u32, usize, usize),
+            Frame(u32, ObjectFrame),
+            Tracks(TrackSet),
+            Coloc(grana_measure::ColocSeries, Region),
+            Done,
+            Failed(String),
+        }
+        let mut repaint = false;
+        let mut updates: Vec<(usize, Job, Update)> = Vec::new();
+        for (index, analysis) in self.analysis.iter().enumerate() {
+            let job = analysis.job();
+            loop {
+                match analysis.poll() {
+                    Poll::Event(Event::Progress { time, done, total }) => {
+                        updates.push((index, job, Update::Progress(time, done, total)));
+                    }
+                    Poll::Event(Event::Frame { time, frame }) => {
+                        updates.push((index, job, Update::Frame(time, frame)));
+                    }
+                    Poll::Event(Event::Tracks(set)) => {
+                        updates.push((index, job, Update::Tracks(set)));
+                    }
+                    Poll::Event(Event::Coloc { series, region }) => {
+                        updates.push((index, job, Update::Coloc(*series, region)));
+                    }
+                    Poll::Event(Event::Done) => {
+                        updates.push((index, job, Update::Done));
+                        break;
+                    }
+                    Poll::Event(Event::Failed(detail)) => {
+                        updates.push((index, job, Update::Failed(detail)));
+                        break;
+                    }
+                    Poll::Empty => break,
+                    Poll::Closed => {
+                        updates.push((
+                            index,
+                            job,
+                            Update::Failed("the analysis worker stopped".to_string()),
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+        let mut removed = Vec::new();
+        let mut detected = Vec::new();
+        for (index, job, update) in updates {
+            repaint = true;
+            match update {
+                Update::Progress(time, done, total) => {
+                    self.record_progress(job, time, done, total);
+                }
+                Update::Frame(time, frame) => {
+                    if let (Job::Detect(set), Some(scene)) = (job, self.scene.as_mut()) {
+                        scene.install(set, time, frame);
+                    }
+                }
+                Update::Tracks(tracks) => {
+                    if let (Job::Track(set), Some(scene)) = (job, self.scene.as_mut()) {
+                        scene.install_tracks(set, tracks);
+                    }
+                }
+                Update::Coloc(series, region) => {
+                    if let Some(scene) = self.scene.as_mut()
+                        && scene.coloc.pair() == Some(series.pair())
+                    {
+                        let frames = scene.frame_count();
+                        scene.coloc.install(series, region, frames);
+                    }
+                }
+                Update::Done => {
+                    self.progress.retain(|progress| progress.job != job);
+                    removed.push(index);
+                    if let Job::Detect(set) = job {
+                        detected.push(set);
+                    }
+                }
+                Update::Failed(detail) => {
+                    self.progress.retain(|progress| progress.job != job);
+                    removed.push(index);
+                    self.message = Some(Message::error(detail));
+                }
+            }
+        }
+        removed.sort_unstable();
+        removed.dedup();
+        for index in removed.into_iter().rev() {
+            self.analysis.remove(index);
+        }
+        for set in detected {
+            self.start_tracks(set);
+        }
+        repaint
+    }
+
+    fn record_progress(&mut self, job: Job, time: u32, done: usize, total: usize) {
+        let progress = Progress {
+            job,
+            time,
+            done,
+            total,
+        };
+        if let Some(existing) = self
+            .progress
+            .iter_mut()
+            .find(|progress| progress.job == job)
+        {
+            *existing = progress;
+        } else {
+            self.progress.push(progress);
+        }
+    }
+
+    fn cancel(&mut self, job: Job) {
+        self.analysis.retain(|analysis| analysis.job() != job);
+        self.progress.retain(|progress| progress.job != job);
+    }
+
+    fn start_detect(&mut self, set: ObjectSetId) {
+        if self.loading.is_some() {
+            return;
+        }
+        if self
+            .analysis
+            .iter()
+            .any(|analysis| analysis.job() == Job::Detect(set))
+        {
+            return;
+        }
+        self.cancel(Job::Track(set));
+        if let Some(scene) = self.scene.as_mut() {
+            scene.clear_tracks(set);
+        }
+        let Some(source) = self.source.as_ref().map(Loader::source) else {
+            return;
+        };
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(object) = scene.objects.get(set) else {
+            return;
+        };
+        let channel = object.channel();
+        let params = object.params();
+        let region = scene.region;
+        if scene.dataset.channels()[channel].intensity().span() <= 0.0 {
+            self.message = Some(Message::error(
+                "the selected channel has no intensity range to detect",
+            ));
+            return;
+        }
+        if region.enabled()
+            && region
+                .voxel_range(scene.dataset.pyramid().level(0))
+                .is_none()
+        {
+            self.message = Some(Message::error("the region does not overlap the dataset"));
+            return;
+        }
+        self.message = None;
+        self.record_progress(Job::Detect(set), 0, 0, 0);
+        self.analysis.push(crate::detect(
+            Job::Detect(set),
+            source,
+            channel,
+            params,
+            region,
+        ));
+    }
+
+    fn start_tracks(&mut self, set: ObjectSetId) {
+        if self.loading.is_some() {
+            return;
+        }
+        if self
+            .analysis
+            .iter()
+            .any(|analysis| analysis.job().set() == Some(set))
+        {
+            return;
+        }
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        if scene.frame_count() < 2 {
+            return;
+        }
+        let Some(object) = scene.objects.get(set) else {
+            return;
+        };
+        if !object.kind().trackable() {
+            return;
+        }
+        if object.detected() == 0 {
+            return;
+        }
+        let mut detections = vec![Vec::new(); scene.frame_count() as usize];
+        for (time, frame) in object.frames() {
+            detections[time as usize] = frame.centroids();
+        }
+        let params = object
+            .track_style()
+            .expect("a trackable object carries track parameters")
+            .params();
+        let frame_interval = scene.dataset.frame_interval();
+        self.message = None;
+        self.record_progress(Job::Track(set), 0, 0, detections.len());
+        self.analysis.push(crate::track(
+            Job::Track(set),
+            detections,
+            params,
+            frame_interval,
+        ));
+    }
+
+    fn start_coloc(&mut self) {
+        if self.loading.is_some()
+            || self
+                .analysis
+                .iter()
+                .any(|analysis| analysis.job() == Job::Coloc)
+        {
+            return;
+        }
+        let Some(source) = self.source.as_ref().map(Loader::source) else {
+            return;
+        };
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(pair) = scene.coloc.pair() else {
+            self.message = Some(Message::error(
+                "the dataset needs two channels to colocalize",
+            ));
+            return;
+        };
+        if [pair.a(), pair.b()]
+            .iter()
+            .any(|channel| scene.dataset.channels()[*channel].intensity().span() <= 0.0)
+        {
+            self.message = Some(Message::error(
+                "the selected channels have no intensity range to colocalize",
+            ));
+            return;
+        }
+        let region = scene.region;
+        if region.enabled()
+            && region
+                .voxel_range(scene.dataset.pyramid().level(0))
+                .is_none()
+        {
+            self.message = Some(Message::error("the region does not overlap the dataset"));
+            return;
+        }
+        self.message = None;
+        self.record_progress(Job::Coloc, 0, 0, 0);
+        self.analysis
+            .push(crate::coloc(Job::Coloc, source, pair, region));
+    }
+
+    fn export_coloc(&mut self) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(series) = scene.coloc.series() else {
+            return;
+        };
+        let Some(pair) = scene.coloc.pair() else {
+            return;
+        };
+        let csv = series.csv(scene.coloc.thresholds());
+        let file_name = format!(
+            "{}-{}-{}-colocalization.csv",
+            crate::slug(scene.dataset.name()),
+            crate::slug(scene.dataset.channels()[pair.a()].name()),
+            crate::slug(scene.dataset.channels()[pair.b()].name())
+        );
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Export colocalization statistics")
+            .set_file_name(file_name)
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            return;
+        };
+        match std::fs::write(&path, csv) {
+            Ok(()) => self.message = None,
+            Err(error) => {
+                self.message = Some(Message::error(format!(
+                    "failed to export colocalization to {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+
+    fn export_measure(&mut self) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(set) = self.measure.set() else {
+            return;
+        };
+        let Some(object) = scene.objects.get(set) else {
+            return;
+        };
+        let Some(csv) = self.measure.csv() else {
+            return;
+        };
+        let channel = scene.dataset.channels()[object.channel()].name();
+        let group = match self.measure.group() {
+            Group::Object => "objects",
+            Group::Track => "tracks",
+            Group::Timepoint => "timepoints",
+        };
+        let file_name = format!(
+            "{}-{}-{}-{group}.csv",
+            crate::slug(scene.dataset.name()),
+            crate::slug(channel),
+            crate::slug(object.name())
+        );
+        let title = format!("Export {} statistics", object.name());
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(title)
+            .set_file_name(file_name)
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            return;
+        };
+        match std::fs::write(&path, csv) {
+            Ok(()) => self.message = None,
+            Err(error) => {
+                self.message = Some(Message::error(format!(
+                    "failed to export statistics to {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+
+    fn capture_protocol(&mut self) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        match Protocol::capture(scene) {
+            Ok(protocol) => {
+                self.protocol_text = Some(protocol.summary());
+                self.protocol = Some(protocol);
+                self.reset_batch_rows();
+                self.batch_message = None;
+            }
+            Err(error) => self.batch_message = Some(error.to_string()),
+        }
+    }
+
+    fn load_protocol(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Open an analysis protocol")
+            .add_filter("grana protocol", &["json"])
+            .pick_file()
+        else {
+            return;
+        };
+        match Protocol::read(&path) {
+            Ok(protocol) => {
+                self.protocol_text = Some(protocol.summary());
+                self.protocol = Some(protocol);
+                self.reset_batch_rows();
+                self.batch_message = None;
+            }
+            Err(error) => self.batch_message = Some(error.to_string()),
+        }
+    }
+
+    fn save_protocol(&mut self) {
+        if self.protocol.is_none() {
+            self.capture_protocol();
+        }
+        let Some(protocol) = self.protocol.as_ref() else {
+            return;
+        };
+        let suggested = format!(
+            "{}-protocol.json",
+            crate::slug(
+                self.scene
+                    .as_ref()
+                    .map_or("grana", |scene| scene.dataset.name())
+            )
+        );
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Save the analysis protocol")
+            .set_file_name(suggested)
+            .add_filter("grana protocol", &["json"])
+            .save_file()
+        else {
+            return;
+        };
+        match protocol.write(&path) {
+            Ok(()) => self.batch_message = None,
+            Err(error) => self.batch_message = Some(error.to_string()),
+        }
+    }
+
+    fn add_batch_datasets(&mut self) {
+        let Some(root) = rfd::FileDialog::new()
+            .set_title("Choose a folder of OME-Zarr datasets")
+            .pick_folder()
+        else {
+            return;
+        };
+        match crate::discover(&root) {
+            Ok(found) => {
+                let mut added = 0;
+                for path in found {
+                    if !self.batch_datasets.contains(&path) {
+                        self.batch_datasets.push(path);
+                        added += 1;
+                    }
+                }
+                if added == 0 {
+                    self.batch_message =
+                        Some("the folder holds no new OME-Zarr dataset".to_string());
+                } else {
+                    self.batch_message = None;
+                }
+                self.reset_batch_rows();
+            }
+            Err(error) => self.batch_message = Some(error.to_string()),
+        }
+    }
+
+    fn choose_batch_output(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Choose a folder for the batch statistics")
+            .pick_folder()
+        else {
+            return;
+        };
+        self.batch_output = Some(path);
+        self.batch_message = None;
+    }
+
+    fn run_batch(&mut self) {
+        if self.batch_running {
+            return;
+        }
+        let Some(protocol) = self.protocol.clone() else {
+            self.batch_message = Some("capture or load a protocol first".to_string());
+            return;
+        };
+        if self.batch_datasets.is_empty() {
+            self.batch_message = Some("add a folder of datasets first".to_string());
+            return;
+        }
+        let Some(output) = self.batch_output.clone() else {
+            self.batch_message = Some("choose an output folder first".to_string());
+            return;
+        };
+        self.reset_batch_rows();
+        self.batch_running = true;
+        self.batch_message = None;
+        self.batch = Some(Batch::start(BatchPlan {
+            protocol,
+            datasets: self.batch_datasets.clone(),
+            output,
+        }));
+    }
+
+    fn reset_batch_rows(&mut self) {
+        self.batch_rows = self
+            .batch_datasets
+            .iter()
+            .map(|path| BatchDataset {
+                name: crate::dataset_name(path),
+                state: "queued".to_string(),
+                detail: String::new(),
+            })
+            .collect();
+    }
+
+    fn poll_batch(&mut self) -> bool {
+        let Some(batch) = self.batch.take() else {
+            return false;
+        };
+        let mut repaint = false;
+        let mut finished = false;
+        let mut fatal = false;
+        loop {
+            let event = match batch.poll() {
+                BatchPoll::Event(event) => event,
+                BatchPoll::Empty => break,
+                BatchPoll::Closed => {
+                    if !finished {
+                        self.batch_running = false;
+                        self.batch_message = Some("the batch worker stopped".to_string());
+                    }
+                    return repaint;
+                }
+            };
+            repaint = true;
+            match event {
+                BatchEvent::Started { index, name } => {
+                    if let Some(row) = self.batch_rows.get_mut(index) {
+                        row.name = name;
+                        row.state = "running".to_string();
+                    }
+                }
+                BatchEvent::Step { index, label } => {
+                    if let Some(row) = self.batch_rows.get_mut(index) {
+                        row.state = label;
+                    }
+                }
+                BatchEvent::Progress { index, done, total } => {
+                    if let Some(row) = self.batch_rows.get_mut(index) {
+                        row.detail = format!("{done}/{total}");
+                    }
+                }
+                BatchEvent::Dataset { index, outcome } => {
+                    if let Some(row) = self.batch_rows.get_mut(index) {
+                        match outcome {
+                            Outcome::Complete { objects, .. } => {
+                                row.state = "done".to_string();
+                                row.detail = format!("{objects} objects");
+                            }
+                            Outcome::Failed { detail } => {
+                                row.state = "failed".to_string();
+                                row.detail = detail;
+                            }
+                        }
+                    }
+                }
+                BatchEvent::Failed(detail) => {
+                    fatal = true;
+                    self.batch_message = Some(detail);
+                }
+                BatchEvent::Done { cancelled } => {
+                    finished = true;
+                    self.batch_running = false;
+                    if !fatal {
+                        self.batch_message =
+                            cancelled.then(|| "the batch was cancelled".to_string());
+                    }
+                }
+            }
+        }
+        if !finished {
+            self.batch = Some(batch);
+        }
+        repaint
+    }
+
+    fn remove_object(&mut self, set: ObjectSetId) {
+        self.cancel(Job::Detect(set));
+        self.cancel(Job::Track(set));
+        if let Some(scene) = self.scene.as_mut() {
+            scene.remove_object(set);
+        }
+    }
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}

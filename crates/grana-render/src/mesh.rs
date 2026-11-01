@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use bytemuck::{Pod, Zeroable};
+use grana_geometry::PackedMesh;
 use grana_gpu::{IndexedCommands, Table};
-use grana_object::PackedMesh;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Buffer, BufferUsages,
     ColorTargetState, ColorWrites, CommandEncoder, CompareFunction, ComputePipeline,
@@ -15,10 +15,11 @@ use wgpu::{
 };
 
 use crate::layout::Layouts;
-use crate::schema::{LayerKey, SceneFrame, Shading, Style};
+use crate::schema::{LayerKey, SceneFrame, Style};
 use crate::target::SCENE_FORMAT;
-use crate::transfer::srgb_to_linear;
 use crate::volume::depth_state;
+use grana_display::Shading;
+use grana_display::srgb_to_linear;
 
 const CULL_SHADER: &str = concat!(
     include_str!("shader/scene.wgsl"),

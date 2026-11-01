@@ -6,15 +6,16 @@ use wgpu::{
     ColorTargetState, ColorWrites, CommandEncoder, Device, Extent3d, FilterMode, FragmentState,
     LoadOp, MipmapFilterMode, Operations as PassOperations, PipelineLayoutDescriptor,
     PrimitiveState, Queue, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
-    RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor,
-    ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, TexelCopyBufferInfo,
-    TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureDescriptor, TextureDimension,
-    TextureFormat, TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor,
-    TextureViewDimension, VertexState,
+    RenderPipelineDescriptor, Sampler, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource,
+    ShaderStages, StoreOp, TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo,
+    Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
+    TextureViewDescriptor, VertexState,
 };
 
 use crate::atlas::Atlas;
 use crate::paint::{FLAG_CHROME, GLASS_MARGIN, Instance, KIND_GLASS};
+use grana_gpu::Target;
+use grana_gpu::layout;
 
 const BLUR_SHADER: &str = include_str!("shader/blur.wgsl");
 const UI_SHADER: &str = include_str!("shader/ui.wgsl");
@@ -56,11 +57,6 @@ struct Uniforms {
     time: f32,
     pointer: [f32; 2],
     padding: [f32; 2],
-}
-
-struct Target {
-    texture: Texture,
-    view: TextureView,
 }
 
 struct ElementTarget {
@@ -306,9 +302,19 @@ impl Renderer {
         }
         self.size = size;
         let device = self.device.clone();
-        self.scene = Some(target(&device, "grana.ui.scene", size, self.color_format));
-        self.color = Some(target(&device, "grana.ui.color", size, self.color_format));
-        self.backdrop = Some(target(
+        self.scene = Some(Target::new(
+            &device,
+            "grana.ui.scene",
+            size,
+            self.color_format,
+        ));
+        self.color = Some(Target::new(
+            &device,
+            "grana.ui.color",
+            size,
+            self.color_format,
+        ));
+        self.backdrop = Some(Target::new(
             &device,
             "grana.ui.backdrop",
             size,
@@ -1093,34 +1099,15 @@ fn element_target(
 }
 
 fn texture_entry(binding: u32) -> BindGroupLayoutEntry {
-    BindGroupLayoutEntry {
-        binding,
-        visibility: ShaderStages::FRAGMENT,
-        ty: BindingType::Texture {
-            sample_type: TextureSampleType::Float { filterable: true },
-            view_dimension: TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
+    layout::texture(binding, ShaderStages::FRAGMENT)
 }
 
 fn sampler_entry(binding: u32) -> BindGroupLayoutEntry {
-    BindGroupLayoutEntry {
-        binding,
-        visibility: ShaderStages::FRAGMENT,
-        ty: BindingType::Sampler(SamplerBindingType::Filtering),
-        count: None,
-    }
+    layout::sampler(binding, ShaderStages::FRAGMENT)
 }
 
 fn instance_buffer(device: &Device, label: &str, capacity: usize) -> Buffer {
-    device.create_buffer(&BufferDescriptor {
-        label: Some(label),
-        size: (capacity * size_of::<Instance>()) as u64,
-        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
+    grana_gpu::storage_buffer::<Instance>(device, label, capacity)
 }
 
 fn unorm(format: TextureFormat) -> TextureFormat {
@@ -1129,32 +1116,6 @@ fn unorm(format: TextureFormat) -> TextureFormat {
         TextureFormat::Rgba8UnormSrgb => TextureFormat::Rgba8Unorm,
         other => other,
     }
-}
-
-fn create_target(device: &Device, label: &str, size: [u32; 2], format: TextureFormat) -> Texture {
-    device.create_texture(&TextureDescriptor {
-        label: Some(label),
-        size: Extent3d {
-            width: size[0].max(1),
-            height: size[1].max(1),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format,
-        usage: TextureUsages::RENDER_ATTACHMENT
-            | TextureUsages::TEXTURE_BINDING
-            | TextureUsages::COPY_SRC
-            | TextureUsages::COPY_DST,
-        view_formats: &[],
-    })
-}
-
-fn target(device: &Device, label: &str, size: [u32; 2], format: TextureFormat) -> Target {
-    let texture = create_target(device, label, size, format);
-    let view = texture.create_view(&TextureViewDescriptor::default());
-    Target { texture, view }
 }
 
 fn clear_target(encoder: &mut CommandEncoder, view: &TextureView) {
