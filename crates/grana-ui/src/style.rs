@@ -24,48 +24,48 @@ impl Glass {
     };
 
     pub const PANEL: Self = Self {
-        displacement: 34.0,
-        aberration: 1.4,
-        saturation: 1.35,
+        displacement: 52.0,
+        aberration: 2.1,
+        saturation: 1.36,
         blur: 6.0,
-        tint: Color::rgba(0.043, 0.051, 0.075, 0.34),
-        rim: 0.85,
+        tint: Color::TRANSPARENT,
+        rim: 0.95,
     };
 
     pub const SHEET: Self = Self {
-        displacement: 30.0,
-        aberration: 1.2,
-        saturation: 1.32,
+        displacement: 26.0,
+        aberration: 1.3,
+        saturation: 1.28,
         blur: 6.0,
-        tint: Color::rgba(0.039, 0.047, 0.071, 0.48),
+        tint: Color::TRANSPARENT,
         rim: 0.8,
     };
 
     pub const BAR: Self = Self {
-        displacement: 26.0,
-        aberration: 1.2,
-        saturation: 1.4,
+        displacement: 24.0,
+        aberration: 1.4,
+        saturation: 1.38,
         blur: 6.0,
-        tint: Color::rgba(0.047, 0.055, 0.078, 0.26),
-        rim: 0.9,
+        tint: Color::TRANSPARENT,
+        rim: 0.95,
     };
 
     pub const POPOVER: Self = Self {
-        displacement: 22.0,
-        aberration: 1.0,
-        saturation: 1.3,
+        displacement: 18.0,
+        aberration: 1.1,
+        saturation: 1.28,
         blur: 6.0,
-        tint: Color::rgba(0.035, 0.043, 0.066, 0.72),
-        rim: 0.7,
+        tint: Color::TRANSPARENT,
+        rim: 0.85,
     };
 
     pub const CONTROL: Self = Self {
-        displacement: 12.0,
-        aberration: 0.8,
-        saturation: 1.3,
+        displacement: 10.0,
+        aberration: 0.6,
+        saturation: 1.2,
         blur: 6.0,
-        tint: Color::rgba(1.0, 1.0, 1.0, 0.07),
-        rim: 0.55,
+        tint: Color::TRANSPARENT,
+        rim: 0.5,
     };
 
     pub fn lerp(self, other: Self, t: f32) -> Self {
@@ -79,6 +79,16 @@ impl Glass {
             rim: self.rim + (other.rim - self.rim) * t,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ambient {
+    pub uv: [f32; 4],
+    pub tint: Color,
+    pub blur: f32,
+    pub saturation: f32,
+    pub brightness: f32,
+    pub opacity: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

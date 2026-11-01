@@ -228,7 +228,7 @@ impl Text {
                     flush(&mut lines, &mut glyphs, &mut pen);
                 }
                 if truncate && !wrap && bounded && pen + run.width > max_width {
-                    let ellipsis = self.fonts.shape(face, "\u{2026}", style, style.size);
+                    let ellipsis = self.fonts.shape(face, "\u{2026}", style, 1.0);
                     if pen + ellipsis.width <= max_width {
                         for glyph in &ellipsis.glyphs {
                             glyphs.push(PlacedGlyph {
@@ -239,9 +239,9 @@ impl Text {
                             });
                         }
                         pen += ellipsis.width;
-                        let _ = pen;
                     }
                     truncated = true;
+                    flush(&mut lines, &mut glyphs, &mut pen);
                     break 'paragraphs;
                 }
                 for glyph in &run.glyphs {

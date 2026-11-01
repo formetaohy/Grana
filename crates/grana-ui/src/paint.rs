@@ -3,7 +3,7 @@ use glam::Vec2;
 
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
-use crate::style::{Border, Fill, Glass, Shadow};
+use crate::style::{Ambient, Border, Fill, Glass, Shadow};
 use crate::text::{Text, TextLayout, TextStyle};
 
 pub const KIND_SURFACE: u32 = 0;
@@ -14,9 +14,13 @@ pub const KIND_GLYPH: u32 = 3;
 pub const KIND_SCENE: u32 = 4;
 pub const KIND_SEGMENT: u32 = 5;
 pub const KIND_RING: u32 = 6;
+pub const KIND_AMBIENT: u32 = 7;
+pub const KIND_GLOW: u32 = 8;
+pub const KIND_TRIANGLE: u32 = 9;
 
 pub const FLAG_GRADIENT: u32 = 1 << 0;
 pub const FLAG_BORDER: u32 = 1 << 1;
+pub const FLAG_CHROME: u32 = 1 << 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -166,6 +170,11 @@ impl<'a> Painter<'a> {
     ) {
         if shadow.color.alpha > 0.0 && shadow.radius > 0.0 {
             self.shadow(rect, corners, shadow);
+            if matches!(fill, Fill::Glass(_))
+                && let Some(instance) = self.instances.last_mut()
+            {
+                instance.meta[1] |= FLAG_CHROME;
+            }
         }
         match fill {
             Fill::None => {}
@@ -240,6 +249,53 @@ impl<'a> Painter<'a> {
         instance.rect = [rect.min.x, rect.min.y, rect.width(), rect.height()];
         instance.corners = corners_array(corners.resolved(rect.size()));
         instance.uv = uv;
+        self.push(instance);
+    }
+
+    pub fn ambient(&mut self, rect: Rect, corners: Corners, ambient: Ambient) {
+        if rect.is_empty() || ambient.opacity <= 0.0 {
+            return;
+        }
+        let mut instance = Instance::blank(KIND_AMBIENT);
+        instance.rect = [rect.min.x, rect.min.y, rect.width(), rect.height()];
+        instance.corners = corners_array(corners.resolved(rect.size()));
+        instance.uv = ambient.uv;
+        instance.color = ambient.tint.to_array();
+        instance.extra = [
+            ambient.blur,
+            ambient.saturation,
+            ambient.brightness,
+            ambient.opacity,
+        ];
+        self.push(instance);
+    }
+
+    pub fn glow(&mut self, rect: Rect, color: Color, falloff: f32) {
+        if rect.is_empty() || color.alpha <= 0.0 {
+            return;
+        }
+        let mut instance = Instance::blank(KIND_GLOW);
+        instance.rect = [rect.min.x, rect.min.y, rect.width(), rect.height()];
+        instance.color = color.to_array();
+        instance.extra = [falloff.clamp(0.0, 1.0), 0.0, 0.0, 0.0];
+        self.push(instance);
+    }
+
+    pub fn triangle(&mut self, a: Vec2, b: Vec2, c: Vec2, color: Color) {
+        if color.alpha <= 0.0 {
+            return;
+        }
+        let min = a.min(b).min(c);
+        let max = a.max(b).max(c);
+        let rect = Rect::from_min_max(min, max);
+        if rect.is_empty() {
+            return;
+        }
+        let mut instance = Instance::blank(KIND_TRIANGLE);
+        instance.rect = [rect.min.x, rect.min.y, rect.width(), rect.height()];
+        instance.uv = [a.x, a.y, b.x, b.y];
+        instance.extra = [c.x, c.y, 0.0, 0.0];
+        instance.color = color.to_array();
         self.push(instance);
     }
 

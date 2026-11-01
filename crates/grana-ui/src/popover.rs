@@ -2,6 +2,7 @@ use glam::Vec2;
 
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
+use crate::icon::{self, Icon};
 use crate::motion::Motion;
 use crate::text::{Align, TextStyle};
 use crate::theme::{Level, Role};
@@ -111,7 +112,7 @@ pub fn combo<T: Copy + PartialEq>(
 
 pub fn menu_row(ui: &mut Ui, index: usize, label: &str, checked: bool) -> bool {
     let key = ui.id(&format!("menu.row.{index}"));
-    let height = 24.0;
+    let height = 26.0;
     let rect = ui.allocate(Vec2::new(ui.available().x, height));
     let response = ui.interact(key, rect);
     let hover = ui.animate(
@@ -127,7 +128,7 @@ pub fn menu_row(ui: &mut Ui, index: usize, label: &str, checked: bool) -> bool {
     let accent = ui.theme().palette.accent;
     let mut painter = ui.painter();
     if hover > 0.01 {
-        painter.rect(rect, Corners::all(6.0), Color::white_alpha(0.09 * hover));
+        painter.rect(rect, Corners::all(6.0), Color::white_alpha(0.08 * hover));
     }
     if checked {
         let tick = Vec2::new(rect.min.x + 11.0, rect.center().y);
@@ -152,6 +153,75 @@ pub fn menu_row(ui: &mut Ui, index: usize, label: &str, checked: bool) -> bool {
         Align::Center,
     );
     response.clicked
+}
+
+pub fn action_row(
+    ui: &mut Ui,
+    id: &str,
+    symbol: Icon,
+    label: &str,
+    shortcut: Option<&str>,
+) -> bool {
+    let key = ui.id(id);
+    let rect = ui.allocate(Vec2::new(ui.available().x, 28.0));
+    let response = ui.interact(key, rect);
+    let hover = ui.animate(
+        key,
+        if response.hovered { 1.0 } else { 0.0 },
+        Motion::quick(),
+    );
+    let accent = ui.theme().palette.text_secondary;
+    let primary = ui.theme().palette.text_primary;
+    let tertiary = ui.theme().palette.text_tertiary;
+    let font = ui.theme().font(Level::Callout);
+    let caption = ui.theme().font(Level::Caption);
+    let shortcut_width = shortcut.map_or(6.0, |text| {
+        18.0 + ui.measure_text(text, TextStyle::new(caption, tertiary)).x
+    });
+    let mut painter = ui.painter();
+    if hover > 0.01 {
+        painter.rect(rect, Corners::all(6.0), Color::white_alpha(0.08 * hover));
+    }
+    icon::paint(
+        symbol,
+        &mut painter,
+        Vec2::new(rect.min.x + 14.0, rect.center().y),
+        14.0,
+        accent.lerp(primary, hover),
+        1.5,
+    );
+    painter.text_in(
+        Rect::from_min_max(
+            Vec2::new(rect.min.x + 27.0, rect.min.y),
+            Vec2::new(rect.max.x - shortcut_width, rect.max.y),
+        ),
+        label,
+        TextStyle::new(font, accent.lerp(primary, hover)),
+        Align::Center,
+    );
+    if let Some(shortcut) = shortcut {
+        painter.text_in(
+            rect.shrink2(Vec2::new(8.0, 0.0)),
+            shortcut,
+            TextStyle::new(caption, tertiary).aligned(Align::End),
+            Align::Center,
+        );
+    }
+    response.clicked
+}
+
+pub fn separator(ui: &mut Ui) {
+    let rect = ui.allocate(Vec2::new(ui.available().x, 9.0));
+    let separator = ui.theme().palette.separator;
+    let mut painter = ui.painter();
+    painter.rect(
+        Rect::from_min_size(
+            Vec2::new(rect.min.x + 8.0, rect.center().y),
+            Vec2::new(rect.width() - 16.0, 0.5),
+        ),
+        Corners::ZERO,
+        separator,
+    );
 }
 
 pub fn disclosure_row(ui: &mut Ui, id: &str, label: &str, open: bool) -> bool {

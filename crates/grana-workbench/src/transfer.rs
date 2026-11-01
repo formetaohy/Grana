@@ -1,6 +1,5 @@
-use glam::Vec2;
 use grana_render::{Stop, TransferFunction};
-use grana_ui::{Block, Color, Length, Role, Ui, Vec2 as UiVec2};
+use grana_ui::{Block, Color, Length, Role, Ui};
 use grana_volume::Intensity;
 
 use crate::widget;
@@ -81,7 +80,14 @@ pub fn edit(
                     stop.set_opacity(value);
                     changed = true;
                 }
-                if widget::icon_button(ui, "remove", "\u{2212}", 18.0, Role::Quiet) {
+                if widget::icon_button(
+                    ui,
+                    "remove",
+                    grana_ui::Icon::Minus,
+                    18.0,
+                    Role::Quiet,
+                    "Remove stop",
+                ) {
                     removed = Some(index);
                 }
             },
@@ -107,8 +113,6 @@ pub fn edit(
         *transfer = TransferFunction::new(stops);
     }
     ui.pop_id();
-    let _ = Vec2::ZERO;
-    let _ = UiVec2::ZERO;
 }
 
 fn midpoint(stops: &[Stop]) -> f32 {

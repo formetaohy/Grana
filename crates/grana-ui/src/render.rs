@@ -14,7 +14,7 @@ use wgpu::{
 };
 
 use crate::atlas::Atlas;
-use crate::paint::{GLASS_MARGIN, Instance, KIND_GLASS};
+use crate::paint::{FLAG_CHROME, GLASS_MARGIN, Instance, KIND_GLASS};
 
 const BLUR_SHADER: &str = include_str!("shader/blur.wgsl");
 const UI_SHADER: &str = include_str!("shader/ui.wgsl");
@@ -83,6 +83,7 @@ pub struct Renderer {
     scale: f32,
     scene: Option<Target>,
     color: Option<Target>,
+    backdrop: Option<Target>,
     elements: Vec<ElementTarget>,
     box_pass: RenderPipeline,
     blit: RenderPipeline,
@@ -266,6 +267,7 @@ impl Renderer {
             scale: 1.0,
             scene: None,
             color: None,
+            backdrop: None,
             elements: Vec::new(),
             box_pass: box_blur,
             blit,
@@ -305,6 +307,12 @@ impl Renderer {
         let device = self.device.clone();
         self.scene = Some(target(&device, "grana.ui.scene", size, self.color_format));
         self.color = Some(target(&device, "grana.ui.color", size, self.color_format));
+        self.backdrop = Some(target(
+            &device,
+            "grana.ui.backdrop",
+            size,
+            self.color_format,
+        ));
         self.elements.clear();
     }
 
@@ -474,34 +482,121 @@ impl Renderer {
         let Some(scene) = self.scene.as_ref().map(|scene| scene.view.clone()) else {
             return;
         };
-        let base_rects = glass_rects(base, self.scale, self.size);
+        let Some(backdrop) = self
+            .backdrop
+            .as_ref()
+            .map(|backdrop| (backdrop.texture.clone(), backdrop.view.clone()))
+        else {
+            return;
+        };
         let overlay_rects = glass_rects(overlay, self.scale, self.size);
-        self.write_glass_uniforms(&base_rects, &overlay_rects);
-        self.paint_layer(
-            encoder,
-            &color,
-            &scene,
-            &scene,
-            base,
-            self.base.clone(),
-            atlas,
-            false,
-            0,
-            &base_rects,
-        );
-        if !overlay.is_empty() {
+        let chrome_start = base.iter().position(|instance| {
+            instance.meta[0] == KIND_GLASS || instance.meta[1] & FLAG_CHROME != 0
+        });
+        if let Some(start) = chrome_start {
+            let content = &base[..start];
+            let chrome = &base[start..];
+            let chrome_rects = glass_rects(chrome, self.scale, self.size);
+            self.write_glass_uniforms(&chrome_rects, &overlay_rects);
+            if content.is_empty() {
+                clear_target(encoder, &color);
+            } else {
+                self.paint_layer(
+                    encoder,
+                    &color,
+                    &scene,
+                    &scene,
+                    content,
+                    0,
+                    self.base.clone(),
+                    atlas,
+                    false,
+                    0,
+                    &[],
+                );
+            }
+            encoder.copy_texture_to_texture(
+                TexelCopyTextureInfo {
+                    texture: &self
+                        .color
+                        .as_ref()
+                        .expect("the interface layer is sized")
+                        .texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                TexelCopyTextureInfo {
+                    texture: &backdrop.0,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                Extent3d {
+                    width: self.size[0],
+                    height: self.size[1],
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.paint_layer(
+                encoder,
+                &color,
+                &backdrop.1,
+                &scene,
+                chrome,
+                start,
+                self.base.clone(),
+                atlas,
+                true,
+                0,
+                &chrome_rects,
+            );
+            if !overlay.is_empty() {
+                self.paint_layer(
+                    encoder,
+                    &color,
+                    &color,
+                    &scene,
+                    overlay,
+                    0,
+                    self.overlay_instances.clone(),
+                    atlas,
+                    true,
+                    chrome_rects.len(),
+                    &overlay_rects,
+                );
+            }
+        } else {
+            let base_rects = glass_rects(base, self.scale, self.size);
+            self.write_glass_uniforms(&base_rects, &overlay_rects);
             self.paint_layer(
                 encoder,
                 &color,
                 &color,
                 &scene,
-                overlay,
-                self.overlay_instances.clone(),
+                base,
+                0,
+                self.base.clone(),
                 atlas,
-                true,
-                base_rects.len(),
-                &overlay_rects,
+                false,
+                0,
+                &base_rects,
             );
+            if !overlay.is_empty() {
+                self.paint_layer(
+                    encoder,
+                    &color,
+                    &color,
+                    &scene,
+                    overlay,
+                    0,
+                    self.overlay_instances.clone(),
+                    atlas,
+                    true,
+                    base_rects.len(),
+                    &overlay_rects,
+                );
+            }
         }
         let group = self.device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.ui.blit.group"),
@@ -619,6 +714,7 @@ impl Renderer {
         source: &TextureView,
         scene: &TextureView,
         instances: &[Instance],
+        instance_base: usize,
         buffer: Buffer,
         atlas: &Atlas,
         load: bool,
@@ -653,7 +749,10 @@ impl Renderer {
                     });
                     pass.set_pipeline(&self.ui);
                     pass.set_bind_group(0, &group, &[]);
-                    pass.draw(0..6, start as u32..(start + len) as u32);
+                    pass.draw(
+                        0..6,
+                        (instance_base + start) as u32..(instance_base + start + len) as u32,
+                    );
                     first = false;
                 }
                 Segment::Glass { index } => {
@@ -682,7 +781,10 @@ impl Renderer {
                     });
                     pass.set_pipeline(&self.ui);
                     pass.set_bind_group(0, &group, &[]);
-                    pass.draw(0..6, index as u32..index as u32 + 1);
+                    pass.draw(
+                        0..6,
+                        (instance_base + index) as u32..(instance_base + index) as u32 + 1,
+                    );
                     first = false;
                 }
             }
@@ -1012,7 +1114,8 @@ fn create_target(device: &Device, label: &str, size: [u32; 2], format: TextureFo
         format,
         usage: TextureUsages::RENDER_ATTACHMENT
             | TextureUsages::TEXTURE_BINDING
-            | TextureUsages::COPY_SRC,
+            | TextureUsages::COPY_SRC
+            | TextureUsages::COPY_DST,
         view_formats: &[],
     })
 }
@@ -1021,6 +1124,22 @@ fn target(device: &Device, label: &str, size: [u32; 2], format: TextureFormat) -
     let texture = create_target(device, label, size, format);
     let view = texture.create_view(&TextureViewDescriptor::default());
     Target { texture, view }
+}
+
+fn clear_target(encoder: &mut CommandEncoder, view: &TextureView) {
+    let _ = encoder.begin_render_pass(&RenderPassDescriptor {
+        label: Some("grana.ui.clear.pass"),
+        color_attachments: &[Some(RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: PassOperations {
+                load: LoadOp::Clear(wgpu::Color::BLACK),
+                store: StoreOp::Store,
+            },
+        })],
+        ..Default::default()
+    });
 }
 
 fn upload_map(device: &Device, queue: &Queue) -> TextureView {

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use glam::Vec2;
-use grana_ui::{Color, Corners, Glass, Painter, Rect, Shadow, Ui, Vec2 as UiVec2};
+use grana_ui::{Border, Color, Corners, Fill, Glass, Painter, Rect, Shadow, Ui, Vec2 as UiVec2};
 use wgpu::{
     BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
     BindingResource, BindingType, ColorTargetState, ColorWrites, CommandEncoderDescriptor, Device,
@@ -109,18 +109,18 @@ fn main() {
 
 fn paint_reference(painter: &mut Painter<'_>, rim: f32) {
     let capsule = Rect::from_min_size(UiVec2::new(268.0, 206.0), UiVec2::new(424.0, 188.0));
-    painter.shadow(
+    painter.outlined(
         capsule,
         Corners::capsule(),
-        Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.25), 40.0, 12.0),
-    );
-    painter.glass(
-        capsule,
-        Corners::capsule(),
-        Glass {
+        Fill::Glass(Glass {
             rim,
             ..Glass::REFERENCE
+        }),
+        Border {
+            width: 0.0,
+            color: Color::TRANSPARENT,
         },
+        Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.25), 40.0, 12.0),
     );
 }
 

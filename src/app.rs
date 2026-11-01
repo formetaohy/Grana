@@ -192,7 +192,8 @@ impl App {
                 .create_window(
                     Window::default_attributes()
                         .with_title("grana")
-                        .with_inner_size(LogicalSize::new(1440.0, 900.0)),
+                        .with_inner_size(LogicalSize::new(1440.0, 900.0))
+                        .with_min_inner_size(LogicalSize::new(1080.0, 700.0)),
                 )
                 .expect("failed to create the window"),
         );

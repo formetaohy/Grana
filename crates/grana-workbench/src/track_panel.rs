@@ -40,11 +40,26 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>, id: 
         let mut division = params.division();
         let mut range = params.division_range();
         let step_max = (0.25 * world).max(step * 4.0).max(16.0 * voxel);
-        if let Some(value) = widget::slider(ui, "step", Some("step"), step, voxel..=step_max, true)
-        {
+        if let Some(value) = widget::slider_readout(
+            ui,
+            "step",
+            Some("step"),
+            step,
+            voxel..=step_max,
+            true,
+            &format!("{step:.3} µm"),
+        ) {
             step = value;
         }
-        if let Some(value) = widget::slider(ui, "gap", Some("gap"), gap, 0.0..=10.0, false) {
+        if let Some(value) = widget::slider_readout(
+            ui,
+            "gap",
+            Some("gap"),
+            gap,
+            0.0..=10.0,
+            false,
+            &format!("{gap:.0}"),
+        ) {
             gap = value;
         }
         if let Some(value) = widget::toggle_row(ui, "division", "division", division) {
@@ -54,13 +69,14 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>, id: 
             let minimum = step;
             let maximum = (4.0 * step).max(minimum);
             range = range.clamp(minimum, maximum);
-            if let Some(value) = widget::slider(
+            if let Some(value) = widget::slider_readout(
                 ui,
                 "division.range",
                 Some("division range"),
                 range,
                 minimum..=maximum,
                 false,
+                &format!("{range:.2} µm"),
             ) {
                 range = value;
             }
@@ -112,13 +128,14 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>, id: 
         {
             object.set_track_visible(value);
         }
-        if let Some(value) = widget::slider(
+        if let Some(value) = widget::slider_readout(
             ui,
             "width",
             Some("tube width"),
             view.thickness,
             min_thickness..=max_thickness,
             true,
+            &format!("{:.3} µm", view.thickness),
         ) && let Some(object) = state.scene.objects.get_mut(id)
         {
             object.set_track_thickness(value);

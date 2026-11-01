@@ -38,6 +38,9 @@ const KIND_GLYPH: u32 = 3u;
 const KIND_SCENE: u32 = 4u;
 const KIND_SEGMENT: u32 = 5u;
 const KIND_RING: u32 = 6u;
+const KIND_AMBIENT: u32 = 7u;
+const KIND_GLOW: u32 = 8u;
+const KIND_TRIANGLE: u32 = 9u;
 
 const FLAG_GRADIENT: u32 = 1u;
 const FLAG_BORDER: u32 = 2u;
@@ -236,6 +239,45 @@ fn shade_glass(
     return mix(color, overlaid, clamp(ring, 0.0, 1.0));
 }
 
+fn scene_tap(uv: vec2<f32>) -> vec3<f32> {
+    return textureSampleLevel(scene, scene_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).rgb;
+}
+
+fn ambient_color(in: VertexOut, instance: Instance) -> vec3<f32> {
+    let size = max(instance.rect.zw, vec2<f32>(1.0));
+    let step = (instance.uv.zw - instance.uv.xy) / size * instance.extra.x;
+    let uv = in.uv;
+    var color = scene_tap(uv) * 0.24;
+    color += scene_tap(uv + vec2<f32>(step.x, 0.0)) * 0.11;
+    color += scene_tap(uv - vec2<f32>(step.x, 0.0)) * 0.11;
+    color += scene_tap(uv + vec2<f32>(0.0, step.y)) * 0.11;
+    color += scene_tap(uv - vec2<f32>(0.0, step.y)) * 0.11;
+    color += scene_tap(uv + step * 0.7) * 0.08;
+    color += scene_tap(uv - step * 0.7) * 0.08;
+    color += scene_tap(uv + vec2<f32>(step.x, -step.y) * 0.7) * 0.08;
+    color += scene_tap(uv + vec2<f32>(-step.x, step.y) * 0.7) * 0.08;
+    let luminance = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+    color = mix(vec3<f32>(luminance), color, instance.extra.y);
+    color *= instance.extra.z;
+    return mix(color, instance.color.rgb, instance.color.a);
+}
+
+fn cross2(a: vec2<f32>, b: vec2<f32>) -> f32 {
+    return a.x * b.y - a.y * b.x;
+}
+
+fn triangle_coverage(a: vec2<f32>, b: vec2<f32>, c: vec2<f32>, point: vec2<f32>) -> f32 {
+    let area = cross2(b - a, c - a);
+    if (abs(area) < 0.00001) {
+        return 0.0;
+    }
+    let sign = select(-1.0, 1.0, area > 0.0);
+    let ab = sign * cross2(b - a, point - a) / max(length(b - a), 0.0001);
+    let bc = sign * cross2(c - b, point - b) / max(length(c - b), 0.0001);
+    let ca = sign * cross2(a - c, point - c) / max(length(a - c), 0.0001);
+    return clamp(min(ab, min(bc, ca)) + 0.5, 0.0, 1.0);
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let instance = instances[in.index];
@@ -306,6 +348,17 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         return premultiplied(instance.color, coverage(distance) * clip_mask);
     }
 
+    if (kind == KIND_TRIANGLE) {
+        let a = instance.uv.xy * scale;
+        let b = instance.uv.zw * scale;
+        let c = instance.extra.xy * scale;
+        let coverage = triangle_coverage(a, b, c, in.position_px);
+        if (coverage <= 0.0) {
+            discard;
+        }
+        return premultiplied(instance.color, coverage * clip_mask);
+    }
+
     let size = instance.rect.zw * scale;
     let centre = (instance.rect.xy + instance.rect.zw * 0.5) * scale;
     let p = in.position_px - centre;
@@ -316,6 +369,18 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         discard;
     }
     let mask = coverage(distance) * clip_mask;
+
+    if (kind == KIND_AMBIENT) {
+        let alpha = clamp(instance.extra.w, 0.0, 1.0) * mask;
+        return vec4<f32>(ambient_color(in, instance) * alpha, alpha);
+    }
+
+    if (kind == KIND_GLOW) {
+        let radial = length(p / max(half, vec2<f32>(1.0)));
+        let falloff = mix(2.0, 8.0, instance.extra.x);
+        let alpha = pow(clamp(1.0 - radial, 0.0, 1.0), falloff);
+        return premultiplied(instance.color, alpha * mask);
+    }
 
     if (kind == KIND_SCENE) {
         let color = textureSampleLevel(scene, scene_sampler, in.uv, 0.0);

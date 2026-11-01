@@ -10,46 +10,168 @@ use crate::state::State;
 use crate::widget;
 
 pub fn build(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>) {
-    let open = ui.disclosure_open("objects", true);
-    let next = widget::disclosure(ui, "objects", "Objects", open, |ui| {
-        let channel = state.scene.selected;
-        let channel_name = state.scene.channel(channel).name().to_string();
-        let loading = state.loading.is_some();
-        ui.row(Block::row().gaps(6.0), |ui| {
-            for kind in [
-                ObjectKind::Spots,
-                ObjectKind::Surfaces,
-                ObjectKind::Filaments,
-            ] {
-                let label = format!("+ {}", kind.name());
-                if !loading
-                    && widget::button(
-                        ui,
-                        &format!("add.{}.{}", kind.name(), channel),
-                        &label,
-                        Role::Quiet,
-                    )
-                {
-                    actions.push(Action::AddObject(kind));
-                }
-            }
-        });
-        widget::weak(ui, &format!("new objects read {channel_name}"));
-        if state.scene.objects.is_empty() {
-            widget::weak(ui, "add an object, then detect and track it");
-            return;
+    let channel = state.scene.selected;
+    let channel_name = state.scene.channel(channel).name().to_string();
+    let count = state.scene.objects.len();
+    let add = section_header(ui, count);
+    add_menu(ui, state, actions, add);
+    if count == 0 {
+        empty(ui, &channel_name);
+        return;
+    }
+    let ids = state
+        .scene
+        .objects
+        .iter()
+        .map(ObjectSet::id)
+        .collect::<Vec<_>>();
+    for id in ids {
+        object(ui, state, actions, id);
+    }
+    widget::weak(ui, &format!("new objects read {channel_name}"));
+}
+
+fn section_header(ui: &mut Ui, count: usize) -> Rect {
+    let header = ui.allocate_full(26.0);
+    let detail = format!("{count}");
+    let style = TextStyle::new(
+        grana_ui::TypeStyle::new(10.0, 600.0, 13.0),
+        ui.theme().palette.text_tertiary,
+    );
+    let detail_style = TextStyle::new(
+        grana_ui::TypeStyle::new(10.0, 400.0, 13.0),
+        ui.theme().palette.text_tertiary,
+    )
+    .aligned(Align::End);
+    let add = Rect::from_center_size(
+        Vec2::new(header.max.x - 12.0, header.center().y),
+        Vec2::splat(24.0),
+    );
+    {
+        let mut painter = ui.painter();
+        painter.text_in(header, "OBJECTS", style, Align::Center);
+        painter.text_in(
+            Rect::from_min_max(header.min, Vec2::new(header.max.x - 30.0, header.max.y)),
+            &detail,
+            detail_style,
+            Align::Center,
+        );
+    }
+    let response = ui.interact(ui.id("objects.add"), add);
+    if response.clicked {
+        ui.toggle_popup(ui.id("objects.add"));
+    }
+    let hover = ui.animate(
+        ui.id("objects.add.hover"),
+        if response.hovered { 1.0 } else { 0.0 },
+        grana_ui::Motion::quick(),
+    );
+    let icon_color = ui.theme().palette.text_secondary;
+    {
+        let mut painter = ui.painter();
+        if hover > 0.01 {
+            painter.rect(add, Corners::capsule(), Color::white_alpha(0.08 * hover));
         }
-        let ids = state
-            .scene
-            .objects
-            .iter()
-            .map(ObjectSet::id)
-            .collect::<Vec<_>>();
-        for id in ids {
-            object(ui, state, actions, id);
+        grana_ui::icon::paint(
+            grana_ui::Icon::Plus,
+            &mut painter,
+            add.center(),
+            13.0,
+            icon_color,
+            1.6,
+        );
+    }
+    add
+}
+
+fn add_menu(ui: &mut Ui, state: &State<'_>, actions: &mut Vec<Action>, anchor: Rect) {
+    let open = ui.popup_open(ui.id("objects.add"));
+    let mut chosen = None;
+    grana_ui::popover::popover(ui, "objects.add", open, anchor, 196.0, |ui| {
+        if grana_ui::popover::action_row(ui, "add.spots", grana_ui::Icon::Target, "Spots", None) {
+            chosen = Some(ObjectKind::Spots);
+        }
+        if grana_ui::popover::action_row(ui, "add.surfaces", grana_ui::Icon::Cube, "Surfaces", None)
+        {
+            chosen = Some(ObjectKind::Surfaces);
+        }
+        if grana_ui::popover::action_row(
+            ui,
+            "add.filaments",
+            grana_ui::Icon::Channel,
+            "Filaments",
+            None,
+        ) {
+            chosen = Some(ObjectKind::Filaments);
         }
     });
-    ui.store_open("objects", next);
+    if let Some(kind) = chosen {
+        ui.close_popup();
+        if state.loading.is_none() {
+            actions.push(Action::AddObject(kind));
+        }
+    }
+}
+
+fn empty(ui: &mut Ui, channel_name: &str) {
+    let look = ui.theme().look(Role::Card, grana_ui::State::Rest);
+    ui.column(
+        Block::column()
+            .padding(Edges::symmetric(16.0, 18.0))
+            .gaps(8.0)
+            .background(look),
+        |ui| {
+            let art = ui.allocate_full(42.0);
+            let art_color = ui.theme().palette.text_tertiary;
+            {
+                let mut painter = ui.painter();
+                painter.rect(
+                    Rect::from_center_size(
+                        Vec2::new(art.center().x, art.center().y),
+                        Vec2::splat(38.0),
+                    ),
+                    Corners::capsule(),
+                    Color::white_alpha(0.05),
+                );
+                grana_ui::icon::paint(
+                    grana_ui::Icon::Layers,
+                    &mut painter,
+                    art.center(),
+                    21.0,
+                    art_color,
+                    1.5,
+                );
+            }
+            let title = ui.allocate_full(18.0);
+            let title_style = TextStyle::new(
+                ui.theme().font(grana_ui::Level::Headline),
+                ui.theme().palette.text_primary,
+            )
+            .aligned(Align::Center);
+            {
+                let mut painter = ui.painter();
+                painter.text_in(title, "No object sets", title_style, Align::Center);
+            }
+            let detail = format!(
+                "Add spots, surfaces or filaments to detect and measure structures in {channel_name}."
+            );
+            let style = TextStyle::new(
+                ui.theme().font(grana_ui::Level::Caption),
+                ui.theme().palette.text_tertiary,
+            )
+            .wrapping()
+            .aligned(Align::Center);
+            ui.text_style_wrapped(&detail, style, ui.available().x);
+        },
+    );
+}
+
+fn kind_icon(kind: ObjectKind) -> grana_ui::Icon {
+    match kind {
+        ObjectKind::Spots => grana_ui::Icon::Target,
+        ObjectKind::Surfaces => grana_ui::Icon::Cube,
+        ObjectKind::Filaments => grana_ui::Icon::Channel,
+    }
 }
 
 fn object(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>, id: ObjectSetId) {
@@ -72,12 +194,8 @@ fn object(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>, id: Obj
         .frame(time)
         .and_then(ObjectFrame::spots)
         .and_then(|spots| spots.mean_quality());
-    let coloring = set.object_coloring().clone();
-    let palette = coloring.palette();
-    let reversed = coloring.reversed();
-    let colored = coloring.metric().is_some();
     let open_id = format!("object.{}.open", id.raw());
-    let expanded = ui.disclosure_open(&open_id, true);
+    let expanded = ui.disclosure_open(&open_id, false);
     let look = state_card(ui);
     ui.push_id(&format!("object.{}", id.raw()));
     ui.column(
@@ -86,95 +204,159 @@ fn object(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>, id: Obj
             .gaps(8.0)
             .background(look),
         |ui| {
-            let header = ui.allocate_full(24.0);
+            let header = ui.allocate_full(44.0);
+            let icon = Rect::from_center_size(
+                Vec2::new(header.min.x + 14.0, header.center().y),
+                Vec2::splat(27.0),
+            );
+            let menu_rect = Rect::from_center_size(
+                Vec2::new(header.max.x - 12.0, header.center().y),
+                Vec2::splat(24.0),
+            );
+            let eye_rect = Rect::from_center_size(
+                Vec2::new(menu_rect.min.x - 23.0, header.center().y),
+                Vec2::splat(24.0),
+            );
             let response = ui.interact(
                 ui.id("header"),
-                Rect::from_min_max(header.min, Vec2::new(header.max.x - 62.0, header.max.y)),
+                Rect::from_min_max(header.min, Vec2::new(eye_rect.min.x - 6.0, header.max.y)),
             );
+            if response.clicked {
+                ui.store_open(&open_id, !expanded);
+            }
             let arrow = ui.animate(
                 ui.id("arrow"),
                 if expanded { 1.0 } else { 0.0 },
                 grana_ui::Motion::snappy(),
             );
+            let tint = Color::from_rgb_f32(color);
             let chevron = ui.theme().palette.text_tertiary;
-            let title = ui.theme().font(grana_ui::Level::Headline);
-            let title_color = ui.theme().palette.text_primary;
+            let count = current.map(|(count, _level)| format!("{count} {}", kind.count_noun()));
+            let subtitle = match count {
+                Some(count) => {
+                    if frames > 1 {
+                        format!("{channel_name} · {count} · {detected} frames")
+                    } else {
+                        format!("{channel_name} · {count}")
+                    }
+                }
+                None if detected > 0 => {
+                    format!("{channel_name} · no objects on frame {}", time + 1)
+                }
+                None => format!("{channel_name} · not detected"),
+            };
+            let name_style = TextStyle::new(
+                ui.theme().font(grana_ui::Level::Headline),
+                ui.theme().palette.text_primary,
+            )
+            .truncating();
+            let subtitle_style = TextStyle::new(
+                grana_ui::TypeStyle::new(10.5, 400.0, 13.0),
+                ui.theme().palette.text_tertiary,
+            )
+            .truncating();
             {
                 let mut painter = ui.painter();
-                if colored {
-                    let samples = 16;
-                    let width = 16.0;
-                    let height = 12.0;
-                    let rect = Rect::from_center_size(
-                        Vec2::new(header.min.x + 9.0, header.center().y),
-                        Vec2::new(width, height),
-                    );
-                    let step = width / samples as f32;
-                    for index in 0..samples {
-                        let position = index as f32 / (samples - 1) as f32;
-                        let position = if reversed { 1.0 - position } else { position };
-                        let [red, green, blue] = palette.sample(position);
-                        painter.rect(
-                            Rect::from_min_size(
-                                Vec2::new(rect.min.x + index as f32 * step, rect.min.y),
-                                Vec2::new(step + 0.5, height),
-                            ),
-                            Corners::all(1.0),
-                            Color::rgb(red, green, blue),
-                        );
-                    }
-                } else {
-                    painter.rect(
-                        Rect::from_center_size(
-                            Vec2::new(header.min.x + 8.0, header.center().y),
-                            Vec2::new(11.0, 11.0),
-                        ),
-                        Corners::all(3.0),
-                        Color::from_rgb_f32(color),
-                    );
-                }
-                let angle = std::f32::consts::FRAC_PI_2 * (0.5 + 0.5 * arrow);
-                let centre = Vec2::new(header.min.x + 30.0, header.center().y);
-                let tip = centre + Vec2::new(angle.cos(), angle.sin()) * 2.2;
-                painter.segment(tip + Vec2::new(-2.0, -1.3), tip, 1.4, chevron);
-                painter.segment(tip, tip + Vec2::new(2.0, -1.3), 1.4, chevron);
+                painter.outlined(
+                    icon,
+                    Corners::all(8.0),
+                    grana_ui::Fill::Solid(tint.with_alpha(0.16)),
+                    grana_ui::Border {
+                        width: 0.5,
+                        color: tint.with_alpha(0.34),
+                    },
+                    grana_ui::Shadow::NONE,
+                );
+                grana_ui::icon::paint(
+                    kind_icon(kind),
+                    &mut painter,
+                    icon.center(),
+                    15.0,
+                    tint,
+                    1.6,
+                );
+                let text_area = Rect::from_min_max(
+                    Vec2::new(icon.max.x + 9.0, header.min.y),
+                    Vec2::new(eye_rect.min.x - 20.0, header.max.y),
+                );
                 painter.text_in(
                     Rect::from_min_max(
-                        Vec2::new(header.min.x + 38.0, header.min.y),
-                        Vec2::new(header.max.x - 62.0, header.max.y),
+                        text_area.min,
+                        Vec2::new(text_area.max.x, text_area.center().y + 3.0),
                     ),
                     &name,
-                    TextStyle::new(title, title_color),
+                    name_style,
                     Align::Center,
                 );
+                painter.text_in(
+                    Rect::from_min_max(
+                        Vec2::new(text_area.min.x, text_area.center().y + 1.0),
+                        text_area.max,
+                    ),
+                    &subtitle,
+                    subtitle_style,
+                    Align::Center,
+                );
+                let angle = std::f32::consts::FRAC_PI_2 * (0.5 + 0.5 * arrow);
+                let centre = Vec2::new(eye_rect.min.x - 11.0, header.center().y);
+                let tip = centre + Vec2::new(angle.cos(), angle.sin()) * 2.4;
+                painter.segment(tip + Vec2::new(-2.2, -1.4), tip, 1.4, chevron);
+                painter.segment(tip, tip + Vec2::new(2.2, -1.4), 1.4, chevron);
             }
-            if response.clicked {
-                ui.store_open(&open_id, !expanded);
-            }
-            ui.place(
-                Rect::from_min_size(
-                    Vec2::new(header.max.x - 58.0, header.min.y),
-                    Vec2::new(34.0, header.height()),
-                ),
-                |ui| {
-                    if let Some(value) = widget::toggle(ui, "visible", visible) {
-                        visible = value;
+            ui.place(eye_rect, |ui| {
+                let tooltip = if visible {
+                    "Hide object set"
+                } else {
+                    "Show object set"
+                };
+                if widget::icon_button(
+                    ui,
+                    "visible",
+                    if visible {
+                        grana_ui::Icon::Eye
+                    } else {
+                        grana_ui::Icon::EyeOff
+                    },
+                    24.0,
+                    Role::Quiet,
+                    tooltip,
+                ) {
+                    visible = !visible;
+                }
+            });
+            let menu_key = ui.id("menu");
+            ui.place(menu_rect, |ui| {
+                if widget::icon_button(
+                    ui,
+                    "menu.button",
+                    grana_ui::Icon::Ellipsis,
+                    24.0,
+                    Role::Quiet,
+                    "Object actions",
+                ) {
+                    ui.toggle_popup(menu_key);
+                }
+                let open = ui.popup_open(menu_key);
+                let mut remove = false;
+                grana_ui::popover::popover(ui, "object.menu", open, menu_rect, 188.0, |ui| {
+                    if grana_ui::popover::action_row(
+                        ui,
+                        "remove",
+                        grana_ui::Icon::Trash,
+                        "Remove object",
+                        None,
+                    ) {
+                        remove = true;
                     }
-                },
-            );
-            ui.place(
-                Rect::from_min_size(
-                    Vec2::new(header.max.x - 22.0, header.min.y),
-                    Vec2::new(22.0, header.height()),
-                ),
-                |ui| {
-                    if widget::icon_button(ui, "close", "\u{00D7}", 22.0, Role::Quiet) {
-                        actions.push(Action::RemoveObject(id));
-                    }
-                },
-            );
+                });
+                if remove {
+                    ui.close_popup();
+                    actions.push(Action::RemoveObject(id));
+                }
+            });
             if expanded {
-                widget::weak(ui, &channel_name);
+                divider(ui);
+                widget::caption(ui, &format!("source channel {channel_name}"));
                 params(ui, state, id);
                 detect(ui, state, actions, id, kind, frames);
                 summary(
@@ -188,15 +370,17 @@ fn object(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>, id: Obj
                     time,
                 );
                 appearance(ui, state, id);
-                ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
-                    if widget::button(ui, "clear", "Clear", Role::Quiet) {
-                        actions.push(Action::ClearObject(id));
-                    }
-                });
                 measure(ui, state, id, time);
                 if kind.trackable() {
                     crate::track_panel::build(ui, state, actions, id);
                 }
+                ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
+                    if detected > 0 && widget::button(ui, "clear", "Clear", Role::Danger) {
+                        actions.push(Action::ClearObject(id));
+                    }
+                    ui.space(1.0);
+                    widget::weak(ui, &format!("#{}", id.raw()));
+                });
             }
         },
     );
@@ -210,9 +394,24 @@ fn object(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>, id: Obj
         }
     }
 }
+
+fn divider(ui: &mut Ui) {
+    let rect = ui.allocate_full(9.0);
+    let color = ui.theme().palette.separator;
+    let mut painter = ui.painter();
+    painter.rect(
+        Rect::from_min_size(
+            Vec2::new(rect.min.x, rect.center().y),
+            Vec2::new(rect.width(), 0.5),
+        ),
+        Corners::ZERO,
+        color,
+    );
+}
+
 fn state_card(ui: &mut Ui) -> grana_ui::Look {
     let mut look = ui.theme().look(Role::Card, grana_ui::State::Rest);
-    look.corners = Corners::all(11.0);
+    look.corners = Corners::all(12.0);
     look
 }
 
@@ -265,22 +464,30 @@ fn detect(
     frames: u32,
 ) {
     let running = progress(state.analysis, Job::Detect(id));
-    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-        if running.is_none() && widget::button(ui, "detect", "Detect", Role::Prominent) {
+    if running.is_none() {
+        if widget::button_with(ui, "detect", "Detect", Role::Prominent, Length::Fill).clicked {
             actions.push(Action::Detect(id));
         }
-        if running.is_some() {
+    } else {
+        ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
+            widget::spinner(ui, 14.0);
+            if let Some(running) = running {
+                caption(
+                    ui,
+                    &crate::panel::progress_caption(kind, Job::Detect(id), running, frames),
+                );
+                let fraction = if running.total > 0 {
+                    running.done as f32 / running.total as f32
+                } else {
+                    0.0
+                };
+                let width = (ui.available().x - 74.0).max(60.0);
+                widget::progress(ui, fraction, width);
+            }
             if widget::button(ui, "cancel", "Cancel", Role::Quiet) {
                 actions.push(Action::CancelDetect(id));
             }
-            widget::spinner(ui, 14.0);
-        }
-    });
-    if let Some(running) = running {
-        caption(
-            ui,
-            &crate::panel::progress_caption(kind, Job::Detect(id), running, frames),
-        );
+        });
     }
 }
 

@@ -69,7 +69,7 @@ impl Viewport {
             volume_rect: Rect::ZERO,
             section_rect: Rect::ZERO,
             modifiers: Modifiers::default(),
-            split: 0.56,
+            split: 0.62,
         }
     }
 

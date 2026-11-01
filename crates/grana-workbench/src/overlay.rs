@@ -2,7 +2,9 @@ use glam::{Mat4, Vec2, Vec3};
 use grana_measure::Unit;
 use grana_render::{Camera, Palette, SectionCamera, plane_basis};
 use grana_scene::Scene;
-use grana_ui::{Align, Color, Corners, Painter, Rect, TextStyle, TypeStyle, Ui};
+use grana_ui::{
+    Align, Color, Corners, Fill, Icon, Painter, Rect, Role, TextStyle, TypeStyle, Ui, icon,
+};
 use grana_volume::{Axis, Region};
 
 use crate::coloring;
@@ -72,9 +74,11 @@ pub fn paint(ui: &mut Ui, overlay: &mut Overlay<'_>) {
             overlay.volume_rect,
             Vec2::new(
                 overlay.volume_rect.min.x + 14.0,
-                overlay.volume_rect.min.y + 52.0,
+                overlay.volume_rect.min.y + 58.0,
             ),
-            &format!("rendering movie · {frame} / {frames}"),
+            Icon::Record,
+            "REC",
+            &format!("frame {frame} of {frames}"),
             Color::rgba(1.0, 0.55, 0.45, 1.0),
         );
     }
@@ -121,8 +125,10 @@ fn paint_volume(ui: &mut Ui, overlay: &mut Overlay<'_>) {
         ui,
         overlay.volume_safe,
         overlay.volume_safe.min + Vec2::new(14.0, 14.0),
+        Icon::Cube,
+        "3D",
         &format!(
-            "3D · level {} / {} · {} samples",
+            "Level {} of {} · {} samples",
             overlay.volume_level + 1,
             overlay.levels,
             overlay.samples
@@ -144,15 +150,25 @@ fn paint_section(ui: &mut Ui, overlay: &Overlay<'_>) {
         let mut painter = ui.painter_in(clip);
         scale_bar(&mut painter, stage, world_per_point);
         cross(&mut painter, stage.center(), 6.0, 1.0, CROSS);
+        painter.outlined(
+            stage,
+            Corners::all(7.0),
+            Fill::None,
+            grana_ui::Border {
+                width: 0.75,
+                color: Color::white_alpha(0.14),
+            },
+            grana_ui::Shadow::NONE,
+        );
     }
     chip(
         ui,
         rect,
         rect.min + Vec2::new(14.0, 14.0),
+        Icon::Section,
+        &format!("{} · {} = {plane:.2} µm", plane_name(axis), axis.name()),
         &format!(
-            "{} · {} = {plane:.2} µm · {world_per_pixel:.3} µm/px · level {} / {}",
-            plane_name(axis),
-            axis.name(),
+            "{world_per_pixel:.3} µm/px · level {} of {}",
             overlay.section_level + 1,
             overlay.levels
         ),
@@ -328,19 +344,47 @@ fn caption_style() -> TextStyle {
     TextStyle::new(TypeStyle::new(11.0, 400.0, 14.0), LABEL)
 }
 
-fn chip(ui: &mut Ui, pane: Rect, origin: Vec2, text: &str, color: Color) {
-    let clip = ui.clip().intersect(pane, Corners::all(16.0));
-    let style = TextStyle::new(TypeStyle::new(11.0, 500.0, 14.0), color);
-    let layout = ui.layout_text(text, style, 0.0);
-    let size = layout.size + Vec2::new(18.0, 10.0);
-    let rect = Rect::from_min_size(origin, size);
+fn chip(
+    ui: &mut Ui,
+    pane: Rect,
+    origin: Vec2,
+    symbol: Icon,
+    title: &str,
+    detail: &str,
+    tint: Color,
+) {
+    let clip = ui.clip().intersect(pane, Corners::all(20.0));
+    let title_style = TextStyle::new(
+        TypeStyle::new(11.5, 600.0, 15.0),
+        Color::rgba(1.0, 1.0, 1.0, 0.94),
+    );
+    let detail_style = TextStyle::new(TypeStyle::new(10.5, 400.0, 13.0), Color::white_alpha(0.56));
+    let maximum = (pane.width() - 80.0).max(120.0);
+    let title_layout = ui.layout_text(title, title_style, maximum);
+    let detail_layout = ui.layout_text(detail, detail_style, maximum);
+    let width = title_layout.size.x.max(detail_layout.size.x).min(maximum) + 52.0;
+    let height = 44.0;
+    let rect = Rect::from_min_size(origin, Vec2::new(width, height));
+    let look = ui.theme().look(Role::Hud, grana_ui::State::Rest);
     let mut painter = ui.painter_in(clip);
-    painter.rect(rect, Corners::capsule(), Color::black_alpha(0.34));
-    painter.text_in(
-        rect,
-        text,
-        TextStyle::new(style.font, color).aligned(Align::Center),
-        Align::Center,
+    painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
+    icon::paint(
+        symbol,
+        &mut painter,
+        Vec2::new(rect.min.x + 18.0, rect.center().y),
+        15.0,
+        tint,
+        1.5,
+    );
+    painter.text(
+        &title_layout,
+        Vec2::new(rect.min.x + 33.0, rect.min.y + 8.0),
+        Color::rgba(1.0, 1.0, 1.0, 0.94),
+    );
+    painter.text(
+        &detail_layout,
+        Vec2::new(rect.min.x + 33.0, rect.min.y + 25.0),
+        Color::white_alpha(0.56),
     );
 }
 
@@ -350,6 +394,20 @@ fn scale_bar(painter: &mut Painter, rect: Rect, world_per_point: f32) {
     let left = rect.min.x + 18.0;
     let bottom = rect.max.y - 24.0;
     let color = BAR;
+    let pill = Rect::from_min_size(
+        Vec2::new(left - 9.0, bottom - 10.0),
+        Vec2::new(points + 64.0, 23.0),
+    );
+    painter.outlined(
+        pill,
+        Corners::capsule(),
+        Fill::Solid(Color::black_alpha(0.38)),
+        grana_ui::Border {
+            width: 0.5,
+            color: Color::white_alpha(0.10),
+        },
+        grana_ui::Shadow::NONE,
+    );
     painter.segment(
         Vec2::new(left, bottom),
         Vec2::new(left + points, bottom),
@@ -369,7 +427,7 @@ fn scale_bar(painter: &mut Painter, rect: Rect, world_per_point: f32) {
         color,
     );
     painter.text_at(
-        Vec2::new(left + points + 8.0, bottom - 8.0),
+        Vec2::new(left + points + 8.0, bottom - 7.0),
         &format_length(length),
         caption_style(),
     );
