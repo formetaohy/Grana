@@ -21,7 +21,7 @@ pub(super) fn toolbar_bar(ui: &mut Ui, rect: Rect, state: &State<'_>, actions: &
     let left_width = {
         let mut width = 0.0;
         let brand = ui.measure_text(
-            "grana",
+            "Grana",
             TextStyle::new(
                 TypeStyle::new(14.5, 650.0, 18.0),
                 ui.theme().palette.text_primary,
@@ -75,7 +75,7 @@ pub(super) fn toolbar_bar(ui: &mut Ui, rect: Rect, state: &State<'_>, actions: &
                 brand(ui);
                 ui.space(1.0);
                 ui.text_style(
-                    "grana",
+                    "Grana",
                     TextStyle::new(
                         TypeStyle::new(14.5, 650.0, 18.0),
                         ui.theme().palette.text_primary,

@@ -258,9 +258,9 @@ impl Theme {
             Role::Panel => Look {
                 fill: Fill::Glass(Glass {
                     tint: if dark {
-                        Color::rgba(0.014, 0.020, 0.032, 0.22)
+                        Color::rgba(0.014, 0.020, 0.032, 0.42)
                     } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.32)
+                        Color::rgba(1.0, 1.0, 1.0, 0.52)
                     },
                     ..Glass::PANEL
                 }),
@@ -308,9 +308,9 @@ impl Theme {
             Role::Toolbar => Look {
                 fill: Fill::Glass(Glass {
                     tint: if dark {
-                        Color::rgba(0.014, 0.020, 0.032, 0.12)
+                        Color::rgba(0.014, 0.020, 0.032, 0.14)
                     } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.26)
+                        Color::rgba(1.0, 1.0, 1.0, 0.36)
                     },
                     ..Glass::BAR
                 }),

@@ -14,7 +14,7 @@ mod timeline;
 
 const MARGIN: f32 = 14.0;
 const INSPECTOR_WIDTH: f32 = 316.0;
-const TOOLBAR_HEIGHT: f32 = 54.0;
+const TOOLBAR_HEIGHT: f32 = 46.0;
 const SHEET_DEFAULT: f32 = 384.0;
 const SHEET_MINIMUM: f32 = 220.0;
 const GAP: f32 = 12.0;

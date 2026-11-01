@@ -191,6 +191,119 @@ fn ring_layer(
     return vec4<f32>(rgb, alpha);
 }
 
+const PI: f32 = 3.14159265359;
+const STUDIO_THICKNESS: f32 = 20.0;
+const STUDIO_DISTANCE: f32 = 64.0;
+const STUDIO_IOR: f32 = 1.4;
+const STUDIO_DISPERSION: f32 = 7.0;
+const STUDIO_FRESNEL_RANGE: f32 = 30.0;
+const STUDIO_FRESNEL_HARDNESS: f32 = 0.20;
+const STUDIO_FRESNEL_FACTOR: f32 = 0.20;
+const STUDIO_GLARE_RANGE: f32 = 30.0;
+const STUDIO_GLARE_HARDNESS: f32 = 0.20;
+const STUDIO_GLARE_FACTOR: f32 = 0.90;
+const STUDIO_GLARE_CONVERGENCE: f32 = 0.50;
+const STUDIO_GLARE_OPPOSITE: f32 = 0.80;
+const STUDIO_GLARE_ANGLE: f32 = -PI * 0.25;
+const STUDIO_EDGE_GAIN: f32 = 8.0;
+
+fn studio_glass(
+    p: vec2<f32>,
+    size: vec2<f32>,
+    half: vec2<f32>,
+    radius: vec4<f32>,
+    origin: vec2<f32>,
+    sdf: f32,
+    tint: vec4<f32>,
+    specular: f32,
+    haze: f32,
+    margin: f32,
+) -> vec3<f32> {
+    let local = p + size * 0.5;
+    let base = origin + local;
+    let inside = max(-sdf, 0.0);
+    let thickness = STUDIO_THICKNESS * uniforms.scale;
+    let ratio = 1.0 - clamp(inside / thickness, 0.0, 1.0);
+    let theta_i = asin(clamp(ratio * ratio, 0.0, 1.0));
+    let theta_t = asin(clamp(sin(theta_i) / STUDIO_IOR, 0.0, 1.0));
+    let edge_factor = select(0.0, max(-tan(theta_t - theta_i), 0.0), inside < thickness);
+
+    let epsilon = max(uniforms.scale, 0.75);
+    let normal_x = squircle(p + vec2<f32>(epsilon, 0.0), half, radius)
+        - squircle(p - vec2<f32>(epsilon, 0.0), half, radius);
+    let normal_y = squircle(p + vec2<f32>(0.0, epsilon), half, radius)
+        - squircle(p - vec2<f32>(0.0, epsilon), half, radius);
+    let normal = normalize(vec2<f32>(normal_x, normal_y) + vec2<f32>(0.0001, 0.0001));
+
+    let offset = -normal * edge_factor * STUDIO_DISTANCE * uniforms.scale;
+    let spread = 0.02 * STUDIO_DISPERSION;
+    let refracted = vec3<f32>(
+        sharp_sample(base + offset * (1.0 + spread)).r,
+        sharp_sample(base + offset).g,
+        sharp_sample(base + offset * (1.0 - spread)).b,
+    );
+    let interior = mix(
+        sharp_sample(base),
+        backdrop_sample(local, size, margin),
+        clamp(haze, 0.0, 1.0),
+    );
+    var color = mix(
+        mix(interior, tint.rgb, tint.a),
+        mix(refracted, tint.rgb, tint.a * 0.25),
+        clamp(edge_factor * STUDIO_EDGE_GAIN, 0.0, 1.0),
+    );
+
+    let fresnel_geo = clamp(
+        pow(
+            max(
+                1.0 - inside / 1500.0 * pow(500.0 / STUDIO_FRESNEL_RANGE, 2.0)
+                    + STUDIO_FRESNEL_HARDNESS,
+                0.0,
+            ),
+            5.0,
+        ),
+        0.0,
+        1.0,
+    );
+    color = mix(
+        color,
+        vec3<f32>(1.0),
+        fresnel_geo * STUDIO_FRESNEL_FACTOR * 0.7 * specular,
+    );
+
+    let glare_geo = clamp(
+        pow(
+            max(
+                1.0 - inside / 1500.0 * pow(500.0 / STUDIO_GLARE_RANGE, 2.0)
+                    + STUDIO_GLARE_HARDNESS,
+                0.0,
+            ),
+            5.0,
+        ),
+        0.0,
+        1.0,
+    );
+    let glare_angle = (atan2(normal.y, normal.x) - PI * 0.25 + STUDIO_GLARE_ANGLE) * 2.0;
+    let far = select(
+        0.0,
+        1.0,
+        (glare_angle > PI * 1.5 && glare_angle < PI * 3.5) || glare_angle < -PI * 0.5,
+    );
+    let side = select(1.2, 1.2 * STUDIO_GLARE_OPPOSITE, far > 0.5);
+    let raw = clamp(
+        (0.5 + sin(glare_angle) * 0.5) * side * STUDIO_GLARE_FACTOR,
+        0.0,
+        1.0,
+    );
+    let glare = clamp(
+        pow(raw, 0.1 + STUDIO_GLARE_CONVERGENCE * 2.0),
+        0.0,
+        1.0,
+    ) * glare_geo;
+    color = mix(color, vec3<f32>(1.0), clamp(glare * specular, 0.0, 1.0));
+    return color;
+}
+
 fn shade_glass(
     p: vec2<f32>,
     size: vec2<f32>,
@@ -201,6 +314,7 @@ fn shade_glass(
     rim_strength: f32,
     refraction: f32,
     specular: f32,
+    haze: f32,
     margin: f32,
 ) -> vec3<f32> {
     let displacement = glass.x * uniforms.scale;
@@ -212,7 +326,22 @@ fn shade_glass(
     let shift = vec2<f32>((0.5 - m.r) * displacement, (0.5 - m.b) * displacement);
 
     let half = size * 0.5;
-    let inset = abs(squircle(p, half, radius));
+    let sdf = squircle(p, half, radius);
+    let inset = abs(sdf);
+    if (refraction > 0.0) {
+        return studio_glass(
+            p,
+            size,
+            half,
+            radius,
+            origin,
+            sdf,
+            tint,
+            specular,
+            haze,
+            margin,
+        );
+    }
     let lens = clamp(min(size.x, size.y) * 0.11, 14.0 * uniforms.scale, 44.0 * uniforms.scale);
     let edge = 1.0 - smoothstep(0.0, lens, inset);
 
@@ -237,36 +366,6 @@ fn shade_glass(
     );
     let refracted_tinted = mix(refracted, tint.rgb, tint.a * 0.35);
     var color = mix(frost, refracted_tinted, clamp(edge * refraction, 0.0, 1.0));
-
-    let epsilon = max(uniforms.scale, 0.75);
-    let normal_x = squircle(p + vec2<f32>(epsilon, 0.0), half, radius)
-        - squircle(p - vec2<f32>(epsilon, 0.0), half, radius);
-    let normal_y = squircle(p + vec2<f32>(0.0, epsilon), half, radius)
-        - squircle(p - vec2<f32>(0.0, epsilon), half, radius);
-    let normal = normalize(vec2<f32>(normal_x, normal_y) + vec2<f32>(0.0001, 0.0001));
-    let light = normalize(vec2<f32>(-0.45, -0.85));
-    let specular_mask = pow(clamp(dot(normal, light), 0.0, 1.0), 6.0) * edge * rim_strength;
-    let environment = sharp_sample(base + normal * 14.0 * uniforms.scale);
-    color += mix(vec3<f32>(0.90), environment, 0.45) * specular_mask * specular * 0.90;
-
-    let top = clamp(-p.y / max(half.y, 0.001), 0.0, 1.0);
-    let top_rim = (1.0 - smoothstep(0.0, 2.5 * uniforms.scale, inset)) * top * rim_strength;
-    color += vec3<f32>(0.16 * top_rim * specular);
-    let broad = (1.0 - smoothstep(0.0, 54.0 * uniforms.scale, inset))
-        * top
-        * clamp(0.45 - p.x / max(half.x, 0.001) * 0.18, 0.0, 1.0);
-    color += vec3<f32>(0.08 * broad * specular);
-
-    let bottom = clamp(p.y / max(half.y, 0.001), 0.0, 1.0);
-    color *= 1.0 - 0.09 * bottom * edge * specular;
-
-    let pointer_px = uniforms.pointer * uniforms.scale;
-    let pointer_inside = all(pointer_px >= origin) && all(pointer_px <= origin + size);
-    let pointer_x = clamp((pointer_px.x - origin.x) / max(size.x, 1.0), 0.0, 1.0);
-    let glint = exp(-pow((local.x / max(size.x, 1.0) - pointer_x) / 0.18, 2.0))
-        * (1.0 - smoothstep(0.0, 9.0 * uniforms.scale, inset))
-        * select(0.0, 1.0, pointer_inside);
-    color += vec3<f32>(0.06 * glint * rim_strength * specular);
 
     let pointer = uniforms.pointer;
     let inside = all(pointer >= origin) && all(pointer <= origin + size);
@@ -455,6 +554,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             instance.glass.w,
             instance.glass2.y,
             instance.glass2.z,
+            instance.glass2.x,
             instance.extra.x * uniforms.scale,
         );
         return vec4<f32>(color * mask, mask);

@@ -90,8 +90,8 @@ pub(super) fn paint_backdrop(ui: &mut Ui, layout: &Layout, state: &State<'_>) {
 
 fn calibration_grid(painter: &mut grana_ui::Painter<'_>, full: Rect) {
     let step = 28.0;
-    let minor = Color::white_alpha(0.10);
-    let major = Color::white_alpha(0.16);
+    let minor = Color::white_alpha(0.22);
+    let major = Color::white_alpha(0.32);
     let mut index = 0;
     let mut x = full.min.x;
     while x <= full.max.x {

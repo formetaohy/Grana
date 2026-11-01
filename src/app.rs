@@ -191,7 +191,7 @@ impl App {
             event_loop
                 .create_window(
                     Window::default_attributes()
-                        .with_title("grana")
+                        .with_title("Grana")
                         .with_inner_size(LogicalSize::new(1440.0, 900.0))
                         .with_min_inner_size(LogicalSize::new(1080.0, 700.0)),
                 )
@@ -1992,7 +1992,7 @@ impl App {
             .map(|path| file_name(path))
             .unwrap_or_else(|| "untitled".to_string());
         let marker = if self.dirty() { " •" } else { "" };
-        let title = format!("grana — {name}{marker}");
+        let title = format!("Grana — {name}{marker}");
         if self.title.as_deref() == Some(title.as_str()) {
             return;
         }
