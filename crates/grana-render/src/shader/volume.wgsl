@@ -158,7 +158,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         while (t < exit && steps < max_steps && cells < MAX_CELL_STEPS && !complete) {
             cells += 1u;
             let uvw = ray_uvw(t, direction);
-            let cell = brick_cell(frame.grid.xyz, uvw);
+            let cell = brick_cell(frame.grid.xyz, frame.dims.xyz, uvw);
             let record = bricks[brick_index(frame.grid.xyz, cell)];
             let boundary = min(t + boundary_delta(uvw, direction_uvw, step_length * 0.25), exit);
             if (record.slot == 0u || record.flags == 0u) {

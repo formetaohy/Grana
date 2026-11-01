@@ -10,7 +10,7 @@ fn unproject(ndc: vec3<f32>) -> vec3<f32> {
 }
 
 fn sample_volume(channel: u32, uvw: vec3<f32>) -> f32 {
-    let cell = brick_cell(frame.grid.xyz, uvw);
+    let cell = brick_cell(frame.grid.xyz, frame.dims.xyz, uvw);
     let record = bricks[brick_index(frame.grid.xyz, cell)];
     if (record.slot == 0u) {
         return 0.0;
@@ -43,14 +43,12 @@ fn ray_uvw(t: f32, direction: vec3<f32>) -> vec3<f32> {
 }
 
 fn boundary_delta(uvw: vec3<f32>, direction: vec3<f32>, minimum: f32) -> f32 {
-    let grid = vec3<f32>(f32(frame.grid.x), f32(frame.grid.y), f32(frame.grid.z));
+    let edge = brick_edge(uvw, frame.dims.xyz, direction);
     var delta = 1.0e20;
     for (var axis = 0u; axis < 3u; axis += 1u) {
         let step = direction[axis];
         if (abs(step) > 1.0e-9) {
-            let cell = uvw[axis] * grid[axis];
-            let next = select(floor(cell) + 1.0, ceil(cell) - 1.0, step < 0.0);
-            delta = min(delta, (next / grid[axis] - uvw[axis]) / step);
+            delta = min(delta, (edge[axis] - uvw[axis]) / step);
         }
     }
     return max(delta, minimum);

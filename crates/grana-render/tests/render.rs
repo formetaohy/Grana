@@ -5,7 +5,7 @@ use common::{
     green_pixels, green_sum, lit, pixel, read_pixels, red_count, red_pixels, settle, target,
 };
 use glam::Vec3;
-use grana_display::{Camera, SectionCamera, Shading, Stop, TransferFunction};
+use grana_display::{Camera, CameraState, SectionCamera, Shading, Stop, TransferFunction};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::{Track, TrackNode, TrackSet};
 use grana_render::{Frame, Layer, LayerKey, Marker, Renderer, SceneFrame, Style};
@@ -377,6 +377,94 @@ fn sections_planes_and_layers() {
     let plane = section_render(&device, &queue, &texture, &half, Axis::X, [0.0, 0.0, 0.0]);
     assert!(dark_fraction(&plane, 0.0, 0.33, 0.0, 1.0) > 0.98);
     assert!(bright_fraction(&plane, 0.67, 1.0, 0.2, 0.8) > 0.30);
+}
+
+#[test]
+fn samples_bricks_shorter_than_their_side() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = slab_volume(22..26);
+    let world = volume.world_extent()[2];
+    let focus = (24.5 / 48.0 - 0.5) * world;
+    let plane = section_render(
+        &device,
+        &queue,
+        &texture,
+        &volume,
+        Axis::Z,
+        [0.0, 0.0, focus],
+    );
+    assert!(
+        bright_fraction(&plane, 0.25, 0.75, 0.25, 0.75) > 0.9,
+        "a plane inside a short brick reads the brick it lies in"
+    );
+}
+
+#[test]
+fn marches_bricks_shorter_than_their_side() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = slab_volume(24..26);
+    let world = Vec3::from(volume.world_extent());
+    let mut camera = Camera::new(35.0);
+    camera.fit(world, 1.0);
+    camera.restore(CameraState {
+        pivot: [0.0; 3],
+        yaw: 0.0,
+        pitch: 0.0,
+        distance: camera.distance(),
+        fov_y: camera.fov_y(),
+    });
+    let pixels = render(Setup {
+        device: &device,
+        queue: &queue,
+        job: Job {
+            texture: &texture,
+            volume: &volume,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            focus_z: 0.0,
+            mesh: None,
+        },
+        camera: Some(&camera),
+        section: None,
+        markers: &[],
+    });
+    let darkest = (SIDE * 2 / 5..SIDE * 3 / 5)
+        .flat_map(|y| (SIDE * 2 / 5..SIDE * 3 / 5).map(move |x| (x, y)))
+        .map(|(x, y)| pixel(&pixels, x, y).map(u32::from))
+        .map(|[red, green, blue, _]| red + green + blue)
+        .min()
+        .expect("the crop holds pixels");
+    assert!(
+        darkest > 400,
+        "a ray inside a short brick reads the brick it lies in: {darkest}"
+    );
+}
+
+fn slab_volume(ribbon: std::ops::Range<u32>) -> Volume {
+    let extent = Extent::new(64, 64, 48);
+    let mut voxels = vec![0u16; extent.voxel_count() as usize];
+    for z in ribbon {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                voxels[extent.index(x, y, z) as usize] = 60000;
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        Spacing::new(0.1, 0.1, 0.2),
+        vec![Channel::new(
+            "slab",
+            [1.0, 1.0, 1.0],
+            VoxelData::U16(voxels),
+        )],
+    )
 }
 
 #[test]

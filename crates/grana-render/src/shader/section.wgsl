@@ -21,7 +21,7 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 }
 
 fn sample_section(channel: u32, uvw: vec3<f32>) -> f32 {
-    let cell = brick_cell(section.grid.xyz, uvw);
+    let cell = brick_cell(section.grid.xyz, section.dims.xyz, uvw);
     let record = bricks[brick_index(section.grid.xyz, cell)];
     if (record.slot == 0u || record.flags == 0u) {
         return 0.0;
