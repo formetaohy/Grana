@@ -28,7 +28,7 @@ pub(super) fn timeline_bar(
     state: &mut State<'_>,
     actions: &mut Vec<Action>,
 ) {
-    let look = ui.theme().look(Role::Toolbar, grana_ui::State::Rest);
+    let look = ui.theme().look(Role::Transport, grana_ui::State::Rest);
     ui.stacked(rect, false, |ui| {
         {
             let mut painter = ui.painter();

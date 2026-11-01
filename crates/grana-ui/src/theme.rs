@@ -9,6 +9,7 @@ pub enum Role {
     Panel,
     Sheet,
     Toolbar,
+    Transport,
     Popover,
     Hud,
     Chip,
@@ -301,6 +302,20 @@ impl Theme {
                     30.0,
                     11.0,
                 ),
+                text: palette.text_primary,
+            },
+            Role::Transport => Look {
+                fill: Fill::Glass(Glass::CLEAR.tinted(if dark {
+                    Color::rgba(0.82, 0.87, 0.96, 0.10)
+                } else {
+                    Color::rgba(1.0, 1.0, 1.0, 0.16)
+                })),
+                corners: Corners::capsule(),
+                border: Border {
+                    width: metrics.hairline,
+                    color: white(0.28),
+                },
+                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.28), 26.0, 9.0),
                 text: palette.text_primary,
             },
             Role::Popover => Look {
