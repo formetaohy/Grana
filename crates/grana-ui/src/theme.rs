@@ -258,7 +258,7 @@ impl Theme {
         match role {
             Role::Panel => Look {
                 fill: Fill::Glass(Glass::REGULAR.tinted(if dark {
-                    Color::rgba(0.150, 0.170, 0.210, 0.30)
+                    Color::rgba(0.100, 0.120, 0.160, 0.06)
                 } else {
                     Color::rgba(1.0, 1.0, 1.0, 0.30)
                 })),
@@ -280,7 +280,7 @@ impl Theme {
             },
             Role::Sheet => Look {
                 fill: Fill::Glass(Glass::REGULAR.tinted(if dark {
-                    Color::rgba(0.150, 0.170, 0.210, 0.30)
+                    Color::rgba(0.100, 0.120, 0.160, 0.06)
                 } else {
                     Color::rgba(1.0, 1.0, 1.0, 0.30)
                 })),
@@ -302,7 +302,7 @@ impl Theme {
             },
             Role::Toolbar => Look {
                 fill: Fill::Glass(Glass::REGULAR.tinted(if dark {
-                    Color::rgba(0.120, 0.140, 0.180, 0.18)
+                    Color::rgba(0.100, 0.120, 0.160, 0.04)
                 } else {
                     Color::rgba(1.0, 1.0, 1.0, 0.30)
                 })),
@@ -324,7 +324,7 @@ impl Theme {
             },
             Role::Popover => Look {
                 fill: Fill::Glass(Glass::REGULAR.tinted(if dark {
-                    Color::rgba(0.150, 0.170, 0.210, 0.34)
+                    Color::rgba(0.100, 0.120, 0.160, 0.08)
                 } else {
                     Color::rgba(0.98, 0.98, 0.99, 0.36)
                 })),

@@ -205,7 +205,6 @@ const STUDIO_GLARE_FACTOR: f32 = 0.90;
 const STUDIO_GLARE_CONVERGENCE: f32 = 0.50;
 const STUDIO_GLARE_OPPOSITE: f32 = 0.80;
 const STUDIO_GLARE_ANGLE: f32 = -PI * 0.25;
-const STUDIO_EDGE_GAIN: f32 = 8.0;
 
 fn studio_glass(
     p: vec2<f32>,
@@ -216,6 +215,7 @@ fn studio_glass(
     sdf: f32,
     tint: vec4<f32>,
     specular: f32,
+    refraction: f32,
     haze: f32,
     margin: f32,
 ) -> vec3<f32> {
@@ -238,9 +238,21 @@ fn studio_glass(
     let offset = -normal * edge_factor * STUDIO_DISTANCE * uniforms.scale;
     let spread = 0.02 * STUDIO_DISPERSION;
     let refracted = vec3<f32>(
-        sharp_sample(base + offset * (1.0 + spread)).r,
-        sharp_sample(base + offset).g,
-        sharp_sample(base + offset * (1.0 - spread)).b,
+        mix(
+            sharp_sample(base + offset * (1.0 + spread)).r,
+            backdrop_sample(local + offset * (1.0 + spread), size, margin).r,
+            haze,
+        ),
+        mix(
+            sharp_sample(base + offset).g,
+            backdrop_sample(local + offset, size, margin).g,
+            haze,
+        ),
+        mix(
+            sharp_sample(base + offset * (1.0 - spread)).b,
+            backdrop_sample(local + offset * (1.0 - spread), size, margin).b,
+            haze,
+        ),
     );
     let interior = mix(
         sharp_sample(base),
@@ -248,12 +260,16 @@ fn studio_glass(
         clamp(haze, 0.0, 1.0),
     );
     let neutral = vec3<f32>(dot(interior, vec3<f32>(0.2126, 0.7152, 0.0722)));
-    let soft = mix(interior, neutral, 0.20 * haze);
+    let soft = mix(interior, neutral, 0.50 * haze);
     var color = mix(
-        mix(soft, tint.rgb, tint.a),
-        mix(refracted, tint.rgb, tint.a * 0.25),
-        clamp(edge_factor * STUDIO_EDGE_GAIN, 0.0, 1.0),
+        soft,
+        refracted,
+        smoothstep(0.0, 0.20, edge_factor) * refraction,
     );
+    color = mix(color, tint.rgb, tint.a);
+    let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let veil = smoothstep(0.35, 0.85, luma) * 0.22 * haze;
+    color = mix(color, vec3<f32>(0.020, 0.030, 0.045), veil);
 
     let fresnel_geo = clamp(
         pow(
@@ -340,6 +356,7 @@ fn shade_glass(
             sdf,
             tint,
             specular,
+            refraction,
             haze,
             margin,
         );
