@@ -1,5 +1,4 @@
-use glam::Vec2;
-use grana_ui::{Align, Axis, Block, Color, Length, Rect, Role, TextStyle, Ui};
+use grana_ui::{Align, Axis, Block, Length, Role, TextStyle, Ui};
 
 use crate::action::Action;
 use crate::state::State;
@@ -180,7 +179,4 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>) {
         ui,
         "keyframes carry the camera, the section plane and the time point; motion eases in and out of every keyframe",
     );
-    let _ = Vec2::ZERO;
-    let _ = Color::TRANSPARENT;
-    let _ = Rect::ZERO;
 }
