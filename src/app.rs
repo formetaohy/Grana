@@ -153,7 +153,7 @@ impl App {
             exiting: false,
             scene: None,
             measure: Measure::new(),
-            panel: Some(Panel::Statistics),
+            panel: None,
             viewport: Viewport::new(),
             animation: Animation::new(1, 0.0),
             movie: None,

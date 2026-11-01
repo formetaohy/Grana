@@ -285,7 +285,9 @@ impl Ui {
     pub fn end(&mut self) -> Frame {
         self.registry.end(self.elapsed);
         self.text.flush(self.renderer.queue());
-        self.renderer.write_uniforms(self.scale, self.time);
+        let pointer = self.input.position();
+        self.renderer
+            .write_uniforms(self.scale, self.time, [pointer.x, pointer.y]);
         self.areas.clear();
         self.ids.clear();
         Frame {

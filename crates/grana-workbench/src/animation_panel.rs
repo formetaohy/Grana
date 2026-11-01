@@ -8,6 +8,7 @@ use crate::widget;
 const WIDTHS: [u32; 4] = [1280, 1920, 2560, 3840];
 
 pub fn build(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>) {
+    widget::caption(ui, "keyframe the camera and section, then export a movie");
     let animation = &mut state.animation;
     let busy = animation.movie.is_some();
     let duration = animation.timeline.duration();

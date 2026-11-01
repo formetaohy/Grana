@@ -1,7 +1,7 @@
 use glam::Vec2;
 use grana_ui::{
-    Align, Block, Color, Corners, Cursor, Edges, Length, Rect, Role, TextStyle, TypeStyle, Ui,
-    Vec2 as UiVec2,
+    Align, Block, Color, Corners, Cursor, Edges, Fill, Length, Rect, Role, Shadow, TextStyle,
+    TypeStyle, Ui, Vec2 as UiVec2,
 };
 
 use crate::action::Action;
@@ -9,13 +9,15 @@ use crate::overlay::{self, Overlay};
 use crate::state::State;
 use crate::widget;
 
-const MARGIN: f32 = 12.0;
-const INSPECTOR_WIDTH: f32 = 328.0;
-const TOOLBAR_HEIGHT: f32 = 44.0;
-const SHEET_DEFAULT: f32 = 330.0;
-const SHEET_MINIMUM: f32 = 180.0;
+const MARGIN: f32 = 16.0;
+const INSPECTOR_WIDTH: f32 = 320.0;
+const TOOLBAR_HEIGHT: f32 = 52.0;
+const SHEET_DEFAULT: f32 = 320.0;
+const SHEET_MINIMUM: f32 = 200.0;
 const TIMELINE_WIDTH: f32 = 520.0;
-const GAP: f32 = 8.0;
+const TIMELINE_HEIGHT: f32 = 44.0;
+const GAP: f32 = 12.0;
+const SPLITTER: f32 = 5.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
@@ -43,33 +45,73 @@ impl Panel {
     }
 }
 
+struct Layout {
+    toolbar: Rect,
+    inspector: Rect,
+    stage: Rect,
+    sheet: Option<Rect>,
+}
+
+impl Layout {
+    fn new(ui: &mut Ui, state: &State<'_>, full: Rect) -> Self {
+        let toolbar = Rect::from_min_max(
+            full.min + Vec2::splat(MARGIN),
+            Vec2::new(full.max.x - MARGIN, MARGIN + TOOLBAR_HEIGHT),
+        );
+        let top = toolbar.max.y + GAP;
+        let inspector = Rect::from_min_max(
+            Vec2::new(MARGIN, top),
+            Vec2::new(MARGIN + INSPECTOR_WIDTH, full.max.y - MARGIN),
+        );
+        let stage_left = inspector.max.x + GAP;
+        let sheet = state.panel.map(|_| {
+            let available = full.max.y - MARGIN - top - GAP - 160.0;
+            let height = sheet_height(ui, available);
+            Rect::from_min_max(
+                Vec2::new(stage_left, full.max.y - MARGIN - height),
+                Vec2::new(full.max.x - MARGIN, full.max.y - MARGIN),
+            )
+        });
+        let stage_bottom = sheet.map_or(full.max.y - MARGIN, |sheet| sheet.min.y - GAP);
+        let stage = Rect::from_min_max(
+            Vec2::new(stage_left, top),
+            Vec2::new(full.max.x - MARGIN, stage_bottom),
+        );
+        Self {
+            toolbar,
+            inspector,
+            stage,
+            sheet,
+        }
+    }
+
+    fn views(&self, split: f32) -> (Rect, Rect) {
+        let width = (self.stage.width() - SPLITTER) * split;
+        (
+            Rect::from_min_max(
+                self.stage.min,
+                Vec2::new(self.stage.min.x + width, self.stage.max.y),
+            ),
+            Rect::from_min_max(
+                Vec2::new(self.stage.min.x + width + SPLITTER, self.stage.min.y),
+                self.stage.max,
+            ),
+        )
+    }
+}
+
 pub fn build(ui: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
     let mut actions = Vec::new();
     let size = ui.size();
     let full = Rect::from_min_size(Vec2::ZERO, size);
-    let content = Rect::from_min_max(
-        Vec2::new(MARGIN, 10.0 + TOOLBAR_HEIGHT + 10.0),
-        Vec2::new(full.max.x - MARGIN, full.max.y - MARGIN),
-    );
+    let layout = Layout::new(ui, state, full);
     ui.root(|ui| {
         {
             let backdrop = ui.theme().palette.scene_backdrop;
             let mut painter = ui.painter();
             painter.rect(full, Corners::ZERO, backdrop);
         }
-        let split = state.viewport.split();
-        let splitter = 5.0;
-        let volume = Rect::from_min_max(
-            content.min,
-            Vec2::new(
-                content.min.x + (content.width() - splitter) * split,
-                content.max.y,
-            ),
-        );
-        let section = Rect::from_min_max(
-            Vec2::new(volume.max.x + splitter, content.min.y),
-            content.max,
-        );
+        let (volume, section) = layout.views(state.viewport.split());
         state.viewport.set_rects(volume, section);
         let (plane_u, plane_v) = state.viewport.section().axis().in_plane();
         let world = state.scene.dataset.world_size();
@@ -85,13 +127,22 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
         {
             let mut painter = ui.painter();
             let uv = scene_uv(volume, size);
-            painter.scene(volume, Corners::all(16.0), uv);
-            painter.scene(stage, Corners::ZERO, scene_uv(stage, size));
+            painter.scene(volume, Corners::all(18.0), uv);
+            painter.outlined(
+                volume,
+                Corners::all(18.0),
+                grana_ui::Fill::None,
+                grana_ui::Border {
+                    width: 1.0,
+                    color: Color::white_alpha(0.07),
+                },
+                grana_ui::Shadow::NONE,
+            );
+            painter.scene(stage, Corners::all(12.0), scene_uv(stage, size));
         }
         let legends = overlay::legends(state.scene);
-        let toolbar = toolbar_rect(ui, full);
         let volume_safe = Rect::from_min_max(
-            Vec2::new(inspector_rect(full, toolbar, None).max.x, volume.min.y),
+            Vec2::new(layout.inspector.max.x + GAP, volume.min.y),
             volume.max,
         );
         let mut overlay = Overlay {
@@ -111,27 +162,18 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
             recording: state.animation.movie,
         };
         overlay::paint(ui, &mut overlay);
-        split_handle(ui, volume, section, state, &mut actions);
-        let sheet_for_timeline = state
-            .panel
-            .map(|_| sheet_rect(full, sheet_height(ui, size)));
-        let timeline =
-            (state.scene.frame_count() > 1).then(|| timeline_rect(volume, sheet_for_timeline));
-        if let Some(rect) = timeline {
+        split_handle(ui, volume, section, &mut actions);
+        if state.scene.frame_count() > 1 {
+            let rect = timeline_rect(volume);
             register_occluder(ui, rect);
             timeline_bar(ui, rect, state, &mut actions);
         }
-        register_occluder(ui, toolbar);
-        toolbar_bar(ui, toolbar, state, &mut actions);
-        let sheet_height = sheet_height(ui, size);
-        let sheet = state.panel.map(|_| sheet_rect(full, sheet_height));
-        let inspector = inspector_rect(full, toolbar, sheet);
-        if let Some(sheet) = sheet {
+        register_occluder(ui, layout.toolbar);
+        toolbar_bar(ui, layout.toolbar, state, &mut actions);
+        register_occluder(ui, layout.inspector);
+        inspector_panel(ui, layout.inspector, state, &mut actions);
+        if let Some(sheet) = layout.sheet {
             register_occluder(ui, sheet);
-        }
-        register_occluder(ui, inspector);
-        inspector_panel(ui, inspector, state, &mut actions);
-        if let Some(sheet) = sheet {
             sheet_panel(ui, sheet, state, &mut actions);
         }
     });
@@ -142,16 +184,9 @@ fn register_occluder(ui: &mut Ui, rect: Rect) {
     ui.register_occluder(rect);
 }
 
-fn toolbar_rect(_ui: &mut Ui, full: Rect) -> Rect {
-    Rect::from_min_max(
-        Vec2::new(MARGIN, 10.0),
-        Vec2::new(full.max.x - MARGIN, 10.0 + TOOLBAR_HEIGHT),
-    )
-}
-
 fn button_width(ui: &mut Ui, label: &str) -> f32 {
     let body = TextStyle::new(ui.theme().font(grana_ui::Level::Body), Color::WHITE);
-    ui.measure_text(label, body).x + 22.0
+    ui.measure_text(label, body).x + 26.0
 }
 
 fn title_style(ui: &Ui) -> TypeStyle {
@@ -166,17 +201,9 @@ fn toolbar_bar(ui: &mut Ui, rect: Rect, state: &State<'_>, actions: &mut Vec<Act
     let open = button_width(ui, "Open");
     let project = button_width(ui, "Project");
     let fit = button_width(ui, "Fit");
-    let analysis = button_width(ui, "Analysis");
-    let animation = button_width(ui, "Animation");
-    let left = 18.0 + brand + 13.0 + open + GAP + project + GAP + fit + 10.0;
-    let right = analysis + GAP + animation + 18.0;
-    let title_size = ui
-        .measure_text(
-            state.scene.dataset.name(),
-            TextStyle::new(ui.theme().font(grana_ui::Level::Body), Color::WHITE),
-        )
-        .x;
-    let title_width = (rect.width() - 2.0 * left.max(right) - 24.0).max(60.0);
+    let left = 20.0 + brand + 14.0 + open + 4.0 + project + 20.0;
+    let right = fit + 12.0 + 2.0 * button_width(ui, "Analyze") + 20.0;
+    let title_width = (rect.width() - left - right).max(80.0);
     ui.stacked(rect, false, |ui| {
         {
             let mut painter = ui.painter();
@@ -187,8 +214,8 @@ fn toolbar_bar(ui: &mut Ui, rect: Rect, state: &State<'_>, actions: &mut Vec<Act
             |ui| {
                 ui.row(
                     Block::row()
-                        .padding(Edges::symmetric(18.0, 0.0))
-                        .gaps(GAP)
+                        .padding(Edges::symmetric(20.0, 0.0))
+                        .gaps(4.0)
                         .align(Align::Center)
                         .height(Length::Fill),
                     |ui| {
@@ -196,38 +223,24 @@ fn toolbar_bar(ui: &mut Ui, rect: Rect, state: &State<'_>, actions: &mut Vec<Act
                             "grana",
                             TextStyle::new(title_style(ui), ui.theme().palette.text_primary),
                         );
-                        separator(ui, TOOLBAR_HEIGHT - 20.0);
+                        ui.space(10.0);
                         if widget::button(ui, "open", "Open", Role::Quiet) {
                             actions.push(Action::OpenDataset);
                         }
                         project_menu(ui, state, actions);
-                        if widget::button(ui, "fit", "Fit", Role::Quiet) {
-                            actions.push(Action::Fit);
-                        }
                     },
                 );
             },
         );
-        if title_width > title_size {
-            ui.place(
-                Rect::from_center_size(rect.center(), Vec2::new(title_width, rect.height())),
-                |ui| {
-                    let style = TextStyle::new(
-                        ui.theme().font(grana_ui::Level::Body),
-                        ui.theme().palette.text_secondary,
-                    )
-                    .aligned(Align::Center);
-                    ui.text_in(
-                        Rect::from_min_size(
-                            Vec2::new(rect.center().x - title_width * 0.5, rect.min.y),
-                            Vec2::new(title_width, rect.height()),
-                        ),
-                        state.scene.dataset.name(),
-                        style,
-                        Align::Center,
-                    );
-                },
-            );
+        let center = Rect::from_center_size(rect.center(), Vec2::new(title_width, rect.height()));
+        {
+            let style = TextStyle::new(
+                ui.theme().font(grana_ui::Level::Body),
+                ui.theme().palette.text_secondary,
+            )
+            .aligned(Align::Center);
+            let mut painter = ui.painter();
+            painter.text_in(center, state.scene.dataset.name(), style, Align::Center);
         }
         ui.place(
             Rect::from_min_size(
@@ -237,54 +250,113 @@ fn toolbar_bar(ui: &mut Ui, rect: Rect, state: &State<'_>, actions: &mut Vec<Act
             |ui| {
                 ui.row(
                     Block::row()
-                        .padding(Edges::symmetric(18.0, 0.0))
-                        .gaps(GAP)
+                        .padding(Edges::symmetric(20.0, 0.0))
+                        .gaps(8.0)
                         .align(Align::Center)
+                        .justify(Align::End)
                         .height(Length::Fill),
                     |ui| {
-                        let analysis_open = state.panel.is_some();
-                        if widget::button(
-                            ui,
-                            "analysis",
-                            "Analysis",
-                            if analysis_open {
-                                Role::Tinted
-                            } else {
-                                Role::Quiet
-                            },
-                        ) {
-                            actions.push(Action::SetPanel(
-                                (!analysis_open).then_some(Panel::Statistics),
-                            ));
+                        if widget::button(ui, "fit", "Fit", Role::Quiet) {
+                            actions.push(Action::Fit);
                         }
-                        let animation_open = *state.panel == Some(Panel::Animation);
-                        if widget::button(
-                            ui,
-                            "animation",
-                            "Animation",
-                            if animation_open {
-                                Role::Tinted
-                            } else {
-                                Role::Quiet
-                            },
-                        ) {
-                            actions.push(Action::SetPanel(
-                                (!animation_open).then_some(Panel::Animation),
-                            ));
-                        }
+                        ui.space(6.0);
+                        mode_switch(ui, state, actions);
                     },
                 );
             },
         );
     });
 }
+
+fn mode_switch(ui: &mut Ui, state: &State<'_>, actions: &mut Vec<Action>) {
+    let labels = ["Analyze", "Animate"];
+    let font = ui.theme().font(grana_ui::Level::Callout);
+    let style = TextStyle::new(font, Color::WHITE);
+    let widths = labels.map(|label| ui.measure_text(label, style).x + 24.0);
+    let height = ui.theme().metrics.control_height;
+    let hairline = ui.theme().metrics.hairline;
+    let cursor = ui.cursor_position();
+    let track = Rect::from_min_size(cursor, Vec2::new(widths[0] + widths[1] + 4.0, height));
+    let mut chosen = None;
+    let active = match *state.panel {
+        Some(Panel::Animation) => Some(1),
+        Some(_) => Some(0),
+        None => None,
+    };
+    for (index, width) in widths.iter().enumerate() {
+        let cell = Rect::from_min_size(
+            Vec2::new(
+                track.min.x + 2.0 + if index == 0 { 0.0 } else { widths[0] },
+                track.min.y + 2.0,
+            ),
+            Vec2::new(*width, track.height() - 4.0),
+        );
+        let key = ui.id(&format!("mode.{index}"));
+        let response = ui.interact(key, cell);
+        if response.clicked {
+            chosen = Some(index);
+        }
+        let role = if active == Some(index) {
+            Role::SegmentSelected
+        } else {
+            Role::Segment
+        };
+        let look = ui.look(key, role, &response);
+        let text = if active == Some(index) {
+            ui.theme().palette.text_primary
+        } else {
+            ui.theme().palette.text_secondary
+        };
+        let mut painter = ui.painter();
+        painter.outlined(
+            cell,
+            Corners::capsule(),
+            look.fill,
+            look.border,
+            look.shadow,
+        );
+        painter.text_in(
+            cell,
+            labels[index],
+            TextStyle::new(font, text).aligned(Align::Center),
+            Align::Center,
+        );
+    }
+    let mut painter = ui.painter();
+    painter.outlined(
+        track,
+        Corners::capsule(),
+        Fill::Solid(Color::rgba(0.0, 0.0, 0.0, 0.20)),
+        grana_ui::Border {
+            width: hairline,
+            color: Color::white_alpha(0.06),
+        },
+        Shadow::NONE,
+    );
+    ui.allocate(track.size());
+    if let Some(index) = chosen {
+        let panel = if index == 0 {
+            if active == Some(0) {
+                None
+            } else {
+                Some(Panel::Statistics)
+            }
+        } else if active == Some(1) {
+            None
+        } else {
+            Some(Panel::Animation)
+        };
+        actions.push(Action::SetPanel(panel));
+    }
+}
+
 fn project_menu(ui: &mut Ui, state: &State<'_>, actions: &mut Vec<Action>) {
     let key = ui.id("project.menu");
     let font = ui.theme().font(grana_ui::Level::Body);
     let width = ui
         .measure_text("Project", TextStyle::new(font, Color::WHITE))
         .x
-        + 22.0;
+        + 26.0;
     let height = ui.theme().metrics.control_height;
     let rect = ui.allocate(Vec2::new(width, height));
     let response = ui.interact(key, rect);
@@ -313,7 +385,7 @@ fn project_menu(ui: &mut Ui, state: &State<'_>, actions: &mut Vec<Action>) {
         if grana_ui::popover::menu_row(ui, 1, "Save project", false) {
             chosen = Some(Action::SaveProject);
         }
-        if grana_ui::popover::menu_row(ui, 2, "Save as…", false) {
+        if grana_ui::popover::menu_row(ui, 2, "Save as...", false) {
             chosen = Some(Action::SaveProjectAs);
         }
         if grana_ui::popover::menu_row(ui, 3, "Save snapshot", false) {
@@ -328,23 +400,15 @@ fn project_menu(ui: &mut Ui, state: &State<'_>, actions: &mut Vec<Action>) {
     }
 }
 
-fn separator(ui: &mut Ui, height: f32) {
-    let rect = ui.allocate(Vec2::new(9.0, height));
-    let mut painter = ui.painter();
-    painter.rect(
-        Rect::from_center_size(rect.center(), Vec2::new(1.0, height - 8.0)),
-        Corners::ZERO,
-        Color::white_alpha(0.12),
-    );
-}
-
-fn timeline_rect(volume: Rect, sheet: Option<Rect>) -> Rect {
-    let width = TIMELINE_WIDTH.min(volume.width() - 40.0).max(280.0);
-    let bottom = match sheet {
-        Some(sheet) => (sheet.min.y - 30.0).max(volume.min.y + 80.0),
-        None => volume.max.y - 26.0,
-    };
-    Rect::from_center_size(Vec2::new(volume.center().x, bottom), Vec2::new(width, 40.0))
+fn timeline_rect(volume: Rect) -> Rect {
+    let width = TIMELINE_WIDTH.min(volume.width() - 48.0).max(280.0);
+    Rect::from_center_size(
+        Vec2::new(
+            volume.center().x,
+            volume.max.y - 16.0 - TIMELINE_HEIGHT * 0.5,
+        ),
+        Vec2::new(width, TIMELINE_HEIGHT),
+    )
 }
 
 fn timeline_bar(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut Vec<Action>) {
@@ -356,8 +420,8 @@ fn timeline_bar(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut Ve
         }
         ui.row(
             Block::row()
-                .padding(Edges::symmetric(10.0, 0.0))
-                .gaps(10.0)
+                .padding(Edges::symmetric(14.0, 0.0))
+                .gaps(12.0)
                 .align(Align::Center),
             |ui| {
                 let symbol = if state.playing {
@@ -370,7 +434,7 @@ fn timeline_bar(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut Ve
                 }
                 let frames = state.scene.frame_count();
                 let mut time = state.scene.time() as f32;
-                let width = (ui.available().x - 96.0).max(80.0);
+                let width = (ui.available().x - 108.0).max(80.0);
                 if let Some(value) = widget::slider_sized(
                     ui,
                     "time",
@@ -412,25 +476,9 @@ fn timeline_bar(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut Ve
     });
 }
 
-fn sheet_height(ui: &mut Ui, size: Vec2) -> f32 {
+fn sheet_height(ui: &mut Ui, available: f32) -> f32 {
     let stored = ui.value_of(ui.id("sheet.height")).unwrap_or(SHEET_DEFAULT);
-    stored.clamp(SHEET_MINIMUM, size.y * 0.7)
-}
-
-fn sheet_rect(full: Rect, height: f32) -> Rect {
-    let left = MARGIN + INSPECTOR_WIDTH + 14.0;
-    Rect::from_min_max(
-        Vec2::new(left, full.max.y - MARGIN - height),
-        Vec2::new(full.max.x - MARGIN, full.max.y - MARGIN),
-    )
-}
-
-fn inspector_rect(full: Rect, toolbar: Rect, _sheet: Option<Rect>) -> Rect {
-    let top = toolbar.max.y + 14.0;
-    Rect::from_min_max(
-        Vec2::new(MARGIN + 8.0, top),
-        Vec2::new(MARGIN + 8.0 + INSPECTOR_WIDTH, full.max.y - MARGIN),
-    )
+    stored.clamp(SHEET_MINIMUM, available.max(SHEET_MINIMUM))
 }
 
 fn inspector_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut Vec<Action>) {
@@ -443,8 +491,8 @@ fn inspector_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut
         ui.scroll(ui.id("inspector"), Length::Fill, |ui| {
             ui.column(
                 Block::column()
-                    .padding(Edges::symmetric(16.0, 14.0))
-                    .gaps(10.0),
+                    .padding(Edges::symmetric(18.0, 16.0))
+                    .gaps(14.0),
                 |ui| {
                     crate::inspector::header(ui, state);
                     ui.separator();
@@ -452,17 +500,11 @@ fn inspector_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut
                     ui.separator();
                     crate::inspector::display(ui, state.scene);
                     ui.separator();
-                    crate::inspector::section(ui, state, actions);
-                    ui.separator();
-                    crate::inspector::region(ui, state);
-                    ui.separator();
                     crate::object_panel::build(ui, state, actions);
                     ui.separator();
-                    crate::inspector::rendering(ui, state.scene);
+                    crate::inspector::section(ui, state, actions);
                     ui.separator();
-                    crate::inspector::streaming(ui, state);
-                    ui.separator();
-                    crate::inspector::footer(ui, state);
+                    crate::inspector::more(ui, state);
                 },
             );
         });
@@ -471,7 +513,7 @@ fn inspector_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut
 
 fn sheet_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut Vec<Action>) {
     let appear = ui.appeared(ui.id("sheet.appear"), 0.26);
-    let rect = rect.translate(Vec2::new(0.0, (1.0 - appear) * 26.0));
+    let rect = rect.translate(Vec2::new(0.0, (1.0 - appear) * 24.0));
     let look = ui.theme().look(Role::Sheet, grana_ui::State::Rest);
     {
         let mut painter = ui.painter();
@@ -481,19 +523,42 @@ fn sheet_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut Vec
         handle(ui, rect);
         ui.column(
             Block::column()
-                .padding(Edges::symmetric(18.0, 12.0))
-                .gaps(10.0),
+                .padding(Edges::symmetric(18.0, 14.0))
+                .gaps(12.0),
             |ui| {
-                ui.row(Block::row().gaps(12.0).align(Align::Center), |ui| {
-                    let labels = Panel::ALL.map(|panel| panel.name());
-                    if let Some(index) = widget::tabs(ui, "panel.tabs", &labels, panel_index(state))
-                    {
-                        actions.push(Action::SetPanel(Some(Panel::ALL[index])));
-                    }
-                    if widget::button(ui, "hide.panel", "Hide", Role::Quiet) {
-                        actions.push(Action::SetPanel(None));
-                    }
-                });
+                let header = ui.allocate_full(ui.theme().metrics.control_height);
+                let close = Rect::from_center_size(
+                    Vec2::new(header.max.x - 13.0, header.center().y),
+                    Vec2::splat(26.0),
+                );
+                ui.place(
+                    Rect::from_min_max(header.min, Vec2::new(header.max.x - 34.0, header.max.y)),
+                    |ui| {
+                        let labels = Panel::ALL.map(|panel| panel.name());
+                        if let Some(index) =
+                            widget::tabs(ui, "panel.tabs", &labels, panel_index(state))
+                        {
+                            actions.push(Action::SetPanel(Some(Panel::ALL[index])));
+                        }
+                    },
+                );
+                let key = ui.id("hide.panel");
+                let response = ui.interact(key, close);
+                let look = ui.look(key, Role::Quiet, &response);
+                {
+                    let font = ui.theme().font(grana_ui::Level::Title);
+                    let mut painter = ui.painter();
+                    painter.outlined(close, look.corners, look.fill, look.border, look.shadow);
+                    painter.text_in(
+                        close,
+                        "\u{00D7}",
+                        TextStyle::new(font, look.text).aligned(Align::Center),
+                        Align::Center,
+                    );
+                }
+                if response.clicked {
+                    actions.push(Action::SetPanel(None));
+                }
                 ui.separator();
                 let panel = state.panel.unwrap_or(Panel::Statistics);
                 ui.scroll(ui.id("sheet.body"), Length::Fill, |ui| match panel {
@@ -518,7 +583,7 @@ fn handle(ui: &mut Ui, rect: Rect) {
     let key = ui.id("sheet.resize");
     let strip = Rect::from_min_max(
         Vec2::new(rect.min.x, rect.min.y),
-        Vec2::new(rect.max.x, rect.min.y + 8.0),
+        Vec2::new(rect.max.x, rect.min.y + 10.0),
     );
     let response = ui.interact(key, strip);
     if response.dragging {
@@ -527,36 +592,28 @@ fn handle(ui: &mut Ui, rect: Rect) {
         ui.store_value(ui.id("sheet.height"), height);
         ui.set_cursor(Cursor::ResizeVertical);
     }
-
     let grip = Rect::from_center_size(
-        Vec2::new(rect.center().x, rect.min.y + 3.0),
-        Vec2::new(38.0, 4.0),
+        Vec2::new(rect.center().x, rect.min.y + 4.0),
+        Vec2::new(36.0, 4.0),
     );
     let mut painter = ui.painter();
     painter.rect(
         grip,
         Corners::capsule(),
-        Color::white_alpha(if response.hovered { 0.22 } else { 0.12 }),
+        Color::white_alpha(if response.hovered { 0.28 } else { 0.16 }),
     );
 }
 
-fn split_handle(
-    ui: &mut Ui,
-    volume: Rect,
-    section: Rect,
-    state: &mut State<'_>,
-    actions: &mut Vec<Action>,
-) {
-    let split = state.viewport.split();
-    let x = volume.max.x + 2.5;
-    let rect = Rect::from_center_size(Vec2::new(x, volume.center().y), Vec2::new(5.0, 74.0));
-    let response = ui.interact(ui.id("split.handle"), rect.expand(3.0));
+fn split_handle(ui: &mut Ui, volume: Rect, section: Rect, actions: &mut Vec<Action>) {
+    let x = volume.max.x + SPLITTER * 0.5;
+    let rect = Rect::from_center_size(Vec2::new(x, volume.center().y), Vec2::new(5.0, 76.0));
+    let response = ui.interact(ui.id("split.handle"), rect.expand(4.0));
     if response.hovered || response.dragging {
         ui.set_cursor(Cursor::ResizeHorizontal);
     }
     if response.dragging {
         let pointer = ui.input().position().x;
-        let total = volume.width() + section.width() + 5.0;
+        let total = volume.width() + section.width() + SPLITTER;
         actions.push(Action::SetSplit(
             ((pointer - volume.min.x) / total).clamp(0.25, 0.8),
         ));
@@ -570,7 +627,7 @@ fn split_handle(
         look.border,
         look.shadow,
     );
-    let dots = Color::white_alpha(if response.hovered { 0.5 } else { 0.28 });
+    let dots = Color::white_alpha(if response.hovered { 0.55 } else { 0.30 });
     for offset in [-6.0f32, 0.0, 6.0] {
         painter.rect(
             Rect::from_center_size(
@@ -581,7 +638,6 @@ fn split_handle(
             dots,
         );
     }
-    let _ = split;
 }
 
 pub fn scene_uv(rect: Rect, size: Vec2) -> [f32; 4] {

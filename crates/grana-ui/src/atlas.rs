@@ -9,8 +9,7 @@ use crate::font::{Fonts, GlyphRaster};
 use crate::theme::TypeStyle;
 
 const PADDING: u32 = 1;
-const INITIAL_SIZE: u32 = 1024;
-const MAXIMUM_SIZE: u32 = 4096;
+const SIZE: u32 = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GlyphKey {
@@ -81,30 +80,24 @@ struct Upload {
 }
 
 pub struct Atlas {
-    device: Device,
-    size: u32,
     texture: Texture,
     view: TextureView,
     sampler: Sampler,
     shelves: Vec<Shelf>,
     slots: HashMap<GlyphKey, GlyphSlot>,
     uploads: Vec<Upload>,
-    resets: u32,
 }
 
 impl Atlas {
     pub fn new(device: &Device) -> Self {
-        let (texture, view, sampler) = create(device, INITIAL_SIZE);
+        let (texture, view, sampler) = create(device);
         Self {
-            device: device.clone(),
-            size: INITIAL_SIZE,
             texture,
             view,
             sampler,
             shelves: Vec::new(),
             slots: HashMap::new(),
             uploads: Vec::new(),
-            resets: 0,
         }
     }
 
@@ -117,18 +110,14 @@ impl Atlas {
     }
 
     pub fn size(&self) -> u32 {
-        self.size
-    }
-
-    pub fn resets(&self) -> u32 {
-        self.resets
+        SIZE
     }
 
     pub fn slot(&mut self, fonts: &mut Fonts, request: GlyphRequest) -> Option<GlyphSlot> {
         let fraction_x = request.position.0.rem_euclid(1.0);
         let fraction_y = request.position.1.rem_euclid(1.0);
-        let quantized_x = (fraction_x * 4.0).round() as u8 & 3;
-        let quantized_y = (fraction_y * 4.0).round() as u8 & 3;
+        let quantized_x = (fraction_x * 2.0).round() as u8 & 1;
+        let quantized_y = (fraction_y * 2.0).round() as u8 & 1;
         let key = GlyphKey::new(
             request.face,
             request.id,
@@ -146,24 +135,20 @@ impl Atlas {
             request.style,
             request.pixels_per_point,
             request.hint,
-            swash::zeno::Vector::new(quantized_x as f32 / 4.0, quantized_y as f32 / 4.0),
+            swash::zeno::Vector::new(quantized_x as f32 / 2.0, quantized_y as f32 / 2.0),
         )?;
-        let slot = self.insert(key, &raster)?;
+        let slot = self.insert(&raster)?;
         self.slots.insert(key, slot);
         Some(slot)
     }
 
-    fn insert(&mut self, _key: GlyphKey, raster: &GlyphRaster) -> Option<GlyphSlot> {
+    fn insert(&mut self, raster: &GlyphRaster) -> Option<GlyphSlot> {
         let width = raster.width + PADDING * 2;
         let height = raster.height + PADDING * 2;
-        if width > self.size || height > self.size {
+        if width > SIZE || height > SIZE {
             return None;
         }
-        let allocated = self.allocate(width, height).or_else(|| {
-            self.grow();
-            self.allocate(width, height)
-        });
-        let (x, y) = allocated?;
+        let (x, y) = self.allocate(width, height)?;
         let mut data = vec![0u8; (width * height) as usize];
         for row in 0..raster.height {
             let source = (row * raster.width) as usize;
@@ -180,10 +165,10 @@ impl Atlas {
         });
         Some(GlyphSlot {
             uv: [
-                (x + PADDING) as f32 / self.size as f32,
-                (y + PADDING) as f32 / self.size as f32,
-                (x + PADDING + raster.width) as f32 / self.size as f32,
-                (y + PADDING + raster.height) as f32 / self.size as f32,
+                (x + PADDING) as f32 / SIZE as f32,
+                (y + PADDING) as f32 / SIZE as f32,
+                (x + PADDING + raster.width) as f32 / SIZE as f32,
+                (y + PADDING + raster.height) as f32 / SIZE as f32,
             ],
             left: raster.left,
             top: raster.top,
@@ -194,7 +179,7 @@ impl Atlas {
 
     fn allocate(&mut self, width: u32, height: u32) -> Option<(u32, u32)> {
         for shelf in self.shelves.iter_mut() {
-            if shelf.height >= height && shelf.cursor + width + PADDING <= self.size {
+            if shelf.height >= height && shelf.cursor + width + PADDING <= SIZE {
                 let x = shelf.cursor;
                 shelf.cursor += width + PADDING;
                 return Some((x, shelf.top));
@@ -204,7 +189,7 @@ impl Atlas {
             .shelves
             .last()
             .map_or(0, |shelf| shelf.top + shelf.height);
-        if top + height > self.size {
+        if top + height > SIZE {
             return None;
         }
         self.shelves.push(Shelf {
@@ -213,23 +198,6 @@ impl Atlas {
             cursor: width + PADDING,
         });
         Some((0, top))
-    }
-
-    fn grow(&mut self) {
-        let device = self.device.clone();
-        self.reset(&device, (self.size * 2).min(MAXIMUM_SIZE));
-    }
-
-    pub fn reset(&mut self, device: &Device, size: u32) {
-        self.resets += 1;
-        self.size = size;
-        self.shelves.clear();
-        self.slots.clear();
-        self.uploads.clear();
-        let (texture, view, sampler) = create(device, size);
-        self.texture = texture;
-        self.view = view;
-        self.sampler = sampler;
     }
 
     pub fn flush(&mut self, queue: &Queue) {
@@ -261,12 +229,12 @@ impl Atlas {
     }
 }
 
-fn create(device: &Device, size: u32) -> (Texture, TextureView, Sampler) {
+fn create(device: &Device) -> (Texture, TextureView, Sampler) {
     let texture = device.create_texture(&TextureDescriptor {
         label: Some("grana.ui.atlas"),
         size: wgpu::Extent3d {
-            width: size,
-            height: size,
+            width: SIZE,
+            height: SIZE,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,

@@ -76,10 +76,10 @@ pub struct Palette {
 impl Palette {
     pub fn dark() -> Self {
         Self {
-            text_primary: Color::rgba(1.0, 1.0, 1.0, 0.96),
-            text_secondary: Color::rgba(1.0, 1.0, 1.0, 0.68),
-            text_tertiary: Color::rgba(1.0, 1.0, 1.0, 0.50),
-            text_quaternary: Color::rgba(1.0, 1.0, 1.0, 0.26),
+            text_primary: Color::rgba(1.0, 1.0, 1.0, 0.98),
+            text_secondary: Color::rgba(1.0, 1.0, 1.0, 0.74),
+            text_tertiary: Color::rgba(1.0, 1.0, 1.0, 0.55),
+            text_quaternary: Color::rgba(1.0, 1.0, 1.0, 0.30),
             text_on_accent: Color::rgba(1.0, 1.0, 1.0, 1.0),
             accent: Color::bytes(10, 132, 255),
             accent_hover: Color::bytes(48, 152, 255),
@@ -129,14 +129,14 @@ pub struct Metrics {
 impl Metrics {
     pub const fn standard() -> Self {
         Self {
-            control_height: 26.0,
-            row_height: 26.0,
-            gap: 8.0,
-            padding: 14.0,
+            control_height: 30.0,
+            row_height: 30.0,
+            gap: 10.0,
+            padding: 16.0,
             inset: 12.0,
-            toolbar_height: 42.0,
-            radius: 9.0,
-            panel_radius: 22.0,
+            toolbar_height: 52.0,
+            radius: 10.0,
+            panel_radius: 24.0,
             hairline: 0.5,
         }
     }
@@ -157,14 +157,14 @@ pub struct Typography {
 impl Typography {
     pub const fn standard() -> Self {
         Self {
-            large_title: TypeStyle::new(22.0, 620.0, 27.0),
+            large_title: TypeStyle::new(24.0, 640.0, 30.0),
             title: TypeStyle::new(15.0, 590.0, 20.0),
-            headline: TypeStyle::new(13.0, 590.0, 17.0),
-            body: TypeStyle::new(13.0, 400.0, 17.0),
-            callout: TypeStyle::new(12.0, 400.0, 16.0),
-            caption: TypeStyle::new(11.0, 400.0, 14.0),
-            micro: TypeStyle::new(10.0, 520.0, 13.0),
-            monospace: TypeStyle::new(12.0, 400.0, 16.0),
+            headline: TypeStyle::new(13.0, 600.0, 18.0),
+            body: TypeStyle::new(13.0, 420.0, 18.0),
+            callout: TypeStyle::new(12.5, 420.0, 17.0),
+            caption: TypeStyle::new(11.5, 420.0, 15.0),
+            micro: TypeStyle::new(10.5, 540.0, 14.0),
+            monospace: TypeStyle::new(12.0, 420.0, 17.0),
         }
     }
 
@@ -242,11 +242,11 @@ impl Theme {
             Role::Panel => Look {
                 fill: Fill::Glass(Glass {
                     tint: if self.dark {
-                        Color::rgba(0.075, 0.082, 0.10, 0.16)
+                        Color::rgba(0.035, 0.043, 0.062, 0.56)
                     } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.44)
+                        Color::rgba(1.0, 1.0, 1.0, 0.34)
                     },
-                    ..Glass::THICK
+                    ..Glass::PANEL
                 }),
                 corners: Corners::all(metrics.panel_radius),
                 border: Border {
@@ -263,11 +263,11 @@ impl Theme {
             Role::Sheet => Look {
                 fill: Fill::Glass(Glass {
                     tint: if self.dark {
-                        Color::rgba(0.062, 0.068, 0.084, 0.56)
+                        Color::rgba(0.031, 0.039, 0.058, 0.64)
                     } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.52)
+                        Color::rgba(1.0, 1.0, 1.0, 0.46)
                     },
-                    ..Glass::THICK
+                    ..Glass::SHEET
                 }),
                 corners: Corners::all(metrics.panel_radius),
                 border: Border {
@@ -284,12 +284,11 @@ impl Theme {
             Role::Toolbar => Look {
                 fill: Fill::Glass(Glass {
                     tint: if self.dark {
-                        Color::rgba(0.07, 0.075, 0.09, 0.10)
+                        Color::rgba(0.039, 0.047, 0.066, 0.46)
                     } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.40)
+                        Color::rgba(1.0, 1.0, 1.0, 0.32)
                     },
-                    blur: 22.0,
-                    ..Glass::CLEAR
+                    ..Glass::BAR
                 }),
                 corners: Corners::capsule(),
                 border: Border {
@@ -306,12 +305,11 @@ impl Theme {
             Role::Popover => Look {
                 fill: Fill::Glass(Glass {
                     tint: if self.dark {
-                        Color::rgba(0.07, 0.075, 0.09, 0.62)
+                        Color::rgba(0.027, 0.035, 0.054, 0.78)
                     } else {
-                        Color::rgba(0.98, 0.98, 0.99, 0.86)
+                        Color::rgba(0.98, 0.98, 0.99, 0.80)
                     },
-                    blur: 38.0,
-                    ..Glass::THICK
+                    ..Glass::POPOVER
                 }),
                 corners: Corners::all(metrics.radius + 4.0),
                 border: Border {

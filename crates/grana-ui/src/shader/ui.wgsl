@@ -2,6 +2,8 @@ struct Uniforms {
     viewport: vec2<f32>,
     scale: f32,
     time: f32,
+    pointer: vec2<f32>,
+    padding: vec2<f32>,
 };
 
 struct Instance {
@@ -26,6 +28,8 @@ struct Instance {
 @group(0) @binding(5) var scene_sampler: sampler;
 @group(0) @binding(6) var atlas: texture_2d<f32>;
 @group(0) @binding(7) var atlas_sampler: sampler;
+@group(0) @binding(8) var glass_map: texture_2d<f32>;
+@group(0) @binding(9) var glass_map_sampler: sampler;
 
 const KIND_SURFACE: u32 = 0u;
 const KIND_GLASS: u32 = 1u;
@@ -37,6 +41,9 @@ const KIND_RING: u32 = 6u;
 
 const FLAG_GRADIENT: u32 = 1u;
 const FLAG_BORDER: u32 = 2u;
+
+const MAP_SIZE: f32 = 256.0;
+const RING: f32 = 1.5;
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
@@ -129,91 +136,104 @@ fn premultiplied(color: vec4<f32>, mask: f32) -> vec4<f32> {
     return vec4<f32>(color.rgb * alpha, alpha);
 }
 
-fn blurred(uv: vec2<f32>, radius: f32) -> vec3<f32> {
-    let levels = f32(textureNumLevels(backdrop));
-    let lod = clamp(log2(max(radius, 1.0)) - 0.5, 0.0, levels - 1.0);
-    let texel = exp2(floor(lod)) / uniforms.viewport;
-    let offset = texel * 0.5;
-    var sum = textureSampleLevel(backdrop, backdrop_sampler, uv + vec2<f32>(-offset.x, -offset.y), lod).rgb;
-    sum += textureSampleLevel(backdrop, backdrop_sampler, uv + vec2<f32>(offset.x, -offset.y), lod).rgb;
-    sum += textureSampleLevel(backdrop, backdrop_sampler, uv + vec2<f32>(-offset.x, offset.y), lod).rgb;
-    sum += textureSampleLevel(backdrop, backdrop_sampler, uv + vec2<f32>(offset.x, offset.y), lod).rgb;
-    return sum * 0.25;
+fn normal_cdf(x: f32) -> f32 {
+    return 1.0 / (1.0 + exp(-1.702 * x));
 }
 
-fn bevel_height(inset: f32, thickness: f32) -> f32 {
-    if (inset <= 0.0) {
+fn backdrop_sample(local: vec2<f32>, size: vec2<f32>, margin: f32) -> vec3<f32> {
+    let clamped = clamp(local, vec2<f32>(0.5), size - vec2<f32>(0.5));
+    let surface = size + vec2<f32>(2.0 * margin);
+    return textureSampleLevel(backdrop, backdrop_sampler, (clamped + vec2<f32>(margin)) / surface, 0.0).rgb;
+}
+
+fn glass_gradient_alpha(t: f32, low: f32, high: f32, low_stop: f32, high_stop: f32) -> f32 {
+    if (t <= 0.0) {
         return 0.0;
     }
-    let clamped = min(inset, thickness);
-    return sqrt(max(0.0, clamped * (2.0 * thickness - clamped)));
+    if (t < low_stop) {
+        return mix(0.0, low, t / max(low_stop, 0.0001));
+    }
+    if (t < high_stop) {
+        return mix(low, high, (t - low_stop) / max(high_stop - low_stop, 0.0001));
+    }
+    return mix(high, 0.0, (t - high_stop) / max(1.0 - high_stop, 0.0001));
+}
+
+fn ring_layer(
+    white_low: f32,
+    white_high: f32,
+    gradient_t: f32,
+    low_stop: f32,
+    high_stop: f32,
+    inset: f32,
+) -> vec4<f32> {
+    let a = glass_gradient_alpha(gradient_t, white_low, white_high, low_stop, high_stop);
+    var rgb = vec3<f32>(a);
+    var alpha = a;
+    let white_hard = 0.650 * clamp(1.50 - inset, 0.0, 1.0);
+    let white_soft = 0.160 * exp(-pow((inset - 1.00) / 1.50, 2.0) * 0.5);
+    let black_soft = 0.350 * exp(-pow((inset - 1.00) / 2.00, 2.0) * 0.5);
+    let white = clamp(white_hard + white_soft, 0.0, 1.0);
+    rgb = rgb * (1.0 - white) + white;
+    alpha = alpha * (1.0 - white) + white;
+    rgb = rgb * (1.0 - black_soft);
+    alpha = alpha * (1.0 - black_soft) + black_soft;
+    return vec4<f32>(rgb, alpha);
 }
 
 fn shade_glass(
     p: vec2<f32>,
     size: vec2<f32>,
     radius: vec4<f32>,
+    origin: vec2<f32>,
     glass: vec4<f32>,
-    glass2: vec4<f32>,
-    specular: f32,
     tint: vec4<f32>,
-    screen_uv: vec2<f32>,
+    rim_strength: f32,
+    margin: f32,
 ) -> vec3<f32> {
+    let displacement = glass.x * uniforms.scale;
+    let aberration = glass.y;
+    let map_scale = max(size.x, size.y) / MAP_SIZE;
+    let draw = (size - vec2<f32>(MAP_SIZE) * map_scale) * 0.5;
+    let local = p + size * 0.5;
+    let m = textureSampleLevel(glass_map, glass_map_sampler, (local - draw) / map_scale / MAP_SIZE, 0.0).rgb;
+    let dx = (0.5 - m.r) * displacement;
+    let dy = (0.5 - m.b) * displacement;
+    let gain_g = 1.0 + aberration * 0.05;
+    let gain_b = 1.0 + aberration * 0.10;
+    let red = backdrop_sample(local + vec2<f32>(dx, dy), size, margin);
+    let green = backdrop_sample(local + vec2<f32>(dx * gain_g, dy * gain_g), size, margin);
+    let blue = backdrop_sample(local + vec2<f32>(dx * gain_b, dy * gain_b), size, margin);
+    var color = vec3<f32>(red.r, green.g, blue.b);
+    color = mix(color, tint.rgb, tint.a);
+
+    let pointer = uniforms.pointer;
+    let inside = all(pointer >= origin) && all(pointer <= origin + size);
+    let offset = select(vec2<f32>(0.0), (pointer - (origin + size * 0.5)) / max(size, vec2<f32>(1.0)) * 100.0, inside);
+    let variation_x = abs(offset.x);
+
     let half = size * 0.5;
-    let thickness = max(glass.w * uniforms.scale, 1.0);
-    let inset = clamp(-squircle(p, half, radius), 0.0, thickness);
-    let step = 1.0;
-    let height = bevel_height(inset, thickness);
-    let height_right = bevel_height(clamp(-squircle(p + vec2<f32>(step, 0.0), half, radius), 0.0, thickness), thickness);
-    let height_left = bevel_height(clamp(-squircle(p - vec2<f32>(step, 0.0), half, radius), 0.0, thickness), thickness);
-    let height_down = bevel_height(clamp(-squircle(p + vec2<f32>(0.0, step), half, radius), 0.0, thickness), thickness);
-    let height_up = bevel_height(clamp(-squircle(p - vec2<f32>(0.0, step), half, radius), 0.0, thickness), thickness);
-    var bend = vec2<f32>((height_right - height_left) / (2.0 * step), (height_down - height_up) / (2.0 * step));
-    bend = clamp(bend, vec2<f32>(-2.5, -2.5), vec2<f32>(2.5, 2.5));
-
-    let depth = clamp(inset / thickness, 0.0, 1.0);
-    let centre = -p / max(half, vec2<f32>(1.0));
-    let strength = glass.y * uniforms.scale;
-    let lens = bend * strength + centre * strength * 0.08 * depth;
-    let base_uv = screen_uv + lens / uniforms.viewport;
-
-    let dispersion = glass.z * strength * 0.02;
-    var color: vec3<f32>;
-    if (dispersion > 0.01) {
-        color = vec3<f32>(
-            blurred(base_uv + bend * dispersion / uniforms.viewport, glass.x * uniforms.scale).r,
-            blurred(base_uv, glass.x * uniforms.scale).g,
-            blurred(base_uv - bend * dispersion / uniforms.viewport, glass.x * uniforms.scale).b,
-        );
-    } else {
-        color = blurred(base_uv, glass.x * uniforms.scale);
+    let inset = abs(squircle(p, half, radius));
+    let angle = (135.0 + offset.x * 1.2) * 0.017453292;
+    let direction = vec2<f32>(sin(angle), cos(angle));
+    let gradient_length = abs(size.x * sin(angle)) + abs(size.y * cos(angle));
+    let t = clamp(dot(p, direction) / max(gradient_length, 0.0001) + 0.5, 0.0, 1.0);
+    let low_stop = clamp(33.0 + offset.y * 0.3, 10.0, 90.0) / 100.0;
+    let high_stop = clamp(66.0 + offset.y * 0.4, 10.0, 90.0) / 100.0;
+    let inset_css = inset / max(uniforms.scale, 0.0001);
+    let first = ring_layer(0.120 + variation_x * 0.008, 0.400 + variation_x * 0.012, t, low_stop, high_stop, inset_css);
+    let second = ring_layer(0.320 + variation_x * 0.008, 0.600 + variation_x * 0.012, t, low_stop, high_stop, inset_css);
+    let ring_rgb = first.rgb * 0.2;
+    var overlaid = clamp(color + ring_rgb - color * ring_rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    if (second.a > 0.0001) {
+        let source = second.rgb / second.a;
+        let low = 2.0 * overlaid * source;
+        let high = 1.0 - 2.0 * (1.0 - overlaid) * (1.0 - source);
+        let blended = select(high, low, overlaid < vec3<f32>(0.5));
+        overlaid = mix(overlaid, clamp(blended, vec3<f32>(0.0), vec3<f32>(1.0)), second.a);
     }
-
-    let luminance = dot(color, vec3<f32>(0.299, 0.587, 0.114));
-    let veil = clamp(luminance * 1.08 + 0.015, 0.0, 1.0);
-    color = mix(vec3<f32>(luminance), color, glass2.x);
-    color = mix(color, vec3<f32>(veil), 0.22);
-    color = color * glass2.y;
-    color = color * (1.0 - tint.a) + tint.rgb * tint.a;
-
-    let normal = normalize(vec3<f32>(-bend * 0.55, 1.0));
-    let light = normalize(vec3<f32>(-0.30, -0.58, 0.76));
-    let halfway = normalize(light + vec3<f32>(0.0, 0.0, 1.0));
-    let specular_term = pow(max(dot(normal, halfway), 0.0), 90.0) * specular;
-
-    let top = clamp(0.5 - p.y / max(size.y, 1.0), 0.0, 1.0);
-    let top_weight = top * top;
-    let absorption = exp(-inset * inset / 1.1);
-    let ring = exp(-pow((inset - 2.6) / 2.05, 2.0));
-    let rim = ring * glass2.z * (0.70 + 0.30 * top_weight) * 0.34;
-    let sheen = glass2.w * smoothstep(0.0, size.y * 0.7, -p.y + half.y * 0.4) * 0.30;
-
-    color *= 1.0 - 0.30 * absorption;
-    color *= 1.0 + 0.025 * (top - 0.5);
-    color += vec3<f32>(sheen * top_weight);
-    color += vec3<f32>(rim * 0.97, rim * 0.99, rim);
-    color += vec3<f32>(specular_term);
-    return color;
+    let ring = clamp((1.3551 + 0.5) * uniforms.scale - inset, 0.0, 1.0) * rim_strength;
+    return mix(color, overlaid, clamp(ring, 0.0, 1.0));
 }
 
 @fragment
@@ -242,8 +262,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let shape_centre = (instance.uv.xy + instance.uv.zw * 0.5) * scale;
         let distance = squircle(in.position_px - shape_centre, shape_half, instance.color2 * scale);
         let sigma = max(instance.extra.x * scale, 0.75);
-        let ramp = clamp(0.5 - distance / (sigma * 2.4), 0.0, 1.0);
-        let coverage = ramp * ramp * (3.0 - 2.0 * ramp);
+        let coverage = normal_cdf(-distance / sigma);
         let alpha = instance.color.a * coverage * clip_mask;
         return vec4<f32>(instance.color.rgb * alpha, alpha);
     }
@@ -304,8 +323,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     }
 
     if (kind == KIND_GLASS) {
-        let screen_uv = in.position_px / uniforms.viewport;
-        let color = shade_glass(p, size, radius, instance.glass, instance.glass2, instance.extra.x, instance.color, screen_uv);
+        let origin = centre - half;
+        let color = shade_glass(p, size, radius, origin, instance.glass, instance.color, instance.glass.w, instance.extra.x * uniforms.scale);
         return vec4<f32>(color * mask, mask);
     }
 

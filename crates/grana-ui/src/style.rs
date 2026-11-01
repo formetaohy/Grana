@@ -5,71 +5,78 @@ use crate::geometry::Corners;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Glass {
+    pub displacement: f32,
+    pub aberration: f32,
+    pub saturation: f32,
     pub blur: f32,
     pub tint: Color,
-    pub saturation: f32,
-    pub brightness: f32,
-    pub refraction: f32,
-    pub dispersion: f32,
-    pub thickness: f32,
     pub rim: f32,
-    pub sheen: f32,
-    pub specular: f32,
 }
 
 impl Glass {
-    pub const CLEAR: Self = Self {
-        blur: 24.0,
-        tint: Color::rgba(0.05, 0.06, 0.08, 0.30),
-        saturation: 1.6,
-        brightness: 1.02,
-        refraction: 9.0,
-        dispersion: 0.35,
-        thickness: 18.0,
+    pub const REFERENCE: Self = Self {
+        displacement: 70.0,
+        aberration: 2.0,
+        saturation: 1.4,
+        blur: 6.0,
+        tint: Color::TRANSPARENT,
+        rim: 1.0,
+    };
+
+    pub const PANEL: Self = Self {
+        displacement: 34.0,
+        aberration: 1.4,
+        saturation: 1.35,
+        blur: 6.0,
+        tint: Color::rgba(0.043, 0.051, 0.075, 0.34),
+        rim: 0.85,
+    };
+
+    pub const SHEET: Self = Self {
+        displacement: 30.0,
+        aberration: 1.2,
+        saturation: 1.32,
+        blur: 6.0,
+        tint: Color::rgba(0.039, 0.047, 0.071, 0.48),
+        rim: 0.8,
+    };
+
+    pub const BAR: Self = Self {
+        displacement: 26.0,
+        aberration: 1.2,
+        saturation: 1.4,
+        blur: 6.0,
+        tint: Color::rgba(0.047, 0.055, 0.078, 0.26),
+        rim: 0.9,
+    };
+
+    pub const POPOVER: Self = Self {
+        displacement: 22.0,
+        aberration: 1.0,
+        saturation: 1.3,
+        blur: 6.0,
+        tint: Color::rgba(0.035, 0.043, 0.066, 0.72),
+        rim: 0.7,
+    };
+
+    pub const CONTROL: Self = Self {
+        displacement: 12.0,
+        aberration: 0.8,
+        saturation: 1.3,
+        blur: 6.0,
+        tint: Color::rgba(1.0, 1.0, 1.0, 0.07),
         rim: 0.55,
-        sheen: 0.10,
-        specular: 0.35,
-    };
-
-    pub const THIN: Self = Self {
-        blur: 16.0,
-        tint: Color::rgba(1.0, 1.0, 1.0, 0.045),
-        saturation: 1.25,
-        brightness: 1.04,
-        refraction: 3.0,
-        dispersion: 0.12,
-        thickness: 10.0,
-        rim: 0.35,
-        sheen: 0.05,
-        specular: 0.18,
-    };
-
-    pub const THICK: Self = Self {
-        blur: 30.0,
-        tint: Color::rgba(0.05, 0.055, 0.07, 0.34),
-        saturation: 1.14,
-        brightness: 1.06,
-        refraction: 16.0,
-        dispersion: 0.8,
-        thickness: 14.0,
-        rim: 0.50,
-        sheen: 0.08,
-        specular: 0.30,
     };
 
     pub fn lerp(self, other: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
         Self {
+            displacement: self.displacement + (other.displacement - self.displacement) * t,
+            aberration: self.aberration + (other.aberration - self.aberration) * t,
+            saturation: self.saturation + (other.saturation - self.saturation) * t,
             blur: self.blur + (other.blur - self.blur) * t,
             tint: self.tint.lerp(other.tint, t),
-            saturation: self.saturation + (other.saturation - self.saturation) * t,
-            brightness: self.brightness + (other.brightness - self.brightness) * t,
-            refraction: self.refraction + (other.refraction - self.refraction) * t,
-            dispersion: self.dispersion + (other.dispersion - self.dispersion) * t,
-            thickness: self.thickness + (other.thickness - self.thickness) * t,
             rim: self.rim + (other.rim - self.rim) * t,
-            sheen: self.sheen + (other.sheen - self.sheen) * t,
-            specular: self.specular + (other.specular - self.specular) * t,
         }
     }
 }
@@ -92,7 +99,7 @@ impl Fill {
         match self {
             Self::None => false,
             Self::Solid(color) | Self::Gradient(color, _) => color.alpha > 0.0,
-            Self::Glass(glass) => glass.tint.alpha > 0.0,
+            Self::Glass(glass) => glass.tint.alpha > 0.0 || glass.rim > 0.0,
             Self::Scene(_) => true,
         }
     }
@@ -132,6 +139,7 @@ impl Fill {
                 }
                 Self::Glass(glass) => Self::Glass(Glass {
                     tint: glass.tint.with_alpha(glass.tint.alpha * t),
+                    rim: glass.rim * t,
                     ..glass
                 }),
                 other => other,
@@ -144,6 +152,7 @@ impl Fill {
                 ),
                 Self::Glass(glass) => Self::Glass(Glass {
                     tint: glass.tint.with_alpha(glass.tint.alpha * (1.0 - t)),
+                    rim: glass.rim * (1.0 - t),
                     ..glass
                 }),
                 current => current,

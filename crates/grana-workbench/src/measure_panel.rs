@@ -7,9 +7,9 @@ use crate::action::Action;
 use crate::state::State;
 use crate::widget;
 
-const ROW_HEIGHT: f32 = 22.0;
-const HEADER_HEIGHT: f32 = 26.0;
-const MIN_COLUMN_WIDTH: f32 = 54.0;
+const ROW_HEIGHT: f32 = 26.0;
+const HEADER_HEIGHT: f32 = 30.0;
+const MIN_COLUMN_WIDTH: f32 = 58.0;
 
 pub fn build(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>) {
     header(ui, state, actions);
@@ -92,12 +92,14 @@ fn header(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>) {
         let total = state.measure.table().map_or(0, |table| table.rows());
         let shown = state.measure.rows().len();
         widget::caption(ui, &format!("{shown} of {total} rows"));
-    });
-    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-        if widget::button(ui, "export", "Export CSV", Role::Control) {
+        ui.space(8.0);
+        if widget::button(ui, "export", "Export CSV", Role::Quiet) {
             actions.push(Action::ExportMeasure);
         }
         columns_menu(ui, state);
+        if widget::button(ui, "add.filter", "Filter", Role::Quiet) {
+            state.measure.add_filter();
+        }
     });
 }
 
@@ -173,15 +175,17 @@ fn filters(ui: &mut Ui, state: &mut State<'_>) {
         })
         .collect::<Vec<_>>();
     let mut visibility = state.measure.visibility();
-    ui.row(Block::row().gaps(10.0).align(Align::Center), |ui| {
-        if widget::button(ui, "add.filter", "Add filter", Role::Quiet) {
-            state.measure.add_filter();
-        }
-        if let Some(value) = widget::checkbox(ui, "hide.filtered", "hide filtered", visibility) {
-            visibility = value;
-            state.measure.set_visibility(value);
-        }
-    });
+    let filtered = !state.measure.filters().is_empty();
+    if filtered {
+        ui.row(Block::row().gaps(10.0).align(Align::Center), |ui| {
+            widget::field_label(ui, "filter");
+            if let Some(value) = widget::checkbox(ui, "hide.filtered", "hide filtered", visibility)
+            {
+                visibility = value;
+                state.measure.set_visibility(value);
+            }
+        });
+    }
     let filters = state.measure.filters().to_vec();
     let mut removed = None;
     let mut retargeted = None;

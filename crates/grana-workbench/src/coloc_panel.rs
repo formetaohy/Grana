@@ -13,6 +13,10 @@ const PLOT_MIN: f32 = 112.0;
 const PLOT_CELLS: usize = 72;
 
 pub fn build(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>) {
+    widget::caption(
+        ui,
+        "intensity correlation and threshold overlap for a channel pair",
+    );
     let running = progress(state.analysis, Job::Coloc);
     header(ui, state, actions, running);
     if state.scene.coloc.pair().is_none() {

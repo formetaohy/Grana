@@ -5,6 +5,7 @@ use crate::state::State;
 use crate::widget;
 
 pub fn build(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>) {
+    widget::caption(ui, "run one protocol over many OME-Zarr datasets");
     protocol(ui, state, actions);
     datasets(ui, state, actions);
     output(ui, state, actions);

@@ -8,6 +8,7 @@ use crate::text::{Text, TextLayout, TextStyle};
 
 pub const KIND_SURFACE: u32 = 0;
 pub const KIND_GLASS: u32 = 1;
+pub const GLASS_MARGIN: f32 = 0.0;
 pub const KIND_SHADOW: u32 = 2;
 pub const KIND_GLYPH: u32 = 3;
 pub const KIND_SCENE: u32 = 4;
@@ -193,7 +194,7 @@ impl<'a> Painter<'a> {
     }
 
     pub fn glass(&mut self, rect: Rect, corners: Corners, glass: Glass) {
-        if rect.is_empty() || glass.tint.alpha <= 0.0 {
+        if rect.is_empty() {
             return;
         }
         let mut instance = Instance::blank(KIND_GLASS);
@@ -201,13 +202,13 @@ impl<'a> Painter<'a> {
         instance.corners = corners_array(corners.resolved(rect.size()));
         instance.color = glass.tint.to_array();
         instance.glass = [
-            glass.blur,
-            glass.refraction,
-            glass.dispersion,
-            glass.thickness,
+            glass.displacement,
+            glass.aberration,
+            glass.saturation,
+            glass.rim,
         ];
-        instance.glass2 = [glass.saturation, glass.brightness, glass.rim, glass.sheen];
-        instance.extra = [glass.specular, 0.0, 0.0, 0.0];
+        instance.glass2 = [glass.blur, 0.0, 0.0, 0.0];
+        instance.extra = [GLASS_MARGIN, 0.0, 0.0, 0.0];
         self.push(instance);
     }
 
