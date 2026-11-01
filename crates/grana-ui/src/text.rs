@@ -198,7 +198,7 @@ impl Text {
         let leading = style.leading.max(style.size * 1.05);
         let ascent = style.size * 0.78;
         let descent = style.size * 0.22;
-        let baseline_offset = 0.5 * (leading - (ascent - descent)) + ascent;
+        let baseline_offset = 0.5 * (leading - (ascent + descent)) + ascent;
         let bounded = max_width > 0.0;
         let mut lines: Vec<(Vec<PlacedGlyph>, f32)> = Vec::new();
         let mut glyphs: Vec<PlacedGlyph> = Vec::new();

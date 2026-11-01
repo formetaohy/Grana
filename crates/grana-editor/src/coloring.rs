@@ -1,7 +1,7 @@
 use grana_display::Palette;
 use grana_measure::Unit;
 use grana_scene::Coloring;
-use grana_ui::{Color, Length, Ui};
+use grana_ui::{Align, Block, Color, Ui};
 
 use crate::widget;
 use grana_figure::value;
@@ -16,7 +16,7 @@ pub fn edit<M: Copy + PartialEq>(
 ) -> bool {
     let mut changed = false;
     ui.push_id(salt);
-    ui.row(grana_ui::Block::row().gaps(8.0), |ui| {
+    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
         widget::field_label(ui, "color by");
         let mut options = vec![(None, "uniform".to_string())];
         options.extend(
@@ -41,7 +41,7 @@ pub fn edit<M: Copy + PartialEq>(
         return changed;
     };
     let (unit, decimals) = describe(metric);
-    ui.row(grana_ui::Block::row().gaps(8.0), |ui| {
+    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
         let palettes = Palette::ALL
             .iter()
             .map(|palette| (*palette, palette.name().to_string()))
@@ -90,7 +90,7 @@ fn range<M: Copy + PartialEq>(
             let speed = ((maximum - minimum).abs() / 100.0).max(1.0e-6);
             let mut low = minimum;
             let mut high = maximum;
-            ui.row(grana_ui::Block::row().gaps(6.0), |ui| {
+            ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
                 if let Some(value) = widget::drag_value(ui, "low", low, speed, decimals as usize) {
                     low = value;
                 }
@@ -115,7 +115,7 @@ fn range<M: Copy + PartialEq>(
                 value(minimum, unit, decimals),
                 value(maximum, unit, decimals)
             );
-            ui.row(grana_ui::Block::row().gaps(6.0), |ui| {
+            ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
                 widget::caption(ui, &text);
                 if widget::button(ui, "fix", "Fix range", grana_ui::Role::Quiet) {
                     coloring.set_manual(Some((minimum, maximum)));
@@ -125,6 +125,5 @@ fn range<M: Copy + PartialEq>(
         }
         (None, None) => widget::weak(ui, "no measured values to map yet"),
     }
-    let _ = Length::Auto;
     changed
 }

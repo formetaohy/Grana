@@ -39,6 +39,32 @@ pub struct Instance {
 }
 
 impl Instance {
+    pub fn translate(&mut self, delta: Vec2) {
+        self.rect[0] += delta.x;
+        self.rect[1] += delta.y;
+        self.clip[0] += delta.x;
+        self.clip[1] += delta.y;
+        match self.meta[0] {
+            KIND_SHADOW => {
+                self.uv[0] += delta.x;
+                self.uv[1] += delta.y;
+            }
+            KIND_SEGMENT => {
+                self.rect[2] += delta.x;
+                self.rect[3] += delta.y;
+            }
+            KIND_TRIANGLE => {
+                self.uv[0] += delta.x;
+                self.uv[1] += delta.y;
+                self.uv[2] += delta.x;
+                self.uv[3] += delta.y;
+                self.extra[0] += delta.x;
+                self.extra[1] += delta.y;
+            }
+            _ => {}
+        }
+    }
+
     fn blank(kind: u32) -> Self {
         Self {
             rect: [0.0; 4],

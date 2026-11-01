@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::Range;
 
 use glam::Vec2;
 
@@ -219,6 +220,27 @@ impl Registry {
 
     pub fn register_wheel(&mut self, key: u64, rect: Rect) {
         self.next_wheel_targets.push((key, rect));
+    }
+
+    pub fn hit_count(&self) -> usize {
+        self.next_hits.len()
+    }
+
+    pub fn wheel_count(&self) -> usize {
+        self.next_wheel_targets.len()
+    }
+
+    pub fn shift_hits(&mut self, range: Range<usize>, delta: Vec2) {
+        for hit in &mut self.next_hits[range] {
+            hit.rect = hit.rect.translate(delta);
+            hit.clip = hit.clip.translate(delta);
+        }
+    }
+
+    pub fn shift_wheels(&mut self, range: Range<usize>, delta: Vec2) {
+        for (_, rect) in &mut self.next_wheel_targets[range] {
+            *rect = rect.translate(delta);
+        }
     }
 
     pub fn wheel_owner(&self) -> Option<u64> {

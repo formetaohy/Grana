@@ -130,6 +130,7 @@ fn header(
                 .gaps(6.0)
                 .align(Align::Center)
                 .justify(Align::End)
+                .width(Length::Fill)
                 .height(Length::Fill),
             |ui| {
                 if let Some(running) = running {

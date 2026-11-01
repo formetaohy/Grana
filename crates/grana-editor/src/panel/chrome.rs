@@ -113,6 +113,7 @@ pub(super) fn toolbar_bar(
                 .gaps(10.0)
                 .align(Align::Center)
                 .justify(Align::End)
+                .width(Length::Fill)
                 .height(Length::Fill),
             |ui| {
                 if widget::icon_button(

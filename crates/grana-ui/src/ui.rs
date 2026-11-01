@@ -115,6 +115,23 @@ struct Area {
     main: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct Span {
+    instance: usize,
+    overlay: usize,
+    hit: usize,
+    wheel: usize,
+    offset: f32,
+    size: f32,
+    direct: bool,
+}
+
+#[derive(Default)]
+struct SpanFrame {
+    spans: Vec<Span>,
+    open: Option<Span>,
+}
+
 impl Area {
     fn remaining(&self) -> Vec2 {
         match self.axis {
@@ -181,6 +198,7 @@ pub struct Ui {
     instances: Vec<Instance>,
     overlay: Vec<Instance>,
     areas: Vec<Area>,
+    frames: Vec<SpanFrame>,
     ids: Vec<u64>,
     scale: f32,
     size: Vec2,
@@ -203,6 +221,7 @@ impl Ui {
             instances: Vec::new(),
             overlay: Vec::new(),
             areas: Vec::new(),
+            frames: Vec::new(),
             ids: Vec::new(),
             scale: 1.0,
             size: Vec2::ZERO,
@@ -278,6 +297,7 @@ impl Ui {
         self.overlay.clear();
         self.occluders.clear();
         self.areas.clear();
+        self.frames.clear();
         self.ids.clear();
         self.overlay_clip = Clip::new(Rect::from_min_size(Vec2::ZERO, size), Corners::ZERO);
     }
@@ -289,6 +309,7 @@ impl Ui {
         self.renderer
             .write_uniforms(self.scale, self.time, [pointer.x, pointer.y]);
         self.areas.clear();
+        self.frames.clear();
         self.ids.clear();
         Frame {
             animating: self.registry.animating(),
@@ -323,7 +344,9 @@ impl Ui {
             cross: 0.0,
             main: 0.0,
         });
+        self.push_frame();
         content(self);
+        self.pop_frame();
         self.areas.pop();
     }
 
@@ -333,6 +356,93 @@ impl Ui {
 
     fn area_mut(&mut self) -> &mut Area {
         self.areas.last_mut().expect("a layout area is active")
+    }
+
+    fn push_frame(&mut self) {
+        self.frames.push(SpanFrame::default());
+    }
+
+    fn pop_frame(&mut self) {
+        self.frames.pop();
+    }
+
+    fn begin_span(&mut self, offset: f32, size: f32, direct: bool) {
+        let span = Span {
+            instance: self.instances.len(),
+            overlay: self.overlay.len(),
+            hit: self.registry.hit_count(),
+            wheel: self.registry.wheel_count(),
+            offset,
+            size,
+            direct,
+        };
+        let frame = self.frames.last_mut().expect("a layout frame is active");
+        if let Some(open) = frame.open.replace(span) {
+            frame.spans.push(open);
+        }
+    }
+
+    fn end_span(&mut self, size: Option<f32>) {
+        let frame = self.frames.last_mut().expect("a layout frame is active");
+        let Some(mut open) = frame.open.take() else {
+            return;
+        };
+        if let Some(size) = size {
+            open.size = size;
+        }
+        frame.spans.push(open);
+    }
+
+    fn settle_frame(
+        &mut self,
+        axis: Axis,
+        align: Align,
+        justify: Align,
+        auto_cross: bool,
+        content_cross: f32,
+        main_space: f32,
+    ) {
+        let Some(frame) = self.frames.pop() else {
+            return;
+        };
+
+        let mut spans = frame.spans;
+        if let Some(open) = frame.open {
+            spans.push(open);
+        }
+        let instance_end = self.instances.len();
+        let overlay_end = self.overlay.len();
+        let hit_end = self.registry.hit_count();
+        let wheel_end = self.registry.wheel_count();
+        for index in 0..spans.len() {
+            let span = spans[index];
+            let cross = if auto_cross && !span.direct {
+                (content_cross - span.size) * cross_factor(align) - span.offset
+            } else {
+                0.0
+            };
+            let main = main_space * cross_factor(justify);
+            let delta = match axis {
+                Axis::Row => Vec2::new(main, cross),
+                Axis::Column => Vec2::new(cross, main),
+            };
+            if delta == Vec2::ZERO {
+                continue;
+            }
+            let next = spans.get(index + 1);
+            let instance_stop = next.map_or(instance_end, |span| span.instance);
+            let overlay_stop = next.map_or(overlay_end, |span| span.overlay);
+            let hit_stop = next.map_or(hit_end, |span| span.hit);
+            let wheel_stop = next.map_or(wheel_end, |span| span.wheel);
+            for instance in &mut self.instances[span.instance..instance_stop] {
+                instance.translate(delta);
+            }
+            for instance in &mut self.overlay[span.overlay..overlay_stop] {
+                instance.translate(delta);
+            }
+            self.registry.shift_hits(span.hit..hit_stop, delta);
+            self.registry.shift_wheels(span.wheel..wheel_stop, delta);
+        }
     }
 
     pub fn available(&self) -> Vec2 {
@@ -398,26 +508,38 @@ impl Ui {
         let align = area.align;
         let origin = match axis {
             Axis::Column => Vec2::new(
-                area.rect.min.x + (area.rect.width() - size.x).max(0.0) * cross_factor(align),
+                area.rect.min.x + (area.rect.width() - size.x) * cross_factor(align),
                 area.cursor.y,
             ),
             Axis::Row => Vec2::new(
                 area.cursor.x,
-                area.rect.min.y + (area.rect.height() - size.y).max(0.0) * cross_factor(align),
+                area.rect.min.y + (area.rect.height() - size.y) * cross_factor(align),
             ),
         };
+        let offset = match axis {
+            Axis::Column => origin.x - area.rect.min.x,
+            Axis::Row => origin.y - area.rect.min.y,
+        };
         let rect = Rect::from_min_size(origin, size);
+        self.begin_span(
+            offset,
+            match axis {
+                Axis::Column => size.x,
+                Axis::Row => size.y,
+            },
+            false,
+        );
         let area = self.area_mut();
         match axis {
             Axis::Column => {
                 area.cursor.y += size.y + area.gap;
                 area.cross = area.cross.max(size.x);
-                area.main = area.cursor.y - area.origin.y - area.gap;
+                area.main = (area.cursor.y - area.origin.y - area.gap).max(0.0);
             }
             Axis::Row => {
                 area.cursor.x += size.x + area.gap;
                 area.cross = area.cross.max(size.y);
-                area.main = area.cursor.x - area.origin.x - area.gap;
+                area.main = (area.cursor.x - area.origin.x - area.gap).max(0.0);
             }
         }
         rect
@@ -452,11 +574,23 @@ impl Ui {
                 parent.rect.min.y + (parent.rect.height() - height) * cross_factor(parent.align),
             ),
         };
+        let offset = match parent.axis {
+            Axis::Column => origin.x - parent.rect.min.x,
+            Axis::Row => origin.y - parent.rect.min.y,
+        };
+        let initial_cross = match axis {
+            Axis::Row => height,
+            Axis::Column => width,
+        };
+        self.begin_span(offset, initial_cross, false);
         let outer = Rect::from_min_size(origin, Vec2::new(width, height));
         let inner = block.padding.shrink(outer);
-        let inner = match (axis, block.height) {
-            (Axis::Row, Length::Auto) => {
+        let inner = match (axis, block.width, block.height) {
+            (Axis::Row, _, Length::Auto) => {
                 Rect::from_min_size(inner.min, Vec2::new(inner.width(), 0.0))
+            }
+            (Axis::Column, Length::Auto, _) => {
+                Rect::from_min_size(inner.min, Vec2::new(0.0, inner.height()))
             }
             _ => inner,
         };
@@ -480,8 +614,35 @@ impl Ui {
             cross: 0.0,
             main: 0.0,
         });
+        self.push_frame();
+        self.begin_span(0.0, 0.0, true);
         content(self);
         let area = self.areas.pop().expect("a layout area is active");
+        let auto_cross = match axis {
+            Axis::Row => matches!(block.height, Length::Auto),
+            Axis::Column => matches!(block.width, Length::Auto),
+        };
+        let auto_main = match axis {
+            Axis::Row => matches!(block.width, Length::Auto),
+            Axis::Column => matches!(block.height, Length::Auto),
+        };
+        let inner_main = match axis {
+            Axis::Row => area.rect.width(),
+            Axis::Column => area.rect.height(),
+        };
+        let main_space = if auto_main {
+            0.0
+        } else {
+            (inner_main - area.main).max(0.0)
+        };
+        self.settle_frame(
+            axis,
+            block.align,
+            block.justify,
+            auto_cross,
+            area.cross,
+            main_space,
+        );
         let measured = area.content_size() + block.padding.size();
         let width = match block.width {
             Length::Auto => measured.x.min(remaining.x),
@@ -493,28 +654,29 @@ impl Ui {
             Length::Fill | Length::Fixed(_) => height,
         };
         let rect = Rect::from_min_size(origin, Vec2::new(width, height));
-        if block.justify != Align::Start && axis == Axis::Column {
-            let shift = (width - measured.x).max(0.0) * cross_factor(block.justify);
-            let _ = shift;
-        }
         {
             let parent = self.area_mut();
             match parent.axis {
                 Axis::Column => {
                     parent.cursor.y += rect.height() + parent.gap;
                     parent.cross = parent.cross.max(rect.width());
-                    parent.main = parent.cursor.y - parent.origin.y - parent.gap;
+                    parent.main = (parent.cursor.y - parent.origin.y - parent.gap).max(0.0);
                 }
                 Axis::Row => {
                     parent.cursor.x += rect.width() + parent.gap;
                     parent.cross = parent.cross.max(rect.height());
-                    parent.main = parent.cursor.x - parent.origin.x - parent.gap;
+                    parent.main = (parent.cursor.x - parent.origin.x - parent.gap).max(0.0);
                 }
             }
         }
         if let Some(look) = block.background {
             self.paint_background(index, rect, look);
         }
+        let final_cross = match axis {
+            Axis::Row => height,
+            Axis::Column => width,
+        };
+        self.end_span(Some(final_cross));
         rect
     }
 
@@ -539,7 +701,9 @@ impl Ui {
             cross: 0.0,
             main: 0.0,
         });
+        self.push_frame();
         content(self);
+        self.pop_frame();
         self.areas.pop();
     }
 
@@ -560,7 +724,9 @@ impl Ui {
             cross: 0.0,
             main: 0.0,
         });
+        self.push_frame();
         content(self);
+        self.pop_frame();
         self.areas.pop();
     }
 
@@ -656,7 +822,9 @@ impl Ui {
             cross: 0.0,
             main: 0.0,
         });
+        self.push_frame();
         content(self);
+        self.pop_frame();
         let area = self.areas.pop().expect("a layout area is active");
         self.overlay_mode -= 1;
         area.main
@@ -916,7 +1084,9 @@ impl Ui {
             cross: 0.0,
             main: 0.0,
         });
+        self.push_frame();
         content(self);
+        self.pop_frame();
         let area = self.areas.pop().expect("a layout area is active");
         let measured = area.main;
         let viewport = match axis {

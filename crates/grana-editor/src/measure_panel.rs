@@ -128,6 +128,7 @@ fn header(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                 .gaps(6.0)
                 .align(Align::Center)
                 .justify(Align::End)
+                .width(Length::Fill)
                 .height(Length::Fill),
             |ui| {
                 widget::caption(ui, &format!("{shown} / {total} rows"));
