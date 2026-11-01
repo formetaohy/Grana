@@ -33,12 +33,12 @@ impl Glass {
         displacement: 72.0,
         aberration: 2.2,
         saturation: 1.36,
-        blur: 10.0,
+        blur: 16.0,
         frost: 1.0,
         tint: Color::TRANSPARENT,
-        rim: 0.60,
-        refraction: 0.18,
-        specular: 0.10,
+        rim: 0.70,
+        refraction: 0.45,
+        specular: 0.35,
     };
 
     pub const CLEAR: Self = Self {
@@ -52,10 +52,6 @@ impl Glass {
         refraction: 1.0,
         specular: 0.90,
     };
-
-    pub fn tinted(self, tint: Color) -> Self {
-        Self { tint, ..self }
-    }
 
     pub fn lerp(self, other: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);

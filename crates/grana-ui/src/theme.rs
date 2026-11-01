@@ -260,11 +260,7 @@ impl Theme {
         };
         match role {
             Role::Panel => Look {
-                fill: Fill::Glass(Glass::REGULAR.tinted(if dark {
-                    Color::rgba(0.100, 0.120, 0.160, 0.06)
-                } else {
-                    Color::rgba(1.0, 1.0, 1.0, 0.30)
-                })),
+                fill: Fill::Glass(Glass::REGULAR),
                 corners: Corners::all(metrics.panel_radius),
                 border: Border::NONE,
                 shadow: Shadow::new(
@@ -275,11 +271,7 @@ impl Theme {
                 text: palette.text_primary,
             },
             Role::Sheet => Look {
-                fill: Fill::Glass(Glass::REGULAR.tinted(if dark {
-                    Color::rgba(0.100, 0.120, 0.160, 0.06)
-                } else {
-                    Color::rgba(1.0, 1.0, 1.0, 0.30)
-                })),
+                fill: Fill::Glass(Glass::REGULAR),
                 corners: Corners::all(metrics.panel_radius),
                 border: Border::NONE,
                 shadow: Shadow::new(
@@ -290,11 +282,7 @@ impl Theme {
                 text: palette.text_primary,
             },
             Role::Toolbar => Look {
-                fill: Fill::Glass(Glass::REGULAR.tinted(if dark {
-                    Color::rgba(0.100, 0.120, 0.160, 0.04)
-                } else {
-                    Color::rgba(1.0, 1.0, 1.0, 0.30)
-                })),
+                fill: Fill::Glass(Glass::REGULAR),
                 corners: Corners::capsule(),
                 border: Border::NONE,
                 shadow: Shadow::new(
@@ -305,11 +293,7 @@ impl Theme {
                 text: palette.text_primary,
             },
             Role::Transport => Look {
-                fill: Fill::Glass(Glass::CLEAR.tinted(if dark {
-                    Color::rgba(0.82, 0.87, 0.96, 0.10)
-                } else {
-                    Color::rgba(1.0, 1.0, 1.0, 0.16)
-                })),
+                fill: Fill::Glass(Glass::CLEAR),
                 corners: Corners::capsule(),
                 border: Border {
                     width: metrics.hairline,
@@ -319,11 +303,7 @@ impl Theme {
                 text: palette.text_primary,
             },
             Role::Popover => Look {
-                fill: Fill::Glass(Glass::REGULAR.tinted(if dark {
-                    Color::rgba(0.100, 0.120, 0.160, 0.08)
-                } else {
-                    Color::rgba(0.98, 0.98, 0.99, 0.36)
-                })),
+                fill: Fill::Glass(Glass::REGULAR),
                 corners: Corners::all(metrics.popover_radius),
                 border: Border::NONE,
                 shadow: Shadow::new(
@@ -334,11 +314,7 @@ impl Theme {
                 text: palette.text_primary,
             },
             Role::Chip => Look {
-                fill: Fill::Glass(Glass::CLEAR.tinted(if dark {
-                    Color::rgba(0.82, 0.87, 0.96, 0.10)
-                } else {
-                    Color::rgba(1.0, 1.0, 1.0, 0.16)
-                })),
+                fill: Fill::Glass(Glass::CLEAR),
                 corners: Corners::all(metrics.card_radius),
                 border: Border {
                     width: metrics.hairline,
