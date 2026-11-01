@@ -11,7 +11,7 @@ use crate::theme::{Level, Role};
 use crate::ui::{Block, Length, Response, Ui};
 
 fn knob_shadow() -> Shadow {
-    Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.34), 7.0, 2.0)
+    Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.30), 11.0, 2.0)
 }
 
 pub fn button(ui: &mut Ui, id: &str, label: &str, role: Role) -> bool {

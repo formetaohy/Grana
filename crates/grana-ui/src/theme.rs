@@ -257,7 +257,7 @@ impl Theme {
                         Color::rgba(0.0, 0.0, 0.0, 0.08)
                     },
                 },
-                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.20), 28.0, 10.0),
+                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.18), 24.0, 9.0),
                 text: palette.text_primary,
             },
             Role::Sheet => Look {
@@ -278,7 +278,7 @@ impl Theme {
                         Color::rgba(0.0, 0.0, 0.0, 0.07)
                     },
                 },
-                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.18), 26.0, 10.0),
+                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.16), 24.0, 9.0),
                 text: palette.text_primary,
             },
             Role::Toolbar => Look {
@@ -300,7 +300,7 @@ impl Theme {
                         Color::rgba(0.0, 0.0, 0.0, 0.06)
                     },
                 },
-                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.16), 20.0, 8.0),
+                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.15), 18.0, 7.0),
                 text: palette.text_primary,
             },
             Role::Popover => Look {
@@ -322,7 +322,7 @@ impl Theme {
                         Color::rgba(0.0, 0.0, 0.0, 0.08)
                     },
                 },
-                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.46), 40.0, 16.0),
+                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.32), 34.0, 13.0),
                 text: palette.text_primary,
             },
             Role::Card => Look {
@@ -375,7 +375,7 @@ impl Theme {
                     color: Color::rgba(1.0, 1.0, 1.0, 0.10),
                 },
                 shadow: if hovered {
-                    Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.18), 8.0, 2.0)
+                    Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.14), 12.0, 3.0)
                 } else {
                     Shadow::NONE
                 },
@@ -399,7 +399,7 @@ impl Theme {
                 shadow: if disabled {
                     Shadow::NONE
                 } else {
-                    Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.17), 8.0, 1.5)
+                    Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.14), 12.0, 2.0)
                 },
                 text: palette.text_on_accent,
             },
@@ -444,7 +444,7 @@ impl Theme {
                     width: metrics.hairline,
                     color: Color::rgba(1.0, 1.0, 1.0, 0.16),
                 },
-                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.26), 7.0, 1.5),
+                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.20), 12.0, 2.0),
                 text: text(palette.text_primary),
             },
             Role::Track => Look {
@@ -473,7 +473,7 @@ impl Theme {
                     width: 0.0,
                     color: Color::TRANSPARENT,
                 },
-                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.36), 7.0, 2.0),
+                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.26), 11.0, 2.0),
                 text: palette.text_primary,
             },
             Role::Quiet => Look {

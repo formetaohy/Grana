@@ -238,16 +238,13 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     }
 
     if (kind == KIND_SHADOW) {
-        let half = instance.rect.zw * scale * 0.5;
-        let centre = (instance.rect.xy + instance.rect.zw * 0.5) * scale;
-        let distance = squircle(in.position_px - centre, half, instance.corners * scale);
-        let panel_half = instance.uv.zw * scale * 0.5;
-        let panel_centre = (instance.uv.xy + instance.uv.zw * 0.5) * scale;
-        let panel_distance = squircle(in.position_px - panel_centre, panel_half, instance.color2 * scale);
-        let outside = smoothstep(-1.5, 0.5, panel_distance);
-        let sigma = max(instance.extra.x * scale, 0.5);
-        let spread = max(distance, 0.0) / sigma;
-        let alpha = instance.color.a * exp(-spread * spread * 1.6) * outside * clip_mask;
+        let shape_half = instance.uv.zw * scale * 0.5;
+        let shape_centre = (instance.uv.xy + instance.uv.zw * 0.5) * scale;
+        let distance = squircle(in.position_px - shape_centre, shape_half, instance.color2 * scale);
+        let sigma = max(instance.extra.x * scale, 0.75);
+        let ramp = clamp(0.5 - distance / (sigma * 2.4), 0.0, 1.0);
+        let coverage = ramp * ramp * (3.0 - 2.0 * ramp);
+        let alpha = instance.color.a * coverage * clip_mask;
         return vec4<f32>(instance.color.rgb * alpha, alpha);
     }
 

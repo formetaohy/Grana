@@ -212,33 +212,25 @@ impl<'a> Painter<'a> {
     }
 
     pub fn shadow(&mut self, rect: Rect, corners: Corners, shadow: Shadow) {
-        if rect.is_empty() || shadow.color.alpha <= 0.0 {
+        if rect.is_empty() || shadow.color.alpha <= 0.0 || shadow.radius <= 0.0 {
             return;
         }
         let mut instance = Instance::blank(KIND_SHADOW);
-        let grow = 0.5 * shadow.radius;
-        let expanded = rect.translate(shadow.offset).expand(grow);
-        let resolved = corners.resolved(rect.size());
-        let grown = Corners {
-            top_left: resolved.top_left + grow,
-            top_right: resolved.top_right + grow,
-            bottom_right: resolved.bottom_right + grow,
-            bottom_left: resolved.bottom_left + grow,
-        };
+        let sigma = (shadow.radius * 0.5).max(0.5);
+        let expanded = rect.translate(shadow.offset).expand(2.6 * sigma);
         instance.rect = [
             expanded.min.x,
             expanded.min.y,
             expanded.width(),
             expanded.height(),
         ];
-        instance.corners = corners_array(grown.resolved(expanded.size()));
+        instance.corners = corners_array(corners.resolved(rect.size()));
         instance.color = shadow.color.to_array();
-        instance.color2 = corners_array(resolved);
+        instance.color2 = corners_array(corners.resolved(rect.size()));
         instance.uv = [rect.min.x, rect.min.y, rect.width(), rect.height()];
-        instance.extra = [shadow.radius * 0.5, 0.0, 0.0, 0.0];
+        instance.extra = [sigma, 0.0, 0.0, 0.0];
         self.push(instance);
     }
-
     pub fn scene(&mut self, rect: Rect, corners: Corners, uv: [f32; 4]) {
         if rect.is_empty() {
             return;
