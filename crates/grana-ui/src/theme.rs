@@ -89,7 +89,7 @@ impl Palette {
             success: Color::bytes(48, 209, 88),
             separator: Color::rgba(1.0, 1.0, 1.0, 0.10),
             scrim: Color::rgba(0.0, 0.0, 0.0, 0.28),
-            scene_backdrop: Color::bytes(10, 10, 12),
+            scene_backdrop: Color::bytes(30, 31, 36),
         }
     }
 
@@ -242,7 +242,7 @@ impl Theme {
             Role::Panel => Look {
                 fill: Fill::Glass(Glass {
                     tint: if self.dark {
-                        Color::rgba(0.075, 0.082, 0.10, 0.40)
+                        Color::rgba(0.075, 0.082, 0.10, 0.16)
                     } else {
                         Color::rgba(1.0, 1.0, 1.0, 0.44)
                     },
@@ -257,7 +257,7 @@ impl Theme {
                         Color::rgba(0.0, 0.0, 0.0, 0.08)
                     },
                 },
-                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.42), 34.0, 14.0),
+                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.20), 28.0, 10.0),
                 text: palette.text_primary,
             },
             Role::Sheet => Look {
@@ -278,13 +278,13 @@ impl Theme {
                         Color::rgba(0.0, 0.0, 0.0, 0.07)
                     },
                 },
-                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.38), 30.0, 12.0),
+                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.18), 26.0, 10.0),
                 text: palette.text_primary,
             },
             Role::Toolbar => Look {
                 fill: Fill::Glass(Glass {
                     tint: if self.dark {
-                        Color::rgba(0.07, 0.075, 0.09, 0.22)
+                        Color::rgba(0.07, 0.075, 0.09, 0.10)
                     } else {
                         Color::rgba(1.0, 1.0, 1.0, 0.40)
                     },
@@ -300,13 +300,13 @@ impl Theme {
                         Color::rgba(0.0, 0.0, 0.0, 0.06)
                     },
                 },
-                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.34), 22.0, 8.0),
+                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.16), 20.0, 8.0),
                 text: palette.text_primary,
             },
             Role::Popover => Look {
                 fill: Fill::Glass(Glass {
                     tint: if self.dark {
-                        Color::rgba(0.07, 0.075, 0.09, 0.82)
+                        Color::rgba(0.07, 0.075, 0.09, 0.62)
                     } else {
                         Color::rgba(0.98, 0.98, 0.99, 0.86)
                     },

@@ -114,7 +114,8 @@ fn squircle(p: vec2<f32>, half: vec2<f32>, radius: vec4<f32>) -> f32 {
     if (q.x <= 0.0 || q.y <= 0.0) {
         return max(q.x, q.y) - r;
     }
-    let exponent = 4.0;
+    let ratio = clamp(r / max(min(half.x, half.y), 0.001), 0.0, 1.0);
+    let exponent = mix(2.0, 4.0, clamp((1.0 - ratio) * 2.0, 0.0, 1.0));
     let norm = pow(pow(q.x, exponent) + pow(q.y, exponent), 1.0 / exponent);
     return norm - r;
 }

@@ -84,8 +84,6 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>) -> Vec<Action> {
         .intersect(section);
         {
             let mut painter = ui.painter();
-            let backdrop = Color::rgba(0.016, 0.02, 0.03, 0.55);
-            painter.rect(section, Corners::all(16.0), backdrop);
             let uv = scene_uv(volume, size);
             painter.scene(volume, Corners::all(16.0), uv);
             painter.scene(stage, Corners::ZERO, scene_uv(stage, size));
@@ -437,11 +435,11 @@ fn inspector_rect(full: Rect, toolbar: Rect, _sheet: Option<Rect>) -> Rect {
 
 fn inspector_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut Vec<Action>) {
     let look = ui.theme().look(Role::Panel, grana_ui::State::Rest);
+    {
+        let mut painter = ui.painter();
+        painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
+    }
     ui.stacked(rect, true, |ui| {
-        {
-            let mut painter = ui.painter();
-            painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
-        }
         ui.scroll(ui.id("inspector"), Length::Fill, |ui| {
             ui.column(
                 Block::column()
@@ -475,11 +473,11 @@ fn sheet_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut Vec
     let appear = ui.appeared(ui.id("sheet.appear"), 0.26);
     let rect = rect.translate(Vec2::new(0.0, (1.0 - appear) * 26.0));
     let look = ui.theme().look(Role::Sheet, grana_ui::State::Rest);
+    {
+        let mut painter = ui.painter();
+        painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
+    }
     ui.stacked(rect, true, |ui| {
-        {
-            let mut painter = ui.painter();
-            painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
-        }
         handle(ui, rect);
         ui.column(
             Block::column()
