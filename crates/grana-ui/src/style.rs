@@ -36,9 +36,9 @@ impl Glass {
         blur: 10.0,
         frost: 1.0,
         tint: Color::TRANSPARENT,
-        rim: 0.72,
-        refraction: 0.85,
-        specular: 0.55,
+        rim: 0.60,
+        refraction: 0.18,
+        specular: 0.10,
     };
 
     pub const CLEAR: Self = Self {
@@ -170,6 +170,11 @@ pub struct Border {
 }
 
 impl Border {
+    pub const NONE: Self = Self {
+        width: 0.0,
+        color: Color::TRANSPARENT,
+    };
+
     pub fn hairline(color: Color) -> Self {
         Self { width: 0.5, color }
     }

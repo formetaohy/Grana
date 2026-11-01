@@ -479,7 +479,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let distance = squircle(in.position_px - shape_centre, shape_half, instance.color2 * scale);
         let sigma = max(instance.extra.x * scale, 0.75);
         let coverage = normal_cdf(-distance / sigma);
-        let alpha = instance.color.a * coverage * clip_mask;
+        let outside = smoothstep(0.0, 1.5, distance);
+        let alpha = instance.color.a * coverage * outside * clip_mask;
         return vec4<f32>(instance.color.rgb * alpha, alpha);
     }
 
@@ -539,7 +540,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let half = size * 0.5;
     let radius = instance.corners * scale;
     let distance = squircle(p, half, radius);
-    if (distance > 0.5) {
+    let feathered = kind == KIND_GLASS && instance.glass2.x > 0.5;
+    if (distance > select(0.5, 1.5, feathered)) {
         discard;
     }
     let mask = coverage(distance) * clip_mask;
@@ -576,7 +578,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             instance.glass2.x,
             instance.extra.x * uniforms.scale,
         );
-        return vec4<f32>(color * mask, mask);
+        let glass_mask = select(
+            coverage(distance),
+            smoothstep(1.5, -1.5, distance),
+            feathered,
+        ) * clip_mask;
+        return vec4<f32>(color * glass_mask, glass_mask);
     }
 
     var color = instance.color;

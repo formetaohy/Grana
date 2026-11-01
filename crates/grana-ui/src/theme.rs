@@ -263,14 +263,7 @@ impl Theme {
                     Color::rgba(1.0, 1.0, 1.0, 0.30)
                 })),
                 corners: Corners::all(metrics.panel_radius),
-                border: Border {
-                    width: metrics.hairline,
-                    color: if dark {
-                        Color::rgba(1.0, 1.0, 1.0, 0.30)
-                    } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.65)
-                    },
-                },
+                border: Border::NONE,
                 shadow: Shadow::new(
                     Color::rgba(0.0, 0.0, 0.0, if dark { 0.26 } else { 0.14 }),
                     38.0,
@@ -285,14 +278,7 @@ impl Theme {
                     Color::rgba(1.0, 1.0, 1.0, 0.30)
                 })),
                 corners: Corners::all(metrics.panel_radius),
-                border: Border {
-                    width: metrics.hairline,
-                    color: if dark {
-                        Color::rgba(1.0, 1.0, 1.0, 0.30)
-                    } else {
-                        Color::rgba(0.0, 0.0, 0.0, 0.06)
-                    },
-                },
+                border: Border::NONE,
                 shadow: Shadow::new(
                     Color::rgba(0.0, 0.0, 0.0, if dark { 0.36 } else { 0.18 }),
                     44.0,
@@ -307,14 +293,7 @@ impl Theme {
                     Color::rgba(1.0, 1.0, 1.0, 0.30)
                 })),
                 corners: Corners::capsule(),
-                border: Border {
-                    width: metrics.hairline,
-                    color: if dark {
-                        Color::rgba(1.0, 1.0, 1.0, 0.30)
-                    } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.65)
-                    },
-                },
+                border: Border::NONE,
                 shadow: Shadow::new(
                     Color::rgba(0.0, 0.0, 0.0, if dark { 0.22 } else { 0.10 }),
                     30.0,
@@ -329,14 +308,7 @@ impl Theme {
                     Color::rgba(0.98, 0.98, 0.99, 0.36)
                 })),
                 corners: Corners::all(metrics.radius + 5.0),
-                border: Border {
-                    width: metrics.hairline,
-                    color: if dark {
-                        Color::rgba(1.0, 1.0, 1.0, 0.20)
-                    } else {
-                        Color::rgba(0.0, 0.0, 0.0, 0.06)
-                    },
-                },
+                border: Border::NONE,
                 shadow: Shadow::new(
                     Color::rgba(0.0, 0.0, 0.0, if dark { 0.42 } else { 0.20 }),
                     42.0,
