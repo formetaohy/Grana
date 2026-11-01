@@ -216,7 +216,7 @@ impl<'a> Painter<'a> {
             glass.saturation,
             glass.rim,
         ];
-        instance.glass2 = [glass.frost, glass.refraction, glass.specular, 0.0];
+        instance.glass2 = [glass.frost, glass.refraction, glass.specular, glass.blur];
         instance.extra = [GLASS_MARGIN, 0.0, 0.0, 0.0];
         self.push(instance);
     }

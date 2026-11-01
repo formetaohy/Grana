@@ -8,6 +8,7 @@ pub struct Glass {
     pub displacement: f32,
     pub aberration: f32,
     pub saturation: f32,
+    pub blur: f32,
     pub frost: f32,
     pub tint: Color,
     pub rim: f32,
@@ -20,6 +21,7 @@ impl Glass {
         displacement: 70.0,
         aberration: 2.0,
         saturation: 1.4,
+        blur: 4.0,
         frost: 0.0,
         tint: Color::TRANSPARENT,
         rim: 1.0,
@@ -27,60 +29,33 @@ impl Glass {
         specular: 0.0,
     };
 
-    pub const PANEL: Self = Self {
+    pub const REGULAR: Self = Self {
         displacement: 72.0,
         aberration: 2.2,
         saturation: 1.36,
-        frost: 0.0,
+        blur: 10.0,
+        frost: 1.0,
         tint: Color::TRANSPARENT,
-        rim: 0.82,
-        refraction: 1.0,
-        specular: 0.65,
+        rim: 0.72,
+        refraction: 0.85,
+        specular: 0.55,
     };
 
-    pub const SHEET: Self = Self {
-        displacement: 44.0,
-        aberration: 1.5,
-        saturation: 1.28,
-        frost: 0.0,
-        tint: Color::TRANSPARENT,
-        rim: 0.64,
-        refraction: 1.0,
-        specular: 0.38,
-    };
-
-    pub const BAR: Self = Self {
+    pub const CLEAR: Self = Self {
         displacement: 64.0,
         aberration: 1.8,
         saturation: 1.38,
+        blur: 0.0,
         frost: 0.0,
         tint: Color::TRANSPARENT,
-        rim: 0.80,
+        rim: 0.95,
         refraction: 1.0,
-        specular: 0.65,
+        specular: 0.90,
     };
 
-    pub const POPOVER: Self = Self {
-        displacement: 32.0,
-        aberration: 1.2,
-        saturation: 1.28,
-        frost: 1.0,
-        tint: Color::TRANSPARENT,
-        rim: 0.68,
-        refraction: 0.8,
-        specular: 0.42,
-    };
-
-    pub const CONTROL: Self = Self {
-        displacement: 10.0,
-        aberration: 0.6,
-        saturation: 1.2,
-        frost: 0.0,
-        tint: Color::TRANSPARENT,
-        rim: 0.5,
-        refraction: 0.0,
-        specular: 0.0,
-    };
+    pub fn tinted(self, tint: Color) -> Self {
+        Self { tint, ..self }
+    }
 
     pub fn lerp(self, other: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
@@ -88,6 +63,7 @@ impl Glass {
             displacement: self.displacement + (other.displacement - self.displacement) * t,
             aberration: self.aberration + (other.aberration - self.aberration) * t,
             saturation: self.saturation + (other.saturation - self.saturation) * t,
+            blur: self.blur + (other.blur - self.blur) * t,
             frost: self.frost + (other.frost - self.frost) * t,
             tint: self.tint.lerp(other.tint, t),
             rim: self.rim + (other.rim - self.rim) * t,

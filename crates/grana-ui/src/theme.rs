@@ -257,14 +257,11 @@ impl Theme {
         };
         match role {
             Role::Panel => Look {
-                fill: Fill::Glass(Glass {
-                    tint: if dark {
-                        Color::rgba(0.014, 0.020, 0.032, 0.14)
-                    } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.36)
-                    },
-                    ..Glass::PANEL
-                }),
+                fill: Fill::Glass(Glass::REGULAR.tinted(if dark {
+                    Color::rgba(0.150, 0.170, 0.210, 0.30)
+                } else {
+                    Color::rgba(1.0, 1.0, 1.0, 0.30)
+                })),
                 corners: Corners::all(metrics.panel_radius),
                 border: Border {
                     width: metrics.hairline,
@@ -282,14 +279,11 @@ impl Theme {
                 text: palette.text_primary,
             },
             Role::Sheet => Look {
-                fill: Fill::Glass(Glass {
-                    tint: if dark {
-                        Color::rgba(0.014, 0.020, 0.032, 0.14)
-                    } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.36)
-                    },
-                    ..Glass::SHEET
-                }),
+                fill: Fill::Glass(Glass::REGULAR.tinted(if dark {
+                    Color::rgba(0.150, 0.170, 0.210, 0.30)
+                } else {
+                    Color::rgba(1.0, 1.0, 1.0, 0.30)
+                })),
                 corners: Corners::all(metrics.panel_radius),
                 border: Border {
                     width: metrics.hairline,
@@ -307,14 +301,11 @@ impl Theme {
                 text: palette.text_primary,
             },
             Role::Toolbar => Look {
-                fill: Fill::Glass(Glass {
-                    tint: if dark {
-                        Color::rgba(0.014, 0.020, 0.032, 0.14)
-                    } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.36)
-                    },
-                    ..Glass::BAR
-                }),
+                fill: Fill::Glass(Glass::REGULAR.tinted(if dark {
+                    Color::rgba(0.120, 0.140, 0.180, 0.18)
+                } else {
+                    Color::rgba(1.0, 1.0, 1.0, 0.30)
+                })),
                 corners: Corners::capsule(),
                 border: Border {
                     width: metrics.hairline,
@@ -332,14 +323,11 @@ impl Theme {
                 text: palette.text_primary,
             },
             Role::Popover => Look {
-                fill: Fill::Glass(Glass {
-                    tint: if dark {
-                        Color::rgba(0.014, 0.019, 0.030, 0.82)
-                    } else {
-                        Color::rgba(0.98, 0.98, 0.99, 0.86)
-                    },
-                    ..Glass::POPOVER
-                }),
+                fill: Fill::Glass(Glass::REGULAR.tinted(if dark {
+                    Color::rgba(0.150, 0.170, 0.210, 0.34)
+                } else {
+                    Color::rgba(0.98, 0.98, 0.99, 0.36)
+                })),
                 corners: Corners::all(metrics.radius + 5.0),
                 border: Border {
                     width: metrics.hairline,
@@ -357,16 +345,11 @@ impl Theme {
                 text: palette.text_primary,
             },
             Role::Chip => Look {
-                fill: Fill::Glass(Glass {
-                    tint: if dark {
-                        Color::rgba(0.82, 0.87, 0.96, 0.16)
-                    } else {
-                        Color::rgba(1.0, 1.0, 1.0, 0.26)
-                    },
-                    rim: 1.0,
-                    specular: 0.90,
-                    ..Glass::BAR
-                }),
+                fill: Fill::Glass(Glass::CLEAR.tinted(if dark {
+                    Color::rgba(0.82, 0.87, 0.96, 0.10)
+                } else {
+                    Color::rgba(1.0, 1.0, 1.0, 0.16)
+                })),
                 corners: Corners::all(metrics.radius + 1.0),
                 border: Border {
                     width: metrics.hairline,

@@ -641,20 +641,21 @@ impl Renderer {
         pass.draw(0..3, 0..1);
     }
 
-    fn write_glass_uniforms(&self, base: &[[f32; 4]], overlay: &[[f32; 4]]) {
+    fn write_glass_uniforms(&self, base: &[GlassRect], overlay: &[GlassRect]) {
         let count = (base.len() + overlay.len()).max(1);
-        let sigma = BLUR_RADIUS * self.scale;
-        let mut window = (sigma * 1.879_97).round().max(1.0) as u32;
-        if window.is_multiple_of(2) {
-            window += 1;
-        }
-        let radius = ((window - 1) / 2) as f32;
         let max_offset = self.blur_uniforms.size() as usize;
         let stride = BLUR_STRIDE as usize;
         let mut blocks = vec![0u8; (count * BLUR_PASSES * stride).min(max_offset)];
-        for (element, rect) in base.iter().chain(overlay.iter()).enumerate() {
+        for (element, glass) in base.iter().chain(overlay.iter()).enumerate() {
+            let rect = glass.rect;
             let width = rect[2].max(1.0);
             let height = rect[3].max(1.0);
+            let sigma = glass.blur.max(0.0) * self.scale;
+            let mut window = (sigma * 1.879_97).round().max(1.0) as u32;
+            if window.is_multiple_of(2) {
+                window += 1;
+            }
+            let radius = ((window - 1) / 2) as f32;
             for pass in 0..BLUR_PASSES {
                 let direction = if pass < BLUR_PASSES / 2 {
                     [1.0f32, 0.0]
@@ -726,7 +727,7 @@ impl Renderer {
         atlas: &Atlas,
         load: bool,
         uniform_base: usize,
-        rects: &[[f32; 4]],
+        rects: &[GlassRect],
     ) {
         if instances.is_empty() {
             return;
@@ -764,7 +765,7 @@ impl Renderer {
                     first = false;
                 }
                 Segment::Glass { index } => {
-                    let rect = rects[element];
+                    let rect = rects[element].rect;
                     element += 1;
                     let (a, b) = self.element_pair(rect);
                     self.blur_element(encoder, source, a, b, rect, uniform_base + element - 1);
@@ -1002,7 +1003,13 @@ impl Renderer {
     }
 }
 
-fn glass_rects(instances: &[Instance], scale: f32, size: [u32; 2]) -> Vec<[f32; 4]> {
+#[derive(Clone, Copy)]
+struct GlassRect {
+    rect: [f32; 4],
+    blur: f32,
+}
+
+fn glass_rects(instances: &[Instance], scale: f32, size: [u32; 2]) -> Vec<GlassRect> {
     let mut rects = Vec::new();
     for instance in instances {
         if instance.meta[0] != KIND_GLASS {
@@ -1022,7 +1029,10 @@ fn glass_rects(instances: &[Instance], scale: f32, size: [u32; 2]) -> Vec<[f32; 
         let y1 = ((rect[1] + rect[3]) * scale + margin)
             .ceil()
             .clamp(0.0, size[1] as f32);
-        rects.push([x0, y0, (x1 - x0).max(1.0), (y1 - y0).max(1.0)]);
+        rects.push(GlassRect {
+            rect: [x0, y0, (x1 - x0).max(1.0), (y1 - y0).max(1.0)],
+            blur: instance.glass2[3],
+        });
     }
     rects
 }
