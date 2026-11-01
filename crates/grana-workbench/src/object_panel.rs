@@ -411,7 +411,7 @@ fn divider(ui: &mut Ui) {
 
 fn state_card(ui: &mut Ui) -> grana_ui::Look {
     let mut look = ui.theme().look(Role::Card, grana_ui::State::Rest);
-    look.corners = Corners::all(12.0);
+    look.corners = Corners::all(ui.theme().metrics.card_radius);
     look
 }
 

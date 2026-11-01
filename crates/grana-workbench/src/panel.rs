@@ -135,12 +135,13 @@ fn register_occluder(ui: &mut Ui, rect: Rect) {
 
 fn inspector_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut Vec<Action>) {
     let look = ui.theme().look(Role::Panel, grana_ui::State::Rest);
+    let panel_radius = ui.theme().metrics.panel_radius;
     {
         let mut painter = ui.painter();
         painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
         painter.gradient(
             Rect::from_min_size(rect.min, Vec2::new(rect.width(), 168.0)),
-            Corners::top(24.0),
+            Corners::top(panel_radius),
             Color::black_alpha(0.30),
             Color::TRANSPARENT,
         );
@@ -149,7 +150,7 @@ fn inspector_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, actions: &mut
         let footer_height = 30.0;
         let header = Rect::from_min_size(
             rect.min + Vec2::new(18.0, 16.0),
-            Vec2::new(rect.width() - 36.0, 146.0),
+            Vec2::new(rect.width() - 36.0, 140.0),
         );
         ui.place(header, |ui| {
             ui.column(Block::column().gaps(4.0), |ui| {
@@ -430,10 +431,10 @@ pub fn caption(ui: &mut Ui, text: &str) {
 
 pub fn card(ui: &mut Ui, gap: f32, content: impl FnOnce(&mut Ui)) -> Rect {
     let mut look = ui.theme().look(Role::Card, grana_ui::State::Rest);
-    look.corners = Corners::all(12.0);
+    look.corners = Corners::all(ui.theme().metrics.card_radius);
     ui.column(
         Block::column()
-            .padding(Edges::symmetric(14.0, 13.0))
+            .padding(Edges::symmetric(14.0, 14.0))
             .gaps(gap)
             .background(look),
         content,
@@ -476,7 +477,7 @@ pub fn card_title(ui: &mut Ui, symbol: Icon, title: &str, detail: Option<&str>) 
 
 pub fn empty_state(ui: &mut Ui, symbol: Icon, title: &str, detail: &str) {
     let mut look = ui.theme().look(Role::Card, grana_ui::State::Rest);
-    look.corners = Corners::all(12.0);
+    look.corners = Corners::all(ui.theme().metrics.card_radius);
     ui.column(
         Block::column()
             .padding(Edges::symmetric(24.0, 22.0))

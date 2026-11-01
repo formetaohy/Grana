@@ -378,12 +378,12 @@ fn chip(
     );
     painter.text(
         &title_layout,
-        Vec2::new(rect.min.x + 33.0, rect.min.y + 8.0),
+        Vec2::new(rect.min.x + 33.0, rect.min.y + 7.0),
         Color::rgba(1.0, 1.0, 1.0, 0.94),
     );
     painter.text(
         &detail_layout,
-        Vec2::new(rect.min.x + 33.0, rect.min.y + 25.0),
+        Vec2::new(rect.min.x + 33.0, rect.min.y + 24.0),
         Color::white_alpha(0.56),
     );
 }

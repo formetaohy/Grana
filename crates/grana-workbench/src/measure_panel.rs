@@ -329,7 +329,7 @@ fn filters(ui: &mut Ui, state: &mut State<'_>) {
 
 fn card_look(ui: &Ui) -> grana_ui::Look {
     let mut look = ui.theme().look(Role::Card, grana_ui::State::Rest);
-    look.corners = Corners::all(9.0);
+    look.corners = Corners::all(ui.theme().metrics.card_radius);
     look
 }
 
@@ -384,11 +384,12 @@ fn table(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>) {
         return;
     }
     let surface = Rect::from_min_size(ui.cursor_position(), ui.available());
+    let card_radius = ui.theme().metrics.card_radius;
     {
         let mut painter = ui.painter();
         painter.outlined(
             surface,
-            Corners::all(10.0),
+            Corners::all(card_radius),
             grana_ui::Fill::Solid(Color::rgba(0.025, 0.032, 0.045, 0.88)),
             grana_ui::Border {
                 width: 0.5,
@@ -403,7 +404,7 @@ fn table(ui: &mut Ui, state: &mut State<'_>, actions: &mut Vec<Action>) {
     let band = ui.allocate(Vec2::new(total, HEADER_HEIGHT));
     {
         let mut painter = ui.painter();
-        painter.rect(band, Corners::top(10.0), Color::white_alpha(0.035));
+        painter.rect(band, Corners::top(card_radius), Color::white_alpha(0.035));
         painter.rect(
             Rect::from_min_size(
                 Vec2::new(band.min.x, band.max.y - 0.5),
@@ -563,9 +564,14 @@ fn header_cell(ui: &mut Ui, id: &str, text: &str, sorted: Option<bool>, rect: Re
         None => None,
     };
     let icon_color = ui.theme().palette.text_tertiary;
+    let card_radius = ui.theme().metrics.card_radius;
     let mut painter = ui.painter();
     if hover > 0.01 {
-        painter.rect(rect, Corners::top(10.0), Color::white_alpha(0.04 * hover));
+        painter.rect(
+            rect,
+            Corners::top(card_radius),
+            Color::white_alpha(0.04 * hover),
+        );
     }
     painter.text_in(
         Rect::from_min_max(

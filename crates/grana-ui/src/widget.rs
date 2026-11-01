@@ -62,19 +62,19 @@ pub fn action_button(ui: &mut Ui, id: &str, symbol: Icon, label: &str, role: Rol
     let look = ui.look(key, role, &response);
     let body = rect.shrink(0.7 * press);
     let glyph = Rect::from_center_size(
-        Vec2::new(body.min.x + 16.0, body.center().y),
-        Vec2::splat(15.0),
+        Vec2::new(body.min.x + 15.0, body.center().y),
+        Vec2::splat(14.0),
     );
     let mut painter = ui.painter();
     painter.outlined(body, look.corners, look.fill, look.border, look.shadow);
-    icon::paint(symbol, &mut painter, glyph.center(), 15.0, look.text, 1.5);
+    icon::paint(symbol, &mut painter, glyph.center(), 14.0, look.text, 1.5);
     painter.text_in(
         Rect::from_min_max(
-            Vec2::new(body.min.x + 27.0, body.min.y),
+            Vec2::new(body.min.x + 24.0, body.min.y),
             Vec2::new(body.max.x - 2.0, body.max.y),
         ),
         label,
-        TextStyle::new(font, look.text),
+        TextStyle::new(font, look.text).aligned(Align::Start),
         Align::Center,
     );
     response

@@ -31,7 +31,6 @@ pub(super) fn toolbar_bar(ui: &mut Ui, rect: Rect, state: &State<'_>, actions: &
     };
     let left = left.with_width(left_width);
     let right_width = {
-        let fit = 32.0;
         let analyze = ui.measure_text(
             "Analyze",
             TextStyle::new(ui.theme().font(Level::Callout), Color::WHITE),
@@ -40,7 +39,7 @@ pub(super) fn toolbar_bar(ui: &mut Ui, rect: Rect, state: &State<'_>, actions: &
             "Animate",
             TextStyle::new(ui.theme().font(Level::Callout), Color::WHITE),
         );
-        fit + 12.0 + (analyze.x + 22.0 + animate.x + 22.0 + 4.0) + 14.0
+        32.0 + 10.0 + (analyze.x + 22.0 + animate.x + 22.0 + 4.0) + 32.0
     };
     let right = Rect::from_min_size(
         Vec2::new(rect.max.x - right_width, rect.min.y),
@@ -105,7 +104,7 @@ pub(super) fn toolbar_bar(ui: &mut Ui, rect: Rect, state: &State<'_>, actions: &
     ui.place(right, |ui| {
         ui.row(
             Block::row()
-                .padding(Edges::symmetric(14.0, 0.0))
+                .padding(Edges::symmetric(16.0, 0.0))
                 .gaps(10.0)
                 .align(Align::Center)
                 .justify(Align::End)

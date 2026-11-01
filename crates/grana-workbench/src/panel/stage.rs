@@ -29,15 +29,15 @@ pub(super) fn paint_backdrop(ui: &mut Ui, layout: &Layout, state: &State<'_>) {
             Ambient {
                 uv: cover_uv(
                     Rect::from_center_size(
-                        layout.volume.center() + Vec2::new(layout.volume.width() * 0.28, 0.0),
-                        layout.volume.size(),
+                        layout.volume.center() + Vec2::new(layout.volume.width() * -0.04, 0.0),
+                        layout.volume.size() * 0.72,
                     ),
                     full.size(),
                 ),
-                tint: Color::rgba(0.010, 0.016, 0.028, 0.15),
-                blur: 0.0,
-                saturation: 1.05,
-                brightness: 0.85,
+                tint: Color::rgba(0.010, 0.016, 0.028, 0.12),
+                blur: 28.0,
+                saturation: 0.95,
+                brightness: 0.86,
                 opacity: 1.0,
             },
         );
@@ -58,6 +58,26 @@ pub(super) fn paint_backdrop(ui: &mut Ui, layout: &Layout, state: &State<'_>) {
                 full.width() * 0.56,
                 0.07,
             ),
+            (
+                Vec2::new(full.width() * 0.92, full.height() * 0.18),
+                full.width() * 0.72,
+                0.10,
+            ),
+            (
+                Vec2::new(full.width() * 0.56, full.height() * 0.88),
+                full.width() * 0.80,
+                0.07,
+            ),
+            (
+                Vec2::new(full.width() * 1.02, full.height() * 0.24),
+                full.width() * 1.30,
+                0.20,
+            ),
+            (
+                Vec2::new(full.width() * 0.92, full.height() * 0.62),
+                full.width() * 1.20,
+                0.15,
+            ),
         ];
         for (index, (center, diameter, alpha)) in glows.iter().enumerate() {
             let channel = &channels[index % channels.len()];
@@ -68,12 +88,27 @@ pub(super) fn paint_backdrop(ui: &mut Ui, layout: &Layout, state: &State<'_>) {
                 0.12,
             );
         }
-        calibration_grid(&mut painter, full);
-        painter.rect(full, Corners::ZERO, Color::black_alpha(0.24));
+        painter.glow(
+            Rect::from_center_size(
+                Vec2::new(full.width() * 0.94, full.height() * 0.36),
+                Vec2::splat(full.width() * 1.50),
+            ),
+            Color::rgba(0.06, 0.20, 0.32, 0.14),
+            0.10,
+        );
+        painter.glow(
+            Rect::from_center_size(
+                Vec2::new(full.width() * 0.24, full.height() * 0.92),
+                Vec2::splat(full.width() * 1.20),
+            ),
+            Color::rgba(0.34, 0.16, 0.05, 0.10),
+            0.12,
+        );
+        painter.rect(full, Corners::ZERO, Color::black_alpha(0.10));
         painter.gradient(
             Rect::from_min_size(full.min, Vec2::new(full.width(), 150.0)),
             Corners::ZERO,
-            Color::black_alpha(0.28),
+            Color::black_alpha(0.14),
             Color::TRANSPARENT,
         );
         painter.gradient(
@@ -83,40 +118,8 @@ pub(super) fn paint_backdrop(ui: &mut Ui, layout: &Layout, state: &State<'_>) {
             ),
             Corners::ZERO,
             Color::TRANSPARENT,
-            Color::black_alpha(0.26),
+            Color::black_alpha(0.14),
         );
-    }
-}
-
-fn calibration_grid(painter: &mut grana_ui::Painter<'_>, full: Rect) {
-    let step = 28.0;
-    let minor = Color::white_alpha(0.22);
-    let major = Color::white_alpha(0.32);
-    let mut index = 0;
-    let mut x = full.min.x;
-    while x <= full.max.x {
-        let color = if index % 5 == 0 { major } else { minor };
-        painter.segment(
-            Vec2::new(x, full.min.y),
-            Vec2::new(x, full.max.y),
-            0.5,
-            color,
-        );
-        x += step;
-        index += 1;
-    }
-    index = 0;
-    let mut y = full.min.y;
-    while y <= full.max.y {
-        let color = if index % 5 == 0 { major } else { minor };
-        painter.segment(
-            Vec2::new(full.min.x, y),
-            Vec2::new(full.max.x, y),
-            0.5,
-            color,
-        );
-        y += step;
-        index += 1;
     }
 }
 

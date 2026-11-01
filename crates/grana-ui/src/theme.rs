@@ -125,8 +125,9 @@ pub struct Metrics {
     pub gap: f32,
     pub padding: f32,
     pub inset: f32,
-    pub toolbar_height: f32,
     pub radius: f32,
+    pub card_radius: f32,
+    pub popover_radius: f32,
     pub panel_radius: f32,
     pub hairline: f32,
 }
@@ -139,9 +140,10 @@ impl Metrics {
             gap: 8.0,
             padding: 14.0,
             inset: 12.0,
-            toolbar_height: 54.0,
-            radius: 9.0,
-            panel_radius: 24.0,
+            radius: 10.0,
+            card_radius: 16.0,
+            popover_radius: 18.0,
+            panel_radius: 22.0,
             hairline: 0.5,
         }
     }
@@ -307,7 +309,7 @@ impl Theme {
                 } else {
                     Color::rgba(0.98, 0.98, 0.99, 0.36)
                 })),
-                corners: Corners::all(metrics.radius + 5.0),
+                corners: Corners::all(metrics.popover_radius),
                 border: Border::NONE,
                 shadow: Shadow::new(
                     Color::rgba(0.0, 0.0, 0.0, if dark { 0.42 } else { 0.20 }),
@@ -322,7 +324,7 @@ impl Theme {
                 } else {
                     Color::rgba(1.0, 1.0, 1.0, 0.16)
                 })),
-                corners: Corners::all(metrics.radius + 1.0),
+                corners: Corners::all(metrics.card_radius),
                 border: Border {
                     width: metrics.hairline,
                     color: white(0.34),
@@ -337,7 +339,7 @@ impl Theme {
                     if dark { 0.014 } else { 0.09 },
                     if dark { 0.44 } else { 0.34 },
                 )),
-                corners: Corners::all(metrics.radius + 1.0),
+                corners: Corners::all(metrics.card_radius),
                 border: Border {
                     width: metrics.hairline,
                     color: white(0.10),
@@ -351,7 +353,7 @@ impl Theme {
                 } else {
                     Color::rgba(1.0, 1.0, 1.0, 0.94)
                 }),
-                corners: Corners::all(metrics.radius + 4.0),
+                corners: Corners::all(metrics.card_radius),
                 border: Border {
                     width: metrics.hairline,
                     color: white(0.06),
