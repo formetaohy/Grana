@@ -48,7 +48,7 @@ impl Encode for Source {
                 writer.u8(0);
                 writer.string(name);
             }
-            Self::Zarr { name, path } => {
+            Self::File { name, path } => {
                 writer.u8(1);
                 writer.string(name);
                 writer.string(&path.to_string_lossy());

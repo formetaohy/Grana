@@ -60,7 +60,7 @@ impl Decode for Source {
             0 => Ok(Self::Synthetic {
                 name: reader.string()?,
             }),
-            1 => Ok(Self::Zarr {
+            1 => Ok(Self::File {
                 name: reader.string()?,
                 path: PathBuf::from(reader.string()?),
             }),

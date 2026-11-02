@@ -3,14 +3,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use grana_analysis::TrackParams;
+use grana_image::{Image, Source};
 use grana_measure::ColocPair;
 use grana_scene::{Job, ObjectParams};
 use grana_volume::Region;
 
 use crate::event::{Event, Poll};
-use crate::reader::Reader;
 use crate::run;
-use crate::source::Source;
 
 pub struct Analysis {
     job: Job,
@@ -46,7 +45,7 @@ pub fn detect(
     region: Region,
 ) -> Analysis {
     spawn(job, move |cancel, sink| {
-        let reader = Reader::open(&source)?;
+        let reader = Image::open(&source)?;
         run::detect(&reader, channel, params, region, cancel, sink)
     })
 }
@@ -65,7 +64,7 @@ pub fn track(
 
 pub fn coloc(job: Job, source: Source, pair: ColocPair, region: Region) -> Analysis {
     spawn(job, move |cancel, sink| {
-        let reader = Reader::open(&source)?;
+        let reader = Image::open(&source)?;
         run::coloc(&reader, pair, region, cancel, sink)
     })
 }

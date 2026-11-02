@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
+use grana_image::{Image, Source};
 use grana_measure::{Aggregate, Frame, Group, Objects, Table};
 use grana_measure::{ColocPair, ColocSeries};
 use grana_object::TrackSet;
@@ -12,10 +13,8 @@ use thiserror::Error;
 
 use crate::event::Event as RunEvent;
 use crate::protocol::Protocol;
-use crate::reader::Reader;
 use crate::run;
 use crate::slug::slug;
-use crate::source::Source;
 
 pub struct Plan {
     pub protocol: Protocol,
@@ -109,23 +108,17 @@ pub fn discover(root: &Path) -> Result<Vec<PathBuf>, DiscoverError> {
         path: root.display().to_string(),
         detail: error.to_string(),
     };
-    if is_dataset(root) {
+    if grana_image::is_image(root) {
         return Ok(vec![root.to_path_buf()]);
     }
     let mut datasets = std::fs::read_dir(root)
         .map_err(fail)?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
-        .filter(|path| path.is_dir() && is_dataset(path))
+        .filter(|path| grana_image::is_image(path))
         .collect::<Vec<_>>();
     datasets.sort();
     Ok(datasets)
-}
-
-fn is_dataset(path: &Path) -> bool {
-    [".zarray", ".zgroup", "zarr.json"]
-        .iter()
-        .any(|name| path.join(name).exists())
 }
 
 fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
@@ -221,8 +214,8 @@ fn analyse(
     events: &Sender<Event>,
     cancel: &AtomicBool,
 ) -> Result<Report, String> {
-    let source = Source::File(dataset.to_path_buf());
-    let reader = Reader::open(&source)?;
+    let source = Source::file(dataset.to_path_buf());
+    let reader = Image::open(&source)?;
     let pyramid = reader.pyramid();
     let channels = pyramid
         .channels()
@@ -313,7 +306,7 @@ fn analyse(
 }
 
 fn detect(
-    reader: &Reader,
+    reader: &Image,
     channel: usize,
     set: &crate::protocol::SetSpec,
     index: usize,
@@ -363,7 +356,7 @@ fn track(
 }
 
 fn colocalize(
-    reader: &Reader,
+    reader: &Image,
     pair: ColocPair,
     cancel: &AtomicBool,
 ) -> Result<Option<ColocSeries>, String> {
@@ -417,11 +410,7 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
 }
 
 pub fn dataset_name(path: &Path) -> String {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("dataset");
-    name.strip_suffix(".zarr").unwrap_or(name).to_string()
+    grana_image::dataset_name(path)
 }
 
 fn row(dataset: &str, status: &str, objects: usize, detail: &str) -> String {

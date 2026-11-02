@@ -8,6 +8,7 @@ use grana_volume::{Intensity, Region};
 
 pub enum Command {
     OpenDataset,
+    OpenImage,
     OpenDemo,
     OpenProject,
     SaveProject,

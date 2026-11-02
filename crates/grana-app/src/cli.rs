@@ -26,7 +26,7 @@ pub fn batch(protocol: &Path, datasets: &Path, output: &Path) -> ExitCode {
     };
     let datasets = match discover(datasets) {
         Ok(found) if found.is_empty() => {
-            eprintln!("{} holds no OME-Zarr dataset", datasets.display());
+            eprintln!("{} holds no dataset", datasets.display());
             return ExitCode::FAILURE;
         }
         Ok(found) => found,

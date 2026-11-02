@@ -3,16 +3,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use grana_analysis::{
     ColocScan, FilamentScan, SpotScan, SurfaceBuilder, TrackBuilder, filament_level,
 };
+use grana_image::Image;
 use grana_measure::ColocPair;
 use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
 use grana_scene::{ObjectFrame, ObjectParams};
 use grana_volume::VoxelData;
 
 use crate::event::Event;
-use crate::reader::Reader;
 
 pub(crate) fn detect(
-    reader: &Reader,
+    reader: &Image,
     channel: usize,
     params: ObjectParams,
     region: grana_volume::Region,
@@ -61,7 +61,7 @@ pub(crate) fn tracks(
 }
 
 pub(crate) fn coloc(
-    reader: &Reader,
+    reader: &Image,
     pair: ColocPair,
     region: grana_volume::Region,
     cancel: &AtomicBool,
@@ -100,8 +100,8 @@ pub(crate) fn coloc(
                 return Ok(());
             }
             let ranges = scan.tile(index);
-            let first = reader.region(time, 0, pair.a(), &ranges)?;
-            let second = reader.region(time, 0, pair.b(), &ranges)?;
+            let first = reader.read_region(time, 0, pair.a(), &ranges)?;
+            let second = reader.read_region(time, 0, pair.b(), &ranges)?;
             scan.add(time, index, &first, &second);
             if index % 16 == 0 || index + 1 == tiles {
                 sink(Event::Progress {
@@ -121,7 +121,7 @@ pub(crate) fn coloc(
 }
 
 fn spots(
-    reader: &Reader,
+    reader: &Image,
     channel: usize,
     params: grana_analysis::SpotParams,
     region: grana_volume::Region,
@@ -160,7 +160,7 @@ fn spots(
             }
             let range = scanner.read_range(index);
             let start = spots.len();
-            let data = reader.region(time, 0, channel, &range)?;
+            let data = reader.read_region(time, 0, channel, &range)?;
             values.clear();
             values.resize(data.voxel_count(), 0.0);
             data.write_values(&mut values);
@@ -177,7 +177,7 @@ fn spots(
                 if measured == channel {
                     continue;
                 }
-                let data = reader.region(time, 0, measured, &range)?;
+                let data = reader.read_region(time, 0, measured, &range)?;
                 values.clear();
                 values.resize(data.voxel_count(), 0.0);
                 data.write_values(&mut values);
@@ -215,7 +215,7 @@ fn spots(
 }
 
 fn surfaces(
-    reader: &Reader,
+    reader: &Image,
     channel: usize,
     params: grana_analysis::SurfaceParams,
     region: grana_volume::Region,
@@ -258,7 +258,7 @@ fn surfaces(
                 return Ok(());
             }
             let coord = builder.coord(index);
-            let data = reader.brick(time, 0, coord)?;
+            let data = reader.read_brick(time, 0, coord)?;
             builder.add(coord, &data);
             if index % 16 == 0 || index + 1 == total {
                 sink(Event::Progress {
@@ -278,7 +278,7 @@ fn surfaces(
 }
 
 fn filaments(
-    reader: &Reader,
+    reader: &Image,
     channel: usize,
     params: grana_analysis::FilamentParams,
     region: grana_volume::Region,
@@ -337,17 +337,19 @@ fn filaments(
 }
 
 fn full_region(
-    reader: &Reader,
+    reader: &Image,
     pyramid: &grana_volume::Pyramid,
     time: u32,
     level: usize,
     channel: usize,
 ) -> Result<VoxelData, String> {
     let extent = pyramid.level(level).extent();
-    reader.region(
-        time,
-        level,
-        channel,
-        &[0..extent.x(), 0..extent.y(), 0..extent.z()],
-    )
+    reader
+        .read_region(
+            time,
+            level,
+            channel,
+            &[0..extent.x(), 0..extent.y(), 0..extent.z()],
+        )
+        .map_err(String::from)
 }

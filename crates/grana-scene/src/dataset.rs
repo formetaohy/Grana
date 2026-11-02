@@ -5,6 +5,7 @@ use grana_volume::{ChannelInfo, Extent, Pyramid, Spacing, VoxelFormat};
 pub enum Origin {
     Synthetic,
     Zarr,
+    Tiff,
 }
 
 #[derive(Clone, Debug)]
@@ -28,6 +29,14 @@ impl Dataset {
             name: name.into(),
             pyramid,
             origin: Origin::Zarr,
+        }
+    }
+
+    pub fn tiff(name: impl Into<String>, pyramid: Pyramid) -> Self {
+        Self {
+            name: name.into(),
+            pyramid,
+            origin: Origin::Tiff,
         }
     }
 

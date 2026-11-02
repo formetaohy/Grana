@@ -315,6 +315,12 @@ impl App {
             self.session.begin_load(path);
             return true;
         }
+        if effects.open_image
+            && let Some(path) = Self::pick_image()
+        {
+            self.session.begin_load(path);
+            return true;
+        }
         if effects.open_project
             && let Some(path) = Self::pick_project()
         {
@@ -874,8 +880,15 @@ impl App {
 
     fn pick_folder() -> Option<PathBuf> {
         rfd::FileDialog::new()
-            .set_title("Open an OME-Zarr dataset")
+            .set_title("Open an OME-Zarr folder")
             .pick_folder()
+    }
+
+    fn pick_image() -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Open an OME-TIFF image")
+            .add_filter("OME-TIFF", &["ome.tif", "ome.tiff", "tif", "tiff"])
+            .pick_file()
     }
 
     fn pick_project() -> Option<PathBuf> {
@@ -1096,16 +1109,16 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::DroppedFile(path) => {
-                if path.is_dir() {
-                    self.session.begin_load(path);
-                } else if path
+                if path
                     .extension()
                     .is_some_and(|extension| extension == "grana")
                 {
                     self.session.begin_project(path);
+                } else if grana_session::is_image(&path) {
+                    self.session.begin_load(path);
                 } else {
                     self.message = Some(format!(
-                        "{} is neither an OME-Zarr folder nor a grana project",
+                        "{} is neither a supported image nor a grana project",
                         path.display()
                     ));
                 }

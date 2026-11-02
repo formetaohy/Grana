@@ -5,10 +5,8 @@ use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 
+use grana_image::{Format, Image, Source};
 use grana_volume::{BrickData, BrickRequest, CHANNEL_LIMIT, Pyramid, VolumeSeries};
-
-use crate::Source;
-use crate::reader::Reader;
 
 const ATTEMPTS: u8 = 3;
 const WORKER_LIMIT: usize = 8;
@@ -18,6 +16,7 @@ pub enum Event {
     Opened {
         name: String,
         pyramid: Pyramid,
+        format: Format,
     },
     Brick {
         request: BrickRequest,
@@ -186,7 +185,7 @@ impl Queue {
 impl Loader {
     pub fn memory(series: VolumeSeries) -> (Self, Pyramid) {
         let source = Source::memory(series);
-        let reader = Reader::open(&source).expect("an in-memory volume opens");
+        let reader = Image::open(&source).expect("an in-memory volume opens");
         let pyramid = reader.pyramid().clone();
         let (sender, events) = mpsc::channel();
         let queue = Arc::new(Queue::new());
@@ -213,10 +212,10 @@ impl Loader {
         let opening_queue = Arc::clone(&queue);
         let opening_time = Arc::clone(&time);
         std::thread::spawn(move || {
-            let reader = match Reader::open(&opened) {
+            let reader = match Image::open(&opened) {
                 Ok(reader) => reader,
                 Err(detail) => {
-                    let _ = opening_sender.send(Event::Failed(detail));
+                    let _ = opening_sender.send(Event::Failed(detail.to_string()));
                     opening_queue.close();
                     return;
                 }
@@ -229,9 +228,11 @@ impl Loader {
                 opening_queue.close();
                 return;
             }
+            let format = reader.format().expect("a file image declares its format");
             let opened = Event::Opened {
                 name: reader.name().to_string(),
                 pyramid: reader.pyramid().clone(),
+                format,
             };
             if opening_sender.send(opened).is_err() {
                 return;
@@ -275,7 +276,7 @@ impl Drop for Loader {
     }
 }
 
-fn spawn(reader: Arc<Reader>, queue: &Arc<Queue>, time: &Arc<AtomicU32>, events: &Sender<Event>) {
+fn spawn(reader: Arc<Image>, queue: &Arc<Queue>, time: &Arc<AtomicU32>, events: &Sender<Event>) {
     for _ in 0..workers() {
         let reader = Arc::clone(&reader);
         let queue = Arc::clone(queue);
@@ -285,9 +286,9 @@ fn spawn(reader: Arc<Reader>, queue: &Arc<Queue>, time: &Arc<AtomicU32>, events:
     }
 }
 
-fn serve(reader: Arc<Reader>, queue: Arc<Queue>, time: Arc<AtomicU32>, events: Sender<Event>) {
+fn serve(reader: Arc<Image>, queue: Arc<Queue>, time: Arc<AtomicU32>, events: Sender<Event>) {
     while let Some((request, attempts)) = queue.take(time.load(AtomicOrdering::Relaxed)) {
-        match reader.brick(request.time, request.level, request.coord) {
+        match reader.read_brick(request.time, request.level, request.coord) {
             Ok(data) => {
                 if events.send(Event::Brick { request, data }).is_err() {
                     return;
@@ -297,7 +298,13 @@ fn serve(reader: Arc<Reader>, queue: Arc<Queue>, time: Arc<AtomicU32>, events: S
                 if queue.retry(request, attempts) {
                     continue;
                 }
-                if events.send(Event::ReadFailed { request, detail }).is_err() {
+                if events
+                    .send(Event::ReadFailed {
+                        request,
+                        detail: detail.to_string(),
+                    })
+                    .is_err()
+                {
                     return;
                 }
             }

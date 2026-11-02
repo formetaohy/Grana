@@ -69,6 +69,7 @@ pub fn header(ui: &mut Ui, state: &State<'_>) {
     let source = match dataset.origin() {
         grana_scene::Origin::Synthetic => "Synthetic",
         grana_scene::Origin::Zarr => "OME-Zarr",
+        grana_scene::Origin::Tiff => "OME-TIFF",
     };
     ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
         widget::badge(ui, source, ui.theme().palette.accent);

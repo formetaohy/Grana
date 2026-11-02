@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use grana_animation::{Keyframe, Timeline};
 use grana_display::Shading;
+use grana_image::Format;
 use grana_measure::Group;
 use grana_object::TrackSet;
 use grana_project::{Project, Source as ProjectSource, ViewState};
@@ -28,6 +29,7 @@ struct Pending {
 #[derive(Default)]
 pub struct Effects {
     pub open_dataset: bool,
+    pub open_image: bool,
     pub open_project: bool,
     pub save_project: Option<bool>,
     pub snapshot: bool,
@@ -294,6 +296,7 @@ impl Session {
         let mut effects = Effects::default();
         match command {
             Command::OpenDataset => effects.open_dataset = true,
+            Command::OpenImage => effects.open_image = true,
             Command::OpenDemo => self.open_sample(),
             Command::OpenProject => effects.open_project = true,
             Command::SaveProject => effects.save_project = Some(false),
@@ -547,11 +550,11 @@ impl Session {
                 self.reset();
                 self.open_dataset(Dataset::synthetic(name, pyramid));
             }
-            ProjectSource::Zarr { path: data, .. } => {
+            ProjectSource::File { path: data, .. } => {
                 let data = data.clone();
-                if !data.is_dir() {
+                if !data.is_dir() && !data.is_file() {
                     self.message = Some(Message::error(format!(
-                        "{} is not an OME-Zarr folder",
+                        "{} is not a readable image",
                         data.display()
                     )));
                     return;
@@ -603,8 +606,8 @@ impl Session {
         let name = scene.dataset.name().to_string();
         match scene.dataset.origin() {
             Origin::Synthetic => Some(ProjectSource::Synthetic { name }),
-            Origin::Zarr => match self.source.as_ref()?.source() {
-                Source::File(path) => Some(ProjectSource::Zarr { name, path }),
+            Origin::Zarr | Origin::Tiff => match self.source.as_ref()?.source() {
+                Source::File(path) => Some(ProjectSource::File { name, path }),
                 Source::Memory(_) => None,
             },
         }
@@ -680,8 +683,16 @@ impl Session {
             processed += 1;
             repaint = true;
             match event {
-                LoaderEvent::Opened { name, pyramid } => {
-                    self.open_dataset(Dataset::zarr(name, pyramid));
+                LoaderEvent::Opened {
+                    name,
+                    pyramid,
+                    format,
+                } => {
+                    let dataset = match format {
+                        Format::Zarr => Dataset::zarr(name, pyramid),
+                        Format::Tiff => Dataset::tiff(name, pyramid),
+                    };
+                    self.open_dataset(dataset);
                 }
                 LoaderEvent::Brick { request, data } => {
                     self.in_flight.remove(&request);
@@ -1118,7 +1129,7 @@ impl Session {
 
     fn add_batch_datasets(&mut self) {
         let Some(root) = rfd::FileDialog::new()
-            .set_title("Choose a folder of OME-Zarr datasets")
+            .set_title("Choose a folder of datasets")
             .pick_folder()
         else {
             return;
@@ -1133,8 +1144,7 @@ impl Session {
                     }
                 }
                 if added == 0 {
-                    self.batch_message =
-                        Some("the folder holds no new OME-Zarr dataset".to_string());
+                    self.batch_message = Some("the folder holds no new dataset".to_string());
                 } else {
                     self.batch_message = None;
                 }

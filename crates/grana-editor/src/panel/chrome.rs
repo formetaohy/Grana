@@ -32,7 +32,7 @@ pub(super) fn toolbar_bar(
             "Project",
             TextStyle::new(ui.theme().font(Level::Body), Color::WHITE),
         );
-        16.0 + 26.0 + 1.0 + 6.0 + open.x + 42.0 + project.x + 34.0 + 32.0 + 16.0
+        16.0 + 26.0 + 1.0 + 6.0 + open.x + 34.0 + project.x + 34.0 + 32.0 + 16.0
     };
     let left = left.with_width(left_width);
     let right_width = {
@@ -66,9 +66,7 @@ pub(super) fn toolbar_bar(
                 brand(ui);
                 vertical_rule(ui, 18.0);
                 ui.space(6.0);
-                if widget::action_button(ui, "open", Icon::Folder, "Open", Role::Quiet).clicked {
-                    commands.push(Command::OpenDataset);
-                }
+                open_menu(ui, state, commands);
                 project_menu(ui, state, commands);
             },
         );
@@ -254,13 +252,10 @@ fn mode_control(ui: &mut Ui, state: &mut State<'_>) {
     }
 }
 
-fn project_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
-    let key = ui.id("project.menu");
+fn menu_button(ui: &mut Ui, id: &str, label: &str) -> Rect {
+    let key = ui.id(id);
     let font = ui.theme().font(Level::Body);
-    let width = ui
-        .measure_text("Project", TextStyle::new(font, Color::WHITE))
-        .x
-        + 34.0;
+    let width = ui.measure_text(label, TextStyle::new(font, Color::WHITE)).x + 34.0;
     let height = 28.0;
     let rect = ui.allocate(Vec2::new(width, height));
     let response = ui.interact(key, rect);
@@ -277,7 +272,7 @@ fn project_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
                 rect.min + Vec2::new(9.0, 0.0),
                 rect.max - Vec2::new(18.0, 0.0),
             ),
-            "Project",
+            label,
             TextStyle::new(font, look.text),
             Align::Center,
         );
@@ -295,6 +290,39 @@ fn project_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
             chevron,
         );
     }
+    rect
+}
+
+fn open_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
+    let rect = menu_button(ui, "open.menu", "Open");
+    let open = ui.popup_open(ui.id("open.menu"));
+    let mut chosen = None;
+    let busy = state.io.loading.is_some();
+    grana_ui::popover::popover(ui, "open.menu", open, rect, 240.0, |ui| {
+        if grana_ui::popover::action_row(ui, "open.image", Icon::Cube, "Open image…", None) {
+            chosen = Some(Command::OpenImage);
+        }
+        if grana_ui::popover::action_row(
+            ui,
+            "open.folder",
+            Icon::Folder,
+            "Open OME-Zarr folder…",
+            None,
+        ) {
+            chosen = Some(Command::OpenDataset);
+        }
+    });
+    if let Some(action) = chosen {
+        ui.close_popup();
+        if !busy {
+            commands.push(action);
+        }
+    }
+}
+
+fn project_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
+    let rect = menu_button(ui, "project.menu", "Project");
+    let key = ui.id("project.menu");
     let open = ui.popup_open(key);
     let mut chosen = None;
     let busy = state.io.loading.is_some();

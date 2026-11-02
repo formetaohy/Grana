@@ -946,6 +946,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-image"
+version = "0.1.1"
+dependencies = [
+ "grana-tiff",
+ "grana-volume",
+ "grana-zarr",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "grana-measure"
 version = "0.1.1"
 dependencies = [
@@ -1015,15 +1025,25 @@ dependencies = [
  "grana-analysis",
  "grana-animation",
  "grana-display",
+ "grana-image",
  "grana-measure",
  "grana-object",
  "grana-project",
  "grana-scene",
  "grana-volume",
- "grana-zarr",
  "rfd",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "grana-tiff"
+version = "0.1.1"
+dependencies = [
+ "flate2",
+ "grana-volume",
+ "quick-xml",
  "thiserror 2.0.21",
 ]
 

@@ -31,7 +31,7 @@ pub struct Shape {
 #[derive(Debug, PartialEq)]
 pub enum Source {
     Synthetic { name: String },
-    Zarr { name: String, path: PathBuf },
+    File { name: String, path: PathBuf },
 }
 
 #[derive(Debug, PartialEq)]
