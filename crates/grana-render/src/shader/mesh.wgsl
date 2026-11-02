@@ -6,6 +6,9 @@ struct MeshUniforms {
     region_min: vec4<f32>,
     region_max: vec4<f32>,
     jitter: vec4<f32>,
+    light_view: mat4x4<f32>,
+    light_reach: vec4<f32>,
+    shadow: vec4<f32>,
 }
 
 struct ObjectData {
@@ -27,6 +30,11 @@ struct Style {
 @group(0) @binding(0) var<uniform> mesh: MeshUniforms;
 @group(1) @binding(0) var<storage, read> objects: array<ObjectData>;
 @group(2) @binding(0) var<storage, read> styles: array<Style>;
+@group(3) @binding(0) var shadow_tau: texture_3d<f32>;
+@group(3) @binding(1) var shadow_sampler: sampler;
+@group(3) @binding(2) var shadow_occlusion: texture_3d<f32>;
+@group(3) @binding(3) var shadow_objects: texture_depth_2d;
+@group(3) @binding(4) var shadow_compare: sampler_comparison;
 
 struct VertexInput {
     @location(0) position: vec4<f32>,
@@ -39,6 +47,10 @@ struct VertexOutput {
     @location(0) normal: vec3<f32>,
     @location(1) position: vec3<f32>,
     @location(2) @interpolate(flat) object: u32,
+}
+
+struct ShadowOutput {
+    @builtin(position) clip_position: vec4<f32>,
 }
 
 fn sgn(value: f32) -> f32 {
@@ -61,16 +73,33 @@ fn decode_normal(packed: vec2<f32>) -> vec3<f32> {
     return normalize(vec3<f32>(x, y, z));
 }
 
+fn object_position(input: VertexInput) -> vec3<f32> {
+    let object = objects[input.object];
+    return object.minimum.xyz + input.position.xyz * object.extent.xyz;
+}
+
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
-    let object = objects[input.object];
-    let position = object.minimum.xyz + input.position.xyz * object.extent.xyz;
+    let position = object_position(input);
     let clip = mesh.view_projection * vec4<f32>(position, 1.0);
     var output: VertexOutput;
     output.clip_position = vec4<f32>(clip.xy + mesh.jitter.xy * clip.w, clip.zw);
     output.normal = decode_normal(input.normal);
     output.position = position;
     output.object = input.object;
+    return output;
+}
+
+@vertex
+fn vs_shadow(input: VertexInput) -> ShadowOutput {
+    let coordinate = shadow_coordinate(mesh.light_view, object_position(input));
+    var output: ShadowOutput;
+    output.clip_position = vec4<f32>(
+        coordinate.x * 2.0 - 1.0,
+        1.0 - coordinate.y * 2.0,
+        coordinate.z,
+        1.0,
+    );
     return output;
 }
 
@@ -86,9 +115,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     if (dot(normal, view) < 0.0) {
         normal = -normal;
     }
+    let sun = sun_transmittance(
+        shadow_coordinate(mesh.light_view, input.position + normal * mesh.light_reach.z),
+        mesh.light_reach.y,
+    );
+    let strength = clamp(mesh.shadow.x, 0.0, 1.0);
+    let direct = mix(1.0, sun, strength);
     let half_vector = normalize(mesh.light.xyz + view);
-    let diffuse = max(dot(normal, mesh.light.xyz), 0.0);
-    let specular = pow(max(dot(normal, half_vector), 0.0), mesh.shading.w);
+    let diffuse = max(dot(normal, mesh.light.xyz), 0.0) * direct;
+    let specular = pow(max(dot(normal, half_vector), 0.0), mesh.shading.w) * direct;
     var color = style.color.rgb * (mesh.shading.x + mesh.shading.y * diffuse)
         + vec3<f32>(mesh.shading.z * specular);
     if (style.flags.y > 0.5) {

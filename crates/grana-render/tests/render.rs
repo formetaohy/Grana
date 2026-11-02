@@ -1726,9 +1726,94 @@ fn shadows_darken_the_volume() {
         lit[slot] = green_sum(&pixels);
     }
     assert!(
-        lit[1] * 1000 < lit[0] * 999,
+        lit[1] * 1000 < lit[0] * 997,
         "cast shadows do not darken the volume: {lit:?}"
     );
+}
+
+#[test]
+fn objects_cast_shadows_onto_surfaces() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = empty_volume();
+    let pyramid = volume.pyramid();
+    let mesh = PackedMesh::new(casting_planes());
+    let styles = [Style::new([0.98, 0.72, 0.5], true, false); 2];
+    let layers = [Layer {
+        key: LayerKey::at_frame(1, 0, 0, 1),
+        mesh: &mesh,
+        style_start: 0,
+        style_count: 2,
+    }];
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let mut lit = [0u64; 2];
+    for (slot, shadows) in [0.0f32, 0.95].into_iter().enumerate() {
+        let scene = SceneFrame {
+            channels: &channels,
+            shading: Shading {
+                shadows,
+                ..Shading::default()
+            },
+            step_scale: 1.0,
+            styles: &styles,
+            layers: &layers,
+            markers: &[],
+        };
+        let view = texture.create_view(&Default::default());
+        let pixels = render_samples(
+            &texture,
+            &volume,
+            Session {
+                device: &device,
+                queue: &queue,
+                target: &view,
+                camera: &camera,
+                section: &section,
+                scene: &scene,
+                volume_region: WHOLE,
+                section_region: CORNER,
+                region: Region::none(),
+                time: 0,
+            },
+        );
+        lit[slot] = pixels.iter().map(|pixel| u64::from(pixel[0])).sum();
+    }
+    assert!(
+        lit[1] * 1000 < lit[0] * 995,
+        "objects cast no shadow onto a surface: {lit:?}"
+    );
+}
+
+fn casting_planes() -> Mesh {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for (object, (height, extent, offset)) in
+        [(-1.5f32, 1.5f32, [0.0f32, 0.0]), (-0.4, 0.6, [-0.6, 0.6])]
+            .into_iter()
+            .enumerate()
+    {
+        let base = vertices.len() as u32;
+        for (x, y) in [
+            (-extent, -extent),
+            (extent, -extent),
+            (extent, extent),
+            (-extent, extent),
+        ] {
+            vertices.push(MeshVertex::new(
+                [x + offset[0], y + offset[1], height],
+                [0.0, 0.0, 1.0],
+                object as u32,
+            ));
+        }
+        indices.extend([0u32, 1, 2, 0, 2, 3].map(|index| base + index));
+    }
+    Mesh::new(vertices, indices)
 }
 
 fn render_samples(texture: &wgpu::Texture, volume: &Volume, session: Session<'_>) -> Vec<[u8; 4]> {

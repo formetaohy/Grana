@@ -3,6 +3,7 @@ use glam::Mat4;
 use grana_volume::Region;
 
 use crate::brick::BrickTable;
+use crate::shadow::ShadowSpace;
 use grana_display::Shading;
 use grana_display::{Camera, SectionCamera};
 
@@ -28,6 +29,9 @@ pub(crate) struct FrameData {
     pub viewport: [f32; 4],
     pub jitter: [f32; 4],
     pub planes: [[f32; 4]; 6],
+    pub light_view: [[f32; 4]; 4],
+    pub light_inverse: [[f32; 4]; 4],
+    pub light_reach: [f32; 4],
 }
 
 #[repr(C)]
@@ -61,8 +65,9 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 480);
+    assert!(size_of::<FrameData>() == 624);
     assert!(std::mem::offset_of!(FrameData, planes) == 384);
+    assert!(std::mem::offset_of!(FrameData, light_view) == 480);
     assert!(size_of::<SectionData>() == 160);
     assert!(size_of::<ScheduleData>() == 48);
 };
@@ -80,6 +85,7 @@ impl FrameData {
         shading: Shading,
         step_scale: f32,
         channels: usize,
+        space: ShadowSpace,
     ) -> Self {
         let VolumeView {
             camera,
@@ -124,6 +130,9 @@ impl FrameData {
             viewport: [aspect * height as f32, height as f32, 0.0, 0.0],
             jitter: [0.0; 4],
             planes: planes(view_projection),
+            light_view: space.view().to_cols_array_2d(),
+            light_inverse: space.inverse().to_cols_array_2d(),
+            light_reach: space.reach(),
         }
     }
 }

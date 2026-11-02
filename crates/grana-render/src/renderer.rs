@@ -2,6 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use bytemuck::cast_slice;
+use glam::Vec3;
 use grana_gpu::Readback;
 use grana_volume::{
     BRICK_SIDE, BrickData, BrickGrid, BrickRequest, Level, PADDED_SIDE, Pyramid, Region,
@@ -19,7 +20,6 @@ use crate::brick::{BrickRecord, BrickTable};
 use crate::census::{CENSUS_LEVELS, Census};
 use crate::frame::{FrameData, SectionData, VolumeView};
 use crate::layout::Layouts;
-use crate::light::Light;
 use crate::marker::MarkerPasses;
 use crate::mesh::MeshPasses;
 use crate::planner::{
@@ -31,6 +31,7 @@ use crate::present::Present;
 use crate::sample;
 use crate::schema::SceneFrame;
 use crate::section::SectionPass;
+use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
 use crate::target::{self, SceneTarget};
 use crate::volume::VolumePass;
 use grana_display::{Camera, SectionCamera};
@@ -191,7 +192,7 @@ pub struct Renderer {
     bricks: Vec<Option<BrickTable>>,
     planner: Option<Planner>,
     census: Option<Census>,
-    light: Option<Light>,
+    shadow: Option<Shadow>,
     volume: VolumePass,
     section: SectionPass,
     meshes: MeshPasses,
@@ -211,6 +212,7 @@ pub struct Renderer {
     content: u64,
     pin: u64,
     prefetch: bool,
+    object_key: Option<u64>,
     settled: Option<Residency>,
     info: FrameInfo,
 }
@@ -238,7 +240,7 @@ impl Renderer {
             bricks: Vec::new(),
             planner: None,
             census: None,
-            light: None,
+            shadow: None,
             volume: VolumePass::new(device, &layouts),
             section: SectionPass::new(device, &layouts),
             meshes: MeshPasses::new(device, &layouts, budget / 2),
@@ -259,6 +261,7 @@ impl Renderer {
             content: 0,
             pin: 0,
             prefetch: false,
+            object_key: None,
             settled: None,
             info: FrameInfo::default(),
         }
@@ -303,11 +306,16 @@ impl Renderer {
         self.bricks = (0..pyramid.level_count()).map(|_| None).collect();
         self.planner = Some(Planner::new(device, &self.layouts, slots));
         self.census = Some(Census::new(device, &self.layouts, pyramid));
-        self.light = Some(Light::new(
+        let finest = pyramid.level(0);
+        let world = Vec3::from(finest.world_extent());
+        let spacing = finest.spacing();
+        let voxel = Vec3::new(spacing.x(), spacing.y(), spacing.z());
+        self.shadow = Some(Shadow::new(
             device,
             &self.layouts,
-            pyramid.level(0).world_extent(),
+            shadow::resolution(world, voxel),
         ));
+        self.object_key = None;
         self.scene = Some(crate::table::SceneTable::new(
             device,
             &self.layouts,
@@ -505,7 +513,8 @@ impl Renderer {
             epoch,
             content,
             settled,
-            light,
+            shadow,
+            object_key,
             info,
             ..
         } = self;
@@ -623,6 +632,14 @@ impl Renderer {
             .expect("the volume level table exists");
         let section_data =
             SectionData::new(camera, section, section_aspect, section_table, *channels);
+        let finest = pyramid.level(0);
+        let world = Vec3::from(finest.world_extent());
+        let spacing = finest.spacing();
+        let space = ShadowSpace::new(
+            camera.light_direction(),
+            world,
+            Vec3::new(spacing.x(), spacing.y(), spacing.z()),
+        );
         let mut frame_data = FrameData::new(
             VolumeView {
                 camera,
@@ -634,6 +651,7 @@ impl Renderer {
             scene.shading,
             scene.step_scale,
             *channels,
+            space,
         );
         let signature = Signature {
             scene,
@@ -712,16 +730,33 @@ impl Renderer {
                 census.encode(&mut encoder, scene_group);
                 planner.encode(&mut encoder, scene_group, &planner.volume, &planner.section);
             }
-            if (reset || unsettled)
-                && scene.shading.shadows > 0.0
-                && let Some(light) = light.as_ref()
-            {
-                light.encode(
+            let styles = scene_styles(scene);
+            if scene.shading.shadows > 0.0 {
+                meshes.cull_shadow(&mut encoder, scene_group);
+            }
+            if let Some(shadow) = shadow.as_mut() {
+                let groups = ShadowGroups {
+                    scene: scene_group,
+                    level: volume_table.group(),
+                    atlas: atlas.group(),
+                };
+                shadow.encode_occlusion(
                     &mut encoder,
-                    scene_group,
-                    volume_table.group(),
-                    atlas.group(),
+                    groups,
+                    digest(&[*content, styles, volume_level as u64]),
                 );
+                if scene.shading.shadows > 0.0 {
+                    let object = digest(&[styles, space.digest()]);
+                    if *object_key != Some(object) {
+                        *object_key = Some(object);
+                        meshes.draw_shadow(&mut encoder, shadow.objects());
+                    }
+                    shadow.encode_tau(
+                        &mut encoder,
+                        groups,
+                        digest(&[*content, styles, volume_level as u64, space.digest()]),
+                    );
+                }
             }
             meshes.cull_volume(&mut encoder, scene_group);
             meshes.cull_section(&mut encoder, scene_group);
@@ -729,11 +764,16 @@ impl Renderer {
             markers.cull_section(&mut encoder, scene_group);
             present.clear(&mut encoder, target.scene.color());
             clear_depth(&mut encoder, target.scene.depth());
+            let shadow_group = shadow
+                .as_ref()
+                .map(Shadow::group)
+                .expect("the shadow is ready");
             meshes.draw_volume(
                 &mut encoder,
                 target.scene.color(),
                 target.scene.depth(),
                 volume_region,
+                shadow_group,
             );
             markers.draw_volume(
                 &mut encoder,
@@ -742,10 +782,6 @@ impl Renderer {
                 volume_region,
                 scene_group,
             );
-            let light_group = light
-                .as_ref()
-                .map(Light::group)
-                .expect("the light is ready");
             volume.draw(
                 &mut encoder,
                 crate::volume::VolumeFrame {
@@ -755,7 +791,7 @@ impl Renderer {
                     level: volume_table.group(),
                     atlas: atlas.group(),
                     depth_group: target.scene.depth_group(),
-                    light: light_group,
+                    shadow: shadow_group,
                 },
             );
             section_pass.draw(
@@ -988,6 +1024,27 @@ impl Signature<'_, '_> {
         }
         hasher.finish()
     }
+}
+
+fn digest(words: &[u64]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    words.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn scene_styles(scene: &SceneFrame<'_>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    channel_style(scene.channels).hash(&mut hasher);
+    for layer in scene.layers {
+        layer.key.hash(&mut hasher);
+        layer.style_start.hash(&mut hasher);
+        layer.style_count.hash(&mut hasher);
+    }
+    for style in scene.styles {
+        style.color().map(f32::to_bits).hash(&mut hasher);
+        style.visible().hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 fn channel_style(channels: &[crate::ChannelRow<'_>]) -> u64 {

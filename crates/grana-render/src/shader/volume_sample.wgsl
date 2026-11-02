@@ -38,6 +38,20 @@ fn channel_alpha(uvw: vec3<f32>) -> f32 {
     return per_voxel;
 }
 
+fn channel_extinction(uvw: vec3<f32>) -> f32 {
+    let count = u32(frame.march.z);
+    var extinction = 0.0;
+    for (var channel = 0u; channel < count; channel += 1u) {
+        let opacity = channel_opacity(channel);
+        if (opacity <= 0.0) {
+            continue;
+        }
+        let alpha = clamp(channel_sample(channel, sample_volume(channel, uvw)).a, 0.0, 0.998);
+        extinction += -log(1.0 - alpha) * opacity;
+    }
+    return extinction;
+}
+
 fn ray_uvw(t: f32, direction: vec3<f32>) -> vec3<f32> {
     return (frame.eye.xyz + direction * t - frame.box_min.xyz) / frame.box_size.xyz;
 }

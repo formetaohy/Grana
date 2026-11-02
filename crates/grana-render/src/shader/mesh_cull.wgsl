@@ -26,6 +26,8 @@ const VOLUME_NARROW: u32 = 0u;
 const VOLUME_WIDE: u32 = 1u;
 const SECTION_NARROW: u32 = 2u;
 const SECTION_WIDE: u32 = 3u;
+const SHADOW_NARROW: u32 = 4u;
+const SHADOW_WIDE: u32 = 5u;
 
 @group(1) @binding(0) var<storage, read> objects: array<ObjectData>;
 @group(2) @binding(0) var<storage, read> styles: array<StyleData>;
@@ -115,4 +117,22 @@ fn mesh_cull_section(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     commands[index + count * SECTION_NARROW] = narrow;
     commands[index + count * SECTION_WIDE] = wide;
+}
+
+@compute @workgroup_size(64)
+fn mesh_cull_shadow(@builtin(global_invocation_id) id: vec3<u32>) {
+    let index = id.x;
+    if (index >= arrayLength(&objects)) {
+        return;
+    }
+    let count = arrayLength(&objects);
+    let object = objects[index];
+    var narrow = IndexedArgs(0u, 0u, 0u, 0, 0u);
+    var wide = IndexedArgs(0u, 0u, 0u, 0, 0u);
+    if (styles[index].flags.x >= 0.5) {
+        narrow = narrow_command(object, object.vertex_base);
+        wide = wide_command(object, object.vertex_base);
+    }
+    commands[index + count * SHADOW_NARROW] = narrow;
+    commands[index + count * SHADOW_WIDE] = wide;
 }

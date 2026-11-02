@@ -18,6 +18,9 @@ struct FrameData {
     viewport: vec4<f32>,
     jitter: vec4<f32>,
     planes: array<vec4<f32>, 6>,
+    light_view: mat4x4<f32>,
+    light_inverse: mat4x4<f32>,
+    light_reach: vec4<f32>,
 }
 
 struct SectionData {

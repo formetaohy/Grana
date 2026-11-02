@@ -1,6 +1,9 @@
 @group(3) @binding(0) var object_depth: texture_depth_2d;
-@group(4) @binding(0) var light_volume: texture_3d<f32>;
-@group(4) @binding(1) var light_sampler: sampler;
+@group(4) @binding(0) var shadow_tau: texture_3d<f32>;
+@group(4) @binding(1) var shadow_sampler: sampler;
+@group(4) @binding(2) var shadow_occlusion: texture_3d<f32>;
+@group(4) @binding(3) var shadow_objects: texture_depth_2d;
+@group(4) @binding(4) var shadow_compare: sampler_comparison;
 
 const MAX_CELL_STEPS: u32 = 4096u;
 const MINIMUM_TRANSMITTANCE: f32 = 0.003;
@@ -61,17 +64,15 @@ fn region_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
 }
 
 fn lighting(uvw: vec3<f32>) -> vec2<f32> {
+    let occlusion = local_occlusion(uvw);
     let strength = clamp(frame.march.y, 0.0, 1.0);
     if (strength <= 0.0) {
-        return vec2<f32>(1.0, 0.0);
+        return vec2<f32>(1.0, occlusion);
     }
-    let sampled = textureSampleLevel(
-        light_volume,
-        light_sampler,
-        clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0)),
-        0.0,
-    );
-    return vec2<f32>(mix(1.0, sampled.r, strength), sampled.g * strength);
+    let world = frame.box_min.xyz + uvw * frame.box_size.xyz;
+    let coordinate = shadow_coordinate(frame.light_view, world);
+    let sun = sun_transmittance(coordinate, frame.light_reach.y);
+    return vec2<f32>(mix(1.0, sun, strength), occlusion);
 }
 
 fn lit(color: vec3<f32>, normal: vec3<f32>, direction: vec3<f32>, light: vec2<f32>) -> vec3<f32> {

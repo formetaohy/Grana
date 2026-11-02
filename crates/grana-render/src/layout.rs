@@ -3,8 +3,8 @@ use std::num::NonZeroU32;
 use grana_gpu::layout::{sampler, storage, texture, uniform};
 use wgpu::{
     BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType, Device,
-    PipelineLayout, PipelineLayoutDescriptor, ShaderStages, StorageTextureAccess, TextureFormat,
-    TextureSampleType, TextureViewDimension,
+    PipelineLayout, PipelineLayoutDescriptor, SamplerBindingType, ShaderStages,
+    StorageTextureAccess, TextureFormat, TextureSampleType, TextureViewDimension,
 };
 
 use grana_volume::CHANNEL_LIMIT;
@@ -17,8 +17,8 @@ pub(crate) struct Layouts {
     pub plan_data: BindGroupLayout,
     pub atlas: BindGroupLayout,
     pub depth: BindGroupLayout,
-    pub light: BindGroupLayout,
-    pub light_write: BindGroupLayout,
+    pub shadow: BindGroupLayout,
+    pub shadow_write: BindGroupLayout,
     pub styles: BindGroupLayout,
     pub objects: BindGroupLayout,
     pub commands: BindGroupLayout,
@@ -34,7 +34,7 @@ pub(crate) struct Layouts {
     pub marker_section: PipelineLayout,
     pub marker_cull_pipeline: PipelineLayout,
     pub census: PipelineLayout,
-    pub light_pipeline: PipelineLayout,
+    pub shadow_pipeline: PipelineLayout,
 }
 
 impl Layouts {
@@ -104,8 +104,8 @@ impl Layouts {
                 sampler(1, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
             ],
         });
-        let light = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.light.layout"),
+        let shadow = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.shadow.layout"),
             entries: &[
                 BindGroupLayoutEntry {
                     binding: 0,
@@ -118,16 +118,42 @@ impl Layouts {
                     count: None,
                 },
                 sampler(1, ShaderStages::FRAGMENT),
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Depth,
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Comparison),
+                    count: None,
+                },
             ],
         });
-        let light_write = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.light.write.layout"),
+        let shadow_write = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.shadow.write.layout"),
             entries: &[BindGroupLayoutEntry {
                 binding: 0,
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::StorageTexture {
                     access: StorageTextureAccess::WriteOnly,
-                    format: TextureFormat::Rgba16Float,
+                    format: TextureFormat::Rgba8Unorm,
                     view_dimension: TextureViewDimension::D3,
                 },
                 count: None,
@@ -184,7 +210,7 @@ impl Layouts {
         let volume = pipeline_layout(
             device,
             "grana.volume.layout",
-            &[&scene, &level, &atlas, &depth, &light],
+            &[&scene, &level, &atlas, &depth, &shadow],
         );
         let section = pipeline_layout(device, "grana.section.layout", &[&scene, &level, &atlas]);
         let cull = pipeline_layout(
@@ -211,10 +237,10 @@ impl Layouts {
             &[&scene, &marker_cull],
         );
         let census = pipeline_layout(device, "grana.census.layout", &[&scene, &census_level]);
-        let light_pipeline = pipeline_layout(
+        let shadow_pipeline = pipeline_layout(
             device,
-            "grana.light.pipeline.layout",
-            &[&scene, &level, &atlas, &light_write],
+            "grana.shadow.pipeline.layout",
+            &[&scene, &level, &atlas, &shadow_write],
         );
         Self {
             scene,
@@ -224,8 +250,8 @@ impl Layouts {
             plan_data,
             atlas,
             depth,
-            light,
-            light_write,
+            shadow,
+            shadow_write,
             styles,
             objects,
             commands,
@@ -241,7 +267,7 @@ impl Layouts {
             marker_section,
             marker_cull_pipeline,
             census,
-            light_pipeline,
+            shadow_pipeline,
         }
     }
 }
