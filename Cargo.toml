@@ -25,6 +25,7 @@ quick-xml = "0.41"
 zarrs = { version = "0.23", default-features = false, features = ["filesystem", "blosc", "zstd", "gzip", "sharding", "crc32c"] }
 ome_zarr_metadata = "0.3"
 openh264 = "0.9"
+openreadout-jpegxr = "0.4"
 zstd = "0.13"
 grana-animation = { version = "0.1.1", path = "crates/grana-animation" }
 grana-volume = { version = "0.1.1", path = "crates/grana-volume" }
@@ -43,6 +44,7 @@ grana-analysis = { version = "0.1.1", path = "crates/grana-analysis" }
 grana-render = { version = "0.1.1", path = "crates/grana-render" }
 grana-zarr = { version = "0.1.1", path = "crates/grana-zarr" }
 grana-tiff = { version = "0.1.1", path = "crates/grana-tiff" }
+grana-czi = { version = "0.1.1", path = "crates/grana-czi" }
 grana-image = { version = "0.1.1", path = "crates/grana-image" }
 grana-measure = { version = "0.1.1", path = "crates/grana-measure" }
 grana-session = { version = "0.1.1", path = "crates/grana-session" }

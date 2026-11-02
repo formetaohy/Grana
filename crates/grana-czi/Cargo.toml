@@ -1,0 +1,20 @@
+[package]
+name = "grana-czi"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+grana-volume = { workspace = true }
+openreadout-jpegxr = { workspace = true }
+quick-xml = { workspace = true }
+thiserror = { workspace = true }
+zstd = { workspace = true }
+
+[dev-dependencies]
+zstd = { workspace = true }
+
+[lints]
+workspace = true

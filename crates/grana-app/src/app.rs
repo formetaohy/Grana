@@ -886,7 +886,12 @@ impl App {
 
     fn pick_image() -> Option<PathBuf> {
         rfd::FileDialog::new()
-            .set_title("Open an OME-TIFF image")
+            .set_title("Open a microscopy image")
+            .add_filter(
+                "Microscopy image",
+                &["czi", "ome.tif", "ome.tiff", "tif", "tiff"],
+            )
+            .add_filter("ZEISS CZI", &["czi"])
             .add_filter("OME-TIFF", &["ome.tif", "ome.tiff", "tif", "tiff"])
             .pick_file()
     }

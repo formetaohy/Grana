@@ -872,6 +872,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-czi"
+version = "0.1.1"
+dependencies = [
+ "grana-volume",
+ "openreadout-jpegxr",
+ "quick-xml",
+ "thiserror 2.0.21",
+ "zstd",
+]
+
+[[package]]
 name = "grana-display"
 version = "0.1.1"
 dependencies = [
@@ -949,6 +960,7 @@ dependencies = [
 name = "grana-image"
 version = "0.1.1"
 dependencies = [
+ "grana-czi",
  "grana-tiff",
  "grana-volume",
  "grana-zarr",
@@ -1953,6 +1965,12 @@ dependencies = [
  "nasm-rs",
  "walkdir",
 ]
+
+[[package]]
+name = "openreadout-jpegxr"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e36e2e787cbaa846b7809c9c6ca250a97c3fe81c116eddb6c4441b988a418f9b"
 
 [[package]]
 name = "orbclient"

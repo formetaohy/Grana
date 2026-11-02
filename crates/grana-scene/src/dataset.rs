@@ -6,6 +6,7 @@ pub enum Origin {
     Synthetic,
     Zarr,
     Tiff,
+    Czi,
 }
 
 #[derive(Clone, Debug)]
@@ -37,6 +38,14 @@ impl Dataset {
             name: name.into(),
             pyramid,
             origin: Origin::Tiff,
+        }
+    }
+
+    pub fn czi(name: impl Into<String>, pyramid: Pyramid) -> Self {
+        Self {
+            name: name.into(),
+            pyramid,
+            origin: Origin::Czi,
         }
     }
 

@@ -606,7 +606,7 @@ impl Session {
         let name = scene.dataset.name().to_string();
         match scene.dataset.origin() {
             Origin::Synthetic => Some(ProjectSource::Synthetic { name }),
-            Origin::Zarr | Origin::Tiff => match self.source.as_ref()?.source() {
+            Origin::Zarr | Origin::Tiff | Origin::Czi => match self.source.as_ref()?.source() {
                 Source::File(path) => Some(ProjectSource::File { name, path }),
                 Source::Memory(_) => None,
             },
@@ -691,6 +691,7 @@ impl Session {
                     let dataset = match format {
                         Format::Zarr => Dataset::zarr(name, pyramid),
                         Format::Tiff => Dataset::tiff(name, pyramid),
+                        Format::Czi => Dataset::czi(name, pyramid),
                     };
                     self.open_dataset(dataset);
                 }

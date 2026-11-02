@@ -8,6 +8,8 @@ pub enum Error {
     Zarr(#[from] grana_zarr::Error),
     #[error(transparent)]
     Tiff(#[from] grana_tiff::Error),
+    #[error(transparent)]
+    Czi(#[from] grana_czi::Error),
     #[error("failed to open the image `{path}`: {detail}")]
     Open { path: PathBuf, detail: String },
     #[error("the image `{path}` is not supported: {detail}")]
