@@ -414,6 +414,26 @@ impl Session {
                     scene.select_track(set, index);
                 }
             }
+            Command::CutTrack { set, time, object } => {
+                let cut = self
+                    .scene
+                    .as_mut()
+                    .is_some_and(|scene| scene.cut_track(set, time, object));
+                self.message = (!cut)
+                    .then(|| Message::error("the track ends at this frame and cannot be cut"));
+            }
+            Command::JoinTracks {
+                set,
+                source,
+                target,
+            } => {
+                let joined = self
+                    .scene
+                    .as_mut()
+                    .is_some_and(|scene| scene.join_tracks(set, source, target));
+                self.message = (!joined)
+                    .then(|| Message::error("a track joins a later track that starts a lineage"));
+            }
             Command::SetRegion(region) => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.region = region;

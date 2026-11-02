@@ -162,18 +162,44 @@ impl Scene {
             return;
         };
         object.install_tracks(set);
-        let stale = self.selection.is_some_and(|selection| {
-            selection.set == id && matches!(selection.item, Item::Track(_))
-        });
-        if stale {
-            self.selection = None;
-        }
+        self.drop_track_selection(id);
     }
 
     pub fn clear_tracks(&mut self, id: ObjectSetId) {
         if let Some(object) = self.objects.get_mut(id) {
             object.clear_tracks();
         }
+        self.drop_track_selection(id);
+    }
+
+    pub fn cut_track(&mut self, id: ObjectSetId, time: u32, object: usize) -> bool {
+        let Some(set) = self.objects.get_mut(id) else {
+            return false;
+        };
+        if !set.cut_track(time, object) {
+            return false;
+        }
+        self.drop_track_selection(id);
+        true
+    }
+
+    pub fn join_tracks(
+        &mut self,
+        id: ObjectSetId,
+        source: (u32, usize),
+        target: (u32, usize),
+    ) -> bool {
+        let Some(set) = self.objects.get_mut(id) else {
+            return false;
+        };
+        if !set.join_tracks(source, target) {
+            return false;
+        }
+        self.drop_track_selection(id);
+        true
+    }
+
+    fn drop_track_selection(&mut self, id: ObjectSetId) {
         let stale = self.selection.is_some_and(|selection| {
             selection.set == id && matches!(selection.item, Item::Track(_))
         });

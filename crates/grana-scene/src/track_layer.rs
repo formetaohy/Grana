@@ -53,4 +53,26 @@ impl TrackLayer {
         self.mesh = PackedMesh::new(self.set.mesh(thickness));
         self.revision += 1;
     }
+
+    pub fn cut(&mut self, time: u32, object: usize) -> bool {
+        let Some(set) = self.set.cut(time, object) else {
+            return false;
+        };
+        self.install(set);
+        true
+    }
+
+    pub fn join(&mut self, source: (u32, usize), target: (u32, usize)) -> bool {
+        let Some(set) = self.set.join(source, target) else {
+            return false;
+        };
+        self.install(set);
+        true
+    }
+
+    fn install(&mut self, set: TrackSet) {
+        self.set = set;
+        self.mesh = PackedMesh::new(self.set.mesh(self.thickness));
+        self.revision += 1;
+    }
 }

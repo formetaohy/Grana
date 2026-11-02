@@ -78,6 +78,16 @@ pub enum Command {
         set: ObjectSetId,
         index: Option<usize>,
     },
+    CutTrack {
+        set: ObjectSetId,
+        time: u32,
+        object: usize,
+    },
+    JoinTracks {
+        set: ObjectSetId,
+        source: (u32, usize),
+        target: (u32, usize),
+    },
     SetRegion(Region),
     SetExposure(f32),
     SetStepScale(f32),

@@ -372,7 +372,7 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
                 appearance(ui, state, commands, id);
                 measure(ui, state, commands, id, time);
                 if kind.trackable() {
-                    crate::track_panel::build(ui, state, commands, id);
+                    crate::track_panel::entry(ui, state, id);
                 }
                 ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
                     if detected > 0 && widget::button(ui, "clear", "Clear", Role::Danger) {

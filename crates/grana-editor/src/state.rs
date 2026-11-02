@@ -1,6 +1,6 @@
 use grana_animation::Timeline;
 use grana_display::Viewport;
-use grana_scene::{Measure, Progress, Scene};
+use grana_scene::{Measure, ObjectSetId, Progress, Scene};
 use grana_session::{BatchView, IoView};
 
 use crate::panel::Panel;
@@ -49,6 +49,8 @@ pub struct Workspace {
     pub panel: Option<Panel>,
     pub playback: Playback,
     pub movie_size: [u32; 2],
+    pub track_set: Option<ObjectSetId>,
+    pub join: Option<(u32, usize)>,
 }
 
 pub struct State<'a> {

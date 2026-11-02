@@ -1,3 +1,5 @@
+use crate::graph::TrackGraph;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrackNode {
     time: u32,
@@ -237,6 +239,51 @@ impl TrackSet {
             .enumerate()
             .filter(move |(_, track)| track.parent() == Some(index as u32))
             .map(|(child, _)| child)
+    }
+
+    pub fn cut(&self, time: u32, object: usize) -> Option<Self> {
+        let mut graph = TrackGraph::from_set(self);
+        let node = graph.node_at(time, object)?;
+        if !graph.cut(node) {
+            return None;
+        }
+        Some(graph.into_set(self.frame_interval))
+    }
+
+    pub fn can_join(&self, source: (u32, usize), target: (u32, usize)) -> bool {
+        let Some(source_track) = self.track_at(source.0, source.1) else {
+            return false;
+        };
+        let Some(target_track) = self.track_at(target.0, target.1) else {
+            return false;
+        };
+        let Some(track) = self.track(source_track) else {
+            return false;
+        };
+        let Some(last) = track.nodes().last() else {
+            return false;
+        };
+        if (last.time(), last.object()) != source || self.children(source_track).next().is_some() {
+            return false;
+        }
+        let Some(track) = self.track(target_track) else {
+            return false;
+        };
+        let Some(first) = track.nodes().first() else {
+            return false;
+        };
+        (first.time(), first.object()) == target && track.parent().is_none() && target.0 > source.0
+    }
+
+    pub fn join(&self, source: (u32, usize), target: (u32, usize)) -> Option<Self> {
+        let mut graph = TrackGraph::from_set(self);
+        let source = graph.node_at(source.0, source.1)?;
+        let target = graph.node_at(target.0, target.1)?;
+        if !graph.can_join(source, target) {
+            return None;
+        }
+        graph.join(source, target);
+        Some(graph.into_set(self.frame_interval))
     }
 
     pub fn mesh(&self, radius: f32) -> grana_geometry::Mesh {

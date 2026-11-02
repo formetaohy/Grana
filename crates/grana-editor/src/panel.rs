@@ -23,14 +23,16 @@ const SPLITTER: f32 = 6.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
     Statistics,
+    Tracks,
     Colocalization,
     Batch,
     Animation,
 }
 
 impl Panel {
-    pub const ALL: [Panel; 4] = [
+    pub const ALL: [Panel; 5] = [
         Panel::Statistics,
+        Panel::Tracks,
         Panel::Colocalization,
         Panel::Batch,
         Panel::Animation,
@@ -39,6 +41,7 @@ impl Panel {
     pub fn name(self) -> &'static str {
         match self {
             Self::Statistics => "Statistics",
+            Self::Tracks => "Tracks",
             Self::Colocalization => "Colocalization",
             Self::Batch => "Batch",
             Self::Animation => "Animation",
@@ -350,12 +353,15 @@ fn sheet_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Ve
         let panel = state.workspace.panel.unwrap_or(Panel::Statistics);
         ui.place(body, |ui| match panel {
             Panel::Statistics => crate::measure_panel::build(ui, state, commands),
+            Panel::Tracks => crate::track_panel::build(ui, state, commands),
             _ => {
                 ui.scroll(ui.id("sheet.body"), Length::Fill, |ui| match panel {
                     Panel::Colocalization => crate::coloc_panel::build(ui, state, commands),
                     Panel::Batch => crate::batch_panel::build(ui, state, commands),
                     Panel::Animation => crate::animation_panel::build(ui, state, commands),
-                    Panel::Statistics => unreachable!("statistics has its own layout"),
+                    Panel::Statistics | Panel::Tracks => {
+                        unreachable!("statistics and tracks have their own layout")
+                    }
                 });
             }
         });

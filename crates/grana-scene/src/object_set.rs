@@ -549,6 +549,34 @@ impl ObjectSet {
         self.track_bounds = None;
     }
 
+    pub fn cut_track(&mut self, time: u32, object: usize) -> bool {
+        let Some(layer) = self.tracks.as_mut() else {
+            return false;
+        };
+        if !layer.cut(time, object) {
+            return false;
+        }
+        self.revision += 1;
+        self.document += 1;
+        self.visibility = Visibility::All;
+        self.rebuild_track_bounds();
+        true
+    }
+
+    pub fn join_tracks(&mut self, source: (u32, usize), target: (u32, usize)) -> bool {
+        let Some(layer) = self.tracks.as_mut() else {
+            return false;
+        };
+        if !layer.join(source, target) {
+            return false;
+        }
+        self.revision += 1;
+        self.document += 1;
+        self.visibility = Visibility::All;
+        self.rebuild_track_bounds();
+        true
+    }
+
     fn rebuild_frame_bounds(&mut self) {
         let metric = self.object_coloring.metric();
         for (slot, bounds) in self.frames.iter().zip(self.frame_bounds.iter_mut()) {
