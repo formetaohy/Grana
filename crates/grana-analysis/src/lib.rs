@@ -1,4 +1,5 @@
 mod assignment;
+mod background;
 mod coloc;
 mod filament;
 mod mask;
@@ -10,6 +11,7 @@ mod surface;
 mod table;
 mod track;
 
+pub use background::{Background, BackgroundSample};
 pub use coloc::ColocScan;
 pub use filament::{FilamentScan, filament_level};
 pub use mask::{Mask, Roi};

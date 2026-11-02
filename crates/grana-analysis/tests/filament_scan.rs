@@ -128,3 +128,56 @@ fn segment_distance(point: Vec3, start: Vec3, end: Vec3) -> f32 {
 fn distance(segment: ([f32; 3], [f32; 3])) -> f64 {
     f64::from(Vec3::from(segment.1).distance(Vec3::from(segment.0)))
 }
+
+#[test]
+fn traces_filaments_under_an_illumination_ramp() {
+    let data = ramped(&SEGMENTS, 20_000.0);
+    let level = Level::new(EXTENT, Spacing::new(SPACING, SPACING, SPACING));
+    let mut scan = FilamentScan::new(
+        0,
+        level,
+        params(),
+        1,
+        0,
+        Region::none(),
+        channel_intensity(),
+    );
+    let set = scan
+        .frame(&data, None, |_| Ok(data.clone()))
+        .expect("the filament scan traces the ramped frame");
+    assert_eq!(
+        set.object_count(),
+        1,
+        "the ramp does not flood the background"
+    );
+    let expected = (distance(SEGMENTS[0]) + distance(SEGMENTS[1]) + distance(SEGMENTS[2]))
+        * f64::from(SPACING);
+    let length = set.object(0).expect("the filament exists").length();
+    assert!(
+        (length - expected).abs() <= 0.2 * expected,
+        "the ramped trace keeps {length:.2} µm of {expected:.2} µm"
+    );
+}
+
+fn ramped(segments: &[([f32; 3], [f32; 3])], high: f32) -> VoxelData {
+    let count = EXTENT.voxel_count() as usize;
+    let mut values = vec![0u16; count];
+    for z in 0..EXTENT.z() {
+        for y in 0..EXTENT.y() {
+            for x in 0..EXTENT.x() {
+                let point = Vec3::new(x as f32, y as f32, z as f32);
+                let closest = segments
+                    .iter()
+                    .map(|(start, end)| {
+                        segment_distance(point, Vec3::from(*start), Vec3::from(*end))
+                    })
+                    .fold(f32::INFINITY, f32::min);
+                let background = high * x as f32 / (EXTENT.x() - 1) as f32;
+                let intensity = background + PEAK * (-0.5 * (closest / RADIUS).powi(2)).exp();
+                values[EXTENT.index(x, y, z) as usize] =
+                    (intensity.min(f32::from(u16::MAX))) as u16;
+            }
+        }
+    }
+    VoxelData::U16(values)
+}

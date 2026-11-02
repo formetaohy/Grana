@@ -202,6 +202,16 @@ fn extract(volume: &Volume, params: SurfaceParams, region: Region) -> SurfaceSet
     let intensity = Intensity::new(0.0, f32::from(HIGH));
     let channels = volume.channel_count();
     let mut builder = SurfaceBuilder::new(0, level, params, channels, 0, region, intensity);
+    builder
+        .fit_background(|range| {
+            Ok(volume.channels()[0].data().region(
+                volume.extent(),
+                range[0].clone(),
+                range[1].clone(),
+                range[2].clone(),
+            ))
+        })
+        .expect("the background is fitted");
     for index in 0..builder.tile_count() {
         let range = builder.detection_range(index);
         let detection = volume.channels()[0].data().region(
@@ -253,5 +263,120 @@ fn blobs(extent: Extent, spacing: &[f32; 3], centres: &[[f32; 3]], radius: f32) 
                 VoxelData::U16(vec![MARKER; count]),
             ),
         ],
+    )
+}
+
+#[test]
+fn detects_objects_on_an_uneven_background() {
+    let extent = Extent::new(240, 80, 80);
+    let centres = [[60.0f32, 40.0, 40.0], [190.0, 40.0, 40.0]];
+    let volume = illuminated(extent, &[0.1, 0.1, 0.1], &centres, 10.0, 0.2, 0.8, 0.35);
+    let set = extract(
+        &volume,
+        SurfaceParams::new(0.25, 0.0, 0.0, 0.0),
+        Region::none(),
+    );
+    assert_eq!(
+        set.object_count(),
+        centres.len(),
+        "every blob survives the illumination ramp"
+    );
+    let expected = 4.0 / 3.0 * PI * 10.0f64.powi(3);
+    for object in set.objects() {
+        let relative = (object.voxel_count() as f64 - expected).abs() / expected;
+        assert!(
+            relative < 0.1,
+            "a blob under the ramp holds {} voxels against {expected}",
+            object.voxel_count()
+        );
+    }
+}
+
+#[test]
+fn fills_cavities_enclosed_by_a_surface() {
+    let extent = Extent::new(96, 96, 96);
+    let volume = shell(extent, &[0.1, 0.1, 0.1], [48.0, 48.0, 48.0], 20.0, 10.0);
+    let set = extract(
+        &volume,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.0),
+        Region::none(),
+    );
+    assert_eq!(set.object_count(), 1, "the shell is one object");
+    let expected = 4.0 / 3.0 * PI * 20.0f64.powi(3);
+    let relative = (set.objects()[0].voxel_count() as f64 - expected).abs() / expected;
+    assert!(
+        relative < 0.05,
+        "the cavity is filled: {} voxels against {expected}",
+        set.objects()[0].voxel_count()
+    );
+}
+
+fn illuminated(
+    extent: Extent,
+    spacing: &[f32; 3],
+    centres: &[[f32; 3]],
+    radius: f32,
+    low: f32,
+    high: f32,
+    contrast: f32,
+) -> Volume {
+    let count = extent.voxel_count() as usize;
+    let mut values = vec![0u16; count];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let background = low + (high - low) * x as f32 / (extent.x() - 1) as f32;
+                let inside = centres.iter().any(|centre| {
+                    ((x as f32 - centre[0]).powi(2)
+                        + (y as f32 - centre[1]).powi(2)
+                        + (z as f32 - centre[2]).powi(2))
+                    .sqrt()
+                        < radius
+                });
+                let value = if inside {
+                    background + contrast
+                } else {
+                    background
+                };
+                values[extent.index(x, y, z) as usize] =
+                    (value.clamp(0.0, 1.0) * f32::from(HIGH)).round() as u16;
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        Spacing::new(spacing[0], spacing[1], spacing[2]),
+        vec![Channel::new(
+            "ramp",
+            [0.3, 0.8, 1.0],
+            VoxelData::U16(values),
+        )],
+    )
+}
+
+fn shell(extent: Extent, spacing: &[f32; 3], centre: [f32; 3], radius: f32, cavity: f32) -> Volume {
+    let count = extent.voxel_count() as usize;
+    let mut values = vec![0u16; count];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let offset = ((x as f32 - centre[0]).powi(2)
+                    + (y as f32 - centre[1]).powi(2)
+                    + (z as f32 - centre[2]).powi(2))
+                .sqrt();
+                if offset < radius && offset >= cavity {
+                    values[extent.index(x, y, z) as usize] = HIGH;
+                }
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        Spacing::new(spacing[0], spacing[1], spacing[2]),
+        vec![Channel::new(
+            "shell",
+            [0.3, 0.8, 1.0],
+            VoxelData::U16(values),
+        )],
     )
 }

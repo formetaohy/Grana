@@ -304,6 +304,11 @@ fn surfaces(
             done: 0,
             total,
         });
+        builder.fit_background(|range| {
+            reader
+                .read_region(time, 0, channel, range)
+                .map_err(String::from)
+        })?;
         for index in 0..total {
             if cancel.load(Ordering::Relaxed) {
                 return Ok(());

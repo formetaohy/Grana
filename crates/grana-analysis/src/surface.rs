@@ -7,6 +7,7 @@ use grana_object::{IntensityTable, SampleAccumulator, SurfaceSet, SurfaceStatist
 use grana_volume::{Intensity, Level, Region, VoxelData};
 
 use crate::SurfaceParams;
+use crate::background::Background;
 use crate::mask::Mask;
 use crate::table::{EDGE_TABLE, TRIANGLE_TABLE};
 
@@ -15,6 +16,8 @@ const DISTANCE_LIMIT: u32 = 12;
 const GRAIN_LIMIT: f32 = 3.0;
 const GRAIN_SUPPORT: f32 = 3.0;
 const ANISOTROPY_LIMIT: u32 = 16;
+const BACKGROUND_SAMPLES: usize = 48;
+const BACKGROUND_BLOCKS: u32 = 3;
 const EMPTY: u32 = u32::MAX;
 
 const CORNER: [[usize; 3]; 8] = [
@@ -89,6 +92,7 @@ pub struct SurfaceBuilder {
     world: [f32; 3],
     voxel_volume: f64,
     params: SurfaceParams,
+    intensity: Intensity,
     threshold: f32,
     region: [Range<u32>; 3],
     tiles: [u32; 3],
@@ -101,8 +105,12 @@ pub struct SurfaceBuilder {
     kernels: [Vec<f32>; 3],
     pad: [u32; 3],
     dims: [usize; 3],
+    background: Option<Background>,
+    raw: Vec<f32>,
+    row: Vec<f32>,
     field: Vec<f32>,
     mask: Vec<bool>,
+    outside: Vec<bool>,
     distance: Vec<u16>,
     labels: Vec<u32>,
     order: Vec<u32>,
@@ -133,7 +141,7 @@ impl SurfaceBuilder {
             channels > 0 && detection < channels,
             "the detection channel is one of the measured channels"
         );
-        let threshold = intensity.value(params.threshold());
+        let threshold = params.threshold() * intensity.span();
         let extent = level.extent();
         let extent = [extent.x(), extent.y(), extent.z()];
         let spacing = level.spacing();
@@ -174,6 +182,7 @@ impl SurfaceBuilder {
             world,
             voxel_volume,
             params,
+            intensity,
             threshold,
             region,
             tiles,
@@ -186,8 +195,12 @@ impl SurfaceBuilder {
             kernels,
             pad,
             dims: [0; 3],
+            background: None,
+            raw: Vec::new(),
+            row: Vec::new(),
             field: Vec::new(),
             mask: Vec::new(),
+            outside: Vec::new(),
             distance: Vec::new(),
             labels: Vec::new(),
             order: Vec::new(),
@@ -226,6 +239,57 @@ impl SurfaceBuilder {
         })
     }
 
+    pub fn fit_background(
+        &mut self,
+        mut read: impl FnMut(&[Range<u32>; 3]) -> Result<VoxelData, String>,
+    ) -> Result<(), String> {
+        assert!(
+            self.next == 0,
+            "the background is fitted before the surface tiles arrive"
+        );
+        assert!(
+            self.background.is_none(),
+            "the background is fitted once for every frame"
+        );
+        let stride = ((self.tile_count as f64 / BACKGROUND_SAMPLES as f64)
+            .cbrt()
+            .ceil() as usize)
+            .max(1);
+        let [columns, rows, depths] = self.tiles;
+        let mut samples = Vec::new();
+        let mut values = Vec::new();
+        for depth in (0..depths as usize).step_by(stride) {
+            for row in (0..rows as usize).step_by(stride) {
+                for column in (0..columns as usize).step_by(stride) {
+                    let index = column + columns as usize * (row + rows as usize * depth);
+                    let core = self.core_range(index);
+                    let data = read(&core)?;
+                    if data.voxel_count() != core_voxels(&core) {
+                        return Err(
+                            "the background tile does not cover the requested region".to_string()
+                        );
+                    }
+                    values.clear();
+                    values.resize(data.voxel_count(), 0.0);
+                    data.write_values(&mut values);
+                    let dims = [0, 1, 2].map(|axis| core[axis].end - core[axis].start);
+                    let origin = [core[0].start, core[1].start, core[2].start];
+                    samples.extend(Background::samples(
+                        values.len(),
+                        dims,
+                        origin,
+                        BACKGROUND_BLOCKS,
+                        self.intensity,
+                        |index| values[index],
+                    ));
+                }
+            }
+        }
+        let extent = self.extent.map(|value| value as f32);
+        self.background = Some(Background::fit(&samples, extent, self.intensity));
+        Ok(())
+    }
+
     pub fn add(
         &mut self,
         index: usize,
@@ -241,11 +305,16 @@ impl SurfaceBuilder {
         if detection.voxel_count() != count {
             return Err("the detection tile does not cover the requested region".to_string());
         }
-        self.field.clear();
-        self.field.resize(count, 0.0);
-        detection.write_values(&mut self.field);
+        self.raw.clear();
+        self.raw.resize(count, 0.0);
+        detection.write_values(&mut self.raw);
         self.smooth();
+        let background = self
+            .background
+            .expect("the background is fitted before the surface tiles arrive");
+        self.contrast(&array, background);
         self.threshold_mask(roi);
+        self.fill_holes();
         self.labels.clear();
         self.labels.resize(count, EMPTY);
         if self.split {
@@ -359,7 +428,7 @@ impl SurfaceBuilder {
                 for row in 0..dims[first] {
                     let base = strides[first] * row + strides[second] * position;
                     for (step, slot) in line.iter_mut().enumerate() {
-                        *slot = self.field[base + strides[axis] * step];
+                        *slot = self.raw[base + strides[axis] * step];
                     }
                     for (step, slot) in blurred.iter_mut().enumerate() {
                         let mut sum = 0.0;
@@ -372,10 +441,87 @@ impl SurfaceBuilder {
                         *slot = sum;
                     }
                     for (step, value) in blurred.iter().enumerate() {
-                        self.field[base + strides[axis] * step] = *value;
+                        self.raw[base + strides[axis] * step] = *value;
                     }
                 }
             }
+        }
+    }
+
+    fn contrast(&mut self, array: &[Range<u32>; 3], background: Background) {
+        let dims = self.dims;
+        let count = dims[0] * dims[1] * dims[2];
+        self.field.clear();
+        self.field.resize(count, 0.0);
+        self.row.clear();
+        self.row.resize(dims[0], 0.0);
+        for depth in 0..dims[2] {
+            for line in 0..dims[1] {
+                let base = dims[0] * (line + dims[1] * depth);
+                let voxel = [
+                    array[0].start as f32,
+                    (array[1].start + line as u32) as f32,
+                    (array[2].start + depth as u32) as f32,
+                ];
+                background.row(voxel, dims[0], &mut self.row);
+                for column in 0..dims[0] {
+                    self.field[base + column] = self.raw[base + column] - self.row[column];
+                }
+            }
+        }
+    }
+
+    fn fill_holes(&mut self) {
+        let dims = self.dims;
+        let strides = strides_of(dims);
+        let count = dims[0] * dims[1] * dims[2];
+        self.outside.clear();
+        self.outside.resize(count, false);
+        self.stack.clear();
+        for z in 0..dims[2] {
+            for y in 0..dims[1] {
+                for x in 0..dims[0] {
+                    if x != 0
+                        && y != 0
+                        && z != 0
+                        && x + 1 != dims[0]
+                        && y + 1 != dims[1]
+                        && z + 1 != dims[2]
+                    {
+                        continue;
+                    }
+                    let index = x + dims[0] * (y + dims[1] * z);
+                    if !self.mask[index] {
+                        self.outside[index] = true;
+                        self.stack.push(index as u32);
+                    }
+                }
+            }
+        }
+        while let Some(cell) = self.stack.pop() {
+            let cell = cell as usize;
+            for axis in 0..3 {
+                let coordinate = (cell / strides[axis]) % dims[axis];
+                for step in [-1i64, 1] {
+                    let reached = coordinate as i64 + step;
+                    if reached < 0 || reached >= dims[axis] as i64 {
+                        continue;
+                    }
+                    let neighbour = (cell as i64 + step * strides[axis] as i64) as usize;
+                    if !self.mask[neighbour] && !self.outside[neighbour] {
+                        self.outside[neighbour] = true;
+                        self.stack.push(neighbour as u32);
+                    }
+                }
+            }
+        }
+        let threshold = self.threshold;
+        for index in 0..count {
+            if self.mask[index] || self.outside[index] {
+                continue;
+            }
+            self.mask[index] = true;
+            self.field[index] = threshold;
         }
     }
 
@@ -626,7 +772,7 @@ impl SurfaceBuilder {
                     for (channel, data) in measured.iter().enumerate() {
                         let value = match data {
                             Some(data) => data.value(local),
-                            None => self.field[index],
+                            None => self.raw[index],
                         };
                         self.accumulators[node * self.channels + channel].push(value);
                     }
@@ -1085,6 +1231,13 @@ fn crossing(
     ((line[position] + weight * (position * position) as f64)
         - (line[anchor] + weight * (anchor * anchor) as f64))
         / (2.0 * weight * (position as f64 - anchor as f64))
+}
+
+fn core_voxels(core: &[Range<u32>; 3]) -> usize {
+    [0, 1, 2]
+        .map(|axis| (core[axis].end - core[axis].start) as usize)
+        .into_iter()
+        .product()
 }
 
 fn dims_of(ranges: &[Range<u32>; 3]) -> [usize; 3] {

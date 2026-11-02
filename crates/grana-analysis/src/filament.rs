@@ -9,10 +9,12 @@ use grana_object::{FilamentSet, IntensityTable, SampleAccumulator};
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
 use crate::FilamentParams;
+use crate::background::Background;
 use crate::mask::Mask;
 
 const MAX_VOXELS: u64 = 1 << 25;
 const MAX_STEP: u32 = 32;
+const BACKGROUND_BLOCKS: u32 = 3;
 
 pub fn filament_level(pyramid: &Pyramid) -> Option<usize> {
     (0..pyramid.level_count()).find(|index| voxels(pyramid.level(*index)) <= MAX_VOXELS)
@@ -56,6 +58,7 @@ pub struct FilamentScan {
     extent: [u32; 3],
     step: [u32; 3],
     params: FilamentParams,
+    intensity: Intensity,
     threshold: f32,
     channels: usize,
     grid: Grid,
@@ -118,7 +121,8 @@ impl FilamentScan {
             extent,
             step,
             params,
-            threshold: intensity.value(params.threshold()),
+            intensity,
+            threshold: params.threshold() * intensity.span(),
             channels,
             grid: Grid {
                 dims,
@@ -161,7 +165,7 @@ impl FilamentScan {
             self.extent,
             self.step,
             &self.grid,
-            self.threshold,
+            volume::Contrast::new(self.threshold, self.background(detection)),
             volume::Gate {
                 region: self.region,
                 roi,
@@ -224,6 +228,22 @@ impl FilamentScan {
             objects,
             intensities,
         ))
+    }
+
+    fn background(&self, detection: &VoxelData) -> Background {
+        let samples = Background::samples(
+            detection.voxel_count(),
+            self.extent,
+            [0, 0, 0],
+            BACKGROUND_BLOCKS,
+            self.intensity,
+            |index| detection.value(index),
+        );
+        Background::fit(
+            &samples,
+            self.extent.map(|value| value as f32),
+            self.intensity,
+        )
     }
 
     fn sample(&self, data: &VoxelData, node: usize) -> f32 {
