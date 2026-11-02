@@ -25,6 +25,8 @@ const CORNERS: array<vec2<f32>, 3> = array<vec2<f32>, 3>(
 
 const SELECTED: vec3<f32> = vec3<f32>(1.0, 0.86, 0.45);
 const SELECTED_MIX: f32 = 0.55;
+const FILL_ALPHA: f32 = 0.6;
+const SELECTED_ALPHA: f32 = 0.85;
 
 struct VertexInput {
     @location(0) position: vec4<f32>,
@@ -52,8 +54,8 @@ fn vs_cut(input: VertexInput) -> CutOutput {
     let v = section.mapping.y;
     var output: CutOutput;
     output.clip_position = vec4<f32>(
-        (uvw[u] - section.uv_center.x) / section.uv_scale.x,
-        (uvw[v] - section.uv_center.y) / section.uv_scale.y,
+        (uvw[u] - section.uv_center.x) / section.uv_scale.x + section.jitter.x,
+        (uvw[v] - section.uv_center.y) / section.uv_scale.y + section.jitter.y,
         0.5,
         1.0,
     );
@@ -73,7 +75,7 @@ fn fs_parity(input: CutOutput) -> @location(0) vec4<f32> {
 fn vs_fill(@builtin(vertex_index) index: u32, @builtin(instance_index) object: u32) -> FillOutput {
     let corner = CORNERS[index];
     var output: FillOutput;
-    output.clip_position = vec4<f32>(corner, 0.5, 1.0);
+    output.clip_position = vec4<f32>(corner + section.jitter.xy, 0.5, 1.0);
     output.uv = section.uv_center.xy + corner * section.uv_scale.xy;
     output.object = object;
     return output;
@@ -90,10 +92,12 @@ fn fs_fill(input: FillOutput) -> @location(0) vec4<f32> {
     }
     let style = styles[input.object];
     var color = style.color.rgb;
+    var alpha = FILL_ALPHA;
     if (style.flags.y > 0.5) {
         color = mix(color, SELECTED, SELECTED_MIX);
+        alpha = SELECTED_ALPHA;
     }
-    return vec4<f32>(color, 1.0);
+    return vec4<f32>(color * alpha, alpha);
 }
 
 @vertex

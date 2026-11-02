@@ -1,6 +1,7 @@
 mod atlas;
 mod brick;
 mod census;
+mod cut;
 mod frame;
 mod image;
 mod layout;

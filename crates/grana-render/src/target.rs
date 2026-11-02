@@ -13,7 +13,6 @@ pub(crate) struct SceneTarget {
     color: TextureView,
     depth: TextureView,
     depth_group: BindGroup,
-    stencil: TextureView,
 }
 
 impl SceneTarget {
@@ -59,23 +58,10 @@ impl SceneTarget {
                 resource: BindingResource::TextureView(&depth),
             }],
         });
-        let stencil = device
-            .create_texture(&TextureDescriptor {
-                label: Some("grana.scene.stencil"),
-                size: extent,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: STENCIL_FORMAT,
-                usage: TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            })
-            .create_view(&TextureViewDescriptor::default());
         Self {
             color,
             depth,
             depth_group,
-            stencil,
         }
     }
 
@@ -89,10 +75,6 @@ impl SceneTarget {
 
     pub fn depth_group(&self) -> &BindGroup {
         &self.depth_group
-    }
-
-    pub fn stencil(&self) -> &TextureView {
-        &self.stencil
     }
 }
 

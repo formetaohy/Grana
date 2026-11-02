@@ -42,7 +42,7 @@ fn vs_main(@builtin(vertex_index) index: u32, @builtin(instance_index) instance:
         cross / (section.world[v] * section.uv_scale.y),
     );
     var output: MarkerOutput;
-    output.clip_position = vec4<f32>(center + local * extent, 0.0, 1.0);
+    output.clip_position = vec4<f32>(center + local * extent + section.jitter.xy, 0.0, 1.0);
     output.color_alpha = data.color_alpha;
     output.local = local;
     output.center = data.center_radius.xyz;
@@ -65,5 +65,6 @@ fn fs_main(input: MarkerOutput) -> @location(0) vec4<f32> {
     let width = fwidth(distance);
     let coverage = clamp((1.0 - distance) / max(width, 1.0e-6) + 0.5, 0.0, 1.0);
     let rim = 1.0 - 0.45 * smoothstep(0.72, 1.0, distance);
-    return vec4<f32>(input.color_alpha.rgb * rim, input.color_alpha.a * coverage);
+    let alpha = input.color_alpha.a * coverage;
+    return vec4<f32>(input.color_alpha.rgb * rim * alpha, alpha);
 }

@@ -60,15 +60,28 @@ fn marker_cull_volume(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
-@compute @workgroup_size(64)
-fn marker_cull_section(@builtin(global_invocation_id) id: vec3<u32>) {
-    let index = id.x;
+fn cull_section_side(index: u32, front: bool) {
     if (index >= arrayLength(&markers)) {
         return;
     }
     let data = markers[index];
-    if (!outside_section(data.center_radius.xyz, data.center_radius.w)
-        && !outside_region_sphere(data.center_radius.xyz, data.center_radius.w)) {
+    if (outside_section(data.center_radius.xyz, data.center_radius.w)
+        || outside_region_sphere(data.center_radius.xyz, data.center_radius.w)) {
+        return;
+    }
+    let uvw = (data.center_radius.xyz - section.box_min.xyz) / section.world.xyz;
+    let ahead = uvw[section.mapping.z] >= section.plane.x;
+    if (ahead == front) {
         append(index);
     }
+}
+
+@compute @workgroup_size(64)
+fn marker_cull_section_behind(@builtin(global_invocation_id) id: vec3<u32>) {
+    cull_section_side(id.x, false);
+}
+
+@compute @workgroup_size(64)
+fn marker_cull_section_front(@builtin(global_invocation_id) id: vec3<u32>) {
+    cull_section_side(id.x, true);
 }

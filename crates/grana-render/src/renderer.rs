@@ -18,6 +18,7 @@ use wgpu::{
 use crate::atlas::{Atlas, ResidentBrick};
 use crate::brick::{BrickRecord, BrickTable};
 use crate::census::{CENSUS_LEVELS, Census};
+use crate::cut::CutLayer;
 use crate::frame::{FrameData, SectionData, VolumeView};
 use crate::layout::Layouts;
 use crate::marker::MarkerPasses;
@@ -195,6 +196,7 @@ pub struct Renderer {
     shadow: Option<Shadow>,
     volume: VolumePass,
     section: SectionPass,
+    cut: CutLayer,
     meshes: MeshPasses,
     markers: MarkerPasses,
     dummy: TextureView,
@@ -243,6 +245,7 @@ impl Renderer {
             shadow: None,
             volume: VolumePass::new(device, &layouts),
             section: SectionPass::new(device, &layouts),
+            cut: CutLayer::new(device),
             meshes: MeshPasses::new(device, &layouts, budget / 2),
             markers: MarkerPasses::new(device, &layouts),
             layouts,
@@ -502,6 +505,7 @@ impl Renderer {
             census,
             volume,
             section: section_pass,
+            cut,
             meshes,
             markers,
             pyramid,
@@ -545,6 +549,7 @@ impl Renderer {
         let section_height = section_region[3].max(1);
         let volume_aspect = volume_width as f32 / volume_height as f32;
         let section_aspect = section_width as f32 / section_height as f32;
+        let cut_size = [section_width, section_height];
         let slots = atlas.slots();
         let level_count = pyramid.level_count();
         let section_target_level = select_section_level(pyramid, section, section_height as f32);
@@ -630,7 +635,7 @@ impl Renderer {
         let volume_table = bricks[volume_level]
             .as_ref()
             .expect("the volume level table exists");
-        let section_data =
+        let mut section_data =
             SectionData::new(camera, section, section_aspect, section_table, *channels);
         let finest = pyramid.level(0);
         let world = Vec3::from(finest.world_extent());
@@ -677,6 +682,8 @@ impl Renderer {
             info.samples = target.samples;
             let offset = sample::offset(target.samples - 1, size);
             frame_data.jitter = [offset.x, offset.y, (target.samples - 1) as f32, 0.0];
+            let cut_offset = sample::offset(target.samples - 1, cut_size);
+            section_data.jitter = [cut_offset.x, cut_offset.y, 0.0, 0.0];
             let range = section_range(
                 pyramid,
                 section_level,
@@ -803,20 +810,12 @@ impl Renderer {
                     atlas: atlas.group(),
                 },
             );
-            meshes.draw_section(
-                &mut encoder,
-                target.scene.color(),
-                target.scene.stencil(),
-                scene_group,
-                &section_data,
-                section_region,
-            );
-            markers.draw_section(
-                &mut encoder,
-                target.scene.color(),
-                section_region,
-                scene_group,
-            );
+            cut.draw(device, &mut encoder, cut_size, |pass| {
+                markers.draw_section_behind(pass, scene_group);
+                meshes.draw_section(pass, scene_group, &section_data, cut_size);
+                markers.draw_section_front(pass, scene_group);
+            });
+            cut.composite(&mut encoder, target.scene.color(), section_region);
             present.accumulate(
                 &mut encoder,
                 &target.accumulation,

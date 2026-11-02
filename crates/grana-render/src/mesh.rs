@@ -8,13 +8,14 @@ use wgpu::{
     ColorTargetState, ColorWrites, CommandEncoder, CompareFunction, ComputePipeline,
     ComputePipelineDescriptor, DepthBiasState, DepthStencilState, Device, FragmentState,
     IndexFormat, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor, PrimitiveState,
-    Queue, RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor,
-    RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource,
-    StencilFaceState, StencilOperation, StencilState, StoreOp, TextureFormat, TextureView,
-    VertexAttribute, VertexBufferLayout, VertexFormat, VertexState, VertexStepMode,
+    Queue, RenderPass, RenderPassColorAttachment, RenderPassDepthStencilAttachment,
+    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor,
+    ShaderSource, StencilFaceState, StencilOperation, StencilState, StoreOp, TextureFormat,
+    TextureView, VertexAttribute, VertexBufferLayout, VertexFormat, VertexState, VertexStepMode,
     util::DeviceExt,
 };
 
+use crate::cut;
 use crate::frame::SectionData;
 use crate::layout::Layouts;
 use crate::schema::{LayerKey, SceneFrame, Style};
@@ -112,18 +113,9 @@ struct SectionObject {
     high: [f32; 3],
 }
 
-#[derive(Clone, Copy)]
-struct SectionItem {
-    reach: f32,
-    layer: usize,
-    object: usize,
-    rect: [u32; 4],
-}
-
 pub(crate) struct MeshPasses {
     slots: HashMap<LayerKey, MeshSlot>,
     active: Vec<LayerKey>,
-    items: Vec<SectionItem>,
     order: u64,
     budget: u64,
     resident: u64,
@@ -265,7 +257,7 @@ impl MeshPasses {
                 StencilOperation::Replace,
                 0xFF,
             )),
-            multisample: MultisampleState::default(),
+            multisample: cut::multisample(),
             fragment: Some(FragmentState {
                 module: &section_module,
                 entry_point: Some("fs_quad"),
@@ -294,7 +286,7 @@ impl MeshPasses {
                 StencilOperation::Invert,
                 0xFF,
             )),
-            multisample: MultisampleState::default(),
+            multisample: cut::multisample(),
             fragment: Some(FragmentState {
                 module: &section_module,
                 entry_point: Some("fs_parity"),
@@ -323,14 +315,14 @@ impl MeshPasses {
                 StencilOperation::Keep,
                 0x00,
             )),
-            multisample: MultisampleState::default(),
+            multisample: cut::multisample(),
             fragment: Some(FragmentState {
                 module: &section_module,
                 entry_point: Some("fs_fill"),
                 compilation_options: Default::default(),
                 targets: &[Some(ColorTargetState {
                     format: SCENE_FORMAT,
-                    blend: None,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: ColorWrites::ALL,
                 })],
             }),
@@ -354,7 +346,6 @@ impl MeshPasses {
         Self {
             slots: HashMap::new(),
             active: Vec::new(),
-            items: Vec::new(),
             order: 0,
             budget,
             resident: 0,
@@ -567,90 +558,34 @@ impl MeshPasses {
         }
     }
 
-    pub fn draw_section(
-        &mut self,
-        encoder: &mut CommandEncoder,
-        target: &TextureView,
-        stencil: &TextureView,
-        scene: &BindGroup,
+    pub fn draw_section<'a>(
+        &'a self,
+        pass: &mut RenderPass<'a>,
+        scene: &'a BindGroup,
         section: &SectionData,
-        region: [u32; 4],
+        size: [u32; 2],
     ) {
-        let mut items = std::mem::take(&mut self.items);
-        items.clear();
-        for (layer, key) in self.active.iter().enumerate() {
+        pass.set_bind_group(0, scene, &[]);
+        for key in &self.active {
             let slot = &self.slots[key];
+            pass.set_bind_group(1, &slot.object_group, &[]);
+            pass.set_bind_group(2, &slot.style_group, &[]);
             for (object, object_data) in slot.section.iter().enumerate() {
                 if !slot.visible[object] {
                     continue;
                 }
-                let Some(rect) = cut_rect(object_data, section, region) else {
+                let Some(rect) = cut_rect(object_data, section, size) else {
                     continue;
                 };
-                items.push(SectionItem {
-                    reach: section_reach(object_data, section),
-                    layer,
-                    object,
-                    rect,
-                });
+                pass.set_scissor_rect(rect[0], rect[1], rect[2], rect[3]);
+                pass.set_pipeline(&self.section_clear);
+                pass.draw(0..3, 0..1);
+                pass.set_pipeline(&self.section_parity);
+                slot.draw_object(pass, object);
+                pass.set_pipeline(&self.section_fill);
+                pass.draw(0..3, object as u32..object as u32 + 1);
             }
         }
-        if items.is_empty() {
-            self.items = items;
-            return;
-        }
-        items.sort_unstable_by(|left, right| right.reach.total_cmp(&left.reach));
-        let width = region[2].max(1);
-        let height = region[3].max(1);
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.mesh.section.pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                view: stencil,
-                depth_ops: None,
-                stencil_ops: Some(Operations {
-                    load: LoadOp::Clear(0),
-                    store: StoreOp::Store,
-                }),
-            }),
-            ..Default::default()
-        });
-        pass.set_viewport(
-            region[0] as f32,
-            region[1] as f32,
-            width as f32,
-            height as f32,
-            0.0,
-            1.0,
-        );
-        pass.set_bind_group(0, scene, &[]);
-        let mut current = usize::MAX;
-        for item in &items {
-            let key = &self.active[item.layer];
-            let slot = &self.slots[key];
-            if item.layer != current {
-                current = item.layer;
-                pass.set_bind_group(1, &slot.object_group, &[]);
-                pass.set_bind_group(2, &slot.style_group, &[]);
-            }
-            pass.set_scissor_rect(item.rect[0], item.rect[1], item.rect[2], item.rect[3]);
-            pass.set_pipeline(&self.section_clear);
-            pass.draw(0..3, 0..1);
-            pass.set_pipeline(&self.section_parity);
-            slot.draw_object(&mut pass, item.object);
-            pass.set_pipeline(&self.section_fill);
-            pass.draw(0..3, item.object as u32..item.object as u32 + 1);
-        }
-        drop(pass);
-        self.items = items;
     }
 }
 
@@ -877,12 +812,7 @@ fn section_axis(section: &SectionData) -> (usize, usize, usize) {
     )
 }
 
-fn section_reach(object: &SectionObject, section: &SectionData) -> f32 {
-    let (_, u, v) = section_axis(section);
-    (object.high[u] - object.low[u]) * (object.high[v] - object.low[v])
-}
-
-fn cut_rect(object: &SectionObject, section: &SectionData, region: [u32; 4]) -> Option<[u32; 4]> {
+fn cut_rect(object: &SectionObject, section: &SectionData, size: [u32; 2]) -> Option<[u32; 4]> {
     let (axis, u, v) = section_axis(section);
     let plane = section.box_min[axis] + section.plane[0] * section.world[axis];
     if object.high[axis] < plane || object.low[axis] > plane {
@@ -891,22 +821,12 @@ fn cut_rect(object: &SectionObject, section: &SectionData, region: [u32; 4]) -> 
     if section.uv_scale[0] <= 0.0 || section.uv_scale[1] <= 0.0 {
         return None;
     }
-    let (first_u, second_u) = cut_span(object.low[u], object.high[u], u, 0, section, region);
-    let (first_v, second_v) = cut_span(object.low[v], object.high[v], v, 1, section, region);
-    let left = edge(
-        first_u.min(second_u) - SCISSOR_MARGIN,
-        0,
-        region,
-        f32::floor,
-    );
-    let right = edge(first_u.max(second_u) + SCISSOR_MARGIN, 0, region, f32::ceil);
-    let top = edge(
-        first_v.min(second_v) - SCISSOR_MARGIN,
-        1,
-        region,
-        f32::floor,
-    );
-    let bottom = edge(first_v.max(second_v) + SCISSOR_MARGIN, 1, region, f32::ceil);
+    let (first_u, second_u) = cut_span(object.low[u], object.high[u], u, 0, section, size);
+    let (first_v, second_v) = cut_span(object.low[v], object.high[v], v, 1, section, size);
+    let left = edge(first_u.min(second_u) - SCISSOR_MARGIN, size[0], f32::floor);
+    let right = edge(first_u.max(second_u) + SCISSOR_MARGIN, size[0], f32::ceil);
+    let top = edge(first_v.min(second_v) - SCISSOR_MARGIN, size[1], f32::floor);
+    let bottom = edge(first_v.max(second_v) + SCISSOR_MARGIN, size[1], f32::ceil);
     if right <= left || bottom <= top {
         return None;
     }
@@ -919,29 +839,23 @@ fn cut_span(
     world_axis: usize,
     pane_axis: usize,
     section: &SectionData,
-    region: [u32; 4],
+    size: [u32; 2],
 ) -> (f32, f32) {
-    let (start, size) = if pane_axis == 0 {
-        (region[0], region[2])
-    } else {
-        (region[1], region[3])
-    };
+    let length = size[pane_axis] as f32;
     let pixel = |world: f32| {
         let uv = (world - section.box_min[world_axis]) / section.world[world_axis];
-        start as f32
-            + ((uv - section.uv_center[pane_axis]) / section.uv_scale[pane_axis] * 0.5 + 0.5)
-                * size as f32
+        let clip = (uv - section.uv_center[pane_axis]) / section.uv_scale[pane_axis];
+        if pane_axis == 0 {
+            (clip * 0.5 + 0.5) * length
+        } else {
+            (0.5 - clip * 0.5) * length
+        }
     };
     (pixel(low), pixel(high))
 }
 
-fn edge(value: f32, pane_axis: usize, region: [u32; 4], round: fn(f32) -> f32) -> u32 {
-    let (start, size) = if pane_axis == 0 {
-        (region[0], region[2])
-    } else {
-        (region[1], region[3])
-    };
-    (round(value) as i64).clamp(start as i64, (start + size) as i64) as u32
+fn edge(value: f32, length: u32, round: fn(f32) -> f32) -> u32 {
+    (round(value) as i64).clamp(0, length as i64) as u32
 }
 
 fn bind_group(device: &Device, layout: &BindGroupLayout, buffer: &Buffer) -> BindGroup {

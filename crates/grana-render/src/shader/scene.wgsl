@@ -27,6 +27,7 @@ struct SectionData {
     uv_center: vec4<f32>,
     uv_scale: vec4<f32>,
     plane: vec4<f32>,
+    jitter: vec4<f32>,
     mapping: vec4<u32>,
     box_min: vec4<f32>,
     world: vec4<f32>,

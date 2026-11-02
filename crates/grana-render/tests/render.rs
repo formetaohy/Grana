@@ -1,4 +1,4 @@
-﻿mod common;
+mod common;
 
 use common::{
     SAMPLES, SIDE, Session, blue, bright_fraction, channels, dark_fraction, device, green,
@@ -1877,13 +1877,13 @@ fn pyramids() -> Mesh {
         let base = vertices.len() as u32;
         for (x, y) in [(-1.0f32, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
             vertices.push(MeshVertex::new(
-                [centre + 0.4 * x, 0.4 * y, -1.0],
+                [centre + 0.4 * x, 0.55 + 0.4 * y, -1.0],
                 [0.0, 0.0, -1.0],
                 object as u32,
             ));
         }
         vertices.push(MeshVertex::new(
-            [centre, 0.0, 1.0],
+            [centre, 0.55, 1.0],
             [0.0, 0.0, 1.0],
             object as u32,
         ));
@@ -1894,4 +1894,105 @@ fn pyramids() -> Mesh {
         indices.extend([base, base + 2, base + 1, base, base + 3, base + 2]);
     }
     Mesh::new(vertices, indices)
+}
+
+fn slab() -> Mesh {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let corners = [
+        [-0.8f32, -0.8, -0.5],
+        [0.8, -0.8, -0.5],
+        [0.8, 0.8, -0.5],
+        [-0.8, 0.8, -0.5],
+        [-0.8, -0.8, 0.5],
+        [0.8, -0.8, 0.5],
+        [0.8, 0.8, 0.5],
+        [-0.8, 0.8, 0.5],
+    ];
+    for corner in corners {
+        let normal = Vec3::new(
+            if corner[0].abs() > 0.79 {
+                corner[0].signum()
+            } else {
+                0.0
+            },
+            if corner[1].abs() > 0.79 {
+                corner[1].signum()
+            } else {
+                0.0
+            },
+            if corner[2].abs() > 0.49 {
+                corner[2].signum()
+            } else {
+                0.0
+            },
+        )
+        .normalize();
+        vertices.push(MeshVertex::new(corner, normal.to_array(), 0));
+    }
+    for face in [
+        [0u32, 2, 1],
+        [0, 3, 2],
+        [4, 5, 6],
+        [4, 6, 7],
+        [0, 1, 5],
+        [0, 5, 4],
+        [3, 7, 6],
+        [3, 6, 2],
+        [0, 4, 7],
+        [0, 7, 3],
+        [1, 2, 6],
+        [1, 6, 5],
+    ] {
+        indices.extend(face);
+    }
+    Mesh::new(vertices, indices)
+}
+
+#[test]
+fn orders_section_markers_against_cut_faces() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = empty_volume();
+    let mesh = PackedMesh::new(slab());
+    let styles = [Style::new([1.0, 0.12, 0.12], true, false)];
+    let world = Vec3::from(volume.world_extent());
+    let voxel = Vec3::new(0.1, 0.1, 0.1);
+    let mut camera = Camera::new(35.0);
+    camera.fit(world, 1.0);
+    let mut section = SectionCamera::new(Axis::Z);
+    section.fit(world, voxel, 1.0);
+    let mut measured = [[0u8; 2]; 2];
+    for (slot, z) in [-0.15f32, 0.15].into_iter().enumerate() {
+        let markers = [Marker::new([0.0, 0.0, z], 0.3, [0.12, 1.0, 0.12], 1.0)];
+        let pixels = marker_scene(
+            &device,
+            &queue,
+            Job {
+                texture: &texture,
+                volume: &volume,
+                volume_region: CORNER,
+                section_region: WHOLE,
+                focus_z: 0.0,
+                mesh: Some((&mesh, &styles)),
+            },
+            &camera,
+            &section,
+            &markers,
+        );
+        let [red, green, _, _] = pixel(&pixels, SIDE / 2, SIDE / 2);
+        measured[slot] = [red, green];
+    }
+    assert!(
+        measured[0][0] > measured[0][1] && measured[0][1] > 120,
+        "a marker behind the plane sits under the cut face: {:?}",
+        measured[0]
+    );
+    assert!(
+        measured[1][1] > measured[1][0],
+        "a marker in front of the plane sits over the cut face: {:?}",
+        measured[1]
+    );
 }

@@ -40,6 +40,7 @@ pub(crate) struct SectionData {
     pub uv_center: [f32; 4],
     pub uv_scale: [f32; 4],
     pub plane: [f32; 4],
+    pub jitter: [f32; 4],
     pub mapping: [u32; 4],
     pub box_min: [f32; 4],
     pub world: [f32; 4],
@@ -68,7 +69,7 @@ const _: () = {
     assert!(size_of::<FrameData>() == 624);
     assert!(std::mem::offset_of!(FrameData, planes) == 384);
     assert!(std::mem::offset_of!(FrameData, light_view) == 480);
-    assert!(size_of::<SectionData>() == 160);
+    assert!(size_of::<SectionData>() == 176);
     assert!(size_of::<ScheduleData>() == 48);
 };
 pub(crate) struct VolumeView<'a> {
@@ -172,6 +173,7 @@ impl SectionData {
             uv_center,
             uv_scale,
             plane: [plane, 0.0, 0.0, 0.0],
+            jitter: [0.0; 4],
             mapping: [
                 u_axis.index() as u32,
                 v_axis.index() as u32,
