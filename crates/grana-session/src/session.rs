@@ -357,10 +357,13 @@ impl Session {
             Command::ClearObject(set) => {
                 self.cancel(Job::Detect(set));
                 self.cancel(Job::Track(set));
+                self.clear_relations(set);
                 if let Some(scene) = self.scene.as_mut() {
                     scene.clear_object(set);
                 }
             }
+            Command::AddRelation { source, target } => self.add_relation(source, target),
+            Command::RemoveRelation { source, target } => self.remove_relation(source, target),
             Command::Track(set) => self.start_tracks(set),
             Command::CancelTrack(set) => self.cancel(Job::Track(set)),
             Command::ClearTracks(set) => {
@@ -663,6 +666,14 @@ impl Session {
                     self.cancel(Job::Track(set));
                 }
                 Action::Track => self.cancel(Job::Track(set)),
+                Action::Relation => {
+                    self.analysis.retain(|analysis| {
+                        !matches!(analysis.job(), Job::Relation { target, .. } if target == set)
+                    });
+                    self.progress.retain(|progress| {
+                        !matches!(progress.job, Job::Relation { target, .. } if target == set)
+                    });
+                }
                 _ => {}
             }
         }
@@ -903,6 +914,7 @@ impl Session {
             Progress(u32, usize, usize),
             Frame(u32, ObjectFrame),
             Tracks(TrackSet),
+            Relation(u32, grana_object::RelationFrame),
             Coloc(grana_measure::ColocSeries, Region),
             Done,
             Failed(String),
@@ -921,6 +933,9 @@ impl Session {
                     }
                     Poll::Event(Event::Tracks(set)) => {
                         updates.push((index, job, Update::Tracks(set)));
+                    }
+                    Poll::Event(Event::Relation { time, frame }) => {
+                        updates.push((index, job, Update::Relation(time, frame)));
                     }
                     Poll::Event(Event::Coloc { series, region }) => {
                         updates.push((index, job, Update::Coloc(*series, region)));
@@ -961,6 +976,13 @@ impl Session {
                 Update::Tracks(tracks) => {
                     if let (Job::Track(set), Some(scene)) = (job, self.scene.as_mut()) {
                         scene.install_tracks(set, tracks);
+                    }
+                }
+                Update::Relation(time, frame) => {
+                    if let (Job::Relation { source, target }, Some(scene)) =
+                        (job, self.scene.as_mut())
+                    {
+                        scene.install_relation(source, target, time, frame);
                     }
                 }
                 Update::Coloc(series, region) => {
@@ -1019,6 +1041,99 @@ impl Session {
         self.progress.retain(|progress| progress.job != job);
     }
 
+    fn clear_relations(&mut self, set: ObjectSetId) {
+        self.analysis.retain(|analysis| {
+            !matches!(analysis.job(), Job::Relation { .. } if analysis.job().involves(set))
+        });
+        self.progress.retain(
+            |progress| !matches!(progress.job, Job::Relation { .. } if progress.job.involves(set)),
+        );
+        if let Some(scene) = self.scene.as_mut() {
+            scene.clear_relations(set);
+        }
+    }
+
+    fn add_relation(&mut self, source: ObjectSetId, target: ObjectSetId) {
+        let busy = self.analysis.iter().any(
+            |analysis| matches!(analysis.job(), Job::Detect(id) if id == source || id == target),
+        );
+        if busy {
+            self.message = Some(Message::error(
+                "the object sets are being detected before they relate",
+            ));
+            return;
+        }
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        if scene
+            .objects
+            .get(source)
+            .is_some_and(|set| set.detected() == 0)
+        {
+            self.message = Some(Message::error(
+                "the object set holds no objects to relate from",
+            ));
+            return;
+        }
+        if scene
+            .objects
+            .get(target)
+            .is_some_and(|set| set.detected() == 0)
+        {
+            self.message = Some(Message::error(
+                "the target object set holds no objects to relate to",
+            ));
+            return;
+        }
+        if !scene.add_relation(source, target) {
+            return;
+        }
+        self.start_relation(source, target);
+    }
+
+    fn remove_relation(&mut self, source: ObjectSetId, target: ObjectSetId) {
+        self.cancel(Job::Relation { source, target });
+        if let Some(scene) = self.scene.as_mut() {
+            scene.remove_relation(source, target);
+        }
+    }
+
+    fn start_relation(&mut self, source: ObjectSetId, target: ObjectSetId) {
+        let job = Job::Relation { source, target };
+        if self.loading.is_some() || self.analysis.iter().any(|analysis| analysis.job() == job) {
+            return;
+        }
+        let prepared = {
+            let Some(scene) = self.scene.as_ref() else {
+                return;
+            };
+            let (Some(from), Some(to)) = (scene.objects.get(source), scene.objects.get(target))
+            else {
+                return;
+            };
+            if to.detected() == 0 {
+                self.message = Some(Message::error(
+                    "the target object set holds no objects to relate to",
+                ));
+                return;
+            }
+            let frames = scene.frame_count();
+            let source_frames = (0..frames)
+                .map(|time| from.frame_shared(time))
+                .collect::<Vec<_>>();
+            let target_frames = (0..frames)
+                .map(|time| to.frame_shared(time))
+                .collect::<Vec<_>>();
+            (source_frames, target_frames, frames as usize)
+        };
+        let (source_frames, target_frames, total) = prepared;
+        self.message = None;
+        self.record_progress(job, 0, 0, total);
+        self.analysis
+            .push(crate::relation(job, source_frames, target_frames));
+    }
+
     fn start_detect(&mut self, set: ObjectSetId) {
         if self.loading.is_some() {
             return;
@@ -1031,6 +1146,7 @@ impl Session {
             return;
         }
         self.cancel(Job::Track(set));
+        self.clear_relations(set);
         if let Some(scene) = self.scene.as_mut() {
             scene.clear_tracks(set);
         }
@@ -1488,6 +1604,7 @@ impl Session {
     fn remove_object(&mut self, set: ObjectSetId) {
         self.cancel(Job::Detect(set));
         self.cancel(Job::Track(set));
+        self.clear_relations(set);
         if let Some(scene) = self.scene.as_mut() {
             scene.remove_object(set);
         }

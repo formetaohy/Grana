@@ -22,6 +22,14 @@ pub enum Command {
     Detect(ObjectSetId),
     CancelDetect(ObjectSetId),
     ClearObject(ObjectSetId),
+    AddRelation {
+        source: ObjectSetId,
+        target: ObjectSetId,
+    },
+    RemoveRelation {
+        source: ObjectSetId,
+        target: ObjectSetId,
+    },
     Track(ObjectSetId),
     CancelTrack(ObjectSetId),
     ClearTracks(ObjectSetId),
@@ -159,6 +167,7 @@ pub enum Action {
     RemoveObject,
     ClearObject,
     Detect,
+    Relation,
     Track,
     ClearTracks,
     CutTrack,
@@ -203,6 +212,7 @@ impl Action {
             Self::RemoveObject => "remove an object set",
             Self::ClearObject => "clear objects",
             Self::Detect => "detection",
+            Self::Relation => "object relation",
             Self::Track => "tracking",
             Self::ClearTracks => "clear tracks",
             Self::CutTrack => "track cut",
@@ -308,6 +318,9 @@ impl Command {
             Self::RemoveObject(_) => Edit::new(Action::RemoveObject),
             Self::ClearObject(_) => Edit::new(Action::ClearObject),
             Self::Detect(set) => Edit::targeted(Action::Detect, set.raw()),
+            Self::AddRelation { target, .. } | Self::RemoveRelation { target, .. } => {
+                Edit::targeted(Action::Relation, target.raw())
+            }
             Self::Track(set) => Edit::targeted(Action::Track, set.raw()),
             Self::ClearTracks(_) => Edit::new(Action::ClearTracks),
             Self::CutTrack { .. } => Edit::new(Action::CutTrack),

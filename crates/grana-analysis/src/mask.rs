@@ -1,10 +1,8 @@
-use std::sync::Arc;
-
 use grana_geometry::PackedMesh;
-use grana_object::Spot;
 use grana_volume::Level;
 
-const UNIT: f32 = 65535.0;
+use crate::shape::Shape;
+
 const NUDGE: [f32; 2] = [1.0e-4, 3.7e-4];
 const WORD: usize = 64;
 const PARALLEL: f32 = 1.0e-12;
@@ -67,18 +65,12 @@ impl Mask {
     }
 }
 
-#[derive(Clone)]
-pub enum RoiFrame {
-    Mesh(Arc<PackedMesh>),
-    Spots(Arc<[Spot]>),
-}
-
 pub struct Roi {
-    frames: Vec<Option<RoiFrame>>,
+    frames: Vec<Option<Shape>>,
 }
 
 impl Roi {
-    pub fn new(frames: Vec<Option<RoiFrame>>) -> Self {
+    pub fn new(frames: Vec<Option<Shape>>) -> Self {
         Self { frames }
     }
 
@@ -86,7 +78,7 @@ impl Roi {
         let Some(Some(frame)) = self.frames.get(time as usize) else {
             return Mask::empty(level);
         };
-        let Some((low, high)) = bounds(frame) else {
+        let Some((low, high)) = frame.bounds() else {
             return Mask::empty(level);
         };
         let spacing = level.spacing();
@@ -107,12 +99,12 @@ impl Roi {
         }
         let mut area = Area::new(origin, limit, spacing, world);
         match frame {
-            RoiFrame::Spots(spots) => {
+            Shape::Spots(spots) => {
                 for spot in spots.iter() {
                     area.sphere(spot.center(), spot.radius());
                 }
             }
-            RoiFrame::Mesh(mesh) => rasterize(mesh, &mut area),
+            Shape::Mesh(mesh) => rasterize(mesh, &mut area),
         }
         area.finish()
     }
@@ -208,43 +200,6 @@ impl Area {
             spacing: self.spacing,
             world: self.world,
         }
-    }
-}
-
-fn bounds(frame: &RoiFrame) -> Option<([f32; 3], [f32; 3])> {
-    let mut low = [f32::INFINITY; 3];
-    let mut high = [f32::NEG_INFINITY; 3];
-    let mut take = |minimum: [f32; 3], maximum: [f32; 3]| {
-        for axis in 0..3 {
-            low[axis] = low[axis].min(minimum[axis]);
-            high[axis] = high[axis].max(maximum[axis]);
-        }
-    };
-    match frame {
-        RoiFrame::Spots(spots) => {
-            for spot in spots.iter() {
-                let center = spot.center();
-                let radius = spot.radius();
-                take(
-                    [0, 1, 2].map(|axis| center[axis] - radius),
-                    [0, 1, 2].map(|axis| center[axis] + radius),
-                );
-            }
-        }
-        RoiFrame::Mesh(mesh) => mesh_bounds(mesh, &mut take),
-    }
-    if low[0] <= high[0] {
-        Some((low, high))
-    } else {
-        None
-    }
-}
-
-fn mesh_bounds(mesh: &PackedMesh, take: &mut impl FnMut([f32; 3], [f32; 3])) {
-    for group in mesh.groups() {
-        let low = group.min();
-        let high = [0, 1, 2].map(|axis| low[axis] + UNIT * group.scale()[axis]);
-        take(low, high);
     }
 }
 

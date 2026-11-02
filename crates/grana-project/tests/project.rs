@@ -9,8 +9,9 @@ use grana_geometry::{Bounds, Mesh, MeshVertex};
 use grana_measure::{COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocPair, ColocSeries};
 use grana_measure::{Measurement, TrackMeasurement};
 use grana_object::{
-    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, SampleAccumulator,
-    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
+    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, RelationFrame,
+    SampleAccumulator, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track,
+    TrackNode, TrackSet,
 };
 use grana_project::{Project, Source, ViewState};
 use grana_scene::{
@@ -245,6 +246,15 @@ fn stage(scene: &mut Scene) {
                 )],
                 intensities(2, 1),
             )),
+        );
+    }
+    scene.add_relation(spots, surfaces);
+    for time in 0..2 {
+        scene.install_relation(
+            spots,
+            surfaces,
+            time,
+            RelationFrame::new(vec![0.5 + time as f32, 1.5], vec![1.0, 0.0], vec![1, 1]),
         );
     }
     let node = |time: u32, x: f32| TrackNode::new(time, time as usize, [x, 0.0, 0.0]);

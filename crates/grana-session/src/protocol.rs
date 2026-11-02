@@ -16,8 +16,17 @@ pub struct Protocol {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     region: Option<RegionSpec>,
     sets: Vec<SetSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    relations: Vec<RelationSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     coloc: Option<ColocSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RelationSpec {
+    pub source: String,
+    pub target: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -101,11 +110,13 @@ impl Protocol {
     pub fn new(
         region: Option<RegionSpec>,
         sets: Vec<SetSpec>,
+        relations: Vec<RelationSpec>,
         coloc: Option<ColocSpec>,
     ) -> Result<Self, ProtocolError> {
         Self {
             region,
             sets,
+            relations,
             coloc,
         }
         .checked()
@@ -117,6 +128,10 @@ impl Protocol {
 
     pub fn sets(&self) -> &[SetSpec] {
         &self.sets
+    }
+
+    pub fn relations(&self) -> &[RelationSpec] {
+        &self.relations
     }
 
     pub fn coloc(&self) -> Option<&ColocSpec> {
@@ -188,6 +203,19 @@ impl Protocol {
                 set.mask = Some(name.clone());
             }
         }
+        let relations = scene
+            .objects
+            .iter()
+            .flat_map(|set| {
+                set.relations().iter().filter_map(|relation| {
+                    let target = scene.objects.get(relation.target())?;
+                    Some(RelationSpec {
+                        source: set.name().to_string(),
+                        target: target.name().to_string(),
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
         let coloc = if scene.coloc.series().is_some() {
             scene.coloc.pair().map(|pair| ColocSpec {
                 a: channels[pair.a()].clone(),
@@ -197,7 +225,7 @@ impl Protocol {
         } else {
             None
         };
-        Self::new(region, sets, coloc)
+        Self::new(region, sets, relations, coloc)
     }
 
     pub fn to_json(&self) -> Result<String, ProtocolError> {
@@ -261,6 +289,12 @@ impl Protocol {
             Some(region) => format!("{sets} · region {:.0}%", region.percent()),
             None => sets,
         };
+        for relation in &self.relations {
+            summary.push_str(&format!(
+                " · relates {} to {}",
+                relation.source, relation.target
+            ));
+        }
         if let Some(coloc) = &self.coloc {
             summary.push_str(&format!(" · colocalizes {} with {}", coloc.a, coloc.b));
         }
@@ -329,6 +363,37 @@ impl Protocol {
                 (_, None) => {}
             }
             set.measure.checked(&set.name, set.track.is_some())?;
+        }
+        let mut pairs = Vec::new();
+        for relation in &self.relations {
+            validate(&relation.source, "a relation source")?;
+            validate(&relation.target, "a relation target")?;
+            if !names.contains(&relation.source) {
+                return Err(ProtocolError::Invalid(format!(
+                    "the relation source {} is not an object set of the protocol",
+                    relation.source
+                )));
+            }
+            if !names.contains(&relation.target) {
+                return Err(ProtocolError::Invalid(format!(
+                    "the relation target {} is not an object set of the protocol",
+                    relation.target
+                )));
+            }
+            if relation.source == relation.target {
+                return Err(ProtocolError::Invalid(format!(
+                    "{} cannot relate to itself",
+                    relation.source
+                )));
+            }
+            let pair = (&relation.source, &relation.target);
+            if pairs.contains(&pair) {
+                return Err(ProtocolError::Invalid(format!(
+                    "{} relates to {} twice",
+                    relation.source, relation.target
+                )));
+            }
+            pairs.push(pair);
         }
         if let Some(coloc) = &self.coloc {
             validate(&coloc.a, "a channel name")?;

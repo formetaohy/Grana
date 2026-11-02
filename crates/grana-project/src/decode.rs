@@ -11,12 +11,12 @@ use grana_measure::{
     COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocThresholds,
 };
 use grana_object::{
-    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, SampleStatistics, Spot,
-    SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
+    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, RelationFrame,
+    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_scene::{
     ChannelState, ColocState, ColorState, ItemState, MeasureState, ObjectFrame, ObjectKind,
-    ObjectParams, SceneState, SelectionState, SetState, TrackStyle, Visibility,
+    ObjectParams, RelationState, SceneState, SelectionState, SetState, TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Intensity, Region};
 
@@ -315,6 +315,7 @@ impl Decode for SetState {
             track_color: ColorState::<TrackMeasurement>::decode(reader)?,
             visibility: Visibility::decode(reader)?,
             frames: Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?,
+            relations: Vec::<RelationState>::decode(reader)?,
             document: reader.u64()?,
         };
         if state.document == 0 {
@@ -331,7 +332,57 @@ impl Decode for SetState {
         {
             return Err(FAULT_SHAPE);
         }
+        for relation in &state.relations {
+            if relation.target == id || relation.frames.len() != state.frames.len() {
+                return Err(FAULT_SHAPE);
+            }
+            for (frame, relation) in state.frames.iter().zip(&relation.frames) {
+                let objects = frame.as_deref().map_or(0, ObjectFrame::object_count);
+                if relation
+                    .as_deref()
+                    .is_some_and(|relation| relation.objects() != objects)
+                {
+                    return Err(FAULT_SHAPE);
+                }
+            }
+        }
         Ok(state)
+    }
+}
+
+impl Decode for RelationState {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let target = reader.u64()?;
+        if target == 0 {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self {
+            target,
+            frames: Vec::<Option<Arc<RelationFrame>>>::decode(reader)?,
+        })
+    }
+}
+
+impl Decode for RelationFrame {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let count = reader.count(12)?;
+        let mut distance = Vec::with_capacity(count.min(1 << 16));
+        let mut inside = Vec::with_capacity(count.min(1 << 16));
+        let mut partner = Vec::with_capacity(count.min(1 << 16));
+        for _ in 0..count {
+            let reach = reader.f32()?;
+            if reach.is_nan() || reach < 0.0 {
+                return Err(FAULT_VALUE);
+            }
+            distance.push(reach);
+            let within = reader.f32()?;
+            if !(0.0..=1.0).contains(&within) {
+                return Err(FAULT_VALUE);
+            }
+            inside.push(within);
+            partner.push(reader.u32()?);
+        }
+        Ok(Self::new(distance, inside, partner))
     }
 }
 

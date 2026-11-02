@@ -1,6 +1,7 @@
 use glam::Vec3;
 use grana_display::{Ray, Shading, TransferFunction};
-use grana_object::TrackSet;
+use grana_measure::RelationRow;
+use grana_object::{RelationFrame, TrackSet};
 use grana_volume::{Axis, ChannelInfo, Intensity, Region};
 
 use crate::channel::Channel;
@@ -148,13 +149,58 @@ impl Scene {
         self.mask = source;
     }
 
-    pub fn mask_frames(&self) -> Option<Vec<Option<grana_analysis::RoiFrame>>> {
+    pub fn mask_frames(&self) -> Option<Vec<Option<grana_analysis::Shape>>> {
         let set = self.objects.get(self.mask?)?;
         Some(
             (0..self.frame_count())
-                .map(|time| set.frame_shared(time).as_deref().map(ObjectFrame::roi))
+                .map(|time| set.frame_shared(time).as_deref().map(ObjectFrame::shape))
                 .collect(),
         )
+    }
+
+    pub fn add_relation(&mut self, source: ObjectSetId, target: ObjectSetId) -> bool {
+        if source == target {
+            return false;
+        }
+        let valid = self.objects.get(source).is_some() && self.objects.get(target).is_some();
+        if !valid {
+            return false;
+        }
+        self.objects.add_relation(source, target)
+    }
+
+    pub fn remove_relation(&mut self, source: ObjectSetId, target: ObjectSetId) -> bool {
+        self.objects.remove_relation(source, target)
+    }
+
+    pub fn install_relation(
+        &mut self,
+        source: ObjectSetId,
+        target: ObjectSetId,
+        time: u32,
+        frame: RelationFrame,
+    ) {
+        self.objects.install_relation(source, target, time, frame);
+    }
+
+    pub fn clear_relations(&mut self, id: ObjectSetId) {
+        self.objects.clear_relations(id);
+    }
+
+    pub fn relation_rows(&self, id: ObjectSetId, time: u32) -> Vec<RelationRow<'_>> {
+        let Some(set) = self.objects.get(id) else {
+            return Vec::new();
+        };
+        set.relations()
+            .iter()
+            .map(|relation| {
+                let target = self
+                    .objects
+                    .get(relation.target())
+                    .map_or("target", ObjectSet::name);
+                RelationRow::new(target, relation.frame(time))
+            })
+            .collect()
     }
 
     pub fn install(&mut self, id: ObjectSetId, time: u32, frame: ObjectFrame) {
@@ -173,6 +219,7 @@ impl Scene {
 
     pub fn clear_object(&mut self, id: ObjectSetId) {
         self.objects.clear(id);
+        self.objects.clear_relations(id);
         if self.selection.is_some_and(|selection| selection.set == id) {
             self.selection = None;
         }

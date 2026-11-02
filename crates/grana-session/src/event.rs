@@ -1,5 +1,5 @@
 use grana_measure::ColocSeries;
-use grana_object::TrackSet;
+use grana_object::{RelationFrame, TrackSet};
 use grana_scene::ObjectFrame;
 use grana_volume::Region;
 
@@ -14,6 +14,10 @@ pub enum Event {
         frame: ObjectFrame,
     },
     Tracks(TrackSet),
+    Relation {
+        time: u32,
+        frame: RelationFrame,
+    },
     Coloc {
         series: Box<ColocSeries>,
         region: Region,

@@ -363,6 +363,19 @@ impl PackedMesh {
                 .map(|axis| group.min[axis] + f32::from(vertex.position[axis]) * group.scale[axis])
         })
     }
+
+    pub fn position(&self, object: usize, vertex: usize) -> [f32; 3] {
+        let group = self
+            .groups
+            .get(object)
+            .expect("the vertex names a packed object");
+        assert!(
+            vertex < group.vertex_count as usize,
+            "the vertex lies inside its packed object"
+        );
+        let packed = self.vertices[group.first_vertex as usize + vertex];
+        [0, 1, 2].map(|axis| group.min[axis] + f32::from(packed.position[axis]) * group.scale[axis])
+    }
 }
 
 fn quantize(value: f32, min: f32, scale: f32) -> u16 {

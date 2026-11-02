@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use grana_analysis::{Roi, TrackParams};
 use grana_image::{Image, Source};
 use grana_measure::ColocPair;
-use grana_scene::{Job, ObjectParams};
+use grana_scene::{Job, ObjectFrame, ObjectParams};
 use grana_volume::Region;
 
 use crate::event::{Event, Poll};
@@ -59,6 +59,17 @@ pub fn track(
 ) -> Analysis {
     spawn(job, move |cancel, sink| {
         run::tracks(frames, params, frame_interval, cancel, sink);
+        Ok(())
+    })
+}
+
+pub fn relation(
+    job: Job,
+    source: Vec<Option<Arc<ObjectFrame>>>,
+    target: Vec<Option<Arc<ObjectFrame>>>,
+) -> Analysis {
+    spawn(job, move |cancel, sink| {
+        run::relation(source, target, cancel, sink);
         Ok(())
     })
 }

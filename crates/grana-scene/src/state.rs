@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use grana_display::{Shading, TransferFunction};
 use grana_measure::{Measurement, TrackMeasurement};
-use grana_object::TrackSet;
+use grana_object::{RelationFrame, TrackSet};
 use grana_volume::{Intensity, Region};
 
 use crate::coloc::ColocState;
@@ -50,6 +50,12 @@ pub enum ItemState {
 }
 
 #[derive(Debug, PartialEq)]
+pub struct RelationState {
+    pub target: u64,
+    pub frames: Vec<Option<Arc<RelationFrame>>>,
+}
+
+#[derive(Debug, PartialEq)]
 pub struct SetState {
     pub id: u64,
     pub kind: ObjectKind,
@@ -66,6 +72,7 @@ pub struct SetState {
     pub track_color: ColorState<TrackMeasurement>,
     pub visibility: Visibility,
     pub frames: Vec<Option<Arc<ObjectFrame>>>,
+    pub relations: Vec<RelationState>,
     pub document: u64,
 }
 

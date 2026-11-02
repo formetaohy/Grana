@@ -1,11 +1,12 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{
-    ColocScan, FilamentScan, Roi, SpotScan, SurfaceBuilder, TrackBuilder, filament_level,
+    ColocScan, FilamentScan, Reference, Roi, SpotScan, SurfaceBuilder, TrackBuilder, filament_level,
 };
 use grana_image::Image;
 use grana_measure::ColocPair;
-use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
+use grana_object::{IntensityTable, RelationFrame, SampleAccumulator, Spot, SpotSet};
 use grana_scene::{ObjectFrame, ObjectParams};
 use grana_volume::VoxelData;
 
@@ -62,6 +63,47 @@ pub(crate) fn tracks(
         return;
     }
     sink(Event::Tracks(builder.finish(frame_interval)));
+    sink(Event::Done);
+}
+
+pub(crate) fn relation(
+    source: Vec<Option<Arc<ObjectFrame>>>,
+    target: Vec<Option<Arc<ObjectFrame>>>,
+    cancel: &AtomicBool,
+    sink: &mut dyn FnMut(Event),
+) {
+    let total = source.len().min(target.len());
+    sink(Event::Progress {
+        time: 0,
+        done: 0,
+        total,
+    });
+    let references = target
+        .iter()
+        .take(total)
+        .map(|frame| frame.as_deref().map(|frame| Reference::new(&frame.shape())))
+        .collect::<Vec<_>>();
+    for (time, frame) in source.iter().take(total).enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        sink(Event::Progress {
+            time: time as u32,
+            done: time + 1,
+            total,
+        });
+        let Some(frame) = frame.as_deref() else {
+            continue;
+        };
+        let result = match &references[time] {
+            Some(reference) => reference.relate(&frame.shape()),
+            None => RelationFrame::empty(frame.object_count()),
+        };
+        sink(Event::Relation {
+            time: time as u32,
+            frame: result,
+        });
+    }
     sink(Event::Done);
 }
 

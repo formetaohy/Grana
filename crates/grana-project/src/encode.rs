@@ -4,12 +4,12 @@ use grana_geometry::{Bounds, GeometryGroup, PackedMesh, PackedVertex};
 use grana_measure::{ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocThresholds};
 use grana_measure::{Filter, Measurement, TrackMeasurement};
 use grana_object::{
-    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, SampleStatistics, Spot,
-    SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
+    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, RelationFrame,
+    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_scene::{
     ChannelState, ColocState, ColorState, ItemState, MeasureState, ObjectFrame, ObjectParams,
-    SceneState, SelectionState, SetState, TrackStyle, Visibility,
+    RelationState, SceneState, SelectionState, SetState, TrackStyle, Visibility,
 };
 use grana_volume::{Intensity, Region};
 
@@ -213,7 +213,27 @@ impl Encode for SetState {
         self.track_color.encode(writer);
         self.visibility.encode(writer);
         self.frames.encode(writer);
+        self.relations.encode(writer);
         writer.u64(self.document);
+    }
+}
+
+impl Encode for RelationState {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u64(self.target);
+        self.frames.encode(writer);
+    }
+}
+
+impl Encode for RelationFrame {
+    fn encode(&self, writer: &mut Writer) {
+        let objects = self.objects();
+        writer.count(objects);
+        for object in 0..objects {
+            writer.f32(self.distance(object));
+            writer.f32(self.inside(object));
+            writer.u32(self.partner(object));
+        }
     }
 }
 

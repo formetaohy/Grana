@@ -1,4 +1,4 @@
-use grana_object::TrackSet;
+use grana_object::{RelationFrame, TrackSet};
 
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind};
@@ -57,6 +57,45 @@ impl Objects {
 
     pub fn remove(&mut self, id: ObjectSetId) {
         self.sets.retain(|set| set.id() != id);
+        self.clear_relations(id);
+    }
+
+    pub fn add_relation(&mut self, id: ObjectSetId, target: ObjectSetId) -> bool {
+        let stamp = take_stamp(&mut self.stamp);
+        self.get_mut(id)
+            .is_some_and(|set| set.add_relation(target, stamp))
+    }
+
+    pub fn remove_relation(&mut self, id: ObjectSetId, target: ObjectSetId) -> bool {
+        let stamp = take_stamp(&mut self.stamp);
+        self.get_mut(id)
+            .is_some_and(|set| set.remove_relation(target, stamp))
+    }
+
+    pub fn install_relation(
+        &mut self,
+        id: ObjectSetId,
+        target: ObjectSetId,
+        time: u32,
+        frame: RelationFrame,
+    ) -> bool {
+        let stamp = take_stamp(&mut self.stamp);
+        let Some(set) = self.get_mut(id) else {
+            return false;
+        };
+        set.install_relation(target, time, frame, stamp);
+        true
+    }
+
+    pub fn clear_relations(&mut self, id: ObjectSetId) {
+        let stamp = take_stamp(&mut self.stamp);
+        for set in &mut self.sets {
+            if set.id() == id {
+                set.clear_relations(stamp);
+            } else {
+                set.remove_relation(id, stamp);
+            }
+        }
     }
 
     pub fn install(&mut self, id: ObjectSetId, time: u32, frame: ObjectFrame) -> bool {
@@ -125,6 +164,20 @@ impl Objects {
             self.ordinals[state.kind.index()] += 1;
             self.sets
                 .push(ObjectSet::restore(state, dataset, &mut self.stamp));
+        }
+        for set in &self.sets {
+            for relation in set.relations() {
+                assert!(
+                    self.sets
+                        .iter()
+                        .any(|target| target.id() == relation.target()),
+                    "a relation names an object set of the scene"
+                );
+                assert!(
+                    relation.target() != set.id(),
+                    "a relation names another object set"
+                );
+            }
         }
     }
 

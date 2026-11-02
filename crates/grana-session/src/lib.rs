@@ -18,11 +18,11 @@ pub use batch::{
 pub use command::{Action, Command};
 pub use event::{Event, Poll};
 pub use grana_image::{Source, is_image};
-pub use job::{Analysis, coloc, detect, track};
+pub use job::{Analysis, coloc, detect, relation, track};
 pub use loader::Loader;
 pub use protocol::{
     ColocSpec, DetectionSpec, FilterSpec, MeasureSpec, Protocol, ProtocolError, RegionSpec,
-    SetSpec, TrackSpec,
+    RelationSpec, SetSpec, TrackSpec,
 };
 pub use session::{Effects, Session};
 pub use slug::slug;

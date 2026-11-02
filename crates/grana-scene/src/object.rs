@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use grana_analysis::{FilamentParams, RoiFrame, SpotParams, SurfaceParams, TrackParams};
+use grana_analysis::{FilamentParams, Shape, SpotParams, SurfaceParams, TrackParams};
 use grana_geometry::PackedMesh;
 use grana_measure::{Measurement, Objects};
 use grana_object::{FilamentSet, IntensityTable, Spot, SpotSet, SurfaceSet};
@@ -292,11 +292,11 @@ impl ObjectFrame {
         }
     }
 
-    pub fn roi(&self) -> RoiFrame {
+    pub fn shape(&self) -> Shape {
         match self {
-            Self::Spots(set) => RoiFrame::Spots(Arc::from(set.spots())),
-            Self::Surfaces(set) => RoiFrame::Mesh(set.shared()),
-            Self::Filaments(set) => RoiFrame::Mesh(set.shared()),
+            Self::Spots(set) => Shape::spots(Arc::from(set.spots())),
+            Self::Surfaces(set) => Shape::mesh(set.shared()),
+            Self::Filaments(set) => Shape::mesh(set.shared()),
         }
     }
 

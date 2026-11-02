@@ -5,6 +5,7 @@ mod csv;
 mod filter;
 mod metric;
 mod plot;
+mod relation;
 mod table;
 
 pub use coloc::{
@@ -17,4 +18,5 @@ pub use metric::{Measurement, Statistic, TrackMeasurement};
 pub use plot::{
     HISTOGRAM_BINS, Histogram, MeasureView, Plot, PlotAxis, SCATTER_BINS, Scatter, Summary,
 };
+pub use relation::{RelationField, RelationRow};
 pub use table::{Aggregate, Frame, Group, Objects, Observation, Table};

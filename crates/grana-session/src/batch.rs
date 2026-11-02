@@ -7,8 +7,8 @@ use std::sync::{Mutex, MutexGuard};
 use glam::Vec3;
 use grana_image::{Image, Source};
 use grana_measure::{ColocPair, ColocSeries};
-use grana_measure::{Frame, Objects, Table};
-use grana_object::TrackSet;
+use grana_measure::{Frame, RelationRow, Table};
+use grana_object::{RelationFrame, TrackSet};
 use grana_scene::ObjectFrame;
 use grana_volume::{Pyramid, Region};
 use serde::{Deserialize, Serialize};
@@ -379,12 +379,12 @@ fn write_dataset(
         .map_or_else(Region::none, |region| region.region(world(pyramid)));
     let mut objects = 0usize;
     let mut detail = Vec::new();
-    let mut detected = Vec::<(String, Vec<Option<grana_analysis::RoiFrame>>)>::new();
     let progress = Progress {
         index,
         events,
         cancel,
     };
+    let mut detected = Vec::<Detected>::new();
     for set in protocol.sets() {
         if cancel.load(Ordering::Relaxed) {
             return Err("cancelled".to_string());
@@ -392,9 +392,9 @@ fn write_dataset(
         let channel = resolve(pyramid, &set.channel)
             .map_err(|detail| format!("the set {} cannot start: {detail}", set.name))?;
         let roi = match set.mask() {
-            Some(mask) => match detected.iter().find(|(name, _)| name == mask) {
-                Some((_, frames)) if frames.iter().any(Option::is_some) => {
-                    Some(grana_analysis::Roi::new(frames.clone()))
+            Some(mask) => match detected.iter().find(|detected| detected.set.name == *mask) {
+                Some(detected) if detected.frames.iter().any(Option::is_some) => {
+                    Some(grana_analysis::Roi::new(shape_frames(&detected.frames)))
                 }
                 Some(_) => {
                     return Err(format!(
@@ -415,8 +415,10 @@ fn write_dataset(
             index,
             label: format!("detecting {}", set.name),
         });
-        let frames = detect(&reader, channel, set, region, roi, &progress)?;
-        let detected_frames = frame_refs(&frames);
+        let frames = detect(&reader, channel, set, region, roi, &progress)?
+            .into_iter()
+            .map(|frame| frame.map(Arc::new))
+            .collect::<Vec<_>>();
         let tracks = if let Some(params) = set.track_params() {
             let _ = events.send(Event::Step {
                 index,
@@ -429,27 +431,56 @@ fn write_dataset(
         } else {
             None
         };
+        detected.push(Detected {
+            set,
+            frames,
+            tracks,
+            relations: Vec::new(),
+        });
+    }
+    for relation in protocol.relations() {
+        let source = detected
+            .iter()
+            .position(|detected| detected.set.name == relation.source)
+            .ok_or_else(|| format!("the relation source {} is unknown", relation.source))?;
+        let target = detected
+            .iter()
+            .position(|detected| detected.set.name == relation.target)
+            .ok_or_else(|| format!("the relation target {} is unknown", relation.target))?;
+        let _ = events.send(Event::Step {
+            index,
+            label: format!("relating {} to {}", relation.source, relation.target),
+        });
+        let frames = relate(
+            detected[source].frames.clone(),
+            detected[target].frames.clone(),
+            &progress,
+        )?;
+        detected[source]
+            .relations
+            .push((relation.target.clone(), frames));
+    }
+    for detected in &detected {
+        let rows = relation_rows(detected);
+        let frames = table_frames(&detected.frames, &rows);
         let table = Table::build(
-            &detected_frames,
-            tracks.as_ref(),
+            &frames,
+            detected.tracks.as_ref(),
             &channels,
             pyramid.frame_interval(),
-            set.group(),
-            set.aggregate(),
+            detected.set.group(),
+            detected.set.aggregate(),
         );
-        let filters = set.filters(&table)?;
+        let filters = detected.set.filters(&table)?;
         let rows = table.matching(&filters);
-        let file = folder.join(format!("{}-{}.csv", slug(&set.name), set.group().key()));
+        let file = folder.join(format!(
+            "{}-{}.csv",
+            slug(&detected.set.name),
+            detected.set.group().key()
+        ));
         write(&file, &table.csv(&rows))?;
         objects += rows.len();
-        detail.push(format!("{}={}", set.name, rows.len()));
-        detected.push((
-            set.name.clone(),
-            frames
-                .iter()
-                .map(|frame| frame.as_ref().map(ObjectFrame::roi))
-                .collect(),
-        ));
+        detail.push(format!("{}={}", detected.set.name, rows.len()));
     }
     if let Some(coloc) = protocol.coloc() {
         let _ = events.send(Event::Step {
@@ -484,6 +515,13 @@ fn write_dataset(
     Ok(report)
 }
 
+struct Detected<'a> {
+    set: &'a crate::protocol::SetSpec,
+    frames: Vec<Option<Arc<ObjectFrame>>>,
+    tracks: Option<TrackSet>,
+    relations: Vec<(String, Vec<Option<RelationFrame>>)>,
+}
+
 fn detect(
     reader: &Image,
     channel: usize,
@@ -503,7 +541,11 @@ fn detect(
                 total,
             });
         }
-        RunEvent::Tracks(_) | RunEvent::Coloc { .. } | RunEvent::Done | RunEvent::Failed(_) => {}
+        RunEvent::Tracks(_)
+        | RunEvent::Relation { .. }
+        | RunEvent::Coloc { .. }
+        | RunEvent::Done
+        | RunEvent::Failed(_) => {}
     };
     run::detect(
         reader,
@@ -518,7 +560,7 @@ fn detect(
 }
 
 fn track(
-    frames: &[Option<ObjectFrame>],
+    frames: &[Option<Arc<ObjectFrame>>],
     params: grana_analysis::TrackParams,
     frame_interval: f32,
     cancel: &AtomicBool,
@@ -555,21 +597,64 @@ fn colocalize(
     Ok(series)
 }
 
-fn frame_refs(frames: &[Option<ObjectFrame>]) -> Vec<Frame<'_>> {
+fn relate(
+    source: Vec<Option<Arc<ObjectFrame>>>,
+    target: Vec<Option<Arc<ObjectFrame>>>,
+    progress: &Progress<'_>,
+) -> Result<Vec<Option<RelationFrame>>, String> {
+    let mut frames = vec![None; source.len()];
+    let mut sink = |event: RunEvent| match event {
+        RunEvent::Relation { time, frame } => frames[time as usize] = Some(frame),
+        RunEvent::Progress { done, total, .. } => {
+            let _ = progress.events.send(Event::Progress {
+                index: progress.index,
+                done,
+                total,
+            });
+        }
+        RunEvent::Frame { .. }
+        | RunEvent::Tracks(_)
+        | RunEvent::Coloc { .. }
+        | RunEvent::Done
+        | RunEvent::Failed(_) => {}
+    };
+    run::relation(source, target, progress.cancel, &mut sink);
+    if progress.cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".to_string());
+    }
+    Ok(frames)
+}
+
+fn shape_frames(frames: &[Option<Arc<ObjectFrame>>]) -> Vec<Option<grana_analysis::Shape>> {
+    frames
+        .iter()
+        .map(|frame| frame.as_deref().map(ObjectFrame::shape))
+        .collect()
+}
+
+fn relation_rows<'a>(detected: &'a Detected<'a>) -> Vec<Vec<RelationRow<'a>>> {
+    (0..detected.frames.len())
+        .map(|time| {
+            detected
+                .relations
+                .iter()
+                .map(|(target, frames)| RelationRow::new(target, frames[time].as_ref()))
+                .collect()
+        })
+        .collect()
+}
+
+fn table_frames<'a>(
+    frames: &'a [Option<Arc<ObjectFrame>>],
+    relations: &'a [Vec<RelationRow<'a>>],
+) -> Vec<Frame<'a>> {
     frames
         .iter()
         .enumerate()
         .filter_map(|(time, frame)| {
-            frame.as_ref().map(|frame| {
-                Frame::new(
-                    time as u32,
-                    match frame {
-                        ObjectFrame::Spots(set) => Objects::Spots(set),
-                        ObjectFrame::Surfaces(set) => Objects::Surfaces(set),
-                        ObjectFrame::Filaments(set) => Objects::Filaments(set),
-                    },
-                )
-            })
+            frame
+                .as_ref()
+                .map(|frame| Frame::new(time as u32, frame.objects(), &relations[time]))
         })
         .collect()
 }

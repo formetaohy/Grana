@@ -8,8 +8,8 @@ fn bins_histograms_and_scatters_over_gated_rows() {
     let channels = ["EGFP".to_string()];
     let table = Table::build(
         &[
-            Frame::new(0, Objects::Spots(&first)),
-            Frame::new(1, Objects::Spots(&second)),
+            Frame::new(0, Objects::Spots(&first), &[]),
+            Frame::new(1, Objects::Spots(&second), &[]),
         ],
         None,
         &channels,
@@ -78,7 +78,7 @@ fn widens_a_constant_column_into_a_readable_range() {
     let spots = spots([0.5, 0.5], [0.5, 0.5]);
     let channels = ["EGFP".to_string()];
     let table = Table::build(
-        &[Frame::new(0, Objects::Spots(&spots))],
+        &[Frame::new(0, Objects::Spots(&spots), &[])],
         None,
         &channels,
         1.0,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use grana_analysis::{Roi, RoiFrame, SpotParams, SpotScan};
+use grana_analysis::{Roi, Shape, SpotParams, SpotScan};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::Spot;
 use grana_volume::{Extent, Level, Region, Spacing};
@@ -54,7 +54,7 @@ fn cube(half: f32) -> PackedMesh {
 #[test]
 fn fills_the_volume_of_a_closed_mesh() {
     let mesh = cube(6.0);
-    let roi = Roi::new(vec![Some(RoiFrame::Mesh(Arc::new(mesh)))]);
+    let roi = Roi::new(vec![Some(Shape::Mesh(Arc::new(mesh)))]);
     let mask = roi.mask(level(), 0);
     assert!(!mask.is_empty(), "a closed mesh of this size covers cells");
     let inside = mask.count();
@@ -98,7 +98,7 @@ fn drops_spots_outside_the_mask() {
         "the scan finds the bright voxel"
     );
     let far = Spot::new([-64.0, -64.0, -64.0], 2.0, 1.0);
-    let outside = Roi::new(vec![Some(RoiFrame::Spots(Arc::from([far])))]);
+    let outside = Roi::new(vec![Some(Shape::spots(Arc::from([far])))]);
     let mask = outside.mask(level, 0);
     assert!(
         scan.detect(0, &values, Some(&mask)).is_empty(),
@@ -106,7 +106,7 @@ fn drops_spots_outside_the_mask() {
     );
     let position = [0.5, 0.5, 0.5];
     let here = Spot::new(position, 6.0, 1.0);
-    let covering = Roi::new(vec![Some(RoiFrame::Spots(Arc::from([here])))]);
+    let covering = Roi::new(vec![Some(Shape::spots(Arc::from([here])))]);
     let mask = covering.mask(level, 0);
     assert_eq!(
         scan.detect(0, &values, Some(&mask)).len(),

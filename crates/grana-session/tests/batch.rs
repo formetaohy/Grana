@@ -24,8 +24,15 @@ const PROTOCOL: &str = r#"
         "division_range": 2.0,
         "thickness": 0.5
       }
+    },
+    {
+      "name": "Nuclei",
+      "channel": "Cells",
+      "color": [1.0, 0.7, 0.2],
+      "detection": {"kind": "surfaces", "threshold": 0.3, "min_volume": 1.0}
     }
   ],
+  "relations": [{"source": "Puncta", "target": "Nuclei"}],
   "coloc": {"a": "Cells", "b": "Signal", "thresholds": [0.5, 0.5]}
 }
 "#;
@@ -78,7 +85,10 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
     );
 
     let summary = read(&output.join("summary.csv"));
-    assert!(summary.contains("alpha,ok,2,Puncta=2"), "{summary}");
+    assert!(
+        summary.contains("alpha,ok,4,Puncta=2; Nuclei=2"),
+        "{summary}"
+    );
     assert!(summary.contains("beta,failed"), "{summary}");
     assert!(output.join("protocol.json").exists());
     assert!(
@@ -95,6 +105,11 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
         lines[1].starts_with("1,0.000,1,1,"),
         "the spot belongs to one track: {objects}"
     );
+    assert!(lines[0].contains("nuclei_distance_um"), "{objects}");
+    assert!(
+        lines[1].ends_with(",0.000,1.00,1"),
+        "the spot sits inside its nucleus: {objects}"
+    );
 
     let coloc = read(&output.join("alpha").join("coloc-Cells-Signal.csv"));
     assert!(coloc.starts_with("scope,frame"), "{coloc}");
@@ -107,7 +122,10 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
         "a repeated protocol resumes the completed dataset"
     );
     let summary = read(&output.join("summary.csv"));
-    assert!(summary.contains("alpha,resumed,2,Puncta=2"), "{summary}");
+    assert!(
+        summary.contains("alpha,resumed,4,Puncta=2; Nuclei=2"),
+        "{summary}"
+    );
 }
 
 #[test]

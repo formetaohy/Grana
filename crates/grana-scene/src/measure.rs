@@ -493,9 +493,12 @@ impl Measure {
             return;
         };
         self.revision = Some((id, object.revision()));
+        let relations = (0..object.frame_count())
+            .map(|time| scene.relation_rows(id, time))
+            .collect::<Vec<_>>();
         let frames = object
             .frames()
-            .map(|(time, frame)| Frame::new(time, frame.objects()))
+            .map(|(time, frame)| Frame::new(time, frame.objects(), &relations[time as usize]))
             .collect::<Vec<_>>();
         if frames.is_empty() {
             self.visible.clear();
@@ -519,6 +522,11 @@ impl Measure {
         );
         self.visible = default_visibility(&table);
         self.axes = readable_axes(&table, self.axes);
+        let columns = table.columns().len();
+        self.filters.retain(|filter| filter.column() < columns);
+        if self.sort.is_some_and(|(column, _)| column >= columns) {
+            self.sort = None;
+        }
         self.table = Some(table);
         self.refresh();
     }
@@ -642,6 +650,8 @@ fn default_visibility(table: &Table) -> Vec<bool> {
                     || key.starts_with("area_um2")
                     || key.starts_with("sphericity")
                     || key.contains("_intensity_mean")
+                    || key.ends_with("_distance_um")
+                    || key.ends_with("_inside")
             }
         })
         .collect()

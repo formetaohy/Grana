@@ -6,6 +6,7 @@ use crate::column::{Column, Unit};
 use crate::csv;
 use crate::filter::Filter;
 use crate::metric::{Measurement, TrackMeasurement};
+use crate::relation::{RelationField, RelationRow};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
@@ -156,11 +157,16 @@ impl<'a> Objects<'a> {
 pub struct Frame<'a> {
     time: u32,
     objects: Objects<'a>,
+    relations: &'a [RelationRow<'a>],
 }
 
 impl<'a> Frame<'a> {
-    pub fn new(time: u32, objects: Objects<'a>) -> Self {
-        Self { time, objects }
+    pub fn new(time: u32, objects: Objects<'a>, relations: &'a [RelationRow<'a>]) -> Self {
+        Self {
+            time,
+            objects,
+            relations,
+        }
     }
 
     pub fn time(&self) -> u32 {
@@ -178,16 +184,26 @@ enum ObjectCell {
     Object,
     Track,
     Measure(Measurement),
+    Relation { index: usize, field: RelationField },
 }
 
 impl ObjectCell {
-    fn column(&self, channels: &[String], keys: &[String]) -> Column {
+    fn column(
+        &self,
+        channels: &[String],
+        keys: &[String],
+        relations: &[RelationRow<'_>],
+    ) -> Column {
         match self {
             Self::Frame => Column::new("frame", "frame", Unit::Count, 0),
             Self::Time => Column::new("time", "time_s", Unit::Second, 3),
             Self::Object => Column::new("object", "object", Unit::Count, 0),
             Self::Track => Column::new("track", "track", Unit::Count, 0),
             Self::Measure(measurement) => measurement.column(channels, keys),
+            Self::Relation { index, field } => {
+                let target = relations[*index].target();
+                field.column(target, &sanitize(target))
+            }
         }
     }
 
@@ -206,6 +222,7 @@ impl ObjectCell {
                 .and_then(|set| set.track_at(frame.time, object))
                 .map_or(0.0, |track| (track + 1) as f32),
             Self::Measure(measurement) => measurement.value(frame.objects, object),
+            Self::Relation { index, field } => field.value(frame.relations[*index], object),
         }
     }
 }
@@ -270,6 +287,15 @@ impl Table {
                 frame.objects.channels(),
                 channels.len(),
                 "every frame measures every named channel"
+            );
+            assert!(
+                frame.relations.len() == frames[0].relations.len()
+                    && frame
+                        .relations
+                        .iter()
+                        .zip(frames[0].relations)
+                        .all(|(row, first)| row.target() == first.target()),
+                "every frame carries the relations of its object set"
             );
         }
         let keys = channel_keys(channels);
@@ -356,6 +382,9 @@ impl Table {
         assert!(column < self.columns.len(), "the column exists");
         (0..self.rows()).fold(None, |range, row| {
             let value = self.value(row, column);
+            if !value.is_finite() {
+                return range;
+            }
             Some(match range {
                 None => (value, value),
                 Some((minimum, maximum)) => (minimum.min(value), maximum.max(value)),
@@ -388,9 +417,14 @@ fn object_table(
             .into_iter()
             .map(ObjectCell::Measure),
     );
+    for index in 0..frames[0].relations.len() {
+        for field in RelationField::ALL {
+            cells.push(ObjectCell::Relation { index, field });
+        }
+    }
     let columns = cells
         .iter()
-        .map(|cell| cell.column(channels, keys))
+        .map(|cell| cell.column(channels, keys, frames[0].relations))
         .collect::<Vec<_>>();
     let mut observations = Vec::new();
     let mut values = Vec::new();

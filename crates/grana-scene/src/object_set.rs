@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use grana_analysis::TrackParams;
 use grana_measure::{Measurement, TrackMeasurement};
-use grana_object::TrackSet;
+use grana_object::{RelationFrame, TrackSet};
 
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
-use crate::state::SetState;
+use crate::relation::Relation;
+use crate::state::{RelationState, SetState};
 use crate::track_layer::TrackLayer;
 use grana_display::{ColorState, Coloring, Extent, merged};
 
@@ -72,6 +73,7 @@ pub struct ObjectSet {
     document: u64,
     visibility: Visibility,
     tracks: Option<TrackLayer>,
+    relations: Vec<Relation>,
 }
 
 impl ObjectSet {
@@ -109,6 +111,7 @@ impl ObjectSet {
             document: 1,
             visibility: Visibility::All,
             tracks: None,
+            relations: Vec::new(),
         }
     }
 
@@ -275,6 +278,71 @@ impl ObjectSet {
             .filter_map(|(time, slot)| slot.data.as_deref().map(|data| (time as u32, data)))
     }
 
+    pub fn relations(&self) -> &[Relation] {
+        &self.relations
+    }
+
+    pub fn relation(&self, target: ObjectSetId) -> Option<&Relation> {
+        self.relations
+            .iter()
+            .find(|relation| relation.target() == target)
+    }
+
+    pub(crate) fn add_relation(&mut self, target: ObjectSetId, stamp: u64) -> bool {
+        if self.relation(target).is_some() {
+            return false;
+        }
+        self.relations.push(Relation::new(
+            target,
+            vec![None; self.frame_count() as usize],
+        ));
+        self.revision = stamp;
+        self.document += 1;
+        true
+    }
+
+    pub(crate) fn remove_relation(&mut self, target: ObjectSetId, stamp: u64) -> bool {
+        let count = self.relations.len();
+        self.relations
+            .retain(|relation| relation.target() != target);
+        if self.relations.len() == count {
+            return false;
+        }
+        self.revision = stamp;
+        self.document += 1;
+        true
+    }
+
+    pub(crate) fn install_relation(
+        &mut self,
+        target: ObjectSetId,
+        time: u32,
+        frame: RelationFrame,
+        stamp: u64,
+    ) {
+        let Some(relation) = self
+            .relations
+            .iter_mut()
+            .find(|relation| relation.target() == target)
+        else {
+            return;
+        };
+        if !relation.install(time, frame) {
+            return;
+        }
+        self.revision = stamp;
+        self.document += 1;
+    }
+
+    pub(crate) fn clear_relations(&mut self, stamp: u64) {
+        if self.relations.is_empty() {
+            return;
+        }
+        self.relations.clear();
+        self.revision = stamp;
+        self.document += 1;
+    }
+
     pub fn detected(&self) -> usize {
         self.frames
             .iter()
@@ -311,6 +379,14 @@ impl ObjectSet {
             track_color: self.track_coloring.state(),
             visibility: self.visibility.clone(),
             frames: self.frames.iter().map(|slot| slot.data.clone()).collect(),
+            relations: self
+                .relations
+                .iter()
+                .map(|relation| RelationState {
+                    target: relation.target().raw(),
+                    frames: relation.shared_frames().to_vec(),
+                })
+                .collect(),
             document: self.document,
         }
     }
@@ -332,6 +408,7 @@ impl ObjectSet {
             track_color,
             visibility,
             frames,
+            relations,
             document,
         } = state;
         assert_eq!(
@@ -370,6 +447,7 @@ impl ObjectSet {
             document: 1,
             visibility: Visibility::All,
             tracks: None,
+            relations: Vec::new(),
         };
         assert_eq!(
             set.frames.len(),
@@ -380,6 +458,15 @@ impl ObjectSet {
             if let Some(frame) = frame {
                 set.install_shared(time as u32, frame, take_stamp(stamp));
             }
+        }
+        for relation in relations {
+            let target = ObjectSetId::new(relation.target);
+            assert_eq!(
+                relation.frames.len(),
+                frame_count,
+                "a restored relation covers every frame of its set"
+            );
+            set.relations.push(Relation::new(target, relation.frames));
         }
         if let Some(tracks) = tracks {
             let thickness = track_thickness.expect("a restored track layer carries a thickness");

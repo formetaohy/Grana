@@ -371,6 +371,7 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
                 );
                 appearance(ui, state, commands, id);
                 measure(ui, state, commands, id, time);
+                relations(ui, state, commands, id);
                 if kind.trackable() {
                     crate::track_panel::entry(ui, state, id);
                 }
@@ -392,6 +393,95 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
         if set.color() != color {
             commands.push(Command::SetObjectColor { set: id, color });
         }
+    }
+}
+
+fn relations(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: ObjectSetId) {
+    let Some(set) = state.scene.objects.get(id) else {
+        return;
+    };
+    let targets = state
+        .scene
+        .objects
+        .iter()
+        .filter(|other| other.id() != id && other.detected() > 0)
+        .map(|other| (other.id(), other.name().to_string()))
+        .collect::<Vec<_>>();
+    if targets.is_empty() && set.relations().is_empty() {
+        return;
+    }
+    divider(ui);
+    widget::section_title(ui, "Relations");
+    let mut removed = None;
+    for relation in set.relations() {
+        let target = relation.target();
+        let name = targets
+            .iter()
+            .find(|(candidate, _)| *candidate == target)
+            .map_or("another set", |(_, name)| name.as_str());
+        let running = progress(state.jobs, Job::Relation { source: id, target });
+        ui.row(
+            Block::row()
+                .gaps(8.0)
+                .align(Align::Center)
+                .width(Length::Fill),
+            |ui| {
+                widget::weak(ui, name);
+                ui.space(1.0);
+                let (done, total) = match running {
+                    Some(running) => (running.done, running.total),
+                    None => (relation.computed(), relation.frame_count()),
+                };
+                widget::caption(ui, &format!("{done}/{total} frames"));
+                if widget::icon_button(
+                    ui,
+                    &format!("relation.{}.remove", target.raw()),
+                    grana_ui::Icon::Close,
+                    22.0,
+                    Role::Quiet,
+                    "Remove the relation",
+                ) {
+                    removed = Some(target);
+                }
+            },
+        );
+    }
+    let unlinked = targets
+        .iter()
+        .filter(|(target, _)| set.relation(*target).is_none())
+        .map(|(target, name)| (*target, name.as_str()))
+        .collect::<Vec<_>>();
+    if !unlinked.is_empty() {
+        let response = widget::button_with(
+            ui,
+            "relation.add",
+            "Relate to an object set",
+            Role::Quiet,
+            Length::Fill,
+        );
+        let anchor = response.rect;
+        if response.clicked {
+            ui.toggle_popup(ui.id("relation.menu"));
+        }
+        let open = ui.popup_open(ui.id("relation.menu"));
+        let mut chosen = None;
+        grana_ui::popover::popover(ui, "relation.menu", open, anchor, 216.0, |ui| {
+            for (index, (target, name)) in unlinked.iter().enumerate() {
+                if grana_ui::popover::menu_row(ui, index, name, false) {
+                    chosen = Some(*target);
+                }
+            }
+        });
+        if let Some(target) = chosen {
+            ui.close_popup();
+            commands.push(Command::AddRelation { source: id, target });
+        }
+    }
+    if !set.relations().is_empty() {
+        widget::caption(ui, "distances and containment join the statistics table");
+    }
+    if let Some(target) = removed {
+        commands.push(Command::RemoveRelation { source: id, target });
     }
 }
 

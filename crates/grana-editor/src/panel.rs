@@ -437,13 +437,16 @@ pub fn progress_caption(
             grana_scene::ObjectKind::Surfaces => "bricks",
             grana_scene::ObjectKind::Filaments => "frames",
         },
-        grana_scene::Job::Track(_) | grana_scene::Job::Coloc => "frames",
+        grana_scene::Job::Track(_)
+        | grana_scene::Job::Relation { .. }
+        | grana_scene::Job::Coloc => "frames",
     };
     let prefix = match job {
         grana_scene::Job::Detect(_) if frames > 1 => format!("frame {} · ", progress.time + 1),
-        grana_scene::Job::Detect(_) | grana_scene::Job::Track(_) | grana_scene::Job::Coloc => {
-            String::new()
-        }
+        grana_scene::Job::Detect(_)
+        | grana_scene::Job::Track(_)
+        | grana_scene::Job::Relation { .. }
+        | grana_scene::Job::Coloc => String::new(),
     };
     if progress.total > 0 {
         format!("{prefix}{}/{} {unit}", progress.done, progress.total)
