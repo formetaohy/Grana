@@ -1,8 +1,8 @@
 use grana_analysis::TrackParams;
 use grana_display::{Coloring, Shading, TransferFunction};
 use grana_measure::{
-    Aggregate, ColocPair, ColocSettings, ColocThresholds, Filter, Group, MeasureView, Measurement,
-    PlotAxis, TrackMeasurement,
+    Aggregate, ColocPair, ColocSettings, ColocThresholds, Filter, Group, Lasso, MeasureView,
+    Measurement, PlotAxis, Scope, TrackMeasurement,
 };
 use grana_scene::{ObjectKind, ObjectParams, ObjectSetId, Selection};
 use grana_volume::{Intensity, Region};
@@ -123,6 +123,7 @@ pub enum Command {
     SetMeasureSet(Option<ObjectSetId>),
     SetMeasureGroup(Group),
     SetMeasureAggregate(Aggregate),
+    SetMeasureScope(Scope),
     AddFilter,
     RemoveFilter(usize),
     SetFilter {
@@ -133,6 +134,7 @@ pub enum Command {
         index: usize,
         column: usize,
     },
+    SetLasso(Option<Lasso>),
     SetColumnVisible {
         index: usize,
         visible: bool,
@@ -214,6 +216,8 @@ pub enum Action {
     ResetRendering,
     MeasureGroup,
     MeasureAggregate,
+    MeasureScope,
+    MeasureLasso,
     MeasureFilter,
     AddFilter,
     RemoveFilter,
@@ -261,6 +265,8 @@ impl Action {
             Self::ResetRendering => "rendering reset",
             Self::MeasureGroup => "statistics group",
             Self::MeasureAggregate => "statistics aggregate",
+            Self::MeasureScope => "statistics range",
+            Self::MeasureLasso => "statistics lasso",
             Self::MeasureFilter => "statistics filter",
             Self::AddFilter => "filter addition",
             Self::RemoveFilter => "filter removal",
@@ -382,6 +388,8 @@ impl Command {
             Self::ResetRendering => Edit::new(Action::ResetRendering),
             Self::SetMeasureGroup(_) => Edit::new(Action::MeasureGroup),
             Self::SetMeasureAggregate(_) => Edit::new(Action::MeasureAggregate),
+            Self::SetMeasureScope(_) => Edit::new(Action::MeasureScope),
+            Self::SetLasso(_) => Edit::new(Action::MeasureLasso),
             Self::AddFilter => Edit::new(Action::AddFilter),
             Self::RemoveFilter(_) => Edit::new(Action::RemoveFilter),
             Self::SetFilter { index, .. } | Self::RetargetFilter { index, .. } => {

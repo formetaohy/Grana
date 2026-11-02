@@ -4,7 +4,8 @@ use glam::Vec3;
 use grana_geometry::{Bounds, Mesh, MeshVertex};
 use grana_object::{IntensityTable, SurfaceSet, SurfaceStatistics};
 
-use super::{EMPTY, SurfaceBuilder, find};
+use super::assemble::Assembler;
+use super::{EMPTY, Node, find, union};
 
 const MAX_FOLD: u32 = 8;
 
@@ -17,8 +18,49 @@ struct Shell {
     dropped: bool,
 }
 
-impl SurfaceBuilder {
+impl Assembler<'_> {
+    pub(super) fn merge_basins(&mut self) {
+        let mut seams: HashMap<(u32, u32), u32> = HashMap::new();
+        for (left, right, neck) in std::mem::take(&mut self.necks) {
+            let left = find(&mut self.nodes, left);
+            let right = find(&mut self.nodes, right);
+            if left == right {
+                continue;
+            }
+            let key = (left.min(right), left.max(right));
+            let slot = seams.entry(key).or_insert(0);
+            *slot = (*slot).max(neck);
+        }
+        let mut seams = seams.into_iter().collect::<Vec<_>>();
+        seams.sort_unstable_by(|(left_key, left_neck), (right_key, right_neck)| {
+            right_neck.cmp(left_neck).then(left_key.cmp(right_key))
+        });
+        let gap = f64::from(self.plan.merge_gap);
+        let channels = self.plan.channels;
+        for ((left, right), neck) in seams {
+            let left = find(&mut self.nodes, left);
+            let right = find(&mut self.nodes, right);
+            if left == right {
+                continue;
+            }
+            let reach = f64::from(self.nodes[left as usize].reach)
+                .sqrt()
+                .min(f64::from(self.nodes[right as usize].reach).sqrt());
+            let drop = reach - f64::from(neck).sqrt();
+            if drop < gap {
+                union(
+                    &mut self.nodes,
+                    &mut self.accumulators,
+                    channels,
+                    left,
+                    right,
+                );
+            }
+        }
+    }
+
     pub(super) fn build(mut self) -> SurfaceSet {
+        let plan = self.plan;
         let mut targets = vec![EMPTY; self.nodes.len()];
         for (index, target) in targets.iter_mut().enumerate() {
             *target = fold(&mut self.nodes, index as u32);
@@ -101,7 +143,7 @@ impl SurfaceBuilder {
                 }
             }
         }
-        let epsilon = 0.5 * self.voxel_volume;
+        let epsilon = 0.5 * plan.voxel_volume;
         let mut edge_indices = vec![usize::MAX; parts.len()];
         let mut edges: Vec<HashMap<(u32, u32), u32>> = Vec::new();
         for (slot, part) in parts.iter().enumerate() {
@@ -166,7 +208,7 @@ impl SurfaceBuilder {
                 continue;
             }
             let target = part.target as usize;
-            let voxels = (volume / self.voxel_volume).round().max(1.0) as u64;
+            let voxels = (volume / plan.voxel_volume).round().max(1.0) as u64;
             cavity_voxels[target] += voxels;
             cavity_volume[target] += volume;
             for (slot, moment) in cavity_moment[target].iter_mut().zip(&part.moment) {
@@ -174,13 +216,13 @@ impl SurfaceBuilder {
             }
             for axis in 0..3 {
                 let low =
-                    ((part.low[axis] + 0.5 * self.world[axis]) / self.spacing[axis] - 0.5).floor();
+                    ((part.low[axis] + 0.5 * plan.world[axis]) / plan.spacing[axis] - 0.5).floor();
                 let high =
-                    ((part.high[axis] + 0.5 * self.world[axis]) / self.spacing[axis] - 0.5).ceil();
+                    ((part.high[axis] + 0.5 * plan.world[axis]) / plan.spacing[axis] - 0.5).ceil();
                 cavity_low[target][axis] = cavity_low[target][axis]
-                    .min(low.clamp(0.0, self.extent[axis] as f32 - 1.0) as u32);
+                    .min(low.clamp(0.0, plan.extent[axis] as f32 - 1.0) as u32);
                 cavity_high[target][axis] = cavity_high[target][axis]
-                    .max(high.clamp(0.0, self.extent[axis] as f32 - 1.0) as u32);
+                    .max(high.clamp(0.0, plan.extent[axis] as f32 - 1.0) as u32);
             }
         }
         let mut objects = Vec::new();
@@ -195,7 +237,7 @@ impl SurfaceBuilder {
                 continue;
             }
             let voxels = node.voxels + cavity_voxels[root];
-            let volume = cavity_volume[root] + node.voxels as f64 * self.voxel_volume;
+            let volume = cavity_volume[root] + node.voxels as f64 * plan.voxel_volume;
             let low = [0, 1, 2].map(|axis| {
                 if cavity_voxels[root] > 0 {
                     cavity_low[root][axis].min(node.low[axis])
@@ -220,37 +262,37 @@ impl SurfaceBuilder {
             }
             let count = voxels as f64;
             let centroid = [0, 1, 2].map(|axis| {
-                ((sum[axis] / count + 0.5) * f64::from(self.spacing[axis])
-                    - 0.5 * f64::from(self.world[axis])) as f32
+                ((sum[axis] / count + 0.5) * f64::from(plan.spacing[axis])
+                    - 0.5 * f64::from(plan.world[axis])) as f32
             });
             let bounds = Bounds::new(
                 [0, 1, 2].map(|axis| {
-                    (f64::from(low[axis]) * f64::from(self.spacing[axis])
-                        - 0.5 * f64::from(self.world[axis])) as f32
+                    (f64::from(low[axis]) * f64::from(plan.spacing[axis])
+                        - 0.5 * f64::from(plan.world[axis])) as f32
                 }),
                 [0, 1, 2].map(|axis| {
-                    ((f64::from(high[axis]) + 1.0) * f64::from(self.spacing[axis])
-                        - 0.5 * f64::from(self.world[axis])) as f32
+                    ((f64::from(high[axis]) + 1.0) * f64::from(plan.spacing[axis])
+                        - 0.5 * f64::from(plan.world[axis])) as f32
                 }),
             );
             let area = areas[root];
-            if volume < f64::from(self.params.min_volume()) || area <= 0.0 {
+            if volume < f64::from(plan.params.min_volume()) || area <= 0.0 {
                 continue;
             }
             let statistics = SurfaceStatistics::new(voxels, volume, area, centroid, bounds);
-            if statistics.sphericity() < f64::from(self.params.min_sphericity()) {
+            if statistics.sphericity() < f64::from(plan.params.min_sphericity()) {
                 continue;
             }
-            let mean = self.accumulators[root * self.channels + self.detection]
+            let mean = self.accumulators[root * plan.channels + plan.detection]
                 .statistics()
                 .mean();
-            if self.span > 0.0 && mean / self.span < self.params.min_mean_intensity() {
+            if plan.span > 0.0 && mean / plan.span < plan.params.min_mean_intensity() {
                 continue;
             }
             map[root] = objects.len() as u32;
             objects.push(statistics);
-            for channel in 0..self.channels {
-                intensities.push(self.accumulators[root * self.channels + channel].statistics());
+            for channel in 0..plan.channels {
+                intensities.push(self.accumulators[root * plan.channels + channel].statistics());
             }
         }
         let mut vertex_map: HashMap<(u32, u32), u32> = HashMap::new();
@@ -300,15 +342,15 @@ impl SurfaceBuilder {
             indices.extend_from_slice(&mapped);
         }
         SurfaceSet::new(
-            self.level_index,
+            plan.level_index,
             Mesh::new(vertices, indices),
             objects,
-            IntensityTable::new(self.channels, intensities),
+            IntensityTable::new(plan.channels, intensities),
         )
     }
 }
 
-fn nearest(nodes: &[super::Node], candidates: &[u32], point: Vec3) -> u32 {
+fn nearest(nodes: &[Node], candidates: &[u32], point: Vec3) -> u32 {
     candidates
         .iter()
         .copied()
@@ -320,7 +362,7 @@ fn nearest(nodes: &[super::Node], candidates: &[u32], point: Vec3) -> u32 {
         .unwrap_or(EMPTY)
 }
 
-fn distance(nodes: &[super::Node], root: u32, point: Vec3) -> f32 {
+fn distance(nodes: &[Node], root: u32, point: Vec3) -> f32 {
     let node = nodes[root as usize];
     let mut total = 0.0f32;
     for axis in 0..3 {
@@ -332,7 +374,7 @@ fn distance(nodes: &[super::Node], root: u32, point: Vec3) -> f32 {
     total
 }
 
-fn fold(nodes: &mut [super::Node], node: u32) -> u32 {
+fn fold(nodes: &mut [Node], node: u32) -> u32 {
     let mut root = find(nodes, node);
     let mut steps = 0;
     while nodes[root as usize].voxels == 0

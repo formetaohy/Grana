@@ -1,12 +1,16 @@
 use glam::Vec2;
-use grana_measure::{Histogram, Plot, SCATTER_BINS, Scatter, Table};
+use grana_measure::{
+    Histogram, Lasso, MeasureView, Observation, Plot, SCATTER_BINS, Scatter, Table,
+};
+use grana_scene::{Item, ObjectSetId, Scene};
 use grana_session::Command;
 use grana_ui::{
     Align, Border, Button, Color, Corners, Cursor, Fill, Painter, Rect, Shadow, TextStyle,
     TypeStyle, Ui,
 };
 
-use crate::state::State;
+use crate::measure_panel;
+use crate::state::{PlotDrag, PlotGate, State};
 
 const LEFT: f32 = 40.0;
 const RIGHT: f32 = 10.0;
@@ -15,6 +19,10 @@ const TICK: f32 = 18.0;
 const SUMMARY: f32 = 20.0;
 const POINT_LIMIT: u64 = 4096;
 const BRUSH_SLOP: f32 = 4.0;
+const LASSO_STEP: f32 = 1.5;
+const HOVER_REACH: f32 = 11.0;
+const SCATTER_HINT: &str = "drag: lasso · shift drag: box · click: locate";
+const HISTOGRAM_HINT: &str = "drag: gate · click: locate";
 
 enum Readout {
     None,
@@ -27,11 +35,13 @@ enum Readout {
     Cell {
         x: f32,
         y: f32,
+        observation: Option<Observation>,
     },
 }
 
-pub(crate) fn view(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
-    let (Some(table), Some(plot)) = (state.measure.table(), state.measure.plot()) else {
+pub(crate) fn view(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
+    let measure = state.measure;
+    let (Some(table), Some(plot)) = (measure.table(), measure.plot()) else {
         return;
     };
     let card = Rect::from_min_size(ui.cursor_position(), ui.available());
@@ -43,9 +53,19 @@ pub(crate) fn view(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) 
         card.min + Vec2::new(LEFT, TOP),
         Vec2::new(card.max.x - RIGHT, card.max.y - SUMMARY - TICK),
     );
+    let current = plot.view();
+    if !ui.input().button(Button::Primary).down
+        && state
+            .workspace
+            .drag
+            .view
+            .is_some_and(|view| view != current)
+    {
+        state.workspace.drag = PlotDrag::default();
+    }
     let readout = match plot {
-        Plot::Histogram(histogram) => histogram_view(ui, state, commands, histogram, inner),
-        Plot::Scatter(scatter) => scatter_view(ui, state, commands, scatter, inner, table.rows()),
+        Plot::Histogram(histogram) => histogram_view(ui, state, commands, histogram, inner, table),
+        Plot::Scatter(scatter) => scatter_view(ui, state, commands, scatter, inner, table),
     };
     titles(ui, plot, table, card);
     summary(ui, plot, table, readout, card);
@@ -93,18 +113,22 @@ fn summary(ui: &mut Ui, plot: &Plot, table: &Table, readout: Readout, card: Rect
             let unit = column.unit().suffix();
             format!("{low:.places$} – {high:.places$} {unit} · {gated} of {bin_total}")
         }
-        (Plot::Scatter(scatter), Readout::Cell { x, y }) => {
+        (Plot::Scatter(scatter), Readout::Cell { x, y, observation }) => {
             let first = &table.columns()[scatter.x()];
             let second = &table.columns()[scatter.y()];
             let x_places = first.decimals() as usize;
             let y_places = second.decimals() as usize;
-            format!(
+            let mut text = format!(
                 "{} {x:.x_places$} {} · {} {y:.y_places$} {}",
                 first.label(),
                 first.unit().suffix(),
                 second.label(),
                 second.unit().suffix()
-            )
+            );
+            if let Some(observation) = observation {
+                text.push_str(&located(observation));
+            }
+            text
         }
         (Plot::Histogram(histogram), _) => {
             let statistics = histogram.summary();
@@ -112,10 +136,10 @@ fn summary(ui: &mut Ui, plot: &Plot, table: &Table, readout: Readout, card: Rect
             let places = column.decimals() as usize;
             let unit = column.unit().suffix();
             if statistics.count() == 0 {
-                format!("{total} objects · nothing gated")
+                format!("{total} objects · nothing gated · {HISTOGRAM_HINT}")
             } else {
                 format!(
-                    "{} of {total} gated · mean {:.places$} {unit} · σ {:.places$}",
+                    "{} of {total} gated · mean {:.places$} {unit} · σ {:.places$} · {HISTOGRAM_HINT}",
                     statistics.count(),
                     statistics.mean(),
                     statistics.deviation()
@@ -127,10 +151,10 @@ fn summary(ui: &mut Ui, plot: &Plot, table: &Table, readout: Readout, card: Rect
                 .correlation()
                 .map_or_else(|| "r —".to_string(), |value| format!("r {value:.2}"));
             if scatter.x_summary().count() == 0 {
-                format!("{total} objects · nothing gated")
+                format!("{total} objects · nothing gated · {SCATTER_HINT}")
             } else {
                 format!(
-                    "{} of {total} gated · {correlation}",
+                    "{} of {total} gated · {correlation} · {SCATTER_HINT}",
                     scatter.x_summary().count()
                 )
             }
@@ -149,59 +173,102 @@ fn summary(ui: &mut Ui, plot: &Plot, table: &Table, readout: Readout, card: Rect
     painter.text_in(rect, &text, style, Align::Center);
 }
 
+fn located(observation: Observation) -> String {
+    match (
+        observation.time(),
+        observation.object(),
+        observation.track(),
+    ) {
+        (Some(time), Some(object), _) => format!(" · frame {} · object {}", time + 1, object + 1),
+        (_, _, Some(track)) => format!(" · track {}", track + 1),
+        (Some(time), _, _) => format!(" · frame {}", time + 1),
+        _ => String::new(),
+    }
+}
+
 fn histogram_view(
     ui: &mut Ui,
-    state: &State<'_>,
+    state: &mut State<'_>,
     commands: &mut Vec<Command>,
     histogram: &Histogram,
     inner: Rect,
+    table: &Table,
 ) -> Readout {
     if inner.is_empty() {
         return Readout::None;
     }
+    let measure = state.measure;
     let key = ui.id("plot.histogram");
     let response = ui.interact(key, inner);
     if response.hovered {
         ui.set_cursor(Cursor::Crosshair);
     }
-    let start_key = ui.id("plot.histogram.start");
-    let active_key = ui.id("plot.histogram.active");
     let pointer = ui
         .input()
         .position()
         .clamp(inner.min, inner.max - Vec2::splat(1.0));
-    let down = ui.input().button(Button::Primary).down;
+    let released = ui.input().button(Button::Primary).released;
+    let clicked = response.clicked;
     let began = response.active && ui.input().button(Button::Primary).pressed;
-    let mut start = ui.value_of(start_key);
-    let mut active = ui.value_of(active_key).is_some_and(|value| value > 0.5);
+    let mut drag = std::mem::take(&mut state.workspace.drag);
     if began && ui.pointer_in(inner).is_some() {
-        let value = value_at(inner, histogram.low(), histogram.high(), pointer.x);
-        ui.store_value(start_key, value);
-        ui.store_value(active_key, 1.0);
-        start = Some(value);
-        active = true;
+        drag.view = Some(MeasureView::Histogram);
+        drag.gate = Some(PlotGate::Rectangle);
+        drag.origin = Some(pointer);
+        drag.moved = false;
+        drag.vertices.clear();
     }
     let mut brush = None;
-    if active && let Some(start) = start {
-        let value = value_at(inner, histogram.low(), histogram.high(), pointer.x);
-        brush = Some((start.min(value), start.max(value)));
-        if !down {
-            if let Some((low, high)) = brush {
-                let width = (high - low) / (histogram.high() - histogram.low()) * inner.width();
+    if let Some(origin) = drag
+        .origin
+        .filter(|_| drag.view == Some(MeasureView::Histogram))
+    {
+        if pointer.distance(origin) > BRUSH_SLOP {
+            drag.moved = true;
+        }
+        let from = value_at(inner, histogram.low(), histogram.high(), origin.x);
+        let to = value_at(inner, histogram.low(), histogram.high(), pointer.x);
+        if drag.moved {
+            brush = Some((from.min(to), from.max(to)));
+        }
+        if released {
+            if drag.moved {
+                let width =
+                    (to - from).abs() / (histogram.high() - histogram.low()) * inner.width();
                 if width >= BRUSH_SLOP {
                     commands.push(Command::SetGate {
                         column: histogram.column(),
-                        minimum: low,
-                        maximum: high,
+                        minimum: from.min(to),
+                        maximum: from.max(to),
                     });
                 }
             }
-            ui.store_value(active_key, 0.0);
-            brush = None;
-            active = false;
+            drag.origin = None;
+            drag.moved = false;
         }
     }
-    let hovered = if active { None } else { ui.pointer_in(inner) };
+    state.workspace.drag = drag;
+    if clicked
+        && let Some(row) = table.nearest(
+            measure.rows(),
+            &[histogram.column()],
+            &[value_at(
+                inner,
+                histogram.low(),
+                histogram.high(),
+                pointer.x,
+            )],
+            &[inner.width()],
+        )
+        && let Some(set) = measure.set()
+    {
+        measure_panel::locate(commands, set, table.observation(row));
+    }
+    let hovered = if brush.is_some() {
+        None
+    } else {
+        ui.pointer_in(inner)
+    };
     let bins = histogram.bins();
     let peak = histogram.peak().max(1);
     let width = inner.width() / bins as f32;
@@ -224,8 +291,7 @@ fn histogram_view(
         font,
         tick_color,
     );
-    if let Some(filter) = state
-        .measure
+    if let Some(filter) = measure
         .filters()
         .iter()
         .find(|filter| filter.column() == histogram.column())
@@ -273,6 +339,25 @@ fn histogram_view(
             accent.with_alpha(0.06),
         );
     }
+    if let Some(row) = selected_row(table, measure.rows(), state.scene, measure.set()) {
+        let x = pixel_x(
+            inner,
+            histogram.low(),
+            histogram.high(),
+            table.value(row, histogram.column()),
+        );
+        painter.segment(
+            Vec2::new(x, inner.min.y),
+            Vec2::new(x, inner.max.y),
+            1.4,
+            accent,
+        );
+        painter.rect(
+            Rect::from_center_size(Vec2::new(x, inner.max.y - 4.0), Vec2::splat(5.0)),
+            Corners::capsule(),
+            accent,
+        );
+    }
     if let Some(pointer) = hovered {
         painter.segment(
             Vec2::new(pointer.x, inner.min.y),
@@ -298,81 +383,139 @@ fn histogram_view(
 
 fn scatter_view(
     ui: &mut Ui,
-    state: &State<'_>,
+    state: &mut State<'_>,
     commands: &mut Vec<Command>,
     scatter: &Scatter,
     inner: Rect,
-    rows: usize,
+    table: &Table,
 ) -> Readout {
     if inner.is_empty() {
         return Readout::None;
     }
+    let measure = state.measure;
     let key = ui.id("plot.scatter");
     let response = ui.interact(key, inner);
     if response.hovered {
         ui.set_cursor(Cursor::Crosshair);
     }
-    let active_key = ui.id("plot.scatter.active");
-    let start_x_key = ui.id("plot.scatter.start.x");
-    let start_y_key = ui.id("plot.scatter.start.y");
     let pointer = ui
         .input()
         .position()
         .clamp(inner.min, inner.max - Vec2::splat(1.0));
-    let down = ui.input().button(Button::Primary).down;
+    let released = ui.input().button(Button::Primary).released;
+    let clicked = response.clicked;
     let began = response.active && ui.input().button(Button::Primary).pressed;
-    let mut start = ui.value_of(start_x_key).zip(ui.value_of(start_y_key));
-    let mut active = ui.value_of(active_key).is_some_and(|value| value > 0.5);
+    let shift = ui.input().modifiers().shift;
+    let mut drag = std::mem::take(&mut state.workspace.drag);
     if began && ui.pointer_in(inner).is_some() {
-        let x = value_at(inner, scatter.x_low(), scatter.x_high(), pointer.x);
-        let y = value_at_y(inner, scatter.y_low(), scatter.y_high(), pointer.y);
-        ui.store_value(start_x_key, x);
-        ui.store_value(start_y_key, y);
-        ui.store_value(active_key, 1.0);
-        start = Some((x, y));
-        active = true;
+        drag.view = Some(MeasureView::Scatter);
+        drag.gate = Some(if shift {
+            PlotGate::Rectangle
+        } else {
+            PlotGate::Lasso
+        });
+        drag.origin = Some(pointer);
+        drag.moved = false;
+        drag.vertices.clear();
     }
     let mut brush = None;
-    if active && let Some((start_x, start_y)) = start {
-        let x = value_at(inner, scatter.x_low(), scatter.x_high(), pointer.x);
-        let y = value_at_y(inner, scatter.y_low(), scatter.y_high(), pointer.y);
-        brush = Some((
-            start_x.min(x),
-            start_x.max(x),
-            start_y.min(y),
-            start_y.max(y),
-        ));
-        if !down {
-            if let Some((low_x, high_x, low_y, high_y)) = brush {
-                let width = (high_x - low_x) / (scatter.x_high() - scatter.x_low()) * inner.width();
-                let height =
-                    (high_y - low_y) / (scatter.y_high() - scatter.y_low()) * inner.height();
-                if width >= BRUSH_SLOP && height >= BRUSH_SLOP {
-                    commands.push(Command::SetGate {
-                        column: scatter.x(),
-                        minimum: low_x,
-                        maximum: high_x,
-                    });
-                    commands.push(Command::SetGate {
-                        column: scatter.y(),
-                        minimum: low_y,
-                        maximum: high_y,
-                    });
+    if let Some(origin) = drag
+        .origin
+        .filter(|_| drag.view == Some(MeasureView::Scatter))
+    {
+        if pointer.distance(origin) > BRUSH_SLOP {
+            drag.moved = true;
+        }
+        let from_x = value_at(inner, scatter.x_low(), scatter.x_high(), origin.x);
+        let from_y = value_at_y(inner, scatter.y_low(), scatter.y_high(), origin.y);
+        let to_x = value_at(inner, scatter.x_low(), scatter.x_high(), pointer.x);
+        let to_y = value_at_y(inner, scatter.y_low(), scatter.y_high(), pointer.y);
+        let lassoing = drag.gate == Some(PlotGate::Lasso);
+        if drag.moved && lassoing {
+            push_vertex(&mut drag.vertices, Vec2::new(to_x, to_y));
+        } else if drag.moved {
+            brush = Some((
+                from_x.min(to_x),
+                from_x.max(to_x),
+                from_y.min(to_y),
+                from_y.max(to_y),
+            ));
+        }
+        if released {
+            if drag.moved {
+                if lassoing {
+                    push_vertex(&mut drag.vertices, Vec2::new(to_x, to_y));
+                    let points = drag
+                        .vertices
+                        .iter()
+                        .map(|vertex| [vertex.x, vertex.y])
+                        .collect::<Vec<_>>();
+                    if let Some(lasso) = Lasso::new(scatter.x(), scatter.y(), points) {
+                        commands.push(Command::SetLasso(Some(lasso)));
+                    }
+                } else if let Some((low_x, high_x, low_y, high_y)) = brush {
+                    let width =
+                        (high_x - low_x) / (scatter.x_high() - scatter.x_low()) * inner.width();
+                    let height =
+                        (high_y - low_y) / (scatter.y_high() - scatter.y_low()) * inner.height();
+                    if width >= BRUSH_SLOP && height >= BRUSH_SLOP {
+                        commands.push(Command::SetGate {
+                            column: scatter.x(),
+                            minimum: low_x,
+                            maximum: high_x,
+                        });
+                        commands.push(Command::SetGate {
+                            column: scatter.y(),
+                            minimum: low_y,
+                            maximum: high_y,
+                        });
+                    }
                 }
             }
-            ui.store_value(active_key, 0.0);
-            brush = None;
-            active = false;
+            drag.origin = None;
+            drag.moved = false;
         }
     }
-    let hovered = if active { None } else { ui.pointer_in(inner) };
+    let draft = (drag.moved && drag.gate == Some(PlotGate::Lasso)).then(|| {
+        (
+            drag.vertices.clone(),
+            Vec2::new(
+                value_at(inner, scatter.x_low(), scatter.x_high(), pointer.x),
+                value_at_y(inner, scatter.y_low(), scatter.y_high(), pointer.y),
+            ),
+        )
+    });
+    state.workspace.drag = drag;
+    if clicked
+        && let Some(row) = table.nearest(
+            measure.rows(),
+            &[scatter.x(), scatter.y()],
+            &[
+                value_at(inner, scatter.x_low(), scatter.x_high(), pointer.x),
+                value_at_y(inner, scatter.y_low(), scatter.y_high(), pointer.y),
+            ],
+            &[inner.width(), inner.height()],
+        )
+        && let Some(set) = measure.set()
+    {
+        measure_panel::locate(commands, set, table.observation(row));
+    }
+    let hovered = if brush.is_some() || draft.is_some() {
+        None
+    } else {
+        ui.pointer_in(inner)
+    };
     let accent = ui.theme().palette.accent;
     let font = ui.theme().font(grana_ui::Level::Monospace);
     let tick_color = ui.theme().palette.text_tertiary;
     let scale = (1.0 + scatter.peak().max(1) as f32).ln();
     let cell_width = inner.width() / SCATTER_BINS as f32;
     let cell_height = inner.height() / SCATTER_BINS as f32;
-    let points = rows as u64 <= POINT_LIMIT;
+    let points = measure.rows().len() as u64 <= POINT_LIMIT;
+    let lasso = measure
+        .lasso()
+        .filter(|lasso| lasso.x() == scatter.x() && lasso.y() == scatter.y());
+    let lassoed = lasso.is_some();
     let empty = TextStyle::new(
         ui.theme().font(grana_ui::Level::Caption),
         ui.theme().palette.text_tertiary,
@@ -388,13 +531,11 @@ fn scatter_view(
         font,
         tick_color,
     );
-    let x_gate = state
-        .measure
+    let x_gate = measure
         .filters()
         .iter()
         .find(|filter| filter.column() == scatter.x());
-    let y_gate = state
-        .measure
+    let y_gate = measure
         .filters()
         .iter()
         .find(|filter| filter.column() == scatter.y());
@@ -436,6 +577,7 @@ fn scatter_view(
             accent.with_alpha(0.05),
         );
     }
+    let dim = |alpha: f32| Color::white_alpha(if lassoed { alpha * 0.5 } else { alpha });
     if points {
         for row in 0..SCATTER_BINS {
             for column in 0..SCATTER_BINS {
@@ -447,7 +589,7 @@ fn scatter_view(
                 painter.rect(
                     Rect::from_center_size(centre, Vec2::splat(dot)),
                     Corners::capsule(),
-                    Color::white_alpha(0.5),
+                    dim(0.5),
                 );
             }
         }
@@ -477,7 +619,7 @@ fn scatter_view(
                 painter.rect(
                     Rect::from_center_size(centre, Vec2::new(cell_width + 0.5, cell_height + 0.5)),
                     Corners::ZERO,
-                    Color::white_alpha(0.04 + 0.34 * weight),
+                    dim(0.04 + 0.34 * weight),
                 );
                 let gated = scatter.gated_at(column, row);
                 if gated > 0 {
@@ -493,6 +635,28 @@ fn scatter_view(
                 }
             }
         }
+    }
+    if let Some(lasso) = lasso {
+        lasso_outline(
+            &mut painter,
+            inner,
+            (scatter.x_low(), scatter.x_high()),
+            (scatter.y_low(), scatter.y_high()),
+            lasso.points(),
+            accent,
+        );
+    }
+    if let Some((vertices, last)) = draft {
+        let mut points = vertices;
+        points.push(last);
+        lasso_outline(
+            &mut painter,
+            inner,
+            (scatter.x_low(), scatter.x_high()),
+            (scatter.y_low(), scatter.y_high()),
+            &points.iter().map(|v| [v.x, v.y]).collect::<Vec<_>>(),
+            accent.with_alpha(0.8),
+        );
     }
     if let Some((low_x, high_x, low_y, high_y)) = brush {
         let rect = Rect::from_min_max(
@@ -516,6 +680,32 @@ fn scatter_view(
             Shadow::NONE,
         );
     }
+    if let Some(row) = selected_row(table, measure.rows(), state.scene, measure.set()) {
+        let centre = Vec2::new(
+            pixel_x(
+                inner,
+                scatter.x_low(),
+                scatter.x_high(),
+                table.value(row, scatter.x()),
+            ),
+            pixel_y(
+                inner,
+                scatter.y_low(),
+                scatter.y_high(),
+                table.value(row, scatter.y()),
+            ),
+        );
+        painter.outlined(
+            Rect::from_center_size(centre, Vec2::splat(9.0)),
+            Corners::capsule(),
+            Fill::Solid(Color::white_alpha(0.12)),
+            Border {
+                width: 1.4,
+                color: accent,
+            },
+            Shadow::NONE,
+        );
+    }
     if let Some(pointer) = hovered {
         painter.segment(
             Vec2::new(pointer.x, inner.min.y),
@@ -529,15 +719,101 @@ fn scatter_view(
             0.6,
             Color::white_alpha(0.10),
         );
-        readout = Readout::Cell {
-            x: value_at(inner, scatter.x_low(), scatter.x_high(), pointer.x),
-            y: value_at_y(inner, scatter.y_low(), scatter.y_high(), pointer.y),
-        };
+        let x = value_at(inner, scatter.x_low(), scatter.x_high(), pointer.x);
+        let y = value_at_y(inner, scatter.y_low(), scatter.y_high(), pointer.y);
+        let observation = table
+            .nearest(
+                measure.rows(),
+                &[scatter.x(), scatter.y()],
+                &[x, y],
+                &[inner.width(), inner.height()],
+            )
+            .filter(|row| {
+                let centre = Vec2::new(
+                    pixel_x(
+                        inner,
+                        scatter.x_low(),
+                        scatter.x_high(),
+                        table.value(*row, scatter.x()),
+                    ),
+                    pixel_y(
+                        inner,
+                        scatter.y_low(),
+                        scatter.y_high(),
+                        table.value(*row, scatter.y()),
+                    ),
+                );
+                centre.distance(pointer) <= HOVER_REACH
+            })
+            .map(|row| table.observation(row));
+        readout = Readout::Cell { x, y, observation };
     }
     if scatter.peak() == 0 {
         painter.text_in(inner, "no objects to plot", empty, Align::Center);
     }
     readout
+}
+
+fn push_vertex(vertices: &mut Vec<Vec2>, vertex: Vec2) {
+    if vertices
+        .last()
+        .is_none_or(|last| last.distance(vertex) > LASSO_STEP)
+    {
+        vertices.push(vertex);
+    }
+}
+
+fn lasso_outline(
+    painter: &mut Painter<'_>,
+    inner: Rect,
+    x: (f32, f32),
+    y: (f32, f32),
+    points: &[[f32; 2]],
+    accent: Color,
+) {
+    if points.len() < 2 {
+        return;
+    }
+    let mut previous = pixel_of(inner, x, y, points[points.len() - 1]);
+    for point in points {
+        let current = pixel_of(inner, x, y, *point);
+        painter.segment(previous, current, 4.0, accent.with_alpha(0.10));
+        painter.segment(previous, current, 1.0, accent.with_alpha(0.75));
+        previous = current;
+    }
+}
+
+fn pixel_of(inner: Rect, x: (f32, f32), y: (f32, f32), point: [f32; 2]) -> Vec2 {
+    Vec2::new(
+        pixel_x(inner, x.0, x.1, point[0]),
+        pixel_y(inner, y.0, y.1, point[1]),
+    )
+}
+
+fn selected_row(
+    table: &Table,
+    rows: &[usize],
+    scene: &Scene,
+    set: Option<ObjectSetId>,
+) -> Option<usize> {
+    let selection = scene.selection()?;
+    if Some(selection.set) != set {
+        return None;
+    }
+    rows.iter().copied().find(|row| {
+        let observation = table.observation(*row);
+        match (
+            observation.time(),
+            observation.object(),
+            observation.track(),
+        ) {
+            (Some(time), Some(object), _) => {
+                scene.time() == time && selection.item == Item::Object(object)
+            }
+            (_, _, Some(track)) => selection.item == Item::Track(track),
+            _ => false,
+        }
+    })
 }
 
 fn cell_centre(inner: Rect, column: usize, row: usize, width: f32, height: f32) -> Vec2 {

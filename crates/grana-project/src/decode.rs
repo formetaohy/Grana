@@ -5,7 +5,7 @@ use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
 use grana_geometry::{Bounds, GeometryGroup, PackedMesh, PackedVertex};
 use grana_measure::{
-    Aggregate, Filter, Group, MeasureView, Measurement, Statistic, TrackMeasurement,
+    Aggregate, Filter, Group, Lasso, MeasureView, Measurement, Scope, Statistic, TrackMeasurement,
 };
 use grana_measure::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocCost, ColocFrame,
@@ -814,7 +814,24 @@ impl Decode for MeasureState {
         }
         let group = group(reader.u8()?)?;
         let aggregate = aggregate(reader.u8()?)?;
+        let scope = Scope::from_index(reader.u8()?).ok_or(FAULT_TAG)?;
         let filters = Vec::<Filter>::decode(reader)?;
+        let lasso = match reader.u8()? {
+            0 => None,
+            1 => {
+                let x = reader.count(1)?;
+                let y = reader.count(1)?;
+                let count = reader.count(8)?;
+                let mut points = Vec::with_capacity(count.min(1 << 16));
+                for _ in 0..count {
+                    let first = finite(reader.f32()?)?;
+                    let second = finite(reader.f32()?)?;
+                    points.push([first, second]);
+                }
+                Some(Lasso::new(x, y, points).ok_or(FAULT_VALUE)?)
+            }
+            _ => return Err(FAULT_SHAPE),
+        };
         let sort = match reader.u8()? {
             0 => None,
             1 => Some((reader.count(1)?, reader.bool()?)),
@@ -829,7 +846,9 @@ impl Decode for MeasureState {
             set,
             group,
             aggregate,
+            scope,
             filters,
+            lasso,
             sort,
             columns,
             visibility,

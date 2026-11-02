@@ -524,6 +524,8 @@ impl Session {
                     self.measure.set_aggregate(aggregate, scene);
                 }
             }
+            Command::SetMeasureScope(scope) => self.measure.set_scope(scope),
+            Command::SetLasso(lasso) => self.measure.set_lasso(lasso),
             Command::AddFilter => self.measure.add_filter(),
             Command::RemoveFilter(index) => self.measure.remove_filter(index),
             Command::SetFilter { index, filter } => self.measure.set_filter(index, filter),

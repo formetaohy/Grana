@@ -1,7 +1,10 @@
+use std::ops::Range;
+
 use glam::Vec3;
 use grana_geometry::MeshVertex;
 
-use super::{EMPTY, OUTSIDE, SurfaceBuilder, find};
+use super::tile::Contact;
+use super::{EMPTY, OUTSIDE, Tile, find};
 use crate::table::{EDGE_TABLE, TRIANGLE_TABLE};
 
 const CORNER: [[i64; 3]; 8] = [
@@ -40,20 +43,20 @@ const DIRECTIONS: [[i64; 3]; 7] = [
     [1, 1, 1],
 ];
 
-impl SurfaceBuilder {
-    pub(super) fn emit(&mut self) {
-        let core = self.core_range(self.next);
+impl Tile<'_> {
+    pub(super) fn emit(&mut self, core: &[Range<u32>; 3]) -> Result<(), String> {
+        let plan = self.pass.plan;
         let mut low = [0i64; 3];
         let mut high = [0i64; 3];
         for axis in 0..3 {
-            low[axis] = if core[axis].start == self.region[axis].start {
+            low[axis] = if core[axis].start == plan.region[axis].start {
                 core[axis].start as i64 - 1
             } else {
                 core[axis].start as i64
             };
             high[axis] = core[axis].end as i64;
         }
-        let threshold = self.threshold;
+        let threshold = plan.threshold;
         self.edges.clear();
         let mut values = [0.0f32; 8];
         let mut corners = [[0i64; 3]; 8];
@@ -108,32 +111,35 @@ impl SurfaceBuilder {
                     }
                 }
             }
+            if self.fragment_bytes() > super::TILE_FRAGMENT_LIMIT {
+                return Err(format!(
+                    "a surface tile exceeds the {} byte fragment limit",
+                    super::TILE_FRAGMENT_LIMIT
+                ));
+            }
         }
+        Ok(())
     }
 
     fn record_contact(&mut self, object: u32, candidates: &[u32; 8], values: &[f32; 8]) {
-        if self.nodes[object as usize].contact != EMPTY || self.nodes[object as usize].voxels > 0 {
+        let threshold = self.pass.plan.threshold;
+        if self.nodes[object as usize].voxels > 0 {
             return;
         }
-        let threshold = self.threshold;
-        let mut contact = EMPTY;
-        let mut best = 0u64;
+        let mut contact = Contact {
+            object,
+            labels: [EMPTY; 8],
+            count: 0,
+        };
         for corner in 0..8 {
             if values[corner] < threshold || candidates[corner] == EMPTY {
                 continue;
             }
-            let root = find(&mut self.nodes, candidates[corner]);
-            if root == object {
-                continue;
-            }
-            let voxels = self.nodes[root as usize].voxels;
-            if voxels > 0 && voxels > best {
-                contact = root;
-                best = voxels;
-            }
+            contact.labels[contact.count as usize] = candidates[corner];
+            contact.count += 1;
         }
-        if contact != EMPTY {
-            self.nodes[object as usize].contact = contact;
+        if contact.count > 0 {
+            self.contacts.push(contact);
         }
     }
 
@@ -145,6 +151,7 @@ impl SurfaceBuilder {
         corners: &[[i64; 3]; 8],
         object: u32,
     ) -> u32 {
+        let plan = self.pass.plan;
         let mut direction = [0i64; 3];
         let mut lower = [0i64; 3];
         for axis in 0..3 {
@@ -155,7 +162,7 @@ impl SurfaceBuilder {
             .iter()
             .position(|candidate| *candidate == direction)
             .expect("a marching cubes edge runs along one of seven directions");
-        let extent = self.extent;
+        let extent = plan.extent;
         let linear = lower[0] + i64::from(extent[0]) * (lower[1] + i64::from(extent[1]) * lower[2]);
         let key = ((linear as u64) << 4) | slot as u64;
         if let Some(vertex) = self.edges.get(&key) {
@@ -169,7 +176,7 @@ impl SurfaceBuilder {
         let end = if start == first { second } else { first };
         let low = values[start];
         let high = values[end];
-        let threshold = self.threshold;
+        let threshold = plan.threshold;
         let fraction = if (high - low).abs() > f32::EPSILON {
             ((threshold - low) / (high - low)).clamp(0.0, 1.0)
         } else {
@@ -184,7 +191,7 @@ impl SurfaceBuilder {
         let fallback = if low < high { -fallback } else { fallback };
         let normal = self.normal(point, fallback);
         let world = [0, 1, 2].map(|component| {
-            (point[component] + 0.5) * self.spacing[component] - 0.5 * self.world[component]
+            (point[component] + 0.5) * plan.spacing[component] - 0.5 * plan.world[component]
         });
         let vertex = self.vertices.len() as u32;
         self.vertices
@@ -215,20 +222,21 @@ impl SurfaceBuilder {
             ordering.swap(1, 2);
         }
         self.indices.extend_from_slice(&ordering);
-        self.triangle_objects.push(object);
+        self.triangles.push(object);
     }
 
     fn normal(&self, point: [f32; 3], fallback: Vec3) -> Vec3 {
+        let spacing = self.pass.plan.spacing;
         let gradient = Vec3::new(
             (self.sample([point[0] + 1.0, point[1], point[2]])
                 - self.sample([point[0] - 1.0, point[1], point[2]]))
-                / (2.0 * self.spacing[0]),
+                / (2.0 * spacing[0]),
             (self.sample([point[0], point[1] + 1.0, point[2]])
                 - self.sample([point[0], point[1] - 1.0, point[2]]))
-                / (2.0 * self.spacing[1]),
+                / (2.0 * spacing[1]),
             (self.sample([point[0], point[1], point[2] + 1.0])
                 - self.sample([point[0], point[1], point[2] - 1.0]))
-                / (2.0 * self.spacing[2]),
+                / (2.0 * spacing[2]),
         );
         if gradient.length_squared() > 1.0e-20 {
             return -gradient.normalize();

@@ -13,7 +13,7 @@ use crate::binary::u32_at;
 use crate::cache::Cache;
 use crate::directory;
 use crate::header::{self, Header};
-use crate::layout::{Layout, Plan, PlaneKey};
+use crate::layout::{Layout, LevelLayout, Plan, PlaneKey};
 use crate::metadata::{self, Metadata};
 use crate::plane;
 use crate::segment;
@@ -38,8 +38,7 @@ pub struct Image {
     path: PathBuf,
     name: String,
     pyramid: Pyramid,
-    extent: Extent,
-    plans: HashMap<PlaneKey, Plan>,
+    levels: Vec<LevelLayout>,
     store: Store,
     cache: Mutex<Cache>,
 }
@@ -52,6 +51,7 @@ impl Image {
         let entries = directory::read(&store, header.directory, path)?;
         let layout = Layout::of(entries, &metadata, path)?;
         let cache = Cache::new(CACHE_BYTES);
+        let base = &layout.levels[0];
         let mut channels = Vec::with_capacity(layout.pixels.len());
         for index in 0..layout.pixels.len() {
             let format = layout.pixels[index].format();
@@ -59,7 +59,7 @@ impl Image {
             let display = metadata.display.get(index);
             let window = display
                 .and_then(|display| window(display.low, display.high, intensity))
-                .or_else(|| probe(&store, path, &layout, &cache, format, index as u32))
+                .or_else(|| probe(&store, path, base, &cache, format, index as u32))
                 .filter(|window| window.span() > 0.0)
                 .unwrap_or(intensity);
             let source = metadata.channels.get(index);
@@ -75,7 +75,11 @@ impl Image {
             channels.push(ChannelInfo::new(name, tint, intensity, window, format));
         }
         let pyramid = Pyramid::new(
-            vec![Level::new(layout.extent, layout.spacing)],
+            layout
+                .levels
+                .iter()
+                .map(|level| Level::new(level.extent, level.spacing))
+                .collect(),
             channels,
             layout.frames,
             layout.interval,
@@ -84,8 +88,7 @@ impl Image {
             path: path.to_path_buf(),
             name: dataset_name(path),
             pyramid,
-            extent: layout.extent,
-            plans: layout.plans,
+            levels: layout.levels,
             store,
             cache,
         })
@@ -109,6 +112,7 @@ impl Image {
         z: Range<u32>,
     ) -> Result<VoxelData, Error> {
         self.validate(time, level, channel, &x, &y, &z)?;
+        let level = &self.levels[level];
         let channel = u32::try_from(channel)
             .map_err(|_| Error::region(&self.path, "the requested channel is out of range"))?;
         let format = self.pyramid.channels()[channel as usize].format();
@@ -120,7 +124,7 @@ impl Image {
             y: &y,
             z: &z,
         };
-        let bytes = region(&self.store, &self.path, &self.plans, &self.cache, &request)?;
+        let bytes = region(&self.store, &self.path, &level.plans, &self.cache, &request)?;
         Ok(voxels(format, bytes))
     }
 
@@ -130,7 +134,13 @@ impl Image {
         level: usize,
         coord: BrickCoord,
     ) -> Result<BrickData, Error> {
-        let grid = BrickGrid::new(self.extent);
+        let Some(target) = self.levels.get(level) else {
+            return Err(Error::region(
+                &self.path,
+                "the requested resolution level does not exist",
+            ));
+        };
+        let grid = BrickGrid::new(target.extent);
         let spatial = grid.padded_range(coord);
         let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
         let extent = Extent::new(
@@ -153,7 +163,7 @@ impl Image {
                 origin,
                 extent,
                 grid.origin(coord),
-                self.extent,
+                target.extent,
             ));
         }
         Ok(BrickData::new(channels))
@@ -168,10 +178,10 @@ impl Image {
         y: &Range<u32>,
         z: &Range<u32>,
     ) -> Result<(), Error> {
-        if level != 0 {
+        if level >= self.levels.len() {
             return Err(Error::region(
                 &self.path,
-                "the CZI image carries a single resolution level",
+                "the requested resolution level does not exist",
             ));
         }
         if time >= self.pyramid.frame_count() {
@@ -186,7 +196,7 @@ impl Image {
                 "the requested channel does not exist",
             ));
         }
-        let extent = self.extent;
+        let extent = self.levels[level].extent;
         let inside = x.start < x.end
             && x.end <= extent.x()
             && y.start < y.end
@@ -340,12 +350,12 @@ fn sample_bytes(format: VoxelFormat) -> usize {
 fn probe(
     store: &Store,
     path: &Path,
-    layout: &Layout,
+    level: &LevelLayout,
     cache: &Mutex<Cache>,
     format: VoxelFormat,
     channel: u32,
 ) -> Option<Intensity> {
-    let extent = layout.extent;
+    let extent = level.extent;
     let side_x = extent.x().min(PROBE_SIDE);
     let side_y = extent.y().min(PROBE_SIDE);
     let left = (extent.x() - side_x) / 2;
@@ -362,7 +372,7 @@ fn probe(
         y: &y,
         z: &z,
     };
-    let bytes = region(store, path, &layout.plans, cache, &request).ok()?;
+    let bytes = region(store, path, &level.plans, cache, &request).ok()?;
     let sample = sample_bytes(format);
     let mut range = (f32::INFINITY, f32::NEG_INFINITY);
     for line in 0..side_y as usize {

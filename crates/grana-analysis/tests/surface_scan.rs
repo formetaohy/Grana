@@ -1,4 +1,5 @@
 use std::f64::consts::PI;
+use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
 use grana_analysis::{SurfaceBuilder, SurfaceFilter, SurfaceParams};
@@ -204,6 +205,60 @@ fn splits_touching_lobes_at_their_neck() {
         coarse.object_count(),
         1,
         "a seed wider than the neck keeps the lobes together"
+    );
+}
+
+#[test]
+fn splits_large_lobes_at_their_thick_neck() {
+    let volume = large_lobes();
+    let filter = || SurfaceFilter::new(0.0, 0.8, 0.0, 0.0);
+    let merged = extract(
+        &volume,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.0, filter()),
+        Region::none(),
+    );
+    assert_eq!(merged.object_count(), 1, "touching lobes form one object");
+    let total = merged.objects()[0].voxel_count();
+
+    let split = extract(
+        &volume,
+        SurfaceParams::new(0.5, 0.0, 0.6, 0.0, filter()),
+        Region::none(),
+    );
+    assert_eq!(
+        split.object_count(),
+        2,
+        "a neck far wider than the base distance limit still splits"
+    );
+    let kept = split
+        .objects()
+        .iter()
+        .map(|object| object.voxel_count())
+        .sum::<u64>();
+    assert_eq!(kept, total, "splitting conserves the mask");
+
+    let mut centres = split
+        .objects()
+        .iter()
+        .map(|object| object.centroid()[0])
+        .collect::<Vec<_>>();
+    centres.sort_by(|left, right| left.partial_cmp(right).expect("the centroids order"));
+    let separation = (centres[1] - centres[0]) / volume.spacing().x();
+    assert!(
+        (30.0..46.0).contains(&separation),
+        "the lobes are {separation} voxels apart in x"
+    );
+}
+
+#[test]
+fn keeps_surfaces_deterministic_across_worker_counts() {
+    let volume = large_lobes();
+    let surface = SurfaceParams::new(0.5, 0.0, 0.6, 0.0, SurfaceFilter::new(0.0, 0.8, 0.0, 0.0));
+    let single = extract_with(&volume, surface, Region::none(), 1);
+    let many = extract_with(&volume, surface, Region::none(), 4);
+    assert_eq!(
+        single, many,
+        "the surface set does not depend on the worker count"
     );
 }
 
@@ -419,30 +474,51 @@ fn caps_a_surface_cut_by_the_region() {
 }
 
 fn extract(volume: &Volume, params: SurfaceParams, region: Region) -> SurfaceSet {
+    extract_with(volume, params, region, 1)
+}
+
+fn extract_with(
+    volume: &Volume,
+    params: SurfaceParams,
+    region: Region,
+    workers: usize,
+) -> SurfaceSet {
     let level = Level::new(volume.extent(), volume.spacing());
     let intensity = Intensity::new(0.0, f32::from(HIGH));
     let channels = volume.channel_count();
-    let mut builder = SurfaceBuilder::new(0, level, params, channels, 0, region, intensity);
-    for index in 0..builder.tile_count() {
-        let range = builder.detection_range(index);
-        let detection = volume.channels()[0].data().region(
-            volume.extent(),
-            range[0].clone(),
-            range[1].clone(),
-            range[2].clone(),
-        );
-        builder
-            .add(index, &detection, None, |channel, core| {
+    let builder = SurfaceBuilder::new(0, level, params, channels, 0, region, intensity);
+    let cancel = AtomicBool::new(false);
+    builder
+        .scan(
+            workers,
+            &cancel,
+            None,
+            &mut |_done, _total| {},
+            &|_index, ranges| {
+                Ok(volume.channels()[0].data().region(
+                    volume.extent(),
+                    ranges[0].clone(),
+                    ranges[1].clone(),
+                    ranges[2].clone(),
+                ))
+            },
+            &|channel, core| {
                 Ok(volume.channels()[channel].data().region(
                     volume.extent(),
                     core[0].clone(),
                     core[1].clone(),
                     core[2].clone(),
                 ))
-            })
-            .expect("a surface tile is added");
-    }
-    builder.finish()
+            },
+        )
+        .expect("a surface frame is detected")
+        .expect("surface detection completes")
+}
+
+fn large_lobes() -> Volume {
+    let extent = Extent::new(200, 80, 80);
+    let centres = [[80.0f32, 40.0, 40.0], [118.0, 40.0, 40.0]];
+    blobs(extent, &[0.1, 0.1, 0.1], &centres, 22.0)
 }
 
 fn blobs(extent: Extent, spacing: &[f32; 3], centres: &[[f32; 3]], radius: f32) -> Volume {

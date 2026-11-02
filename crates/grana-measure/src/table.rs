@@ -5,6 +5,7 @@ use grana_object::{
 use crate::column::{Column, Unit};
 use crate::csv;
 use crate::filter::Filter;
+use crate::lasso::Lasso;
 use crate::metric::{Measurement, TrackMeasurement};
 use crate::relation::{RelationField, RelationRow};
 
@@ -355,14 +356,88 @@ impl Table {
         self.observations[row]
     }
 
-    pub fn matching(&self, filters: &[Filter]) -> Vec<usize> {
+    pub fn matching(
+        &self,
+        filters: &[Filter],
+        lasso: Option<&Lasso>,
+        frame: Option<u32>,
+    ) -> Vec<usize> {
         (0..self.rows())
             .filter(|row| {
-                filters
-                    .iter()
-                    .all(|filter| filter.contains(self.value(*row, filter.column())))
+                frame.is_none_or(|frame| self.observations[*row].time() == Some(frame))
+                    && filters
+                        .iter()
+                        .all(|filter| filter.contains(self.value(*row, filter.column())))
+                    && lasso.is_none_or(|lasso| {
+                        lasso.contains(self.value(*row, lasso.x()), self.value(*row, lasso.y()))
+                    })
             })
             .collect()
+    }
+
+    pub fn count(&self, frame: Option<u32>) -> usize {
+        match frame {
+            None => self.rows(),
+            Some(frame) => self
+                .observations
+                .iter()
+                .filter(|observation| observation.time() == Some(frame))
+                .count(),
+        }
+    }
+
+    pub fn nearest(
+        &self,
+        rows: &[usize],
+        axes: &[usize],
+        target: &[f32],
+        pixels: &[f32],
+    ) -> Option<usize> {
+        assert!(
+            matches!(axes.len(), 1 | 2),
+            "a probe names one or two plot axes"
+        );
+        assert_eq!(target.len(), axes.len(), "a probe targets every plot axis");
+        assert_eq!(pixels.len(), axes.len(), "a probe measures every plot axis");
+        assert!(
+            target.iter().all(|value| value.is_finite()),
+            "a probe targets finite values"
+        );
+        assert!(
+            pixels
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0),
+            "a probe measures non-negative pixels"
+        );
+        let mut scales = Vec::with_capacity(axes.len());
+        for (index, axis) in axes.iter().enumerate() {
+            let (low, high) = self.extent(*axis)?;
+            scales.push(if high > low {
+                pixels[index] / (high - low)
+            } else {
+                0.0
+            });
+        }
+        let mut nearest = None;
+        let mut closest = f32::INFINITY;
+        for row in rows {
+            let mut distance = 0.0;
+            let mut finite = true;
+            for (index, axis) in axes.iter().enumerate() {
+                let value = self.value(*row, *axis);
+                if !value.is_finite() {
+                    finite = false;
+                    break;
+                }
+                let delta = (value - target[index]) * scales[index];
+                distance += delta * delta;
+            }
+            if finite && distance < closest {
+                closest = distance;
+                nearest = Some(*row);
+            }
+        }
+        nearest
     }
 
     pub fn sort(&self, rows: &mut [usize], column: usize, descending: bool) {

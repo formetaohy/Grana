@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use grana_czi::Image;
-use grana_volume::{BrickCoord, VoxelData, VoxelFormat};
+use grana_volume::{BrickCoord, PADDED_SIDE, VoxelData, VoxelFormat};
 
 const WIDTH: u32 = 4;
 const HEIGHT: u32 = 3;
@@ -11,17 +11,43 @@ const DEPTH: u32 = 1;
 const FILE_HEADER_BODY: usize = 512;
 const METADATA_XML_OFFSET: usize = 256;
 const ENTRY_MINIMUM: usize = 240;
+const PYRAMID_WIDTH: u32 = 12;
+const PYRAMID_HEIGHT: u32 = 6;
+const COARSE_WIDTH: u32 = 4;
+const COARSE_HEIGHT: u32 = 2;
+const COARSE_TILE: u32 = 2;
 
 struct Axis {
     code: [u8; 4],
     start: i32,
     size: u32,
+    stored: u32,
 }
 
 impl Axis {
     fn new(code: [u8; 4], start: i32, size: u32) -> Self {
-        Self { code, start, size }
+        Self {
+            code,
+            start,
+            size,
+            stored: 0,
+        }
     }
+
+    fn stored(code: [u8; 4], start: i32, size: u32, stored: u32) -> Self {
+        Self {
+            code,
+            start,
+            size,
+            stored,
+        }
+    }
+}
+
+struct Plane {
+    compression: i32,
+    axes: Vec<Axis>,
+    data: Vec<u8>,
 }
 
 #[test]
@@ -71,6 +97,78 @@ fn reads_a_written_file() {
 }
 
 #[test]
+fn reads_a_pyramid() {
+    let path = write_pyramid();
+    let image = Image::open(&path).expect("the pyramid opens");
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.level_count(), 2);
+    assert_eq!(pyramid.channel_count(), 1);
+    let base = pyramid.level(0);
+    assert_eq!(
+        (base.extent().x(), base.extent().y(), base.extent().z()),
+        (PYRAMID_WIDTH, PYRAMID_HEIGHT, 1)
+    );
+    assert_eq!(
+        (base.spacing().x(), base.spacing().y(), base.spacing().z()),
+        (1.0, 1.0, 2.0)
+    );
+    let coarse = pyramid.level(1);
+    assert_eq!(
+        (
+            coarse.extent().x(),
+            coarse.extent().y(),
+            coarse.extent().z()
+        ),
+        (COARSE_WIDTH, COARSE_HEIGHT, 1)
+    );
+    assert_eq!(
+        (
+            coarse.spacing().x(),
+            coarse.spacing().y(),
+            coarse.spacing().z()
+        ),
+        (3.0, 3.0, 2.0)
+    );
+    let VoxelData::U8(base_samples) = image
+        .read_region(0, 0, 0, 0..PYRAMID_WIDTH, 0..PYRAMID_HEIGHT, 0..1)
+        .expect("the base plane reads")
+    else {
+        panic!("the base plane is eight bit");
+    };
+    assert_eq!(base_samples, pyramid_base_samples());
+    let VoxelData::U8(coarse_samples) = image
+        .read_region(0, 1, 0, 0..COARSE_WIDTH, 0..COARSE_HEIGHT, 0..1)
+        .expect("the coarse plane reads")
+    else {
+        panic!("the coarse plane is eight bit");
+    };
+    assert_eq!(coarse_samples, pyramid_coarse_samples());
+    let VoxelData::U8(second_tile) = image
+        .read_region(0, 1, 0, 2..COARSE_WIDTH, 0..COARSE_HEIGHT, 0..1)
+        .expect("the second coarse tile reads")
+    else {
+        panic!("the second coarse tile is eight bit");
+    };
+    assert_eq!(second_tile, vec![20, 21, 22, 23]);
+    let brick = image
+        .read_brick(0, 1, BrickCoord::new(0, 0, 0))
+        .expect("the coarse brick reads");
+    assert_eq!(brick.channels().len(), 1);
+    let VoxelData::U8(brick_samples) = &brick.channels()[0] else {
+        panic!("the coarse brick is eight bit");
+    };
+    assert_eq!(
+        brick_samples.len(),
+        (PADDED_SIDE * PADDED_SIDE * PADDED_SIDE) as usize
+    );
+    assert_eq!(brick_samples[0], 10);
+    assert_eq!(brick_samples[3], 20);
+    assert_eq!(brick_samples[4], 21);
+    assert!(image.read_region(0, 2, 0, 0..1, 0..1, 0..1).is_err());
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn refuses_files_that_are_not_czi() {
     let path = std::env::temp_dir().join("grana-not-a-czi.czi");
     std::fs::write(&path, b"II*\0not a czi").expect("the file writes");
@@ -114,6 +212,7 @@ fn write() -> PathBuf {
     content[..4].copy_from_slice(&(CHANNELS as i32).to_le_bytes());
     for (channel, position) in positions.iter().enumerate() {
         content.extend_from_slice(&entry(
+            1,
             compression(channel as u32),
             *position as u64,
             &axes(channel as u32),
@@ -162,10 +261,10 @@ fn axes(channel: u32) -> Vec<Axis> {
     ]
 }
 
-fn entry(compression: i32, position: u64, axes: &[Axis]) -> Vec<u8> {
+fn entry(pixel: i32, compression: i32, position: u64, axes: &[Axis]) -> Vec<u8> {
     let mut bytes = vec![0u8; 32];
     bytes[..2].copy_from_slice(b"DV");
-    bytes[2..6].copy_from_slice(&1i32.to_le_bytes());
+    bytes[2..6].copy_from_slice(&pixel.to_le_bytes());
     bytes[6..14].copy_from_slice(&(position as i64).to_le_bytes());
     bytes[18..22].copy_from_slice(&compression.to_le_bytes());
     bytes[28..32].copy_from_slice(&(axes.len() as i32).to_le_bytes());
@@ -174,6 +273,7 @@ fn entry(compression: i32, position: u64, axes: &[Axis]) -> Vec<u8> {
         fields[..4].copy_from_slice(&axis.code);
         fields[4..8].copy_from_slice(&axis.start.to_le_bytes());
         fields[8..12].copy_from_slice(&(axis.size as i32).to_le_bytes());
+        fields[16..20].copy_from_slice(&(axis.stored as i32).to_le_bytes());
         bytes.extend_from_slice(&fields);
     }
     bytes
@@ -205,7 +305,7 @@ fn payload(channel: u32) -> Vec<u8> {
     body.extend_from_slice(&0u32.to_le_bytes());
     body.extend_from_slice(&0u32.to_le_bytes());
     body.extend_from_slice(&(data.len() as u64).to_le_bytes());
-    body.extend_from_slice(&entry(compression, 0, &axes(channel)));
+    body.extend_from_slice(&entry(1, compression, 0, &axes(channel)));
     body.resize(16 + ENTRY_MINIMUM, 0);
     body.extend_from_slice(&data);
     segment(b"ZISRAWSUBBLOCK", &body)
@@ -239,6 +339,141 @@ fn xml() -> String {
 <Channel Id=\"Channel:1\" Name=\"Red\"><Low>0</Low><High>0.5</High></Channel>\
 <Channel Id=\"Channel:2\" Name=\"Green\"><Low>0.25</Low><High>1</High></Channel>\
 </Channels></DisplaySetting>\
+</Metadata></ImageDocument>"
+    )
+}
+
+fn write_pyramid() -> PathBuf {
+    let xml = pyramid_xml();
+    let metadata_length = METADATA_XML_OFFSET + xml.len();
+    let planes = pyramid_planes();
+    let directory_body = 128
+        + planes
+            .iter()
+            .map(|plane| 32 + plane.axes.len() * 20)
+            .sum::<usize>();
+    let metadata = 32 + FILE_HEADER_BODY;
+    let directory = metadata + 32 + metadata_length;
+    let first_subblock = directory + 32 + directory_body;
+    let payloads = planes.iter().map(subblock).collect::<Vec<_>>();
+    let mut positions = Vec::new();
+    let mut position = first_subblock;
+    for payload in &payloads {
+        positions.push(position);
+        position += payload.len();
+    }
+    let mut content = vec![0u8; 128];
+    content[..4].copy_from_slice(&(planes.len() as i32).to_le_bytes());
+    for (plane, position) in planes.iter().zip(positions.iter()) {
+        content.extend_from_slice(&entry(0, plane.compression, *position as u64, &plane.axes));
+    }
+    let mut file = segment(b"ZISRAWFILE", &[0u8; FILE_HEADER_BODY]);
+    file[32..36].copy_from_slice(&1i32.to_le_bytes());
+    file.extend_from_slice(&segment(b"ZISRAWMETADATA", &metadata_body(&xml)));
+    file.extend_from_slice(&segment(b"ZISRAWDIRECTORY", &content));
+    for payload in &payloads {
+        file.extend_from_slice(payload);
+    }
+    patch(&mut file, 52, directory as u64);
+    patch(&mut file, 60, metadata as u64);
+    let path = std::env::temp_dir().join("grana-pyramid.czi");
+    std::fs::write(&path, &file).expect("the file writes");
+    path
+}
+
+fn pyramid_planes() -> Vec<Plane> {
+    vec![
+        Plane {
+            compression: 0,
+            axes: pyramid_axes(
+                0,
+                0,
+                PYRAMID_WIDTH,
+                PYRAMID_HEIGHT,
+                PYRAMID_WIDTH,
+                PYRAMID_HEIGHT,
+            ),
+            data: pyramid_base_samples(),
+        },
+        Plane {
+            compression: 0,
+            axes: pyramid_axes(
+                0,
+                0,
+                PYRAMID_WIDTH / 2,
+                PYRAMID_HEIGHT,
+                COARSE_TILE,
+                COARSE_TILE,
+            ),
+            data: vec![10, 11, 12, 13],
+        },
+        Plane {
+            compression: 0,
+            axes: pyramid_axes(
+                1,
+                (PYRAMID_WIDTH / 2) as i32,
+                PYRAMID_WIDTH / 2,
+                PYRAMID_HEIGHT,
+                COARSE_TILE,
+                COARSE_TILE,
+            ),
+            data: vec![20, 21, 22, 23],
+        },
+    ]
+}
+
+fn pyramid_axes(
+    mosaic: i32,
+    x: i32,
+    width: u32,
+    height: u32,
+    stored_width: u32,
+    stored_height: u32,
+) -> Vec<Axis> {
+    vec![
+        Axis::stored(*b"X\0\0\0", x, width, stored_width),
+        Axis::stored(*b"Y\0\0\0", 0, height, stored_height),
+        Axis::new(*b"Z\0\0\0", 0, 1),
+        Axis::new(*b"C\0\0\0", 0, 1),
+        Axis::new(*b"T\0\0\0", 0, 1),
+        Axis::new(*b"M\0\0\0", mosaic, 1),
+    ]
+}
+
+fn subblock(plane: &Plane) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&(plane.data.len() as u64).to_le_bytes());
+    body.extend_from_slice(&entry(0, plane.compression, 0, &plane.axes));
+    body.resize(16 + ENTRY_MINIMUM, 0);
+    body.extend_from_slice(&plane.data);
+    segment(b"ZISRAWSUBBLOCK", &body)
+}
+
+fn pyramid_base_samples() -> Vec<u8> {
+    (0..PYRAMID_WIDTH * PYRAMID_HEIGHT)
+        .map(|index| index as u8)
+        .collect()
+}
+
+fn pyramid_coarse_samples() -> Vec<u8> {
+    vec![10, 11, 20, 21, 12, 13, 22, 23]
+}
+
+fn pyramid_xml() -> String {
+    format!(
+        "<ImageDocument><Metadata><Information><Image>\
+<SizeX>{PYRAMID_WIDTH}</SizeX><SizeY>{PYRAMID_HEIGHT}</SizeY><SizeZ>1</SizeZ>\
+<SizeC>1</SizeC><SizeT>1</SizeT>\
+<Dimensions><Channels>\
+<Channel Id=\"Channel:1\"><Color>#FFFF0000</Color><Fluor>Red</Fluor></Channel>\
+</Channels></Dimensions></Image></Information>\
+<Scaling><Items>\
+<Distance Id=\"X\"><Value>1E-06</Value></Distance>\
+<Distance Id=\"Y\"><Value>1E-06</Value></Distance>\
+<Distance Id=\"Z\"><Value>2E-06</Value></Distance>\
+</Items></Scaling>\
 </Metadata></ImageDocument>"
     )
 }

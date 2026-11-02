@@ -32,6 +32,11 @@ const SECTION_SHADER: &str = concat!(
     "\n",
     include_str!("shader/marker_section.wgsl")
 );
+const SHADOW_SHADER: &str = concat!(
+    include_str!("shader/scene.wgsl"),
+    "\n",
+    include_str!("shader/marker_shadow.wgsl")
+);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -64,6 +69,18 @@ impl Marker {
             color_alpha: [red, green, blue, alpha],
         }
     }
+
+    pub(crate) fn center(self) -> [f32; 3] {
+        [
+            self.center_radius[0],
+            self.center_radius[1],
+            self.center_radius[2],
+        ]
+    }
+
+    pub(crate) fn radius(self) -> f32 {
+        self.center_radius[3]
+    }
 }
 
 impl Hash for Marker {
@@ -81,6 +98,7 @@ pub(crate) struct MarkerPasses {
     volume_group: BindGroup,
     behind_group: BindGroup,
     front_group: BindGroup,
+    shadow_group: BindGroup,
     volume_cull_group: BindGroup,
     behind_cull_group: BindGroup,
     front_cull_group: BindGroup,
@@ -92,6 +110,7 @@ pub(crate) struct MarkerPasses {
     front_cull: ComputePipeline,
     volume_pipeline: RenderPipeline,
     section_pipeline: RenderPipeline,
+    shadow_pipeline: RenderPipeline,
     count: u32,
 }
 
@@ -154,6 +173,10 @@ impl MarkerPasses {
         let section_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.marker.section"),
             source: ShaderSource::Wgsl(SECTION_SHADER.into()),
+        });
+        let shadow_module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("grana.marker.shadow"),
+            source: ShaderSource::Wgsl(SHADOW_SHADER.into()),
         });
         let volume_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.marker"),
@@ -218,6 +241,27 @@ impl MarkerPasses {
             multiview_mask: None,
             cache: None,
         });
+        let shadow_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.marker.shadow"),
+            layout: Some(&layouts.marker_volume),
+            vertex: VertexState {
+                module: &shadow_module,
+                entry_point: Some("vs_shadow"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: PrimitiveState::default(),
+            depth_stencil: Some(depth_state(true, CompareFunction::Less)),
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &shadow_module,
+                entry_point: Some("fs_shadow"),
+                compilation_options: Default::default(),
+                targets: &[],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         Self {
             markers,
             volume_order,
@@ -226,6 +270,7 @@ impl MarkerPasses {
             volume_group: groups.volume_render,
             behind_group: groups.behind_render,
             front_group: groups.front_render,
+            shadow_group: groups.shadow_render,
             volume_cull_group: groups.volume_cull,
             behind_cull_group: groups.behind_cull,
             front_cull_group: groups.front_cull,
@@ -237,6 +282,7 @@ impl MarkerPasses {
             front_cull,
             volume_pipeline,
             section_pipeline,
+            shadow_pipeline,
             count: 0,
         }
     }
@@ -276,6 +322,7 @@ impl MarkerPasses {
             self.volume_group = groups.volume_render;
             self.behind_group = groups.behind_render;
             self.front_group = groups.front_render;
+            self.shadow_group = groups.shadow_render;
             self.volume_cull_group = groups.volume_cull;
             self.behind_cull_group = groups.behind_cull;
             self.front_cull_group = groups.front_cull;
@@ -382,6 +429,34 @@ impl MarkerPasses {
         pass.draw_indirect(self.volume_args.buffer(), 0);
     }
 
+    pub fn draw_shadow(
+        &self,
+        encoder: &mut CommandEncoder,
+        target: &TextureView,
+        scene: &BindGroup,
+    ) {
+        if self.count == 0 {
+            return;
+        }
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("grana.marker.shadow.pass"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                view: target,
+                depth_ops: Some(Operations {
+                    load: LoadOp::Load,
+                    store: StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.shadow_pipeline);
+        pass.set_bind_group(0, scene, &[]);
+        pass.set_bind_group(1, &self.shadow_group, &[]);
+        pass.draw(0..6, 0..self.count);
+    }
+
     pub fn draw_section_behind<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
         self.draw_section(pass, scene, &self.behind_group, &self.behind_args);
     }
@@ -411,6 +486,7 @@ struct Groups {
     volume_render: BindGroup,
     behind_render: BindGroup,
     front_render: BindGroup,
+    shadow_render: BindGroup,
     volume_cull: BindGroup,
     behind_cull: BindGroup,
     front_cull: BindGroup,
@@ -465,6 +541,7 @@ fn groups(
         volume_render: render("grana.marker.volume.render.group", volume_order),
         behind_render: render("grana.marker.behind.render.group", behind_order),
         front_render: render("grana.marker.front.render.group", front_order),
+        shadow_render: render("grana.marker.shadow.render.group", volume_order),
         volume_cull: cull("grana.marker.cull.volume.group", volume_order, volume_args),
         behind_cull: cull("grana.marker.cull.behind.group", behind_order, behind_args),
         front_cull: cull("grana.marker.cull.front.group", front_order, front_args),

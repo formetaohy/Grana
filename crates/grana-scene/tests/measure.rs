@@ -1,22 +1,26 @@
-use grana_measure::{MeasureView, Plot, PlotAxis};
+use grana_measure::{Lasso, MeasureView, Plot, PlotAxis, Scope};
 use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
 use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, Scene};
 use grana_volume::{Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
 fn scene() -> Scene {
     let extent = Extent::new(4, 4, 2);
-    let volume = Volume::new(
-        extent,
-        Spacing::new(0.5, 0.5, 1.0),
-        vec![Channel::new(
-            "signal",
-            [1.0, 1.0, 1.0],
-            VoxelData::U16(vec![1; extent.voxel_count() as usize]),
-        )],
-    );
+    let frames = (0..2)
+        .map(|_| {
+            Volume::new(
+                extent,
+                Spacing::new(0.5, 0.5, 1.0),
+                vec![Channel::new(
+                    "signal",
+                    [1.0, 1.0, 1.0],
+                    VoxelData::U16(vec![1; extent.voxel_count() as usize]),
+                )],
+            )
+        })
+        .collect();
     Scene::new(Dataset::synthetic(
         "fixture",
-        VolumeSeries::new(vec![volume], 1.0).pyramid().clone(),
+        VolumeSeries::new(frames, 1.0).pyramid().clone(),
     ))
 }
 
@@ -38,14 +42,17 @@ fn frame() -> ObjectFrame {
 }
 
 #[test]
-fn plots_and_gates_measurements() {
+fn plots_gates_lassos_and_scopes_measurements() {
     let mut scene = scene();
     let set = scene.add_object(ObjectKind::Spots, 0);
-    scene.install(set, 0, frame());
+    for time in 0..2 {
+        scene.install(set, time, frame());
+    }
     let mut measure = Measure::new();
     measure.select(set, &scene);
     assert_eq!(measure.view(), MeasureView::Table);
     assert!(measure.plot().is_none());
+    assert_eq!(measure.total(), 6);
 
     measure.set_view(MeasureView::Histogram);
     let (column, minimum, maximum, expected) = {
@@ -108,6 +115,63 @@ fn plots_and_gates_measurements() {
     measure.set_axis(PlotAxis::Y, second);
     assert_eq!(measure.axes()[1], second);
 
+    let [x, y] = measure.axes();
+    let points = {
+        let table = measure.table().expect("the set measures");
+        let (x_low, x_high) = table.extent(x).expect("the x column holds values");
+        let (y_low, y_high) = table.extent(y).expect("the y column holds values");
+        vec![
+            [x_low, y_low],
+            [x_high, y_low],
+            [x_high, y_high],
+            [x_low, y_high],
+        ]
+    };
+    let gated = measure.rows().to_vec();
+    let lasso = Lasso::new(x, y, points).expect("the polygon covers the plot");
+    measure.set_lasso(Some(lasso));
+    assert!(measure.lasso().is_some());
+    assert_eq!(
+        measure.rows().len(),
+        gated.len(),
+        "a lasso over the whole extent keeps every gated row"
+    );
+
+    let (expected_total, expected_rows) = {
+        let table = measure.table().expect("the set measures");
+        let time = scene.time();
+        (
+            (0..table.rows())
+                .filter(|row| table.observation(*row).time() == Some(time))
+                .count(),
+            gated
+                .iter()
+                .filter(|row| table.observation(**row).time() == Some(time))
+                .count(),
+        )
+    };
+    measure.set_scope(Scope::Current);
+    assert_eq!(measure.total(), expected_total);
+    assert_eq!(measure.rows().len(), expected_rows);
+
+    scene.set_time(1);
+    measure.sync(&scene, false);
+    assert_eq!(
+        measure.rows().len(),
+        expected_rows,
+        "every frame measures the same objects"
+    );
+    assert_eq!(measure.total(), expected_total);
+    assert_eq!(
+        measure.filters().len(),
+        2,
+        "the gates survive a frame change"
+    );
+    assert!(
+        measure.lasso().is_some(),
+        "the lasso survives a frame change"
+    );
+
     let state = measure.state();
     let document = measure.document_hash();
     let mut restored = Measure::new();
@@ -115,4 +179,13 @@ fn plots_and_gates_measurements() {
     assert_eq!(restored.state(), measure.state());
     assert_eq!(restored.document_hash(), document);
     assert_eq!(restored.plot().map(Plot::view), Some(MeasureView::Scatter));
+
+    let other = (0..measure.table().expect("the set measures").columns().len())
+        .find(|candidate| *candidate != x && *candidate != y)
+        .expect("another column exists");
+    measure.set_axis(PlotAxis::X, other);
+    assert!(
+        measure.lasso().is_none(),
+        "the lasso follows the plotted axes"
+    );
 }

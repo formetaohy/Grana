@@ -1,10 +1,9 @@
+use std::collections::HashMap;
 use std::ops::Range;
 
-use grana_volume::VoxelData;
+use super::{EMPTY, Measure, Tile, find, parabola, strides_of};
 
-use super::{EMPTY, Face, SurfaceBuilder, find, length, parabola, strides_of};
-
-impl SurfaceBuilder {
+impl Tile<'_> {
     pub(super) fn flood(&mut self) {
         let dims = self.dims;
         let strides = strides_of(dims);
@@ -37,17 +36,21 @@ impl SurfaceBuilder {
         }
     }
 
-    pub(super) fn watershed(&mut self) {
+    pub(super) fn watershed(&mut self) -> bool {
         self.fill_distance();
         let dims = self.dims;
         let strides = strides_of(dims);
         let count = dims[0] * dims[1] * dims[2];
-        let cap = self.distance_cap as usize;
+        let cap = self.pass.cap as usize;
         let mut counts = vec![0u32; cap + 1];
+        let mut saturated = false;
         for index in 0..count {
-            if self.mask[index] {
-                counts[self.chamfer[index] as usize] += 1;
+            if !self.mask[index] {
+                continue;
             }
+            let bucket = self.chamfer[index] as usize;
+            saturated |= bucket == cap;
+            counts[bucket] += 1;
         }
         let mut cursor = vec![0u32; cap + 1];
         let mut total = 0u32;
@@ -99,22 +102,24 @@ impl SurfaceBuilder {
                 );
                 self.labels[index] = self.labels[best as usize];
             } else {
-                self.labels[index] = self.create_node(u32::from(level));
+                self.labels[index] = self.create_node(level);
             }
         }
+        saturated
     }
 
     fn fill_distance(&mut self) {
+        let plan = self.pass.plan;
         let dims = self.dims;
         let strides = strides_of(dims);
         let count = dims[0] * dims[1] * dims[2];
-        let cap = self.distance_cap;
+        let cap = self.pass.cap;
         self.chamfer.clear();
         self.chamfer.resize(count, 0);
         for index in 0..count {
             self.chamfer[index] = if self.mask[index] { cap } else { 0 };
         }
-        let anisotropy = self.anisotropy;
+        let anisotropy = plan.anisotropy;
         for axis in 0..3 {
             let weight = f64::from(anisotropy[axis] * anisotropy[axis]);
             let (first, second) = ((axis + 1) % 3, (axis + 2) % 3);
@@ -129,7 +134,7 @@ impl SurfaceBuilder {
                     parabola(&mut line, weight);
                     for (step, value) in line.iter().enumerate() {
                         self.chamfer[base + strides[axis] * step] =
-                            value.min(f64::from(cap)) as u16;
+                            value.min(f64::from(cap)) as u32;
                     }
                 }
             }
@@ -139,8 +144,7 @@ impl SurfaceBuilder {
     pub(super) fn record_necks(&mut self) {
         let dims = self.dims;
         let strides = strides_of(dims);
-        let mut pairs: std::collections::HashMap<(u32, u32), u16> =
-            std::collections::HashMap::new();
+        let mut pairs: HashMap<(u32, u32), u32> = HashMap::new();
         for z in 0..dims[2] {
             for y in 0..dims[1] {
                 for x in 0..dims[0] {
@@ -180,8 +184,9 @@ impl SurfaceBuilder {
         &mut self,
         core: &[Range<u32>; 3],
         array: &[Range<u32>; 3],
-        mut measure: impl FnMut(usize, &[Range<u32>; 3]) -> Result<VoxelData, String>,
+        measure: &Measure<'_>,
     ) -> Result<(), String> {
+        let plan = self.pass.plan;
         let dims = self.dims;
         let core_dims = super::dims_of(core);
         let core_count = core_dims[0] * core_dims[1] * core_dims[2];
@@ -190,9 +195,10 @@ impl SurfaceBuilder {
             (core[1].start - array[1].start) as usize,
             (core[2].start - array[2].start) as usize,
         ];
-        let mut measured = Vec::with_capacity(self.channels);
-        for channel in 0..self.channels {
-            if channel == self.detection {
+        let channels = plan.channels;
+        let mut measured = Vec::with_capacity(channels);
+        for channel in 0..channels {
+            if channel == plan.detection {
                 measured.push(None);
                 continue;
             }
@@ -210,14 +216,18 @@ impl SurfaceBuilder {
                     if !self.mask[index] {
                         continue;
                     }
-                    let node = find(&mut self.nodes, self.labels[index]) as usize;
+                    let node = self.labels[index] as usize;
+                    assert!(
+                        node < self.nodes.len(),
+                        "the accumulated voxel belongs to a tile node"
+                    );
                     let local = x + core_dims[0] * (y + core_dims[1] * z);
                     for (channel, data) in measured.iter().enumerate() {
                         let value = match data {
                             Some(data) => data.value(local),
                             None => self.raw[index],
                         };
-                        self.accumulators[node * self.channels + channel].push(value);
+                        self.accumulators[node * channels + channel].push(value);
                     }
                     let voxel = [
                         core[0].start + x as u32,
@@ -235,141 +245,5 @@ impl SurfaceBuilder {
             }
         }
         Ok(())
-    }
-
-    pub(super) fn join(&mut self) {
-        let [x, y, z] = self.tile_position(self.next);
-        let strides = strides_of(self.dims);
-
-        if x > 0
-            && let Some(face) = self.x_face.take()
-        {
-            let plane = self.join_plane(0);
-            self.join_face(&face, 0, plane, strides);
-        }
-        if y > 0
-            && let Some(face) = self.y_faces[x as usize].take()
-        {
-            let plane = self.join_plane(1);
-            self.join_face(&face, 1, plane, strides);
-        }
-        if z > 0 {
-            let slot = y as usize * self.tiles[0] as usize + x as usize;
-            if let Some(face) = self.z_faces[slot].take() {
-                let plane = self.join_plane(2);
-                self.join_face(&face, 2, plane, strides);
-            }
-        }
-    }
-
-    fn join_plane(&self, axis: usize) -> usize {
-        let core = self.core_range(self.next);
-        let array = self.array_range();
-        (core[axis].start - array[axis].start) as usize
-    }
-
-    fn join_face(&mut self, face: &Face, axis: usize, plane: usize, strides: [usize; 3]) {
-        let array = self.array_range();
-        let first = (axis + 1) % 3;
-        let second = (axis + 2) % 3;
-        let start = [
-            face.origin[0].max(array[first].start),
-            face.origin[1].max(array[second].start),
-        ];
-        let end = [
-            (face.origin[0] + face.dims[0]).min(array[first].end),
-            (face.origin[1] + face.dims[1]).min(array[second].end),
-        ];
-        if start[0] >= end[0] || start[1] >= end[1] {
-            return;
-        }
-        for second_position in start[1]..end[1] {
-            for first_position in start[0]..end[0] {
-                let cached = face.labels[(first_position - face.origin[0]) as usize
-                    + face.dims[0] as usize * (second_position - face.origin[1]) as usize];
-                if cached == EMPTY {
-                    continue;
-                }
-                let index = strides[axis] * plane
-                    + strides[first] * (first_position - array[first].start) as usize
-                    + strides[second] * (second_position - array[second].start) as usize;
-                let local = self.labels[index];
-                if local == EMPTY {
-                    continue;
-                }
-
-                self.union(local, cached);
-            }
-        }
-    }
-
-    pub(super) fn store_faces(&mut self, core: &[Range<u32>; 3], array: &[Range<u32>; 3]) {
-        let [x, y, _] = self.tile_position(self.next);
-        if core[0].end < array[0].end {
-            self.x_face = Some(self.slice(0, (core[0].end - array[0].start) as usize));
-        }
-        if core[1].end < array[1].end {
-            self.y_faces[x as usize] = Some(self.slice(1, (core[1].end - array[1].start) as usize));
-        }
-        if core[2].end < array[2].end {
-            let slot = y as usize * self.tiles[0] as usize + x as usize;
-            self.z_faces[slot] = Some(self.slice(2, (core[2].end - array[2].start) as usize));
-        }
-    }
-
-    fn slice(&self, axis: usize, plane: usize) -> Face {
-        let dims = self.dims;
-        let strides = strides_of(dims);
-        let array = self.array_range();
-        let first = (axis + 1) % 3;
-        let second = (axis + 2) % 3;
-        let mut labels = Vec::with_capacity(dims[first] * dims[second]);
-        for second_position in 0..dims[second] {
-            for first_position in 0..dims[first] {
-                labels.push(
-                    self.labels[strides[axis] * plane
-                        + strides[first] * first_position
-                        + strides[second] * second_position],
-                );
-            }
-        }
-        Face {
-            origin: [array[first].start, array[second].start],
-            dims: [dims[first] as u32, dims[second] as u32],
-            labels,
-        }
-    }
-
-    pub(super) fn merge_basins(&mut self) {
-        let mut seams: std::collections::HashMap<(u32, u32), u16> =
-            std::collections::HashMap::new();
-        for (left, right, neck) in std::mem::take(&mut self.necks) {
-            let left = find(&mut self.nodes, left);
-            let right = find(&mut self.nodes, right);
-            if left == right {
-                continue;
-            }
-            let key = (left.min(right), left.max(right));
-            let slot = seams.entry(key).or_insert(0);
-            *slot = (*slot).max(neck);
-        }
-        let mut seams = seams.into_iter().collect::<Vec<_>>();
-        seams.sort_unstable_by(|(left_key, left_neck), (right_key, right_neck)| {
-            right_neck.cmp(left_neck).then(left_key.cmp(right_key))
-        });
-        let gap = self.merge_gap;
-        for ((left, right), neck) in seams {
-            let left = find(&mut self.nodes, left);
-            let right = find(&mut self.nodes, right);
-            if left == right {
-                continue;
-            }
-            let reach = length(self.nodes[left as usize].reach)
-                .min(length(self.nodes[right as usize].reach));
-            let drop = i64::from(reach) - i64::from(length(u32::from(neck)));
-            if drop < i64::from(gap) {
-                self.union(left, right);
-            }
-        }
     }
 }

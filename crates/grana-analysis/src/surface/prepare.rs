@@ -1,14 +1,15 @@
-use super::{OUTSIDE, REMOVED, SurfaceBuilder};
+use super::{OUTSIDE, REMOVED, Tile};
 use crate::local::LocalField;
 use crate::mask::Mask;
 use crate::morphology;
 
-impl SurfaceBuilder {
+impl Tile<'_> {
     pub(super) fn smooth(&mut self) {
+        let plan = self.pass.plan;
         let dims = self.dims;
         let strides = super::strides_of(dims);
         for axis in 0..3 {
-            let kernel = &self.kernels[axis];
+            let kernel = &plan.kernels[axis];
             if kernel.len() <= 1 {
                 continue;
             }
@@ -42,22 +43,23 @@ impl SurfaceBuilder {
     }
 
     pub(super) fn prepare(&mut self, roi: Option<&Mask>) {
+        let plan = self.pass.plan;
         let dims = self.dims;
         let count = dims[0] * dims[1] * dims[2];
         let start = self.start;
         let gate = Gate {
             region: [
-                self.region[0].start,
-                self.region[1].start,
-                self.region[2].start,
+                plan.region[0].start,
+                plan.region[1].start,
+                plan.region[2].start,
             ],
-            limit: [self.region[0].end, self.region[1].end, self.region[2].end],
-            spacing: self.spacing,
-            world: self.world,
+            limit: [plan.region[0].end, plan.region[1].end, plan.region[2].end],
+            spacing: plan.spacing,
+            world: plan.world,
             roi,
         };
-        let floor = self.intensity.min();
-        let local = LocalField::new(dims, start, self.anchor, self.intensity, |index| {
+        let floor = plan.intensity.min();
+        let local = LocalField::new(dims, start, plan.anchor, plan.intensity, |index| {
             let x = index % dims[0];
             let y = (index / dims[0]) % dims[1];
             let z = index / (dims[0] * dims[1]);
@@ -74,7 +76,7 @@ impl SurfaceBuilder {
         });
         self.field.clear();
         self.field.resize(count, OUTSIDE);
-        let threshold = self.threshold;
+        let threshold = plan.threshold;
         for z in 0..dims[2] {
             for y in 0..dims[1] {
                 let base = dims[0] * (y + dims[1] * z);
@@ -99,25 +101,28 @@ impl SurfaceBuilder {
         for slot in 0..count {
             self.mask[slot] = self.field[slot] >= threshold;
         }
-        let mut distance = vec![0u32; count];
-        if let Some(element) = &self.opening {
+        if let Some(element) = &plan.opening {
+            self.distance.clear();
+            self.distance.resize(count, 0);
             self.scratch.clear();
             self.scratch.resize(count, false);
             morphology::open(
                 &mut self.mask,
                 &mut self.scratch,
-                &mut distance,
+                &mut self.distance,
                 dims,
                 element,
             );
         }
-        if let Some(element) = &self.closing {
+        if let Some(element) = &plan.closing {
+            self.distance.clear();
+            self.distance.resize(count, 0);
             self.scratch.clear();
             self.scratch.resize(count, false);
             morphology::close(
                 &mut self.mask,
                 &mut self.scratch,
-                &mut distance,
+                &mut self.distance,
                 dims,
                 element,
             );

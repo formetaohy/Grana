@@ -1,10 +1,13 @@
+mod assemble;
 mod emit;
 mod finish;
 mod label;
 mod prepare;
+mod tile;
 
-use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc;
 
 use grana_object::{SampleAccumulator, SurfaceSet};
 use grana_volume::{Intensity, Level, Region, VoxelData};
@@ -13,16 +16,30 @@ use crate::SurfaceParams;
 use crate::mask::Mask;
 use crate::morphology::Element;
 
+use assemble::Assembler;
+use tile::{Tile, TileResult};
+
 const TILE_SIDE: u32 = 96;
 const DISTANCE_LIMIT: u32 = 12;
+const DISTANCE_LIMIT_MAX: u32 = 48;
 const GRAIN_LIMIT: f32 = 3.0;
 const GRAIN_SUPPORT: f32 = 3.0;
 const ANISOTROPY_LIMIT: u32 = 16;
 const BLOCK_PAD: u32 = crate::local::PAD_BLOCKS as u32 * crate::local::BLOCK as u32;
 const PAD_ALIGN: u32 = crate::local::BLOCK as u32;
+const ARRAY_BYTES_PER_VOXEL: u64 = 28;
+const WORKER_ARRAY_LIMIT: u64 = 320 << 20;
+const FRAME_ARRAY_LIMIT: u64 = 1024 << 20;
+const TILE_FRAGMENT_LIMIT: u64 = 96 << 20;
+const WORKER_LIMIT: usize = 16;
+
 pub(crate) const EMPTY: u32 = u32::MAX;
 pub(crate) const OUTSIDE: f32 = -1.0;
 pub(crate) const REMOVED: f32 = 1.0e-3;
+
+pub(crate) type Read<'a> = dyn Fn(usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
+pub(crate) type Measure<'a> =
+    dyn Fn(usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Node {
@@ -51,10 +68,20 @@ impl Node {
     }
 }
 
-pub(crate) struct Face {
-    pub(crate) origin: [u32; 2],
-    pub(crate) dims: [u32; 2],
-    pub(crate) labels: Vec<u32>,
+pub(super) struct Face {
+    pub(super) origin: [u32; 2],
+    pub(super) dims: [u32; 2],
+    pub(super) labels: Vec<u32>,
+}
+
+impl Face {
+    fn rebase(&mut self, base: u32) {
+        for label in &mut self.labels {
+            if *label != EMPTY {
+                *label += base;
+            }
+        }
+    }
 }
 
 pub struct SurfaceBuilder {
@@ -73,36 +100,13 @@ pub struct SurfaceBuilder {
     anchor: [i64; 3],
     tiles: [u32; 3],
     tile_count: usize,
-    next: usize,
     split: bool,
     merge_gap: u32,
     anisotropy: [u32; 3],
-    distance_cap: u16,
     kernels: [Vec<f32>; 3],
     opening: Option<Element>,
     closing: Option<Element>,
-    pad: [u32; 3],
-    start: [i64; 3],
-    dims: [usize; 3],
-    raw: Vec<f32>,
-    field: Vec<f32>,
-    mask: Vec<bool>,
-    scratch: Vec<bool>,
-    chamfer: Vec<u16>,
-    labels: Vec<u32>,
-    order: Vec<u32>,
-    stack: Vec<u32>,
-    nodes: Vec<Node>,
-    accumulators: Vec<SampleAccumulator>,
-    necks: Vec<(u32, u32, u16)>,
-    vertices: Vec<grana_geometry::MeshVertex>,
-    keys: Vec<u64>,
-    indices: Vec<u32>,
-    triangle_objects: Vec<u32>,
-    edges: HashMap<u64, u32>,
-    x_face: Option<Face>,
-    y_faces: Vec<Option<Face>>,
-    z_faces: Vec<Option<Face>>,
+    morph_radius: u32,
 }
 
 impl SurfaceBuilder {
@@ -132,22 +136,15 @@ impl SurfaceBuilder {
         let anisotropy =
             spacing.map(|value| ((value / narrowest).round() as u32).clamp(1, ANISOTROPY_LIMIT));
         let split = params.seed() > 0.0;
-        let reach = if split { DISTANCE_LIMIT } else { 0 };
-        let widest = anisotropy.iter().copied().max().expect("three axes exist");
-        let distance_cap = ((reach * widest) * (reach * widest)) as u16;
         let merge_gap = (params.seed() / (2.0 * narrowest)).round().max(1.0) as u32;
         let kernels = spacing.map(|value| gaussian((grain / value).min(GRAIN_LIMIT)));
         let opening = Element::new(level, params.opening());
         let closing = Element::new(level, params.closing());
-        let radius = [opening.as_ref(), closing.as_ref()]
+        let morph_radius = [opening.as_ref(), closing.as_ref()]
             .into_iter()
             .flatten()
             .map(|element| element.reach())
             .fold(0, u32::max);
-        let pad = [0, 1, 2].map(|axis| {
-            let needed = reach + (kernels[axis].len() / 2) as u32 + 1;
-            align(needed.max(radius + 1).max(BLOCK_PAD))
-        });
         let anchor = [
             region[0].start as i64,
             region[1].start as i64,
@@ -158,8 +155,6 @@ impl SurfaceBuilder {
             count.div_ceil(TILE_SIDE)
         });
         let tile_count = tiles[0] as usize * tiles[1] as usize * tiles[2] as usize;
-        let y_faces = (0..tiles[0]).map(|_| None).collect();
-        let z_faces = (0..tiles[0] * tiles[1]).map(|_| None).collect();
         Self {
             level_index,
             detection,
@@ -176,36 +171,13 @@ impl SurfaceBuilder {
             anchor,
             tiles,
             tile_count,
-            next: 0,
             split,
             merge_gap,
             anisotropy,
-            distance_cap,
             kernels,
             opening,
             closing,
-            pad,
-            start: [0; 3],
-            dims: [0; 3],
-            raw: Vec::new(),
-            field: Vec::new(),
-            mask: Vec::new(),
-            scratch: Vec::new(),
-            chamfer: Vec::new(),
-            labels: Vec::new(),
-            order: Vec::new(),
-            stack: Vec::new(),
-            nodes: Vec::new(),
-            accumulators: Vec::new(),
-            necks: Vec::new(),
-            vertices: Vec::new(),
-            keys: Vec::new(),
-            indices: Vec::new(),
-            triangle_objects: Vec::new(),
-            edges: HashMap::new(),
-            x_face: None,
-            y_faces,
-            z_faces,
+            morph_radius,
         }
     }
 
@@ -213,140 +185,266 @@ impl SurfaceBuilder {
         self.tile_count
     }
 
-    pub fn core_range(&self, index: usize) -> [Range<u32>; 3] {
-        assert!(index < self.tile_count, "the tile index is in bounds");
-        let [x, y, z] = self.tile_position(index);
-        [0, 1, 2].map(|axis| {
-            let start = self.region[axis].start + [x, y, z][axis] * TILE_SIDE;
-            start..(start + TILE_SIDE).min(self.region[axis].end)
-        })
-    }
-
-    pub fn detection_range(&self, index: usize) -> [Range<u32>; 3] {
-        let core = self.core_range(index);
-        [0, 1, 2].map(|axis| {
-            let start = core[axis].start.saturating_sub(self.pad[axis]);
-            start..(core[axis].end + self.pad[axis]).min(self.extent[axis])
-        })
-    }
-
-    pub fn add(
-        &mut self,
-        index: usize,
-        detection: &VoxelData,
+    pub fn scan(
+        self,
+        workers: usize,
+        cancel: &AtomicBool,
         roi: Option<&Mask>,
-        measure: impl FnMut(usize, &[Range<u32>; 3]) -> Result<VoxelData, String>,
-    ) -> Result<(), String> {
-        assert_eq!(index, self.next, "surface tiles arrive in raster order");
-        let core = self.core_range(index);
-        let array = self.detection_range(index);
-        self.dims = dims_of(&array);
-        self.start = [
-            array[0].start as i64,
-            array[1].start as i64,
-            array[2].start as i64,
-        ];
-        let count = self.dims[0] * self.dims[1] * self.dims[2];
-        if detection.voxel_count() != count {
-            return Err("the detection tile does not cover the requested region".to_string());
-        }
-        self.raw.clear();
-        self.raw.resize(count, 0.0);
-        detection.write_values(&mut self.raw);
-        self.smooth();
-        self.prepare(roi);
-        self.labels.clear();
-        self.labels.resize(count, EMPTY);
-        if self.split {
-            self.watershed();
-            self.record_necks();
+        progress: &mut dyn FnMut(usize, usize),
+        read: &Read<'_>,
+        measure: &Measure<'_>,
+    ) -> Result<Option<SurfaceSet>, String> {
+        let widest = self
+            .anisotropy
+            .iter()
+            .copied()
+            .max()
+            .expect("three axes exist");
+        let mut base = if self.split {
+            (DISTANCE_LIMIT * widest).min(DISTANCE_LIMIT_MAX)
         } else {
-            self.flood();
+            0
+        };
+        while base > DISTANCE_LIMIT && Pass::new(&self, base).max_workers().is_none() {
+            base /= 2;
         }
-        self.join();
-        self.accumulate(&core, &array, measure)?;
-        self.store_faces(&core, &array);
-        self.emit();
-        self.next += 1;
-        Ok(())
+        let desired = match workers {
+            0 => std::thread::available_parallelism().map_or(1, |value| value.get()),
+            value => value,
+        }
+        .clamp(1, WORKER_LIMIT);
+        let mut runs = Vec::new();
+        let limits = if self.split {
+            vec![base, base * 2, base * 4]
+        } else {
+            vec![0]
+        };
+        for limit in limits {
+            match Pass::new(&self, limit).max_workers() {
+                Some(capacity) => runs.push((limit, capacity)),
+                None => break,
+            }
+        }
+        if runs.is_empty() {
+            return Err(format!(
+                "a surface tile needs more than {WORKER_ARRAY_LIMIT} bytes of array memory"
+            ));
+        }
+        let mut inputs = Inputs {
+            cancel,
+            roi,
+            progress,
+            read,
+            measure,
+        };
+        let mut step = 0;
+        loop {
+            let (limit, capacity) = runs[step];
+            let last = step + 1 == runs.len();
+            let pass = Pass::new(&self, limit);
+            let workers = desired.min(capacity).min(pass.total().max(1));
+            let outcome = run_pass(&pass, workers, last, &mut inputs)?;
+            match outcome {
+                PassOutcome::Cancelled => return Ok(None),
+                PassOutcome::Saturated => {
+                    assert!(!last, "the final surface pass accepts a saturated field");
+                    step += 1;
+                }
+                PassOutcome::Done(set) => return Ok(Some(set)),
+            }
+        }
+    }
+}
+
+struct Pass<'a> {
+    plan: &'a SurfaceBuilder,
+    cap: u32,
+    pad: [u32; 3],
+}
+
+impl<'a> Pass<'a> {
+    fn new(plan: &'a SurfaceBuilder, limit: u32) -> Self {
+        let cap = limit * limit;
+        let pad = [0, 1, 2].map(|axis| {
+            let needed = limit + (plan.kernels[axis].len() / 2) as u32 + 1;
+            align(needed.max(plan.morph_radius + 1).max(BLOCK_PAD))
+        });
+        Self { plan, cap, pad }
     }
 
-    pub fn finish(mut self) -> SurfaceSet {
-        assert_eq!(
-            self.next, self.tile_count,
-            "every surface tile has been added"
-        );
-        self.merge_basins();
-        self.build()
+    fn total(&self) -> usize {
+        self.plan.tile_count
     }
 
     fn tile_position(&self, index: usize) -> [u32; 3] {
-        let x = index % self.tiles[0] as usize;
-        let y = (index / self.tiles[0] as usize) % self.tiles[1] as usize;
-        let z = index / (self.tiles[0] as usize * self.tiles[1] as usize);
+        let tiles = self.plan.tiles;
+        let x = index % tiles[0] as usize;
+        let y = (index / tiles[0] as usize) % tiles[1] as usize;
+        let z = index / (tiles[0] as usize * tiles[1] as usize);
         [x as u32, y as u32, z as u32]
     }
 
-    fn array_range(&self) -> [Range<u32>; 3] {
-        self.detection_range(self.next)
+    fn core_range(&self, index: usize) -> [Range<u32>; 3] {
+        assert!(index < self.total(), "the tile index is in bounds");
+        let position = self.tile_position(index);
+        [0, 1, 2].map(|axis| {
+            let start = self.plan.region[axis].start + position[axis] * TILE_SIDE;
+            start..(start + TILE_SIDE).min(self.plan.region[axis].end)
+        })
     }
 
-    fn array_index(&self, voxel: [i64; 3]) -> Option<usize> {
-        let mut local = [0usize; 3];
+    fn array_range(&self, index: usize) -> [Range<u32>; 3] {
+        let core = self.core_range(index);
+        [0, 1, 2].map(|axis| {
+            let start = core[axis].start.saturating_sub(self.pad[axis]);
+            start..(core[axis].end + self.pad[axis]).min(self.plan.extent[axis])
+        })
+    }
+
+    fn array_bytes(&self) -> u64 {
+        let mut voxels = 1u64;
         for axis in 0..3 {
-            let value = voxel[axis] - self.start[axis];
-            if value < 0 || value >= self.dims[axis] as i64 {
-                return None;
+            let size = (self.plan.region[axis].end - self.plan.region[axis].start) as u64;
+            let span = u64::from(TILE_SIDE + 2 * self.pad[axis]);
+            voxels *= size.min(span);
+        }
+        voxels * ARRAY_BYTES_PER_VOXEL
+    }
+
+    fn max_workers(&self) -> Option<usize> {
+        let bytes = self.array_bytes();
+        if bytes > WORKER_ARRAY_LIMIT {
+            return None;
+        }
+        Some((FRAME_ARRAY_LIMIT / bytes).clamp(1, WORKER_LIMIT as u64) as usize)
+    }
+}
+
+enum PassOutcome {
+    Done(SurfaceSet),
+    Saturated,
+    Cancelled,
+}
+
+struct Inputs<'a> {
+    cancel: &'a AtomicBool,
+    roi: Option<&'a Mask>,
+    progress: &'a mut dyn FnMut(usize, usize),
+    read: &'a Read<'a>,
+    measure: &'a Measure<'a>,
+}
+
+fn run_pass(
+    pass: &Pass<'_>,
+    workers: usize,
+    accept: bool,
+    inputs: &mut Inputs<'_>,
+) -> Result<PassOutcome, String> {
+    let total = pass.total();
+    let next = AtomicUsize::new(0);
+    let stop = AtomicBool::new(false);
+    let (sender, receiver) = mpsc::sync_channel::<(usize, TileResult)>(workers * 2);
+    let cancel = inputs.cancel;
+    let roi = inputs.roi;
+    let read = inputs.read;
+    let measure = inputs.measure;
+    std::thread::scope(|scope| {
+        let next = &next;
+        let stop = &stop;
+        for _ in 0..workers {
+            let sender = sender.clone();
+            scope.spawn(move || {
+                let mut tile = Tile::new(pass);
+                loop {
+                    if halted(cancel, stop) {
+                        break;
+                    }
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    if index >= total {
+                        break;
+                    }
+                    let result = tile.run(index, cancel, stop, roi, read, measure);
+                    if sender.send((index, result)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(sender);
+        assemble(
+            pass,
+            total,
+            receiver,
+            cancel,
+            stop,
+            accept,
+            &mut *inputs.progress,
+        )
+    })
+}
+
+fn assemble(
+    pass: &Pass<'_>,
+    total: usize,
+    receiver: mpsc::Receiver<(usize, TileResult)>,
+    cancel: &AtomicBool,
+    stop: &AtomicBool,
+    accept: bool,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<PassOutcome, String> {
+    let mut assembler = Assembler::new(pass);
+    let mut pending: Vec<Option<TileResult>> = (0..total).map(|_| None).collect();
+    let mut assembled = 0usize;
+    while assembled < total {
+        if cancel.load(Ordering::Relaxed) {
+            stop.store(true, Ordering::Relaxed);
+            return Ok(PassOutcome::Cancelled);
+        }
+        let (index, result) = match receiver.recv() {
+            Ok(value) => value,
+            Err(_) => {
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(PassOutcome::Cancelled);
+                }
+                return Err(
+                    "the surface workers stopped before every tile was assembled".to_string(),
+                );
             }
-            local[axis] = value as usize;
+        };
+        pending[index] = Some(result);
+        while assembled < total {
+            let Some(result) = pending[assembled].take() else {
+                break;
+            };
+            match result {
+                TileResult::Cancelled => {
+                    stop.store(true, Ordering::Relaxed);
+                    return Ok(PassOutcome::Cancelled);
+                }
+                TileResult::Failed(detail) => {
+                    stop.store(true, Ordering::Relaxed);
+                    return Err(detail);
+                }
+                TileResult::Finished(output) => {
+                    if !accept && output.saturated {
+                        stop.store(true, Ordering::Relaxed);
+                        return Ok(PassOutcome::Saturated);
+                    }
+                    assembler.push(assembled, *output);
+                    assembled += 1;
+                    if (assembled - 1).is_multiple_of(4) || assembled == total {
+                        progress(assembled, total);
+                    }
+                }
+            }
         }
-        Some(local[0] + self.dims[0] * (local[1] + self.dims[1] * local[2]))
     }
+    assembler.merge_basins();
+    Ok(PassOutcome::Done(assembler.build()))
+}
 
-    fn create_node(&mut self, reach: u32) -> u32 {
-        let node = self.nodes.len() as u32;
-        self.nodes.push(Node {
-            parent: node,
-            ..Node::new(reach)
-        });
-        for _ in 0..self.channels {
-            self.accumulators.push(SampleAccumulator::new());
-        }
-        node
-    }
-
-    fn union(&mut self, left: u32, right: u32) -> u32 {
-        let mut left = find(&mut self.nodes, left);
-        let mut right = find(&mut self.nodes, right);
-        if left == right {
-            return left;
-        }
-        if self.nodes[left as usize].rank < self.nodes[right as usize].rank {
-            std::mem::swap(&mut left, &mut right);
-        }
-        let winner = self.nodes[left as usize];
-        let loser = self.nodes[right as usize];
-        for channel in 0..self.channels {
-            let other = self.accumulators[right as usize * self.channels + channel];
-            self.accumulators[left as usize * self.channels + channel].merge(&other);
-        }
-        let target = &mut self.nodes[left as usize];
-        target.reach = target.reach.max(loser.reach);
-        target.voxels += loser.voxels;
-        for axis in 0..3 {
-            target.sum[axis] += loser.sum[axis];
-            target.low[axis] = target.low[axis].min(loser.low[axis]);
-            target.high[axis] = target.high[axis].max(loser.high[axis]);
-        }
-        if target.contact == EMPTY {
-            target.contact = loser.contact;
-        }
-        if winner.rank == loser.rank {
-            target.rank += 1;
-        }
-        self.nodes[right as usize].parent = left;
-        left
-    }
+fn halted(cancel: &AtomicBool, stop: &AtomicBool) -> bool {
+    cancel.load(Ordering::Relaxed) || stop.load(Ordering::Relaxed)
 }
 
 pub(crate) fn find(nodes: &mut [Node], node: u32) -> u32 {
@@ -363,7 +461,46 @@ pub(crate) fn find(nodes: &mut [Node], node: u32) -> u32 {
     root
 }
 
-pub(crate) fn gaussian(sigma: f32) -> Vec<f32> {
+fn union(
+    nodes: &mut [Node],
+    accumulators: &mut [SampleAccumulator],
+    channels: usize,
+    left: u32,
+    right: u32,
+) -> u32 {
+    let mut left = find(nodes, left);
+    let mut right = find(nodes, right);
+    if left == right {
+        return left;
+    }
+    if nodes[left as usize].rank < nodes[right as usize].rank {
+        std::mem::swap(&mut left, &mut right);
+    }
+    let winner = nodes[left as usize];
+    let loser = nodes[right as usize];
+    for channel in 0..channels {
+        let other = accumulators[right as usize * channels + channel];
+        accumulators[left as usize * channels + channel].merge(&other);
+    }
+    let target = &mut nodes[left as usize];
+    target.reach = target.reach.max(loser.reach);
+    target.voxels += loser.voxels;
+    for axis in 0..3 {
+        target.sum[axis] += loser.sum[axis];
+        target.low[axis] = target.low[axis].min(loser.low[axis]);
+        target.high[axis] = target.high[axis].max(loser.high[axis]);
+    }
+    if target.contact == EMPTY {
+        target.contact = loser.contact;
+    }
+    if winner.rank == loser.rank {
+        target.rank += 1;
+    }
+    nodes[right as usize].parent = left;
+    left
+}
+
+fn gaussian(sigma: f32) -> Vec<f32> {
     let support = (GRAIN_SUPPORT * sigma).ceil() as usize;
     if support == 0 {
         return vec![1.0];
@@ -381,7 +518,7 @@ pub(crate) fn gaussian(sigma: f32) -> Vec<f32> {
     kernel
 }
 
-pub(crate) fn parabola(line: &mut [f64], weight: f64) {
+fn parabola(line: &mut [f64], weight: f64) {
     let length = line.len();
     if length < 3 {
         return;
@@ -429,14 +566,10 @@ fn align(value: u32) -> u32 {
     value.div_ceil(PAD_ALIGN) * PAD_ALIGN
 }
 
-fn dims_of(ranges: &[Range<u32>; 3]) -> [usize; 3] {
+pub(crate) fn dims_of(ranges: &[Range<u32>; 3]) -> [usize; 3] {
     [0, 1, 2].map(|axis| (ranges[axis].end - ranges[axis].start) as usize)
 }
 
 pub(crate) fn strides_of(dims: [usize; 3]) -> [usize; 3] {
     [1, dims[0], dims[0] * dims[1]]
-}
-
-pub(crate) fn length(squared: u32) -> u32 {
-    (squared as f64).sqrt() as u32
 }

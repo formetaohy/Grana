@@ -1767,7 +1767,7 @@ fn objects_cast_shadows_onto_surfaces() {
     let texture = target(&device, SIDE);
     let volume = empty_volume();
     let pyramid = volume.pyramid();
-    let mesh = PackedMesh::new(casting_planes());
+    let mesh = PackedMesh::new(casting_planes([-0.6, 0.6]));
     let styles = [Style::new([0.98, 0.72, 0.5], true, false); 2];
     let layers = [Layer {
         key: LayerKey::at_frame(1, 0, 0, 1),
@@ -1818,13 +1818,12 @@ fn objects_cast_shadows_onto_surfaces() {
     );
 }
 
-fn casting_planes() -> Mesh {
+fn casting_planes(offset: [f32; 2]) -> Mesh {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    for (object, (height, extent, offset)) in
-        [(-1.5f32, 1.5f32, [0.0f32, 0.0]), (-0.4, 0.6, [-0.6, 0.6])]
-            .into_iter()
-            .enumerate()
+    for (object, (height, extent, shift)) in [(-1.5f32, 1.5f32, [0.0f32, 0.0]), (-0.4, 0.6, offset)]
+        .into_iter()
+        .enumerate()
     {
         let base = vertices.len() as u32;
         for (x, y) in [
@@ -1834,7 +1833,7 @@ fn casting_planes() -> Mesh {
             (-extent, extent),
         ] {
             vertices.push(MeshVertex::new(
-                [x + offset[0], y + offset[1], height],
+                [x + shift[0], y + shift[1], height],
                 [0.0, 0.0, 1.0],
                 object as u32,
             ));
@@ -1842,6 +1841,205 @@ fn casting_planes() -> Mesh {
         indices.extend([0u32, 1, 2, 0, 2, 3].map(|index| base + index));
     }
     Mesh::new(vertices, indices)
+}
+
+#[test]
+fn refreshes_object_shadows_when_the_geometry_changes() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = empty_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    let styles = [
+        Style::new([0.12, 1.0, 0.12], true, false),
+        Style::new([1.0, 0.12, 0.12], true, false),
+    ];
+    let first = PackedMesh::new(casting_planes([-0.6, 0.6]));
+    let second = PackedMesh::new(casting_planes([0.6, 0.6]));
+    let pixels = ShadowPixels {
+        device: &device,
+        queue: &queue,
+        texture: &texture,
+        view: &view,
+        camera: &camera,
+        section: &section,
+        channels: &channels,
+        volume: &volume,
+        styles: &styles,
+    };
+    let first_lit = pixels.draw(&mut renderer, &first, 1, 0.0);
+    let first_shadowed = pixels.draw(&mut renderer, &first, 1, 0.95);
+    let second_lit = pixels.draw(&mut renderer, &second, 2, 0.0);
+    let second_shadowed = pixels.draw(&mut renderer, &second, 2, 0.95);
+    let brightness = |pixels: &[[u8; 4]], index: usize| -> i32 {
+        let [red, green, blue, _] = pixels[index].map(i32::from);
+        red + green + blue
+    };
+    let receiver = |pixels: &[[u8; 4]], index: usize| -> bool {
+        let [red, green, blue, _] = pixels[index].map(u32::from);
+        green > red + 30 && green > blue + 30
+    };
+    let mut moved = 0usize;
+    for index in 0..first_lit.len() {
+        if !receiver(&first_lit, index) || !receiver(&second_lit, index) {
+            continue;
+        }
+        let unshadowed = brightness(&first_lit, index);
+        if (unshadowed - brightness(&second_lit, index)).abs() > 8 {
+            continue;
+        }
+        if unshadowed - brightness(&first_shadowed, index) < 30 {
+            continue;
+        }
+        if brightness(&second_lit, index) - brightness(&second_shadowed, index) < 30 {
+            moved += 1;
+        }
+    }
+    assert!(
+        moved > 60,
+        "the object shadow does not follow the moved geometry: {moved}"
+    );
+}
+
+#[test]
+fn projects_object_shadows_outside_the_data_box() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = empty_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::splat(12.0), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    let styles = [
+        Style::new([0.12, 1.0, 0.12], true, false),
+        Style::new([1.0, 0.12, 0.12], true, false),
+    ];
+    let mesh = PackedMesh::new(shifted(
+        casting_planes([-0.6, 0.6]),
+        Vec3::new(2.6, 0.0, 0.0),
+    ));
+    let pixels = ShadowPixels {
+        device: &device,
+        queue: &queue,
+        texture: &texture,
+        view: &view,
+        camera: &camera,
+        section: &section,
+        channels: &channels,
+        volume: &volume,
+        styles: &styles,
+    };
+    let lit = pixels.draw(&mut renderer, &mesh, 1, 0.0);
+    let shadowed = pixels.draw(&mut renderer, &mesh, 1, 0.95);
+    let mut darkened = 0usize;
+    for index in 0..lit.len() {
+        let [red, green, blue, _] = lit[index].map(u32::from);
+        if !(green > red + 30 && green > blue + 30) {
+            continue;
+        }
+        let total = |pixel: [u8; 4]| -> i32 {
+            let [red, green, blue, _] = pixel.map(i32::from);
+            red + green + blue
+        };
+        if total(lit[index]) - total(shadowed[index]) > 30 {
+            darkened += 1;
+        }
+    }
+    assert!(
+        darkened > 60,
+        "an object outside the data box casts no shadow: {darkened}"
+    );
+}
+
+fn shifted(mesh: Mesh, shift: Vec3) -> Mesh {
+    let vertices = mesh
+        .vertices()
+        .iter()
+        .map(|vertex| {
+            MeshVertex::new(
+                (Vec3::from(vertex.position()) + shift).to_array(),
+                vertex.normal(),
+                vertex.object(),
+            )
+        })
+        .collect::<Vec<_>>();
+    Mesh::new(vertices, mesh.indices().to_vec())
+}
+
+struct ShadowPixels<'a> {
+    device: &'a wgpu::Device,
+    queue: &'a wgpu::Queue,
+    texture: &'a wgpu::Texture,
+    view: &'a wgpu::TextureView,
+    camera: &'a Camera,
+    section: &'a SectionCamera,
+    channels: &'a [grana_render::ChannelRow<'a>],
+    volume: &'a Volume,
+    styles: &'a [Style],
+}
+
+impl ShadowPixels<'_> {
+    fn draw(
+        &self,
+        renderer: &mut Renderer,
+        mesh: &PackedMesh,
+        revision: u64,
+        shadows: f32,
+    ) -> Vec<[u8; 4]> {
+        let layers = [Layer {
+            key: LayerKey::at_frame(1, 0, 0, revision),
+            mesh,
+            style_start: 0,
+            style_count: self.styles.len(),
+        }];
+        let scene = SceneFrame {
+            channels: self.channels,
+            shading: Shading {
+                shadows,
+                ..Shading::default()
+            },
+            step_scale: 1.0,
+            styles: self.styles,
+            layers: &layers,
+            markers: &[],
+        };
+        let session = Session {
+            device: self.device,
+            queue: self.queue,
+            target: self.view,
+            camera: self.camera,
+            section: self.section,
+            scene: &scene,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            region: Region::none(),
+            time: 0,
+        };
+        settle(renderer, session, |request| {
+            let grid = BrickGrid::new(self.volume.extent());
+            self.volume.brick(&grid, request.coord)
+        });
+        for _ in 0..SAMPLES {
+            renderer.draw(self.device, self.queue, common::frame(&session));
+        }
+        read_pixels(self.device, self.queue, self.texture, SIDE)
+    }
 }
 
 fn render_samples(texture: &wgpu::Texture, volume: &Volume, session: Session<'_>) -> Vec<[u8; 4]> {

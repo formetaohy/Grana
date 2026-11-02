@@ -117,7 +117,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     let sun = sun_transmittance(
         shadow_coordinate(mesh.light_view, input.position + normal * mesh.light_reach.z),
-        mesh.light_reach.y,
+        shadow_bias(mesh.light_reach, normal, mesh.light.xyz),
     );
     let strength = clamp(mesh.shadow.x, 0.0, 1.0);
     let direct = mix(1.0, sun, strength);

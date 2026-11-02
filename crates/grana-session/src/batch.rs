@@ -472,7 +472,7 @@ fn write_dataset(
             detected.set.aggregate(),
         );
         let filters = detected.set.filters(&table)?;
-        let rows = table.matching(&filters);
+        let rows = table.matching(&filters, None, None);
         let file = folder.join(format!(
             "{}-{}.csv",
             slug(&detected.set.name),

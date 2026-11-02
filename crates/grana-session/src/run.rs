@@ -373,16 +373,16 @@ fn surfaces(
     if span <= 0.0 {
         return Err("the selected channel has no intensity range to detect".to_string());
     }
-    let channels = pyramid.channel_count();
+    let workers = std::thread::available_parallelism().map_or(1, |value| value.get());
     for time in 0..pyramid.frame_count() {
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let mut builder = SurfaceBuilder::new(
+        let builder = SurfaceBuilder::new(
             0,
             pyramid.level(0),
             params,
-            channels,
+            pyramid.channel_count(),
             channel,
             region,
             pyramid.channels()[channel].intensity(),
@@ -394,28 +394,28 @@ fn surfaces(
             done: 0,
             total,
         });
-        for index in 0..total {
-            if cancel.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            let range = builder.detection_range(index);
-            let data = reader.read_region(time, 0, channel, &range)?;
-            builder.add(index, &data, mask.as_ref(), |measured, core| {
+        let set = builder.scan(
+            workers,
+            cancel,
+            mask.as_ref(),
+            &mut |done, total| sink(Event::Progress { time, done, total }),
+            &|_index, ranges| {
+                reader
+                    .read_region(time, 0, channel, ranges)
+                    .map_err(String::from)
+            },
+            &|measured, core| {
                 reader
                     .read_region(time, 0, measured, core)
                     .map_err(String::from)
-            })?;
-            if index % 4 == 0 || index + 1 == total {
-                sink(Event::Progress {
-                    time,
-                    done: index + 1,
-                    total,
-                });
-            }
-        }
+            },
+        )?;
+        let Some(set) = set else {
+            return Ok(());
+        };
         sink(Event::Frame {
             time,
-            frame: ObjectFrame::Surfaces(builder.finish()),
+            frame: ObjectFrame::Surfaces(set),
         });
     }
     sink(Event::Done);

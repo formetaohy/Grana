@@ -519,7 +519,21 @@ impl Encode for MeasureState {
         self.set.encode(writer);
         writer.u8(self.group.index());
         writer.u8(self.aggregate.index());
+        writer.u8(self.scope.index());
         self.filters.encode(writer);
+        match &self.lasso {
+            Some(lasso) => {
+                writer.u8(1);
+                writer.count(lasso.x());
+                writer.count(lasso.y());
+                writer.count(lasso.points().len());
+                for point in lasso.points() {
+                    writer.f32(point[0]);
+                    writer.f32(point[1]);
+                }
+            }
+            None => writer.u8(0),
+        }
         match self.sort {
             Some((column, descending)) => {
                 writer.u8(1);

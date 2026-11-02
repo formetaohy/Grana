@@ -49,6 +49,47 @@ fn finds_the_nearest_of_many_objects() {
     assert_eq!(bvh.contains(Vec3::new(9.0 * 8.0, 4.0, 0.0)), None);
 }
 
+#[test]
+fn finds_the_nearest_primitive_along_a_ray() {
+    let bvh = Bvh::new([
+        (
+            3,
+            Primitive::triangle([
+                Vec3::new(-1.0, -1.0, 0.0),
+                Vec3::new(1.0, -1.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ]),
+        ),
+        (5, Primitive::sphere(Vec3::new(0.0, 0.0, 2.0), 0.5)),
+    ]);
+    let (distance, object) = bvh
+        .ray(Vec3::new(0.0, 0.0, -5.0), Vec3::Z, 10.0)
+        .expect("the triangle lies ahead");
+    assert!((distance - 5.0).abs() < 1.0e-6, "{distance}");
+    assert_eq!(object, 3);
+    assert_eq!(
+        bvh.ray(Vec3::new(0.0, 0.0, -5.0), Vec3::Z, 4.0),
+        None,
+        "the segment stops short of the triangle"
+    );
+    let (distance, object) = bvh
+        .ray(Vec3::new(0.0, 0.0, 5.0), -Vec3::Z, 10.0)
+        .expect("the sphere lies ahead");
+    assert!((distance - 2.5).abs() < 1.0e-6, "{distance}");
+    assert_eq!(object, 5);
+    let (distance, object) = bvh
+        .ray(Vec3::new(0.0, 0.0, 2.2), Vec3::Z, 10.0)
+        .expect("the sphere contains the origin");
+    assert_eq!(distance, 0.0);
+    assert_eq!(object, 5);
+    assert_eq!(
+        bvh.ray(Vec3::new(4.0, 0.0, -5.0), Vec3::Z, 20.0),
+        None,
+        "the ray misses every primitive"
+    );
+    assert_eq!(Bvh::new([]).ray(Vec3::ZERO, Vec3::Z, 1.0), None);
+}
+
 fn cube(half: f32) -> Vec<[Vec3; 3]> {
     let corner = |bits: usize| {
         Vec3::new(

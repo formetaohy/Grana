@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use grana_measure::{Aggregate, Filter, Frame, Group, MeasureView, Plot, PlotAxis, Table};
+use grana_measure::{
+    Aggregate, Filter, Frame, Group, Lasso, MeasureView, Plot, PlotAxis, Scope, Table,
+};
 
 use crate::object::ObjectFrame;
 use crate::object_set::{ObjectSetId, Visibility};
@@ -12,7 +14,9 @@ pub struct MeasureState {
     pub set: Option<u64>,
     pub group: Group,
     pub aggregate: Aggregate,
+    pub scope: Scope,
     pub filters: Vec<Filter>,
+    pub lasso: Option<Lasso>,
     pub sort: Option<(usize, bool)>,
     pub columns: Vec<bool>,
     pub visibility: bool,
@@ -24,16 +28,20 @@ pub struct Measure {
     set: Option<ObjectSetId>,
     group: Group,
     aggregate: Aggregate,
+    scope: Scope,
     filters: Vec<Filter>,
+    lasso: Option<Lasso>,
     sort: Option<(usize, bool)>,
     table: Option<Table>,
     rows: Vec<usize>,
+    total: usize,
     visible: Vec<bool>,
     visibility: bool,
     view: MeasureView,
     axes: [usize; 2],
     plot: Option<Plot>,
     revision: Option<(ObjectSetId, u64)>,
+    time: u32,
     dirty: bool,
 }
 
@@ -49,16 +57,20 @@ impl Measure {
             set: None,
             group: Group::Object,
             aggregate: Aggregate::Mean,
+            scope: Scope::All,
             filters: Vec::new(),
+            lasso: None,
             sort: None,
             table: None,
             rows: Vec::new(),
+            total: 0,
             visible: Vec::new(),
             visibility: true,
             view: MeasureView::Table,
             axes: [0; 2],
             plot: None,
             revision: None,
+            time: 0,
             dirty: false,
         }
     }
@@ -72,6 +84,7 @@ impl Measure {
             return;
         }
         self.set = Some(set);
+        self.time = scene.time();
         if !scene
             .objects
             .get(set)
@@ -80,6 +93,7 @@ impl Measure {
             self.group = Group::Object;
         }
         self.filters.clear();
+        self.lasso = None;
         self.sort = None;
         self.rebuild(scene);
     }
@@ -100,13 +114,52 @@ impl Measure {
             return;
         }
         self.group = group;
+        self.time = scene.time();
         self.filters.clear();
+        self.lasso = None;
         self.sort = None;
         self.rebuild(scene);
     }
 
     pub fn aggregate(&self) -> Aggregate {
         self.aggregate
+    }
+
+    pub fn scope(&self) -> Scope {
+        self.scope
+    }
+
+    pub fn set_scope(&mut self, scope: Scope) {
+        if self.scope == scope {
+            return;
+        }
+        self.scope = scope;
+        self.dirty = true;
+        self.refresh();
+    }
+
+    pub fn lasso(&self) -> Option<&Lasso> {
+        self.lasso.as_ref()
+    }
+
+    pub fn set_lasso(&mut self, lasso: Option<Lasso>) {
+        if let Some(lasso) = &lasso {
+            let Some(table) = self.table.as_ref() else {
+                return;
+            };
+            if lasso.x() >= table.columns().len() || lasso.y() >= table.columns().len() {
+                return;
+            }
+        }
+        if self.lasso == lasso {
+            return;
+        }
+        self.lasso = lasso;
+        self.refresh();
+    }
+
+    pub fn total(&self) -> usize {
+        self.total
     }
 
     pub fn view(&self) -> MeasureView {
@@ -139,7 +192,16 @@ impl Measure {
         }
         self.axes[axis.index()] = column;
         self.dirty = true;
-        self.refresh_plot();
+        if self
+            .lasso
+            .as_ref()
+            .is_some_and(|lasso| lasso.x() != self.axes[0] || lasso.y() != self.axes[1])
+        {
+            self.lasso = None;
+            self.refresh();
+        } else {
+            self.refresh_plot();
+        }
     }
 
     pub fn set_gate(&mut self, column: usize, minimum: f32, maximum: f32) {
@@ -171,7 +233,9 @@ impl Measure {
             return;
         }
         self.aggregate = aggregate;
+        self.time = scene.time();
         self.filters.clear();
+        self.lasso = None;
         self.rebuild(scene);
     }
 
@@ -287,13 +351,17 @@ impl Measure {
         self.set = None;
         self.table = None;
         self.rows.clear();
+        self.total = 0;
         self.visible.clear();
+        self.scope = Scope::All;
         self.filters.clear();
+        self.lasso = None;
         self.sort = None;
         self.view = MeasureView::Table;
         self.axes = [0; 2];
         self.plot = None;
         self.revision = None;
+        self.time = 0;
         self.dirty = true;
     }
 
@@ -307,13 +375,20 @@ impl Measure {
             self.table = None;
             self.plot = None;
             self.rows.clear();
+            self.total = 0;
             self.visible.clear();
+            self.lasso = None;
             self.axes = [0; 2];
             self.dirty = true;
             return;
         };
+        let time = scene.time();
+        let moved = self.time != time;
+        self.time = time;
         if !busy && self.revision != Some((id, object.revision())) {
             self.rebuild(scene);
+        } else if moved && self.scope == Scope::Current {
+            self.refresh();
         }
     }
 
@@ -325,7 +400,7 @@ impl Measure {
         let Some(object) = scene.objects.get_mut(id) else {
             return;
         };
-        if !self.visibility || self.filters.is_empty() {
+        if !self.visibility || (self.filters.is_empty() && self.lasso.is_none()) {
             object.set_visibility(Visibility::All);
             return;
         }
@@ -336,6 +411,7 @@ impl Measure {
             object.set_visibility(Visibility::All);
             return;
         }
+        let rows = table.matching(&self.filters, self.lasso.as_ref(), None);
         let visibility = match self.group {
             Group::Object => {
                 let mut frames = (0..object.frame_count())
@@ -343,8 +419,8 @@ impl Measure {
                         vec![false; object.frame(time).map_or(0, ObjectFrame::object_count)]
                     })
                     .collect::<Vec<_>>();
-                for row in &self.rows {
-                    let observation = table.observation(*row);
+                for row in rows {
+                    let observation = table.observation(row);
                     if let (Some(time), Some(index)) = (observation.time(), observation.object())
                         && let Some(mask) = frames.get_mut(time as usize)
                         && let Some(value) = mask.get_mut(index)
@@ -357,8 +433,8 @@ impl Measure {
             Group::Track => {
                 let count = object.tracks().map_or(0, |layer| layer.set().len());
                 let mut mask = vec![false; count];
-                for row in &self.rows {
-                    if let Some(track) = table.observation(*row).track()
+                for row in rows {
+                    if let Some(track) = table.observation(row).track()
                         && let Some(value) = mask.get_mut(track)
                     {
                         *value = true;
@@ -380,7 +456,9 @@ impl Measure {
             set: self.set.map(ObjectSetId::raw),
             group: self.group,
             aggregate: self.aggregate,
+            scope: self.scope,
             filters: self.filters.clone(),
+            lasso: self.table.as_ref().and(self.lasso.clone()),
             sort: self.sort,
             columns: self.visible.clone(),
             visibility: self.visibility,
@@ -394,7 +472,9 @@ impl Measure {
             set,
             group,
             aggregate,
+            scope,
             filters,
+            lasso,
             sort,
             columns,
             visibility,
@@ -404,10 +484,14 @@ impl Measure {
         self.set = None;
         self.group = group;
         self.aggregate = aggregate;
+        self.scope = scope;
+        self.time = scene.time();
         self.table = None;
         self.rows.clear();
+        self.total = 0;
         self.visible.clear();
         self.filters.clear();
+        self.lasso = None;
         self.sort = None;
         self.visibility = visibility;
         self.view = view;
@@ -417,9 +501,14 @@ impl Measure {
         self.dirty = true;
         let Some(set) = set else {
             assert!(
-                columns.is_empty() && filters.is_empty() && sort.is_none() && axes == [0; 2],
+                columns.is_empty()
+                    && filters.is_empty()
+                    && lasso.is_none()
+                    && sort.is_none()
+                    && axes == [0; 2],
                 "a measure state without an object set carries no table state"
             );
+            self.refresh();
             return;
         };
         self.set = Some(ObjectSetId::new(set));
@@ -439,8 +528,15 @@ impl Measure {
             axes.iter().all(|axis| *axis < count) || (count == 0 && axes == [0; 2]),
             "a measure state names plot axes inside its table"
         );
+        assert!(
+            lasso
+                .as_ref()
+                .is_none_or(|lasso| lasso.x() < count && lasso.y() < count),
+            "a measure state names lasso axes inside its table"
+        );
         self.visible = columns;
         self.filters = filters;
+        self.lasso = lasso;
         self.sort = sort;
         self.axes = match self.table.as_ref() {
             Some(table) => readable_axes(table, axes),
@@ -455,10 +551,20 @@ impl Measure {
         hash = mix(hash, self.set.map_or(0, ObjectSetId::raw));
         hash = mix(hash, u64::from(self.group.index()));
         hash = mix(hash, u64::from(self.aggregate.index()));
+        hash = mix(hash, u64::from(self.scope.index()));
         for filter in &self.filters {
             hash = mix(hash, filter.column() as u64);
             hash = mix(hash, u64::from(filter.minimum().to_bits()));
             hash = mix(hash, u64::from(filter.maximum().to_bits()));
+        }
+        if let Some(lasso) = &self.lasso {
+            hash = mix(hash, lasso.x() as u64);
+            hash = mix(hash, lasso.y() as u64);
+            hash = mix(hash, lasso.points().len() as u64);
+            for point in lasso.points() {
+                hash = mix(hash, u64::from(point[0].to_bits()));
+                hash = mix(hash, u64::from(point[1].to_bits()));
+            }
         }
         if let Some((column, descending)) = self.sort {
             hash = mix(hash, column as u64);
@@ -478,10 +584,12 @@ impl Measure {
         self.table = None;
         self.plot = None;
         self.rows.clear();
+        self.total = 0;
         self.visible.clear();
         let Some(id) = self.set else {
             self.revision = None;
             self.visible.clear();
+            self.lasso = None;
             self.axes = [0; 2];
             return;
         };
@@ -489,6 +597,7 @@ impl Measure {
             self.set = None;
             self.revision = None;
             self.visible.clear();
+            self.lasso = None;
             self.axes = [0; 2];
             return;
         };
@@ -502,6 +611,7 @@ impl Measure {
             .collect::<Vec<_>>();
         if frames.is_empty() {
             self.visible.clear();
+            self.lasso = None;
             self.axes = [0; 2];
             return;
         }
@@ -524,6 +634,13 @@ impl Measure {
         self.axes = readable_axes(&table, self.axes);
         let columns = table.columns().len();
         self.filters.retain(|filter| filter.column() < columns);
+        if self
+            .lasso
+            .as_ref()
+            .is_some_and(|lasso| lasso.x() >= columns || lasso.y() >= columns)
+        {
+            self.lasso = None;
+        }
         if self.sort.is_some_and(|(column, _)| column >= columns) {
             self.sort = None;
         }
@@ -535,10 +652,13 @@ impl Measure {
         self.dirty = true;
         let Some(table) = self.table.as_ref() else {
             self.rows.clear();
+            self.total = 0;
             self.plot = None;
             return;
         };
-        let mut rows = table.matching(&self.filters);
+        let frame = self.scope_frame();
+        self.total = table.count(frame);
+        let mut rows = table.matching(&self.filters, self.lasso.as_ref(), frame);
         if let Some((column, descending)) = self.sort
             && column < table.columns().len()
         {
@@ -546,6 +666,10 @@ impl Measure {
         }
         self.rows = rows;
         self.refresh_plot();
+    }
+
+    fn scope_frame(&self) -> Option<u32> {
+        (self.scope == Scope::Current && self.group != Group::Track).then_some(self.time)
     }
 
     fn refresh_plot(&mut self) {

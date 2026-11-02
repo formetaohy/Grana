@@ -44,14 +44,24 @@ pub(crate) struct ShadowSpace {
     view: Mat4,
     inverse: Mat4,
     depth: f32,
+    width: f32,
+    height: f32,
     unit: f32,
 }
 
 impl ShadowSpace {
-    pub fn new(light: Vec3, world: Vec3, voxel: Vec3) -> Self {
+    pub fn new(light: Vec3, low: Vec3, high: Vec3, voxel: Vec3) -> Self {
         assert!(
             light.is_finite() && light.length() > 1.0e-6,
             "a shadow space follows a finite light"
+        );
+        assert!(
+            low.is_finite() && high.is_finite(),
+            "a shadow space spans a finite box"
+        );
+        assert!(
+            low.cmplt(high).all(),
+            "a shadow space spans a positive world"
         );
         let light = light.normalize();
         let hint = if light.y.abs() > 0.9 {
@@ -61,7 +71,8 @@ impl ShadowSpace {
         };
         let across = light.cross(hint).normalize();
         let upward = light.cross(across).normalize();
-        let half = 0.5 * world;
+        let centre = 0.5 * (low + high);
+        let half = 0.5 * (high - low);
         let width = 2.0 * half.dot(across.abs());
         let height = 2.0 * half.dot(upward.abs());
         let depth = 2.0 * half.dot(light.abs());
@@ -73,7 +84,12 @@ impl ShadowSpace {
             [across.x / width, upward.x / height, -light.x / depth, 0.0],
             [across.y / width, upward.y / height, -light.y / depth, 0.0],
             [across.z / width, upward.z / height, -light.z / depth, 0.0],
-            [0.5, 0.5, 0.5, 1.0],
+            [
+                0.5 - centre.dot(across) / width,
+                0.5 - centre.dot(upward) / height,
+                0.5 + centre.dot(light) / depth,
+                1.0,
+            ],
         ]);
         let unit = voxel.min_element();
         assert!(
@@ -84,6 +100,8 @@ impl ShadowSpace {
             view,
             inverse: view.inverse(),
             depth,
+            width,
+            height,
             unit,
         }
     }
@@ -97,7 +115,13 @@ impl ShadowSpace {
     }
 
     pub fn reach(&self) -> [f32; 4] {
-        [self.depth, DEPTH_BIAS, NORMAL_OFFSET * self.unit, 0.0]
+        let texel = self.width.max(self.height) / OBJECT_SIDE as f32;
+        [
+            self.depth,
+            DEPTH_BIAS,
+            NORMAL_OFFSET * self.unit,
+            texel / self.depth,
+        ]
     }
 
     pub fn digest(&self) -> u64 {

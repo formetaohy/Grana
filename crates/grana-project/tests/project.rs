@@ -67,6 +67,28 @@ fn round_trips_a_project() {
         .len();
     measure.toggle_sort(columns - 1);
     measure.set_column_visible(0, false);
+    measure.set_view(grana_measure::MeasureView::Scatter);
+    let axes = measure.axes();
+    let (lasso_points, x, y) = {
+        let table = measure.table().expect("the track table builds");
+        let (x_low, x_high) = table.extent(axes[0]).expect("the x column holds values");
+        let (y_low, y_high) = table.extent(axes[1]).expect("the y column holds values");
+        (
+            vec![
+                [x_low, y_low],
+                [x_high, y_low],
+                [x_high, y_high],
+                [x_low, y_high],
+            ],
+            axes[0],
+            axes[1],
+        )
+    };
+    assert_ne!(x, y, "a scatter plots two columns");
+    measure.set_lasso(Some(
+        grana_measure::Lasso::new(x, y, lasso_points).expect("the polygon covers the plot"),
+    ));
+    measure.set_scope(grana_measure::Scope::Current);
     let view = ViewState {
         camera: CameraState {
             pivot: [1.0, -2.0, 0.5],

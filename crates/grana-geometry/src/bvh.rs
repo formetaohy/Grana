@@ -57,6 +57,29 @@ impl Primitive {
         }
     }
 
+    fn span(self, origin: Vec3, direction: Vec3) -> Option<(f32, f32)> {
+        match self {
+            Self::Triangle(points) => {
+                triangle_ray(points, origin, direction).map(|distance| (distance, distance))
+            }
+            Self::Sphere { center, radius } => {
+                let offset = origin - center;
+                let squared = direction.length_squared();
+                let projection = offset.dot(direction);
+                let constant = offset.length_squared() - radius * radius;
+                let discriminant = projection * projection - squared * constant;
+                if discriminant <= 0.0 {
+                    return None;
+                }
+                let root = discriminant.sqrt();
+                Some((
+                    (-projection - root) / squared,
+                    (-projection + root) / squared,
+                ))
+            }
+        }
+    }
+
     fn crossings(self, origin: Vec3, direction: Vec3) -> u32 {
         match self {
             Self::Triangle(points) => u32::from(triangle_ray(points, origin, direction).is_some()),
@@ -162,6 +185,106 @@ impl Bvh {
             push(&mut stack, &mut depth, node.right);
         }
         best.is_finite().then_some((best, object))
+    }
+
+    pub fn ray(&self, origin: Vec3, direction: Vec3, reach: f32) -> Option<(f32, u32)> {
+        assert!(
+            origin.is_finite() && direction.is_finite(),
+            "a ray is finite"
+        );
+        assert!(
+            direction.length_squared() > PARALLEL,
+            "a ray follows a positive direction"
+        );
+        assert!(
+            reach >= 0.0 && !reach.is_nan(),
+            "a ray reaches a non negative distance"
+        );
+        if self.nodes.is_empty() {
+            return None;
+        }
+        let mut best = reach;
+        let mut object = 0;
+        let mut found = false;
+        let mut stack = [0u32; DEPTH];
+        let mut depth = 1usize;
+        stack[0] = 0;
+        while depth > 0 {
+            depth -= 1;
+            let index = stack[depth];
+            let node = self.nodes[index as usize];
+            let Some((entry, exit)) = box_span(node.low, node.high, origin, direction) else {
+                continue;
+            };
+            if exit < 0.0 || entry > best {
+                continue;
+            }
+            if node.count > 0 {
+                for slot in node.start..node.start + node.count {
+                    let entry = self.entries[self.order[slot as usize] as usize];
+                    let Some((near, far)) = entry.primitive.span(origin, direction) else {
+                        continue;
+                    };
+                    if far < 0.0 || near > best {
+                        continue;
+                    }
+                    let distance = near.max(0.0);
+                    if !found || distance < best {
+                        best = distance;
+                        object = entry.object;
+                        found = true;
+                    }
+                }
+                continue;
+            }
+            push(&mut stack, &mut depth, index + 1);
+            push(&mut stack, &mut depth, node.right);
+        }
+        found.then_some((best, object))
+    }
+
+    pub fn containing(&self, point: Vec3) -> Vec<u32> {
+        assert!(point.is_finite(), "a containment probe is finite");
+        let Some(root) = self.nodes.first() else {
+            return Vec::new();
+        };
+        if (0..3).any(|axis| point[axis] < root.low[axis] || point[axis] > root.high[axis]) {
+            return Vec::new();
+        }
+        let direction = Vec3::from(PROBE).normalize();
+        let mut counts: Vec<(u32, u32)> = Vec::new();
+        let mut stack = [0u32; DEPTH];
+        let mut depth = 1usize;
+        stack[0] = 0;
+        while depth > 0 {
+            depth -= 1;
+            let index = stack[depth];
+            let node = self.nodes[index as usize];
+            if !box_crossed(node.low, node.high, point, direction) {
+                continue;
+            }
+            if node.count > 0 {
+                for slot in node.start..node.start + node.count {
+                    let entry = self.entries[self.order[slot as usize] as usize];
+                    let crossings = entry.primitive.crossings(point, direction);
+                    if crossings == 0 {
+                        continue;
+                    }
+                    match counts.iter_mut().find(|count| count.0 == entry.object) {
+                        Some(count) => count.1 += crossings,
+                        None => counts.push((entry.object, crossings)),
+                    }
+                }
+                continue;
+            }
+            push(&mut stack, &mut depth, index + 1);
+            push(&mut stack, &mut depth, node.right);
+        }
+        counts
+            .into_iter()
+            .filter(|count| count.1 % 2 == 1)
+            .map(|count| count.0)
+            .collect()
     }
 
     pub fn contains(&self, point: Vec3) -> Option<u32> {
@@ -342,14 +465,14 @@ fn box_distance(low: Vec3, high: Vec3, point: Vec3) -> f32 {
     offset.length()
 }
 
-fn box_crossed(low: Vec3, high: Vec3, origin: Vec3, direction: Vec3) -> bool {
+fn box_span(low: Vec3, high: Vec3, origin: Vec3, direction: Vec3) -> Option<(f32, f32)> {
     let mut entry = f32::NEG_INFINITY;
     let mut exit = f32::INFINITY;
     for axis in 0..3 {
         let step = direction[axis];
         if step.abs() < PARALLEL {
             if origin[axis] < low[axis] || origin[axis] > high[axis] {
-                return false;
+                return None;
             }
             continue;
         }
@@ -359,5 +482,9 @@ fn box_crossed(low: Vec3, high: Vec3, origin: Vec3, direction: Vec3) -> bool {
         entry = entry.max(first.min(second));
         exit = exit.min(first.max(second));
     }
-    exit >= entry.max(0.0)
+    (exit >= entry).then_some((entry, exit))
+}
+
+fn box_crossed(low: Vec3, high: Vec3, origin: Vec3, direction: Vec3) -> bool {
+    box_span(low, high, origin, direction).is_some_and(|(entry, exit)| exit >= entry.max(0.0))
 }

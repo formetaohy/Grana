@@ -63,7 +63,7 @@ fn region_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(entry, exit);
 }
 
-fn lighting(uvw: vec3<f32>) -> vec2<f32> {
+fn lighting(uvw: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
     let occlusion = local_occlusion(uvw);
     let strength = clamp(frame.march.y, 0.0, 1.0);
     if (strength <= 0.0) {
@@ -71,7 +71,10 @@ fn lighting(uvw: vec3<f32>) -> vec2<f32> {
     }
     let world = frame.box_min.xyz + uvw * frame.box_size.xyz;
     let coordinate = shadow_coordinate(frame.light_view, world);
-    let sun = sun_transmittance(coordinate, frame.light_reach.y);
+    let sun = sun_transmittance(
+        coordinate,
+        shadow_bias(frame.light_reach, normal, frame.light.xyz),
+    );
     return vec2<f32>(mix(1.0, sun, strength), occlusion);
 }
 
@@ -106,11 +109,8 @@ fn shade_volume(
     if (weight <= 0.0) {
         return color;
     }
-    return mix(
-        color,
-        lit(color, shaded_normal(gradient, direction), direction, lighting(uvw)),
-        weight,
-    );
+    let normal = shaded_normal(gradient, direction);
+    return mix(color, lit(color, normal, direction, lighting(uvw, normal)), weight);
 }
 
 @fragment

@@ -44,6 +44,7 @@ const SECTION_BUDGET_DIVISOR: usize = 2;
 const PREFETCH_LIMIT: usize = 1024;
 const PREFETCH_SHARE: usize = 4;
 const CENSUS_BYTES: u64 = (CENSUS_LEVELS * size_of::<u32>()) as u64;
+const UNIT: f32 = 65535.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ViewInfo {
@@ -657,9 +658,11 @@ impl Renderer {
         let finest = pyramid.level(0);
         let world = Vec3::from(finest.world_extent());
         let spacing = finest.spacing();
+        let (shadow_low, shadow_high) = shadow_bounds(scene, world);
         let space = ShadowSpace::new(
             camera.light_direction(),
-            world,
+            shadow_low,
+            shadow_high,
             Vec3::new(spacing.x(), spacing.y(), spacing.z()),
         );
         let mut frame_data = FrameData::new(
@@ -770,10 +773,11 @@ impl Renderer {
                     digest(&[*content, styles, volume_level as u64]),
                 );
                 if scene.shading.shadows > 0.0 {
-                    let object = digest(&[styles, space.digest()]);
+                    let object = digest(&[shadow_geometry(scene), space.digest()]);
                     if *object_key != Some(object) {
                         *object_key = Some(object);
                         meshes.draw_shadow(&mut encoder, shadow.objects());
+                        markers.draw_shadow(&mut encoder, shadow.objects(), scene_group);
                     }
                     shadow.encode_tau(
                         &mut encoder,
@@ -1053,6 +1057,47 @@ impl Signature<'_, '_> {
 fn digest(words: &[u64]) -> u64 {
     let mut hasher = DefaultHasher::new();
     words.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn shadow_bounds(scene: &SceneFrame<'_>, world: Vec3) -> (Vec3, Vec3) {
+    let mut low = -0.5 * world;
+    let mut high = 0.5 * world;
+    for layer in scene.layers {
+        for (object, group) in layer.mesh.groups().iter().enumerate() {
+            if !scene.styles[layer.style_start + object].visible() {
+                continue;
+            }
+            let object_low = Vec3::from(group.min());
+            let object_high = object_low + UNIT * Vec3::from(group.scale());
+            low = low.min(object_low);
+            high = high.max(object_high);
+        }
+    }
+    for marker in scene.markers {
+        let center = Vec3::from(marker.center());
+        let radius = Vec3::splat(marker.radius());
+        low = low.min(center - radius);
+        high = high.max(center + radius);
+    }
+    (low, high)
+}
+
+fn shadow_geometry(scene: &SceneFrame<'_>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    scene.layers.len().hash(&mut hasher);
+    for layer in scene.layers {
+        layer.key.hash(&mut hasher);
+        layer.style_count.hash(&mut hasher);
+        for style in &scene.styles[layer.style_start..layer.style_start + layer.style_count] {
+            style.visible().hash(&mut hasher);
+        }
+    }
+    scene.markers.len().hash(&mut hasher);
+    for marker in scene.markers {
+        marker.center().map(f32::to_bits).hash(&mut hasher);
+        marker.radius().to_bits().hash(&mut hasher);
+    }
     hasher.finish()
 }
 

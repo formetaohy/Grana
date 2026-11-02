@@ -1,5 +1,7 @@
+use glam::Vec2;
 use grana_animation::Timeline;
 use grana_display::Viewport;
+use grana_measure::MeasureView;
 use grana_scene::{Measure, ObjectSetId, Progress, Scene};
 use grana_session::{BatchView, HistoryView, IoView};
 
@@ -44,6 +46,21 @@ impl Default for Playback {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlotGate {
+    Lasso,
+    Rectangle,
+}
+
+#[derive(Default)]
+pub(crate) struct PlotDrag {
+    pub view: Option<MeasureView>,
+    pub gate: Option<PlotGate>,
+    pub origin: Option<Vec2>,
+    pub moved: bool,
+    pub vertices: Vec<Vec2>,
+}
+
 #[derive(Default)]
 pub struct Workspace {
     pub panel: Option<Panel>,
@@ -51,6 +68,7 @@ pub struct Workspace {
     pub movie_size: [u32; 2],
     pub track_set: Option<ObjectSetId>,
     pub join: Option<(u32, usize)>,
+    pub(crate) drag: PlotDrag,
 }
 
 pub struct State<'a> {

@@ -23,6 +23,7 @@ impl Snapshot {
             .and_then(|id| scene.objects.get(id));
         if !set.is_some_and(|set| set.detected() > 0) {
             state.filters.clear();
+            state.lasso = None;
             state.sort = None;
             state.columns.clear();
             state.axes = [0; 2];

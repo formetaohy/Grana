@@ -1,6 +1,6 @@
 use glam::Vec2;
-use grana_measure::{Aggregate, Column, Filter, Group, MeasureView, PlotAxis};
-use grana_scene::{Item, Selection};
+use grana_measure::{Aggregate, Column, Filter, Group, MeasureView, Observation, PlotAxis, Scope};
+use grana_scene::{Item, ObjectSetId, Selection};
 use grana_ui::{Align, Axis, Block, Color, Corners, Icon, Length, Rect, Role, TextStyle, Ui, icon};
 
 use crate::panel::empty_state;
@@ -49,7 +49,41 @@ fn view_row(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         Vec2::splat(24.0),
     );
     let actions = Rect::from_min_max(row.min, Vec2::new(clear.min.x - 8.0, row.max.y));
-    let view_rect = Rect::from_min_size(actions.min, Vec2::new(VIEW_WIDTH, row.height()));
+    let scope = state.measure.scope();
+    let ranged = state.measure.group() != Group::Track;
+    let scope_width = if ranged { 176.0 } else { 0.0 };
+    let scope_rect = Rect::from_min_size(actions.min, Vec2::new(scope_width, row.height()));
+    if ranged {
+        ui.place(scope_rect, |ui| {
+            ui.row(
+                Block::row()
+                    .gaps(6.0)
+                    .align(Align::Center)
+                    .height(Length::Fill),
+                |ui| {
+                    widget::field_label(ui, "RANGE");
+                    let labels = Scope::ALL.map(Scope::label);
+                    let index = Scope::ALL
+                        .iter()
+                        .position(|current| *current == scope)
+                        .unwrap_or(0);
+                    if let Some(chosen) = widget::segmented(ui, "measure.scope", &labels, index) {
+                        let next = Scope::ALL[chosen];
+                        if next != scope {
+                            commands.push(Command::SetMeasureScope(next));
+                        }
+                    }
+                },
+            );
+        });
+    }
+    let view_rect = Rect::from_min_size(
+        Vec2::new(
+            scope_rect.max.x + if ranged { 12.0 } else { 0.0 },
+            row.min.y,
+        ),
+        Vec2::new(VIEW_WIDTH, row.height()),
+    );
     ui.place(view_rect, |ui| {
         let index = match view {
             MeasureView::Table => 0,
@@ -64,6 +98,42 @@ fn view_row(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         ) && MeasureView::ALL[chosen] != view
         {
             commands.push(Command::SetMeasureView(MeasureView::ALL[chosen]));
+        }
+    });
+    let lasso = state.measure.lasso().is_some();
+    let gated = lasso
+        || state.measure.filters().iter().any(|filter| {
+            filter.column() == axes[0]
+                || (view == MeasureView::Scatter && filter.column() == axes[1])
+        });
+    ui.place(clear, |ui| {
+        if widget::icon_button_enabled(
+            ui,
+            "measure.gate.clear",
+            Icon::Close,
+            24.0,
+            Role::Quiet,
+            "Clear the gate and the lasso",
+            gated,
+        ) {
+            let mut indices = state
+                .measure
+                .filters()
+                .iter()
+                .enumerate()
+                .filter(|(_, filter)| {
+                    filter.column() == axes[0]
+                        || (view == MeasureView::Scatter && filter.column() == axes[1])
+                })
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            indices.sort_unstable_by(|left, right| right.cmp(left));
+            for index in indices {
+                commands.push(Command::RemoveFilter(index));
+            }
+            if lasso {
+                commands.push(Command::SetLasso(None));
+            }
         }
     });
     if view == MeasureView::Table {
@@ -116,36 +186,6 @@ fn view_row(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                 }
             },
         );
-    });
-    let gated = state.measure.filters().iter().any(|filter| {
-        filter.column() == axes[0] || (view == MeasureView::Scatter && filter.column() == axes[1])
-    });
-    ui.place(clear, |ui| {
-        if widget::icon_button_enabled(
-            ui,
-            "measure.gate.clear",
-            Icon::Close,
-            24.0,
-            Role::Quiet,
-            "Clear the gate",
-            gated,
-        ) {
-            let mut indices = state
-                .measure
-                .filters()
-                .iter()
-                .enumerate()
-                .filter(|(_, filter)| {
-                    filter.column() == axes[0]
-                        || (view == MeasureView::Scatter && filter.column() == axes[1])
-                })
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>();
-            indices.sort_unstable_by(|left, right| right.cmp(left));
-            for index in indices {
-                commands.push(Command::RemoveFilter(index));
-            }
-        }
     });
 }
 
@@ -242,7 +282,7 @@ fn header(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
             },
         );
     });
-    let total = state.measure.table().map_or(0, |table| table.rows());
+    let total = state.measure.total();
     let shown = state.measure.rows().len();
     ui.place(right, |ui| {
         ui.row(
@@ -631,27 +671,7 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                 }
             }
             if response.clicked {
-                match (
-                    observation.time(),
-                    observation.object(),
-                    observation.track(),
-                ) {
-                    (Some(time), Some(object), _) => {
-                        commands.push(Command::SetTime(time));
-                        commands.push(Command::Select(Some(Selection {
-                            set,
-                            item: Item::Object(object),
-                        })));
-                    }
-                    (_, _, Some(track)) => {
-                        commands.push(Command::Select(Some(Selection {
-                            set,
-                            item: Item::Track(track),
-                        })));
-                    }
-                    (Some(time), _, _) => commands.push(Command::SetTime(time)),
-                    _ => {}
-                }
+                locate(commands, set, observation);
             }
         }
         let remaining = shown.saturating_sub(last);
@@ -661,6 +681,30 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     });
     for index in toggled {
         commands.push(Command::ToggleSort(index));
+    }
+}
+
+pub(crate) fn locate(commands: &mut Vec<Command>, set: ObjectSetId, observation: Observation) {
+    match (
+        observation.time(),
+        observation.object(),
+        observation.track(),
+    ) {
+        (Some(time), Some(object), _) => {
+            commands.push(Command::SetTime(time));
+            commands.push(Command::Select(Some(Selection {
+                set,
+                item: Item::Object(object),
+            })));
+        }
+        (_, _, Some(track)) => {
+            commands.push(Command::Select(Some(Selection {
+                set,
+                item: Item::Track(track),
+            })));
+        }
+        (Some(time), _, _) => commands.push(Command::SetTime(time)),
+        _ => {}
     }
 }
 

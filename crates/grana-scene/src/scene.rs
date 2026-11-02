@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use glam::Vec3;
 use grana_display::{Ray, Shading, TransferFunction};
 use grana_measure::RelationRow;
@@ -35,6 +37,7 @@ pub struct Scene {
     pub mask: Option<ObjectSetId>,
     pub objects: Objects,
     pub coloc: Coloc,
+    pub(crate) pick: RefCell<pick::Cache>,
     time: u32,
     selection: Option<Selection>,
 }
@@ -66,6 +69,7 @@ impl Scene {
             mask: None,
             objects: Objects::new(),
             coloc: Coloc::new(channel_count, region),
+            pick: RefCell::default(),
             time: 0,
             selection: None,
         }

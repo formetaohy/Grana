@@ -105,10 +105,10 @@ fn filters_sorts_and_exports_rows() {
         Aggregate::Mean,
     );
     let x = column(&table, "x_um");
-    let matched = table.matching(&[Filter::new(x, 3.5, 6.0)]);
+    let matched = table.matching(&[Filter::new(x, 3.5, 6.0)], None, None);
     assert_eq!(matched, vec![1, 3]);
 
-    let empty = table.matching(&[Filter::new(x, 10.0, 20.0)]);
+    let empty = table.matching(&[Filter::new(x, 10.0, 20.0)], None, None);
     assert!(empty.is_empty());
 
     let mut ordered = matched.clone();
