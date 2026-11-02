@@ -256,6 +256,12 @@ impl ObjectSet {
             .and_then(|slot| slot.data.as_deref())
     }
 
+    pub fn frame_shared(&self, time: u32) -> Option<Arc<ObjectFrame>> {
+        self.frames
+            .get(time as usize)
+            .and_then(|slot| slot.data.clone())
+    }
+
     pub fn frame_stamp(&self, time: u32) -> Option<u64> {
         self.frames
             .get(time as usize)

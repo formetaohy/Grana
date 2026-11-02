@@ -40,7 +40,7 @@ fn traces_branching_filaments() {
         channel_intensity(),
     );
     let set = scan
-        .frame(&data, |_| Ok(data.clone()))
+        .frame(&data, None, |_| Ok(data.clone()))
         .expect("the filament scan traces the frame");
     assert_eq!(set.object_count(), 1, "the spur merges into one filament");
     let statistics = set.object(0).expect("the filament exists");
@@ -80,7 +80,7 @@ fn traces_branching_filaments() {
     let region = Region::new(Vec3::new(-9.0, -9.0, -4.0), Vec3::new(-2.0, 9.0, 4.0));
     let mut restricted = FilamentScan::new(0, level, params(), 1, 0, region, channel_intensity());
     let restricted = restricted
-        .frame(&data, |_| Ok(data.clone()))
+        .frame(&data, None, |_| Ok(data.clone()))
         .expect("the restricted filament scan traces the frame");
     assert_eq!(
         restricted.object_count(),

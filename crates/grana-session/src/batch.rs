@@ -162,6 +162,12 @@ struct Report {
     detail: String,
 }
 
+struct Progress<'a> {
+    index: usize,
+    events: &'a Sender<Event>,
+    cancel: &'a AtomicBool,
+}
+
 fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
     if let Err(detail) = prepare(&plan) {
         let _ = events.send(Event::Failed(detail));
@@ -373,18 +379,44 @@ fn write_dataset(
         .map_or_else(Region::none, |region| region.region(world(pyramid)));
     let mut objects = 0usize;
     let mut detail = Vec::new();
+    let mut detected = Vec::<(String, Vec<Option<grana_analysis::RoiFrame>>)>::new();
+    let progress = Progress {
+        index,
+        events,
+        cancel,
+    };
     for set in protocol.sets() {
         if cancel.load(Ordering::Relaxed) {
             return Err("cancelled".to_string());
         }
         let channel = resolve(pyramid, &set.channel)
             .map_err(|detail| format!("the set {} cannot start: {detail}", set.name))?;
+        let roi = match set.mask() {
+            Some(mask) => match detected.iter().find(|(name, _)| name == mask) {
+                Some((_, frames)) if frames.iter().any(Option::is_some) => {
+                    Some(grana_analysis::Roi::new(frames.clone()))
+                }
+                Some(_) => {
+                    return Err(format!(
+                        "the set {} is masked by {mask}, which detected no objects",
+                        set.name
+                    ));
+                }
+                None => {
+                    return Err(format!(
+                        "the set {} is masked by {mask}, which holds no detections yet",
+                        set.name
+                    ));
+                }
+            },
+            None => None,
+        };
         let _ = events.send(Event::Step {
             index,
             label: format!("detecting {}", set.name),
         });
-        let frames = detect(&reader, channel, set, region, index, events, cancel)?;
-        let detected = frame_refs(&frames);
+        let frames = detect(&reader, channel, set, region, roi, &progress)?;
+        let detected_frames = frame_refs(&frames);
         let tracks = if let Some(params) = set.track_params() {
             let _ = events.send(Event::Step {
                 index,
@@ -398,7 +430,7 @@ fn write_dataset(
             None
         };
         let table = Table::build(
-            &detected,
+            &detected_frames,
             tracks.as_ref(),
             &channels,
             pyramid.frame_interval(),
@@ -411,6 +443,13 @@ fn write_dataset(
         write(&file, &table.csv(&rows))?;
         objects += rows.len();
         detail.push(format!("{}={}", set.name, rows.len()));
+        detected.push((
+            set.name.clone(),
+            frames
+                .iter()
+                .map(|frame| frame.as_ref().map(ObjectFrame::roi))
+                .collect(),
+        ));
     }
     if let Some(coloc) = protocol.coloc() {
         let _ = events.send(Event::Step {
@@ -450,20 +489,31 @@ fn detect(
     channel: usize,
     set: &crate::protocol::SetSpec,
     region: Region,
-    index: usize,
-    events: &Sender<Event>,
-    cancel: &AtomicBool,
+    roi: Option<grana_analysis::Roi>,
+    progress: &Progress<'_>,
 ) -> Result<Vec<Option<ObjectFrame>>, String> {
     let frames = reader.pyramid().frame_count() as usize;
     let mut collected = vec![None; frames];
     let mut sink = |event: RunEvent| match event {
         RunEvent::Frame { time, frame } => collected[time as usize] = Some(frame),
         RunEvent::Progress { done, total, .. } => {
-            let _ = events.send(Event::Progress { index, done, total });
+            let _ = progress.events.send(Event::Progress {
+                index: progress.index,
+                done,
+                total,
+            });
         }
         RunEvent::Tracks(_) | RunEvent::Coloc { .. } | RunEvent::Done | RunEvent::Failed(_) => {}
     };
-    run::detect(reader, channel, set.params(), region, cancel, &mut sink)?;
+    run::detect(
+        reader,
+        channel,
+        set.params(),
+        region,
+        roi,
+        progress.cancel,
+        &mut sink,
+    )?;
     Ok(collected)
 }
 

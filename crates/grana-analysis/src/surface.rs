@@ -8,6 +8,7 @@ use grana_volume::{
 };
 
 use crate::SurfaceParams;
+use crate::mask::Mask;
 use crate::table::{EDGE_TABLE, TRIANGLE_TABLE};
 
 const CORNER: [[usize; 3]; 8] = [
@@ -186,7 +187,7 @@ impl SurfaceBuilder {
         )
     }
 
-    pub fn add(&mut self, coord: BrickCoord, data: &BrickData) {
+    pub fn add(&mut self, coord: BrickCoord, data: &BrickData, roi: Option<&Mask>) {
         assert_eq!(
             coord,
             self.coord(self.next),
@@ -234,7 +235,12 @@ impl SurfaceBuilder {
                             && voxel[axis] < i64::from(self.ranges[axis].end)
                     });
                     let index = rx + es[0] * (ry + es[1] * rz);
-                    self.mask[index] = inside && self.value(rx, ry, rz) >= threshold;
+                    let selected = roi.is_none_or(|roi| {
+                        roi.contains([0, 1, 2].map(|axis| {
+                            (voxel[axis] as f32 + 0.5) * self.spacing[axis] - 0.5 * self.world[axis]
+                        }))
+                    });
+                    self.mask[index] = inside && selected && self.value(rx, ry, rz) >= threshold;
                 }
             }
         }

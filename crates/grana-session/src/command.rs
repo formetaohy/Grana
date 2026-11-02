@@ -59,6 +59,7 @@ pub enum Command {
         set: ObjectSetId,
         coloring: Coloring<Measurement>,
     },
+    SetMask(Option<ObjectSetId>),
     SetTrackParams {
         set: ObjectSetId,
         params: TrackParams,
@@ -171,6 +172,7 @@ pub enum Action {
     ObjectColor,
     ObjectParameters,
     ObjectColoring,
+    Mask,
     TrackVisible,
     TrackThickness,
     TrackColoring,
@@ -214,6 +216,7 @@ impl Action {
             Self::ObjectColor => "object color",
             Self::ObjectParameters => "object parameters",
             Self::ObjectColoring => "object colors",
+            Self::Mask => "analysis mask",
             Self::TrackVisible => "track visibility",
             Self::TrackThickness => "track width",
             Self::TrackColoring => "track colors",
@@ -326,6 +329,7 @@ impl Command {
             Self::SetObjectColoring { set, .. } => {
                 Edit::targeted(Action::ObjectColoring, set.raw())
             }
+            Self::SetMask(_) => Edit::new(Action::Mask),
             Self::SetTrackVisible { set, .. } => Edit::targeted(Action::TrackVisible, set.raw()),
             Self::SetTrackThickness { set, .. } => {
                 Edit::targeted(Action::TrackThickness, set.raw())

@@ -3,7 +3,7 @@ use std::ops::Range;
 use grana_object::{SampleAccumulator, Spot};
 use grana_volume::{Level, Region as VolumeRegion};
 
-use crate::SpotParams;
+use crate::{Mask, SpotParams};
 
 const FWHM_PER_SIGMA: f32 = 2.354_82;
 const MIN_SIGMA: f32 = 0.5;
@@ -108,7 +108,7 @@ impl SpotScan {
         })
     }
 
-    pub fn detect(&mut self, index: usize, values: &[f32]) -> Vec<Spot> {
+    pub fn detect(&mut self, index: usize, values: &[f32], roi: Option<&Mask>) -> Vec<Spot> {
         let core = self.core(index);
         let read = self.read_range(index);
         let read_dims = dimensions(&read);
@@ -242,6 +242,9 @@ impl SpotScan {
                     let center = [0, 1, 2].map(|axis| {
                         (voxel[axis] + 0.5) * self.spacing[axis] - 0.5 * self.world[axis]
                     });
+                    if roi.is_some_and(|roi| !roi.contains(center)) {
+                        continue;
+                    }
                     spots.push(Spot::new(center, self.radius, value));
                 }
             }

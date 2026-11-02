@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::IntensityTable;
 use grana_geometry::{Bounds, Mesh, PackedMesh};
 
@@ -72,7 +74,7 @@ impl SurfaceStatistics {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SurfaceSet {
     level: usize,
-    geometry: PackedMesh,
+    geometry: Arc<PackedMesh>,
     objects: Vec<SurfaceStatistics>,
     intensities: IntensityTable,
 }
@@ -84,7 +86,7 @@ impl SurfaceSet {
         objects: Vec<SurfaceStatistics>,
         intensities: IntensityTable,
     ) -> Self {
-        let geometry = PackedMesh::new(mesh);
+        let geometry = Arc::new(PackedMesh::new(mesh));
         assert_eq!(
             geometry.object_count(),
             objects.len(),
@@ -122,7 +124,7 @@ impl SurfaceSet {
         }
         Some(Self {
             level,
-            geometry,
+            geometry: Arc::new(geometry),
             objects,
             intensities,
         })
@@ -134,6 +136,10 @@ impl SurfaceSet {
 
     pub fn geometry(&self) -> &PackedMesh {
         &self.geometry
+    }
+
+    pub fn shared(&self) -> Arc<PackedMesh> {
+        Arc::clone(&self.geometry)
     }
 
     pub fn objects(&self) -> &[SurfaceStatistics] {

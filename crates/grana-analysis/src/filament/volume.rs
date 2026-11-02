@@ -2,6 +2,7 @@ use glam::Vec3;
 use grana_volume::{Region, VoxelData};
 
 use super::Grid;
+use crate::mask::Mask;
 
 const AXIS: u16 = 16;
 const FACE: u16 = 23;
@@ -20,19 +21,30 @@ pub(super) fn radius(distance: u16, spacing: f32) -> f32 {
     ((f32::from(distance) / SCALE) - 0.5).max(MINIMUM_RADIUS) * spacing
 }
 
+pub(super) struct Gate<'a> {
+    pub(super) region: Region,
+    pub(super) roi: Option<&'a Mask>,
+}
+
+impl Gate<'_> {
+    fn admits(&self, point: [f32; 3]) -> bool {
+        self.region.contains(Vec3::from(point)) && self.roi.is_none_or(|roi| roi.contains(point))
+    }
+}
+
 pub(super) fn mask(
     data: &VoxelData,
     extent: [u32; 3],
     step: [u32; 3],
     grid: &Grid,
     threshold: f32,
-    region: Region,
+    gate: Gate<'_>,
     mask: &mut [u8],
 ) {
     match data {
-        VoxelData::U8(values) => fill(values, extent, step, grid, threshold, region, mask),
-        VoxelData::U16(values) => fill(values, extent, step, grid, threshold, region, mask),
-        VoxelData::F32(values) => fill(values, extent, step, grid, threshold, region, mask),
+        VoxelData::U8(values) => fill(values, extent, step, grid, threshold, gate, mask),
+        VoxelData::U16(values) => fill(values, extent, step, grid, threshold, gate, mask),
+        VoxelData::F32(values) => fill(values, extent, step, grid, threshold, gate, mask),
     }
 }
 
@@ -50,7 +62,7 @@ fn fill<T: Sample>(
     step: [u32; 3],
     grid: &Grid,
     threshold: f32,
-    region: Region,
+    gate: Gate<'_>,
     mask: &mut [u8],
 ) {
     let width = extent[0] as usize;
@@ -65,7 +77,7 @@ fn fill<T: Sample>(
             let high_y = (low_y + step[1] as usize).min(height);
             for x in 0..grid.dims[0] as usize {
                 let cell = stride[2] * (z + 1) + stride[1] * (y + 1) + x + 1;
-                if !region.contains(Vec3::from(grid.position([x as f32, y as f32, z as f32]))) {
+                if !gate.admits(grid.position([x as f32, y as f32, z as f32])) {
                     mask[cell] = 0;
                     continue;
                 }

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{
-    ColocScan, FilamentScan, SpotScan, SurfaceBuilder, TrackBuilder, filament_level,
+    ColocScan, FilamentScan, Roi, SpotScan, SurfaceBuilder, TrackBuilder, filament_level,
 };
 use grana_image::Image;
 use grana_measure::ColocPair;
@@ -16,13 +16,18 @@ pub(crate) fn detect(
     channel: usize,
     params: ObjectParams,
     region: grana_volume::Region,
+    roi: Option<Roi>,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
     match params {
-        ObjectParams::Spots(params) => spots(reader, channel, params, region, cancel, sink),
-        ObjectParams::Surfaces(params) => surfaces(reader, channel, params, region, cancel, sink),
-        ObjectParams::Filaments(params) => filaments(reader, channel, params, region, cancel, sink),
+        ObjectParams::Spots(params) => spots(reader, channel, params, region, roi, cancel, sink),
+        ObjectParams::Surfaces(params) => {
+            surfaces(reader, channel, params, region, roi, cancel, sink)
+        }
+        ObjectParams::Filaments(params) => {
+            filaments(reader, channel, params, region, roi, cancel, sink)
+        }
     }
 }
 
@@ -125,6 +130,7 @@ fn spots(
     channel: usize,
     params: grana_analysis::SpotParams,
     region: grana_volume::Region,
+    roi: Option<Roi>,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
@@ -147,6 +153,7 @@ fn spots(
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
+        let mask = roi.as_ref().map(|roi| roi.mask(pyramid.level(0), time));
         sink(Event::Progress {
             time,
             done: 0,
@@ -164,7 +171,7 @@ fn spots(
             values.clear();
             values.resize(data.voxel_count(), 0.0);
             data.write_values(&mut values);
-            spots.extend(scanner.detect(index, &values));
+            spots.extend(scanner.detect(index, &values, mask.as_ref()));
             accumulators.resize(spots.len() * channels, SampleAccumulator::new());
             for (slot, accumulator) in scanner
                 .measure(index, &spots[start..], &values)
@@ -219,6 +226,7 @@ fn surfaces(
     channel: usize,
     params: grana_analysis::SurfaceParams,
     region: grana_volume::Region,
+    roi: Option<Roi>,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
@@ -248,6 +256,7 @@ fn surfaces(
             pyramid.channels()[channel].intensity(),
         );
         let total = builder.coord_count();
+        let mask = roi.as_ref().map(|roi| roi.mask(pyramid.level(0), time));
         sink(Event::Progress {
             time,
             done: 0,
@@ -259,7 +268,7 @@ fn surfaces(
             }
             let coord = builder.coord(index);
             let data = reader.read_brick(time, 0, coord)?;
-            builder.add(coord, &data);
+            builder.add(coord, &data, mask.as_ref());
             if index % 16 == 0 || index + 1 == total {
                 sink(Event::Progress {
                     time,
@@ -282,6 +291,7 @@ fn filaments(
     channel: usize,
     params: grana_analysis::FilamentParams,
     region: grana_volume::Region,
+    roi: Option<Roi>,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
@@ -319,7 +329,8 @@ fn filaments(
             total: total as usize,
         });
         let detection = full_region(reader, pyramid, time, level, channel)?;
-        let set = scan.frame(&detection, |measured| {
+        let mask = roi.as_ref().map(|roi| roi.mask(pyramid.level(level), time));
+        let set = scan.frame(&detection, mask.as_ref(), |measured| {
             full_region(reader, pyramid, time, level, measured)
         })?;
         sink(Event::Frame {

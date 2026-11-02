@@ -32,7 +32,7 @@ fn extracts_measured_surfaces() {
     );
     for index in 0..builder.coord_count() {
         let coord = builder.coord(index);
-        builder.add(coord, &brick(&volume, &grid, coord));
+        builder.add(coord, &brick(&volume, &grid, coord), None);
     }
     let set = builder.finish();
     assert_eq!(set.object_count(), centres.len(), "each blob is one object");
@@ -105,7 +105,7 @@ fn extracts_measured_surfaces() {
     );
     for index in 0..filtered.coord_count() {
         let coord = filtered.coord(index);
-        filtered.add(coord, &brick(&volume, &grid, coord));
+        filtered.add(coord, &brick(&volume, &grid, coord), None);
     }
     let filtered = filtered.finish();
     assert!(
@@ -126,7 +126,7 @@ fn extracts_measured_surfaces() {
     );
     for index in 0..restricted.coord_count() {
         let coord = restricted.coord(index);
-        restricted.add(coord, &brick(&volume, &grid, coord));
+        restricted.add(coord, &brick(&volume, &grid, coord), None);
     }
     let restricted = restricted.finish();
     assert_eq!(

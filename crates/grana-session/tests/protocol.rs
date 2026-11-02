@@ -141,6 +141,20 @@ fn rejects_an_invalid_protocol() {
     );
     assert!(
         invalid(&PROTOCOL.replace(
+            "\"color\": [1.0, 0.7, 0.2],",
+            "\"color\": [1.0, 0.7, 0.2], \"mask\": \"Puncta\","
+        )),
+        "an analysis mask names a set that runs before it"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace(
+            "\"color\": [1.0, 0.7, 0.2],",
+            "\"color\": [1.0, 0.7, 0.2], \"mask\": \"Nuclei\","
+        )),
+        "a set cannot be masked by itself"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace(
             "\"name\": \"Puncta\",\n      \"channel\": \"GFP\",\n      \"color\": [0.3, 0.8, 1.0],\n      \"detection\": {\"kind\": \"spots\", \"diameter\": 0.45, \"contrast\": 0.1}",
             "\"name\": \"Puncta\",\n      \"channel\": \"GFP\",\n      \"color\": [0.3, 0.8, 1.0],\n      \"detection\": {\"kind\": \"spots\", \"diameter\": 0.45, \"contrast\": 0.1},\n      \"measure\": {\"group\": \"tracks\", \"aggregate\": \"mean\"}"
         )),
@@ -181,4 +195,33 @@ fn captures_the_analysis_of_a_scene() {
     let region = protocol.region().expect("the scene region is captured");
     assert_eq!(region.low, [0.25, 0.25, 0.25]);
     assert_eq!(region.high, [0.75, 0.75, 0.75]);
+}
+
+#[test]
+fn captures_an_analysis_mask() {
+    let extent = Extent::new(4, 4, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "DAPI",
+            [0.3, 0.4, 1.0],
+            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+        )],
+    );
+    let series = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let first = scene.add_object(ObjectKind::Surfaces, 0);
+    scene.add_object(ObjectKind::Spots, 0);
+    scene.set_mask(Some(first));
+    let protocol =
+        Protocol::capture(&scene, &Measure::new()).expect("the masked analysis captures");
+    assert_eq!(protocol.sets().len(), 2);
+    assert_eq!(protocol.sets()[0].name, "Surfaces 1");
+    assert_eq!(protocol.sets()[0].mask(), None);
+    assert_eq!(protocol.sets()[1].name, "Spots 1");
+    assert_eq!(protocol.sets()[1].mask(), Some("Surfaces 1"));
+    let text = protocol.to_json().expect("the protocol serializes");
+    let restored = Protocol::from_json(&text).expect("the protocol round trips");
+    assert_eq!(protocol, restored);
 }

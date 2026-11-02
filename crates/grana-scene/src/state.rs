@@ -22,6 +22,7 @@ pub struct SceneState {
     pub step_scale: f32,
     pub exposure: f32,
     pub region: Region,
+    pub mask: Option<u64>,
     pub time: u32,
     pub selection: Option<SelectionState>,
     pub sets: Vec<SetState>,
@@ -107,6 +108,7 @@ impl Scene {
             step_scale: self.step_scale,
             exposure: self.exposure,
             region: self.region,
+            mask: self.mask.map(|set| set.raw()),
             time: self.time(),
             selection: self.selection().map(|selection| SelectionState {
                 set: selection.set.raw(),
@@ -137,6 +139,10 @@ impl Scene {
         self.exposure = state.exposure;
         self.region = state.region;
         self.objects.restore(state.sets, &self.dataset);
+        self.mask = state
+            .mask
+            .and_then(ObjectSetId::from_raw)
+            .filter(|set| self.objects.get(*set).is_some());
         self.coloc
             .restore(state.coloc, self.channels.len(), self.frame_count());
         self.set_time(state.time);
@@ -187,6 +193,7 @@ impl Scene {
             hash = mix(hash, set.kind().index() as u64);
             hash = mix(hash, set.document());
         }
+        hash = mix(hash, self.mask.map_or(0, ObjectSetId::raw));
         hash = mix(hash, self.coloc.document());
         hash
     }

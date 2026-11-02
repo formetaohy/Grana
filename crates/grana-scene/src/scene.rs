@@ -31,6 +31,7 @@ pub struct Scene {
     pub step_scale: f32,
     pub exposure: f32,
     pub region: Region,
+    pub mask: Option<ObjectSetId>,
     pub objects: Objects,
     pub coloc: Coloc,
     time: u32,
@@ -60,6 +61,7 @@ impl Scene {
             step_scale: 1.0,
             exposure: 1.0,
             region: Region::full(-half, half),
+            mask: None,
             objects: Objects::new(),
             coloc: Coloc::new(channel_count),
             time: 0,
@@ -131,6 +133,28 @@ impl Scene {
         if self.selection.is_some_and(|selection| selection.set == id) {
             self.selection = None;
         }
+        if self.mask == Some(id) {
+            self.mask = None;
+        }
+    }
+
+    pub fn set_mask(&mut self, source: Option<ObjectSetId>) {
+        if let Some(source) = source {
+            assert!(
+                self.objects.get(source).is_some(),
+                "an analysis mask names an object set of the scene"
+            );
+        }
+        self.mask = source;
+    }
+
+    pub fn mask_frames(&self) -> Option<Vec<Option<grana_analysis::RoiFrame>>> {
+        let set = self.objects.get(self.mask?)?;
+        Some(
+            (0..self.frame_count())
+                .map(|time| set.frame_shared(time).as_deref().map(ObjectFrame::roi))
+                .collect(),
+        )
     }
 
     pub fn install(&mut self, id: ObjectSetId, time: u32, frame: ObjectFrame) {

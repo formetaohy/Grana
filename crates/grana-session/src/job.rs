@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-use grana_analysis::TrackParams;
+use grana_analysis::{Roi, TrackParams};
 use grana_image::{Image, Source};
 use grana_measure::ColocPair;
 use grana_scene::{Job, ObjectParams};
@@ -43,10 +43,11 @@ pub fn detect(
     channel: usize,
     params: ObjectParams,
     region: Region,
+    roi: Option<Roi>,
 ) -> Analysis {
     spawn(job, move |cancel, sink| {
         let reader = Image::open(&source)?;
-        run::detect(&reader, channel, params, region, cancel, sink)
+        run::detect(&reader, channel, params, region, roi, cancel, sink)
     })
 }
 

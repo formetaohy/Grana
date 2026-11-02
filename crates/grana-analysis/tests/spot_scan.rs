@@ -128,7 +128,7 @@ fn scan_all(scan: &mut SpotScan, data: &VoxelData, level: Level) -> Vec<Spot> {
         values.clear();
         values.resize(region.voxel_count(), 0.0);
         region.write_values(&mut values);
-        spots.extend(scan.detect(index, &values));
+        spots.extend(scan.detect(index, &values, None));
     }
     spots
 }

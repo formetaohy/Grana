@@ -227,6 +227,7 @@ fn inspector_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mu
                             }
                             1 => {
                                 ui.column(Block::column().gaps(6.0), |ui| {
+                                    crate::inspector::mask(ui, state, commands);
                                     crate::object_panel::build(ui, state, commands);
                                 });
                             }

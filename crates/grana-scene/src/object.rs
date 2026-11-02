@@ -1,4 +1,6 @@
-use grana_analysis::{FilamentParams, SpotParams, SurfaceParams, TrackParams};
+use std::sync::Arc;
+
+use grana_analysis::{FilamentParams, RoiFrame, SpotParams, SurfaceParams, TrackParams};
 use grana_geometry::PackedMesh;
 use grana_measure::{Measurement, Objects};
 use grana_object::{FilamentSet, IntensityTable, Spot, SpotSet, SurfaceSet};
@@ -287,6 +289,14 @@ impl ObjectFrame {
             Self::Spots(_) => None,
             Self::Surfaces(set) => Some(set.geometry()),
             Self::Filaments(set) => Some(set.geometry()),
+        }
+    }
+
+    pub fn roi(&self) -> RoiFrame {
+        match self {
+            Self::Spots(set) => RoiFrame::Spots(Arc::from(set.spots())),
+            Self::Surfaces(set) => RoiFrame::Mesh(set.shared()),
+            Self::Filaments(set) => RoiFrame::Mesh(set.shared()),
         }
     }
 

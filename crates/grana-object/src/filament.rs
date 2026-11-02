@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::IntensityTable;
 use grana_geometry::{Bounds, Mesh, PackedMesh};
 
@@ -131,7 +133,7 @@ impl FilamentStatistics {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilamentSet {
     level: usize,
-    geometry: PackedMesh,
+    geometry: Arc<PackedMesh>,
     objects: Vec<FilamentStatistics>,
     intensities: IntensityTable,
 }
@@ -143,7 +145,7 @@ impl FilamentSet {
         objects: Vec<FilamentStatistics>,
         intensities: IntensityTable,
     ) -> Self {
-        let geometry = PackedMesh::new(mesh);
+        let geometry = Arc::new(PackedMesh::new(mesh));
         assert_eq!(
             geometry.object_count(),
             objects.len(),
@@ -181,7 +183,7 @@ impl FilamentSet {
         }
         Some(Self {
             level,
-            geometry,
+            geometry: Arc::new(geometry),
             objects,
             intensities,
         })
@@ -193,6 +195,10 @@ impl FilamentSet {
 
     pub fn geometry(&self) -> &PackedMesh {
         &self.geometry
+    }
+
+    pub fn shared(&self) -> Arc<PackedMesh> {
+        Arc::clone(&self.geometry)
     }
 
     pub fn objects(&self) -> &[FilamentStatistics] {

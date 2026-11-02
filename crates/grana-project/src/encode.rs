@@ -110,6 +110,7 @@ impl Encode for SceneState {
         writer.f32(self.step_scale);
         writer.f32(self.exposure);
         self.region.encode(writer);
+        writer.u64(self.mask.unwrap_or(0));
         writer.u32(self.time);
         self.selection.encode(writer);
         self.sets.encode(writer);

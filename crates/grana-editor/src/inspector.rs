@@ -484,6 +484,67 @@ pub fn region(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     ui.store_open("region", next);
 }
 
+pub fn mask(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
+    let sources = state
+        .scene
+        .objects
+        .iter()
+        .map(|set| (set.id(), set.name().to_string(), set.detected()))
+        .collect::<Vec<_>>();
+    let current = state.scene.mask;
+    let label = current
+        .and_then(|id| {
+            sources
+                .iter()
+                .find(|(set, _, _)| *set == id)
+                .map(|(_, name, _)| name.clone())
+        })
+        .unwrap_or_else(|| "Whole dataset".to_string());
+    let mut chosen = None;
+    section_header(ui, "Analysis mask", None);
+    let response = widget::button_with(ui, "mask.pick", &label, Role::Quiet, Length::Fill);
+    let anchor = response.rect;
+    if response.clicked {
+        ui.toggle_popup(ui.id("mask.menu"));
+    }
+    let chevron = ui.theme().palette.text_tertiary;
+    {
+        let mut painter = ui.painter();
+        grana_ui::icon::paint(
+            grana_ui::Icon::ChevronDown,
+            &mut painter,
+            Vec2::new(anchor.max.x - 12.0, anchor.center().y),
+            11.0,
+            chevron,
+            1.5,
+        );
+    }
+    let open = ui.popup_open(ui.id("mask.menu"));
+    grana_ui::popover::popover(ui, "mask.menu", open, anchor, 216.0, |ui| {
+        if grana_ui::popover::menu_row(ui, 0, "Whole dataset", current.is_none()) {
+            chosen = Some(None);
+        }
+        for (index, (set, name, detected)) in sources.iter().enumerate() {
+            let detail = if *detected == 0 {
+                format!("{name} · empty")
+            } else {
+                name.clone()
+            };
+            if grana_ui::popover::menu_row(ui, index + 1, &detail, current == Some(*set)) {
+                chosen = Some(Some(*set));
+            }
+        }
+    });
+    if let Some(source) = chosen {
+        ui.close_popup();
+        commands.push(Command::SetMask(source));
+    }
+    match current.and_then(|id| sources.iter().find(|(set, _, _)| *set == id)) {
+        Some((_, name, _)) => widget::caption(ui, &format!("detection reads only inside {name}")),
+        None => widget::caption(ui, "detection reads the whole dataset"),
+    }
+}
+
 pub fn rendering(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
     let open = ui.disclosure_open("rendering", true);
     let next = widget::disclosure(ui, "rendering", "Rendering", open, |ui| {

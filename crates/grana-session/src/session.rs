@@ -424,6 +424,11 @@ impl Session {
                     target.set_object_coloring(coloring);
                 }
             }
+            Command::SetMask(source) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_mask(source);
+                }
+            }
             Command::SetTrackParams { set, params } => {
                 if let Some(target) = self.object_mut(set) {
                     target.set_track_params(params);
@@ -1041,6 +1046,28 @@ impl Session {
         let channel = object.channel();
         let params = object.params();
         let region = scene.region;
+        let roi = match scene.mask {
+            None => None,
+            Some(source) => {
+                if source == set {
+                    self.message = Some(Message::error(
+                        "an object set cannot be limited to its own objects",
+                    ));
+                    return;
+                }
+                match scene.mask_frames() {
+                    Some(frames) if frames.iter().any(Option::is_some) => {
+                        Some(grana_analysis::Roi::new(frames))
+                    }
+                    _ => {
+                        self.message = Some(Message::error(
+                            "the analysis mask holds no detected objects",
+                        ));
+                        return;
+                    }
+                }
+            }
+        };
         if scene.dataset.channels()[channel].intensity().span() <= 0.0 {
             self.message = Some(Message::error(
                 "the selected channel has no intensity range to detect",
@@ -1063,6 +1090,7 @@ impl Session {
             channel,
             params,
             region,
+            roi,
         ));
     }
 

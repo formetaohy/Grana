@@ -145,6 +145,10 @@ impl Decode for SceneState {
             step_scale: positive(reader.f32()?)?,
             exposure: positive(reader.f32()?)?,
             region: Region::decode(reader)?,
+            mask: match reader.u64()? {
+                0 => None,
+                set => Some(set),
+            },
             time: reader.u32()?,
             selection: Option::<SelectionState>::decode(reader)?,
             sets: Vec::<SetState>::decode(reader)?,

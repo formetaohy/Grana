@@ -35,6 +35,8 @@ pub struct SetSpec {
     pub color: [f32; 3],
     pub detection: DetectionSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track: Option<TrackSpec>,
     #[serde(default)]
     pub measure: MeasureSpec,
@@ -129,7 +131,11 @@ impl Protocol {
             .iter()
             .map(|channel| channel.name().to_string())
             .collect::<Vec<_>>();
-        let sets = scene
+        let mask = scene
+            .mask
+            .and_then(|id| scene.objects.get(id))
+            .map(|set| set.id());
+        let mut sets = scene
             .objects
             .iter()
             .map(|set| {
@@ -164,11 +170,24 @@ impl Protocol {
                     channel: channels[set.channel()].clone(),
                     color: set.color(),
                     detection,
+                    mask: None,
                     track,
                     measure,
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+        if let Some(mask) = mask {
+            let position = scene
+                .objects
+                .iter()
+                .position(|set| set.id() == mask)
+                .expect("the analysis mask names a set of the scene");
+            let name = sets[position].name.clone();
+            sets.rotate_left(position);
+            for set in &mut sets[1..] {
+                set.mask = Some(name.clone());
+            }
+        }
         let coloc = if scene.coloc.series().is_some() {
             scene.coloc.pair().map(|pair| ColocSpec {
                 a: channels[pair.a()].clone(),
@@ -231,6 +250,9 @@ impl Protocol {
                         if filters == 1 { "" } else { "s" }
                     );
                 }
+                if let Some(mask) = &set.mask {
+                    text = format!("{text} within {mask}");
+                }
                 text
             })
             .collect::<Vec<_>>()
@@ -274,6 +296,21 @@ impl Protocol {
             }
             names.push(set.name.clone());
             slugs.push(key);
+            if let Some(mask) = &set.mask {
+                validate(mask, "an analysis mask")?;
+                if !names[..names.len() - 1].contains(mask) {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{} is masked by an object set that does not run before it",
+                        set.name
+                    )));
+                }
+                if mask == &set.name {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{} cannot be masked by itself",
+                        set.name
+                    )));
+                }
+            }
             if set.color.iter().any(|value| !(0.0..=1.0).contains(value)) {
                 return Err(ProtocolError::Invalid(format!(
                     "the color of {} is not an srgb triple",
@@ -377,6 +414,10 @@ impl SetSpec {
 
     pub fn params(&self) -> ObjectParams {
         self.detection.params()
+    }
+
+    pub fn mask(&self) -> Option<&str> {
+        self.mask.as_deref()
     }
 
     pub fn track_params(&self) -> Option<TrackParams> {

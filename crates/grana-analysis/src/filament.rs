@@ -9,6 +9,7 @@ use grana_object::{FilamentSet, IntensityTable, SampleAccumulator};
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
 use crate::FilamentParams;
+use crate::mask::Mask;
 
 const MAX_VOXELS: u64 = 1 << 25;
 const MAX_STEP: u32 = 32;
@@ -136,6 +137,7 @@ impl FilamentScan {
     pub fn frame(
         &mut self,
         detection: &VoxelData,
+        roi: Option<&Mask>,
         mut read: impl FnMut(usize) -> Result<VoxelData, String>,
     ) -> Result<FilamentSet, String> {
         if self.empty {
@@ -160,7 +162,10 @@ impl FilamentScan {
             self.step,
             &self.grid,
             self.threshold,
-            self.region,
+            volume::Gate {
+                region: self.region,
+                roi,
+            },
             &mut self.mask,
         );
         volume::distance(&self.mask, &self.grid, &mut self.distance);
