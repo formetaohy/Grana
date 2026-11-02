@@ -504,6 +504,9 @@ impl Encode for MeasureState {
         }
         self.columns.encode(writer);
         writer.bool(self.visibility);
+        writer.u8(self.view.index());
+        writer.count(self.axes[0]);
+        writer.count(self.axes[1]);
     }
 }
 

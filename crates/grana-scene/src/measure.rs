@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use grana_measure::{Aggregate, Filter, Frame, Group, Table};
+use grana_measure::{Aggregate, Filter, Frame, Group, MeasureView, Plot, PlotAxis, Table};
 
 use crate::object::ObjectFrame;
 use crate::object_set::{ObjectSetId, Visibility};
@@ -16,6 +16,8 @@ pub struct MeasureState {
     pub sort: Option<(usize, bool)>,
     pub columns: Vec<bool>,
     pub visibility: bool,
+    pub view: MeasureView,
+    pub axes: [usize; 2],
 }
 
 pub struct Measure {
@@ -28,6 +30,9 @@ pub struct Measure {
     rows: Vec<usize>,
     visible: Vec<bool>,
     visibility: bool,
+    view: MeasureView,
+    axes: [usize; 2],
+    plot: Option<Plot>,
     revision: Option<(ObjectSetId, u64)>,
     dirty: bool,
 }
@@ -50,6 +55,9 @@ impl Measure {
             rows: Vec::new(),
             visible: Vec::new(),
             visibility: true,
+            view: MeasureView::Table,
+            axes: [0; 2],
+            plot: None,
             revision: None,
             dirty: false,
         }
@@ -99,6 +107,63 @@ impl Measure {
 
     pub fn aggregate(&self) -> Aggregate {
         self.aggregate
+    }
+
+    pub fn view(&self) -> MeasureView {
+        self.view
+    }
+
+    pub fn axes(&self) -> [usize; 2] {
+        self.axes
+    }
+
+    pub fn plot(&self) -> Option<&Plot> {
+        self.plot.as_ref()
+    }
+
+    pub fn set_view(&mut self, view: MeasureView) {
+        if self.view == view {
+            return;
+        }
+        self.view = view;
+        self.dirty = true;
+        self.refresh_plot();
+    }
+
+    pub fn set_axis(&mut self, axis: PlotAxis, column: usize) {
+        let Some(table) = self.table.as_ref() else {
+            return;
+        };
+        if column >= table.columns().len() || self.axes[axis.index()] == column {
+            return;
+        }
+        self.axes[axis.index()] = column;
+        self.dirty = true;
+        self.refresh_plot();
+    }
+
+    pub fn set_gate(&mut self, column: usize, minimum: f32, maximum: f32) {
+        let Some(table) = self.table.as_ref() else {
+            return;
+        };
+        if column >= table.columns().len() {
+            return;
+        }
+        let filter = Filter::new(column, minimum, maximum);
+        match self
+            .filters
+            .iter()
+            .position(|current| current.column() == column)
+        {
+            Some(index) => {
+                if self.filters[index] == filter {
+                    return;
+                }
+                self.filters[index] = filter;
+            }
+            None => self.filters.push(filter),
+        }
+        self.refresh();
     }
 
     pub fn set_aggregate(&mut self, aggregate: Aggregate, scene: &Scene) {
@@ -225,6 +290,9 @@ impl Measure {
         self.visible.clear();
         self.filters.clear();
         self.sort = None;
+        self.view = MeasureView::Table;
+        self.axes = [0; 2];
+        self.plot = None;
         self.revision = None;
         self.dirty = true;
     }
@@ -237,8 +305,10 @@ impl Measure {
             self.set = None;
             self.revision = None;
             self.table = None;
+            self.plot = None;
             self.rows.clear();
             self.visible.clear();
+            self.axes = [0; 2];
             self.dirty = true;
             return;
         };
@@ -314,6 +384,8 @@ impl Measure {
             sort: self.sort,
             columns: self.visible.clone(),
             visibility: self.visibility,
+            view: self.view,
+            axes: self.axes,
         }
     }
 
@@ -326,6 +398,8 @@ impl Measure {
             sort,
             columns,
             visibility,
+            view,
+            axes,
         } = state;
         self.set = None;
         self.group = group;
@@ -336,11 +410,14 @@ impl Measure {
         self.filters.clear();
         self.sort = None;
         self.visibility = visibility;
+        self.view = view;
+        self.axes = axes;
+        self.plot = None;
         self.revision = None;
         self.dirty = true;
         let Some(set) = set else {
             assert!(
-                columns.is_empty() && filters.is_empty() && sort.is_none(),
+                columns.is_empty() && filters.is_empty() && sort.is_none() && axes == [0; 2],
                 "a measure state without an object set carries no table state"
             );
             return;
@@ -358,9 +435,17 @@ impl Measure {
                 && sort.is_none_or(|(column, _)| column < count),
             "a measure state names columns inside its table"
         );
+        assert!(
+            axes.iter().all(|axis| *axis < count) || (count == 0 && axes == [0; 2]),
+            "a measure state names plot axes inside its table"
+        );
         self.visible = columns;
         self.filters = filters;
         self.sort = sort;
+        self.axes = match self.table.as_ref() {
+            Some(table) => readable_axes(table, axes),
+            None => axes,
+        };
         self.refresh();
         self.dirty = true;
     }
@@ -382,22 +467,29 @@ impl Measure {
         for visible in &self.visible {
             hash = mix(hash, u64::from(u8::from(*visible)));
         }
-        mix(hash, u64::from(u8::from(self.visibility)))
+        hash = mix(hash, u64::from(u8::from(self.visibility)));
+        hash = mix(hash, u64::from(self.view.index()));
+        hash = mix(hash, self.axes[0] as u64);
+        mix(hash, self.axes[1] as u64)
     }
 
     fn rebuild(&mut self, scene: &Scene) {
         self.dirty = true;
         self.table = None;
+        self.plot = None;
         self.rows.clear();
+        self.visible.clear();
         let Some(id) = self.set else {
             self.revision = None;
             self.visible.clear();
+            self.axes = [0; 2];
             return;
         };
         let Some(object) = scene.objects.get(id) else {
             self.set = None;
             self.revision = None;
             self.visible.clear();
+            self.axes = [0; 2];
             return;
         };
         self.revision = Some((id, object.revision()));
@@ -407,6 +499,7 @@ impl Measure {
             .collect::<Vec<_>>();
         if frames.is_empty() {
             self.visible.clear();
+            self.axes = [0; 2];
             return;
         }
         let channels = scene
@@ -416,15 +509,17 @@ impl Measure {
             .map(|channel| channel.name().to_string())
             .collect::<Vec<_>>();
         let tracks = object.tracks().map(|layer| layer.set());
-        self.table = Some(Table::build(
+        let table = Table::build(
             &frames,
             tracks,
             &channels,
             scene.dataset.frame_interval(),
             self.group,
             self.aggregate,
-        ));
-        self.visible = default_visibility(self.table.as_ref().expect("the table exists"));
+        );
+        self.visible = default_visibility(&table);
+        self.axes = readable_axes(&table, self.axes);
+        self.table = Some(table);
         self.refresh();
     }
 
@@ -432,6 +527,7 @@ impl Measure {
         self.dirty = true;
         let Some(table) = self.table.as_ref() else {
             self.rows.clear();
+            self.plot = None;
             return;
         };
         let mut rows = table.matching(&self.filters);
@@ -441,7 +537,89 @@ impl Measure {
             table.sort(&mut rows, column, descending);
         }
         self.rows = rows;
+        self.refresh_plot();
     }
+
+    fn refresh_plot(&mut self) {
+        self.plot = self
+            .table
+            .as_ref()
+            .and_then(|table| table.plot(self.view, self.axes, &self.rows));
+    }
+}
+
+fn readable_axes(table: &Table, axes: [usize; 2]) -> [usize; 2] {
+    let columns = table.columns().len();
+    if axes == [0; 2] || axes[0] >= columns || axes[1] >= columns {
+        return preferred_axes(table);
+    }
+    axes
+}
+
+fn preferred_axes(table: &Table) -> [usize; 2] {
+    let columns = table.columns();
+    let identity = table.identity_columns();
+    let varies = |index: usize| {
+        table
+            .extent(index)
+            .is_some_and(|(low, high)| low.is_finite() && high.is_finite() && high > low)
+    };
+    let key_family = |key: &str| columns.iter().any(|column| column.key() == key);
+    let preferred: &[&str] = if key_family("contrast") {
+        &["diameter_um", "contrast"]
+    } else if key_family("junctions") {
+        &["length_um", "diameter_um"]
+    } else {
+        &["volume_um3", "area_um2", "sphericity"]
+    };
+    let mut chosen = Vec::with_capacity(2);
+    for key in preferred {
+        if chosen.len() == 2 {
+            break;
+        }
+        if let Some(index) = columns.iter().position(|column| column.key() == *key)
+            && varies(index)
+            && !chosen.contains(&index)
+        {
+            chosen.push(index);
+        }
+    }
+    let mut scored = Vec::new();
+    for index in identity..columns.len() {
+        if chosen.contains(&index) || positional(columns, index) {
+            continue;
+        }
+        let Some((low, high)) = table.extent(index) else {
+            continue;
+        };
+        if !(low.is_finite() && high.is_finite()) {
+            continue;
+        }
+        let span = high - low;
+        if span <= 0.0 {
+            continue;
+        }
+        let scale = low.abs().max(high.abs()).max(1.0e-6);
+        scored.push((span / scale, index));
+    }
+    scored.sort_by(|left, right| right.0.total_cmp(&left.0));
+    for (_, index) in scored {
+        if chosen.len() == 2 {
+            break;
+        }
+        chosen.push(index);
+    }
+    let x = chosen
+        .first()
+        .copied()
+        .unwrap_or(identity.min(columns.len() - 1));
+    let y = chosen.get(1).copied().unwrap_or(x);
+    [x, y]
+}
+
+fn positional(columns: &[grana_measure::Column], index: usize) -> bool {
+    let key = columns[index].key();
+    key.starts_with("x_um") || key.starts_with("y_um") || key.starts_with("z_um")
 }
 
 fn default_visibility(table: &Table) -> Vec<bool> {

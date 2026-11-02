@@ -1,3 +1,5 @@
+use crate::correlation::Pearson;
+
 pub const COLOC_BINS: usize = 1024;
 pub const COLOC_SCATTER: usize = 128;
 
@@ -53,80 +55,43 @@ impl ColocThresholds {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ColocMoments {
-    voxels: u64,
-    sum_a: f64,
-    sum_b: f64,
-    sum_aa: f64,
-    sum_bb: f64,
-    sum_ab: f64,
+    correlation: Pearson,
 }
 
 impl ColocMoments {
     pub fn new(voxels: u64, sums: [f64; 5]) -> Self {
-        let [sum_a, sum_b, sum_aa, sum_bb, sum_ab] = sums;
-        assert!(
-            sums.iter().all(|value| value.is_finite() && *value >= 0.0),
-            "colocalization moments are finite and not negative"
-        );
         Self {
-            voxels,
-            sum_a,
-            sum_b,
-            sum_aa,
-            sum_bb,
-            sum_ab,
+            correlation: Pearson::from_sums(voxels, sums),
         }
     }
 
     pub fn voxels(self) -> u64 {
-        self.voxels
+        self.correlation.count()
     }
 
     pub fn sums(self) -> [f64; 5] {
-        [
-            self.sum_a,
-            self.sum_b,
-            self.sum_aa,
-            self.sum_bb,
-            self.sum_ab,
-        ]
+        self.correlation.sums()
     }
 
     pub fn push(&mut self, a: f64, b: f64) {
-        self.voxels += 1;
-        self.sum_a += a;
-        self.sum_b += b;
-        self.sum_aa += a * a;
-        self.sum_bb += b * b;
-        self.sum_ab += a * b;
+        self.correlation.push(a, b);
     }
 
     pub fn merge(&mut self, other: &Self) {
-        self.voxels += other.voxels;
-        self.sum_a += other.sum_a;
-        self.sum_b += other.sum_b;
-        self.sum_aa += other.sum_aa;
-        self.sum_bb += other.sum_bb;
-        self.sum_ab += other.sum_ab;
+        self.correlation.merge(&other.correlation);
     }
 
     fn pearson(self) -> Option<f64> {
-        let count = self.voxels as f64;
-        let left = count * self.sum_aa - self.sum_a * self.sum_a;
-        let right = count * self.sum_bb - self.sum_b * self.sum_b;
-        if left <= 0.0 || right <= 0.0 {
-            return None;
-        }
-        let numerator = count * self.sum_ab - self.sum_a * self.sum_b;
-        Some((numerator / (left * right).sqrt()).clamp(-1.0, 1.0))
+        self.correlation.value()
     }
 
     fn overlap(self) -> Option<f64> {
-        let mass = self.sum_aa * self.sum_bb;
+        let [_, _, sum_aa, sum_bb, sum_ab] = self.correlation.sums();
+        let mass = sum_aa * sum_bb;
         if mass <= 0.0 {
             return None;
         }
-        Some((self.sum_ab / mass.sqrt()).clamp(0.0, 1.0))
+        Some((sum_ab / mass.sqrt()).clamp(0.0, 1.0))
     }
 }
 
@@ -216,12 +181,11 @@ impl ColocFrame {
 
     pub fn statistics(&self, thresholds: ColocThresholds) -> ColocStatistics {
         let [cut_a, cut_b] = thresholds.bins();
-        let a_mass = self.moments.sum_a;
-        let b_mass = self.moments.sum_b;
+        let [a_mass, b_mass, ..] = self.moments.sums();
         let first = (a_mass > 0.0).then(|| (above(&self.a_by_b, cut_b) / a_mass).clamp(0.0, 1.0));
         let second = (b_mass > 0.0).then(|| (above(&self.b_by_a, cut_a) / b_mass).clamp(0.0, 1.0));
         ColocStatistics {
-            voxels: self.moments.voxels,
+            voxels: self.moments.voxels(),
             pearson: self.moments.pearson(),
             overlap: self.moments.overlap(),
             manders: [first, second],

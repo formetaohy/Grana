@@ -1,7 +1,8 @@
 use grana_analysis::TrackParams;
 use grana_display::{Coloring, Shading, TransferFunction};
 use grana_measure::{
-    Aggregate, ColocPair, ColocThresholds, Filter, Group, Measurement, TrackMeasurement,
+    Aggregate, ColocPair, ColocThresholds, Filter, Group, MeasureView, Measurement, PlotAxis,
+    TrackMeasurement,
 };
 use grana_scene::{ObjectKind, ObjectParams, ObjectSetId, Selection};
 use grana_volume::{Intensity, Region};
@@ -112,6 +113,16 @@ pub enum Command {
     },
     ShowAllColumns,
     SetMeasureVisibility(bool),
+    SetMeasureView(MeasureView),
+    SetPlotAxis {
+        axis: PlotAxis,
+        column: usize,
+    },
+    SetGate {
+        column: usize,
+        minimum: f32,
+        maximum: f32,
+    },
     ToggleSort(usize),
     SetColocPair(ColocPair),
     SetColocThresholds(ColocThresholds),
@@ -333,6 +344,7 @@ impl Command {
             Self::SetFilter { index, .. } | Self::RetargetFilter { index, .. } => {
                 Edit::targeted(Action::MeasureFilter, *index as u64)
             }
+            Self::SetGate { column, .. } => Edit::targeted(Action::MeasureFilter, *column as u64),
             Self::SetMeasureVisibility(_) => Edit::new(Action::MeasureVisibility),
             Self::SetColocPair(_) => Edit::new(Action::ColocPair),
             Self::SetColocThresholds(_) => Edit::new(Action::ColocThresholds),

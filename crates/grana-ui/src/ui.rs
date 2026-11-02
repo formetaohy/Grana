@@ -1047,7 +1047,8 @@ impl Ui {
             Axis::Column => self.allocate(Vec2::new(available.x, resolve(length, available.y))),
             Axis::Row => self.allocate(Vec2::new(resolve(length, available.x), available.y)),
         };
-        self.registry.register_wheel(key, outer);
+        self.registry
+            .register_wheel(key, outer, self.overlay_mode > 0);
         if self.registry.wheel_owner() == Some(key) {
             let wheel = match axis {
                 Axis::Column => -self.input.wheel().y,

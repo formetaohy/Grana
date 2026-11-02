@@ -524,6 +524,13 @@ impl Session {
             }
             Command::ShowAllColumns => self.measure.show_all_columns(),
             Command::SetMeasureVisibility(visible) => self.measure.set_visibility(visible),
+            Command::SetMeasureView(view) => self.measure.set_view(view),
+            Command::SetPlotAxis { axis, column } => self.measure.set_axis(axis, column),
+            Command::SetGate {
+                column,
+                minimum,
+                maximum,
+            } => self.measure.set_gate(column, minimum, maximum),
             Command::ToggleSort(index) => self.measure.toggle_sort(index),
             Command::SetColocPair(pair) => {
                 if let Some(scene) = self.scene.as_mut() {

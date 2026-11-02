@@ -90,6 +90,7 @@ impl App {
                 .create_window(
                     Window::default_attributes()
                         .with_title("Grana")
+                        .with_visible(self.capture.is_none())
                         .with_inner_size(LogicalSize::new(1440.0, 900.0))
                         .with_min_inner_size(LogicalSize::new(1080.0, 700.0)),
                 )
@@ -958,6 +959,27 @@ impl App {
             surface.window.request_redraw();
         }
     }
+
+    fn pump_capture(&mut self, event_loop: &ActiveEventLoop) {
+        if self.surface.is_none() {
+            return;
+        }
+        if self
+            .repaint_at
+            .is_none_or(|deadline| Instant::now() >= deadline)
+        {
+            self.repaint_at = None;
+            self.redraw();
+        }
+        if self.exiting {
+            event_loop.exit();
+            return;
+        }
+        match self.repaint_at {
+            Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
+            None => event_loop.set_control_flow(ControlFlow::Poll),
+        }
+    }
 }
 
 fn frame_stats(info: FrameInfo) -> FrameStats {
@@ -1016,6 +1038,7 @@ fn interface_cursor(cursor: grana_ui::Cursor) -> CursorIcon {
     match cursor {
         grana_ui::Cursor::Arrow => CursorIcon::Default,
         grana_ui::Cursor::Pointing => CursorIcon::Pointer,
+        grana_ui::Cursor::Crosshair => CursorIcon::Crosshair,
         grana_ui::Cursor::Grab => CursorIcon::Grab,
         grana_ui::Cursor::Grabbing => CursorIcon::Grabbing,
         grana_ui::Cursor::ResizeHorizontal => CursorIcon::ColResize,
@@ -1160,6 +1183,10 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if self.exiting {
             event_loop.exit();
+            return;
+        }
+        if self.capture.is_some() {
+            self.pump_capture(event_loop);
             return;
         }
         if self.repaint_at.is_none() {

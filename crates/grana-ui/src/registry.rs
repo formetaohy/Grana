@@ -12,6 +12,7 @@ const CLICK_SLOP: f32 = 3.0;
 pub enum Cursor {
     Arrow,
     Pointing,
+    Crosshair,
     Grab,
     Grabbing,
     ResizeHorizontal,
@@ -85,6 +86,13 @@ impl Scroll {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct WheelTarget {
+    key: u64,
+    rect: Rect,
+    overlay: bool,
+}
+
 pub struct Registry {
     hits: Vec<Hit>,
     next_hits: Vec<Hit>,
@@ -102,8 +110,8 @@ pub struct Registry {
     popup_interacted: bool,
     occluders: Vec<Rect>,
     next_occluders: Vec<Rect>,
-    wheel_targets: Vec<(u64, Rect)>,
-    next_wheel_targets: Vec<(u64, Rect)>,
+    wheel_targets: Vec<WheelTarget>,
+    next_wheel_targets: Vec<WheelTarget>,
     wheel_owner: Option<u64>,
     cursor: Cursor,
     animating: bool,
@@ -146,12 +154,17 @@ impl Registry {
         self.next_hits.clear();
         self.next_occluders.clear();
         self.next_wheel_targets.clear();
-        self.wheel_owner = self
+        let overlay = self
             .wheel_targets
             .iter()
             .rev()
-            .find(|(_, rect)| rect.contains(position))
-            .map(|(key, _)| *key);
+            .find(|target| target.overlay && target.rect.contains(position));
+        let any = self
+            .wheel_targets
+            .iter()
+            .rev()
+            .find(|target| target.rect.contains(position));
+        self.wheel_owner = overlay.or(any).map(|target| target.key);
         self.hover = self
             .hits
             .iter()
@@ -218,8 +231,9 @@ impl Registry {
         self.next_occluders.push(rect);
     }
 
-    pub fn register_wheel(&mut self, key: u64, rect: Rect) {
-        self.next_wheel_targets.push((key, rect));
+    pub fn register_wheel(&mut self, key: u64, rect: Rect, overlay: bool) {
+        self.next_wheel_targets
+            .push(WheelTarget { key, rect, overlay });
     }
 
     pub fn hit_count(&self) -> usize {
@@ -238,8 +252,8 @@ impl Registry {
     }
 
     pub fn shift_wheels(&mut self, range: Range<usize>, delta: Vec2) {
-        for (_, rect) in &mut self.next_wheel_targets[range] {
-            *rect = rect.translate(delta);
+        for target in &mut self.next_wheel_targets[range] {
+            target.rect = target.rect.translate(delta);
         }
     }
 

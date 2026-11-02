@@ -1,9 +1,10 @@
 use glam::Vec2;
-use grana_measure::{Aggregate, Column, Filter, Group};
+use grana_measure::{Aggregate, Column, Filter, Group, MeasureView, PlotAxis};
 use grana_scene::{Item, Selection};
 use grana_ui::{Align, Axis, Block, Color, Corners, Icon, Length, Rect, Role, TextStyle, Ui, icon};
 
 use crate::panel::empty_state;
+use crate::plot;
 use crate::state::State;
 use crate::widget;
 use grana_session::Command;
@@ -11,6 +12,7 @@ use grana_session::Command;
 const ROW_HEIGHT: f32 = 28.0;
 const HEADER_HEIGHT: f32 = 30.0;
 const MIN_COLUMN_WIDTH: f32 = 58.0;
+const VIEW_WIDTH: f32 = 262.0;
 
 pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     if state.scene.objects.is_empty() {
@@ -23,8 +25,128 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         return;
     }
     header(ui, state, commands);
+    let measured = state.measure.table().is_some();
+    if measured {
+        view_row(ui, state, commands);
+    }
     filters(ui, state, commands);
-    table(ui, state, commands);
+    if measured && state.measure.view() != MeasureView::Table {
+        plot::view(ui, state, commands);
+    } else {
+        table(ui, state, commands);
+    }
+}
+
+fn view_row(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
+    let Some(table) = state.measure.table() else {
+        return;
+    };
+    let view = state.measure.view();
+    let axes = state.measure.axes();
+    let row = ui.allocate_full(30.0);
+    let clear = Rect::from_center_size(
+        Vec2::new(row.max.x - 12.0, row.center().y),
+        Vec2::splat(24.0),
+    );
+    let actions = Rect::from_min_max(row.min, Vec2::new(clear.min.x - 8.0, row.max.y));
+    let view_rect = Rect::from_min_size(actions.min, Vec2::new(VIEW_WIDTH, row.height()));
+    ui.place(view_rect, |ui| {
+        let index = match view {
+            MeasureView::Table => 0,
+            MeasureView::Histogram => 1,
+            MeasureView::Scatter => 2,
+        };
+        if let Some(chosen) = widget::segmented(
+            ui,
+            "measure.view",
+            &["Table", "Histogram", "Scatter"],
+            index,
+        ) && MeasureView::ALL[chosen] != view
+        {
+            commands.push(Command::SetMeasureView(MeasureView::ALL[chosen]));
+        }
+    });
+    if view == MeasureView::Table {
+        return;
+    }
+    let options = table
+        .columns()
+        .iter()
+        .enumerate()
+        .map(|(index, column)| (index, crate::panel::column_label(column)))
+        .collect::<Vec<_>>();
+    let area = Rect::from_min_max(Vec2::new(view_rect.max.x + 14.0, row.min.y), actions.max);
+    ui.place(area, |ui| {
+        ui.row(
+            Block::row()
+                .gaps(6.0)
+                .align(Align::Center)
+                .height(Length::Fill),
+            |ui| {
+                widget::field_label(ui, "X");
+                let width = if view == MeasureView::Scatter {
+                    156.0
+                } else {
+                    212.0
+                };
+                if let Some(column) =
+                    grana_ui::popover::combo(ui, "measure.plot.x", width, &options, Some(axes[0]))
+                    && column != axes[0]
+                {
+                    commands.push(Command::SetPlotAxis {
+                        axis: PlotAxis::X,
+                        column,
+                    });
+                }
+                if view == MeasureView::Scatter {
+                    widget::field_label(ui, "Y");
+                    if let Some(column) = grana_ui::popover::combo(
+                        ui,
+                        "measure.plot.y",
+                        width,
+                        &options,
+                        Some(axes[1]),
+                    ) && column != axes[1]
+                    {
+                        commands.push(Command::SetPlotAxis {
+                            axis: PlotAxis::Y,
+                            column,
+                        });
+                    }
+                }
+            },
+        );
+    });
+    let gated = state.measure.filters().iter().any(|filter| {
+        filter.column() == axes[0] || (view == MeasureView::Scatter && filter.column() == axes[1])
+    });
+    ui.place(clear, |ui| {
+        if widget::icon_button_enabled(
+            ui,
+            "measure.gate.clear",
+            Icon::Close,
+            24.0,
+            Role::Quiet,
+            "Clear the gate",
+            gated,
+        ) {
+            let mut indices = state
+                .measure
+                .filters()
+                .iter()
+                .enumerate()
+                .filter(|(_, filter)| {
+                    filter.column() == axes[0]
+                        || (view == MeasureView::Scatter && filter.column() == axes[1])
+                })
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            indices.sort_unstable_by(|left, right| right.cmp(left));
+            for index in indices {
+                commands.push(Command::RemoveFilter(index));
+            }
+        }
+    });
 }
 
 fn header(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
@@ -186,9 +308,12 @@ fn columns_menu(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>,
         grana_ui::popover::separator(ui);
         for (index, column) in columns.iter().enumerate() {
             let shown = visible.get(index).copied().unwrap_or(false);
-            if let Some(next) =
-                widget::checkbox(ui, &format!("column.{index}"), &label(column), shown)
-            {
+            if let Some(next) = widget::checkbox(
+                ui,
+                &format!("column.{index}"),
+                &crate::panel::column_label(column),
+                shown,
+            ) {
                 toggles.push((index, next));
             }
         }
@@ -388,20 +513,8 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         return;
     }
     let surface = Rect::from_min_size(ui.cursor_position(), ui.available());
+    crate::panel::card_surface(ui, surface);
     let card_radius = ui.theme().metrics.card_radius;
-    {
-        let mut painter = ui.painter();
-        painter.outlined(
-            surface,
-            Corners::all(card_radius),
-            grana_ui::Fill::Solid(Color::rgba(0.025, 0.032, 0.045, 0.88)),
-            grana_ui::Border {
-                width: 0.5,
-                color: Color::white_alpha(0.06),
-            },
-            grana_ui::Shadow::NONE,
-        );
-    }
     let available = surface.width();
     let widths = column_widths(&columns, available - 1.0);
     let total = widths.iter().sum::<f32>();
@@ -430,7 +543,13 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
             .sort()
             .filter(|(current, _)| current == index)
             .map(|(_, descending)| descending);
-        if header_cell(ui, &format!("head.{index}"), &label(column), sorted, rect) {
+        if header_cell(
+            ui,
+            &format!("head.{index}"),
+            &crate::panel::column_label(column),
+            sorted,
+            rect,
+        ) {
             toggled.push(*index);
         }
         left += *width;
@@ -603,7 +722,7 @@ fn column_widths(columns: &[(usize, Column)], available: f32) -> Vec<f32> {
     let initial = columns
         .iter()
         .map(|(_, column)| {
-            let header = label(column).chars().count() as f32 * 5.9 + 22.0;
+            let header = crate::panel::column_label(column).chars().count() as f32 * 5.9 + 22.0;
             let value = (f32::from(column.decimals()) + 6.0) * 7.0 + 18.0;
             header.max(value).max(MIN_COLUMN_WIDTH)
         })
@@ -615,13 +734,4 @@ fn column_widths(columns: &[(usize, Column)], available: f32) -> Vec<f32> {
     }
     let scale = available / total;
     initial.iter().map(|width| width * scale).collect()
-}
-
-fn label(column: &Column) -> String {
-    let unit = column.unit().suffix();
-    if unit.is_empty() {
-        column.label().to_string()
-    } else {
-        format!("{} ({unit})", column.label())
-    }
 }

@@ -97,11 +97,20 @@ pub fn combo<T: Copy + PartialEq>(
     );
     let mut chosen = None;
     let open = ui.popup_open(key);
+    let scroll = ui.id(&format!("{id}.scroll"));
     let stays = popover(ui, id, open, rect, width.max(160.0), |ui| {
-        for (index, (value, text)) in items.iter().enumerate() {
-            if menu_row(ui, index, text, selected == Some(*value)) {
-                chosen = Some(*value);
-            }
+        let room = ui.available().y;
+        let content = items.len() as f32 * MENU_ROW;
+        if content > room {
+            ui.scroll_axis(
+                scroll,
+                crate::ui::Axis::Column,
+                crate::ui::Length::Fixed(room),
+                Some(content),
+                |ui| chosen = rows(ui, items, selected),
+            );
+        } else {
+            chosen = rows(ui, items, selected);
         }
     });
     if chosen.is_some() || (!stays && open) {
@@ -110,9 +119,21 @@ pub fn combo<T: Copy + PartialEq>(
     chosen
 }
 
+const MENU_ROW: f32 = 26.0;
+
+fn rows<T: Copy + PartialEq>(ui: &mut Ui, items: &[(T, String)], selected: Option<T>) -> Option<T> {
+    let mut chosen = None;
+    for (index, (value, text)) in items.iter().enumerate() {
+        if menu_row(ui, index, text, selected == Some(*value)) {
+            chosen = Some(*value);
+        }
+    }
+    chosen
+}
+
 pub fn menu_row(ui: &mut Ui, index: usize, label: &str, checked: bool) -> bool {
     let key = ui.id(&format!("menu.row.{index}"));
-    let height = 26.0;
+    let height = MENU_ROW;
     let rect = ui.allocate(Vec2::new(ui.available().x, height));
     let response = ui.interact(key, rect);
     let hover = ui.animate(

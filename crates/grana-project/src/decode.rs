@@ -4,7 +4,9 @@ use std::sync::Arc;
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
 use grana_geometry::{Bounds, GeometryGroup, PackedMesh, PackedVertex};
-use grana_measure::{Aggregate, Filter, Group, Measurement, Statistic, TrackMeasurement};
+use grana_measure::{
+    Aggregate, Filter, Group, MeasureView, Measurement, Statistic, TrackMeasurement,
+};
 use grana_measure::{
     COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocThresholds,
 };
@@ -24,6 +26,7 @@ use crate::project::{Project, Shape, Source, ViewState};
 
 const FAULT_VALUE: &str = "the project data carries a value outside its domain";
 const FAULT_SHAPE: &str = "the project data carries an inconsistent shape";
+const FAULT_TAG: &str = "the project data carries an unknown variant tag";
 
 impl Decode for Project {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
@@ -715,14 +718,21 @@ impl Decode for MeasureState {
             1 => Some((reader.count(1)?, reader.bool()?)),
             _ => return Err(FAULT_SHAPE),
         };
+        let columns = Vec::<bool>::decode(reader)?;
+        let visibility = reader.bool()?;
+        let view = MeasureView::from_index(reader.u8()?).ok_or(FAULT_TAG)?;
+        let x = reader.count(0)?;
+        let y = reader.count(0)?;
         Ok(Self {
             set,
             group,
             aggregate,
             filters,
             sort,
-            columns: Vec::<bool>::decode(reader)?,
-            visibility: reader.bool()?,
+            columns,
+            visibility,
+            view,
+            axes: [x, y],
         })
     }
 }

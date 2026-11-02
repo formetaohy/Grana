@@ -25,6 +25,7 @@ impl Snapshot {
             state.filters.clear();
             state.sort = None;
             state.columns.clear();
+            state.axes = [0; 2];
             if set.is_none() {
                 state.set = None;
             }

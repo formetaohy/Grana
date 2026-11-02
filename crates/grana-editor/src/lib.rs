@@ -6,6 +6,7 @@ mod inspector;
 mod measure_panel;
 mod object_panel;
 mod panel;
+mod plot;
 mod stage;
 mod state;
 mod track_panel;

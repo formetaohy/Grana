@@ -1,7 +1,7 @@
 use glam::Vec2;
 use grana_ui::{
-    Align, Block, Color, Corners, Cursor, Edges, Icon, Length, Level, Rect, Role, TextStyle,
-    TypeStyle, Ui, icon,
+    Align, Block, Border, Color, Corners, Cursor, Edges, Fill, Icon, Length, Level, Rect, Role,
+    Shadow, TextStyle, TypeStyle, Ui, icon,
 };
 
 use crate::state::State;
@@ -465,6 +465,30 @@ pub fn card(ui: &mut Ui, gap: f32, content: impl FnOnce(&mut Ui)) -> Rect {
             .background(look),
         content,
     )
+}
+
+pub fn card_surface(ui: &mut Ui, rect: Rect) {
+    let corners = Corners::all(ui.theme().metrics.card_radius);
+    let mut painter = ui.painter();
+    painter.outlined(
+        rect,
+        corners,
+        Fill::Solid(Color::rgba(0.025, 0.032, 0.045, 0.88)),
+        Border {
+            width: 0.5,
+            color: Color::white_alpha(0.06),
+        },
+        Shadow::NONE,
+    );
+}
+
+pub fn column_label(column: &grana_measure::Column) -> String {
+    let unit = column.unit().suffix();
+    if unit.is_empty() {
+        column.label().to_string()
+    } else {
+        format!("{} ({unit})", column.label())
+    }
 }
 
 pub fn card_title(ui: &mut Ui, symbol: Icon, title: &str, detail: Option<&str>) {
