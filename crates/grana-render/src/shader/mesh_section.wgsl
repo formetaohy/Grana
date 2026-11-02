@@ -17,114 +17,91 @@ struct Style {
 @group(1) @binding(0) var<storage, read> objects: array<ObjectData>;
 @group(2) @binding(0) var<storage, read> styles: array<Style>;
 
+const CORNERS: array<vec2<f32>, 3> = array<vec2<f32>, 3>(
+    vec2<f32>(-1.0, -1.0),
+    vec2<f32>(3.0, -1.0),
+    vec2<f32>(-1.0, 3.0),
+);
+
+const SELECTED: vec3<f32> = vec3<f32>(1.0, 0.86, 0.45);
+const SELECTED_MIX: f32 = 0.55;
+
 struct VertexInput {
     @location(0) position: vec4<f32>,
     @location(1) normal: vec2<f32>,
     @location(2) object: u32,
 }
 
-struct VertexOutput {
+struct CutOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) normal: vec3<f32>,
-    @location(1) height: f32,
-    @location(2) uv: vec2<f32>,
-    @location(3) @interpolate(flat) object: u32,
-    @location(4) position: vec3<f32>,
+    @location(0) height: f32,
 }
 
-struct DepthOutput {
-    @builtin(frag_depth) depth: f32,
-}
-
-fn plane_depth(height: f32) -> f32 {
-    let plane = section.plane.x;
-    return (height - plane) / max(1.0 - plane, 1.0e-4);
-}
-
-fn sgn(value: f32) -> f32 {
-    if (value < 0.0) {
-        return -1.0;
-    }
-    return 1.0;
-}
-
-fn decode_normal(packed: vec2<f32>) -> vec3<f32> {
-    var x = packed.x * 2.0 - 1.0;
-    var y = packed.y * 2.0 - 1.0;
-    let z = 1.0 - abs(x) - abs(y);
-    if (z < 0.0) {
-        let across = (1.0 - abs(y)) * sgn(x);
-        let down = (1.0 - abs(x)) * sgn(y);
-        x = across;
-        y = down;
-    }
-    return normalize(vec3<f32>(x, y, z));
+struct FillOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) @interpolate(flat) object: u32,
 }
 
 @vertex
-fn vs_main(input: VertexInput) -> VertexOutput {
+fn vs_cut(input: VertexInput) -> CutOutput {
     let object = objects[input.object];
-    let position = object.minimum.xyz + input.position.xyz * object.extent.xyz;
-    let axis = section.mapping.z;
+    let world = object.minimum.xyz + input.position.xyz * object.extent.xyz;
+    let uvw = (world - section.box_min.xyz) / section.world.xyz;
     let u = section.mapping.x;
     let v = section.mapping.y;
-    let uvw = (position - section.box_min.xyz) / section.world.xyz;
-    let ndc = vec2<f32>(
+    var output: CutOutput;
+    output.clip_position = vec4<f32>(
         (uvw[u] - section.uv_center.x) / section.uv_scale.x,
         (uvw[v] - section.uv_center.y) / section.uv_scale.y,
+        0.5,
+        1.0,
     );
-    var output: VertexOutput;
-    output.clip_position = vec4<f32>(ndc, 0.5, 1.0);
-    output.normal = decode_normal(input.normal);
-    output.height = uvw[axis];
-    output.uv = vec2<f32>(uvw[u], uvw[v]);
-    output.object = input.object;
-    output.position = position;
+    output.height = uvw[section.mapping.z];
     return output;
 }
 
-fn hidden(input: VertexOutput) -> bool {
-    if (outside_region(input.position)) {
-        return true;
-    }
-    if (input.uv.x < 0.0 || input.uv.x > 1.0 || input.uv.y < 0.0 || input.uv.y > 1.0) {
-        return true;
-    }
-    return input.height < section.plane.x;
-}
-
 @fragment
-fn fs_depth(input: VertexOutput) -> DepthOutput {
-    if (hidden(input)) {
+fn fs_parity(input: CutOutput) -> @location(0) vec4<f32> {
+    if (input.height < section.plane.x) {
         discard;
     }
-    var output: DepthOutput;
-    output.depth = plane_depth(input.height);
+    return vec4<f32>(0.0);
+}
+
+@vertex
+fn vs_fill(@builtin(vertex_index) index: u32, @builtin(instance_index) object: u32) -> FillOutput {
+    let corner = CORNERS[index];
+    var output: FillOutput;
+    output.clip_position = vec4<f32>(corner, 0.5, 1.0);
+    output.uv = section.uv_center.xy + corner * section.uv_scale.xy;
+    output.object = object;
     return output;
 }
 
-struct ColorOutput {
-    @location(0) color: vec4<f32>,
-    @builtin(frag_depth) depth: f32,
-}
-
 @fragment
-fn fs_main(input: VertexOutput) -> ColorOutput {
-    if (hidden(input)) {
-        discard;
-    }
-    var direction = vec3<f32>(0.0);
-    direction[section.mapping.z] = 1.0;
-    if (dot(normalize(input.normal), direction) <= 0.0) {
+fn fs_fill(input: FillOutput) -> @location(0) vec4<f32> {
+    var uvw = vec3<f32>(0.0);
+    uvw[section.mapping.z] = section.plane.x;
+    uvw[section.mapping.x] = input.uv.x;
+    uvw[section.mapping.y] = input.uv.y;
+    if (outside_region(section.box_min.xyz + uvw * section.world.xyz)) {
         discard;
     }
     let style = styles[input.object];
     var color = style.color.rgb;
     if (style.flags.y > 0.5) {
-        color = mix(color, vec3<f32>(1.0, 0.86, 0.45), 0.55);
+        color = mix(color, SELECTED, SELECTED_MIX);
     }
-    var output: ColorOutput;
-    output.color = vec4<f32>(color, 1.0);
-    output.depth = plane_depth(input.height);
-    return output;
+    return vec4<f32>(color, 1.0);
+}
+
+@vertex
+fn vs_quad(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    return vec4<f32>(CORNERS[index], 0.5, 1.0);
+}
+
+@fragment
+fn fs_quad() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0);
 }

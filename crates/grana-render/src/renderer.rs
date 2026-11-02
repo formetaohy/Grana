@@ -759,7 +759,6 @@ impl Renderer {
                 }
             }
             meshes.cull_volume(&mut encoder, scene_group);
-            meshes.cull_section(&mut encoder, scene_group);
             markers.cull_volume(&mut encoder, scene_group);
             markers.cull_section(&mut encoder, scene_group);
             present.clear(&mut encoder, target.scene.color());
@@ -807,9 +806,10 @@ impl Renderer {
             meshes.draw_section(
                 &mut encoder,
                 target.scene.color(),
-                target.scene.depth(),
-                section_region,
+                target.scene.stencil(),
                 scene_group,
+                &section_data,
+                section_region,
             );
             markers.draw_section(
                 &mut encoder,

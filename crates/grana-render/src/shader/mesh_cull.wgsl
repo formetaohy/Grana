@@ -24,10 +24,8 @@ struct IndexedArgs {
 
 const VOLUME_NARROW: u32 = 0u;
 const VOLUME_WIDE: u32 = 1u;
-const SECTION_NARROW: u32 = 2u;
-const SECTION_WIDE: u32 = 3u;
-const SHADOW_NARROW: u32 = 4u;
-const SHADOW_WIDE: u32 = 5u;
+const SHADOW_NARROW: u32 = 2u;
+const SHADOW_WIDE: u32 = 3u;
 
 @group(1) @binding(0) var<storage, read> objects: array<ObjectData>;
 @group(2) @binding(0) var<storage, read> styles: array<StyleData>;
@@ -39,24 +37,6 @@ fn outside_sphere(center: vec3<f32>, radius: f32) -> bool {
         if (dot(plane.xyz, center) + plane.w < -radius) {
             return true;
         }
-    }
-    return false;
-}
-
-fn outside_section(center: vec3<f32>, radius: f32) -> bool {
-    let world = section.world.xyz;
-    let uvw = (center - section.box_min.xyz) / world;
-    let axis = section.mapping.z;
-    if (abs(uvw[axis] - section.plane.x) * world[axis] > radius) {
-        return true;
-    }
-    let u = section.mapping.x;
-    let v = section.mapping.y;
-    if (abs(uvw[u] - section.uv_center.x) - radius / world[u] > section.uv_scale.x) {
-        return true;
-    }
-    if (abs(uvw[v] - section.uv_center.y) - radius / world[v] > section.uv_scale.y) {
-        return true;
     }
     return false;
 }
@@ -97,26 +77,6 @@ fn mesh_cull_volume(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     commands[index + count * VOLUME_NARROW] = narrow;
     commands[index + count * VOLUME_WIDE] = wide;
-}
-
-@compute @workgroup_size(64)
-fn mesh_cull_section(@builtin(global_invocation_id) id: vec3<u32>) {
-    let index = id.x;
-    if (index >= arrayLength(&objects)) {
-        return;
-    }
-    let count = arrayLength(&objects);
-    let object = objects[index];
-    var narrow = IndexedArgs(0u, 0u, 0u, 0, 0u);
-    var wide = IndexedArgs(0u, 0u, 0u, 0, 0u);
-    if (styles[index].flags.x >= 0.5
-        && !outside_section(object.center_radius.xyz, object.center_radius.w)
-        && !outside_region_sphere(object.center_radius.xyz, object.center_radius.w)) {
-        narrow = narrow_command(object, object.vertex_base);
-        wide = wide_command(object, object.vertex_base);
-    }
-    commands[index + count * SECTION_NARROW] = narrow;
-    commands[index + count * SECTION_WIDE] = wide;
 }
 
 @compute @workgroup_size(64)

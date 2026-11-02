@@ -1,4 +1,4 @@
-mod common;
+﻿mod common;
 
 use common::{
     SAMPLES, SIDE, Session, blue, bright_fraction, channels, dark_fraction, device, green,
@@ -1829,4 +1829,69 @@ fn render_samples(texture: &wgpu::Texture, volume: &Volume, session: Session<'_>
         volume.brick(&grid, request.coord)
     });
     read_pixels(session.device, session.queue, texture, SIDE)
+}
+
+#[test]
+fn cuts_objects_at_the_plane() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = empty_volume();
+    let mesh = PackedMesh::new(pyramids());
+    let styles = [
+        Style::new([1.0, 0.12, 0.12], true, false),
+        Style::new([0.12, 1.0, 0.12], true, false),
+    ];
+    let mut measured = [0usize; 2];
+    for (slot, focus) in [-0.7f32, 0.7].into_iter().enumerate() {
+        let pixels = scene_render(
+            &device,
+            &queue,
+            Job {
+                texture: &texture,
+                volume: &volume,
+                volume_region: CORNER,
+                section_region: WHOLE,
+                focus_z: focus,
+                mesh: Some((&mesh, &styles)),
+            },
+        );
+        measured[slot] = red_pixels(&pixels) + green_pixels(&pixels);
+    }
+    assert!(
+        measured[0] > 1500,
+        "the section does not fill the wide cut: {}",
+        measured[0]
+    );
+    assert!(
+        measured[0] > 8 * measured[1],
+        "the section projects the object instead of cutting it: {measured:?}"
+    );
+}
+
+fn pyramids() -> Mesh {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for (object, centre) in [-0.9f32, 0.9].into_iter().enumerate() {
+        let base = vertices.len() as u32;
+        for (x, y) in [(-1.0f32, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+            vertices.push(MeshVertex::new(
+                [centre + 0.4 * x, 0.4 * y, -1.0],
+                [0.0, 0.0, -1.0],
+                object as u32,
+            ));
+        }
+        vertices.push(MeshVertex::new(
+            [centre, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            object as u32,
+        ));
+        let apex = base + 4;
+        for corner in 0..4u32 {
+            indices.extend([base + corner, base + (corner + 1) % 4, apex]);
+        }
+        indices.extend([base, base + 2, base + 1, base, base + 3, base + 2]);
+    }
+    Mesh::new(vertices, indices)
 }
