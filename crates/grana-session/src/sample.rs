@@ -14,6 +14,8 @@ const MEMBRANE_OPACITY: f32 = 0.35;
 const MEMBRANE_RADIAL: f32 = 1.24;
 const MEMBRANE_AXIAL: f32 = 1.35;
 const SURFACE_VOLUME: f32 = 2.0;
+const SURFACE_GRAIN: f32 = 0.15;
+const SURFACE_SEED: f32 = 1.2;
 const SPOT_DIAMETER: f32 = 0.45;
 const SPOT_CONTRAST: f32 = 0.1;
 const VESSEL_OPACITY: f32 = 0.18;
@@ -73,6 +75,8 @@ pub fn stage(scene: &mut Scene) -> Staged {
         set.set_color(SURFACE_COLOR);
         set.set_params(ObjectParams::Surfaces(SurfaceParams::new(
             NUCLEUS_THRESHOLD,
+            SURFACE_GRAIN,
+            SURFACE_SEED,
             SURFACE_VOLUME,
         )));
     }

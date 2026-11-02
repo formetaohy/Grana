@@ -1,6 +1,6 @@
 use glam::Vec2;
 use grana_scene::{
-    Item, Job, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, ParamBound, ParamField, Selection,
+    Item, Job, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, ParamField, ParamScale, Selection,
 };
 use grana_ui::{Align, Block, Color, Corners, Edges, Length, Rect, Role, TextStyle, Ui};
 
@@ -537,11 +537,17 @@ fn params(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: Objec
 }
 
 fn bounds(field: &ParamField, voxel: f32, world: f32) -> (f32, f32) {
-    match field.bound {
-        ParamBound::Voxel(factor) => (voxel, factor * voxel),
-        ParamBound::Unit => (0.0, 1.0),
-        ParamBound::Volume => (0.0, 200.0),
-        ParamBound::Length(fraction) => (voxel, fraction * world),
+    (
+        scale(field.minimum, voxel, world),
+        scale(field.maximum, voxel, world),
+    )
+}
+
+fn scale(scale: ParamScale, voxel: f32, world: f32) -> f32 {
+    match scale {
+        ParamScale::Voxel(factor) => factor * voxel,
+        ParamScale::World(fraction) => fraction * world,
+        ParamScale::Absolute(value) => value,
     }
 }
 

@@ -5,6 +5,8 @@ pub struct SpotParams {
 }
 
 impl SpotParams {
+    pub const FIELD_COUNT: usize = 2;
+
     pub fn new(diameter: f32, threshold: f32) -> Self {
         assert!(
             diameter.is_finite() && diameter > 0.0,
@@ -28,6 +30,22 @@ impl SpotParams {
         self.threshold
     }
 
+    pub fn field(&self, index: usize) -> f32 {
+        match index {
+            0 => self.diameter,
+            1 => self.threshold,
+            _ => panic!("a spot carries two parameters"),
+        }
+    }
+
+    pub fn set_field(&mut self, index: usize, value: f32) {
+        match index {
+            0 => self.set_diameter(value),
+            1 => self.set_threshold(value),
+            _ => panic!("a spot carries two parameters"),
+        }
+    }
+
     pub fn set_diameter(&mut self, diameter: f32) {
         assert!(
             diameter.is_finite() && diameter > 0.0,
@@ -48,14 +66,26 @@ impl SpotParams {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceParams {
     threshold: f32,
+    grain: f32,
+    seed: f32,
     min_volume: f32,
 }
 
 impl SurfaceParams {
-    pub fn new(threshold: f32, min_volume: f32) -> Self {
+    pub const FIELD_COUNT: usize = 4;
+
+    pub fn new(threshold: f32, grain: f32, seed: f32, min_volume: f32) -> Self {
         assert!(
             (0.0..=1.0).contains(&threshold),
             "a surface threshold is a fraction of the channel intensity range"
+        );
+        assert!(
+            grain.is_finite() && grain >= 0.0,
+            "a surface grain is a non-negative length"
+        );
+        assert!(
+            seed.is_finite() && seed >= 0.0,
+            "a surface seed is a non-negative length"
         );
         assert!(
             min_volume.is_finite() && min_volume >= 0.0,
@@ -63,6 +93,8 @@ impl SurfaceParams {
         );
         Self {
             threshold,
+            grain,
+            seed,
             min_volume,
         }
     }
@@ -71,8 +103,36 @@ impl SurfaceParams {
         self.threshold
     }
 
+    pub fn grain(self) -> f32 {
+        self.grain
+    }
+
+    pub fn seed(self) -> f32 {
+        self.seed
+    }
+
     pub fn min_volume(self) -> f32 {
         self.min_volume
+    }
+
+    pub fn field(&self, index: usize) -> f32 {
+        match index {
+            0 => self.threshold,
+            1 => self.grain,
+            2 => self.seed,
+            3 => self.min_volume,
+            _ => panic!("a surface carries four parameters"),
+        }
+    }
+
+    pub fn set_field(&mut self, index: usize, value: f32) {
+        match index {
+            0 => self.set_threshold(value),
+            1 => self.set_grain(value),
+            2 => self.set_seed(value),
+            3 => self.set_min_volume(value),
+            _ => panic!("a surface carries four parameters"),
+        }
     }
 
     pub fn set_threshold(&mut self, threshold: f32) {
@@ -81,6 +141,22 @@ impl SurfaceParams {
             "a surface threshold is a fraction of the channel intensity range"
         );
         self.threshold = threshold;
+    }
+
+    pub fn set_grain(&mut self, grain: f32) {
+        assert!(
+            grain.is_finite() && grain >= 0.0,
+            "a surface grain is a non-negative length"
+        );
+        self.grain = grain;
+    }
+
+    pub fn set_seed(&mut self, seed: f32) {
+        assert!(
+            seed.is_finite() && seed >= 0.0,
+            "a surface seed is a non-negative length"
+        );
+        self.seed = seed;
     }
 
     pub fn set_min_volume(&mut self, min_volume: f32) {
@@ -99,6 +175,8 @@ pub struct FilamentParams {
 }
 
 impl FilamentParams {
+    pub const FIELD_COUNT: usize = 2;
+
     pub fn new(threshold: f32, min_length: f32) -> Self {
         assert!(
             (0.0..=1.0).contains(&threshold),
@@ -120,6 +198,22 @@ impl FilamentParams {
 
     pub fn min_length(self) -> f32 {
         self.min_length
+    }
+
+    pub fn field(&self, index: usize) -> f32 {
+        match index {
+            0 => self.threshold,
+            1 => self.min_length,
+            _ => panic!("a filament carries two parameters"),
+        }
+    }
+
+    pub fn set_field(&mut self, index: usize, value: f32) {
+        match index {
+            0 => self.set_threshold(value),
+            1 => self.set_min_length(value),
+            _ => panic!("a filament carries two parameters"),
+        }
     }
 
     pub fn set_threshold(&mut self, threshold: f32) {

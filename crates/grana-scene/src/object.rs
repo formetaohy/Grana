@@ -14,6 +14,8 @@ const DIVISION_SCALE: f32 = 2.0;
 const SPOT_DIAMETER: f32 = 4.0;
 const SPOT_CONTRAST: f32 = 0.2;
 const SURFACE_THRESHOLD: f32 = 0.5;
+const SURFACE_GRAIN: f32 = 1.0;
+const SURFACE_SEED: f32 = 6.0;
 const SURFACE_MIN_VOLUME: f32 = 0.0;
 const FILAMENT_THRESHOLD: f32 = 0.5;
 const FILAMENT_MIN_LENGTH: f32 = 2.0;
@@ -26,18 +28,18 @@ pub enum ObjectKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ParamBound {
+pub enum ParamScale {
     Voxel(f32),
-    Unit,
-    Volume,
-    Length(f32),
+    World(f32),
+    Absolute(f32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParamField {
     pub label: &'static str,
     pub suffix: &'static str,
-    pub bound: ParamBound,
+    pub minimum: ParamScale,
+    pub maximum: ParamScale,
     pub logarithmic: bool,
 }
 
@@ -45,28 +47,46 @@ const SPOT_FIELDS: [ParamField; 2] = [
     ParamField {
         label: "diameter",
         suffix: " µm",
-        bound: ParamBound::Voxel(16.0),
+        minimum: ParamScale::Voxel(1.0),
+        maximum: ParamScale::Voxel(16.0),
         logarithmic: true,
     },
     ParamField {
         label: "contrast",
         suffix: "",
-        bound: ParamBound::Unit,
+        minimum: ParamScale::Absolute(0.0),
+        maximum: ParamScale::Absolute(1.0),
         logarithmic: false,
     },
 ];
 
-const SURFACE_FIELDS: [ParamField; 2] = [
+const SURFACE_FIELDS: [ParamField; 4] = [
     ParamField {
         label: "threshold",
         suffix: "",
-        bound: ParamBound::Unit,
+        minimum: ParamScale::Absolute(0.0),
+        maximum: ParamScale::Absolute(1.0),
+        logarithmic: false,
+    },
+    ParamField {
+        label: "grain",
+        suffix: " µm",
+        minimum: ParamScale::Absolute(0.0),
+        maximum: ParamScale::Voxel(3.0),
+        logarithmic: false,
+    },
+    ParamField {
+        label: "seed size",
+        suffix: " µm",
+        minimum: ParamScale::Absolute(0.0),
+        maximum: ParamScale::World(0.1),
         logarithmic: false,
     },
     ParamField {
         label: "min volume",
         suffix: " µm³",
-        bound: ParamBound::Volume,
+        minimum: ParamScale::Absolute(0.0),
+        maximum: ParamScale::Absolute(200.0),
         logarithmic: false,
     },
 ];
@@ -75,13 +95,15 @@ const FILAMENT_FIELDS: [ParamField; 2] = [
     ParamField {
         label: "threshold",
         suffix: "",
-        bound: ParamBound::Unit,
+        minimum: ParamScale::Absolute(0.0),
+        maximum: ParamScale::Absolute(1.0),
         logarithmic: false,
     },
     ParamField {
         label: "min length",
         suffix: " µm",
-        bound: ParamBound::Length(0.25),
+        minimum: ParamScale::Voxel(1.0),
+        maximum: ParamScale::World(0.25),
         logarithmic: true,
     },
 ];
@@ -152,9 +174,12 @@ impl ObjectKind {
             Self::Spots => {
                 ObjectParams::Spots(SpotParams::new(SPOT_DIAMETER * voxel, SPOT_CONTRAST))
             }
-            Self::Surfaces => {
-                ObjectParams::Surfaces(SurfaceParams::new(SURFACE_THRESHOLD, SURFACE_MIN_VOLUME))
-            }
+            Self::Surfaces => ObjectParams::Surfaces(SurfaceParams::new(
+                SURFACE_THRESHOLD,
+                SURFACE_GRAIN * voxel,
+                SURFACE_SEED * voxel,
+                SURFACE_MIN_VOLUME,
+            )),
             Self::Filaments => ObjectParams::Filaments(FilamentParams::new(
                 FILAMENT_THRESHOLD,
                 FILAMENT_MIN_LENGTH,
@@ -217,26 +242,18 @@ impl ObjectParams {
     }
 
     pub fn value(&self, index: usize) -> f32 {
-        assert!(index < 2, "an object kind carries two parameters");
-        match (self, index) {
-            (Self::Spots(params), 0) => params.diameter(),
-            (Self::Spots(params), _) => params.threshold(),
-            (Self::Surfaces(params), 0) => params.threshold(),
-            (Self::Surfaces(params), _) => params.min_volume(),
-            (Self::Filaments(params), 0) => params.threshold(),
-            (Self::Filaments(params), _) => params.min_length(),
+        match self {
+            Self::Spots(params) => params.field(index),
+            Self::Surfaces(params) => params.field(index),
+            Self::Filaments(params) => params.field(index),
         }
     }
 
     pub fn set_value(&mut self, index: usize, value: f32) {
-        assert!(index < 2, "an object kind carries two parameters");
-        match (self, index) {
-            (Self::Spots(params), 0) => params.set_diameter(value),
-            (Self::Spots(params), _) => params.set_threshold(value),
-            (Self::Surfaces(params), 0) => params.set_threshold(value),
-            (Self::Surfaces(params), _) => params.set_min_volume(value),
-            (Self::Filaments(params), 0) => params.set_threshold(value),
-            (Self::Filaments(params), _) => params.set_min_length(value),
+        match self {
+            Self::Spots(params) => params.set_field(index, value),
+            Self::Surfaces(params) => params.set_field(index, value),
+            Self::Filaments(params) => params.set_field(index, value),
         }
     }
 }

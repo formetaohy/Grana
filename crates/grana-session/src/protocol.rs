@@ -71,9 +71,20 @@ pub struct FilterSpec {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum DetectionSpec {
-    Spots { diameter: f32, contrast: f32 },
-    Surfaces { threshold: f32, min_volume: f32 },
-    Filaments { threshold: f32, min_length: f32 },
+    Spots {
+        diameter: f32,
+        contrast: f32,
+    },
+    Surfaces {
+        threshold: f32,
+        grain: f32,
+        seed: f32,
+        min_volume: f32,
+    },
+    Filaments {
+        threshold: f32,
+        min_length: f32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -161,6 +172,8 @@ impl Protocol {
                     },
                     ObjectParams::Surfaces(params) => DetectionSpec::Surfaces {
                         threshold: params.threshold(),
+                        grain: params.grain(),
+                        seed: params.seed(),
                         min_volume: params.min_volume(),
                     },
                     ObjectParams::Filaments(params) => DetectionSpec::Filaments {
@@ -618,8 +631,10 @@ impl DetectionSpec {
             }
             Self::Surfaces {
                 threshold,
+                grain,
+                seed,
                 min_volume,
-            } => ObjectParams::Surfaces(SurfaceParams::new(threshold, min_volume)),
+            } => ObjectParams::Surfaces(SurfaceParams::new(threshold, grain, seed, min_volume)),
             Self::Filaments {
                 threshold,
                 min_length,
@@ -641,10 +656,18 @@ impl DetectionSpec {
             }
             Self::Surfaces {
                 threshold,
+                grain,
+                seed,
                 min_volume,
             } => {
                 if !(0.0..=1.0).contains(&threshold) {
                     return invalid("needs a unit surface threshold".to_string());
+                }
+                if !(grain.is_finite() && grain >= 0.0) {
+                    return invalid("needs a non-negative surface grain".to_string());
+                }
+                if !(seed.is_finite() && seed >= 0.0) {
+                    return invalid("needs a non-negative surface seed".to_string());
                 }
                 if !(min_volume.is_finite() && min_volume >= 0.0) {
                     return invalid("needs a non-negative minimum volume".to_string());

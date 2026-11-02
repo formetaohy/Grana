@@ -2,45 +2,32 @@ use std::f64::consts::PI;
 
 use glam::Vec3;
 use grana_analysis::{SurfaceBuilder, SurfaceParams};
-use grana_volume::{
-    BrickData, BrickGrid, Channel, Extent, Intensity, Level, Region, Spacing, Volume, VoxelData,
-};
+use grana_object::SurfaceSet;
+use grana_volume::{Channel, Extent, Intensity, Level, Region, Spacing, Volume, VoxelData};
 
-const EXTENT: Extent = Extent::new(120, 96, 72);
-const RADIUS: f32 = 12.0;
 const HIGH: u16 = 65_535;
 const MARKER: u16 = 7;
 
 #[test]
 fn extracts_measured_surfaces() {
+    let extent = Extent::new(120, 96, 72);
     let centres = [[36.0f32, 48.0, 36.0], [84.0, 40.0, 30.0]];
-    let volume = blobs(&centres);
+    let volume = blobs(extent, &[0.1, 0.1, 0.2], &centres, 12.0);
     let level = Level::new(volume.extent(), volume.spacing());
-    let grid = BrickGrid::new(volume.extent());
     let threshold = 0.5;
-    let intensity = Intensity::new(0.0, f32::from(HIGH));
     let channels = volume.channel_count();
 
-    let mut builder = SurfaceBuilder::new(
-        0,
-        level,
-        SurfaceParams::new(threshold, 0.0),
-        channels,
-        0,
+    let set = extract(
+        &volume,
+        SurfaceParams::new(threshold, 0.0, 0.0, 0.0),
         Region::none(),
-        intensity,
     );
-    for index in 0..builder.coord_count() {
-        let coord = builder.coord(index);
-        builder.add(coord, &brick(&volume, &grid, coord), None);
-    }
-    let set = builder.finish();
     assert_eq!(set.object_count(), centres.len(), "each blob is one object");
     assert!(!set.geometry().is_empty(), "the mesh holds triangles");
     assert_eq!(set.intensities().channels(), channels);
 
     let spacing = [0.1f64, 0.1, 0.2];
-    let radius = f64::from(RADIUS) * (spacing[0] * spacing[1] * spacing[2]).cbrt();
+    let radius = 12.0 * (spacing[0] * spacing[1] * spacing[2]).cbrt();
     let expected_volume = 4.0 / 3.0 * PI * radius.powi(3);
     let expected_area = 4.0 * PI * radius.powi(2);
     let world = level.world_extent();
@@ -94,41 +81,42 @@ fn extracts_measured_surfaces() {
         assert_eq!(marker.deviation(), 0.0, "a constant channel is flat");
     }
 
-    let mut filtered = SurfaceBuilder::new(
-        0,
-        level,
-        SurfaceParams::new(threshold, (1.5 * expected_volume) as f32),
-        channels,
-        0,
+    let filtered = extract(
+        &volume,
+        SurfaceParams::new(threshold, 0.0, 0.0, (1.5 * expected_volume) as f32),
         Region::none(),
-        intensity,
     );
-    for index in 0..filtered.coord_count() {
-        let coord = filtered.coord(index);
-        filtered.add(coord, &brick(&volume, &grid, coord), None);
-    }
-    let filtered = filtered.finish();
     assert!(
         filtered.is_empty(),
         "the volume filter must drop small objects"
     );
     assert_eq!(filtered.intensities().objects(), 0);
 
-    let region = Region::new(Vec3::new(-6.0, -4.8, -7.2), Vec3::new(0.5, 4.8, 7.2));
-    let mut restricted = SurfaceBuilder::new(
-        0,
-        level,
-        SurfaceParams::new(threshold, 0.0),
-        channels,
-        0,
-        region,
-        intensity,
+    let smoothed = extract(
+        &volume,
+        SurfaceParams::new(threshold, 0.1, 0.0, 0.0),
+        Region::none(),
     );
-    for index in 0..restricted.coord_count() {
-        let coord = restricted.coord(index);
-        restricted.add(coord, &brick(&volume, &grid, coord), None);
+    assert_eq!(
+        smoothed.object_count(),
+        centres.len(),
+        "the grain keeps every blob"
+    );
+    for object in smoothed.objects() {
+        let relative = (object.volume() - expected_volume).abs() / expected_volume;
+        assert!(
+            relative < 0.08,
+            "the grain shifts a blob volume {} from {expected_volume}",
+            object.volume()
+        );
     }
-    let restricted = restricted.finish();
+
+    let region = Region::new(Vec3::new(-6.0, -4.8, -7.2), Vec3::new(0.5, 4.8, 7.2));
+    let restricted = extract(
+        &volume,
+        SurfaceParams::new(threshold, 0.0, 0.0, 0.0),
+        region,
+    );
     assert_eq!(
         restricted.object_count(),
         1,
@@ -144,35 +132,119 @@ fn extracts_measured_surfaces() {
     );
 }
 
-fn brick(volume: &Volume, grid: &BrickGrid, coord: grana_volume::BrickCoord) -> BrickData {
-    BrickData::new(
-        (0..volume.channel_count())
-            .map(|channel| volume.channel_brick(grid, coord, channel))
-            .collect(),
-    )
+#[test]
+fn splits_touching_lobes_at_their_neck() {
+    let extent = Extent::new(200, 80, 80);
+    let radius = 10.0;
+    let centres = [[86.5f32, 40.0, 40.0], [105.5, 40.0, 40.0]];
+    let volume = blobs(extent, &[0.1, 0.1, 0.1], &centres, radius);
+
+    let merged = extract(
+        &volume,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.0),
+        Region::none(),
+    );
+    assert_eq!(merged.object_count(), 1, "touching lobes form one object");
+    let total = merged.objects()[0].voxel_count();
+
+    let split = extract(
+        &volume,
+        SurfaceParams::new(0.5, 0.0, 0.6, 0.0),
+        Region::none(),
+    );
+    assert_eq!(
+        split.object_count(),
+        2,
+        "the seed splits the lobes at their neck"
+    );
+    let kept = split
+        .objects()
+        .iter()
+        .map(|object| object.voxel_count())
+        .sum::<u64>();
+    assert_eq!(kept, total, "splitting conserves the mask");
+
+    let expected = 4.0 / 3.0 * PI * f64::from(radius).powi(3);
+    for object in split.objects() {
+        let relative = (object.voxel_count() as f64 - expected).abs() / expected;
+        assert!(
+            relative < 0.03,
+            "a lobe holds {} voxels against {expected}",
+            object.voxel_count()
+        );
+    }
+    let mut centres = split
+        .objects()
+        .iter()
+        .map(|object| object.centroid()[0])
+        .collect::<Vec<_>>();
+    centres.sort_by(|left, right| left.partial_cmp(right).expect("the centroids order"));
+    let separation = centres[1] - centres[0];
+    assert!(
+        (1.5..2.3).contains(&separation),
+        "the lobes are {separation} apart in x"
+    );
+
+    let coarse = extract(
+        &volume,
+        SurfaceParams::new(0.5, 0.0, 2.4, 0.0),
+        Region::none(),
+    );
+    assert_eq!(
+        coarse.object_count(),
+        1,
+        "a seed wider than the neck keeps the lobes together"
+    );
 }
 
-fn blobs(centres: &[[f32; 3]]) -> Volume {
-    let count = EXTENT.voxel_count() as usize;
+fn extract(volume: &Volume, params: SurfaceParams, region: Region) -> SurfaceSet {
+    let level = Level::new(volume.extent(), volume.spacing());
+    let intensity = Intensity::new(0.0, f32::from(HIGH));
+    let channels = volume.channel_count();
+    let mut builder = SurfaceBuilder::new(0, level, params, channels, 0, region, intensity);
+    for index in 0..builder.tile_count() {
+        let range = builder.detection_range(index);
+        let detection = volume.channels()[0].data().region(
+            volume.extent(),
+            range[0].clone(),
+            range[1].clone(),
+            range[2].clone(),
+        );
+        builder
+            .add(index, &detection, None, |channel, core| {
+                Ok(volume.channels()[channel].data().region(
+                    volume.extent(),
+                    core[0].clone(),
+                    core[1].clone(),
+                    core[2].clone(),
+                ))
+            })
+            .expect("a surface tile is added");
+    }
+    builder.finish()
+}
+
+fn blobs(extent: Extent, spacing: &[f32; 3], centres: &[[f32; 3]], radius: f32) -> Volume {
+    let count = extent.voxel_count() as usize;
     let mut values = vec![0u16; count];
     for centre in centres {
-        for z in 0..EXTENT.z() {
-            for y in 0..EXTENT.y() {
-                for x in 0..EXTENT.x() {
+        for z in 0..extent.z() {
+            for y in 0..extent.y() {
+                for x in 0..extent.x() {
                     let offset = ((x as f32 - centre[0]).powi(2)
                         + (y as f32 - centre[1]).powi(2)
                         + (z as f32 - centre[2]).powi(2))
                     .sqrt();
-                    if offset < RADIUS {
-                        values[EXTENT.index(x, y, z) as usize] = HIGH;
+                    if offset < radius {
+                        values[extent.index(x, y, z) as usize] = HIGH;
                     }
                 }
             }
         }
     }
     Volume::new(
-        EXTENT,
-        spacing(),
+        extent,
+        Spacing::new(spacing[0], spacing[1], spacing[2]),
         vec![
             Channel::new("blobs", [0.3, 0.8, 1.0], VoxelData::U16(values)),
             Channel::new(
@@ -182,8 +254,4 @@ fn blobs(centres: &[[f32; 3]]) -> Volume {
             ),
         ],
     )
-}
-
-fn spacing() -> Spacing {
-    Spacing::new(0.1, 0.1, 0.2)
 }

@@ -388,19 +388,34 @@ impl Decode for RelationFrame {
 
 impl Decode for ObjectParams {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let tag = reader.u8()?;
-        let first = finite(reader.f32()?)?;
-        let second = finite(reader.f32()?)?;
-        match tag {
-            0 if first > 0.0 && (0.0..=1.0).contains(&second) => {
+        let kind = match reader.u8()? {
+            0 => ObjectKind::Spots,
+            1 => ObjectKind::Surfaces,
+            2 => ObjectKind::Filaments,
+            _ => return Err(FAULT_SHAPE),
+        };
+        let mut values = [0.0f32; 4];
+        for slot in values.iter_mut().take(kind.fields().len()) {
+            *slot = finite(reader.f32()?)?;
+        }
+        let [first, second, third, fourth] = values;
+        match kind {
+            ObjectKind::Spots if first > 0.0 && (0.0..=1.0).contains(&second) => {
                 Ok(Self::Spots(grana_analysis::SpotParams::new(first, second)))
             }
-            1 if (0.0..=1.0).contains(&first) && second >= 0.0 => Ok(Self::Surfaces(
-                grana_analysis::SurfaceParams::new(first, second),
-            )),
-            2 if (0.0..=1.0).contains(&first) && second > 0.0 => Ok(Self::Filaments(
-                grana_analysis::FilamentParams::new(first, second),
-            )),
+            ObjectKind::Surfaces
+                if (0.0..=1.0).contains(&first)
+                    && second >= 0.0
+                    && third >= 0.0
+                    && fourth >= 0.0 =>
+            {
+                Ok(Self::Surfaces(grana_analysis::SurfaceParams::new(
+                    first, second, third, fourth,
+                )))
+            }
+            ObjectKind::Filaments if (0.0..=1.0).contains(&first) && second > 0.0 => Ok(
+                Self::Filaments(grana_analysis::FilamentParams::new(first, second)),
+            ),
             _ => Err(FAULT_VALUE),
         }
     }

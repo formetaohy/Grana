@@ -18,7 +18,7 @@ pub use dataset::{Dataset, Origin};
 pub use grana_display::{ColorState, Coloring, Extent};
 pub use job::{Job, Progress};
 pub use measure::{Measure, MeasureState};
-pub use object::{ObjectFrame, ObjectKind, ObjectParams, ParamBound, ParamField, TrackStyle};
+pub use object::{ObjectFrame, ObjectKind, ObjectParams, ParamField, ParamScale, TrackStyle};
 pub use object_set::{ObjectSet, ObjectSetId, Visibility};
 pub use objects::Objects;
 pub use relation::Relation;

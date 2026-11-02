@@ -1,4 +1,4 @@
-use std::fs;
+﻿use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -29,7 +29,7 @@ const PROTOCOL: &str = r#"
       "name": "Nuclei",
       "channel": "Cells",
       "color": [1.0, 0.7, 0.2],
-      "detection": {"kind": "surfaces", "threshold": 0.3, "min_volume": 1.0}
+      "detection": {"kind": "surfaces", "threshold": 0.3, "grain": 0.1, "seed": 0.6, "min_volume": 1.0}
     }
   ],
   "relations": [{"source": "Puncta", "target": "Nuclei"}],

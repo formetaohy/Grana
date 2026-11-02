@@ -239,9 +239,11 @@ impl Encode for RelationFrame {
 
 impl Encode for ObjectParams {
     fn encode(&self, writer: &mut Writer) {
-        writer.u8(self.kind().index() as u8);
-        writer.f32(self.value(0));
-        writer.f32(self.value(1));
+        let kind = self.kind();
+        writer.u8(kind.index() as u8);
+        for index in 0..kind.fields().len() {
+            writer.f32(self.value(index));
+        }
     }
 }
 

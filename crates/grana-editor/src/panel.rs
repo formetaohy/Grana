@@ -1,4 +1,4 @@
-use glam::Vec2;
+﻿use glam::Vec2;
 use grana_ui::{
     Align, Block, Border, Color, Corners, Cursor, Edges, Fill, Icon, Length, Level, Rect, Role,
     Shadow, TextStyle, TypeStyle, Ui, icon,
@@ -434,7 +434,7 @@ pub fn progress_caption(
     let unit = match job {
         grana_scene::Job::Detect(_) => match kind {
             grana_scene::ObjectKind::Spots => "blocks",
-            grana_scene::ObjectKind::Surfaces => "bricks",
+            grana_scene::ObjectKind::Surfaces => "tiles",
             grana_scene::ObjectKind::Filaments => "frames",
         },
         grana_scene::Job::Track(_)

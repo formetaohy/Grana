@@ -11,7 +11,7 @@ const PROTOCOL: &str = r#"
       "name": "Nuclei",
       "channel": "DAPI",
       "color": [1.0, 0.7, 0.2],
-      "detection": {"kind": "surfaces", "threshold": 0.25, "min_volume": 2.0},
+      "detection": {"kind": "surfaces", "threshold": 0.25, "grain": 0.1, "seed": 0.6, "min_volume": 2.0},
       "track": {
         "max_step": 0.8,
         "max_gap": 1,
@@ -56,7 +56,9 @@ fn reads_and_writes_a_protocol() {
     assert_eq!(region.high, [0.9, 0.8, 1.0]);
     let surface = protocol.sets()[0].params();
     assert_eq!(surface.value(0), 0.25);
-    assert_eq!(surface.value(1), 2.0);
+    assert_eq!(surface.value(1), 0.1);
+    assert_eq!(surface.value(2), 0.6);
+    assert_eq!(surface.value(3), 2.0);
     let track = protocol.sets()[0]
         .track_params()
         .expect("the surface set is tracked");

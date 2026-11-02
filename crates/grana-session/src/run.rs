@@ -297,7 +297,7 @@ fn surfaces(
             region,
             pyramid.channels()[channel].intensity(),
         );
-        let total = builder.coord_count();
+        let total = builder.tile_count();
         let mask = roi.as_ref().map(|roi| roi.mask(pyramid.level(0), time));
         sink(Event::Progress {
             time,
@@ -308,10 +308,14 @@ fn surfaces(
             if cancel.load(Ordering::Relaxed) {
                 return Ok(());
             }
-            let coord = builder.coord(index);
-            let data = reader.read_brick(time, 0, coord)?;
-            builder.add(coord, &data, mask.as_ref());
-            if index % 16 == 0 || index + 1 == total {
+            let range = builder.detection_range(index);
+            let data = reader.read_region(time, 0, channel, &range)?;
+            builder.add(index, &data, mask.as_ref(), |measured, core| {
+                reader
+                    .read_region(time, 0, measured, core)
+                    .map_err(String::from)
+            })?;
+            if index % 4 == 0 || index + 1 == total {
                 sink(Event::Progress {
                     time,
                     done: index + 1,
