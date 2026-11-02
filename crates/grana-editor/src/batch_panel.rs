@@ -69,7 +69,7 @@ fn protocol(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
             None => {
                 widget::weak(
                     ui,
-                    "Capture the current objects, detection parameters and colocalization pair into a reusable protocol.",
+                    "Capture the current region, objects, detection parameters, statistics grouping and colocalization pair into a reusable protocol.",
                 );
             }
         }
@@ -195,6 +195,25 @@ fn output(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         {
             commands.push(Command::ChooseBatchOutput);
         }
+        if !state.batch_running() {
+            let jobs = state.batch_jobs();
+            ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
+                widget::field_label(ui, "WORKERS");
+                if let Some(value) = widget::drag_value(ui, "batch.jobs", jobs as f32, 0.15, 0) {
+                    let next = (value.round() as i64).clamp(1, 16) as u32;
+                    if next as usize != jobs {
+                        commands.push(Command::SetBatchJobs(next));
+                    }
+                }
+                widget::caption(
+                    ui,
+                    &format!(
+                        "{jobs} dataset{} at a time",
+                        if jobs == 1 { "" } else { "s" }
+                    ),
+                );
+            });
+        }
         ui.separator();
         let running = state.batch_running();
         if running {
@@ -225,14 +244,14 @@ fn output(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         }
         widget::weak(
             ui,
-            "Each dataset writes object, track and colocalization tables into the output folder.",
+            "Each dataset writes the tables of the protocol grouping into its own folder. Re-running the same protocol resumes where it stopped.",
         );
     });
 }
 
 fn state_tint(state: &str, ui: &Ui) -> Color {
     match state {
-        "complete" | "done" => ui.theme().palette.success,
+        "complete" | "done" | "resumed" => ui.theme().palette.success,
         "failed" => ui.theme().palette.danger,
         "running" => ui.theme().palette.accent,
         _ => ui.theme().palette.text_secondary,
@@ -242,6 +261,7 @@ fn state_tint(state: &str, ui: &Ui) -> Color {
 fn state_label(state: &str) -> &str {
     match state {
         "complete" | "done" => "Complete",
+        "resumed" => "Resumed",
         "failed" => "Failed",
         "running" => "Running",
         "pending" => "Pending",

@@ -70,6 +70,7 @@ pub struct Session {
     batch_rows: Vec<BatchDataset>,
     batch_output: Option<PathBuf>,
     batch_running: bool,
+    batch_jobs: usize,
     batch_message: Option<String>,
     generation: u64,
     view: Option<ViewState>,
@@ -106,6 +107,7 @@ impl Session {
             batch_rows: Vec::new(),
             batch_output: None,
             batch_running: false,
+            batch_jobs: crate::default_jobs(),
             batch_message: None,
             generation: 0,
             view: None,
@@ -184,6 +186,7 @@ impl Session {
                 .batch_output
                 .as_ref()
                 .map(|path| path.display().to_string()),
+            jobs: self.batch_jobs,
             running: self.batch_running,
             message: self.batch_message.clone(),
         })
@@ -545,6 +548,7 @@ impl Session {
                 self.batch_rows.clear();
             }
             Command::ChooseBatchOutput => self.choose_batch_output(),
+            Command::SetBatchJobs(jobs) => self.set_batch_jobs(jobs),
             Command::RunBatch => self.run_batch(),
             Command::CancelBatch => {
                 if let Some(batch) = &self.batch {
@@ -1230,7 +1234,7 @@ impl Session {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        match Protocol::capture(scene) {
+        match Protocol::capture(scene, &self.measure) {
             Ok(protocol) => {
                 self.protocol_text = Some(protocol.summary());
                 self.protocol = Some(protocol);
@@ -1327,6 +1331,13 @@ impl Session {
         self.batch_message = None;
     }
 
+    fn set_batch_jobs(&mut self, jobs: u32) {
+        if self.batch_running {
+            return;
+        }
+        self.batch_jobs = jobs.clamp(1, crate::MAX_JOBS as u32) as usize;
+    }
+
     fn run_batch(&mut self) {
         if self.batch_running {
             return;
@@ -1350,6 +1361,7 @@ impl Session {
             protocol,
             datasets: self.batch_datasets.clone(),
             output,
+            jobs: self.batch_jobs,
         }));
     }
 
@@ -1405,8 +1417,10 @@ impl Session {
                 BatchEvent::Dataset { index, outcome } => {
                     if let Some(row) = self.batch_rows.get_mut(index) {
                         match outcome {
-                            Outcome::Complete { objects, .. } => {
-                                row.state = "done".to_string();
+                            Outcome::Complete {
+                                objects, resumed, ..
+                            } => {
+                                row.state = if resumed { "resumed" } else { "done" }.to_string();
                                 row.detail = format!("{objects} objects");
                             }
                             Outcome::Failed { detail } => {

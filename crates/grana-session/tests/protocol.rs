@@ -1,9 +1,11 @@
-use grana_scene::{Dataset, ObjectKind, Scene};
+use glam::Vec3;
+use grana_scene::{Dataset, Measure, ObjectKind, Scene};
 use grana_session::{DetectionSpec, Protocol};
-use grana_volume::{Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
+use grana_volume::{Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
 const PROTOCOL: &str = r#"
 {
+  "region": {"low": [0.1, 0.2, 0.0], "high": [0.9, 0.8, 1.0]},
   "sets": [
     {
       "name": "Nuclei",
@@ -16,6 +18,11 @@ const PROTOCOL: &str = r#"
         "division": true,
         "division_range": 2.0,
         "thickness": 0.2
+      },
+      "measure": {
+        "group": "tracks",
+        "aggregate": "max",
+        "filters": [{"column": "volume_um3", "minimum": 1.0, "maximum": 9.0}]
       }
     },
     {
@@ -42,6 +49,11 @@ fn reads_and_writes_a_protocol() {
     assert_eq!(protocol.sets()[0].kind(), ObjectKind::Surfaces);
     assert_eq!(protocol.sets()[1].kind(), ObjectKind::Spots);
     assert_eq!(protocol.sets()[2].kind(), ObjectKind::Filaments);
+    let region = protocol
+        .region()
+        .expect("the protocol restricts its region");
+    assert_eq!(region.low, [0.1, 0.2, 0.0]);
+    assert_eq!(region.high, [0.9, 0.8, 1.0]);
     let surface = protocol.sets()[0].params();
     assert_eq!(surface.value(0), 0.25);
     assert_eq!(surface.value(1), 2.0);
@@ -52,6 +64,17 @@ fn reads_and_writes_a_protocol() {
     assert_eq!(track.max_gap(), 1);
     assert!(track.division());
     assert_eq!(track.division_range(), 2.0);
+    let measure = &protocol.sets()[0].measure;
+    assert_eq!(measure.group(), grana_measure::Group::Track);
+    assert_eq!(measure.aggregate(), grana_measure::Aggregate::Maximum);
+    assert_eq!(measure.filters.len(), 1);
+    assert_eq!(measure.filters[0].column, "volume_um3");
+    assert_eq!(measure.filters[0].minimum, 1.0);
+    assert_eq!(measure.filters[0].maximum, 9.0);
+    assert_eq!(
+        protocol.sets()[1].measure.group(),
+        grana_measure::Group::Object
+    );
     let coloc = protocol.coloc().expect("the protocol colocalizes");
     assert_eq!(coloc.a, "GFP");
     assert_eq!(coloc.b, "RFP");
@@ -64,6 +87,7 @@ fn reads_and_writes_a_protocol() {
     let text = protocol.to_json().expect("the protocol serializes");
     let restored = Protocol::from_json(&text).expect("the protocol round trips");
     assert_eq!(protocol, restored);
+    assert_eq!(protocol.digest(), restored.digest());
 }
 
 #[test]
@@ -103,6 +127,25 @@ fn rejects_an_invalid_protocol() {
         )),
         "a colocalization pair names two channels"
     );
+    assert!(
+        invalid(&PROTOCOL.replace("\"group\": \"tracks\"", "\"group\": \"steps\"")),
+        "an unknown grouping is rejected"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace("\"minimum\": 1.0", "\"minimum\": 10.0")),
+        "a filter range is ordered"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace("[0.1, 0.2, 0.0]", "[0.1, 0.2, -0.1]")),
+        "a region box lies inside the dataset"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace(
+            "\"name\": \"Puncta\",\n      \"channel\": \"GFP\",\n      \"color\": [0.3, 0.8, 1.0],\n      \"detection\": {\"kind\": \"spots\", \"diameter\": 0.45, \"contrast\": 0.1}",
+            "\"name\": \"Puncta\",\n      \"channel\": \"GFP\",\n      \"color\": [0.3, 0.8, 1.0],\n      \"detection\": {\"kind\": \"spots\", \"diameter\": 0.45, \"contrast\": 0.1},\n      \"measure\": {\"group\": \"tracks\", \"aggregate\": \"mean\"}"
+        )),
+        "an untracked set does not group by tracks"
+    );
 }
 
 #[test]
@@ -119,11 +162,13 @@ fn captures_the_analysis_of_a_scene() {
     );
     let movie = VolumeSeries::new(vec![volume], 1.0);
     let mut scene = Scene::new(Dataset::synthetic("fixture", movie.pyramid().clone()));
+    scene.region = Region::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
     let set = scene.add_object(ObjectKind::Spots, 0);
     if let Some(set) = scene.objects.get_mut(set) {
         set.set_color([0.2, 0.7, 0.9]);
     }
-    let protocol = Protocol::capture(&scene).expect("the scene analysis is capturable");
+    let measure = Measure::new();
+    let protocol = Protocol::capture(&scene, &measure).expect("the scene analysis is capturable");
     assert_eq!(protocol.sets().len(), 1);
     let spec = &protocol.sets()[0];
     assert_eq!(spec.name, "Spots 1");
@@ -131,5 +176,9 @@ fn captures_the_analysis_of_a_scene() {
     assert_eq!(spec.kind(), ObjectKind::Spots);
     assert_eq!(spec.color, [0.2, 0.7, 0.9]);
     assert!(spec.track_params().is_some());
+    assert_eq!(spec.measure.group(), grana_measure::Group::Object);
     assert!(protocol.coloc().is_none());
+    let region = protocol.region().expect("the scene region is captured");
+    assert_eq!(region.low, [0.25, 0.25, 0.25]);
+    assert_eq!(region.high, [0.75, 0.75, 0.75]);
 }

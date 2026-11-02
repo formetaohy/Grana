@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use grana_session::{Batch, BatchEvent, Plan, Protocol, discover};
+use grana_session::{Batch, BatchEvent, Outcome, Plan, Protocol, discover};
 
 const EXTENT: [u32; 3] = [40, 40, 8];
 const FRAMES: u32 = 2;
@@ -30,6 +30,32 @@ const PROTOCOL: &str = r#"
 }
 "#;
 
+const LIMITED: &str = r#"
+{
+  "region": {"low": [0.9, 0.9, 0.9], "high": [1.0, 1.0, 1.0]},
+  "sets": [
+    {
+      "name": "Puncta",
+      "channel": "Cells",
+      "color": [0.3, 0.8, 1.0],
+      "detection": {"kind": "spots", "diameter": 5.0, "contrast": 0.05},
+      "track": {
+        "max_step": 2.0,
+        "max_gap": 1,
+        "division": false,
+        "division_range": 2.0,
+        "thickness": 0.5
+      },
+      "measure": {
+        "group": "objects",
+        "aggregate": "mean",
+        "filters": [{"column": "diameter_um", "minimum": 0.0, "maximum": 1000.0}]
+      }
+    }
+  ]
+}
+"#;
+
 #[test]
 fn runs_a_protocol_over_a_folder_of_datasets() {
     let temp = TempDir::new("grana-batch");
@@ -44,19 +70,12 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
     assert!(datasets[1].ends_with("beta.zarr"));
 
     let protocol = Protocol::from_json(PROTOCOL).expect("the protocol is valid");
-    let batch = Batch::start(Plan {
-        protocol,
-        datasets,
-        output: output.clone(),
-    });
-    let mut cancelled = None;
-    while let Some(event) = batch.wait() {
-        if let BatchEvent::Done { cancelled: stopped } = event {
-            cancelled = Some(stopped);
-            break;
-        }
-    }
-    assert_eq!(cancelled, Some(false), "the batch finishes");
+    let completed = run(&protocol, &datasets, &output, 2);
+    assert_eq!(
+        completed,
+        [Status::Ok, Status::Failed],
+        "the batch finishes"
+    );
 
     let summary = read(&output.join("summary.csv"));
     assert!(summary.contains("alpha,ok,2,Puncta=2"), "{summary}");
@@ -77,16 +96,76 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
         "the spot belongs to one track: {objects}"
     );
 
-    let tracks = read(&output.join("alpha").join("Puncta-tracks.csv"));
-    assert_eq!(
-        tracks.lines().count(),
-        2,
-        "the spots share one track: {tracks}"
-    );
-
     let coloc = read(&output.join("alpha").join("coloc-Cells-Signal.csv"));
     assert!(coloc.starts_with("scope,frame"), "{coloc}");
     assert_eq!(coloc.lines().count(), 4, "{coloc}");
+
+    let resumed = run(&protocol, &datasets, &output, 2);
+    assert_eq!(
+        resumed,
+        [Status::Resumed, Status::Failed],
+        "a repeated protocol resumes the completed dataset"
+    );
+    let summary = read(&output.join("summary.csv"));
+    assert!(summary.contains("alpha,resumed,2,Puncta=2"), "{summary}");
+}
+
+#[test]
+fn applies_the_region_and_the_statistics_filters() {
+    let temp = TempDir::new("grana-batch-region");
+    let root = temp.path().join("datasets");
+    write_dataset(&root.join("alpha.zarr"), "Cells", "Signal");
+    let output = temp.path().join("out");
+    let datasets = discover(&root).expect("the folder lists its datasets");
+    let protocol = Protocol::from_json(LIMITED).expect("the protocol is valid");
+    let completed = run(&protocol, &datasets, &output, 1);
+    assert_eq!(completed, [Status::Ok], "the batch finishes");
+    let summary = read(&output.join("summary.csv"));
+    assert!(summary.contains("alpha,ok,0,Puncta=0"), "{summary}");
+    let objects = read(&output.join("alpha").join("Puncta-objects.csv"));
+    assert_eq!(
+        objects.lines().count(),
+        1,
+        "the region excludes every spot: {objects}"
+    );
+    assert!(
+        !output.join("alpha").join("Puncta-tracks.csv").exists(),
+        "the protocol exports only its grouping"
+    );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Status {
+    Ok,
+    Resumed,
+    Failed,
+}
+
+fn run(protocol: &Protocol, datasets: &[PathBuf], output: &Path, jobs: usize) -> Vec<Status> {
+    let batch = Batch::start(Plan {
+        protocol: protocol.clone(),
+        datasets: datasets.to_vec(),
+        output: output.to_path_buf(),
+        jobs,
+    });
+    let mut completed = vec![Status::Failed; datasets.len()];
+    while let Some(event) = batch.wait() {
+        match event {
+            BatchEvent::Dataset { index, outcome } => {
+                completed[index] = match outcome {
+                    Outcome::Complete { resumed: false, .. } => Status::Ok,
+                    Outcome::Complete { resumed: true, .. } => Status::Resumed,
+                    Outcome::Failed { .. } => Status::Failed,
+                };
+            }
+            BatchEvent::Done { cancelled } => {
+                assert!(!cancelled, "the batch was not cancelled");
+                return completed;
+            }
+            _ => {}
+        }
+    }
+    panic!("the batch stopped before it finished");
 }
 
 fn write_dataset(path: &Path, first: &str, second: &str) {

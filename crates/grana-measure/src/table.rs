@@ -24,6 +24,18 @@ impl Group {
             Self::Timepoint => 2,
         }
     }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Object => "objects",
+            Self::Track => "tracks",
+            Self::Timepoint => "timepoints",
+        }
+    }
+
+    pub fn parse(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|group| group.key() == key)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +84,12 @@ impl Aggregate {
             Self::Maximum => "max",
             Self::Deviation => "std",
         }
+    }
+
+    pub fn parse(key: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|aggregate| aggregate.key() == key)
     }
 
     fn apply(self, statistics: SampleStatistics) -> f32 {
@@ -285,6 +303,10 @@ impl Table {
 
     pub fn columns(&self) -> &[Column] {
         &self.columns
+    }
+
+    pub fn column(&self, key: &str) -> Option<usize> {
+        self.columns.iter().position(|column| column.key() == key)
     }
 
     pub fn identity_columns(&self) -> usize {

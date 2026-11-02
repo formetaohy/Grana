@@ -84,6 +84,10 @@ impl State<'_> {
         self.batch.is_some_and(|batch| batch.running)
     }
 
+    pub fn batch_jobs(&self) -> usize {
+        self.batch.map_or(1, |batch| batch.jobs)
+    }
+
     pub fn batch_message(&self) -> Option<&str> {
         self.batch.and_then(|batch| batch.message.as_deref())
     }

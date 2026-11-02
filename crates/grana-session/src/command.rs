@@ -125,6 +125,7 @@ pub enum Command {
     AddBatchDatasets,
     ClearBatchDatasets,
     ChooseBatchOutput,
+    SetBatchJobs(u32),
     RunBatch,
     CancelBatch,
     SetKeyframe,

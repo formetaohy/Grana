@@ -16,7 +16,7 @@ pub fn gui(capture: Option<PathBuf>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-pub fn batch(protocol: &Path, datasets: &Path, output: &Path) -> ExitCode {
+pub fn batch(protocol: &Path, datasets: &Path, output: &Path, jobs: Option<usize>) -> ExitCode {
     let protocol = match Protocol::read(protocol) {
         Ok(protocol) => protocol,
         Err(error) => {
@@ -39,6 +39,7 @@ pub fn batch(protocol: &Path, datasets: &Path, output: &Path) -> ExitCode {
         protocol,
         datasets,
         output: output.to_path_buf(),
+        jobs: jobs.unwrap_or_else(grana_session::default_jobs),
     });
     let mut failures = 0;
     while let Some(event) = running.wait() {
@@ -47,7 +48,17 @@ pub fn batch(protocol: &Path, datasets: &Path, output: &Path) -> ExitCode {
             BatchEvent::Step { label, .. } => println!("  {label}"),
             BatchEvent::Progress { .. } => {}
             BatchEvent::Dataset { outcome, .. } => match outcome {
-                Outcome::Complete { objects, detail } => println!("  {objects} objects · {detail}"),
+                Outcome::Complete {
+                    objects,
+                    detail,
+                    resumed,
+                } => {
+                    if resumed {
+                        println!("  {objects} objects · {detail} (resumed)");
+                    } else {
+                        println!("  {objects} objects · {detail}");
+                    }
+                }
                 Outcome::Failed { detail } => {
                     eprintln!("  failed: {detail}");
                     failures += 1;

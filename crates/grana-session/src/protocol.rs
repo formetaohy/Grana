@@ -1,7 +1,10 @@
 use std::path::Path;
 
+use glam::Vec3;
 use grana_analysis::{FilamentParams, SpotParams, SurfaceParams, TrackParams};
-use grana_scene::{ObjectKind, ObjectParams, Scene};
+use grana_measure::{Aggregate, Filter, Group};
+use grana_scene::{Measure, ObjectKind, ObjectParams, Scene};
+use grana_volume::Region;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -10,9 +13,18 @@ use crate::slug::slug;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Protocol {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    region: Option<RegionSpec>,
     sets: Vec<SetSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     coloc: Option<ColocSpec>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegionSpec {
+    pub low: [f32; 3],
+    pub high: [f32; 3],
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -24,6 +36,25 @@ pub struct SetSpec {
     pub detection: DetectionSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track: Option<TrackSpec>,
+    #[serde(default)]
+    pub measure: MeasureSpec,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeasureSpec {
+    pub group: String,
+    pub aggregate: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<FilterSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilterSpec {
+    pub column: String,
+    pub minimum: f32,
+    pub maximum: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -65,8 +96,21 @@ pub enum ProtocolError {
 }
 
 impl Protocol {
-    pub fn new(sets: Vec<SetSpec>, coloc: Option<ColocSpec>) -> Result<Self, ProtocolError> {
-        Self { sets, coloc }.checked()
+    pub fn new(
+        region: Option<RegionSpec>,
+        sets: Vec<SetSpec>,
+        coloc: Option<ColocSpec>,
+    ) -> Result<Self, ProtocolError> {
+        Self {
+            region,
+            sets,
+            coloc,
+        }
+        .checked()
+    }
+
+    pub fn region(&self) -> Option<RegionSpec> {
+        self.region
     }
 
     pub fn sets(&self) -> &[SetSpec] {
@@ -77,7 +121,8 @@ impl Protocol {
         self.coloc.as_ref()
     }
 
-    pub fn capture(scene: &Scene) -> Result<Self, ProtocolError> {
+    pub fn capture(scene: &Scene, measure: &Measure) -> Result<Self, ProtocolError> {
+        let region = RegionSpec::of(scene.region, scene.dataset.world_size());
         let channels = scene
             .dataset
             .channels()
@@ -109,12 +154,18 @@ impl Protocol {
                     division_range: style.params().division_range(),
                     thickness: style.thickness(),
                 });
+                let measure = if measure.set() == Some(set.id()) {
+                    MeasureSpec::of(measure)
+                } else {
+                    MeasureSpec::default()
+                };
                 SetSpec {
                     name: set.name().to_string(),
                     channel: channels[set.channel()].clone(),
                     color: set.color(),
                     detection,
                     track,
+                    measure,
                 }
             })
             .collect();
@@ -127,7 +178,7 @@ impl Protocol {
         } else {
             None
         };
-        Self::new(sets, coloc)
+        Self::new(region, sets, coloc)
     }
 
     pub fn to_json(&self) -> Result<String, ProtocolError> {
@@ -155,17 +206,43 @@ impl Protocol {
         })
     }
 
+    pub fn digest(&self) -> u64 {
+        let text = serde_json::to_vec(self).expect("a protocol always serializes");
+        text.into_iter()
+            .fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+            })
+    }
+
     pub fn summary(&self) -> String {
         let sets = self
             .sets
             .iter()
-            .map(|set| format!("{} on {}", set.name, set.channel))
+            .map(|set| {
+                let mut text = format!("{} on {}", set.name, set.channel);
+                let group = set.measure.group();
+                if group != Group::Object {
+                    text = format!("{text} ({})", group.key());
+                }
+                let filters = set.measure.filters.len();
+                if filters > 0 {
+                    text = format!(
+                        "{text} · {filters} filter{}",
+                        if filters == 1 { "" } else { "s" }
+                    );
+                }
+                text
+            })
             .collect::<Vec<_>>()
             .join(", ");
-        match &self.coloc {
-            Some(coloc) => format!("{sets} · colocalizes {} with {}", coloc.a, coloc.b),
+        let mut summary = match &self.region {
+            Some(region) => format!("{sets} · region {:.0}%", region.percent()),
             None => sets,
+        };
+        if let Some(coloc) = &self.coloc {
+            summary.push_str(&format!(" · colocalizes {} with {}", coloc.a, coloc.b));
         }
+        summary
     }
 
     fn checked(self) -> Result<Self, ProtocolError> {
@@ -173,6 +250,9 @@ impl Protocol {
             return Err(ProtocolError::Invalid(
                 "a protocol names at least one object set".to_string(),
             ));
+        }
+        if let Some(region) = &self.region {
+            region.checked()?;
         }
         let mut names = Vec::new();
         let mut slugs = Vec::new();
@@ -211,6 +291,7 @@ impl Protocol {
                 (_, Some(track)) => track.checked(&set.name)?,
                 (_, None) => {}
             }
+            set.measure.checked(&set.name, set.track.is_some())?;
         }
         if let Some(coloc) = &self.coloc {
             validate(&coloc.a, "a channel name")?;
@@ -234,6 +315,61 @@ impl Protocol {
     }
 }
 
+impl RegionSpec {
+    pub fn of(region: Region, world: Vec3) -> Option<Self> {
+        if !region.enabled() {
+            return None;
+        }
+        let half = 0.5 * world;
+        let axis =
+            |values: Vec3| [0, 1, 2].map(|index| (values[index] + half[index]) / world[index]);
+        Some(Self {
+            low: axis(region.min()),
+            high: axis(region.max()),
+        })
+    }
+
+    pub fn region(self, world: Vec3) -> Region {
+        let half = 0.5 * world;
+        let axis = |values: [f32; 3]| {
+            Vec3::new(
+                values[0] * world.x - half.x,
+                values[1] * world.y - half.y,
+                values[2] * world.z - half.z,
+            )
+        };
+        Region::new(axis(self.low), axis(self.high))
+    }
+
+    pub fn percent(self) -> f32 {
+        let span = (0..3).fold(1.0f32, |product, axis| {
+            product * (self.high[axis] - self.low[axis]).max(0.0)
+        });
+        span * 100.0
+    }
+
+    fn checked(self) -> Result<(), ProtocolError> {
+        for axis in 0..3 {
+            let low = self.low[axis];
+            let high = self.high[axis];
+            if !(low.is_finite() && high.is_finite()) {
+                return Err(ProtocolError::Invalid("a region box is finite".to_string()));
+            }
+            if !(0.0..=1.0).contains(&low) || !(0.0..=1.0).contains(&high) {
+                return Err(ProtocolError::Invalid(
+                    "a region box lies inside the dataset".to_string(),
+                ));
+            }
+            if low >= high {
+                return Err(ProtocolError::Invalid(
+                    "a region box holds a positive extent on every axis".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl SetSpec {
     pub fn kind(&self) -> ObjectKind {
         self.detection.kind()
@@ -252,6 +388,111 @@ impl SetSpec {
                 track.division_range,
             )
         })
+    }
+
+    pub fn group(&self) -> Group {
+        self.measure.group()
+    }
+
+    pub fn aggregate(&self) -> Aggregate {
+        self.measure.aggregate()
+    }
+
+    pub fn filters(&self, table: &grana_measure::Table) -> Result<Vec<Filter>, String> {
+        self.measure
+            .filters
+            .iter()
+            .map(|filter| {
+                let column = table.column(&filter.column).ok_or_else(|| {
+                    format!(
+                        "the table of {} has no column named {}",
+                        self.name, filter.column
+                    )
+                })?;
+                Ok(Filter::new(column, filter.minimum, filter.maximum))
+            })
+            .collect()
+    }
+}
+
+impl MeasureSpec {
+    pub fn of(measure: &Measure) -> Self {
+        let group = measure.group();
+        let aggregate = if group == Group::Object {
+            Aggregate::Mean
+        } else {
+            measure.aggregate()
+        };
+        let filters = match measure.table() {
+            Some(table) => measure
+                .filters()
+                .iter()
+                .map(|filter| {
+                    let column = table
+                        .columns()
+                        .get(filter.column())
+                        .expect("a measure filter names a column of its table");
+                    FilterSpec {
+                        column: column.key().to_string(),
+                        minimum: filter.minimum(),
+                        maximum: filter.maximum(),
+                    }
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        Self {
+            group: group.key().to_string(),
+            aggregate: aggregate.key().to_string(),
+            filters,
+        }
+    }
+
+    pub fn group(&self) -> Group {
+        Group::parse(&self.group).expect("a measure group names a table grouping")
+    }
+
+    pub fn aggregate(&self) -> Aggregate {
+        Aggregate::parse(&self.aggregate).expect("a measure aggregate names a reduction")
+    }
+
+    fn checked(&self, set: &str, tracked: bool) -> Result<(), ProtocolError> {
+        let invalid =
+            |detail: String| Err(ProtocolError::Invalid(format!("the set {set} {detail}")));
+        let group = Group::parse(&self.group).ok_or_else(|| {
+            ProtocolError::Invalid(format!("the set {set} names an unknown grouping"))
+        })?;
+        let aggregate = Aggregate::parse(&self.aggregate).ok_or_else(|| {
+            ProtocolError::Invalid(format!("the set {set} names an unknown aggregate"))
+        })?;
+        if group == Group::Object && aggregate != Aggregate::Mean {
+            return invalid("measures objects without an aggregate".to_string());
+        }
+        if group == Group::Track && !tracked {
+            return invalid("groups by tracks without tracking".to_string());
+        }
+        for filter in &self.filters {
+            if filter.column.trim().is_empty() {
+                return invalid("filters an unnamed column".to_string());
+            }
+            if !(filter.minimum.is_finite() && filter.maximum.is_finite()) {
+                return invalid("filters a range that is not finite".to_string());
+            }
+            if filter.minimum > filter.maximum {
+                return invalid("filters a range that is not ordered".to_string());
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for MeasureSpec {
+    fn default() -> Self {
+        Self {
+            group: Group::Object.key().to_string(),
+            aggregate: Aggregate::Mean.key().to_string(),
+            filters: Vec::new(),
+        }
     }
 }
 

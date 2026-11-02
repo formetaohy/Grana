@@ -25,6 +25,7 @@ pub struct BatchView<'a> {
     pub protocol: Option<&'a str>,
     pub datasets: &'a [BatchDataset],
     pub output: Option<String>,
+    pub jobs: usize,
     pub running: bool,
     pub message: Option<String>,
 }
