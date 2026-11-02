@@ -301,14 +301,18 @@ impl Decode for SetState {
             visible,
             params,
             track_style: Option::<TrackStyle>::decode(reader)?,
-            tracks: Option::<TrackSet>::decode(reader)?,
+            tracks: Option::<Arc<TrackSet>>::decode(reader)?,
             track_thickness: Option::<f32>::decode(reader)?.map(positive).transpose()?,
             track_visible: Option::<bool>::decode(reader)?,
             object_color: ColorState::<Measurement>::decode(reader)?,
             track_color: ColorState::<TrackMeasurement>::decode(reader)?,
             visibility: Visibility::decode(reader)?,
             frames: Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?,
+            document: reader.u64()?,
         };
+        if state.document == 0 {
+            return Err(FAULT_VALUE);
+        }
         if kind.trackable() != state.track_style.is_some()
             || state.tracks.is_some() != state.track_thickness.is_some()
             || state.tracks.is_some() != state.track_visible.is_some()
@@ -409,8 +413,8 @@ impl Decode for Visibility {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         match reader.u8()? {
             0 => Ok(Self::All),
-            1 => Ok(Self::Object(Vec::<Vec<bool>>::decode(reader)?)),
-            2 => Ok(Self::Track(Vec::<bool>::decode(reader)?)),
+            1 => Ok(Self::Object(Arc::<Vec<Vec<bool>>>::decode(reader)?)),
+            2 => Ok(Self::Track(Arc::<Vec<bool>>::decode(reader)?)),
             _ => Err(FAULT_SHAPE),
         }
     }
@@ -753,7 +757,11 @@ impl Decode for ColocState {
             thresholds: ColocThresholds::decode(reader)?,
             region: Option::<Region>::decode(reader)?,
             series: Option::<ColocSeries>::decode(reader)?,
+            document: reader.u64()?,
         };
+        if state.document == 0 {
+            return Err(FAULT_VALUE);
+        }
         if let Some(series) = &state.series
             && (state.pair != Some(series.pair()) || state.region.is_none())
         {

@@ -1,7 +1,7 @@
 use grana_animation::Timeline;
 use grana_display::Viewport;
 use grana_scene::{Measure, ObjectSetId, Progress, Scene};
-use grana_session::{BatchView, IoView};
+use grana_session::{BatchView, HistoryView, IoView};
 
 use crate::panel::Panel;
 use crate::stage::Stage;
@@ -60,6 +60,7 @@ pub struct State<'a> {
     pub jobs: &'a [Progress],
     pub io: &'a IoView<'a>,
     pub batch: Option<&'a BatchView<'a>>,
+    pub history: HistoryView,
     pub viewport: &'a mut Viewport,
     pub stage: &'a mut Stage,
     pub workspace: &'a mut Workspace,

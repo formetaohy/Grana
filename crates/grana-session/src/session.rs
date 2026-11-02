@@ -10,12 +10,14 @@ use grana_project::{Project, Source as ProjectSource, ViewState};
 use grana_scene::{Dataset, Job, Measure, ObjectFrame, ObjectSetId, Origin, Progress, Scene};
 use grana_volume::{BrickData, BrickRequest, Region};
 
+use crate::command::Edit;
+use crate::history::{History, Snapshot};
 use crate::loader::{Event as LoaderEvent, Loader};
 use crate::sample;
-use crate::view::{BatchDataset, BatchView, IoView, Message};
+use crate::view::{BatchDataset, BatchView, HistoryView, IoView, Message};
 use crate::{
-    Analysis, Batch, BatchEvent, BatchPoll, Command, Event, Outcome, Plan as BatchPlan, Poll,
-    Protocol, Source,
+    Action, Analysis, Batch, BatchEvent, BatchPoll, Command, Event, Outcome, Plan as BatchPlan,
+    Poll, Protocol, Source,
 };
 
 const MAX_IN_FLIGHT: usize = 8192;
@@ -24,6 +26,13 @@ const UPLOAD_BATCH: usize = 64;
 struct Pending {
     path: PathBuf,
     project: Project,
+}
+
+struct Recording {
+    edit: Edit,
+    snapshot: Snapshot,
+    hash: u64,
+    analyses: usize,
 }
 
 #[derive(Default)]
@@ -64,6 +73,7 @@ pub struct Session {
     batch_message: Option<String>,
     generation: u64,
     view: Option<ViewState>,
+    history: History,
 }
 
 impl Default for Session {
@@ -99,6 +109,7 @@ impl Session {
             batch_message: None,
             generation: 0,
             view: None,
+            history: History::default(),
         }
     }
 
@@ -112,6 +123,7 @@ impl Session {
         self.message = None;
         self.loading = None;
         self.generation += 1;
+        self.history.clear();
         for set in [staged.spots, staged.surfaces, staged.filaments] {
             self.start_detect(set);
         }
@@ -155,6 +167,13 @@ impl Session {
 
     pub fn dirty(&self) -> bool {
         self.project.is_some() && self.document_hash() != self.saved
+    }
+
+    pub fn history(&self) -> HistoryView {
+        HistoryView {
+            undo: self.history.undo_action(),
+            redo: self.history.redo_action(),
+        }
     }
 
     pub fn batch(&self) -> Option<BatchView<'_>> {
@@ -281,7 +300,16 @@ impl Session {
     }
 
     pub fn insert_keyframe(&mut self, key: Keyframe) -> usize {
-        self.timeline.insert(key)
+        let snapshot = if self.loading.is_none() {
+            self.snapshot()
+        } else {
+            None
+        };
+        let index = self.timeline.insert(key);
+        if let Some(snapshot) = snapshot {
+            self.history.record(Edit::new(Action::Keyframe), snapshot);
+        }
+        index
     }
 
     pub fn remove_keyframe(&mut self, index: usize) -> bool {
@@ -293,6 +321,12 @@ impl Session {
     }
 
     pub fn execute(&mut self, command: Command) -> Effects {
+        match command {
+            Command::Undo => return self.undo(),
+            Command::Redo => return self.redo(),
+            _ => {}
+        }
+        let recording = self.begin_edit(&command);
         let mut effects = Effects::default();
         match command {
             Command::OpenDataset => effects.open_dataset = true,
@@ -398,8 +432,8 @@ impl Session {
                 }
             }
             Command::SetTrackThickness { set, thickness } => {
-                if let Some(target) = self.object_mut(set) {
-                    target.set_track_thickness(thickness);
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_track_thickness(set, thickness);
                 }
             }
             Command::SetTrackColoring { set, coloring } => {
@@ -526,8 +560,113 @@ impl Session {
             Command::SetTimelineDuration(duration) => self.timeline.set_duration(duration),
             Command::ExportMovie { width } => effects.export_movie = Some(width),
             Command::CancelMovie => effects.cancel_movie = true,
+            Command::Undo | Command::Redo => {
+                unreachable!("undo and redo run before the document commands")
+            }
+        }
+        if let Some(recording) = recording {
+            self.commit_edit(recording);
         }
         effects
+    }
+
+    fn begin_edit(&self, command: &Command) -> Option<Recording> {
+        if self.loading.is_some() {
+            return None;
+        }
+        let edit = command.edit()?;
+        let snapshot = self.snapshot()?;
+        Some(Recording {
+            edit,
+            snapshot,
+            hash: self.document_hash()?,
+            analyses: self.analysis.len(),
+        })
+    }
+
+    fn commit_edit(&mut self, recording: Recording) {
+        let Recording {
+            edit,
+            snapshot,
+            hash,
+            analyses,
+        } = recording;
+        let changed = self.document_hash() != Some(hash);
+        let started = self.analysis.len() > analyses;
+        if changed || (edit.asynchronous() && started) {
+            self.history.record(edit, snapshot);
+        }
+    }
+
+    fn snapshot(&self) -> Option<Snapshot> {
+        let scene = self.scene.as_ref()?;
+        Some(Snapshot::capture(scene, &self.measure, &self.timeline))
+    }
+
+    fn undo(&mut self) -> Effects {
+        if self.loading.is_some() {
+            return Effects::default();
+        }
+        let Some(current) = self.snapshot() else {
+            return Effects::default();
+        };
+        let Some((edit, snapshot)) = self.history.undo(current) else {
+            return Effects::default();
+        };
+        self.abandon(edit);
+        self.restore(snapshot);
+        Effects {
+            repaint: true,
+            ..Effects::default()
+        }
+    }
+
+    fn redo(&mut self) -> Effects {
+        if self.loading.is_some() {
+            return Effects::default();
+        }
+        let Some(current) = self.snapshot() else {
+            return Effects::default();
+        };
+        let Some((edit, snapshot)) = self.history.redo(current) else {
+            return Effects::default();
+        };
+        self.abandon(edit);
+        self.restore(snapshot);
+        Effects {
+            repaint: true,
+            ..Effects::default()
+        }
+    }
+
+    fn abandon(&mut self, edit: Edit) {
+        if let Some(set) = ObjectSetId::from_raw(edit.target()) {
+            match edit.action() {
+                Action::Detect => {
+                    self.cancel(Job::Detect(set));
+                    self.cancel(Job::Track(set));
+                }
+                Action::Track => self.cancel(Job::Track(set)),
+                _ => {}
+            }
+        }
+        if edit.action() == Action::ComputeColoc {
+            self.cancel(Job::Coloc);
+        }
+    }
+
+    fn restore(&mut self, snapshot: Snapshot) {
+        let (state, measure, timeline) = snapshot.into_parts();
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        scene.restore(state);
+        self.measure.restore(measure, scene);
+        self.timeline = timeline;
+        if let Some(source) = &self.source {
+            source.set_time(scene.time());
+        }
+        self.message = None;
     }
 
     fn object_mut(&mut self, set: ObjectSetId) -> Option<&mut grana_scene::ObjectSet> {
@@ -648,6 +787,7 @@ impl Session {
         self.bricks.clear();
         self.timeline = Timeline::new(30, 1.0);
         self.view = None;
+        self.history.clear();
     }
 
     fn open_dataset(&mut self, dataset: Dataset) {
@@ -661,6 +801,7 @@ impl Session {
         self.failed.clear();
         self.bricks.clear();
         self.timeline = Timeline::new(30, self.frame_duration());
+        self.history.clear();
         if let Some(pending) = self.pending.take() {
             if pending.project.matches(&scene.dataset) {
                 scene.restore(pending.project.scene);

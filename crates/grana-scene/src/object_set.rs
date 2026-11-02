@@ -22,6 +22,10 @@ impl ObjectSetId {
         Self(raw)
     }
 
+    pub fn from_raw(raw: u64) -> Option<Self> {
+        (raw > 0).then_some(Self(raw))
+    }
+
     pub fn raw(self) -> u64 {
         self.0
     }
@@ -30,8 +34,8 @@ impl ObjectSetId {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Visibility {
     All,
-    Object(Vec<Vec<bool>>),
-    Track(Vec<bool>),
+    Object(Arc<Vec<Vec<bool>>>),
+    Track(Arc<Vec<bool>>),
 }
 
 struct FrameSlot {
@@ -64,7 +68,6 @@ pub struct ObjectSet {
     object_coloring: Coloring<Measurement>,
     track_coloring: Coloring<TrackMeasurement>,
     track_bounds: Option<Extent>,
-    stamp: u64,
     revision: u64,
     document: u64,
     visibility: Visibility,
@@ -102,7 +105,6 @@ impl ObjectSet {
             object_coloring: Coloring::new(),
             track_coloring: Coloring::new(),
             track_bounds: None,
-            stamp: 1,
             revision: 1,
             document: 1,
             visibility: Visibility::All,
@@ -296,17 +298,18 @@ impl ObjectSet {
             visible: self.visible,
             params: self.params,
             track_style: self.track_style,
-            tracks: self.tracks.as_ref().map(|layer| layer.set().clone()),
+            tracks: self.tracks.as_ref().map(TrackLayer::shared_set),
             track_thickness: self.tracks.as_ref().map(TrackLayer::thickness),
             track_visible: self.tracks.as_ref().map(TrackLayer::visible),
             object_color: self.object_coloring.state(),
             track_color: self.track_coloring.state(),
             visibility: self.visibility.clone(),
             frames: self.frames.iter().map(|slot| slot.data.clone()).collect(),
+            document: self.document,
         }
     }
 
-    pub(crate) fn restore(state: SetState, dataset: &Dataset) -> Self {
+    pub(crate) fn restore(state: SetState, dataset: &Dataset, stamp: &mut u64) -> Self {
         let SetState {
             id,
             kind,
@@ -323,6 +326,7 @@ impl ObjectSet {
             track_color,
             visibility,
             frames,
+            document,
         } = state;
         assert_eq!(
             params.kind(),
@@ -356,7 +360,6 @@ impl ObjectSet {
             object_coloring: Coloring::new(),
             track_coloring: Coloring::new(),
             track_bounds: None,
-            stamp: 1,
             revision: 1,
             document: 1,
             visibility: Visibility::All,
@@ -369,18 +372,19 @@ impl ObjectSet {
         );
         for (time, frame) in frames.into_iter().enumerate() {
             if let Some(frame) = frame {
-                set.install_shared(time as u32, frame);
+                set.install_shared(time as u32, frame, take_stamp(stamp));
             }
         }
         if let Some(tracks) = tracks {
             let thickness = track_thickness.expect("a restored track layer carries a thickness");
             let visible = track_visible.expect("a restored track layer carries visibility");
-            let mut layer = TrackLayer::new(tracks, thickness);
+            let mut layer = TrackLayer::shared(tracks, thickness, take_stamp(stamp));
             layer.set_visible(visible);
             set.tracks = Some(layer);
         }
         set.restore_coloring(object_color, track_color);
         set.set_visibility(visibility);
+        set.document = document;
         set
     }
 
@@ -463,11 +467,11 @@ impl ObjectSet {
         }
     }
 
-    pub fn install(&mut self, time: u32, frame: ObjectFrame) {
-        self.install_shared(time, Arc::new(frame));
+    pub(crate) fn install(&mut self, time: u32, frame: ObjectFrame, stamp: u64) {
+        self.install_shared(time, Arc::new(frame), stamp);
     }
 
-    fn install_shared(&mut self, time: u32, frame: Arc<ObjectFrame>) {
+    fn install_shared(&mut self, time: u32, frame: Arc<ObjectFrame>, stamp: u64) {
         assert_eq!(
             frame.kind(),
             self.kind,
@@ -481,22 +485,21 @@ impl ObjectSet {
             .frames
             .get_mut(time as usize)
             .expect("the object frame lies inside the time series");
-        self.stamp += 1;
-        self.revision += 1;
+        self.revision = stamp;
         self.document += 1;
         self.visibility = Visibility::All;
-        slot.stamp = self.stamp;
+        slot.stamp = stamp;
         slot.data = Some(frame);
         self.frame_bounds[time as usize] = bounds;
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self, stamp: u64) {
         for slot in &mut self.frames {
             slot.data = None;
         }
         self.frame_bounds.fill(None);
         self.track_bounds = None;
-        self.revision += 1;
+        self.revision = stamp;
         self.document += 1;
         self.visibility = Visibility::All;
         self.tracks = None;
@@ -519,7 +522,7 @@ impl ObjectSet {
         }
     }
 
-    pub fn install_tracks(&mut self, set: TrackSet) {
+    pub(crate) fn install_tracks(&mut self, set: TrackSet, stamp: u64) {
         let style = self
             .track_style
             .expect("only trackable objects install tracks");
@@ -532,45 +535,50 @@ impl ObjectSet {
             .track_coloring
             .metric()
             .and_then(|metric| track_extent(&set, metric));
-        let mut layer = TrackLayer::new(set, thickness);
+        let mut layer = TrackLayer::new(set, thickness, stamp);
         layer.set_visible(visible);
         self.tracks = Some(layer);
         self.track_bounds = bounds;
-        self.revision += 1;
+        self.revision = stamp;
         self.document += 1;
         self.visibility = Visibility::All;
     }
 
-    pub fn clear_tracks(&mut self) {
-        self.revision += 1;
+    pub(crate) fn clear_tracks(&mut self, stamp: u64) {
+        self.revision = stamp;
         self.document += 1;
         self.visibility = Visibility::All;
         self.tracks = None;
         self.track_bounds = None;
     }
 
-    pub fn cut_track(&mut self, time: u32, object: usize) -> bool {
+    pub(crate) fn cut_track(&mut self, time: u32, object: usize, stamp: u64) -> bool {
         let Some(layer) = self.tracks.as_mut() else {
             return false;
         };
-        if !layer.cut(time, object) {
+        if !layer.cut(time, object, stamp) {
             return false;
         }
-        self.revision += 1;
+        self.revision = stamp;
         self.document += 1;
         self.visibility = Visibility::All;
         self.rebuild_track_bounds();
         true
     }
 
-    pub fn join_tracks(&mut self, source: (u32, usize), target: (u32, usize)) -> bool {
+    pub(crate) fn join_tracks(
+        &mut self,
+        source: (u32, usize),
+        target: (u32, usize),
+        stamp: u64,
+    ) -> bool {
         let Some(layer) = self.tracks.as_mut() else {
             return false;
         };
-        if !layer.join(source, target) {
+        if !layer.join(source, target, stamp) {
             return false;
         }
-        self.revision += 1;
+        self.revision = stamp;
         self.document += 1;
         self.visibility = Visibility::All;
         self.rebuild_track_bounds();
@@ -603,13 +611,14 @@ impl ObjectSet {
         MAX_THICKNESS * self.voxel
     }
 
-    pub fn set_track_thickness(&mut self, thickness: f32) {
+    pub(crate) fn set_track_thickness(&mut self, thickness: f32, stamp: u64) {
         let thickness = thickness.clamp(self.min_thickness(), self.max_thickness());
         if let Some(layer) = self.tracks.as_mut() {
             let previous = layer.thickness();
-            layer.set_thickness(thickness);
+            layer.set_thickness(thickness, stamp);
             if layer.thickness() != previous {
                 self.document += 1;
+                self.revision = stamp;
             }
         }
     }
@@ -650,4 +659,9 @@ fn accumulate(accumulated: Option<Extent>, value: f32) -> Option<Extent> {
         None => (value, value),
         Some((minimum, maximum)) => (minimum.min(value), maximum.max(value)),
     })
+}
+
+pub(crate) fn take_stamp(stamp: &mut u64) -> u64 {
+    *stamp += 1;
+    *stamp
 }

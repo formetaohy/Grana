@@ -58,13 +58,14 @@ pub struct SetState {
     pub visible: bool,
     pub params: ObjectParams,
     pub track_style: Option<TrackStyle>,
-    pub tracks: Option<TrackSet>,
+    pub tracks: Option<Arc<TrackSet>>,
     pub track_thickness: Option<f32>,
     pub track_visible: Option<bool>,
     pub object_color: ColorState<Measurement>,
     pub track_color: ColorState<TrackMeasurement>,
     pub visibility: Visibility,
     pub frames: Vec<Option<Arc<ObjectFrame>>>,
+    pub document: u64,
 }
 
 impl SceneState {

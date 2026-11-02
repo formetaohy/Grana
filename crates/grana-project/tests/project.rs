@@ -1,4 +1,5 @@
 use std::fs;
+use std::sync::Arc;
 
 use glam::Vec3;
 use grana_analysis::SpotParams;
@@ -40,15 +41,15 @@ fn round_trips_a_project() {
         .objects
         .get_mut(spots)
         .expect("the spots exist")
-        .set_visibility(Visibility::Object(vec![
+        .set_visibility(Visibility::Object(Arc::new(vec![
             vec![true, false],
             vec![false, true],
-        ]));
+        ])));
     scene
         .objects
         .get_mut(surfaces)
         .expect("the surfaces exist")
-        .set_visibility(Visibility::Track(vec![true, false, true]));
+        .set_visibility(Visibility::Track(Arc::new(vec![true, false, true])));
     scene.select(Some(Selection {
         set: surfaces,
         item: Item::Track(2),
@@ -278,7 +279,6 @@ fn stage(scene: &mut Scene) {
     let spots = scene.objects.get_mut(spots).expect("the spots exist");
     spots.set_color([0.1, 0.2, 0.3]);
     spots.set_params(ObjectParams::Spots(SpotParams::new(3.0, 0.3)));
-    spots.set_track_thickness(2.0);
     let mut coloring = spots.object_coloring().clone();
     coloring.set_metric(Some(Measurement::Contrast));
     coloring.set_palette(Palette::Inferno);
@@ -290,6 +290,7 @@ fn stage(scene: &mut Scene) {
     track_coloring.set_palette(Palette::Plasma);
     spots.set_track_coloring(track_coloring);
     let spot_set = spots.id();
+    scene.set_track_thickness(spot_set, 2.0);
     let nodes = vec![
         TrackNode::new(0, 0, [0.0, 0.0, 0.0]),
         TrackNode::new(1, 0, [1.0, 0.0, 0.0]),

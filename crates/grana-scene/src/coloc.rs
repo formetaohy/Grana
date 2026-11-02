@@ -7,6 +7,7 @@ pub struct ColocState {
     pub thresholds: ColocThresholds,
     pub region: Option<Region>,
     pub series: Option<ColocSeries>,
+    pub document: u64,
 }
 
 pub struct Coloc {
@@ -112,6 +113,7 @@ impl Coloc {
             thresholds: self.thresholds,
             region: self.region,
             series: self.series.clone(),
+            document: self.revision,
         }
     }
 
@@ -121,6 +123,7 @@ impl Coloc {
             thresholds,
             region,
             series,
+            document,
         } = state;
         assert!(
             pair.is_none_or(|pair| pair.a() < channels && pair.b() < channels),
@@ -136,7 +139,7 @@ impl Coloc {
         self.thresholds = thresholds;
         self.region = region;
         self.series = series;
-        self.revision += 1;
+        self.revision = document;
     }
 
     pub fn document(&self) -> u64 {

@@ -1,6 +1,8 @@
 use grana_animation::Timeline;
 use grana_scene::{Measure, Progress, Scene};
 
+use crate::command::Action;
+
 pub struct Message(String);
 
 impl Message {
@@ -40,6 +42,12 @@ pub struct IoView<'a> {
     pub movie_message: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HistoryView {
+    pub undo: Option<Action>,
+    pub redo: Option<Action>,
+}
+
 pub struct SessionView<'a> {
     pub scene: &'a Scene,
     pub measure: &'a Measure,
@@ -47,4 +55,5 @@ pub struct SessionView<'a> {
     pub jobs: &'a [Progress],
     pub io: IoView<'a>,
     pub batch: Option<BatchView<'a>>,
+    pub history: HistoryView,
 }

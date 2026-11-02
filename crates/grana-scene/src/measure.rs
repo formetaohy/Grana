@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use grana_measure::{Aggregate, Filter, Frame, Group, Table};
 
 use crate::object::ObjectFrame;
@@ -236,6 +238,7 @@ impl Measure {
             self.revision = None;
             self.table = None;
             self.rows.clear();
+            self.visible.clear();
             self.dirty = true;
             return;
         };
@@ -279,7 +282,7 @@ impl Measure {
                         *value = true;
                     }
                 }
-                Visibility::Object(frames)
+                Visibility::Object(Arc::new(frames))
             }
             Group::Track => {
                 let count = object.tracks().map_or(0, |layer| layer.set().len());
@@ -291,7 +294,7 @@ impl Measure {
                         *value = true;
                     }
                 }
-                Visibility::Track(mask)
+                Visibility::Track(Arc::new(mask))
             }
             Group::Timepoint => Visibility::All,
         };
@@ -388,11 +391,13 @@ impl Measure {
         self.rows.clear();
         let Some(id) = self.set else {
             self.revision = None;
+            self.visible.clear();
             return;
         };
         let Some(object) = scene.objects.get(id) else {
             self.set = None;
             self.revision = None;
+            self.visible.clear();
             return;
         };
         self.revision = Some((id, object.revision()));
@@ -401,6 +406,7 @@ impl Measure {
             .map(|(time, frame)| Frame::new(time, frame.objects()))
             .collect::<Vec<_>>();
         if frames.is_empty() {
+            self.visible.clear();
             return;
         }
         let channels = scene

@@ -49,6 +49,8 @@ pub enum Icon {
     Channel,
     Filter,
     Columns,
+    Undo,
+    Redo,
 }
 
 pub fn paint(
@@ -398,6 +400,18 @@ pub fn paint(
             );
             line(painter, (8.4, 4.0), (8.4, 16.0));
             line(painter, (12.6, 4.0), (12.6, 16.0));
+        }
+        Icon::Undo => {
+            painter.triangle(point(2.9, 8.0), point(7.2, 4.5), point(7.2, 11.5), color);
+            line(painter, (7.2, 8.0), (12.6, 8.0));
+            arc(painter, 12.6, 11.6, 3.6, PI * 1.5, PI * 0.5);
+            line(painter, (16.2, 11.6), (16.2, 15.4));
+        }
+        Icon::Redo => {
+            painter.triangle(point(17.1, 8.0), point(12.8, 4.5), point(12.8, 11.5), color);
+            line(painter, (12.8, 8.0), (7.4, 8.0));
+            arc(painter, 7.4, 11.6, 3.6, PI, PI * 0.5);
+            line(painter, (3.8, 11.6), (3.8, 15.4));
         }
     }
 }

@@ -134,10 +134,9 @@ impl Scene {
     }
 
     pub fn install(&mut self, id: ObjectSetId, time: u32, frame: ObjectFrame) {
-        let Some(set) = self.objects.get_mut(id) else {
+        if !self.objects.install(id, time, frame) {
             return;
-        };
-        set.install(time, frame);
+        }
         if time == self.time {
             let stale = self.selection.is_some_and(|selection| {
                 selection.set == id && matches!(selection.item, Item::Object(_))
@@ -149,34 +148,25 @@ impl Scene {
     }
 
     pub fn clear_object(&mut self, id: ObjectSetId) {
-        if let Some(set) = self.objects.get_mut(id) {
-            set.clear();
-        }
+        self.objects.clear(id);
         if self.selection.is_some_and(|selection| selection.set == id) {
             self.selection = None;
         }
     }
 
     pub fn install_tracks(&mut self, id: ObjectSetId, set: TrackSet) {
-        let Some(object) = self.objects.get_mut(id) else {
-            return;
-        };
-        object.install_tracks(set);
-        self.drop_track_selection(id);
+        if self.objects.install_tracks(id, set) {
+            self.drop_track_selection(id);
+        }
     }
 
     pub fn clear_tracks(&mut self, id: ObjectSetId) {
-        if let Some(object) = self.objects.get_mut(id) {
-            object.clear_tracks();
-        }
+        self.objects.clear_tracks(id);
         self.drop_track_selection(id);
     }
 
     pub fn cut_track(&mut self, id: ObjectSetId, time: u32, object: usize) -> bool {
-        let Some(set) = self.objects.get_mut(id) else {
-            return false;
-        };
-        if !set.cut_track(time, object) {
+        if !self.objects.cut_track(id, time, object) {
             return false;
         }
         self.drop_track_selection(id);
@@ -189,14 +179,15 @@ impl Scene {
         source: (u32, usize),
         target: (u32, usize),
     ) -> bool {
-        let Some(set) = self.objects.get_mut(id) else {
-            return false;
-        };
-        if !set.join_tracks(source, target) {
+        if !self.objects.join_tracks(id, source, target) {
             return false;
         }
         self.drop_track_selection(id);
         true
+    }
+
+    pub fn set_track_thickness(&mut self, id: ObjectSetId, thickness: f32) {
+        self.objects.set_track_thickness(id, thickness);
     }
 
     fn drop_track_selection(&mut self, id: ObjectSetId) {

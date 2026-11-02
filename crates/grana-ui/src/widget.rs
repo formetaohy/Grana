@@ -129,6 +129,33 @@ pub fn icon_button_response(
     response
 }
 
+pub fn icon_button_enabled(
+    ui: &mut Ui,
+    id: &str,
+    symbol: Icon,
+    size: f32,
+    role: Role,
+    tooltip: &str,
+    enabled: bool,
+) -> bool {
+    if !enabled {
+        let rect = ui.allocate(Vec2::splat(size));
+        let look = ui.look_disabled(role);
+        let mut painter = ui.painter();
+        painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
+        icon::paint(
+            symbol,
+            &mut painter,
+            rect.center(),
+            (size * 0.54).clamp(12.0, 18.0),
+            look.text,
+            1.6,
+        );
+        return false;
+    }
+    icon_button_response(ui, id, symbol, size, role, tooltip).clicked
+}
+
 pub fn badge(ui: &mut Ui, label: &str, tint: Color) -> Rect {
     let font = ui.theme().font(Level::Micro);
     let style = TextStyle::new(font, tint);

@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use grana_geometry::PackedMesh;
 use grana_object::TrackSet;
 
 pub struct TrackLayer {
-    set: TrackSet,
+    set: Arc<TrackSet>,
     mesh: PackedMesh,
     visible: bool,
     thickness: f32,
@@ -10,19 +12,27 @@ pub struct TrackLayer {
 }
 
 impl TrackLayer {
-    pub fn new(set: TrackSet, thickness: f32) -> Self {
+    pub fn new(set: TrackSet, thickness: f32, revision: u64) -> Self {
+        Self::shared(Arc::new(set), thickness, revision)
+    }
+
+    pub fn shared(set: Arc<TrackSet>, thickness: f32, revision: u64) -> Self {
         let mesh = PackedMesh::new(set.mesh(thickness));
         Self {
             set,
             mesh,
             visible: true,
             thickness,
-            revision: 1,
+            revision,
         }
     }
 
     pub fn set(&self) -> &TrackSet {
         &self.set
+    }
+
+    pub fn shared_set(&self) -> Arc<TrackSet> {
+        Arc::clone(&self.set)
     }
 
     pub fn mesh(&self) -> &PackedMesh {
@@ -45,34 +55,34 @@ impl TrackLayer {
         self.visible = visible;
     }
 
-    pub fn set_thickness(&mut self, thickness: f32) {
+    pub fn set_thickness(&mut self, thickness: f32, revision: u64) {
         if (self.thickness - thickness).abs() <= f32::EPSILON {
             return;
         }
         self.thickness = thickness;
         self.mesh = PackedMesh::new(self.set.mesh(thickness));
-        self.revision += 1;
+        self.revision = revision;
     }
 
-    pub fn cut(&mut self, time: u32, object: usize) -> bool {
+    pub fn cut(&mut self, time: u32, object: usize, revision: u64) -> bool {
         let Some(set) = self.set.cut(time, object) else {
             return false;
         };
-        self.install(set);
+        self.install(set, revision);
         true
     }
 
-    pub fn join(&mut self, source: (u32, usize), target: (u32, usize)) -> bool {
+    pub fn join(&mut self, source: (u32, usize), target: (u32, usize), revision: u64) -> bool {
         let Some(set) = self.set.join(source, target) else {
             return false;
         };
-        self.install(set);
+        self.install(set, revision);
         true
     }
 
-    fn install(&mut self, set: TrackSet) {
-        self.set = set;
+    fn install(&mut self, set: TrackSet, revision: u64) {
+        self.set = Arc::new(set);
         self.mesh = PackedMesh::new(self.set.mesh(self.thickness));
-        self.revision += 1;
+        self.revision = revision;
     }
 }

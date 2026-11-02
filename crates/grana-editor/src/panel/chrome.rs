@@ -10,6 +10,22 @@ use grana_session::Command;
 
 use super::Panel;
 
+const COMMAND: &str = if cfg!(target_os = "macos") {
+    "⌘"
+} else {
+    "Ctrl "
+};
+const UNDO: &str = if cfg!(target_os = "macos") {
+    "⌘Z"
+} else {
+    "Ctrl Z"
+};
+const REDO: &str = if cfg!(target_os = "macos") {
+    "⇧⌘Z"
+} else {
+    "Ctrl Shift Z"
+};
+
 pub(super) fn toolbar_bar(
     ui: &mut Ui,
     rect: Rect,
@@ -44,7 +60,7 @@ pub(super) fn toolbar_bar(
             "Animate",
             TextStyle::new(ui.theme().font(Level::Callout), Color::WHITE),
         );
-        32.0 + 10.0 + (analyze.x + 22.0 + animate.x + 22.0 + 4.0) + 32.0
+        32.0 + 30.0 * 3.0 + 10.0 * 3.0 + (analyze.x + 22.0 + animate.x + 22.0 + 4.0)
     };
     let right = Rect::from_min_size(
         Vec2::new(rect.max.x - right_width, rect.min.y),
@@ -114,6 +130,38 @@ pub(super) fn toolbar_bar(
                 .width(Length::Fill)
                 .height(Length::Fill),
             |ui| {
+                let undo = state.history.undo;
+                let redo = state.history.redo;
+                let undo_tip = undo.map_or_else(
+                    || "Nothing to undo".to_string(),
+                    |action| format!("Undo {} · {UNDO}", action.label()),
+                );
+                let redo_tip = redo.map_or_else(
+                    || "Nothing to redo".to_string(),
+                    |action| format!("Redo {} · {REDO}", action.label()),
+                );
+                if widget::icon_button_enabled(
+                    ui,
+                    "undo",
+                    Icon::Undo,
+                    30.0,
+                    Role::Quiet,
+                    &undo_tip,
+                    undo.is_some(),
+                ) {
+                    commands.push(Command::Undo);
+                }
+                if widget::icon_button_enabled(
+                    ui,
+                    "redo",
+                    Icon::Redo,
+                    30.0,
+                    Role::Quiet,
+                    &redo_tip,
+                    redo.is_some(),
+                ) {
+                    commands.push(Command::Redo);
+                }
                 if widget::icon_button(
                     ui,
                     "fit",
@@ -326,13 +374,15 @@ fn project_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
     let open = ui.popup_open(key);
     let mut chosen = None;
     let busy = state.io.loading.is_some();
+    let open_key = format!("{COMMAND}O");
+    let save_key = format!("{COMMAND}S");
     grana_ui::popover::popover(ui, "project.menu", open, rect, 224.0, |ui| {
         if grana_ui::popover::action_row(
             ui,
             "open.project",
             Icon::Folder,
             "Open project",
-            Some("Ctrl O"),
+            Some(&open_key),
         ) {
             chosen = Some(Command::OpenProject);
         }
@@ -342,7 +392,7 @@ fn project_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
             "save.project",
             Icon::Save,
             "Save project",
-            Some("Ctrl S"),
+            Some(&save_key),
         ) {
             chosen = Some(Command::SaveProject);
         }

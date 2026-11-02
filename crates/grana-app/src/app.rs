@@ -309,6 +309,9 @@ impl App {
     }
 
     fn react(&mut self, effects: Effects) -> bool {
+        if effects.repaint {
+            self.request_redraw();
+        }
         if effects.open_dataset
             && let Some(path) = Self::pick_folder()
         {
@@ -383,6 +386,7 @@ impl App {
             jobs: session.progress(),
             io: session.io(&adapter, movie, movie_message),
             batch: session.batch(),
+            history: session.history(),
         };
         let frame = frame_stats(*info);
         let commands =
@@ -907,7 +911,7 @@ impl App {
         if event.state != ElementState::Pressed || event.repeat {
             return;
         }
-        if self.modifiers.control_key() {
+        if shortcut(self.modifiers) {
             if let Key::Character(text) = &event.logical_key {
                 if text.as_str().eq_ignore_ascii_case("s") {
                     let view = self.view_state();
@@ -916,6 +920,15 @@ impl App {
                     && let Some(path) = Self::pick_project()
                 {
                     self.session.begin_project(path);
+                } else if text.as_str().eq_ignore_ascii_case("z") {
+                    let command = if self.modifiers.shift_key() {
+                        Command::Redo
+                    } else {
+                        Command::Undo
+                    };
+                    self.apply(vec![command]);
+                } else if text.as_str().eq_ignore_ascii_case("y") {
+                    self.apply(vec![Command::Redo]);
                 }
             }
             self.request_redraw();
@@ -1013,6 +1026,10 @@ fn interface_cursor(cursor: grana_ui::Cursor) -> CursorIcon {
 
 fn even(value: u32) -> u32 {
     (value.max(2) / 2) * 2
+}
+
+fn shortcut(modifiers: ModifiersState) -> bool {
+    modifiers.control_key() || modifiers.super_key()
 }
 
 fn scale_region(region: [u32; 4], origin: [u32; 2], factor: f32, size: [u32; 2]) -> [u32; 4] {

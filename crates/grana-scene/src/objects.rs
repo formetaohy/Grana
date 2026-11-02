@@ -1,6 +1,8 @@
+use grana_object::TrackSet;
+
 use crate::dataset::Dataset;
-use crate::object::ObjectKind;
-use crate::object_set::{ObjectSet, ObjectSetId};
+use crate::object::{ObjectFrame, ObjectKind};
+use crate::object_set::{ObjectSet, ObjectSetId, take_stamp};
 use crate::state::SetState;
 
 const PALETTE: [[f32; 3]; 8] = [
@@ -18,6 +20,7 @@ pub struct Objects {
     sets: Vec<ObjectSet>,
     next_id: u64,
     ordinals: [u64; 3],
+    stamp: u64,
 }
 
 impl Default for Objects {
@@ -32,6 +35,7 @@ impl Objects {
             sets: Vec::new(),
             next_id: 1,
             ordinals: [0; 3],
+            stamp: 0,
         }
     }
 
@@ -55,6 +59,62 @@ impl Objects {
         self.sets.retain(|set| set.id() != id);
     }
 
+    pub fn install(&mut self, id: ObjectSetId, time: u32, frame: ObjectFrame) -> bool {
+        let stamp = take_stamp(&mut self.stamp);
+        let Some(set) = self.get_mut(id) else {
+            return false;
+        };
+        set.install(time, frame, stamp);
+        true
+    }
+
+    pub fn clear(&mut self, id: ObjectSetId) {
+        let stamp = take_stamp(&mut self.stamp);
+        if let Some(set) = self.get_mut(id) {
+            set.clear(stamp);
+        }
+    }
+
+    pub fn install_tracks(&mut self, id: ObjectSetId, tracks: TrackSet) -> bool {
+        let stamp = take_stamp(&mut self.stamp);
+        let Some(set) = self.get_mut(id) else {
+            return false;
+        };
+        set.install_tracks(tracks, stamp);
+        true
+    }
+
+    pub fn clear_tracks(&mut self, id: ObjectSetId) {
+        let stamp = take_stamp(&mut self.stamp);
+        if let Some(set) = self.get_mut(id) {
+            set.clear_tracks(stamp);
+        }
+    }
+
+    pub fn cut_track(&mut self, id: ObjectSetId, time: u32, object: usize) -> bool {
+        let stamp = take_stamp(&mut self.stamp);
+        self.get_mut(id)
+            .is_some_and(|set| set.cut_track(time, object, stamp))
+    }
+
+    pub fn join_tracks(
+        &mut self,
+        id: ObjectSetId,
+        source: (u32, usize),
+        target: (u32, usize),
+    ) -> bool {
+        let stamp = take_stamp(&mut self.stamp);
+        self.get_mut(id)
+            .is_some_and(|set| set.join_tracks(source, target, stamp))
+    }
+
+    pub fn set_track_thickness(&mut self, id: ObjectSetId, thickness: f32) {
+        let stamp = take_stamp(&mut self.stamp);
+        if let Some(set) = self.get_mut(id) {
+            set.set_track_thickness(thickness, stamp);
+        }
+    }
+
     pub(crate) fn restore(&mut self, states: Vec<SetState>, dataset: &Dataset) {
         self.sets.clear();
         self.next_id = 1;
@@ -63,7 +123,8 @@ impl Objects {
             assert!(state.id >= self.next_id, "object set ids ascend from one");
             self.next_id = state.id + 1;
             self.ordinals[state.kind.index()] += 1;
-            self.sets.push(ObjectSet::restore(state, dataset));
+            self.sets
+                .push(ObjectSet::restore(state, dataset, &mut self.stamp));
         }
     }
 

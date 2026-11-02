@@ -212,6 +212,7 @@ impl Encode for SetState {
         self.track_color.encode(writer);
         self.visibility.encode(writer);
         self.frames.encode(writer);
+        writer.u64(self.document);
     }
 }
 
@@ -520,6 +521,7 @@ impl Encode for ColocState {
         self.thresholds.encode(writer);
         self.region.encode(writer);
         self.series.encode(writer);
+        writer.u64(self.document);
     }
 }
 

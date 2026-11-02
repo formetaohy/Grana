@@ -118,6 +118,7 @@ pub fn build(
         jobs: view.jobs,
         io: &view.io,
         batch: view.batch.as_ref(),
+        history: view.history,
         viewport,
         stage,
         workspace,
