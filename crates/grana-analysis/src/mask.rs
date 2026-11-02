@@ -34,10 +34,18 @@ impl Mask {
         let cell = [0, 1, 2].map(|axis| {
             ((point[axis] + 0.5 * self.world[axis]) / self.spacing[axis]).floor() as i64
         });
-        if !self.inside(&cell) {
+        self.contains_cell_index(&cell)
+    }
+
+    pub fn contains_cell(&self, cell: [u32; 3]) -> bool {
+        self.contains_cell_index(&cell.map(i64::from))
+    }
+
+    fn contains_cell_index(&self, cell: &[i64; 3]) -> bool {
+        if !self.inside(cell) {
             return false;
         }
-        let index = self.index(&cell);
+        let index = self.index(cell);
         self.bits[index / WORD] & (1 << (index % WORD)) != 0
     }
 

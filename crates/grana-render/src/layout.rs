@@ -21,6 +21,7 @@ pub(crate) struct Layouts {
     pub shadow_write: BindGroupLayout,
     pub styles: BindGroupLayout,
     pub objects: BindGroupLayout,
+    pub cut: BindGroupLayout,
     pub commands: BindGroupLayout,
     pub marker_cull: BindGroupLayout,
     pub marker_render: BindGroupLayout,
@@ -188,6 +189,13 @@ impl Layouts {
                 true,
             )],
         });
+        let cut = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.cut.data.layout"),
+            entries: &[
+                storage(0, ShaderStages::VERTEX_FRAGMENT, true),
+                storage(1, ShaderStages::FRAGMENT, true),
+            ],
+        });
         let commands = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.commands.layout"),
             entries: &[storage(0, ShaderStages::COMPUTE, false)],
@@ -254,6 +262,7 @@ impl Layouts {
             shadow_write,
             styles,
             objects,
+            cut,
             commands,
             marker_cull,
             marker_render,

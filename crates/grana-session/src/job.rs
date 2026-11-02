@@ -4,7 +4,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use grana_analysis::{Roi, TrackParams};
 use grana_image::{Image, Source};
-use grana_measure::ColocPair;
+use grana_measure::{ColocPair, ColocSettings};
 use grana_scene::{Job, ObjectFrame, ObjectParams};
 use grana_volume::Region;
 
@@ -74,10 +74,23 @@ pub fn relation(
     })
 }
 
-pub fn coloc(job: Job, source: Source, pair: ColocPair, region: Region) -> Analysis {
+pub fn coloc(
+    job: Job,
+    source: Source,
+    pair: ColocPair,
+    region: Region,
+    roi: Option<Roi>,
+    mask: Option<u64>,
+    settings: ColocSettings,
+) -> Analysis {
     spawn(job, move |cancel, sink| {
         let reader = Image::open(&source)?;
-        run::coloc(&reader, pair, region, cancel, sink)
+        run::coloc(
+            &reader,
+            run::ColocRequest::new(pair, region, roi, mask, settings),
+            cancel,
+            sink,
+        )
     })
 }
 

@@ -8,15 +8,18 @@ use grana_measure::{
     Aggregate, Filter, Group, MeasureView, Measurement, Statistic, TrackMeasurement,
 };
 use grana_measure::{
-    COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocThresholds,
+    COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocCost, ColocFrame,
+    ColocMoments, ColocPair, ColocSeries, ColocSeriesInfo, ColocSettings, ColocSignificance,
+    ColocThresholds,
 };
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, RelationFrame,
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_scene::{
-    ChannelState, ColocState, ColorState, ItemState, MeasureState, ObjectFrame, ObjectKind,
-    ObjectParams, RelationState, SceneState, SelectionState, SetState, TrackStyle, Visibility,
+    ChannelState, ColocResult, ColocState, ColorState, ItemState, MeasureState, ObjectFrame,
+    ObjectKind, ObjectParams, RelationState, SceneState, SelectionState, SetState, TrackStyle,
+    Visibility,
 };
 use grana_volume::{Axis, Intensity, Region};
 
@@ -170,6 +173,21 @@ impl Decode for SceneState {
                     .metric
                     .is_some_and(|metric| !metric.colorable())
         }) {
+            return Err(FAULT_SHAPE);
+        }
+        if state
+            .coloc
+            .pair
+            .is_some_and(|pair| pair.a() >= channels || pair.b() >= channels)
+            || state.coloc.results.iter().any(|result| {
+                let pair = result.pair();
+                pair.a() >= channels
+                    || pair.b() >= channels
+                    || result
+                        .mask()
+                        .is_some_and(|mask| !state.sets.iter().any(|set| set.id == mask))
+            })
+        {
             return Err(FAULT_SHAPE);
         }
         Ok(state)
@@ -394,28 +412,42 @@ impl Decode for ObjectParams {
             2 => ObjectKind::Filaments,
             _ => return Err(FAULT_SHAPE),
         };
-        let mut values = [0.0f32; 4];
-        for slot in values.iter_mut().take(kind.fields().len()) {
+        const FIELDS: usize = 8;
+        let count = kind.fields().len();
+        if count > FIELDS {
+            return Err(FAULT_SHAPE);
+        }
+        let mut values = [0.0f32; FIELDS];
+        for slot in values.iter_mut().take(count) {
             *slot = finite(reader.f32()?)?;
         }
-        let [first, second, third, fourth] = values;
+        let unit = |value: f32| (0.0..=1.0).contains(&value);
+        let length = |value: f32| value >= 0.0;
         match kind {
-            ObjectKind::Spots if first > 0.0 && (0.0..=1.0).contains(&second) => {
-                Ok(Self::Spots(grana_analysis::SpotParams::new(first, second)))
-            }
+            ObjectKind::Spots if values[0] > 0.0 && values[1] >= 0.0 => Ok(Self::Spots(
+                grana_analysis::SpotParams::new(values[0], values[1]),
+            )),
             ObjectKind::Surfaces
-                if (0.0..=1.0).contains(&first)
-                    && second >= 0.0
-                    && third >= 0.0
-                    && fourth >= 0.0 =>
+                if unit(values[0])
+                    && length(values[1])
+                    && length(values[2])
+                    && length(values[3])
+                    && length(values[4])
+                    && length(values[5])
+                    && unit(values[6])
+                    && unit(values[7]) =>
             {
                 Ok(Self::Surfaces(grana_analysis::SurfaceParams::new(
-                    first, second, third, fourth,
+                    values[0],
+                    values[1],
+                    values[2],
+                    values[3],
+                    grana_analysis::SurfaceFilter::new(values[4], values[5], values[6], values[7]),
                 )))
             }
-            ObjectKind::Filaments if (0.0..=1.0).contains(&first) && second > 0.0 => Ok(
-                Self::Filaments(grana_analysis::FilamentParams::new(first, second)),
-            ),
+            ObjectKind::Filaments if unit(values[0]) && values[1] > 0.0 => Ok(Self::Filaments(
+                grana_analysis::FilamentParams::new(values[0], values[1]),
+            )),
             _ => Err(FAULT_VALUE),
         }
     }
@@ -834,20 +866,31 @@ impl Decode for ColocState {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let state = Self {
             pair: Option::<ColocPair>::decode(reader)?,
-            thresholds: ColocThresholds::decode(reader)?,
-            region: Option::<Region>::decode(reader)?,
-            series: Option::<ColocSeries>::decode(reader)?,
+            results: Vec::<ColocResult>::decode(reader)?,
+            settings: ColocSettings::decode(reader)?,
             document: reader.u64()?,
         };
         if state.document == 0 {
             return Err(FAULT_VALUE);
         }
-        if let Some(series) = &state.series
-            && (state.pair != Some(series.pair()) || state.region.is_none())
-        {
-            return Err(FAULT_SHAPE);
+        for (index, result) in state.results.iter().enumerate() {
+            if state.results[index + 1..]
+                .iter()
+                .any(|other| other.pair() == result.pair())
+            {
+                return Err(FAULT_SHAPE);
+            }
         }
         Ok(state)
+    }
+}
+
+impl Decode for ColocResult {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        Ok(Self::from_parts(
+            ColocThresholds::decode(reader)?,
+            ColocSeries::decode(reader)?,
+        ))
     }
 }
 
@@ -868,29 +911,117 @@ impl Decode for ColocThresholds {
     }
 }
 
+impl Decode for ColocSettings {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let permutations = reader.u32()?;
+        let block = reader.u32()?;
+        if !(1..=COLOC_PERMUTATIONS_MAX).contains(&permutations)
+            || !(1..=COLOC_BLOCK_MAX).contains(&block)
+        {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self::new(permutations, block))
+    }
+}
+
 impl Decode for ColocSeries {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let pair = ColocPair::decode(reader)?;
+        let info = ColocSeriesInfo::decode(reader)?;
+        let bins = reader.count(1)?;
+        if !(COLOC_BINS_MIN..=COLOC_BINS_MAX).contains(&bins) {
+            return Err(FAULT_VALUE);
+        }
         let frames = Vec::<ColocFrame>::decode(reader)?;
-        let counts_a = Vec::<u64>::decode(reader)?;
-        let counts_b = Vec::<u64>::decode(reader)?;
-        let scatter = Vec::<u64>::decode(reader)?;
-        let total = ColocFrame::decode(reader)?;
-        if counts_a.len() != COLOC_BINS
-            || counts_b.len() != COLOC_BINS
-            || scatter.len() != COLOC_SCATTER * COLOC_SCATTER
+        let joint = Vec::<u64>::decode(reader)?;
+        let significance = Option::<ColocSignificance>::decode(reader)?;
+        let cost = ColocCost::decode(reader)?;
+        if frames.is_empty() || joint.len() != bins * bins {
+            return Err(FAULT_SHAPE);
+        }
+        if frames.iter().any(|frame| frame.bins() != bins) {
+            return Err(FAULT_SHAPE);
+        }
+        let voxels = frames
+            .iter()
+            .map(|frame| frame.moments().voxels())
+            .sum::<u64>();
+        if joint.iter().sum::<u64>() != voxels || cost.scan_voxels() != voxels {
+            return Err(FAULT_SHAPE);
+        }
+        if let Some(significance) = significance
+            && significance.randomizations() != cost.randomizations()
         {
             return Err(FAULT_SHAPE);
         }
-        let voxels = total.moments().voxels();
-        let counted: u64 = counts_a.iter().copied().sum();
-        let scattered: u64 = scatter.iter().copied().sum();
-        let framed: u64 = frames.iter().map(|frame| frame.moments().voxels()).sum();
-        if counted != voxels || scattered != voxels || framed != voxels {
-            return Err(FAULT_SHAPE);
-        }
         Ok(Self::from_parts(
-            pair, frames, counts_a, counts_b, scatter, total,
+            pair,
+            info,
+            bins,
+            frames,
+            joint,
+            significance,
+            cost,
+        ))
+    }
+}
+
+impl Decode for ColocSeriesInfo {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let level = reader.count(1)?;
+        let permutation_level = reader.count(1)?;
+        let permutation_stride = reader.u32()?;
+        let mask = Option::<u64>::decode(reader)?;
+        if permutation_level < level || permutation_stride == 0 {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self::new(
+            level,
+            permutation_level,
+            permutation_stride,
+            mask,
+        ))
+    }
+}
+
+impl Decode for ColocSignificance {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let p = reader.f64()?;
+        let randomizations = reader.u32()?;
+        let permutation_pearson = reader.f64()?;
+        if !p.is_finite()
+            || !(0.0..=1.0).contains(&p)
+            || !(1..=COLOC_PERMUTATIONS_MAX).contains(&randomizations)
+            || !permutation_pearson.is_finite()
+            || !(-1.0..=1.0).contains(&permutation_pearson)
+        {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self::new(p, randomizations, permutation_pearson))
+    }
+}
+
+impl Decode for ColocCost {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let scan_voxels = reader.u64()?;
+        let permutation_voxels = reader.u64()?;
+        let permutation_frames = reader.u32()?;
+        let randomizations = reader.u32()?;
+        let blocks = reader.u64()?;
+        if scan_voxels == 0
+            || permutation_voxels == 0
+            || permutation_frames == 0
+            || blocks == 0
+            || !(1..=COLOC_PERMUTATIONS_MAX).contains(&randomizations)
+        {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self::new(
+            scan_voxels,
+            permutation_voxels,
+            permutation_frames,
+            randomizations,
+            blocks,
         ))
     }
 }
@@ -900,7 +1031,7 @@ impl Decode for ColocFrame {
         let moments = ColocMoments::decode(reader)?;
         let a_by_b = Vec::<f64>::decode(reader)?;
         let b_by_a = Vec::<f64>::decode(reader)?;
-        if a_by_b.len() != COLOC_BINS || b_by_a.len() != COLOC_BINS {
+        if a_by_b.is_empty() || a_by_b.len() != b_by_a.len() || a_by_b.len() > COLOC_BINS_MAX {
             return Err(FAULT_SHAPE);
         }
         if a_by_b

@@ -5,7 +5,7 @@ use grana_object::{RelationFrame, TrackSet};
 use grana_volume::{Axis, ChannelInfo, Intensity, Region};
 
 use crate::channel::Channel;
-use crate::coloc::Coloc;
+use crate::coloc::{Coloc, MaskKey};
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
@@ -54,6 +54,7 @@ impl Scene {
             .collect::<Vec<Channel>>();
         let half = 0.5 * dataset.world_size();
         let channel_count = channels.len();
+        let region = Region::full(-half, half);
         Self {
             dataset,
             channels,
@@ -61,10 +62,10 @@ impl Scene {
             shading: Shading::default(),
             step_scale: 1.0,
             exposure: 1.0,
-            region: Region::full(-half, half),
+            region,
             mask: None,
             objects: Objects::new(),
-            coloc: Coloc::new(channel_count),
+            coloc: Coloc::new(channel_count, region),
             time: 0,
             selection: None,
         }
@@ -137,6 +138,7 @@ impl Scene {
         if self.mask == Some(id) {
             self.mask = None;
         }
+        self.sync_coloc_inputs();
     }
 
     pub fn set_mask(&mut self, source: Option<ObjectSetId>) {
@@ -147,6 +149,15 @@ impl Scene {
             );
         }
         self.mask = source;
+        self.sync_coloc_inputs();
+    }
+
+    pub fn set_region(&mut self, region: Region) {
+        if self.region == region {
+            return;
+        }
+        self.region = region;
+        self.sync_coloc_inputs();
     }
 
     pub fn mask_frames(&self) -> Option<Vec<Option<grana_analysis::Shape>>> {
@@ -215,6 +226,7 @@ impl Scene {
                 self.selection = None;
             }
         }
+        self.sync_coloc_inputs();
     }
 
     pub fn clear_object(&mut self, id: ObjectSetId) {
@@ -223,6 +235,7 @@ impl Scene {
         if self.selection.is_some_and(|selection| selection.set == id) {
             self.selection = None;
         }
+        self.sync_coloc_inputs();
     }
 
     pub fn install_tracks(&mut self, id: ObjectSetId, set: TrackSet) {
@@ -343,5 +356,15 @@ impl Scene {
                 set,
                 item: Item::Track(index),
             })
+    }
+
+    fn mask_key(&self) -> Option<MaskKey> {
+        let set = self.objects.get(self.mask?)?;
+        Some(MaskKey::new(set.id(), set.document()))
+    }
+
+    fn sync_coloc_inputs(&mut self) {
+        let mask = self.mask_key();
+        self.coloc.set_inputs(self.region, mask);
     }
 }

@@ -1,15 +1,18 @@
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
 use grana_geometry::{Bounds, GeometryGroup, PackedMesh, PackedVertex};
-use grana_measure::{ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocThresholds};
+use grana_measure::{
+    ColocCost, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocSeriesInfo, ColocSettings,
+    ColocSignificance, ColocThresholds,
+};
 use grana_measure::{Filter, Measurement, TrackMeasurement};
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, RelationFrame,
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_scene::{
-    ChannelState, ColocState, ColorState, ItemState, MeasureState, ObjectFrame, ObjectParams,
-    RelationState, SceneState, SelectionState, SetState, TrackStyle, Visibility,
+    ChannelState, ColocResult, ColocState, ColorState, ItemState, MeasureState, ObjectFrame,
+    ObjectParams, RelationState, SceneState, SelectionState, SetState, TrackStyle, Visibility,
 };
 use grana_volume::{Intensity, Region};
 
@@ -544,10 +547,16 @@ impl Encode for Filter {
 impl Encode for ColocState {
     fn encode(&self, writer: &mut Writer) {
         self.pair.encode(writer);
-        self.thresholds.encode(writer);
-        self.region.encode(writer);
-        self.series.encode(writer);
+        self.results.encode(writer);
+        self.settings.encode(writer);
         writer.u64(self.document);
+    }
+}
+
+impl Encode for ColocResult {
+    fn encode(&self, writer: &mut Writer) {
+        self.thresholds().encode(writer);
+        self.series().encode(writer);
     }
 }
 
@@ -565,14 +574,49 @@ impl Encode for ColocThresholds {
     }
 }
 
+impl Encode for ColocSettings {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u32(self.permutations());
+        writer.u32(self.block());
+    }
+}
+
 impl Encode for ColocSeries {
     fn encode(&self, writer: &mut Writer) {
         self.pair().encode(writer);
+        self.info().encode(writer);
+        writer.count(self.bins());
         self.frames().encode(writer);
-        self.counts_a().encode(writer);
-        self.counts_b().encode(writer);
-        self.scatter().encode(writer);
-        self.total().encode(writer);
+        self.joint().encode(writer);
+        self.significance().encode(writer);
+        self.cost().encode(writer);
+    }
+}
+
+impl Encode for ColocSeriesInfo {
+    fn encode(&self, writer: &mut Writer) {
+        writer.count(self.level());
+        writer.count(self.permutation_level());
+        writer.u32(self.permutation_stride());
+        self.mask().encode(writer);
+    }
+}
+
+impl Encode for ColocSignificance {
+    fn encode(&self, writer: &mut Writer) {
+        writer.f64(self.p());
+        writer.u32(self.randomizations());
+        writer.f64(self.permutation_pearson());
+    }
+}
+
+impl Encode for ColocCost {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u64(self.scan_voxels());
+        writer.u64(self.permutation_voxels());
+        writer.u32(self.permutation_frames());
+        writer.u32(self.randomizations());
+        writer.u64(self.blocks());
     }
 }
 

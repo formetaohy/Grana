@@ -2,7 +2,7 @@ use glam::Vec3;
 use grana_volume::{Region, VoxelData};
 
 use super::Grid;
-use crate::background::Background;
+use crate::local::LocalField;
 use crate::mask::Mask;
 
 const AXIS: u16 = 16;
@@ -33,37 +33,18 @@ impl Gate<'_> {
     }
 }
 
-pub(super) struct Contrast {
-    threshold: f32,
-    background: Background,
-}
-
-impl Contrast {
-    pub(super) fn new(threshold: f32, background: Background) -> Self {
-        Self {
-            threshold,
-            background,
-        }
-    }
-
-    fn level(&self, voxel: [f32; 3]) -> f32 {
-        self.background.value(voxel)
-    }
-}
-
 pub(super) fn mask(
     data: &VoxelData,
-    extent: [u32; 3],
-    step: [u32; 3],
     grid: &Grid,
-    contrast: Contrast,
+    field: &LocalField,
+    threshold: f32,
     gate: Gate<'_>,
     mask: &mut [u8],
 ) {
     match data {
-        VoxelData::U8(values) => fill(values, extent, step, grid, contrast, gate, mask),
-        VoxelData::U16(values) => fill(values, extent, step, grid, contrast, gate, mask),
-        VoxelData::F32(values) => fill(values, extent, step, grid, contrast, gate, mask),
+        VoxelData::U8(values) => fill(values, grid, field, threshold, gate, mask),
+        VoxelData::U16(values) => fill(values, grid, field, threshold, gate, mask),
+        VoxelData::F32(values) => fill(values, grid, field, threshold, gate, mask),
     }
 }
 
@@ -77,13 +58,14 @@ pub(super) fn distance(mask: &[u8], grid: &Grid, distance: &mut [u16]) {
 
 fn fill<T: Sample>(
     values: &[T],
-    extent: [u32; 3],
-    step: [u32; 3],
     grid: &Grid,
-    contrast: Contrast,
+    field: &LocalField,
+    threshold: f32,
     gate: Gate<'_>,
     mask: &mut [u8],
 ) {
+    let extent = grid.extent;
+    let step = grid.step;
     let width = extent[0] as usize;
     let height = extent[1] as usize;
     let depth = extent[2] as usize;
@@ -100,24 +82,22 @@ fn fill<T: Sample>(
                     mask[cell] = 0;
                     continue;
                 }
-                let level = contrast.level([
-                    (x as f32 + 0.5) * step[0] as f32 - 0.5,
-                    (y as f32 + 0.5) * step[1] as f32 - 0.5,
-                    (z as f32 + 0.5) * step[2] as f32 - 0.5,
-                ]);
                 let low_x = x * step[0] as usize;
                 let high_x = (low_x + step[0] as usize).min(width);
-                let mut maximum = f32::NEG_INFINITY;
+                let mut best = f32::NEG_INFINITY;
                 for row in low_z..high_z {
                     let base = width * (row * height);
                     for column in low_y..high_y {
                         let offset = base + width * column;
-                        for value in &values[offset + low_x..offset + high_x] {
-                            maximum = maximum.max(value.value() - level);
+                        for (index, value) in
+                            values[offset + low_x..offset + high_x].iter().enumerate()
+                        {
+                            let voxel = [(low_x + index) as i64, column as i64, row as i64];
+                            best = best.max(field.contrast(voxel, value.value()));
                         }
                     }
                 }
-                mask[cell] = u8::from(maximum > contrast.threshold);
+                mask[cell] = u8::from(best > threshold);
             }
         }
     }

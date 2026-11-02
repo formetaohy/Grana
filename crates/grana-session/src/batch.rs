@@ -483,22 +483,44 @@ fn write_dataset(
         detail.push(format!("{}={}", detected.set.name, rows.len()));
     }
     if let Some(coloc) = protocol.coloc() {
-        let _ = events.send(Event::Step {
-            index,
-            label: format!("colocalizing {} with {}", coloc.a, coloc.b),
-        });
-        let pair = ColocPair::new(
-            resolve(pyramid, &coloc.a).map_err(|detail| format!("colocalization: {detail}"))?,
-            resolve(pyramid, &coloc.b).map_err(|detail| format!("colocalization: {detail}"))?,
-        );
-        let series =
-            colocalize(&reader, pair, region, cancel)?.ok_or_else(|| "cancelled".to_string())?;
-        let thresholds =
-            grana_measure::ColocThresholds::new(coloc.thresholds[0], coloc.thresholds[1]);
-        write(
-            &folder.join(format!("coloc-{}-{}.csv", slug(&coloc.a), slug(&coloc.b))),
-            &series.csv(thresholds),
-        )?;
+        let mask_frames = match &coloc.mask {
+            None => None,
+            Some(name) => match detected.iter().find(|detected| detected.set.name == *name) {
+                Some(detected) if detected.frames.iter().any(Option::is_some) => {
+                    Some(shape_frames(&detected.frames))
+                }
+                Some(_) => {
+                    return Err(format!(
+                        "the colocalization mask {name} detected no objects"
+                    ));
+                }
+                None => {
+                    return Err(format!("the colocalization mask {name} is unknown"));
+                }
+            },
+        };
+        let settings = coloc.settings();
+        for spec in &coloc.pairs {
+            let _ = events.send(Event::Step {
+                index,
+                label: format!("colocalizing {} with {}", spec.a, spec.b),
+            });
+            let pair = ColocPair::new(
+                resolve(pyramid, &spec.a).map_err(|detail| format!("colocalization: {detail}"))?,
+                resolve(pyramid, &spec.b).map_err(|detail| format!("colocalization: {detail}"))?,
+            );
+            let roi = mask_frames
+                .as_ref()
+                .map(|frames| grana_analysis::Roi::new(frames.clone()));
+            let series = colocalize(&reader, pair, region, roi, settings, cancel)?
+                .ok_or_else(|| "cancelled".to_string())?;
+            let thresholds =
+                grana_measure::ColocThresholds::new(spec.thresholds[0], spec.thresholds[1]);
+            write(
+                &folder.join(format!("coloc-{}-{}.csv", slug(&spec.a), slug(&spec.b))),
+                &series.csv(thresholds),
+            )?;
+        }
     }
     let report = Report {
         objects,
@@ -585,6 +607,8 @@ fn colocalize(
     reader: &Image,
     pair: ColocPair,
     region: Region,
+    roi: Option<grana_analysis::Roi>,
+    settings: grana_measure::ColocSettings,
     cancel: &AtomicBool,
 ) -> Result<Option<ColocSeries>, String> {
     let mut series = None;
@@ -593,7 +617,12 @@ fn colocalize(
             series = Some(*found);
         }
     };
-    run::coloc(reader, pair, region, cancel, &mut sink)?;
+    run::coloc(
+        reader,
+        run::ColocRequest::new(pair, region, roi, None, settings),
+        cancel,
+        &mut sink,
+    )?;
     Ok(series)
 }
 

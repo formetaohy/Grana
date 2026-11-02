@@ -51,14 +51,20 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     if (outside_region(section.box_min.xyz + uvw * section.world.xyz)) {
         return vec4<f32>(0.0);
     }
-    var color = vec3<f32>(0.0);
+    var color = vec4<f32>(0.0);
     let count = section.axes.x;
     for (var channel = 0u; channel < count; channel += 1u) {
         let opacity = channel_opacity(channel);
         if (opacity > 0.0) {
             let sample = channel_sample(channel, sample_section(channel, uvw));
-            color += sample.rgb * opacity;
+            let alpha = sample.a * opacity;
+            if (alpha > 0.0) {
+                color = vec4<f32>(
+                    sample.rgb * alpha + color.rgb * (1.0 - alpha),
+                    alpha + color.a * (1.0 - alpha),
+                );
+            }
         }
     }
-    return vec4<f32>(color, 1.0);
+    return color;
 }

@@ -6,7 +6,9 @@ use grana_analysis::SpotParams;
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, TransferFunction};
 use grana_geometry::{Bounds, Mesh, MeshVertex};
-use grana_measure::{COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocPair, ColocSeries};
+use grana_measure::{
+    ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
+};
 use grana_measure::{Measurement, TrackMeasurement};
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, RelationFrame,
@@ -17,7 +19,7 @@ use grana_project::{Project, Source, ViewState};
 use grana_scene::{
     Dataset, Item, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene, Selection, Visibility,
 };
-use grana_volume::{Axis, Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
+use grana_volume::{Axis, Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
 const EXTENT: Extent = Extent::new(8, 8, 4);
 
@@ -97,6 +99,17 @@ fn round_trips_a_project() {
     assert_eq!(restored.state(), project.scene);
     assert_eq!(restored_measure.state(), project.measure);
     assert_eq!(loaded.view, project.view);
+    let restored_result = restored
+        .coloc
+        .result()
+        .expect("the restored scene keeps its colocalization result");
+    let captured_result = &project.scene.coloc.results[0];
+    assert_eq!(restored_result.series(), captured_result.series());
+    assert!(restored_result.significance().is_some());
+    assert_eq!(restored_result.costes(), captured_result.costes());
+    assert_eq!(restored_result.level(), 0);
+    assert_eq!(restored_result.permutation_level(), 1);
+    assert_eq!(restored_result.permutation_stride(), 1);
 }
 
 #[test]
@@ -265,27 +278,22 @@ fn stage(scene: &mut Scene) {
             vec![Track::new(None, vec![node(0, 0.0), node(1, 1.0)])],
         ),
     );
-    let mut frame = ColocFrame::new();
+    let bins = 64;
+    let mut frame = ColocFrame::new(bins);
     frame.push(0.25, 0.75);
     frame.push(0.5, 0.5);
-    let mut counts_a = vec![0; COLOC_BINS];
-    let mut counts_b = vec![0; COLOC_BINS];
-    counts_a[256] += 1;
-    counts_a[512] += 1;
-    counts_b[768] += 1;
-    counts_b[512] += 1;
-    let mut scatter = vec![0; COLOC_SCATTER * COLOC_SCATTER];
-    scatter[32 + COLOC_SCATTER * 96] += 1;
-    scatter[64 + COLOC_SCATTER * 64] += 1;
-    let series = ColocSeries::new(
+    let mut joint = vec![0; bins * bins];
+    joint[5 + bins * 7] = 2;
+    let series = ColocSeries::from_parts(
         ColocPair::new(0, 1),
-        vec![frame, ColocFrame::new()],
-        counts_a,
-        counts_b,
-        scatter,
+        ColocSeriesInfo::new(0, 1, 1, None),
+        bins,
+        vec![frame, ColocFrame::new(bins)],
+        joint,
+        Some(ColocSignificance::new(0.004975, 200, 1.0)),
+        ColocCost::new(2, 1024, 1, 200, 8),
     );
-    let region = Region::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
-    scene.coloc.install(series, region, 2);
+    scene.coloc.install(series);
     let spots = scene.objects.get_mut(spots).expect("the spots exist");
     spots.set_color([0.1, 0.2, 0.3]);
     spots.set_params(ObjectParams::Spots(SpotParams::new(3.0, 0.3)));

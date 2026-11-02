@@ -64,20 +64,130 @@ impl SpotParams {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceFilter {
+    opening: f32,
+    closing: f32,
+    min_sphericity: f32,
+    min_mean_intensity: f32,
+}
+
+impl SurfaceFilter {
+    pub fn new(opening: f32, closing: f32, min_sphericity: f32, min_mean_intensity: f32) -> Self {
+        assert!(
+            opening.is_finite() && opening >= 0.0,
+            "a surface opening radius is a non-negative length"
+        );
+        assert!(
+            closing.is_finite() && closing >= 0.0,
+            "a surface closing radius is a non-negative length"
+        );
+        assert!(
+            (0.0..=1.0).contains(&min_sphericity),
+            "a surface sphericity filter is a unit fraction"
+        );
+        assert!(
+            (0.0..=1.0).contains(&min_mean_intensity),
+            "a surface intensity filter is a unit fraction"
+        );
+        Self {
+            opening,
+            closing,
+            min_sphericity,
+            min_mean_intensity,
+        }
+    }
+
+    pub fn opening(self) -> f32 {
+        self.opening
+    }
+
+    pub fn closing(self) -> f32 {
+        self.closing
+    }
+
+    pub fn min_sphericity(self) -> f32 {
+        self.min_sphericity
+    }
+
+    pub fn min_mean_intensity(self) -> f32 {
+        self.min_mean_intensity
+    }
+
+    pub fn field(self, index: usize) -> f32 {
+        match index {
+            0 => self.opening,
+            1 => self.closing,
+            2 => self.min_sphericity,
+            3 => self.min_mean_intensity,
+            _ => panic!("a surface filter carries four parameters"),
+        }
+    }
+
+    pub fn set_field(&mut self, index: usize, value: f32) {
+        match index {
+            0 => self.set_opening(value),
+            1 => self.set_closing(value),
+            2 => self.set_min_sphericity(value),
+            3 => self.set_min_mean_intensity(value),
+            _ => panic!("a surface filter carries four parameters"),
+        }
+    }
+
+    pub fn set_opening(&mut self, opening: f32) {
+        assert!(
+            opening.is_finite() && opening >= 0.0,
+            "a surface opening radius is a non-negative length"
+        );
+        self.opening = opening;
+    }
+
+    pub fn set_closing(&mut self, closing: f32) {
+        assert!(
+            closing.is_finite() && closing >= 0.0,
+            "a surface closing radius is a non-negative length"
+        );
+        self.closing = closing;
+    }
+
+    pub fn set_min_sphericity(&mut self, min_sphericity: f32) {
+        assert!(
+            (0.0..=1.0).contains(&min_sphericity),
+            "a surface sphericity filter is a unit fraction"
+        );
+        self.min_sphericity = min_sphericity;
+    }
+
+    pub fn set_min_mean_intensity(&mut self, min_mean_intensity: f32) {
+        assert!(
+            (0.0..=1.0).contains(&min_mean_intensity),
+            "a surface intensity filter is a unit fraction"
+        );
+        self.min_mean_intensity = min_mean_intensity;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceParams {
     threshold: f32,
     grain: f32,
     seed: f32,
     min_volume: f32,
+    filter: SurfaceFilter,
 }
 
 impl SurfaceParams {
-    pub const FIELD_COUNT: usize = 4;
+    pub const FIELD_COUNT: usize = 8;
 
-    pub fn new(threshold: f32, grain: f32, seed: f32, min_volume: f32) -> Self {
+    pub fn new(
+        threshold: f32,
+        grain: f32,
+        seed: f32,
+        min_volume: f32,
+        filter: SurfaceFilter,
+    ) -> Self {
         assert!(
             (0.0..=1.0).contains(&threshold),
-            "a surface threshold is a fraction of the channel intensity range"
+            "a surface threshold is a fraction of the local intensity range"
         );
         assert!(
             grain.is_finite() && grain >= 0.0,
@@ -96,6 +206,7 @@ impl SurfaceParams {
             grain,
             seed,
             min_volume,
+            filter,
         }
     }
 
@@ -115,13 +226,34 @@ impl SurfaceParams {
         self.min_volume
     }
 
+    pub fn filter(self) -> SurfaceFilter {
+        self.filter
+    }
+
+    pub fn opening(self) -> f32 {
+        self.filter.opening()
+    }
+
+    pub fn closing(self) -> f32 {
+        self.filter.closing()
+    }
+
+    pub fn min_sphericity(self) -> f32 {
+        self.filter.min_sphericity()
+    }
+
+    pub fn min_mean_intensity(self) -> f32 {
+        self.filter.min_mean_intensity()
+    }
+
     pub fn field(&self, index: usize) -> f32 {
         match index {
             0 => self.threshold,
             1 => self.grain,
             2 => self.seed,
             3 => self.min_volume,
-            _ => panic!("a surface carries four parameters"),
+            4..=7 => self.filter.field(index - 4),
+            _ => panic!("a surface carries eight parameters"),
         }
     }
 
@@ -131,14 +263,15 @@ impl SurfaceParams {
             1 => self.set_grain(value),
             2 => self.set_seed(value),
             3 => self.set_min_volume(value),
-            _ => panic!("a surface carries four parameters"),
+            4..=7 => self.filter.set_field(index - 4, value),
+            _ => panic!("a surface carries eight parameters"),
         }
     }
 
     pub fn set_threshold(&mut self, threshold: f32) {
         assert!(
             (0.0..=1.0).contains(&threshold),
-            "a surface threshold is a fraction of the channel intensity range"
+            "a surface threshold is a fraction of the local intensity range"
         );
         self.threshold = threshold;
     }
@@ -166,8 +299,11 @@ impl SurfaceParams {
         );
         self.min_volume = min_volume;
     }
-}
 
+    pub fn set_filter(&mut self, filter: SurfaceFilter) {
+        self.filter = filter;
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FilamentParams {
     threshold: f32,
@@ -180,7 +316,7 @@ impl FilamentParams {
     pub fn new(threshold: f32, min_length: f32) -> Self {
         assert!(
             (0.0..=1.0).contains(&threshold),
-            "a filament threshold is a fraction of the channel intensity range"
+            "a filament threshold is a fraction of the local intensity range"
         );
         assert!(
             min_length.is_finite() && min_length > 0.0,
@@ -219,7 +355,7 @@ impl FilamentParams {
     pub fn set_threshold(&mut self, threshold: f32) {
         assert!(
             (0.0..=1.0).contains(&threshold),
-            "a filament threshold is a fraction of the channel intensity range"
+            "a filament threshold is a fraction of the local intensity range"
         );
         self.threshold = threshold;
     }

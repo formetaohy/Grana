@@ -1,8 +1,9 @@
 mod assignment;
-mod background;
 mod coloc;
 mod filament;
+mod local;
 mod mask;
+mod morphology;
 mod params;
 mod relation;
 mod scan;
@@ -11,11 +12,10 @@ mod surface;
 mod table;
 mod track;
 
-pub use background::{Background, BackgroundSample};
-pub use coloc::ColocScan;
+pub use coloc::{ColocLevels, ColocPermutation, ColocScan, ColocScanConfig, coloc_levels};
 pub use filament::{FilamentScan, filament_level};
 pub use mask::{Mask, Roi};
-pub use params::{FilamentParams, SpotParams, SurfaceParams, TrackParams};
+pub use params::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
 pub use relation::Reference;
 pub use scan::SpotScan;
 pub use shape::Shape;

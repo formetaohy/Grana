@@ -1,11 +1,13 @@
 mod engine;
-mod movie;
-mod snapshot;
+mod frame;
+mod image;
+mod output;
+mod overlay;
+mod panels;
 mod view;
 
-pub use engine::{
-    Engine, MOVIE_SAMPLES, Pose, ProjectedView, Recording, SAMPLE_LIMIT, View, ViewportFrame, name,
-};
-pub use movie::Plan;
-pub use snapshot::write_rgba;
+pub use engine::{Engine, SAMPLE_LIMIT, ViewportFrame};
+pub use image::write_rgba;
+pub use output::{Destination, Outcome, Plan, Pose};
+pub use panels::{Panels, Panes};
 pub use view::{RenderedScene, frame};

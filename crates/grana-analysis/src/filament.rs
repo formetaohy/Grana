@@ -9,12 +9,11 @@ use grana_object::{FilamentSet, IntensityTable, SampleAccumulator};
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
 use crate::FilamentParams;
-use crate::background::Background;
+use crate::local::LocalField;
 use crate::mask::Mask;
 
 const MAX_VOXELS: u64 = 1 << 25;
 const MAX_STEP: u32 = 32;
-const BACKGROUND_BLOCKS: u32 = 3;
 
 pub fn filament_level(pyramid: &Pyramid) -> Option<usize> {
     (0..pyramid.level_count()).find(|index| voxels(pyramid.level(*index)) <= MAX_VOXELS)
@@ -31,6 +30,8 @@ pub(super) struct Grid {
     pub stride: [usize; 3],
     pub spacing: [f32; 3],
     pub world: [f32; 3],
+    pub extent: [u32; 3],
+    pub step: [u32; 3],
 }
 
 impl Grid {
@@ -122,7 +123,7 @@ impl FilamentScan {
             step,
             params,
             intensity,
-            threshold: params.threshold() * intensity.span(),
+            threshold: params.threshold(),
             channels,
             grid: Grid {
                 dims,
@@ -130,6 +131,8 @@ impl FilamentScan {
                 stride,
                 spacing: working,
                 world,
+                extent,
+                step,
             },
             region,
             empty,
@@ -160,12 +163,18 @@ impl FilamentScan {
         if detection.voxel_count() as u64 != expected {
             return Err("the detection frame does not cover the requested level".to_string());
         }
+        let field = LocalField::new(
+            [0, 1, 2].map(|axis| self.extent[axis] as usize),
+            [0, 0, 0],
+            [0, 0, 0],
+            self.intensity,
+            |index| detection.value(index),
+        );
         volume::mask(
             detection,
-            self.extent,
-            self.step,
             &self.grid,
-            volume::Contrast::new(self.threshold, self.background(detection)),
+            &field,
+            self.threshold,
             volume::Gate {
                 region: self.region,
                 roi,
@@ -228,22 +237,6 @@ impl FilamentScan {
             objects,
             intensities,
         ))
-    }
-
-    fn background(&self, detection: &VoxelData) -> Background {
-        let samples = Background::samples(
-            detection.voxel_count(),
-            self.extent,
-            [0, 0, 0],
-            BACKGROUND_BLOCKS,
-            self.intensity,
-            |index| detection.value(index),
-        );
-        Background::fit(
-            &samples,
-            self.extent.map(|value| value as f32),
-            self.intensity,
-        )
     }
 
     fn sample(&self, data: &VoxelData, node: usize) -> f32 {

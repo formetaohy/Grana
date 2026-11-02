@@ -8,6 +8,7 @@ pub(crate) const SCENE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const ACCUMULATION_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 pub(crate) const STENCIL_FORMAT: TextureFormat = TextureFormat::Stencil8;
+pub(crate) const CUT_ID_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
 pub(crate) struct SceneTarget {
     color: TextureView,

@@ -5,7 +5,10 @@ use common::{
     green_pixels, green_sum, lit, pixel, read_pixels, red_count, red_pixels, settle, target,
 };
 use glam::Vec3;
-use grana_display::{Camera, CameraState, SectionCamera, Shading, Stop, TransferFunction};
+use grana_display::{
+    Camera, CameraState, SectionCamera, Shading, Stop, TransferFunction, linear_to_srgb,
+    srgb_to_linear,
+};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::{Track, TrackNode, TrackSet};
 use grana_render::{Frame, Layer, LayerKey, Marker, Renderer, SceneFrame, Style};
@@ -17,7 +20,9 @@ use grana_volume::{
 const BUDGET: u64 = 512 << 20;
 const WHOLE: [u32; 4] = [0, 0, SIDE, SIDE];
 const CORNER: [u32; 4] = [0, 0, 1, 1];
+const SECTION_AREA: [u32; 4] = [1, 1, SIDE - 1, SIDE - 1];
 
+#[derive(Clone, Copy)]
 struct Job<'a> {
     texture: &'a wgpu::Texture,
     volume: &'a Volume,
@@ -433,6 +438,7 @@ fn marches_bricks_shorter_than_their_side() {
         camera: Some(&camera),
         section: None,
         markers: &[],
+        shading: None,
     });
     let darkest = (SIDE * 2 / 5..SIDE * 3 / 5)
         .flat_map(|y| (SIDE * 2 / 5..SIDE * 3 / 5).map(move |x| (x, y)))
@@ -667,7 +673,7 @@ fn composites_objects_into_the_volume() {
         &markers,
     );
     assert_eq!(
-        red_count(&missed, WHOLE),
+        red_count(&missed, SECTION_AREA),
         0,
         "the section marks an object it does not intersect"
     );
@@ -798,7 +804,7 @@ fn renders_surface_objects_and_sections() {
         },
     );
     assert_eq!(
-        red_pixels(&missed),
+        red_count(&missed, SECTION_AREA),
         0,
         "the section fills an object the plane misses"
     );
@@ -1140,6 +1146,7 @@ struct Setup<'a> {
     camera: Option<&'a Camera>,
     section: Option<&'a SectionCamera>,
     markers: &'a [Marker],
+    shading: Option<Shading>,
 }
 
 fn scene_render(device: &wgpu::Device, queue: &wgpu::Queue, job: Job<'_>) -> Vec<[u8; 4]> {
@@ -1150,6 +1157,25 @@ fn scene_render(device: &wgpu::Device, queue: &wgpu::Queue, job: Job<'_>) -> Vec
         camera: None,
         section: None,
         markers: &[],
+        shading: None,
+    })
+}
+
+fn framing_scene(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    job: Job<'_>,
+    camera: &Camera,
+    shading: Option<Shading>,
+) -> Vec<[u8; 4]> {
+    render(Setup {
+        device,
+        queue,
+        job,
+        camera: Some(camera),
+        section: None,
+        markers: &[],
+        shading,
     })
 }
 
@@ -1168,6 +1194,7 @@ fn marker_scene(
         camera: Some(camera),
         section: Some(section),
         markers,
+        shading: None,
     })
 }
 
@@ -1179,6 +1206,7 @@ fn render(setup: Setup<'_>) -> Vec<[u8; 4]> {
         camera,
         section,
         markers,
+        shading,
     } = setup;
     let volume = job.volume;
     let view = job.texture.create_view(&Default::default());
@@ -1231,7 +1259,7 @@ fn render(setup: Setup<'_>) -> Vec<[u8; 4]> {
         .map_or_else(Vec::new, |(_, styles)| styles.to_vec());
     let scene = SceneFrame {
         channels: &channels,
-        shading: Shading::default(),
+        shading: shading.unwrap_or_default(),
         step_scale: 1.0,
         styles: &styles,
         layers: &layers,
@@ -1994,5 +2022,581 @@ fn orders_section_markers_against_cut_faces() {
         measured[1][1] > measured[1][0],
         "a marker in front of the plane sits over the cut face: {:?}",
         measured[1]
+    );
+}
+
+fn section_job<'a>(
+    texture: &'a wgpu::Texture,
+    volume: &'a Volume,
+    mesh: Option<(&'a PackedMesh, &'a [Style])>,
+) -> Job<'a> {
+    Job {
+        texture,
+        volume,
+        volume_region: CORNER,
+        section_region: WHOLE,
+        focus_z: 0.0,
+        mesh,
+    }
+}
+
+fn aces(radiance: f32) -> f32 {
+    let toe = 0.03;
+    let shoulder = 2.43;
+    let offset = 0.59;
+    let bias = 0.14;
+    let slope = 2.51;
+    ((radiance * (slope * radiance + toe)) / (radiance * (shoulder * radiance + offset) + bias))
+        .clamp(0.0, 1.0)
+}
+
+fn backdrop(ndc: [f32; 2]) -> [f32; 3] {
+    let height = (ndc[1] * 0.5 + 0.5).clamp(0.0, 1.0);
+    let low = [0.012f32, 0.014, 0.020];
+    let high = [0.040f32, 0.048, 0.066];
+    [0, 1, 2].map(|channel| low[channel] + (high[channel] - low[channel]) * height)
+}
+
+fn expected_cut_fill(color: [f32; 3], energy: f32, ndc: [f32; 2]) -> [i32; 3] {
+    let linear = srgb_to_linear(color);
+    let backdrop = backdrop(ndc);
+    [0, 1, 2].map(|channel| {
+        let covered = aces(0.6 * linear[channel] * energy);
+        let behind = aces(backdrop[channel]);
+        (linear_to_srgb(covered + 0.4 * behind) * 255.0).round() as i32
+    })
+}
+
+fn brightness(pixel: [u8; 4]) -> u32 {
+    pixel.iter().take(3).map(|value| u32::from(*value)).sum()
+}
+
+#[test]
+fn lights_cut_faces_with_the_surface_shading_model() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = empty_volume();
+    let mesh = PackedMesh::new(cubes());
+    let styles = [
+        Style::new([1.0, 0.12, 0.12], true, false),
+        Style::new([0.12, 1.0, 0.12], true, false),
+    ];
+    let configs = [
+        Shading {
+            ambient: 0.35,
+            diffuse: 0.75,
+            specular: 0.0,
+            shininess: 28.0,
+            shadows: 0.0,
+        },
+        Shading {
+            ambient: 0.8,
+            diffuse: 0.2,
+            specular: 0.0,
+            shininess: 28.0,
+            shadows: 0.0,
+        },
+        Shading {
+            ambient: 0.35,
+            diffuse: 0.75,
+            specular: 0.0,
+            shininess: 28.0,
+            shadows: 0.0,
+        },
+    ];
+    let job = Job {
+        texture: &texture,
+        volume: &volume,
+        volume_region: CORNER,
+        section_region: WHOLE,
+        focus_z: 0.0,
+        mesh: Some((&mesh, &styles)),
+    };
+    for (slot, shading) in configs.into_iter().enumerate() {
+        let mut camera = Camera::new(35.0);
+        camera.fit(Vec3::from(volume.world_extent()), 1.0);
+        if slot == 2 {
+            let state = camera.state();
+            camera.restore(CameraState {
+                yaw: state.yaw + std::f32::consts::PI,
+                ..state
+            });
+        }
+        let pixels = framing_scene(&device, &queue, job, &camera, Some(shading));
+        let light = camera.light_direction();
+        let energy = shading.ambient + shading.diffuse * light.z.max(0.0);
+        let ndc = [
+            (2.0 * 75.0 + 1.0) / SIDE as f32 - 1.0,
+            1.0 - (2.0 * 128.0 + 1.0) / SIDE as f32,
+        ];
+        let expected = expected_cut_fill([1.0, 0.12, 0.12], energy, ndc);
+        assert!(
+            expected[0] > 40,
+            "the shading sample is too dark to resolve: {expected:?}"
+        );
+        let measured = pixel(&pixels, 75, 128);
+        for channel in 0..3 {
+            let difference = i32::from(measured[channel]) - expected[channel];
+            assert!(
+                difference.abs() <= 3,
+                "the cut fill does not follow the surface shading model: {measured:?} against {expected:?}"
+            );
+        }
+    }
+}
+
+fn outline_runs(pixels: &[[u8; 4]], y: u32) -> Vec<(u32, u32)> {
+    let mut runs = Vec::new();
+    let mut start = None;
+    for x in 0..SIDE {
+        let [red, green, blue, _] = pixel(pixels, x, y).map(u32::from);
+        let outlined = red > green + 20 && red > blue + 20;
+        match (outlined, start) {
+            (true, None) => start = Some(x),
+            (false, Some(from)) => {
+                runs.push((from, x - from));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = start {
+        runs.push((from, SIDE - from));
+    }
+    runs
+}
+
+#[test]
+fn outlines_cut_faces_in_screen_space() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = empty_volume();
+    let mesh = PackedMesh::new(cubes());
+    let plain = [
+        Style::new([1.0, 0.12, 0.12], true, false),
+        Style::new([0.12, 1.0, 0.12], true, false),
+    ];
+    let selected = [
+        Style::new([1.0, 0.12, 0.12], true, true),
+        Style::new([0.12, 1.0, 0.12], true, false),
+    ];
+    let shaded = Shading {
+        ambient: 0.0,
+        diffuse: 0.0,
+        specular: 0.0,
+        shininess: 28.0,
+        shadows: 0.0,
+    };
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let plain_job = section_job(&texture, &volume, Some((&mesh, &plain)));
+    let plain_pixels = framing_scene(&device, &queue, plain_job, &camera, Some(shaded));
+    let runs = outline_runs(&plain_pixels, 128);
+    assert_eq!(
+        runs.len(),
+        2,
+        "a cut face carries one outline per silhouette edge: {runs:?}"
+    );
+    let (left, left_width) = runs[0];
+    let (right, right_width) = runs[1];
+    assert!(
+        (20..40).contains(&left) && (1..=6).contains(&left_width),
+        "the leading outline is not a thin screen space band: {runs:?}"
+    );
+    assert!(
+        (105..130).contains(&right) && (1..=6).contains(&right_width),
+        "the trailing outline is not a thin screen space band: {runs:?}"
+    );
+    assert!(
+        brightness(pixel(&plain_pixels, 75, 128)) < 140,
+        "the cut fill shades the face under a zero ambient shading"
+    );
+    let selected_job = section_job(&texture, &volume, Some((&mesh, &selected)));
+    let selected_pixels = framing_scene(&device, &queue, selected_job, &camera, Some(shaded));
+    let highlighted = |pixels: &[[u8; 4]]| {
+        pixels
+            .iter()
+            .filter(|pixel| u32::from(pixel[1]) > 180)
+            .count()
+    };
+    assert!(
+        highlighted(&selected_pixels) > highlighted(&plain_pixels) + 200,
+        "selection does not highlight the outline"
+    );
+}
+
+fn box_faces(
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
+    object: u32,
+    low: [f32; 3],
+    high: [f32; 3],
+    cap: bool,
+) {
+    let [x0, y0, z0] = low;
+    let [x1, y1, z1] = high;
+    let mut faces = vec![
+        (
+            [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]],
+            [0.0, 0.0, -1.0],
+        ),
+        (
+            [[x0, y0, z0], [x0, y0, z1], [x1, y0, z1], [x1, y0, z0]],
+            [0.0, -1.0, 0.0],
+        ),
+        (
+            [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]],
+            [0.0, 1.0, 0.0],
+        ),
+        (
+            [[x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1]],
+            [-1.0, 0.0, 0.0],
+        ),
+        (
+            [[x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0]],
+            [1.0, 0.0, 0.0],
+        ),
+    ];
+    if cap {
+        faces.push((
+            [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],
+            [0.0, 0.0, 1.0],
+        ));
+    }
+    for (corners, normal) in faces {
+        let base = vertices.len() as u32;
+        for corner in corners {
+            vertices.push(MeshVertex::new(corner, normal, object));
+        }
+        indices.extend([0u32, 1, 2, 0, 2, 3].map(|index| base + index));
+    }
+}
+
+fn box_mesh(cap: bool) -> Mesh {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    box_faces(
+        &mut vertices,
+        &mut indices,
+        0,
+        [-0.8, -0.8, -0.5],
+        [0.8, 0.8, 0.5],
+        cap,
+    );
+    Mesh::new(vertices, indices)
+}
+
+fn overlapping_boxes() -> Mesh {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    box_faces(
+        &mut vertices,
+        &mut indices,
+        0,
+        [-0.45, -0.4, -0.5],
+        [0.05, 0.4, 0.5],
+        true,
+    );
+    box_faces(
+        &mut vertices,
+        &mut indices,
+        1,
+        [-0.05, -0.4, -0.5],
+        [0.45, 0.4, 0.5],
+        true,
+    );
+    Mesh::new(vertices, indices)
+}
+
+#[test]
+fn orders_overlapping_cut_faces_by_camera_depth() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = empty_volume();
+    let mesh = PackedMesh::new(overlapping_boxes());
+    let styles = [
+        Style::new([1.0, 0.12, 0.12], true, false),
+        Style::new([0.12, 1.0, 0.12], true, false),
+    ];
+    let selected = [
+        Style::new([1.0, 0.12, 0.12], true, true),
+        Style::new([0.12, 1.0, 0.12], true, false),
+    ];
+    let mut positive = Camera::new(35.0);
+    positive.fit(Vec3::from(volume.world_extent()), 1.0);
+    let mut negative = positive.clone();
+    let state = negative.state();
+    negative.restore(CameraState {
+        yaw: state.yaw + std::f32::consts::PI,
+        ..state
+    });
+    let job = Job {
+        texture: &texture,
+        volume: &volume,
+        volume_region: CORNER,
+        section_region: WHOLE,
+        focus_z: 0.0,
+        mesh: Some((&mesh, &styles)),
+    };
+    let forward = framing_scene(&device, &queue, job, &positive, None);
+    let [red, green, ..] = pixel(&forward, 128, 128).map(u32::from);
+    assert!(
+        green > red + 20,
+        "the nearer object does not own the overlap: red {red} green {green}"
+    );
+    let backward = framing_scene(&device, &queue, job, &negative, None);
+    let [red, green, ..] = pixel(&backward, 128, 128).map(u32::from);
+    assert!(
+        red > green + 20,
+        "orbiting by half a turn does not swap the overlap: red {red} green {green}"
+    );
+    let highlighted = Job {
+        mesh: Some((&mesh, &selected)),
+        ..job
+    };
+    let pixels = framing_scene(&device, &queue, highlighted, &positive, None);
+    let [red, green, ..] = pixel(&pixels, 128, 128).map(u32::from);
+    assert!(
+        green > red + 20,
+        "selection breaks the depth order: red {red} green {green}"
+    );
+}
+
+#[test]
+fn shrinks_section_marker_disks_with_the_plane_offset() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = empty_volume();
+    let world = Vec3::from(volume.world_extent());
+    let voxel = Vec3::new(
+        volume.spacing().x(),
+        volume.spacing().y(),
+        volume.spacing().z(),
+    );
+    let mut camera = Camera::new(35.0);
+    camera.fit(world, 1.0);
+    let mut section = SectionCamera::new(Axis::Z);
+    section.fit(world, voxel, 1.0);
+    let markers = [Marker::new([0.0, 0.0, 0.0], 0.4, [1.0, 0.1, 0.1], 1.0)];
+    let mut counts = [0usize; 3];
+    for (slot, focus) in [0.0f32, -0.3, -0.9].into_iter().enumerate() {
+        let mut view = camera.clone();
+        view.set_focus_along(Axis::Z, focus);
+        let pixels = marker_scene(
+            &device,
+            &queue,
+            Job {
+                texture: &texture,
+                volume: &volume,
+                volume_region: CORNER,
+                section_region: WHOLE,
+                focus_z: 0.0,
+                mesh: None,
+            },
+            &view,
+            &section,
+            &markers,
+        );
+        counts[slot] = red_count(&pixels, SECTION_AREA);
+    }
+    assert!(counts[0] > 1500, "the centred marker disk is missing");
+    assert!(
+        counts[1] > 500 && counts[1] * 4 < counts[0] * 3,
+        "the marker disk does not shrink with the plane offset: {counts:?}"
+    );
+    assert_eq!(
+        counts[2], 0,
+        "a marker beyond its radius still marks the plane: {counts:?}"
+    );
+}
+
+#[test]
+fn reuses_the_cut_target_and_draws_each_cut_object_twice() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = empty_volume();
+    let pyramid = volume.pyramid();
+    let mesh = PackedMesh::new(cubes());
+    let styles = [
+        Style::new([1.0, 0.12, 0.12], true, false),
+        Style::new([0.12, 1.0, 0.12], true, false),
+    ];
+    let layers = [Layer {
+        key: LayerKey::at_frame(1, 0, 0, 1),
+        mesh: &mesh,
+        style_start: 0,
+        style_count: 2,
+    }];
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &styles,
+        layers: &layers,
+        markers: &[],
+    };
+    let camera = Camera::new(35.0);
+    let section = SectionCamera::new(Axis::Z);
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    let session = Session {
+        device: &device,
+        queue: &queue,
+        target: &view,
+        camera: &camera,
+        section: &section,
+        scene: &scene,
+        volume_region: CORNER,
+        section_region: WHOLE,
+        region: Region::none(),
+        time: 0,
+    };
+    for sample in 1..=SAMPLES {
+        let info = renderer.draw(&device, &queue, common::frame(&session));
+        assert_eq!(info.samples, sample, "the cut layer accumulates a sample");
+        assert_eq!(info.cut.targets, 1, "the cut target is built once");
+        assert_eq!(info.cut.objects, 2, "both objects cross the cut plane");
+        assert_eq!(
+            info.cut.draws,
+            2 * info.cut.objects + 2,
+            "each cut object costs two draws: one stencil pass and one fill"
+        );
+    }
+    let settled = renderer.draw(&device, &queue, common::frame(&session));
+    assert_eq!(settled.samples, SAMPLES, "accumulation stops at the limit");
+    assert_eq!(
+        settled.cut.objects, 0,
+        "a settled frame draws no cut object"
+    );
+    assert_eq!(settled.cut.draws, 0, "a settled frame draws no cut face");
+    assert_eq!(settled.cut.targets, 1, "the settled frame keeps the target");
+}
+
+#[test]
+fn exports_section_cut_faces_with_a_transparent_background() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = sphere(Extent::new(128, 128, 64), Spacing::new(0.1, 0.1, 0.2));
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let mut section = SectionCamera::new(Axis::Z);
+    section.fit(
+        Vec3::from(volume.world_extent()),
+        Vec3::new(0.1, 0.1, 0.2),
+        1.0,
+    );
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    let session = Session {
+        device: &device,
+        queue: &queue,
+        target: &view,
+        camera: &camera,
+        section: &section,
+        scene: &scene,
+        volume_region: CORNER,
+        section_region: WHOLE,
+        region: Region::none(),
+        time: 0,
+    };
+    settle(&mut renderer, session, |request| {
+        let grid = BrickGrid::new(volume.extent());
+        volume.brick(&grid, request.coord)
+    });
+    for _ in 0..SAMPLES {
+        renderer.draw(&device, &queue, common::frame(&session));
+    }
+    renderer.set_transparent(true);
+    renderer.draw(&device, &queue, common::frame(&session));
+    let clear = read_pixels(&device, &queue, &texture, SIDE);
+    let signal = pixel(&clear, SIDE / 2, SIDE / 2);
+    assert!(
+        signal[3] > 200,
+        "the section signal carries alpha in a transparent export: {signal:?}"
+    );
+    let empty = pixel(&clear, 30, 30);
+    assert_eq!(
+        empty[3], 0,
+        "the empty section carries no alpha in a transparent export: {empty:?}"
+    );
+    renderer.set_transparent(false);
+    renderer.draw(&device, &queue, common::frame(&session));
+    let opaque = read_pixels(&device, &queue, &texture, SIDE);
+    assert_eq!(
+        pixel(&opaque, 30, 30)[3],
+        255,
+        "an opaque export fills the section background"
+    );
+}
+
+#[test]
+fn needs_capped_geometry_to_fill_open_surfaces() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = empty_volume();
+    let styles = [Style::new([1.0, 0.12, 0.12], true, false)];
+    let open = PackedMesh::new(box_mesh(false));
+    let capped = PackedMesh::new(box_mesh(true));
+    let open_pixels = scene_render(
+        &device,
+        &queue,
+        Job {
+            texture: &texture,
+            volume: &volume,
+            volume_region: CORNER,
+            section_region: WHOLE,
+            focus_z: 0.0,
+            mesh: Some((&open, &styles)),
+        },
+    );
+    assert_eq!(
+        red_count(&open_pixels, SECTION_AREA),
+        0,
+        "an open surface fills its cut face without a cap"
+    );
+    let capped_pixels = scene_render(
+        &device,
+        &queue,
+        Job {
+            texture: &texture,
+            volume: &volume,
+            volume_region: CORNER,
+            section_region: WHOLE,
+            focus_z: 0.0,
+            mesh: Some((&capped, &styles)),
+        },
+    );
+    assert!(
+        red_count(&capped_pixels, SECTION_AREA) > 500,
+        "a capped surface does not fill its cut face"
     );
 }

@@ -6,9 +6,10 @@ use grana_ui::{
 use crate::panel::{card, card_title};
 use crate::state::State;
 use crate::widget;
-use grana_session::Command;
+use grana_session::{Command, Export};
 
 const WIDTHS: [u32; 4] = [1280, 1920, 2560, 3840];
+const IMAGE_WIDTHS: [u32; 5] = [0, 1280, 1920, 2560, 3840];
 const TRACK_HEIGHT: f32 = 62.0;
 
 pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
@@ -20,9 +21,8 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let selected = state.workspace.playback.selected;
     let fps = state.timeline.fps();
     let width = state.workspace.playback.width;
-    let size = state.workspace.movie_size;
-    let movie = state.io.movie;
-    let message = state.io.movie_message.clone();
+    let export = state.io.export;
+    let message = state.io.export_message.clone();
     let frames = state.io.frames;
     let interval = state.io.frame_interval;
     let timeline_frames = state.timeline.frames();
@@ -32,11 +32,35 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         .map_or(1, |sample| sample.time + 1);
     let gap = 14.0;
     let sheet_width = ui.available().x;
-    let export_width = 306.0;
+    let card_width = 306.0;
+    let width_key = ui.id("export.width");
+    let transparent_key = ui.id("export.transparent");
+    let image_width = ui
+        .value_of(width_key)
+        .map_or(0, |value| value.round() as u32);
+    let transparent = ui
+        .value_of(transparent_key)
+        .is_some_and(|value| value > 0.5);
+    let image_options = IMAGE_WIDTHS
+        .iter()
+        .map(|width| (*width, width_label(*width)))
+        .collect::<Vec<_>>();
+    let stage_width = (state.stage.section_rect().max.x - state.stage.volume_rect().min.x).max(1.0);
+    let stage_height = (state.stage.volume_rect().max.y - state.stage.volume_rect().min.y).max(1.0);
+    let resolved_width = if image_width == 0 {
+        (stage_width * ui.scale()).round() as u32
+    } else {
+        image_width
+    };
+    let movie_size = [
+        width,
+        even((width as f32 * stage_height / stage_width).round() as u32),
+    ];
+    state.workspace.movie_size = movie_size;
     ui.row(Block::row().gaps(gap).align(Align::Start), |ui| {
         ui.column(
             Block::column()
-                .width(Length::Fixed((sheet_width - gap - export_width).max(420.0)))
+                .width(Length::Fixed((sheet_width - gap - card_width).max(420.0)))
                 .gaps(10.0),
             |ui| {
                 card(ui, 8.0, |ui| {
@@ -92,11 +116,11 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         );
         ui.column(
             Block::column()
-                .width(Length::Fixed(export_width))
+                .width(Length::Fixed(card_width))
                 .gaps(10.0),
             |ui| {
                 card(ui, 8.0, |ui| {
-                    card_title(ui, Icon::Camera, "Movie", None);
+                    card_title(ui, Icon::Film, "Movie", None);
                     ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
                         widget::field_label(ui, "FPS");
                         if let Some(value) = widget::drag_value(ui, "fps", fps as f32, 0.5, 0) {
@@ -130,7 +154,10 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                             ui.theme().font(grana_ui::Level::Monospace),
                             ui.theme().palette.text_secondary,
                         );
-                        ui.text_style(&format!("{} × {}", size[0], size[1]), style);
+                        ui.text_style(
+                            &format!("{} × {}", movie_size[0], movie_size[1]),
+                            style,
+                        );
                     });
                     widget::caption(
                         ui,
@@ -140,14 +167,14 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                         ),
                     );
                     ui.separator();
-                    match movie {
+                    match export {
                         Some((frame, total)) => {
                             let fraction = frame as f32 / total.max(1) as f32;
                             widget::progress(ui, fraction, ui.available().x);
                             ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-                                widget::caption(ui, &format!("Rendering {frame} / {total}"));
+                                widget::caption(ui, &format!("Exporting {frame} / {total}"));
                                 if widget::button(ui, "cancel", "Cancel", Role::Quiet) {
-                                    commands.push(Command::CancelMovie);
+                                    commands.push(Command::CancelExport);
                                 }
                             });
                         }
@@ -172,17 +199,100 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                             }
                         }
                     }
-                    if let Some(message) = message {
-                        widget::weak(ui, &message);
-                    }
                     widget::weak(
                         ui,
-                        "Keyframes record the camera, section plane and time point. Motion eases through every keyframe.",
+                        "The movie shows the full viewport: the 3D volume, the section pane and the figure overlay.",
                     );
                 });
+                card(ui, 8.0, |ui| {
+                    card_title(ui, Icon::Camera, "Image", None);
+                    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
+                        widget::field_label(ui, "WIDTH");
+                        if let Some(value) = grana_ui::popover::combo(
+                            ui,
+                            "export.width",
+                            96.0,
+                            &image_options,
+                            Some(image_width),
+                        ) {
+                            ui.store_value(width_key, value as f32);
+                            commands.push(Command::SetExport(Export::new(value, transparent)));
+                        }
+                        let style = TextStyle::new(
+                            ui.theme().font(grana_ui::Level::Monospace),
+                            ui.theme().palette.text_secondary,
+                        );
+                        ui.text_style(&format!("{resolved_width} px"), style);
+                    });
+                    if let Some(value) = widget::toggle_row(
+                        ui,
+                        "export.transparent",
+                        "Transparent background",
+                        transparent,
+                    ) {
+                        ui.store_value(transparent_key, if value { 1.0 } else { 0.0 });
+                        commands.push(Command::SetExport(Export::new(image_width, value)));
+                    }
+                    ui.separator();
+                    let idle = export.is_none();
+                    if widget::button_with(
+                        ui,
+                        "save.image",
+                        "Save image",
+                        if idle { Role::Prominent } else { Role::Quiet },
+                        Length::Fill,
+                    )
+                    .clicked
+                        && idle
+                    {
+                        commands.push(Command::SaveSnapshot);
+                    }
+                    if widget::button_with(
+                        ui,
+                        "export.sequence",
+                        "Export sequence",
+                        if idle { Role::Control } else { Role::Quiet },
+                        Length::Fill,
+                    )
+                    .clicked
+                        && idle
+                        && frames > 0
+                    {
+                        commands.push(Command::ExportSequence(Export::new(
+                            image_width,
+                            transparent,
+                        )));
+                    }
+                    widget::caption(
+                        ui,
+                        &format!(
+                            "One PNG per time point · {frames} files · folder {}-sequence/ · names <stem>-<index>-t<time>.png",
+                            grana_session::slug(state.scene.dataset.name())
+                        ),
+                    );
+                });
+                if let Some(message) = message {
+                    widget::weak(ui, &message);
+                }
+                widget::weak(
+                    ui,
+                    "Keyframes record the camera, section plane and time point. Motion eases through every keyframe.",
+                );
             },
         );
     });
+}
+
+fn width_label(width: u32) -> String {
+    if width == 0 {
+        "Screen".to_string()
+    } else {
+        width.to_string()
+    }
+}
+
+fn even(value: u32) -> u32 {
+    (value.max(2) / 2) * 2
 }
 
 struct TrackResult {

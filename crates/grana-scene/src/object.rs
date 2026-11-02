@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use grana_analysis::{FilamentParams, Shape, SpotParams, SurfaceParams, TrackParams};
+use grana_analysis::{
+    FilamentParams, Shape, SpotParams, SurfaceFilter, SurfaceParams, TrackParams,
+};
 use grana_geometry::PackedMesh;
 use grana_measure::{Measurement, Objects};
 use grana_object::{FilamentSet, IntensityTable, Spot, SpotSet, SurfaceSet};
@@ -17,6 +19,10 @@ const SURFACE_THRESHOLD: f32 = 0.5;
 const SURFACE_GRAIN: f32 = 1.0;
 const SURFACE_SEED: f32 = 6.0;
 const SURFACE_MIN_VOLUME: f32 = 0.0;
+const SURFACE_OPENING: f32 = 0.0;
+const SURFACE_CLOSING: f32 = 0.0;
+const SURFACE_MIN_SPHERICITY: f32 = 0.0;
+const SURFACE_MIN_MEAN_INTENSITY: f32 = 0.0;
 const FILAMENT_THRESHOLD: f32 = 0.5;
 const FILAMENT_MIN_LENGTH: f32 = 2.0;
 
@@ -60,7 +66,7 @@ const SPOT_FIELDS: [ParamField; 2] = [
     },
 ];
 
-const SURFACE_FIELDS: [ParamField; 4] = [
+const SURFACE_FIELDS: [ParamField; SurfaceParams::FIELD_COUNT] = [
     ParamField {
         label: "threshold",
         suffix: "",
@@ -87,6 +93,34 @@ const SURFACE_FIELDS: [ParamField; 4] = [
         suffix: " µm³",
         minimum: ParamScale::Absolute(0.0),
         maximum: ParamScale::Absolute(200.0),
+        logarithmic: false,
+    },
+    ParamField {
+        label: "opening radius",
+        suffix: " µm",
+        minimum: ParamScale::Absolute(0.0),
+        maximum: ParamScale::Voxel(8.0),
+        logarithmic: false,
+    },
+    ParamField {
+        label: "closing radius",
+        suffix: " µm",
+        minimum: ParamScale::Absolute(0.0),
+        maximum: ParamScale::Voxel(8.0),
+        logarithmic: false,
+    },
+    ParamField {
+        label: "min sphericity",
+        suffix: "",
+        minimum: ParamScale::Absolute(0.0),
+        maximum: ParamScale::Absolute(1.0),
+        logarithmic: false,
+    },
+    ParamField {
+        label: "min mean intensity",
+        suffix: "",
+        minimum: ParamScale::Absolute(0.0),
+        maximum: ParamScale::Absolute(1.0),
         logarithmic: false,
     },
 ];
@@ -179,6 +213,12 @@ impl ObjectKind {
                 SURFACE_GRAIN * voxel,
                 SURFACE_SEED * voxel,
                 SURFACE_MIN_VOLUME,
+                SurfaceFilter::new(
+                    SURFACE_OPENING * voxel,
+                    SURFACE_CLOSING * voxel,
+                    SURFACE_MIN_SPHERICITY,
+                    SURFACE_MIN_MEAN_INTENSITY,
+                ),
             )),
             Self::Filaments => ObjectParams::Filaments(FilamentParams::new(
                 FILAMENT_THRESHOLD,

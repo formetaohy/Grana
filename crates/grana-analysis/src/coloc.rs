@@ -1,118 +1,106 @@
+mod scan;
+mod significance;
+
 use std::ops::Range;
 
-use grana_measure::{COLOC_BINS, COLOC_SCATTER, ColocFrame, ColocPair, ColocSeries};
-use grana_volume::{Intensity, Level, Region, VoxelData};
+use grana_volume::{Intensity, Level, Pyramid, Region};
 
-const TILE: [u32; 3] = [256, 256, 32];
-const SCATTER_SHIFT: usize = COLOC_BINS / COLOC_SCATTER;
+pub use scan::{ColocScan, ColocScanConfig};
+pub use significance::ColocPermutation;
 
-pub struct ColocScan {
-    pair: ColocPair,
-    ranges: [Range<u32>; 3],
-    counts: [usize; 3],
-    scales: [[f32; 2]; 2],
-    frames: Vec<ColocFrame>,
-    counts_a: Vec<u64>,
-    counts_b: Vec<u64>,
-    scatter: Vec<u64>,
+const SCAN_VOXELS: u64 = 1 << 22;
+const PERMUTATION_VOXELS: u64 = 1 << 17;
+const PERMUTATION_SAMPLES: u64 = 1 << 19;
+const PERMUTATION_FLOOR: u64 = 1 << 15;
+const PERMUTATION_FRAMES: u32 = 8;
+const PERMUTATION_DEPTH: usize = 2;
+
+pub struct ColocLevels {
+    scan: usize,
+    permutation: usize,
+    stride: u32,
+    frames: Vec<u32>,
 }
 
-impl ColocScan {
-    pub fn new(
-        level: Level,
-        frames: u32,
-        channels: usize,
-        intensities: [Intensity; 2],
-        pair: ColocPair,
-        region: Region,
-    ) -> Self {
-        assert!(
-            pair.a() < channels && pair.b() < channels,
-            "a colocalization pair names two channels of the dataset"
+impl ColocLevels {
+    pub fn scan(&self) -> usize {
+        self.scan
+    }
+
+    pub fn permutation(&self) -> usize {
+        self.permutation
+    }
+
+    pub fn stride(&self) -> u32 {
+        self.stride
+    }
+
+    pub fn frames(&self) -> &[u32] {
+        &self.frames
+    }
+}
+
+pub fn coloc_levels(pyramid: &Pyramid, region: Region, frames: u32) -> ColocLevels {
+    assert!(frames > 0, "a colocalization scan covers a frame");
+    let levels = (0..pyramid.level_count())
+        .filter_map(|index| voxels(region, pyramid.level(index)).map(|voxels| (index, voxels)))
+        .collect::<Vec<_>>();
+    assert!(
+        !levels.is_empty(),
+        "the colocalization region overlaps the dataset"
+    );
+    let scan = levels
+        .iter()
+        .find(|(_, count)| *count <= SCAN_VOXELS)
+        .map_or_else(
+            || levels.last().expect("the scan level exists").0,
+            |(index, _)| *index,
         );
-        assert!(frames > 0, "a colocalization scan covers a frame");
-        let Some(ranges) = region.voxel_range(level) else {
-            panic!("the colocalization region overlaps the dataset");
-        };
-        let counts = [0, 1, 2].map(|axis| {
-            let (start, end) = (ranges[axis].start, ranges[axis].end);
-            ((end - start).div_ceil(TILE[axis])) as usize
-        });
-        let scales = intensities.map(|intensity| {
-            let span = intensity.span();
-            if span > 0.0 {
-                [intensity.min(), 1.0 / span]
-            } else {
-                [intensity.min(), 0.0]
-            }
-        });
-        Self {
-            pair,
-            ranges,
-            counts,
-            scales,
-            frames: (0..frames).map(|_| ColocFrame::new()).collect(),
-            counts_a: vec![0; COLOC_BINS],
-            counts_b: vec![0; COLOC_BINS],
-            scatter: vec![0; COLOC_SCATTER * COLOC_SCATTER],
-        }
-    }
-
-    pub fn pair(&self) -> ColocPair {
-        self.pair
-    }
-
-    pub fn tile_count(&self) -> usize {
-        self.counts[0] * self.counts[1] * self.counts[2]
-    }
-
-    pub fn tile(&self, index: usize) -> [Range<u32>; 3] {
-        assert!(index < self.tile_count(), "the tile index lies on the grid");
-        let x = index % self.counts[0];
-        let y = (index / self.counts[0]) % self.counts[1];
-        let z = index / (self.counts[0] * self.counts[1]);
-        [0, 1, 2].map(|axis| {
-            let offset = [x, y, z][axis] as u32 * TILE[axis];
-            let start = self.ranges[axis].start + offset;
-            start..(start + TILE[axis]).min(self.ranges[axis].end)
-        })
-    }
-
-    pub fn add(&mut self, time: u32, index: usize, a: &VoxelData, b: &VoxelData) {
-        let tile = self.tile(index);
-        let voxels = [0, 1, 2]
-            .map(|axis| (tile[axis].end - tile[axis].start) as usize)
+    let limit = scan.saturating_add(PERMUTATION_DEPTH);
+    let candidates = levels
+        .iter()
+        .copied()
+        .filter(|(index, _)| *index >= scan && *index <= limit)
+        .collect::<Vec<_>>();
+    let mut permutation = candidates
+        .iter()
+        .filter(|(_, count)| *count <= PERMUTATION_VOXELS)
+        .map(|(index, _)| *index)
+        .max()
+        .unwrap_or_else(|| candidates.last().expect("the permutation level exists").0);
+    loop {
+        let ranges = region
+            .voxel_range(pyramid.level(permutation))
+            .expect("the permutation level carries the colocalization region");
+        let lengths = ranges.map(|range| range.end - range.start);
+        let wanted = frames.min(PERMUTATION_FRAMES);
+        let budget = (PERMUTATION_SAMPLES / u64::from(wanted)).max(1);
+        let mut stride = 1u32;
+        let mut sampled = lengths
             .iter()
-            .product::<usize>();
-        assert!(
-            a.voxel_count() == voxels && b.voxel_count() == voxels,
-            "a colocalization tile carries both channels voxel for voxel"
-        );
-        let frame = &mut self.frames[time as usize];
-        for voxel in 0..voxels {
-            let a = unit(self.scales[0], a.value(voxel));
-            let b = unit(self.scales[1], b.value(voxel));
-            let bin_a = bin(a);
-            let bin_b = bin(b);
-            frame.push(a, b);
-            self.counts_a[bin_a] += 1;
-            self.counts_b[bin_b] += 1;
-            self.scatter[(bin_a / SCATTER_SHIFT) + COLOC_SCATTER * (bin_b / SCATTER_SHIFT)] += 1;
+            .map(|length| u64::from(*length))
+            .product::<u64>();
+        while sampled > budget {
+            stride += 1;
+            sampled = lengths
+                .iter()
+                .map(|length| u64::from(length.div_ceil(stride)))
+                .product::<u64>();
         }
-    }
-
-    pub fn finish(self) -> ColocSeries {
-        ColocSeries::new(
-            self.pair,
-            self.frames,
-            self.counts_a,
-            self.counts_b,
-            self.scatter,
-        )
+        let sampled_frames = (PERMUTATION_SAMPLES / sampled).clamp(1, u64::from(wanted)) as u32;
+        if sampled * u64::from(sampled_frames) >= PERMUTATION_FLOOR || permutation == scan {
+            return ColocLevels {
+                scan,
+                permutation,
+                stride,
+                frames: sample_frames(frames, sampled_frames),
+            };
+        }
+        permutation -= 1;
     }
 }
 
-fn unit(scale: [f32; 2], value: f32) -> f32 {
+pub(super) fn unit(scale: [f32; 2], value: f32) -> f32 {
     if value.is_finite() {
         ((value - scale[0]) * scale[1]).clamp(0.0, 1.0)
     } else {
@@ -120,6 +108,33 @@ fn unit(scale: [f32; 2], value: f32) -> f32 {
     }
 }
 
-fn bin(unit: f32) -> usize {
-    ((unit * COLOC_BINS as f32) as usize).min(COLOC_BINS - 1)
+pub(super) fn scale(intensity: Intensity) -> [f32; 2] {
+    let span = intensity.span();
+    if span > 0.0 {
+        [intensity.min(), 1.0 / span]
+    } else {
+        [intensity.min(), 0.0]
+    }
+}
+
+fn voxels(region: Region, level: Level) -> Option<u64> {
+    region.voxel_range(level).map(|ranges: [Range<u32>; 3]| {
+        ranges
+            .iter()
+            .map(|range| u64::from(range.end - range.start))
+            .product()
+    })
+}
+
+fn sample_frames(frames: u32, count: u32) -> Vec<u32> {
+    assert!(
+        count > 0 && count <= frames,
+        "a colocalization significance test samples frames of the dataset"
+    );
+    if count == 1 {
+        return vec![0];
+    }
+    (0..count)
+        .map(|index| ((u64::from(frames - 1) * u64::from(index)) / u64::from(count - 1)) as u32)
+        .collect()
 }

@@ -1,7 +1,13 @@
 use crate::correlation::Pearson;
 
-pub const COLOC_BINS: usize = 1024;
-pub const COLOC_SCATTER: usize = 128;
+mod threshold;
+
+pub const COLOC_BINS_MIN: usize = 32;
+pub const COLOC_BINS_MAX: usize = 512;
+pub const COLOC_PERMUTATIONS_DEFAULT: u32 = 200;
+pub const COLOC_PERMUTATIONS_MAX: u32 = 2000;
+pub const COLOC_BLOCK_DEFAULT: u32 = 3;
+pub const COLOC_BLOCK_MAX: u32 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ColocPair {
@@ -47,9 +53,221 @@ impl ColocThresholds {
         self.b
     }
 
-    fn bins(self) -> [usize; 2] {
-        [self.a, self.b]
-            .map(|threshold| ((threshold * COLOC_BINS as f32) as usize).min(COLOC_BINS - 1))
+    fn cuts(self, bins: usize) -> [usize; 2] {
+        assert!(
+            bins > 0,
+            "a colocalization histogram holds at least one bin"
+        );
+        [self.a, self.b].map(|threshold| ((threshold * bins as f32) as usize).min(bins - 1))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColocThresholdRange {
+    low: ColocThresholds,
+    high: ColocThresholds,
+}
+
+impl ColocThresholdRange {
+    pub fn new(low: ColocThresholds, high: ColocThresholds) -> Self {
+        assert!(
+            low.a() <= high.a() && low.b() <= high.b(),
+            "a colocalization threshold range grows with its thresholds"
+        );
+        Self { low, high }
+    }
+
+    pub fn low(self) -> ColocThresholds {
+        self.low
+    }
+
+    pub fn high(self) -> ColocThresholds {
+        self.high
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColocSettings {
+    permutations: u32,
+    block: u32,
+}
+
+impl ColocSettings {
+    pub fn new(permutations: u32, block: u32) -> Self {
+        assert!(
+            (1..=COLOC_PERMUTATIONS_MAX).contains(&permutations),
+            "a colocalization significance test runs between one and the maximum number of permutations"
+        );
+        assert!(
+            (1..=COLOC_BLOCK_MAX).contains(&block),
+            "a colocalization randomization block spans a supported number of voxels"
+        );
+        Self {
+            permutations,
+            block,
+        }
+    }
+
+    pub fn permutations(self) -> u32 {
+        self.permutations
+    }
+
+    pub fn block(self) -> u32 {
+        self.block
+    }
+}
+
+impl Default for ColocSettings {
+    fn default() -> Self {
+        Self::new(COLOC_PERMUTATIONS_DEFAULT, COLOC_BLOCK_DEFAULT)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColocSeriesInfo {
+    level: usize,
+    permutation_level: usize,
+    permutation_stride: u32,
+    mask: Option<u64>,
+}
+
+impl ColocSeriesInfo {
+    pub fn new(
+        level: usize,
+        permutation_level: usize,
+        permutation_stride: u32,
+        mask: Option<u64>,
+    ) -> Self {
+        assert!(
+            permutation_level >= level,
+            "a colocalization significance test samples a coarser level than its scan"
+        );
+        assert!(
+            permutation_stride > 0,
+            "a colocalization significance test samples a positive stride"
+        );
+        Self {
+            level,
+            permutation_level,
+            permutation_stride,
+            mask,
+        }
+    }
+
+    pub fn level(self) -> usize {
+        self.level
+    }
+
+    pub fn permutation_level(self) -> usize {
+        self.permutation_level
+    }
+
+    pub fn permutation_stride(self) -> u32 {
+        self.permutation_stride
+    }
+
+    pub fn mask(self) -> Option<u64> {
+        self.mask
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColocSignificance {
+    p: f64,
+    randomizations: u32,
+    permutation_pearson: f64,
+}
+
+impl ColocSignificance {
+    pub fn new(p: f64, randomizations: u32, permutation_pearson: f64) -> Self {
+        assert!(
+            p.is_finite() && (0.0..=1.0).contains(&p),
+            "a permutation p value is a probability"
+        );
+        assert!(
+            randomizations > 0,
+            "a permutation test runs at least one randomization"
+        );
+        assert!(
+            permutation_pearson.is_finite() && (-1.0..=1.0).contains(&permutation_pearson),
+            "a permutation test compares Pearson coefficients"
+        );
+        Self {
+            p,
+            randomizations,
+            permutation_pearson,
+        }
+    }
+
+    pub fn p(self) -> f64 {
+        self.p
+    }
+
+    pub fn randomizations(self) -> u32 {
+        self.randomizations
+    }
+
+    pub fn permutation_pearson(self) -> f64 {
+        self.permutation_pearson
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColocCost {
+    scan_voxels: u64,
+    permutation_voxels: u64,
+    permutation_frames: u32,
+    randomizations: u32,
+    blocks: u64,
+}
+
+impl ColocCost {
+    pub fn new(
+        scan_voxels: u64,
+        permutation_voxels: u64,
+        permutation_frames: u32,
+        randomizations: u32,
+        blocks: u64,
+    ) -> Self {
+        assert!(
+            scan_voxels > 0,
+            "a colocalization scan visits at least one voxel"
+        );
+        assert!(
+            permutation_voxels > 0 && permutation_frames > 0 && blocks > 0,
+            "a colocalization significance test samples blocks of voxels"
+        );
+        assert!(
+            (1..=COLOC_PERMUTATIONS_MAX).contains(&randomizations),
+            "a colocalization significance test runs a supported number of permutations"
+        );
+        Self {
+            scan_voxels,
+            permutation_voxels,
+            permutation_frames,
+            randomizations,
+            blocks,
+        }
+    }
+
+    pub fn scan_voxels(self) -> u64 {
+        self.scan_voxels
+    }
+
+    pub fn permutation_voxels(self) -> u64 {
+        self.permutation_voxels
+    }
+
+    pub fn permutation_frames(self) -> u32 {
+        self.permutation_frames
+    }
+
+    pub fn randomizations(self) -> u32 {
+        self.randomizations
+    }
+
+    pub fn blocks(self) -> u64 {
+        self.blocks
     }
 }
 
@@ -101,6 +319,7 @@ pub struct ColocStatistics {
     pearson: Option<f64>,
     overlap: Option<f64>,
     manders: [Option<f64>; 2],
+    significance: Option<ColocSignificance>,
 }
 
 impl ColocStatistics {
@@ -119,6 +338,10 @@ impl ColocStatistics {
     pub fn manders(self) -> [Option<f64>; 2] {
         self.manders
     }
+
+    pub fn significance(self) -> Option<ColocSignificance> {
+        self.significance
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -129,24 +352,29 @@ pub struct ColocFrame {
 }
 
 impl ColocFrame {
-    pub fn new() -> Self {
+    pub fn new(bins: usize) -> Self {
+        assert!(bins > 0, "a colocalization frame holds intensity bins");
         Self {
             moments: ColocMoments::default(),
-            a_by_b: vec![0.0; COLOC_BINS],
-            b_by_a: vec![0.0; COLOC_BINS],
+            a_by_b: vec![0.0; bins],
+            b_by_a: vec![0.0; bins],
         }
     }
 
     pub fn from_parts(moments: ColocMoments, a_by_b: Vec<f64>, b_by_a: Vec<f64>) -> Self {
         assert!(
-            a_by_b.len() == COLOC_BINS && b_by_a.len() == COLOC_BINS,
-            "a colocalization frame carries one sum per intensity bin"
+            !a_by_b.is_empty() && a_by_b.len() == b_by_a.len(),
+            "a colocalization frame carries one sum per intensity bin and channel"
         );
         Self {
             moments,
             a_by_b,
             b_by_a,
         }
+    }
+
+    pub fn bins(&self) -> usize {
+        self.a_by_b.len()
     }
 
     pub fn moments(&self) -> ColocMoments {
@@ -162,14 +390,19 @@ impl ColocFrame {
     }
 
     pub fn push(&mut self, a: f32, b: f32) {
-        let bin_a = bin(a);
-        let bin_b = bin(b);
+        let bins = self.bins();
+        let bin_a = bin(a, bins);
+        let bin_b = bin(b, bins);
         self.moments.push(f64::from(a), f64::from(b));
         self.a_by_b[bin_b] += f64::from(a);
         self.b_by_a[bin_a] += f64::from(b);
     }
 
     pub fn merge(&mut self, other: &Self) {
+        assert!(
+            self.bins() == other.bins(),
+            "colocalization frames merge at one bin resolution"
+        );
         self.moments.merge(&other.moments);
         for (target, source) in self.a_by_b.iter_mut().zip(&other.a_by_b) {
             *target += source;
@@ -180,7 +413,7 @@ impl ColocFrame {
     }
 
     pub fn statistics(&self, thresholds: ColocThresholds) -> ColocStatistics {
-        let [cut_a, cut_b] = thresholds.bins();
+        let [cut_a, cut_b] = thresholds.cuts(self.bins());
         let [a_mass, b_mass, ..] = self.moments.sums();
         let first = (a_mass > 0.0).then(|| (above(&self.a_by_b, cut_b) / a_mass).clamp(0.0, 1.0));
         let second = (b_mass > 0.0).then(|| (above(&self.b_by_a, cut_a) / b_mass).clamp(0.0, 1.0));
@@ -189,69 +422,116 @@ impl ColocFrame {
             pearson: self.moments.pearson(),
             overlap: self.moments.overlap(),
             manders: [first, second],
+            significance: None,
         }
     }
 }
 
 impl Default for ColocFrame {
     fn default() -> Self {
-        Self::new()
+        Self::new(1)
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColocSeries {
     pair: ColocPair,
+    info: ColocSeriesInfo,
+    bins: usize,
     frames: Vec<ColocFrame>,
-    counts_a: Vec<u64>,
-    counts_b: Vec<u64>,
-    scatter: Vec<u64>,
+    joint: Vec<u64>,
     total: ColocFrame,
+    significance: Option<ColocSignificance>,
+    costes: Option<ColocThresholdRange>,
+    cost: ColocCost,
 }
 
 impl ColocSeries {
-    pub fn new(
+    pub fn from_parts(
         pair: ColocPair,
+        info: ColocSeriesInfo,
+        bins: usize,
         frames: Vec<ColocFrame>,
-        counts_a: Vec<u64>,
-        counts_b: Vec<u64>,
-        scatter: Vec<u64>,
+        joint: Vec<u64>,
+        significance: Option<ColocSignificance>,
+        cost: ColocCost,
     ) -> Self {
-        let mut total = ColocFrame::new();
+        assert!(!frames.is_empty(), "a colocalization series covers a frame");
+        assert!(
+            (COLOC_BINS_MIN..=COLOC_BINS_MAX).contains(&bins),
+            "a colocalization series bins intensities within the supported range"
+        );
+        assert!(
+            joint.len() == bins * bins,
+            "a colocalization series maps the square scatter grid"
+        );
+        assert!(
+            frames.iter().all(|frame| frame.bins() == bins),
+            "a colocalization series bins every frame at one resolution"
+        );
+        let mut total = ColocFrame::new(bins);
         for frame in &frames {
             total.merge(frame);
         }
-        Self::from_parts(pair, frames, counts_a, counts_b, scatter, total)
-    }
-
-    pub fn from_parts(
-        pair: ColocPair,
-        frames: Vec<ColocFrame>,
-        counts_a: Vec<u64>,
-        counts_b: Vec<u64>,
-        scatter: Vec<u64>,
-        total: ColocFrame,
-    ) -> Self {
+        let voxels = total.moments().voxels();
         assert!(
-            counts_a.len() == COLOC_BINS && counts_b.len() == COLOC_BINS,
-            "a colocalization series counts every intensity bin"
+            voxels > 0,
+            "a colocalization series covers at least one voxel"
         );
         assert!(
-            scatter.len() == COLOC_SCATTER * COLOC_SCATTER,
-            "a colocalization series maps the square scatter grid"
+            joint.iter().sum::<u64>() == voxels,
+            "a colocalization series scatters every scanned voxel"
         );
+        assert!(
+            cost.scan_voxels() == voxels,
+            "a colocalization cost counts the voxels of its series"
+        );
+        if let Some(significance) = significance {
+            assert!(
+                significance.randomizations() == cost.randomizations(),
+                "a colocalization cost counts the randomizations of its significance test"
+            );
+        }
+        let costes = threshold::costes(bins, &joint, total.moments());
         Self {
             pair,
+            info,
+            bins,
             frames,
-            counts_a,
-            counts_b,
-            scatter,
+            joint,
             total,
+            significance,
+            costes,
+            cost,
         }
     }
 
     pub fn pair(&self) -> ColocPair {
         self.pair
+    }
+
+    pub fn info(&self) -> ColocSeriesInfo {
+        self.info
+    }
+
+    pub fn level(&self) -> usize {
+        self.info.level()
+    }
+
+    pub fn permutation_level(&self) -> usize {
+        self.info.permutation_level()
+    }
+
+    pub fn permutation_stride(&self) -> u32 {
+        self.info.permutation_stride()
+    }
+
+    pub fn mask(&self) -> Option<u64> {
+        self.info.mask()
+    }
+
+    pub fn bins(&self) -> usize {
+        self.bins
     }
 
     pub fn frames(&self) -> &[ColocFrame] {
@@ -262,32 +542,38 @@ impl ColocSeries {
         self.frames.get(time as usize)
     }
 
-    pub fn counts_a(&self) -> &[u64] {
-        &self.counts_a
+    pub fn joint(&self) -> &[u64] {
+        &self.joint
     }
 
-    pub fn counts_b(&self) -> &[u64] {
-        &self.counts_b
-    }
-
-    pub fn scatter(&self) -> &[u64] {
-        &self.scatter
+    pub fn joint_at(&self, a: usize, b: usize) -> u64 {
+        assert!(
+            a < self.bins && b < self.bins,
+            "the scatter cell lies on the grid"
+        );
+        self.joint[a + self.bins * b]
     }
 
     pub fn total(&self) -> &ColocFrame {
         &self.total
     }
 
-    pub fn scatter_at(&self, a: usize, b: usize) -> u64 {
-        assert!(
-            a < COLOC_SCATTER && b < COLOC_SCATTER,
-            "the scatter cell lies on the grid"
-        );
-        self.scatter[a + COLOC_SCATTER * b]
+    pub fn significance(&self) -> Option<ColocSignificance> {
+        self.significance
+    }
+
+    pub fn costes(&self) -> Option<ColocThresholdRange> {
+        self.costes
+    }
+
+    pub fn cost(&self) -> ColocCost {
+        self.cost
     }
 
     pub fn statistics(&self, thresholds: ColocThresholds) -> ColocStatistics {
-        self.total.statistics(thresholds)
+        let mut statistics = self.total.statistics(thresholds);
+        statistics.significance = self.significance;
+        statistics
     }
 
     pub fn frame_statistics(
@@ -299,11 +585,14 @@ impl ColocSeries {
     }
 
     pub fn otsu(&self) -> ColocThresholds {
-        ColocThresholds::new(otsu(&self.counts_a), otsu(&self.counts_b))
+        let (counts_a, counts_b) = self.marginals();
+        ColocThresholds::new(otsu(&counts_a), otsu(&counts_b))
     }
 
     pub fn csv(&self, thresholds: ColocThresholds) -> String {
-        let mut text = String::from("scope,frame,voxels,pearson,overlap,manders_a,manders_b\n");
+        let mut text = String::from(
+            "scope,frame,voxels,pearson,overlap,manders_a,manders_b,p,randomizations\n",
+        );
         let mut rows = vec![(
             "series".to_string(),
             String::new(),
@@ -316,9 +605,17 @@ impl ColocSeries {
                 frame.statistics(thresholds),
             ));
         }
+        let randomizations = self
+            .significance
+            .map(|significance| significance.randomizations().to_string())
+            .unwrap_or_default();
         for (scope, frame, statistics) in rows {
+            let p = statistics
+                .significance
+                .map(|significance| format!("{:.6}", significance.p()))
+                .unwrap_or_default();
             text.push_str(&format!(
-                "{scope},{frame},{},{},{},{},{}\n",
+                "{scope},{frame},{},{},{},{},{},{p},{randomizations}\n",
                 statistics.voxels(),
                 option(statistics.pearson()),
                 option(statistics.overlap()),
@@ -328,10 +625,23 @@ impl ColocSeries {
         }
         text
     }
+
+    fn marginals(&self) -> (Vec<u64>, Vec<u64>) {
+        let mut counts_a = vec![0; self.bins];
+        let mut counts_b = vec![0; self.bins];
+        for (b, count_b) in counts_b.iter_mut().enumerate() {
+            for (a, count_a) in counts_a.iter_mut().enumerate() {
+                let count = self.joint[a + self.bins * b];
+                *count_a += count;
+                *count_b += count;
+            }
+        }
+        (counts_a, counts_b)
+    }
 }
 
-fn bin(unit: f32) -> usize {
-    ((unit.clamp(0.0, 1.0) * COLOC_BINS as f32) as usize).min(COLOC_BINS - 1)
+fn bin(unit: f32, bins: usize) -> usize {
+    ((unit.clamp(0.0, 1.0) * bins as f32) as usize).min(bins - 1)
 }
 
 fn above(sums: &[f64], cut: usize) -> f64 {

@@ -39,8 +39,8 @@ pub struct IoView<'a> {
     pub pending: usize,
     pub frames: u32,
     pub frame_interval: f32,
-    pub movie: Option<(u32, u32)>,
-    pub movie_message: Option<String>,
+    pub export: Option<(u32, u32)>,
+    pub export_message: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

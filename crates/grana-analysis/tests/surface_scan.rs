@@ -1,12 +1,22 @@
 use std::f64::consts::PI;
 
 use glam::Vec3;
-use grana_analysis::{SurfaceBuilder, SurfaceParams};
+use grana_analysis::{SurfaceBuilder, SurfaceFilter, SurfaceParams};
 use grana_object::SurfaceSet;
 use grana_volume::{Channel, Extent, Intensity, Level, Region, Spacing, Volume, VoxelData};
 
 const HIGH: u16 = 65_535;
 const MARKER: u16 = 7;
+
+fn params(threshold: f32) -> SurfaceParams {
+    SurfaceParams::new(
+        threshold,
+        0.0,
+        0.0,
+        0.0,
+        SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+    )
+}
 
 #[test]
 fn extracts_measured_surfaces() {
@@ -17,11 +27,7 @@ fn extracts_measured_surfaces() {
     let threshold = 0.5;
     let channels = volume.channel_count();
 
-    let set = extract(
-        &volume,
-        SurfaceParams::new(threshold, 0.0, 0.0, 0.0),
-        Region::none(),
-    );
+    let set = extract(&volume, params(threshold), Region::none());
     assert_eq!(set.object_count(), centres.len(), "each blob is one object");
     assert!(!set.geometry().is_empty(), "the mesh holds triangles");
     assert_eq!(set.intensities().channels(), channels);
@@ -83,7 +89,13 @@ fn extracts_measured_surfaces() {
 
     let filtered = extract(
         &volume,
-        SurfaceParams::new(threshold, 0.0, 0.0, (1.5 * expected_volume) as f32),
+        SurfaceParams::new(
+            threshold,
+            0.0,
+            0.0,
+            (1.5 * expected_volume) as f32,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        ),
         Region::none(),
     );
     assert!(
@@ -94,7 +106,13 @@ fn extracts_measured_surfaces() {
 
     let smoothed = extract(
         &volume,
-        SurfaceParams::new(threshold, 0.1, 0.0, 0.0),
+        SurfaceParams::new(
+            threshold,
+            0.1,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        ),
         Region::none(),
     );
     assert_eq!(
@@ -112,11 +130,7 @@ fn extracts_measured_surfaces() {
     }
 
     let region = Region::new(Vec3::new(-6.0, -4.8, -7.2), Vec3::new(0.5, 4.8, 7.2));
-    let restricted = extract(
-        &volume,
-        SurfaceParams::new(threshold, 0.0, 0.0, 0.0),
-        region,
-    );
+    let restricted = extract(&volume, params(threshold), region);
     assert_eq!(
         restricted.object_count(),
         1,
@@ -139,17 +153,13 @@ fn splits_touching_lobes_at_their_neck() {
     let centres = [[86.5f32, 40.0, 40.0], [105.5, 40.0, 40.0]];
     let volume = blobs(extent, &[0.1, 0.1, 0.1], &centres, radius);
 
-    let merged = extract(
-        &volume,
-        SurfaceParams::new(0.5, 0.0, 0.0, 0.0),
-        Region::none(),
-    );
+    let merged = extract(&volume, params(0.5), Region::none());
     assert_eq!(merged.object_count(), 1, "touching lobes form one object");
     let total = merged.objects()[0].voxel_count();
 
     let split = extract(
         &volume,
-        SurfaceParams::new(0.5, 0.0, 0.6, 0.0),
+        SurfaceParams::new(0.5, 0.0, 0.6, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
         Region::none(),
     );
     assert_eq!(
@@ -187,7 +197,7 @@ fn splits_touching_lobes_at_their_neck() {
 
     let coarse = extract(
         &volume,
-        SurfaceParams::new(0.5, 0.0, 2.4, 0.0),
+        SurfaceParams::new(0.5, 0.0, 2.4, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
         Region::none(),
     );
     assert_eq!(
@@ -197,21 +207,222 @@ fn splits_touching_lobes_at_their_neck() {
     );
 }
 
+#[test]
+fn detects_objects_on_an_uneven_background() {
+    let extent = Extent::new(240, 80, 80);
+    let centres = [[60.0f32, 40.0, 40.0], [190.0, 40.0, 40.0]];
+    let volume = illuminated(extent, &[0.1, 0.1, 0.1], &centres, 10.0, 0.2, 0.8, 0.35);
+    let set = extract(&volume, params(0.25), Region::none());
+    assert_eq!(
+        set.object_count(),
+        centres.len(),
+        "every blob survives the illumination ramp"
+    );
+    let expected = 4.0 / 3.0 * PI * 10.0f64.powi(3);
+    for object in set.objects() {
+        let relative = (object.voxel_count() as f64 - expected).abs() / expected;
+        assert!(
+            relative < 0.1,
+            "a blob under the ramp holds {} voxels against {expected}",
+            object.voxel_count()
+        );
+    }
+}
+
+#[test]
+fn fills_cavities_enclosed_by_a_surface() {
+    let extent = Extent::new(96, 96, 96);
+    let volume = shell(extent, &[0.1, 0.1, 0.1], [48.0, 48.0, 48.0], 20.0, 10.0);
+    let set = extract(&volume, params(0.5), Region::none());
+    assert_eq!(set.object_count(), 1, "the shell is one object");
+    let expected = 4.0 / 3.0 * PI * 20.0f64.powi(3);
+    let relative = (set.objects()[0].voxel_count() as f64 - expected).abs() / expected;
+    assert!(
+        relative < 0.05,
+        "the cavity is filled: {} voxels against {expected}",
+        set.objects()[0].voxel_count()
+    );
+}
+
+#[test]
+fn fills_a_cavity_spanning_tiles() {
+    let extent = Extent::new(240, 140, 140);
+    let volume = shell(extent, &[0.1, 0.1, 0.1], [120.0, 70.0, 70.0], 45.0, 30.0);
+    let set = extract(
+        &volume,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.01, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
+        Region::none(),
+    );
+    assert_eq!(set.object_count(), 1, "the shell stays one object");
+    let expected = 4.0 / 3.0 * PI * 45.0f64.powi(3);
+    assert!(
+        watertight(&set),
+        "the cross tile surface is watertight on every axis"
+    );
+    let relative = (set.objects()[0].voxel_count() as f64 - expected).abs() / expected;
+    assert!(
+        relative < 0.05,
+        "the cross tile cavity is filled: {} voxels against {expected}",
+        set.objects()[0].voxel_count()
+    );
+}
+
+fn watertight(set: &SurfaceSet) -> bool {
+    let geometry = set.geometry();
+    for (object, group) in geometry.groups().iter().enumerate() {
+        let mut edges: std::collections::HashMap<([u32; 3], [u32; 3]), u32> =
+            std::collections::HashMap::new();
+        for index in 0..group.index_count() as usize / 3 {
+            let corners = geometry
+                .triangle(object, index)
+                .map(|point| point.map(f32::to_bits));
+            for pair in [[0usize, 1usize], [1, 2], [2, 0]] {
+                let first = corners[pair[0]];
+                let second = corners[pair[1]];
+                assert_ne!(first, second, "a triangle edge holds a positive length");
+                let key = if first < second {
+                    (first, second)
+                } else {
+                    (second, first)
+                };
+                *edges.entry(key).or_insert(0) += 1;
+            }
+        }
+        if edges.values().any(|count| *count != 2) {
+            return false;
+        }
+    }
+    true
+}
+
+#[test]
+fn detects_dim_objects_under_a_scattering_step() {
+    let extent = Extent::new(320, 96, 96);
+    let centres = [[60.0f32, 48.0, 48.0], [260.0, 48.0, 48.0]];
+    let volume = scattering(extent, &[0.1, 0.1, 0.1], &centres, 10.0);
+    let set = extract(&volume, params(0.25), Region::none());
+    assert_eq!(
+        set.object_count(),
+        centres.len(),
+        "the scattering step neither floods nor hides the dim objects"
+    );
+    let expected = 4.0 / 3.0 * PI * 10.0f64.powi(3);
+    for object in set.objects() {
+        let relative = (object.voxel_count() as f64 - expected).abs() / expected;
+        assert!(
+            relative < 0.15,
+            "a dim object holds {} voxels against {expected}",
+            object.voxel_count()
+        );
+    }
+}
+
+#[test]
+fn keeps_dim_objects_beside_a_saturated_block() {
+    let extent = Extent::new(192, 128, 128);
+    let volume = saturated(extent, &[0.1, 0.1, 0.1]);
+    let set = extract(&volume, params(0.5), Region::none());
+    assert_eq!(
+        set.object_count(),
+        2,
+        "the bright plateau and the dim object are both objects"
+    );
+    let mut volumes = set
+        .objects()
+        .iter()
+        .map(|object| object.voxel_count())
+        .collect::<Vec<_>>();
+    volumes.sort_unstable();
+    let expected = 4.0 / 3.0 * PI * 8.0f64.powi(3);
+    let relative = (volumes[0] as f64 - expected).abs() / expected;
+    assert!(
+        relative < 0.2,
+        "the dim object holds {} voxels against {expected}",
+        volumes[0]
+    );
+}
+
+#[test]
+fn removes_noise_and_seals_cracks_with_morphology() {
+    let extent = Extent::new(160, 96, 96);
+    let volume = bridged(extent, &[0.1, 0.1, 0.1]);
+    let coarse = extract(&volume, params(0.5), Region::none());
+    assert_eq!(
+        coarse.object_count(),
+        3,
+        "the spheres and the noise speck are separate objects"
+    );
+    let opened = extract(
+        &volume,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.0, SurfaceFilter::new(0.2, 0.0, 0.0, 0.0)),
+        Region::none(),
+    );
+    assert_eq!(opened.object_count(), 2, "opening removes the noise speck");
+    let sealed = extract(
+        &volume,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.0, SurfaceFilter::new(0.2, 0.2, 0.0, 0.0)),
+        Region::none(),
+    );
+    assert_eq!(
+        sealed.object_count(),
+        1,
+        "closing seals the one voxel crack"
+    );
+}
+
+#[test]
+fn filters_objects_by_shape_and_intensity() {
+    let extent = Extent::new(240, 120, 120);
+    let volume = mixed(extent, &[0.1, 0.1, 0.1]);
+    let set = extract(&volume, params(0.25), Region::none());
+    assert_eq!(set.object_count(), 2, "the fixture holds two objects");
+    let round = extract(
+        &volume,
+        SurfaceParams::new(0.25, 0.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.85, 0.0)),
+        Region::none(),
+    );
+    assert_eq!(round.object_count(), 1, "only the sphere is spherical");
+    assert_eq!(round.geometry().object_count(), 1);
+    assert_eq!(round.intensities().objects(), 1);
+    let bright = extract(
+        &volume,
+        SurfaceParams::new(0.25, 0.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.75)),
+        Region::none(),
+    );
+    assert_eq!(bright.object_count(), 1, "only the bright object passes");
+    assert_eq!(bright.geometry().object_count(), 1);
+    assert_eq!(bright.intensities().objects(), 1);
+    assert_eq!(bright.geometry().groups().len(), 1);
+}
+
+#[test]
+fn caps_a_surface_cut_by_the_region() {
+    let extent = Extent::new(160, 160, 160);
+    let volume = blobs(extent, &[0.1, 0.1, 0.1], &[[80.0, 80.0, 80.0]], 20.0);
+    let region = Region::new(Vec3::new(0.0, -8.0, -8.0), Vec3::new(8.0, 8.0, 8.0));
+    let set = extract(&volume, params(0.5), region);
+    assert_eq!(set.object_count(), 1, "the cut blob stays one object");
+    let object = set.objects()[0];
+    let half = 0.5 * 4.0 / 3.0 * PI * 20.0f64.powi(3);
+    let relative = (object.voxel_count() as f64 - half).abs() / half;
+    assert!(
+        relative < 0.1,
+        "the region keeps half a sphere: {} against {half}",
+        object.voxel_count()
+    );
+    assert!(
+        (0.78..=0.90).contains(&object.sphericity()),
+        "the capped half sphere is a closed body: {}",
+        object.sphericity()
+    );
+    assert!(watertight(&set), "the region cut is capped without holes");
+}
+
 fn extract(volume: &Volume, params: SurfaceParams, region: Region) -> SurfaceSet {
     let level = Level::new(volume.extent(), volume.spacing());
     let intensity = Intensity::new(0.0, f32::from(HIGH));
     let channels = volume.channel_count();
     let mut builder = SurfaceBuilder::new(0, level, params, channels, 0, region, intensity);
-    builder
-        .fit_background(|range| {
-            Ok(volume.channels()[0].data().region(
-                volume.extent(),
-                range[0].clone(),
-                range[1].clone(),
-                range[2].clone(),
-            ))
-        })
-        .expect("the background is fitted");
     for index in 0..builder.tile_count() {
         let range = builder.detection_range(index);
         let detection = volume.channels()[0].data().region(
@@ -237,17 +448,18 @@ fn extract(volume: &Volume, params: SurfaceParams, region: Region) -> SurfaceSet
 fn blobs(extent: Extent, spacing: &[f32; 3], centres: &[[f32; 3]], radius: f32) -> Volume {
     let count = extent.voxel_count() as usize;
     let mut values = vec![0u16; count];
-    for centre in centres {
-        for z in 0..extent.z() {
-            for y in 0..extent.y() {
-                for x in 0..extent.x() {
-                    let offset = ((x as f32 - centre[0]).powi(2)
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let inside = centres.iter().any(|centre| {
+                    ((x as f32 - centre[0]).powi(2)
                         + (y as f32 - centre[1]).powi(2)
                         + (z as f32 - centre[2]).powi(2))
-                    .sqrt();
-                    if offset < radius {
-                        values[extent.index(x, y, z) as usize] = HIGH;
-                    }
+                    .sqrt()
+                        < radius
+                });
+                if inside {
+                    values[extent.index(x, y, z) as usize] = HIGH;
                 }
             }
         }
@@ -264,51 +476,6 @@ fn blobs(extent: Extent, spacing: &[f32; 3], centres: &[[f32; 3]], radius: f32) 
             ),
         ],
     )
-}
-
-#[test]
-fn detects_objects_on_an_uneven_background() {
-    let extent = Extent::new(240, 80, 80);
-    let centres = [[60.0f32, 40.0, 40.0], [190.0, 40.0, 40.0]];
-    let volume = illuminated(extent, &[0.1, 0.1, 0.1], &centres, 10.0, 0.2, 0.8, 0.35);
-    let set = extract(
-        &volume,
-        SurfaceParams::new(0.25, 0.0, 0.0, 0.0),
-        Region::none(),
-    );
-    assert_eq!(
-        set.object_count(),
-        centres.len(),
-        "every blob survives the illumination ramp"
-    );
-    let expected = 4.0 / 3.0 * PI * 10.0f64.powi(3);
-    for object in set.objects() {
-        let relative = (object.voxel_count() as f64 - expected).abs() / expected;
-        assert!(
-            relative < 0.1,
-            "a blob under the ramp holds {} voxels against {expected}",
-            object.voxel_count()
-        );
-    }
-}
-
-#[test]
-fn fills_cavities_enclosed_by_a_surface() {
-    let extent = Extent::new(96, 96, 96);
-    let volume = shell(extent, &[0.1, 0.1, 0.1], [48.0, 48.0, 48.0], 20.0, 10.0);
-    let set = extract(
-        &volume,
-        SurfaceParams::new(0.5, 0.0, 0.0, 0.0),
-        Region::none(),
-    );
-    assert_eq!(set.object_count(), 1, "the shell is one object");
-    let expected = 4.0 / 3.0 * PI * 20.0f64.powi(3);
-    let relative = (set.objects()[0].voxel_count() as f64 - expected).abs() / expected;
-    assert!(
-        relative < 0.05,
-        "the cavity is filled: {} voxels against {expected}",
-        set.objects()[0].voxel_count()
-    );
 }
 
 fn illuminated(
@@ -354,6 +521,150 @@ fn illuminated(
     )
 }
 
+fn scattering(extent: Extent, spacing: &[f32; 3], centres: &[[f32; 3]], radius: f32) -> Volume {
+    let count = extent.voxel_count() as usize;
+    let mut values = vec![0u16; count];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let ramp = 0.1 + 0.1 * x as f32 / (extent.x() - 1) as f32;
+                let step = 0.3 * smooth((x as f32 - 150.0) / 32.0);
+                let background = ramp + step;
+                let inside = centres.iter().any(|centre| {
+                    ((x as f32 - centre[0]).powi(2)
+                        + (y as f32 - centre[1]).powi(2)
+                        + (z as f32 - centre[2]).powi(2))
+                    .sqrt()
+                        < radius
+                });
+                let value = if inside {
+                    background + 0.05
+                } else {
+                    background
+                };
+                values[extent.index(x, y, z) as usize] =
+                    (value.clamp(0.0, 1.0) * f32::from(HIGH)).round() as u16;
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        Spacing::new(spacing[0], spacing[1], spacing[2]),
+        vec![Channel::new(
+            "scatter",
+            [0.3, 0.8, 1.0],
+            VoxelData::U16(values),
+        )],
+    )
+}
+
+fn saturated(extent: Extent, spacing: &[f32; 3]) -> Volume {
+    let count = extent.voxel_count() as usize;
+    let mut values = vec![0u16; count];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let plateau =
+                    (24..40).contains(&x) && (56..72).contains(&y) && (56..72).contains(&z);
+                let dim = ((x as f32 - 140.0).powi(2)
+                    + (y as f32 - 64.0).powi(2)
+                    + (z as f32 - 64.0).powi(2))
+                .sqrt()
+                    < 8.0;
+                let value = if plateau {
+                    f32::from(HIGH)
+                } else if dim {
+                    0.05 * f32::from(HIGH)
+                } else {
+                    0.0
+                };
+                values[extent.index(x, y, z) as usize] = value as u16;
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        Spacing::new(spacing[0], spacing[1], spacing[2]),
+        vec![Channel::new(
+            "saturated",
+            [0.3, 0.8, 1.0],
+            VoxelData::U16(values),
+        )],
+    )
+}
+
+fn bridged(extent: Extent, spacing: &[f32; 3]) -> Volume {
+    let count = extent.voxel_count() as usize;
+    let mut values = vec![0u16; count];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let first = ((x as f32 - 70.0).powi(2)
+                    + (y as f32 - 48.0).powi(2)
+                    + (z as f32 - 48.0).powi(2))
+                .sqrt()
+                    < 7.0;
+                let second = ((x as f32 - 85.0).powi(2)
+                    + (y as f32 - 48.0).powi(2)
+                    + (z as f32 - 48.0).powi(2))
+                .sqrt()
+                    < 7.0;
+                let noise =
+                    (140..142).contains(&x) && (30..32).contains(&y) && (40..42).contains(&z);
+                let value = if first || second || noise {
+                    f32::from(HIGH)
+                } else {
+                    0.0
+                };
+                values[extent.index(x, y, z) as usize] = value as u16;
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        Spacing::new(spacing[0], spacing[1], spacing[2]),
+        vec![Channel::new(
+            "bridged",
+            [0.3, 0.8, 1.0],
+            VoxelData::U16(values),
+        )],
+    )
+}
+
+fn mixed(extent: Extent, spacing: &[f32; 3]) -> Volume {
+    let count = extent.voxel_count() as usize;
+    let mut values = vec![0u16; count];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let sphere = ((x as f32 - 40.0).powi(2)
+                    + (y as f32 - 60.0).powi(2)
+                    + (z as f32 - 60.0).powi(2))
+                .sqrt()
+                    < 12.0;
+                let rod = (100..160).contains(&x) && (58..62).contains(&y) && (58..62).contains(&z);
+                let value = if sphere {
+                    0.3 * f32::from(HIGH)
+                } else if rod {
+                    0.9 * f32::from(HIGH)
+                } else {
+                    0.0
+                };
+                values[extent.index(x, y, z) as usize] = value as u16;
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        Spacing::new(spacing[0], spacing[1], spacing[2]),
+        vec![Channel::new(
+            "mixed",
+            [0.3, 0.8, 1.0],
+            VoxelData::U16(values),
+        )],
+    )
+}
+
 fn shell(extent: Extent, spacing: &[f32; 3], centre: [f32; 3], radius: f32, cavity: f32) -> Volume {
     let count = extent.voxel_count() as usize;
     let mut values = vec![0u16; count];
@@ -379,4 +690,9 @@ fn shell(extent: Extent, spacing: &[f32; 3], centre: [f32; 3], radius: f32, cavi
             VoxelData::U16(values),
         )],
     )
+}
+
+fn smooth(value: f32) -> f32 {
+    let clamped = value.clamp(0.0, 1.0);
+    clamped * clamped * (3.0 - 2.0 * clamped)
 }

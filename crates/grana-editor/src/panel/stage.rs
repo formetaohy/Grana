@@ -185,7 +185,7 @@ pub(super) fn paint_overlay(
         section_rect: layout.section,
         region: &mut region,
         legends: &legends,
-        recording: state.io.movie,
+        recording: state.io.export,
     };
     overlay::paint(ui, &mut overlay);
     if region != state.scene.region {

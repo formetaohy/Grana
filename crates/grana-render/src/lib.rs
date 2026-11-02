@@ -22,5 +22,5 @@ pub const DEPTH_BUCKETS: usize = planner::BUCKETS;
 
 pub use image::{Image, read as read_image};
 pub use marker::Marker;
-pub use renderer::{Frame, FrameInfo, Renderer, Requests, ViewInfo};
+pub use renderer::{CutInfo, Frame, FrameInfo, Renderer, Requests, ViewInfo};
 pub use schema::{ChannelRow, Layer, LayerKey, SceneFrame, Style};

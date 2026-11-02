@@ -202,11 +202,18 @@ impl MarkerPasses {
                 module: &section_module,
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
-                targets: &[Some(ColorTargetState {
-                    format: SCENE_FORMAT,
-                    blend: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: ColorWrites::ALL,
-                })],
+                targets: &[
+                    Some(ColorTargetState {
+                        format: SCENE_FORMAT,
+                        blend: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: ColorWrites::ALL,
+                    }),
+                    Some(ColorTargetState {
+                        format: crate::target::CUT_ID_FORMAT,
+                        blend: None,
+                        write_mask: ColorWrites::empty(),
+                    }),
+                ],
             }),
             multiview_mask: None,
             cache: None,

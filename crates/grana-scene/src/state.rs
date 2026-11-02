@@ -5,7 +5,7 @@ use grana_measure::{Measurement, TrackMeasurement};
 use grana_object::{RelationFrame, TrackSet};
 use grana_volume::{Intensity, Region};
 
-use crate::coloc::ColocState;
+use crate::coloc::{ColocState, MaskKey};
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::scene::{Item, Scene, Selection};
@@ -89,11 +89,25 @@ impl SceneState {
                 .coloc
                 .pair
                 .is_none_or(|pair| pair.a() < channel_count && pair.b() < channel_count)
+            && self.coloc.results.iter().all(|result| {
+                let pair = result.pair();
+                pair.a() < channel_count
+                    && pair.b() < channel_count
+                    && result.series().frames().len() == frame_count as usize
+                    && result
+                        .mask()
+                        .is_none_or(|mask| self.sets.iter().any(|set| set.id == mask))
+            })
             && self
                 .coloc
-                .series
-                .as_ref()
-                .is_none_or(|series| series.frames().len() == frame_count as usize)
+                .results
+                .iter()
+                .enumerate()
+                .all(|(index, result)| {
+                    self.coloc.results[index + 1..]
+                        .iter()
+                        .all(|other| other.pair() != result.pair())
+                })
     }
 }
 
@@ -150,8 +164,17 @@ impl Scene {
             .mask
             .and_then(ObjectSetId::from_raw)
             .filter(|set| self.objects.get(*set).is_some());
-        self.coloc
-            .restore(state.coloc, self.channels.len(), self.frame_count());
+        let mask = self
+            .mask
+            .and_then(|set| self.objects.get(set))
+            .map(|set| MaskKey::new(set.id(), set.document()));
+        self.coloc.restore(
+            state.coloc,
+            self.channels.len(),
+            self.frame_count(),
+            state.region,
+            mask,
+        );
         self.set_time(state.time);
         self.select(state.selection.map(|selection| Selection {
             set: ObjectSetId::new(selection.set),

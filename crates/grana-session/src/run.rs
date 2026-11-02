@@ -2,10 +2,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{
-    ColocScan, FilamentScan, Reference, Roi, SpotScan, SurfaceBuilder, TrackBuilder, filament_level,
+    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, Reference, Roi, SpotScan,
+    SurfaceBuilder, TrackBuilder, coloc_levels, filament_level,
 };
 use grana_image::Image;
-use grana_measure::ColocPair;
+use grana_measure::{ColocPair, ColocSettings};
 use grana_object::{IntensityTable, RelationFrame, SampleAccumulator, Spot, SpotSet};
 use grana_scene::{ObjectFrame, ObjectParams};
 use grana_volume::VoxelData;
@@ -107,13 +108,45 @@ pub(crate) fn relation(
     sink(Event::Done);
 }
 
-pub(crate) fn coloc(
-    reader: &Image,
+pub(crate) struct ColocRequest {
     pair: ColocPair,
     region: grana_volume::Region,
+    roi: Option<Roi>,
+    mask: Option<u64>,
+    settings: ColocSettings,
+}
+
+impl ColocRequest {
+    pub(crate) fn new(
+        pair: ColocPair,
+        region: grana_volume::Region,
+        roi: Option<Roi>,
+        mask: Option<u64>,
+        settings: ColocSettings,
+    ) -> Self {
+        Self {
+            pair,
+            region,
+            roi,
+            mask,
+            settings,
+        }
+    }
+}
+
+pub(crate) fn coloc(
+    reader: &Image,
+    request: ColocRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
+    let ColocRequest {
+        pair,
+        region,
+        roi,
+        mask: mask_id,
+        settings,
+    } = request;
     let pyramid = reader.pyramid();
     let channels = pyramid.channel_count();
     if pair.a() >= channels || pair.b() >= channels {
@@ -131,36 +164,93 @@ pub(crate) fn coloc(
         return Err("the region does not overlap the dataset".to_string());
     }
     let frames = pyramid.frame_count();
+    let levels = coloc_levels(pyramid, region, frames);
+    let scan_level = levels.scan();
+    let permutation_level = levels.permutation();
+    let scan_info = pyramid.level(scan_level);
+    let permutation_frames = levels.frames().to_vec();
     let mut scan = ColocScan::new(
-        pyramid.level(0),
-        frames,
-        channels,
-        intensities,
-        pair,
+        scan_info,
+        &levels,
+        ColocScanConfig::new(pair, channels, intensities, mask_id, frames),
         region,
     );
-    let tiles = scan.tile_count();
-    let total = tiles * frames as usize;
+    let mut permutation =
+        ColocPermutation::new(pyramid, region, pair, &levels, settings, intensities);
+    let scan_tiles = scan.tile_count();
+    let permutation_tiles = permutation.tile_count();
+    let piggyback = permutation_level == scan_level
+        && permutation_frames
+            .iter()
+            .enumerate()
+            .all(|(time, sampled)| *sampled == time as u32)
+        && permutation_frames.len() == frames as usize;
+    let permutation_work = if piggyback {
+        0
+    } else {
+        permutation_tiles * permutation_frames.len()
+    };
+    let total = scan_tiles * frames as usize + permutation_work;
+    let mut done = 0usize;
     for time in 0..frames {
-        for index in 0..tiles {
+        let mask = roi.as_ref().map(|roi| roi.mask(scan_info, time));
+        for index in 0..scan_tiles {
             if cancel.load(Ordering::Relaxed) {
                 return Ok(());
             }
             let ranges = scan.tile(index);
-            let first = reader.read_region(time, 0, pair.a(), &ranges)?;
-            let second = reader.read_region(time, 0, pair.b(), &ranges)?;
-            scan.add(time, index, &first, &second);
-            if index % 16 == 0 || index + 1 == tiles {
-                sink(Event::Progress {
-                    time,
-                    done: time as usize * tiles + index + 1,
-                    total,
-                });
+            let first = reader.read_region(time, scan_level, pair.a(), &ranges)?;
+            let second = reader.read_region(time, scan_level, pair.b(), &ranges)?;
+            scan.add(time, index, &first, &second, mask.as_ref());
+            if piggyback {
+                permutation.add(time as usize, index, &first, &second, mask.as_ref());
+            }
+            done += 1;
+            if index % 16 == 0 || index + 1 == scan_tiles {
+                sink(Event::Progress { time, done, total });
             }
         }
     }
+    if scan.voxels() == 0 {
+        return Err("the analysis mask covers no voxels of the colocalization region".to_string());
+    }
+    if !piggyback {
+        let permutation_info = pyramid.level(permutation_level);
+        for (slot, time) in permutation_frames.iter().enumerate() {
+            let mask = roi.as_ref().map(|roi| roi.mask(permutation_info, *time));
+            for index in 0..permutation_tiles {
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+                let ranges = permutation.tile(index);
+                let first = reader.read_region(*time, permutation_level, pair.a(), &ranges)?;
+                let second = reader.read_region(*time, permutation_level, pair.b(), &ranges)?;
+                permutation.add(slot, index, &first, &second, mask.as_ref());
+                done += 1;
+                if index % 16 == 0 || index + 1 == permutation_tiles {
+                    sink(Event::Progress {
+                        time: *time,
+                        done,
+                        total,
+                    });
+                }
+            }
+        }
+    }
+    let permutation_voxels = permutation.sampled_voxels();
+    let permutation_frame_count = permutation.sampled_frames();
+    let blocks = permutation.blocks();
+    let randomizations = permutation.randomizations();
+    let significance = permutation.test();
+    let series = scan.finish(
+        significance,
+        permutation_voxels,
+        permutation_frame_count,
+        randomizations,
+        blocks,
+    );
     sink(Event::Coloc {
-        series: Box::new(scan.finish()),
+        series: Box::new(series),
         region,
     });
     sink(Event::Done);
@@ -304,11 +394,6 @@ fn surfaces(
             done: 0,
             total,
         });
-        builder.fit_background(|range| {
-            reader
-                .read_region(time, 0, channel, range)
-                .map_err(String::from)
-        })?;
         for index in 0..total {
             if cancel.load(Ordering::Relaxed) {
                 return Ok(());

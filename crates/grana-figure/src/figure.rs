@@ -9,6 +9,7 @@ pub fn instances(
     pixels_per_point: f32,
     world_per_point: f32,
     legends: &[Legend],
+    backdrop: bool,
 ) -> Vec<Instance> {
     let points = Vec2::new(
         size[0] as f32 / pixels_per_point,
@@ -20,6 +21,7 @@ pub fn instances(
             Rect::from_min_size(Vec2::ZERO, points),
             world_per_point,
             legends,
+            backdrop,
         );
     })
 }

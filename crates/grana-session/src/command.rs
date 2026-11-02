@@ -1,11 +1,28 @@
 use grana_analysis::TrackParams;
 use grana_display::{Coloring, Shading, TransferFunction};
 use grana_measure::{
-    Aggregate, ColocPair, ColocThresholds, Filter, Group, MeasureView, Measurement, PlotAxis,
-    TrackMeasurement,
+    Aggregate, ColocPair, ColocSettings, ColocThresholds, Filter, Group, MeasureView, Measurement,
+    PlotAxis, TrackMeasurement,
 };
 use grana_scene::{ObjectKind, ObjectParams, ObjectSetId, Selection};
 use grana_volume::{Intensity, Region};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Export {
+    pub width: u32,
+    pub transparent: bool,
+}
+
+impl Export {
+    pub const NATIVE: Self = Self {
+        width: 0,
+        transparent: false,
+    };
+
+    pub const fn new(width: u32, transparent: bool) -> Self {
+        Self { width, transparent }
+    }
+}
 
 pub enum Command {
     OpenDataset,
@@ -135,6 +152,8 @@ pub enum Command {
     ToggleSort(usize),
     SetColocPair(ColocPair),
     SetColocThresholds(ColocThresholds),
+    SetColocSettings(ColocSettings),
+    RemoveColocResult(ColocPair),
     ComputeColoc,
     CancelColoc,
     ExportColoc,
@@ -156,7 +175,9 @@ pub enum Command {
     ExportMovie {
         width: u32,
     },
-    CancelMovie,
+    SetExport(Export),
+    ExportSequence(Export),
+    CancelExport,
     Undo,
     Redo,
 }
@@ -199,6 +220,8 @@ pub enum Action {
     MeasureVisibility,
     ColocPair,
     ColocThresholds,
+    ColocSettings,
+    ColocResult,
     ComputeColoc,
     Keyframe,
     TimelineFps,
@@ -244,6 +267,8 @@ impl Action {
             Self::MeasureVisibility => "statistics visibility",
             Self::ColocPair => "colocalization channels",
             Self::ColocThresholds => "colocalization thresholds",
+            Self::ColocSettings => "colocalization settings",
+            Self::ColocResult => "colocalization result",
             Self::ComputeColoc => "colocalization",
             Self::Keyframe => "keyframes",
             Self::TimelineFps => "frame rate",
@@ -269,6 +294,7 @@ impl Action {
                 | Self::Shading
                 | Self::MeasureFilter
                 | Self::ColocThresholds
+                | Self::ColocSettings
                 | Self::TimelineFps
                 | Self::TimelineDuration
         )
@@ -365,6 +391,8 @@ impl Command {
             Self::SetMeasureVisibility(_) => Edit::new(Action::MeasureVisibility),
             Self::SetColocPair(_) => Edit::new(Action::ColocPair),
             Self::SetColocThresholds(_) => Edit::new(Action::ColocThresholds),
+            Self::SetColocSettings(_) => Edit::new(Action::ColocSettings),
+            Self::RemoveColocResult(_) => Edit::new(Action::ColocResult),
             Self::ComputeColoc => Edit::new(Action::ComputeColoc),
             Self::ClearKeyframes | Self::DeleteKeyframe(_) => Edit::new(Action::Keyframe),
             Self::SetTimelineFps(_) => Edit::new(Action::TimelineFps),

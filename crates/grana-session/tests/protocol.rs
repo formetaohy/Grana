@@ -1,4 +1,8 @@
 use glam::Vec3;
+use grana_measure::{
+    ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
+    ColocThresholds,
+};
 use grana_scene::{Dataset, Measure, ObjectKind, Scene};
 use grana_session::{DetectionSpec, Protocol};
 use grana_volume::{Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
@@ -11,7 +15,7 @@ const PROTOCOL: &str = r#"
       "name": "Nuclei",
       "channel": "DAPI",
       "color": [1.0, 0.7, 0.2],
-      "detection": {"kind": "surfaces", "threshold": 0.25, "grain": 0.1, "seed": 0.6, "min_volume": 2.0},
+      "detection": {"kind": "surfaces", "threshold": 0.25, "grain": 0.1, "seed": 0.6, "min_volume": 2.0, "opening": 0.2, "closing": 0.3, "min_sphericity": 0.4, "min_mean_intensity": 0.05},
       "track": {
         "max_step": 0.8,
         "max_gap": 1,
@@ -38,7 +42,7 @@ const PROTOCOL: &str = r#"
       "detection": {"kind": "filaments", "threshold": 0.6, "min_length": 3.0}
     }
   ],
-  "coloc": {"a": "GFP", "b": "RFP", "thresholds": [0.4, 0.6]}
+  "coloc": {"settings": {"permutations": 200, "block": 3}, "pairs": [{"a": "GFP", "b": "RFP", "thresholds": [0.4, 0.6]}, {"a": "GFP", "b": "DAPI", "thresholds": [0.5, 0.5]}], "mask": null}
 }
 "#;
 
@@ -59,6 +63,10 @@ fn reads_and_writes_a_protocol() {
     assert_eq!(surface.value(1), 0.1);
     assert_eq!(surface.value(2), 0.6);
     assert_eq!(surface.value(3), 2.0);
+    assert_eq!(surface.value(4), 0.2);
+    assert_eq!(surface.value(5), 0.3);
+    assert_eq!(surface.value(6), 0.4);
+    assert_eq!(surface.value(7), 0.05);
     let track = protocol.sets()[0]
         .track_params()
         .expect("the surface set is tracked");
@@ -78,9 +86,16 @@ fn reads_and_writes_a_protocol() {
         grana_measure::Group::Object
     );
     let coloc = protocol.coloc().expect("the protocol colocalizes");
-    assert_eq!(coloc.a, "GFP");
-    assert_eq!(coloc.b, "RFP");
-    assert_eq!(coloc.thresholds, [0.4, 0.6]);
+    assert_eq!(coloc.settings.permutations, 200);
+    assert_eq!(coloc.settings.block, 3);
+    assert_eq!(coloc.pairs.len(), 2);
+    assert_eq!(coloc.pairs[0].a, "GFP");
+    assert_eq!(coloc.pairs[0].b, "RFP");
+    assert_eq!(coloc.pairs[0].thresholds, [0.4, 0.6]);
+    assert_eq!(coloc.pairs[1].a, "GFP");
+    assert_eq!(coloc.pairs[1].b, "DAPI");
+    assert_eq!(coloc.mask, None);
+    assert_eq!(coloc.settings().permutations(), 200);
     assert!(matches!(
         protocol.sets()[1].detection,
         DetectionSpec::Spots { .. }
@@ -124,10 +139,44 @@ fn rejects_an_invalid_protocol() {
     );
     assert!(
         invalid(&PROTOCOL.replace(
-            "\"coloc\": {\"a\": \"GFP\", \"b\": \"RFP\"",
-            "\"coloc\": {\"a\": \"GFP\", \"b\": \"GFP\""
+            "\"pairs\": [{\"a\": \"GFP\", \"b\": \"RFP\", \"thresholds\": [0.4, 0.6]}",
+            "\"pairs\": [{\"a\": \"GFP\", \"b\": \"GFP\", \"thresholds\": [0.4, 0.6]}"
         )),
         "a colocalization pair names two channels"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace(
+            "\"a\": \"GFP\", \"b\": \"DAPI\", \"thresholds\": [0.5, 0.5]",
+            "\"a\": \"GFP\", \"b\": \"RFP\", \"thresholds\": [0.5, 0.5]"
+        )),
+        "a colocalization pair appears once"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace("\"thresholds\": [0.4, 0.6]", "\"thresholds\": [0.4, 1.6]")),
+        "a colocalization threshold is a unit fraction"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace("\"permutations\": 200", "\"permutations\": 0")),
+        "a colocalization significance test runs permutations"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace("\"block\": 3", "\"block\": 0")),
+        "a colocalization randomization block is positive"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace("\"mask\": null", "\"mask\": \"Missing\"")),
+        "a colocalization mask names an object set of the protocol"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace(
+            "\"pairs\": [{\"a\": \"GFP\", \"b\": \"RFP\", \"thresholds\": [0.4, 0.6]}, {\"a\": \"GFP\", \"b\": \"DAPI\", \"thresholds\": [0.5, 0.5]}]",
+            "\"pairs\": []"
+        )),
+        "a colocalization specification names a pair"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace(", \"mask\": null", "")),
+        "a colocalization specification carries a mask field"
     );
     assert!(
         invalid(&PROTOCOL.replace("\"group\": \"tracks\"", "\"group\": \"steps\"")),
@@ -170,11 +219,18 @@ fn captures_the_analysis_of_a_scene() {
     let volume = Volume::new(
         extent,
         Spacing::new(1.0, 1.0, 1.0),
-        vec![Channel::new(
-            "DAPI",
-            [0.3, 0.4, 1.0],
-            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
-        )],
+        vec![
+            Channel::new(
+                "DAPI",
+                [0.3, 0.4, 1.0],
+                VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+            ),
+            Channel::new(
+                "GFP",
+                [0.3, 1.0, 0.4],
+                VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+            ),
+        ],
     );
     let movie = VolumeSeries::new(vec![volume], 1.0);
     let mut scene = Scene::new(Dataset::synthetic("fixture", movie.pyramid().clone()));
@@ -183,6 +239,21 @@ fn captures_the_analysis_of_a_scene() {
     if let Some(set) = scene.objects.get_mut(set) {
         set.set_color([0.2, 0.7, 0.9]);
     }
+    let mut frame = ColocFrame::new(32);
+    frame.push(0.25, 0.75);
+    frame.push(0.5, 0.5);
+    let mut joint = vec![0; 32 * 32];
+    joint[4 + 32 * 9] = 2;
+    scene.coloc.install(ColocSeries::from_parts(
+        ColocPair::new(0, 1),
+        ColocSeriesInfo::new(0, 0, 1, None),
+        32,
+        vec![frame],
+        joint,
+        Some(ColocSignificance::new(0.004_975, 200, 1.0)),
+        ColocCost::new(2, 32, 1, 200, 4),
+    ));
+    scene.coloc.set_thresholds(ColocThresholds::new(0.2, 0.8));
     let measure = Measure::new();
     let protocol = Protocol::capture(&scene, &measure).expect("the scene analysis is capturable");
     assert_eq!(protocol.sets().len(), 1);
@@ -193,7 +264,14 @@ fn captures_the_analysis_of_a_scene() {
     assert_eq!(spec.color, [0.2, 0.7, 0.9]);
     assert!(spec.track_params().is_some());
     assert_eq!(spec.measure.group(), grana_measure::Group::Object);
-    assert!(protocol.coloc().is_none());
+    let coloc = protocol.coloc().expect("the scene colocalization captures");
+    assert_eq!(coloc.pairs.len(), 1);
+    assert_eq!(coloc.pairs[0].a, "DAPI");
+    assert_eq!(coloc.pairs[0].b, "GFP");
+    assert_eq!(coloc.pairs[0].thresholds, [0.2, 0.8]);
+    assert_eq!(coloc.settings.permutations, 200);
+    assert_eq!(coloc.settings.block, 3);
+    assert_eq!(coloc.mask, None);
     let region = protocol.region().expect("the scene region is captured");
     assert_eq!(region.low, [0.25, 0.25, 0.25]);
     assert_eq!(region.high, [0.75, 0.75, 0.75]);

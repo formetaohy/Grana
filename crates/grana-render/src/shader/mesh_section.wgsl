@@ -1,12 +1,8 @@
-struct ObjectData {
-    center_radius: vec4<f32>,
+struct CutObject {
     minimum: vec4<f32>,
     extent: vec4<f32>,
-    narrow_first: u32,
-    narrow_count: u32,
-    wide_first: u32,
-    wide_count: u32,
-    vertex_base: u32,
+    style: u32,
+    reserved: array<u32, 3>,
 }
 
 struct Style {
@@ -14,8 +10,8 @@ struct Style {
     flags: vec4<f32>,
 }
 
-@group(1) @binding(0) var<storage, read> objects: array<ObjectData>;
-@group(2) @binding(0) var<storage, read> styles: array<Style>;
+@group(1) @binding(0) var<storage, read> cuts: array<CutObject>;
+@group(1) @binding(1) var<storage, read> styles: array<Style>;
 
 const CORNERS: array<vec2<f32>, 3> = array<vec2<f32>, 3>(
     vec2<f32>(-1.0, -1.0),
@@ -31,35 +27,71 @@ const SELECTED_ALPHA: f32 = 0.85;
 struct VertexInput {
     @location(0) position: vec4<f32>,
     @location(1) normal: vec2<f32>,
-    @location(2) object: u32,
 }
 
 struct CutOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) height: f32,
+    @location(1) world: vec3<f32>,
 }
 
 struct FillOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) uv: vec2<f32>,
-    @location(1) @interpolate(flat) object: u32,
+    @location(1) @interpolate(flat) style: u32,
+}
+
+struct FillFragment {
+    @location(0) color: vec4<f32>,
+    @location(1) identity: vec4<f32>,
+}
+
+fn encode_identity(identity: u32) -> vec4<f32> {
+    return vec4<f32>(
+        f32(identity & 0xFFu) / 255.0,
+        f32((identity >> 8u) & 0xFFu) / 255.0,
+        f32((identity >> 16u) & 0xFFu) / 255.0,
+        0.0,
+    );
+}
+
+fn cut_normal() -> vec3<f32> {
+    var normal = vec3<f32>(0.0);
+    normal[section.mapping.z] = 1.0;
+    return normal;
+}
+
+fn lit(color: vec3<f32>) -> vec3<f32> {
+    let normal = cut_normal();
+    let diffuse = max(dot(normal, frame.light.xyz), 0.0);
+    let half_vector = normalize(frame.light.xyz + normal);
+    let specular = pow(max(dot(normal, half_vector), 0.0), frame.shading.w);
+    return color * (frame.shading.x + frame.shading.y * diffuse)
+        + vec3<f32>(frame.shading.z * specular);
+}
+
+fn plane_world(uv: vec2<f32>) -> vec3<f32> {
+    var uvw = vec3<f32>(0.0);
+    uvw[section.mapping.z] = section.plane.x;
+    uvw[section.mapping.x] = uv.x;
+    uvw[section.mapping.y] = uv.y;
+    return section.box_min.xyz + uvw * section.world.xyz;
 }
 
 @vertex
-fn vs_cut(input: VertexInput) -> CutOutput {
-    let object = objects[input.object];
+fn vs_cut(input: VertexInput, @builtin(instance_index) instance: u32) -> CutOutput {
+    let object = cuts[instance];
     let world = object.minimum.xyz + input.position.xyz * object.extent.xyz;
     let uvw = (world - section.box_min.xyz) / section.world.xyz;
-    let u = section.mapping.x;
-    let v = section.mapping.y;
     var output: CutOutput;
     output.clip_position = vec4<f32>(
-        (uvw[u] - section.uv_center.x) / section.uv_scale.x + section.jitter.x,
-        (uvw[v] - section.uv_center.y) / section.uv_scale.y + section.jitter.y,
+        (uvw[section.mapping.x] - section.uv_center.x) / section.uv_scale.x + section.jitter.x,
+        (uvw[section.mapping.y] - section.uv_center.y) / section.uv_scale.y + section.jitter.y,
         0.5,
         1.0,
     );
     output.height = uvw[section.mapping.z];
+    output.world = world;
     return output;
 }
 
@@ -72,40 +104,32 @@ fn fs_parity(input: CutOutput) -> @location(0) vec4<f32> {
 }
 
 @vertex
-fn vs_fill(@builtin(vertex_index) index: u32, @builtin(instance_index) object: u32) -> FillOutput {
+fn vs_fill(@builtin(vertex_index) index: u32, @builtin(instance_index) instance: u32) -> FillOutput {
     let corner = CORNERS[index];
     var output: FillOutput;
     output.clip_position = vec4<f32>(corner + section.jitter.xy, 0.5, 1.0);
     output.uv = section.uv_center.xy + corner * section.uv_scale.xy;
-    output.object = object;
+    output.style = cuts[instance].style;
     return output;
 }
 
 @fragment
-fn fs_fill(input: FillOutput) -> @location(0) vec4<f32> {
-    var uvw = vec3<f32>(0.0);
-    uvw[section.mapping.z] = section.plane.x;
-    uvw[section.mapping.x] = input.uv.x;
-    uvw[section.mapping.y] = input.uv.y;
-    if (outside_region(section.box_min.xyz + uvw * section.world.xyz)) {
-        discard;
+fn fs_fill(input: FillOutput) -> FillFragment {
+    let world = plane_world(input.uv);
+    let style = styles[input.style];
+    var fragment: FillFragment;
+    if (outside_region(world)) {
+        fragment.color = vec4<f32>(0.0);
+        fragment.identity = vec4<f32>(0.0);
+        return fragment;
     }
-    let style = styles[input.object];
-    var color = style.color.rgb;
+    var color = lit(style.color.rgb);
     var alpha = FILL_ALPHA;
     if (style.flags.y > 0.5) {
-        color = mix(color, SELECTED, SELECTED_MIX);
+        color = mix(color, lit(SELECTED), SELECTED_MIX);
         alpha = SELECTED_ALPHA;
     }
-    return vec4<f32>(color * alpha, alpha);
-}
-
-@vertex
-fn vs_quad(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    return vec4<f32>(CORNERS[index], 0.5, 1.0);
-}
-
-@fragment
-fn fs_quad() -> @location(0) vec4<f32> {
-    return vec4<f32>(0.0);
+    fragment.color = vec4<f32>(color * alpha, alpha);
+    fragment.identity = encode_identity(input.style + 1u);
+    return fragment;
 }

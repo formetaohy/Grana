@@ -1,0 +1,273 @@
+use glam::Vec3;
+use grana_geometry::MeshVertex;
+
+use super::{EMPTY, OUTSIDE, SurfaceBuilder, find};
+use crate::table::{EDGE_TABLE, TRIANGLE_TABLE};
+
+const CORNER: [[i64; 3]; 8] = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+    [1, 0, 1],
+    [1, 1, 1],
+    [0, 1, 1],
+];
+
+const EDGE_CORNER: [[usize; 2]; 12] = [
+    [0, 1],
+    [1, 2],
+    [2, 3],
+    [3, 0],
+    [4, 5],
+    [5, 6],
+    [6, 7],
+    [7, 4],
+    [0, 4],
+    [1, 5],
+    [2, 6],
+    [3, 7],
+];
+
+const DIRECTIONS: [[i64; 3]; 7] = [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+    [1, 1, 0],
+    [1, 0, 1],
+    [0, 1, 1],
+    [1, 1, 1],
+];
+
+impl SurfaceBuilder {
+    pub(super) fn emit(&mut self) {
+        let core = self.core_range(self.next);
+        let mut low = [0i64; 3];
+        let mut high = [0i64; 3];
+        for axis in 0..3 {
+            low[axis] = if core[axis].start == self.region[axis].start {
+                core[axis].start as i64 - 1
+            } else {
+                core[axis].start as i64
+            };
+            high[axis] = core[axis].end as i64;
+        }
+        let threshold = self.threshold;
+        self.edges.clear();
+        let mut values = [0.0f32; 8];
+        let mut corners = [[0i64; 3]; 8];
+        let mut candidates = [EMPTY; 8];
+        for bz in low[2]..high[2] {
+            for by in low[1]..high[1] {
+                for bx in low[0]..high[0] {
+                    let mut index = 0u32;
+                    for (corner, offset) in CORNER.iter().enumerate() {
+                        let cell = [bx + offset[0], by + offset[1], bz + offset[2]];
+                        corners[corner] = cell;
+                        match self.array_index(cell) {
+                            Some(slot) => {
+                                values[corner] = self.field[slot];
+                                candidates[corner] = self.labels[slot];
+                            }
+                            None => {
+                                values[corner] = OUTSIDE;
+                                candidates[corner] = EMPTY;
+                            }
+                        }
+                        if values[corner] < threshold {
+                            index |= 1 << corner;
+                        }
+                    }
+                    if EDGE_TABLE[index as usize] == 0 {
+                        continue;
+                    }
+                    let mut object = EMPTY;
+                    let mut deepest = threshold;
+                    for (corner, value) in values.iter().enumerate() {
+                        if *value < deepest || candidates[corner] == EMPTY {
+                            continue;
+                        }
+                        object = find(&mut self.nodes, candidates[corner]);
+                        deepest = *value;
+                    }
+                    if object == EMPTY {
+                        continue;
+                    }
+                    self.record_contact(object, &candidates, &values);
+                    let table = TRIANGLE_TABLE[index as usize];
+                    let mut corner = 0;
+                    while corner < 16 && table[corner] >= 0 {
+                        let mut triangle = [0u32; 3];
+                        for (offset, vertex) in triangle.iter_mut().enumerate() {
+                            let edge = EDGE_CORNER[table[corner + offset] as usize];
+                            *vertex = self.edge_vertex(edge[0], edge[1], &values, &corners, object);
+                        }
+                        self.push_triangle(triangle, object);
+                        corner += 3;
+                    }
+                }
+            }
+        }
+    }
+
+    fn record_contact(&mut self, object: u32, candidates: &[u32; 8], values: &[f32; 8]) {
+        if self.nodes[object as usize].contact != EMPTY || self.nodes[object as usize].voxels > 0 {
+            return;
+        }
+        let threshold = self.threshold;
+        let mut contact = EMPTY;
+        let mut best = 0u64;
+        for corner in 0..8 {
+            if values[corner] < threshold || candidates[corner] == EMPTY {
+                continue;
+            }
+            let root = find(&mut self.nodes, candidates[corner]);
+            if root == object {
+                continue;
+            }
+            let voxels = self.nodes[root as usize].voxels;
+            if voxels > 0 && voxels > best {
+                contact = root;
+                best = voxels;
+            }
+        }
+        if contact != EMPTY {
+            self.nodes[object as usize].contact = contact;
+        }
+    }
+
+    fn edge_vertex(
+        &mut self,
+        first: usize,
+        second: usize,
+        values: &[f32; 8],
+        corners: &[[i64; 3]; 8],
+        object: u32,
+    ) -> u32 {
+        let mut direction = [0i64; 3];
+        let mut lower = [0i64; 3];
+        for axis in 0..3 {
+            direction[axis] = (corners[second][axis] - corners[first][axis]).abs();
+            lower[axis] = corners[first][axis].min(corners[second][axis]);
+        }
+        let slot = DIRECTIONS
+            .iter()
+            .position(|candidate| *candidate == direction)
+            .expect("a marching cubes edge runs along one of seven directions");
+        let extent = self.extent;
+        let linear = lower[0] + i64::from(extent[0]) * (lower[1] + i64::from(extent[1]) * lower[2]);
+        let key = ((linear as u64) << 4) | slot as u64;
+        if let Some(vertex) = self.edges.get(&key) {
+            return *vertex;
+        }
+        let start = if corners[first] == lower {
+            first
+        } else {
+            second
+        };
+        let end = if start == first { second } else { first };
+        let low = values[start];
+        let high = values[end];
+        let threshold = self.threshold;
+        let fraction = if (high - low).abs() > f32::EPSILON {
+            ((threshold - low) / (high - low)).clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
+        let point = [0, 1, 2].map(|axis| lower[axis] as f32 + direction[axis] as f32 * fraction);
+        let fallback = Vec3::new(
+            direction[0] as f32,
+            direction[1] as f32,
+            direction[2] as f32,
+        );
+        let fallback = if low < high { -fallback } else { fallback };
+        let normal = self.normal(point, fallback);
+        let world = [0, 1, 2].map(|component| {
+            (point[component] + 0.5) * self.spacing[component] - 0.5 * self.world[component]
+        });
+        let vertex = self.vertices.len() as u32;
+        self.vertices
+            .push(MeshVertex::new(world, normal.to_array(), object));
+        self.keys.push(key);
+        self.edges.insert(key, vertex);
+        vertex
+    }
+
+    fn push_triangle(&mut self, triangle: [u32; 3], object: u32) {
+        if triangle[0] == triangle[1] || triangle[1] == triangle[2] || triangle[2] == triangle[0] {
+            return;
+        }
+        let positions = triangle.map(|index| self.vertices[index as usize].position());
+        let geometric = (Vec3::from(positions[1]) - Vec3::from(positions[0]))
+            .cross(Vec3::from(positions[2]) - Vec3::from(positions[0]));
+        let area = 0.5 * geometric.length();
+        if !area.is_finite() || area <= 0.0 {
+            return;
+        }
+        let average = triangle
+            .map(|index| Vec3::from(self.vertices[index as usize].normal()))
+            .iter()
+            .copied()
+            .sum::<Vec3>();
+        let mut ordering = [triangle[0], triangle[1], triangle[2]];
+        if geometric.dot(average) < 0.0 {
+            ordering.swap(1, 2);
+        }
+        self.indices.extend_from_slice(&ordering);
+        self.triangle_objects.push(object);
+    }
+
+    fn normal(&self, point: [f32; 3], fallback: Vec3) -> Vec3 {
+        let gradient = Vec3::new(
+            (self.sample([point[0] + 1.0, point[1], point[2]])
+                - self.sample([point[0] - 1.0, point[1], point[2]]))
+                / (2.0 * self.spacing[0]),
+            (self.sample([point[0], point[1] + 1.0, point[2]])
+                - self.sample([point[0], point[1] - 1.0, point[2]]))
+                / (2.0 * self.spacing[1]),
+            (self.sample([point[0], point[1], point[2] + 1.0])
+                - self.sample([point[0], point[1], point[2] - 1.0]))
+                / (2.0 * self.spacing[2]),
+        );
+        if gradient.length_squared() > 1.0e-20 {
+            return -gradient.normalize();
+        }
+        if fallback.length_squared() > 1.0e-20 {
+            return fallback.normalize();
+        }
+        Vec3::Z
+    }
+
+    fn sample(&self, point: [f32; 3]) -> f32 {
+        let mut low = [0i64; 3];
+        let mut fraction = [0.0f32; 3];
+        for axis in 0..3 {
+            let value = point[axis].floor();
+            low[axis] = value as i64;
+            fraction[axis] = (point[axis] - value).clamp(0.0, 1.0);
+        }
+        let mut total = 0.0;
+        for corner in 0..8 {
+            let offset = [
+                (corner & 1) as i64,
+                ((corner >> 1) & 1) as i64,
+                ((corner >> 2) & 1) as i64,
+            ];
+            let share = [0, 1, 2].map(|axis| {
+                if offset[axis] == 0 {
+                    1.0 - fraction[axis]
+                } else {
+                    fraction[axis]
+                }
+            });
+            let cell = [low[0] + offset[0], low[1] + offset[1], low[2] + offset[2]];
+            let value = match self.array_index(cell) {
+                Some(slot) => self.field[slot],
+                None => OUTSIDE,
+            };
+            total += value * share[0] * share[1] * share[2];
+        }
+        total
+    }
+}

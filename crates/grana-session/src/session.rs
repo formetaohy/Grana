@@ -10,7 +10,7 @@ use grana_project::{Project, Source as ProjectSource, ViewState};
 use grana_scene::{Dataset, Job, Measure, ObjectFrame, ObjectSetId, Origin, Progress, Scene};
 use grana_volume::{BrickData, BrickRequest, Region};
 
-use crate::command::Edit;
+use crate::command::{Edit, Export};
 use crate::history::{History, Snapshot};
 use crate::loader::{Event as LoaderEvent, Loader};
 use crate::sample;
@@ -41,9 +41,10 @@ pub struct Effects {
     pub open_image: bool,
     pub open_project: bool,
     pub save_project: Option<bool>,
-    pub snapshot: bool,
+    pub snapshot: Option<Export>,
     pub export_movie: Option<u32>,
-    pub cancel_movie: bool,
+    pub sequence: Option<Export>,
+    pub cancel_export: bool,
     pub keyframe: bool,
     pub repaint: bool,
 }
@@ -75,6 +76,7 @@ pub struct Session {
     generation: u64,
     view: Option<ViewState>,
     history: History,
+    export: Export,
 }
 
 impl Default for Session {
@@ -112,6 +114,7 @@ impl Session {
             generation: 0,
             view: None,
             history: History::default(),
+            export: Export::NATIVE,
         }
     }
 
@@ -195,8 +198,8 @@ impl Session {
     pub fn io<'a>(
         &'a self,
         adapter: &'a str,
-        movie: Option<(u32, u32)>,
-        movie_message: Option<String>,
+        export: Option<(u32, u32)>,
+        export_message: Option<String>,
     ) -> IoView<'a> {
         let frames = self.scene.as_ref().map_or(0, |scene| scene.frame_count());
         let interval = self
@@ -212,8 +215,8 @@ impl Session {
             pending: self.in_flight.len(),
             frames,
             frame_interval: interval,
-            movie,
-            movie_message,
+            export,
+            export_message,
         }
     }
 
@@ -338,7 +341,7 @@ impl Session {
             Command::OpenProject => effects.open_project = true,
             Command::SaveProject => effects.save_project = Some(false),
             Command::SaveProjectAs => effects.save_project = Some(true),
-            Command::SaveSnapshot => effects.snapshot = true,
+            Command::SaveSnapshot => effects.snapshot = Some(self.export),
             Command::SetTime(time) => self.set_time(time),
             Command::Select(selection) => {
                 if let Some(scene) = self.scene.as_mut() {
@@ -481,7 +484,7 @@ impl Session {
             }
             Command::SetRegion(region) => {
                 if let Some(scene) = self.scene.as_mut() {
-                    scene.region = region;
+                    scene.set_region(region);
                 }
             }
             Command::SetExposure(exposure) => {
@@ -550,6 +553,16 @@ impl Session {
                     scene.coloc.set_thresholds(thresholds);
                 }
             }
+            Command::SetColocSettings(settings) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.coloc.set_settings(settings);
+                }
+            }
+            Command::RemoveColocResult(pair) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.coloc.remove_result(pair);
+                }
+            }
             Command::ComputeColoc => self.start_coloc(),
             Command::CancelColoc => self.cancel(Job::Coloc),
             Command::ExportColoc => self.export_coloc(),
@@ -578,7 +591,12 @@ impl Session {
             Command::SetTimelineFps(fps) => self.timeline.set_fps(fps),
             Command::SetTimelineDuration(duration) => self.timeline.set_duration(duration),
             Command::ExportMovie { width } => effects.export_movie = Some(width),
-            Command::CancelMovie => effects.cancel_movie = true,
+            Command::SetExport(export) => self.export = export,
+            Command::ExportSequence(export) => {
+                self.export = export;
+                effects.sequence = Some(export);
+            }
+            Command::CancelExport => effects.cancel_export = true,
             Command::Undo | Command::Redo => {
                 unreachable!("undo and redo run before the document commands")
             }
@@ -915,7 +933,7 @@ impl Session {
             Frame(u32, ObjectFrame),
             Tracks(TrackSet),
             Relation(u32, grana_object::RelationFrame),
-            Coloc(grana_measure::ColocSeries, Region),
+            Coloc(Box<grana_measure::ColocSeries>, Region),
             Done,
             Failed(String),
         }
@@ -938,7 +956,7 @@ impl Session {
                         updates.push((index, job, Update::Relation(time, frame)));
                     }
                     Poll::Event(Event::Coloc { series, region }) => {
-                        updates.push((index, job, Update::Coloc(*series, region)));
+                        updates.push((index, job, Update::Coloc(series, region)));
                     }
                     Poll::Event(Event::Done) => {
                         updates.push((index, job, Update::Done));
@@ -988,9 +1006,10 @@ impl Session {
                 Update::Coloc(series, region) => {
                     if let Some(scene) = self.scene.as_mut()
                         && scene.coloc.pair() == Some(series.pair())
+                        && scene.region == region
+                        && series.mask() == scene.mask.map(|set| set.raw())
                     {
-                        let frames = scene.frame_count();
-                        scene.coloc.install(series, region, frames);
+                        scene.coloc.install(*series);
                     }
                 }
                 Update::Done => {
@@ -1294,23 +1313,44 @@ impl Session {
             self.message = Some(Message::error("the region does not overlap the dataset"));
             return;
         }
+        let settings = scene.coloc.settings();
+        let mask = scene.mask;
+        let roi = match mask {
+            None => None,
+            Some(_) => match scene.mask_frames() {
+                Some(frames) if frames.iter().any(Option::is_some) => {
+                    Some(grana_analysis::Roi::new(frames))
+                }
+                _ => {
+                    self.message = Some(Message::error(
+                        "the analysis mask holds no detected objects",
+                    ));
+                    return;
+                }
+            },
+        };
         self.message = None;
         self.record_progress(Job::Coloc, 0, 0, 0);
-        self.analysis
-            .push(crate::coloc(Job::Coloc, source, pair, region));
+        self.analysis.push(crate::coloc(
+            Job::Coloc,
+            source,
+            pair,
+            region,
+            roi,
+            mask.map(|set| set.raw()),
+            settings,
+        ));
     }
 
     fn export_coloc(&mut self) {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        let Some(series) = scene.coloc.series() else {
+        let Some(result) = scene.coloc.result() else {
             return;
         };
-        let Some(pair) = scene.coloc.pair() else {
-            return;
-        };
-        let csv = series.csv(scene.coloc.thresholds());
+        let pair = result.pair();
+        let csv = result.series().csv(result.thresholds());
         let file_name = format!(
             "{}-{}-{}-colocalization.csv",
             crate::slug(scene.dataset.name()),

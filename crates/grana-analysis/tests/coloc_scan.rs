@@ -1,24 +1,31 @@
+use std::sync::Arc;
+
 use glam::Vec3;
-use grana_analysis::ColocScan;
-use grana_measure::{COLOC_BINS, COLOC_SCATTER, ColocPair, ColocSeries, ColocThresholds};
-use grana_volume::{Extent, Intensity, Level, Region, Spacing, VoxelData};
+use grana_analysis::{ColocPermutation, ColocScan, ColocScanConfig, Roi, Shape, coloc_levels};
+use grana_measure::{
+    COLOC_BINS_MAX, COLOC_BINS_MIN, ColocPair, ColocSeries, ColocSettings, ColocThresholds,
+};
+use grana_object::Spot;
+use grana_volume::{
+    ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, VoxelData, VoxelFormat,
+};
 
 const EXTENT: Extent = Extent::new(64, 48, 8);
 const RAMP: f32 = 65535.0;
 
-fn level() -> Level {
-    Level::new(EXTENT, Spacing::new(0.1, 0.1, 0.3))
-}
-
-fn intensity() -> Intensity {
-    Intensity::new(0.0, RAMP)
-}
-
 #[test]
 fn measures_correlated_channels() {
-    let first = ramp(|x, _, _| x as f32 / (EXTENT.x() - 1) as f32);
+    let first = volume(EXTENT, |x, _, _| x as f32 / (EXTENT.x() - 1) as f32);
     let second = first.clone();
-    let series = scan(Region::none(), &first, &second);
+    let series = scan(
+        EXTENT,
+        1,
+        Region::none(),
+        &[first],
+        &[second],
+        None,
+        ColocSettings::default(),
+    );
     let statistics = series.statistics(ColocThresholds::new(0.5, 0.5));
     assert_eq!(statistics.voxels(), EXTENT.voxel_count());
     assert!(
@@ -33,8 +40,12 @@ fn measures_correlated_channels() {
     );
     let manders = statistics.manders();
     assert!(manders[0].is_some_and(|value| (value - manders[1].unwrap()).abs() < 1.0e-6));
+    let bins = series.bins();
+    let cut = ((0.5f32 * bins as f32) as usize).min(bins - 1);
+    let bin =
+        |x: u32| (((x as f32 / (EXTENT.x() - 1) as f32) * bins as f32) as usize).min(bins - 1);
     let above = (0..EXTENT.x())
-        .filter(|x| *x as f32 / (EXTENT.x() - 1) as f32 > 0.5)
+        .filter(|x| bin(*x) > cut)
         .map(|x| x as f64)
         .sum::<f64>();
     let total = (0..EXTENT.x()).map(|x| x as f64).sum::<f64>();
@@ -44,18 +55,36 @@ fn measures_correlated_channels() {
         (0.3..0.7).contains(&otsu.a()),
         "the otsu threshold splits the ramp near its middle"
     );
-    assert_eq!(series.counts_a().iter().sum::<u64>(), EXTENT.voxel_count());
-    assert_eq!(series.scatter().iter().sum::<u64>(), EXTENT.voxel_count());
-    assert_eq!(series.counts_a().len(), COLOC_BINS);
-    assert_eq!(series.scatter().len(), COLOC_SCATTER * COLOC_SCATTER);
+    assert!((COLOC_BINS_MIN..=COLOC_BINS_MAX).contains(&series.bins()));
+    assert_eq!(series.joint().len(), series.bins() * series.bins());
+    assert_eq!(series.joint().iter().sum::<u64>(), EXTENT.voxel_count());
+    assert_eq!(series.level(), 0);
+    assert_eq!(series.permutation_level(), 0);
+    assert_eq!(series.cost().scan_voxels(), EXTENT.voxel_count());
+    let significance = series
+        .significance()
+        .expect("the series carries a permutation test");
+    assert_eq!(significance.randomizations(), 200);
+    assert!(
+        significance.p() < 0.01,
+        "a perfectly correlated pair tests significant"
+    );
 }
 
 #[test]
 fn measures_anticorrelated_channels_inside_a_region() {
-    let first = ramp(|x, _, _| x as f32 / (EXTENT.x() - 1) as f32);
-    let second = ramp(|x, _, _| 1.0 - x as f32 / (EXTENT.x() - 1) as f32);
+    let first = volume(EXTENT, |x, _, _| x as f32 / (EXTENT.x() - 1) as f32);
+    let second = volume(EXTENT, |x, _, _| 1.0 - x as f32 / (EXTENT.x() - 1) as f32);
     let region = Region::new(Vec3::new(-1.0, -1.0, -2.0), Vec3::new(1.0, 1.0, 2.0));
-    let series = scan(region, &first, &second);
+    let series = scan(
+        EXTENT,
+        1,
+        region,
+        &[first],
+        &[second],
+        None,
+        ColocSettings::default(),
+    );
     let statistics = series.statistics(ColocThresholds::new(0.5, 0.5));
     assert!(
         statistics.voxels() < EXTENT.voxel_count(),
@@ -65,31 +94,409 @@ fn measures_anticorrelated_channels_inside_a_region() {
         statistics.pearson().is_some_and(|value| value < -0.999),
         "opposite ramps anticorrelate"
     );
+    let significance = series
+        .significance()
+        .expect("the series carries a permutation test");
+    assert!(
+        significance.p() > 0.05,
+        "anticorrelated channels are not significantly colocalized"
+    );
 }
 
-fn scan(region: Region, first: &VoxelData, second: &VoxelData) -> ColocSeries {
-    let mut scan = ColocScan::new(
-        level(),
+#[test]
+fn gates_the_scan_by_the_analysis_mask() {
+    let spots: Arc<[Spot]> = vec![Spot::new([0.0, 0.0, 0.0], 1.5, 1.0)].into();
+    let roi = Roi::new(vec![Some(Shape::spots(spots))]);
+    let first = volume(EXTENT, |x, _, _| x as f32 / (EXTENT.x() - 1) as f32);
+    let second = volume(EXTENT, |x, y, z| {
+        let unit = x as f32 / (EXTENT.x() - 1) as f32;
+        if inside(x, y, z) { unit } else { 1.0 - unit }
+    });
+    let masked = scan(
+        EXTENT,
         1,
-        2,
-        [intensity(), intensity()],
-        ColocPair::new(0, 1),
+        Region::none(),
+        std::slice::from_ref(&first),
+        std::slice::from_ref(&second),
+        Some(&roi),
+        ColocSettings::default(),
+    );
+    let whole = scan(
+        EXTENT,
+        1,
+        Region::none(),
+        &[first],
+        &[second],
+        None,
+        ColocSettings::default(),
+    );
+    let mask = roi.mask(level(EXTENT), 0);
+    let masked_statistics = masked.statistics(ColocThresholds::new(0.5, 0.5));
+    assert_eq!(masked_statistics.voxels(), mask.count());
+    assert!(
+        masked_statistics
+            .pearson()
+            .is_some_and(|value| value > 0.95),
+        "the masked core correlates"
+    );
+    let whole_statistics = whole.statistics(ColocThresholds::new(0.5, 0.5));
+    assert!(
+        whole_statistics
+            .pearson()
+            .is_some_and(|value| value < -0.05),
+        "the anticorrelated surroundings dominate the unmasked volume"
+    );
+    assert!(
+        masked
+            .significance()
+            .is_some_and(|significance| significance.p() < 0.01)
+    );
+    assert!(
+        whole
+            .significance()
+            .is_some_and(|significance| significance.p() > 0.05)
+    );
+}
+
+#[test]
+fn adapts_the_bin_count_to_the_sample() {
+    let small = Extent::new(24, 24, 24);
+    let large = Extent::new(48, 48, 48);
+    let settings = ColocSettings::new(8, 3);
+    let small_series = scan(
+        small,
+        1,
+        Region::none(),
+        &[volume(small, |x, _, _| x as f32 / (small.x() - 1) as f32)],
+        &[volume(small, |x, _, _| x as f32 / (small.x() - 1) as f32)],
+        None,
+        settings,
+    );
+    let large_series = scan(
+        large,
+        1,
+        Region::none(),
+        &[volume(large, |x, _, _| x as f32 / (large.x() - 1) as f32)],
+        &[volume(large, |x, _, _| x as f32 / (large.x() - 1) as f32)],
+        None,
+        settings,
+    );
+    assert!((COLOC_BINS_MIN..=COLOC_BINS_MAX).contains(&small_series.bins()));
+    assert!((COLOC_BINS_MIN..=COLOC_BINS_MAX).contains(&large_series.bins()));
+    assert!(
+        large_series.bins() > small_series.bins(),
+        "a larger sample resolves more intensity bins"
+    );
+}
+
+#[test]
+fn selects_pyramid_levels_within_the_budgets() {
+    let pyramid = described_pyramid(1);
+    let levels = coloc_levels(&pyramid, Region::none(), 1);
+    assert_eq!(levels.scan(), 1);
+    assert_eq!(levels.permutation(), 3);
+    assert_eq!(levels.stride(), 1);
+    assert_eq!(levels.frames(), &[0]);
+
+    let pyramid = described_pyramid(40);
+    let levels = coloc_levels(&pyramid, Region::none(), 40);
+    assert_eq!(levels.scan(), 1);
+    assert_eq!(levels.permutation(), 3);
+    assert_eq!(levels.stride(), 1);
+    assert_eq!(levels.frames().len(), 8);
+}
+
+#[test]
+fn samples_a_coarser_permutation_level() {
+    let scan_extent = Extent::new(64, 48, 8);
+    let permutation_extent = Extent::new(32, 24, 8);
+    let frames = 8;
+    let pyramid = Pyramid::new(
+        vec![
+            level(scan_extent),
+            Level::new(permutation_extent, Spacing::new(0.2, 0.2, 0.6)),
+        ],
+        channels(),
+        frames,
+        1.0,
+    );
+    let scan_first = (0..frames)
+        .map(|_| {
+            volume(scan_extent, |x, _, _| {
+                x as f32 / (scan_extent.x() - 1) as f32
+            })
+        })
+        .collect::<Vec<_>>();
+    let scan_second = scan_first.clone();
+    let permutation_first = (0..frames)
+        .map(|_| {
+            volume(permutation_extent, |x, _, _| {
+                x as f32 / (permutation_extent.x() - 1) as f32
+            })
+        })
+        .collect::<Vec<_>>();
+    let permutation_second = permutation_first.clone();
+    let series = scan_with(
+        &pyramid,
+        frames,
+        Region::none(),
+        &Channels {
+            first: &scan_first,
+            second: &scan_second,
+        },
+        &Channels {
+            first: &permutation_first,
+            second: &permutation_second,
+        },
+        None,
+        ColocSettings::new(40, 3),
+    );
+    assert_eq!(series.level(), 0);
+    assert_eq!(series.permutation_level(), 1);
+    assert_eq!(series.permutation_stride(), 1);
+    assert!(
+        series
+            .significance()
+            .is_some_and(|significance| significance.p() < 0.05)
+    );
+}
+
+#[test]
+fn samples_a_stride_when_no_coarser_level_fits() {
+    let extent = Extent::new(96, 96, 64);
+    let frames = 1;
+    let pyramid = pyramid(extent, frames);
+    let levels = coloc_levels(&pyramid, Region::none(), frames);
+    assert_eq!(levels.scan(), 0);
+    assert_eq!(levels.permutation(), 0);
+    assert_eq!(levels.stride(), 2);
+    let first = volume(extent, |x, _, _| x as f32 / (extent.x() - 1) as f32);
+    let second = first.clone();
+    let series = scan(
+        extent,
+        frames,
+        Region::none(),
+        &[first],
+        &[second],
+        None,
+        ColocSettings::new(40, 3),
+    );
+    assert_eq!(series.permutation_stride(), 2);
+    assert!(
+        series
+            .significance()
+            .is_some_and(|significance| significance.p() < 0.05)
+    );
+}
+
+#[test]
+fn samples_a_grid_that_does_not_divide_the_blocks() {
+    let extent = Extent::new(61, 37, 23);
+    let settings = ColocSettings::new(200, 3);
+    let identical = volume(extent, |x, _, _| x as f32 / (extent.x() - 1) as f32);
+    let correlated = scan(
+        extent,
+        1,
+        Region::none(),
+        std::slice::from_ref(&identical),
+        std::slice::from_ref(&identical),
+        None,
+        settings,
+    );
+    assert_eq!(correlated.permutation_level(), 0);
+    assert_eq!(correlated.permutation_stride(), 1);
+    assert!((COLOC_BINS_MIN..=COLOC_BINS_MAX).contains(&correlated.bins()));
+    let significance = correlated
+        .significance()
+        .expect("the correlated grid carries a permutation test");
+    assert_eq!(significance.randomizations(), 200);
+    assert!(
+        significance.p() < 0.01,
+        "an identical pair tests significant on a grid that does not divide the blocks"
+    );
+
+    let first = volume(extent, |x, y, z| hash(x, y, z, 1));
+    let second = volume(extent, |x, y, z| hash(x, y, z, 2));
+    let independent = scan(
+        extent,
+        1,
+        Region::none(),
+        &[first],
+        &[second],
+        None,
+        settings,
+    );
+    let significance = independent
+        .significance()
+        .expect("the independent grid carries a permutation test");
+    assert!(
+        significance.p() > 0.05,
+        "independent noise is not significant on a grid that does not divide the blocks"
+    );
+}
+
+#[test]
+fn finds_the_costes_threshold_interval() {
+    let first = volume(EXTENT, |x, y, _| {
+        if core(x, y) {
+            0.6 + 0.4 * x as f32 / (EXTENT.x() - 1) as f32
+        } else {
+            0.05 + 0.15 * x as f32 / (EXTENT.x() - 1) as f32
+        }
+    });
+    let second = volume(EXTENT, |x, y, _| {
+        if core(x, y) {
+            0.6 + 0.4 * x as f32 / (EXTENT.x() - 1) as f32
+        } else {
+            0.05 + 0.15 * y as f32 / (EXTENT.y() - 1) as f32
+        }
+    });
+    let series = scan(
+        EXTENT,
+        1,
+        Region::none(),
+        &[first],
+        &[second],
+        None,
+        ColocSettings::new(8, 3),
+    );
+    let costes = series.costes().expect(
+        "a correlated core separated from an uncorrelated background carries Costes thresholds",
+    );
+    let high = costes.high();
+    assert!(high.a() > 0.3 && high.a() < 0.9, "{high:?}");
+    assert!(costes.low().a() <= high.a() && costes.low().b() <= high.b());
+    let manders = series.statistics(high).manders();
+    assert!(manders[0].is_some_and(|value| value > 0.5), "{manders:?}");
+    assert!(manders[1].is_some_and(|value| value > 0.5), "{manders:?}");
+}
+
+struct Channels<'a> {
+    first: &'a [VoxelData],
+    second: &'a [VoxelData],
+}
+
+fn scan(
+    extent: Extent,
+    frames: u32,
+    region: Region,
+    first: &[VoxelData],
+    second: &[VoxelData],
+    roi: Option<&Roi>,
+    settings: ColocSettings,
+) -> ColocSeries {
+    let pyramid = pyramid(extent, frames);
+    let data = Channels { first, second };
+    scan_with(&pyramid, frames, region, &data, &data, roi, settings)
+}
+
+fn scan_with(
+    pyramid: &Pyramid,
+    frames: u32,
+    region: Region,
+    scan_data: &Channels<'_>,
+    permutation_data: &Channels<'_>,
+    roi: Option<&Roi>,
+    settings: ColocSettings,
+) -> ColocSeries {
+    let levels = coloc_levels(pyramid, region, frames);
+    let info = pyramid.level(levels.scan());
+    let scan_extent = info.extent();
+    let pair = ColocPair::new(0, 1);
+    let intensities = [intensity(), intensity()];
+    let mut scan = ColocScan::new(
+        info,
+        &levels,
+        ColocScanConfig::new(pair, 2, intensities, None, frames),
         region,
     );
-    for index in 0..scan.tile_count() {
-        let ranges = scan.tile(index);
-        let a = slice(first, &ranges);
-        let b = slice(second, &ranges);
-        scan.add(0, index, &a, &b);
+    let mut permutation =
+        ColocPermutation::new(pyramid, region, pair, &levels, settings, intensities);
+    for time in 0..frames {
+        let mask = roi.map(|roi| roi.mask(info, time));
+        for index in 0..scan.tile_count() {
+            let ranges = scan.tile(index);
+            let a = slice(&scan_data.first[time as usize], scan_extent, &ranges);
+            let b = slice(&scan_data.second[time as usize], scan_extent, &ranges);
+            scan.add(time, index, &a, &b, mask.as_ref());
+        }
     }
-    scan.finish()
+    let permutation_info = pyramid.level(levels.permutation());
+    let permutation_extent = permutation_info.extent();
+    let permutation_frames = levels.frames().to_vec();
+    for (slot, time) in permutation_frames.iter().enumerate() {
+        let mask = roi.map(|roi| roi.mask(permutation_info, *time));
+        for index in 0..permutation.tile_count() {
+            let ranges = permutation.tile(index);
+            let a = slice(
+                &permutation_data.first[*time as usize],
+                permutation_extent,
+                &ranges,
+            );
+            let b = slice(
+                &permutation_data.second[*time as usize],
+                permutation_extent,
+                &ranges,
+            );
+            permutation.add(slot, index, &a, &b, mask.as_ref());
+        }
+    }
+    let permutation_voxels = permutation.sampled_voxels();
+    let permutation_frames = permutation.sampled_frames();
+    let blocks = permutation.blocks();
+    let randomizations = permutation.randomizations();
+    let significance = permutation.test();
+    scan.finish(
+        significance,
+        permutation_voxels,
+        permutation_frames,
+        randomizations,
+        blocks,
+    )
 }
 
-fn ramp(value: impl Fn(u32, u32, u32) -> f32) -> VoxelData {
-    let mut voxels = Vec::with_capacity(EXTENT.voxel_count() as usize);
-    for z in 0..EXTENT.z() {
-        for y in 0..EXTENT.y() {
-            for x in 0..EXTENT.x() {
+fn level(extent: Extent) -> Level {
+    Level::new(extent, Spacing::new(0.1, 0.1, 0.3))
+}
+
+fn pyramid(extent: Extent, frames: u32) -> Pyramid {
+    Pyramid::new(vec![level(extent)], channels(), frames, 1.0)
+}
+
+fn described_pyramid(frames: u32) -> Pyramid {
+    let levels = vec![
+        Level::new(Extent::new(512, 512, 64), Spacing::new(0.1, 0.1, 0.3)),
+        Level::new(Extent::new(256, 256, 32), Spacing::new(0.2, 0.2, 0.6)),
+        Level::new(Extent::new(128, 128, 16), Spacing::new(0.4, 0.4, 1.2)),
+        Level::new(Extent::new(64, 64, 8), Spacing::new(0.8, 0.8, 2.4)),
+        Level::new(Extent::new(32, 32, 4), Spacing::new(1.6, 1.6, 4.8)),
+    ];
+    Pyramid::new(levels, channels(), frames, 1.0)
+}
+
+fn channels() -> Vec<ChannelInfo> {
+    (0..2)
+        .map(|channel| {
+            ChannelInfo::new(
+                format!("Channel {channel}"),
+                [1.0, 1.0, 1.0],
+                intensity(),
+                intensity(),
+                VoxelFormat::U16,
+            )
+        })
+        .collect()
+}
+
+fn intensity() -> Intensity {
+    Intensity::new(0.0, RAMP)
+}
+
+fn volume(extent: Extent, value: impl Fn(u32, u32, u32) -> f32) -> VoxelData {
+    let mut voxels = Vec::with_capacity(extent.voxel_count() as usize);
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
                 voxels.push((value(x, y, z) * RAMP) as u16);
             }
         }
@@ -97,11 +504,35 @@ fn ramp(value: impl Fn(u32, u32, u32) -> f32) -> VoxelData {
     VoxelData::U16(voxels)
 }
 
-fn slice(data: &VoxelData, ranges: &[std::ops::Range<u32>; 3]) -> VoxelData {
+fn slice(data: &VoxelData, extent: Extent, ranges: &[std::ops::Range<u32>; 3]) -> VoxelData {
     data.region(
-        EXTENT,
+        extent,
         ranges[0].clone(),
         ranges[1].clone(),
         ranges[2].clone(),
     )
+}
+
+fn inside(x: u32, y: u32, z: u32) -> bool {
+    let point = [
+        (x as f32 + 0.5) * 0.1 - 0.5 * EXTENT.x() as f32 * 0.1,
+        (y as f32 + 0.5) * 0.1 - 0.5 * EXTENT.y() as f32 * 0.1,
+        (z as f32 + 0.5) * 0.3 - 0.5 * EXTENT.z() as f32 * 0.3,
+    ];
+    point.iter().map(|value| value * value).sum::<f32>() <= 1.5 * 1.5
+}
+
+fn core(x: u32, y: u32) -> bool {
+    x >= EXTENT.x() / 4 && x < 3 * EXTENT.x() / 4 && y >= EXTENT.y() / 4 && y < 3 * EXTENT.y() / 4
+}
+
+fn hash(x: u32, y: u32, z: u32, seed: u32) -> f32 {
+    let mut value = x.wrapping_mul(73_856_093)
+        ^ y.wrapping_mul(19_349_663)
+        ^ z.wrapping_mul(83_492_791)
+        ^ seed.wrapping_mul(2_654_435_761);
+    value ^= value >> 13;
+    value = value.wrapping_mul(0x85eb_ca6b);
+    value ^= value >> 16;
+    (value % 10_000) as f32 / 9_999.0
 }

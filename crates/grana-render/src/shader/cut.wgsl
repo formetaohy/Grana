@@ -1,5 +1,26 @@
+struct CutObject {
+    minimum: vec4<f32>,
+    extent: vec4<f32>,
+    style: u32,
+    reserved: array<u32, 3>,
+}
+
+struct Style {
+    color: vec4<f32>,
+    flags: vec4<f32>,
+}
+
 @group(0) @binding(0) var layer: texture_2d<f32>;
 @group(0) @binding(1) var layer_sampler: sampler;
+@group(0) @binding(2) var identities: texture_multisampled_2d<f32>;
+@group(1) @binding(0) var<storage, read> cuts: array<CutObject>;
+@group(1) @binding(1) var<storage, read> styles: array<Style>;
+
+const SAMPLE_COUNT: i32 = 4;
+const OUTLINE_ALPHA: f32 = 0.85;
+const OUTLINE_RADIUS: i32 = 1;
+const SELECTED: vec3<f32> = vec3<f32>(1.0, 0.86, 0.45);
+const SELECTED_MIX: f32 = 0.55;
 
 struct Output {
     @builtin(position) clip_position: vec4<f32>,
@@ -21,6 +42,50 @@ fn vs_main(@builtin(vertex_index) index: u32) -> Output {
 }
 
 @fragment
-fn fs_main(input: Output) -> @location(0) vec4<f32> {
+fn fs_composite(input: Output) -> @location(0) vec4<f32> {
     return textureSampleLevel(layer, layer_sampler, input.uv, 0.0);
+}
+
+fn decode_identity(value: vec4<f32>) -> u32 {
+    let bytes = vec4<u32>(clamp(value, vec4<f32>(0.0), vec4<f32>(1.0)) * 255.0 + 0.5);
+    return bytes.x | (bytes.y << 8u) | (bytes.z << 16u);
+}
+
+fn nearest_identity(coordinate: vec2<i32>) -> u32 {
+    let extent = vec2<i32>(textureDimensions(identities));
+    let at = clamp(coordinate, vec2<i32>(0), extent - vec2<i32>(1));
+    var identity = 0u;
+    for (var index = 0; index < SAMPLE_COUNT; index += 1) {
+        identity = max(identity, decode_identity(textureLoad(identities, at, index)));
+    }
+    return identity;
+}
+
+@fragment
+fn fs_outline(input: Output) -> @location(0) vec4<f32> {
+    let coordinate = vec2<i32>(input.clip_position.xy);
+    let near = nearest_identity(coordinate);
+    if (near == 0u) {
+        return vec4<f32>(0.0);
+    }
+    let offsets = array<vec2<i32>, 4>(
+        vec2<i32>(OUTLINE_RADIUS, 0),
+        vec2<i32>(-OUTLINE_RADIUS, 0),
+        vec2<i32>(0, OUTLINE_RADIUS),
+        vec2<i32>(0, -OUTLINE_RADIUS),
+    );
+    var boundary = false;
+    for (var index = 0; index < 4; index += 1) {
+        if (nearest_identity(coordinate + offsets[index]) < near) {
+            boundary = true;
+        }
+    }
+    if (!boundary) {
+        return vec4<f32>(0.0);
+    }
+    let style = styles[cuts[near - 1u].style];
+    let selected = style.flags.y > 0.5;
+    let color = mix(style.color.rgb, SELECTED, select(0.0, SELECTED_MIX, selected));
+    let alpha = select(OUTLINE_ALPHA, 1.0, selected);
+    return vec4<f32>(color * alpha, alpha);
 }

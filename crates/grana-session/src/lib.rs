@@ -15,14 +15,14 @@ pub use batch::{
     Batch, BatchPoll, DiscoverError, Event as BatchEvent, MAX_JOBS, Outcome, Plan, dataset_name,
     default_jobs, discover,
 };
-pub use command::{Action, Command};
+pub use command::{Action, Command, Export};
 pub use event::{Event, Poll};
 pub use grana_image::{Source, is_image};
 pub use job::{Analysis, coloc, detect, relation, track};
 pub use loader::Loader;
 pub use protocol::{
-    ColocSpec, DetectionSpec, FilterSpec, MeasureSpec, Protocol, ProtocolError, RegionSpec,
-    RelationSpec, SetSpec, TrackSpec,
+    ColocPairSpec, ColocSettingsSpec, ColocSpec, DetectionSpec, FilterSpec, MeasureSpec, Protocol,
+    ProtocolError, RegionSpec, RelationSpec, SetSpec, TrackSpec,
 };
 pub use session::{Effects, Session};
 pub use slug::slug;

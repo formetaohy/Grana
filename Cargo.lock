@@ -923,6 +923,7 @@ dependencies = [
  "grana-video",
  "grana-volume",
  "png",
+ "pollster",
  "wgpu",
 ]
 

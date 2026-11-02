@@ -1,8 +1,10 @@
 use std::path::Path;
 
 use glam::Vec3;
-use grana_analysis::{FilamentParams, SpotParams, SurfaceParams, TrackParams};
-use grana_measure::{Aggregate, Filter, Group};
+use grana_analysis::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
+use grana_measure::{
+    Aggregate, COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocSettings, Filter, Group,
+};
 use grana_scene::{Measure, ObjectKind, ObjectParams, Scene};
 use grana_volume::Region;
 use serde::{Deserialize, Serialize};
@@ -80,6 +82,10 @@ pub enum DetectionSpec {
         grain: f32,
         seed: f32,
         min_volume: f32,
+        opening: f32,
+        closing: f32,
+        min_sphericity: f32,
+        min_mean_intensity: f32,
     },
     Filaments {
         threshold: f32,
@@ -100,6 +106,28 @@ pub struct TrackSpec {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ColocSpec {
+    pub settings: ColocSettingsSpec,
+    pub pairs: Vec<ColocPairSpec>,
+    #[serde(deserialize_with = "mask_field")]
+    pub mask: Option<String>,
+}
+
+impl ColocSpec {
+    pub fn settings(&self) -> ColocSettings {
+        ColocSettings::new(self.settings.permutations, self.settings.block)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColocSettingsSpec {
+    pub permutations: u32,
+    pub block: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColocPairSpec {
     pub a: String,
     pub b: String,
     pub thresholds: [f32; 2],
@@ -175,6 +203,10 @@ impl Protocol {
                         grain: params.grain(),
                         seed: params.seed(),
                         min_volume: params.min_volume(),
+                        opening: params.opening(),
+                        closing: params.closing(),
+                        min_sphericity: params.min_sphericity(),
+                        min_mean_intensity: params.min_mean_intensity(),
                     },
                     ObjectParams::Filaments(params) => DetectionSpec::Filaments {
                         threshold: params.threshold(),
@@ -229,14 +261,35 @@ impl Protocol {
                 })
             })
             .collect::<Vec<_>>();
-        let coloc = if scene.coloc.series().is_some() {
-            scene.coloc.pair().map(|pair| ColocSpec {
-                a: channels[pair.a()].clone(),
-                b: channels[pair.b()].clone(),
-                thresholds: [scene.coloc.thresholds().a(), scene.coloc.thresholds().b()],
-            })
-        } else {
+        let coloc = if scene.coloc.results().is_empty() {
             None
+        } else {
+            let pairs = scene
+                .coloc
+                .results()
+                .iter()
+                .map(|result| {
+                    let pair = result.pair();
+                    ColocPairSpec {
+                        a: channels[pair.a()].clone(),
+                        b: channels[pair.b()].clone(),
+                        thresholds: [result.thresholds().a(), result.thresholds().b()],
+                    }
+                })
+                .collect::<Vec<_>>();
+            let mask = scene
+                .mask
+                .and_then(|id| scene.objects.get(id))
+                .map(|set| set.name().to_string());
+            let settings = scene.coloc.settings();
+            Some(ColocSpec {
+                settings: ColocSettingsSpec {
+                    permutations: settings.permutations(),
+                    block: settings.block(),
+                },
+                pairs,
+                mask,
+            })
         };
         Self::new(region, sets, relations, coloc)
     }
@@ -309,7 +362,20 @@ impl Protocol {
             ));
         }
         if let Some(coloc) = &self.coloc {
-            summary.push_str(&format!(" · colocalizes {} with {}", coloc.a, coloc.b));
+            let pairs = coloc
+                .pairs
+                .iter()
+                .map(|pair| format!("{} with {}", pair.a, pair.b))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mask = coloc
+                .mask
+                .as_ref()
+                .map_or_else(String::new, |mask| format!(" within {mask}"));
+            summary.push_str(&format!(
+                " · colocalizes {pairs}{mask} ({} permutations)",
+                coloc.settings.permutations
+            ));
         }
         summary
     }
@@ -409,21 +475,57 @@ impl Protocol {
             pairs.push(pair);
         }
         if let Some(coloc) = &self.coloc {
-            validate(&coloc.a, "a channel name")?;
-            validate(&coloc.b, "a channel name")?;
-            if coloc.a == coloc.b {
+            if !(1..=COLOC_PERMUTATIONS_MAX).contains(&coloc.settings.permutations) {
                 return Err(ProtocolError::Invalid(
-                    "a colocalization pair names two channels".to_string(),
+                    "a colocalization significance test runs a supported number of permutations"
+                        .to_string(),
                 ));
             }
-            if coloc
-                .thresholds
-                .iter()
-                .any(|value| !(0.0..=1.0).contains(value))
-            {
+            if !(1..=COLOC_BLOCK_MAX).contains(&coloc.settings.block) {
                 return Err(ProtocolError::Invalid(
-                    "a colocalization threshold is a unit fraction".to_string(),
+                    "a colocalization randomization block spans a supported number of voxels"
+                        .to_string(),
                 ));
+            }
+            if coloc.pairs.is_empty() {
+                return Err(ProtocolError::Invalid(
+                    "a colocalization specification names at least one channel pair".to_string(),
+                ));
+            }
+            let mut pairs = Vec::new();
+            for pair in &coloc.pairs {
+                validate(&pair.a, "a channel name")?;
+                validate(&pair.b, "a channel name")?;
+                if pair.a == pair.b {
+                    return Err(ProtocolError::Invalid(
+                        "a colocalization pair names two channels".to_string(),
+                    ));
+                }
+                if pair
+                    .thresholds
+                    .iter()
+                    .any(|value| !(0.0..=1.0).contains(value))
+                {
+                    return Err(ProtocolError::Invalid(
+                        "a colocalization threshold is a unit fraction".to_string(),
+                    ));
+                }
+                let key = (&pair.a, &pair.b);
+                if pairs.contains(&key) {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{} and {} are colocalized twice",
+                        pair.a, pair.b
+                    )));
+                }
+                pairs.push(key);
+            }
+            if let Some(mask) = &coloc.mask {
+                validate(mask, "a colocalization mask")?;
+                if !names.contains(mask) {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the colocalization mask {mask} is not an object set of the protocol"
+                    )));
+                }
             }
         }
         Ok(self)
@@ -634,7 +736,17 @@ impl DetectionSpec {
                 grain,
                 seed,
                 min_volume,
-            } => ObjectParams::Surfaces(SurfaceParams::new(threshold, grain, seed, min_volume)),
+                opening,
+                closing,
+                min_sphericity,
+                min_mean_intensity,
+            } => ObjectParams::Surfaces(SurfaceParams::new(
+                threshold,
+                grain,
+                seed,
+                min_volume,
+                SurfaceFilter::new(opening, closing, min_sphericity, min_mean_intensity),
+            )),
             Self::Filaments {
                 threshold,
                 min_length,
@@ -659,6 +771,10 @@ impl DetectionSpec {
                 grain,
                 seed,
                 min_volume,
+                opening,
+                closing,
+                min_sphericity,
+                min_mean_intensity,
             } => {
                 if !(0.0..=1.0).contains(&threshold) {
                     return invalid("needs a unit surface threshold".to_string());
@@ -671,6 +787,18 @@ impl DetectionSpec {
                 }
                 if !(min_volume.is_finite() && min_volume >= 0.0) {
                     return invalid("needs a non-negative minimum volume".to_string());
+                }
+                if !(opening.is_finite() && opening >= 0.0) {
+                    return invalid("needs a non-negative surface opening radius".to_string());
+                }
+                if !(closing.is_finite() && closing >= 0.0) {
+                    return invalid("needs a non-negative surface closing radius".to_string());
+                }
+                if !(0.0..=1.0).contains(&min_sphericity) {
+                    return invalid("needs a unit sphericity filter".to_string());
+                }
+                if !(0.0..=1.0).contains(&min_mean_intensity) {
+                    return invalid("needs a unit intensity filter".to_string());
                 }
             }
             Self::Filaments {
@@ -717,4 +845,11 @@ fn validate(value: &str, what: &str) -> Result<(), ProtocolError> {
         return Err(ProtocolError::Invalid(format!("{what} is empty")));
     }
     Ok(())
+}
+
+fn mask_field<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)
 }

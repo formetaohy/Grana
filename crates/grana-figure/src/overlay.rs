@@ -119,6 +119,7 @@ fn paint_volume(ui: &mut Ui, overlay: &mut Overlay<'_>) {
             overlay.volume_safe,
             world_per_point,
             overlay.legends,
+            true,
         );
     }
     chip(
@@ -148,7 +149,7 @@ fn paint_section(ui: &mut Ui, overlay: &Overlay<'_>) {
     let clip = ui.clip().intersect(rect, Corners::all(16.0));
     {
         let mut painter = ui.painter_in(clip);
-        scale_bar(&mut painter, stage, world_per_point);
+        scale_bar(&mut painter, stage, world_per_point, true);
         cross(&mut painter, stage.center(), 6.0, 1.0, CROSS);
         painter.outlined(
             stage,
@@ -175,9 +176,15 @@ fn paint_section(ui: &mut Ui, overlay: &Overlay<'_>) {
         LABEL,
     );
 }
-pub fn figure(painter: &mut Painter, rect: Rect, world_per_point: f32, legends: &[Legend]) {
-    scale_bar(painter, rect, world_per_point);
-    paint_legends(painter, rect, legends);
+pub fn figure(
+    painter: &mut Painter,
+    rect: Rect,
+    world_per_point: f32,
+    legends: &[Legend],
+    backdrop: bool,
+) {
+    scale_bar(painter, rect, world_per_point, backdrop);
+    paint_legends(painter, rect, legends, backdrop);
 }
 
 pub fn legends(scene: &Scene) -> Vec<Legend> {
@@ -388,7 +395,7 @@ fn chip(
     );
 }
 
-fn scale_bar(painter: &mut Painter, rect: Rect, world_per_point: f32) {
+fn scale_bar(painter: &mut Painter, rect: Rect, world_per_point: f32, backdrop: bool) {
     let length = nice_length(SCALE_TARGET * world_per_point);
     let points = length / world_per_point;
     let left = rect.min.x + 18.0;
@@ -398,16 +405,18 @@ fn scale_bar(painter: &mut Painter, rect: Rect, world_per_point: f32) {
         Vec2::new(left - 9.0, bottom - 10.0),
         Vec2::new(points + 64.0, 23.0),
     );
-    painter.outlined(
-        pill,
-        Corners::capsule(),
-        Fill::Solid(Color::black_alpha(0.38)),
-        grana_ui::Border {
-            width: 0.5,
-            color: Color::white_alpha(0.10),
-        },
-        grana_ui::Shadow::NONE,
-    );
+    if backdrop {
+        painter.outlined(
+            pill,
+            Corners::capsule(),
+            Fill::Solid(Color::black_alpha(0.38)),
+            grana_ui::Border {
+                width: 0.5,
+                color: Color::white_alpha(0.10),
+            },
+            grana_ui::Shadow::NONE,
+        );
+    }
     painter.segment(
         Vec2::new(left, bottom),
         Vec2::new(left + points, bottom),
@@ -433,7 +442,7 @@ fn scale_bar(painter: &mut Painter, rect: Rect, world_per_point: f32) {
     );
 }
 
-fn paint_legends(painter: &mut Painter, rect: Rect, legends: &[Legend]) {
+fn paint_legends(painter: &mut Painter, rect: Rect, legends: &[Legend], backdrop: bool) {
     if legends.is_empty() || rect.width() < 340.0 || rect.height() < 260.0 {
         return;
     }
@@ -449,7 +458,9 @@ fn paint_legends(painter: &mut Painter, rect: Rect, legends: &[Legend]) {
             Vec2::new(left - 10.0, title_top - 9.0),
             Vec2::new(left + LEGEND_WIDTH, bar_bottom + 10.0),
         );
-        painter.rect(card, Corners::all(10.0), Color::black_alpha(0.42));
+        if backdrop {
+            painter.rect(card, Corners::all(10.0), Color::black_alpha(0.42));
+        }
         painter.text_at(
             Vec2::new(left, title_top),
             &truncated(&legend.title),

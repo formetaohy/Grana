@@ -10,4 +10,8 @@ pub enum Error {
     Write { path: PathBuf, detail: String },
     #[error("the movie encoder stopped before the movie was complete")]
     Stopped,
+    #[error("the frame sequence already exists at {}", path.display())]
+    Exists { path: PathBuf },
+    #[error("the frame sequence holds {index} of {frames} frames")]
+    Incomplete { index: u32, frames: u32 },
 }

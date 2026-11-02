@@ -134,7 +134,7 @@ impl Present {
         })
     }
 
-    pub fn write(&self, queue: &Queue, exposure: f32, samples: u32) {
+    pub fn write(&self, queue: &Queue, exposure: f32, samples: u32, transparent: bool) {
         assert!(
             exposure.is_finite() && exposure > 0.0,
             "an exposure scales radiance by a positive factor"
@@ -145,7 +145,7 @@ impl Present {
                 if self.encode { 1.0 } else { 0.0 },
                 exposure,
                 1.0 / samples as f32,
-                0.0,
+                if transparent { 1.0 } else { 0.0 },
             ],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));

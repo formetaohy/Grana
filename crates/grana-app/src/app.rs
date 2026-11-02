@@ -6,14 +6,13 @@ use glam::Vec2;
 use grana_animation::Keyframe;
 use grana_display::Viewport;
 use grana_editor::{FrameStats, Pane, Stage, ViewStats, Workspace};
-use grana_engine::{Engine, Plan, Pose, ProjectedView, Recording, SAMPLE_LIMIT};
+use grana_engine::{Destination, Engine, Outcome, Panels, Plan, Pose, SAMPLE_LIMIT};
 use grana_gpu::Gpu;
 use grana_project::ViewState;
 use grana_render::FrameInfo;
-use grana_session::{Command, Effects, Session, SessionView};
+use grana_session::{Command, Effects, Export, Session, SessionView};
 use grana_ui::{
-    Button as UiButton, Event as UiEvent, Modifiers as UiModifiers, Rect as UiRect, Ui,
-    Vec2 as UiVec2,
+    Button as UiButton, Event as UiEvent, Modifiers as UiModifiers, Ui, Vec2 as UiVec2,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -22,8 +21,6 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
-const SNAPSHOT_SCALE: u32 = 4;
-const SNAPSHOT_LIMIT: u32 = 8192;
 const STREAM_POLL: Duration = Duration::from_millis(16);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
 const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
@@ -56,6 +53,7 @@ pub struct App {
     title: Option<String>,
     modifiers: ModifiersState,
     message: Option<String>,
+    resume: Option<(u32, f32)>,
 }
 
 impl App {
@@ -81,6 +79,7 @@ impl App {
             title: None,
             modifiers: ModifiersState::default(),
             message: None,
+            resume: None,
         }
     }
 
@@ -99,10 +98,10 @@ impl App {
         let size = window.inner_size();
         let gpu = Gpu::new(window.clone(), [size.width, size.height]);
         let ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
-        let mut engine = Engine::new(&gpu);
+        let mut engine = Engine::new(&gpu.device, &gpu.queue, gpu.format());
         self.session.open_sample();
         if let Some(scene) = self.session.scene() {
-            engine.set_dataset(&gpu, scene.dataset.pyramid());
+            engine.set_dataset(&gpu.device, scene.dataset.pyramid());
         }
         self.generation = self.session.generation();
         self.surface = Some(Surface { window, gpu, ui });
@@ -123,13 +122,13 @@ impl App {
         self.advance_playback();
         self.advance_animation();
         self.fit_views();
-        let recording = self.engine.as_ref().is_some_and(Engine::recording);
-        let mut delay = if recording {
-            self.record().unwrap_or(Duration::MAX)
+        let exporting = self.engine.as_ref().is_some_and(Engine::exporting);
+        let mut delay = if exporting {
+            self.export_tick().unwrap_or(Duration::MAX)
         } else {
             self.render().unwrap_or(Duration::MAX)
         };
-        if recording || animating {
+        if exporting || animating {
             delay = Duration::ZERO;
         } else if self.workspace.playback.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
@@ -156,7 +155,7 @@ impl App {
         let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_mut()) else {
             return;
         };
-        if let Some(requests) = engine.poll_requests(&surface.gpu) {
+        if let Some(requests) = engine.poll_requests(&surface.gpu.device) {
             let current = session
                 .scene()
                 .is_some_and(|scene| scene.time() == requests.time);
@@ -173,12 +172,12 @@ impl App {
             }
         }
         for (request, data) in session.take_bricks() {
-            engine.upload(&surface.gpu, request, &data);
+            engine.upload(&surface.gpu.device, &surface.gpu.queue, request, &data);
         }
         if session.generation() != self.generation {
             self.generation = session.generation();
             if let Some(scene) = session.scene() {
-                engine.set_dataset(&surface.gpu, scene.dataset.pyramid());
+                engine.set_dataset(&surface.gpu.device, scene.dataset.pyramid());
             }
             self.needs_fit = true;
             self.fit_section = false;
@@ -200,15 +199,15 @@ impl App {
         };
         let scale = surface.window.scale_factor() as f32;
         let size = surface.gpu.size();
-        let volume_region = physical_region(self.stage.volume_rect(), scale, size);
-        let section_region = physical_region(self.stage.section_rect(), scale, size);
-        self.stage.set_regions(volume_region, section_region);
-        let volume_aspect = volume_region[2] as f32 / volume_region[3] as f32;
-        let section_aspect = section_region[2] as f32 / section_region[3] as f32;
-        let sized = volume_region[2] > 64
-            && volume_region[3] > 64
-            && section_region[2] > 64
-            && section_region[3] > 64;
+        let panes =
+            Panels::new(self.stage.volume_rect(), self.stage.section_rect()).screen(scale, size);
+        self.stage.set_regions(panes.volume, panes.section);
+        let volume_aspect = panes.volume[2] as f32 / panes.volume[3] as f32;
+        let section_aspect = panes.section[2] as f32 / panes.section[3] as f32;
+        let sized = panes.volume[2] > 64
+            && panes.volume[3] > 64
+            && panes.section[2] > 64
+            && panes.section[3] > 64;
         let Some(scene) = self.session.scene() else {
             return;
         };
@@ -335,14 +334,17 @@ impl App {
             let view = self.view_state();
             self.session.save_project(choose, view);
         }
-        if effects.snapshot {
-            self.begin_snapshot();
+        if let Some(export) = effects.snapshot {
+            self.begin_snapshot(export);
         }
         if let Some(width) = effects.export_movie {
             self.begin_movie(width);
         }
-        if effects.cancel_movie {
-            self.cancel_movie();
+        if let Some(export) = effects.sequence {
+            self.begin_sequence(export);
+        }
+        if effects.cancel_export {
+            self.cancel_export();
         }
         if effects.keyframe {
             self.set_keyframe();
@@ -378,14 +380,14 @@ impl App {
             .ui
             .begin(points, scale, self.start.elapsed().as_secs_f64());
         let adapter = surface.gpu.adapter.clone();
-        let movie = engine.movie();
-        let movie_message = engine.movie_message();
+        let export = engine.progress();
+        let export_message = engine.output_message();
         let view = SessionView {
             scene,
             measure: session.measure(),
             timeline: session.timeline(),
             jobs: session.progress(),
-            io: session.io(&adapter, movie, movie_message),
+            io: session.io(&adapter, export, export_message),
             batch: session.batch(),
             history: session.history(),
         };
@@ -397,40 +399,39 @@ impl App {
     }
 
     fn render(&mut self) -> Option<Duration> {
-        if self.engine.as_ref().is_some_and(Engine::snapshot_pending) {
-            let delay = self.capture();
+        if self.engine.as_ref().is_some_and(Engine::exporting) {
+            let delay = self.export_tick();
             self.present_ui();
             return delay;
         }
+        let size = self.surface.as_ref()?.gpu.size();
+        let scale = self.surface.as_ref()?.window.scale_factor() as f32;
+        let panes = self.panels().screen(scale, size);
+        let playing = self.workspace.playback.playing;
         let App {
             surface,
             engine,
             session,
             viewport,
-            stage,
             ..
         } = self;
         let surface = surface.as_mut()?;
         let engine = engine.as_mut()?;
         let scene = session.scene()?;
-        let size = surface.gpu.size();
-        let scale = surface.window.scale_factor() as f32;
-        let volume_region = physical_region(stage.volume_rect(), scale, size);
-        let section_region = physical_region(stage.section_rect(), scale, size);
         let frame = surface.gpu.acquire()?;
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let playing = self.workspace.playback.playing;
         let info = engine.draw_viewport(
-            &surface.gpu,
+            &surface.gpu.device,
+            &surface.gpu.queue,
             grana_engine::ViewportFrame {
                 target: surface.ui.scene_view(),
                 scene,
                 viewport,
                 size,
-                volume_region,
-                section_region,
+                volume_region: panes.volume,
+                section_region: panes.section,
                 prefetch: playing,
             },
         );
@@ -448,81 +449,131 @@ impl App {
         Some(Duration::MAX)
     }
 
-    fn capture(&mut self) -> Option<Duration> {
-        let App {
-            surface,
-            engine,
-            session,
-            ..
-        } = self;
-        let surface = surface.as_mut()?;
-        let engine = engine.as_mut()?;
-        let scene = session.scene()?;
-        let size = surface.gpu.size();
-        let scale = surface.window.scale_factor() as f32;
-        let pane = physical_region(self.stage.volume_rect(), scale, size);
-        let aspect = self.stage.volume_rect().width() / self.stage.volume_rect().height().max(1.0);
-        let pixels_per_point = self.stage.volume_rect().width().max(1.0);
-        let screen = pane[2].max(pane[3]).max(1);
-        let projected = ProjectedView {
+    fn panels(&self) -> Panels {
+        Panels::new(self.stage.volume_rect(), self.stage.section_rect())
+    }
+
+    fn pose(&self) -> Pose {
+        Pose {
+            time: self.session.scene().map_or(0, |scene| scene.time()),
             camera: self.viewport.camera_state(),
             section: self.viewport.section_state(),
-            aspect,
-            world_per_point: 2.0
-                * self.viewport.camera().distance()
-                * (self.viewport.camera().fov_y() * 0.5).tan()
-                / self.stage.volume_rect().height().max(1.0),
-            pixels_per_point: screen as f32 / pixels_per_point,
+        }
+    }
+
+    fn export_tick(&mut self) -> Option<Duration> {
+        let Some(pose) = self.engine.as_ref().and_then(Engine::pose) else {
+            self.present_ui();
+            return Some(Duration::ZERO);
         };
-        engine.capture(&surface.gpu, &mut surface.ui, scene, &projected);
+        self.session.set_time(pose.time);
+        let outcome = {
+            let App {
+                surface,
+                engine,
+                session,
+                ..
+            } = self;
+            let (Some(surface), Some(engine), Some(scene)) =
+                (surface.as_mut(), engine.as_mut(), session.scene())
+            else {
+                return Some(Duration::ZERO);
+            };
+            engine.render_export(
+                &surface.gpu.device,
+                &surface.gpu.queue,
+                &mut surface.ui,
+                scene,
+            )
+        };
+        self.present_ui();
+        match outcome {
+            Outcome::Running => {}
+            Outcome::Complete { .. } => self.finish_export(),
+            Outcome::Failed { detail } => {
+                self.message = Some(detail);
+                self.finish_export();
+            }
+        }
         Some(Duration::ZERO)
     }
 
-    fn begin_snapshot(&mut self) {
-        if self.engine.as_ref().is_some_and(Engine::recording) {
-            return;
-        }
-        let App {
-            surface,
-            engine,
-            session,
-            ..
-        } = self;
-        let (Some(surface), Some(engine), Some(scene)) =
-            (surface.as_mut(), engine.as_mut(), session.scene())
-        else {
+    fn start_export(&mut self, plan: Plan) {
+        let Some(surface) = self.surface.as_ref() else {
             return;
         };
-        let pixels = surface.window.scale_factor() as f32;
-        let pane = physical_region(self.stage.volume_rect(), pixels, surface.gpu.size());
-        let longest = pane[2].max(pane[3]).max(1);
-        let scale = SNAPSHOT_SCALE.min((SNAPSHOT_LIMIT / longest).max(1));
-        let size = [(pane[2] * scale).max(1), (pane[3] * scale).max(1)];
-        let suggested = format!("{}-snapshot.png", grana_session::slug(scene.dataset.name()));
+        let Some(time) = self.session.scene().map(|scene| scene.time()) else {
+            return;
+        };
+        let position = self.workspace.playback.position;
+        let Some(engine) = self.engine.as_mut() else {
+            return;
+        };
+        match engine.start_export(&surface.gpu.device, plan) {
+            Ok(()) => {
+                self.resume = Some((time, position));
+                self.workspace.playback.previewing = false;
+                self.workspace.playback.playing = false;
+                self.last_advance = None;
+                self.last_animation = None;
+                self.message = None;
+                self.repaint_at = Some(Instant::now());
+            }
+            Err(detail) => self.message = Some(detail),
+        }
+    }
+
+    fn finish_export(&mut self) {
+        if let Some((time, position)) = self.resume.take() {
+            self.restore_time(time, position);
+        }
+        self.repaint_at = Some(Instant::now());
+    }
+
+    fn begin_snapshot(&mut self, export: Export) {
+        if self.engine.as_ref().is_some_and(Engine::exporting) || self.session.loading().is_some() {
+            return;
+        }
+        let Some(scene) = self.session.scene() else {
+            return;
+        };
+        let slug = grana_session::slug(scene.dataset.name());
+        let Some(surface) = self.surface.as_ref() else {
+            return;
+        };
+        let scale = surface.window.scale_factor() as f32;
+        let width = if export.width == 0 {
+            self.panels().native_width(scale)
+        } else {
+            export.width
+        };
+        let suggested = format!("{slug}-image.png");
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Save a snapshot")
+            .set_title("Save an image")
             .set_file_name(suggested)
             .add_filter("PNG", &["png"])
             .save_file()
         else {
             return;
         };
-        engine.begin_snapshot(&surface.gpu, path, size);
+        let panels = self.panels();
+        let poses = vec![self.pose()];
+        self.start_export(Plan {
+            destination: Destination::Image { path },
+            panels,
+            width,
+            transparent: export.transparent,
+            poses,
+            fps: 0,
+        });
     }
 
     fn begin_movie(&mut self, width: u32) {
-        if self
-            .engine
-            .as_ref()
-            .is_some_and(|engine| engine.recording() || engine.snapshot_pending())
-            || self.session.loading().is_some()
-        {
+        if self.engine.as_ref().is_some_and(Engine::exporting) || self.session.loading().is_some() {
             return;
         }
         if self.session.timeline().is_empty() {
-            if let Some(engine) = self.engine.as_mut() {
-                engine.set_movie_message(Some("set a keyframe before exporting".to_string()));
-            }
+            self.set_output_message("set a keyframe before exporting");
             return;
         }
         let Some(scene) = self.session.scene() else {
@@ -537,125 +588,82 @@ impl App {
         else {
             return;
         };
-        self.start_movie(path, width);
+        let poses = poses(self.session.timeline());
+        let fps = self.session.timeline().fps();
+        let panels = self.panels();
+        self.start_export(Plan {
+            destination: Destination::Movie { path },
+            panels,
+            width,
+            transparent: false,
+            poses,
+            fps,
+        });
     }
 
-    fn start_movie(&mut self, path: PathBuf, width: u32) {
-        let position = self.workspace.playback.position;
-        let layout = self.movie_layout(width);
-        let App {
-            surface,
-            engine,
-            session,
-            ..
-        } = self;
-        let (Some(surface), Some(engine), Some(scene)) =
-            (surface.as_mut(), engine.as_mut(), session.scene())
+    fn begin_sequence(&mut self, export: Export) {
+        if self.engine.as_ref().is_some_and(Engine::exporting) || self.session.loading().is_some() {
+            return;
+        }
+        let Some(scene) = self.session.scene() else {
+            return;
+        };
+        let frames = scene.frame_count();
+        if frames == 0 {
+            self.set_output_message("the dataset has no time point to export");
+            return;
+        }
+        let stem = grana_session::slug(scene.dataset.name());
+        let camera = self.viewport.camera_state();
+        let section = self.viewport.section_state();
+        let Some(parent) = rfd::FileDialog::new()
+            .set_title("Choose a folder for the frame sequence")
+            .pick_folder()
         else {
             return;
         };
-        if engine.recording() || engine.snapshot_pending() || session.loading().is_some() {
-            return;
-        }
-        if session.timeline().is_empty() {
-            engine.set_movie_message(Some("set a keyframe before exporting".to_string()));
-            return;
-        }
-        let Some((size, volume)) = layout else {
+        let Some(surface) = self.surface.as_ref() else {
             return;
         };
-        let limit = surface.gpu.device.limits().max_texture_dimension_2d;
-        if size[0] > limit || size[1] > limit {
-            engine.set_movie_message(Some(format!(
-                "a {} × {} movie exceeds the {limit} pixel limit of this device",
-                size[0], size[1]
-            )));
-            return;
-        }
-        let plan = Plan {
-            path,
-            size,
-            volume,
-            fps: session.timeline().fps(),
-            frames: session.timeline().frames(),
-            resume: scene.time(),
-            position,
+        let scale = surface.window.scale_factor() as f32;
+        let width = if export.width == 0 {
+            self.panels().native_width(scale)
+        } else {
+            export.width
         };
-        match engine.start_movie(&surface.gpu, plan) {
-            Ok(()) => {
-                self.workspace.playback.previewing = false;
-                self.workspace.playback.playing = false;
-                self.last_advance = None;
-                self.last_animation = None;
-                self.message = None;
-                self.repaint_at = Some(Instant::now());
-            }
-            Err(detail) => self.message = Some(detail),
-        }
+        let directory = parent.join(format!("{stem}-sequence"));
+        let poses = (0..frames)
+            .map(|time| Pose {
+                time,
+                camera,
+                section,
+            })
+            .collect();
+        let panels = self.panels();
+        self.start_export(Plan {
+            destination: Destination::Sequence { directory, stem },
+            panels,
+            width,
+            transparent: export.transparent,
+            poses,
+            fps: 0,
+        });
     }
 
-    fn cancel_movie(&mut self) {
+    fn cancel_export(&mut self) {
         let Some(engine) = self.engine.as_mut() else {
             return;
         };
-        if let Some((time, position)) = engine.cancel_movie() {
-            self.session.set_time(time);
-            self.workspace.playback.position =
-                position.clamp(0.0, self.session.timeline().duration());
+        if engine.cancel_export() {
+            self.finish_export();
         }
         self.repaint_at = Some(Instant::now());
     }
 
-    fn record(&mut self) -> Option<Duration> {
-        let Some(frame) = self.engine.as_ref().and_then(Engine::movie) else {
-            self.present_ui();
-            return Some(Duration::ZERO);
-        };
-        let Some(sample) = self.session.timeline().sample_frame(frame.0) else {
-            if let Some(engine) = self.engine.as_mut() {
-                engine
-                    .set_movie_message(Some("the timeline ended before the movie did".to_string()));
-            }
-            self.cancel_movie();
-            self.present_ui();
-            return Some(Duration::ZERO);
-        };
-        self.session.set_time(sample.time);
-        let pose = Pose {
-            time: sample.time,
-            position: self.workspace.playback.position,
-            camera: sample.camera,
-            section: sample.section,
-        };
-        let outcome = {
-            let App {
-                surface,
-                engine,
-                session,
-                ..
-            } = self;
-            let (Some(surface), Some(engine), Some(scene)) =
-                (surface.as_mut(), engine.as_mut(), session.scene())
-            else {
-                return Some(Duration::ZERO);
-            };
-            engine.record(&surface.gpu, scene, &pose)
-        };
-        self.present_ui();
-        match outcome {
-            Recording::Running => {}
-            Recording::Complete { path } => {
-                if let Some(engine) = self.engine.as_mut() {
-                    engine.set_movie_message(Some(format!("saved {}", grana_engine::name(&path))));
-                }
-                self.restore_time(pose.time, pose.position);
-            }
-            Recording::Failed { detail } => {
-                self.message = Some(detail);
-                self.restore_time(pose.time, pose.position);
-            }
+    fn set_output_message(&mut self, message: &str) {
+        if let Some(engine) = self.engine.as_mut() {
+            engine.set_output_message(Some(message.to_string()));
         }
-        Some(Duration::ZERO)
     }
 
     fn restore_time(&mut self, time: u32, position: f32) {
@@ -685,19 +693,6 @@ impl App {
         surface.gpu.queue.present(frame);
     }
 
-    fn movie_layout(&self, width: u32) -> Option<([u32; 2], [u32; 4])> {
-        let surface = self.surface.as_ref()?;
-        let scale = surface.window.scale_factor() as f32;
-        let surface_size = surface.gpu.size();
-        let pane = physical_region(self.stage.volume_rect(), scale, surface_size);
-        let factor = width as f32 / pane[2] as f32;
-        let size = [
-            even((pane[2] as f32 * factor).round() as u32),
-            even((pane[3] as f32 * factor).round() as u32),
-        ];
-        Some((size, scale_region(pane, [pane[0], pane[1]], factor, size)))
-    }
-
     fn streaming(&self) -> bool {
         let Some(engine) = self.engine.as_ref() else {
             return false;
@@ -708,8 +703,7 @@ impl App {
             || !self.session.progress().is_empty()
             || self.session.pending() > 0
             || engine.requests_pending()
-            || engine.recording()
-            || engine.snapshot_pending()
+            || engine.exporting()
             || (self.session.scene().is_some()
                 && (self.info.volume.resident < self.info.volume.demand
                     || self.info.section.resident < self.info.section.demand))
@@ -799,7 +793,7 @@ impl App {
         self.workspace.playback.position = at;
         self.workspace.playback.selected = Some(index);
         if let Some(engine) = self.engine.as_mut() {
-            engine.set_movie_message(None);
+            engine.set_output_message(None);
         }
         self.request_redraw();
     }
@@ -982,6 +976,17 @@ impl App {
     }
 }
 
+fn poses(timeline: &grana_animation::Timeline) -> Vec<Pose> {
+    (0..timeline.frames())
+        .filter_map(|frame| timeline.sample_frame(frame))
+        .map(|sample| Pose {
+            time: sample.time,
+            camera: sample.camera,
+            section: sample.section,
+        })
+        .collect()
+}
+
 fn frame_stats(info: FrameInfo) -> FrameStats {
     FrameStats {
         volume: view_stats(info.volume),
@@ -999,18 +1004,6 @@ fn view_stats(info: grana_render::ViewInfo) -> ViewStats {
         demand: info.demand,
         resident: info.resident,
     }
-}
-
-fn physical_region(rect: UiRect, scale: f32, surface: [u32; 2]) -> [u32; 4] {
-    let x = ((rect.min.x * scale).round() as i64).clamp(0, surface[0] as i64 - 1) as u32;
-    let y = ((rect.min.y * scale).round() as i64).clamp(0, surface[1] as i64 - 1) as u32;
-    let width = ((rect.width() * scale).round() as u32)
-        .min(surface[0] - x)
-        .max(1);
-    let height = ((rect.height() * scale).round() as u32)
-        .min(surface[1] - y)
-        .max(1);
-    [x, y, width, height]
 }
 
 fn interface_key(key: &Key) -> Option<grana_ui::Key> {
@@ -1047,20 +1040,8 @@ fn interface_cursor(cursor: grana_ui::Cursor) -> CursorIcon {
     }
 }
 
-fn even(value: u32) -> u32 {
-    (value.max(2) / 2) * 2
-}
-
 fn shortcut(modifiers: ModifiersState) -> bool {
     modifiers.control_key() || modifiers.super_key()
-}
-
-fn scale_region(region: [u32; 4], origin: [u32; 2], factor: f32, size: [u32; 2]) -> [u32; 4] {
-    let x = ((region[0].saturating_sub(origin[0]) as f32 * factor).round() as u32).min(size[0] - 1);
-    let y = ((region[1].saturating_sub(origin[1]) as f32 * factor).round() as u32).min(size[1] - 1);
-    let width = ((region[2] as f32 * factor).round() as u32).clamp(1, size[0] - x);
-    let height = ((region[3] as f32 * factor).round() as u32).clamp(1, size[1] - y);
-    [x, y, width, height]
 }
 
 impl App {

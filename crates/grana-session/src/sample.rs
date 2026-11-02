@@ -1,5 +1,5 @@
 use glam::Vec3;
-use grana_analysis::{FilamentParams, SpotParams, SurfaceParams};
+use grana_analysis::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams};
 use grana_scene::{ObjectKind, ObjectParams, ObjectSetId, Scene};
 use grana_volume::{Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -16,6 +16,10 @@ const MEMBRANE_AXIAL: f32 = 1.35;
 const SURFACE_VOLUME: f32 = 2.0;
 const SURFACE_GRAIN: f32 = 0.15;
 const SURFACE_SEED: f32 = 1.2;
+const SURFACE_OPENING: f32 = 0.0;
+const SURFACE_CLOSING: f32 = 0.0;
+const SURFACE_MIN_SPHERICITY: f32 = 0.0;
+const SURFACE_MIN_MEAN_INTENSITY: f32 = 0.0;
 const SPOT_DIAMETER: f32 = 0.45;
 const SPOT_CONTRAST: f32 = 0.1;
 const VESSEL_OPACITY: f32 = 0.18;
@@ -78,6 +82,12 @@ pub fn stage(scene: &mut Scene) -> Staged {
             SURFACE_GRAIN,
             SURFACE_SEED,
             SURFACE_VOLUME,
+            SurfaceFilter::new(
+                SURFACE_OPENING,
+                SURFACE_CLOSING,
+                SURFACE_MIN_SPHERICITY,
+                SURFACE_MIN_MEAN_INTENSITY,
+            ),
         )));
     }
     if let Some(set) = scene.objects.get_mut(filaments) {

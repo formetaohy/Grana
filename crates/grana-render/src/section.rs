@@ -55,7 +55,7 @@ impl SectionPass {
                 compilation_options: Default::default(),
                 targets: &[Some(ColorTargetState {
                     format: SCENE_FORMAT,
-                    blend: None,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: ColorWrites::ALL,
                 })],
             }),

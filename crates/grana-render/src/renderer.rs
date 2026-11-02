@@ -54,9 +54,17 @@ pub struct ViewInfo {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+pub struct CutInfo {
+    pub objects: u32,
+    pub draws: u32,
+    pub targets: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 pub struct FrameInfo {
     pub volume: ViewInfo,
     pub section: ViewInfo,
+    pub cut: CutInfo,
     pub bytes: u64,
     pub geometry: u64,
     pub samples: u32,
@@ -214,6 +222,7 @@ pub struct Renderer {
     content: u64,
     pin: u64,
     prefetch: bool,
+    transparent: bool,
     object_key: Option<u64>,
     settled: Option<Residency>,
     info: FrameInfo,
@@ -245,7 +254,7 @@ impl Renderer {
             shadow: None,
             volume: VolumePass::new(device, &layouts),
             section: SectionPass::new(device, &layouts),
-            cut: CutLayer::new(device),
+            cut: CutLayer::new(device, &layouts),
             meshes: MeshPasses::new(device, &layouts, budget / 2),
             markers: MarkerPasses::new(device, &layouts),
             layouts,
@@ -264,6 +273,7 @@ impl Renderer {
             content: 0,
             pin: 0,
             prefetch: false,
+            transparent: false,
             object_key: None,
             settled: None,
             info: FrameInfo::default(),
@@ -272,6 +282,10 @@ impl Renderer {
 
     pub fn format(&self) -> TextureFormat {
         self.present.format()
+    }
+
+    pub fn set_transparent(&mut self, transparent: bool) {
+        self.transparent = transparent;
     }
 
     pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) {
@@ -492,6 +506,8 @@ impl Renderer {
         );
         self.time = time;
         self.prefetch = prefetch;
+        self.info.cut.objects = 0;
+        self.info.cut.draws = 0;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("grana.frame"),
         });
@@ -518,6 +534,7 @@ impl Renderer {
             content,
             settled,
             shadow,
+            transparent,
             object_key,
             info,
             ..
@@ -810,12 +827,20 @@ impl Renderer {
                     atlas: atlas.group(),
                 },
             );
-            cut.draw(device, &mut encoder, cut_size, |pass| {
+            let stats = cut.draw(device, &mut encoder, cut_size, |pass| {
                 markers.draw_section_behind(pass, scene_group);
-                meshes.draw_section(pass, scene_group, &section_data, cut_size);
+                let stats =
+                    meshes.draw_section(pass, queue, scene_group, &section_data, cut_size, camera);
                 markers.draw_section_front(pass, scene_group);
+                stats
             });
+            if stats.objects > 0 {
+                cut.outline(&mut encoder, cut_size, meshes.cut_group());
+            }
             cut.composite(&mut encoder, target.scene.color(), section_region);
+            info.cut.objects = stats.objects;
+            info.cut.draws = stats.draws + 1 + u32::from(stats.objects > 0);
+            info.cut.targets = cut.targets();
             present.accumulate(
                 &mut encoder,
                 &target.accumulation,
@@ -823,7 +848,7 @@ impl Renderer {
                 reset,
             );
         }
-        present.write(queue, exposure, target.samples);
+        present.write(queue, exposure, target.samples, *transparent);
         present.present(&mut encoder, surface, &target.present_group);
         if unsettled
             && let Some(feedback) = feedback.as_mut()

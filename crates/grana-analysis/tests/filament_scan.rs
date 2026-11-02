@@ -19,6 +19,47 @@ fn channel_intensity() -> Intensity {
     Intensity::new(0.0, INTENSITY_MAX)
 }
 
+#[test]
+fn traces_a_dim_filament_on_a_coarse_grid() {
+    let extent = Extent::new(40, 40, 30);
+    let spacing = Spacing::new(0.3, 0.3, 0.1);
+    let mut values = vec![0u16; extent.voxel_count() as usize];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let offset = ((y as f32 - 20.0).powi(2) + (z as f32 - 15.0).powi(2)).sqrt();
+                let intensity = 300.0 + 4_000.0 * (-0.5 * (offset / 0.9).powi(2)).exp();
+                values[extent.index(x, y, z) as usize] = intensity as u16;
+            }
+        }
+    }
+    let data = VoxelData::U16(values);
+    let level = Level::new(extent, spacing);
+    let mut scan = FilamentScan::new(
+        0,
+        level,
+        params(),
+        1,
+        0,
+        Region::none(),
+        channel_intensity(),
+    );
+    let set = scan
+        .frame(&data, None, |_| Ok(data.clone()))
+        .expect("the coarse filament scan traces the frame");
+    assert_eq!(
+        set.object_count(),
+        1,
+        "the dim filament survives the coarse working grid"
+    );
+    let length = set.object(0).expect("the filament exists").length();
+    let expected = f64::from(extent.x()) * f64::from(spacing.x());
+    assert!(
+        length > 0.5 * expected,
+        "the traced length {length:.2} µm keeps most of {expected:.2} µm"
+    );
+}
+
 const SEGMENTS: [([f32; 3], [f32; 3]); 4] = [
     ([12.0, 12.0, 10.0], [40.0, 40.0, 10.0]),
     ([40.0, 40.0, 10.0], [58.0, 60.0, 18.0]),

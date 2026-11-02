@@ -13,7 +13,7 @@ mod state;
 mod track_layer;
 
 pub use channel::Channel;
-pub use coloc::{Coloc, ColocState};
+pub use coloc::{Coloc, ColocResult, ColocState, MaskKey};
 pub use dataset::{Dataset, Origin};
 pub use grana_display::{ColorState, Coloring, Extent};
 pub use job::{Job, Progress};
