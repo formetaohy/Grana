@@ -66,6 +66,8 @@ pub(crate) fn tail_targets() -> [Option<ColorTargetState>; 3] {
 }
 
 pub(crate) struct Oit {
+    keys: Buffer,
+    colors: Buffer,
     counts: Buffer,
     accumulate: TextureView,
     reveal: TextureView,
@@ -165,6 +167,8 @@ impl Oit {
             ],
         });
         Self {
+            keys,
+            colors,
             counts,
             accumulate,
             reveal,
@@ -183,6 +187,12 @@ impl Oit {
 
     pub fn layers(&self) -> u32 {
         self.layers
+    }
+
+    pub fn bytes(&self) -> u64 {
+        let store = self.keys.size() + self.colors.size() + self.counts.size();
+        let tail = u64::from(self.size[0]) * u64::from(self.size[1]) * TAIL_BYTES;
+        store + tail
     }
 
     pub fn write_group(&self) -> &BindGroup {

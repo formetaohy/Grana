@@ -144,6 +144,53 @@ fn round_trips_a_project() {
 }
 
 #[test]
+fn round_trips_object_set_order() {
+    let mut scene = fixture();
+    stage(&mut scene);
+    let ids = scene.objects.iter().map(|set| set.id()).collect::<Vec<_>>();
+    let moved = *ids.last().expect("the fixture stages object sets");
+    assert!(scene.reorder_object(moved, 0));
+    let order = scene.objects.iter().map(|set| set.id()).collect::<Vec<_>>();
+    assert_eq!(order[0], moved);
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "fixture".to_string(),
+        },
+        ViewState {
+            camera: CameraState {
+                pivot: [0.0; 3],
+                yaw: 0.0,
+                pitch: 0.0,
+                distance: 1.0,
+                fov_y: 0.6,
+            },
+            section: SectionState {
+                axis: Axis::Z,
+                span: 1.0,
+            },
+            split: 0.5,
+            timeline: Timeline::default(),
+        },
+    );
+    let path = std::env::temp_dir().join(format!("grana-order-{}.grana", std::process::id()));
+    project.write(&path).expect("the project writes");
+    let loaded = Project::read(&path).expect("the project reads");
+    fs::remove_file(&path).ok();
+    let mut restored = fixture();
+    restored.restore(loaded.scene);
+    assert_eq!(
+        restored
+            .objects
+            .iter()
+            .map(|set| set.id())
+            .collect::<Vec<_>>(),
+        order
+    );
+}
+
+#[test]
 fn rejects_damaged_projects() {
     let mut scene = fixture();
     stage(&mut scene);

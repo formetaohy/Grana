@@ -63,6 +63,7 @@ pub struct CutInfo {
     pub objects: u32,
     pub draws: u32,
     pub targets: u64,
+    pub indices: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -72,6 +73,7 @@ pub struct FrameInfo {
     pub cut: CutInfo,
     pub bytes: u64,
     pub geometry: u64,
+    pub fragments: u64,
     pub samples: u32,
     pub settled: bool,
 }
@@ -1124,6 +1126,7 @@ impl Renderer {
             info.cut.objects = slice.objects();
             info.cut.draws = slice.draws() + 1 + u32::from(slice.objects() > 0);
             info.cut.targets = cut.targets();
+            info.cut.indices = slice.index_bytes();
             present.accumulate(
                 &mut encoder,
                 &target.accumulation,
@@ -1162,6 +1165,7 @@ impl Renderer {
         info.section.level = section_level;
         info.bytes = atlas.bytes();
         info.geometry = meshes.bytes();
+        info.fragments = target.oit.as_ref().map_or(0, Oit::bytes);
         *info
     }
 

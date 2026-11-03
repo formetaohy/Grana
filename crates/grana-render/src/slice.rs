@@ -35,7 +35,6 @@ const QUAD_INDICES: [u32; 6] = [0, 1, 2, 0, 2, 3];
 const QUAD_LIMIT: u32 = 1 << 18;
 const PARALLEL_FLOOR: usize = 8;
 const WORKER_LIMIT: usize = 16;
-const INDEX_FLOOR: usize = 1024;
 const INDEX_BUDGET: u64 = 64 << 20;
 
 type Cut = (u32, Vec<[f32; 2]>);
@@ -244,6 +243,10 @@ impl SlicePass {
         self.draws
     }
 
+    pub fn index_bytes(&self) -> u64 {
+        self.index.resident
+    }
+
     pub fn prepare(
         &mut self,
         device: &Device,
@@ -295,22 +298,10 @@ impl SlicePass {
         }
     }
 
-    fn solid(&mut self, key: LayerKey, mesh: &PackedMesh, object: usize) -> bool {
-        let flags = self
-            .closed
-            .entry(key)
-            .or_insert_with(|| vec![None; mesh.object_count()]);
-        if let Some(flag) = flags[object] {
-            return flag;
-        }
-        let flag = is_closed(mesh, object);
-        flags[object] = Some(flag);
-        flag
-    }
-
     fn build(&mut self, scene: &SceneFrame<'_>, axis: usize, plane: f32) {
         self.runs.clear();
         self.staged.clear();
+        self.retain(scene);
         let mut candidates = Vec::new();
         for layer in scene.layers {
             let mesh = layer.mesh;
@@ -319,9 +310,6 @@ impl SlicePass {
                 let low = group.min();
                 let high = [0, 1, 2].map(|index| low[index] + UNIT * group.scale()[index]);
                 if plane < low[axis] || plane > high[axis] {
-                    continue;
-                }
-                if !self.solid(layer.key, mesh, object) {
                     continue;
                 }
                 candidates.push(Candidate {
@@ -334,6 +322,7 @@ impl SlicePass {
                 });
             }
         }
+        self.keep_solid(&mut candidates);
         self.index.prepare(&candidates, axis);
         let cuts = self.cut(&candidates, axis, plane);
         for (candidate, (quads, vertices)) in candidates.iter().zip(cuts) {
@@ -360,10 +349,50 @@ impl SlicePass {
                 high: candidate.high,
             });
         }
+    }
+
+    fn retain(&mut self, scene: &SceneFrame<'_>) {
         self.closed
             .retain(|key, _| scene.layers.iter().any(|layer| layer.key == *key));
         self.index
             .retain(|key| scene.layers.iter().any(|layer| layer.key == *key));
+    }
+
+    fn keep_solid(&mut self, candidates: &mut Vec<Candidate<'_>>) {
+        let mut solid = Vec::with_capacity(candidates.len());
+        let mut missing = Vec::new();
+        for (slot, candidate) in candidates.iter().enumerate() {
+            let flags = self
+                .closed
+                .entry(candidate.layer)
+                .or_insert_with(|| vec![None; candidate.mesh.object_count()]);
+            match flags[candidate.object] {
+                Some(flag) => solid.push(flag),
+                None => {
+                    solid.push(false);
+                    missing.push(slot);
+                }
+            }
+        }
+        if !missing.is_empty() {
+            let found = parallel_over(candidates, &missing, |candidate| {
+                is_closed(candidate.mesh, candidate.object)
+            });
+            for (slot, index) in missing.into_iter().enumerate() {
+                let candidate = &candidates[index];
+                if let Some(flags) = self.closed.get_mut(&candidate.layer) {
+                    flags[candidate.object] = Some(found[slot]);
+                }
+                solid[index] = found[slot];
+            }
+        }
+        let mut kept = Vec::with_capacity(candidates.len());
+        for (candidate, flag) in candidates.drain(..).zip(solid) {
+            if flag {
+                kept.push(candidate);
+            }
+        }
+        *candidates = kept;
     }
 
     fn cut(&mut self, candidates: &[Candidate<'_>], axis: usize, plane: f32) -> Vec<Cut> {
@@ -547,14 +576,13 @@ fn cut_object(
 }
 
 struct CachedIndex {
-    axis: usize,
     index: SectionIndex,
     used: u64,
     bytes: u64,
 }
 
 struct SectionCache {
-    entries: HashMap<(LayerKey, usize), CachedIndex>,
+    entries: HashMap<(LayerKey, usize, usize), CachedIndex>,
     resident: u64,
     order: u64,
 }
@@ -571,38 +599,42 @@ impl SectionCache {
     fn prepare(&mut self, candidates: &[Candidate<'_>], axis: usize) {
         self.order += 1;
         let order = self.order;
-        for candidate in candidates {
-            let count = candidate.mesh.groups()[candidate.object].index_count() as usize / 3;
-            if count < INDEX_FLOOR {
-                continue;
-            }
-            let key = (candidate.layer, candidate.object);
-            if let Some(entry) = self.entries.get_mut(&key)
-                && entry.axis == axis
-            {
+        let mut missing = Vec::new();
+        for (slot, candidate) in candidates.iter().enumerate() {
+            let key = (candidate.layer, candidate.object, axis);
+            if let Some(entry) = self.entries.get_mut(&key) {
                 entry.used = order;
-                continue;
+            } else {
+                missing.push(slot);
             }
-            let index = SectionIndex::new(candidate.mesh, candidate.object, axis);
-            let bytes = index.bytes();
-            let cached = CachedIndex {
-                axis,
-                index,
-                used: order,
-                bytes,
-            };
-            if let Some(previous) = self.entries.insert(key, cached) {
-                self.resident = self.resident.saturating_sub(previous.bytes);
+        }
+        if !missing.is_empty() {
+            let built = parallel_over(candidates, &missing, |candidate| {
+                SectionIndex::new(candidate.mesh, candidate.object, axis)
+            });
+            for (slot, index) in missing.into_iter().zip(built) {
+                let candidate = &candidates[slot];
+                let key = (candidate.layer, candidate.object, axis);
+                let bytes = index.bytes();
+                if let Some(previous) = self.entries.insert(
+                    key,
+                    CachedIndex {
+                        index,
+                        used: order,
+                        bytes,
+                    },
+                ) {
+                    self.resident = self.resident.saturating_sub(previous.bytes);
+                }
+                self.resident += bytes;
             }
-            self.resident += bytes;
         }
         self.evict(order);
     }
 
     fn get(&self, layer: LayerKey, object: usize, axis: usize) -> Option<&SectionIndex> {
         self.entries
-            .get(&(layer, object))
-            .filter(|entry| entry.axis == axis)
+            .get(&(layer, object, axis))
             .map(|entry| &entry.index)
     }
 
@@ -634,6 +666,51 @@ impl SectionCache {
         });
         self.resident = resident;
     }
+}
+
+fn parallel_over<U: Send>(
+    candidates: &[Candidate<'_>],
+    slots: &[usize],
+    work: impl Fn(&Candidate<'_>) -> U + Sync,
+) -> Vec<U> {
+    let total = slots.len();
+    let workers = std::thread::available_parallelism()
+        .map_or(1, |value| value.get())
+        .min(WORKER_LIMIT)
+        .min(total);
+    if workers <= 1 {
+        return slots.iter().map(|slot| work(&candidates[*slot])).collect();
+    }
+    let next = AtomicUsize::new(0);
+    let (sender, receiver) = mpsc::channel();
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let sender = sender.clone();
+            let next = &next;
+            let work = &work;
+            scope.spawn(move || {
+                loop {
+                    let position = next.fetch_add(1, Ordering::Relaxed);
+                    if position >= total {
+                        break;
+                    }
+                    let outcome = work(&candidates[slots[position]]);
+                    if sender.send((position, outcome)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(sender);
+    });
+    let mut results = (0..total).map(|_| None).collect::<Vec<Option<U>>>();
+    for (position, outcome) in receiver {
+        results[position] = Some(outcome);
+    }
+    results
+        .into_iter()
+        .map(|outcome| outcome.expect("every cut plane task completes"))
+        .collect()
 }
 
 fn span_key(scene: &SceneFrame<'_>, axis: usize, plane: f32) -> u64 {

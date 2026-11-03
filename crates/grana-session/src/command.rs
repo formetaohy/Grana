@@ -38,6 +38,10 @@ pub enum Command {
         set: ObjectSetId,
         name: String,
     },
+    ReorderObject {
+        set: ObjectSetId,
+        index: usize,
+    },
     DeleteObject {
         set: ObjectSetId,
         time: u32,
@@ -211,6 +215,7 @@ pub enum Action {
     AddObject,
     RemoveObject,
     RenameObject,
+    ReorderObject,
     DeleteObject,
     ClearObject,
     Seed,
@@ -269,6 +274,7 @@ impl Action {
             Self::AddObject => "add an object set",
             Self::RemoveObject => "remove an object set",
             Self::RenameObject => "rename an object set",
+            Self::ReorderObject => "reorder object sets",
             Self::DeleteObject => "delete an object",
             Self::ClearObject => "clear objects",
             Self::Seed => "seed points",
@@ -390,6 +396,7 @@ impl Command {
             Self::AddObject(_) => Edit::new(Action::AddObject),
             Self::RemoveObject(_) => Edit::new(Action::RemoveObject),
             Self::RenameObject { set, .. } => Edit::targeted(Action::RenameObject, set.raw()),
+            Self::ReorderObject { .. } => Edit::new(Action::ReorderObject),
             Self::DeleteObject { set, .. } => Edit::targeted(Action::DeleteObject, set.raw()),
             Self::ClearObject(_) => Edit::new(Action::ClearObject),
             Self::AddSeed { set, .. } | Self::RemoveSeed { set, .. } | Self::ClearSeeds(set) => {

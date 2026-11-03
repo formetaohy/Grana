@@ -73,6 +73,37 @@ fn undoes_and_replays_document_edits() {
     assert!(session.history().redo.is_none());
 }
 
+fn order(session: &Session) -> Vec<grana_scene::ObjectSetId> {
+    session
+        .scene()
+        .expect("the sample opens")
+        .objects
+        .iter()
+        .map(|set| set.id())
+        .collect()
+}
+
+#[test]
+fn reorders_object_sets_and_undoes_the_order() {
+    let mut session = session();
+    session.execute(Command::AddObject(ObjectKind::Spots));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let original = order(&session);
+    let moved = *original.last().expect("the sample holds two object sets");
+    session.execute(Command::ReorderObject {
+        set: moved,
+        index: 0,
+    });
+    let reordered = order(&session);
+    assert_eq!(reordered.len(), original.len());
+    assert_eq!(reordered[0], moved);
+    assert_ne!(reordered, original);
+    session.execute(Command::Undo);
+    assert_eq!(order(&session), original);
+    session.execute(Command::Redo);
+    assert_eq!(order(&session), reordered);
+}
+
 #[test]
 fn coalesces_a_continuous_edit() {
     let mut session = session();

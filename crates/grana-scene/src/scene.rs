@@ -145,6 +145,10 @@ impl Scene {
         self.objects.rename(id, name)
     }
 
+    pub fn reorder_object(&mut self, id: ObjectSetId, index: usize) -> bool {
+        self.objects.reorder(id, index)
+    }
+
     pub fn delete_object(&mut self, id: ObjectSetId, time: u32, object: usize) -> bool {
         if !self.objects.delete_object(id, time, object) {
             return false;

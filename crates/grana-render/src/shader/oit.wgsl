@@ -2,7 +2,6 @@
 @group(4) @binding(1) var<storage, read_write> oit_colors: array<vec2<u32>>;
 @group(4) @binding(2) var<storage, read_write> oit_counts: array<atomic<u32>>;
 
-const OIT_DEPTH_SCALE: f32 = 1.0 / 64.0;
 const OIT_WEIGHT_FLOOR: f32 = 1.0e-2;
 const OIT_WEIGHT_CEIL: f32 = 3.0e3;
 
@@ -53,18 +52,14 @@ fn oit_tail(
     }
     let index = oit_pixel(origin, size, pixel);
     let stored = min(atomicLoad(&oit_counts[index]), layers);
-    if (stored < layers) {
-        return false;
-    }
     let key = oit_key(depth);
     let base = index * layers;
-    var rank = 0u;
     for (var slot = 0u; slot < stored; slot += 1u) {
-        if (oit_keys[base + slot] > key) {
-            rank += 1u;
+        if (oit_keys[base + slot] == key) {
+            return false;
         }
     }
-    return rank >= layers;
+    return true;
 }
 
 fn oit_weight(depth: f32, alpha: f32) -> f32 {

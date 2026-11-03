@@ -385,6 +385,11 @@ impl Session {
                     Message::error("object set names differ and do not collide as file names")
                 });
             }
+            Command::ReorderObject { set, index } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.reorder_object(set, index);
+                }
+            }
             Command::DeleteObject { set, time, object } => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.delete_object(set, time, object);

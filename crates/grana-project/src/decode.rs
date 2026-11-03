@@ -158,7 +158,9 @@ impl Decode for SceneState {
             sets: Vec::<SetState>::decode(reader)?,
             coloc: ColocState::decode(reader)?,
         };
-        if state.sets.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+        let mut ids = state.sets.iter().map(|set| set.id).collect::<Vec<_>>();
+        ids.sort_unstable();
+        if ids.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err(FAULT_SHAPE);
         }
         let channels = state.channels.len();

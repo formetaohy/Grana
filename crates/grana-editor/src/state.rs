@@ -22,6 +22,8 @@ pub struct FrameStats {
     pub section: ViewStats,
     pub bytes: u64,
     pub geometry: u64,
+    pub fragments: u64,
+    pub indices: u64,
     pub samples: u32,
 }
 

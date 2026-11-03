@@ -179,7 +179,7 @@ fn fs_tail(input: VertexOutput) -> TailFragment {
     var output: TailFragment;
     output.accumulate = vec4<f32>(sample.rgb * sample.a * weight, sample.a * weight);
     output.reveal = vec4<f32>(sample.a);
-    output.depth = vec2<f32>(input.clip_position.z * sample.a * weight * OIT_DEPTH_SCALE);
+    output.depth = vec2<f32>(input.clip_position.z * sample.a, sample.a);
     return output;
 }
 

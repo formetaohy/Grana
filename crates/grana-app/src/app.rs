@@ -1126,6 +1126,8 @@ fn frame_stats(info: FrameInfo) -> FrameStats {
         section: view_stats(info.section),
         bytes: info.bytes,
         geometry: info.geometry,
+        fragments: info.fragments,
+        indices: info.cut.indices,
         samples: info.samples,
     }
 }

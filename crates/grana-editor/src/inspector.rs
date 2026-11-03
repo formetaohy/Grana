@@ -703,6 +703,22 @@ pub fn streaming(ui: &mut Ui, state: &State<'_>) {
                 state.frame.geometry as f64 / (1024.0 * 1024.0)
             ),
         );
+        widget::labelled(
+            ui,
+            "fragments",
+            &format!(
+                "{:.0} MiB transparent",
+                state.frame.fragments as f64 / (1024.0 * 1024.0)
+            ),
+        );
+        widget::labelled(
+            ui,
+            "cuts",
+            &format!(
+                "{:.0} MiB indexes",
+                state.frame.indices as f64 / (1024.0 * 1024.0)
+            ),
+        );
         if state.io.pending > 0 {
             ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
                 widget::spinner(ui, 12.0);

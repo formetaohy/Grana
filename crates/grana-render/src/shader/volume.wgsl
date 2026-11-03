@@ -20,8 +20,7 @@ const SHADING_THRESHOLD: f32 = 0.02;
 const SHADING_FLOOR: f32 = 0.02;
 const SHADING_CEIL: f32 = 0.10;
 const EMPTY_DISTANCE: f32 = 1.0e19;
-const MAXIMUM_LAYERS: u32 = 8u;
-const TAIL_DEPTH_SCALE: f32 = 64.0;
+const MAXIMUM_ENTRIES: u32 = 9u;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -220,8 +219,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let start = max(max(entry, 0.0), clip.x);
     let jitter = sample_noise(input.clip_position.xy, frame.jitter.z) * frame.march.x;
 
-    var layer_depth: array<f32, MAXIMUM_LAYERS>;
-    var layer_color: array<vec2<u32>, MAXIMUM_LAYERS>;
+    var layer_depth: array<f32, MAXIMUM_ENTRIES>;
+    var layer_color: array<vec2<u32>, MAXIMUM_ENTRIES>;
     var layers = 0u;
     var tail = vec4<f32>(0.0);
     var tail_depth = EMPTY_DISTANCE;
@@ -252,15 +251,35 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             let accumulation = textureLoad(oit_accumulate, pixel, 0);
             if (accumulation.a > 0.0) {
                 let reveal = textureLoad(oit_reveal, pixel, 0).r;
-                let weighted = textureLoad(oit_tail_depth, pixel, 0).r;
+                let weighted = textureLoad(oit_tail_depth, pixel, 0).xy;
                 tail = vec4<f32>(accumulation.rgb / accumulation.a, 1.0 - reveal);
-                tail_depth = weighted * TAIL_DEPTH_SCALE / accumulation.a;
+                if (weighted.y > 0.0) {
+                    tail_depth = weighted.x / weighted.y;
+                }
             }
         }
     }
 
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
+    if (tail.a > 0.0) {
+        var position = layers;
+        loop {
+            if (position == 0u || layer_depth[position - 1u] <= tail_depth) {
+                break;
+            }
+            layer_depth[position] = layer_depth[position - 1u];
+            layer_color[position] = layer_color[position - 1u];
+            position -= 1u;
+        }
+        let premultiplied = vec4<f32>(tail.rgb * tail.a, tail.a);
+        layer_depth[position] = tail_depth;
+        layer_color[position] = vec2<u32>(
+            pack2x16float(premultiplied.rg),
+            pack2x16float(premultiplied.ba),
+        );
+        layers += 1u;
+    }
     var cursor = start + min(jitter, max(exit - start, 0.0));
     for (var index = 0u; index < layers; index += 1u) {
         let limit = min(object_distance(layer_depth[index], ndc), exit);
@@ -279,17 +298,6 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         if (transmittance < MINIMUM_TRANSMITTANCE) {
             break;
         }
-    }
-    if (tail.a > 0.0) {
-        let limit = min(object_distance(tail_depth, ndc), exit);
-        if (limit > cursor) {
-            let segment = march(cursor, limit, direction);
-            radiance += transmittance * segment.rgb;
-            transmittance *= segment.a;
-            cursor = limit;
-        }
-        radiance += transmittance * tail.rgb * tail.a;
-        transmittance *= 1.0 - tail.a;
     }
     if (cursor < exit) {
         let segment = march(cursor, exit, direction);

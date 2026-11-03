@@ -26,8 +26,9 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         .iter()
         .map(ObjectSet::id)
         .collect::<Vec<_>>();
-    for id in ids {
-        object(ui, state, commands, id);
+    let count = ids.len();
+    for (position, id) in ids.into_iter().enumerate() {
+        object(ui, state, commands, id, position, count);
     }
     widget::weak(ui, &format!("new objects read {channel_name}"));
 }
@@ -175,7 +176,14 @@ fn kind_icon(kind: ObjectKind) -> grana_ui::Icon {
     }
 }
 
-fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: ObjectSetId) {
+fn object(
+    ui: &mut Ui,
+    state: &mut State<'_>,
+    commands: &mut Vec<Command>,
+    id: ObjectSetId,
+    position: usize,
+    sets: usize,
+) {
     let Some(set) = state.scene.objects.get(id) else {
         return;
     };
@@ -351,6 +359,7 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
                 let open = ui.popup_open(menu_key);
                 let mut rename = false;
                 let mut remove = false;
+                let mut reorder = None;
                 grana_ui::popover::popover(ui, "object.menu", open, menu_rect, 188.0, |ui| {
                     if grana_ui::popover::action_row(
                         ui,
@@ -360,6 +369,28 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
                         None,
                     ) {
                         rename = true;
+                    }
+                    if position > 0
+                        && grana_ui::popover::action_row(
+                            ui,
+                            "move.up",
+                            grana_ui::Icon::ChevronUp,
+                            "Move up",
+                            None,
+                        )
+                    {
+                        reorder = Some(position - 1);
+                    }
+                    if position + 1 < sets
+                        && grana_ui::popover::action_row(
+                            ui,
+                            "move.down",
+                            grana_ui::Icon::ChevronDown,
+                            "Move down",
+                            None,
+                        )
+                    {
+                        reorder = Some(position + 1);
                     }
                     if grana_ui::popover::action_row(
                         ui,
@@ -374,6 +405,10 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
                 if rename {
                     ui.close_popup();
                     ui.begin_edit(name_key, &name);
+                }
+                if let Some(index) = reorder {
+                    ui.close_popup();
+                    commands.push(Command::ReorderObject { set: id, index });
                 }
                 if remove {
                     ui.close_popup();

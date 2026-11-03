@@ -11,7 +11,9 @@ use grana_display::{
 };
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::{Track, TrackNode, TrackSet};
-use grana_render::{Frame, Layer, LayerKey, Marker, PickId, PickPane, Renderer, SceneFrame, Style};
+use grana_render::{
+    CutInfo, Frame, Layer, LayerKey, Marker, PickId, PickPane, Renderer, SceneFrame, Style,
+};
 use grana_volume::{
     Axis, BrickGrid, Channel, Extent, Level, Pyramid, Region, Spacing, Volume, VolumeSeries,
     VoxelData,
@@ -965,6 +967,120 @@ fn composites_transparent_surfaces_beyond_the_stored_layers() {
         shown[2] > hidden[2] + 30,
         "the surfaces beyond the stored layers are dropped: {shown:?} {hidden:?}"
     );
+}
+
+#[test]
+fn keeps_near_transparent_surfaces_drawn_after_far_ones() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = empty_volume();
+    let pyramid = volume.pyramid();
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let far = PackedMesh::new(receding_planes(&camera, 16, 0.5, 0.17));
+    let near = PackedMesh::new(view_plane(&camera, -1.2, 0.9));
+    let blue = [0.12, 0.2, 1.0];
+    let red = [1.0, 0.12, 0.12];
+    let mut styles = (0..16)
+        .map(|_| Style::new(blue, true, false, 0.05))
+        .collect::<Vec<_>>();
+    styles.push(Style::new(red, true, false, 0.9));
+    let layers = [
+        Layer {
+            key: LayerKey::at_frame(1, 0, 0, 1),
+            mesh: &far,
+            style_start: 0,
+            style_count: 16,
+        },
+        Layer {
+            key: LayerKey::at_frame(2, 0, 0, 1),
+            mesh: &near,
+            style_start: 16,
+            style_count: 1,
+        },
+    ];
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &styles,
+        layers: &layers,
+        markers: &[],
+    };
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    settle(
+        &mut renderer,
+        Session {
+            device: &device,
+            queue: &queue,
+            target: &view,
+            camera: &camera,
+            section: &section,
+            scene: &scene,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            region: Region::none(),
+            time: 0,
+        },
+        |request| {
+            let grid = BrickGrid::new(volume.extent());
+            volume.brick(&grid, request.coord)
+        },
+    );
+    let pixels = read_pixels(&device, &queue, &texture, SIDE);
+    let centre = pixel(&pixels, SIDE / 2, SIDE / 2).map(u32::from);
+    assert!(
+        centre[0] > centre[2] + 40,
+        "the nearest transparent surface vanishes when farther ones fill the layers first: {centre:?}"
+    );
+}
+
+fn receding_planes(camera: &Camera, count: usize, first: f32, step: f32) -> Mesh {
+    let pivot = camera.focus();
+    let forward = camera.forward();
+    let right = camera.right();
+    let up = camera.up();
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for object in 0..count {
+        let centre = pivot + forward * (first + step * object as f32);
+        let base = vertices.len() as u32;
+        for corner in [[-1.0f32, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]] {
+            let position = centre + (right * corner[0] + up * corner[1]) * 0.9;
+            vertices.push(MeshVertex::new(
+                position.to_array(),
+                (-forward).to_array(),
+                object as u32,
+            ));
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    Mesh::new(vertices, indices)
+}
+
+fn view_plane(camera: &Camera, offset: f32, half: f32) -> Mesh {
+    let centre = camera.focus() + camera.forward() * offset;
+    let right = camera.right();
+    let up = camera.up();
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for corner in [[-1.0f32, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]] {
+        let position = centre + (right * corner[0] + up * corner[1]) * half;
+        vertices.push(MeshVertex::new(
+            position.to_array(),
+            (-camera.forward()).to_array(),
+            0,
+        ));
+    }
+    indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+    Mesh::new(vertices, indices)
 }
 
 #[test]
@@ -3124,6 +3240,71 @@ fn cuts_every_object_through_the_parallel_path() {
     assert_eq!(
         info.cut.objects, count as u32,
         "every object crossing the plane holds a cut face"
+    );
+}
+
+#[test]
+fn reuses_cut_indexes_when_the_axis_returns() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = empty_volume();
+    let pyramid = volume.pyramid();
+    let mesh = PackedMesh::new(many_boxes(9));
+    let styles = (0..9)
+        .map(|_| Style::new([1.0, 0.12, 0.12], true, false, 1.0))
+        .collect::<Vec<_>>();
+    let layers = [Layer {
+        key: LayerKey::at_frame(1, 0, 0, 1),
+        mesh: &mesh,
+        style_start: 0,
+        style_count: 9,
+    }];
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &styles,
+        layers: &layers,
+        markers: &[],
+    };
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    camera.set_focus_along(Axis::X, -0.12);
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    let mut cut = |section: &SectionCamera| -> CutInfo {
+        let session = Session {
+            device: &device,
+            queue: &queue,
+            target: &view,
+            camera: &camera,
+            section,
+            scene: &scene,
+            volume_region: CORNER,
+            section_region: WHOLE,
+            region: Region::none(),
+            time: 0,
+        };
+        renderer.draw(&device, &queue, common::frame(&session)).cut
+    };
+    let z_first = cut(&SectionCamera::new(Axis::Z));
+    assert!(z_first.objects > 0, "the z cut names every box");
+    assert!(z_first.indices > 0, "the z cut indexes its boxes");
+    let x_first = cut(&SectionCamera::new(Axis::X));
+    assert!(x_first.objects > 0, "the x cut names a box");
+    assert!(
+        x_first.indices > z_first.indices,
+        "a new axis adds its own indexes"
+    );
+    let z_again = cut(&SectionCamera::new(Axis::Z));
+    assert!(
+        z_again.indices == x_first.indices,
+        "returning to an axis rebuilds its indexes"
     );
 }
 

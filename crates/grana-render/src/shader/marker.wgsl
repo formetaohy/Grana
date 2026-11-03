@@ -129,7 +129,7 @@ fn fs_tail(input: MarkerOutput) -> TailFragment {
     var output: TailFragment;
     output.accumulate = vec4<f32>(shaded.color.rgb * shaded.color.a * weight, shaded.color.a * weight);
     output.reveal = vec4<f32>(shaded.color.a);
-    output.depth = vec2<f32>(shaded.depth * shaded.color.a * weight * OIT_DEPTH_SCALE);
+    output.depth = vec2<f32>(shaded.depth * shaded.color.a, shaded.color.a);
     return output;
 }
 

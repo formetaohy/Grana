@@ -64,6 +64,19 @@ impl Objects {
         self.clear_relations(id);
     }
 
+    pub fn reorder(&mut self, id: ObjectSetId, index: usize) -> bool {
+        let Some(position) = self.sets.iter().position(|set| set.id() == id) else {
+            return false;
+        };
+        let target = index.min(self.sets.len() - 1);
+        if position == target {
+            return false;
+        }
+        let set = self.sets.remove(position);
+        self.sets.insert(target, set);
+        true
+    }
+
     pub fn rename(&mut self, id: ObjectSetId, name: &str) -> bool {
         let name = name.trim();
         if name.is_empty() || self.occupied(name, Some(id)) {
@@ -232,8 +245,12 @@ impl Objects {
         self.next_id = 1;
         self.ordinals = [0; 3];
         for state in states {
-            assert!(state.id >= self.next_id, "object set ids ascend from one");
-            self.next_id = state.id + 1;
+            assert!(state.id > 0, "an object set id is positive");
+            assert!(
+                !self.sets.iter().any(|set| set.id().raw() == state.id),
+                "object set ids are unique"
+            );
+            self.next_id = self.next_id.max(state.id + 1);
             self.ordinals[state.kind.index()] += 1;
             self.sets
                 .push(ObjectSet::restore(state, dataset, &mut self.stamp));
