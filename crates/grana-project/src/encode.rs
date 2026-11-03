@@ -385,6 +385,7 @@ impl Encode for TrackMeasurement {
 
 impl Encode for ObjectFrame {
     fn encode(&self, writer: &mut Writer) {
+        writer.step();
         match self {
             Self::Spots(set) => {
                 writer.u8(TAG_SPOTS);
@@ -491,6 +492,7 @@ impl Encode for Bounds {
 
 impl Encode for PackedMesh {
     fn encode(&self, writer: &mut Writer) {
+        writer.step();
         writer.blob(&self.to_bytes());
     }
 }

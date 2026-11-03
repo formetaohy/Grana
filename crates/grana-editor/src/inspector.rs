@@ -87,6 +87,19 @@ pub fn header(ui: &mut Ui, state: &State<'_>) {
             widget::caption(ui, name);
         });
     }
+    if let Some((label, done, total)) = state.io.document {
+        ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
+            widget::spinner(ui, 13.0);
+            let text = done
+                .checked_mul(100)
+                .and_then(|percent| percent.checked_div(total))
+                .map_or_else(
+                    || label.to_string(),
+                    |percent| format!("{label} · {percent}%"),
+                );
+            widget::caption(ui, &text);
+        });
+    }
 }
 
 fn plural(count: usize) -> &'static str {

@@ -39,6 +39,7 @@ pub struct StoreView {
 pub struct IoView<'a> {
     pub adapter: &'a str,
     pub loading: Option<&'a str>,
+    pub document: Option<(&'a str, usize, usize)>,
     pub message: Option<&'a Message>,
     pub project: Option<String>,
     pub dirty: bool,

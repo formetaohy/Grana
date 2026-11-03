@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_geometry::MeshStore;
 
@@ -8,6 +9,7 @@ const FAULT_LENGTH: &str = "the project data declares a length it cannot hold";
 const FAULT_TAG: &str = "the project data carries an unknown variant tag";
 const FAULT_UTF8: &str = "the project data carries text that is not utf-8";
 const FAULT_TRAILING: &str = "the project data carries trailing bytes";
+const FAULT_CANCELLED: &str = "the project transfer was cancelled";
 const STRING_LIMIT: usize = 1 << 20;
 
 pub(crate) trait Encode {
@@ -128,14 +130,24 @@ impl<T: Decode> Decode for Arc<T> {
 
 pub(crate) struct Writer<'a> {
     sink: &'a mut dyn Write,
+    cancel: &'a AtomicBool,
+    report: &'a mut dyn FnMut(usize),
+    steps: usize,
     raw: usize,
     fault: Option<String>,
 }
 
 impl<'a> Writer<'a> {
-    pub fn new(sink: &'a mut dyn Write) -> Self {
+    pub fn new(
+        sink: &'a mut dyn Write,
+        cancel: &'a AtomicBool,
+        report: &'a mut dyn FnMut(usize),
+    ) -> Self {
         Self {
             sink,
+            cancel,
+            report,
+            steps: 0,
             raw: 0,
             fault: None,
         }
@@ -153,6 +165,14 @@ impl<'a> Writer<'a> {
         if self.fault.is_none() {
             self.fault = Some(detail.to_string());
         }
+    }
+
+    pub fn step(&mut self) {
+        if self.fault.is_some() {
+            return;
+        }
+        self.steps += 1;
+        (self.report)(self.steps);
     }
 
     pub fn blob(&mut self, bytes: &[u8]) {
@@ -205,6 +225,10 @@ impl<'a> Writer<'a> {
         if self.fault.is_some() {
             return;
         }
+        if self.cancel.load(Ordering::Relaxed) {
+            self.fault = Some(FAULT_CANCELLED.to_string());
+            return;
+        }
         match self.sink.write_all(bytes) {
             Ok(()) => self.raw += bytes.len(),
             Err(error) => self.fault = Some(error.to_string()),
@@ -216,19 +240,36 @@ pub(crate) struct Reader<'a> {
     source: &'a mut dyn Read,
     remaining: usize,
     store: Arc<MeshStore>,
+    cancel: &'a AtomicBool,
+    report: &'a mut dyn FnMut(usize),
+    steps: usize,
 }
 
 impl<'a> Reader<'a> {
-    pub fn new(source: &'a mut dyn Read, length: usize, store: Arc<MeshStore>) -> Self {
+    pub fn new(
+        source: &'a mut dyn Read,
+        length: usize,
+        store: Arc<MeshStore>,
+        cancel: &'a AtomicBool,
+        report: &'a mut dyn FnMut(usize),
+    ) -> Self {
         Self {
             source,
             remaining: length,
             store,
+            cancel,
+            report,
+            steps: 0,
         }
     }
 
     pub fn store(&self) -> &Arc<MeshStore> {
         &self.store
+    }
+
+    pub fn step(&mut self) {
+        self.steps += 1;
+        (self.report)(self.steps);
     }
 
     pub fn blob(&mut self) -> Result<Vec<u8>, &'static str> {
@@ -315,6 +356,9 @@ impl<'a> Reader<'a> {
     fn fill(&mut self, bytes: &mut [u8]) -> Result<(), &'static str> {
         if bytes.len() > self.remaining {
             return Err(FAULT_TRUNCATED);
+        }
+        if self.cancel.load(Ordering::Relaxed) {
+            return Err(FAULT_CANCELLED);
         }
         self.source.read_exact(bytes).map_err(|_| FAULT_TRUNCATED)?;
         self.remaining -= bytes.len();

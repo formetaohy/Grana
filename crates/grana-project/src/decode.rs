@@ -632,6 +632,7 @@ impl Decode for TrackMeasurement {
 
 impl Decode for ObjectFrame {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        reader.step();
         match reader.u8()? {
             TAG_SPOTS => Ok(Self::Spots(SpotSet::decode(reader)?)),
             TAG_SURFACES => Ok(Self::Surfaces(SurfaceSet::decode(reader)?)),
@@ -779,6 +780,7 @@ impl Decode for Bounds {
 
 impl Decode for PackedMesh {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        reader.step();
         let bytes = reader.blob()?;
         Self::from_bytes(&bytes).ok_or(FAULT_SHAPE)
     }

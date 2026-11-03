@@ -1,19 +1,24 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use grana_animation::Timeline;
 use grana_display::{CameraState, SectionState};
 use grana_geometry::MeshStore;
-use grana_scene::{Dataset, Measure, MeasureState, Scene, SceneState};
+use grana_scene::{Dataset, Measure, MeasureState, ObjectKind, Scene, SceneState};
 
 use crate::binary::{Decode, Encode, Reader, Writer};
 use crate::error::Error;
 
-const MAGIC: &[u8; 11] = b"granaproj11";
-const HEADER: usize = MAGIC.len() + size_of::<u64>();
+const MAGIC: &[u8; 11] = b"granaproj12";
+const LENGTH: usize = size_of::<u64>();
+const STEPS: usize = size_of::<u32>();
+const HEADER: usize = MAGIC.len() + LENGTH + STEPS;
 const COMPRESSION_LEVEL: i32 = 6;
 const RAW_LIMIT: u64 = 16 << 30;
+const STALE_AGE: Duration = Duration::from_secs(3600);
 
 #[derive(Debug, PartialEq)]
 pub struct Project {
@@ -70,28 +75,51 @@ impl Project {
                 .matches(dataset.channels().len(), dataset.frame_count())
     }
 
-    pub fn write(&self, path: &Path) -> Result<(), Error> {
+    pub fn write(
+        &self,
+        path: &Path,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<(), Error> {
         let temporary = temporary_path(path);
-        let result = self.write_stream(&temporary, path).and_then(|()| {
-            std::fs::rename(&temporary, path).map_err(|error| Error::Write {
-                path: path.to_path_buf(),
-                detail: error.to_string(),
-            })
-        });
+        let total = self.steps();
+        let result = self
+            .write_stream(&temporary, path, total, cancel, progress)
+            .and_then(|()| {
+                std::fs::rename(&temporary, path).map_err(|error| Error::Write {
+                    path: path.to_path_buf(),
+                    detail: error.to_string(),
+                })
+            });
         if result.is_err() {
             let _ = std::fs::remove_file(&temporary);
         }
         result
     }
 
-    pub fn read(path: &Path, store: Arc<MeshStore>) -> Result<Self, Error> {
-        let format = |detail: &str| Error::Format {
-            path: path.to_path_buf(),
-            detail: detail.to_string(),
+    pub fn read(
+        path: &Path,
+        store: Arc<MeshStore>,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Self, Error> {
+        let format = |detail: &str| {
+            if cancel.load(Ordering::Relaxed) {
+                return Error::Cancelled;
+            }
+            Error::Format {
+                path: path.to_path_buf(),
+                detail: detail.to_string(),
+            }
         };
-        let read = |detail: String| Error::Read {
-            path: path.to_path_buf(),
-            detail,
+        let read = |detail: String| {
+            if cancel.load(Ordering::Relaxed) {
+                return Error::Cancelled;
+            }
+            Error::Read {
+                path: path.to_path_buf(),
+                detail,
+            }
         };
         let mut file = std::fs::File::open(path).map_err(|error| read(error.to_string()))?;
         let mut header = [0u8; HEADER];
@@ -100,8 +128,11 @@ impl Project {
         if &header[..MAGIC.len()] != MAGIC {
             return Err(format("the file does not carry a grana project header"));
         }
-        let mut length = [0u8; 8];
-        length.copy_from_slice(&header[MAGIC.len()..HEADER]);
+        let mut length = [0u8; LENGTH];
+        length.copy_from_slice(&header[MAGIC.len()..MAGIC.len() + LENGTH]);
+        let mut steps = [0u8; STEPS];
+        steps.copy_from_slice(&header[MAGIC.len() + LENGTH..HEADER]);
+        let total = u32::from_le_bytes(steps) as usize;
         let raw_length = u64::from_le_bytes(length);
         if raw_length > RAW_LIMIT {
             return Err(format("the project declares an impossible payload size"));
@@ -110,22 +141,48 @@ impl Project {
             .map_err(|_| format("the project declares an impossible payload size"))?;
         let mut decoder = zstd::Decoder::new(file)
             .map_err(|error| format(&format!("the payload does not decompress: {error}")))?;
-        let mut reader = Reader::new(&mut decoder, raw_length, store);
+        let mut report = |done: usize| progress(done, total);
+        let mut reader = Reader::new(&mut decoder, raw_length, store, cancel, &mut report);
         let project = Project::decode(&mut reader).map_err(format)?;
         reader.done().map_err(format)?;
         Ok(project)
     }
 
-    fn write_stream(&self, temporary: &Path, path: &Path) -> Result<(), Error> {
-        let write = |detail: String| Error::Write {
-            path: path.to_path_buf(),
-            detail,
+    fn steps(&self) -> usize {
+        self.scene
+            .sets
+            .iter()
+            .flat_map(|set| set.frames.iter().flatten())
+            .map(|frame| match frame.kind() {
+                ObjectKind::Spots => 1,
+                ObjectKind::Surfaces | ObjectKind::Filaments => 2,
+            })
+            .sum()
+    }
+
+    fn write_stream(
+        &self,
+        temporary: &Path,
+        path: &Path,
+        total: usize,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<(), Error> {
+        let write = |detail: String| {
+            if cancel.load(Ordering::Relaxed) {
+                return Error::Cancelled;
+            }
+            Error::Write {
+                path: path.to_path_buf(),
+                detail,
+            }
         };
+        sweep(path);
         let mut file =
             std::fs::File::create(temporary).map_err(|error| write(error.to_string()))?;
         file.write_all(MAGIC)
             .map_err(|error| write(error.to_string()))?;
-        file.write_all(&[0u8; size_of::<u64>()])
+        file.write_all(&[0u8; LENGTH + STEPS])
             .map_err(|error| write(error.to_string()))?;
         let mut encoder = zstd::Encoder::new(file, COMPRESSION_LEVEL)
             .map_err(|error| write(error.to_string()))?;
@@ -133,7 +190,8 @@ impl Project {
             .include_checksum(true)
             .map_err(|error| write(error.to_string()))?;
         let raw = {
-            let mut writer = Writer::new(&mut encoder);
+            let mut report = |done: usize| progress(done, total);
+            let mut writer = Writer::new(&mut encoder, cancel, &mut report);
             self.encode(&mut writer);
             if let Some(error) = writer.fault() {
                 return Err(write(error.to_string()));
@@ -145,7 +203,11 @@ impl Project {
             .map_err(|error| write(error.to_string()))?;
         file.write_all(&(raw as u64).to_le_bytes())
             .map_err(|error| write(error.to_string()))?;
+        let steps = u32::try_from(total).map_err(|_| write("too many steps".to_string()))?;
+        file.write_all(&steps.to_le_bytes())
+            .map_err(|error| write(error.to_string()))?;
         file.flush().map_err(|error| write(error.to_string()))?;
+        file.sync_all().map_err(|error| write(error.to_string()))?;
         Ok(())
     }
 }
@@ -156,4 +218,35 @@ fn temporary_path(path: &Path) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("project");
     path.with_file_name(format!(".{name}.{}.tmp", std::process::id()))
+}
+
+fn sweep(path: &Path) {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    let Some(directory) = path.parent() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    let prefix = format!(".{name}.");
+    for entry in entries.flatten() {
+        let candidate = entry.path();
+        let Some(candidate_name) = candidate.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !candidate_name.starts_with(&prefix) || !candidate_name.ends_with(".tmp") {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_none_or(|age| age >= STALE_AGE);
+        if stale {
+            let _ = std::fs::remove_file(&candidate);
+        }
+    }
 }

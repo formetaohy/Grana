@@ -1,4 +1,4 @@
-use grana_display::{Shading, srgb_to_linear};
+use grana_display::Shading;
 use grana_object::Spot;
 use grana_render::{ChannelRow, Layer, LayerKey, Marker, SceneFrame, Style};
 use grana_scene::{Item, ObjectSet, Scene, Selection};
@@ -91,7 +91,7 @@ pub fn frame(scene: &Scene) -> Result<RenderedScene<'_>, String> {
             let start = styles.len();
             for index in 0..frame.object_count() {
                 styles.push(Style::new(
-                    srgb_to_linear(color(index)),
+                    color(index),
                     set.visible_object(scene.time(), index),
                     scene.object_selected(set.id(), index),
                     set.opacity(),
@@ -125,7 +125,7 @@ pub fn frame(scene: &Scene) -> Result<RenderedScene<'_>, String> {
             let start = styles.len();
             for index in 0..tracks.set().len() {
                 styles.push(Style::new(
-                    srgb_to_linear(color(index)),
+                    color(index),
                     tracks.visible() && set.visible_track(index),
                     scene.track_selected(set.id(), index),
                     set.opacity(),

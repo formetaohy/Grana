@@ -414,7 +414,9 @@ impl App {
         }
         if let Some(choose) = effects.save_project {
             let view = self.view_state();
-            self.session.save_project(choose, view);
+            if let Some(path) = self.project_path(choose) {
+                self.session.save_project(path, view);
+            }
         }
         if let Some(export) = effects.snapshot {
             self.begin_snapshot(export);
@@ -818,6 +820,7 @@ impl App {
         self.session.batch().is_some_and(|batch| batch.running)
             || self.workspace.playback.playing
             || self.session.loading().is_some()
+            || self.session.transferring()
             || !self.session.progress().is_empty()
             || self.session.pending() > 0
             || engine.requests_pending()
@@ -1031,6 +1034,17 @@ impl App {
             .pick_file()
     }
 
+    fn project_path(&self, choose: bool) -> Option<PathBuf> {
+        if !choose && let Some(path) = self.session.project() {
+            return Some(path.to_path_buf());
+        }
+        rfd::FileDialog::new()
+            .set_title("Save a grana project")
+            .set_file_name(self.session.suggested_project())
+            .add_filter("grana project", &["grana"])
+            .save_file()
+    }
+
     fn on_key(&mut self, event: &winit::event::KeyEvent) {
         if event.state != ElementState::Pressed || event.repeat {
             return;
@@ -1047,7 +1061,9 @@ impl App {
             if let Key::Character(text) = &event.logical_key {
                 if text.as_str().eq_ignore_ascii_case("s") {
                     let view = self.view_state();
-                    self.session.save_project(self.modifiers.shift_key(), view);
+                    if let Some(path) = self.project_path(self.modifiers.shift_key()) {
+                        self.session.save_project(path, view);
+                    }
                 } else if text.as_str().eq_ignore_ascii_case("o")
                     && let Some(path) = Self::pick_project()
                 {

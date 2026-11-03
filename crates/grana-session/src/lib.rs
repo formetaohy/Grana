@@ -1,5 +1,6 @@
 mod batch;
 mod command;
+mod document;
 mod event;
 mod history;
 mod job;
@@ -8,6 +9,7 @@ mod protocol;
 mod run;
 mod sample;
 mod session;
+mod task;
 mod view;
 
 pub use batch::{
@@ -15,7 +17,7 @@ pub use batch::{
     default_jobs, discover,
 };
 pub use command::{Action, Command, Export};
-pub use event::{Event, Poll};
+pub use event::Event;
 pub use grana_image::{Source, is_image};
 pub use grana_scene::slug;
 pub use job::{Analysis, coloc, detect, relation, track};
@@ -26,4 +28,5 @@ pub use protocol::{
 };
 pub use run::DetectRequest;
 pub use session::{Effects, Session};
+pub use task::Poll;
 pub use view::{BatchDataset, BatchView, HistoryView, IoView, Message, SessionView, StoreView};

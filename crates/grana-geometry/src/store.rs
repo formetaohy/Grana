@@ -3,7 +3,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::Duration;
 
 use crate::error::Error;
 use crate::packed::PackedMesh;
@@ -13,6 +14,7 @@ pub const DEFAULT_BUDGET: u64 = 768 << 20;
 const PREFIX: &str = "grana-geometry";
 const SUFFIX: &str = "mesh";
 const RECLAIM_FACTOR: u64 = 4;
+const STALE_AGE: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MeshId(u32);
@@ -114,6 +116,7 @@ impl Inner {
 impl MeshStore {
     pub fn temporary(budget: u64) -> Result<Arc<Self>, Error> {
         assert!(budget > 0, "a mesh store holds at least one byte");
+        sweep();
         let path = temporary_path();
         let file = OpenOptions::new()
             .read(true)
@@ -124,6 +127,10 @@ impl MeshStore {
                 path: path.clone(),
                 detail: error.to_string(),
             })?;
+        file.lock().map_err(|error| Error::Create {
+            path: path.clone(),
+            detail: error.to_string(),
+        })?;
         let mut entries = HashMap::new();
         entries.reserve(0);
         Ok(Arc::new(Self {
@@ -466,4 +473,39 @@ fn temporary_path() -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let count = COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("{PREFIX}-{}-{count}.{SUFFIX}", std::process::id()))
+}
+
+fn sweep() {
+    static SWEPT: OnceLock<()> = OnceLock::new();
+    SWEPT.get_or_init(|| {
+        let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+            return;
+        };
+        let suffix = format!(".{SUFFIX}");
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !name.starts_with(PREFIX) || !name.ends_with(&suffix) {
+                continue;
+            }
+            let fresh = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age < STALE_AGE);
+            if fresh {
+                continue;
+            }
+            let Ok(file) = OpenOptions::new().read(true).write(true).open(&path) else {
+                continue;
+            };
+            if file.try_lock().is_err() {
+                continue;
+            }
+            remove(&path);
+        }
+    });
 }

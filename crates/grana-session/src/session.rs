@@ -13,14 +13,16 @@ use grana_scene::{Dataset, Item, Job, Measure, ObjectFrame, ObjectSetId, Origin,
 use grana_volume::{BrickData, BrickRequest, Region};
 
 use crate::command::{Edit, Export};
+use crate::document::{self, Document};
 use crate::history::{History, Snapshot};
 use crate::loader::{Event as LoaderEvent, Loader};
 use crate::run::DetectRequest;
 use crate::sample;
+use crate::task::Poll;
 use crate::view::{BatchDataset, BatchView, HistoryView, IoView, Message, StoreView};
 use crate::{
     Action, Analysis, Batch, BatchEvent, BatchPoll, Command, Event, Outcome, Plan as BatchPlan,
-    Poll, Protocol, Source,
+    Protocol, Source,
 };
 
 const MAX_IN_FLIGHT: usize = 8192;
@@ -65,6 +67,7 @@ pub struct Session {
     bricks: Vec<(BrickRequest, BrickData)>,
     pending: Option<Pending>,
     loading: Option<String>,
+    document: Option<Document>,
     message: Option<Message>,
     project: Option<PathBuf>,
     saved: Option<u64>,
@@ -106,6 +109,7 @@ impl Session {
             bricks: Vec::new(),
             pending: None,
             loading: None,
+            document: None,
             message: None,
             project: None,
             saved: None,
@@ -215,9 +219,17 @@ impl Session {
             .as_ref()
             .map_or(0.0, |scene| scene.dataset.frame_interval());
         let stats = self.store.stats();
+        let document = self.document.as_ref().map(|document| {
+            (
+                document.label(),
+                document.progress().0,
+                document.progress().1,
+            )
+        });
         IoView {
             adapter,
             loading: self.loading.as_deref(),
+            document,
             message: self.message.as_ref(),
             project: self.project_name(),
             dirty: self.dirty(),
@@ -267,6 +279,7 @@ impl Session {
 
     pub fn poll(&mut self) -> bool {
         let mut repaint = self.poll_source();
+        repaint |= self.poll_document();
         repaint |= self.poll_analysis();
         repaint |= self.poll_batch();
         repaint
@@ -348,14 +361,6 @@ impl Session {
             self.history.record(Edit::new(Action::Keyframe), snapshot);
         }
         index
-    }
-
-    pub fn remove_keyframe(&mut self, index: usize) -> bool {
-        self.timeline.remove(index).is_some()
-    }
-
-    pub fn clear_keyframes(&mut self) {
-        self.timeline.clear();
     }
 
     pub fn execute(&mut self, command: Command) -> Effects {
@@ -796,7 +801,7 @@ impl Session {
     }
 
     pub fn begin_load(&mut self, path: PathBuf) {
-        if self.loading.is_some() {
+        if self.reject_transfer() {
             return;
         }
         self.loading = Some(file_name(&path));
@@ -808,16 +813,54 @@ impl Session {
     }
 
     pub fn begin_project(&mut self, path: PathBuf) {
-        if self.loading.is_some() {
+        if self.reject_transfer() {
             return;
         }
-        let project = match Project::read(&path, self.store()) {
-            Ok(project) => project,
-            Err(error) => {
-                self.message = Some(Message::error(error.to_string()));
-                return;
-            }
+        self.document = Some(Document::open(path, Arc::clone(&self.store)));
+        self.message = None;
+    }
+
+    pub fn save_project(&mut self, path: PathBuf, view: ViewState) {
+        if self.reject_transfer() {
+            return;
+        }
+        let (Some(scene), Some(source)) = (self.scene.as_ref(), self.source_ref()) else {
+            return;
         };
+        let project = Project::capture(scene, &self.measure, source, view);
+        let hash = self.document_hash();
+        self.document = Some(Document::save(project, path, hash));
+        self.message = None;
+    }
+
+    pub fn project(&self) -> Option<&Path> {
+        self.project.as_deref()
+    }
+
+    pub fn suggested_project(&self) -> String {
+        let name = self
+            .scene
+            .as_ref()
+            .map_or("project", |scene| scene.dataset.name());
+        format!("{}.grana", crate::slug(name))
+    }
+
+    pub fn transferring(&self) -> bool {
+        self.loading.is_some() || self.document.is_some()
+    }
+
+    fn reject_transfer(&mut self) -> bool {
+        if self.loading.is_some() {
+            return true;
+        }
+        if self.document.is_some() {
+            self.message = Some(Message::error("a project transfer is already running"));
+            return true;
+        }
+        false
+    }
+
+    fn open_project(&mut self, path: &Path, project: Project) {
         self.message = None;
         match &project.source {
             ProjectSource::Synthetic { name } => {
@@ -825,7 +868,10 @@ impl Session {
                 let (source, pyramid) = Loader::memory(sample::series());
                 self.source = Some(source);
                 self.loading = None;
-                self.pending = Some(Pending { path, project });
+                self.pending = Some(Pending {
+                    path: path.to_path_buf(),
+                    project,
+                });
                 self.project = None;
                 self.saved = None;
                 self.reset();
@@ -842,7 +888,10 @@ impl Session {
                 }
                 self.source = Some(Loader::file(data.clone()));
                 self.loading = Some(file_name(&data));
-                self.pending = Some(Pending { path, project });
+                self.pending = Some(Pending {
+                    path: path.to_path_buf(),
+                    project,
+                });
                 self.project = None;
                 self.saved = None;
                 self.reset();
@@ -850,36 +899,58 @@ impl Session {
         }
     }
 
-    pub fn save_project(&mut self, choose: bool, view: ViewState) {
-        if self.loading.is_some() {
-            return;
-        }
-        let (Some(scene), Some(source)) = (self.scene.as_ref(), self.source_ref()) else {
-            return;
-        };
-        let suggested = format!("{}.grana", crate::slug(scene.dataset.name()));
-        let path = match (choose, self.project.clone()) {
-            (false, Some(path)) => path,
-            _ => match rfd::FileDialog::new()
-                .set_title("Save a grana project")
-                .set_file_name(suggested)
-                .add_filter("grana project", &["grana"])
-                .save_file()
-            {
-                Some(path) => path,
-                None => return,
-            },
-        };
-        let project = Project::capture(scene, &self.measure, source, view);
-        let hash = self.document_hash();
-        match project.write(&path) {
-            Ok(()) => {
-                self.project = Some(path);
-                self.saved = hash;
-                self.message = None;
+    fn poll_document(&mut self) -> bool {
+        let (events, closed, path, hash) = {
+            let Some(document) = self.document.as_mut() else {
+                return false;
+            };
+            let mut events = Vec::new();
+            let mut closed = false;
+            loop {
+                match document.poll() {
+                    Poll::Event(event) => events.push(event),
+                    Poll::Empty => break,
+                    Poll::Closed => {
+                        closed = true;
+                        break;
+                    }
+                }
             }
-            Err(error) => self.message = Some(Message::error(error.to_string())),
+            (
+                events,
+                closed,
+                document.path().to_path_buf(),
+                document.hash(),
+            )
+        };
+        if events.is_empty() && !closed {
+            return false;
         }
+        let mut settled = false;
+        for event in events {
+            settled = true;
+            match event {
+                document::Outcome::Saved => {
+                    self.project = Some(path.clone());
+                    self.saved = hash;
+                }
+                document::Outcome::Opened(project) => self.open_project(&path, *project),
+                document::Outcome::Failed(detail) => {
+                    self.message = Some(Message::error(detail));
+                }
+                document::Outcome::Cancelled => {}
+            }
+        }
+        let finished = settled || closed;
+        if finished {
+            if closed && !settled {
+                self.message = Some(Message::error(
+                    "the project worker stopped before it finished",
+                ));
+            }
+            self.document = None;
+        }
+        true
     }
 
     fn source_ref(&self) -> Option<ProjectSource> {

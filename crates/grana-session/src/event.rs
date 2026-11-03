@@ -25,9 +25,3 @@ pub enum Event {
     Done,
     Failed(String),
 }
-
-pub enum Poll {
-    Event(Event),
-    Empty,
-    Closed,
-}

@@ -14,6 +14,33 @@ use grana_volume::VoxelData;
 
 use crate::event::Event;
 
+mod frames;
+
+use self::frames::Notice;
+use self::frames::frames as pipeline;
+
+const FRAME_WORKERS: usize = 4;
+const FILAMENT_BYTES: u64 = 512 << 20;
+const FILAMENT_VOXEL_BYTES: u64 = 12;
+
+fn frame_window(totals: u32, workers: usize, per_frame: usize) -> usize {
+    (workers / per_frame.max(1)).max(1).min(totals as usize)
+}
+
+fn install(sink: &mut dyn FnMut(Event)) -> impl FnMut(Notice<ObjectFrame>) + '_ {
+    move |notice| match notice {
+        Notice::Progress { frame, done, total } => sink(Event::Progress {
+            time: frame,
+            done,
+            total,
+        }),
+        Notice::Frame { frame, value } => sink(Event::Frame {
+            time: frame,
+            frame: value,
+        }),
+    }
+}
+
 pub struct DetectRequest {
     channel: usize,
     params: ObjectParams,
@@ -332,34 +359,31 @@ fn spots(
     let channels = pyramid.channel_count();
     let level = pyramid.level(0);
     let scanner = SpotScanner::new(0, level, span, params, region, channels, channel);
-    let total = scanner.blocks();
-    for time in 0..pyramid.frame_count() {
-        if cancel.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        let mask = roi.as_ref().map(|roi| roi.mask(level, time)).transpose()?;
-        sink(Event::Progress {
-            time,
-            done: 0,
-            total,
-        });
-        let read = |measured: usize, ranges: &[Range<u32>; 3]| {
-            reader
-                .read_region(time, 0, measured, ranges)
-                .map_err(String::from)
-        };
-        let set = scanner.frame(workers, cancel, mask.as_ref(), &read, &mut |done, total| {
-            sink(Event::Progress { time, done, total })
-        })?;
-        let Some(set) = set else {
-            return Ok(());
-        };
-        sink(Event::Frame {
-            time,
-            frame: ObjectFrame::Spots(set),
-        });
+    let totals = pyramid.frame_count();
+    let window = frame_window(totals, workers, FRAME_WORKERS);
+    let share = (workers / window).max(1);
+    let completed = pipeline(
+        totals,
+        window,
+        cancel,
+        || (),
+        |(), time, report| {
+            let mask = roi.as_ref().map(|roi| roi.mask(level, time)).transpose()?;
+            let read = |measured: usize, ranges: &[Range<u32>; 3]| {
+                reader
+                    .read_region(time, 0, measured, ranges)
+                    .map_err(String::from)
+            };
+            let set = scanner.frame(share, cancel, mask.as_ref(), &read, &mut |done, total| {
+                report(done, total)
+            })?;
+            Ok(set.map(ObjectFrame::Spots))
+        },
+        &mut install(sink),
+    )?;
+    if completed {
+        sink(Event::Done);
     }
-    sink(Event::Done);
     Ok(())
 }
 fn surfaces(
@@ -393,55 +417,52 @@ fn surfaces(
         "the dataset is too large to detect surfaces at any resolution level".to_string()
     })?;
     let level = pyramid.level(level_index);
-    for time in 0..pyramid.frame_count() {
-        if cancel.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        let builder = SurfaceBuilder::new(
-            level_index,
-            level,
-            params,
-            pyramid.channel_count(),
-            channel,
-            region,
-            pyramid.channels()[channel].intensity(),
-        )
-        .with_seeds(seeds.get(time as usize).map_or(&[], Vec::as_slice));
-        let total = builder.tile_count() * 2;
-        let mask = roi.as_ref().map(|roi| roi.mask(level, time)).transpose()?;
-        sink(Event::Progress {
-            time,
-            done: 0,
-            total,
-        });
-        let set = builder.scan(
-            workers,
-            cancel,
-            mask.as_ref(),
-            &mut |done, total| sink(Event::Progress { time, done, total }),
-            Sources::new(
-                &|_index, ranges| {
-                    reader
-                        .read_region(time, level_index, channel, ranges)
-                        .map_err(String::from)
-                },
-                &|measured, core| {
-                    reader
-                        .read_region(time, level_index, measured, core)
-                        .map_err(String::from)
-                },
-                &store,
-            ),
-        )?;
-        let Some(set) = set else {
-            return Ok(());
-        };
-        sink(Event::Frame {
-            time,
-            frame: ObjectFrame::Surfaces(set),
-        });
+    let totals = pyramid.frame_count();
+    let window = frame_window(totals, workers, FRAME_WORKERS);
+    let share = (workers / window).max(1);
+    let completed = pipeline(
+        totals,
+        window,
+        cancel,
+        || (),
+        |(), time, report| {
+            let builder = SurfaceBuilder::new(
+                level_index,
+                level,
+                params,
+                pyramid.channel_count(),
+                channel,
+                region,
+                pyramid.channels()[channel].intensity(),
+            )
+            .with_seeds(seeds.get(time as usize).map_or(&[], Vec::as_slice));
+            let mask = roi.as_ref().map(|roi| roi.mask(level, time)).transpose()?;
+            let set = builder.scan(
+                share,
+                cancel,
+                mask.as_ref(),
+                &mut |done, total| report(done, total),
+                Sources::new(
+                    &|_index, ranges| {
+                        reader
+                            .read_region(time, level_index, channel, ranges)
+                            .map_err(String::from)
+                    },
+                    &|measured, core| {
+                        reader
+                            .read_region(time, level_index, measured, core)
+                            .map_err(String::from)
+                    },
+                    &store,
+                ),
+            )?;
+            Ok(set.map(ObjectFrame::Surfaces))
+        },
+        &mut install(sink),
+    )?;
+    if completed {
+        sink(Event::Done);
     }
-    sink(Event::Done);
     Ok(())
 }
 
@@ -457,6 +478,7 @@ fn filaments(
         region,
         roi,
         store,
+        workers,
         ..
     } = request;
     let pyramid = reader.pyramid();
@@ -473,44 +495,48 @@ fn filaments(
         "the dataset is too large to trace filaments at any resolution level".to_string()
     })?;
     let channels = pyramid.channel_count();
-    let mut scan = FilamentScan::new(
-        level,
-        pyramid.level(level),
-        params,
-        channels,
-        channel,
-        region,
-        pyramid.channels()[channel].intensity(),
-    );
-    let total = pyramid.frame_count();
-    for time in 0..total {
-        if cancel.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        sink(Event::Progress {
-            time,
-            done: time as usize,
-            total: total as usize,
-        });
-        let detection = full_region(reader, pyramid, time, level, channel)?;
-        let mask = roi
-            .as_ref()
-            .map(|roi| roi.mask(pyramid.level(level), time))
-            .transpose()?;
-        let set = scan.frame(&detection, mask.as_ref(), &store, |measured| {
-            full_region(reader, pyramid, time, level, measured)
-        })?;
-        sink(Event::Frame {
-            time,
-            frame: ObjectFrame::Filaments(set),
-        });
-        sink(Event::Progress {
-            time,
-            done: time as usize + 1,
-            total: total as usize,
-        });
+    let info = pyramid.level(level);
+    let extent = info.extent();
+    let voxels = u64::from(extent.x()) * u64::from(extent.y()) * u64::from(extent.z());
+    let held = (FILAMENT_BYTES / (voxels * FILAMENT_VOXEL_BYTES).max(1)).max(1) as usize;
+    let totals = pyramid.frame_count();
+    let window = frame_window(totals, workers, 1).min(held);
+    let intensity = pyramid.channels()[channel].intensity();
+    let completed = pipeline(
+        totals,
+        window,
+        cancel,
+        || FilamentScan::new(level, info, params, channels, channel, region, intensity),
+        |scan, time, _report| {
+            let detection = full_region(reader, pyramid, time, level, channel)?;
+            let mask = roi.as_ref().map(|roi| roi.mask(info, time)).transpose()?;
+            let set = scan.frame(&detection, mask.as_ref(), &store, |measured| {
+                full_region(reader, pyramid, time, level, measured)
+            })?;
+            Ok(Some(ObjectFrame::Filaments(set)))
+        },
+        &mut |notice| match notice {
+            Notice::Progress { frame, done, total } => sink(Event::Progress {
+                time: frame,
+                done,
+                total,
+            }),
+            Notice::Frame { frame, value } => {
+                sink(Event::Progress {
+                    time: frame,
+                    done: frame as usize + 1,
+                    total: totals as usize,
+                });
+                sink(Event::Frame {
+                    time: frame,
+                    frame: value,
+                });
+            }
+        },
+    )?;
+    if completed {
+        sink(Event::Done);
     }
-    sink(Event::Done);
     Ok(())
 }
 

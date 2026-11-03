@@ -10,4 +10,6 @@ pub enum Error {
     Write { path: PathBuf, detail: String },
     #[error("the project `{path}` is invalid: {detail}")]
     Format { path: PathBuf, detail: String },
+    #[error("the project transfer was cancelled")]
+    Cancelled,
 }
