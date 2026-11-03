@@ -78,12 +78,30 @@ fn keeps_relations_deterministic_across_worker_counts() {
         })
         .collect::<Vec<_>>();
     let cancel = AtomicBool::new(false);
-    let single = relate_frames(&source, &target, 1, &cancel, &mut |_, _| {})
-        .expect("the relation frames are measured")
-        .expect("the relation finishes");
-    let many = relate_frames(&source, &target, 8, &cancel, &mut |_, _| {})
-        .expect("the relation frames are measured")
-        .expect("the relation finishes");
+    let counts = source
+        .iter()
+        .map(|frame| frame.as_ref().map(Shape::objects))
+        .collect::<Vec<_>>();
+    let single = relate_frames(
+        &counts,
+        |time| Ok(source[time].clone()),
+        |time| Ok(target[time].clone()),
+        1,
+        &cancel,
+        &mut |_, _| {},
+    )
+    .expect("the relation frames are measured")
+    .expect("the relation finishes");
+    let many = relate_frames(
+        &counts,
+        |time| Ok(source[time].clone()),
+        |time| Ok(target[time].clone()),
+        8,
+        &cancel,
+        &mut |_, _| {},
+    )
+    .expect("the relation frames are measured")
+    .expect("the relation finishes");
     assert_eq!(single, many, "the relation does not depend on workers");
     assert_eq!(single.len(), 4);
     assert!(

@@ -1,6 +1,8 @@
 use std::io::{Read, Write};
 use std::sync::Arc;
 
+use grana_geometry::MeshStore;
+
 const FAULT_TRUNCATED: &str = "the project data ends before its structure closes";
 const FAULT_LENGTH: &str = "the project data declares a length it cannot hold";
 const FAULT_TAG: &str = "the project data carries an unknown variant tag";
@@ -127,7 +129,7 @@ impl<T: Decode> Decode for Arc<T> {
 pub(crate) struct Writer<'a> {
     sink: &'a mut dyn Write,
     raw: usize,
-    fault: Option<std::io::Error>,
+    fault: Option<String>,
 }
 
 impl<'a> Writer<'a> {
@@ -143,8 +145,19 @@ impl<'a> Writer<'a> {
         self.raw
     }
 
-    pub fn fault(&self) -> Option<&std::io::Error> {
-        self.fault.as_ref()
+    pub fn fault(&self) -> Option<&str> {
+        self.fault.as_deref()
+    }
+
+    pub fn fail(&mut self, detail: &str) {
+        if self.fault.is_none() {
+            self.fault = Some(detail.to_string());
+        }
+    }
+
+    pub fn blob(&mut self, bytes: &[u8]) {
+        self.count(bytes.len());
+        self.bytes(bytes);
     }
 
     pub fn u8(&mut self, value: u8) {
@@ -194,7 +207,7 @@ impl<'a> Writer<'a> {
         }
         match self.sink.write_all(bytes) {
             Ok(()) => self.raw += bytes.len(),
-            Err(error) => self.fault = Some(error),
+            Err(error) => self.fault = Some(error.to_string()),
         }
     }
 }
@@ -202,14 +215,27 @@ impl<'a> Writer<'a> {
 pub(crate) struct Reader<'a> {
     source: &'a mut dyn Read,
     remaining: usize,
+    store: Arc<MeshStore>,
 }
 
 impl<'a> Reader<'a> {
-    pub fn new(source: &'a mut dyn Read, length: usize) -> Self {
+    pub fn new(source: &'a mut dyn Read, length: usize, store: Arc<MeshStore>) -> Self {
         Self {
             source,
             remaining: length,
+            store,
         }
+    }
+
+    pub fn store(&self) -> &Arc<MeshStore> {
+        &self.store
+    }
+
+    pub fn blob(&mut self) -> Result<Vec<u8>, &'static str> {
+        let length = self.count(1)?;
+        let mut bytes = vec![0u8; length];
+        self.fill(&mut bytes)?;
+        Ok(bytes)
     }
 
     pub fn u8(&mut self) -> Result<u8, &'static str> {

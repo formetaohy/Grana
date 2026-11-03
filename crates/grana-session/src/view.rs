@@ -30,6 +30,12 @@ pub struct BatchView<'a> {
     pub message: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StoreView {
+    pub resident: u64,
+    pub spilled: u64,
+}
+
 pub struct IoView<'a> {
     pub adapter: &'a str,
     pub loading: Option<&'a str>,
@@ -41,6 +47,7 @@ pub struct IoView<'a> {
     pub frame_interval: f32,
     pub export: Option<(u32, u32)>,
     pub export_message: Option<String>,
+    pub store: StoreView,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

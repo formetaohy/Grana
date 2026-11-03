@@ -1,8 +1,10 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use grana_animation::{Keyframe, Timeline};
 use grana_display::Shading;
+use grana_geometry::{DEFAULT_BUDGET, MeshStore};
 use grana_image::Format;
 use grana_measure::Group;
 use grana_object::TrackSet;
@@ -15,7 +17,7 @@ use crate::history::{History, Snapshot};
 use crate::loader::{Event as LoaderEvent, Loader};
 use crate::run::DetectRequest;
 use crate::sample;
-use crate::view::{BatchDataset, BatchView, HistoryView, IoView, Message};
+use crate::view::{BatchDataset, BatchView, HistoryView, IoView, Message, StoreView};
 use crate::{
     Action, Analysis, Batch, BatchEvent, BatchPoll, Command, Event, Outcome, Plan as BatchPlan,
     Poll, Protocol, Source,
@@ -52,6 +54,7 @@ pub struct Effects {
 
 pub struct Session {
     scene: Option<Scene>,
+    store: Arc<MeshStore>,
     measure: Measure,
     timeline: Timeline,
     source: Option<Loader>,
@@ -91,6 +94,8 @@ impl Session {
     pub fn new() -> Self {
         Self {
             scene: None,
+            store: MeshStore::temporary(DEFAULT_BUDGET)
+                .expect("the geometry store needs a temporary file"),
             measure: Measure::new(),
             timeline: Timeline::new(30, 1.0),
             source: None,
@@ -209,6 +214,7 @@ impl Session {
             .scene
             .as_ref()
             .map_or(0.0, |scene| scene.dataset.frame_interval());
+        let stats = self.store.stats();
         IoView {
             adapter,
             loading: self.loading.as_deref(),
@@ -220,6 +226,10 @@ impl Session {
             frame_interval: interval,
             export,
             export_message,
+            store: StoreView {
+                resident: stats.resident(),
+                spilled: stats.spilled(),
+            },
         }
     }
 
@@ -391,8 +401,12 @@ impl Session {
                 }
             }
             Command::DeleteObject { set, time, object } => {
-                if let Some(scene) = self.scene.as_mut() {
-                    scene.delete_object(set, time, object);
+                let removed = self
+                    .scene
+                    .as_mut()
+                    .map(|scene| scene.delete_object(set, time, object));
+                if let Some(Err(detail)) = removed {
+                    self.message = Some(Message::error(detail));
                 }
             }
             Command::RemoveObject(set) => self.remove_object(set),
@@ -797,7 +811,7 @@ impl Session {
         if self.loading.is_some() {
             return;
         }
-        let project = match Project::read(&path) {
+        let project = match Project::read(&path, self.store()) {
             Ok(project) => project,
             Err(error) => {
                 self.message = Some(Message::error(error.to_string()));
@@ -1304,10 +1318,12 @@ impl Session {
                     ));
                     return;
                 }
+                let detected = scene
+                    .objects
+                    .get(source)
+                    .is_some_and(|set| set.detected() > 0);
                 match scene.mask_frames() {
-                    Some(frames) if frames.iter().any(Option::is_some) => {
-                        Some(grana_analysis::Roi::new(frames))
-                    }
+                    Some(frames) if detected => Some(frames),
                     _ => {
                         self.message = Some(Message::error(
                             "the analysis mask holds no detected objects",
@@ -1336,8 +1352,12 @@ impl Session {
         self.analysis.push(crate::detect(
             Job::Detect(set),
             source,
-            DetectRequest::new(channel, params, region, roi, seeds, 0),
+            DetectRequest::new(channel, params, region, roi, seeds, 0, self.store()),
         ));
+    }
+
+    fn store(&self) -> Arc<MeshStore> {
+        Arc::clone(&self.store)
     }
 
     fn start_tracks(&mut self, set: ObjectSetId) {
@@ -1428,17 +1448,21 @@ impl Session {
         let mask = scene.mask;
         let roi = match mask {
             None => None,
-            Some(_) => match scene.mask_frames() {
-                Some(frames) if frames.iter().any(Option::is_some) => {
-                    Some(grana_analysis::Roi::new(frames))
+            Some(mask) => {
+                let detected = scene
+                    .objects
+                    .get(mask)
+                    .is_some_and(|set| set.detected() > 0);
+                match scene.mask_frames() {
+                    Some(frames) if detected => Some(frames),
+                    _ => {
+                        self.message = Some(Message::error(
+                            "the analysis mask holds no detected objects",
+                        ));
+                        return;
+                    }
                 }
-                _ => {
-                    self.message = Some(Message::error(
-                        "the analysis mask holds no detected objects",
-                    ));
-                    return;
-                }
-            },
+            }
         };
         self.message = None;
         self.record_progress(Job::Coloc, 0, 0, 0);

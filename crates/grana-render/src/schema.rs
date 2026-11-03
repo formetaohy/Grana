@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::marker::Marker;
 use grana_display::{Shading, TransferFunction};
 use grana_geometry::PackedMesh;
@@ -86,10 +88,10 @@ pub struct ChannelRow<'a> {
     pub transfer: &'a TransferFunction,
 }
 
-#[derive(Clone, Copy)]
-pub struct Layer<'a> {
+#[derive(Clone)]
+pub struct Layer {
     pub key: LayerKey,
-    pub mesh: &'a PackedMesh,
+    pub mesh: Arc<PackedMesh>,
     pub style_start: usize,
     pub style_count: usize,
 }
@@ -99,6 +101,6 @@ pub struct SceneFrame<'a> {
     pub shading: Shading,
     pub step_scale: f32,
     pub styles: &'a [Style],
-    pub layers: &'a [Layer<'a>],
+    pub layers: &'a [Layer],
     pub markers: &'a [Marker],
 }

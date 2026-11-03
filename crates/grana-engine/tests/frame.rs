@@ -10,11 +10,11 @@ fn assembles_the_render_frame() {
     scene.install(id, 0, ObjectFrame::Surfaces(surfaces()));
     assert!(scene.geometry_bytes() > 0, "the packed geometry is counted");
     {
-        let rendered = grana_engine::frame(&scene);
+        let rendered = grana_engine::frame(&scene).expect("the frame renders");
         assert_eq!(rendered.layers.len(), 1, "the surface layer renders");
         assert_eq!(rendered.styles.len(), 2, "every surface carries a style");
-        let layer = rendered.layers[0];
-        let mesh = layer.mesh;
+        let layer = &rendered.layers[0];
+        let mesh = &layer.mesh;
         assert_eq!(mesh.triangle_count(), 4);
         assert_eq!(mesh.vertex_count(), 8);
         assert_eq!(layer.style_count, 2);
@@ -38,7 +38,7 @@ fn assembles_the_render_frame() {
         .get_mut(id)
         .expect("the surfaces exist")
         .set_visible(false);
-    let rendered = grana_engine::frame(&scene);
+    let rendered = grana_engine::frame(&scene).expect("the frame renders");
     assert!(rendered.layers.is_empty(), "a hidden set renders nothing");
     assert!(
         rendered.style_ids.is_empty(),

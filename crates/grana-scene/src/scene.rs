@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use glam::Vec3;
+use grana_analysis::Shape;
 use grana_display::{Shading, TransferFunction};
 use grana_geometry::ray_hit;
 use grana_measure::RelationRow;
@@ -11,6 +14,13 @@ use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
+
+fn shape_at(frames: &[Option<Arc<ObjectFrame>>], time: u32) -> Result<Option<Shape>, String> {
+    let Some(frame) = frames.get(time as usize).and_then(|frame| frame.as_deref()) else {
+        return Ok(None);
+    };
+    frame.shape().map(Some).map_err(|error| error.to_string())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Selection {
@@ -149,9 +159,14 @@ impl Scene {
         self.objects.reorder(id, index)
     }
 
-    pub fn delete_object(&mut self, id: ObjectSetId, time: u32, object: usize) -> bool {
-        if !self.objects.delete_object(id, time, object) {
-            return false;
+    pub fn delete_object(
+        &mut self,
+        id: ObjectSetId,
+        time: u32,
+        object: usize,
+    ) -> Result<bool, String> {
+        if !self.objects.delete_object(id, time, object)? {
+            return Ok(false);
         }
         if let Some(Selection {
             set,
@@ -169,7 +184,7 @@ impl Scene {
             };
         }
         self.sync_coloc_inputs();
-        true
+        Ok(true)
     }
 
     pub fn set_mask(&mut self, source: Option<ObjectSetId>) {
@@ -191,13 +206,16 @@ impl Scene {
         self.sync_coloc_inputs();
     }
 
-    pub fn mask_frames(&self) -> Option<Vec<Option<grana_analysis::Shape>>> {
+    pub fn mask_frames(&self) -> Option<grana_analysis::Roi> {
         let set = self.objects.get(self.mask?)?;
-        Some(
+        let frames = Arc::new(
             (0..self.frame_count())
-                .map(|time| set.frame_shared(time).as_deref().map(ObjectFrame::shape))
-                .collect(),
-        )
+                .map(|time| set.frame_shared(time))
+                .collect::<Vec<_>>(),
+        );
+        Some(grana_analysis::Roi::paged(frames.len(), move |time| {
+            shape_at(&frames, time)
+        }))
     }
 
     pub fn add_relation(&mut self, source: ObjectSetId, target: ObjectSetId) -> bool {
@@ -329,9 +347,17 @@ impl Scene {
         self.objects.seed_frames(id)
     }
 
-    pub fn surface_ray(&self, id: ObjectSetId, origin: Vec3, direction: Vec3) -> Option<Vec3> {
-        let mesh = self.objects.get(id)?.frame(self.time)?.geometry()?;
-        ray_hit(mesh, origin, direction)
+    pub fn surface_ray(
+        &self,
+        id: ObjectSetId,
+        origin: Vec3,
+        direction: Vec3,
+    ) -> Result<Option<Vec3>, String> {
+        let Some(frame) = self.objects.get(id).and_then(|set| set.frame(self.time)) else {
+            return Ok(None);
+        };
+        let mesh = frame.geometry().map_err(|error| error.to_string())?;
+        Ok(mesh.and_then(|mesh| ray_hit(&mesh, origin, direction)))
     }
 
     fn drop_track_selection(&mut self, id: ObjectSetId) {

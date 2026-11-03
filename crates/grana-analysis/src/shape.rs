@@ -20,6 +20,13 @@ impl Shape {
         Self::Spots(spots)
     }
 
+    pub fn objects(&self) -> usize {
+        match self {
+            Self::Mesh(mesh) => mesh.object_count(),
+            Self::Spots(spots) => spots.len(),
+        }
+    }
+
     pub fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
         let mut low = [f32::INFINITY; 3];
         let mut high = [f32::NEG_INFINITY; 3];

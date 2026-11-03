@@ -4,6 +4,8 @@ use common::{
     SAMPLES, SIDE, Session, blue, bright_fraction, channels, dark_fraction, device, green,
     green_pixels, green_sum, lit, pixel, read_pixels, red_count, red_pixels, settle, target,
 };
+use std::sync::Arc;
+
 use glam::Vec3;
 use grana_display::{
     Camera, CameraState, SectionCamera, Shading, Stop, TransferFunction, linear_to_srgb,
@@ -992,13 +994,13 @@ fn keeps_near_transparent_surfaces_drawn_after_far_ones() {
     let layers = [
         Layer {
             key: LayerKey::at_frame(1, 0, 0, 1),
-            mesh: &far,
+            mesh: Arc::new(far.clone()),
             style_start: 0,
             style_count: 16,
         },
         Layer {
             key: LayerKey::at_frame(2, 0, 0, 1),
-            mesh: &near,
+            mesh: Arc::new(near.clone()),
             style_start: 16,
             style_count: 1,
         },
@@ -1756,7 +1758,7 @@ fn render(setup: Setup<'_>) -> Vec<[u8; 4]> {
         .mesh
         .map(|(mesh, styles)| Layer {
             key: LayerKey::at_frame(1, 0, 0, 1),
-            mesh,
+            mesh: Arc::new(mesh.clone()),
             style_start: 0,
             style_count: styles.len(),
         })
@@ -1995,13 +1997,13 @@ fn keeps_object_geometry_resident() {
     renderer.set_dataset(&device, &pyramid);
     let first = [Layer {
         key: LayerKey::stable(1, 0, 1),
-        mesh: &mesh,
+        mesh: Arc::new(mesh.clone()),
         style_start: 0,
         style_count: 2,
     }];
     let second = [Layer {
         key: LayerKey::stable(1, 0, 2),
-        mesh: &mesh,
+        mesh: Arc::new(mesh.clone()),
         style_start: 0,
         style_count: 2,
     }];
@@ -2033,7 +2035,7 @@ struct Resident<'a> {
 }
 
 impl Resident<'_> {
-    fn geometry(&self, renderer: &mut Renderer, layers: &[Layer<'_>]) -> u64 {
+    fn geometry(&self, renderer: &mut Renderer, layers: &[Layer]) -> u64 {
         let scene = SceneFrame {
             channels: self.channels,
             shading: Shading::default(),
@@ -2279,7 +2281,7 @@ fn objects_cast_shadows_onto_surfaces() {
     let styles = [Style::new([0.98, 0.72, 0.5], true, false, 1.0); 2];
     let layers = [Layer {
         key: LayerKey::at_frame(1, 0, 0, 1),
-        mesh: &mesh,
+        mesh: Arc::new(mesh.clone()),
         style_start: 0,
         style_count: 2,
     }];
@@ -2512,7 +2514,7 @@ impl ShadowPixels<'_> {
     ) -> Vec<[u8; 4]> {
         let layers = [Layer {
             key: LayerKey::at_frame(1, 0, 0, revision),
-            mesh,
+            mesh: Arc::new(mesh.clone()),
             style_start: 0,
             style_count: self.styles.len(),
         }];
@@ -3140,7 +3142,7 @@ fn reuses_the_cut_target_and_batches_every_cut_face() {
     ];
     let layers = [Layer {
         key: LayerKey::at_frame(1, 0, 0, 1),
-        mesh: &mesh,
+        mesh: Arc::new(mesh.clone()),
         style_start: 0,
         style_count: 2,
     }];
@@ -3206,7 +3208,7 @@ fn cuts_every_object_through_the_parallel_path() {
         .collect::<Vec<_>>();
     let layers = [Layer {
         key: LayerKey::at_frame(1, 0, 0, 1),
-        mesh: &mesh,
+        mesh: Arc::new(mesh.clone()),
         style_start: 0,
         style_count: count,
     }];
@@ -3258,7 +3260,7 @@ fn reuses_cut_indexes_when_the_axis_returns() {
         .collect::<Vec<_>>();
     let layers = [Layer {
         key: LayerKey::at_frame(1, 0, 0, 1),
-        mesh: &mesh,
+        mesh: Arc::new(mesh.clone()),
         style_start: 0,
         style_count: 9,
     }];
@@ -3455,7 +3457,7 @@ fn resolves_volume_picks_at_the_requested_pixel() {
     let styles = [Style::new([1.0, 0.12, 0.12], true, false, 1.0)];
     let layers = [Layer {
         key: LayerKey::at_frame(1, 0, 0, 1),
-        mesh: &mesh,
+        mesh: Arc::new(mesh.clone()),
         style_start: 0,
         style_count: 1,
     }];
@@ -3536,7 +3538,7 @@ fn picks_markers_before_meshes_and_cut_faces() {
     let styles = [Style::new([1.0, 0.12, 0.12], true, false, 0.5)];
     let layers = [Layer {
         key: LayerKey::at_frame(1, 0, 0, 1),
-        mesh: &mesh,
+        mesh: Arc::new(mesh.clone()),
         style_start: 0,
         style_count: 1,
     }];

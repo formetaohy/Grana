@@ -5,6 +5,8 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Mutex, MutexGuard};
 
 use glam::Vec3;
+use grana_analysis::Roi;
+use grana_geometry::{DEFAULT_BUDGET, MeshStore};
 use grana_image::{Image, Source};
 use grana_measure::{ColocPair, ColocSeries};
 use grana_measure::{Frame, RelationRow, Table};
@@ -370,6 +372,8 @@ fn analyse(task: &Task<'_>, dataset: &Path, output: &Path) -> Result<Report, Str
 fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Report, String> {
     let source = Source::file(dataset.to_path_buf());
     let reader = Image::open(&source)?;
+    let store = MeshStore::temporary(DEFAULT_BUDGET)
+        .map_err(|error| format!("the dataset cannot page its geometry: {error}"))?;
     let pyramid = reader.pyramid();
     let channels = pyramid
         .channels()
@@ -397,7 +401,7 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
         let roi = match set.mask() {
             Some(mask) => match detected.iter().find(|detected| detected.set.name == *mask) {
                 Some(detected) if detected.frames.iter().any(Option::is_some) => {
-                    Some(grana_analysis::Roi::new(shape_frames(&detected.frames)))
+                    Some(paged_roi(&detected.frames))
                 }
                 Some(_) => {
                     return Err(format!(
@@ -418,10 +422,21 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
             index: task.index,
             label: format!("detecting {}", set.name),
         });
-        let frames = detect(&reader, task, channel, set, region, roi, &progress)?
-            .into_iter()
-            .map(|frame| frame.map(Arc::new))
-            .collect::<Vec<_>>();
+        let frames = detect(
+            task,
+            set,
+            Reading {
+                reader: &reader,
+                channel,
+                region,
+                roi,
+            },
+            &store,
+            &progress,
+        )?
+        .into_iter()
+        .map(|frame| frame.map(Arc::new))
+        .collect::<Vec<_>>();
         let tracks = if let Some(params) = set.track_params() {
             let _ = task.events.send(Event::Step {
                 index: task.index,
@@ -491,7 +506,7 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
             None => None,
             Some(name) => match detected.iter().find(|detected| detected.set.name == *name) {
                 Some(detected) if detected.frames.iter().any(Option::is_some) => {
-                    Some(shape_frames(&detected.frames))
+                    Some(detected.frames.clone())
                 }
                 Some(_) => {
                     return Err(format!(
@@ -513,9 +528,7 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
                 resolve(pyramid, &spec.a).map_err(|detail| format!("colocalization: {detail}"))?,
                 resolve(pyramid, &spec.b).map_err(|detail| format!("colocalization: {detail}"))?,
             );
-            let roi = mask_frames
-                .as_ref()
-                .map(|frames| grana_analysis::Roi::new(frames.clone()));
+            let roi = mask_frames.as_ref().map(|frames| paged_roi(frames));
             let series = colocalize(&reader, pair, region, roi, settings, task.cancel)?
                 .ok_or_else(|| "cancelled".to_string())?;
             let thresholds =
@@ -549,16 +562,21 @@ struct Detected<'a> {
     relations: Vec<(String, Vec<Option<RelationFrame>>)>,
 }
 
-fn detect(
-    reader: &Image,
-    task: &Task<'_>,
+struct Reading<'a> {
+    reader: &'a Image,
     channel: usize,
-    set: &crate::protocol::SetSpec,
     region: Region,
-    roi: Option<grana_analysis::Roi>,
+    roi: Option<Roi>,
+}
+
+fn detect(
+    task: &Task<'_>,
+    set: &crate::protocol::SetSpec,
+    reading: Reading<'_>,
+    store: &Arc<MeshStore>,
     progress: &Progress<'_>,
 ) -> Result<Vec<Option<ObjectFrame>>, String> {
-    let frames = reader.pyramid().frame_count() as usize;
+    let frames = reading.reader.pyramid().frame_count() as usize;
     let mut collected = vec![None; frames];
     let mut sink = |event: RunEvent| match event {
         RunEvent::Frame { time, frame } => collected[time as usize] = Some(frame),
@@ -576,14 +594,15 @@ fn detect(
         | RunEvent::Failed(_) => {}
     };
     run::detect(
-        reader,
+        reading.reader,
         run::DetectRequest::new(
-            channel,
+            reading.channel,
             set.params(),
-            region,
-            roi,
+            reading.region,
+            reading.roi,
             set.seeds().to_vec(),
             task.workers,
+            Arc::clone(store),
         ),
         progress.cancel,
         &mut sink,
@@ -665,11 +684,20 @@ fn relate(
     Ok(frames)
 }
 
-fn shape_frames(frames: &[Option<Arc<ObjectFrame>>]) -> Vec<Option<grana_analysis::Shape>> {
-    frames
-        .iter()
-        .map(|frame| frame.as_deref().map(ObjectFrame::shape))
-        .collect()
+fn paged_roi(frames: &[Option<Arc<ObjectFrame>>]) -> Roi {
+    let frames = Arc::new(frames.to_vec());
+    let count = frames.len();
+    Roi::paged(count, move |time| shape_at(&frames, time))
+}
+
+fn shape_at(
+    frames: &[Option<Arc<ObjectFrame>>],
+    time: u32,
+) -> Result<Option<grana_analysis::Shape>, String> {
+    let Some(frame) = frames.get(time as usize).and_then(|frame| frame.as_deref()) else {
+        return Ok(None);
+    };
+    frame.shape().map(Some).map_err(|error| error.to_string())
 }
 
 fn relation_rows<'a>(detected: &'a Detected<'a>) -> Vec<Vec<RelationRow<'a>>> {

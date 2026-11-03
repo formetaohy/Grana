@@ -74,20 +74,39 @@ impl Mask {
 }
 
 pub struct Roi {
-    frames: Vec<Option<Shape>>,
+    frames: usize,
+    shape: Box<dyn Fn(u32) -> Result<Option<Shape>, String> + Send + Sync>,
 }
 
 impl Roi {
     pub fn new(frames: Vec<Option<Shape>>) -> Self {
-        Self { frames }
+        let count = frames.len();
+        Self {
+            frames: count,
+            shape: Box::new(move |time| Ok(frames.get(time as usize).cloned().unwrap_or_default())),
+        }
     }
 
-    pub fn mask(&self, level: Level, time: u32) -> Mask {
-        let Some(Some(frame)) = self.frames.get(time as usize) else {
-            return Mask::empty(level);
+    pub fn paged(
+        frames: usize,
+        shape: impl Fn(u32) -> Result<Option<Shape>, String> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            frames,
+            shape: Box::new(shape),
+        }
+    }
+
+    pub fn frames(&self) -> usize {
+        self.frames
+    }
+
+    pub fn mask(&self, level: Level, time: u32) -> Result<Mask, String> {
+        let Some(frame) = (self.shape)(time)? else {
+            return Ok(Mask::empty(level));
         };
         let Some((low, high)) = frame.bounds() else {
-            return Mask::empty(level);
+            return Ok(Mask::empty(level));
         };
         let spacing = level.spacing();
         let spacing = [spacing.x(), spacing.y(), spacing.z()];
@@ -103,7 +122,7 @@ impl Roi {
             limit[axis] = (continuous(high, axis).ceil() as i64 + 1).min(i64::from(*slot));
         }
         if (0..3).any(|axis| limit[axis] <= origin[axis]) {
-            return Mask::empty(level);
+            return Ok(Mask::empty(level));
         }
         let mut area = Area::new(origin, limit, spacing, world);
         match frame {
@@ -112,9 +131,9 @@ impl Roi {
                     area.sphere(spot.center(), spot.radius());
                 }
             }
-            Shape::Mesh(mesh) => rasterize(mesh, &mut area),
+            Shape::Mesh(mesh) => rasterize(&mesh, &mut area),
         }
-        area.finish()
+        Ok(area.finish())
     }
 }
 

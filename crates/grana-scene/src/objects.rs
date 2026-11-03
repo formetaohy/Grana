@@ -92,13 +92,19 @@ impl Objects {
             .any(|set| Some(set.id()) != except && slug(set.name()).to_ascii_lowercase() == key)
     }
 
-    pub fn delete_object(&mut self, id: ObjectSetId, time: u32, object: usize) -> bool {
+    pub fn delete_object(
+        &mut self,
+        id: ObjectSetId,
+        time: u32,
+        object: usize,
+    ) -> Result<bool, String> {
         let stamp = take_stamp(&mut self.stamp);
-        if !self
-            .get_mut(id)
-            .is_some_and(|set| set.delete_object(time, object, stamp))
-        {
-            return false;
+        let removed = match self.get_mut(id) {
+            Some(set) => set.delete_object(time, object, stamp)?,
+            None => false,
+        };
+        if !removed {
+            return Ok(false);
         }
         let targets = self
             .sets
@@ -112,7 +118,7 @@ impl Objects {
                 set.invalidate_relation(id, time, stamp);
             }
         }
-        true
+        Ok(true)
     }
 
     pub fn add_relation(&mut self, id: ObjectSetId, target: ObjectSetId) -> bool {

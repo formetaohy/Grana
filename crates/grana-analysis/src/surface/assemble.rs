@@ -1,11 +1,13 @@
-use grana_geometry::MeshVertex;
+use grana_geometry::{MeshStore, MeshVertex};
 use grana_object::SampleAccumulator;
+use std::sync::Arc;
 
 use super::tile::TileOutput;
 use super::{EMPTY, Face, Node, Pass, SurfaceBuilder, find, union};
 
 pub(super) struct Assembler<'a> {
     pub(super) plan: &'a SurfaceBuilder,
+    pub(super) store: &'a Arc<MeshStore>,
     pub(super) workers: usize,
     pub(super) nodes: Vec<Node>,
     pub(super) accumulators: Vec<SampleAccumulator>,
@@ -27,6 +29,7 @@ impl<'a> Assembler<'a> {
         let tiles = plan.tiles;
         Self {
             plan,
+            store: pass.store,
             workers,
             nodes: Vec::new(),
             accumulators: Vec::new(),

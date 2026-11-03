@@ -980,6 +980,7 @@ version = "0.1.1"
 dependencies = [
  "bytemuck",
  "glam",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1072,6 +1073,7 @@ dependencies = [
  "grana-analysis",
  "grana-animation",
  "grana-display",
+ "grana-geometry",
  "grana-image",
  "grana-measure",
  "grana-object",

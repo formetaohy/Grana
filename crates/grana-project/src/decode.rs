@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
-use grana_geometry::{Bounds, GeometryGroup, PackedMesh, PackedVertex};
+use grana_geometry::{Bounds, Geometry, PackedMesh};
 use grana_measure::{
     Aggregate, Filter, Group, Lasso, MeasureView, Measurement, RelationField, Scope, Statistic,
     TrackMeasurement,
@@ -31,6 +31,7 @@ use crate::project::{Project, Shape, Source, ViewState};
 const FAULT_VALUE: &str = "the project data carries a value outside its domain";
 const FAULT_SHAPE: &str = "the project data carries an inconsistent shape";
 const FAULT_TAG: &str = "the project data carries an unknown variant tag";
+const FAULT_SPILL: &str = "the project cannot store the geometry of a frame";
 
 impl Decode for Project {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
@@ -670,9 +671,15 @@ impl Decode for SurfaceSet {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let level = reader.count(1)?;
         let objects = Vec::<SurfaceStatistics>::decode(reader)?;
-        let geometry = PackedMesh::decode(reader)?;
+        let store = Arc::clone(reader.store());
+        let geometry =
+            Geometry::paged(&store, PackedMesh::decode(reader)?).map_err(|_| FAULT_SPILL)?;
         let intensities = IntensityTable::decode(reader)?;
-        Self::from_parts(level, geometry, objects, intensities).ok_or(FAULT_SHAPE)
+        match Self::from_geometry(level, geometry, objects, intensities) {
+            Ok(Some(set)) => Ok(set),
+            Ok(None) => Err(FAULT_SHAPE),
+            Err(_) => Err(FAULT_SPILL),
+        }
     }
 }
 
@@ -705,9 +712,15 @@ impl Decode for FilamentSet {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let level = reader.count(1)?;
         let objects = Vec::<FilamentStatistics>::decode(reader)?;
-        let geometry = PackedMesh::decode(reader)?;
+        let store = Arc::clone(reader.store());
+        let geometry =
+            Geometry::paged(&store, PackedMesh::decode(reader)?).map_err(|_| FAULT_SPILL)?;
         let intensities = IntensityTable::decode(reader)?;
-        Self::from_parts(level, geometry, objects, intensities).ok_or(FAULT_SHAPE)
+        match Self::from_geometry(level, geometry, objects, intensities) {
+            Ok(Some(set)) => Ok(set),
+            Ok(None) => Err(FAULT_SHAPE),
+            Err(_) => Err(FAULT_SPILL),
+        }
     }
 }
 
@@ -766,47 +779,8 @@ impl Decode for Bounds {
 
 impl Decode for PackedMesh {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let groups = Vec::<GeometryGroup>::decode(reader)?;
-        let vertices = Vec::<PackedVertex>::decode(reader)?;
-        let narrow = Vec::<u16>::decode(reader)?;
-        let wide = Vec::<u32>::decode(reader)?;
-        Self::from_parts(groups, vertices, narrow, wide).ok_or(FAULT_SHAPE)
-    }
-}
-
-impl Decode for GeometryGroup {
-    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let mut min = [0.0; 3];
-        for value in &mut min {
-            *value = finite(reader.f32()?)?;
-        }
-        let mut scale = [0.0; 3];
-        for value in &mut scale {
-            *value = finite(reader.f32()?)?;
-        }
-        Ok(Self::new(
-            min,
-            scale,
-            reader.u32()?,
-            reader.u32()?,
-            reader.u32()?,
-            reader.u32()?,
-            reader.bool()?,
-        ))
-    }
-}
-
-impl Decode for PackedVertex {
-    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let mut position = [0; 3];
-        for value in &mut position {
-            *value = reader.u16()?;
-        }
-        let mut normal = [0; 2];
-        for value in &mut normal {
-            *value = reader.u16()?;
-        }
-        Ok(Self::new(position, normal))
+        let bytes = reader.blob()?;
+        Self::from_bytes(&bytes).ok_or(FAULT_SHAPE)
     }
 }
 

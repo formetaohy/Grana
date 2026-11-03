@@ -20,5 +20,5 @@ pub use params::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, Track
 pub use relation::{Reference, relate_frames};
 pub use scan::{ChannelRead, SpotScan, SpotScanner};
 pub use shape::Shape;
-pub use surface::{SurfaceBuilder, surface_level};
+pub use surface::{Sources, SurfaceBuilder, surface_level};
 pub use track::TrackBuilder;

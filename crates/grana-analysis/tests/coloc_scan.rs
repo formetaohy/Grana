@@ -130,7 +130,7 @@ fn gates_the_scan_by_the_analysis_mask() {
         None,
         ColocSettings::default(),
     );
-    let mask = roi.mask(level(EXTENT), 0);
+    let mask = roi.mask(level(EXTENT), 0).expect("the mask rasterizes");
     let masked_statistics = masked.statistics(ColocThresholds::new(0.5, 0.5));
     assert_eq!(masked_statistics.voxels(), mask.count());
     assert!(
@@ -413,7 +413,7 @@ fn scan_with(
     let mut permutation =
         ColocPermutation::new(pyramid, region, pair, &levels, settings, intensities);
     for time in 0..frames {
-        let mask = roi.map(|roi| roi.mask(info, time));
+        let mask = roi.map(|roi| roi.mask(info, time).expect("the mask rasterizes"));
         for index in 0..scan.tile_count() {
             let ranges = scan.tile(index);
             let a = slice(&scan_data.first[time as usize], scan_extent, &ranges);
@@ -425,7 +425,10 @@ fn scan_with(
     let permutation_extent = permutation_info.extent();
     let permutation_frames = levels.frames().to_vec();
     for (slot, time) in permutation_frames.iter().enumerate() {
-        let mask = roi.map(|roi| roi.mask(permutation_info, *time));
+        let mask = roi.map(|roi| {
+            roi.mask(permutation_info, *time)
+                .expect("the mask rasterizes")
+        });
         for index in 0..permutation.tile_count() {
             let ranges = permutation.tile(index);
             let a = slice(

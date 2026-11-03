@@ -683,16 +683,21 @@ impl ObjectSet {
         self.seeds.clone()
     }
 
-    pub(crate) fn delete_object(&mut self, time: u32, object: usize, stamp: u64) -> bool {
+    pub(crate) fn delete_object(
+        &mut self,
+        time: u32,
+        object: usize,
+        stamp: u64,
+    ) -> Result<bool, String> {
         let Some(frame) = self
             .frames
             .get(time as usize)
             .and_then(|slot| slot.data.clone())
         else {
-            return false;
+            return Ok(false);
         };
-        let Some(pruned) = frame.without(object) else {
-            return false;
+        let Some(pruned) = frame.without(object).map_err(|error| error.to_string())? else {
+            return Ok(false);
         };
         let empty = pruned.is_empty();
         let mut visibility = match &self.visibility {
@@ -737,7 +742,7 @@ impl ObjectSet {
         self.document += 1;
         self.visibility = visibility;
         self.rebuild_track_bounds();
-        true
+        Ok(true)
     }
 
     pub(crate) fn invalidate_relation(

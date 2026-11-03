@@ -107,20 +107,18 @@ impl Reference {
 }
 
 fn sources(shape: &Shape) -> usize {
-    match shape {
-        Shape::Mesh(mesh) => mesh.object_count(),
-        Shape::Spots(spots) => spots.len(),
-    }
+    shape.objects()
 }
 
 pub fn relate_frames(
-    source: &[Option<Shape>],
-    target: &[Option<Shape>],
+    counts: &[Option<usize>],
+    source: impl Fn(usize) -> Result<Option<Shape>, String> + Sync,
+    target: impl Fn(usize) -> Result<Option<Shape>, String> + Sync,
     workers: usize,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(usize, usize),
 ) -> Result<Option<Vec<Option<RelationFrame>>>, String> {
-    let total = source.len().min(target.len());
+    let total = counts.len();
     let mut frames = (0..total).map(|_| None).collect::<Vec<_>>();
     let completed = crate::schedule::ordered(
         total,
@@ -129,11 +127,13 @@ pub fn relate_frames(
         progress,
         || (),
         |(), time| {
-            Ok(match (&source[time], &target[time]) {
-                (Some(source), Some(target)) => Some(Reference::new(target).relate(source)),
-                (Some(source), None) => Some(RelationFrame::empty(sources(source))),
-                (None, _) => None,
-            })
+            let Some(place) = target(time)? else {
+                return Ok(counts[time].map(RelationFrame::empty));
+            };
+            let shape = source(time)?;
+            let reference = Reference::new(&place);
+            drop(place);
+            Ok(shape.map(|shape| reference.relate(&shape)))
         },
         |time, frame| {
             frames[time] = frame;

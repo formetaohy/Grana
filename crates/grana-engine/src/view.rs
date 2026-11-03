@@ -11,7 +11,7 @@ const SEED_SCALE: f32 = 2.0;
 pub struct RenderedScene<'a> {
     pub channels: Vec<ChannelRow<'a>>,
     pub styles: Vec<Style>,
-    pub layers: Vec<Layer<'a>>,
+    pub layers: Vec<Layer>,
     pub markers: Vec<Marker>,
     pub style_ids: Vec<Selection>,
     pub marker_ids: Vec<Option<Selection>>,
@@ -32,7 +32,7 @@ impl RenderedScene<'_> {
     }
 }
 
-pub fn frame(scene: &Scene) -> RenderedScene<'_> {
+pub fn frame(scene: &Scene) -> Result<RenderedScene<'_>, String> {
     let mut styles = Vec::new();
     let mut layers = Vec::new();
     let mut markers = Vec::new();
@@ -84,7 +84,8 @@ pub fn frame(scene: &Scene) -> RenderedScene<'_> {
                 }));
             }
         }
-        if let (Some(mesh), Some(stamp)) = (frame.geometry(), set.frame_stamp(scene.time()))
+        let geometry = frame.geometry().map_err(|error| error.to_string())?;
+        if let (Some(mesh), Some(stamp)) = (geometry, set.frame_stamp(scene.time()))
             && !mesh.is_empty()
         {
             let start = styles.len();
@@ -152,7 +153,7 @@ pub fn frame(scene: &Scene) -> RenderedScene<'_> {
             transfer: channel.transfer(),
         })
         .collect();
-    RenderedScene {
+    Ok(RenderedScene {
         channels,
         styles,
         layers,
@@ -161,7 +162,7 @@ pub fn frame(scene: &Scene) -> RenderedScene<'_> {
         marker_ids,
         shading: scene.shading,
         step_scale: scene.step_scale,
-    }
+    })
 }
 
 fn marker(scene: &Scene, set: &ObjectSet, index: usize, spot: Spot, color: [f32; 3]) -> Marker {

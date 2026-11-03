@@ -698,9 +698,10 @@ pub fn streaming(ui: &mut Ui, state: &State<'_>) {
             ui,
             "geometry",
             &format!(
-                "{:.0} MiB packed · {:.0} MiB resident",
+                "{:.0} MiB packed · {:.0} MiB memory · {:.0} MiB disk",
                 state.scene.geometry_bytes() as f64 / (1024.0 * 1024.0),
-                state.frame.geometry as f64 / (1024.0 * 1024.0)
+                state.io.store.resident as f64 / (1024.0 * 1024.0),
+                state.io.store.spilled as f64 / (1024.0 * 1024.0)
             ),
         );
         widget::labelled(

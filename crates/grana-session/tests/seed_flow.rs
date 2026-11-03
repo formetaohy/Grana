@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use grana_analysis::{SurfaceFilter, SurfaceParams};
+use grana_geometry::MeshStore;
 use grana_scene::{Job, ObjectParams, ObjectSetId};
 use grana_session::{DetectRequest, Event, Poll, Source, detect};
 use grana_volume::{Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
@@ -72,6 +73,7 @@ fn run(seeds: Vec<Vec<[f32; 3]>>) -> Result<Vec<usize>, String> {
         None,
         seeds,
         0,
+        MeshStore::memory(),
     );
     let analysis = detect(
         Job::Detect(ObjectSetId::from_raw(1).expect("a set id")),

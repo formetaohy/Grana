@@ -341,24 +341,28 @@ impl ObjectFrame {
         }
     }
 
-    pub fn geometry(&self) -> Option<&PackedMesh> {
-        match self {
+    pub fn geometry(&self) -> Result<Option<Arc<PackedMesh>>, grana_geometry::Error> {
+        Ok(match self {
             Self::Spots(_) => None,
-            Self::Surfaces(set) => Some(set.geometry()),
-            Self::Filaments(set) => Some(set.geometry()),
-        }
+            Self::Surfaces(set) => Some(set.geometry()?),
+            Self::Filaments(set) => Some(set.geometry()?),
+        })
     }
 
-    pub fn shape(&self) -> Shape {
-        match self {
+    pub fn shape(&self) -> Result<Shape, grana_geometry::Error> {
+        Ok(match self {
             Self::Spots(set) => Shape::spots(Arc::from(set.spots())),
-            Self::Surfaces(set) => Shape::mesh(set.shared()),
-            Self::Filaments(set) => Shape::mesh(set.shared()),
-        }
+            Self::Surfaces(set) => Shape::mesh(set.geometry()?),
+            Self::Filaments(set) => Shape::mesh(set.geometry()?),
+        })
     }
 
     pub fn geometry_bytes(&self) -> u64 {
-        self.geometry().map_or(0, PackedMesh::bytes)
+        match self {
+            Self::Spots(_) => 0,
+            Self::Surfaces(set) => set.bytes(),
+            Self::Filaments(set) => set.bytes(),
+        }
     }
 
     pub fn intensities(&self) -> &IntensityTable {
@@ -400,14 +404,14 @@ impl ObjectFrame {
         }
     }
 
-    pub fn without(&self, object: usize) -> Option<Self> {
+    pub fn without(&self, object: usize) -> Result<Option<Self>, grana_geometry::Error> {
         if object >= self.object_count() {
-            return None;
+            return Ok(None);
         }
-        match self {
-            Self::Spots(set) => Some(Self::Spots(set.without(object)?)),
-            Self::Surfaces(set) => Some(Self::Surfaces(set.without(object)?)),
-            Self::Filaments(set) => Some(Self::Filaments(set.without(object)?)),
-        }
+        Ok(match self {
+            Self::Spots(set) => set.without(object).map(Self::Spots),
+            Self::Surfaces(set) => set.without(object)?.map(Self::Surfaces),
+            Self::Filaments(set) => set.without(object)?.map(Self::Filaments),
+        })
     }
 }

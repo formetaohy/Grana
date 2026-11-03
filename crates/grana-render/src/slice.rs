@@ -304,7 +304,7 @@ impl SlicePass {
         self.retain(scene);
         let mut candidates = Vec::new();
         for layer in scene.layers {
-            let mesh = layer.mesh;
+            let mesh = &layer.mesh;
             for object in 0..mesh.object_count() {
                 let group = mesh.groups()[object];
                 let low = group.min();

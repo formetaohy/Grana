@@ -181,7 +181,10 @@ impl Export {
         let pose = self.poses[self.frame];
         let camera = frame::restored_camera(&pose.camera);
         let section = frame::restored_section(&pose.section);
-        let rendered = crate::view::frame(scene);
+        let rendered = match crate::view::frame(scene) {
+            Ok(rendered) => rendered,
+            Err(detail) => return Outcome::Failed { detail },
+        };
         let info = frame::draw(
             renderer,
             device,

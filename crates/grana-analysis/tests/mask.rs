@@ -55,7 +55,7 @@ fn cube(half: f32) -> PackedMesh {
 fn fills_the_volume_of_a_closed_mesh() {
     let mesh = cube(6.0);
     let roi = Roi::new(vec![Some(Shape::Mesh(Arc::new(mesh)))]);
-    let mask = roi.mask(level(), 0);
+    let mask = roi.mask(level(), 0).expect("the mask rasterizes");
     assert!(!mask.is_empty(), "a closed mesh of this size covers cells");
     let inside = mask.count();
     let expected = 12f64.powi(3);
@@ -99,7 +99,7 @@ fn drops_spots_outside_the_mask() {
     );
     let far = Spot::new([-64.0, -64.0, -64.0], 2.0, 1.0);
     let outside = Roi::new(vec![Some(Shape::spots(Arc::from([far])))]);
-    let mask = outside.mask(level, 0);
+    let mask = outside.mask(level, 0).expect("the mask rasterizes");
     assert!(
         scan.detect(0, &values, Some(&mask)).is_empty(),
         "a mask away from the voxel drops the spot"
@@ -107,7 +107,7 @@ fn drops_spots_outside_the_mask() {
     let position = [0.5, 0.5, 0.5];
     let here = Spot::new(position, 6.0, 1.0);
     let covering = Roi::new(vec![Some(Shape::spots(Arc::from([here])))]);
-    let mask = covering.mask(level, 0);
+    let mask = covering.mask(level, 0).expect("the mask rasterizes");
     assert_eq!(
         scan.detect(0, &values, Some(&mask)).len(),
         1,
@@ -118,7 +118,7 @@ fn drops_spots_outside_the_mask() {
 #[test]
 fn an_empty_roi_covers_nothing() {
     let roi = Roi::new(vec![None]);
-    let mask = roi.mask(level(), 0);
+    let mask = roi.mask(level(), 0).expect("the mask rasterizes");
     assert!(mask.is_empty());
     assert!(!mask.contains([0.0, 0.0, 0.0]));
 }

@@ -1,6 +1,6 @@
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
-use grana_geometry::{Bounds, GeometryGroup, PackedMesh, PackedVertex};
+use grana_geometry::{Bounds, PackedMesh};
 use grana_measure::{
     ColocCost, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocSeriesInfo, ColocSettings,
     ColocSignificance, ColocThresholds,
@@ -424,7 +424,10 @@ impl Encode for SurfaceSet {
     fn encode(&self, writer: &mut Writer) {
         writer.count(self.level());
         self.objects().encode(writer);
-        self.geometry().encode(writer);
+        match self.geometry() {
+            Ok(geometry) => geometry.encode(writer),
+            Err(error) => writer.fail(&error.to_string()),
+        }
         self.intensities().encode(writer);
     }
 }
@@ -445,7 +448,10 @@ impl Encode for FilamentSet {
     fn encode(&self, writer: &mut Writer) {
         writer.count(self.level());
         self.objects().encode(writer);
-        self.geometry().encode(writer);
+        match self.geometry() {
+            Ok(geometry) => geometry.encode(writer),
+            Err(error) => writer.fail(&error.to_string()),
+        }
         self.intensities().encode(writer);
     }
 }
@@ -485,40 +491,9 @@ impl Encode for Bounds {
 
 impl Encode for PackedMesh {
     fn encode(&self, writer: &mut Writer) {
-        self.groups().encode(writer);
-        self.vertices().encode(writer);
-        self.narrow().encode(writer);
-        self.wide().encode(writer);
+        writer.blob(&self.to_bytes());
     }
 }
-
-impl Encode for GeometryGroup {
-    fn encode(&self, writer: &mut Writer) {
-        for value in self.min() {
-            writer.f32(value);
-        }
-        for value in self.scale() {
-            writer.f32(value);
-        }
-        writer.u32(self.first_vertex());
-        writer.u32(self.vertex_count());
-        writer.u32(self.first_index());
-        writer.u32(self.index_count());
-        writer.bool(self.wide());
-    }
-}
-
-impl Encode for PackedVertex {
-    fn encode(&self, writer: &mut Writer) {
-        for value in self.position() {
-            writer.u16(value);
-        }
-        for value in self.normal() {
-            writer.u16(value);
-        }
-    }
-}
-
 impl Encode for IntensityTable {
     fn encode(&self, writer: &mut Writer) {
         writer.count(self.channels());

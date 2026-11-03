@@ -123,7 +123,11 @@ fn renames_and_deletes_a_detection_without_losing_identities() {
         item: Item::Object(2),
     }));
 
-    assert!(scene.delete_object(source, 0, 1));
+    assert!(
+        scene
+            .delete_object(source, 0, 1)
+            .expect("the object is deleted")
+    );
     assert_eq!(
         scene
             .objects

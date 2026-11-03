@@ -1,5 +1,6 @@
 use glam::Vec3;
 use grana_analysis::{FilamentParams, FilamentScan};
+use grana_geometry::MeshStore;
 use grana_volume::{Extent, Intensity, Level, Region, Spacing, VoxelData};
 
 const EXTENT: Extent = Extent::new(72, 72, 32);
@@ -45,7 +46,7 @@ fn traces_a_dim_filament_on_a_coarse_grid() {
         channel_intensity(),
     );
     let set = scan
-        .frame(&data, None, |_| Ok(data.clone()))
+        .frame(&data, None, &MeshStore::memory(), |_| Ok(data.clone()))
         .expect("the coarse filament scan traces the frame");
     assert_eq!(
         set.object_count(),
@@ -81,7 +82,7 @@ fn traces_branching_filaments() {
         channel_intensity(),
     );
     let set = scan
-        .frame(&data, None, |_| Ok(data.clone()))
+        .frame(&data, None, &MeshStore::memory(), |_| Ok(data.clone()))
         .expect("the filament scan traces the frame");
     assert_eq!(set.object_count(), 1, "the spur merges into one filament");
     let statistics = set.object(0).expect("the filament exists");
@@ -109,7 +110,7 @@ fn traces_branching_filaments() {
         "the traced diameter {diameter:.2} µm follows the painted tube"
     );
     assert!(
-        set.geometry().triangle_count() > 0,
+        set.geometry().expect("the mesh loads").triangle_count() > 0,
         "the filament carries a mesh"
     );
     let intensity = set.intensities().object(0, 0).mean();
@@ -121,7 +122,7 @@ fn traces_branching_filaments() {
     let region = Region::new(Vec3::new(-9.0, -9.0, -4.0), Vec3::new(-2.0, 9.0, 4.0));
     let mut restricted = FilamentScan::new(0, level, params(), 1, 0, region, channel_intensity());
     let restricted = restricted
-        .frame(&data, None, |_| Ok(data.clone()))
+        .frame(&data, None, &MeshStore::memory(), |_| Ok(data.clone()))
         .expect("the restricted filament scan traces the frame");
     assert_eq!(
         restricted.object_count(),
@@ -184,7 +185,7 @@ fn traces_filaments_under_an_illumination_ramp() {
         channel_intensity(),
     );
     let set = scan
-        .frame(&data, None, |_| Ok(data.clone()))
+        .frame(&data, None, &MeshStore::memory(), |_| Ok(data.clone()))
         .expect("the filament scan traces the ramped frame");
     assert_eq!(
         set.object_count(),

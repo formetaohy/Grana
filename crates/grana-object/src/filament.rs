@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::IntensityTable;
-use grana_geometry::{Bounds, Mesh, PackedMesh};
+use grana_geometry::{Bounds, Geometry, Mesh, MeshStore, PackedMesh};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FilamentTopology {
@@ -133,7 +133,7 @@ impl FilamentStatistics {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilamentSet {
     level: usize,
-    geometry: Arc<PackedMesh>,
+    geometry: Geometry,
     objects: Vec<FilamentStatistics>,
     intensities: IntensityTable,
 }
@@ -145,60 +145,67 @@ impl FilamentSet {
         objects: Vec<FilamentStatistics>,
         intensities: IntensityTable,
     ) -> Self {
-        let geometry = Arc::new(PackedMesh::new(mesh));
-        assert_eq!(
-            geometry.object_count(),
-            objects.len(),
+        let geometry = PackedMesh::new(mesh);
+        assert!(
+            agrees(&geometry, &objects, &intensities),
             "every packed filament names an object"
-        );
-        assert_eq!(
-            geometry.is_empty(),
-            objects.is_empty(),
-            "the mesh and the object list agree on emptiness"
-        );
-        assert_eq!(
-            intensities.objects(),
-            objects.len(),
-            "every filament is measured in every channel"
         );
         Self {
             level,
-            geometry,
+            geometry: Geometry::resident(geometry),
             objects,
             intensities,
         }
     }
 
-    pub fn from_parts(
+    pub fn paged(
         level: usize,
-        geometry: PackedMesh,
+        store: &Arc<MeshStore>,
+        mesh: Mesh,
         objects: Vec<FilamentStatistics>,
         intensities: IntensityTable,
-    ) -> Option<Self> {
-        if geometry.object_count() != objects.len()
-            || geometry.is_empty() != objects.is_empty()
-            || intensities.objects() != objects.len()
-        {
-            return None;
-        }
-        Some(Self {
+    ) -> Result<Self, grana_geometry::Error> {
+        let geometry = PackedMesh::new(mesh);
+        assert!(
+            agrees(&geometry, &objects, &intensities),
+            "every packed filament names an object"
+        );
+        Ok(Self {
             level,
-            geometry: Arc::new(geometry),
+            geometry: Geometry::paged(store, geometry)?,
             objects,
             intensities,
         })
+    }
+
+    pub fn from_geometry(
+        level: usize,
+        geometry: Geometry,
+        objects: Vec<FilamentStatistics>,
+        intensities: IntensityTable,
+    ) -> Result<Option<Self>, grana_geometry::Error> {
+        let packed = geometry.load()?;
+        if !agrees(&packed, &objects, &intensities) {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            level,
+            geometry,
+            objects,
+            intensities,
+        }))
     }
 
     pub fn level(&self) -> usize {
         self.level
     }
 
-    pub fn geometry(&self) -> &PackedMesh {
-        &self.geometry
+    pub fn geometry(&self) -> Result<Arc<PackedMesh>, grana_geometry::Error> {
+        self.geometry.load()
     }
 
-    pub fn shared(&self) -> Arc<PackedMesh> {
-        Arc::clone(&self.geometry)
+    pub fn bytes(&self) -> u64 {
+        self.geometry.bytes()
     }
 
     pub fn objects(&self) -> &[FilamentStatistics] {
@@ -221,17 +228,30 @@ impl FilamentSet {
         self.objects.is_empty()
     }
 
-    pub fn without(&self, object: usize) -> Option<Self> {
+    pub fn without(&self, object: usize) -> Result<Option<Self>, grana_geometry::Error> {
         if object >= self.objects.len() {
-            return None;
+            return Ok(None);
         }
+        let Some(geometry) = self.geometry.without(object)? else {
+            return Ok(None);
+        };
         let mut objects = self.objects.clone();
         objects.remove(object);
-        Self::from_parts(
+        Self::from_geometry(
             self.level,
-            self.geometry.without(object),
+            geometry,
             objects,
             self.intensities.without(object),
         )
     }
+}
+
+fn agrees(
+    geometry: &PackedMesh,
+    objects: &[FilamentStatistics],
+    intensities: &IntensityTable,
+) -> bool {
+    geometry.object_count() == objects.len()
+        && geometry.is_empty() == objects.is_empty()
+        && intensities.objects() == objects.len()
 }

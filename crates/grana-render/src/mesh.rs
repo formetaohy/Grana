@@ -373,7 +373,7 @@ impl MeshPasses {
                 "a mesh layer names its style rows"
             );
             if !self.slots.contains_key(&layer.key) {
-                let slot = MeshSlot::new(device, queue, layouts, layer.mesh);
+                let slot = MeshSlot::new(device, queue, layouts, &layer.mesh);
                 self.resident += slot.bytes;
                 self.slots.insert(layer.key, slot);
             }

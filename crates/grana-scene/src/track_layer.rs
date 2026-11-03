@@ -5,7 +5,7 @@ use grana_object::TrackSet;
 
 pub struct TrackLayer {
     set: Arc<TrackSet>,
-    mesh: PackedMesh,
+    mesh: Arc<PackedMesh>,
     visible: bool,
     thickness: f32,
     revision: u64,
@@ -20,7 +20,7 @@ impl TrackLayer {
         let mesh = PackedMesh::new(set.mesh(thickness));
         Self {
             set,
-            mesh,
+            mesh: Arc::new(mesh),
             visible: true,
             thickness,
             revision,
@@ -35,8 +35,8 @@ impl TrackLayer {
         Arc::clone(&self.set)
     }
 
-    pub fn mesh(&self) -> &PackedMesh {
-        &self.mesh
+    pub fn mesh(&self) -> Arc<PackedMesh> {
+        Arc::clone(&self.mesh)
     }
 
     pub fn visible(&self) -> bool {
@@ -60,7 +60,7 @@ impl TrackLayer {
             return;
         }
         self.thickness = thickness;
-        self.mesh = PackedMesh::new(self.set.mesh(thickness));
+        self.mesh = Arc::new(PackedMesh::new(self.set.mesh(thickness)));
         self.revision = revision;
     }
 
@@ -82,7 +82,7 @@ impl TrackLayer {
 
     fn install(&mut self, set: TrackSet, revision: u64) {
         self.set = Arc::new(set);
-        self.mesh = PackedMesh::new(self.set.mesh(self.thickness));
+        self.mesh = Arc::new(PackedMesh::new(self.set.mesh(self.thickness)));
         self.revision = revision;
     }
 }

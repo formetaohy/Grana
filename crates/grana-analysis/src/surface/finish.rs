@@ -69,6 +69,7 @@ impl Assembler<'_> {
 
     pub(super) fn build(self) -> Result<SurfaceSet, String> {
         let plan = self.plan;
+        let store = self.store;
         let mut nodes = self.nodes;
         let accumulators = self.accumulators;
         let raw_vertices = self.vertices;
@@ -260,12 +261,14 @@ impl Assembler<'_> {
                 missing + 1
             ));
         }
-        Ok(SurfaceSet::new(
+        SurfaceSet::paged(
             plan.level_index,
+            store,
             Mesh::new(vertices, indices),
             objects,
             IntensityTable::new(plan.channels, intensities),
-        ))
+        )
+        .map_err(|error| error.to_string())
     }
 }
 

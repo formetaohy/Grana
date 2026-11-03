@@ -9,9 +9,11 @@ mod prepare;
 mod tile;
 
 use std::ops::Range;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 
+use grana_geometry::MeshStore;
 use grana_object::{SampleAccumulator, SurfaceSet};
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
@@ -46,6 +48,22 @@ pub(crate) const REMOVED: f32 = 1.0e-3;
 pub(crate) type Read<'a> = dyn Fn(usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
 pub(crate) type Measure<'a> =
     dyn Fn(usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
+
+pub struct Sources<'a> {
+    read: &'a Read<'a>,
+    measure: &'a Measure<'a>,
+    store: &'a Arc<MeshStore>,
+}
+
+impl<'a> Sources<'a> {
+    pub fn new(read: &'a Read<'a>, measure: &'a Measure<'a>, store: &'a Arc<MeshStore>) -> Self {
+        Self {
+            read,
+            measure,
+            store,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(crate) struct Node {
@@ -308,12 +326,12 @@ impl SurfaceBuilder {
         cancel: &AtomicBool,
         roi: Option<&Mask>,
         progress: &mut dyn FnMut(usize, usize),
-        read: &Read<'_>,
-        measure: &Measure<'_>,
+        sources: Sources<'_>,
     ) -> Result<Option<SurfaceSet>, String> {
         let desired = crate::schedule::workers(workers);
         let seeds = &self.seeds;
-        let Some(mask) = mask::build(&self, desired, cancel, roi, progress, read)? else {
+        let store = sources.store;
+        let Some(mask) = mask::build(&self, desired, cancel, roi, progress, sources.read)? else {
             return Ok(None);
         };
         let widest = self
@@ -328,7 +346,8 @@ impl SurfaceBuilder {
         } else {
             0
         };
-        while base > DISTANCE_LIMIT && Pass::new(&self, base, seeds).max_workers().is_none() {
+        while base > DISTANCE_LIMIT && Pass::new(&self, base, seeds, store).max_workers().is_none()
+        {
             base /= 2;
         }
         let mut runs = Vec::new();
@@ -338,7 +357,7 @@ impl SurfaceBuilder {
             vec![0]
         };
         for limit in limits {
-            match Pass::new(&self, limit, seeds).max_workers() {
+            match Pass::new(&self, limit, seeds, store).max_workers() {
                 Some(capacity) => runs.push((limit, capacity)),
                 None => break,
             }
@@ -351,8 +370,8 @@ impl SurfaceBuilder {
         let mut inputs = Inputs {
             cancel,
             progress,
-            read,
-            measure,
+            read: sources.read,
+            measure: sources.measure,
             solid: &mask.solid,
             field: &mask.field,
             roi,
@@ -361,7 +380,7 @@ impl SurfaceBuilder {
         loop {
             let (limit, capacity) = runs[step];
             let last = step + 1 == runs.len();
-            let pass = Pass::new(&self, limit, seeds);
+            let pass = Pass::new(&self, limit, seeds, store);
             let workers = desired.min(capacity).min(pass.total().max(1));
             let outcome = run_pass(&pass, workers, last, &mut inputs)?;
             match outcome {
@@ -431,12 +450,18 @@ pub(super) fn smooth(raw: &mut [f32], dims: [usize; 3], kernels: &[Vec<f32>; 3])
 struct Pass<'a> {
     plan: &'a SurfaceBuilder,
     seeds: &'a [[i64; 3]],
+    store: &'a Arc<MeshStore>,
     cap: u32,
     pad: [u32; 3],
 }
 
 impl<'a> Pass<'a> {
-    fn new(plan: &'a SurfaceBuilder, limit: u32, seeds: &'a [[i64; 3]]) -> Self {
+    fn new(
+        plan: &'a SurfaceBuilder,
+        limit: u32,
+        seeds: &'a [[i64; 3]],
+        store: &'a Arc<MeshStore>,
+    ) -> Self {
         let cap = limit * limit;
         let pad = [0, 1, 2].map(|axis| {
             let needed = limit + (plan.kernels[axis].len() / 2) as u32 + 1;
@@ -445,6 +470,7 @@ impl<'a> Pass<'a> {
         Self {
             plan,
             seeds,
+            store,
             cap,
             pad,
         }

@@ -1,5 +1,5 @@
 use glam::Vec3;
-use grana_geometry::{Mesh, MeshVertex, PackedMesh, ray_hit};
+use grana_geometry::{Geometry, Mesh, MeshStore, MeshVertex, PackedMesh, ray_hit};
 
 const CORNERS: [[f32; 3]; 8] = [
     [-1.0, -1.0, -1.0],
@@ -69,6 +69,49 @@ fn widens_objects_above_the_narrow_index_range() {
     );
     assert!(!packed.wide().is_empty());
     assert_geometry(&mesh, &packed);
+}
+
+#[test]
+fn pages_meshes_through_its_spill_file() {
+    let store = MeshStore::temporary(1).expect("the store opens a spill file");
+    let source = PackedMesh::new(mesh(&[8, 8]));
+    let paged = Geometry::paged(&store, source.clone()).expect("the mesh pages");
+    assert!(store.stats().spilled() > 0, "the mesh leaves memory");
+    assert_eq!(store.stats().resident(), 0);
+    assert_eq!(
+        paged.load().expect("the mesh loads").as_ref(),
+        &source,
+        "a paged mesh survives the spill file"
+    );
+    let pruned = paged
+        .without(0)
+        .expect("the surface prunes")
+        .expect("the object exists");
+    assert_eq!(pruned.load().expect("the mesh loads").object_count(), 1);
+    let recycle = MeshStore::temporary(1).expect("the store opens a spill file");
+    let mut spares = (0..4)
+        .map(|_| Geometry::paged(&recycle, source.clone()).expect("the mesh pages"))
+        .collect::<Vec<_>>();
+    let kept = spares.pop().expect("four meshes were paged");
+    spares.clear();
+    assert_eq!(
+        kept.load().expect("the mesh loads").as_ref(),
+        &source,
+        "a reclaimed spill file keeps the meshes it still holds"
+    );
+    drop(kept);
+    assert_eq!(
+        recycle.stats().meshes(),
+        0,
+        "a released mesh leaves its store"
+    );
+    drop(paged);
+    drop(pruned);
+    assert_eq!(
+        store.stats().meshes(),
+        0,
+        "a released mesh leaves the store"
+    );
 }
 
 fn assert_geometry(source: &Mesh, packed: &PackedMesh) {

@@ -366,8 +366,13 @@ impl App {
             }
             return;
         }
-        let Some(hit) = scene.surface_ray(set, ray.origin, ray.direction) else {
-            return;
+        let hit = match scene.surface_ray(set, ray.origin, ray.direction) {
+            Ok(Some(hit)) => hit,
+            Ok(None) => return,
+            Err(detail) => {
+                self.message = Some(detail);
+                return;
+            }
         };
         self.apply(vec![Command::AddSeed {
             set,
@@ -529,7 +534,7 @@ impl App {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let info = engine.draw_viewport(
+        let info = match engine.draw_viewport(
             &surface.gpu.device,
             &surface.gpu.queue,
             grana_engine::ViewportFrame {
@@ -541,7 +546,13 @@ impl App {
                 section_region: panes.section,
                 prefetch: playing,
             },
-        );
+        ) {
+            Ok(info) => info,
+            Err(detail) => {
+                engine.set_output_message(Some(detail));
+                return Some(Duration::ZERO);
+            }
+        };
         let mut encoder =
             surface
                 .gpu

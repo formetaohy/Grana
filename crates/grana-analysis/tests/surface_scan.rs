@@ -2,7 +2,8 @@ use std::f64::consts::PI;
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_analysis::{SurfaceBuilder, SurfaceFilter, SurfaceParams};
+use grana_analysis::{Sources, SurfaceBuilder, SurfaceFilter, SurfaceParams};
+use grana_geometry::MeshStore;
 use grana_object::SurfaceSet;
 use grana_volume::{Channel, Extent, Intensity, Level, Region, Spacing, Volume, VoxelData};
 
@@ -30,7 +31,10 @@ fn extracts_measured_surfaces() {
 
     let set = extract(&volume, params(threshold), Region::none());
     assert_eq!(set.object_count(), centres.len(), "each blob is one object");
-    assert!(!set.geometry().is_empty(), "the mesh holds triangles");
+    assert!(
+        !set.geometry().expect("the mesh loads").is_empty(),
+        "the mesh holds triangles"
+    );
     assert_eq!(set.intensities().channels(), channels);
 
     let spacing = [0.1f64, 0.1, 0.2];
@@ -142,7 +146,11 @@ fn extracts_measured_surfaces() {
         "the kept blob lies inside the region"
     );
     assert!(
-        restricted.geometry().triangle_count() > 0,
+        restricted
+            .geometry()
+            .expect("the mesh loads")
+            .triangle_count()
+            > 0,
         "the restricted surface carries triangles"
     );
 }
@@ -426,7 +434,7 @@ fn no_holes(set: &SurfaceSet) -> bool {
 }
 
 fn edge_counts(set: &SurfaceSet) -> Vec<EdgeCounts> {
-    let geometry = set.geometry();
+    let geometry = set.geometry().expect("the mesh loads");
     geometry
         .groups()
         .iter()
@@ -541,7 +549,7 @@ fn filters_objects_by_shape_and_intensity() {
         Region::none(),
     );
     assert_eq!(round.object_count(), 1, "only the sphere is spherical");
-    assert_eq!(round.geometry().object_count(), 1);
+    assert_eq!(round.geometry().expect("the mesh loads").object_count(), 1);
     assert_eq!(round.intensities().objects(), 1);
     let bright = extract(
         &volume,
@@ -549,9 +557,9 @@ fn filters_objects_by_shape_and_intensity() {
         Region::none(),
     );
     assert_eq!(bright.object_count(), 1, "only the bright object passes");
-    assert_eq!(bright.geometry().object_count(), 1);
+    assert_eq!(bright.geometry().expect("the mesh loads").object_count(), 1);
     assert_eq!(bright.intensities().objects(), 1);
-    assert_eq!(bright.geometry().groups().len(), 1);
+    assert_eq!(bright.geometry().expect("the mesh loads").groups().len(), 1);
 }
 
 #[test]
@@ -656,22 +664,25 @@ fn extract_seeded(
         &cancel,
         None,
         &mut |_done, _total| {},
-        &|_index, ranges| {
-            Ok(volume.channels()[0].data().region(
-                volume.extent(),
-                ranges[0].clone(),
-                ranges[1].clone(),
-                ranges[2].clone(),
-            ))
-        },
-        &|channel, core| {
-            Ok(volume.channels()[channel].data().region(
-                volume.extent(),
-                core[0].clone(),
-                core[1].clone(),
-                core[2].clone(),
-            ))
-        },
+        Sources::new(
+            &|_index, ranges| {
+                Ok(volume.channels()[0].data().region(
+                    volume.extent(),
+                    ranges[0].clone(),
+                    ranges[1].clone(),
+                    ranges[2].clone(),
+                ))
+            },
+            &|channel, core| {
+                Ok(volume.channels()[channel].data().region(
+                    volume.extent(),
+                    core[0].clone(),
+                    core[1].clone(),
+                    core[2].clone(),
+                ))
+            },
+            &MeshStore::memory(),
+        ),
     )
 }
 
@@ -692,22 +703,25 @@ fn extract_with(
             &cancel,
             None,
             &mut |_done, _total| {},
-            &|_index, ranges| {
-                Ok(volume.channels()[0].data().region(
-                    volume.extent(),
-                    ranges[0].clone(),
-                    ranges[1].clone(),
-                    ranges[2].clone(),
-                ))
-            },
-            &|channel, core| {
-                Ok(volume.channels()[channel].data().region(
-                    volume.extent(),
-                    core[0].clone(),
-                    core[1].clone(),
-                    core[2].clone(),
-                ))
-            },
+            Sources::new(
+                &|_index, ranges| {
+                    Ok(volume.channels()[0].data().region(
+                        volume.extent(),
+                        ranges[0].clone(),
+                        ranges[1].clone(),
+                        ranges[2].clone(),
+                    ))
+                },
+                &|channel, core| {
+                    Ok(volume.channels()[channel].data().region(
+                        volume.extent(),
+                        core[0].clone(),
+                        core[1].clone(),
+                        core[2].clone(),
+                    ))
+                },
+                &MeshStore::memory(),
+            ),
         )
         .expect("a surface frame is detected")
         .expect("surface detection completes")

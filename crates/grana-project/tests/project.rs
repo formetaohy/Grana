@@ -5,6 +5,7 @@ use glam::Vec3;
 use grana_analysis::SpotParams;
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, TransferFunction};
+use grana_geometry::MeshStore;
 use grana_geometry::{Bounds, Mesh, MeshVertex};
 use grana_measure::{
     ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
@@ -116,7 +117,11 @@ fn round_trips_a_project() {
     let project = Project::capture(&scene, &measure, source, view);
     let path = std::env::temp_dir().join(format!("grana-project-{}.grana", std::process::id()));
     project.write(&path).expect("the project writes");
-    let loaded = Project::read(&path).expect("the project reads");
+    let loaded = Project::read(
+        &path,
+        MeshStore::temporary(1).expect("the store opens a spill file"),
+    )
+    .expect("the project reads");
     fs::remove_file(&path).ok();
     assert_eq!(loaded, project);
 
@@ -176,7 +181,7 @@ fn round_trips_object_set_order() {
     );
     let path = std::env::temp_dir().join(format!("grana-order-{}.grana", std::process::id()));
     project.write(&path).expect("the project writes");
-    let loaded = Project::read(&path).expect("the project reads");
+    let loaded = Project::read(&path, MeshStore::memory()).expect("the project reads");
     fs::remove_file(&path).ok();
     let mut restored = fixture();
     restored.restore(loaded.scene);
@@ -220,9 +225,9 @@ fn rejects_damaged_projects() {
     project.write(&path).expect("the project writes");
     let bytes = fs::read(&path).expect("the project reads");
     fs::write(&path, b"not a grana project").expect("the damaged file writes");
-    assert!(Project::read(&path).is_err());
+    assert!(Project::read(&path, MeshStore::memory()).is_err());
     fs::write(&path, &bytes[..bytes.len() / 2]).expect("the truncated file writes");
-    assert!(Project::read(&path).is_err());
+    assert!(Project::read(&path, MeshStore::memory()).is_err());
     fs::remove_file(&path).ok();
 }
 

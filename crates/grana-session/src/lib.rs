@@ -26,4 +26,4 @@ pub use protocol::{
 };
 pub use run::DetectRequest;
 pub use session::{Effects, Session};
-pub use view::{BatchDataset, BatchView, HistoryView, IoView, Message, SessionView};
+pub use view::{BatchDataset, BatchView, HistoryView, IoView, Message, SessionView, StoreView};

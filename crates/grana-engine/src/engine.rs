@@ -82,8 +82,8 @@ impl Engine {
         device: &Device,
         queue: &Queue,
         frame: ViewportFrame<'_>,
-    ) -> FrameInfo {
-        let rendered = crate::view::frame(frame.scene);
+    ) -> Result<FrameInfo, String> {
+        let rendered = crate::view::frame(frame.scene)?;
         let info = frame::draw(
             &mut self.renderer,
             device,
@@ -106,7 +106,7 @@ impl Engine {
             styles: rendered.style_ids,
             markers: rendered.marker_ids,
         };
-        info
+        Ok(info)
     }
 
     pub fn request_pick(

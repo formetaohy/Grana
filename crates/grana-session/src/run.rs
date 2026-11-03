@@ -3,9 +3,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{
-    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, Roi, SpotScanner, SurfaceBuilder,
-    TrackBuilder, coloc_levels, filament_level, relate_frames, surface_level,
+    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, Roi, Sources, SpotScanner,
+    SurfaceBuilder, TrackBuilder, coloc_levels, filament_level, relate_frames, surface_level,
 };
+use grana_geometry::MeshStore;
 use grana_image::Image;
 use grana_measure::{ColocPair, ColocSettings};
 use grana_scene::{ObjectFrame, ObjectParams};
@@ -20,6 +21,7 @@ pub struct DetectRequest {
     roi: Option<Roi>,
     seeds: Vec<Vec<[f32; 3]>>,
     workers: usize,
+    store: Arc<MeshStore>,
 }
 
 impl DetectRequest {
@@ -30,6 +32,7 @@ impl DetectRequest {
         roi: Option<Roi>,
         seeds: Vec<Vec<[f32; 3]>>,
         workers: usize,
+        store: Arc<MeshStore>,
     ) -> Self {
         Self {
             channel,
@@ -38,6 +41,7 @@ impl DetectRequest {
             roi,
             seeds,
             workers,
+            store,
         }
     }
 }
@@ -102,23 +106,23 @@ pub(crate) fn relation(
         done: 0,
         total,
     });
-    let source = source
-        .iter()
-        .take(total)
-        .map(|frame| frame.as_deref().map(ObjectFrame::shape))
+    let counts = (0..total)
+        .map(|time| source[time].as_deref().map(ObjectFrame::object_count))
         .collect::<Vec<_>>();
-    let target = target
-        .iter()
-        .take(total)
-        .map(|frame| frame.as_deref().map(ObjectFrame::shape))
-        .collect::<Vec<_>>();
-    let frames = match relate_frames(&source, &target, workers, cancel, &mut |done, total| {
-        sink(Event::Progress {
-            time: done as u32,
-            done,
-            total,
-        });
-    }) {
+    let frames = match relate_frames(
+        &counts,
+        |time| shape(source.get(time).and_then(Option::as_deref)),
+        |time| shape(target.get(time).and_then(Option::as_deref)),
+        workers,
+        cancel,
+        &mut |done, total| {
+            sink(Event::Progress {
+                time: done as u32,
+                done,
+                total,
+            });
+        },
+    ) {
         Ok(Some(frames)) => frames,
         Ok(None) => return,
         Err(detail) => {
@@ -136,6 +140,13 @@ pub(crate) fn relation(
         });
     }
     sink(Event::Done);
+}
+
+fn shape(frame: Option<&ObjectFrame>) -> Result<Option<grana_analysis::Shape>, String> {
+    let Some(frame) = frame else {
+        return Ok(None);
+    };
+    frame.shape().map(Some).map_err(|error| error.to_string())
 }
 
 pub(crate) struct ColocRequest {
@@ -223,7 +234,10 @@ pub(crate) fn coloc(
     let total = scan_tiles * frames as usize + permutation_work;
     let mut done = 0usize;
     for time in 0..frames {
-        let mask = roi.as_ref().map(|roi| roi.mask(scan_info, time));
+        let mask = roi
+            .as_ref()
+            .map(|roi| roi.mask(scan_info, time))
+            .transpose()?;
         for index in 0..scan_tiles {
             if cancel.load(Ordering::Relaxed) {
                 return Ok(());
@@ -247,7 +261,10 @@ pub(crate) fn coloc(
     if !piggyback {
         let permutation_info = pyramid.level(permutation_level);
         for (slot, time) in permutation_frames.iter().enumerate() {
-            let mask = roi.as_ref().map(|roi| roi.mask(permutation_info, *time));
+            let mask = roi
+                .as_ref()
+                .map(|roi| roi.mask(permutation_info, *time))
+                .transpose()?;
             for index in 0..permutation_tiles {
                 if cancel.load(Ordering::Relaxed) {
                     return Ok(());
@@ -320,7 +337,7 @@ fn spots(
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let mask = roi.as_ref().map(|roi| roi.mask(level, time));
+        let mask = roi.as_ref().map(|roi| roi.mask(level, time)).transpose()?;
         sink(Event::Progress {
             time,
             done: 0,
@@ -358,6 +375,7 @@ fn surfaces(
         roi,
         seeds,
         workers,
+        store,
         ..
     } = request;
     let pyramid = reader.pyramid();
@@ -390,7 +408,7 @@ fn surfaces(
         )
         .with_seeds(seeds.get(time as usize).map_or(&[], Vec::as_slice));
         let total = builder.tile_count() * 2;
-        let mask = roi.as_ref().map(|roi| roi.mask(level, time));
+        let mask = roi.as_ref().map(|roi| roi.mask(level, time)).transpose()?;
         sink(Event::Progress {
             time,
             done: 0,
@@ -401,16 +419,19 @@ fn surfaces(
             cancel,
             mask.as_ref(),
             &mut |done, total| sink(Event::Progress { time, done, total }),
-            &|_index, ranges| {
-                reader
-                    .read_region(time, level_index, channel, ranges)
-                    .map_err(String::from)
-            },
-            &|measured, core| {
-                reader
-                    .read_region(time, level_index, measured, core)
-                    .map_err(String::from)
-            },
+            Sources::new(
+                &|_index, ranges| {
+                    reader
+                        .read_region(time, level_index, channel, ranges)
+                        .map_err(String::from)
+                },
+                &|measured, core| {
+                    reader
+                        .read_region(time, level_index, measured, core)
+                        .map_err(String::from)
+                },
+                &store,
+            ),
         )?;
         let Some(set) = set else {
             return Ok(());
@@ -435,6 +456,7 @@ fn filaments(
         channel,
         region,
         roi,
+        store,
         ..
     } = request;
     let pyramid = reader.pyramid();
@@ -471,8 +493,11 @@ fn filaments(
             total: total as usize,
         });
         let detection = full_region(reader, pyramid, time, level, channel)?;
-        let mask = roi.as_ref().map(|roi| roi.mask(pyramid.level(level), time));
-        let set = scan.frame(&detection, mask.as_ref(), |measured| {
+        let mask = roi
+            .as_ref()
+            .map(|roi| roi.mask(pyramid.level(level), time))
+            .transpose()?;
+        let set = scan.frame(&detection, mask.as_ref(), &store, |measured| {
             full_region(reader, pyramid, time, level, measured)
         })?;
         sink(Event::Frame {

@@ -1,14 +1,16 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use grana_animation::Timeline;
 use grana_display::{CameraState, SectionState};
+use grana_geometry::MeshStore;
 use grana_scene::{Dataset, Measure, MeasureState, Scene, SceneState};
 
 use crate::binary::{Decode, Encode, Reader, Writer};
 use crate::error::Error;
 
-const MAGIC: &[u8; 11] = b"granaproj10";
+const MAGIC: &[u8; 11] = b"granaproj11";
 const HEADER: usize = MAGIC.len() + size_of::<u64>();
 const COMPRESSION_LEVEL: i32 = 6;
 const RAW_LIMIT: u64 = 16 << 30;
@@ -82,7 +84,7 @@ impl Project {
         result
     }
 
-    pub fn read(path: &Path) -> Result<Self, Error> {
+    pub fn read(path: &Path, store: Arc<MeshStore>) -> Result<Self, Error> {
         let format = |detail: &str| Error::Format {
             path: path.to_path_buf(),
             detail: detail.to_string(),
@@ -108,7 +110,7 @@ impl Project {
             .map_err(|_| format("the project declares an impossible payload size"))?;
         let mut decoder = zstd::Decoder::new(file)
             .map_err(|error| format(&format!("the payload does not decompress: {error}")))?;
-        let mut reader = Reader::new(&mut decoder, raw_length);
+        let mut reader = Reader::new(&mut decoder, raw_length, store);
         let project = Project::decode(&mut reader).map_err(format)?;
         reader.done().map_err(format)?;
         Ok(project)

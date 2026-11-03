@@ -4,7 +4,9 @@ mod skeleton;
 mod spanning;
 mod volume;
 
-use grana_geometry::{Mesh, push_sphere, push_tube};
+use std::sync::Arc;
+
+use grana_geometry::{Mesh, MeshStore, push_sphere, push_tube};
 use grana_object::{FilamentSet, IntensityTable, SampleAccumulator};
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
@@ -145,6 +147,7 @@ impl FilamentScan {
         &mut self,
         detection: &VoxelData,
         roi: Option<&Mask>,
+        store: &Arc<MeshStore>,
         mut read: impl FnMut(usize) -> Result<VoxelData, String>,
     ) -> Result<FilamentSet, String> {
         if self.empty {
@@ -232,12 +235,14 @@ impl FilamentScan {
                 .map(SampleAccumulator::statistics)
                 .collect(),
         );
-        Ok(FilamentSet::new(
+        FilamentSet::paged(
             self.level,
+            store,
             Mesh::new(vertices, indices),
             objects,
             intensities,
-        ))
+        )
+        .map_err(|error| error.to_string())
     }
 
     fn sample(&self, data: &VoxelData, node: usize) -> f32 {
