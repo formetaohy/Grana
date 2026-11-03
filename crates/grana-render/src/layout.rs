@@ -26,15 +26,15 @@ pub(crate) struct Layouts {
     pub marker_cull: BindGroupLayout,
     pub marker_render: BindGroupLayout,
     pub census_level: BindGroupLayout,
-    pub peel: BindGroupLayout,
-    pub layers: BindGroupLayout,
+    pub oit_write: BindGroupLayout,
+    pub oit_read: BindGroupLayout,
     pub volume: PipelineLayout,
     pub section: PipelineLayout,
     pub cull: PipelineLayout,
     pub plan_pipeline: PipelineLayout,
     pub mesh_cull: PipelineLayout,
     pub marker_volume: PipelineLayout,
-    pub marker_layer: PipelineLayout,
+    pub marker_oit: PipelineLayout,
     pub marker_section: PipelineLayout,
     pub marker_cull_pipeline: PipelineLayout,
     pub census: PipelineLayout,
@@ -221,29 +221,25 @@ impl Layouts {
                 storage(1, ShaderStages::VERTEX, true),
             ],
         });
-        let peel = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.peel.layout"),
-            entries: &[depth_texture(0), depth_texture(1)],
-        });
-        let layers = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.layers.layout"),
+        let oit_write = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.oit.write.layout"),
             entries: &[
-                layer_texture(0),
-                layer_texture(1),
-                layer_texture(2),
-                layer_texture(3),
-                depth_texture(4),
-                depth_texture(5),
-                depth_texture(6),
-                depth_texture(7),
-                layer_texture(8),
-                layer_texture(9),
+                storage(0, ShaderStages::FRAGMENT, false),
+                storage(1, ShaderStages::FRAGMENT, false),
+                storage(2, ShaderStages::FRAGMENT, false),
+            ],
+        });
+        let oit_read = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.oit.read.layout"),
+            entries: &[
+                storage(0, ShaderStages::FRAGMENT, true),
+                storage(1, ShaderStages::FRAGMENT, true),
             ],
         });
         let volume = pipeline_layout(
             device,
             "grana.volume.layout",
-            &[&scene, &level, &atlas, &depth, &shadow, &layers],
+            &[&scene, &level, &atlas, &depth, &shadow, &oit_read],
         );
         let section = pipeline_layout(device, "grana.section.layout", &[&scene, &level, &atlas]);
         let cull = pipeline_layout(
@@ -259,9 +255,15 @@ impl Layouts {
         );
         let marker_volume =
             pipeline_layout(device, "grana.marker.layout", &[&scene, &marker_render]);
-        let marker_layer = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("grana.marker.layer.layout"),
-            bind_group_layouts: &[Some(&scene), Some(&marker_render), None, None, Some(&peel)],
+        let marker_oit = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.marker.oit.layout"),
+            bind_group_layouts: &[
+                Some(&scene),
+                Some(&marker_render),
+                None,
+                None,
+                Some(&oit_write),
+            ],
             immediate_size: 0,
         });
         let marker_section = pipeline_layout(
@@ -297,19 +299,19 @@ impl Layouts {
             marker_cull,
             marker_render,
             census_level,
+            oit_write,
+            oit_read,
             volume,
             section,
             cull,
             plan_pipeline,
             mesh_cull,
             marker_volume,
-            marker_layer,
+            marker_oit,
             marker_section,
             marker_cull_pipeline,
             census,
             shadow_pipeline,
-            peel,
-            layers,
         }
     }
 }
@@ -323,30 +325,4 @@ fn pipeline_layout(device: &Device, label: &str, layouts: &[&BindGroupLayout]) -
             .collect::<Vec<_>>(),
         immediate_size: 0,
     })
-}
-
-fn depth_texture(binding: u32) -> BindGroupLayoutEntry {
-    BindGroupLayoutEntry {
-        binding,
-        visibility: ShaderStages::FRAGMENT,
-        ty: BindingType::Texture {
-            sample_type: TextureSampleType::Depth,
-            view_dimension: TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
-}
-
-fn layer_texture(binding: u32) -> BindGroupLayoutEntry {
-    BindGroupLayoutEntry {
-        binding,
-        visibility: ShaderStages::FRAGMENT,
-        ty: BindingType::Texture {
-            sample_type: TextureSampleType::Float { filterable: false },
-            view_dimension: TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
 }

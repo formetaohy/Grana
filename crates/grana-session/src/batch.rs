@@ -710,8 +710,12 @@ fn content(dataset: &Path) -> u64 {
 }
 
 fn file_content(path: &Path, length: u64) -> u64 {
+    file_bytes(HASH, path, length)
+}
+
+fn file_bytes(seed: u64, path: &Path, length: u64) -> u64 {
     use std::io::{Read, Seek, SeekFrom};
-    let mut hash = mix_u64(HASH, length);
+    let mut hash = mix_u64(seed, length);
     let Ok(mut file) = std::fs::File::open(path) else {
         return hash;
     };
@@ -738,16 +742,16 @@ fn directory_content(root: &Path) -> u64 {
     collect(root, root, &mut entries);
     entries.sort();
     let mut hash = mix_u64(HASH, entries.len() as u64);
-    for (name, size, modified) in entries {
+    for (name, size) in entries {
         hash = mix_u64(hash, size);
-        hash = mix_u64(hash, modified);
         hash = mix_u64(hash, name.len() as u64);
         hash = mix_bytes(hash, name.as_bytes());
+        hash = file_bytes(hash, &root.join(&name), size);
     }
     hash
 }
 
-fn collect(root: &Path, folder: &Path, entries: &mut Vec<(String, u64, u64)>) {
+fn collect(root: &Path, folder: &Path, entries: &mut Vec<(String, u64)>) {
     let Ok(listing) = std::fs::read_dir(folder) else {
         return;
     };
@@ -765,12 +769,7 @@ fn collect(root: &Path, folder: &Path, entries: &mut Vec<(String, u64, u64)>) {
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
-        let modified = metadata
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |duration| duration.as_nanos() as u64);
-        entries.push((name, metadata.len(), modified));
+        entries.push((name, metadata.len()));
     }
 }
 

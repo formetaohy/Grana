@@ -9,6 +9,7 @@ struct MeshUniforms {
     light_view: mat4x4<f32>,
     light_reach: vec4<f32>,
     shadow: vec4<f32>,
+    viewport: vec4<f32>,
 }
 
 struct ObjectData {
@@ -35,8 +36,6 @@ struct Style {
 @group(3) @binding(2) var shadow_occlusion: texture_3d<f32>;
 @group(3) @binding(3) var shadow_objects: texture_depth_2d;
 @group(3) @binding(4) var shadow_compare: sampler_comparison;
-@group(4) @binding(0) var previous_depth: texture_depth_2d;
-@group(4) @binding(1) var opaque_depth: texture_depth_2d;
 @group(5) @binding(0) var<storage, read> pick_ids: array<u32>;
 
 struct VertexInput {
@@ -144,41 +143,18 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 @fragment
-fn fs_layer(input: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_oit(input: VertexOutput) {
     if (is_outside(input)) {
         discard;
     }
-    let pixel = vec2<i32>(input.clip_position.xy);
-    let depth = input.clip_position.z;
-    if (depth > textureLoad(opaque_depth, pixel, 0)
-        || depth <= textureLoad(previous_depth, pixel, 0)) {
-        discard;
-    }
     let sample = shade(input);
-    return vec4<f32>(sample.rgb * sample.a, sample.a);
-}
-
-struct TailFragment {
-    @location(0) color: vec4<f32>,
-    @location(1) distance: f32,
-}
-
-@fragment
-fn fs_tail(input: VertexOutput) -> TailFragment {
-    if (is_outside(input)) {
-        discard;
-    }
-    let pixel = vec2<i32>(input.clip_position.xy);
-    let depth = input.clip_position.z;
-    if (depth > textureLoad(opaque_depth, pixel, 0)
-        || depth <= textureLoad(previous_depth, pixel, 0)) {
-        discard;
-    }
-    let sample = shade(input);
-    var output: TailFragment;
-    output.color = vec4<f32>(sample.rgb * sample.a, sample.a);
-    output.distance = length(mesh.eye.xyz - input.position);
-    return output;
+    oit_push(
+        vec2<i32>(mesh.viewport.xy),
+        vec2<i32>(mesh.viewport.zw),
+        vec2<i32>(input.clip_position.xy),
+        input.clip_position.z,
+        vec4<f32>(sample.rgb * sample.a, sample.a),
+    );
 }
 
 @fragment

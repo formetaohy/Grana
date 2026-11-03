@@ -4,16 +4,15 @@
 @group(4) @binding(2) var shadow_occlusion: texture_3d<f32>;
 @group(4) @binding(3) var shadow_objects: texture_depth_2d;
 @group(4) @binding(4) var shadow_compare: sampler_comparison;
-@group(5) @binding(0) var layer_color_0: texture_2d<f32>;
-@group(5) @binding(1) var layer_color_1: texture_2d<f32>;
-@group(5) @binding(2) var layer_color_2: texture_2d<f32>;
-@group(5) @binding(3) var layer_color_3: texture_2d<f32>;
-@group(5) @binding(4) var layer_depth_0: texture_depth_2d;
-@group(5) @binding(5) var layer_depth_1: texture_depth_2d;
-@group(5) @binding(6) var layer_depth_2: texture_depth_2d;
-@group(5) @binding(7) var layer_depth_3: texture_depth_2d;
-@group(5) @binding(8) var tail_color: texture_2d<f32>;
-@group(5) @binding(9) var tail_distance: texture_2d<f32>;
+
+struct OitFragment {
+    next: u32,
+    depth: f32,
+    color: vec2<u32>,
+}
+
+@group(5) @binding(0) var<storage, read> oit_heads: array<u32>;
+@group(5) @binding(1) var<storage, read> oit_nodes: array<OitFragment>;
 
 const MAX_CELL_STEPS: u32 = 4096u;
 const MINIMUM_TRANSMITTANCE: f32 = 0.003;
@@ -23,6 +22,8 @@ const SHADING_THRESHOLD: f32 = 0.02;
 const SHADING_FLOOR: f32 = 0.02;
 const SHADING_CEIL: f32 = 0.10;
 const EMPTY_DISTANCE: f32 = 1.0e19;
+const MAX_FRAGMENTS: u32 = 16u;
+const CHAIN_LIMIT: u32 = 256u;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -47,40 +48,6 @@ fn object_distance(depth: f32, ndc: vec2<f32>) -> f32 {
         return EMPTY_DISTANCE;
     }
     return length(unproject(vec3<f32>(ndc, depth)) - frame.eye.xyz);
-}
-
-fn layer_color(index: u32, pixel: vec2<i32>) -> vec4<f32> {
-    switch index {
-        case 0u: {
-            return textureLoad(layer_color_0, pixel, 0);
-        }
-        case 1u: {
-            return textureLoad(layer_color_1, pixel, 0);
-        }
-        case 2u: {
-            return textureLoad(layer_color_2, pixel, 0);
-        }
-        default: {
-            return textureLoad(layer_color_3, pixel, 0);
-        }
-    }
-}
-
-fn layer_depth(index: u32, pixel: vec2<i32>) -> f32 {
-    switch index {
-        case 0u: {
-            return textureLoad(layer_depth_0, pixel, 0);
-        }
-        case 1u: {
-            return textureLoad(layer_depth_1, pixel, 0);
-        }
-        case 2u: {
-            return textureLoad(layer_depth_2, pixel, 0);
-        }
-        default: {
-            return textureLoad(layer_depth_3, pixel, 0);
-        }
-    }
 }
 
 fn region_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
@@ -255,41 +222,73 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let start = max(max(entry, 0.0), clip.x);
     let jitter = sample_noise(input.clip_position.xy, frame.jitter.z) * frame.march.x;
 
+    var fragment_depth: array<f32, MAX_FRAGMENTS>;
+    var fragment_color: array<vec2<u32>, MAX_FRAGMENTS>;
+    var fragments = 0u;
+    if (frame.oit.x > 0u) {
+        let origin = vec2<i32>(frame.viewport.xy);
+        let size = vec2<i32>(frame.viewport.zw);
+        let local = pixel - origin;
+        if (local.x >= 0 && local.y >= 0 && local.x < size.x && local.y < size.y) {
+            var index = oit_heads[local.y * size.x + local.x];
+            var guard = 0u;
+            loop {
+                if (index == 0u || guard >= CHAIN_LIMIT) {
+                    break;
+                }
+                guard += 1u;
+                let node = oit_nodes[index - 1u];
+                let depth = node.depth;
+                if (fragments < MAX_FRAGMENTS) {
+                    var slot = fragments;
+                    loop {
+                        if (slot == 0u || fragment_depth[slot - 1u] <= depth) {
+                            break;
+                        }
+                        fragment_depth[slot] = fragment_depth[slot - 1u];
+                        fragment_color[slot] = fragment_color[slot - 1u];
+                        slot -= 1u;
+                    }
+                    fragment_depth[slot] = depth;
+                    fragment_color[slot] = node.color;
+                    fragments += 1u;
+                } else if (depth < fragment_depth[MAX_FRAGMENTS - 1u]) {
+                    var slot = MAX_FRAGMENTS - 1u;
+                    loop {
+                        if (slot == 0u || fragment_depth[slot - 1u] <= depth) {
+                            break;
+                        }
+                        fragment_depth[slot] = fragment_depth[slot - 1u];
+                        fragment_color[slot] = fragment_color[slot - 1u];
+                        slot -= 1u;
+                    }
+                    fragment_depth[slot] = depth;
+                    fragment_color[slot] = node.color;
+                }
+                index = node.next;
+            }
+        }
+    }
+
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
     var cursor = start + min(jitter, max(exit - start, 0.0));
-    let count = frame.layers.x;
-    for (var index = 0u; index < count; index += 1u) {
-        let depth = layer_depth(index, pixel);
-        if (depth >= 1.0) {
-            continue;
-        }
-        let limit = min(object_distance(depth, ndc), exit);
+    for (var index = 0u; index < fragments; index += 1u) {
+        let limit = min(object_distance(fragment_depth[index], ndc), exit);
         if (limit > cursor) {
             let segment = march(cursor, limit, direction);
             radiance += transmittance * segment.rgb;
             transmittance *= segment.a;
             cursor = limit;
         }
-        let sample = layer_color(index, pixel);
+        let sample = vec4<f32>(
+            unpack2x16float(fragment_color[index].x),
+            unpack2x16float(fragment_color[index].y),
+        );
         radiance += transmittance * sample.rgb;
         transmittance *= 1.0 - sample.a;
         if (transmittance < MINIMUM_TRANSMITTANCE) {
             break;
-        }
-    }
-    if (frame.layers.y > 0u) {
-        let tail = textureLoad(tail_color, pixel, 0);
-        if (tail.a > 0.0) {
-            let reach = clamp(textureLoad(tail_distance, pixel, 0).r, cursor, exit);
-            if (reach > cursor) {
-                let segment = march(cursor, reach, direction);
-                radiance += transmittance * segment.rgb;
-                transmittance *= segment.a;
-                cursor = reach;
-            }
-            radiance += transmittance * tail.rgb;
-            transmittance *= 1.0 - tail.a;
         }
     }
     if (cursor < exit) {

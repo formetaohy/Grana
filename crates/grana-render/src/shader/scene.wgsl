@@ -21,7 +21,7 @@ struct FrameData {
     light_view: mat4x4<f32>,
     light_inverse: mat4x4<f32>,
     light_reach: vec4<f32>,
-    layers: vec4<u32>,
+    oit: vec4<u32>,
 }
 
 struct SectionData {

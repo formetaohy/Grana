@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use grana_session::{Batch, BatchEvent, Outcome, Plan, Protocol, discover};
 
@@ -114,6 +114,17 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
     let coloc = read(&output.join("alpha").join("coloc-Cells-Signal.csv"));
     assert!(coloc.starts_with("scope,frame"), "{coloc}");
     assert_eq!(coloc.lines().count(), 4, "{coloc}");
+
+    let stamp = SystemTime::now() + Duration::from_secs(3600);
+    for file in [".zattrs", "0/.zarray", "0/0/0/0/0/0"] {
+        let handle = fs::File::options()
+            .write(true)
+            .open(root.join("alpha.zarr").join(file))
+            .expect("the dataset files stay writable");
+        handle
+            .set_times(fs::FileTimes::new().set_modified(stamp))
+            .expect("the modification time is writable");
+    }
 
     let resumed = run(&protocol, &datasets, &output, 2);
     assert_eq!(

@@ -1,10 +1,13 @@
-use grana_geometry::{Mesh, MeshVertex, PackedMesh, cross_section};
+use grana_geometry::{Mesh, MeshVertex, PackedMesh, SectionCutter, SectionIndex};
+
+const UNIT: f32 = 65535.0;
 
 #[test]
 fn fills_the_even_odd_cross_section_of_a_packed_object() {
+    let mut cutter = SectionCutter::new();
     let mut vertices = Vec::new();
     let pack = PackedMesh::new(cube([0.0, 0.0, 0.0], 0.5, 0));
-    assert!(cross_section(&pack, 0, 2, 0.0, &mut vertices) > 0);
+    assert!(cutter.cut(&pack, 0, 2, 0.0, &mut vertices) > 0);
     assert!(
         (area(&vertices) - 1.0).abs() < 1.0e-3,
         "the cut face area: {}",
@@ -12,12 +15,12 @@ fn fills_the_even_odd_cross_section_of_a_packed_object() {
     );
     vertices.clear();
     assert_eq!(
-        cross_section(&pack, 0, 2, 0.75, &mut vertices),
+        cutter.cut(&pack, 0, 2, 0.75, &mut vertices),
         0,
         "a plane beyond the cube meets nothing"
     );
     let hollow = PackedMesh::new(hole());
-    assert!(cross_section(&hollow, 0, 2, 0.0, &mut vertices) > 0);
+    assert!(cutter.cut(&hollow, 0, 2, 0.0, &mut vertices) > 0);
     assert!(
         (area(&vertices) - 0.75).abs() < 1.0e-3,
         "a cavity leaves the ring area: {}",
@@ -25,12 +28,69 @@ fn fills_the_even_odd_cross_section_of_a_packed_object() {
     );
     let second = PackedMesh::new(cube([4.0, 0.0, 0.0], 0.5, 0));
     vertices.clear();
-    assert!(cross_section(&second, 0, 2, 0.0, &mut vertices) > 0);
+    assert!(cutter.cut(&second, 0, 2, 0.0, &mut vertices) > 0);
     assert!(
         (area(&vertices) - 1.0).abs() < 1.0e-3,
         "a translated object keeps its own frame: {}",
         area(&vertices)
     );
+}
+
+#[test]
+fn indexes_the_same_cross_section_as_the_full_scan() {
+    let mut cutter = SectionCutter::new();
+    for mesh in [PackedMesh::new(hole()), PackedMesh::new(sphere())] {
+        for axis in 0..3 {
+            let index = SectionIndex::new(&mesh, 0, axis);
+            let group = &mesh.groups()[0];
+            let low = group.min()[axis];
+            let high = low + UNIT * group.scale()[axis];
+            for step in 0..=32 {
+                let plane = low + (high - low) * step as f32 / 32.0;
+                let mut direct = Vec::new();
+                let mut indexed = Vec::new();
+                let scanned = cutter.cut(&mesh, 0, axis, plane, &mut direct);
+                let selected = cutter.cut_indexed(&mesh, 0, axis, plane, &index, &mut indexed);
+                assert_eq!(scanned, selected, "the index loses a quad at {plane}");
+                assert_eq!(direct, indexed, "the index cuts a different face");
+            }
+        }
+    }
+}
+
+fn sphere() -> Mesh {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let rings = 24u32;
+    let slices = 32u32;
+    for ring in 0..=rings {
+        let polar = std::f32::consts::PI * ring as f32 / rings as f32;
+        for slice in 0..slices {
+            let azimuth = std::f32::consts::TAU * slice as f32 / slices as f32;
+            let normal = [
+                polar.sin() * azimuth.cos(),
+                polar.sin() * azimuth.sin(),
+                polar.cos(),
+            ];
+            vertices.push(MeshVertex::new(normal, normal, 0));
+        }
+    }
+    for ring in 0..rings {
+        for slice in 0..slices {
+            let next = (slice + 1) % slices;
+            let base = ring * slices;
+            let following = (ring + 1) * slices;
+            indices.extend_from_slice(&[
+                base + slice,
+                following + slice,
+                following + next,
+                base + slice,
+                following + next,
+                base + next,
+            ]);
+        }
+    }
+    Mesh::new(vertices, indices)
 }
 
 fn area(vertices: &[[f32; 2]]) -> f32 {

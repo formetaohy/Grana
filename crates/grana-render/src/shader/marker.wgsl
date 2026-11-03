@@ -5,8 +5,6 @@ struct MarkerInstance {
 
 @group(1) @binding(0) var<storage, read> markers: array<MarkerInstance>;
 @group(1) @binding(1) var<storage, read> order: array<u32>;
-@group(4) @binding(0) var previous_depth: texture_depth_2d;
-@group(4) @binding(1) var opaque_depth: texture_depth_2d;
 
 struct MarkerOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -101,18 +99,15 @@ fn fs_main(input: MarkerOutput) -> MarkerFragment {
 }
 
 @fragment
-fn fs_layer(input: MarkerOutput) -> MarkerFragment {
+fn fs_oit(input: MarkerOutput) {
     let shaded = shade(input);
-    let pixel = vec2<i32>(input.clip_position.xy);
-    if (shaded.depth > textureLoad(opaque_depth, pixel, 0)
-        || shaded.depth <= textureLoad(previous_depth, pixel, 0)) {
-        discard;
-    }
-    let alpha = shaded.color.a;
-    var output: MarkerFragment;
-    output.color = vec4<f32>(shaded.color.rgb * alpha, alpha);
-    output.depth = shaded.depth;
-    return output;
+    oit_push(
+        vec2<i32>(frame.viewport.xy),
+        vec2<i32>(frame.viewport.zw),
+        vec2<i32>(input.clip_position.xy),
+        shaded.depth,
+        vec4<f32>(shaded.color.rgb * shaded.color.a, shaded.color.a),
+    );
 }
 
 @fragment
@@ -121,25 +116,5 @@ fn fs_pick(input: MarkerOutput) -> PickFragment {
     var output: PickFragment;
     output.id = vec2<u32>(2u, input.marker + 1u);
     output.depth = shaded.depth;
-    return output;
-}
-
-struct TailFragment {
-    @location(0) color: vec4<f32>,
-    @location(1) distance: f32,
-}
-
-@fragment
-fn fs_tail(input: MarkerOutput) -> TailFragment {
-    let shaded = shade(input);
-    let pixel = vec2<i32>(input.clip_position.xy);
-    if (shaded.depth > textureLoad(opaque_depth, pixel, 0)
-        || shaded.depth <= textureLoad(previous_depth, pixel, 0)) {
-        discard;
-    }
-    let alpha = shaded.color.a;
-    var output: TailFragment;
-    output.color = vec4<f32>(shaded.color.rgb * alpha, alpha);
-    output.distance = length(frame.eye.xyz - shaded.surface);
     return output;
 }

@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use grana_display::Camera;
-use grana_geometry::{PackedMesh, cross_section, is_closed};
+use grana_geometry::{PackedMesh, SectionCutter, SectionIndex, is_closed};
 use grana_gpu::Table;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Buffer, BufferUsages,
@@ -35,10 +35,13 @@ const QUAD_INDICES: [u32; 6] = [0, 1, 2, 0, 2, 3];
 const QUAD_LIMIT: u32 = 1 << 18;
 const PARALLEL_FLOOR: usize = 8;
 const WORKER_LIMIT: usize = 16;
+const INDEX_FLOOR: usize = 1024;
+const INDEX_BUDGET: u64 = 64 << 20;
 
 type Cut = (u32, Vec<[f32; 2]>);
 
 struct Candidate<'a> {
+    layer: LayerKey,
     mesh: &'a PackedMesh,
     object: usize,
     style: usize,
@@ -91,8 +94,10 @@ pub(crate) struct SlicePass {
     command_capacity: u32,
     runs: Vec<FaceRun>,
     closed: HashMap<LayerKey, Vec<Option<bool>>>,
+    index: SectionCache,
     staged: Vec<FaceVertex>,
-    scratch: Vec<[f32; 2]>,
+    cutter: SectionCutter,
+    cut_vertices: Vec<[f32; 2]>,
     span_key: Option<u64>,
     objects: u32,
     draws: u32,
@@ -217,8 +222,10 @@ impl SlicePass {
             command_capacity: 1,
             runs: Vec::new(),
             closed: HashMap::new(),
+            index: SectionCache::new(),
             staged: Vec::new(),
-            scratch: Vec::new(),
+            cutter: SectionCutter::new(),
+            cut_vertices: Vec::new(),
             span_key: None,
             objects: 0,
             draws: 0,
@@ -318,6 +325,7 @@ impl SlicePass {
                     continue;
                 }
                 candidates.push(Candidate {
+                    layer: layer.key,
                     mesh,
                     object,
                     style: layer.style_start + object,
@@ -326,6 +334,7 @@ impl SlicePass {
                 });
             }
         }
+        self.index.prepare(&candidates, axis);
         let cuts = self.cut(&candidates, axis, plane);
         for (candidate, (quads, vertices)) in candidates.iter().zip(cuts) {
             assert!(
@@ -353,22 +362,24 @@ impl SlicePass {
         }
         self.closed
             .retain(|key, _| scene.layers.iter().any(|layer| layer.key == *key));
+        self.index
+            .retain(|key| scene.layers.iter().any(|layer| layer.key == *key));
     }
 
     fn cut(&mut self, candidates: &[Candidate<'_>], axis: usize, plane: f32) -> Vec<Cut> {
+        let Self {
+            cutter,
+            cut_vertices,
+            index,
+            ..
+        } = self;
         if candidates.len() < PARALLEL_FLOOR {
             return candidates
                 .iter()
                 .map(|candidate| {
-                    self.scratch.clear();
-                    let quads = cross_section(
-                        candidate.mesh,
-                        candidate.object,
-                        axis,
-                        plane,
-                        &mut self.scratch,
-                    );
-                    (quads as u32, std::mem::take(&mut self.scratch))
+                    cut_vertices.clear();
+                    let quads = cut_object(cutter, index, candidate, axis, plane, cut_vertices);
+                    (quads as u32, std::mem::take(cut_vertices))
                 })
                 .collect();
         }
@@ -378,27 +389,31 @@ impl SlicePass {
             .min(candidates.len());
         let next = AtomicUsize::new(0);
         let (sender, receiver) = mpsc::channel();
+        let index = &*index;
         std::thread::scope(|scope| {
             for _ in 0..workers {
                 let sender = sender.clone();
                 let next = &next;
                 scope.spawn(move || {
-                    let mut scratch = Vec::new();
+                    let mut cutter = SectionCutter::new();
+                    let mut vertices = Vec::new();
                     loop {
-                        let index = next.fetch_add(1, Ordering::Relaxed);
-                        if index >= candidates.len() {
+                        let slot = next.fetch_add(1, Ordering::Relaxed);
+                        if slot >= candidates.len() {
                             break;
                         }
-                        let candidate = &candidates[index];
-                        let quads = cross_section(
-                            candidate.mesh,
-                            candidate.object,
+                        vertices.clear();
+                        let quads = cut_object(
+                            &mut cutter,
+                            index,
+                            &candidates[slot],
                             axis,
                             plane,
-                            &mut scratch,
+                            &mut vertices,
                         );
-                        let vertices = std::mem::take(&mut scratch);
-                        if sender.send((index, quads as u32, vertices)).is_err() {
+                        let quads = quads as u32;
+                        let vertices = std::mem::take(&mut vertices);
+                        if sender.send((slot, quads, vertices)).is_err() {
                             break;
                         }
                     }
@@ -507,6 +522,117 @@ impl SlicePass {
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         pass.set_index_buffer(self.indices.slice(..), IndexFormat::Uint32);
         pass.multi_draw_indexed_indirect(&self.commands, 0, self.objects);
+    }
+}
+
+fn cut_object(
+    cutter: &mut SectionCutter,
+    index: &SectionCache,
+    candidate: &Candidate<'_>,
+    axis: usize,
+    plane: f32,
+    vertices: &mut Vec<[f32; 2]>,
+) -> usize {
+    match index.get(candidate.layer, candidate.object, axis) {
+        Some(section) => cutter.cut_indexed(
+            candidate.mesh,
+            candidate.object,
+            axis,
+            plane,
+            section,
+            vertices,
+        ),
+        None => cutter.cut(candidate.mesh, candidate.object, axis, plane, vertices),
+    }
+}
+
+struct CachedIndex {
+    axis: usize,
+    index: SectionIndex,
+    used: u64,
+    bytes: u64,
+}
+
+struct SectionCache {
+    entries: HashMap<(LayerKey, usize), CachedIndex>,
+    resident: u64,
+    order: u64,
+}
+
+impl SectionCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            resident: 0,
+            order: 0,
+        }
+    }
+
+    fn prepare(&mut self, candidates: &[Candidate<'_>], axis: usize) {
+        self.order += 1;
+        let order = self.order;
+        for candidate in candidates {
+            let count = candidate.mesh.groups()[candidate.object].index_count() as usize / 3;
+            if count < INDEX_FLOOR {
+                continue;
+            }
+            let key = (candidate.layer, candidate.object);
+            if let Some(entry) = self.entries.get_mut(&key)
+                && entry.axis == axis
+            {
+                entry.used = order;
+                continue;
+            }
+            let index = SectionIndex::new(candidate.mesh, candidate.object, axis);
+            let bytes = index.bytes();
+            let cached = CachedIndex {
+                axis,
+                index,
+                used: order,
+                bytes,
+            };
+            if let Some(previous) = self.entries.insert(key, cached) {
+                self.resident = self.resident.saturating_sub(previous.bytes);
+            }
+            self.resident += bytes;
+        }
+        self.evict(order);
+    }
+
+    fn get(&self, layer: LayerKey, object: usize, axis: usize) -> Option<&SectionIndex> {
+        self.entries
+            .get(&(layer, object))
+            .filter(|entry| entry.axis == axis)
+            .map(|entry| &entry.index)
+    }
+
+    fn evict(&mut self, order: u64) {
+        while self.resident > INDEX_BUDGET {
+            let victim = self
+                .entries
+                .iter()
+                .filter(|(_, entry)| entry.used < order)
+                .min_by_key(|(_, entry)| entry.used)
+                .map(|(key, _)| *key);
+            let Some(key) = victim else {
+                break;
+            };
+            if let Some(entry) = self.entries.remove(&key) {
+                self.resident -= entry.bytes;
+            }
+        }
+    }
+
+    fn retain(&mut self, keep: impl Fn(&LayerKey) -> bool) {
+        let mut resident = 0u64;
+        self.entries.retain(|key, entry| {
+            let kept = keep(&key.0);
+            if kept {
+                resident += entry.bytes;
+            }
+            kept
+        });
+        self.resident = resident;
     }
 }
 

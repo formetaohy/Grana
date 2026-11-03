@@ -7,6 +7,7 @@ mod image;
 mod layout;
 mod marker;
 mod mesh;
+mod oit;
 mod pick;
 mod planner;
 mod present;

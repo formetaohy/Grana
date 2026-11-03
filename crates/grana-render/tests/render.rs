@@ -905,6 +905,86 @@ fn composites_transparent_surfaces_beyond_the_layers() {
     );
 }
 
+#[test]
+fn orders_transparent_surfaces_independently_of_draw_order() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = empty_volume();
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let forward = (0..8).collect::<Vec<_>>();
+    let backward = (0..8).rev().collect::<Vec<_>>();
+    let red = [1.0, 0.12, 0.12];
+    let blue = [0.12, 0.2, 1.0];
+    let styles = |order: &[usize]| {
+        order
+            .iter()
+            .map(|depth| style_of(*depth, red, blue, true))
+            .collect::<Vec<_>>()
+    };
+    let near_styles = styles(&forward);
+    let far_styles = styles(&backward);
+    let near = PackedMesh::new(stacked_view(&camera, &forward));
+    let far = PackedMesh::new(stacked_view(&camera, &backward));
+    let near = framing_scene(
+        &device,
+        &queue,
+        Job {
+            texture: &texture,
+            volume: &volume,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            focus_z: 0.0,
+            mesh: Some((&near, &near_styles)),
+        },
+        &camera,
+        None,
+    );
+    let far = framing_scene(
+        &device,
+        &queue,
+        Job {
+            texture: &texture,
+            volume: &volume,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            focus_z: 0.0,
+            mesh: Some((&far, &far_styles)),
+        },
+        &camera,
+        None,
+    );
+    assert!(
+        near == far,
+        "the transparent surfaces composite in draw order instead of depth order"
+    );
+}
+
+fn stacked_view(camera: &Camera, order: &[usize]) -> Mesh {
+    let eye = camera.eye();
+    let forward = camera.forward();
+    let right = camera.right();
+    let up = camera.up();
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for (object, depth) in order.iter().enumerate() {
+        let centre = eye + forward * (5.6 + 0.4 * *depth as f32);
+        let base = vertices.len() as u32;
+        for corner in [[-1.0f32, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]] {
+            let position = centre + (right * corner[0] + up * corner[1]) * 0.9;
+            vertices.push(MeshVertex::new(
+                position.to_array(),
+                (-forward).to_array(),
+                object as u32,
+            ));
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    Mesh::new(vertices, indices)
+}
+
 fn style_of(index: usize, red: [f32; 3], blue: [f32; 3], visible: bool) -> Style {
     if index < 4 {
         Style::new(red, visible, false, 0.15)

@@ -23,6 +23,7 @@ use crate::frame::{FrameData, SectionData, VolumeView};
 use crate::layout::Layouts;
 use crate::marker::MarkerPasses;
 use crate::mesh::MeshPasses;
+use crate::oit::Oit;
 use crate::pick::{self, PICK_ROW, PickId, PickPane, PickTarget};
 use crate::planner::{
     self, Demand, Planner, Schedule, SectionRange, bucket_scale, decode_plan,
@@ -35,7 +36,7 @@ use crate::schema::SceneFrame;
 use crate::section::SectionPass;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
 use crate::slice::SlicePass;
-use crate::target::{self, LAYER_COUNT, LayerTargets, SceneTarget};
+use crate::target::{self, SceneTarget};
 use crate::volume::VolumePass;
 use grana_display::{Camera, SectionCamera};
 use grana_volume::CHANNEL_LIMIT;
@@ -173,54 +174,10 @@ struct FrameTarget {
     accumulation: TextureView,
     accumulate_group: BindGroup,
     present_group: BindGroup,
-    layers: Option<Layers>,
+    oit: Option<Oit>,
     size: [u32; 2],
     samples: u32,
     signature: Option<u64>,
-}
-
-struct Layers {
-    targets: LayerTargets,
-    volume_group: BindGroup,
-    peel_groups: Vec<BindGroup>,
-    tail_group: BindGroup,
-    size: [u32; 2],
-}
-
-impl Layers {
-    fn new(
-        device: &Device,
-        layouts: &Layouts,
-        opaque: &TextureView,
-        empty: &TextureView,
-        size: [u32; 2],
-    ) -> Self {
-        let targets = LayerTargets::new(device, size, "grana.layer");
-        let volume_group = crate::target::layer_group(device, &layouts.layers, &targets);
-        let peel_groups = (0..LAYER_COUNT)
-            .map(|index| {
-                let previous = if index == 0 {
-                    empty
-                } else {
-                    targets.depth(index - 1)
-                };
-                crate::target::peel_group(device, &layouts.peel, previous, opaque)
-            })
-            .collect();
-        let tail_group = crate::target::peel_group(
-            device,
-            &layouts.peel,
-            targets.depth(LAYER_COUNT - 1),
-            opaque,
-        );
-        Self {
-            targets,
-            volume_group,
-            peel_groups,
-            tail_group,
-            size,
-        }
-    }
 }
 
 impl FrameTarget {
@@ -239,7 +196,7 @@ impl FrameTarget {
             accumulation,
             accumulate_group,
             present_group,
-            layers: None,
+            oit: None,
             size,
             samples: 0,
             signature: None,
@@ -264,8 +221,7 @@ pub struct Renderer {
     meshes: MeshPasses,
     markers: MarkerPasses,
     dummy: TextureView,
-    empty_depth: TextureView,
-    dummy_layer_group: BindGroup,
+    dummy_oit: Oit,
     atlas_sampler: Sampler,
     pyramid: Option<Pyramid>,
     channels: usize,
@@ -295,9 +251,7 @@ impl Renderer {
         assert!(budget > 0, "a renderer needs a residency budget");
         let layouts = Layouts::new(device);
         let dummy = dummy_texture(device, queue);
-        let empty_depth = crate::target::depth_placeholder(device, queue, 0.0);
-        let dummy_layers = LayerTargets::new(device, [1, 1], "grana.layer.dummy");
-        let dummy_layer_group = crate::target::layer_group(device, &layouts.layers, &dummy_layers);
+        let dummy_oit = Oit::new(device, &layouts, [0, 0, 1, 1]);
         let atlas_sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("grana.atlas.sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -325,8 +279,7 @@ impl Renderer {
             markers: MarkerPasses::new(device, &layouts),
             layouts,
             dummy,
-            empty_depth,
-            dummy_layer_group,
+            dummy_oit,
             atlas_sampler,
             pyramid: None,
             channels: 0,
@@ -733,8 +686,7 @@ impl Renderer {
             transparent,
             object_key,
             info,
-            empty_depth,
-            dummy_layer_group,
+            dummy_oit,
             ..
         } = self;
         let (Some(pyramid), Some(atlas), Some(scene_table), Some(planner), Some(census)) = (
@@ -875,37 +827,29 @@ impl Renderer {
             *channels,
             space,
         );
-        let layers = if scene
+        let translucent = scene
             .styles
             .iter()
             .any(|style| style.visible() && style.transparent())
-            || scene.markers.iter().any(|marker| marker.transparent())
-        {
-            LAYER_COUNT
-        } else {
-            0
-        };
-        frame_data.layers = [layers as u32, u32::from(layers > 0), 0, 0];
-        if layers == 0 {
-            target.layers = None;
-        }
-        if layers > 0
+            || scene.markers.iter().any(|marker| marker.transparent());
+        frame_data.viewport = [
+            volume_region[0] as f32,
+            volume_region[1] as f32,
+            volume_region[2] as f32,
+            volume_region[3] as f32,
+        ];
+        frame_data.oit = [u32::from(translucent), 0, 0, 0];
+        if translucent
             && target
-                .layers
+                .oit
                 .as_ref()
-                .is_none_or(|value| value.size != size)
+                .is_none_or(|oit| oit.pixels() != volume_width * volume_height)
         {
-            target.layers = Some(Layers::new(
-                device,
-                layouts,
-                target.scene.depth(),
-                empty_depth,
-                size,
-            ));
+            target.oit = Some(Oit::new(device, layouts, volume_region));
         }
-        let layer_group = match target.layers.as_ref() {
-            Some(value) if layers > 0 => &value.volume_group,
-            _ => dummy_layer_group,
+        let oit_group = match target.oit.as_ref() {
+            Some(oit) if translucent => oit.read_group(),
+            _ => dummy_oit.read_group(),
         };
         let signature = Signature {
             scene,
@@ -1041,17 +985,37 @@ impl Renderer {
                 volume_region,
                 scene_group,
             );
-            if let Some(layers) = target.layers.as_ref().filter(|_| layers > 0) {
-                layers.encode(
-                    &mut encoder,
-                    LayerFrame {
-                        region: volume_region,
-                        scene: scene_group,
-                        shadow: shadow_group,
-                        meshes,
-                        markers,
-                    },
+            if let Some(oit) = target.oit.as_ref().filter(|_| translucent) {
+                oit.clear(&mut encoder);
+                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: Some("grana.oit.pass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                        view: target.scene.depth(),
+                        depth_ops: Some(Operations {
+                            load: LoadOp::Load,
+                            store: StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    ..Default::default()
+                });
+                pass.set_viewport(
+                    volume_region[0] as f32,
+                    volume_region[1] as f32,
+                    volume_width as f32,
+                    volume_height as f32,
+                    0.0,
+                    1.0,
                 );
+                pass.set_scissor_rect(
+                    volume_region[0],
+                    volume_region[1],
+                    volume_width,
+                    volume_height,
+                );
+                meshes.draw_oit(&mut pass, shadow_group, oit.write_group());
+                markers.draw_oit(&mut pass, scene_group, oit.write_group());
             }
             volume.draw(
                 &mut encoder,
@@ -1063,7 +1027,7 @@ impl Renderer {
                     atlas: atlas.group(),
                     depth_group: target.scene.depth_group(),
                     shadow: shadow_group,
-                    layers: layer_group,
+                    oit: oit_group,
                 },
             );
             section_pass.draw(
@@ -1435,98 +1399,6 @@ fn ensure_brick(
 ) {
     if bricks[level].is_none() {
         bricks[level] = Some(BrickTable::new(device, layout, level, source, atlas));
-    }
-}
-
-struct LayerFrame<'a> {
-    region: [u32; 4],
-    scene: &'a BindGroup,
-    shadow: &'a BindGroup,
-    meshes: &'a crate::mesh::MeshPasses,
-    markers: &'a MarkerPasses,
-}
-
-impl Layers {
-    fn encode(&self, encoder: &mut CommandEncoder, frame: LayerFrame<'_>) {
-        let LayerFrame {
-            region,
-            scene,
-            shadow,
-            meshes,
-            markers,
-        } = frame;
-        let width = region[2].max(1);
-        let height = region[3].max(1);
-        for index in 0..LAYER_COUNT {
-            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("grana.layer.pass"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: self.targets.color(index),
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                    view: self.targets.depth(index),
-                    depth_ops: Some(Operations {
-                        load: LoadOp::Clear(1.0),
-                        store: StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                ..Default::default()
-            });
-            pass.set_viewport(
-                region[0] as f32,
-                region[1] as f32,
-                width as f32,
-                height as f32,
-                0.0,
-                1.0,
-            );
-            pass.set_scissor_rect(region[0], region[1], width, height);
-            meshes.draw_layer(&mut pass, shadow, &self.peel_groups[index]);
-            markers.draw_layer(&mut pass, scene, &self.peel_groups[index]);
-        }
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.tail.pass"),
-            color_attachments: &[
-                Some(RenderPassColorAttachment {
-                    view: self.targets.tail_color(),
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: StoreOp::Store,
-                    },
-                }),
-                Some(RenderPassColorAttachment {
-                    view: self.targets.tail_distance(),
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: StoreOp::Store,
-                    },
-                }),
-            ],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-        pass.set_viewport(
-            region[0] as f32,
-            region[1] as f32,
-            width as f32,
-            height as f32,
-            0.0,
-            1.0,
-        );
-        pass.set_scissor_rect(region[0], region[1], width, height);
-        meshes.draw_tail(&mut pass, shadow, &self.tail_group);
-        markers.draw_tail(&mut pass, scene, &self.tail_group);
     }
 }
 

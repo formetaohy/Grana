@@ -32,7 +32,7 @@ pub(crate) struct FrameData {
     pub light_view: [[f32; 4]; 4],
     pub light_inverse: [[f32; 4]; 4],
     pub light_reach: [f32; 4],
-    pub layers: [u32; 4],
+    pub oit: [u32; 4],
 }
 
 #[repr(C)]
@@ -129,13 +129,13 @@ impl FrameData {
                 shading.shininess,
             ],
             march: [step, shading.shadows, channels as f32, pixel_scale],
-            viewport: [aspect * height as f32, height as f32, 0.0, 0.0],
+            viewport: [0.0; 4],
             jitter: [0.0; 4],
             planes: planes(view_projection),
             light_view: space.view().to_cols_array_2d(),
             light_inverse: space.inverse().to_cols_array_2d(),
             light_reach: space.reach(),
-            layers: [0; 4],
+            oit: [0; 4],
         }
     }
 }

@@ -51,7 +51,7 @@ pub(crate) struct VolumeFrame<'a> {
     pub atlas: &'a BindGroup,
     pub depth_group: &'a BindGroup,
     pub shadow: &'a BindGroup,
-    pub layers: &'a BindGroup,
+    pub oit: &'a BindGroup,
 }
 
 impl VolumePass {
@@ -120,7 +120,7 @@ impl VolumePass {
         pass.set_bind_group(2, frame.atlas, &[]);
         pass.set_bind_group(3, frame.depth_group, &[]);
         pass.set_bind_group(4, frame.shadow, &[]);
-        pass.set_bind_group(5, frame.layers, &[]);
+        pass.set_bind_group(5, frame.oit, &[]);
         pass.draw(0..3, 0..1);
     }
 }

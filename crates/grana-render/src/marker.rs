@@ -13,8 +13,7 @@ use wgpu::{
 
 use crate::cut;
 use crate::layout::Layouts;
-use crate::mesh::{farthest, tail_over};
-use crate::target::{PICK_FORMAT, SCENE_FORMAT, TAIL_DISTANCE_FORMAT};
+use crate::target::{PICK_FORMAT, SCENE_FORMAT};
 use crate::volume::depth_state;
 use grana_display::srgb_to_linear;
 
@@ -25,6 +24,8 @@ const CULL_SHADER: &str = concat!(
 );
 const VOLUME_SHADER: &str = concat!(
     include_str!("shader/scene.wgsl"),
+    "\n",
+    include_str!("shader/oit.wgsl"),
     "\n",
     include_str!("shader/marker.wgsl")
 );
@@ -119,8 +120,7 @@ pub(crate) struct MarkerPasses {
     behind_cull: ComputePipeline,
     front_cull: ComputePipeline,
     volume_pipeline: RenderPipeline,
-    layer_pipeline: RenderPipeline,
-    tail_pipeline: RenderPipeline,
+    oit_pipeline: RenderPipeline,
     section_pipeline: RenderPipeline,
     section_pick_pipeline: RenderPipeline,
     volume_pick_pipeline: RenderPipeline,
@@ -224,9 +224,9 @@ impl MarkerPasses {
             multiview_mask: None,
             cache: None,
         });
-        let layer_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.marker.layer"),
-            layout: Some(&layouts.marker_layer),
+        let oit_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.marker.oit"),
+            layout: Some(&layouts.marker_oit),
             vertex: VertexState {
                 module: &volume_module,
                 entry_point: Some("vs_main"),
@@ -237,17 +237,13 @@ impl MarkerPasses {
                 cull_mode: None,
                 ..Default::default()
             },
-            depth_stencil: Some(depth_state(true, CompareFunction::Less)),
+            depth_stencil: Some(depth_state(false, CompareFunction::Less)),
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &volume_module,
-                entry_point: Some("fs_layer"),
+                entry_point: Some("fs_oit"),
                 compilation_options: Default::default(),
-                targets: &[Some(ColorTargetState {
-                    format: SCENE_FORMAT,
-                    blend: None,
-                    write_mask: ColorWrites::ALL,
-                })],
+                targets: &[],
             }),
             multiview_mask: None,
             cache: None,
@@ -281,41 +277,6 @@ impl MarkerPasses {
                         format: crate::target::CUT_ID_FORMAT,
                         blend: None,
                         write_mask: ColorWrites::empty(),
-                    }),
-                ],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        let tail_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.marker.tail"),
-            layout: Some(&layouts.marker_layer),
-            vertex: VertexState {
-                module: &volume_module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: PrimitiveState {
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: MultisampleState::default(),
-            fragment: Some(FragmentState {
-                module: &volume_module,
-                entry_point: Some("fs_tail"),
-                compilation_options: Default::default(),
-                targets: &[
-                    Some(ColorTargetState {
-                        format: SCENE_FORMAT,
-                        blend: Some(tail_over()),
-                        write_mask: ColorWrites::ALL,
-                    }),
-                    Some(ColorTargetState {
-                        format: TAIL_DISTANCE_FORMAT,
-                        blend: Some(farthest()),
-                        write_mask: ColorWrites::ALL,
                     }),
                 ],
             }),
@@ -419,8 +380,7 @@ impl MarkerPasses {
             behind_cull,
             front_cull,
             volume_pipeline,
-            layer_pipeline,
-            tail_pipeline,
+            oit_pipeline,
             section_pipeline,
             section_pick_pipeline,
             volume_pick_pipeline,
@@ -574,35 +534,19 @@ impl MarkerPasses {
         pass.draw_indirect(self.opaque_args.buffer(), 0);
     }
 
-    pub fn draw_layer<'a>(
+    pub fn draw_oit<'a>(
         &'a self,
         pass: &mut RenderPass<'a>,
         scene: &'a BindGroup,
-        peel: &'a BindGroup,
+        oit: &'a BindGroup,
     ) {
         if self.count == 0 {
             return;
         }
-        pass.set_pipeline(&self.layer_pipeline);
+        pass.set_pipeline(&self.oit_pipeline);
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.layer_group, &[]);
-        pass.set_bind_group(4, peel, &[]);
-        pass.draw_indirect(self.layer_args.buffer(), 0);
-    }
-
-    pub fn draw_tail<'a>(
-        &'a self,
-        pass: &mut RenderPass<'a>,
-        scene: &'a BindGroup,
-        peel: &'a BindGroup,
-    ) {
-        if self.count == 0 {
-            return;
-        }
-        pass.set_pipeline(&self.tail_pipeline);
-        pass.set_bind_group(0, scene, &[]);
-        pass.set_bind_group(1, &self.layer_group, &[]);
-        pass.set_bind_group(4, peel, &[]);
+        pass.set_bind_group(4, oit, &[]);
         pass.draw_indirect(self.layer_args.buffer(), 0);
     }
 
