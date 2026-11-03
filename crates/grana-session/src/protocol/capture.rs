@@ -5,7 +5,7 @@ use grana_scene::{Measure, ObjectColor, ObjectKind, ObjectParams, Scene, TrackCo
 use super::{
     ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, DetectionSpec, FilterSpec,
     LassoSpec, MeasureSpec, Protocol, ProtocolError, RegionSpec, RelationSpec, RenderSpec, SetSpec,
-    SortSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    SnapshotSpec, SortSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -130,19 +130,22 @@ impl Protocol {
                 mask,
             })
         };
-        Self::build(
-            RegionSpec::of(scene.region, scene.dataset.world_size()),
-            Some(RenderSpec::of(
+        let snapshot = Some(SnapshotSpec::of(view.as_ref().and_then(ViewSpec::export)));
+        Protocol {
+            region: RegionSpec::of(scene.region, scene.dataset.world_size()),
+            render: Some(RenderSpec::of(
                 scene.shading,
                 scene.exposure,
                 scene.step_scale,
             )),
-            specs,
+            channels: specs,
             sets,
             relations,
             coloc,
             view,
-        )
+            snapshot,
+        }
+        .checked()
     }
 }
 

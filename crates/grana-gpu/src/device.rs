@@ -1,10 +1,12 @@
 use wgpu::{
-    CurrentSurfaceTexture, Device, DeviceDescriptor, ExperimentalFeatures, Instance,
+    Adapter, CurrentSurfaceTexture, Device, DeviceDescriptor, ExperimentalFeatures, Instance,
     InstanceDescriptor, MemoryHints, PowerPreference, PresentMode, Queue, RequestAdapterOptions,
     Surface, SurfaceColorSpace, SurfaceConfiguration, TextureFormat, TextureUsages, Trace,
 };
 
 use crate::REQUIRED_FEATURES;
+
+pub const HEADLESS_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
 pub struct Gpu {
     pub surface: Surface<'static>,
@@ -14,37 +16,34 @@ pub struct Gpu {
     pub adapter: String,
 }
 
+pub struct Headless {
+    pub device: Device,
+    pub queue: Queue,
+}
+
+impl Headless {
+    pub fn new() -> Result<Self, String> {
+        let instance = Instance::new(InstanceDescriptor::new_without_display_handle());
+        let (_, device, queue) = acquire(&instance, None)?;
+        Ok(Self { device, queue })
+    }
+
+    pub fn format(&self) -> TextureFormat {
+        HEADLESS_FORMAT
+    }
+}
+
 impl Gpu {
     pub fn new(window: impl Into<wgpu::SurfaceTarget<'static>>, size: [u32; 2]) -> Self {
         let instance = Instance::new(InstanceDescriptor::new_without_display_handle());
         let surface = instance
             .create_surface(window)
             .expect("failed to create a window surface");
-        let options = |fallback: bool| RequestAdapterOptions {
-            power_preference: PowerPreference::HighPerformance,
-            force_fallback_adapter: fallback,
-            compatible_surface: Some(&surface),
-            apply_limit_buckets: false,
-        };
-        let adapter = pollster::block_on(instance.request_adapter(&options(false)))
-            .or_else(|_| pollster::block_on(instance.request_adapter(&options(true))))
-            .expect("no graphics adapter can present to this window");
-        assert!(
-            adapter.features().contains(REQUIRED_FEATURES),
-            "the graphics adapter cannot stream packed volume bricks"
-        );
+        let (adapter, device, queue) =
+            acquire(&instance, Some(&surface)).unwrap_or_else(|detail| panic!("{detail}"));
         let info = adapter.get_info();
         let description = format!("{} · {:?}", info.name, info.backend);
         println!("grana: using {description}");
-        let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
-            label: Some("grana"),
-            required_features: REQUIRED_FEATURES,
-            required_limits: adapter.limits(),
-            experimental_features: ExperimentalFeatures::disabled(),
-            memory_hints: MemoryHints::Performance,
-            trace: Trace::Off,
-        }))
-        .expect("failed to create a graphics device");
         let capabilities = surface.get_capabilities(&adapter);
         let format = capabilities
             .formats
@@ -103,4 +102,32 @@ impl Gpu {
             | CurrentSurfaceTexture::Validation => None,
         }
     }
+}
+
+fn acquire(
+    instance: &Instance,
+    surface: Option<&Surface<'static>>,
+) -> Result<(Adapter, Device, Queue), String> {
+    let options = |fallback: bool| RequestAdapterOptions {
+        power_preference: PowerPreference::HighPerformance,
+        force_fallback_adapter: fallback,
+        compatible_surface: surface,
+        apply_limit_buckets: false,
+    };
+    let adapter = pollster::block_on(instance.request_adapter(&options(false)))
+        .or_else(|_| pollster::block_on(instance.request_adapter(&options(true))))
+        .map_err(|_| "no graphics adapter is available".to_string())?;
+    if !adapter.features().contains(REQUIRED_FEATURES) {
+        return Err("the graphics adapter cannot stream packed volume bricks".to_string());
+    }
+    let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
+        label: Some("grana"),
+        required_features: REQUIRED_FEATURES,
+        required_limits: adapter.limits(),
+        experimental_features: ExperimentalFeatures::disabled(),
+        memory_hints: MemoryHints::Performance,
+        trace: Trace::Off,
+    }))
+    .map_err(|error| format!("failed to create a graphics device: {error}"))?;
+    Ok((adapter, device, queue))
 }

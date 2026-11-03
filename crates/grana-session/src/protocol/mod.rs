@@ -13,8 +13,8 @@ use thiserror::Error;
 pub use spec::{
     AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec,
     DetectionSpec, ExportSpec, FilterSpec, KeySpec, LassoSpec, MeasureSpec, RegionSpec,
-    RelationSpec, RenderSpec, SectionSpec, SetSpec, ShadingSpec, SortSpec, StopSpec, TimelineSpec,
-    TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    RelationSpec, RenderSpec, SectionSpec, SetSpec, ShadingSpec, SnapshotSpec, SortSpec, StopSpec,
+    TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub(crate) use step::Step;
@@ -35,6 +35,8 @@ pub struct Protocol {
     coloc: Option<ColocSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     view: Option<ViewSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    snapshot: Option<SnapshotSpec>,
 }
 
 #[derive(Debug, Error)]
@@ -50,27 +52,6 @@ pub enum ProtocolError {
 }
 
 impl Protocol {
-    pub(crate) fn build(
-        region: Option<RegionSpec>,
-        render: Option<RenderSpec>,
-        channels: Vec<ChannelSpec>,
-        sets: Vec<SetSpec>,
-        relations: Vec<RelationSpec>,
-        coloc: Option<ColocSpec>,
-        view: Option<ViewSpec>,
-    ) -> Result<Self, ProtocolError> {
-        Self {
-            region,
-            render,
-            channels,
-            sets,
-            relations,
-            coloc,
-            view,
-        }
-        .checked()
-    }
-
     pub fn region(&self) -> Option<RegionSpec> {
         self.region
     }
@@ -97,6 +78,10 @@ impl Protocol {
 
     pub fn view(&self) -> Option<&ViewSpec> {
         self.view.as_ref()
+    }
+
+    pub fn snapshot(&self) -> Option<SnapshotSpec> {
+        self.snapshot
     }
 
     pub fn to_json(&self) -> Result<String, ProtocolError> {
@@ -192,6 +177,12 @@ impl Protocol {
             summary.push_str(&format!(
                 " · {} fps over {:.1} s",
                 timeline.fps, timeline.duration
+            ));
+        }
+        if let Some(snapshot) = self.snapshot {
+            summary.push_str(&format!(
+                " · snapshot {}×{}",
+                snapshot.width, snapshot.height
             ));
         }
         summary

@@ -1,10 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use grana_session::{Batch, BatchEvent, Outcome, Plan, Protocol, discover};
 use winit::event_loop::{ControlFlow, EventLoop};
 
 use crate::app::App;
+use crate::snapshot::Snapshot;
 
 pub fn gui(capture: Option<PathBuf>) -> ExitCode {
     let event_loop = EventLoop::new().expect("failed to create the event loop");
@@ -47,6 +49,7 @@ pub fn batch(
         output: output.to_path_buf(),
         jobs: jobs.unwrap_or_else(grana_session::default_jobs),
         project,
+        snapshot: Some(Arc::new(Snapshot::new())),
     });
     let mut failures = 0;
     while let Some(event) = running.wait() {

@@ -63,9 +63,11 @@ pub struct App {
 
 impl App {
     pub fn new(capture: Option<PathBuf>) -> Self {
+        let mut session = Session::new();
+        session.set_snapshot_factory(Arc::new(|| Arc::new(crate::snapshot::Snapshot::new())));
         Self {
             surface: None,
-            session: Session::new(),
+            session,
             engine: None,
             start: Instant::now(),
             capture,

@@ -1,13 +1,17 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
+use grana_image::Image;
 use grana_measure::Measurement;
 use grana_project::{Project, Source as ProjectSource};
-use grana_scene::ObjectColor;
-use grana_session::{Batch, BatchEvent, Outcome, Plan, Protocol, Session, discover};
+use grana_scene::{ObjectColor, Scene};
+use grana_session::{
+    Batch, BatchEvent, Outcome, Plan, Protocol, Session, SnapshotRequest, Snapshotter, discover,
+};
 
 const EXTENT: [u32; 3] = [40, 40, 8];
 const FRAMES: u32 = 2;
@@ -208,12 +212,24 @@ fn run(
     jobs: usize,
     project: bool,
 ) -> Vec<Status> {
+    run_with(protocol, datasets, output, jobs, project, None)
+}
+
+fn run_with(
+    protocol: &Protocol,
+    datasets: &[PathBuf],
+    output: &Path,
+    jobs: usize,
+    project: bool,
+    snapshot: Option<std::sync::Arc<dyn Snapshotter>>,
+) -> Vec<Status> {
     let batch = Batch::start(Plan {
         protocol: protocol.clone(),
         datasets: datasets.to_vec(),
         output: output.to_path_buf(),
         jobs,
         project,
+        snapshot,
     });
     let mut completed = vec![Status::Failed; datasets.len()];
     while let Some(event) = batch.wait() {
@@ -497,4 +513,125 @@ fn writes_a_project_that_reopens() {
         [Status::Ok],
         "a deleted project invalidates the resume marker"
     );
+}
+
+const SNAPSHOT: &str = r#"
+{
+  "sets": [
+    {
+      "name": "Puncta",
+      "channel": "Cells",
+      "color": [0.3, 0.8, 1.0],
+      "detection": {"kind": "spots", "diameter": 5.0, "contrast": 0.05}
+    }
+  ],
+  "snapshot": {"width": 320, "height": 200}
+}
+"#;
+
+#[test]
+fn renders_a_snapshot_at_the_end_of_every_dataset() {
+    let temp = TempDir::new("grana-batch-snapshot");
+    let root = temp.path().join("datasets");
+    write_dataset(&root.join("alpha.zarr"), "Cells", "Signal");
+    let output = temp.path().join("out");
+    let datasets = discover(&root).expect("the folder lists its datasets");
+    let protocol = Protocol::from_json(SNAPSHOT).expect("the protocol is valid");
+    let recorder = std::sync::Arc::new(Recorder::default());
+    let completed = run_with(
+        &protocol,
+        &datasets,
+        &output,
+        1,
+        false,
+        Some(recorder.clone()),
+    );
+    assert_eq!(completed, [Status::Ok], "the batch finishes");
+    let file = output.join("alpha").join("snapshot.png");
+    assert!(file.is_file(), "the dataset carries its quality snapshot");
+    let record = read(&output.join("alpha").join("result.json"));
+    assert!(record.contains("\"snapshot.png\""), "{record}");
+    let request = recorder
+        .request
+        .lock()
+        .expect("the recorder is readable")
+        .take()
+        .expect("the batch requests one snapshot");
+    assert_eq!(request.size, [320, 200]);
+    assert!(!request.transparent);
+    assert_eq!(request.time, 0);
+    assert!(
+        request.view.is_none(),
+        "a protocol without a view lets the renderer fit its panes"
+    );
+    assert!(request.objects > 0, "the snapshot renders the detected set");
+    assert_eq!(recorder.calls.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        recorder.opened.load(Ordering::Relaxed),
+        1,
+        "the run opens its renderer before any dataset"
+    );
+
+    fs::remove_file(&file).expect("the snapshot is removable");
+    let again = run_with(
+        &protocol,
+        &datasets,
+        &output,
+        1,
+        false,
+        Some(recorder.clone()),
+    );
+    assert_eq!(
+        again,
+        [Status::Ok],
+        "a deleted snapshot invalidates the resume marker"
+    );
+    assert_eq!(recorder.calls.load(Ordering::Relaxed), 2);
+
+    let orphaned = run(&protocol, &datasets, &output, 1, false);
+    assert_eq!(
+        orphaned,
+        [Status::Failed],
+        "a snapshot protocol needs a renderer"
+    );
+}
+
+struct SnapshotCall {
+    size: [u32; 2],
+    transparent: bool,
+    time: u32,
+    view: Option<f32>,
+    objects: usize,
+}
+
+#[derive(Default)]
+struct Recorder {
+    calls: AtomicUsize,
+    opened: AtomicUsize,
+    request: Mutex<Option<SnapshotCall>>,
+}
+
+impl Snapshotter for Recorder {
+    fn open(&self) -> Result<(), String> {
+        self.opened.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn snapshot(
+        &self,
+        _reader: &Image,
+        scene: &Scene,
+        request: &SnapshotRequest,
+        path: &Path,
+    ) -> Result<(), String> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        *self.request.lock().expect("the recorder is writable") = Some(SnapshotCall {
+            size: request.size,
+            transparent: request.transparent,
+            time: request.time,
+            view: request.view.as_ref().map(|view| view.split),
+            objects: scene.objects.iter().map(|set| set.detected()).sum(),
+        });
+        fs::write(path, b"snapshot").map_err(|error| error.to_string())
+    }
 }

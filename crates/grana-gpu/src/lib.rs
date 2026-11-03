@@ -12,7 +12,7 @@ pub const REQUIRED_FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_AR
 
 pub use buffer::storage as storage_buffer;
 pub use command::{IndexedCommands, InstanceCommands};
-pub use device::Gpu;
+pub use device::{Gpu, HEADLESS_FORMAT, Headless};
 pub use readback::Readback;
 pub use table::Table;
 pub use target::Target;

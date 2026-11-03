@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use glam::Vec2;
 use grana_display::{Camera, SectionCamera};
 use grana_engine::{Destination, Engine, Outcome, Panels, Plan, Pose};
-use grana_gpu::REQUIRED_FEATURES;
 use grana_scene::{Dataset, Scene};
 use grana_ui::Rect;
 use grana_volume::{Axis, BrickGrid, Channel, Extent, Spacing, Volume, VoxelData};
@@ -346,28 +345,11 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let options = |fallback: bool| wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: fallback,
-        compatible_surface: None,
-        apply_limit_buckets: false,
-    };
-    let adapter = pollster::block_on(instance.request_adapter(&options(false)))
-        .or_else(|_| pollster::block_on(instance.request_adapter(&options(true))))
-        .ok()?;
-    if !adapter.features().contains(REQUIRED_FEATURES) {
-        println!("the adapter lacks packed brick streaming, skipping");
-        return None;
+    match grana_gpu::Headless::new() {
+        Ok(headless) => Some((headless.device, headless.queue)),
+        Err(detail) => {
+            println!("{detail}, skipping");
+            None
+        }
     }
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("grana.export.test"),
-        required_features: REQUIRED_FEATURES,
-        required_limits: adapter.limits(),
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: wgpu::MemoryHints::Performance,
-        trace: wgpu::Trace::Off,
-    }))
-    .expect("failed to create a test device");
-    Some((device, queue))
 }

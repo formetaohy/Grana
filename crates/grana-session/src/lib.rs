@@ -10,6 +10,7 @@ mod recipe;
 mod run;
 mod sample;
 mod session;
+mod snapshot;
 mod task;
 mod view;
 
@@ -28,9 +29,11 @@ pub use protocol::{
     AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec,
     DetectionSpec, ExportSpec, FilterSpec, KeySpec, LassoSpec, MeasureSpec, Protocol,
     ProtocolError, RegionSpec, RelationSpec, RenderSpec, SectionSpec, SetSpec, ShadingSpec,
-    SortSpec, Staged, StopSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    SnapshotSpec, SortSpec, Staged, StopSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec,
+    WindowSpec,
 };
 pub use run::{ColocRequest, DetectRequest};
 pub use session::{Effects, Session};
+pub use snapshot::{SnapshotFactory, SnapshotRequest, Snapshotter};
 pub use task::Poll;
 pub use view::{BatchDataset, BatchView, HistoryView, IoView, Message, SessionView, StoreView};

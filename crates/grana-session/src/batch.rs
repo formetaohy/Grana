@@ -19,9 +19,11 @@ use thiserror::Error;
 use crate::event::Event as RunEvent;
 use crate::protocol::{Protocol, ProtocolError, Step};
 use crate::run;
+use crate::snapshot::{SnapshotRequest, Snapshotter};
 
 const RESULT: &str = "result.json";
 const PARTIAL: &str = "partial";
+const SNAPSHOT: &str = "snapshot.png";
 pub const MAX_JOBS: usize = 16;
 const DEFAULT_JOBS: usize = 4;
 const ANALYSIS_REVISION: u32 = 5;
@@ -48,6 +50,7 @@ pub struct Plan {
     pub output: PathBuf,
     pub jobs: usize,
     pub project: bool,
+    pub snapshot: Option<Arc<dyn Snapshotter>>,
 }
 
 pub enum Event {
@@ -198,6 +201,7 @@ struct Task<'a> {
     digest: u64,
     index: usize,
     project: bool,
+    snapshot: Option<&'a dyn Snapshotter>,
     events: &'a Sender<Event>,
     cancel: &'a AtomicBool,
 }
@@ -243,6 +247,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
                             digest,
                             index,
                             project: plan.project,
+                            snapshot: plan.snapshot.as_deref(),
                             events: &events,
                             cancel: &cancel,
                         },
@@ -293,6 +298,12 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
 }
 
 fn prepare(plan: &Plan) -> Result<(), String> {
+    if plan.protocol.snapshot().is_some() {
+        let snapshotter = plan.snapshot.as_ref().ok_or_else(|| {
+            "the protocol requests quality snapshots but this run carries no renderer".to_string()
+        })?;
+        snapshotter.open()?;
+    }
     std::fs::create_dir_all(&plan.output)
         .map_err(|error| format!("failed to create {}: {error}", plan.output.display()))?;
     plan.protocol
@@ -452,7 +463,9 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
             }
         }
     }
-    let Run { scene, sets, .. } = run;
+    let Run {
+        mut scene, sets, ..
+    } = run;
     let mut objects = 0usize;
     let mut detail = Vec::new();
     let mut quality = Vec::new();
@@ -520,6 +533,27 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
         detail: detail.join("; "),
         quality,
     };
+    if let Some(spec) = task.protocol.snapshot() {
+        let snapshotter = task.snapshot.ok_or_else(|| {
+            "the protocol requests quality snapshots but this run carries no renderer".to_string()
+        })?;
+        let _ = task.events.send(Event::Step {
+            index: task.index,
+            label: format!("rendering the quality snapshot of {}", reader.name()),
+        });
+        let time = task.protocol.view().map_or(scene.time(), |view| view.time);
+        scene.set_time(time.min(scene.frame_count() - 1));
+        let request = SnapshotRequest {
+            view: task
+                .protocol
+                .view()
+                .map(|_| view_state(task.protocol, &scene)),
+            size: spec.size(),
+            transparent: spec.transparent,
+            time: scene.time(),
+        };
+        snapshotter.snapshot(&reader, &scene, &request, &folder.join(SNAPSHOT))?;
+    }
     if task.project {
         let _ = task.events.send(Event::Step {
             index: task.index,
@@ -856,6 +890,9 @@ fn artifacts(protocol: &Protocol, name: &str, project: bool) -> Vec<String> {
                 .iter()
                 .map(|pair| format!("coloc-{}-{}.csv", slug(&pair.a), slug(&pair.b))),
         );
+    }
+    if protocol.snapshot().is_some() {
+        artifacts.push(SNAPSHOT.to_string());
     }
     if project {
         artifacts.push(format!("{}.granaproj", slug(name)));

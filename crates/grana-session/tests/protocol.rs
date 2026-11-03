@@ -8,14 +8,15 @@ use grana_measure::{
     ColocThresholds, Lasso, MeasureView, Measurement, RelationField, Scope, TrackMeasurement,
 };
 use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
-use grana_project::ViewState;
+use grana_project::{Export, ViewState};
 use grana_scene::{Dataset, Measure, ObjectColor, ObjectFrame, ObjectKind, Scene, TrackColor};
-use grana_session::{DetectionSpec, Protocol, ViewSpec};
+use grana_session::{DetectionSpec, Protocol, SnapshotSpec, ViewSpec};
 use grana_volume::{Axis, Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
 const PROTOCOL: &str = r#"
 {
   "region": {"low": [0.1, 0.2, 0.0], "high": [0.9, 0.8, 1.0]},
+  "snapshot": {"width": 1200, "height": 750},
   "sets": [
     {
       "name": "Nuclei",
@@ -64,6 +65,11 @@ fn reads_and_writes_a_protocol() {
         .expect("the protocol restricts its region");
     assert_eq!(region.low, [0.1, 0.2, 0.0]);
     assert_eq!(region.high, [0.9, 0.8, 1.0]);
+    let snapshot = protocol
+        .snapshot()
+        .expect("the protocol renders a snapshot");
+    assert_eq!(snapshot.size(), [1200, 750]);
+    assert!(!snapshot.transparent);
     let surface = protocol.sets()[0].params();
     assert_eq!(surface.value(0), 0.25);
     assert_eq!(surface.value(1), 0.1);
@@ -113,6 +119,19 @@ fn reads_and_writes_a_protocol() {
 }
 
 #[test]
+fn a_captured_snapshot_follows_the_export_width() {
+    assert_eq!(
+        SnapshotSpec::of(Some(Export::new(2400, true))).size(),
+        [2400, 1500]
+    );
+    assert_eq!(SnapshotSpec::of(Some(Export::NATIVE)).size(), [1600, 1000]);
+    assert_eq!(
+        SnapshotSpec::of(Some(Export::new(64, false))).size(),
+        [64, 64]
+    );
+}
+
+#[test]
 fn rejects_an_invalid_protocol() {
     let invalid = |text: &str| Protocol::from_json(text).is_err();
     assert!(invalid(r#"{"sets": []}"#), "an empty protocol is rejected");
@@ -123,6 +142,13 @@ fn rejects_an_invalid_protocol() {
     assert!(
         invalid(&PROTOCOL.replace("\"min_length\": 3.0", "\"min_length\": 0.0")),
         "a filament length filter is positive"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace(
+            "\"snapshot\": {\"width\": 1200, \"height\": 750}",
+            "\"snapshot\": {\"width\": 8, \"height\": 750}"
+        )),
+        "a snapshot covers a usable number of pixels"
     );
     assert!(
         invalid(&PROTOCOL.replace(
@@ -277,6 +303,10 @@ fn captures_the_analysis_of_a_scene() {
     let region = protocol.region().expect("the scene region is captured");
     assert_eq!(region.low, [0.25, 0.25, 0.25]);
     assert_eq!(region.high, [0.75, 0.75, 0.75]);
+    let snapshot = protocol
+        .snapshot()
+        .expect("a captured protocol renders a snapshot");
+    assert_eq!(snapshot.size(), [1600, 1000]);
 }
 
 #[test]

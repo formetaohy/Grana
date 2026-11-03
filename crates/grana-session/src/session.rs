@@ -27,7 +27,7 @@ use crate::task::Poll;
 use crate::view::{BatchDataset, BatchView, HistoryView, IoView, Message, StoreView};
 use crate::{
     Action, Analysis, Batch, BatchEvent, BatchPoll, Command, Event, Outcome, Plan as BatchPlan,
-    Protocol, Source, ViewSpec,
+    Protocol, SnapshotFactory, Source, ViewSpec,
 };
 
 const MAX_IN_FLIGHT: usize = 8192;
@@ -112,6 +112,7 @@ pub struct Session {
     export: Export,
     resume: Vec<(ObjectSetId, ObjectSetId, i32)>,
     recut: Option<(ObjectSetId, SurfaceCut)>,
+    snapshotter: Option<SnapshotFactory>,
 }
 
 impl Default for Session {
@@ -159,6 +160,7 @@ impl Session {
             export: Export::NATIVE,
             resume: Vec::new(),
             recut: None,
+            snapshotter: None,
         }
     }
 
@@ -200,6 +202,10 @@ impl Session {
         self.protocol = Some(protocol);
         self.reset_batch_rows();
         self.batch_message = None;
+    }
+
+    pub fn set_snapshot_factory(&mut self, factory: SnapshotFactory) {
+        self.snapshotter = Some(factory);
     }
 
     pub fn replaying(&self) -> bool {
@@ -2193,6 +2199,7 @@ impl Session {
             output,
             jobs: self.batch_jobs,
             project: self.batch_project,
+            snapshot: self.snapshotter.as_ref().map(|factory| factory()),
         }));
     }
 

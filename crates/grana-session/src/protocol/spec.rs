@@ -99,6 +99,15 @@ pub struct ExportSpec {
     pub transparent: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotSpec {
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub transparent: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TimelineSpec {
@@ -449,6 +458,41 @@ impl ViewSpec {
             return Err(ProtocolError::Invalid(
                 "a view exports at a plausible width".to_string(),
             ));
+        }
+        Ok(())
+    }
+}
+
+impl SnapshotSpec {
+    pub const WIDTH: u32 = 1600;
+    pub const MIN: u32 = 64;
+    pub const MAX: u32 = 16384;
+
+    pub fn of(export: Option<Export>) -> Self {
+        let width = match export {
+            Some(export) if export.width >= Self::MIN => export.width,
+            _ => Self::WIDTH,
+        };
+        Self {
+            width,
+            height: (width * 5 / 8).max(Self::MIN),
+            transparent: false,
+        }
+    }
+
+    pub fn size(self) -> [u32; 2] {
+        [self.width, self.height]
+    }
+
+    pub(super) fn checked(self) -> Result<(), ProtocolError> {
+        if !(Self::MIN..=Self::MAX).contains(&self.width)
+            || !(Self::MIN..=Self::MAX).contains(&self.height)
+        {
+            return Err(ProtocolError::Invalid(format!(
+                "a snapshot covers {}-{} pixels on each side",
+                Self::MIN,
+                Self::MAX
+            )));
         }
         Ok(())
     }

@@ -238,6 +238,9 @@ impl Protocol {
         if let Some(view) = &self.view {
             view.checked()?;
         }
+        if let Some(snapshot) = self.snapshot {
+            snapshot.checked()?;
+        }
         Ok(self)
     }
 }

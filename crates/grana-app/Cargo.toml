@@ -14,6 +14,7 @@ grana-display = { workspace = true }
 grana-editor = { workspace = true }
 grana-engine = { workspace = true }
 grana-gpu = { workspace = true }
+grana-image = { workspace = true }
 grana-project = { workspace = true }
 grana-render = { workspace = true }
 grana-scene = { workspace = true }
@@ -26,3 +27,6 @@ winit = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+png = "0.18"

@@ -894,12 +894,14 @@ dependencies = [
  "grana-editor",
  "grana-engine",
  "grana-gpu",
+ "grana-image",
  "grana-project",
  "grana-render",
  "grana-scene",
  "grana-session",
  "grana-ui",
  "grana-volume",
+ "png",
  "rfd",
  "wgpu",
  "winit",
@@ -960,7 +962,6 @@ dependencies = [
  "grana-video",
  "grana-volume",
  "png",
- "pollster",
  "wgpu",
 ]
 
@@ -1055,7 +1056,6 @@ dependencies = [
  "grana-object",
  "grana-volume",
  "half",
- "pollster",
  "wgpu",
 ]
 
