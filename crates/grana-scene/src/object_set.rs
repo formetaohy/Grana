@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use grana_analysis::TrackParams;
 use grana_measure::{Measurement, TrackMeasurement};
+use grana_object::TrackParams;
 use grana_object::{RelationFrame, TrackSet};
 
 use crate::color::ObjectColor;

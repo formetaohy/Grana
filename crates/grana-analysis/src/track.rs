@@ -1,8 +1,8 @@
 use glam::Vec3;
 use grana_object::{Track, TrackNode, TrackSet};
 
-use crate::TrackParams;
 use crate::assignment::{self, rejected};
+use grana_object::TrackParams;
 
 struct Segment {
     nodes: Vec<TrackNode>,

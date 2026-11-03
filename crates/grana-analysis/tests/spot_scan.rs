@@ -1,7 +1,8 @@
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_analysis::{SpotParams, SpotScan, SpotScanner};
+use grana_analysis::{SpotScan, SpotScanner};
+use grana_object::SpotParams;
 use grana_object::{Spot, SpotSet};
 use grana_volume::{Extent, Level, Region, Spacing, VoxelData};
 

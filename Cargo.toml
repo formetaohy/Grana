@@ -35,6 +35,7 @@ grana-gpu = { version = "0.1.1", path = "crates/grana-gpu" }
 grana-figure = { version = "0.1.1", path = "crates/grana-figure" }
 grana-engine = { version = "0.1.1", path = "crates/grana-engine" }
 grana-app = { version = "0.1.1", path = "crates/grana-app" }
+grana-codec = { version = "0.1.1", path = "crates/grana-codec" }
 grana-geometry = { version = "0.1.1", path = "crates/grana-geometry" }
 grana-display = { version = "0.1.1", path = "crates/grana-display" }
 grana-scene = { version = "0.1.1", path = "crates/grana-scene" }

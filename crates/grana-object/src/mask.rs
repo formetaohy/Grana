@@ -1,7 +1,7 @@
 use grana_geometry::PackedMesh;
 use grana_volume::Level;
 
-use crate::shape::Shape;
+use crate::Shape;
 
 const NUDGE: [f32; 2] = [1.0e-4, 3.7e-4];
 const WORD: usize = 64;

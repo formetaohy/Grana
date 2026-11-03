@@ -1,4 +1,3 @@
-mod binary;
 mod bounds;
 mod bvh;
 mod error;
@@ -9,7 +8,6 @@ mod slice;
 mod store;
 mod tube;
 
-pub use binary::{BlobReader, BlobWriter};
 pub use bounds::Bounds;
 pub use bvh::{Bvh, Primitive};
 pub use error::Error;

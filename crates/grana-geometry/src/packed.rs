@@ -4,8 +4,9 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
+use grana_codec::{Decoder, Encoder, FAULT_TAG, FAULT_VALUE, Fault};
+
 use crate::Mesh;
-use crate::binary::{BlobReader, BlobWriter};
 use crate::store::{Decode, Payload};
 
 const UNIT: f32 = 65535.0;
@@ -306,7 +307,8 @@ impl PackedMesh {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut writer = BlobWriter::with_capacity(self.byte_length());
+        let mut bytes = Vec::with_capacity(self.byte_length());
+        let mut writer = Encoder::memory(&mut bytes);
         writer.count(self.groups.len());
         for group in &self.groups {
             for value in group.min.iter().chain(&group.scale) {
@@ -332,11 +334,21 @@ impl PackedMesh {
         for index in &self.wide {
             writer.u32(*index);
         }
-        writer.finish()
+        drop(writer);
+        assert_eq!(
+            bytes.len(),
+            self.byte_length(),
+            "a packed mesh encodes its own size"
+        );
+        bytes
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let mut reader = BlobReader::new(bytes);
+        Self::decode(bytes).ok()
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, Fault> {
+        let mut reader = Decoder::memory(bytes);
         let groups = reader.count(6 * size_of::<f32>() + 4 * size_of::<u32>() + 1)?;
         let mut decoded = Vec::with_capacity(groups);
         for _ in 0..groups {
@@ -344,18 +356,23 @@ impl PackedMesh {
             for value in &mut values {
                 *value = reader.f32()?;
             }
+            let first_vertex = reader.u32()?;
+            let vertex_count = reader.u32()?;
+            let first_index = reader.u32()?;
+            let index_count = reader.u32()?;
+            let wide = match reader.u8()? {
+                0 => false,
+                1 => true,
+                _ => return Err(FAULT_TAG),
+            };
             decoded.push(GeometryGroup::new(
                 [values[0], values[1], values[2]],
                 [values[3], values[4], values[5]],
-                reader.u32()?,
-                reader.u32()?,
-                reader.u32()?,
-                reader.u32()?,
-                match reader.u8()? {
-                    0 => false,
-                    1 => true,
-                    _ => return None,
-                },
+                first_vertex,
+                vertex_count,
+                first_index,
+                index_count,
+                wide,
             ));
         }
         let vertices = reader.count(5 * size_of::<u16>())?;
@@ -376,10 +393,8 @@ impl PackedMesh {
         for _ in 0..wide {
             wide_indices.push(reader.u32()?);
         }
-        if !reader.done() {
-            return None;
-        }
-        Self::from_parts(decoded, packed, narrow_indices, wide_indices)
+        reader.done()?;
+        Self::from_parts(decoded, packed, narrow_indices, wide_indices).ok_or(FAULT_VALUE)
     }
 
     pub fn byte_length(&self) -> usize {

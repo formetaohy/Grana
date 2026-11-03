@@ -2,11 +2,12 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_analysis::{ColocPermutation, ColocScan, ColocScanConfig, Roi, Shape, coloc_levels};
+use grana_analysis::{ColocPermutation, ColocScan, ColocScanConfig, coloc_levels};
 use grana_measure::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, ColocPair, ColocSeries, ColocSettings, ColocThresholds,
 };
 use grana_object::Spot;
+use grana_object::{Roi, Shape};
 use grana_volume::{
     ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, VoxelData, VoxelFormat,
 };

@@ -2,8 +2,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_analysis::{Reference, Shape, relate_frames};
+use grana_analysis::{Reference, relate_frames};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
+use grana_object::Shape;
 use grana_object::Spot;
 
 #[test]

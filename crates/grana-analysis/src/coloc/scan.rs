@@ -7,8 +7,8 @@ use grana_measure::{
 };
 use grana_volume::{Intensity, Level, Region, VoxelData};
 
-use crate::Mask;
 use crate::schedule;
+use grana_object::Mask;
 
 use super::{ColocLevels, ColocRead, scale, unit};
 

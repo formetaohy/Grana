@@ -1,9 +1,9 @@
-use grana_analysis::TrackParams;
 use grana_display::{Coloring, Shading, TransferFunction};
 use grana_measure::{
     Aggregate, ColocPair, ColocSettings, ColocThresholds, Filter, Group, Lasso, MeasureView,
     PlotAxis, Scope,
 };
+use grana_object::TrackParams;
 use grana_scene::{ObjectColor, ObjectKind, ObjectParams, ObjectSetId, Selection, TrackColor};
 use grana_volume::{Intensity, Region};
 

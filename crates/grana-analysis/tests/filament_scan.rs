@@ -1,6 +1,7 @@
 use glam::Vec3;
-use grana_analysis::{FilamentParams, FilamentScan};
+use grana_analysis::FilamentScan;
 use grana_geometry::GeometryStore;
+use grana_object::FilamentParams;
 use grana_volume::{Extent, Intensity, Level, Region, Spacing, VoxelData};
 
 const EXTENT: Extent = Extent::new(72, 72, 32);

@@ -1,8 +1,8 @@
 use std::sync::atomic::AtomicBool;
 
 use crate::local::{BLOCK, BlockField, LocalField, floor};
-use crate::mask::Mask;
 use crate::morphology;
+use grana_object::Mask;
 
 use super::bits::{Bits, Grid, MaskInputs, SIDE};
 use super::{Gate, Read, SurfaceBuilder, dims_of, smooth};

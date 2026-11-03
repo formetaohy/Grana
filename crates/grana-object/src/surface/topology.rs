@@ -1,7 +1,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use grana_geometry::{BlobReader, BlobWriter, Decode, Payload};
+use grana_codec::{Decoder, Encoder, FAULT_VALUE, Fault};
+use grana_geometry::{Decode, Payload};
 
 use crate::intensity::{AccumulatorParts, SampleAccumulator};
 
@@ -344,7 +345,8 @@ impl SurfaceTopology {
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let info = self.info;
-        let mut writer = BlobWriter::with_capacity(self.stored_bytes());
+        let mut bytes = Vec::with_capacity(self.stored_bytes());
+        let mut writer = Encoder::memory(&mut bytes);
         writer.count(info.level());
         writer.count(info.channels());
         writer.count(info.detection());
@@ -406,7 +408,7 @@ impl SurfaceTopology {
         for basin in patches.basins() {
             writer.u32(*basin);
         }
-        let bytes = writer.finish();
+        drop(writer);
         assert_eq!(
             bytes.len(),
             self.stored_bytes(),
@@ -416,39 +418,43 @@ impl SurfaceTopology {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let mut reader = BlobReader::new(bytes);
+        Self::decode(bytes).ok()
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, Fault> {
+        let mut reader = Decoder::memory(bytes);
         let level = reader.count(1)?;
         let channels = reader.count(1)?;
         let detection = reader.count(1)?;
         if channels == 0 || detection >= channels {
-            return None;
+            return Err(FAULT_VALUE);
         }
         let mut spacing = [0.0f32; 3];
         let mut world = [0.0f32; 3];
         for value in &mut spacing {
             *value = finite(reader.f32()?)?;
             if *value <= 0.0 {
-                return None;
+                return Err(FAULT_VALUE);
             }
         }
         for value in &mut world {
             *value = finite(reader.f32()?)?;
             if *value <= 0.0 {
-                return None;
+                return Err(FAULT_VALUE);
             }
         }
         let voxel_volume = reader.f64()?;
         if !voxel_volume.is_finite() || voxel_volume <= 0.0 {
-            return None;
+            return Err(FAULT_VALUE);
         }
         let span = reader.f32()?;
         if !span.is_finite() || span < 0.0 {
-            return None;
+            return Err(FAULT_VALUE);
         }
         let seeds = reader.count(1)?;
         let basin_count = reader.count(BASIN_BYTES)?;
         if basin_count as u64 >= u64::from(u32::MAX) {
-            return None;
+            return Err(FAULT_VALUE);
         }
         let mut basins = Vec::with_capacity(basin_count);
         for _ in 0..basin_count {
@@ -458,7 +464,7 @@ impl SurfaceTopology {
             for value in &mut sum {
                 *value = reader.f64()?;
                 if !value.is_finite() {
-                    return None;
+                    return Err(FAULT_VALUE);
                 }
             }
             let mut low = [0u32; 3];
@@ -482,19 +488,21 @@ impl SurfaceTopology {
             ));
         }
         let accumulator_count = reader.count(ACCUMULATOR_BYTES)?;
-        if accumulator_count != basin_count.checked_mul(channels)? {
-            return None;
+        if accumulator_count != basin_count.checked_mul(channels).ok_or(FAULT_VALUE)? {
+            return Err(FAULT_VALUE);
         }
         let mut accumulators = Vec::with_capacity(accumulator_count);
         for _ in 0..accumulator_count {
-            accumulators.push(SampleAccumulator::restore(AccumulatorParts {
+            let accumulator = SampleAccumulator::restore(AccumulatorParts {
                 count: reader.u64()?,
                 mean: reader.f64()?,
                 squared: reader.f64()?,
                 minimum: reader.f32()?,
                 maximum: reader.f32()?,
                 sum: reader.f64()?,
-            })?);
+            })
+            .ok_or(FAULT_VALUE)?;
+            accumulators.push(accumulator);
         }
         let seam_count = reader.count(SEAM_BYTES)?;
         let mut seams = Vec::with_capacity(seam_count);
@@ -503,7 +511,7 @@ impl SurfaceTopology {
             let right = reader.u32()?;
             let saddle = reader.u32()?;
             if left >= right || right as usize >= basin_count {
-                return None;
+                return Err(FAULT_VALUE);
             }
             seams.push(Seam::new(left, right, saddle));
         }
@@ -512,7 +520,7 @@ impl SurfaceTopology {
         let triangles = reader.count(3 * size_of::<u32>())?;
         let tagged = reader.count(size_of::<u32>())?;
         if positions != normals || triangles != tagged {
-            return None;
+            return Err(FAULT_VALUE);
         }
         let mut decoded_positions = Vec::with_capacity(positions);
         for _ in 0..positions {
@@ -536,7 +544,7 @@ impl SurfaceTopology {
             for value in &mut values {
                 *value = reader.u32()?;
                 if *value as usize >= positions {
-                    return None;
+                    return Err(FAULT_VALUE);
                 }
             }
             decoded_triangles.push(values);
@@ -545,20 +553,18 @@ impl SurfaceTopology {
         for _ in 0..tagged {
             let basin = reader.u32()?;
             if basin as usize >= basin_count {
-                return None;
+                return Err(FAULT_VALUE);
             }
             tagged_basins.push(basin);
         }
-        if !reader.done() {
-            return None;
-        }
+        reader.done()?;
         let patches = SurfacePatches::new(
             decoded_positions,
             decoded_normals,
             decoded_triangles,
             tagged_basins,
         );
-        Some(Self::new(
+        Ok(Self::new(
             TopologyInfo::new(level, channels, detection, spacing, world).with_sampling(
                 voxel_volume,
                 span,
@@ -597,8 +603,8 @@ const ACCUMULATOR_BYTES: usize =
     size_of::<u64>() + 2 * size_of::<f64>() + 2 * size_of::<f32>() + size_of::<f64>();
 const SEAM_BYTES: usize = 3 * size_of::<u32>();
 
-fn finite(value: f32) -> Option<f32> {
-    value.is_finite().then_some(value)
+fn finite(value: f32) -> Result<f32, Fault> {
+    value.is_finite().then_some(value).ok_or(FAULT_VALUE)
 }
 
 impl Payload for SurfaceTopology {

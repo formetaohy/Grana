@@ -9,7 +9,9 @@ use grana_display::{CameraState, SectionState};
 use grana_geometry::GeometryStore;
 use grana_scene::{Dataset, Measure, MeasureState, ObjectFrame, Scene, SceneState};
 
-use crate::binary::{Decode, Encode, Reader, Writer};
+use grana_codec::Encoder;
+
+use crate::codec::{Decode, Encode, Reader};
 use crate::error::Error;
 
 const MAGIC: &[u8; 11] = b"granaproj15";
@@ -214,12 +216,12 @@ impl Project {
             .map_err(|error| write(error.to_string()))?;
         let raw = {
             let mut report = |done: usize| progress(done, total);
-            let mut writer = Writer::new(&mut encoder, cancel, &mut report);
+            let mut writer = Encoder::stream(&mut encoder, cancel, &mut report);
             self.encode(&mut writer);
             if let Some(error) = writer.fault() {
                 return Err(write(error.to_string()));
             }
-            writer.raw()
+            writer.len()
         };
         let mut file = encoder.finish().map_err(|error| write(error.to_string()))?;
         file.seek(SeekFrom::Start(MAGIC.len() as u64))

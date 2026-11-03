@@ -1,8 +1,8 @@
 use glam::Vec3;
-use grana_analysis::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
 use grana_measure::{Aggregate, Filter, Group, MeasureView, RelationField, Scope, Table};
+use grana_object::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
 use grana_project::{Export, ViewState};
 use grana_scene::{ObjectKind, ObjectParams};
 use grana_volume::Axis;

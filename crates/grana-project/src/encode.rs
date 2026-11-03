@@ -17,7 +17,9 @@ use grana_scene::{
 };
 use grana_volume::{Intensity, Region};
 
-use crate::binary::{Encode, Writer};
+use grana_codec::Encoder;
+
+use crate::codec::Encode;
 use crate::project::{Export, Project, Shape, Source, ViewState};
 
 pub(crate) const TAG_SPOTS: u8 = 0;
@@ -25,7 +27,7 @@ pub(crate) const TAG_SURFACES: u8 = 1;
 pub(crate) const TAG_FILAMENTS: u8 = 2;
 
 impl Encode for Project {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         self.shape.encode(writer);
         self.source.encode(writer);
         self.scene.encode(writer);
@@ -35,7 +37,7 @@ impl Encode for Project {
 }
 
 impl Encode for Shape {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         for value in self.extent {
             writer.u32(value);
         }
@@ -46,7 +48,7 @@ impl Encode for Shape {
 }
 
 impl Encode for Source {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         match self {
             Self::Synthetic { name } => {
                 writer.u8(0);
@@ -62,7 +64,7 @@ impl Encode for Source {
 }
 
 impl Encode for ViewState {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         self.camera.encode(writer);
         self.section.encode(writer);
         writer.f32(self.split);
@@ -72,14 +74,14 @@ impl Encode for ViewState {
 }
 
 impl Encode for Export {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u32(self.width);
         writer.bool(self.transparent);
     }
 }
 
 impl Encode for Timeline {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u32(self.fps());
         writer.f32(self.duration());
         self.keys().encode(writer);
@@ -87,7 +89,7 @@ impl Encode for Timeline {
 }
 
 impl Encode for Keyframe {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f32(self.at);
         writer.u32(self.time);
         self.camera.encode(writer);
@@ -96,7 +98,7 @@ impl Encode for Keyframe {
 }
 
 impl Encode for CameraState {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         for value in self.pivot {
             writer.f32(value);
         }
@@ -108,14 +110,14 @@ impl Encode for CameraState {
 }
 
 impl Encode for SectionState {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u8(self.axis.index() as u8);
         writer.f32(self.span);
     }
 }
 
 impl Encode for SceneState {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         self.channels.encode(writer);
         writer.count(self.selected);
         self.shading.encode(writer);
@@ -131,7 +133,7 @@ impl Encode for SceneState {
 }
 
 impl Encode for ChannelState {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.bool(self.enabled);
         writer.f32(self.opacity);
         self.window.encode(writer);
@@ -140,13 +142,13 @@ impl Encode for ChannelState {
 }
 
 impl Encode for TransferFunction {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         self.stops().encode(writer);
     }
 }
 
 impl Encode for Stop {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f32(self.position());
         for value in self.color() {
             writer.f32(value);
@@ -156,7 +158,7 @@ impl Encode for Stop {
 }
 
 impl Encode for Shading {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f32(self.ambient);
         writer.f32(self.diffuse);
         writer.f32(self.specular);
@@ -166,14 +168,14 @@ impl Encode for Shading {
 }
 
 impl Encode for Intensity {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f32(self.min());
         writer.f32(self.max());
     }
 }
 
 impl Encode for Region {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         for value in self.min().to_array() {
             writer.f32(value);
         }
@@ -185,14 +187,14 @@ impl Encode for Region {
 }
 
 impl Encode for SelectionState {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u64(self.set);
         self.item.encode(writer);
     }
 }
 
 impl Encode for ItemState {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         match self {
             Self::Object(index) => {
                 writer.u8(0);
@@ -207,7 +209,7 @@ impl Encode for ItemState {
 }
 
 impl Encode for SetState {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u64(self.id);
         writer.u8(self.kind.index() as u8);
         writer.string(&self.name);
@@ -241,7 +243,7 @@ impl Encode for SetState {
 }
 
 impl Encode for RelationState {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u64(self.target);
         writer.i32(self.shift);
         self.frames.encode(writer);
@@ -249,7 +251,7 @@ impl Encode for RelationState {
 }
 
 impl Encode for RelationFrame {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         let objects = self.objects();
         writer.count(objects);
         for object in 0..objects {
@@ -261,7 +263,7 @@ impl Encode for RelationFrame {
 }
 
 impl Encode for ObjectParams {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         let kind = self.kind();
         writer.u8(kind.index() as u8);
         for index in 0..kind.fields().len() {
@@ -271,7 +273,7 @@ impl Encode for ObjectParams {
 }
 
 impl Encode for TrackStyle {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         let params = self.params();
         writer.f32(params.max_step());
         writer.u32(params.max_gap());
@@ -282,21 +284,21 @@ impl Encode for TrackStyle {
 }
 
 impl Encode for TrackSet {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f32(self.frame_interval());
         self.tracks().encode(writer);
     }
 }
 
 impl Encode for Track {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         self.parent().encode(writer);
         self.nodes().encode(writer);
     }
 }
 
 impl Encode for TrackNode {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u32(self.time());
         writer.count(self.object());
         for value in self.centroid() {
@@ -306,7 +308,7 @@ impl Encode for TrackNode {
 }
 
 impl Encode for Visibility {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         match self {
             Self::All => writer.u8(0),
             Self::Object(frames) => {
@@ -322,13 +324,13 @@ impl Encode for Visibility {
 }
 
 impl Encode for Palette {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u8(self.index());
     }
 }
 
 impl<M: Encode + Copy> Encode for ColorState<M> {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         self.metric.encode(writer);
         self.palette.encode(writer);
         writer.bool(self.reversed);
@@ -344,7 +346,7 @@ impl<M: Encode + Copy> Encode for ColorState<M> {
 }
 
 impl Encode for Measurement {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         match self {
             Self::Position(axis) => {
                 writer.u8(0);
@@ -371,7 +373,7 @@ impl Encode for Measurement {
 }
 
 impl Encode for ObjectColor {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         match self {
             Self::Measurement(measurement) => {
                 writer.u8(0);
@@ -387,13 +389,13 @@ impl Encode for ObjectColor {
 }
 
 impl Encode for TrackMeasurement {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u8(self.index());
     }
 }
 
 impl Encode for TrackColor {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         match self {
             Self::Measurement(measurement) => {
                 writer.u8(0);
@@ -414,7 +416,7 @@ impl Encode for TrackColor {
 }
 
 impl Encode for ObjectFrame {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.step();
         match self {
             Self::Spots(set) => {
@@ -434,7 +436,7 @@ impl Encode for ObjectFrame {
 }
 
 impl Encode for SpotSet {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.count(self.level());
         self.spots().encode(writer);
         self.intensities().encode(writer);
@@ -442,7 +444,7 @@ impl Encode for SpotSet {
 }
 
 impl Encode for Spot {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         for value in self.center() {
             writer.f32(value);
         }
@@ -452,7 +454,7 @@ impl Encode for Spot {
 }
 
 impl Encode for SurfaceSet {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.count(self.level());
         self.objects().encode(writer);
         match self.geometry() {
@@ -486,7 +488,7 @@ impl Encode for SurfaceSet {
 }
 
 impl Encode for SurfaceStatistics {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u64(self.voxel_count());
         writer.f64(self.volume());
         writer.f64(self.area());
@@ -498,7 +500,7 @@ impl Encode for SurfaceStatistics {
 }
 
 impl Encode for FilamentSet {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.count(self.level());
         self.objects().encode(writer);
         match self.geometry() {
@@ -510,7 +512,7 @@ impl Encode for FilamentSet {
 }
 
 impl Encode for FilamentStatistics {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f64(self.length());
         writer.f64(self.diameter());
         writer.f64(self.volume());
@@ -523,7 +525,7 @@ impl Encode for FilamentStatistics {
 }
 
 impl Encode for FilamentTopology {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u32(self.branches());
         writer.u32(self.terminals());
         writer.u32(self.junctions());
@@ -532,7 +534,7 @@ impl Encode for FilamentTopology {
 }
 
 impl Encode for Bounds {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         for value in self.min() {
             writer.f32(value);
         }
@@ -543,13 +545,13 @@ impl Encode for Bounds {
 }
 
 impl Encode for PackedMesh {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.step();
         writer.blob(&self.to_bytes());
     }
 }
 impl Encode for IntensityTable {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.count(self.channels());
         writer.count(self.objects());
         for object in 0..self.objects() {
@@ -561,7 +563,7 @@ impl Encode for IntensityTable {
 }
 
 impl Encode for SampleStatistics {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f32(self.mean());
         writer.f32(self.minimum());
         writer.f32(self.maximum());
@@ -571,7 +573,7 @@ impl Encode for SampleStatistics {
 }
 
 impl Encode for MeasureState {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         self.set.encode(writer);
         writer.u8(self.group.index());
         writer.u8(self.aggregate.index());
@@ -607,7 +609,7 @@ impl Encode for MeasureState {
 }
 
 impl Encode for Filter {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.count(self.column());
         writer.f32(self.minimum());
         writer.f32(self.maximum());
@@ -615,7 +617,7 @@ impl Encode for Filter {
 }
 
 impl Encode for ColocState {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         self.pair.encode(writer);
         self.results.encode(writer);
         self.settings.encode(writer);
@@ -624,35 +626,35 @@ impl Encode for ColocState {
 }
 
 impl Encode for ColocResult {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         self.thresholds().encode(writer);
         self.series().encode(writer);
     }
 }
 
 impl Encode for ColocPair {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.count(self.a());
         writer.count(self.b());
     }
 }
 
 impl Encode for ColocThresholds {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f32(self.a());
         writer.f32(self.b());
     }
 }
 
 impl Encode for ColocSettings {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u32(self.permutations());
         writer.u32(self.block());
     }
 }
 
 impl Encode for ColocSeries {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         self.pair().encode(writer);
         self.info().encode(writer);
         writer.count(self.bins());
@@ -664,7 +666,7 @@ impl Encode for ColocSeries {
 }
 
 impl Encode for ColocSeriesInfo {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.count(self.level());
         writer.count(self.permutation_level());
         writer.u32(self.permutation_stride());
@@ -673,7 +675,7 @@ impl Encode for ColocSeriesInfo {
 }
 
 impl Encode for ColocSignificance {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f64(self.p());
         writer.u32(self.randomizations());
         writer.f64(self.permutation_pearson());
@@ -681,7 +683,7 @@ impl Encode for ColocSignificance {
 }
 
 impl Encode for ColocCost {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u64(self.scan_voxels());
         writer.u64(self.permutation_voxels());
         writer.u32(self.permutation_frames());
@@ -691,7 +693,7 @@ impl Encode for ColocCost {
 }
 
 impl Encode for ColocFrame {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         self.moments().encode(writer);
         self.a_by_b().encode(writer);
         self.b_by_a().encode(writer);
@@ -699,7 +701,7 @@ impl Encode for ColocFrame {
 }
 
 impl Encode for ColocMoments {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u64(self.voxels());
         for value in self.sums() {
             writer.f64(value);
@@ -708,7 +710,7 @@ impl Encode for ColocMoments {
 }
 
 impl<T: Encode> Encode for [T] {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         writer.count(self.len());
         for value in self {
             value.encode(writer);
@@ -717,13 +719,13 @@ impl<T: Encode> Encode for [T] {
 }
 
 impl<T: Encode> Encode for Vec<T> {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         self.as_slice().encode(writer);
     }
 }
 
 impl<T: Encode> Encode for Option<T> {
-    fn encode(&self, writer: &mut Writer) {
+    fn encode(&self, writer: &mut Encoder<'_>) {
         match self {
             Some(value) => {
                 writer.bool(true);

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_analysis::{SurfaceCut, TrackParams};
 use grana_geometry::GeometryStore;
 use grana_image::{Image, Source};
+use grana_object::{SurfaceCut, TrackParams};
 use grana_scene::{Job, ObjectFrame};
 
 use crate::event::Event;

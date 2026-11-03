@@ -25,7 +25,7 @@ use grana_scene::{
 };
 use grana_volume::{Axis, Intensity, Region};
 
-use crate::binary::{Decode, Reader};
+use crate::codec::{Decode, Reader};
 use crate::encode::{TAG_FILAMENTS, TAG_SPOTS, TAG_SURFACES};
 use crate::project::{Export, Project, Shape, Source, ViewState};
 
@@ -462,7 +462,7 @@ impl Decode for ObjectParams {
         let length = |value: f32| value >= 0.0;
         match kind {
             ObjectKind::Spots if values[0] > 0.0 && values[1] >= 0.0 => Ok(Self::Spots(
-                grana_analysis::SpotParams::new(values[0], values[1]),
+                grana_object::SpotParams::new(values[0], values[1]),
             )),
             ObjectKind::Surfaces
                 if unit(values[0])
@@ -474,16 +474,16 @@ impl Decode for ObjectParams {
                     && unit(values[6])
                     && unit(values[7]) =>
             {
-                Ok(Self::Surfaces(grana_analysis::SurfaceParams::new(
+                Ok(Self::Surfaces(grana_object::SurfaceParams::new(
                     values[0],
                     values[1],
                     values[2],
                     values[3],
-                    grana_analysis::SurfaceFilter::new(values[4], values[5], values[6], values[7]),
+                    grana_object::SurfaceFilter::new(values[4], values[5], values[6], values[7]),
                 )))
             }
             ObjectKind::Filaments if unit(values[0]) && values[1] > 0.0 => Ok(Self::Filaments(
-                grana_analysis::FilamentParams::new(values[0], values[1]),
+                grana_object::FilamentParams::new(values[0], values[1]),
             )),
             _ => Err(FAULT_VALUE),
         }
@@ -501,7 +501,7 @@ impl Decode for TrackStyle {
             return Err(FAULT_VALUE);
         }
         Ok(Self::new(
-            grana_analysis::TrackParams::new(max_step, max_gap, division, division_range),
+            grana_object::TrackParams::new(max_step, max_gap, division, division_range),
             thickness,
         ))
     }

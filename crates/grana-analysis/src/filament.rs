@@ -10,9 +10,9 @@ use grana_geometry::{GeometryStore, Mesh, push_sphere, push_tube};
 use grana_object::{FilamentSet, IntensityTable, SampleAccumulator};
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
-use crate::FilamentParams;
 use crate::local::LocalField;
-use crate::mask::Mask;
+use grana_object::FilamentParams;
+use grana_object::Mask;
 
 const MAX_VOXELS: u64 = 1 << 25;
 const MAX_STEP: u32 = 32;

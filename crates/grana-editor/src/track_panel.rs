@@ -1,6 +1,6 @@
 use glam::Vec2;
-use grana_analysis::TrackParams;
 use grana_measure::Aggregate;
+use grana_object::TrackParams;
 use grana_object::TrackSet;
 use grana_scene::{Job, ObjectSet, ObjectSetId, TrackColor};
 use grana_ui::{Align, Block, Color, Corners, Icon, Length, Rect, Role, TextStyle, TypeStyle, Ui};

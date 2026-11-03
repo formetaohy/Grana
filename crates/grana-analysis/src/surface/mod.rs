@@ -17,10 +17,10 @@ use grana_geometry::{Geometry, GeometryStore};
 use grana_object::SurfaceSet;
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
-use crate::SurfaceParams;
-use crate::mask::Mask;
 use crate::morphology::Element;
-use crate::params::SurfaceCut;
+use grana_object::Mask;
+use grana_object::SurfaceCut;
+use grana_object::SurfaceParams;
 
 use assemble::Assembler;
 use mask::SolidMask;

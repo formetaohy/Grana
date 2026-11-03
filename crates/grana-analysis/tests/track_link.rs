@@ -1,4 +1,5 @@
-use grana_analysis::{TrackBuilder, TrackParams};
+use grana_analysis::TrackBuilder;
+use grana_object::TrackParams;
 
 #[test]
 fn links_motion_and_closes_gaps() {

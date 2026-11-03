@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use grana_analysis::{Roi, Shape, SpotParams, SpotScan};
+use grana_analysis::SpotScan;
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::Spot;
+use grana_object::{Roi, Shape, SpotParams};
 use grana_volume::{Extent, Level, Region, Spacing};
 
 const SIDE: u32 = 32;

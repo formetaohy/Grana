@@ -9,8 +9,8 @@ use grana_object::{
 };
 
 use super::cap;
-use crate::SurfaceCut;
 use crate::schedule;
+use grana_object::SurfaceCut;
 
 const EMPTY: u32 = u32::MAX;
 const SPLIT_FLOOR: f64 = 1.0;
@@ -327,35 +327,44 @@ impl Meshed<'_> {
         if info.span() > 0.0 && mean / info.span() < self.spec.min_mean_intensity() {
             return None;
         }
-        let mut local: HashMap<u32, u32> = HashMap::with_capacity(triangles.len());
+        let mut local: HashMap<[u32; 3], u32> = HashMap::with_capacity(triangles.len());
         let mut positions = Vec::with_capacity(triangles.len());
-        let mut summed = Vec::with_capacity(triangles.len());
+        let mut summed: Vec<[f32; 3]> = Vec::with_capacity(triangles.len());
         let mut mesh = Vec::with_capacity(triangles.len());
         for index in triangles {
             let triangle = patches.triangles()[*index as usize];
             let mut mapped = [0u32; 3];
             for (corner, vertex) in triangle.iter().enumerate() {
-                mapped[corner] = *local.entry(*vertex).or_insert_with(|| {
+                let point = patches.positions()[*vertex as usize];
+                let slot = local.entry(point.map(f32::to_bits)).or_insert_with(|| {
                     let slot = positions.len() as u32;
-                    positions.push(patches.positions()[*vertex as usize]);
-                    summed.push(patches.normals()[*vertex as usize]);
+                    positions.push(point);
+                    summed.push([0.0; 3]);
                     slot
                 });
+                mapped[corner] = *slot;
+                let normal = patches.normals()[*vertex as usize];
+                for (axis, value) in normal.iter().enumerate() {
+                    summed[*slot as usize][axis] += value;
+                }
+            }
+            if mapped[0] == mapped[1] || mapped[1] == mapped[2] || mapped[2] == mapped[0] {
+                continue;
             }
             mesh.push(mapped);
         }
-        let components = Components::new(&positions, &mesh);
+        if mesh.is_empty() {
+            return None;
+        }
+        let components = Components::new(positions.len(), &mesh);
         let mut area = 0.0f64;
         for triangle in &mesh {
             area += triangle_area(&positions, triangle);
         }
-        let selected = (0..mesh.len())
+        let open = (0..mesh.len())
             .filter(|index| !components.closed[components.slot[*index]])
             .collect::<Vec<_>>();
-        if selected.is_empty() {
-            return None;
-        }
-        let cut = cap::build(&positions, &mesh, &selected);
+        let cut = cap::build(&positions, &mesh, &open);
         area += cut.area;
         if area <= 0.0 {
             return None;
@@ -386,11 +395,10 @@ impl Meshed<'_> {
             })
             .collect();
         let mut vertices = Vec::with_capacity(positions.len());
-        let mut indices = Vec::with_capacity(selected.len() * 3 + cut.triangles.len());
+        let mut indices = Vec::with_capacity(mesh.len() * 3 + cut.triangles.len());
         let mut welded: HashMap<u32, u32> = HashMap::with_capacity(positions.len());
-        for index in &selected {
-            let triangle = mesh[*index];
-            let fallback = triangle_normal(&positions, &triangle);
+        for triangle in &mesh {
+            let fallback = triangle_normal(&positions, triangle);
             let mut mapped = [0u32; 3];
             for (corner, vertex) in triangle.iter().enumerate() {
                 mapped[corner] = *welded.entry(*vertex).or_insert_with(|| {
@@ -428,8 +436,8 @@ struct Components {
 }
 
 impl Components {
-    fn new(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> Self {
-        let mut parent: Vec<u32> = (0..positions.len() as u32).collect();
+    fn new(vertices: usize, triangles: &[[u32; 3]]) -> Self {
+        let mut parent: Vec<u32> = (0..vertices as u32).collect();
         for triangle in triangles {
             component(&mut parent, triangle[0], triangle[1]);
             component(&mut parent, triangle[1], triangle[2]);
@@ -441,32 +449,25 @@ impl Components {
             let count = slots.len();
             slot.push(*slots.entry(root).or_insert(count));
         }
-        let mut volumes = vec![0.0f64; slots.len()];
+        let mut edges: Vec<HashMap<(u32, u32), u32>> =
+            (0..slots.len()).map(|_| HashMap::new()).collect();
         for (index, triangle) in triangles.iter().enumerate() {
-            let points = triangle.map(|vertex| Vec3::from(positions[vertex as usize]));
-            volumes[slot[index]] += f64::from(points[0].dot(points[1].cross(points[2])) / 6.0);
-        }
-        let mut closed = volumes
-            .iter()
-            .map(|volume| *volume < 0.0)
-            .collect::<Vec<_>>();
-        let mut edges = vec![HashMap::<(u32, u32), u32>::new(); slots.len()];
-        for (index, triangle) in triangles.iter().enumerate() {
-            if !closed[slot[index]] {
-                continue;
-            }
+            let counts = &mut edges[slot[index]];
             for pair in [[0usize, 1usize], [1, 2], [2, 0]] {
-                let first = triangle[pair[0]];
-                let second = triangle[pair[1]];
-                let key = (first.min(second), first.max(second));
-                *edges[slot[index]].entry(key).or_insert(0u32) += 1;
+                *counts
+                    .entry((triangle[pair[0]], triangle[pair[1]]))
+                    .or_insert(0) += 1;
             }
         }
-        for (index, component) in closed.iter_mut().enumerate() {
-            *component = *component
-                && !edges[index].is_empty()
-                && edges[index].values().all(|count| *count == 2);
-        }
+        let closed = edges
+            .iter()
+            .map(|counts| {
+                !counts.is_empty()
+                    && counts.iter().all(|((from, to), count)| {
+                        *count == 1 && counts.get(&(*to, *from)) == Some(&1)
+                    })
+            })
+            .collect();
         Self { slot, closed }
     }
 }

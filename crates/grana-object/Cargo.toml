@@ -9,7 +9,9 @@ repository.workspace = true
 [dependencies]
 bytemuck = { workspace = true }
 glam = { workspace = true }
+grana-codec = { workspace = true }
 grana-geometry = { workspace = true }
+grana-volume = { workspace = true }
 
 [lints]
 workspace = true

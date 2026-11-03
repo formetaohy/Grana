@@ -906,6 +906,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-codec"
+version = "0.1.1"
+
+[[package]]
 name = "grana-czi"
 version = "0.1.1"
 dependencies = [
@@ -929,7 +933,6 @@ name = "grana-editor"
 version = "0.1.1"
 dependencies = [
  "glam",
- "grana-analysis",
  "grana-animation",
  "grana-display",
  "grana-figure",
@@ -980,6 +983,7 @@ version = "0.1.1"
 dependencies = [
  "bytemuck",
  "glam",
+ "grana-codec",
  "thiserror 2.0.21",
 ]
 
@@ -1016,7 +1020,9 @@ version = "0.1.1"
 dependencies = [
  "bytemuck",
  "glam",
+ "grana-codec",
  "grana-geometry",
+ "grana-volume",
 ]
 
 [[package]]
@@ -1026,6 +1032,7 @@ dependencies = [
  "glam",
  "grana-analysis",
  "grana-animation",
+ "grana-codec",
  "grana-display",
  "grana-geometry",
  "grana-measure",
@@ -1057,7 +1064,6 @@ name = "grana-scene"
 version = "0.1.1"
 dependencies = [
  "glam",
- "grana-analysis",
  "grana-display",
  "grana-geometry",
  "grana-measure",

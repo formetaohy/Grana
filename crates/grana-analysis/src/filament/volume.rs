@@ -3,7 +3,7 @@ use grana_volume::{Region, VoxelData};
 
 use super::Grid;
 use crate::local::LocalField;
-use crate::mask::Mask;
+use grana_object::Mask;
 
 const AXIS: u16 = 16;
 const FACE: u16 = 23;

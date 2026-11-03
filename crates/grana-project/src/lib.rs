@@ -1,4 +1,4 @@
-mod binary;
+mod codec;
 mod decode;
 mod encode;
 mod error;

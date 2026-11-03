@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_analysis::{Sources, SpotParams, SurfaceBuilder, SurfaceFilter, SurfaceParams, recut};
+use grana_analysis::{Sources, SurfaceBuilder, recut};
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, TransferFunction};
 use grana_geometry::GeometryStore;
@@ -18,6 +18,7 @@ use grana_object::{
     SampleAccumulator, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track,
     TrackNode, TrackSet,
 };
+use grana_object::{SpotParams, SurfaceFilter, SurfaceParams};
 use grana_project::{Export, Project, Source, ViewState};
 use grana_scene::{
     Dataset, Item, Measure, ObjectColor, ObjectFrame, ObjectKind, ObjectParams, Scene, Selection,

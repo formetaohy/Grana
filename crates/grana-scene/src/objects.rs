@@ -272,7 +272,7 @@ impl Objects {
     pub fn set_track_style(
         &mut self,
         id: ObjectSetId,
-        params: grana_analysis::TrackParams,
+        params: grana_object::TrackParams,
         thickness: f32,
     ) -> bool {
         let stamp = take_stamp(&mut self.stamp);

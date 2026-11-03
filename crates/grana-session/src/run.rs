@@ -3,12 +3,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{
-    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, Roi, Sources, SpotScanner,
+    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, Sources, SpotScanner,
     SurfaceBuilder, TrackBuilder, coloc_levels, filament_level, relate_frames, surface_level,
 };
 use grana_geometry::GeometryStore;
 use grana_image::Image;
 use grana_measure::{ColocPair, ColocSettings};
+use grana_object::Roi;
 use grana_scene::{ObjectFrame, ObjectParams};
 use grana_volume::VoxelData;
 
@@ -88,7 +89,7 @@ pub(crate) fn detect(
 
 pub(crate) fn tracks(
     frames: Vec<Vec<[f32; 3]>>,
-    params: grana_analysis::TrackParams,
+    params: grana_object::TrackParams,
     frame_interval: f32,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
@@ -171,7 +172,7 @@ pub(crate) fn relation(
     sink(Event::Done);
 }
 
-fn shape(frame: Option<&ObjectFrame>) -> Result<Option<grana_analysis::Shape>, String> {
+fn shape(frame: Option<&ObjectFrame>) -> Result<Option<grana_object::Shape>, String> {
     let Some(frame) = frame else {
         return Ok(None);
     };
@@ -337,7 +338,7 @@ pub(crate) fn coloc(
 
 fn spots(
     reader: &Image,
-    params: grana_analysis::SpotParams,
+    params: grana_object::SpotParams,
     request: DetectRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
@@ -392,7 +393,7 @@ fn spots(
 }
 fn surfaces(
     reader: &Image,
-    params: grana_analysis::SurfaceParams,
+    params: grana_object::SurfaceParams,
     request: DetectRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
@@ -472,7 +473,7 @@ fn surfaces(
 
 fn filaments(
     reader: &Image,
-    params: grana_analysis::FilamentParams,
+    params: grana_object::FilamentParams,
     request: DetectRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use crate::Spot;
 use grana_geometry::PackedMesh;
-use grana_object::Spot;
 
 const UNIT: f32 = 65535.0;
 

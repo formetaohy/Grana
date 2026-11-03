@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_analysis::{Shape, TrackParams};
 use grana_display::{Shading, TransferFunction};
 use grana_geometry::ray_hit;
 use grana_measure::{Aggregate, Frame, Group, RelationRow, Table};
 use grana_object::{RelationFrame, TrackSet};
+use grana_object::{Shape, TrackParams};
 use grana_volume::{ChannelInfo, Intensity, Region};
 
 use crate::channel::Channel;
@@ -214,14 +214,14 @@ impl Scene {
         self.sync_coloc_inputs();
     }
 
-    pub fn mask_frames(&self) -> Option<grana_analysis::Roi> {
+    pub fn mask_frames(&self) -> Option<grana_object::Roi> {
         let set = self.objects.get(self.mask?)?;
         let frames = Arc::new(
             (0..self.frame_count())
                 .map(|time| set.frame_shared(time))
                 .collect::<Vec<_>>(),
         );
-        Some(grana_analysis::Roi::paged(frames.len(), move |time| {
+        Some(grana_object::Roi::paged(frames.len(), move |time| {
             shape_at(&frames, time)
         }))
     }

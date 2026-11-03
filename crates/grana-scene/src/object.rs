@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use grana_analysis::{
-    FilamentParams, Shape, SpotParams, SurfaceFilter, SurfaceParams, TrackParams,
-};
 use grana_geometry::PackedMesh;
 use grana_measure::{Measurement, Objects};
-use grana_object::{FilamentSet, IntensityTable, Spot, SpotSet, SurfaceSet};
+use grana_object::{
+    FilamentParams, FilamentSet, IntensityTable, Shape, Spot, SpotParams, SpotSet, SurfaceFilter,
+    SurfaceParams, SurfaceSet, TrackParams,
+};
 
 const SPOT_STEP: f32 = 8.0;
 const SURFACE_STEP: f32 = 12.0;

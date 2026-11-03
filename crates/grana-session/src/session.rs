@@ -2,12 +2,12 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use grana_analysis::SurfaceCut;
 use grana_animation::{Keyframe, Timeline};
 use grana_display::Shading;
 use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
 use grana_image::Format;
 use grana_measure::{ColocPair, ColocThresholds, Group};
+use grana_object::SurfaceCut;
 use grana_object::TrackSet;
 use grana_project::{Project, Source as ProjectSource, ViewState};
 use grana_scene::{

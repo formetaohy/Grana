@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
 use grana_volume::{Level, Region as VolumeRegion, VoxelData};
 
-use crate::{Mask, SpotParams};
+use grana_object::{Mask, SpotParams};
 
 const FWHM_PER_SIGMA: f32 = 2.354_82;
 const MIN_SIGMA: f32 = 0.5;

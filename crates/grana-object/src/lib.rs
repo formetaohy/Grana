@@ -1,14 +1,22 @@
 mod filament;
 mod graph;
 mod intensity;
+mod mask;
+mod params;
 mod relation;
+mod shape;
 mod spot;
 mod surface;
 mod track;
 
 pub use filament::{FilamentSet, FilamentStatistics, FilamentTopology};
 pub use intensity::{IntensityTable, SampleAccumulator, SampleStatistics};
+pub use mask::{Mask, Roi};
+pub use params::{
+    FilamentParams, SpotParams, SurfaceCut, SurfaceFilter, SurfaceParams, TrackParams,
+};
 pub use relation::RelationFrame;
+pub use shape::Shape;
 pub use spot::{Spot, SpotSet};
 pub use surface::{
     Basin, Seam, SurfacePatches, SurfaceSet, SurfaceStatistics, SurfaceTopology, TopologyInfo,

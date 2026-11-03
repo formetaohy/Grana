@@ -4,8 +4,8 @@ use std::sync::atomic::AtomicBool;
 use grana_measure::{ColocPair, ColocSettings, ColocSignificance};
 use grana_volume::{Intensity, Level, Pyramid, Region};
 
-use crate::Mask;
 use crate::schedule;
+use grana_object::Mask;
 
 use super::{ColocLevels, ColocRead, scale, unit};
 

@@ -3,9 +3,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_analysis::{Sources, SurfaceBuilder, SurfaceFilter, SurfaceParams, recut};
+use grana_analysis::{Sources, SurfaceBuilder, recut};
 use grana_geometry::GeometryStore;
 use grana_object::SurfaceSet;
+use grana_object::{SurfaceFilter, SurfaceParams};
 use grana_volume::{Channel, Extent, Intensity, Level, Region, Spacing, Volume, VoxelData};
 
 const HIGH: u16 = 65_535;

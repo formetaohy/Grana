@@ -5,7 +5,7 @@ use glam::Vec3;
 use grana_geometry::{Bvh, PackedMesh, Primitive};
 use grana_object::RelationFrame;
 
-use crate::shape::Shape;
+use grana_object::Shape;
 
 pub struct Reference {
     bvh: Bvh,

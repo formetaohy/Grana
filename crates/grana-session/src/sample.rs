@@ -1,5 +1,5 @@
 use glam::Vec3;
-use grana_analysis::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams};
+use grana_object::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams};
 use grana_scene::{ObjectKind, ObjectParams, ObjectSetId, Scene};
 use grana_volume::{Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
