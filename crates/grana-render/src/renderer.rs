@@ -33,6 +33,7 @@ use crate::sample;
 use crate::schema::SceneFrame;
 use crate::section::SectionPass;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
+use crate::slice::SlicePass;
 use crate::target::{self, SceneTarget};
 use crate::volume::VolumePass;
 use grana_display::{Camera, SectionCamera};
@@ -206,6 +207,7 @@ pub struct Renderer {
     volume: VolumePass,
     section: SectionPass,
     cut: CutLayer,
+    slice: SlicePass,
     meshes: MeshPasses,
     markers: MarkerPasses,
     dummy: TextureView,
@@ -256,6 +258,7 @@ impl Renderer {
             volume: VolumePass::new(device, &layouts),
             section: SectionPass::new(device, &layouts),
             cut: CutLayer::new(device, &layouts),
+            slice: SlicePass::new(device, &layouts),
             meshes: MeshPasses::new(device, &layouts, budget / 2),
             markers: MarkerPasses::new(device, &layouts),
             layouts,
@@ -523,6 +526,7 @@ impl Renderer {
             volume,
             section: section_pass,
             cut,
+            slice,
             meshes,
             markers,
             pyramid,
@@ -698,6 +702,10 @@ impl Renderer {
         let reset = target.samples == 0;
         info.samples = target.samples;
         if target.samples < samples {
+            meshes.set(device, queue, layouts, scene);
+            slice.prepare(device, queue, layouts, scene, &section_data, camera);
+        }
+        if target.samples < samples {
             target.samples += 1;
             info.samples = target.samples;
             let offset = sample::offset(target.samples - 1, size);
@@ -749,7 +757,6 @@ impl Renderer {
                 planner.volume.bind_level(device, layouts, volume_table);
                 planner.section.bind_level(device, layouts, section_table);
             }
-            meshes.set(device, queue, layouts, scene);
             meshes.write_uniforms(queue, &frame_data, scene.shading);
             markers.prepare(device, queue, layouts, scene.markers);
             let scene_group = scene_table.group();
@@ -831,19 +838,17 @@ impl Renderer {
                     atlas: atlas.group(),
                 },
             );
-            let stats = cut.draw(device, &mut encoder, cut_size, |pass| {
+            cut.draw(device, &mut encoder, cut_size, |pass| {
                 markers.draw_section_behind(pass, scene_group);
-                let stats =
-                    meshes.draw_section(pass, queue, scene_group, &section_data, cut_size, camera);
+                slice.draw(pass, scene_group);
                 markers.draw_section_front(pass, scene_group);
-                stats
             });
-            if stats.objects > 0 {
-                cut.outline(&mut encoder, cut_size, meshes.cut_group());
+            if slice.objects() > 0 {
+                cut.outline(&mut encoder, cut_size, slice.style_group());
             }
             cut.composite(&mut encoder, target.scene.color(), section_region);
-            info.cut.objects = stats.objects;
-            info.cut.draws = stats.draws + 1 + u32::from(stats.objects > 0);
+            info.cut.objects = slice.objects();
+            info.cut.draws = slice.draws() + 1 + u32::from(slice.objects() > 0);
             info.cut.targets = cut.targets();
             present.accumulate(
                 &mut encoder,

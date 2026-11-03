@@ -1,10 +1,3 @@
-struct CutObject {
-    minimum: vec4<f32>,
-    extent: vec4<f32>,
-    style: u32,
-    reserved: array<u32, 3>,
-}
-
 struct Style {
     color: vec4<f32>,
     flags: vec4<f32>,
@@ -13,8 +6,7 @@ struct Style {
 @group(0) @binding(0) var layer: texture_2d<f32>;
 @group(0) @binding(1) var layer_sampler: sampler;
 @group(0) @binding(2) var identities: texture_multisampled_2d<f32>;
-@group(1) @binding(0) var<storage, read> cuts: array<CutObject>;
-@group(1) @binding(1) var<storage, read> styles: array<Style>;
+@group(1) @binding(0) var<storage, read> styles: array<Style>;
 
 const SAMPLE_COUNT: i32 = 4;
 const OUTLINE_ALPHA: f32 = 0.85;
@@ -83,7 +75,7 @@ fn fs_outline(input: Output) -> @location(0) vec4<f32> {
     if (!boundary) {
         return vec4<f32>(0.0);
     }
-    let style = styles[cuts[near - 1u].style];
+    let style = styles[near - 1u];
     let selected = style.flags.y > 0.5;
     let color = mix(style.color.rgb, SELECTED, select(0.0, SELECTED_MIX, selected));
     let alpha = select(OUTLINE_ALPHA, 1.0, selected);

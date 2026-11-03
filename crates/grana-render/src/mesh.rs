@@ -1,29 +1,24 @@
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use bytemuck::{Pod, Zeroable};
-use glam::Vec3;
 use grana_geometry::PackedMesh;
 use grana_gpu::{IndexedCommands, Table};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Buffer, BufferUsages,
     ColorTargetState, ColorWrites, CommandEncoder, CompareFunction, ComputePipeline,
-    ComputePipelineDescriptor, DepthBiasState, DepthStencilState, Device, FragmentState,
-    IndexFormat, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor, PrimitiveState,
-    Queue, RenderPass, RenderPassColorAttachment, RenderPassDepthStencilAttachment,
-    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor,
-    ShaderSource, StencilFaceState, StencilOperation, StencilState, StoreOp, TextureFormat,
-    TextureView, VertexAttribute, VertexBufferLayout, VertexFormat, VertexState, VertexStepMode,
+    ComputePipelineDescriptor, Device, FragmentState, IndexFormat, LoadOp, MultisampleState,
+    Operations, PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPassColorAttachment,
+    RenderPassDepthStencilAttachment, RenderPassDescriptor, RenderPipeline,
+    RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, StoreOp, TextureView,
+    VertexAttribute, VertexBufferLayout, VertexFormat, VertexState, VertexStepMode,
     util::DeviceExt,
 };
 
-use crate::cut;
-use crate::frame::SectionData;
 use crate::layout::Layouts;
 use crate::schema::{LayerKey, SceneFrame, Style};
 use crate::target::SCENE_FORMAT;
 use crate::volume::depth_state;
-use grana_display::{Camera, Shading, srgb_to_linear};
+use grana_display::{Shading, srgb_to_linear};
 
 const CULL_SHADER: &str = concat!(
     include_str!("shader/scene.wgsl"),
@@ -37,11 +32,6 @@ const VOLUME_SHADER: &str = concat!(
     "\n",
     include_str!("shader/mesh.wgsl")
 );
-const SECTION_SHADER: &str = concat!(
-    include_str!("shader/scene.wgsl"),
-    "\n",
-    include_str!("shader/mesh_section.wgsl")
-);
 
 const VOLUME_NARROW: usize = 0;
 const VOLUME_WIDE: usize = 1;
@@ -50,8 +40,6 @@ const SHADOW_WIDE: usize = 3;
 const REGIONS: usize = 4;
 const UNIT: f32 = 65535.0;
 const WORKGROUP: u32 = 64;
-const STENCIL: TextureFormat = TextureFormat::Stencil8;
-const SCISSOR_MARGIN: f32 = 2.0;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -77,7 +65,7 @@ struct ObjectData {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
-struct StyleData {
+pub(crate) struct StyleData {
     color: [f32; 4],
     flags: [f32; 4],
 }
@@ -104,49 +92,6 @@ const _: () = {
     assert!(size_of::<MeshUniforms>() == 256);
 };
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
-struct CutObject {
-    minimum: [f32; 4],
-    extent: [f32; 4],
-    style: u32,
-    reserved: [u32; 3],
-}
-
-#[derive(Clone, Copy)]
-struct SectionObject {
-    first: u32,
-    count: u32,
-    base: i32,
-    wide: bool,
-    low: [f32; 3],
-    high: [f32; 3],
-    extent: [f32; 3],
-}
-
-#[derive(Clone, Copy)]
-struct SectionDraw {
-    layer: u32,
-    object: u32,
-    cut: u32,
-    rect: [u32; 4],
-    depth: f32,
-}
-
-#[derive(Default)]
-struct SectionBatch {
-    draws: Vec<SectionDraw>,
-    objects: Vec<CutObject>,
-    ordered: Vec<CutObject>,
-    cached: Vec<CutObject>,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct SectionStats {
-    pub objects: u32,
-    pub draws: u32,
-}
-
 pub(crate) struct MeshPasses {
     slots: HashMap<LayerKey, MeshSlot>,
     active: Vec<LayerKey>,
@@ -157,13 +102,6 @@ pub(crate) struct MeshPasses {
     shadow_cull: ComputePipeline,
     volume_pipeline: RenderPipeline,
     shadow_pipeline: RenderPipeline,
-    section_parity: RenderPipeline,
-    section_fill: RenderPipeline,
-    cut_objects: Table<CutObject>,
-    cut_styles: Table<StyleData>,
-    cut_group: BindGroup,
-    cut_style_cache: Vec<StyleData>,
-    section_batch: RefCell<SectionBatch>,
     uniforms: Buffer,
     uniform_group: BindGroup,
 }
@@ -202,11 +140,6 @@ impl MeshPasses {
             ],
             immediate_size: 0,
         });
-        let section_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("grana.mesh.section.pipeline_layout"),
-            bind_group_layouts: &[Some(&layouts.scene), Some(&layouts.cut)],
-            immediate_size: 0,
-        });
         let cull_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.mesh.cull"),
             source: ShaderSource::Wgsl(CULL_SHADER.into()),
@@ -230,10 +163,6 @@ impl MeshPasses {
         let volume_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.mesh"),
             source: ShaderSource::Wgsl(VOLUME_SHADER.into()),
-        });
-        let section_module = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("grana.mesh.section"),
-            source: ShaderSource::Wgsl(SECTION_SHADER.into()),
         });
         let shadow_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.mesh.shadow"),
@@ -276,81 +205,6 @@ impl MeshPasses {
             multiview_mask: None,
             cache: None,
         });
-        let section_parity = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.mesh.section.parity"),
-            layout: Some(&section_layout),
-            vertex: VertexState {
-                module: &section_module,
-                entry_point: Some("vs_cut"),
-                compilation_options: Default::default(),
-                buffers: &[Some(section_vertex_layout())],
-            },
-            primitive: PrimitiveState::default(),
-            depth_stencil: Some(cut_stencil(
-                CompareFunction::Always,
-                StencilOperation::Invert,
-                0xFF,
-            )),
-            multisample: cut::multisample(),
-            fragment: Some(FragmentState {
-                module: &section_module,
-                entry_point: Some("fs_parity"),
-                compilation_options: Default::default(),
-                targets: &[
-                    Some(ColorTargetState {
-                        format: SCENE_FORMAT,
-                        blend: None,
-                        write_mask: ColorWrites::empty(),
-                    }),
-                    Some(ColorTargetState {
-                        format: crate::target::CUT_ID_FORMAT,
-                        blend: None,
-                        write_mask: ColorWrites::empty(),
-                    }),
-                ],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        let section_fill = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.mesh.section.fill"),
-            layout: Some(&section_layout),
-            vertex: VertexState {
-                module: &section_module,
-                entry_point: Some("vs_fill"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: PrimitiveState::default(),
-            depth_stencil: Some(cut_stencil(
-                CompareFunction::NotEqual,
-                StencilOperation::Replace,
-                0xFF,
-            )),
-            multisample: cut::multisample(),
-            fragment: Some(FragmentState {
-                module: &section_module,
-                entry_point: Some("fs_fill"),
-                compilation_options: Default::default(),
-                targets: &[
-                    Some(ColorTargetState {
-                        format: SCENE_FORMAT,
-                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                        write_mask: ColorWrites::ALL,
-                    }),
-                    Some(ColorTargetState {
-                        format: crate::target::CUT_ID_FORMAT,
-                        blend: None,
-                        write_mask: ColorWrites::ALL,
-                    }),
-                ],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        let cut_objects = Table::with_capacity(device, "grana.cut.objects", 1);
-        let cut_styles = Table::with_capacity(device, "grana.cut.styles", 1);
-        let cut_group = cut_group(device, layouts, cut_objects.buffer(), cut_styles.buffer());
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.mesh.uniforms"),
             size: size_of::<MeshUniforms>() as u64,
@@ -375,13 +229,6 @@ impl MeshPasses {
             shadow_cull,
             volume_pipeline,
             shadow_pipeline,
-            section_parity,
-            section_fill,
-            cut_objects,
-            cut_styles,
-            cut_group,
-            cut_style_cache: Vec::new(),
-            section_batch: RefCell::new(SectionBatch::default()),
             uniforms,
             uniform_group,
         }
@@ -441,44 +288,6 @@ impl MeshPasses {
             self.active.push(layer.key);
         }
         self.evict();
-        self.write_cut_styles(device, queue, layouts, scene);
-    }
-
-    fn write_cut_styles(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        layouts: &Layouts,
-        scene: &SceneFrame<'_>,
-    ) {
-        let styles = scene
-            .styles
-            .iter()
-            .copied()
-            .map(style_data)
-            .collect::<Vec<_>>();
-        let mut objects = 0;
-        for layer in scene.layers {
-            objects += layer.style_count;
-        }
-        let mut grown = self.cut_styles.reserve(device, styles.len().max(1));
-        grown |= self.cut_objects.reserve(device, objects.max(1));
-        if grown || styles != self.cut_style_cache {
-            queue.write_buffer(self.cut_styles.buffer(), 0, bytemuck::cast_slice(&styles));
-            self.cut_style_cache = styles;
-        }
-        if grown {
-            self.cut_group = cut_group(
-                device,
-                layouts,
-                self.cut_objects.buffer(),
-                self.cut_styles.buffer(),
-            );
-        }
-    }
-
-    pub fn cut_group(&self) -> &BindGroup {
-        &self.cut_group
     }
 
     fn evict(&mut self) {
@@ -622,95 +431,6 @@ impl MeshPasses {
             self.slots[key].draw(&mut pass, VOLUME_NARROW, VOLUME_WIDE);
         }
     }
-
-    pub fn draw_section<'a>(
-        &'a self,
-        pass: &mut RenderPass<'a>,
-        queue: &Queue,
-        scene: &'a BindGroup,
-        section: &SectionData,
-        size: [u32; 2],
-        camera: &Camera,
-    ) -> SectionStats {
-        let mut batch = self.section_batch.borrow_mut();
-        let SectionBatch {
-            draws,
-            objects,
-            ordered,
-            cached,
-        } = &mut *batch;
-        draws.clear();
-        objects.clear();
-        let eye = camera.eye();
-        let forward = camera.forward();
-        for (layer, key) in self.active.iter().enumerate() {
-            let slot = &self.slots[key];
-            for (object, object_data) in slot.section.iter().enumerate() {
-                if !slot.visible[object] {
-                    continue;
-                }
-                let Some(rect) = cut_rect(object_data, section, size) else {
-                    continue;
-                };
-                draws.push(SectionDraw {
-                    layer: layer as u32,
-                    object: object as u32,
-                    cut: objects.len() as u32,
-                    rect,
-                    depth: cut_depth(object_data, section, eye, forward),
-                });
-                objects.push(CutObject {
-                    minimum: [
-                        object_data.low[0],
-                        object_data.low[1],
-                        object_data.low[2],
-                        0.0,
-                    ],
-                    extent: [
-                        object_data.extent[0],
-                        object_data.extent[1],
-                        object_data.extent[2],
-                        0.0,
-                    ],
-                    style: slot.style_start + object as u32,
-                    reserved: [0; 3],
-                });
-            }
-        }
-        draws.sort_by(|left, right| {
-            right
-                .depth
-                .total_cmp(&left.depth)
-                .then(left.layer.cmp(&right.layer))
-                .then(left.object.cmp(&right.object))
-        });
-        ordered.clear();
-        ordered.extend(draws.iter().map(|draw| objects[draw.cut as usize]));
-        for (index, draw) in draws.iter_mut().enumerate() {
-            draw.cut = index as u32;
-        }
-        if ordered != cached {
-            queue.write_buffer(self.cut_objects.buffer(), 0, bytemuck::cast_slice(ordered));
-            cached.clear();
-            cached.extend_from_slice(ordered);
-        }
-        let mut stats = SectionStats::default();
-        pass.set_bind_group(0, scene, &[]);
-        pass.set_bind_group(1, &self.cut_group, &[]);
-        for draw in draws.iter() {
-            let slot = &self.slots[&self.active[draw.layer as usize]];
-            pass.set_scissor_rect(draw.rect[0], draw.rect[1], draw.rect[2], draw.rect[3]);
-            pass.set_vertex_buffer(0, slot.vertices.slice(..));
-            pass.set_pipeline(&self.section_parity);
-            slot.draw_object(pass, draw.object as usize, draw.cut..draw.cut + 1);
-            pass.set_pipeline(&self.section_fill);
-            pass.draw(0..3, draw.cut..draw.cut + 1);
-            stats.objects += 1;
-            stats.draws += 2;
-        }
-        pass.set_scissor_rect(0, 0, size[0], size[1]);
-        stats
-    }
 }
 
 struct MeshSlot {
@@ -724,8 +444,6 @@ struct MeshSlot {
     command_group: BindGroup,
     object_count: u32,
     style_start: u32,
-    section: Vec<SectionObject>,
-    visible: Vec<bool>,
     cached_styles: Vec<StyleData>,
     bytes: u64,
     used: u64,
@@ -738,7 +456,6 @@ impl MeshSlot {
         let object_count = u32::try_from(object_count).expect("a mesh holds u32 objects");
         let mut points = Vec::with_capacity(mesh.vertex_count());
         let mut objects = Vec::with_capacity(object_count as usize);
-        let mut section = Vec::with_capacity(object_count as usize);
         for (object, group) in mesh.groups().iter().enumerate() {
             let first = group.first_vertex() as usize;
             let end = first + group.vertex_count() as usize;
@@ -769,15 +486,6 @@ impl MeshSlot {
                 wide_count: if wide { group.index_count() } else { 0 },
                 vertex_base: group.first_vertex(),
                 reserved: [0; 3],
-            });
-            section.push(SectionObject {
-                first: group.first_index(),
-                count: group.index_count(),
-                base: group.first_vertex() as i32,
-                wide,
-                low,
-                high: [0, 1, 2].map(|axis| low[axis] + extent[axis]),
-                extent,
             });
         }
         assert_eq!(
@@ -835,8 +543,6 @@ impl MeshSlot {
             command_group,
             object_count,
             style_start: 0,
-            visible: vec![false; object_count as usize],
-            section,
             cached_styles: Vec::new(),
             bytes,
             used: 0,
@@ -859,9 +565,6 @@ impl MeshSlot {
             .collect::<Vec<_>>();
         if data != self.cached_styles {
             queue.write_buffer(self.styles.buffer(), 0, bytemuck::cast_slice(&data));
-            for (visible, style) in self.visible.iter_mut().zip(styles) {
-                *visible = style.visible();
-            }
             self.cached_styles = data;
         }
     }
@@ -891,128 +594,9 @@ impl MeshSlot {
         }
         draws
     }
-
-    fn draw_object<'a>(
-        &'a self,
-        pass: &mut wgpu::RenderPass<'a>,
-        object: usize,
-        instances: std::ops::Range<u32>,
-    ) {
-        let data = &self.section[object];
-        pass.set_vertex_buffer(0, self.vertices.slice(..));
-        if data.wide {
-            let Some(indices) = &self.wide else {
-                return;
-            };
-            pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
-        } else {
-            let Some(indices) = &self.narrow else {
-                return;
-            };
-            pass.set_index_buffer(indices.slice(..), IndexFormat::Uint16);
-        }
-        pass.draw_indexed(data.first..data.first + data.count, data.base, instances);
-    }
 }
 
-fn cut_stencil(
-    compare: CompareFunction,
-    pass: StencilOperation,
-    write_mask: u32,
-) -> DepthStencilState {
-    let face = StencilFaceState {
-        compare,
-        fail_op: StencilOperation::Keep,
-        depth_fail_op: StencilOperation::Keep,
-        pass_op: pass,
-    };
-    DepthStencilState {
-        format: STENCIL,
-        depth_write_enabled: Some(false),
-        depth_compare: Some(CompareFunction::Always),
-        stencil: StencilState {
-            front: face,
-            back: face,
-            read_mask: 0xFF,
-            write_mask,
-        },
-        bias: DepthBiasState::default(),
-    }
-}
-
-fn section_axis(section: &SectionData) -> (usize, usize, usize) {
-    (
-        section.mapping[2] as usize,
-        section.mapping[0] as usize,
-        section.mapping[1] as usize,
-    )
-}
-
-fn cut_rect(object: &SectionObject, section: &SectionData, size: [u32; 2]) -> Option<[u32; 4]> {
-    let (axis, u, v) = section_axis(section);
-    let plane = section.box_min[axis] + section.plane[0] * section.world[axis];
-    if object.high[axis] < plane || object.low[axis] > plane {
-        return None;
-    }
-    if section.uv_scale[0] <= 0.0 || section.uv_scale[1] <= 0.0 {
-        return None;
-    }
-    let (first_u, second_u) = cut_span(object.low[u], object.high[u], u, 0, section, size);
-    let (first_v, second_v) = cut_span(object.low[v], object.high[v], v, 1, section, size);
-    let left = edge(first_u.min(second_u) - SCISSOR_MARGIN, size[0], f32::floor);
-    let right = edge(first_u.max(second_u) + SCISSOR_MARGIN, size[0], f32::ceil);
-    let top = edge(first_v.min(second_v) - SCISSOR_MARGIN, size[1], f32::floor);
-    let bottom = edge(first_v.max(second_v) + SCISSOR_MARGIN, size[1], f32::ceil);
-    if right <= left || bottom <= top {
-        return None;
-    }
-    Some([left, top, right - left, bottom - top])
-}
-
-fn cut_depth(object: &SectionObject, section: &SectionData, eye: Vec3, forward: Vec3) -> f32 {
-    let (axis, _, _) = section_axis(section);
-    let mut center = std::array::from_fn(|index| 0.5 * (object.low[index] + object.high[index]));
-    center[axis] = section.box_min[axis] + section.plane[0] * section.world[axis];
-    (Vec3::from(center) - eye).dot(forward)
-}
-
-fn cut_span(
-    low: f32,
-    high: f32,
-    world_axis: usize,
-    pane_axis: usize,
-    section: &SectionData,
-    size: [u32; 2],
-) -> (f32, f32) {
-    let length = size[pane_axis] as f32;
-    let pixel = |world: f32| {
-        let uv = (world - section.box_min[world_axis]) / section.world[world_axis];
-        let clip = (uv - section.uv_center[pane_axis]) / section.uv_scale[pane_axis];
-        if pane_axis == 0 {
-            (clip * 0.5 + 0.5) * length
-        } else {
-            (0.5 - clip * 0.5) * length
-        }
-    };
-    (pixel(low), pixel(high))
-}
-
-fn edge(value: f32, length: u32, round: fn(f32) -> f32) -> u32 {
-    (round(value) as i64).clamp(0, length as i64) as u32
-}
-
-fn bind_group(device: &Device, layout: &BindGroupLayout, buffer: &Buffer) -> BindGroup {
-    device.create_bind_group(&BindGroupDescriptor {
-        label: Some("grana.mesh.group"),
-        layout,
-        entries: &[BindGroupEntry {
-            binding: 0,
-            resource: buffer.as_entire_binding(),
-        }],
-    })
-}
-
-fn style_data(style: Style) -> StyleData {
+pub(crate) fn style_data(style: Style) -> StyleData {
     let [red, green, blue] = srgb_to_linear(style.color());
     StyleData {
         color: [red, green, blue, 1.0],
@@ -1025,42 +609,16 @@ fn style_data(style: Style) -> StyleData {
     }
 }
 
-fn cut_group(device: &Device, layouts: &Layouts, objects: &Buffer, styles: &Buffer) -> BindGroup {
+fn bind_group(device: &Device, layout: &BindGroupLayout, buffer: &Buffer) -> BindGroup {
     device.create_bind_group(&BindGroupDescriptor {
-        label: Some("grana.cut.data.group"),
-        layout: &layouts.cut,
-        entries: &[
-            BindGroupEntry {
-                binding: 0,
-                resource: objects.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 1,
-                resource: styles.as_entire_binding(),
-            },
-        ],
+        label: Some("grana.mesh.group"),
+        layout,
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: buffer.as_entire_binding(),
+        }],
     })
 }
-
-fn section_vertex_layout() -> VertexBufferLayout<'static> {
-    VertexBufferLayout {
-        array_stride: size_of::<PointData>() as u64,
-        step_mode: VertexStepMode::Vertex,
-        attributes: &[
-            VertexAttribute {
-                format: VertexFormat::Unorm16x4,
-                offset: 0,
-                shader_location: 0,
-            },
-            VertexAttribute {
-                format: VertexFormat::Unorm16x2,
-                offset: 8,
-                shader_location: 1,
-            },
-        ],
-    }
-}
-
 fn vertex_layout() -> VertexBufferLayout<'static> {
     VertexBufferLayout {
         array_stride: size_of::<PointData>() as u64,

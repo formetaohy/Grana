@@ -2617,7 +2617,7 @@ fn shrinks_section_marker_disks_with_the_plane_offset() {
 }
 
 #[test]
-fn reuses_the_cut_target_and_draws_each_cut_object_twice() {
+fn reuses_the_cut_target_and_batches_every_cut_face() {
     let Some((device, queue)) = device() else {
         return;
     };
@@ -2668,9 +2668,8 @@ fn reuses_the_cut_target_and_draws_each_cut_object_twice() {
         assert_eq!(info.cut.targets, 1, "the cut target is built once");
         assert_eq!(info.cut.objects, 2, "both objects cross the cut plane");
         assert_eq!(
-            info.cut.draws,
-            2 * info.cut.objects + 2,
-            "each cut object costs two draws: one stencil pass and one fill"
+            info.cut.draws, 3,
+            "every cut face costs one draw whatever the object count"
         );
     }
     let settled = renderer.draw(&device, &queue, common::frame(&session));

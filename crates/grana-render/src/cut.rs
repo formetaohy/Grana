@@ -4,14 +4,14 @@ use wgpu::{
     BindGroupLayoutEntry, BindingType, BlendState, ColorTargetState, ColorWrites, CommandEncoder,
     Device, Extent3d, FragmentState, LoadOp, MultisampleState, Operations,
     PipelineLayoutDescriptor, PrimitiveState, RenderPass, RenderPassColorAttachment,
-    RenderPassDepthStencilAttachment, RenderPassDescriptor, RenderPipeline,
-    RenderPipelineDescriptor, Sampler, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource,
-    ShaderStages, StoreOp, TextureDescriptor, TextureDimension, TextureSampleType, TextureUsages,
-    TextureView, TextureViewDescriptor, TextureViewDimension, VertexState,
+    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, Sampler, SamplerDescriptor,
+    ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, TextureDescriptor,
+    TextureDimension, TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor,
+    TextureViewDimension, VertexState,
 };
 
 use crate::layout::Layouts;
-use crate::target::{CUT_ID_FORMAT, SCENE_FORMAT, STENCIL_FORMAT};
+use crate::target::{CUT_ID_FORMAT, SCENE_FORMAT};
 
 const CUT_SAMPLES: u32 = 4;
 
@@ -31,7 +31,6 @@ pub(crate) struct CutLayer {
 struct Target {
     color: TextureView,
     resolved: TextureView,
-    stencil: TextureView,
     identities: TextureView,
     group: BindGroup,
     identities_group: BindGroup,
@@ -105,7 +104,7 @@ impl CutLayer {
         });
         let outline_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.cut.outline.pipeline_layout"),
-            bind_group_layouts: &[Some(&outline_layout), Some(&layouts.cut)],
+            bind_group_layouts: &[Some(&outline_layout), Some(&layouts.styles)],
             immediate_size: 0,
         });
         let outline = device.create_render_pipeline(&RenderPipelineDescriptor {
@@ -184,14 +183,6 @@ impl CutLayer {
                     },
                 }),
             ],
-            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                view: &target.stencil,
-                depth_ops: None,
-                stencil_ops: Some(Operations {
-                    load: LoadOp::Clear(0),
-                    store: StoreOp::Discard,
-                }),
-            }),
             ..Default::default()
         });
         pass.set_viewport(0.0, 0.0, size[0] as f32, size[1] as f32, 0.0, 1.0);
@@ -291,18 +282,6 @@ impl CutLayer {
                 view_formats: &[],
             })
             .create_view(&TextureViewDescriptor::default());
-        let stencil = device
-            .create_texture(&TextureDescriptor {
-                label: Some("grana.cut.stencil"),
-                size: extent,
-                mip_level_count: 1,
-                sample_count: CUT_SAMPLES,
-                dimension: TextureDimension::D2,
-                format: STENCIL_FORMAT,
-                usage: TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            })
-            .create_view(&TextureViewDescriptor::default());
         let identities = device
             .create_texture(&TextureDescriptor {
                 label: Some("grana.cut.identities"),
@@ -340,7 +319,6 @@ impl CutLayer {
         Target {
             color,
             resolved,
-            stencil,
             identities,
             group,
             identities_group,
@@ -353,26 +331,5 @@ pub(crate) fn multisample() -> MultisampleState {
         count: CUT_SAMPLES,
         mask: !0,
         alpha_to_coverage_enabled: false,
-    }
-}
-
-pub(crate) fn pass_state() -> wgpu::DepthStencilState {
-    let face = wgpu::StencilFaceState {
-        compare: wgpu::CompareFunction::Always,
-        fail_op: wgpu::StencilOperation::Keep,
-        depth_fail_op: wgpu::StencilOperation::Keep,
-        pass_op: wgpu::StencilOperation::Keep,
-    };
-    wgpu::DepthStencilState {
-        format: STENCIL_FORMAT,
-        depth_write_enabled: Some(false),
-        depth_compare: Some(wgpu::CompareFunction::Always),
-        stencil: wgpu::StencilState {
-            front: face,
-            back: face,
-            read_mask: 0x00,
-            write_mask: 0x00,
-        },
-        bias: wgpu::DepthBiasState::default(),
     }
 }

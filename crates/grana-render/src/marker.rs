@@ -1,4 +1,4 @@
-use std::hash::{Hash, Hasher};
+﻿use std::hash::{Hash, Hasher};
 
 use bytemuck::{Pod, Zeroable};
 use grana_gpu::{InstanceCommands, Table};
@@ -219,7 +219,7 @@ impl MarkerPasses {
                 cull_mode: None,
                 ..Default::default()
             },
-            depth_stencil: Some(cut::pass_state()),
+            depth_stencil: None,
             multisample: cut::multisample(),
             fragment: Some(FragmentState {
                 module: &section_module,

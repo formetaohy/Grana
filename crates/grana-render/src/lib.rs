@@ -14,6 +14,7 @@ mod sample;
 mod schema;
 mod section;
 mod shadow;
+mod slice;
 mod table;
 mod target;
 mod volume;

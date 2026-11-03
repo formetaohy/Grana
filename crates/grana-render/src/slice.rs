@@ -1,0 +1,421 @@
+﻿use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use bytemuck::{Pod, Zeroable};
+use glam::Vec3;
+use grana_display::Camera;
+use grana_geometry::{PackedMesh, cross_section, is_closed};
+use grana_gpu::Table;
+use wgpu::{
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Buffer, BufferUsages,
+    ColorTargetState, ColorWrites, Device, FragmentState, IndexFormat, PipelineLayoutDescriptor,
+    PrimitiveState, Queue, RenderPass, RenderPipeline, RenderPipelineDescriptor,
+    ShaderModuleDescriptor, ShaderSource, VertexAttribute, VertexBufferLayout, VertexFormat,
+    VertexState, VertexStepMode, util::DeviceExt,
+};
+
+use crate::cut;
+use crate::frame::SectionData;
+use crate::layout::Layouts;
+use crate::mesh::{StyleData, style_data};
+use crate::schema::{LayerKey, SceneFrame};
+use crate::target::{CUT_ID_FORMAT, SCENE_FORMAT};
+
+const SHADER: &str = concat!(
+    include_str!("shader/scene.wgsl"),
+    "\n",
+    include_str!("shader/slice.wgsl")
+);
+
+const UNIT: f32 = 65535.0;
+const QUAD_INDICES: [u32; 6] = [0, 1, 2, 0, 2, 3];
+const QUAD_LIMIT: u32 = 1 << 18;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct FaceVertex {
+    uv: [f32; 2],
+    style: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct FaceCommand {
+    index_count: u32,
+    instance_count: u32,
+    first_index: u32,
+    base_vertex: i32,
+    first_instance: u32,
+}
+
+const _: () = {
+    assert!(size_of::<FaceVertex>() == 12);
+    assert!(size_of::<FaceCommand>() == 20);
+};
+
+#[derive(Clone, Copy)]
+struct FaceRun {
+    style: u32,
+    first_vertex: u32,
+    quads: u32,
+    low: [f32; 3],
+    high: [f32; 3],
+}
+
+pub(crate) struct SlicePass {
+    pipeline: RenderPipeline,
+    vertices: Buffer,
+    indices: Buffer,
+    commands: Buffer,
+    styles: Table<StyleData>,
+    style_group: BindGroup,
+    style_cache: Vec<StyleData>,
+    vertex_capacity: u32,
+    quad_capacity: u32,
+    command_capacity: u32,
+    runs: Vec<FaceRun>,
+    closed: HashMap<LayerKey, Vec<Option<bool>>>,
+    staged: Vec<FaceVertex>,
+    scratch: Vec<[f32; 2]>,
+    span_key: Option<u64>,
+    objects: u32,
+    draws: u32,
+}
+
+impl SlicePass {
+    pub fn new(device: &Device, layouts: &Layouts) -> Self {
+        let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.slice.pipeline_layout"),
+            bind_group_layouts: &[Some(&layouts.scene), Some(&layouts.styles)],
+            immediate_size: 0,
+        });
+        let module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("grana.slice"),
+            source: ShaderSource::Wgsl(SHADER.into()),
+        });
+        let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.slice"),
+            layout: Some(&layout),
+            vertex: VertexState {
+                module: &module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(VertexBufferLayout {
+                    array_stride: size_of::<FaceVertex>() as u64,
+                    step_mode: VertexStepMode::Vertex,
+                    attributes: &[
+                        VertexAttribute {
+                            format: VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        VertexAttribute {
+                            format: VertexFormat::Uint32,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                    ],
+                })],
+            },
+            primitive: PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: cut::multisample(),
+            fragment: Some(FragmentState {
+                module: &module,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[
+                    Some(ColorTargetState {
+                        format: SCENE_FORMAT,
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: ColorWrites::ALL,
+                    }),
+                    Some(ColorTargetState {
+                        format: CUT_ID_FORMAT,
+                        blend: None,
+                        write_mask: ColorWrites::ALL,
+                    }),
+                ],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let styles = Table::with_capacity(device, "grana.slice.styles", 1);
+        let style_group = style_group(device, &layouts.styles, styles.buffer());
+        Self {
+            pipeline,
+            vertices: vertex_buffer(device, "grana.slice.vertices", 4),
+            indices: index_buffer(device, "grana.slice.indices", 1),
+            commands: command_buffer(device, "grana.slice.commands", 1),
+            styles,
+            style_group,
+            style_cache: Vec::new(),
+            vertex_capacity: 4,
+            quad_capacity: 1,
+            command_capacity: 1,
+            runs: Vec::new(),
+            closed: HashMap::new(),
+            staged: Vec::new(),
+            scratch: Vec::new(),
+            span_key: None,
+            objects: 0,
+            draws: 0,
+        }
+    }
+
+    pub fn style_group(&self) -> &BindGroup {
+        &self.style_group
+    }
+
+    pub fn objects(&self) -> u32 {
+        self.objects
+    }
+
+    pub fn draws(&self) -> u32 {
+        self.draws
+    }
+
+    pub fn prepare(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        layouts: &Layouts,
+        scene: &SceneFrame<'_>,
+        section: &SectionData,
+        camera: &Camera,
+    ) {
+        if section.uv_scale[0] <= 0.0 || section.uv_scale[1] <= 0.0 {
+            self.objects = 0;
+            self.draws = 0;
+            return;
+        }
+        self.write_styles(device, queue, layouts, scene);
+        let axis = section.mapping[2] as usize;
+        let box_min = section.box_min;
+        let world = section.world;
+        let plane = box_min[axis] + section.plane[0] * world[axis];
+        let key = span_key(scene, axis, plane);
+        if self.span_key != Some(key) {
+            self.build(scene, axis, plane);
+            self.upload(device, queue);
+            self.span_key = Some(key);
+        }
+        self.pose(device, queue, scene, section, camera);
+    }
+
+    fn write_styles(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        layouts: &Layouts,
+        scene: &SceneFrame<'_>,
+    ) {
+        let rows = scene
+            .styles
+            .iter()
+            .copied()
+            .map(style_data)
+            .collect::<Vec<_>>();
+        let grown = self.styles.reserve(device, rows.len().max(1));
+        if grown {
+            self.style_group = style_group(device, &layouts.styles, self.styles.buffer());
+        }
+        if rows != self.style_cache {
+            queue.write_buffer(self.styles.buffer(), 0, bytemuck::cast_slice(&rows));
+            self.style_cache = rows;
+        }
+    }
+
+    fn solid(&mut self, key: LayerKey, mesh: &PackedMesh, object: usize) -> bool {
+        let flags = self
+            .closed
+            .entry(key)
+            .or_insert_with(|| vec![None; mesh.object_count()]);
+        if let Some(flag) = flags[object] {
+            return flag;
+        }
+        let flag = is_closed(mesh, object);
+        flags[object] = Some(flag);
+        flag
+    }
+
+    fn build(&mut self, scene: &SceneFrame<'_>, axis: usize, plane: f32) {
+        self.runs.clear();
+        self.staged.clear();
+        for layer in scene.layers {
+            let mesh = layer.mesh;
+            for object in 0..mesh.object_count() {
+                let group = mesh.groups()[object];
+                let low = group.min();
+                let high = [0, 1, 2].map(|index| low[index] + UNIT * group.scale()[index]);
+                if plane < low[axis] || plane > high[axis] {
+                    continue;
+                }
+                if !self.solid(layer.key, mesh, object) {
+                    continue;
+                }
+                self.scratch.clear();
+                let first_vertex = self.staged.len() as u32;
+                let quads = cross_section(mesh, object, axis, plane, &mut self.scratch) as u32;
+                assert!(
+                    quads <= QUAD_LIMIT,
+                    "a cut face spans more than {QUAD_LIMIT} quads"
+                );
+                if quads == 0 {
+                    continue;
+                }
+                let style = layer.style_start + object;
+                assert!(style < scene.styles.len(), "a cut face names a scene style");
+                self.staged.extend(self.scratch.iter().map(|uv| FaceVertex {
+                    uv: *uv,
+                    style: style as u32,
+                }));
+                self.runs.push(FaceRun {
+                    style: style as u32,
+                    first_vertex,
+                    quads,
+                    low,
+                    high,
+                });
+            }
+        }
+        self.scratch.clear();
+        self.closed
+            .retain(|key, _| scene.layers.iter().any(|layer| layer.key == *key));
+    }
+
+    fn upload(&mut self, device: &Device, queue: &Queue) {
+        let vertices = self.staged.len() as u32;
+        if vertices > self.vertex_capacity {
+            self.vertices = vertex_buffer(device, "grana.slice.vertices", vertices);
+            self.vertex_capacity = vertices;
+        }
+        if !self.staged.is_empty() {
+            queue.write_buffer(&self.vertices, 0, bytemuck::cast_slice(&self.staged));
+        }
+        let quads = self.runs.iter().map(|run| run.quads).max().unwrap_or(0);
+        if quads > self.quad_capacity {
+            self.indices = index_buffer(device, "grana.slice.indices", quads);
+            self.quad_capacity = quads;
+        }
+    }
+
+    fn pose(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        scene: &SceneFrame<'_>,
+        section: &SectionData,
+        camera: &Camera,
+    ) {
+        let axis = section.mapping[2] as usize;
+        let box_min = section.box_min;
+        let world = section.world;
+        let plane = box_min[axis] + section.plane[0] * world[axis];
+        let eye = camera.eye();
+        let forward = camera.forward();
+        let mut order = self
+            .runs
+            .iter()
+            .enumerate()
+            .filter(|(_, run)| run.quads > 0 && scene.styles[run.style as usize].visible())
+            .map(|(index, run)| {
+                let mut centre = [0.0; 3];
+                for (corner, slot) in centre.iter_mut().enumerate() {
+                    *slot = 0.5 * (run.low[corner] + run.high[corner]);
+                }
+                centre[axis] = plane;
+                ((Vec3::from(centre) - eye).dot(forward), index)
+            })
+            .collect::<Vec<_>>();
+        order.sort_by(|left, right| right.0.total_cmp(&left.0).then(left.1.cmp(&right.1)));
+        let count = order.len() as u32;
+        if count > self.command_capacity {
+            self.commands = command_buffer(device, "grana.slice.commands", count);
+            self.command_capacity = count;
+        }
+        let rows = order
+            .iter()
+            .map(|(_, index)| {
+                let run = &self.runs[*index];
+                FaceCommand {
+                    index_count: run.quads * 6,
+                    instance_count: 1,
+                    first_index: 0,
+                    base_vertex: run.first_vertex as i32,
+                    first_instance: 0,
+                }
+            })
+            .collect::<Vec<_>>();
+        if !rows.is_empty() {
+            queue.write_buffer(&self.commands, 0, bytemuck::cast_slice(&rows));
+        }
+        self.objects = count;
+        self.draws = u32::from(count > 0);
+    }
+
+    pub fn draw<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
+        if self.draws == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, scene, &[]);
+        pass.set_bind_group(1, &self.style_group, &[]);
+        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        pass.set_index_buffer(self.indices.slice(..), IndexFormat::Uint32);
+        pass.multi_draw_indexed_indirect(&self.commands, 0, self.objects);
+    }
+}
+
+fn span_key(scene: &SceneFrame<'_>, axis: usize, plane: f32) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    axis.hash(&mut hasher);
+    plane.to_bits().hash(&mut hasher);
+    for layer in scene.layers {
+        layer.key.hash(&mut hasher);
+        layer.style_start.hash(&mut hasher);
+        layer.mesh.vertex_count().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn style_group(device: &Device, layout: &BindGroupLayout, buffer: &Buffer) -> BindGroup {
+    device.create_bind_group(&BindGroupDescriptor {
+        label: Some("grana.slice.style.group"),
+        layout,
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: buffer.as_entire_binding(),
+        }],
+    })
+}
+
+fn vertex_buffer(device: &Device, label: &'static str, vertices: u32) -> Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: u64::from(vertices.max(1)) * size_of::<FaceVertex>() as u64,
+        usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+fn index_buffer(device: &Device, label: &'static str, quads: u32) -> Buffer {
+    let pattern = (0..quads)
+        .flat_map(|quad| QUAD_INDICES.map(|index| index + 4 * quad))
+        .collect::<Vec<_>>();
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: bytemuck::cast_slice(&pattern),
+        usage: BufferUsages::INDEX,
+    })
+}
+
+fn command_buffer(device: &Device, label: &'static str, commands: u32) -> Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: u64::from(commands.max(1)) * size_of::<FaceCommand>() as u64,
+        usage: BufferUsages::INDIRECT | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
