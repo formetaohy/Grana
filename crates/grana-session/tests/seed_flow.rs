@@ -71,6 +71,7 @@ fn run(seeds: Vec<Vec<[f32; 3]>>) -> Result<Vec<usize>, String> {
         Region::none(),
         None,
         seeds,
+        0,
     );
     let analysis = detect(
         Job::Detect(ObjectSetId::from_raw(1).expect("a set id")),

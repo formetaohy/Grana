@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
 use grana_geometry::{Bvh, PackedMesh, Primitive};
@@ -110,4 +111,34 @@ fn sources(shape: &Shape) -> usize {
         Shape::Mesh(mesh) => mesh.object_count(),
         Shape::Spots(spots) => spots.len(),
     }
+}
+
+pub fn relate_frames(
+    source: &[Option<Shape>],
+    target: &[Option<Shape>],
+    workers: usize,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<Option<Vec<Option<RelationFrame>>>, String> {
+    let total = source.len().min(target.len());
+    let mut frames = (0..total).map(|_| None).collect::<Vec<_>>();
+    let completed = crate::schedule::ordered(
+        total,
+        crate::schedule::workers(workers),
+        cancel,
+        progress,
+        || (),
+        |(), time| {
+            Ok(match (&source[time], &target[time]) {
+                (Some(source), Some(target)) => Some(Reference::new(target).relate(source)),
+                (Some(source), None) => Some(RelationFrame::empty(sources(source))),
+                (None, _) => None,
+            })
+        },
+        |time, frame| {
+            frames[time] = frame;
+            Ok(())
+        },
+    )?;
+    Ok(completed.then_some(frames))
 }

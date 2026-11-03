@@ -33,6 +33,13 @@ pub fn default_jobs() -> usize {
         .min(DEFAULT_JOBS)
 }
 
+fn dataset_workers(jobs: usize) -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, |cores| cores.get())
+        .div_ceil(jobs.max(1))
+        .max(1)
+}
+
 pub struct Plan {
     pub protocol: Protocol,
     pub datasets: Vec<PathBuf>,
@@ -166,6 +173,15 @@ struct Report {
     detail: String,
 }
 
+struct Task<'a> {
+    protocol: &'a Protocol,
+    workers: usize,
+    digest: u64,
+    index: usize,
+    events: &'a Sender<Event>,
+    cancel: &'a AtomicBool,
+}
+
 struct Progress<'a> {
     index: usize,
     events: &'a Sender<Event>,
@@ -182,6 +198,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
     let next = AtomicUsize::new(0);
     let rows = Mutex::new((0..plan.datasets.len()).map(|_| None).collect::<Vec<_>>());
     let jobs = plan.jobs.clamp(1, MAX_JOBS).min(plan.datasets.len().max(1));
+    let workers = dataset_workers(jobs);
     std::thread::scope(|scope| {
         for _ in 0..jobs {
             let events = events.clone();
@@ -198,7 +215,18 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
                     if index >= plan.datasets.len() {
                         break;
                     }
-                    work(plan, digest, index, &events, &cancel, rows);
+                    work(
+                        plan,
+                        &Task {
+                            protocol: &plan.protocol,
+                            workers,
+                            digest,
+                            index,
+                            events: &events,
+                            cancel: &cancel,
+                        },
+                        rows,
+                    );
                 }
             });
         }
@@ -245,19 +273,13 @@ fn folder_name(dataset: &Path) -> String {
     slug(&dataset_name(dataset)).to_ascii_lowercase()
 }
 
-fn work(
-    plan: &Plan,
-    digest: u64,
-    index: usize,
-    events: &Sender<Event>,
-    cancel: &AtomicBool,
-    rows: &Mutex<Vec<Option<Row>>>,
-) {
+fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
+    let index = task.index;
     let dataset = &plan.datasets[index];
     let name = dataset_name(dataset);
     let folder = plan.output.join(folder_name(dataset));
-    if let Some(record) = completed(&folder, digest, &build(), content(dataset)) {
-        let _ = events.send(Event::Dataset {
+    if let Some(record) = completed(&folder, task.digest, &build(), content(dataset)) {
+        let _ = task.events.send(Event::Dataset {
             index,
             outcome: Outcome::Complete {
                 objects: record.objects,
@@ -276,21 +298,13 @@ fn work(
         );
         return;
     }
-    let _ = events.send(Event::Started {
+    let _ = task.events.send(Event::Started {
         index,
         name: name.clone(),
     });
-    match analyse(
-        &plan.protocol,
-        dataset,
-        &plan.output,
-        digest,
-        index,
-        events,
-        cancel,
-    ) {
+    match analyse(task, dataset, &plan.output) {
         Ok(report) => {
-            let _ = events.send(Event::Dataset {
+            let _ = task.events.send(Event::Dataset {
                 index,
                 outcome: Outcome::Complete {
                     objects: report.objects,
@@ -309,10 +323,10 @@ fn work(
             );
         }
         Err(detail) => {
-            if cancel.load(Ordering::Relaxed) {
+            if task.cancel.load(Ordering::Relaxed) {
                 return;
             }
-            let _ = events.send(Event::Dataset {
+            let _ = task.events.send(Event::Dataset {
                 index,
                 outcome: Outcome::Failed {
                     detail: detail.clone(),
@@ -331,22 +345,14 @@ fn work(
     }
 }
 
-fn analyse(
-    protocol: &Protocol,
-    dataset: &Path,
-    output: &Path,
-    digest: u64,
-    index: usize,
-    events: &Sender<Event>,
-    cancel: &AtomicBool,
-) -> Result<Report, String> {
+fn analyse(task: &Task<'_>, dataset: &Path, output: &Path) -> Result<Report, String> {
     let folder = output.join(folder_name(dataset));
     let partial = output.join(format!(".{PARTIAL}-{}", folder_name(dataset)));
     clear(&partial)?;
     clear(&folder)?;
     std::fs::create_dir_all(&partial)
         .map_err(|error| format!("failed to create {}: {error}", partial.display()))?;
-    let outcome = write_dataset(protocol, dataset, &partial, digest, index, events, cancel);
+    let outcome = write_dataset(task, dataset, &partial);
     let report = match outcome {
         Ok(report) => report,
         Err(detail) => {
@@ -361,15 +367,7 @@ fn analyse(
     Ok(report)
 }
 
-fn write_dataset(
-    protocol: &Protocol,
-    dataset: &Path,
-    folder: &Path,
-    digest: u64,
-    index: usize,
-    events: &Sender<Event>,
-    cancel: &AtomicBool,
-) -> Result<Report, String> {
+fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Report, String> {
     let source = Source::file(dataset.to_path_buf());
     let reader = Image::open(&source)?;
     let pyramid = reader.pyramid();
@@ -378,19 +376,20 @@ fn write_dataset(
         .iter()
         .map(|channel| channel.name().to_string())
         .collect::<Vec<_>>();
-    let region = protocol
+    let region = task
+        .protocol
         .region()
         .map_or_else(Region::none, |region| region.region(world(pyramid)));
     let mut objects = 0usize;
     let mut detail = Vec::new();
     let progress = Progress {
-        index,
-        events,
-        cancel,
+        index: task.index,
+        events: task.events,
+        cancel: task.cancel,
     };
     let mut detected = Vec::<Detected>::new();
-    for set in protocol.sets() {
-        if cancel.load(Ordering::Relaxed) {
+    for set in task.protocol.sets() {
+        if task.cancel.load(Ordering::Relaxed) {
             return Err("cancelled".to_string());
         }
         let channel = resolve(pyramid, &set.channel)
@@ -415,20 +414,20 @@ fn write_dataset(
             },
             None => None,
         };
-        let _ = events.send(Event::Step {
-            index,
+        let _ = task.events.send(Event::Step {
+            index: task.index,
             label: format!("detecting {}", set.name),
         });
-        let frames = detect(&reader, channel, set, region, roi, &progress)?
+        let frames = detect(&reader, task, channel, set, region, roi, &progress)?
             .into_iter()
             .map(|frame| frame.map(Arc::new))
             .collect::<Vec<_>>();
         let tracks = if let Some(params) = set.track_params() {
-            let _ = events.send(Event::Step {
-                index,
+            let _ = task.events.send(Event::Step {
+                index: task.index,
                 label: format!("tracking {}", set.name),
             });
-            let Some(tracks) = track(&frames, params, pyramid.frame_interval(), cancel) else {
+            let Some(tracks) = track(&frames, params, pyramid.frame_interval(), task.cancel) else {
                 return Err("cancelled".to_string());
             };
             Some(tracks)
@@ -442,7 +441,7 @@ fn write_dataset(
             relations: Vec::new(),
         });
     }
-    for relation in protocol.relations() {
+    for relation in task.protocol.relations() {
         let source = detected
             .iter()
             .position(|detected| detected.set.name == relation.source)
@@ -451,13 +450,14 @@ fn write_dataset(
             .iter()
             .position(|detected| detected.set.name == relation.target)
             .ok_or_else(|| format!("the relation target {} is unknown", relation.target))?;
-        let _ = events.send(Event::Step {
-            index,
+        let _ = task.events.send(Event::Step {
+            index: task.index,
             label: format!("relating {} to {}", relation.source, relation.target),
         });
         let frames = relate(
             detected[source].frames.clone(),
             detected[target].frames.clone(),
+            task.workers,
             &progress,
         )?;
         detected[source]
@@ -486,7 +486,7 @@ fn write_dataset(
         objects += rows.len();
         detail.push(format!("{}={}", detected.set.name, rows.len()));
     }
-    if let Some(coloc) = protocol.coloc() {
+    if let Some(coloc) = task.protocol.coloc() {
         let mask_frames = match &coloc.mask {
             None => None,
             Some(name) => match detected.iter().find(|detected| detected.set.name == *name) {
@@ -505,8 +505,8 @@ fn write_dataset(
         };
         let settings = coloc.settings();
         for spec in &coloc.pairs {
-            let _ = events.send(Event::Step {
-                index,
+            let _ = task.events.send(Event::Step {
+                index: task.index,
                 label: format!("colocalizing {} with {}", spec.a, spec.b),
             });
             let pair = ColocPair::new(
@@ -516,7 +516,7 @@ fn write_dataset(
             let roi = mask_frames
                 .as_ref()
                 .map(|frames| grana_analysis::Roi::new(frames.clone()));
-            let series = colocalize(&reader, pair, region, roi, settings, cancel)?
+            let series = colocalize(&reader, pair, region, roi, settings, task.cancel)?
                 .ok_or_else(|| "cancelled".to_string())?;
             let thresholds =
                 grana_measure::ColocThresholds::new(spec.thresholds[0], spec.thresholds[1]);
@@ -531,7 +531,7 @@ fn write_dataset(
         detail: detail.join("; "),
     };
     let record = serde_json::to_string(&Record {
-        protocol: digest,
+        protocol: task.digest,
         build: build(),
         content: content(dataset),
         objects: report.objects,
@@ -551,6 +551,7 @@ struct Detected<'a> {
 
 fn detect(
     reader: &Image,
+    task: &Task<'_>,
     channel: usize,
     set: &crate::protocol::SetSpec,
     region: Region,
@@ -576,7 +577,14 @@ fn detect(
     };
     run::detect(
         reader,
-        run::DetectRequest::new(channel, set.params(), region, roi, set.seeds().to_vec()),
+        run::DetectRequest::new(
+            channel,
+            set.params(),
+            region,
+            roi,
+            set.seeds().to_vec(),
+            task.workers,
+        ),
         progress.cancel,
         &mut sink,
     )?;
@@ -631,6 +639,7 @@ fn colocalize(
 fn relate(
     source: Vec<Option<Arc<ObjectFrame>>>,
     target: Vec<Option<Arc<ObjectFrame>>>,
+    workers: usize,
     progress: &Progress<'_>,
 ) -> Result<Vec<Option<RelationFrame>>, String> {
     let mut frames = vec![None; source.len()];
@@ -649,7 +658,7 @@ fn relate(
         | RunEvent::Done
         | RunEvent::Failed(_) => {}
     };
-    run::relation(source, target, progress.cancel, &mut sink);
+    run::relation(source, target, workers, progress.cancel, &mut sink);
     if progress.cancel.load(Ordering::Relaxed) {
         return Err("cancelled".to_string());
     }

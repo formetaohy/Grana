@@ -1,13 +1,13 @@
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{
-    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, Reference, Roi, SpotScan,
-    SurfaceBuilder, TrackBuilder, coloc_levels, filament_level, surface_level,
+    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, Roi, SpotScanner, SurfaceBuilder,
+    TrackBuilder, coloc_levels, filament_level, relate_frames, surface_level,
 };
 use grana_image::Image;
 use grana_measure::{ColocPair, ColocSettings};
-use grana_object::{IntensityTable, RelationFrame, SampleAccumulator, Spot, SpotSet};
 use grana_scene::{ObjectFrame, ObjectParams};
 use grana_volume::VoxelData;
 
@@ -19,6 +19,7 @@ pub struct DetectRequest {
     region: grana_volume::Region,
     roi: Option<Roi>,
     seeds: Vec<Vec<[f32; 3]>>,
+    workers: usize,
 }
 
 impl DetectRequest {
@@ -28,6 +29,7 @@ impl DetectRequest {
         region: grana_volume::Region,
         roi: Option<Roi>,
         seeds: Vec<Vec<[f32; 3]>>,
+        workers: usize,
     ) -> Self {
         Self {
             channel,
@@ -35,6 +37,7 @@ impl DetectRequest {
             region,
             roi,
             seeds,
+            workers,
         }
     }
 }
@@ -89,6 +92,7 @@ pub(crate) fn tracks(
 pub(crate) fn relation(
     source: Vec<Option<Arc<ObjectFrame>>>,
     target: Vec<Option<Arc<ObjectFrame>>>,
+    workers: usize,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) {
@@ -98,30 +102,37 @@ pub(crate) fn relation(
         done: 0,
         total,
     });
-    let references = target
+    let source = source
         .iter()
         .take(total)
-        .map(|frame| frame.as_deref().map(|frame| Reference::new(&frame.shape())))
+        .map(|frame| frame.as_deref().map(ObjectFrame::shape))
         .collect::<Vec<_>>();
-    for (time, frame) in source.iter().take(total).enumerate() {
-        if cancel.load(Ordering::Relaxed) {
-            return;
-        }
+    let target = target
+        .iter()
+        .take(total)
+        .map(|frame| frame.as_deref().map(ObjectFrame::shape))
+        .collect::<Vec<_>>();
+    let frames = match relate_frames(&source, &target, workers, cancel, &mut |done, total| {
         sink(Event::Progress {
-            time: time as u32,
-            done: time + 1,
+            time: done as u32,
+            done,
             total,
         });
-        let Some(frame) = frame.as_deref() else {
+    }) {
+        Ok(Some(frames)) => frames,
+        Ok(None) => return,
+        Err(detail) => {
+            sink(Event::Failed(detail));
+            return;
+        }
+    };
+    for (time, frame) in frames.into_iter().enumerate() {
+        let Some(frame) = frame else {
             continue;
-        };
-        let result = match &references[time] {
-            Some(reference) => reference.relate(&frame.shape()),
-            None => RelationFrame::empty(frame.object_count()),
         };
         sink(Event::Relation {
             time: time as u32,
-            frame: result,
+            frame,
         });
     }
     sink(Event::Done);
@@ -287,6 +298,7 @@ fn spots(
         channel,
         region,
         roi,
+        workers,
         ..
     } = request;
     let pyramid = reader.pyramid();
@@ -301,81 +313,38 @@ fn spots(
         return Err("the selected channel has no intensity range to detect".to_string());
     }
     let channels = pyramid.channel_count();
-    let mut scanner = SpotScan::new(pyramid.level(0), span, params, region);
-    let total = scanner.block_count();
-    let mut values = Vec::new();
+    let level = pyramid.level(0);
+    let scanner = SpotScanner::new(0, level, span, params, region, channels, channel);
+    let total = scanner.blocks();
     for time in 0..pyramid.frame_count() {
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let mask = roi.as_ref().map(|roi| roi.mask(pyramid.level(0), time));
+        let mask = roi.as_ref().map(|roi| roi.mask(level, time));
         sink(Event::Progress {
             time,
             done: 0,
             total,
         });
-        let mut spots: Vec<Spot> = Vec::new();
-        let mut accumulators: Vec<SampleAccumulator> = Vec::new();
-        for index in 0..total {
-            if cancel.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            let range = scanner.read_range(index);
-            let start = spots.len();
-            let data = reader.read_region(time, 0, channel, &range)?;
-            values.clear();
-            values.resize(data.voxel_count(), 0.0);
-            data.write_values(&mut values);
-            spots.extend(scanner.detect(index, &values, mask.as_ref()));
-            accumulators.resize(spots.len() * channels, SampleAccumulator::new());
-            for (slot, accumulator) in scanner
-                .measure(index, &spots[start..], &values)
-                .into_iter()
-                .enumerate()
-            {
-                accumulators[(start + slot) * channels + channel] = accumulator;
-            }
-            for measured in 0..channels {
-                if measured == channel {
-                    continue;
-                }
-                let data = reader.read_region(time, 0, measured, &range)?;
-                values.clear();
-                values.resize(data.voxel_count(), 0.0);
-                data.write_values(&mut values);
-                for (slot, accumulator) in scanner
-                    .measure(index, &spots[start..], &values)
-                    .into_iter()
-                    .enumerate()
-                {
-                    accumulators[(start + slot) * channels + measured] = accumulator;
-                }
-            }
-            if index % 8 == 0 || index + 1 == total {
-                sink(Event::Progress {
-                    time,
-                    done: index + 1,
-                    total,
-                });
-            }
-        }
-        let intensities = accumulators
-            .into_iter()
-            .map(SampleAccumulator::statistics)
-            .collect();
+        let read = |measured: usize, ranges: &[Range<u32>; 3]| {
+            reader
+                .read_region(time, 0, measured, ranges)
+                .map_err(String::from)
+        };
+        let set = scanner.frame(workers, cancel, mask.as_ref(), &read, &mut |done, total| {
+            sink(Event::Progress { time, done, total })
+        })?;
+        let Some(set) = set else {
+            return Ok(());
+        };
         sink(Event::Frame {
             time,
-            frame: ObjectFrame::Spots(SpotSet::new(
-                0,
-                spots,
-                IntensityTable::new(channels, intensities),
-            )),
+            frame: ObjectFrame::Spots(set),
         });
     }
     sink(Event::Done);
     Ok(())
 }
-
 fn surfaces(
     reader: &Image,
     params: grana_analysis::SurfaceParams,
@@ -388,6 +357,7 @@ fn surfaces(
         region,
         roi,
         seeds,
+        workers,
         ..
     } = request;
     let pyramid = reader.pyramid();
@@ -405,7 +375,6 @@ fn surfaces(
         "the dataset is too large to detect surfaces at any resolution level".to_string()
     })?;
     let level = pyramid.level(level_index);
-    let workers = std::thread::available_parallelism().map_or(1, |value| value.get());
     for time in 0..pyramid.frame_count() {
         if cancel.load(Ordering::Relaxed) {
             return Ok(());

@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use glam::Vec3;
 use grana_geometry::{Bounds, Mesh, MeshVertex};
-use grana_object::{IntensityTable, SurfaceSet, SurfaceStatistics};
+use grana_object::{
+    IntensityTable, SampleAccumulator, SampleStatistics, SurfaceSet, SurfaceStatistics,
+};
 
 use super::assemble::Assembler;
 use super::{EMPTY, Node, SPLIT_FLOOR, cap, find, union};
@@ -204,100 +206,50 @@ impl Assembler<'_> {
                 surface.entry(object).or_default().push(index);
             }
         }
+        let mut candidates = Vec::new();
+        for root in 0..nodes.len() {
+            if find(&mut nodes, root as u32) != root as u32 {
+                continue;
+            }
+            if nodes[root].voxels == 0 || !surface.contains_key(&(root as u32)) {
+                continue;
+            }
+            candidates.push(root as u32);
+        }
+        let sweep = Sweep {
+            plan,
+            nodes: &nodes,
+            accumulators: &accumulators,
+            positions: &positions,
+            normals: &normals,
+            first_normals: &first_normals,
+            triangles: &triangles,
+            areas: &areas,
+            folded: &folded,
+        };
+        let chunks = crate::schedule::map(&candidates, self.workers, |root| {
+            sweep.chunk(
+                *root,
+                surface.get(root).expect("a candidate carries triangles"),
+            )
+        });
         let mut objects = Vec::new();
         let mut intensities = Vec::new();
         let mut kept = Vec::new();
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        let mut vertex_map: HashMap<(u32, u32), u32> = HashMap::new();
-        for root in 0..nodes.len() {
-            if find(&mut nodes, root as u32) != root as u32 {
-                continue;
-            }
-            let node = nodes[root];
-            if node.voxels == 0 {
-                continue;
-            }
-            let Some(selected) = surface.get(&(root as u32)) else {
-                continue;
-            };
-            let count = node.voxels as f64;
-            let volume = count * plan.voxel_volume;
-            if volume < f64::from(plan.params.min_volume()) {
-                continue;
-            }
-            let mean = accumulators[root * plan.channels + plan.detection]
-                .statistics()
-                .mean();
-            if plan.span > 0.0 && mean / plan.span < plan.params.min_mean_intensity() {
-                continue;
-            }
-            let cut = cap::build(&positions, &triangles, selected);
-            let area = areas[root] + cut.area;
-            if area <= 0.0 {
-                continue;
-            }
-            let centroid = [0, 1, 2].map(|axis| {
-                ((node.sum[axis] / count + 0.5) * f64::from(plan.spacing[axis])
-                    - 0.5 * f64::from(plan.world[axis])) as f32
-            });
-            let bounds = Bounds::new(
-                [0, 1, 2].map(|axis| {
-                    (f64::from(node.low[axis]) * f64::from(plan.spacing[axis])
-                        - 0.5 * f64::from(plan.world[axis])) as f32
-                }),
-                [0, 1, 2].map(|axis| {
-                    ((f64::from(node.high[axis]) + 1.0) * f64::from(plan.spacing[axis])
-                        - 0.5 * f64::from(plan.world[axis])) as f32
-                }),
-            );
-            let statistics = SurfaceStatistics::new(node.voxels, volume, area, centroid, bounds);
-            if statistics.sphericity() < f64::from(plan.params.min_sphericity()) {
-                continue;
-            }
+        for chunk in chunks.into_iter().flatten() {
             let object = objects.len() as u32;
-            objects.push(statistics);
-            if folded[root] != EMPTY {
-                kept.push(folded[root]);
-            }
-            for channel in 0..plan.channels {
-                intensities.push(accumulators[root * plan.channels + channel].statistics());
-            }
-            for index in selected {
-                let triangle = triangles[*index];
-                let mut mapped = [0u32; 3];
-                for (slot, vertex) in triangle.iter().enumerate() {
-                    let key = (*vertex, object);
-                    mapped[slot] = match vertex_map.get(&key) {
-                        Some(mapped_vertex) => *mapped_vertex,
-                        None => {
-                            let welded = *vertex as usize;
-                            let normal = normals[welded].normalize_or_zero();
-                            let normal = if normal == Vec3::ZERO {
-                                Vec3::from(first_normals[welded])
-                            } else {
-                                normal
-                            };
-                            let mapped_vertex = vertices.len() as u32;
-                            vertices.push(MeshVertex::new(
-                                positions[welded],
-                                normal.to_array(),
-                                object,
-                            ));
-                            vertex_map.insert(key, mapped_vertex);
-                            mapped_vertex
-                        }
-                    };
-                }
-                indices.extend_from_slice(&mapped);
-            }
             let base = vertices.len() as u32;
-            for (position, normal) in cut.positions.iter().zip(&cut.normals) {
+            for (position, normal) in &chunk.vertices {
                 vertices.push(MeshVertex::new(*position, *normal, object));
             }
-            for index in &cut.triangles {
-                indices.push(base + *index);
+            indices.extend(chunk.indices.iter().map(|index| base + index));
+            objects.push(chunk.statistics);
+            if chunk.seed != EMPTY {
+                kept.push(chunk.seed);
             }
+            intensities.extend(chunk.intensities);
         }
         if kept.len() != self.seed_count {
             let missing = (0..self.seed_count)
@@ -395,4 +347,106 @@ fn component(parent: &mut [u32], left: u32, right: u32) {
         (right, left)
     };
     parent[high as usize] = low;
+}
+
+struct Sweep<'a> {
+    plan: &'a super::SurfaceBuilder,
+    nodes: &'a [Node],
+    accumulators: &'a [SampleAccumulator],
+    positions: &'a [[f32; 3]],
+    normals: &'a [Vec3],
+    first_normals: &'a [[f32; 3]],
+    triangles: &'a [[u32; 3]],
+    areas: &'a [f64],
+    folded: &'a [u32],
+}
+
+struct ObjectChunk {
+    statistics: SurfaceStatistics,
+    seed: u32,
+    intensities: Vec<SampleStatistics>,
+    vertices: Vec<([f32; 3], [f32; 3])>,
+    indices: Vec<u32>,
+}
+
+impl Sweep<'_> {
+    fn chunk(&self, root: u32, selected: &[usize]) -> Option<ObjectChunk> {
+        let plan = self.plan;
+        let slot = root as usize;
+        let node = self.nodes[slot];
+        let count = node.voxels as f64;
+        let volume = count * plan.voxel_volume;
+        if volume < f64::from(plan.params.min_volume()) {
+            return None;
+        }
+        let mean = self.accumulators[slot * plan.channels + plan.detection]
+            .statistics()
+            .mean();
+        if plan.span > 0.0 && mean / plan.span < plan.params.min_mean_intensity() {
+            return None;
+        }
+        let cut = cap::build(self.positions, self.triangles, selected);
+        let area = self.areas[slot] + cut.area;
+        if area <= 0.0 {
+            return None;
+        }
+        let centroid = [0, 1, 2].map(|axis| {
+            ((node.sum[axis] / count + 0.5) * f64::from(plan.spacing[axis])
+                - 0.5 * f64::from(plan.world[axis])) as f32
+        });
+        let bounds = Bounds::new(
+            [0, 1, 2].map(|axis| {
+                (f64::from(node.low[axis]) * f64::from(plan.spacing[axis])
+                    - 0.5 * f64::from(plan.world[axis])) as f32
+            }),
+            [0, 1, 2].map(|axis| {
+                ((f64::from(node.high[axis]) + 1.0) * f64::from(plan.spacing[axis])
+                    - 0.5 * f64::from(plan.world[axis])) as f32
+            }),
+        );
+        let statistics = SurfaceStatistics::new(node.voxels, volume, area, centroid, bounds);
+        if statistics.sphericity() < f64::from(plan.params.min_sphericity()) {
+            return None;
+        }
+        let intensities = (0..plan.channels)
+            .map(|channel| self.accumulators[slot * plan.channels + channel].statistics())
+            .collect();
+        let mut vertices = Vec::new();
+        let mut indices = Vec::with_capacity(selected.len() * 3);
+        let mut welded = HashMap::<u32, u32>::new();
+        for index in selected {
+            let triangle = self.triangles[*index];
+            let mut mapped = [0u32; 3];
+            for (corner, vertex) in triangle.iter().enumerate() {
+                mapped[corner] = match welded.get(vertex) {
+                    Some(mapped) => *mapped,
+                    None => {
+                        let normal = self.normals[*vertex as usize].normalize_or_zero();
+                        let normal = if normal == Vec3::ZERO {
+                            Vec3::from(self.first_normals[*vertex as usize])
+                        } else {
+                            normal
+                        };
+                        let mapped = vertices.len() as u32;
+                        vertices.push((self.positions[*vertex as usize], normal.to_array()));
+                        welded.insert(*vertex, mapped);
+                        mapped
+                    }
+                };
+            }
+            indices.extend_from_slice(&mapped);
+        }
+        let base = vertices.len() as u32;
+        for (position, normal) in cut.positions.iter().zip(&cut.normals) {
+            vertices.push((*position, *normal));
+        }
+        indices.extend(cut.triangles.iter().map(|index| base + index));
+        Some(ObjectChunk {
+            statistics,
+            seed: self.folded[slot],
+            intensities,
+            vertices,
+            indices,
+        })
+    }
 }

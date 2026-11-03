@@ -1262,7 +1262,7 @@ impl Session {
         self.message = None;
         self.record_progress(job, 0, 0, total);
         self.analysis
-            .push(crate::relation(job, source_frames, target_frames));
+            .push(crate::relation(job, source_frames, target_frames, 0));
     }
 
     fn start_detect(&mut self, set: ObjectSetId) {
@@ -1336,7 +1336,7 @@ impl Session {
         self.analysis.push(crate::detect(
             Job::Detect(set),
             source,
-            DetectRequest::new(channel, params, region, roi, seeds),
+            DetectRequest::new(channel, params, region, roi, seeds, 0),
         ));
     }
 

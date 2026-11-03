@@ -60,9 +60,10 @@ pub fn relation(
     job: Job,
     source: Vec<Option<Arc<ObjectFrame>>>,
     target: Vec<Option<Arc<ObjectFrame>>>,
+    workers: usize,
 ) -> Analysis {
     spawn(job, move |cancel, sink| {
-        run::relation(source, target, cancel, sink);
+        run::relation(source, target, workers, cancel, sink);
         Ok(())
     })
 }

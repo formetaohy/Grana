@@ -5,7 +5,7 @@ use crate::mask::Mask;
 use crate::morphology;
 
 use super::bits::{Bits, Grid, MaskInputs, SIDE};
-use super::{Gate, Read, SurfaceBuilder, dims_of, parallel_tiles, smooth};
+use super::{Gate, Read, SurfaceBuilder, dims_of, smooth};
 
 const RAISED_TOLERANCE: f32 = 0.5;
 
@@ -64,12 +64,13 @@ pub(super) fn build(
     let mut occupied = vec![false; blocks[0] * blocks[1] * blocks[2]];
     let gate = plan.gate(roi);
     let pad = plan.pad_mask();
-    let completed = parallel_tiles(
+    let completed = crate::schedule::ordered(
         total,
         workers,
         cancel,
         &mut |done, _| progress(done, step),
-        |index| MaskWorker::run(plan, &gate, index, pad, read),
+        || (),
+        |(), index| MaskWorker::run(plan, &gate, index, pad, read),
         |index, chunk| {
             let mut sink = MaskSink {
                 foreground: &mut foreground,
@@ -337,12 +338,13 @@ fn morph(
     let step = total * 2;
     let pad = plan.pad_morph();
     let mut solid = Bits::new(dims);
-    let completed = parallel_tiles(
+    let completed = crate::schedule::ordered(
         total,
         workers,
         cancel,
         &mut |done, _| progress(done, step),
-        |index| MorphWorker::run(plan, index, pad, foreground, admitted, grid),
+        || (),
+        |(), index| MorphWorker::run(plan, index, pad, foreground, admitted, grid),
         |index, chunk| {
             let core = plan.core_range(index);
             let dims = dims_of(&core);

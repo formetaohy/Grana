@@ -1,7 +1,8 @@
 use std::ops::Range;
+use std::sync::atomic::AtomicBool;
 
-use grana_object::{SampleAccumulator, Spot};
-use grana_volume::{Level, Region as VolumeRegion};
+use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
+use grana_volume::{Level, Region as VolumeRegion, VoxelData};
 
 use crate::{Mask, SpotParams};
 
@@ -12,8 +13,178 @@ const CORE_MAX: u32 = 256;
 const CORE_STEP: u32 = 32;
 const CORE_VOXELS_PER_SIGMA: f32 = 8.0;
 const MAX_READ_VOXELS: u64 = 16_777_216;
+const PROGRESS_STRIDE: usize = 4;
+const WORKER_BYTES_LIMIT: u64 = 512 << 20;
+
+pub type ChannelRead<'a> = dyn Fn(usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
 
 type Region = [[usize; 2]; 3];
+
+pub struct SpotScanner {
+    level_index: usize,
+    channels: usize,
+    detection: usize,
+    template: SpotScan,
+}
+
+impl SpotScanner {
+    pub fn new(
+        level_index: usize,
+        level: Level,
+        span: f32,
+        params: SpotParams,
+        region: VolumeRegion,
+        channels: usize,
+        detection: usize,
+    ) -> Self {
+        assert!(
+            channels > 0 && detection < channels,
+            "the detection channel is one of the measured channels"
+        );
+        Self {
+            level_index,
+            channels,
+            detection,
+            template: SpotScan::new(level, span, params, region),
+        }
+    }
+
+    pub fn blocks(&self) -> usize {
+        self.template.block_count()
+    }
+
+    pub fn peak_read_voxels(&self) -> u64 {
+        (0..self.template.block_count())
+            .map(|index| {
+                let range = self.template.read_range(index);
+                [0, 1, 2]
+                    .map(|axis| u64::from(range[axis].end - range[axis].start))
+                    .iter()
+                    .product::<u64>()
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn frame(
+        &self,
+        workers: usize,
+        cancel: &AtomicBool,
+        roi: Option<&Mask>,
+        read: &ChannelRead<'_>,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Option<SpotSet>, String> {
+        let channels = self.channels;
+        let detection = self.detection;
+        let total = self.template.block_count();
+        let bytes = self.peak_read_voxels() * 4;
+        let workers = crate::schedule::workers(workers)
+            .min((WORKER_BYTES_LIMIT / bytes.max(1)).max(1) as usize);
+        let mut spots = Vec::new();
+        let mut accumulators = Vec::new();
+        let completed = crate::schedule::ordered(
+            total,
+            workers,
+            cancel,
+            &mut |done, total| {
+                if done.is_multiple_of(PROGRESS_STRIDE) || done == total {
+                    progress(done, total);
+                }
+            },
+            || SpotWorker::new(&self.template),
+            |worker, index| worker.run(index, channels, detection, read, roi),
+            |_, block| {
+                spots.extend(block.spots);
+                accumulators.extend(block.accumulators);
+                Ok(())
+            },
+        )?;
+        if !completed {
+            return Ok(None);
+        }
+        let intensities = accumulators
+            .into_iter()
+            .map(SampleAccumulator::statistics)
+            .collect::<Vec<_>>();
+        Ok(Some(SpotSet::new(
+            self.level_index,
+            spots,
+            IntensityTable::new(channels, intensities),
+        )))
+    }
+}
+
+struct SpotWorker {
+    scan: SpotScan,
+    values: Vec<f32>,
+    spots: Vec<Spot>,
+    accumulators: Vec<SampleAccumulator>,
+}
+
+struct SpotBlock {
+    spots: Vec<Spot>,
+    accumulators: Vec<SampleAccumulator>,
+}
+
+impl SpotWorker {
+    fn new(template: &SpotScan) -> Self {
+        Self {
+            scan: template.worker(),
+            values: Vec::new(),
+            spots: Vec::new(),
+            accumulators: Vec::new(),
+        }
+    }
+
+    fn run(
+        &mut self,
+        index: usize,
+        channels: usize,
+        detection: usize,
+        read: &ChannelRead<'_>,
+        roi: Option<&Mask>,
+    ) -> Result<SpotBlock, String> {
+        let range = self.scan.read_range(index);
+        self.load(detection, &range, read)?;
+        self.spots.clear();
+        self.spots
+            .extend(self.scan.detect(index, &self.values, roi));
+        self.accumulators.clear();
+        self.accumulators
+            .resize(self.spots.len() * channels, SampleAccumulator::new());
+        let measured = self.scan.measure(index, &self.spots, &self.values);
+        for (slot, accumulator) in measured.into_iter().enumerate() {
+            self.accumulators[slot * channels + detection] = accumulator;
+        }
+        for channel in 0..channels {
+            if channel == detection {
+                continue;
+            }
+            self.load(channel, &range, read)?;
+            let measured = self.scan.measure(index, &self.spots, &self.values);
+            for (slot, accumulator) in measured.into_iter().enumerate() {
+                self.accumulators[slot * channels + channel] = accumulator;
+            }
+        }
+        Ok(SpotBlock {
+            spots: std::mem::take(&mut self.spots),
+            accumulators: std::mem::take(&mut self.accumulators),
+        })
+    }
+
+    fn load(
+        &mut self,
+        channel: usize,
+        range: &[Range<u32>; 3],
+        read: &ChannelRead<'_>,
+    ) -> Result<(), String> {
+        let data = read(channel, range)?;
+        self.values.clear();
+        self.values.resize(data.voxel_count(), 0.0);
+        data.write_values(&mut self.values);
+        Ok(())
+    }
+}
 
 pub struct SpotScan {
     extent: [u32; 3],
@@ -97,6 +268,28 @@ impl SpotScan {
 
     pub fn block_count(&self) -> usize {
         self.counts[0] as usize * self.counts[1] as usize * self.counts[2] as usize
+    }
+
+    fn worker(&self) -> Self {
+        Self {
+            extent: self.extent,
+            spacing: self.spacing,
+            world: self.world,
+            sigma_world: self.sigma_world,
+            truncate: self.truncate,
+            halo: self.halo,
+            core_side: self.core_side,
+            first: self.first,
+            counts: self.counts,
+            ranges: self.ranges.clone(),
+            weights: self.weights,
+            kernels: self.kernels.clone(),
+            threshold: self.threshold,
+            span: self.span,
+            radius: self.radius,
+            source: Vec::new(),
+            blurred: Vec::new(),
+        }
     }
 
     pub fn read_range(&self, index: usize) -> [Range<u32>; 3] {

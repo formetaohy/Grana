@@ -34,7 +34,6 @@ const ARRAY_BYTES_PER_VOXEL: u64 = 28;
 const WORKER_ARRAY_LIMIT: u64 = 320 << 20;
 const FRAME_ARRAY_LIMIT: u64 = 1024 << 20;
 const TILE_FRAGMENT_LIMIT: u64 = 96 << 20;
-const WORKER_LIMIT: usize = 16;
 const SPLIT_FLOOR: f64 = 1.0;
 const SEED_SNAP: i64 = 2;
 
@@ -312,11 +311,7 @@ impl SurfaceBuilder {
         read: &Read<'_>,
         measure: &Measure<'_>,
     ) -> Result<Option<SurfaceSet>, String> {
-        let desired = match workers {
-            0 => std::thread::available_parallelism().map_or(1, |value| value.get()),
-            value => value,
-        }
-        .clamp(1, WORKER_LIMIT);
+        let desired = crate::schedule::workers(workers);
         let seeds = &self.seeds;
         let Some(mask) = mask::build(&self, desired, cancel, roi, progress, read)? else {
             return Ok(None);
@@ -433,76 +428,6 @@ pub(super) fn smooth(raw: &mut [f32], dims: [usize; 3], kernels: &[Vec<f32>; 3])
     }
 }
 
-pub(super) fn parallel_tiles<T, S>(
-    total: usize,
-    workers: usize,
-    cancel: &AtomicBool,
-    progress: &mut dyn FnMut(usize, usize),
-    work: impl Fn(usize) -> Result<T, String> + Sync,
-    mut sink: S,
-) -> Result<bool, String>
-where
-    T: Send,
-    S: FnMut(usize, T) -> Result<(), String>,
-{
-    if total == 0 {
-        return Ok(true);
-    }
-    let next = AtomicUsize::new(0);
-    let stop = AtomicBool::new(false);
-    let (sender, receiver) = mpsc::sync_channel::<Result<(usize, T), String>>(workers.max(1) * 2);
-    std::thread::scope(|scope| {
-        for _ in 0..workers.max(1) {
-            let sender = sender.clone();
-            let next = &next;
-            let stop = &stop;
-            let work = &work;
-            scope.spawn(move || {
-                loop {
-                    if cancel.load(Ordering::Relaxed) || stop.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let index = next.fetch_add(1, Ordering::Relaxed);
-                    if index >= total {
-                        break;
-                    }
-                    let outcome = work(index);
-                    let failed = outcome.is_err();
-                    if sender.send(outcome.map(|value| (index, value))).is_err() {
-                        break;
-                    }
-                    if failed {
-                        stop.store(true, Ordering::Relaxed);
-                        break;
-                    }
-                }
-            });
-        }
-        drop(sender);
-        let mut done = 0usize;
-        while let Ok(message) = receiver.recv() {
-            match message {
-                Ok((index, value)) => {
-                    sink(index, value)?;
-                    done += 1;
-                    progress(done, total);
-                }
-                Err(detail) => {
-                    stop.store(true, Ordering::Relaxed);
-                    return Err(detail);
-                }
-            }
-        }
-        if done == total {
-            return Ok(true);
-        }
-        if cancel.load(Ordering::Relaxed) || stop.load(Ordering::Relaxed) {
-            return Ok(false);
-        }
-        Err("a surface worker stopped before its tile was completed".to_string())
-    })
-}
-
 struct Pass<'a> {
     plan: &'a SurfaceBuilder,
     seeds: &'a [[i64; 3]],
@@ -545,7 +470,7 @@ impl<'a> Pass<'a> {
         if bytes > WORKER_ARRAY_LIMIT {
             return None;
         }
-        Some((FRAME_ARRAY_LIMIT / bytes).clamp(1, WORKER_LIMIT as u64) as usize)
+        Some((FRAME_ARRAY_LIMIT / bytes).clamp(1, crate::schedule::WORKER_LIMIT as u64) as usize)
     }
 }
 
@@ -607,7 +532,7 @@ fn run_pass(
         drop(sender);
         assemble(
             pass,
-            total,
+            workers,
             receiver,
             cancel,
             stop,
@@ -619,14 +544,15 @@ fn run_pass(
 
 fn assemble(
     pass: &Pass<'_>,
-    total: usize,
+    workers: usize,
     receiver: mpsc::Receiver<(usize, TileResult)>,
     cancel: &AtomicBool,
     stop: &AtomicBool,
     accept: bool,
     progress: &mut dyn FnMut(usize, usize),
 ) -> Result<PassOutcome, String> {
-    let mut assembler = Assembler::new(pass);
+    let total = pass.total();
+    let mut assembler = Assembler::new(pass, workers);
     let mut pending: Vec<Option<TileResult>> = (0..total).map(|_| None).collect();
     let mut assembled = 0usize;
     while assembled < total {

@@ -1,7 +1,8 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_analysis::{Reference, Shape};
+use grana_analysis::{Reference, Shape, relate_frames};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::Spot;
 
@@ -54,6 +55,41 @@ fn an_empty_reference_reaches_nothing() {
     assert!(frame.distance(0).is_infinite());
     assert_eq!(frame.inside(0), 0.0);
     assert_eq!(frame.partner(0), 0);
+}
+
+#[test]
+fn keeps_relations_deterministic_across_worker_counts() {
+    let target = (0..4)
+        .map(|index| {
+            Some(Shape::mesh(Arc::new(cubes(&[(
+                0,
+                Vec3::new(6.0 * index as f32, 0.0, 0.0),
+                2.0,
+            )]))))
+        })
+        .collect::<Vec<_>>();
+    let source = (0..4)
+        .map(|index| {
+            Some(Shape::spots(Arc::from([Spot::new(
+                [6.0 * index as f32 + 5.0, 0.0, 0.0],
+                0.5,
+                1.0,
+            )])))
+        })
+        .collect::<Vec<_>>();
+    let cancel = AtomicBool::new(false);
+    let single = relate_frames(&source, &target, 1, &cancel, &mut |_, _| {})
+        .expect("the relation frames are measured")
+        .expect("the relation finishes");
+    let many = relate_frames(&source, &target, 8, &cancel, &mut |_, _| {})
+        .expect("the relation frames are measured")
+        .expect("the relation finishes");
+    assert_eq!(single, many, "the relation does not depend on workers");
+    assert_eq!(single.len(), 4);
+    assert!(
+        (single[2].as_ref().expect("the frame relates").distance(0) - 3.0).abs() < 1.0e-2,
+        "every frame measures its own target"
+    );
 }
 
 fn cubes(cubes: &[(u32, Vec3, f32)]) -> PackedMesh {

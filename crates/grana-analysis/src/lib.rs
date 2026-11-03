@@ -7,6 +7,7 @@ mod morphology;
 mod params;
 mod relation;
 mod scan;
+mod schedule;
 mod shape;
 mod surface;
 mod table;
@@ -16,8 +17,8 @@ pub use coloc::{ColocLevels, ColocPermutation, ColocScan, ColocScanConfig, coloc
 pub use filament::{FilamentScan, filament_level};
 pub use mask::{Mask, Roi};
 pub use params::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
-pub use relation::Reference;
-pub use scan::SpotScan;
+pub use relation::{Reference, relate_frames};
+pub use scan::{ChannelRead, SpotScan, SpotScanner};
 pub use shape::Shape;
 pub use surface::{SurfaceBuilder, surface_level};
 pub use track::TrackBuilder;

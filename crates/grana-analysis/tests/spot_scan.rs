@@ -1,12 +1,15 @@
+use std::sync::atomic::AtomicBool;
+
 use glam::Vec3;
-use grana_analysis::{SpotParams, SpotScan};
-use grana_object::Spot;
+use grana_analysis::{SpotParams, SpotScan, SpotScanner};
+use grana_object::{Spot, SpotSet};
 use grana_volume::{Extent, Level, Region, Spacing, VoxelData};
 
 const EXTENT: Extent = Extent::new(200, 96, 40);
 const DIAMETER: f32 = 0.4;
 const AMPLITUDE: f32 = 12_000.0;
 const BACKGROUND: f32 = 200.0;
+const MARKER: u16 = 981;
 
 fn spacing() -> Spacing {
     Spacing::new(0.1, 0.1, 0.3)
@@ -154,4 +157,69 @@ fn volume(blobs: &[Blob]) -> VoxelData {
         }
     }
     VoxelData::U16(values.into_iter().map(|value| value as u16).collect())
+}
+
+#[test]
+fn keeps_spots_deterministic_across_worker_counts() {
+    let blobs = [
+        Blob {
+            center: [100.0, 50.0, 20.0],
+            world: [0.05, 0.25, 0.15],
+        },
+        Blob {
+            center: [64.3, 30.0, 12.0],
+            world: [-3.52, -1.75, -2.25],
+        },
+    ];
+    let data = volume(&blobs);
+    let level = Level::new(EXTENT, spacing());
+    let span = data.range().span();
+    let single = scan_frame(level, span, &data, 1);
+    let many = scan_frame(level, span, &data, 8);
+    assert_eq!(single.spots(), many.spots(), "the spots are identical");
+    assert_eq!(
+        single.intensities(),
+        many.intensities(),
+        "the measured intensities are identical"
+    );
+    assert_eq!(
+        single.intensities().object(0, 1).mean(),
+        f32::from(MARKER),
+        "the second channel is measured inside the spots"
+    );
+}
+
+fn scan_frame(level: Level, span: f32, data: &VoxelData, workers: usize) -> SpotSet {
+    let scanner = SpotScanner::new(
+        0,
+        level,
+        span,
+        SpotParams::new(DIAMETER, 0.2),
+        Region::none(),
+        2,
+        0,
+    );
+    let cancel = AtomicBool::new(false);
+    scanner
+        .frame(
+            workers,
+            &cancel,
+            None,
+            &|channel, range| {
+                let region = data.region(
+                    level.extent(),
+                    range[0].clone(),
+                    range[1].clone(),
+                    range[2].clone(),
+                );
+                Ok(if channel == 0 {
+                    region
+                } else {
+                    VoxelData::U16(vec![MARKER; region.voxel_count()])
+                })
+            },
+            &mut |_done, _total| {},
+        )
+        .expect("the frame scans")
+        .expect("the spot scan completes")
 }

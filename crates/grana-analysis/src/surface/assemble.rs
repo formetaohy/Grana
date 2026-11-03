@@ -6,6 +6,7 @@ use super::{EMPTY, Face, Node, Pass, SurfaceBuilder, find, union};
 
 pub(super) struct Assembler<'a> {
     pub(super) plan: &'a SurfaceBuilder,
+    pub(super) workers: usize,
     pub(super) nodes: Vec<Node>,
     pub(super) accumulators: Vec<SampleAccumulator>,
     pub(super) necks: Vec<(u32, u32, u32)>,
@@ -21,11 +22,12 @@ pub(super) struct Assembler<'a> {
 }
 
 impl<'a> Assembler<'a> {
-    pub(super) fn new(pass: &Pass<'a>) -> Self {
+    pub(super) fn new(pass: &Pass<'a>, workers: usize) -> Self {
         let plan = pass.plan;
         let tiles = plan.tiles;
         Self {
             plan,
+            workers,
             nodes: Vec::new(),
             accumulators: Vec::new(),
             necks: Vec::new(),
