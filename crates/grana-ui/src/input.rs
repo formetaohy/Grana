@@ -44,7 +44,7 @@ pub struct Modifiers {
     pub logo: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     Moved(Vec2),
     Down(Button),
@@ -57,6 +57,8 @@ pub enum Event {
         pressed: bool,
         repeat: bool,
     },
+    Text(String),
+    Preedit(Option<String>),
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -82,6 +84,8 @@ pub struct Input {
     modifiers: Modifiers,
     events: Vec<Event>,
     keys: Vec<KeyEvent>,
+    texts: Vec<String>,
+    preedit: Option<String>,
     viewport: Vec2,
     scale: f32,
     time: f64,
@@ -99,6 +103,8 @@ impl Input {
             modifiers: Modifiers::default(),
             events: Vec::new(),
             keys: Vec::new(),
+            texts: Vec::new(),
+            preedit: None,
             viewport: Vec2::ZERO,
             scale: 1.0,
             time: 0.0,
@@ -123,6 +129,7 @@ impl Input {
         self.delta = Vec2::ZERO;
         self.wheel = Vec2::ZERO;
         self.keys.clear();
+        self.texts.clear();
         for button in self.buttons.iter_mut() {
             button.pressed = false;
             button.released = false;
@@ -158,6 +165,8 @@ impl Input {
                     pressed,
                     repeat,
                 }),
+                Event::Text(text) => self.texts.push(text),
+                Event::Preedit(text) => self.preedit = text,
             }
         }
         elapsed
@@ -189,6 +198,18 @@ impl Input {
 
     pub fn keys(&self) -> &[KeyEvent] {
         &self.keys
+    }
+
+    pub fn texts(&self) -> &[String] {
+        &self.texts
+    }
+
+    pub fn preedit(&self) -> Option<&str> {
+        self.preedit.as_deref()
+    }
+
+    pub(crate) fn clear_preedit(&mut self) {
+        self.preedit = None;
     }
 
     pub fn viewport(&self) -> Vec2 {

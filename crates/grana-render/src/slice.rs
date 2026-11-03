@@ -1,4 +1,4 @@
-﻿use std::collections::HashMap;
+use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -9,10 +9,10 @@ use grana_geometry::{PackedMesh, cross_section, is_closed};
 use grana_gpu::Table;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Buffer, BufferUsages,
-    ColorTargetState, ColorWrites, Device, FragmentState, IndexFormat, PipelineLayoutDescriptor,
-    PrimitiveState, Queue, RenderPass, RenderPipeline, RenderPipelineDescriptor,
-    ShaderModuleDescriptor, ShaderSource, VertexAttribute, VertexBufferLayout, VertexFormat,
-    VertexState, VertexStepMode, util::DeviceExt,
+    ColorTargetState, ColorWrites, Device, FragmentState, IndexFormat, MultisampleState,
+    PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPass, RenderPipeline,
+    RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, VertexAttribute,
+    VertexBufferLayout, VertexFormat, VertexState, VertexStepMode, util::DeviceExt,
 };
 
 use crate::cut;
@@ -20,7 +20,7 @@ use crate::frame::SectionData;
 use crate::layout::Layouts;
 use crate::mesh::{StyleData, style_data};
 use crate::schema::{LayerKey, SceneFrame};
-use crate::target::{CUT_ID_FORMAT, SCENE_FORMAT};
+use crate::target::{CUT_ID_FORMAT, PICK_FORMAT, SCENE_FORMAT};
 
 const SHADER: &str = concat!(
     include_str!("shader/scene.wgsl"),
@@ -65,6 +65,7 @@ struct FaceRun {
 
 pub(crate) struct SlicePass {
     pipeline: RenderPipeline,
+    pick_pipeline: RenderPipeline,
     vertices: Buffer,
     indices: Buffer,
     commands: Buffer,
@@ -143,8 +144,54 @@ impl SlicePass {
         });
         let styles = Table::with_capacity(device, "grana.slice.styles", 1);
         let style_group = style_group(device, &layouts.styles, styles.buffer());
+        let pick_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.slice.pick.pipeline_layout"),
+            bind_group_layouts: &[Some(&layouts.scene)],
+            immediate_size: 0,
+        });
+        let pick_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.slice.pick"),
+            layout: Some(&pick_layout),
+            vertex: VertexState {
+                module: &module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(VertexBufferLayout {
+                    array_stride: size_of::<FaceVertex>() as u64,
+                    step_mode: VertexStepMode::Vertex,
+                    attributes: &[
+                        VertexAttribute {
+                            format: VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        VertexAttribute {
+                            format: VertexFormat::Uint32,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                    ],
+                })],
+            },
+            primitive: PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &module,
+                entry_point: Some("fs_pick"),
+                compilation_options: Default::default(),
+                targets: &[Some(ColorTargetState {
+                    format: PICK_FORMAT,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         Self {
             pipeline,
+            pick_pipeline,
             vertices: vertex_buffer(device, "grana.slice.vertices", 4),
             indices: index_buffer(device, "grana.slice.indices", 1),
             commands: command_buffer(device, "grana.slice.commands", 1),
@@ -362,6 +409,17 @@ impl SlicePass {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.style_group, &[]);
+        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        pass.set_index_buffer(self.indices.slice(..), IndexFormat::Uint32);
+        pass.multi_draw_indexed_indirect(&self.commands, 0, self.objects);
+    }
+
+    pub fn draw_pick<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
+        if self.draws == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.pick_pipeline);
+        pass.set_bind_group(0, scene, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         pass.set_index_buffer(self.indices.slice(..), IndexFormat::Uint32);
         pass.multi_draw_indexed_indirect(&self.commands, 0, self.objects);

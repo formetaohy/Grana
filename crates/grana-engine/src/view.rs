@@ -1,7 +1,7 @@
 use grana_display::{Shading, srgb_to_linear};
 use grana_object::Spot;
 use grana_render::{ChannelRow, Layer, LayerKey, Marker, SceneFrame, Style};
-use grana_scene::{ObjectSet, Scene};
+use grana_scene::{Item, ObjectSet, Scene, Selection};
 
 const SELECTED_COLOR: [f32; 3] = [1.00, 0.93, 0.62];
 const SELECTED_SCALE: f32 = 1.3;
@@ -11,6 +11,8 @@ pub struct RenderedScene<'a> {
     pub styles: Vec<Style>,
     pub layers: Vec<Layer<'a>>,
     pub markers: Vec<Marker>,
+    pub style_ids: Vec<Selection>,
+    pub marker_ids: Vec<Selection>,
     pub shading: Shading,
     pub step_scale: f32,
 }
@@ -32,6 +34,8 @@ pub fn frame(scene: &Scene) -> RenderedScene<'_> {
     let mut styles = Vec::new();
     let mut layers = Vec::new();
     let mut markers = Vec::new();
+    let mut style_ids = Vec::new();
+    let mut marker_ids = Vec::new();
     for set in scene.objects.iter() {
         if !scene.shown(set) {
             continue;
@@ -57,6 +61,10 @@ pub fn frame(scene: &Scene) -> RenderedScene<'_> {
                     continue;
                 }
                 markers.push(marker(scene, set, index, *spot, color(index)));
+                marker_ids.push(Selection {
+                    set: set.id(),
+                    item: Item::Object(index),
+                });
             }
         }
         if let (Some(mesh), Some(stamp)) = (frame.geometry(), set.frame_stamp(scene.time()))
@@ -70,6 +78,10 @@ pub fn frame(scene: &Scene) -> RenderedScene<'_> {
                     scene.object_selected(set.id(), index),
                     set.opacity(),
                 ));
+                style_ids.push(Selection {
+                    set: set.id(),
+                    item: Item::Object(index),
+                });
             }
             layers.push(Layer {
                 key: LayerKey::at_frame(set.id().raw(), 0, scene.time(), stamp),
@@ -100,6 +112,10 @@ pub fn frame(scene: &Scene) -> RenderedScene<'_> {
                     scene.track_selected(set.id(), index),
                     set.opacity(),
                 ));
+                style_ids.push(Selection {
+                    set: set.id(),
+                    item: Item::Track(index),
+                });
             }
             layers.push(Layer {
                 key: LayerKey::stable(set.id().raw(), 1, tracks.revision()),
@@ -124,6 +140,8 @@ pub fn frame(scene: &Scene) -> RenderedScene<'_> {
         styles,
         layers,
         markers,
+        style_ids,
+        marker_ids,
         shading: scene.shading,
         step_scale: scene.step_scale,
     }

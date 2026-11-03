@@ -12,6 +12,7 @@ struct MarkerOutput {
     @location(1) local: vec2<f32>,
     @location(2) @interpolate(flat) center: vec3<f32>,
     @location(3) @interpolate(flat) cross: f32,
+    @location(4) @interpolate(flat) marker: u32,
 }
 
 @vertex
@@ -47,6 +48,7 @@ fn vs_main(@builtin(vertex_index) index: u32, @builtin(instance_index) instance:
     output.local = local;
     output.center = data.center_radius.xyz;
     output.cross = cross;
+    output.marker = order[instance];
     return output;
 }
 
@@ -67,4 +69,24 @@ fn fs_main(input: MarkerOutput) -> @location(0) vec4<f32> {
     let rim = 1.0 - 0.45 * smoothstep(0.72, 1.0, distance);
     let alpha = input.color_alpha.a * coverage;
     return vec4<f32>(input.color_alpha.rgb * rim * alpha, alpha);
+}
+
+@fragment
+fn fs_pick(input: MarkerOutput) -> @location(0) vec2<u32> {
+    let distance = length(input.local);
+    if (distance > 1.0) {
+        discard;
+    }
+    let width = fwidth(distance);
+    let coverage = clamp((1.0 - distance) / max(width, 1.0e-6) + 0.5, 0.0, 1.0);
+    if (coverage < 0.5) {
+        discard;
+    }
+    var world = input.center;
+    world[section.mapping.x] += input.local.x * input.cross;
+    world[section.mapping.y] += input.local.y * input.cross;
+    if (outside_region(world)) {
+        discard;
+    }
+    return vec2<u32>(2u, input.marker + 1u);
 }

@@ -23,6 +23,7 @@ use crate::frame::{FrameData, SectionData, VolumeView};
 use crate::layout::Layouts;
 use crate::marker::MarkerPasses;
 use crate::mesh::MeshPasses;
+use crate::pick::{self, PICK_ROW, PickId, PickPane, PickTarget};
 use crate::planner::{
     self, Demand, Planner, Schedule, SectionRange, bucket_scale, decode_plan,
     resolve_section_level, resolve_volume_level, section_range, select_section_level,
@@ -104,6 +105,12 @@ struct Levels {
     section: usize,
     volume_capacity: usize,
     section_capacity: usize,
+}
+
+#[derive(Clone, Copy)]
+struct Regions {
+    volume: [u32; 4],
+    section: [u32; 4],
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -268,6 +275,10 @@ pub struct Renderer {
     transparent: bool,
     object_key: Option<u64>,
     settled: Option<Residency>,
+    regions: Option<Regions>,
+    pick_target: Option<PickTarget>,
+    pick_readback: Option<Readback>,
+    pick_pending: bool,
     info: FrameInfo,
 }
 
@@ -325,6 +336,10 @@ impl Renderer {
             transparent: false,
             object_key: None,
             settled: None,
+            regions: None,
+            pick_target: None,
+            pick_readback: None,
+            pick_pending: false,
             info: FrameInfo::default(),
         }
     }
@@ -394,6 +409,9 @@ impl Renderer {
         self.counts.fill(0);
         self.meshes.clear();
         self.frame_target = None;
+        self.regions = None;
+        self.pick_readback = None;
+        self.pick_pending = false;
         self.epoch += 1;
         self.pin = 0;
         self.settled = None;
@@ -528,6 +546,122 @@ impl Renderer {
         info
     }
 
+    pub fn request_pick(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        pane: PickPane,
+        point: [u32; 2],
+    ) -> bool {
+        if self.pick_pending {
+            return false;
+        }
+        let Some(regions) = self.regions else {
+            return false;
+        };
+        if self.frame_target.is_none() {
+            return false;
+        }
+        let region = match pane {
+            PickPane::Volume => regions.volume,
+            PickPane::Section => regions.section,
+        };
+        let inside = point[0] >= region[0]
+            && point[0] < region[0] + region[2]
+            && point[1] >= region[1]
+            && point[1] < region[1] + region[3];
+        if !inside {
+            return false;
+        }
+        let offset = [point[0] - region[0], point[1] - region[1]];
+        let Self {
+            scene,
+            meshes,
+            markers,
+            slice,
+            pick_target,
+            pick_readback,
+            pick_pending,
+            ..
+        } = self;
+        let Some(scene) = scene.as_ref() else {
+            return false;
+        };
+        let target = PickTarget::ensure(device, pick_target);
+        let readback = pick_readback
+            .get_or_insert_with(|| Readback::new(device, "grana.pick.readback", PICK_ROW, 1));
+        let Some(slot) = readback.reserve() else {
+            return false;
+        };
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("grana.pick"),
+        });
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("grana.pick.pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: target.view(),
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: match pane {
+                PickPane::Volume => Some(RenderPassDepthStencilAttachment {
+                    view: target.depth(),
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                PickPane::Section => None,
+            },
+            ..Default::default()
+        });
+        pass.set_viewport(
+            -(offset[0] as f32),
+            -(offset[1] as f32),
+            region[2] as f32,
+            region[3] as f32,
+            0.0,
+            1.0,
+        );
+        pass.set_scissor_rect(0, 0, 1, 1);
+        match pane {
+            PickPane::Volume => {
+                meshes.draw_pick(&mut pass);
+                markers.draw_pick_volume(&mut pass, scene.group());
+            }
+            PickPane::Section => {
+                markers.draw_pick_section_behind(&mut pass, scene.group());
+                slice.draw_pick(&mut pass, scene.group());
+                markers.draw_pick_section_front(&mut pass, scene.group());
+            }
+        }
+        drop(pass);
+        readback.stage_pixel(&mut encoder, slot, target.color(), PICK_ROW);
+        queue.submit([encoder.finish()]);
+        readback.register();
+        *pick_pending = true;
+        true
+    }
+
+    pub fn poll_pick(&mut self, device: &Device) -> Option<PickId> {
+        if !self.pick_pending {
+            return None;
+        }
+        let readback = self.pick_readback.as_mut()?;
+        let (_, bytes) = readback.take(device)?;
+        self.pick_pending = false;
+        Some(pick::decode(&bytes))
+    }
+
+    pub fn pick_pending(&self) -> bool {
+        self.pick_pending
+    }
+
     fn render(
         &mut self,
         device: &Device,
@@ -555,6 +689,10 @@ impl Renderer {
         );
         self.time = time;
         self.prefetch = prefetch;
+        self.regions = Some(Regions {
+            volume: volume_region,
+            section: section_region,
+        });
         self.info.cut.objects = 0;
         self.info.cut.draws = 0;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -740,6 +878,9 @@ impl Renderer {
             0
         };
         frame_data.layers = [layers as u32, 0, 0, 0];
+        if layers == 0 {
+            target.layers = None;
+        }
         if layers > 0
             && target
                 .layers

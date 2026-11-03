@@ -13,7 +13,7 @@ use wgpu::{
 
 use crate::cut;
 use crate::layout::Layouts;
-use crate::target::SCENE_FORMAT;
+use crate::target::{PICK_FORMAT, SCENE_FORMAT};
 use crate::volume::depth_state;
 use grana_display::srgb_to_linear;
 
@@ -120,6 +120,8 @@ pub(crate) struct MarkerPasses {
     volume_pipeline: RenderPipeline,
     layer_pipeline: RenderPipeline,
     section_pipeline: RenderPipeline,
+    section_pick_pipeline: RenderPipeline,
+    volume_pick_pipeline: RenderPipeline,
     shadow_pipeline: RenderPipeline,
     count: u32,
 }
@@ -304,6 +306,62 @@ impl MarkerPasses {
             multiview_mask: None,
             cache: None,
         });
+        let volume_pick_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.marker.pick.volume"),
+            layout: Some(&layouts.marker_volume),
+            vertex: VertexState {
+                module: &volume_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(depth_state(true, CompareFunction::Less)),
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &volume_module,
+                entry_point: Some("fs_pick"),
+                compilation_options: Default::default(),
+                targets: &[Some(ColorTargetState {
+                    format: PICK_FORMAT,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let section_pick_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.marker.pick.section"),
+            layout: Some(&layouts.marker_section),
+            vertex: VertexState {
+                module: &section_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &section_module,
+                entry_point: Some("fs_pick"),
+                compilation_options: Default::default(),
+                targets: &[Some(ColorTargetState {
+                    format: PICK_FORMAT,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         Self {
             markers,
             opaque_order,
@@ -326,6 +384,8 @@ impl MarkerPasses {
             volume_pipeline,
             layer_pipeline,
             section_pipeline,
+            section_pick_pipeline,
+            volume_pick_pipeline,
             shadow_pipeline,
             count: 0,
         }
@@ -526,6 +586,42 @@ impl MarkerPasses {
 
     pub fn draw_section_front<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
         self.draw_section(pass, scene, &self.front_group, &self.front_args);
+    }
+
+    pub fn draw_pick_volume<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
+        if self.count == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.volume_pick_pipeline);
+        pass.set_bind_group(0, scene, &[]);
+        pass.set_bind_group(1, &self.opaque_group, &[]);
+        pass.draw_indirect(self.opaque_args.buffer(), 0);
+        pass.set_bind_group(1, &self.layer_group, &[]);
+        pass.draw_indirect(self.layer_args.buffer(), 0);
+    }
+
+    pub fn draw_pick_section_behind<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
+        self.draw_section_pick(pass, scene, &self.behind_group, &self.behind_args);
+    }
+
+    pub fn draw_pick_section_front<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
+        self.draw_section_pick(pass, scene, &self.front_group, &self.front_args);
+    }
+
+    fn draw_section_pick<'a>(
+        &'a self,
+        pass: &mut RenderPass<'a>,
+        scene: &'a BindGroup,
+        group: &'a BindGroup,
+        args: &'a InstanceCommands,
+    ) {
+        if self.count == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.section_pick_pipeline);
+        pass.set_bind_group(0, scene, &[]);
+        pass.set_bind_group(1, group, &[]);
+        pass.draw_indirect(args.buffer(), 0);
     }
 
     fn draw_section<'a>(

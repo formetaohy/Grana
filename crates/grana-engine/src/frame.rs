@@ -23,9 +23,10 @@ pub(crate) fn draw(
     device: &Device,
     queue: &Queue,
     frame: View<'_>,
+    rendered: &view::RenderedScene<'_>,
 ) -> FrameInfo {
-    let rendered = view::frame(frame.scene);
     renderer.set_transparent(frame.transparent);
+    let scene = rendered.frame();
     renderer.draw(
         device,
         queue,
@@ -40,7 +41,7 @@ pub(crate) fn draw(
             region: frame.scene.region,
             exposure: frame.scene.exposure,
             samples: frame.samples,
-            scene: &rendered.frame(),
+            scene: &scene,
             prefetch: frame.prefetch,
         },
     )

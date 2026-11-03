@@ -999,18 +999,29 @@ pub fn text_field(
     let pointer = ui.input().position();
     let primary = ui.input().button(Button::Primary);
     let modifiers = ui.input().modifiers();
-    let offset = field_offset(ui, style, rect);
+    let preedit = ui.input().preedit().map(str::to_string).unwrap_or_default();
+    let offset = field_offset(ui, style, rect, &preedit);
     let outcome = match ui.poll_edit() {
         Some(outcome) => Some(outcome),
         None if primary.pressed => {
-            if rect.contains(pointer) {
+            if !rect.contains(pointer) {
+                Some(Outcome::Commit)
+            } else if preedit.is_empty() {
+                let count = ui.edit_mut().map_or(1, |edit| edit.click(pointer, time));
                 let caret = caret_at(ui, style, rect, offset, pointer.x);
                 if let Some(edit) = ui.edit_mut() {
-                    edit.place(caret, modifiers.shift, time);
+                    match count {
+                        2 => {
+                            let range = edit.word(caret);
+                            edit.select(range, time);
+                        }
+                        3 => edit.select_all(time),
+                        _ => edit.place(caret, modifiers.shift, time),
+                    }
                 }
                 None
             } else {
-                Some(Outcome::Commit)
+                None
             }
         }
         None if primary.down && response.dragging => {
@@ -1045,6 +1056,7 @@ pub fn text_field(
             caret,
             anchor,
             blinking,
+            preedit: &preedit,
         },
     );
     outcome.map(|outcome| (outcome, text))
@@ -1055,14 +1067,16 @@ struct Field<'a> {
     caret: usize,
     anchor: usize,
     blinking: bool,
+    preedit: &'a str,
 }
 
-fn field_offset(ui: &mut Ui, style: TextStyle, rect: Rect) -> f32 {
+fn field_offset(ui: &mut Ui, style: TextStyle, rect: Rect, preedit: &str) -> f32 {
     let Some(edit) = ui.edit() else {
         return 0.0;
     };
     let text = edit.text().to_string();
-    let caret_x = text_width(ui, style, prefix(&text, edit.caret()));
+    let composition = format!("{}{}", prefix(&text, edit.caret()), preedit);
+    let caret_x = text_width(ui, style, &composition);
     let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0)).width();
     (caret_x - inner + 2.0).max(0.0)
 }
@@ -1080,26 +1094,41 @@ fn paint_field(
         caret,
         anchor,
         blinking,
+        preedit,
     } = field;
     let look = ui.look(key, Role::Field, response);
     let radius = (ui.theme().metrics.radius * 0.6).min(rect.height() * 0.4);
     let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0));
-    let caret_x = text_width(ui, style, prefix(text, caret));
+    let offset_of = |index: usize| prefix(text, index).len();
+    let display = if preedit.is_empty() {
+        text.to_string()
+    } else {
+        let mut display = String::with_capacity(text.len() + preedit.len());
+        display.push_str(prefix(text, caret));
+        display.push_str(preedit);
+        display.push_str(&text[offset_of(caret)..]);
+        display
+    };
+    let composed = preedit.chars().count();
+    let display_caret = caret + composed;
+    let caret_x = text_width(ui, style, prefix(&display, display_caret));
     let offset = (caret_x - inner.width() + 2.0).max(0.0);
-    let layout = ui.layout_text(text, style, 0.0);
+    let layout = ui.layout_text(&display, style, 0.0);
     let origin = Vec2::new(
         inner.min.x - offset,
         inner.min.y + (inner.height() - layout.size.y) * 0.5,
     );
     let height = (layout.size.y * 0.86).max(8.0);
     let top = origin.y + (layout.size.y - height) * 0.5;
-    let selection = (caret != anchor).then(|| {
+    let selection = (preedit.is_empty() && caret != anchor).then(|| {
         let (start, end) = (caret.min(anchor), caret.max(anchor));
         (
             text_width(ui, style, prefix(text, start)),
             text_width(ui, style, prefix(text, end)),
         )
     });
+    let composition =
+        (composed > 0).then(|| (text_width(ui, style, prefix(&display, caret)), caret_x));
     let accent = ui.theme().palette.accent;
     let mut painter = ui.painter();
     painter.outlined(
@@ -1121,6 +1150,16 @@ fn paint_field(
             accent.with_alpha(0.28),
         );
     }
+    if let Some((left, right)) = composition {
+        painter.rect(
+            Rect::from_min_max(
+                Vec2::new(inner.min.x - offset + left, top + height + 2.0),
+                Vec2::new(inner.min.x - offset + right, top + height + 3.2),
+            ),
+            Corners::ZERO,
+            accent,
+        );
+    }
     painter.glyphs(&layout, origin, style.color);
     if blinking {
         painter.rect(
@@ -1133,6 +1172,10 @@ fn paint_field(
         );
     }
     painter.pop_clip(clip);
+    ui.set_edit_caret(Rect::from_min_size(
+        Vec2::new(inner.min.x - offset + caret_x, top),
+        Vec2::new(1.4, height),
+    ));
 }
 
 fn caret_at(ui: &mut Ui, style: TextStyle, rect: Rect, offset: f32, x: f32) -> usize {

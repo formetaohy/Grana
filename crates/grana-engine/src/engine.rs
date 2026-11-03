@@ -1,6 +1,6 @@
 use grana_display::Viewport;
-use grana_render::{FrameInfo, Renderer, Requests};
-use grana_scene::Scene;
+use grana_render::{FrameInfo, PickId, PickPane, Renderer, Requests};
+use grana_scene::{Scene, Selection};
 use grana_ui::Ui;
 use grana_volume::{BrickData, BrickRequest, Pyramid};
 use wgpu::{Device, Queue, TextureFormat, TextureView};
@@ -21,10 +21,24 @@ pub struct ViewportFrame<'a> {
     pub prefetch: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Picked {
+    Hit(Selection),
+    Miss,
+}
+
+#[derive(Clone, Default)]
+struct Identities {
+    styles: Vec<Selection>,
+    markers: Vec<Selection>,
+}
+
 pub struct Engine {
     renderer: Renderer,
     export: Option<Export>,
     output_message: Option<String>,
+    identities: Identities,
+    pending_pick: Option<Identities>,
 }
 
 impl Engine {
@@ -33,11 +47,15 @@ impl Engine {
             renderer: Renderer::new(device, queue, format, TEXTURE_BUDGET),
             export: None,
             output_message: None,
+            identities: Identities::default(),
+            pending_pick: None,
         }
     }
 
     pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) {
         self.renderer.set_dataset(device, pyramid);
+        self.identities = Identities::default();
+        self.pending_pick = None;
     }
 
     pub fn requests_pending(&self) -> bool {
@@ -64,7 +82,8 @@ impl Engine {
         queue: &Queue,
         frame: ViewportFrame<'_>,
     ) -> FrameInfo {
-        frame::draw(
+        let rendered = crate::view::frame(frame.scene);
+        let info = frame::draw(
             &mut self.renderer,
             device,
             queue,
@@ -80,7 +99,46 @@ impl Engine {
                 prefetch: frame.prefetch,
                 transparent: false,
             },
-        )
+            &rendered,
+        );
+        self.identities = Identities {
+            styles: rendered.style_ids,
+            markers: rendered.marker_ids,
+        };
+        info
+    }
+
+    pub fn request_pick(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        pane: PickPane,
+        point: [u32; 2],
+    ) -> bool {
+        if self.pending_pick.is_some() || !self.renderer.request_pick(device, queue, pane, point) {
+            return false;
+        }
+        self.pending_pick = Some(self.identities.clone());
+        true
+    }
+
+    pub fn poll_pick(&mut self, device: &Device) -> Option<Picked> {
+        self.pending_pick.as_ref()?;
+        let pick = self.renderer.poll_pick(device)?;
+        let identities = self.pending_pick.take().expect("the pick was pending");
+        let selection = match pick {
+            PickId::None => None,
+            PickId::Style(index) => identities.styles.get(index as usize).copied(),
+            PickId::Marker(index) => identities.markers.get(index as usize).copied(),
+        };
+        Some(match selection {
+            Some(selection) => Picked::Hit(selection),
+            None => Picked::Miss,
+        })
+    }
+
+    pub fn pick_pending(&self) -> bool {
+        self.pending_pick.is_some()
     }
 
     pub fn start_export(&mut self, device: &Device, plan: Plan) -> Result<(), String> {
@@ -123,6 +181,7 @@ impl Engine {
             renderer,
             export,
             output_message,
+            ..
         } = self;
         let Some(job) = export.as_mut() else {
             return Outcome::Failed {

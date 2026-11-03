@@ -13,10 +13,16 @@ struct MarkerOutput {
     @location(0) @interpolate(flat) center_radius: vec4<f32>,
     @location(1) @interpolate(flat) color_alpha: vec4<f32>,
     @location(2) local: vec2<f32>,
+    @location(3) @interpolate(flat) marker: u32,
 }
 
 struct MarkerFragment {
     @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+}
+
+struct PickFragment {
+    @location(0) id: vec2<u32>,
     @builtin(frag_depth) depth: f32,
 }
 
@@ -48,6 +54,7 @@ fn vs_main(@builtin(vertex_index) index: u32, @builtin(instance_index) instance:
     output.center_radius = vec4<f32>(center, radius);
     output.color_alpha = data.color_alpha;
     output.local = local;
+    output.marker = order[instance];
     return output;
 }
 
@@ -102,6 +109,15 @@ fn fs_layer(input: MarkerOutput) -> MarkerFragment {
     let alpha = shaded.color.a;
     var output: MarkerFragment;
     output.color = vec4<f32>(shaded.color.rgb * alpha, alpha);
+    output.depth = shaded.depth;
+    return output;
+}
+
+@fragment
+fn fs_pick(input: MarkerOutput) -> PickFragment {
+    let shaded = shade(input);
+    var output: PickFragment;
+    output.id = vec2<u32>(2u, input.marker + 1u);
     output.depth = shaded.depth;
     return output;
 }

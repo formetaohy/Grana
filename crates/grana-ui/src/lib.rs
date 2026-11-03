@@ -1,4 +1,5 @@
 mod atlas;
+mod clipboard;
 mod color;
 mod edit;
 mod font;
@@ -17,6 +18,7 @@ mod ui;
 pub mod widget;
 
 pub use atlas::GlyphSlot;
+pub use clipboard::{Clipboard, NullClipboard};
 pub use color::Color;
 pub use edit::{Edit, Outcome as EditOutcome};
 pub use geometry::{Corners, Edges, Rect};

@@ -7,6 +7,7 @@ mod image;
 mod layout;
 mod marker;
 mod mesh;
+mod pick;
 mod planner;
 mod present;
 mod renderer;
@@ -23,5 +24,6 @@ pub const DEPTH_BUCKETS: usize = planner::BUCKETS;
 
 pub use image::{Image, read as read_image};
 pub use marker::Marker;
+pub use pick::{PickId, PickPane};
 pub use renderer::{CutInfo, Frame, FrameInfo, Renderer, Requests, ViewInfo};
 pub use schema::{ChannelRow, Layer, LayerKey, SceneFrame, Style};

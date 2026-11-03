@@ -6,20 +6,22 @@ use glam::Vec2;
 use grana_animation::Keyframe;
 use grana_display::Viewport;
 use grana_editor::{FrameStats, Pane, Stage, ViewStats, Workspace};
-use grana_engine::{Destination, Engine, Outcome, Panels, Plan, Pose, SAMPLE_LIMIT};
+use grana_engine::{Destination, Engine, Outcome, Panels, Picked, Plan, Pose, SAMPLE_LIMIT};
 use grana_gpu::Gpu;
 use grana_project::ViewState;
-use grana_render::FrameInfo;
+use grana_render::{FrameInfo, PickPane};
 use grana_session::{Command, Effects, Export, Session, SessionView};
 use grana_ui::{
     Button as UiButton, Event as UiEvent, Modifiers as UiModifiers, Ui, Vec2 as UiVec2,
 };
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
+
+use crate::clipboard::SystemClipboard;
 
 const STREAM_POLL: Duration = Duration::from_millis(16);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
@@ -54,6 +56,8 @@ pub struct App {
     modifiers: ModifiersState,
     message: Option<String>,
     resume: Option<(u32, f32)>,
+    ime: bool,
+    ime_area: Option<(i32, i32, u32, u32)>,
 }
 
 impl App {
@@ -80,6 +84,8 @@ impl App {
             modifiers: ModifiersState::default(),
             message: None,
             resume: None,
+            ime: false,
+            ime_area: None,
         }
     }
 
@@ -96,9 +102,10 @@ impl App {
                 .expect("failed to create the window"),
         );
         let size = window.inner_size();
-        window.set_ime_allowed(true);
+        window.set_ime_allowed(false);
         let gpu = Gpu::new(window.clone(), [size.width, size.height]);
-        let ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        ui.set_clipboard(Box::new(SystemClipboard::new()));
         let mut engine = Engine::new(&gpu.device, &gpu.queue, gpu.format());
         self.session.open_sample();
         if let Some(scene) = self.session.scene() {
@@ -112,8 +119,10 @@ impl App {
     fn redraw(&mut self) {
         self.session.poll();
         self.exchange_bricks();
+        self.poll_pick();
         self.session.sync_measure();
         let (commands, animating) = self.run_ui();
+        self.sync_ime();
         self.interact_viewport();
         if self.apply(commands) {
             return;
@@ -397,6 +406,36 @@ impl App {
             grana_editor::build(&mut surface.ui, &view, viewport, stage, workspace, frame);
         let frame = surface.ui.end();
         (commands, frame.animating)
+    }
+
+    fn sync_ime(&mut self) {
+        let Some(surface) = self.surface.as_mut() else {
+            return;
+        };
+        let editing = surface.ui.editing();
+        if editing != self.ime {
+            surface.window.set_ime_allowed(editing);
+            self.ime = editing;
+            self.ime_area = None;
+        }
+        let Some(caret) = surface.ui.edit_caret() else {
+            return;
+        };
+        let scale = surface.window.scale_factor() as f32;
+        let area = (
+            (caret.min.x * scale).round() as i32,
+            (caret.min.y * scale).round() as i32,
+            (caret.width().max(1.0) * scale).round().max(1.0) as u32,
+            (caret.height().max(1.0) * scale).round().max(1.0) as u32,
+        );
+        if self.ime_area == Some(area) {
+            return;
+        }
+        surface.window.set_ime_cursor_area(
+            PhysicalPosition::new(area.0, area.1),
+            PhysicalSize::new(area.2, area.3),
+        );
+        self.ime_area = Some(area);
     }
 
     fn render(&mut self) -> Option<Duration> {
@@ -704,6 +743,7 @@ impl App {
             || !self.session.progress().is_empty()
             || self.session.pending() > 0
             || engine.requests_pending()
+            || engine.pick_pending()
             || engine.exporting()
             || (self.session.scene().is_some()
                 && (self.info.volume.resident < self.info.volume.demand
@@ -749,33 +789,42 @@ impl App {
     }
 
     fn pick(&mut self, pane: Pane, point: Vec2) {
-        let Some(scene) = self.session.scene() else {
+        let Some(surface) = self.surface.as_ref() else {
             return;
         };
-        let ndc = self.stage.ndc(pane, point);
-        let aspect = self.stage.aspect(pane);
-        let selection = match pane {
-            Pane::Volume => {
-                let ray = self.viewport.camera().ray(ndc, aspect);
-                scene.pick_ray(&ray)
-            }
-            Pane::Section => {
-                let section = self.viewport.section();
-                let axis = section.axis();
-                let focus = self.viewport.camera().focus();
-                let mut target = section.point(focus, ndc, aspect);
-                let extent = scene.dataset.extent();
-                let world = scene.dataset.world_size()[axis.index()];
-                let layers = axis.extent(extent) as f32;
-                let layer = ((focus[axis.index()] / world + 0.5) * layers)
-                    .floor()
-                    .clamp(0.0, layers - 1.0);
-                target[axis.index()] = ((layer + 0.5) / layers - 0.5) * world;
-                scene.pick_slice(axis, target)
-            }
+        let Some(engine) = self.engine.as_mut() else {
+            return;
         };
-        self.session.execute(Command::Select(selection));
-        self.request_redraw();
+        let scale = surface.window.scale_factor() as f32;
+        let point = [
+            (point.x * scale).max(0.0).round() as u32,
+            (point.y * scale).max(0.0).round() as u32,
+        ];
+        let pane = match pane {
+            Pane::Volume => PickPane::Volume,
+            Pane::Section => PickPane::Section,
+        };
+        engine.request_pick(&surface.gpu.device, &surface.gpu.queue, pane, point);
+    }
+
+    fn poll_pick(&mut self) {
+        let Some(surface) = self.surface.as_ref() else {
+            return;
+        };
+        let Some(engine) = self.engine.as_mut() else {
+            return;
+        };
+        if !engine.pick_pending() {
+            return;
+        }
+        let Some(picked) = engine.poll_pick(&surface.gpu.device) else {
+            return;
+        };
+        let selection = match picked {
+            Picked::Hit(selection) => Some(selection),
+            Picked::Miss => None,
+        };
+        self.apply(vec![Command::Select(selection)]);
     }
 
     fn set_keyframe(&mut self) {
@@ -1114,14 +1163,11 @@ impl App {
                     repeat: event.repeat,
                 });
             }
+            WindowEvent::Ime(Ime::Preedit(text, _)) => {
+                input.push(UiEvent::Preedit((!text.is_empty()).then(|| text.clone())));
+            }
             WindowEvent::Ime(Ime::Commit(text)) => {
-                for character in text.chars() {
-                    input.push(UiEvent::Key {
-                        key: grana_ui::Key::Character(character),
-                        pressed: true,
-                        repeat: false,
-                    });
-                }
+                input.push(UiEvent::Text(text.clone()));
             }
             _ => {}
         }

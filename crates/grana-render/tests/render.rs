@@ -11,7 +11,7 @@ use grana_display::{
 };
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::{Track, TrackNode, TrackSet};
-use grana_render::{Frame, Layer, LayerKey, Marker, Renderer, SceneFrame, Style};
+use grana_render::{Frame, Layer, LayerKey, Marker, PickId, PickPane, Renderer, SceneFrame, Style};
 use grana_volume::{
     Axis, BrickGrid, Channel, Extent, Level, Pyramid, Region, Spacing, Volume, VolumeSeries,
     VoxelData,
@@ -2929,4 +2929,230 @@ fn needs_capped_geometry_to_fill_open_surfaces() {
         red_count(&capped_pixels, SECTION_AREA) > 500,
         "a capped surface does not fill its cut face"
     );
+}
+
+#[test]
+fn resolves_volume_picks_at_the_requested_pixel() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = empty_volume();
+    let pyramid = volume.pyramid();
+    let mesh = PackedMesh::new(left_half_plane());
+    let styles = [Style::new([1.0, 0.12, 0.12], true, false, 1.0)];
+    let layers = [Layer {
+        key: LayerKey::at_frame(1, 0, 0, 1),
+        mesh: &mesh,
+        style_start: 0,
+        style_count: 1,
+    }];
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &styles,
+        layers: &layers,
+        markers: &[],
+    };
+    let mut camera = Camera::new(35.0);
+    camera.restore(CameraState {
+        pivot: [0.0, 0.0, 0.0],
+        yaw: 0.0,
+        pitch: 0.0,
+        distance: 5.0,
+        fov_y: 35.0f32.to_radians(),
+    });
+    let section = SectionCamera::new(Axis::Z);
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    settle(
+        &mut renderer,
+        Session {
+            device: &device,
+            queue: &queue,
+            target: &view,
+            camera: &camera,
+            section: &section,
+            scene: &scene,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            region: Region::none(),
+            time: 0,
+        },
+        |request| {
+            let grid = BrickGrid::new(volume.extent());
+            volume.brick(&grid, request.coord)
+        },
+    );
+    assert_eq!(
+        pick(
+            &mut renderer,
+            &device,
+            &queue,
+            PickPane::Volume,
+            [SIDE / 4, SIDE / 2]
+        ),
+        PickId::Style(0),
+        "the left half plane resolves its style row"
+    );
+    assert_eq!(
+        pick(
+            &mut renderer,
+            &device,
+            &queue,
+            PickPane::Volume,
+            [SIDE * 3 / 4, SIDE / 2]
+        ),
+        PickId::None,
+        "the empty half resolves no identity"
+    );
+}
+
+#[test]
+fn picks_markers_before_meshes_and_cut_faces() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = empty_volume();
+    let pyramid = volume.pyramid();
+    let mesh = PackedMesh::new(box_mesh(true));
+    let styles = [Style::new([1.0, 0.12, 0.12], true, false, 0.5)];
+    let layers = [Layer {
+        key: LayerKey::at_frame(1, 0, 0, 1),
+        mesh: &mesh,
+        style_start: 0,
+        style_count: 1,
+    }];
+    let markers = [Marker::new([0.0, 0.0, 0.2], 0.4, [0.2, 0.6, 1.0], 1.0)];
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &styles,
+        layers: &layers,
+        markers: &markers,
+    };
+    let mut camera = Camera::new(35.0);
+    camera.restore(CameraState {
+        pivot: [0.0, 0.0, 0.0],
+        yaw: 0.0,
+        pitch: 0.0,
+        distance: 5.0,
+        fov_y: 35.0f32.to_radians(),
+    });
+    let mut section = SectionCamera::new(Axis::Z);
+    section.fit(
+        Vec3::from(volume.world_extent()),
+        Vec3::new(0.1, 0.1, 0.1),
+        1.0,
+    );
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    settle(
+        &mut renderer,
+        Session {
+            device: &device,
+            queue: &queue,
+            target: &view,
+            camera: &camera,
+            section: &section,
+            scene: &scene,
+            volume_region: WHOLE,
+            section_region: WHOLE,
+            region: Region::none(),
+            time: 0,
+        },
+        |request| {
+            let grid = BrickGrid::new(volume.extent());
+            volume.brick(&grid, request.coord)
+        },
+    );
+    assert_eq!(
+        pick(
+            &mut renderer,
+            &device,
+            &queue,
+            PickPane::Volume,
+            [SIDE / 2, SIDE / 2]
+        ),
+        PickId::Marker(0),
+        "a marker in front of the box wins the volume pick"
+    );
+    assert_eq!(
+        pick(
+            &mut renderer,
+            &device,
+            &queue,
+            PickPane::Section,
+            [SIDE / 2, SIDE / 2]
+        ),
+        PickId::Marker(0),
+        "a marker ahead of the section plane wins the section pick"
+    );
+    assert_eq!(
+        pick(
+            &mut renderer,
+            &device,
+            &queue,
+            PickPane::Section,
+            [SIDE / 2 + 45, SIDE / 2]
+        ),
+        PickId::Style(0),
+        "a cut face resolves its style row beside the marker"
+    );
+    assert_eq!(
+        pick(
+            &mut renderer,
+            &device,
+            &queue,
+            PickPane::Section,
+            [SIDE / 8, SIDE / 8]
+        ),
+        PickId::None,
+        "the empty section resolves no identity"
+    );
+}
+
+fn pick(
+    renderer: &mut Renderer,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    pane: PickPane,
+    point: [u32; 2],
+) -> PickId {
+    assert!(
+        renderer.request_pick(device, queue, pane, point),
+        "the pick request lands in its pane"
+    );
+    for _ in 0..64 {
+        if let Some(id) = renderer.poll_pick(device) {
+            return id;
+        }
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("failed to wait for the gpu");
+    }
+    panic!("the pick never resolved");
+}
+
+fn left_half_plane() -> Mesh {
+    let corners = [
+        [-1.6f32, -1.6, 0.0],
+        [0.0, -1.6, 0.0],
+        [0.0, 1.6, 0.0],
+        [-1.6, 1.6, 0.0],
+    ];
+    let vertices = corners
+        .into_iter()
+        .map(|corner| MeshVertex::new(corner, [0.0, 0.0, 1.0], 0))
+        .collect::<Vec<_>>();
+    Mesh::new(vertices, vec![0, 1, 2, 0, 2, 3])
 }

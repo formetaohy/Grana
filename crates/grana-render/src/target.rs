@@ -8,6 +8,7 @@ pub(crate) const SCENE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const ACCUMULATION_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 pub(crate) const CUT_ID_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+pub(crate) const PICK_FORMAT: TextureFormat = TextureFormat::Rg32Uint;
 pub(crate) const LAYER_COUNT: usize = 4;
 
 pub(crate) struct SceneTarget {

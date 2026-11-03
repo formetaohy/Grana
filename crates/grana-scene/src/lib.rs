@@ -6,7 +6,6 @@ mod measure;
 mod object;
 mod object_set;
 mod objects;
-mod pick;
 mod relation;
 mod scene;
 mod slug;

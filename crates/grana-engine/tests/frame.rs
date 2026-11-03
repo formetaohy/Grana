@@ -1,5 +1,3 @@
-use glam::Vec3;
-use grana_display::Ray;
 use grana_geometry::{Bounds, Mesh, MeshVertex};
 use grana_object::{IntensityTable, SampleStatistics, SurfaceSet, SurfaceStatistics};
 use grana_scene::{Dataset, Item, ObjectFrame, ObjectKind, Scene, Selection};
@@ -20,18 +18,21 @@ fn assembles_the_render_frame() {
         assert_eq!(mesh.triangle_count(), 4);
         assert_eq!(mesh.vertex_count(), 8);
         assert_eq!(layer.style_count, 2);
+        assert_eq!(
+            rendered.style_ids,
+            vec![
+                Selection {
+                    set: id,
+                    item: Item::Object(0),
+                },
+                Selection {
+                    set: id,
+                    item: Item::Object(1),
+                },
+            ],
+            "every style row resolves to the object it draws"
+        );
     }
-    let ray = Ray {
-        origin: Vec3::new(-1.0, -1.0, 4.0),
-        direction: Vec3::new(0.0, 0.0, -1.0),
-    };
-    assert_eq!(
-        scene.pick_ray(&ray),
-        Some(Selection {
-            set: id,
-            item: Item::Object(0),
-        })
-    );
     scene
         .objects
         .get_mut(id)
@@ -39,7 +40,10 @@ fn assembles_the_render_frame() {
         .set_visible(false);
     let rendered = grana_engine::frame(&scene);
     assert!(rendered.layers.is_empty(), "a hidden set renders nothing");
-    assert_eq!(scene.pick_ray(&ray), None);
+    assert!(
+        rendered.style_ids.is_empty(),
+        "a hidden set resolves no identity"
+    );
 }
 
 fn fixture() -> Scene {

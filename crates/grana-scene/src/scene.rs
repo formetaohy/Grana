@@ -1,10 +1,7 @@
-use std::cell::RefCell;
-
-use glam::Vec3;
-use grana_display::{Ray, Shading, TransferFunction};
+use grana_display::{Shading, TransferFunction};
 use grana_measure::RelationRow;
 use grana_object::{RelationFrame, TrackSet};
-use grana_volume::{Axis, ChannelInfo, Intensity, Region};
+use grana_volume::{ChannelInfo, Intensity, Region};
 
 use crate::channel::Channel;
 use crate::coloc::{Coloc, MaskKey};
@@ -12,7 +9,6 @@ use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
-use crate::pick;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Selection {
@@ -37,7 +33,6 @@ pub struct Scene {
     pub mask: Option<ObjectSetId>,
     pub objects: Objects,
     pub coloc: Coloc,
-    pub(crate) pick: RefCell<pick::Cache>,
     time: u32,
     selection: Option<Selection>,
 }
@@ -69,7 +64,6 @@ impl Scene {
             mask: None,
             objects: Objects::new(),
             coloc: Coloc::new(channel_count, region),
-            pick: RefCell::default(),
             time: 0,
             selection: None,
         }
@@ -344,14 +338,6 @@ impl Scene {
             }) if set == id => Some(index),
             _ => None,
         }
-    }
-
-    pub fn pick_ray(&self, ray: &Ray) -> Option<Selection> {
-        pick::ray(self, self.time, ray)
-    }
-
-    pub fn pick_slice(&self, axis: Axis, point: Vec3) -> Option<Selection> {
-        pick::slice(self, self.time, axis, point)
     }
 
     pub fn geometry_bytes(&self) -> u64 {

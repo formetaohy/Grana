@@ -66,6 +66,40 @@ impl Readback {
         encoder.copy_buffer_to_buffer(source, 0, &self.slots[slot].buffer, offset, size);
     }
 
+    pub fn stage_pixel(
+        &self,
+        encoder: &mut CommandEncoder,
+        slot: usize,
+        texture: &wgpu::Texture,
+        row: u64,
+    ) {
+        assert!(
+            row.is_multiple_of(COPY_ALIGNMENT) && row <= self.slots[slot].buffer.size(),
+            "a pixel readback row fits its staging buffer"
+        );
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &self.slots[slot].buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(u32::try_from(row).expect("a readback row fits u32")),
+                    rows_per_image: Some(1),
+                },
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
     pub fn register(&mut self) {
         for slot in &mut self.slots {
             if slot.reserved && slot.mapping.is_none() {

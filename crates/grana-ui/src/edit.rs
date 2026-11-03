@@ -1,12 +1,34 @@
+use glam::Vec2;
+
+use crate::clipboard::Clipboard;
 use crate::input::{Input, Key};
 
 const BLINK_PERIOD: f32 = 1.06;
 const BLINK_DUTY: f32 = 0.53;
+const MULTI_CLICK_SECONDS: f32 = 0.35;
+const MULTI_CLICK_SLOP: f32 = 4.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Commit,
     Cancel,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Class {
+    Word,
+    Space,
+    Symbol,
+}
+
+fn class(character: char) -> Class {
+    if character.is_alphanumeric() || character == '_' {
+        Class::Word
+    } else if character.is_whitespace() {
+        Class::Space
+    } else {
+        Class::Symbol
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -16,6 +38,8 @@ pub struct Edit {
     anchor: usize,
     caret: usize,
     active_at: f32,
+    clicks: u32,
+    last_click: Option<(f32, Vec2)>,
 }
 
 impl Edit {
@@ -26,6 +50,8 @@ impl Edit {
             anchor: 0,
             caret: text.chars().count(),
             active_at: time,
+            clicks: 0,
+            last_click: None,
         }
     }
 
@@ -78,10 +104,49 @@ impl Edit {
         self.active_at = time;
     }
 
+    pub fn select(&mut self, range: (usize, usize), time: f32) {
+        self.anchor = range.0.min(self.length());
+        self.caret = range.1.min(self.length());
+        self.active_at = time;
+    }
+
     pub fn select_all(&mut self, time: f32) {
         self.anchor = 0;
         self.caret = self.length();
         self.active_at = time;
+    }
+
+    pub fn click(&mut self, point: Vec2, time: f32) -> u32 {
+        let count = match self.last_click {
+            Some((last, at))
+                if time - last <= MULTI_CLICK_SECONDS
+                    && (point - at).length() <= MULTI_CLICK_SLOP =>
+            {
+                self.clicks % 3 + 1
+            }
+            _ => 1,
+        };
+        self.last_click = Some((time, point));
+        self.clicks = count;
+        count
+    }
+
+    pub fn word(&self, caret: usize) -> (usize, usize) {
+        let characters = self.text.chars().collect::<Vec<_>>();
+        if characters.is_empty() {
+            return (0, 0);
+        }
+        let index = caret.min(characters.len() - 1);
+        let kind = class(characters[index]);
+        let mut start = index;
+        while start > 0 && class(characters[start - 1]) == kind {
+            start -= 1;
+        }
+        let mut end = index + 1;
+        while end < characters.len() && class(characters[end]) == kind {
+            end += 1;
+        }
+        (start, end)
     }
 
     pub fn insert(&mut self, text: &str, time: f32) {
@@ -92,7 +157,15 @@ impl Edit {
         self.replace(&text, time);
     }
 
-    pub fn poll(&mut self, input: &Input, time: f32) -> Option<Outcome> {
+    pub fn poll(
+        &mut self,
+        input: &Input,
+        clipboard: &mut dyn Clipboard,
+        time: f32,
+    ) -> Option<Outcome> {
+        for text in input.texts() {
+            self.insert(text, time);
+        }
         let modifiers = input.modifiers();
         for event in input.keys() {
             if !event.pressed {
@@ -101,14 +174,21 @@ impl Edit {
             let Some(key) = event.key else {
                 continue;
             };
+            if modifiers.control || modifiers.logo {
+                let Key::Character(character) = key else {
+                    continue;
+                };
+                match character.to_ascii_lowercase() {
+                    'a' => self.select_all(time),
+                    'c' => self.copy(clipboard),
+                    'x' => self.cut(clipboard, time),
+                    'v' => self.paste(clipboard, time),
+                    _ => {}
+                }
+                continue;
+            }
             match key {
                 Key::Character(character) => {
-                    if modifiers.control || modifiers.logo {
-                        if character.eq_ignore_ascii_case(&'a') {
-                            self.select_all(time);
-                        }
-                        continue;
-                    }
                     if character.is_control() {
                         continue;
                     }
@@ -126,6 +206,32 @@ impl Edit {
             }
         }
         None
+    }
+
+    fn selected_text(&self) -> Option<String> {
+        let (start, end) = self.selection()?;
+        Some(self.text[self.offset(start)..self.offset(end)].to_string())
+    }
+
+    fn copy(&self, clipboard: &mut dyn Clipboard) {
+        let Some(text) = self.selected_text() else {
+            return;
+        };
+        clipboard.write(&text);
+    }
+
+    fn cut(&mut self, clipboard: &mut dyn Clipboard, time: f32) {
+        let Some(text) = self.selected_text() else {
+            return;
+        };
+        clipboard.write(&text);
+        self.replace("", time);
+    }
+
+    fn paste(&mut self, clipboard: &mut dyn Clipboard, time: f32) {
+        if let Some(text) = clipboard.read() {
+            self.insert(&text, time);
+        }
     }
 
     fn replace(&mut self, text: &str, time: f32) {

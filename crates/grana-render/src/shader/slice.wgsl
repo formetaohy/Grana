@@ -101,3 +101,12 @@ fn fs_main(input: FaceOutput) -> FaceFragment {
     fragment.identity = encode_identity(input.style + 1u);
     return fragment;
 }
+
+@fragment
+fn fs_pick(input: FaceOutput) -> @location(0) vec2<u32> {
+    let point = plane_point(input.uv);
+    if (outside_region(point)) {
+        discard;
+    }
+    return vec2<u32>(1u, input.style + 1u);
+}

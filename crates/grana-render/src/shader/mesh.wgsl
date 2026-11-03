@@ -37,6 +37,7 @@ struct Style {
 @group(3) @binding(4) var shadow_compare: sampler_comparison;
 @group(4) @binding(0) var previous_depth: texture_depth_2d;
 @group(4) @binding(1) var opaque_depth: texture_depth_2d;
+@group(5) @binding(0) var<storage, read> pick_ids: array<u32>;
 
 struct VertexInput {
     @location(0) position: vec4<f32>,
@@ -155,4 +156,12 @@ fn fs_layer(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     let sample = shade(input);
     return vec4<f32>(sample.rgb * sample.a, sample.a);
+}
+
+@fragment
+fn fs_pick(input: VertexOutput) -> @location(0) vec2<u32> {
+    if (is_outside(input)) {
+        discard;
+    }
+    return vec2<u32>(1u, pick_ids[input.object]);
 }

@@ -1,5 +1,6 @@
 use glam::Vec2;
 
+use crate::clipboard::{Clipboard, NullClipboard};
 use crate::color::Color;
 use crate::edit::{Edit, Outcome as EditOutcome};
 use crate::geometry::{Corners, Edges, Rect};
@@ -210,6 +211,8 @@ pub struct Ui {
     overlay_mode: u32,
     edit: Option<Edit>,
     edit_seen: bool,
+    edit_caret: Option<Rect>,
+    clipboard: Box<dyn Clipboard>,
 }
 
 impl Ui {
@@ -235,6 +238,8 @@ impl Ui {
             overlay_mode: 0,
             edit: None,
             edit_seen: false,
+            edit_caret: None,
+            clipboard: Box::new(NullClipboard),
         }
     }
 
@@ -275,12 +280,26 @@ impl Ui {
     }
 
     pub fn begin_edit(&mut self, key: u64, text: &str) {
+        self.input.clear_preedit();
         self.edit = Some(Edit::new(key, text, self.time));
         self.edit_seen = true;
     }
 
     pub fn end_edit(&mut self) {
+        self.input.clear_preedit();
         self.edit = None;
+    }
+
+    pub fn set_clipboard(&mut self, clipboard: Box<dyn Clipboard>) {
+        self.clipboard = clipboard;
+    }
+
+    pub fn edit_caret(&self) -> Option<Rect> {
+        self.edit_caret
+    }
+
+    pub(crate) fn set_edit_caret(&mut self, caret: Rect) {
+        self.edit_caret = Some(caret);
     }
 
     pub(crate) fn touch_edit(&mut self) {
@@ -304,9 +323,15 @@ impl Ui {
     }
 
     pub fn poll_edit(&mut self) -> Option<EditOutcome> {
-        let time = self.time;
-        let outcome = self.edit.as_mut()?.poll(&self.input, time)?;
-        self.edit = None;
+        let Self {
+            edit,
+            input,
+            clipboard,
+            time,
+            ..
+        } = self;
+        let outcome = edit.as_mut()?.poll(input, clipboard.as_mut(), *time)?;
+        *edit = None;
         Some(outcome)
     }
 
@@ -341,6 +366,7 @@ impl Ui {
         self.frames.clear();
         self.ids.clear();
         self.edit_seen = false;
+        self.edit_caret = None;
         self.overlay_clip = Clip::new(Rect::from_min_size(Vec2::ZERO, size), Corners::ZERO);
     }
 

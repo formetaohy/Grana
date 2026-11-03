@@ -181,6 +181,7 @@ impl Export {
         let pose = self.poses[self.frame];
         let camera = frame::restored_camera(&pose.camera);
         let section = frame::restored_section(&pose.section);
+        let rendered = crate::view::frame(scene);
         let info = frame::draw(
             renderer,
             device,
@@ -197,6 +198,7 @@ impl Export {
                 prefetch: false,
                 transparent: self.transparent,
             },
+            &rendered,
         );
         self.attempts += 1;
         if info.samples < self.samples {

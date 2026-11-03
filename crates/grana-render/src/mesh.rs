@@ -16,7 +16,7 @@ use wgpu::{
 
 use crate::layout::Layouts;
 use crate::schema::{LayerKey, SceneFrame, Style};
-use crate::target::SCENE_FORMAT;
+use crate::target::{PICK_FORMAT, SCENE_FORMAT};
 use crate::volume::depth_state;
 use grana_display::{Shading, srgb_to_linear};
 
@@ -104,6 +104,7 @@ pub(crate) struct MeshPasses {
     shadow_cull: ComputePipeline,
     volume_pipeline: RenderPipeline,
     layer_pipeline: RenderPipeline,
+    pick_pipeline: RenderPipeline,
     shadow_pipeline: RenderPipeline,
     uniforms: Buffer,
     uniform_group: BindGroup,
@@ -244,6 +245,43 @@ impl MeshPasses {
             multiview_mask: None,
             cache: None,
         });
+        let pick_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.mesh.pick.pipeline_layout"),
+            bind_group_layouts: &[
+                Some(&uniform_layout),
+                Some(&layouts.objects),
+                None,
+                None,
+                None,
+                Some(&layouts.pick),
+            ],
+            immediate_size: 0,
+        });
+        let pick_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.mesh.pick"),
+            layout: Some(&pick_layout),
+            vertex: VertexState {
+                module: &volume_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(vertex_layout())],
+            },
+            primitive: PrimitiveState::default(),
+            depth_stencil: Some(depth_state(true, CompareFunction::Less)),
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &volume_module,
+                entry_point: Some("fs_pick"),
+                compilation_options: Default::default(),
+                targets: &[Some(ColorTargetState {
+                    format: PICK_FORMAT,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.mesh.uniforms"),
             size: size_of::<MeshUniforms>() as u64,
@@ -268,6 +306,7 @@ impl MeshPasses {
             shadow_cull,
             volume_pipeline,
             layer_pipeline,
+            pick_pipeline,
             shadow_pipeline,
             uniforms,
             uniform_group,
@@ -325,6 +364,7 @@ impl MeshPasses {
                 queue,
                 &scene.styles[layer.style_start..layer.style_start + layer.style_count],
             );
+            slot.write_pick(device, queue, layer.style_start);
             self.active.push(layer.key);
         }
         self.evict();
@@ -489,6 +529,17 @@ impl MeshPasses {
             self.slots[key].draw(pass, LAYER_NARROW, LAYER_WIDE);
         }
     }
+
+    pub fn draw_pick<'a>(&'a self, pass: &mut RenderPass<'a>) {
+        if self.active.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.pick_pipeline);
+        pass.set_bind_group(0, &self.uniform_group, &[]);
+        for key in &self.active {
+            self.slots[key].draw_pick(pass);
+        }
+    }
 }
 
 struct MeshSlot {
@@ -498,11 +549,14 @@ struct MeshSlot {
     object_group: BindGroup,
     styles: Table<StyleData>,
     style_group: BindGroup,
+    pick: Table<u32>,
+    pick_group: BindGroup,
     commands: IndexedCommands,
     command_group: BindGroup,
     object_count: u32,
     style_start: u32,
     cached_styles: Vec<StyleData>,
+    pick_base: Option<usize>,
     bytes: u64,
     used: u64,
 }
@@ -577,6 +631,8 @@ impl MeshSlot {
         let object_group = bind_group(device, &layouts.objects, object_table.buffer());
         let styles = Table::with_capacity(device, "grana.mesh.styles", object_count as usize);
         let style_group = bind_group(device, &layouts.styles, styles.buffer());
+        let pick = Table::with_capacity(device, "grana.mesh.pick", object_count as usize);
+        let pick_group = bind_group(device, &layouts.pick, pick.buffer());
         let commands = IndexedCommands::new(
             device,
             "grana.mesh.commands",
@@ -588,7 +644,8 @@ impl MeshSlot {
             + size_of_val(mesh.narrow())
             + size_of_val(mesh.wide())
             + object_count as usize * size_of::<ObjectData>()
-            + object_count as usize * size_of::<StyleData>()) as u64
+            + object_count as usize * size_of::<StyleData>()
+            + object_count as usize * size_of::<u32>()) as u64
             + commands.buffer().size();
         Self {
             vertices,
@@ -597,11 +654,14 @@ impl MeshSlot {
             object_group,
             styles,
             style_group,
+            pick,
+            pick_group,
             commands,
             command_group,
             object_count,
             style_start: 0,
             cached_styles: Vec::new(),
+            pick_base: None,
             bytes,
             used: 0,
         }
@@ -624,6 +684,45 @@ impl MeshSlot {
         if data != self.cached_styles {
             queue.write_buffer(self.styles.buffer(), 0, bytemuck::cast_slice(&data));
             self.cached_styles = data;
+        }
+    }
+
+    fn write_pick(&mut self, device: &Device, queue: &Queue, style_start: usize) {
+        if self.pick_base == Some(style_start) {
+            return;
+        }
+        let base = u32::try_from(style_start + 1).expect("a style row fits u32");
+        let rows = (0..self.object_count)
+            .map(|index| base + index)
+            .collect::<Vec<_>>();
+        let grown = self.pick.write(device, queue, &rows);
+        assert!(!grown, "the pick table holds every mesh object");
+        self.pick_base = Some(style_start);
+    }
+
+    fn draw_pick<'a>(&'a self, pass: &mut RenderPass<'a>) {
+        pass.set_bind_group(1, &self.object_group, &[]);
+        pass.set_bind_group(5, &self.pick_group, &[]);
+        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        if let Some(indices) = &self.narrow {
+            pass.set_index_buffer(indices.slice(..), IndexFormat::Uint16);
+            for region in [OPAQUE_NARROW, LAYER_NARROW] {
+                pass.multi_draw_indexed_indirect(
+                    self.commands.buffer(),
+                    self.commands.offset(region),
+                    self.object_count,
+                );
+            }
+        }
+        if let Some(indices) = &self.wide {
+            pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
+            for region in [OPAQUE_WIDE, LAYER_WIDE] {
+                pass.multi_draw_indexed_indirect(
+                    self.commands.buffer(),
+                    self.commands.offset(region),
+                    self.object_count,
+                );
+            }
         }
     }
 

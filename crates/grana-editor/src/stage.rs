@@ -85,19 +85,6 @@ impl Stage {
         self.section_region = section;
     }
 
-    pub fn ndc(&self, pane: Pane, point: Vec2) -> Vec2 {
-        let region = self.region(pane);
-        Vec2::new(
-            (point.x - region[0] as f32) / region[2] as f32 * 2.0 - 1.0,
-            1.0 - (point.y - region[1] as f32) / region[3] as f32 * 2.0,
-        )
-    }
-
-    pub fn aspect(&self, pane: Pane) -> f32 {
-        let region = self.region(pane);
-        region[2] as f32 / region[3] as f32
-    }
-
     pub fn hovered(&self) -> Option<Pane> {
         self.hovered
     }
@@ -221,12 +208,5 @@ impl Stage {
             });
         }
         interaction
-    }
-
-    fn region(&self, pane: Pane) -> [u32; 4] {
-        match pane {
-            Pane::Volume => self.volume_region,
-            Pane::Section => self.section_region,
-        }
     }
 }
