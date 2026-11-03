@@ -37,6 +37,7 @@ impl Protocol {
             .filter_map(|filter| Some((table.column(&filter.column)?, filter)))
             .map(|(column, filter)| (column, filter.minimum, filter.maximum))
             .collect::<Vec<_>>();
+        let sort = spec.order(table);
         measure.show_all_columns();
         for (index, shown) in visible.iter().enumerate() {
             if !shown {
@@ -46,5 +47,6 @@ impl Protocol {
         for (column, minimum, maximum) in filters {
             measure.set_gate(column, minimum, maximum);
         }
+        measure.set_sort(sort);
     }
 }

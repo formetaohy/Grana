@@ -3,6 +3,7 @@ mod check;
 mod present;
 mod spec;
 mod stage;
+mod step;
 
 use std::path::Path;
 
@@ -11,16 +12,20 @@ use thiserror::Error;
 
 pub use spec::{
     AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec,
-    DetectionSpec, FilterSpec, MeasureSpec, RegionSpec, RelationSpec, SectionSpec, SetSpec,
-    TrackSpec, ViewSpec, WindowSpec,
+    DetectionSpec, FilterSpec, KeySpec, MeasureSpec, RegionSpec, RelationSpec, RenderSpec,
+    SectionSpec, SetSpec, ShadingSpec, SortSpec, StopSpec, TimelineSpec, TrackSpec, TransferSpec,
+    ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
+pub(crate) use step::Step;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Protocol {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     region: Option<RegionSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    render: Option<RenderSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     channels: Vec<ChannelSpec>,
     sets: Vec<SetSpec>,
@@ -47,6 +52,7 @@ pub enum ProtocolError {
 impl Protocol {
     pub(crate) fn build(
         region: Option<RegionSpec>,
+        render: Option<RenderSpec>,
         channels: Vec<ChannelSpec>,
         sets: Vec<SetSpec>,
         relations: Vec<RelationSpec>,
@@ -55,6 +61,7 @@ impl Protocol {
     ) -> Result<Self, ProtocolError> {
         Self {
             region,
+            render,
             channels,
             sets,
             relations,
@@ -66,6 +73,10 @@ impl Protocol {
 
     pub fn region(&self) -> Option<RegionSpec> {
         self.region
+    }
+
+    pub fn render(&self) -> Option<RenderSpec> {
+        self.render
     }
 
     pub fn channels(&self) -> &[ChannelSpec] {
@@ -84,8 +95,8 @@ impl Protocol {
         self.coloc.as_ref()
     }
 
-    pub fn view(&self) -> Option<ViewSpec> {
-        self.view
+    pub fn view(&self) -> Option<&ViewSpec> {
+        self.view.as_ref()
     }
 
     pub fn to_json(&self) -> Result<String, ProtocolError> {
@@ -171,6 +182,12 @@ impl Protocol {
             summary.push_str(&format!(
                 " · colocalizes {pairs}{mask} ({} permutations)",
                 coloc.settings.permutations
+            ));
+        }
+        if let Some(timeline) = self.view.as_ref().and_then(|view| view.timeline.as_ref()) {
+            summary.push_str(&format!(
+                " · {} fps over {:.1} s",
+                timeline.fps, timeline.duration
             ));
         }
         summary

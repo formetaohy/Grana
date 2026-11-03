@@ -1,9 +1,13 @@
 use glam::Vec3;
-use grana_display::{CameraState, Coloring, Palette, SectionState};
+use grana_animation::{Keyframe, Timeline};
+use grana_display::{
+    CameraState, Coloring, Palette, SectionState, Shading, Stop, TransferFunction,
+};
 use grana_measure::{
     ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
     ColocThresholds, Measurement, TrackMeasurement,
 };
+use grana_project::ViewState;
 use grana_scene::{Dataset, Measure, ObjectColor, ObjectKind, Scene};
 use grana_session::{DetectionSpec, Protocol, ViewSpec};
 use grana_volume::{Axis, Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
@@ -336,6 +340,22 @@ fn stages_the_presentation_of_a_captured_protocol() {
     assert!(scene.rename_object(beads, "Beads"));
     scene.channels[0].enabled = false;
     scene.channels[1].opacity = 0.4;
+    scene.exposure = 1.8;
+    scene.step_scale = 0.6;
+    scene.shading = Shading {
+        ambient: 0.2,
+        diffuse: 0.6,
+        specular: 0.4,
+        shininess: 40.0,
+        shadows: 0.3,
+    };
+    scene.set_transfer(
+        1,
+        TransferFunction::new(vec![
+            Stop::new(0.0, [0.0, 0.0, 0.0], 0.0),
+            Stop::new(1.0, [0.2, 0.9, 0.4], 0.8),
+        ]),
+    );
     scene.set_region(Region::new(
         Vec3::new(-1.0, -1.0, -2.0),
         Vec3::new(1.0, 1.0, 2.0),
@@ -347,6 +367,7 @@ fn stages_the_presentation_of_a_captured_protocol() {
     set.set_color([0.9, 0.5, 0.2]);
     set.set_opacity(0.35);
     set.set_visible(false);
+    set.set_track_visible(false);
     let mut object = Coloring::new();
     object.set_metric(Some(ObjectColor::Measurement(Measurement::Diameter)));
     object.set_palette(Palette::Magma);
@@ -364,23 +385,47 @@ fn stages_the_presentation_of_a_captured_protocol() {
         .get_mut(beads)
         .expect("the spot set")
         .set_track_coloring(track);
+    let camera = CameraState {
+        pivot: [1.0, 2.0, 3.0],
+        yaw: 0.4,
+        pitch: -0.2,
+        distance: 42.0,
+        fov_y: 0.6,
+    };
+    let section = SectionState {
+        axis: Axis::X,
+        span: 7.5,
+    };
+    let timeline = Timeline::from_parts(
+        24,
+        6.0,
+        vec![
+            Keyframe {
+                at: 0.0,
+                time: 0,
+                camera,
+                section,
+            },
+            Keyframe {
+                at: 3.0,
+                time: 1,
+                camera: CameraState { yaw: 1.2, ..camera },
+                section,
+            },
+        ],
+    )
+    .expect("the timeline is valid");
     let view = ViewSpec::of(
-        CameraState {
-            pivot: [1.0, 2.0, 3.0],
-            yaw: 0.4,
-            pitch: -0.2,
-            distance: 42.0,
-            fov_y: 0.6,
+        &ViewState {
+            camera,
+            section,
+            split: 0.5,
+            timeline: timeline.clone(),
         },
-        SectionState {
-            axis: Axis::X,
-            span: 7.5,
-        },
-        0.5,
         0,
     );
     let protocol =
-        Protocol::capture(&scene, &Measure::new(), Some(view)).expect("the scene captures");
+        Protocol::capture(&scene, &Measure::new(), Some(view.clone())).expect("the scene captures");
     let text = protocol.to_json().expect("the protocol serializes");
     let protocol = Protocol::from_json(&text).expect("the protocol round trips");
     assert_eq!(protocol.sets()[0].name, "Nuclei");
@@ -389,16 +434,35 @@ fn stages_the_presentation_of_a_captured_protocol() {
     assert_eq!(protocol.channels().len(), 2);
     assert!(!protocol.channels()[0].enabled);
     assert_eq!(protocol.channels()[1].opacity, 0.4);
-    assert_eq!(protocol.view(), Some(view));
+    assert_eq!(
+        protocol.channels()[1]
+            .transfer
+            .as_ref()
+            .expect("the channel transfer captures")
+            .stops
+            .len(),
+        2
+    );
+    assert_eq!(protocol.render().map(|render| render.exposure), Some(1.8));
+    assert_eq!(
+        protocol.sets()[0].track_visible(),
+        Some(false),
+        "the track appearance captures"
+    );
+    assert_eq!(protocol.view(), Some(&view));
+    let played = protocol
+        .view()
+        .and_then(ViewSpec::timeline)
+        .expect("the timeline captures");
+    assert_eq!(played.fps(), 24);
+    assert_eq!(played.duration(), 6.0);
+    assert_eq!(played.keys().len(), 2);
 
     let mut target = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
     let staged = protocol
         .stage(&mut target)
         .expect("the protocol stages onto a fresh scene");
     assert_eq!(staged.len(), 2);
-    assert_eq!(staged.mask_of(0), None);
-    assert_eq!(staged.mask_of(1), Some(0));
-    assert_eq!(staged.mask(), Some(0));
     let staged_nuclei = staged.set(0);
     let staged_beads = staged.set(1);
     let names = target
@@ -409,6 +473,10 @@ fn stages_the_presentation_of_a_captured_protocol() {
     assert_eq!(names, ["Nuclei", "Beads"]);
     assert!(!target.channels[0].enabled);
     assert_eq!(target.channels[1].opacity, 0.4);
+    assert_eq!(target.channels[1].transfer(), scene.channels[1].transfer());
+    assert_eq!(target.exposure, 1.8);
+    assert_eq!(target.step_scale, 0.6);
+    assert_eq!(target.shading, scene.shading);
     assert_eq!(target.mask, Some(staged_nuclei));
     assert_eq!(target.region.min(), scene.region.min());
     assert_eq!(target.region.max(), scene.region.max());
@@ -416,6 +484,7 @@ fn stages_the_presentation_of_a_captured_protocol() {
     assert_eq!(nuclei_set.color(), [0.9, 0.5, 0.2]);
     assert_eq!(nuclei_set.opacity(), 0.35);
     assert!(!nuclei_set.visible());
+    assert!(!nuclei_set.track_visible());
     assert_eq!(nuclei_set.seeds(0), [[0.5, -1.0, 1.5]]);
     let beads_set = target.objects.get(staged_beads).expect("the spot set");
     assert!(beads_set.relation(staged_nuclei).is_some());
@@ -456,6 +525,27 @@ fn rejects_a_protocol_that_names_presentation_it_cannot_reach() {
             "\"color\": [0.3, 0.8, 1.0], \"color_by\": {\"target\": \"Missing\", \"field\": \"distance\", \"palette\": \"viridis\"},"
         )),
         "a color names a relation within the protocol"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace(
+            "  \"region\":",
+            "  \"view\": {\"camera\": {\"pivot\": [0.0, 0.0, 0.0], \"yaw\": 0.0, \"pitch\": 0.0, \"distance\": 1.0, \"fov_y\": 0.6}, \"section\": {\"axis\": \"z\", \"span\": 1.0}, \"split\": 0.5, \"timeline\": {\"fps\": 0, \"duration\": 4.0}},\n  \"region\":"
+        )),
+        "a timeline plays one to 240 frames per second"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace(
+            "  \"region\":",
+            "  \"render\": {\"exposure\": 0.0, \"step_scale\": 1.0, \"shading\": {\"ambient\": 0.3, \"diffuse\": 0.7, \"specular\": 0.3, \"shininess\": 28.0, \"shadows\": 0.7}},\n  \"region\":"
+        )),
+        "a rendering scales radiance by a positive exposure"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace(
+            "  \"region\":",
+            "  \"channels\": [{\"name\": \"DAPI\", \"enabled\": true, \"opacity\": 1.0, \"window\": {\"low\": 0.0, \"high\": 1.0}, \"transfer\": {\"stops\": []}}],\n  \"region\":"
+        )),
+        "a channel transfer holds at least one stop"
     );
     assert!(
         invalid(&PROTOCOL.replace(

@@ -555,6 +555,9 @@ impl ObjectSet {
             let mut layer = TrackLayer::shared(tracks, thickness, take_stamp(stamp));
             layer.set_visible(visible);
             set.tracks = Some(layer);
+            if let Some(style) = set.track_style.as_mut() {
+                style.set_visible(visible);
+            }
         }
         set.restore_coloring(object_color, track_color);
         set.set_visibility(visibility);
@@ -887,7 +890,6 @@ impl ObjectSet {
         let style = self
             .track_style
             .expect("only trackable objects install tracks");
-        let visible = self.tracks.as_ref().is_none_or(TrackLayer::visible);
         let thickness = self
             .tracks
             .as_ref()
@@ -897,7 +899,7 @@ impl ObjectSet {
             .metric()
             .and_then(|metric| track_extent(&set, metric));
         let mut layer = TrackLayer::new(set, thickness, stamp);
-        layer.set_visible(visible);
+        layer.set_visible(style.visible());
         self.tracks = Some(layer);
         self.track_bounds = bounds;
         self.revision = stamp;
@@ -1000,7 +1002,17 @@ impl ObjectSet {
         }
     }
 
+    pub fn track_visible(&self) -> bool {
+        match &self.tracks {
+            Some(layer) => layer.visible(),
+            None => self.track_style.is_none_or(TrackStyle::visible),
+        }
+    }
+
     pub fn set_track_visible(&mut self, visible: bool) {
+        if let Some(style) = self.track_style.as_mut() {
+            style.set_visible(visible);
+        }
         if let Some(layer) = self.tracks.as_mut() {
             let previous = layer.visible();
             layer.set_visible(visible);

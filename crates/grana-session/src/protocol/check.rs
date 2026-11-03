@@ -13,6 +13,9 @@ impl Protocol {
         if let Some(region) = &self.region {
             region.checked()?;
         }
+        if let Some(render) = self.render {
+            render.checked()?;
+        }
         for (index, channel) in self.channels.iter().enumerate() {
             channel.checked()?;
             if self.channels[..index]

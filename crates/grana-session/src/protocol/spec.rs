@@ -1,7 +1,9 @@
 use glam::Vec3;
 use grana_analysis::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
-use grana_display::{CameraState, Palette, SectionState};
+use grana_animation::{Keyframe, Timeline};
+use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
 use grana_measure::{Aggregate, Filter, Group, RelationField, Table};
+use grana_project::ViewState;
 use grana_scene::{ObjectKind, ObjectParams};
 use grana_volume::Axis;
 use serde::{Deserialize, Serialize};
@@ -15,6 +17,8 @@ pub struct ChannelSpec {
     pub enabled: bool,
     pub opacity: f32,
     pub window: WindowSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transfer: Option<TransferSpec>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -22,6 +26,38 @@ pub struct ChannelSpec {
 pub struct WindowSpec {
     pub low: f32,
     pub high: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransferSpec {
+    pub stops: Vec<StopSpec>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StopSpec {
+    pub position: f32,
+    pub color: [f32; 3],
+    pub opacity: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenderSpec {
+    pub exposure: f32,
+    pub step_scale: f32,
+    pub shading: ShadingSpec,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShadingSpec {
+    pub ambient: f32,
+    pub diffuse: f32,
+    pub specular: f32,
+    pub shininess: f32,
+    pub shadows: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -40,7 +76,7 @@ pub struct ColorSpec {
     pub range: Option<[f32; 2]>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ViewSpec {
     pub camera: CameraSpec,
@@ -48,6 +84,26 @@ pub struct ViewSpec {
     pub split: f32,
     #[serde(default)]
     pub time: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<TimelineSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineSpec {
+    pub fps: u32,
+    pub duration: f32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<KeySpec>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeySpec {
+    pub at: f32,
+    pub time: u32,
+    pub camera: CameraSpec,
+    pub section: SectionSpec,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -123,6 +179,16 @@ pub struct MeasureSpec {
     pub filters: Vec<FilterSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<SortSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SortSpec {
+    pub column: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub descending: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -164,6 +230,8 @@ pub struct TrackSpec {
     pub division: bool,
     pub division_range: f32,
     pub thickness: f32,
+    #[serde(default = "truth", skip_serializing_if = "is_true")]
+    pub visible: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -270,39 +338,30 @@ impl ColorSpec {
 }
 
 impl ViewSpec {
-    pub fn of(camera: CameraState, section: SectionState, split: f32, time: u32) -> Self {
+    pub fn of(view: &ViewState, time: u32) -> Self {
         Self {
-            camera: CameraSpec {
-                pivot: camera.pivot,
-                yaw: camera.yaw,
-                pitch: camera.pitch,
-                distance: camera.distance,
-                fov_y: camera.fov_y,
-            },
-            section: SectionSpec {
-                axis: AxisSpec::of(section.axis),
-                span: section.span,
-            },
-            split,
+            camera: CameraSpec::of(view.camera),
+            section: SectionSpec::of(view.section),
+            split: view.split,
             time,
+            timeline: Some(TimelineSpec::of(&view.timeline)),
         }
     }
 
-    pub fn camera(self) -> CameraState {
-        CameraState {
-            pivot: self.camera.pivot,
-            yaw: self.camera.yaw,
-            pitch: self.camera.pitch,
-            distance: self.camera.distance,
-            fov_y: self.camera.fov_y,
-        }
+    pub fn camera(&self) -> CameraState {
+        self.camera.camera()
     }
 
-    pub fn section(self) -> SectionState {
-        SectionState {
-            axis: self.section.axis.axis(),
-            span: self.section.span,
-        }
+    pub fn section(&self) -> SectionState {
+        self.section.section()
+    }
+
+    pub fn timeline(&self) -> Option<Timeline> {
+        self.timeline.as_ref().map(|timeline| {
+            timeline
+                .timeline()
+                .expect("a checked timeline is plausible")
+        })
     }
 
     pub(super) fn checked(&self) -> Result<(), ProtocolError> {
@@ -330,7 +389,85 @@ impl ViewSpec {
                 "a view splits the viewport at a unit fraction".to_string(),
             ));
         }
+        if let Some(timeline) = &self.timeline {
+            timeline
+                .timeline()
+                .map_err(|detail| ProtocolError::Invalid(format!("a view {detail}")))?;
+        }
         Ok(())
+    }
+}
+
+impl CameraSpec {
+    pub fn of(camera: CameraState) -> Self {
+        Self {
+            pivot: camera.pivot,
+            yaw: camera.yaw,
+            pitch: camera.pitch,
+            distance: camera.distance,
+            fov_y: camera.fov_y,
+        }
+    }
+
+    pub fn camera(&self) -> CameraState {
+        CameraState {
+            pivot: self.pivot,
+            yaw: self.yaw,
+            pitch: self.pitch,
+            distance: self.distance,
+            fov_y: self.fov_y,
+        }
+    }
+}
+
+impl SectionSpec {
+    pub fn of(section: SectionState) -> Self {
+        Self {
+            axis: AxisSpec::of(section.axis),
+            span: section.span,
+        }
+    }
+
+    pub fn section(&self) -> SectionState {
+        SectionState {
+            axis: self.axis.axis(),
+            span: self.span,
+        }
+    }
+}
+
+impl TimelineSpec {
+    pub fn of(timeline: &Timeline) -> Self {
+        Self {
+            fps: timeline.fps(),
+            duration: timeline.duration(),
+            keys: timeline
+                .keys()
+                .iter()
+                .map(|key| KeySpec {
+                    at: key.at,
+                    time: key.time,
+                    camera: CameraSpec::of(key.camera),
+                    section: SectionSpec::of(key.section),
+                })
+                .collect(),
+        }
+    }
+
+    pub fn timeline(&self) -> Result<Timeline, &'static str> {
+        Timeline::from_parts(
+            self.fps,
+            self.duration,
+            self.keys
+                .iter()
+                .map(|key| Keyframe {
+                    at: key.at,
+                    time: key.time,
+                    camera: key.camera.camera(),
+                    section: key.section.section(),
+                })
+                .collect(),
+        )
     }
 }
 
@@ -355,6 +492,111 @@ impl ChannelSpec {
                 "the window of {} is a finite ordered range",
                 self.name
             )));
+        }
+        if let Some(transfer) = &self.transfer {
+            transfer.checked(&self.name)?;
+        }
+        Ok(())
+    }
+}
+
+impl TransferSpec {
+    pub fn of(transfer: &TransferFunction) -> Self {
+        Self {
+            stops: transfer
+                .stops()
+                .iter()
+                .map(|stop| StopSpec {
+                    position: stop.position(),
+                    color: stop.color(),
+                    opacity: stop.opacity(),
+                })
+                .collect(),
+        }
+    }
+
+    pub fn transfer(&self) -> TransferFunction {
+        TransferFunction::new(
+            self.stops
+                .iter()
+                .map(|stop| Stop::new(stop.position, stop.color, stop.opacity))
+                .collect(),
+        )
+    }
+
+    pub(super) fn checked(&self, channel: &str) -> Result<(), ProtocolError> {
+        let invalid = |detail: String| {
+            Err(ProtocolError::Invalid(format!(
+                "the transfer of the channel {channel} {detail}"
+            )))
+        };
+        if self.stops.is_empty() {
+            return invalid("holds at least one stop".to_string());
+        }
+        for stop in &self.stops {
+            if !stop.position.is_finite() || !(0.0..=1.0).contains(&stop.position) {
+                return invalid("holds a stop inside the unit interval".to_string());
+            }
+            if stop
+                .color
+                .iter()
+                .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
+            {
+                return invalid("holds an srgb stop color".to_string());
+            }
+            if !stop.opacity.is_finite() || !(0.0..=1.0).contains(&stop.opacity) {
+                return invalid("holds a unit stop opacity".to_string());
+            }
+        }
+        Ok(())
+    }
+}
+
+impl RenderSpec {
+    pub fn of(shading: Shading, exposure: f32, step_scale: f32) -> Self {
+        Self {
+            exposure,
+            step_scale,
+            shading: ShadingSpec {
+                ambient: shading.ambient,
+                diffuse: shading.diffuse,
+                specular: shading.specular,
+                shininess: shading.shininess,
+                shadows: shading.shadows,
+            },
+        }
+    }
+
+    pub fn shading(self) -> Shading {
+        Shading {
+            ambient: self.shading.ambient,
+            diffuse: self.shading.diffuse,
+            specular: self.shading.specular,
+            shininess: self.shading.shininess,
+            shadows: self.shading.shadows,
+        }
+    }
+
+    pub(super) fn checked(self) -> Result<(), ProtocolError> {
+        let invalid =
+            |detail: String| Err(ProtocolError::Invalid(format!("the rendering {detail}")));
+        if !self.exposure.is_finite() || self.exposure <= 0.0 {
+            return invalid("scales radiance by a positive exposure".to_string());
+        }
+        if !self.step_scale.is_finite() || self.step_scale <= 0.0 {
+            return invalid("samples the volume at a positive step".to_string());
+        }
+        let shading = self.shading;
+        for value in [shading.ambient, shading.diffuse, shading.specular] {
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                return invalid("carries unit lighting weights".to_string());
+            }
+        }
+        if !shading.shininess.is_finite() || shading.shininess <= 0.0 {
+            return invalid("carries a positive shininess".to_string());
+        }
+        if !shading.shadows.is_finite() || !(0.0..=1.0).contains(&shading.shadows) {
+            return invalid("carries a unit shadow strength".to_string());
         }
         Ok(())
     }
@@ -447,6 +689,10 @@ impl SetSpec {
         self.track.map(|track| track.thickness)
     }
 
+    pub fn track_visible(&self) -> Option<bool> {
+        self.track.map(|track| track.visible)
+    }
+
     pub fn measure(&self) -> Option<&MeasureSpec> {
         self.measure.as_ref()
     }
@@ -492,6 +738,11 @@ impl MeasureSpec {
             .collect()
     }
 
+    pub fn order(&self, table: &Table) -> Option<(usize, bool)> {
+        let sort = self.sort.as_ref()?;
+        Some((table.column(&sort.column)?, sort.descending))
+    }
+
     pub(super) fn checked(&self, set: &str, tracked: bool) -> Result<(), ProtocolError> {
         let invalid =
             |detail: String| Err(ProtocolError::Invalid(format!("the set {set} {detail}")));
@@ -525,6 +776,11 @@ impl MeasureSpec {
             if self.columns[..index].contains(column) {
                 return invalid(format!("shows the column {column} twice"));
             }
+        }
+        if let Some(sort) = &self.sort
+            && sort.column.trim().is_empty()
+        {
+            return invalid("sorts an unnamed column".to_string());
         }
         Ok(())
     }

@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use grana_measure::{
-    Aggregate, Filter, Frame, Group, Lasso, MeasureView, Plot, PlotAxis, Scope, Table,
-};
+use grana_measure::{Aggregate, Filter, Group, Lasso, MeasureView, Plot, PlotAxis, Scope, Table};
 
 use crate::object::ObjectFrame;
 use crate::object_set::{ObjectSetId, Visibility};
@@ -311,13 +309,29 @@ impl Measure {
         self.sort
     }
 
+    pub fn set_sort(&mut self, sort: Option<(usize, bool)>) {
+        if let Some((column, _)) = sort
+            && !self
+                .table
+                .as_ref()
+                .is_some_and(|table| column < table.columns().len())
+        {
+            return;
+        }
+        if self.sort == sort {
+            return;
+        }
+        self.sort = sort;
+        self.refresh();
+    }
+
     pub fn toggle_sort(&mut self, column: usize) {
-        self.sort = match self.sort {
+        let sort = match self.sort {
             Some((current, false)) if current == column => Some((column, true)),
             Some((current, true)) if current == column => None,
             _ => Some((column, false)),
         };
-        self.refresh();
+        self.set_sort(sort);
     }
 
     pub fn table(&self) -> Option<&Table> {
@@ -602,34 +616,12 @@ impl Measure {
             return;
         };
         self.revision = Some((id, object.revision()));
-        let relations = (0..object.frame_count())
-            .map(|time| scene.relation_rows(id, time))
-            .collect::<Vec<_>>();
-        let frames = object
-            .frames()
-            .map(|(time, frame)| Frame::new(time, frame.objects(), &relations[time as usize]))
-            .collect::<Vec<_>>();
-        if frames.is_empty() {
+        let Some(table) = scene.table(id, self.group, self.aggregate) else {
             self.visible.clear();
             self.lasso = None;
             self.axes = [0; 2];
             return;
-        }
-        let channels = scene
-            .dataset
-            .channels()
-            .iter()
-            .map(|channel| channel.name().to_string())
-            .collect::<Vec<_>>();
-        let tracks = object.tracks().map(|layer| layer.set());
-        let table = Table::build(
-            &frames,
-            tracks,
-            &channels,
-            scene.dataset.frame_interval(),
-            self.group,
-            self.aggregate,
-        );
+        };
         self.visible = default_visibility(&table);
         self.axes = readable_axes(&table, self.axes);
         let columns = table.columns().len();

@@ -6,7 +6,7 @@ use grana_animation::{Keyframe, Timeline};
 use grana_display::Shading;
 use grana_geometry::{DEFAULT_BUDGET, MeshStore};
 use grana_image::Format;
-use grana_measure::{ColocThresholds, Group};
+use grana_measure::{ColocPair, ColocThresholds, Group};
 use grana_object::TrackSet;
 use grana_project::{Project, Source as ProjectSource, ViewState};
 use grana_scene::{Dataset, Item, Job, Measure, ObjectFrame, ObjectSetId, Origin, Progress, Scene};
@@ -16,7 +16,8 @@ use crate::command::{Edit, Export};
 use crate::document::{self, Document};
 use crate::history::{History, Snapshot};
 use crate::loader::{Event as LoaderEvent, Loader};
-use crate::recipe::{Recipe, Step};
+use crate::protocol::Step;
+use crate::recipe::Recipe;
 use crate::run::DetectRequest;
 use crate::sample;
 use crate::task::Poll;
@@ -39,6 +40,23 @@ struct Recording {
     snapshot: Snapshot,
     hash: u64,
     analyses: usize,
+}
+
+enum Next {
+    Detect {
+        set: ObjectSetId,
+        mask: Option<ObjectSetId>,
+    },
+    Relation {
+        source: ObjectSetId,
+        target: ObjectSetId,
+    },
+    Coloc {
+        pair: ColocPair,
+        thresholds: ColocThresholds,
+        mask: Option<ObjectSetId>,
+    },
+    Present,
 }
 
 #[derive(Default)]
@@ -75,7 +93,7 @@ pub struct Session {
     protocol: Option<Protocol>,
     protocol_text: Option<String>,
     recipe: Option<Recipe>,
-    coloc_thresholds: Option<(grana_measure::ColocPair, ColocThresholds)>,
+    coloc_thresholds: Option<(ColocPair, ColocThresholds)>,
     current_view: Option<ViewState>,
     batch: Option<Batch>,
     batch_datasets: Vec<PathBuf>,
@@ -1712,7 +1730,7 @@ impl Session {
         let view = self
             .current_view
             .as_ref()
-            .map(|view| ViewSpec::of(view.camera, view.section, view.split, time));
+            .map(|view| ViewSpec::of(view, time));
         match Protocol::capture(scene, &self.measure, view) {
             Ok(protocol) => self.set_protocol(protocol),
             Err(error) => self.batch_message = Some(error.to_string()),
@@ -1754,31 +1772,7 @@ impl Session {
                 }
             }
         };
-        let order = protocol
-            .sets()
-            .iter()
-            .map(|set| set.name.as_str())
-            .collect::<Vec<_>>();
-        let position = |name: &str| {
-            order
-                .iter()
-                .position(|candidate| *candidate == name)
-                .expect("a checked protocol names its own object sets")
-        };
         let sets = staged.sets().to_vec();
-        let masks = (0..sets.len())
-            .map(|index| staged.mask_of(index).map(|mask| sets[mask]))
-            .collect::<Vec<_>>();
-        let relations = protocol
-            .relations()
-            .iter()
-            .map(|relation| {
-                (
-                    sets[position(&relation.source)],
-                    sets[position(&relation.target)],
-                )
-            })
-            .collect::<Vec<_>>();
         let pairs = match protocol.coloc() {
             Some(coloc) => staged
                 .pairs()
@@ -1796,11 +1790,7 @@ impl Session {
         let settings = protocol
             .coloc()
             .map_or_else(Default::default, |coloc| coloc.settings());
-        let mask = protocol
-            .coloc()
-            .and_then(|coloc| coloc.mask.as_deref())
-            .map(|name| sets[position(name)]);
-        self.recipe = Some(Recipe::new(sets, masks, relations, pairs, settings, mask));
+        self.recipe = Some(Recipe::new(protocol.steps(), sets, pairs, settings));
         self.message = None;
         self.drive_recipe();
     }
@@ -1809,17 +1799,35 @@ impl Session {
         let Some(recipe) = self.recipe.as_ref() else {
             return;
         };
-        let step = recipe.step();
         let settings = recipe.settings();
-        match step {
-            Step::Detect { set, mask } => {
+        let next = match recipe.step() {
+            Step::Detect { set, mask } => Next::Detect {
+                set: recipe.set(set),
+                mask: recipe.mask(mask),
+            },
+            Step::Relation { source, target } => Next::Relation {
+                source: recipe.set(source),
+                target: recipe.set(target),
+            },
+            Step::Coloc { pair, mask } => {
+                let (pair, thresholds) = recipe.pair(pair);
+                Next::Coloc {
+                    pair,
+                    thresholds,
+                    mask: recipe.mask(mask),
+                }
+            }
+            Step::Present => Next::Present,
+        };
+        match next {
+            Next::Detect { set, mask } => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.set_mask(mask);
                 }
                 self.start_detect(set);
             }
-            Step::Relation { source, target } => self.start_relation(source, target),
-            Step::Coloc {
+            Next::Relation { source, target } => self.start_relation(source, target),
+            Next::Coloc {
                 pair,
                 thresholds,
                 mask,
@@ -1832,7 +1840,7 @@ impl Session {
                 }
                 self.start_coloc();
             }
-            Step::Present => {
+            Next::Present => {
                 self.present_recipe();
                 return;
             }
@@ -1877,6 +1885,9 @@ impl Session {
                 if let Some(source) = self.source.as_ref() {
                     source.set_time(time);
                 }
+            }
+            if let Some(timeline) = view.timeline() {
+                self.timeline = timeline;
             }
             self.view = Some(ViewState {
                 camera: view.camera(),

@@ -29,12 +29,12 @@ const PROTOCOL: &str = r#"
       "color_by": {"key": "diameter_um", "palette": "inferno"},
       "detection": {"kind": "spots", "diameter": 5.0, "contrast": 0.05},
       "mask": "Nuclei",
-      "measure": {"group": "objects", "aggregate": "mean"}
+      "measure": {"group": "objects", "aggregate": "mean", "sort": {"column": "diameter_um", "descending": true}}
     }
   ],
   "relations": [{"source": "Beads", "target": "Nuclei"}],
   "coloc": {"settings": {"permutations": 8, "block": 3}, "pairs": [{"a": "Cells", "b": "Signal", "thresholds": [0.5, 0.5]}], "mask": "Nuclei"},
-  "view": {"camera": {"pivot": [0.0, 0.0, 0.0], "yaw": 0.5, "pitch": 0.3, "distance": 90.0, "fov_y": 0.61}, "section": {"axis": "z", "span": 8.0}, "split": 0.5, "time": 1}
+  "view": {"camera": {"pivot": [0.0, 0.0, 0.0], "yaw": 0.5, "pitch": 0.3, "distance": 90.0, "fov_y": 0.61}, "section": {"axis": "z", "span": 8.0}, "split": 0.5, "time": 1, "timeline": {"fps": 24, "duration": 4.0}}
 }
 "#;
 
@@ -75,7 +75,10 @@ fn replays_a_protocol_on_the_open_dataset() {
     let mut session = Session::new();
     session.open_series("fixture", series());
     let protocol = Protocol::from_json(PROTOCOL).expect("the protocol is valid");
-    let view = protocol.view().expect("the protocol carries a view");
+    let view = protocol
+        .view()
+        .expect("the protocol carries a view")
+        .clone();
     session.set_protocol(protocol);
     session.execute(Command::ApplyProtocol);
     assert!(session.replaying(), "the protocol replays its analysis");
@@ -132,10 +135,22 @@ fn replays_a_protocol_on_the_open_dataset() {
         Some(beads_id),
         "the statistics panel shows the measured set"
     );
+    let sort = session
+        .measure()
+        .sort()
+        .expect("the protocol orders the statistics");
+    let table = session
+        .measure()
+        .table()
+        .expect("the measured set carries a table");
+    assert_eq!(table.columns()[sort.0].key(), "diameter_um");
+    assert!(sort.1, "the statistics descend");
     let applied = session.take_view().expect("the protocol applies its view");
     assert_eq!(applied.camera, view.camera());
     assert_eq!(applied.section, view.section());
     assert_eq!(applied.split, 0.5);
+    assert_eq!(applied.timeline.fps(), 24);
+    assert_eq!(applied.timeline.duration(), 4.0);
     assert!(
         session.history().undo.is_some(),
         "the replay is a single undoable edit"

@@ -463,4 +463,12 @@ fn writes_a_project_that_reopens() {
     );
     let view = reopened.take_view().expect("the project restores its view");
     assert_eq!(view.camera.distance, 120.0);
+    drop(reopened);
+    fs::remove_file(&file).expect("the project is removable");
+    let again = run(&protocol, &datasets, &output, 1, true);
+    assert_eq!(
+        again,
+        [Status::Ok],
+        "a deleted project invalidates the resume marker"
+    );
 }

@@ -245,6 +245,7 @@ impl ObjectKind {
 pub struct TrackStyle {
     params: TrackParams,
     thickness: f32,
+    visible: bool,
 }
 
 impl TrackStyle {
@@ -253,7 +254,11 @@ impl TrackStyle {
             thickness.is_finite() && thickness > 0.0,
             "a track tube is a positive thickness"
         );
-        Self { params, thickness }
+        Self {
+            params,
+            thickness,
+            visible: true,
+        }
     }
 
     pub fn params(self) -> TrackParams {
@@ -262,6 +267,14 @@ impl TrackStyle {
 
     pub fn thickness(self) -> f32 {
         self.thickness
+    }
+
+    pub fn visible(self) -> bool {
+        self.visible
+    }
+
+    pub fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
     }
 }
 

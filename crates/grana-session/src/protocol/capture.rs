@@ -4,8 +4,8 @@ use grana_scene::{Measure, ObjectColor, ObjectKind, ObjectParams, Scene};
 
 use super::{
     ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, DetectionSpec, FilterSpec,
-    MeasureSpec, Protocol, ProtocolError, RegionSpec, RelationSpec, SetSpec, TrackSpec, ViewSpec,
-    WindowSpec,
+    MeasureSpec, Protocol, ProtocolError, RegionSpec, RelationSpec, RenderSpec, SetSpec, SortSpec,
+    TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -33,6 +33,7 @@ impl Protocol {
                     low: channel.window.min(),
                     high: channel.window.max(),
                 },
+                transfer: Some(TransferSpec::of(channel.transfer())),
             })
             .collect::<Vec<_>>();
         let mask = scene
@@ -67,6 +68,7 @@ impl Protocol {
                         division: style.params().division(),
                         division_range: style.params().division_range(),
                         thickness: style.thickness(),
+                        visible: set.track_visible(),
                     }),
                     measure,
                 }
@@ -129,6 +131,11 @@ impl Protocol {
         };
         Self::build(
             RegionSpec::of(scene.region, scene.dataset.world_size()),
+            Some(RenderSpec::of(
+                scene.shading,
+                scene.exposure,
+                scene.step_scale,
+            )),
             specs,
             sets,
             relations,
@@ -241,6 +248,13 @@ impl MeasureSpec {
             aggregate: aggregate.key().to_string(),
             filters,
             columns,
+            sort: measure.sort().and_then(|(column, descending)| {
+                let table = measure.table()?;
+                Some(SortSpec {
+                    column: table.columns().get(column)?.key().to_string(),
+                    descending,
+                })
+            }),
         }
     }
 }

@@ -4,7 +4,7 @@ use glam::Vec3;
 use grana_analysis::{Shape, TrackParams};
 use grana_display::{Shading, TransferFunction};
 use grana_geometry::ray_hit;
-use grana_measure::RelationRow;
+use grana_measure::{Aggregate, Frame, Group, RelationRow, Table};
 use grana_object::{RelationFrame, TrackSet};
 use grana_volume::{ChannelInfo, Intensity, Region};
 
@@ -269,6 +269,35 @@ impl Scene {
                 RelationRow::new(target, relation.frame(time))
             })
             .collect()
+    }
+
+    pub fn table(&self, id: ObjectSetId, group: Group, aggregate: Aggregate) -> Option<Table> {
+        let object = self.objects.get(id)?;
+        let relations = (0..object.frame_count())
+            .map(|time| self.relation_rows(id, time))
+            .collect::<Vec<_>>();
+        let frames = object
+            .frames()
+            .map(|(time, frame)| Frame::new(time, frame.objects(), &relations[time as usize]))
+            .collect::<Vec<_>>();
+        if frames.is_empty() {
+            return None;
+        }
+        let channels = self
+            .dataset
+            .channels()
+            .iter()
+            .map(|channel| channel.name().to_string())
+            .collect::<Vec<_>>();
+        let tracks = object.tracks().map(|layer| layer.set());
+        Some(Table::build(
+            &frames,
+            tracks,
+            &channels,
+            self.dataset.frame_interval(),
+            group,
+            aggregate,
+        ))
     }
 
     pub fn install(&mut self, id: ObjectSetId, time: u32, frame: ObjectFrame) {

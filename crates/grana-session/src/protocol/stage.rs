@@ -7,9 +7,7 @@ use super::{ColorSpec, Protocol, ProtocolError};
 
 pub struct Staged {
     sets: Vec<ObjectSetId>,
-    masks: Vec<Option<usize>>,
     pairs: Vec<ColocPair>,
-    mask: Option<usize>,
 }
 
 impl Staged {
@@ -27,14 +25,6 @@ impl Staged {
 
     pub fn sets(&self) -> &[ObjectSetId] {
         &self.sets
-    }
-
-    pub fn mask_of(&self, index: usize) -> Option<usize> {
-        self.masks[index]
-    }
-
-    pub fn mask(&self) -> Option<usize> {
-        self.mask
     }
 
     pub fn pairs(&self) -> &[ColocPair] {
@@ -89,6 +79,11 @@ impl Protocol {
             .collect::<Vec<_>>();
         let keys = channel_keys(&names);
         self.stage_channels(scene, &names)?;
+        if let Some(render) = self.render {
+            scene.exposure = render.exposure;
+            scene.step_scale = render.step_scale;
+            scene.shading = render.shading();
+        }
         let world = scene.dataset.world_size();
         scene.set_region(match self.region {
             Some(region) => region.region(world),
@@ -125,8 +120,15 @@ impl Protocol {
                 set.set_visible(spec.visible);
                 set.set_params(spec.params());
             }
-            if let (Some(params), Some(thickness)) = (spec.track_params(), spec.thickness()) {
+            if let (Some(params), Some(thickness), Some(visible)) =
+                (spec.track_params(), spec.thickness(), spec.track_visible())
+            {
                 scene.set_track_style(id, params, thickness);
+                scene
+                    .objects
+                    .get_mut(id)
+                    .expect("the staged object set exists")
+                    .set_track_visible(visible);
             }
             if !spec.seeds.is_empty() {
                 if spec.seeds.len() != scene.frame_count() as usize {
@@ -187,12 +189,7 @@ impl Protocol {
                 .collect::<Result<Vec<_>, ProtocolError>>()?,
             None => Vec::new(),
         };
-        Ok(Staged {
-            sets,
-            masks,
-            pairs,
-            mask,
-        })
+        Ok(Staged { sets, pairs })
     }
 
     fn stage_channels(&self, scene: &mut Scene, names: &[String]) -> Result<(), ProtocolError> {
@@ -211,6 +208,9 @@ impl Protocol {
             scene.channels[index].enabled = spec.enabled;
             scene.channels[index].opacity = spec.opacity;
             scene.set_window(index, spec.window.low, spec.window.high);
+            if let Some(transfer) = &spec.transfer {
+                scene.set_transfer(index, transfer.transfer());
+            }
         }
         Ok(())
     }

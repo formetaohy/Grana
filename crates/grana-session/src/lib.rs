@@ -25,8 +25,9 @@ pub use job::{Analysis, coloc, detect, relation, track};
 pub use loader::Loader;
 pub use protocol::{
     AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec,
-    DetectionSpec, FilterSpec, MeasureSpec, Protocol, ProtocolError, RegionSpec, RelationSpec,
-    SectionSpec, SetSpec, Staged, TrackSpec, ViewSpec, WindowSpec,
+    DetectionSpec, FilterSpec, KeySpec, MeasureSpec, Protocol, ProtocolError, RegionSpec,
+    RelationSpec, RenderSpec, SectionSpec, SetSpec, ShadingSpec, SortSpec, Staged, StopSpec,
+    TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 pub use run::{ColocRequest, DetectRequest};
 pub use session::{Effects, Session};
