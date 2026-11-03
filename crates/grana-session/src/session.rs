@@ -1627,6 +1627,18 @@ impl Session {
         }
         let cut = params.cut();
         if !self.cuttable(set) {
+            let detected = self
+                .scene
+                .as_ref()
+                .and_then(|scene| scene.objects.get(set))
+                .is_some_and(|object| object.detected() > 0);
+            let detecting = self
+                .analysis
+                .iter()
+                .any(|analysis| matches!(analysis.job(), Job::Detect(id) if id == set));
+            if detected && !detecting {
+                self.start_detect(set);
+            }
             return;
         }
         if self

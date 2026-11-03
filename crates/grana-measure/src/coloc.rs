@@ -590,9 +590,17 @@ impl ColocSeries {
     }
 
     pub fn csv(&self, thresholds: ColocThresholds) -> String {
-        let mut text = String::from(
-            "scope,frame,voxels,pearson,overlap,manders_a,manders_b,p,randomizations\n",
-        );
+        let mut text = crate::csv::line(&[
+            "scope",
+            "frame",
+            "voxels",
+            "pearson",
+            "overlap",
+            "manders_a",
+            "manders_b",
+            "p",
+            "randomizations",
+        ]);
         let mut rows = vec![(
             "series".to_string(),
             String::new(),
@@ -614,14 +622,23 @@ impl ColocSeries {
                 .significance
                 .map(|significance| format!("{:.6}", significance.p()))
                 .unwrap_or_default();
-            text.push_str(&format!(
-                "{scope},{frame},{},{},{},{},{},{p},{randomizations}\n",
-                statistics.voxels(),
-                option(statistics.pearson()),
-                option(statistics.overlap()),
-                option(statistics.manders()[0]),
-                option(statistics.manders()[1])
-            ));
+            let voxels = statistics.voxels().to_string();
+            let pearson = option(statistics.pearson());
+            let overlap = option(statistics.overlap());
+            let manders = statistics.manders();
+            let first = option(manders[0]);
+            let second = option(manders[1]);
+            text.push_str(&crate::csv::line(&[
+                &scope,
+                &frame,
+                &voxels,
+                &pearson,
+                &overlap,
+                &first,
+                &second,
+                &p,
+                &randomizations,
+            ]));
         }
         text
     }

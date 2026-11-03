@@ -252,9 +252,20 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
             });
         }
     });
-    let mut summary = vec!["dataset,status,objects,detail".to_string()];
-    let mut quality =
-        vec!["dataset,status,set,kind,objects,volume_um3,area_um2,size_um,intensity".to_string()];
+    let mut summary = vec![grana_measure::csv::line(&[
+        "dataset", "status", "objects", "detail",
+    ])];
+    let mut quality = vec![grana_measure::csv::line(&[
+        "dataset",
+        "status",
+        "set",
+        "kind",
+        "objects",
+        "volume_um3",
+        "area_um2",
+        "size_um",
+        "intensity",
+    ])];
     for (index, row) in lock(&rows).iter().enumerate() {
         if let Some(row) = row {
             let name = dataset_name(&plan.datasets[index]);
@@ -266,12 +277,12 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
             );
         }
     }
-    if let Err(error) = std::fs::write(plan.output.join("summary.csv"), summary.join("\n") + "\n") {
+    if let Err(error) = std::fs::write(plan.output.join("summary.csv"), summary.concat()) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch summary: {error}"
         )));
     }
-    if let Err(error) = std::fs::write(plan.output.join("quality.csv"), quality.join("\n") + "\n") {
+    if let Err(error) = std::fs::write(plan.output.join("quality.csv"), quality.concat()) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch quality report: {error}"
         )));
@@ -1061,7 +1072,7 @@ pub fn dataset_name(path: &Path) -> String {
 }
 
 fn row_line(dataset: &str, status: &str, objects: usize, detail: &str) -> String {
-    format!("{},{status},{objects},{}", escape(dataset), escape(detail))
+    grana_measure::csv::line(&[dataset, status, &objects.to_string(), detail])
 }
 
 fn quality_line(dataset: &str, status: &str, quality: &Quality) -> String {
@@ -1069,25 +1080,17 @@ fn quality_line(dataset: &str, status: &str, quality: &Quality) -> String {
         Some(value) => format!("{value:.decimals$}"),
         None => String::new(),
     };
-    format!(
-        "{},{status},{},{},{},{},{},{},{}",
-        escape(dataset),
-        escape(&quality.name),
-        escape(&quality.kind),
-        quality.objects,
-        formatted(quality.volume, 3),
-        formatted(quality.area, 3),
-        formatted(quality.size, 3),
-        formatted(quality.intensity, 2),
-    )
-}
-
-fn escape(value: &str) -> String {
-    if value.contains([',', '"', '\n']) {
-        format!("\"{}\"", value.replace('"', "\"\""))
-    } else {
-        value.to_string()
-    }
+    grana_measure::csv::line(&[
+        dataset,
+        status,
+        &quality.name,
+        &quality.kind,
+        &quality.objects.to_string(),
+        &formatted(quality.volume, 3),
+        &formatted(quality.area, 3),
+        &formatted(quality.size, 3),
+        &formatted(quality.intensity, 2),
+    ])
 }
 
 fn lock(rows: &Mutex<Vec<Option<Row>>>) -> MutexGuard<'_, Vec<Option<Row>>> {

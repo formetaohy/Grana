@@ -1,7 +1,7 @@
 mod coloc;
 mod column;
 mod correlation;
-mod csv;
+pub mod csv;
 mod filter;
 mod lasso;
 mod metric;
