@@ -4,38 +4,6 @@ use std::ops::Range;
 use super::{EMPTY, Measure, Tile, find, parabola, strides_of};
 
 impl Tile<'_> {
-    pub(super) fn flood(&mut self) {
-        let dims = self.dims;
-        let strides = strides_of(dims);
-        let count = dims[0] * dims[1] * dims[2];
-        for start in 0..count {
-            if !self.mask[start] || self.labels[start] != EMPTY {
-                continue;
-            }
-            let node = self.create_node(0);
-            self.labels[start] = node;
-            self.stack.clear();
-            self.stack.push(start as u32);
-            while let Some(cell) = self.stack.pop() {
-                let cell = cell as usize;
-                for axis in 0..3 {
-                    let coordinate = (cell / strides[axis]) % dims[axis];
-                    for step in [-1i64, 1] {
-                        let reached = coordinate as i64 + step;
-                        if reached < 0 || reached >= dims[axis] as i64 {
-                            continue;
-                        }
-                        let neighbour = (cell as i64 + step * strides[axis] as i64) as usize;
-                        if self.mask[neighbour] && self.labels[neighbour] == EMPTY {
-                            self.labels[neighbour] = node;
-                            self.stack.push(neighbour as u32);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     pub(super) fn watershed(&mut self) -> bool {
         self.fill_distance();
         let dims = self.dims;

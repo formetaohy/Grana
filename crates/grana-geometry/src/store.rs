@@ -1,6 +1,8 @@
+use std::any::Any;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -16,17 +18,29 @@ const SUFFIX: &str = "mesh";
 const RECLAIM_FACTOR: u64 = 4;
 const STALE_AGE: Duration = Duration::from_secs(60);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct MeshId(u32);
+pub trait Payload: Send + Sync + 'static {
+    fn encode(&self) -> Vec<u8>;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct MeshStats {
-    resident: u64,
-    spilled: u64,
-    meshes: usize,
+    fn stored_bytes(&self) -> u64;
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 }
 
-impl MeshStats {
+pub trait Decode: Payload + Sized {
+    fn decode(bytes: &[u8]) -> Option<Self>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct GeometryId(u32);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StoreStats {
+    resident: u64,
+    spilled: u64,
+    entries: usize,
+}
+
+impl StoreStats {
     pub fn resident(self) -> u64 {
         self.resident
     }
@@ -35,12 +49,12 @@ impl MeshStats {
         self.spilled
     }
 
-    pub fn meshes(self) -> usize {
-        self.meshes
+    pub fn entries(self) -> usize {
+        self.entries
     }
 }
 
-pub struct MeshStore {
+pub struct GeometryStore {
     budget: u64,
     inner: Mutex<Inner>,
 }
@@ -53,12 +67,12 @@ struct Inner {
     spilled: u64,
     stamp: u64,
     next: u32,
-    entries: HashMap<MeshId, Slot>,
+    entries: HashMap<GeometryId, Slot>,
 }
 
 enum Slot {
     Resident {
-        mesh: Arc<PackedMesh>,
+        payload: Arc<dyn Payload>,
         bytes: u64,
         stamp: u64,
     },
@@ -113,9 +127,9 @@ impl Inner {
     }
 }
 
-impl MeshStore {
+impl GeometryStore {
     pub fn temporary(budget: u64) -> Result<Arc<Self>, Error> {
-        assert!(budget > 0, "a mesh store holds at least one byte");
+        assert!(budget > 0, "a geometry store holds at least one byte");
         sweep();
         let path = temporary_path();
         let file = OpenOptions::new()
@@ -131,8 +145,6 @@ impl MeshStore {
             path: path.clone(),
             detail: error.to_string(),
         })?;
-        let mut entries = HashMap::new();
-        entries.reserve(0);
         Ok(Arc::new(Self {
             budget,
             inner: Mutex::new(Inner {
@@ -143,7 +155,7 @@ impl MeshStore {
                 spilled: 0,
                 stamp: 0,
                 next: 0,
-                entries,
+                entries: HashMap::new(),
             }),
         }))
     }
@@ -164,10 +176,10 @@ impl MeshStore {
         })
     }
 
-    pub fn insert(&self, mesh: PackedMesh) -> Result<MeshId, Error> {
-        let bytes = mesh.byte_length() as u64;
+    pub fn insert<T: Decode>(&self, payload: T) -> Result<GeometryId, Error> {
+        let bytes = payload.stored_bytes();
         let mut inner = self.inner();
-        let id = MeshId(inner.next);
+        let id = GeometryId(inner.next);
         inner.next += 1;
         inner.stamp += 1;
         let stamp = inner.stamp;
@@ -175,7 +187,7 @@ impl MeshStore {
         inner.entries.insert(
             id,
             Slot::Resident {
-                mesh: Arc::new(mesh),
+                payload: Arc::new(payload),
                 bytes,
                 stamp,
             },
@@ -184,17 +196,24 @@ impl MeshStore {
         Ok(id)
     }
 
-    pub fn load(&self, id: MeshId) -> Result<Arc<PackedMesh>, Error> {
+    pub fn load<T: Decode>(&self, id: GeometryId) -> Result<Arc<T>, Error> {
         let mut inner = self.inner();
         inner.stamp += 1;
         let stamp = inner.stamp;
+        let path = inner.path.clone().unwrap_or_default();
         let span = match inner.entries.get_mut(&id) {
             None => return Err(Error::Unknown),
             Some(Slot::Resident {
-                mesh, stamp: used, ..
+                payload,
+                stamp: used,
+                ..
             }) => {
                 *used = stamp;
-                return Ok(Arc::clone(mesh));
+                let payload = Arc::clone(payload);
+                return payload
+                    .into_any()
+                    .downcast::<T>()
+                    .map_err(|_| Error::Format { path });
             }
             Some(Slot::Spilled {
                 offset,
@@ -212,12 +231,12 @@ impl MeshStore {
             .seek(SeekFrom::Start(span.0))
             .and_then(|_| inner.file().read_exact(&mut bytes))
             .map_err(|error| inner.spill_error(error))?;
-        let mesh = Arc::new(PackedMesh::from_bytes(&bytes).ok_or_else(|| inner.format())?);
+        let payload = Arc::new(T::decode(&bytes).ok_or_else(|| inner.format())?);
         if let Some(slot) = inner.entries.get_mut(&id)
             && matches!(slot, Slot::Spilled { .. })
         {
             *slot = Slot::Resident {
-                mesh: Arc::clone(&mesh),
+                payload: Arc::clone(&payload) as Arc<dyn Payload>,
                 bytes: span.1,
                 stamp,
             };
@@ -225,10 +244,10 @@ impl MeshStore {
             inner.spilled = inner.spilled.saturating_sub(span.1);
         }
         self.settle(&mut inner)?;
-        Ok(mesh)
+        Ok(payload)
     }
 
-    pub fn bytes(&self, id: MeshId) -> Option<u64> {
+    pub fn bytes(&self, id: GeometryId) -> Option<u64> {
         let mut inner = self.inner();
         inner.stamp += 1;
         let stamp = inner.stamp;
@@ -237,7 +256,7 @@ impl MeshStore {
         Some(slot.bytes())
     }
 
-    pub fn release(&self, id: MeshId) {
+    pub fn release(&self, id: GeometryId) {
         let mut inner = self.inner();
         let Some(slot) = inner.entries.remove(&id) else {
             return;
@@ -248,12 +267,12 @@ impl MeshStore {
         }
     }
 
-    pub fn stats(&self) -> MeshStats {
+    pub fn stats(&self) -> StoreStats {
         let inner = self.inner();
-        MeshStats {
+        StoreStats {
             resident: inner.resident,
             spilled: inner.spilled,
-            meshes: inner.entries.len(),
+            entries: inner.entries.len(),
         }
     }
 
@@ -271,13 +290,13 @@ impl MeshStore {
             };
             assert!(
                 inner.file.is_some(),
-                "a mesh store without a spill file never evicts"
+                "a geometry store without a spill file never evicts"
             );
-            let mesh = match inner.entries.get(&id) {
-                Some(Slot::Resident { mesh, .. }) => Arc::clone(mesh),
+            let payload = match inner.entries.get(&id) {
+                Some(Slot::Resident { payload, .. }) => Arc::clone(payload),
                 _ => continue,
             };
-            let encoded = mesh.to_bytes();
+            let encoded = payload.encode();
             let length = encoded.len() as u64;
             let offset = inner.length;
             inner
@@ -361,7 +380,7 @@ impl MeshStore {
     }
 }
 
-impl Drop for MeshStore {
+impl Drop for GeometryStore {
     fn drop(&mut self) {
         let inner = self
             .inner
@@ -377,53 +396,82 @@ fn remove(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
 
-#[derive(Clone)]
-pub enum Geometry {
-    Resident(Arc<PackedMesh>),
-    Paged(Arc<Paged>),
+pub struct Geometry<T> {
+    stored: Stored<T>,
 }
 
-impl Geometry {
-    pub fn resident(mesh: PackedMesh) -> Self {
-        Self::Resident(Arc::new(mesh))
+enum Stored<T> {
+    Resident(Arc<T>),
+    Paged(Arc<Paged<T>>),
+}
+
+impl<T: Decode> Geometry<T> {
+    pub fn resident(payload: T) -> Self {
+        Self {
+            stored: Stored::Resident(Arc::new(payload)),
+        }
     }
 
-    pub fn paged(store: &Arc<MeshStore>, mesh: PackedMesh) -> Result<Self, Error> {
-        let id = store.insert(mesh)?;
-        Ok(Self::Paged(Arc::new(Paged {
-            store: Arc::clone(store),
-            id,
-        })))
+    pub fn paged(store: &Arc<GeometryStore>, payload: T) -> Result<Self, Error> {
+        Ok(Self {
+            stored: Stored::Paged(Arc::new(Paged::new(store, payload)?)),
+        })
     }
 
-    pub fn load(&self) -> Result<Arc<PackedMesh>, Error> {
-        match self {
-            Self::Resident(mesh) => Ok(Arc::clone(mesh)),
-            Self::Paged(paged) => paged.store.load(paged.id()),
+    pub fn load(&self) -> Result<Arc<T>, Error> {
+        match &self.stored {
+            Stored::Resident(payload) => Ok(Arc::clone(payload)),
+            Stored::Paged(paged) => paged.load(),
         }
     }
 
     pub fn bytes(&self) -> u64 {
-        match self {
-            Self::Resident(mesh) => mesh.bytes(),
-            Self::Paged(paged) => paged.store.bytes(paged.id()).unwrap_or_default(),
+        match &self.stored {
+            Stored::Resident(payload) => payload.stored_bytes(),
+            Stored::Paged(paged) => paged.bytes(),
         }
     }
+}
 
+impl Geometry<PackedMesh> {
     pub fn without(&self, object: usize) -> Result<Option<Self>, Error> {
         let mesh = self.load()?;
         if object >= mesh.object_count() {
             return Ok(None);
         }
         let pruned = mesh.without(object);
-        Ok(Some(match self {
-            Self::Resident(_) => Self::resident(pruned),
-            Self::Paged(paged) => Self::paged(paged.store(), pruned)?,
+        Ok(Some(match &self.stored {
+            Stored::Resident(_) => Self::resident(pruned),
+            Stored::Paged(paged) => Self::paged(&paged.store, pruned)?,
         }))
     }
 }
 
-impl PartialEq for Geometry {
+impl<T> Clone for Geometry<T> {
+    fn clone(&self) -> Self {
+        Self {
+            stored: match &self.stored {
+                Stored::Resident(payload) => Stored::Resident(Arc::clone(payload)),
+                Stored::Paged(paged) => Stored::Paged(Arc::clone(paged)),
+            },
+        }
+    }
+}
+
+impl<T: Decode + std::fmt::Debug> std::fmt::Debug for Geometry<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.stored {
+            Stored::Resident(payload) => formatter.debug_tuple("Resident").field(payload).finish(),
+            Stored::Paged(paged) => formatter
+                .debug_struct("Paged")
+                .field("id", &paged.id)
+                .field("bytes", &paged.bytes())
+                .finish(),
+        }
+    }
+}
+
+impl<T: Decode + PartialEq> PartialEq for Geometry<T> {
     fn eq(&self, other: &Self) -> bool {
         match (self.load(), other.load()) {
             (Ok(left), Ok(right)) => left == right,
@@ -432,38 +480,31 @@ impl PartialEq for Geometry {
     }
 }
 
-impl std::fmt::Debug for Geometry {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Resident(mesh) => formatter
-                .debug_struct("Resident")
-                .field("mesh", mesh)
-                .finish(),
-            Self::Paged(paged) => formatter
-                .debug_struct("Paged")
-                .field("id", &paged.id())
-                .field("bytes", &self.bytes())
-                .finish(),
-        }
+struct Paged<T> {
+    store: Arc<GeometryStore>,
+    id: GeometryId,
+    payload: PhantomData<fn() -> T>,
+}
+
+impl<T: Decode> Paged<T> {
+    fn new(store: &Arc<GeometryStore>, payload: T) -> Result<Self, Error> {
+        Ok(Self {
+            id: store.insert(payload)?,
+            store: Arc::clone(store),
+            payload: PhantomData,
+        })
+    }
+
+    fn load(&self) -> Result<Arc<T>, Error> {
+        self.store.load(self.id)
+    }
+
+    fn bytes(&self) -> u64 {
+        self.store.bytes(self.id).unwrap_or_default()
     }
 }
 
-pub struct Paged {
-    store: Arc<MeshStore>,
-    id: MeshId,
-}
-
-impl Paged {
-    fn id(&self) -> MeshId {
-        self.id
-    }
-
-    fn store(&self) -> &Arc<MeshStore> {
-        &self.store
-    }
-}
-
-impl Drop for Paged {
+impl<T> Drop for Paged<T> {
     fn drop(&mut self) {
         self.store.release(self.id);
     }

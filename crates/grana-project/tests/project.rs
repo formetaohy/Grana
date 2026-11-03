@@ -3,10 +3,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_analysis::SpotParams;
+use grana_analysis::{Sources, SpotParams, SurfaceBuilder, SurfaceFilter, SurfaceParams, recut};
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, TransferFunction};
-use grana_geometry::MeshStore;
+use grana_geometry::GeometryStore;
 use grana_geometry::{Bounds, Mesh, MeshVertex};
 use grana_measure::Measurement;
 use grana_measure::{
@@ -140,7 +140,7 @@ fn round_trips_a_project() {
     let mut record = |done: usize, total: usize| opened.push((done, total));
     let loaded = Project::read(
         &path,
-        MeshStore::temporary(1).expect("the store opens a spill file"),
+        GeometryStore::temporary(1).expect("the store opens a spill file"),
         &AtomicBool::new(false),
         &mut record,
     )
@@ -211,7 +211,7 @@ fn round_trips_object_set_order() {
         .expect("the project writes");
     let loaded = Project::read(
         &path,
-        MeshStore::memory(),
+        GeometryStore::memory(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -265,7 +265,7 @@ fn rejects_damaged_projects() {
     assert!(
         Project::read(
             &path,
-            MeshStore::memory(),
+            GeometryStore::memory(),
             &AtomicBool::new(false),
             &mut |_, _| {}
         )
@@ -275,7 +275,7 @@ fn rejects_damaged_projects() {
     assert!(
         Project::read(
             &path,
-            MeshStore::memory(),
+            GeometryStore::memory(),
             &AtomicBool::new(false),
             &mut |_, _| {}
         )
@@ -498,6 +498,180 @@ fn stage(scene: &mut Scene) {
         set: spot_set,
         item: Item::Object(1),
     }));
+}
+
+#[test]
+fn round_trips_the_surface_topology() {
+    let volume = lobes();
+    let params = lobe_params(0.7);
+    let set = detect(&volume, params);
+    assert_eq!(set.object_count(), 1, "the shallow split keeps the lobes");
+    assert!(set.cuttable(), "a detection carries its topology");
+    let mut scene = surface_scene(&volume);
+    let surfaces = scene.add_object(ObjectKind::Surfaces, 0);
+    scene.install(surfaces, 0, ObjectFrame::Surfaces(set));
+    scene
+        .objects
+        .get_mut(surfaces)
+        .expect("the surfaces exist")
+        .set_params(ObjectParams::Surfaces(params));
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "lobes".to_string(),
+        },
+        ViewState {
+            camera: CameraState {
+                pivot: [0.0; 3],
+                yaw: 0.0,
+                pitch: 0.0,
+                distance: 10.0,
+                fov_y: 0.6,
+            },
+            section: SectionState {
+                axis: Axis::Z,
+                span: 10.0,
+            },
+            split: 0.5,
+            timeline: Timeline::default(),
+            export: Export::NATIVE,
+        },
+    );
+    let path = std::env::temp_dir().join(format!("grana-topology-{}.grana", std::process::id()));
+    let mut written = Vec::new();
+    project
+        .write(&path, &AtomicBool::new(false), &mut |done, total| {
+            written.push((done, total))
+        })
+        .expect("the project writes");
+    let mut opened = Vec::new();
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |done, total| opened.push((done, total)),
+    )
+    .expect("the project reads");
+    fs::remove_file(&path).ok();
+    assert_eq!(
+        opened.last().map(|step| step.0),
+        written.last().map(|step| step.1),
+        "the opened project replays every step of the save"
+    );
+    assert_eq!(loaded, project);
+    let restored = loaded
+        .scene
+        .sets
+        .iter()
+        .find(|set| set.kind == ObjectKind::Surfaces)
+        .and_then(|set| set.frames[0].as_deref())
+        .expect("the project carries its surface frame");
+    let ObjectFrame::Surfaces(restored) = restored else {
+        panic!("the surface frame restores as surfaces");
+    };
+    assert!(
+        restored.cuttable(),
+        "the restored surface keeps its watershed topology"
+    );
+    let deeper = lobe_params(0.3);
+    let cut = recut(restored, deeper.cut(), 2, None)
+        .expect("the restored topology is cut")
+        .expect("the restored surface carries its topology");
+    assert_eq!(
+        cut.object_count(),
+        2,
+        "the restored topology splits the lobes without reading the volume"
+    );
+    assert_eq!(
+        cut,
+        detect(&volume, deeper),
+        "the restored recut matches a fresh detection"
+    );
+}
+
+fn lobes() -> Volume {
+    let extent = Extent::new(200, 80, 80);
+    let centres = [[80.0f32, 40.0, 40.0], [118.0, 40.0, 40.0]];
+    let mut values = vec![0u16; extent.voxel_count() as usize];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let inside = centres.iter().any(|centre| {
+                    ((x as f32 - centre[0]).powi(2)
+                        + (y as f32 - centre[1]).powi(2)
+                        + (z as f32 - centre[2]).powi(2))
+                    .sqrt()
+                        < 22.0
+                });
+                if inside {
+                    values[extent.index(x, y, z) as usize] = u16::MAX;
+                }
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        Spacing::new(0.1, 0.1, 0.1),
+        vec![Channel::new(
+            "lobes",
+            [0.3, 0.8, 1.0],
+            VoxelData::U16(values),
+        )],
+    )
+}
+
+fn lobe_params(split: f32) -> SurfaceParams {
+    SurfaceParams::new(0.5, 0.0, split, 0.0, SurfaceFilter::new(0.0, 0.8, 0.0, 0.0))
+}
+
+fn surface_scene(volume: &Volume) -> Scene {
+    let series = VolumeSeries::new(vec![volume.clone()], 1.0);
+    Scene::new(Dataset::synthetic("lobes", series.pyramid().clone()))
+}
+
+fn detect(volume: &Volume, params: SurfaceParams) -> SurfaceSet {
+    let level = grana_volume::Level::new(volume.extent(), volume.spacing());
+    let intensity = grana_volume::Intensity::new(0.0, f32::from(u16::MAX));
+    let channels = volume.channel_count();
+    let builder = SurfaceBuilder::new(
+        0,
+        level,
+        params,
+        channels,
+        0,
+        grana_volume::Region::none(),
+        intensity,
+    );
+    let cancel = AtomicBool::new(false);
+    builder
+        .scan(
+            2,
+            &cancel,
+            None,
+            &mut |_done, _total| {},
+            Sources::new(
+                &|_index, ranges| {
+                    Ok(volume.channels()[0].data().region(
+                        volume.extent(),
+                        ranges[0].clone(),
+                        ranges[1].clone(),
+                        ranges[2].clone(),
+                    ))
+                },
+                &|channel, core| {
+                    Ok(volume.channels()[channel].data().region(
+                        volume.extent(),
+                        core[0].clone(),
+                        core[1].clone(),
+                        core[2].clone(),
+                    ))
+                },
+                &GeometryStore::memory(),
+            ),
+        )
+        .expect("a surface frame is detected")
+        .expect("surface detection completes")
 }
 
 fn intensities(channels: usize, objects: usize) -> IntensityTable {

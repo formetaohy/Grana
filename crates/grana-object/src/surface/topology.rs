@@ -1,4 +1,9 @@
-use crate::intensity::SampleAccumulator;
+use std::any::Any;
+use std::sync::Arc;
+
+use grana_geometry::{BlobReader, BlobWriter, Decode, Payload};
+
+use crate::intensity::{AccumulatorParts, SampleAccumulator};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Basin {
@@ -264,11 +269,6 @@ impl SurfacePatches {
     pub fn basins(&self) -> &[u32] {
         &self.basins
     }
-
-    pub fn bytes(&self) -> u64 {
-        (4 * self.positions.len() * size_of::<f32>() + 3 * self.triangles.len() * size_of::<u32>())
-            as u64
-    }
 }
 
 pub struct SurfaceTopology {
@@ -342,11 +342,282 @@ impl SurfaceTopology {
         &self.patches
     }
 
-    pub fn bytes(&self) -> u64 {
-        (self.basins.len() * size_of::<Basin>()
-            + self.accumulators.len() * size_of::<SampleAccumulator>()
-            + self.seams.len() * size_of::<Seam>()) as u64
-            + self.patches.bytes()
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let info = self.info;
+        let mut writer = BlobWriter::with_capacity(self.stored_bytes());
+        writer.count(info.level());
+        writer.count(info.channels());
+        writer.count(info.detection());
+        for value in info.spacing().into_iter().chain(info.world()) {
+            writer.f32(value);
+        }
+        writer.f64(info.voxel_volume());
+        writer.f32(info.span());
+        writer.count(info.seeds());
+        writer.count(self.basins.len());
+        for basin in &self.basins {
+            writer.u32(basin.reach());
+            writer.u64(basin.voxels());
+            for value in basin.sum() {
+                writer.f64(value);
+            }
+            for value in basin.low().into_iter().chain(basin.high()) {
+                writer.u32(value);
+            }
+            writer.u32(basin.contact().unwrap_or(u32::MAX));
+            writer.u32(basin.seed().unwrap_or(u32::MAX));
+        }
+        writer.count(self.accumulators.len());
+        for accumulator in &self.accumulators {
+            let parts = accumulator.parts();
+            writer.u64(parts.count);
+            writer.f64(parts.mean);
+            writer.f64(parts.squared);
+            writer.f32(parts.minimum);
+            writer.f32(parts.maximum);
+            writer.f64(parts.sum);
+        }
+        writer.count(self.seams.len());
+        for seam in &self.seams {
+            writer.u32(seam.left());
+            writer.u32(seam.right());
+            writer.u32(seam.saddle());
+        }
+        let patches = &self.patches;
+        writer.count(patches.positions().len());
+        writer.count(patches.normals().len());
+        writer.count(patches.triangles().len());
+        writer.count(patches.basins().len());
+        for position in patches.positions() {
+            for value in position {
+                writer.f32(*value);
+            }
+        }
+        for normal in patches.normals() {
+            for value in normal {
+                writer.f32(*value);
+            }
+        }
+        for triangle in patches.triangles() {
+            for index in triangle {
+                writer.u32(*index);
+            }
+        }
+        for basin in patches.basins() {
+            writer.u32(*basin);
+        }
+        let bytes = writer.finish();
+        assert_eq!(
+            bytes.len(),
+            self.stored_bytes(),
+            "the surface topology encodes its own size"
+        );
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let mut reader = BlobReader::new(bytes);
+        let level = reader.count(1)?;
+        let channels = reader.count(1)?;
+        let detection = reader.count(1)?;
+        if channels == 0 || detection >= channels {
+            return None;
+        }
+        let mut spacing = [0.0f32; 3];
+        let mut world = [0.0f32; 3];
+        for value in &mut spacing {
+            *value = finite(reader.f32()?)?;
+            if *value <= 0.0 {
+                return None;
+            }
+        }
+        for value in &mut world {
+            *value = finite(reader.f32()?)?;
+            if *value <= 0.0 {
+                return None;
+            }
+        }
+        let voxel_volume = reader.f64()?;
+        if !voxel_volume.is_finite() || voxel_volume <= 0.0 {
+            return None;
+        }
+        let span = reader.f32()?;
+        if !span.is_finite() || span < 0.0 {
+            return None;
+        }
+        let seeds = reader.count(1)?;
+        let basin_count = reader.count(BASIN_BYTES)?;
+        if basin_count as u64 >= u64::from(u32::MAX) {
+            return None;
+        }
+        let mut basins = Vec::with_capacity(basin_count);
+        for _ in 0..basin_count {
+            let reach = reader.u32()?;
+            let voxels = reader.u64()?;
+            let mut sum = [0.0f64; 3];
+            for value in &mut sum {
+                *value = reader.f64()?;
+                if !value.is_finite() {
+                    return None;
+                }
+            }
+            let mut low = [0u32; 3];
+            let mut high = [0u32; 3];
+            for value in &mut low {
+                *value = reader.u32()?;
+            }
+            for value in &mut high {
+                *value = reader.u32()?;
+            }
+            let contact = reader.u32()?;
+            let seed = reader.u32()?;
+            basins.push(Basin::new(
+                reach,
+                voxels,
+                sum,
+                low,
+                high,
+                (contact != u32::MAX).then_some(contact),
+                (seed != u32::MAX).then_some(seed),
+            ));
+        }
+        let accumulator_count = reader.count(ACCUMULATOR_BYTES)?;
+        if accumulator_count != basin_count.checked_mul(channels)? {
+            return None;
+        }
+        let mut accumulators = Vec::with_capacity(accumulator_count);
+        for _ in 0..accumulator_count {
+            accumulators.push(SampleAccumulator::restore(AccumulatorParts {
+                count: reader.u64()?,
+                mean: reader.f64()?,
+                squared: reader.f64()?,
+                minimum: reader.f32()?,
+                maximum: reader.f32()?,
+                sum: reader.f64()?,
+            })?);
+        }
+        let seam_count = reader.count(SEAM_BYTES)?;
+        let mut seams = Vec::with_capacity(seam_count);
+        for _ in 0..seam_count {
+            let left = reader.u32()?;
+            let right = reader.u32()?;
+            let saddle = reader.u32()?;
+            if left >= right || right as usize >= basin_count {
+                return None;
+            }
+            seams.push(Seam::new(left, right, saddle));
+        }
+        let positions = reader.count(3 * size_of::<f32>())?;
+        let normals = reader.count(3 * size_of::<f32>())?;
+        let triangles = reader.count(3 * size_of::<u32>())?;
+        let tagged = reader.count(size_of::<u32>())?;
+        if positions != normals || triangles != tagged {
+            return None;
+        }
+        let mut decoded_positions = Vec::with_capacity(positions);
+        for _ in 0..positions {
+            let mut values = [0.0f32; 3];
+            for value in &mut values {
+                *value = finite(reader.f32()?)?;
+            }
+            decoded_positions.push(values);
+        }
+        let mut decoded_normals = Vec::with_capacity(normals);
+        for _ in 0..normals {
+            let mut values = [0.0f32; 3];
+            for value in &mut values {
+                *value = finite(reader.f32()?)?;
+            }
+            decoded_normals.push(values);
+        }
+        let mut decoded_triangles = Vec::with_capacity(triangles);
+        for _ in 0..triangles {
+            let mut values = [0u32; 3];
+            for value in &mut values {
+                *value = reader.u32()?;
+                if *value as usize >= positions {
+                    return None;
+                }
+            }
+            decoded_triangles.push(values);
+        }
+        let mut tagged_basins = Vec::with_capacity(tagged);
+        for _ in 0..tagged {
+            let basin = reader.u32()?;
+            if basin as usize >= basin_count {
+                return None;
+            }
+            tagged_basins.push(basin);
+        }
+        if !reader.done() {
+            return None;
+        }
+        let patches = SurfacePatches::new(
+            decoded_positions,
+            decoded_normals,
+            decoded_triangles,
+            tagged_basins,
+        );
+        Some(Self::new(
+            TopologyInfo::new(level, channels, detection, spacing, world).with_sampling(
+                voxel_volume,
+                span,
+                seeds,
+            ),
+            basins,
+            accumulators,
+            seams,
+            patches,
+        ))
+    }
+
+    fn stored_bytes(&self) -> usize {
+        let patches = &self.patches;
+        INFO_BYTES
+            + 3 * size_of::<u32>()
+            + self.basins.len() * BASIN_BYTES
+            + self.accumulators.len() * ACCUMULATOR_BYTES
+            + self.seams.len() * SEAM_BYTES
+            + 4 * size_of::<u32>()
+            + size_of_val(patches.positions())
+            + size_of_val(patches.normals())
+            + size_of_val(patches.triangles())
+            + size_of_val(patches.basins())
+    }
+}
+
+const INFO_BYTES: usize =
+    4 * size_of::<u32>() + 6 * size_of::<f32>() + size_of::<f64>() + size_of::<f32>();
+const BASIN_BYTES: usize = size_of::<u32>()
+    + size_of::<u64>()
+    + 3 * size_of::<f64>()
+    + 6 * size_of::<u32>()
+    + 2 * size_of::<u32>();
+const ACCUMULATOR_BYTES: usize =
+    size_of::<u64>() + 2 * size_of::<f64>() + 2 * size_of::<f32>() + size_of::<f64>();
+const SEAM_BYTES: usize = 3 * size_of::<u32>();
+
+fn finite(value: f32) -> Option<f32> {
+    value.is_finite().then_some(value)
+}
+
+impl Payload for SurfaceTopology {
+    fn encode(&self) -> Vec<u8> {
+        self.to_bytes()
+    }
+
+    fn stored_bytes(&self) -> u64 {
+        SurfaceTopology::stored_bytes(self) as u64
+    }
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
+    }
+}
+
+impl Decode for SurfaceTopology {
+    fn decode(bytes: &[u8]) -> Option<Self> {
+        Self::from_bytes(bytes)
     }
 }
 
@@ -358,7 +629,7 @@ impl std::fmt::Debug for SurfaceTopology {
             .field("basins", &self.basins.len())
             .field("seams", &self.seams.len())
             .field("triangles", &self.patches.triangles().len())
-            .field("bytes", &self.bytes())
+            .field("bytes", &self.stored_bytes())
             .finish()
     }
 }

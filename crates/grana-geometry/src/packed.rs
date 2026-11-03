@@ -1,7 +1,12 @@
+use std::any::Any;
+use std::sync::Arc;
+
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
 use crate::Mesh;
+use crate::binary::{BlobReader, BlobWriter};
+use crate::store::{Decode, Payload};
 
 const UNIT: f32 = 65535.0;
 const NARROW_LIMIT: usize = u16::MAX as usize;
@@ -301,77 +306,77 @@ impl PackedMesh {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.byte_length());
-        push_count(&mut bytes, self.groups.len());
+        let mut writer = BlobWriter::with_capacity(self.byte_length());
+        writer.count(self.groups.len());
         for group in &self.groups {
             for value in group.min.iter().chain(&group.scale) {
-                push_f32(&mut bytes, *value);
+                writer.f32(*value);
             }
-            push_u32(&mut bytes, group.first_vertex);
-            push_u32(&mut bytes, group.vertex_count);
-            push_u32(&mut bytes, group.first_index);
-            push_u32(&mut bytes, group.index_count);
-            bytes.push(u8::from(group.wide));
+            writer.u32(group.first_vertex);
+            writer.u32(group.vertex_count);
+            writer.u32(group.first_index);
+            writer.u32(group.index_count);
+            writer.u8(u8::from(group.wide));
         }
-        push_count(&mut bytes, self.vertices.len());
+        writer.count(self.vertices.len());
         for vertex in &self.vertices {
             for value in vertex.position.iter().chain(&vertex.normal) {
-                bytes.extend_from_slice(&value.to_le_bytes());
+                writer.u16(*value);
             }
         }
-        push_count(&mut bytes, self.narrow.len());
+        writer.count(self.narrow.len());
         for index in &self.narrow {
-            bytes.extend_from_slice(&index.to_le_bytes());
+            writer.u16(*index);
         }
-        push_count(&mut bytes, self.wide.len());
+        writer.count(self.wide.len());
         for index in &self.wide {
-            bytes.extend_from_slice(&index.to_le_bytes());
+            writer.u32(*index);
         }
-        bytes
+        writer.finish()
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let mut cursor = Cursor::new(bytes);
-        let groups = cursor.count()?;
+        let mut reader = BlobReader::new(bytes);
+        let groups = reader.count(6 * size_of::<f32>() + 4 * size_of::<u32>() + 1)?;
         let mut decoded = Vec::with_capacity(groups);
         for _ in 0..groups {
             let mut values = [0.0f32; 6];
             for value in &mut values {
-                *value = cursor.f32()?;
+                *value = reader.f32()?;
             }
             decoded.push(GeometryGroup::new(
                 [values[0], values[1], values[2]],
                 [values[3], values[4], values[5]],
-                cursor.u32()?,
-                cursor.u32()?,
-                cursor.u32()?,
-                cursor.u32()?,
-                match cursor.u8()? {
+                reader.u32()?,
+                reader.u32()?,
+                reader.u32()?,
+                reader.u32()?,
+                match reader.u8()? {
                     0 => false,
                     1 => true,
                     _ => return None,
                 },
             ));
         }
-        let vertices = cursor.count()?;
+        let vertices = reader.count(5 * size_of::<u16>())?;
         let mut packed = Vec::with_capacity(vertices);
         for _ in 0..vertices {
             packed.push(PackedVertex::new(
-                [cursor.u16()?, cursor.u16()?, cursor.u16()?],
-                [cursor.u16()?, cursor.u16()?],
+                [reader.u16()?, reader.u16()?, reader.u16()?],
+                [reader.u16()?, reader.u16()?],
             ));
         }
-        let narrow = cursor.count()?;
+        let narrow = reader.count(size_of::<u16>())?;
         let mut narrow_indices = Vec::with_capacity(narrow);
         for _ in 0..narrow {
-            narrow_indices.push(cursor.u16()?);
+            narrow_indices.push(reader.u16()?);
         }
-        let wide = cursor.count()?;
+        let wide = reader.count(size_of::<u32>())?;
         let mut wide_indices = Vec::with_capacity(wide);
         for _ in 0..wide {
-            wide_indices.push(cursor.u32()?);
+            wide_indices.push(reader.u32()?);
         }
-        if !cursor.done() {
+        if !reader.done() {
             return None;
         }
         Self::from_parts(decoded, packed, narrow_indices, wide_indices)
@@ -542,61 +547,22 @@ fn sign(value: f32) -> f32 {
     if value < 0.0 { -1.0 } else { 1.0 }
 }
 
-fn push_count(bytes: &mut Vec<u8>, count: usize) {
-    push_u32(
-        bytes,
-        u32::try_from(count).expect("a packed mesh holds fewer than four billion entries"),
-    );
+impl Payload for PackedMesh {
+    fn encode(&self) -> Vec<u8> {
+        self.to_bytes()
+    }
+
+    fn stored_bytes(&self) -> u64 {
+        PackedMesh::byte_length(self) as u64
+    }
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
+    }
 }
 
-fn push_u32(bytes: &mut Vec<u8>, value: u32) {
-    bytes.extend_from_slice(&value.to_le_bytes());
-}
-
-fn push_f32(bytes: &mut Vec<u8>, value: f32) {
-    bytes.extend_from_slice(&value.to_le_bytes());
-}
-
-struct Cursor<'a> {
-    bytes: &'a [u8],
-    at: usize,
-}
-
-impl<'a> Cursor<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, at: 0 }
-    }
-
-    fn count(&mut self) -> Option<usize> {
-        let count = self.u32()? as usize;
-        let entry = count.checked_mul(size_of::<u16>())?;
-        (entry <= self.bytes.len()).then_some(count)
-    }
-
-    fn u8(&mut self) -> Option<u8> {
-        Some(*self.take(1)?.first()?)
-    }
-
-    fn u16(&mut self) -> Option<u16> {
-        Some(u16::from_le_bytes(self.take(2)?.try_into().ok()?))
-    }
-
-    fn u32(&mut self) -> Option<u32> {
-        Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
-    }
-
-    fn f32(&mut self) -> Option<f32> {
-        self.u32().map(f32::from_bits)
-    }
-
-    fn take(&mut self, count: usize) -> Option<&'a [u8]> {
-        let end = self.at.checked_add(count)?;
-        let slice = self.bytes.get(self.at..end)?;
-        self.at = end;
-        Some(slice)
-    }
-
-    fn done(&self) -> bool {
-        self.at == self.bytes.len()
+impl Decode for PackedMesh {
+    fn decode(bytes: &[u8]) -> Option<Self> {
+        Self::from_bytes(bytes)
     }
 }

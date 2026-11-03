@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use grana_object::{Basin, SampleAccumulator, Seam, SurfacePatches, SurfaceTopology, TopologyInfo};
 
 use super::tile::TileOutput;
-use super::{EMPTY, Face, Node, Pass, SurfaceBuilder, find, union};
+use super::{EMPTY, Face, Node, Pass, SurfaceBuilder, find};
 
 pub(super) struct Assembler<'a> {
     pub(super) plan: &'a SurfaceBuilder,
@@ -282,21 +282,11 @@ impl<'a> Assembler<'a> {
                 if local_label == EMPTY {
                     continue;
                 }
-                if self.plan.split > 0.0 {
-                    if local_label == cached_label {
-                        continue;
-                    }
-                    let neck = cached.reach[cached_slot].min(local.reach[local_slot]);
-                    self.necks.push((local_label, cached_label, neck));
-                } else {
-                    union(
-                        &mut self.nodes,
-                        &mut self.accumulators,
-                        self.plan.channels,
-                        local_label,
-                        cached_label,
-                    );
+                if local_label == cached_label {
+                    continue;
                 }
+                let neck = cached.reach[cached_slot].min(local.reach[local_slot]);
+                self.necks.push((local_label, cached_label, neck));
             }
         }
     }

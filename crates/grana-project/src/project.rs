@@ -6,13 +6,13 @@ use std::time::Duration;
 
 use grana_animation::Timeline;
 use grana_display::{CameraState, SectionState};
-use grana_geometry::MeshStore;
-use grana_scene::{Dataset, Measure, MeasureState, ObjectKind, Scene, SceneState};
+use grana_geometry::GeometryStore;
+use grana_scene::{Dataset, Measure, MeasureState, ObjectFrame, Scene, SceneState};
 
 use crate::binary::{Decode, Encode, Reader, Writer};
 use crate::error::Error;
 
-const MAGIC: &[u8; 11] = b"granaproj13";
+const MAGIC: &[u8; 11] = b"granaproj14";
 const LENGTH: usize = size_of::<u64>();
 const STEPS: usize = size_of::<u32>();
 const HEADER: usize = MAGIC.len() + LENGTH + STEPS;
@@ -121,7 +121,7 @@ impl Project {
 
     pub fn read(
         path: &Path,
-        store: Arc<MeshStore>,
+        store: Arc<GeometryStore>,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<Self, Error> {
@@ -175,9 +175,10 @@ impl Project {
             .sets
             .iter()
             .flat_map(|set| set.frames.iter().flatten())
-            .map(|frame| match frame.kind() {
-                ObjectKind::Spots => 1,
-                ObjectKind::Surfaces | ObjectKind::Filaments => 2,
+            .map(|frame| match &**frame {
+                ObjectFrame::Spots(_) => 1,
+                ObjectFrame::Surfaces(set) => 2 + usize::from(set.topology().is_some()),
+                ObjectFrame::Filaments(_) => 2,
             })
             .sum()
     }

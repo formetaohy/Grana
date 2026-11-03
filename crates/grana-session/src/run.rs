@@ -6,7 +6,7 @@ use grana_analysis::{
     ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, Roi, Sources, SpotScanner,
     SurfaceBuilder, TrackBuilder, coloc_levels, filament_level, relate_frames, surface_level,
 };
-use grana_geometry::MeshStore;
+use grana_geometry::GeometryStore;
 use grana_image::Image;
 use grana_measure::{ColocPair, ColocSettings};
 use grana_scene::{ObjectFrame, ObjectParams};
@@ -48,7 +48,7 @@ pub struct DetectRequest {
     roi: Option<Roi>,
     seeds: Vec<Vec<[f32; 3]>>,
     workers: usize,
-    store: Arc<MeshStore>,
+    store: Arc<GeometryStore>,
 }
 
 impl DetectRequest {
@@ -59,7 +59,7 @@ impl DetectRequest {
         roi: Option<Roi>,
         seeds: Vec<Vec<[f32; 3]>>,
         workers: usize,
-        store: Arc<MeshStore>,
+        store: Arc<GeometryStore>,
     ) -> Self {
         Self {
             channel,

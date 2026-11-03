@@ -2,7 +2,7 @@ mod topology;
 
 use std::sync::Arc;
 
-use grana_geometry::{Bounds, Geometry, Mesh, MeshStore, PackedMesh};
+use grana_geometry::{Bounds, Geometry, GeometryStore, Mesh, PackedMesh};
 
 use crate::IntensityTable;
 
@@ -79,10 +79,10 @@ impl SurfaceStatistics {
 #[derive(Clone, Debug)]
 pub struct SurfaceSet {
     level: usize,
-    geometry: Geometry,
+    geometry: Geometry<PackedMesh>,
     objects: Vec<SurfaceStatistics>,
     intensities: IntensityTable,
-    topology: Option<Arc<SurfaceTopology>>,
+    topology: Option<Geometry<SurfaceTopology>>,
 }
 
 impl SurfaceSet {
@@ -108,7 +108,7 @@ impl SurfaceSet {
 
     pub fn paged(
         level: usize,
-        store: &Arc<MeshStore>,
+        store: &Arc<GeometryStore>,
         mesh: Mesh,
         objects: Vec<SurfaceStatistics>,
         intensities: IntensityTable,
@@ -129,7 +129,7 @@ impl SurfaceSet {
 
     pub fn from_geometry(
         level: usize,
-        geometry: Geometry,
+        geometry: Geometry<PackedMesh>,
         objects: Vec<SurfaceStatistics>,
         intensities: IntensityTable,
     ) -> Result<Option<Self>, grana_geometry::Error> {
@@ -146,16 +146,20 @@ impl SurfaceSet {
         }))
     }
 
-    pub fn with_topology(mut self, topology: Arc<SurfaceTopology>) -> Self {
+    pub fn with_topology(
+        mut self,
+        topology: Geometry<SurfaceTopology>,
+    ) -> Result<Self, grana_geometry::Error> {
+        let level = topology.load()?.level();
         assert!(
-            topology.level() == self.level,
+            level == self.level,
             "a surface topology describes the level of its set"
         );
         self.topology = Some(topology);
-        self
+        Ok(self)
     }
 
-    pub fn topology(&self) -> Option<&Arc<SurfaceTopology>> {
+    pub fn topology(&self) -> Option<&Geometry<SurfaceTopology>> {
         self.topology.as_ref()
     }
 

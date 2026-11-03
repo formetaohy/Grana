@@ -118,6 +118,55 @@ impl SampleAccumulator {
         let deviation = (self.squared / self.count as f64).max(0.0).sqrt() as f32;
         SampleStatistics::new(mean, self.minimum, self.maximum, deviation, self.sum)
     }
+
+    pub(crate) fn parts(self) -> AccumulatorParts {
+        AccumulatorParts {
+            count: self.count,
+            mean: self.mean,
+            squared: self.squared,
+            minimum: self.minimum,
+            maximum: self.maximum,
+            sum: self.sum,
+        }
+    }
+
+    pub(crate) fn restore(parts: AccumulatorParts) -> Option<Self> {
+        if parts.count == 0 {
+            let empty = parts.mean == 0.0
+                && parts.squared == 0.0
+                && parts.sum == 0.0
+                && parts.minimum == f32::INFINITY
+                && parts.maximum == f32::NEG_INFINITY;
+            return empty.then(Self::new);
+        }
+        let ordered = f64::from(parts.minimum) <= parts.mean
+            && parts.mean <= f64::from(parts.maximum)
+            && parts.mean.is_finite()
+            && parts.squared.is_finite()
+            && parts.squared >= 0.0
+            && parts.sum.is_finite()
+            && parts.sum >= 0.0
+            && parts.minimum.is_finite()
+            && parts.maximum.is_finite();
+        ordered.then_some(Self {
+            count: parts.count,
+            mean: parts.mean,
+            squared: parts.squared,
+            minimum: parts.minimum,
+            maximum: parts.maximum,
+            sum: parts.sum,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct AccumulatorParts {
+    pub(crate) count: u64,
+    pub(crate) mean: f64,
+    pub(crate) squared: f64,
+    pub(crate) minimum: f32,
+    pub(crate) maximum: f32,
+    pub(crate) sum: f64,
 }
 
 impl Default for SampleAccumulator {

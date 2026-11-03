@@ -460,6 +460,17 @@ impl Encode for SurfaceSet {
             Err(error) => writer.fail(&error.to_string()),
         }
         self.intensities().encode(writer);
+        match self.topology() {
+            None => writer.u8(0),
+            Some(topology) => match topology.load() {
+                Ok(topology) => {
+                    writer.u8(1);
+                    writer.step();
+                    writer.blob(&topology.to_bytes());
+                }
+                Err(error) => writer.fail(&error.to_string()),
+            },
+        }
     }
 }
 

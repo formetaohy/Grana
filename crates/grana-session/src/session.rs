@@ -5,7 +5,7 @@ use std::sync::Arc;
 use grana_analysis::SurfaceCut;
 use grana_animation::{Keyframe, Timeline};
 use grana_display::Shading;
-use grana_geometry::{DEFAULT_BUDGET, MeshStore};
+use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
 use grana_image::Format;
 use grana_measure::{ColocPair, ColocThresholds, Group};
 use grana_object::TrackSet;
@@ -78,7 +78,7 @@ pub struct Effects {
 
 pub struct Session {
     scene: Option<Scene>,
-    store: Arc<MeshStore>,
+    store: Arc<GeometryStore>,
     measure: Measure,
     timeline: Timeline,
     source: Option<Loader>,
@@ -124,7 +124,7 @@ impl Session {
     pub fn new() -> Self {
         Self {
             scene: None,
-            store: MeshStore::temporary(DEFAULT_BUDGET)
+            store: GeometryStore::temporary(DEFAULT_BUDGET)
                 .expect("the geometry store needs a temporary file"),
             measure: Measure::new(),
             timeline: Timeline::new(30, 1.0),
@@ -1626,7 +1626,7 @@ impl Session {
             return;
         }
         let cut = params.cut();
-        if !self.cuttable(set, cut) {
+        if !self.cuttable(set) {
             return;
         }
         if self
@@ -1647,7 +1647,7 @@ impl Session {
         self.start_recut(set, cut);
     }
 
-    fn cuttable(&self, set: ObjectSetId, cut: SurfaceCut) -> bool {
+    fn cuttable(&self, set: ObjectSetId) -> bool {
         let Some(scene) = self.scene.as_ref() else {
             return false;
         };
@@ -1657,7 +1657,7 @@ impl Session {
         object.detected() > 0
             && (0..scene.frame_count()).all(|time| {
                 object.frame(time).is_none_or(|frame| match frame {
-                    ObjectFrame::Surfaces(surface) => grana_analysis::cuttable(surface, cut),
+                    ObjectFrame::Surfaces(surface) => surface.cuttable(),
                     _ => false,
                 })
             })
@@ -1682,7 +1682,7 @@ impl Session {
             .push(crate::recut(Job::Recut(set), frames, cut, 0, self.store()));
     }
 
-    fn store(&self) -> Arc<MeshStore> {
+    fn store(&self) -> Arc<GeometryStore> {
         Arc::clone(&self.store)
     }
 

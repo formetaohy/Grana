@@ -24,5 +24,5 @@ pub use params::{
 pub use relation::{Reference, relate_frames};
 pub use scan::{ChannelRead, SpotScan, SpotScanner};
 pub use shape::Shape;
-pub use surface::{Sources, SurfaceBuilder, cuttable, recut, surface_level};
+pub use surface::{Sources, SurfaceBuilder, recut, surface_level};
 pub use track::TrackBuilder;

@@ -6,7 +6,7 @@ mod volume;
 
 use std::sync::Arc;
 
-use grana_geometry::{Mesh, MeshStore, push_sphere, push_tube};
+use grana_geometry::{GeometryStore, Mesh, push_sphere, push_tube};
 use grana_object::{FilamentSet, IntensityTable, SampleAccumulator};
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
@@ -147,7 +147,7 @@ impl FilamentScan {
         &mut self,
         detection: &VoxelData,
         roi: Option<&Mask>,
-        store: &Arc<MeshStore>,
+        store: &Arc<GeometryStore>,
         mut read: impl FnMut(usize) -> Result<VoxelData, String>,
     ) -> Result<FilamentSet, String> {
         if self.empty {

@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 
-use grana_geometry::MeshStore;
-use grana_object::{SampleAccumulator, SurfaceSet};
+use grana_geometry::{Geometry, GeometryStore};
+use grana_object::SurfaceSet;
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
 use crate::SurfaceParams;
@@ -52,11 +52,15 @@ pub(crate) type Measure<'a> =
 pub struct Sources<'a> {
     read: &'a Read<'a>,
     measure: &'a Measure<'a>,
-    store: &'a Arc<MeshStore>,
+    store: &'a Arc<GeometryStore>,
 }
 
 impl<'a> Sources<'a> {
-    pub fn new(read: &'a Read<'a>, measure: &'a Measure<'a>, store: &'a Arc<MeshStore>) -> Self {
+    pub fn new(
+        read: &'a Read<'a>,
+        measure: &'a Measure<'a>,
+        store: &'a Arc<GeometryStore>,
+    ) -> Self {
         Self {
             read,
             measure,
@@ -68,7 +72,6 @@ impl<'a> Sources<'a> {
 #[derive(Clone, Copy)]
 pub(crate) struct Node {
     pub(crate) parent: u32,
-    pub(crate) rank: u8,
     pub(crate) reach: u32,
     pub(crate) voxels: u64,
     pub(crate) sum: [f64; 3],
@@ -82,7 +85,6 @@ impl Node {
     fn new(reach: u32) -> Self {
         Self {
             parent: 0,
-            rank: 0,
             reach,
             voxels: 0,
             sum: [0.0; 3],
@@ -152,7 +154,6 @@ pub struct SurfaceBuilder {
     anchor: [i64; 3],
     tiles: [u32; 3],
     tile_count: usize,
-    split: f64,
     anisotropy: [u32; 3],
     kernels: [Vec<f32>; 3],
     opening: Option<Element>,
@@ -187,7 +188,6 @@ impl SurfaceBuilder {
         let grain = params.grain().min(GRAIN_LIMIT * narrowest);
         let anisotropy =
             spacing.map(|value| ((value / narrowest).round() as u32).clamp(1, ANISOTROPY_LIMIT));
-        let split = f64::from(params.split());
         let kernels = spacing.map(|value| gaussian((grain / value).min(GRAIN_LIMIT)));
         let opening = Element::new(level, params.opening());
         let closing = Element::new(level, params.closing());
@@ -222,7 +222,6 @@ impl SurfaceBuilder {
             anchor,
             tiles,
             tile_count,
-            split,
             anisotropy,
             kernels,
             opening,
@@ -340,22 +339,12 @@ impl SurfaceBuilder {
             .copied()
             .max()
             .expect("three axes exist");
-        let split = self.split > 0.0 || !seeds.is_empty();
-        let mut base = if split {
-            (DISTANCE_LIMIT * widest).min(DISTANCE_LIMIT_MAX)
-        } else {
-            0
-        };
+        let mut base = (DISTANCE_LIMIT * widest).min(DISTANCE_LIMIT_MAX);
         while base > DISTANCE_LIMIT && Pass::new(&self, base, seeds).max_workers().is_none() {
             base /= 2;
         }
         let mut runs = Vec::new();
-        let limits = if split {
-            vec![base, base * 2, base * 4]
-        } else {
-            vec![0]
-        };
-        for limit in limits {
+        for limit in [base, base * 2, base * 4] {
             match Pass::new(&self, limit, seeds).max_workers() {
                 Some(capacity) => runs.push((limit, capacity)),
                 None => break,
@@ -389,9 +378,14 @@ impl SurfaceBuilder {
                     step += 1;
                 }
                 PassOutcome::Done(topology) => {
-                    let topology = Arc::new(*topology);
-                    let set = cut::cut(&topology, self.params.cut(), desired, Some(store))?;
-                    return Ok(Some(set.with_topology(topology)));
+                    let topology =
+                        Geometry::paged(store, *topology).map_err(|error| error.to_string())?;
+                    let loaded = topology.load().map_err(|error| error.to_string())?;
+                    let set = cut::cut(&loaded, self.params.cut(), desired, Some(store))?;
+                    return Ok(Some(
+                        set.with_topology(topology)
+                            .map_err(|error| error.to_string())?,
+                    ));
                 }
             }
         }
@@ -408,23 +402,21 @@ pub fn surface_level(pyramid: &Pyramid, region: Region) -> Option<usize> {
     })
 }
 
-pub fn cuttable(set: &SurfaceSet, spec: SurfaceCut) -> bool {
-    set.topology()
-        .is_some_and(|topology| spec.split() <= 0.0 || !topology.seams().is_empty())
-}
-
 pub fn recut(
     set: &SurfaceSet,
     spec: SurfaceCut,
     workers: usize,
-    store: Option<&Arc<MeshStore>>,
+    store: Option<&Arc<GeometryStore>>,
 ) -> Result<Option<SurfaceSet>, String> {
     let Some(topology) = set.topology() else {
         return Ok(None);
     };
     let workers = crate::schedule::workers(workers);
-    let set = cut::cut(topology, spec, workers, store)?.with_topology(Arc::clone(topology));
-    Ok(Some(set))
+    let loaded = topology.load().map_err(|error| error.to_string())?;
+    let cut = cut::cut(&loaded, spec, workers, store)?
+        .with_topology(topology.clone())
+        .map_err(|error| error.to_string())?;
+    Ok(Some(cut))
 }
 
 fn voxel_count(ranges: &[Range<u32>; 3]) -> u64 {
@@ -650,48 +642,6 @@ pub(crate) fn find(nodes: &mut [Node], node: u32) -> u32 {
         current = next;
     }
     root
-}
-
-fn union(
-    nodes: &mut [Node],
-    accumulators: &mut [SampleAccumulator],
-    channels: usize,
-    left: u32,
-    right: u32,
-) -> u32 {
-    let mut left = find(nodes, left);
-    let mut right = find(nodes, right);
-    if left == right {
-        return left;
-    }
-    if nodes[left as usize].rank < nodes[right as usize].rank {
-        std::mem::swap(&mut left, &mut right);
-    }
-    let winner = nodes[left as usize];
-    let loser = nodes[right as usize];
-    for channel in 0..channels {
-        let other = accumulators[right as usize * channels + channel];
-        accumulators[left as usize * channels + channel].merge(&other);
-    }
-    let target = &mut nodes[left as usize];
-    target.reach = target.reach.max(loser.reach);
-    target.voxels += loser.voxels;
-    for axis in 0..3 {
-        target.sum[axis] += loser.sum[axis];
-        target.low[axis] = target.low[axis].min(loser.low[axis]);
-        target.high[axis] = target.high[axis].max(loser.high[axis]);
-    }
-    if target.contact == EMPTY {
-        target.contact = loser.contact;
-    }
-    if loser.seed != EMPTY {
-        target.seed = target.seed.min(loser.seed);
-    }
-    if winner.rank == loser.rank {
-        target.rank += 1;
-    }
-    nodes[right as usize].parent = left;
-    left
 }
 
 fn gaussian(sigma: f32) -> Vec<f32> {

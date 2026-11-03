@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_geometry::{Bounds, Mesh, MeshStore, MeshVertex};
+use grana_geometry::{Bounds, GeometryStore, Mesh, MeshVertex};
 use grana_object::{
     Basin, IntensityTable, SampleAccumulator, SampleStatistics, SurfaceSet, SurfaceStatistics,
     SurfaceTopology,
@@ -20,7 +20,7 @@ pub(super) fn cut(
     topology: &SurfaceTopology,
     spec: SurfaceCut,
     workers: usize,
-    store: Option<&Arc<MeshStore>>,
+    store: Option<&Arc<GeometryStore>>,
 ) -> Result<SurfaceSet, String> {
     let info = topology.info();
     let mut merged = Merged::new(topology);

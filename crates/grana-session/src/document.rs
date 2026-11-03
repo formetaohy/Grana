@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use grana_geometry::MeshStore;
+use grana_geometry::GeometryStore;
 use grana_project::{Error, Project};
 
 use crate::task::{Poll, Task};
@@ -52,7 +52,7 @@ impl Document {
         }
     }
 
-    pub fn open(path: PathBuf, store: Arc<MeshStore>) -> Self {
+    pub fn open(path: PathBuf, store: Arc<GeometryStore>) -> Self {
         let headline = label(Transfer::Open, &path);
         let target = path.clone();
         let task = Task::spawn(move |cancel, sink| {

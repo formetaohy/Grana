@@ -7,7 +7,7 @@ use std::sync::{Mutex, MutexGuard};
 use grana_analysis::Roi;
 use grana_animation::Timeline;
 use grana_display::{Camera, SectionCamera};
-use grana_geometry::{DEFAULT_BUDGET, MeshStore};
+use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
 use grana_image::{Format, Image, Source};
 use grana_measure::{ColocPair, ColocSeries, Lasso};
 use grana_project::{Export, Project, Source as ProjectSource, ViewState};
@@ -24,7 +24,7 @@ const RESULT: &str = "result.json";
 const PARTIAL: &str = "partial";
 pub const MAX_JOBS: usize = 16;
 const DEFAULT_JOBS: usize = 4;
-const ANALYSIS_REVISION: u32 = 2;
+const ANALYSIS_REVISION: u32 = 3;
 const CONTENT_SAMPLE: u64 = 1 << 16;
 const HASH: u64 = 0xcbf2_9ce4_8422_2325;
 const PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -377,7 +377,7 @@ fn analyse(task: &Task<'_>, dataset: &Path, output: &Path) -> Result<Report, Str
 fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Report, String> {
     let source = Source::file(dataset.to_path_buf());
     let reader = Image::open(&source)?;
-    let store = MeshStore::temporary(DEFAULT_BUDGET)
+    let store = GeometryStore::temporary(DEFAULT_BUDGET)
         .map_err(|error| format!("the dataset cannot page its geometry: {error}"))?;
     let name = dataset_name(dataset);
     let artifacts = artifacts(task.protocol, &name, task.project);
@@ -514,7 +514,7 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
 struct Run<'a, 'b> {
     task: &'b Task<'a>,
     reader: &'b Image,
-    store: &'b Arc<MeshStore>,
+    store: &'b Arc<GeometryStore>,
     scene: Scene,
     sets: Vec<ObjectSetId>,
     pairs: Vec<ColocPair>,
@@ -826,7 +826,7 @@ fn detect(
     task: &Task<'_>,
     set: &crate::protocol::SetSpec,
     reading: Reading<'_>,
-    store: &Arc<MeshStore>,
+    store: &Arc<GeometryStore>,
     progress: &Progress<'_>,
 ) -> Result<Vec<Option<ObjectFrame>>, String> {
     let frames = reading.reader.pyramid().frame_count() as usize;

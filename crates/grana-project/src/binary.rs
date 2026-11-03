@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_geometry::MeshStore;
+use grana_geometry::GeometryStore;
 
 const FAULT_TRUNCATED: &str = "the project data ends before its structure closes";
 const FAULT_LENGTH: &str = "the project data declares a length it cannot hold";
@@ -255,7 +255,7 @@ impl<'a> Writer<'a> {
 pub(crate) struct Reader<'a> {
     source: &'a mut dyn Read,
     remaining: usize,
-    store: Arc<MeshStore>,
+    store: Arc<GeometryStore>,
     cancel: &'a AtomicBool,
     report: &'a mut dyn FnMut(usize),
     steps: usize,
@@ -265,7 +265,7 @@ impl<'a> Reader<'a> {
     pub fn new(
         source: &'a mut dyn Read,
         length: usize,
-        store: Arc<MeshStore>,
+        store: Arc<GeometryStore>,
         cancel: &'a AtomicBool,
         report: &'a mut dyn FnMut(usize),
     ) -> Self {
@@ -279,7 +279,7 @@ impl<'a> Reader<'a> {
         }
     }
 
-    pub fn store(&self) -> &Arc<MeshStore> {
+    pub fn store(&self) -> &Arc<GeometryStore> {
         &self.store
     }
 

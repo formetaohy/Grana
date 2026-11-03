@@ -2,8 +2,98 @@ use std::time::{Duration, Instant};
 
 use grana_display::{CameraState, SectionState};
 use grana_project::ViewState;
-use grana_session::Session;
+use grana_scene::{ObjectFrame, ObjectKind, ObjectParams};
+use grana_session::{Command, Session};
 use grana_volume::Axis;
+
+#[test]
+fn reopens_a_project_with_its_surface_topology() {
+    let mut session = Session::new();
+    session.open_sample();
+    wait(&mut session, Duration::from_secs(240));
+    let surfaces = surface_set(&session);
+    let params = session
+        .scene()
+        .expect("the sample opens")
+        .objects
+        .get(surfaces)
+        .expect("the sample stages surfaces")
+        .params();
+    let ObjectParams::Surfaces(mut surfaces_params) = params else {
+        panic!("the sample stages a surface set");
+    };
+    let detected = objects(&session, surfaces);
+    assert!(detected > 0, "the sample detection produces surfaces");
+    let path = std::env::temp_dir().join(format!("grana-topology-{}.grana", std::process::id()));
+    std::fs::remove_file(&path).ok();
+    session.save_project(path.clone(), view(&session));
+    wait(&mut session, Duration::from_secs(60));
+
+    let mut reopened = Session::new();
+    reopened.begin_project(path.clone());
+    wait(&mut reopened, Duration::from_secs(240));
+    std::fs::remove_file(&path).ok();
+    let surfaces = surface_set(&reopened);
+    let frame = reopened
+        .scene()
+        .expect("the project opens its dataset")
+        .objects
+        .get(surfaces)
+        .and_then(|set| set.frame(0))
+        .expect("the project keeps its first surface frame");
+    let ObjectFrame::Surfaces(frame) = frame else {
+        panic!("the surface frame restores as surfaces");
+    };
+    assert!(
+        frame.cuttable(),
+        "the reopened surface keeps its watershed topology"
+    );
+
+    surfaces_params.set_min_volume(1.0e6);
+    reopened.execute(Command::SetObjectParams {
+        set: surfaces,
+        params: ObjectParams::Surfaces(surfaces_params),
+    });
+    wait(&mut reopened, Duration::from_secs(60));
+    assert_eq!(
+        objects(&reopened, surfaces),
+        0,
+        "the reopened surface recuts its filters without reading the volume"
+    );
+    surfaces_params.set_min_volume(0.0);
+    reopened.execute(Command::SetObjectParams {
+        set: surfaces,
+        params: ObjectParams::Surfaces(surfaces_params),
+    });
+    wait(&mut reopened, Duration::from_secs(60));
+    assert_eq!(
+        objects(&reopened, surfaces),
+        detected,
+        "the reopened surface restores every object it detected"
+    );
+}
+
+fn surface_set(session: &Session) -> grana_scene::ObjectSetId {
+    session
+        .scene()
+        .expect("the scene exists")
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Surfaces)
+        .expect("the scene stages surfaces")
+        .id()
+}
+
+fn objects(session: &Session, set: grana_scene::ObjectSetId) -> usize {
+    session
+        .scene()
+        .expect("the scene exists")
+        .objects
+        .get(set)
+        .and_then(|set| set.frame(0))
+        .map(ObjectFrame::object_count)
+        .expect("the first frame is detected")
+}
 
 #[test]
 fn transfers_a_project_off_the_caller() {

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use grana_geometry::{DEFAULT_BUDGET, MeshStore};
+use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
 use grana_measure::Measurement;
 use grana_project::{Project, Source as ProjectSource};
 use grana_scene::ObjectColor;
@@ -381,7 +381,7 @@ fn writes_a_project_that_reopens() {
         .map(|entry| entry.path())
         .find(|path| path.extension().is_some_and(|kind| kind == "granaproj"))
         .expect("the batch writes the project");
-    let store = MeshStore::temporary(DEFAULT_BUDGET).expect("the geometry store opens");
+    let store = GeometryStore::temporary(DEFAULT_BUDGET).expect("the geometry store opens");
     let cancel = AtomicBool::new(false);
     let project = Project::read(&file, store, &cancel, &mut |_, _| {}).expect("the project reads");
     let names = project

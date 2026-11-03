@@ -11,7 +11,7 @@ repository = "https://github.com/formetaohy/Grana"
 
 [workspace.dependencies]
 arboard = { version = "3", default-features = false }
-bytemuck = { version = "1", features = ["derive"] }
+bytemuck = { version = "1", features = ["derive", "extern_crate_alloc"] }
 glam = { version = "0.30", features = ["bytemuck"] }
 half = "2"
 wgpu = "30"

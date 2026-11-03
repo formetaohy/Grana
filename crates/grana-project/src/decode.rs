@@ -15,7 +15,8 @@ use grana_measure::{
 };
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, RelationFrame,
-    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
+    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, SurfaceTopology, Track,
+    TrackNode, TrackSet,
 };
 use grana_scene::{
     ChannelState, ColocResult, ColocState, ColorState, ItemState, MeasureState, ObjectColor,
@@ -713,10 +714,21 @@ impl Decode for SurfaceSet {
         let geometry =
             Geometry::paged(&store, PackedMesh::decode(reader)?).map_err(|_| FAULT_SPILL)?;
         let intensities = IntensityTable::decode(reader)?;
-        match Self::from_geometry(level, geometry, objects, intensities) {
-            Ok(Some(set)) => Ok(set),
-            Ok(None) => Err(FAULT_SHAPE),
-            Err(_) => Err(FAULT_SPILL),
+        let Some(set) =
+            Self::from_geometry(level, geometry, objects, intensities).map_err(|_| FAULT_SPILL)?
+        else {
+            return Err(FAULT_SHAPE);
+        };
+        match reader.u8()? {
+            0 => Ok(set),
+            1 => {
+                reader.step();
+                let bytes = reader.blob()?;
+                let topology = SurfaceTopology::from_bytes(&bytes).ok_or(FAULT_SHAPE)?;
+                let topology = Geometry::paged(&store, topology).map_err(|_| FAULT_SPILL)?;
+                set.with_topology(topology).map_err(|_| FAULT_SPILL)
+            }
+            _ => Err(FAULT_TAG),
         }
     }
 }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{SurfaceCut, TrackParams};
-use grana_geometry::MeshStore;
+use grana_geometry::GeometryStore;
 use grana_image::{Image, Source};
 use grana_scene::{Job, ObjectFrame};
 
@@ -37,7 +37,7 @@ pub fn recut(
     frames: Vec<Option<Arc<ObjectFrame>>>,
     cut: SurfaceCut,
     workers: usize,
-    store: Arc<MeshStore>,
+    store: Arc<GeometryStore>,
 ) -> Analysis {
     analyse(job, move |cancel, sink| {
         let total = frames.len();

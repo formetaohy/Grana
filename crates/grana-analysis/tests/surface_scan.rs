@@ -1,9 +1,10 @@
 use std::f64::consts::PI;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_analysis::{Sources, SurfaceBuilder, SurfaceFilter, SurfaceParams, cuttable, recut};
-use grana_geometry::MeshStore;
+use grana_analysis::{Sources, SurfaceBuilder, SurfaceFilter, SurfaceParams, recut};
+use grana_geometry::GeometryStore;
 use grana_object::SurfaceSet;
 use grana_volume::{Channel, Extent, Intensity, Level, Region, Spacing, Volume, VoxelData};
 
@@ -335,6 +336,27 @@ fn recuts_a_detection_without_reading_the_volume() {
 }
 
 #[test]
+fn recuts_a_detection_whose_topology_spilled_to_disk() {
+    let volume = large_lobes();
+    let filter = SurfaceFilter::new(0.0, 0.8, 0.0, 0.0);
+    let params = SurfaceParams::new(0.5, 0.0, 0.7, 0.0, filter);
+    let store = GeometryStore::temporary(1).expect("the store opens a spill file");
+    let set = extract_through(&volume, params, Region::none(), 2, &store);
+    assert_eq!(set.object_count(), 1, "the shallow split keeps the lobes");
+    assert!(store.stats().spilled() > 0, "the topology leaves memory");
+    let mut recut_params = params;
+    recut_params.set_split(0.3);
+    let cut = recut(&set, recut_params.cut(), 2, Some(&store))
+        .expect("the spilled topology is cut")
+        .expect("a detected surface carries its topology");
+    let fresh = extract(&volume, recut_params, Region::none());
+    assert_eq!(
+        cut, fresh,
+        "a recut from the spill file matches a fresh detection"
+    );
+}
+
+#[test]
 fn recuts_objects_that_a_filter_dropped() {
     let volume = large_lobes();
     let filter = SurfaceFilter::new(0.0, 0.8, 0.0, 0.0);
@@ -350,7 +372,7 @@ fn recuts_objects_that_a_filter_dropped() {
 }
 
 #[test]
-fn refuses_to_split_a_surface_that_was_not_watershed() {
+fn recuts_an_unsplit_detection_to_a_deeper_split() {
     let volume = large_lobes();
     let filter = SurfaceFilter::new(0.0, 0.8, 0.0, 0.0);
     let merged = extract(
@@ -358,17 +380,28 @@ fn refuses_to_split_a_surface_that_was_not_watershed() {
         SurfaceParams::new(0.5, 0.0, 0.0, 0.0, filter),
         Region::none(),
     );
-    let split = SurfaceParams::new(0.5, 0.0, 0.3, 0.0, filter);
+    assert_eq!(merged.object_count(), 1, "touching lobes form one object");
     assert!(
-        !cuttable(&merged, split.cut()),
-        "an unsplit detection carries no watershed seams"
+        merged.cuttable(),
+        "an unsplit detection still carries its watershed seams"
     );
-    assert!(
-        cuttable(
-            &merged,
-            SurfaceParams::new(0.5, 0.0, 0.0, 0.0, filter).cut()
-        ),
-        "an unsplit detection recuts to its own split"
+    let mut split = SurfaceParams::new(0.5, 0.0, 0.3, 0.0, filter);
+    let cut = recut(&merged, split.cut(), 2, None)
+        .expect("the carried topology is cut")
+        .expect("a detected surface carries its topology");
+    assert_eq!(
+        cut.object_count(),
+        2,
+        "the deeper split separates the lobes without reading the volume again"
+    );
+    split.set_split(0.0);
+    let restored = recut(&merged, split.cut(), 2, None)
+        .expect("the carried topology is cut")
+        .expect("a detected surface carries its topology");
+    assert_eq!(
+        restored.object_count(),
+        1,
+        "the shallow split joins the lobes again"
     );
 }
 
@@ -738,7 +771,7 @@ fn extract_seeded(
                     core[2].clone(),
                 ))
             },
-            &MeshStore::memory(),
+            &GeometryStore::memory(),
         ),
     )
 }
@@ -748,6 +781,17 @@ fn extract_with(
     params: SurfaceParams,
     region: Region,
     workers: usize,
+) -> SurfaceSet {
+    let store = GeometryStore::memory();
+    extract_through(volume, params, region, workers, &store)
+}
+
+fn extract_through(
+    volume: &Volume,
+    params: SurfaceParams,
+    region: Region,
+    workers: usize,
+    store: &Arc<GeometryStore>,
 ) -> SurfaceSet {
     let level = Level::new(volume.extent(), volume.spacing());
     let intensity = Intensity::new(0.0, f32::from(HIGH));
@@ -777,7 +821,7 @@ fn extract_with(
                         core[2].clone(),
                     ))
                 },
-                &MeshStore::memory(),
+                store,
             ),
         )
         .expect("a surface frame is detected")

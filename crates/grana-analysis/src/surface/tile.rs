@@ -51,7 +51,6 @@ pub(super) struct Tile<'a> {
     pub(super) chamfer: Vec<u32>,
     pub(super) labels: Vec<u32>,
     pub(super) order: Vec<u32>,
-    pub(super) stack: Vec<u32>,
     pub(super) nodes: Vec<Node>,
     pub(super) accumulators: Vec<SampleAccumulator>,
     pub(super) necks: Vec<(u32, u32, u32)>,
@@ -85,7 +84,6 @@ impl<'a> Tile<'a> {
             chamfer: Vec::new(),
             labels: Vec::new(),
             order: Vec::new(),
-            stack: Vec::new(),
             nodes: Vec::new(),
             accumulators: Vec::new(),
             necks: Vec::new(),
@@ -149,15 +147,8 @@ impl<'a> Tile<'a> {
         self.indices.clear();
         self.triangles.clear();
         self.contacts.clear();
-        let split = pass.plan.split > 0.0 || !pass.seeds.is_empty();
-        let saturated = if split {
-            let saturated = self.watershed();
-            self.record_necks();
-            saturated
-        } else {
-            self.flood();
-            false
-        };
+        let saturated = self.watershed();
+        self.record_necks();
         if super::halted(cancel, stop) {
             return TileResult::Cancelled;
         }

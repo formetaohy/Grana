@@ -1,5 +1,5 @@
 use glam::Vec3;
-use grana_geometry::{Geometry, Mesh, MeshStore, MeshVertex, PackedMesh, ray_hit};
+use grana_geometry::{Geometry, GeometryStore, Mesh, MeshVertex, PackedMesh, ray_hit};
 
 const CORNERS: [[f32; 3]; 8] = [
     [-1.0, -1.0, -1.0],
@@ -73,7 +73,7 @@ fn widens_objects_above_the_narrow_index_range() {
 
 #[test]
 fn pages_meshes_through_its_spill_file() {
-    let store = MeshStore::temporary(1).expect("the store opens a spill file");
+    let store = GeometryStore::temporary(1).expect("the store opens a spill file");
     let source = PackedMesh::new(mesh(&[8, 8]));
     let paged = Geometry::paged(&store, source.clone()).expect("the mesh pages");
     assert!(store.stats().spilled() > 0, "the mesh leaves memory");
@@ -88,7 +88,7 @@ fn pages_meshes_through_its_spill_file() {
         .expect("the surface prunes")
         .expect("the object exists");
     assert_eq!(pruned.load().expect("the mesh loads").object_count(), 1);
-    let recycle = MeshStore::temporary(1).expect("the store opens a spill file");
+    let recycle = GeometryStore::temporary(1).expect("the store opens a spill file");
     let mut spares = (0..4)
         .map(|_| Geometry::paged(&recycle, source.clone()).expect("the mesh pages"))
         .collect::<Vec<_>>();
@@ -101,14 +101,14 @@ fn pages_meshes_through_its_spill_file() {
     );
     drop(kept);
     assert_eq!(
-        recycle.stats().meshes(),
+        recycle.stats().entries(),
         0,
         "a released mesh leaves its store"
     );
     drop(paged);
     drop(pruned);
     assert_eq!(
-        store.stats().meshes(),
+        store.stats().entries(),
         0,
         "a released mesh leaves the store"
     );
