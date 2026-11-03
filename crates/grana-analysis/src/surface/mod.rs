@@ -1,7 +1,9 @@
 mod assemble;
+mod bits;
 mod emit;
 mod finish;
 mod label;
+mod mask;
 mod prepare;
 mod tile;
 
@@ -10,13 +12,14 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 
 use grana_object::{SampleAccumulator, SurfaceSet};
-use grana_volume::{Intensity, Level, Region, VoxelData};
+use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
 use crate::SurfaceParams;
 use crate::mask::Mask;
 use crate::morphology::Element;
 
 use assemble::Assembler;
+use mask::SolidMask;
 use tile::{Tile, TileResult};
 
 const TILE_SIDE: u32 = 96;
@@ -25,13 +28,14 @@ const DISTANCE_LIMIT_MAX: u32 = 48;
 const GRAIN_LIMIT: f32 = 3.0;
 const GRAIN_SUPPORT: f32 = 3.0;
 const ANISOTROPY_LIMIT: u32 = 16;
-const BLOCK_PAD: u32 = crate::local::PAD_BLOCKS as u32 * crate::local::BLOCK as u32;
-const PAD_ALIGN: u32 = crate::local::BLOCK as u32;
+const PAD_ALIGN: u32 = 8;
 const ARRAY_BYTES_PER_VOXEL: u64 = 28;
 const WORKER_ARRAY_LIMIT: u64 = 320 << 20;
 const FRAME_ARRAY_LIMIT: u64 = 1024 << 20;
 const TILE_FRAGMENT_LIMIT: u64 = 96 << 20;
 const WORKER_LIMIT: usize = 16;
+
+pub const SURFACE_VOXEL_LIMIT: u64 = 1 << 30;
 
 pub(crate) const EMPTY: u32 = u32::MAX;
 pub(crate) const OUTSIDE: f32 = -1.0;
@@ -80,6 +84,31 @@ impl Face {
             if *label != EMPTY {
                 *label += base;
             }
+        }
+    }
+}
+
+pub(super) struct Gate<'a> {
+    pub(super) region: [u32; 3],
+    pub(super) limit: [u32; 3],
+    pub(super) spacing: [f32; 3],
+    pub(super) world: [f32; 3],
+    pub(super) roi: Option<&'a Mask>,
+}
+
+impl Gate<'_> {
+    pub(super) fn admits(&self, voxel: [i64; 3]) -> bool {
+        let inside = (0..3).all(|axis| {
+            voxel[axis] >= i64::from(self.region[axis]) && voxel[axis] < i64::from(self.limit[axis])
+        });
+        if !inside {
+            return false;
+        }
+        match self.roi {
+            Some(roi) => roi.contains([0, 1, 2].map(|axis| {
+                (voxel[axis] as f32 + 0.5) * self.spacing[axis] - 0.5 * self.world[axis]
+            })),
+            None => true,
         }
     }
 }
@@ -185,6 +214,73 @@ impl SurfaceBuilder {
         self.tile_count
     }
 
+    pub fn level(&self) -> usize {
+        self.level_index
+    }
+
+    pub(super) fn dims(&self) -> [usize; 3] {
+        [
+            (self.region[0].end - self.region[0].start) as usize,
+            (self.region[1].end - self.region[1].start) as usize,
+            (self.region[2].end - self.region[2].start) as usize,
+        ]
+    }
+
+    pub(super) fn blocks(&self) -> [usize; 3] {
+        let dims = self.dims();
+        dims.map(|value| value.div_ceil(crate::local::BLOCK as usize))
+    }
+
+    pub(super) fn tile_position(&self, index: usize) -> [u32; 3] {
+        let tiles = self.tiles;
+        let x = index % tiles[0] as usize;
+        let y = (index / tiles[0] as usize) % tiles[1] as usize;
+        let z = index / (tiles[0] as usize * tiles[1] as usize);
+        [x as u32, y as u32, z as u32]
+    }
+
+    pub(super) fn core_range(&self, index: usize) -> [Range<u32>; 3] {
+        assert!(index < self.tile_count, "the tile index is in bounds");
+        let position = self.tile_position(index);
+        [0, 1, 2].map(|axis| {
+            let start = self.region[axis].start + position[axis] * TILE_SIDE;
+            start..(start + TILE_SIDE).min(self.region[axis].end)
+        })
+    }
+
+    pub(super) fn array_range(&self, index: usize, pad: [u32; 3]) -> [Range<u32>; 3] {
+        let core = self.core_range(index);
+        [0, 1, 2].map(|axis| {
+            let start = core[axis].start.saturating_sub(pad[axis]);
+            start..(core[axis].end + pad[axis]).min(self.extent[axis])
+        })
+    }
+
+    pub(super) fn pad_mask(&self) -> [u32; 3] {
+        [0, 1, 2].map(|axis| {
+            let kernel = (self.kernels[axis].len() / 2) as u32;
+            align(kernel + 1) + crate::local::BLOCK as u32 * (crate::local::WINDOW as u32 + 1)
+        })
+    }
+
+    pub(super) fn pad_morph(&self) -> [u32; 3] {
+        [0; 3].map(|_| align(self.morph_radius + 1))
+    }
+
+    pub(super) fn gate<'a>(&'a self, roi: Option<&'a Mask>) -> Gate<'a> {
+        Gate {
+            region: [
+                self.region[0].start,
+                self.region[1].start,
+                self.region[2].start,
+            ],
+            limit: [self.region[0].end, self.region[1].end, self.region[2].end],
+            spacing: self.spacing,
+            world: self.world,
+            roi,
+        }
+    }
+
     pub fn scan(
         self,
         workers: usize,
@@ -194,6 +290,14 @@ impl SurfaceBuilder {
         read: &Read<'_>,
         measure: &Measure<'_>,
     ) -> Result<Option<SurfaceSet>, String> {
+        let desired = match workers {
+            0 => std::thread::available_parallelism().map_or(1, |value| value.get()),
+            value => value,
+        }
+        .clamp(1, WORKER_LIMIT);
+        let Some(mask) = mask::build(&self, desired, cancel, roi, progress, read)? else {
+            return Ok(None);
+        };
         let widest = self
             .anisotropy
             .iter()
@@ -208,11 +312,6 @@ impl SurfaceBuilder {
         while base > DISTANCE_LIMIT && Pass::new(&self, base).max_workers().is_none() {
             base /= 2;
         }
-        let desired = match workers {
-            0 => std::thread::available_parallelism().map_or(1, |value| value.get()),
-            value => value,
-        }
-        .clamp(1, WORKER_LIMIT);
         let mut runs = Vec::new();
         let limits = if self.split {
             vec![base, base * 2, base * 4]
@@ -232,10 +331,12 @@ impl SurfaceBuilder {
         }
         let mut inputs = Inputs {
             cancel,
-            roi,
             progress,
             read,
             measure,
+            solid: &mask.solid,
+            field: &mask.field,
+            roi,
         };
         let mut step = 0;
         loop {
@@ -256,6 +357,128 @@ impl SurfaceBuilder {
     }
 }
 
+pub fn surface_level(pyramid: &Pyramid, region: Region) -> Option<usize> {
+    (0..pyramid.level_count()).find(|index| {
+        let level = pyramid.level(*index);
+        match region.voxel_range(level) {
+            Some(ranges) => voxel_count(&ranges) <= SURFACE_VOXEL_LIMIT,
+            None => true,
+        }
+    })
+}
+
+fn voxel_count(ranges: &[Range<u32>; 3]) -> u64 {
+    ranges
+        .iter()
+        .map(|range| u64::from(range.end - range.start))
+        .product()
+}
+
+pub(super) fn smooth(raw: &mut [f32], dims: [usize; 3], kernels: &[Vec<f32>; 3]) {
+    let strides = strides_of(dims);
+    for axis in 0..3 {
+        let kernel = &kernels[axis];
+        if kernel.len() <= 1 {
+            continue;
+        }
+        let radius = (kernel.len() / 2) as i64;
+        let (first, second) = ((axis + 1) % 3, (axis + 2) % 3);
+        let length = dims[axis];
+        let mut line = vec![0.0f32; length];
+        let mut blurred = vec![0.0f32; length];
+        for position in 0..dims[second] {
+            for row in 0..dims[first] {
+                let base = strides[first] * row + strides[second] * position;
+                for (step, slot) in line.iter_mut().enumerate() {
+                    *slot = raw[base + strides[axis] * step];
+                }
+                for (step, slot) in blurred.iter_mut().enumerate() {
+                    let mut sum = 0.0;
+                    for (tap, weight) in kernel.iter().enumerate() {
+                        let sample = (step as i64 + tap as i64 - radius).clamp(0, length as i64 - 1)
+                            as usize;
+                        sum += line[sample] * weight;
+                    }
+                    *slot = sum;
+                }
+                for (step, value) in blurred.iter().enumerate() {
+                    raw[base + strides[axis] * step] = *value;
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn parallel_tiles<T, S>(
+    total: usize,
+    workers: usize,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(usize, usize),
+    work: impl Fn(usize) -> Result<T, String> + Sync,
+    mut sink: S,
+) -> Result<bool, String>
+where
+    T: Send,
+    S: FnMut(usize, T) -> Result<(), String>,
+{
+    if total == 0 {
+        return Ok(true);
+    }
+    let next = AtomicUsize::new(0);
+    let stop = AtomicBool::new(false);
+    let (sender, receiver) = mpsc::sync_channel::<Result<(usize, T), String>>(workers.max(1) * 2);
+    std::thread::scope(|scope| {
+        for _ in 0..workers.max(1) {
+            let sender = sender.clone();
+            let next = &next;
+            let stop = &stop;
+            let work = &work;
+            scope.spawn(move || {
+                loop {
+                    if cancel.load(Ordering::Relaxed) || stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    if index >= total {
+                        break;
+                    }
+                    let outcome = work(index);
+                    let failed = outcome.is_err();
+                    if sender.send(outcome.map(|value| (index, value))).is_err() {
+                        break;
+                    }
+                    if failed {
+                        stop.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                }
+            });
+        }
+        drop(sender);
+        let mut done = 0usize;
+        while let Ok(message) = receiver.recv() {
+            match message {
+                Ok((index, value)) => {
+                    sink(index, value)?;
+                    done += 1;
+                    progress(done, total);
+                }
+                Err(detail) => {
+                    stop.store(true, Ordering::Relaxed);
+                    return Err(detail);
+                }
+            }
+        }
+        if done == total {
+            return Ok(true);
+        }
+        if cancel.load(Ordering::Relaxed) || stop.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+        Err("a surface worker stopped before its tile was completed".to_string())
+    })
+}
+
 struct Pass<'a> {
     plan: &'a SurfaceBuilder,
     cap: u32,
@@ -267,7 +490,7 @@ impl<'a> Pass<'a> {
         let cap = limit * limit;
         let pad = [0, 1, 2].map(|axis| {
             let needed = limit + (plan.kernels[axis].len() / 2) as u32 + 1;
-            align(needed.max(plan.morph_radius + 1).max(BLOCK_PAD))
+            align(needed.max(crate::local::BLOCK as u32 * (crate::local::WINDOW as u32 + 1)))
         });
         Self { plan, cap, pad }
     }
@@ -276,35 +499,11 @@ impl<'a> Pass<'a> {
         self.plan.tile_count
     }
 
-    fn tile_position(&self, index: usize) -> [u32; 3] {
-        let tiles = self.plan.tiles;
-        let x = index % tiles[0] as usize;
-        let y = (index / tiles[0] as usize) % tiles[1] as usize;
-        let z = index / (tiles[0] as usize * tiles[1] as usize);
-        [x as u32, y as u32, z as u32]
-    }
-
-    fn core_range(&self, index: usize) -> [Range<u32>; 3] {
-        assert!(index < self.total(), "the tile index is in bounds");
-        let position = self.tile_position(index);
-        [0, 1, 2].map(|axis| {
-            let start = self.plan.region[axis].start + position[axis] * TILE_SIDE;
-            start..(start + TILE_SIDE).min(self.plan.region[axis].end)
-        })
-    }
-
-    fn array_range(&self, index: usize) -> [Range<u32>; 3] {
-        let core = self.core_range(index);
-        [0, 1, 2].map(|axis| {
-            let start = core[axis].start.saturating_sub(self.pad[axis]);
-            start..(core[axis].end + self.pad[axis]).min(self.plan.extent[axis])
-        })
-    }
-
     fn array_bytes(&self) -> u64 {
+        let plan = self.plan;
         let mut voxels = 1u64;
         for axis in 0..3 {
-            let size = (self.plan.region[axis].end - self.plan.region[axis].start) as u64;
+            let size = (plan.region[axis].end - plan.region[axis].start) as u64;
             let span = u64::from(TILE_SIDE + 2 * self.pad[axis]);
             voxels *= size.min(span);
         }
@@ -328,10 +527,12 @@ enum PassOutcome {
 
 struct Inputs<'a> {
     cancel: &'a AtomicBool,
-    roi: Option<&'a Mask>,
     progress: &'a mut dyn FnMut(usize, usize),
     read: &'a Read<'a>,
     measure: &'a Measure<'a>,
+    solid: &'a SolidMask,
+    field: &'a crate::local::BlockField,
+    roi: Option<&'a Mask>,
 }
 
 fn run_pass(
@@ -345,16 +546,19 @@ fn run_pass(
     let stop = AtomicBool::new(false);
     let (sender, receiver) = mpsc::sync_channel::<(usize, TileResult)>(workers * 2);
     let cancel = inputs.cancel;
-    let roi = inputs.roi;
     let read = inputs.read;
     let measure = inputs.measure;
+    let solid = inputs.solid;
+    let field = inputs.field;
+    let gate = pass.plan.gate(inputs.roi);
     std::thread::scope(|scope| {
         let next = &next;
         let stop = &stop;
         for _ in 0..workers {
             let sender = sender.clone();
+            let gate = &gate;
             scope.spawn(move || {
-                let mut tile = Tile::new(pass);
+                let mut tile = Tile::new(pass, solid, field, gate);
                 loop {
                     if halted(cancel, stop) {
                         break;
@@ -363,7 +567,7 @@ fn run_pass(
                     if index >= total {
                         break;
                     }
-                    let result = tile.run(index, cancel, stop, roi, read, measure);
+                    let result = tile.run(index, cancel, stop, read, measure);
                     if sender.send((index, result)).is_err() {
                         break;
                     }
@@ -433,7 +637,7 @@ fn assemble(
                     assembler.push(assembled, *output);
                     assembled += 1;
                     if (assembled - 1).is_multiple_of(4) || assembled == total {
-                        progress(assembled, total);
+                        progress(pass.total() + assembled, pass.total() * 2);
                     }
                 }
             }

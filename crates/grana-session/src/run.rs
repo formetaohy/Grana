@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{
     ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, Reference, Roi, SpotScan,
-    SurfaceBuilder, TrackBuilder, coloc_levels, filament_level,
+    SurfaceBuilder, TrackBuilder, coloc_levels, filament_level, surface_level,
 };
 use grana_image::Image;
 use grana_measure::{ColocPair, ColocSettings};
@@ -373,22 +373,26 @@ fn surfaces(
     if span <= 0.0 {
         return Err("the selected channel has no intensity range to detect".to_string());
     }
+    let level_index = surface_level(pyramid, region).ok_or_else(|| {
+        "the dataset is too large to detect surfaces at any resolution level".to_string()
+    })?;
+    let level = pyramid.level(level_index);
     let workers = std::thread::available_parallelism().map_or(1, |value| value.get());
     for time in 0..pyramid.frame_count() {
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
         let builder = SurfaceBuilder::new(
-            0,
-            pyramid.level(0),
+            level_index,
+            level,
             params,
             pyramid.channel_count(),
             channel,
             region,
             pyramid.channels()[channel].intensity(),
         );
-        let total = builder.tile_count();
-        let mask = roi.as_ref().map(|roi| roi.mask(pyramid.level(0), time));
+        let total = builder.tile_count() * 2;
+        let mask = roi.as_ref().map(|roi| roi.mask(level, time));
         sink(Event::Progress {
             time,
             done: 0,
@@ -401,12 +405,12 @@ fn surfaces(
             &mut |done, total| sink(Event::Progress { time, done, total }),
             &|_index, ranges| {
                 reader
-                    .read_region(time, 0, channel, ranges)
+                    .read_region(time, level_index, channel, ranges)
                     .map_err(String::from)
             },
             &|measured, core| {
                 reader
-                    .read_region(time, 0, measured, core)
+                    .read_region(time, level_index, measured, core)
                     .map_err(String::from)
             },
         )?;

@@ -77,6 +77,7 @@ pub struct Session {
     view: Option<ViewState>,
     history: History,
     export: Export,
+    resume: Vec<(ObjectSetId, ObjectSetId)>,
 }
 
 impl Default for Session {
@@ -115,6 +116,7 @@ impl Session {
             view: None,
             history: History::default(),
             export: Export::NATIVE,
+            resume: Vec::new(),
         }
     }
 
@@ -1035,6 +1037,7 @@ impl Session {
         }
         for set in detected {
             self.start_tracks(set);
+            self.resume_relations(set);
         }
         repaint
     }
@@ -1060,6 +1063,54 @@ impl Session {
     fn cancel(&mut self, job: Job) {
         self.analysis.retain(|analysis| analysis.job() != job);
         self.progress.retain(|progress| progress.job != job);
+    }
+
+    fn defer_relations(&mut self, set: ObjectSetId) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let mut pairs = Vec::new();
+        for object in scene.objects.iter() {
+            for relation in object.relations() {
+                let pair = (object.id(), relation.target());
+                if (pair.0 == set || pair.1 == set) && !self.resume.contains(&pair) {
+                    pairs.push(pair);
+                }
+            }
+        }
+        self.resume.extend(pairs);
+    }
+
+    fn resume_relations(&mut self, set: ObjectSetId) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let busy = |pair: &(ObjectSetId, ObjectSetId)| {
+            self.analysis.iter().any(|analysis| {
+                analysis.job() == Job::Detect(pair.0) || analysis.job() == Job::Detect(pair.1)
+            })
+        };
+        let ready = self
+            .resume
+            .iter()
+            .copied()
+            .filter(|pair| (pair.0 == set || pair.1 == set) && !busy(pair))
+            .filter(|pair| {
+                scene
+                    .objects
+                    .get(pair.0)
+                    .is_some_and(|object| object.detected() > 0)
+                    && scene
+                        .objects
+                        .get(pair.1)
+                        .is_some_and(|object| object.detected() > 0)
+            })
+            .collect::<Vec<_>>();
+        self.resume
+            .retain(|candidate| !(candidate.0 == set || candidate.1 == set));
+        for (source, target) in ready {
+            self.add_relation(source, target);
+        }
     }
 
     fn clear_relations(&mut self, set: ObjectSetId) {
@@ -1167,6 +1218,7 @@ impl Session {
             return;
         }
         self.cancel(Job::Track(set));
+        self.defer_relations(set);
         self.clear_relations(set);
         if let Some(scene) = self.scene.as_mut() {
             scene.clear_tracks(set);

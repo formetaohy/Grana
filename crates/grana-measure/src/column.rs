@@ -1,6 +1,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unit {
     Count,
+    Percent,
     Second,
     Micrometer,
     SquareMicrometer,
@@ -12,6 +13,7 @@ impl Unit {
     pub fn suffix(self) -> &'static str {
         match self {
             Self::Count => "",
+            Self::Percent => "%",
             Self::Second => "s",
             Self::Micrometer => "µm",
             Self::SquareMicrometer => "µm²",

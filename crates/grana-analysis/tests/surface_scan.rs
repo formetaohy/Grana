@@ -451,6 +451,61 @@ fn filters_objects_by_shape_and_intensity() {
 }
 
 #[test]
+fn measures_a_solid_object_through_its_interior() {
+    let extent = Extent::new(160, 160, 160);
+    let volume = blobs(extent, &[0.1, 0.1, 0.1], &[[80.0, 80.0, 80.0]], 40.0);
+    let set = extract(&volume, params(0.5), Region::none());
+    assert_eq!(set.object_count(), 1, "a uniform sphere is one object");
+    let expected = 4.0 / 3.0 * PI * 40.0f64.powi(3);
+    let object = set.objects()[0];
+    let relative = (object.voxel_count() as f64 - expected).abs() / expected;
+    assert!(
+        relative < 0.02,
+        "the sphere is solid: {} voxels against {expected}",
+        object.voxel_count()
+    );
+    let marker = set.intensities().object(0, 1);
+    assert!(
+        (marker.mean() - f32::from(MARKER)).abs() < 1.0e-6,
+        "the marker channel is measured through the interior: {}",
+        marker.mean()
+    );
+    assert!(
+        (marker.sum() - f64::from(MARKER) * object.voxel_count() as f64).abs() < 1.0,
+        "every interior voxel is measured"
+    );
+}
+
+#[test]
+fn splits_solid_lobes_at_their_neck() {
+    let extent = Extent::new(96, 96, 96);
+    let centres = [[30.0f32, 48.0, 48.0], [65.0, 48.0, 48.0]];
+    let volume = blobs(extent, &[0.1, 0.1, 0.1], &centres, 25.0);
+    let merged = extract(&volume, params(0.5), Region::none());
+    assert_eq!(merged.object_count(), 1, "touching lobes form one object");
+    let split = extract(
+        &volume,
+        SurfaceParams::new(0.5, 0.0, 0.6, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
+        Region::none(),
+    );
+    assert_eq!(
+        split.object_count(),
+        2,
+        "a seed shallower than the neck splits the solid lobes"
+    );
+    let total = split
+        .objects()
+        .iter()
+        .map(|object| object.voxel_count())
+        .sum::<u64>();
+    assert_eq!(
+        total,
+        merged.objects()[0].voxel_count(),
+        "splitting conserves the mask"
+    );
+}
+
+#[test]
 fn caps_a_surface_cut_by_the_region() {
     let extent = Extent::new(160, 160, 160);
     let volume = blobs(extent, &[0.1, 0.1, 0.1], &[[80.0, 80.0, 80.0]], 20.0);

@@ -31,7 +31,8 @@ impl RelationField {
     pub fn unit(self) -> Unit {
         match self {
             Self::Distance => Unit::Micrometer,
-            Self::Inside | Self::Partner => Unit::Count,
+            Self::Inside => Unit::Percent,
+            Self::Partner => Unit::Count,
         }
     }
 
@@ -62,7 +63,7 @@ impl RelationField {
         );
         match self {
             Self::Distance => frame.distance(object),
-            Self::Inside => frame.inside(object),
+            Self::Inside => 100.0 * frame.inside(object),
             Self::Partner => frame.partner(object) as f32,
         }
     }

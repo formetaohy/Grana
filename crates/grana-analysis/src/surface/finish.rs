@@ -9,13 +9,9 @@ use super::{EMPTY, Node, find, union};
 
 const MAX_FOLD: u32 = 8;
 
-struct Shell {
-    target: u32,
+struct Component {
     volume: f64,
-    moment: [f64; 3],
-    low: [f32; 3],
-    high: [f32; 3],
-    dropped: bool,
+    closed: bool,
 }
 
 impl Assembler<'_> {
@@ -59,25 +55,31 @@ impl Assembler<'_> {
         }
     }
 
-    pub(super) fn build(mut self) -> SurfaceSet {
+    pub(super) fn build(self) -> SurfaceSet {
         let plan = self.plan;
-        let mut targets = vec![EMPTY; self.nodes.len()];
+        let mut nodes = self.nodes;
+        let accumulators = self.accumulators;
+        let raw_vertices = self.vertices;
+        let keys = self.keys;
+        let raw_indices = self.indices;
+        let objects_of_triangle = self.triangle_objects;
+        let mut targets = vec![EMPTY; nodes.len()];
         for (index, target) in targets.iter_mut().enumerate() {
-            *target = fold(&mut self.nodes, index as u32);
+            *target = fold(&mut nodes, index as u32);
         }
-        let candidates = (0..self.nodes.len())
+        let candidates = (0..nodes.len())
             .filter(|root| {
-                find(&mut self.nodes, *root as u32) == *root as u32 && self.nodes[*root].voxels > 0
+                find(&mut nodes, *root as u32) == *root as u32 && nodes[*root].voxels > 0
             })
             .map(|root| root as u32)
             .collect::<Vec<_>>();
         let mut weld: HashMap<u64, u32> = HashMap::new();
-        let mut welded = Vec::with_capacity(self.vertices.len());
-        let mut positions = Vec::with_capacity(self.vertices.len());
-        let mut normals: Vec<Vec3> = Vec::with_capacity(self.vertices.len());
-        let mut first_normals: Vec<[f32; 3]> = Vec::with_capacity(self.vertices.len());
-        for (index, vertex) in self.vertices.iter().enumerate() {
-            let key = self.keys[index];
+        let mut welded = Vec::with_capacity(raw_vertices.len());
+        let mut positions = Vec::with_capacity(raw_vertices.len());
+        let mut normals: Vec<Vec3> = Vec::with_capacity(raw_vertices.len());
+        let mut first_normals: Vec<[f32; 3]> = Vec::with_capacity(raw_vertices.len());
+        for (index, vertex) in raw_vertices.iter().enumerate() {
+            let key = keys[index];
             let slot = match weld.get(&key) {
                 Some(slot) => *slot,
                 None => {
@@ -92,97 +94,69 @@ impl Assembler<'_> {
             normals[slot as usize] += Vec3::from(vertex.normal());
             welded.push(slot);
         }
-        let mut triangles = Vec::with_capacity(self.indices.len() / 3);
-        for triangle in self.indices.as_chunks::<3>().0 {
+        let mut triangles = Vec::with_capacity(raw_indices.len() / 3);
+        for triangle in raw_indices.as_chunks::<3>().0 {
             triangles.push(triangle.map(|index| welded[index as usize]));
         }
-        let mut triangle_target = Vec::with_capacity(triangles.len());
-        for object in &self.triangle_objects {
-            triangle_target.push(targets[*object as usize]);
+        let mut triangle_object = Vec::with_capacity(triangles.len());
+        for (index, object) in objects_of_triangle.iter().enumerate() {
+            triangle_object.push(if *object == EMPTY {
+                nearest_triangle(&nodes, &candidates, &positions, &triangles[index])
+            } else {
+                targets[*object as usize]
+            });
         }
         let mut parent: Vec<u32> = (0..positions.len() as u32).collect();
         for triangle in &triangles {
             component(&mut parent, triangle[0], triangle[1]);
             component(&mut parent, triangle[1], triangle[2]);
         }
-        let mut shells: HashMap<u32, usize> = HashMap::new();
-        let mut shell_of = Vec::with_capacity(triangles.len());
+        let mut slots: HashMap<u32, usize> = HashMap::new();
+        let mut component_of = Vec::with_capacity(triangles.len());
         for triangle in &triangles {
             let root = component_root(&mut parent, triangle[0]);
-            let count = shells.len();
-            let slot = *shells.entry(root).or_insert(count);
-            shell_of.push(slot);
+            let count = slots.len();
+            let slot = *slots.entry(root).or_insert(count);
+            component_of.push(slot);
         }
-        let mut parts = (0..shells.len())
-            .map(|_| Shell {
-                target: EMPTY,
+        let mut components = (0..slots.len())
+            .map(|_| Component {
                 volume: 0.0,
-                moment: [0.0; 3],
-                low: [f32::INFINITY; 3],
-                high: [f32::NEG_INFINITY; 3],
-                dropped: false,
+                closed: false,
             })
             .collect::<Vec<_>>();
         for (index, triangle) in triangles.iter().enumerate() {
-            let slot = shell_of[index];
             let points = triangle.map(|vertex| Vec3::from(positions[vertex as usize]));
             let volume = points[0].dot(points[1].cross(points[2])) / 6.0;
-            let centroid = (points[0] + points[1] + points[2]) / 4.0;
-            let part = &mut parts[slot];
-            if part.target == EMPTY {
-                part.target = triangle_target[index];
-            }
-            part.volume += f64::from(volume);
-            for axis in 0..3 {
-                part.moment[axis] += f64::from(volume) * f64::from(centroid[axis]);
-            }
-            for point in points {
-                for axis in 0..3 {
-                    part.low[axis] = part.low[axis].min(point[axis]);
-                    part.high[axis] = part.high[axis].max(point[axis]);
-                }
-            }
+            components[component_of[index]].volume += f64::from(volume);
         }
-        let epsilon = 0.5 * plan.voxel_volume;
-        let mut edge_indices = vec![usize::MAX; parts.len()];
-        let mut edges: Vec<HashMap<(u32, u32), u32>> = Vec::new();
-        for (slot, part) in parts.iter().enumerate() {
-            if part.volume < -epsilon {
-                edge_indices[slot] = edges.len();
-                edges.push(HashMap::new());
-            }
+        for component in components.iter_mut() {
+            component.closed = component.volume < 0.0;
         }
+        let mut edges = vec![HashMap::<(u32, u32), u32>::new(); components.len()];
         for (index, triangle) in triangles.iter().enumerate() {
-            let edge_index = edge_indices[shell_of[index]];
-            if edge_index == usize::MAX {
+            if !components[component_of[index]].closed {
                 continue;
             }
             for pair in [[0usize, 1usize], [1, 2], [2, 0]] {
                 let first = triangle[pair[0]];
                 let second = triangle[pair[1]];
                 let key = (first.min(second), first.max(second));
-                *edges[edge_index].entry(key).or_insert(0u32) += 1;
+                *edges[component_of[index]].entry(key).or_insert(0u32) += 1;
             }
         }
-        for (slot, edge_index) in edge_indices.iter().enumerate() {
-            if *edge_index != usize::MAX && edges[*edge_index].values().all(|count| *count == 2) {
-                parts[slot].dropped = true;
-            }
+        for (index, component) in components.iter_mut().enumerate() {
+            component.closed = component.closed
+                && !edges[index].is_empty()
+                && edges[index].values().all(|count| *count == 2);
         }
-        for part in parts.iter_mut() {
-            if part.target != EMPTY {
-                continue;
-            }
-            let centre = Vec3::from([0, 1, 2].map(|axis| 0.5 * (part.low[axis] + part.high[axis])));
-            part.target = nearest(&self.nodes, &candidates, centre);
-        }
-        let mut areas = vec![0.0f64; self.nodes.len()];
+        let mut areas = vec![0.0f64; nodes.len()];
         for (index, triangle) in triangles.iter().enumerate() {
-            if parts[shell_of[index]].dropped {
+            if components[component_of[index]].closed {
                 continue;
             }
-            let target = triangle_target[index];
-            if target == EMPTY {
+            let object = triangle_object[index];
+            if object == EMPTY {
                 continue;
             }
             let points = triangle.map(|vertex| Vec3::from(positions[vertex as usize]));
@@ -191,99 +165,45 @@ impl Assembler<'_> {
                     .cross(points[2] - points[0])
                     .length();
             if area.is_finite() && area > 0.0 {
-                areas[target as usize] += f64::from(area);
+                areas[object as usize] += f64::from(area);
             }
         }
-        let mut cavity_volume = vec![0.0f64; self.nodes.len()];
-        let mut cavity_moment = vec![[0.0f64; 3]; self.nodes.len()];
-        let mut cavity_low = vec![[u32::MAX; 3]; self.nodes.len()];
-        let mut cavity_high = vec![[0u32; 3]; self.nodes.len()];
-        let mut cavity_voxels = vec![0u64; self.nodes.len()];
-        for part in &parts {
-            if !part.dropped || part.target == EMPTY {
-                continue;
-            }
-            let volume = -part.volume;
-            if !volume.is_finite() || volume <= epsilon {
-                continue;
-            }
-            let target = part.target as usize;
-            let voxels = (volume / plan.voxel_volume).round().max(1.0) as u64;
-            cavity_voxels[target] += voxels;
-            cavity_volume[target] += volume;
-            for (slot, moment) in cavity_moment[target].iter_mut().zip(&part.moment) {
-                *slot -= *moment;
-            }
-            for axis in 0..3 {
-                let low =
-                    ((part.low[axis] + 0.5 * plan.world[axis]) / plan.spacing[axis] - 0.5).floor();
-                let high =
-                    ((part.high[axis] + 0.5 * plan.world[axis]) / plan.spacing[axis] - 0.5).ceil();
-                cavity_low[target][axis] = cavity_low[target][axis]
-                    .min(low.clamp(0.0, plan.extent[axis] as f32 - 1.0) as u32);
-                cavity_high[target][axis] = cavity_high[target][axis]
-                    .max(high.clamp(0.0, plan.extent[axis] as f32 - 1.0) as u32);
-            }
-        }
+        let mut map = vec![EMPTY; nodes.len()];
         let mut objects = Vec::new();
         let mut intensities = Vec::new();
-        let mut map = vec![EMPTY; self.nodes.len()];
-        for root in 0..self.nodes.len() {
-            if find(&mut self.nodes, root as u32) != root as u32 {
+        for root in 0..nodes.len() {
+            if find(&mut nodes, root as u32) != root as u32 {
                 continue;
             }
-            let node = self.nodes[root];
+            let node = nodes[root];
             if node.voxels == 0 {
                 continue;
             }
-            let voxels = node.voxels + cavity_voxels[root];
-            let volume = cavity_volume[root] + node.voxels as f64 * plan.voxel_volume;
-            let low = [0, 1, 2].map(|axis| {
-                if cavity_voxels[root] > 0 {
-                    cavity_low[root][axis].min(node.low[axis])
-                } else {
-                    node.low[axis]
-                }
-            });
-            let high = [0, 1, 2].map(|axis| {
-                if cavity_voxels[root] > 0 {
-                    cavity_high[root][axis].max(node.high[axis])
-                } else {
-                    node.high[axis]
-                }
-            });
-            let mut sum = node.sum;
-            if cavity_voxels[root] > 0 {
-                let centroid =
-                    [0, 1, 2].map(|axis| cavity_moment[root][axis] / -cavity_volume[root]);
-                for axis in 0..3 {
-                    sum[axis] += centroid[axis] * cavity_voxels[root] as f64;
-                }
-            }
-            let count = voxels as f64;
+            let count = node.voxels as f64;
             let centroid = [0, 1, 2].map(|axis| {
-                ((sum[axis] / count + 0.5) * f64::from(plan.spacing[axis])
+                ((node.sum[axis] / count + 0.5) * f64::from(plan.spacing[axis])
                     - 0.5 * f64::from(plan.world[axis])) as f32
             });
             let bounds = Bounds::new(
                 [0, 1, 2].map(|axis| {
-                    (f64::from(low[axis]) * f64::from(plan.spacing[axis])
+                    (f64::from(node.low[axis]) * f64::from(plan.spacing[axis])
                         - 0.5 * f64::from(plan.world[axis])) as f32
                 }),
                 [0, 1, 2].map(|axis| {
-                    ((f64::from(high[axis]) + 1.0) * f64::from(plan.spacing[axis])
+                    ((f64::from(node.high[axis]) + 1.0) * f64::from(plan.spacing[axis])
                         - 0.5 * f64::from(plan.world[axis])) as f32
                 }),
             );
+            let volume = count * plan.voxel_volume;
             let area = areas[root];
             if volume < f64::from(plan.params.min_volume()) || area <= 0.0 {
                 continue;
             }
-            let statistics = SurfaceStatistics::new(voxels, volume, area, centroid, bounds);
+            let statistics = SurfaceStatistics::new(node.voxels, volume, area, centroid, bounds);
             if statistics.sphericity() < f64::from(plan.params.min_sphericity()) {
                 continue;
             }
-            let mean = self.accumulators[root * plan.channels + plan.detection]
+            let mean = accumulators[root * plan.channels + plan.detection]
                 .statistics()
                 .mean();
             if plan.span > 0.0 && mean / plan.span < plan.params.min_mean_intensity() {
@@ -292,35 +212,28 @@ impl Assembler<'_> {
             map[root] = objects.len() as u32;
             objects.push(statistics);
             for channel in 0..plan.channels {
-                intensities.push(self.accumulators[root * plan.channels + channel].statistics());
+                intensities.push(accumulators[root * plan.channels + channel].statistics());
             }
         }
         let mut vertex_map: HashMap<(u32, u32), u32> = HashMap::new();
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
         for (index, triangle) in triangles.iter().enumerate() {
-            if parts[shell_of[index]].dropped {
+            if components[component_of[index]].closed {
                 continue;
             }
-            let mut object = triangle_target[index];
-            if object == EMPTY {
-                let points = triangle.map(|vertex| Vec3::from(positions[vertex as usize]));
-                let centre = (points[0] + points[1] + points[2]) / 3.0;
-                object = nearest(&self.nodes, &candidates, centre);
-            } else {
-                object = map[object as usize];
-            }
-            if object == EMPTY {
+            let object = triangle_object[index];
+            if object == EMPTY || map[object as usize] == EMPTY {
                 continue;
             }
+            let object = map[object as usize];
             let mut mapped = [0u32; 3];
             for (slot, vertex) in triangle.iter().enumerate() {
-                let vertex = *vertex;
-                let key = (vertex, object);
+                let key = (*vertex, object);
                 let mapped_vertex = match vertex_map.get(&key) {
                     Some(mapped_vertex) => *mapped_vertex,
                     None => {
-                        let welded = vertex as usize;
+                        let welded = *vertex as usize;
                         let normal = normals[welded].normalize_or_zero();
                         let normal = if normal == Vec3::ZERO {
                             Vec3::from(first_normals[welded])
@@ -350,13 +263,20 @@ impl Assembler<'_> {
     }
 }
 
-fn nearest(nodes: &[Node], candidates: &[u32], point: Vec3) -> u32 {
+fn nearest_triangle(
+    nodes: &[Node],
+    candidates: &[u32],
+    positions: &[[f32; 3]],
+    triangle: &[u32; 3],
+) -> u32 {
+    let points = triangle.map(|vertex| Vec3::from(positions[vertex as usize]));
+    let centre = (points[0] + points[1] + points[2]) / 3.0;
     candidates
         .iter()
         .copied()
         .min_by(|left, right| {
-            distance(nodes, *left, point)
-                .total_cmp(&distance(nodes, *right, point))
+            distance(nodes, *left, centre)
+                .total_cmp(&distance(nodes, *right, centre))
                 .then(left.cmp(right))
         })
         .unwrap_or(EMPTY)

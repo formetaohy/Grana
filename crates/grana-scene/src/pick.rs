@@ -87,22 +87,23 @@ pub(crate) fn slice(scene: &Scene, time: u32, axis: Axis, point: Vec3) -> Option
     let mut solid: Option<(f32, Selection)> = None;
     let mut cache = scene.pick.borrow_mut();
     cache.sync(scene, time);
-    let bvh = cache.bvh.as_ref()?;
-    let mut containing = bvh.containing(point);
-    containing.sort_unstable();
-    for index in containing {
-        let Target::Solid {
-            selection,
-            low,
-            high,
-        } = cache.targets[index as usize]
-        else {
-            continue;
-        };
-        if !crosses(low, high, axis, point) {
-            continue;
+    if let Some(bvh) = cache.bvh.as_ref() {
+        let mut containing = bvh.containing(point);
+        containing.sort_unstable();
+        for index in containing {
+            let Target::Solid {
+                selection,
+                low,
+                high,
+            } = cache.targets[index as usize]
+            else {
+                continue;
+            };
+            if !crosses(low, high, axis, point) {
+                continue;
+            }
+            nearer(&mut solid, reach(low, high, axis), selection);
         }
-        nearer(&mut solid, reach(low, high, axis), selection);
     }
     spot.or(solid).map(|(_, selection)| selection)
 }

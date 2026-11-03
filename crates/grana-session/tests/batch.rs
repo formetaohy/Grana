@@ -107,7 +107,7 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
     );
     assert!(lines[0].contains("nuclei_distance_um"), "{objects}");
     assert!(
-        lines[1].ends_with(",0.000,1.00,1"),
+        lines[1].ends_with(",0.000,100.00,1"),
         "the spot sits inside its nucleus: {objects}"
     );
 

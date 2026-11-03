@@ -5,8 +5,9 @@ use std::sync::atomic::AtomicBool;
 use grana_geometry::MeshVertex;
 use grana_object::SampleAccumulator;
 
-use super::{EMPTY, Face, Measure, Node, Pass, Read, dims_of, strides_of};
-use crate::mask::Mask;
+use super::mask::SolidMask;
+use super::{EMPTY, Face, Gate, Measure, Node, Pass, Read, dims_of, strides_of};
+use crate::local::BlockField;
 
 pub(super) struct Contact {
     pub(super) object: u32,
@@ -37,14 +38,15 @@ pub(super) enum TileResult {
 
 pub(super) struct Tile<'a> {
     pub(super) pass: &'a Pass<'a>,
+    pub(super) solid: &'a SolidMask,
+    pub(super) grid: &'a BlockField,
+    pub(super) gate: &'a Gate<'a>,
     pub(super) array: [Range<u32>; 3],
     pub(super) dims: [usize; 3],
     pub(super) start: [i64; 3],
     pub(super) raw: Vec<f32>,
     pub(super) field: Vec<f32>,
     pub(super) mask: Vec<bool>,
-    pub(super) scratch: Vec<bool>,
-    pub(super) distance: Vec<u32>,
     pub(super) chamfer: Vec<u32>,
     pub(super) labels: Vec<u32>,
     pub(super) order: Vec<u32>,
@@ -61,17 +63,23 @@ pub(super) struct Tile<'a> {
 }
 
 impl<'a> Tile<'a> {
-    pub(super) fn new(pass: &'a Pass<'a>) -> Self {
+    pub(super) fn new(
+        pass: &'a Pass<'a>,
+        solid: &'a SolidMask,
+        grid: &'a BlockField,
+        gate: &'a Gate<'a>,
+    ) -> Self {
         Self {
             pass,
+            solid,
+            grid,
+            gate,
             array: [0..0, 0..0, 0..0],
             dims: [0; 3],
             start: [0; 3],
             raw: Vec::new(),
             field: Vec::new(),
             mask: Vec::new(),
-            scratch: Vec::new(),
-            distance: Vec::new(),
             chamfer: Vec::new(),
             labels: Vec::new(),
             order: Vec::new(),
@@ -93,13 +101,12 @@ impl<'a> Tile<'a> {
         index: usize,
         cancel: &AtomicBool,
         stop: &AtomicBool,
-        roi: Option<&Mask>,
         read: &Read<'_>,
         measure: &Measure<'_>,
     ) -> TileResult {
         let pass = self.pass;
-        let core = pass.core_range(index);
-        let array = pass.array_range(index);
+        let core = pass.plan.core_range(index);
+        let array = pass.plan.array_range(index, pass.pad);
         self.array = array.clone();
         self.dims = dims_of(&array);
         self.start = [
@@ -120,11 +127,15 @@ impl<'a> Tile<'a> {
         self.raw.clear();
         self.raw.resize(count, 0.0);
         detection.write_values(&mut self.raw);
-        self.smooth();
+        super::smooth(&mut self.raw, self.dims, &pass.plan.kernels);
         if super::halted(cancel, stop) {
             return TileResult::Cancelled;
         }
-        self.prepare(roi);
+        self.field.clear();
+        self.field.resize(count, 0.0);
+        self.mask.clear();
+        self.mask.resize(count, false);
+        self.prepare();
         self.labels.clear();
         self.labels.resize(count, EMPTY);
         self.nodes.clear();
@@ -164,7 +175,7 @@ impl<'a> Tile<'a> {
         if let Err(detail) = self.emit(&core) {
             return TileResult::Failed(detail);
         }
-        let position = pass.tile_position(index);
+        let position = pass.plan.tile_position(index);
         let join = [0, 1, 2].map(|axis| {
             (position[axis] > 0)
                 .then(|| self.slice(axis, (core[axis].start - array[axis].start) as usize))

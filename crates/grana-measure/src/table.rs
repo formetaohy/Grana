@@ -527,6 +527,7 @@ fn track_table(
     aggregate: Aggregate,
 ) -> Table {
     let measurements = aggregated_measurements(frames[0].objects, channels.len());
+    let relations = aggregated_relations(frames[0].relations);
     let mut columns = TrackMeasurement::ALL
         .iter()
         .map(|field| field.column())
@@ -536,19 +537,30 @@ fn track_table(
             .iter()
             .map(|measurement| measurement.aggregate_column(channels, keys, aggregate)),
     );
+    columns.extend(relations.iter().map(|(index, field)| {
+        aggregate_relation_column(frames[0].relations[*index], *field, aggregate)
+    }));
     let Some(set) = tracks else {
         return Table::new(columns, TrackMeasurement::ALL.len(), Vec::new(), Vec::new());
     };
     let rows = set.len();
-    let mut accumulators = vec![SampleAccumulator::new(); rows * measurements.len()];
+    let slots = measurements.len() + relations.len();
+    let mut accumulators = vec![SampleAccumulator::new(); rows * slots];
+    let mut counts = vec![0u32; rows * relations.len()];
     for frame in frames {
         for object in 0..frame.objects.count() {
             let Some(track) = set.track_at(frame.time, object) else {
                 continue;
             };
             for (index, measurement) in measurements.iter().enumerate() {
-                accumulators[track * measurements.len() + index]
-                    .push(measurement.value(frame.objects, object));
+                accumulators[track * slots + index].push(measurement.value(frame.objects, object));
+            }
+            for (slot, (index, field)) in relations.iter().enumerate() {
+                let value = field.value(frame.relations[*index], object);
+                if value.is_finite() {
+                    accumulators[track * slots + measurements.len() + slot].push(value);
+                    counts[track * relations.len() + slot] += 1;
+                }
             }
         }
     }
@@ -564,9 +576,15 @@ fn track_table(
             values.push(field.value(track, set));
         }
         for index in 0..measurements.len() {
-            values.push(
-                aggregate.apply(accumulators[track * measurements.len() + index].statistics()),
-            );
+            values.push(aggregate.apply(accumulators[track * slots + index].statistics()));
+        }
+        for slot in 0..relations.len() {
+            values.push(if counts[track * relations.len() + slot] == 0 {
+                f32::NAN
+            } else {
+                aggregate
+                    .apply(accumulators[track * slots + measurements.len() + slot].statistics())
+            });
         }
     }
     Table::new(columns, TrackMeasurement::ALL.len(), observations, values)
@@ -580,6 +598,7 @@ fn timepoint_table(
     aggregate: Aggregate,
 ) -> Table {
     let measurements = aggregated_measurements(frames[0].objects, channels.len());
+    let relations = aggregated_relations(frames[0].relations);
     let mut columns = TimeField::ALL
         .iter()
         .map(|field| field.column())
@@ -589,6 +608,9 @@ fn timepoint_table(
             .iter()
             .map(|measurement| measurement.aggregate_column(channels, keys, aggregate)),
     );
+    columns.extend(relations.iter().map(|(index, field)| {
+        aggregate_relation_column(frames[0].relations[*index], *field, aggregate)
+    }));
     let mut observations = Vec::with_capacity(frames.len());
     let mut values = Vec::with_capacity(frames.len() * columns.len());
     for frame in frames {
@@ -607,6 +629,22 @@ fn timepoint_table(
             }
             values.push(aggregate.apply(accumulator.statistics()));
         }
+        for (index, field) in &relations {
+            let mut accumulator = SampleAccumulator::new();
+            let mut count = 0u32;
+            for object in 0..frame.objects.count() {
+                let value = field.value(frame.relations[*index], object);
+                if value.is_finite() {
+                    accumulator.push(value);
+                    count += 1;
+                }
+            }
+            values.push(if count == 0 {
+                f32::NAN
+            } else {
+                aggregate.apply(accumulator.statistics())
+            });
+        }
     }
     Table::new(columns, TimeField::ALL.len(), observations, values)
 }
@@ -624,6 +662,31 @@ fn aggregated_measurements(objects: Objects<'_>, channels: usize) -> Vec<Measure
         .into_iter()
         .filter(|measurement| measurement.aggregates())
         .collect()
+}
+
+fn aggregated_relations(relations: &[RelationRow<'_>]) -> Vec<(usize, RelationField)> {
+    let mut fields = Vec::with_capacity(relations.len() * 2);
+    for index in 0..relations.len() {
+        for field in [RelationField::Distance, RelationField::Inside] {
+            fields.push((index, field));
+        }
+    }
+    fields
+}
+
+fn aggregate_relation_column(
+    row: RelationRow<'_>,
+    field: RelationField,
+    aggregate: Aggregate,
+) -> Column {
+    let target = row.target();
+    let base = field.column(target, &sanitize(target));
+    Column::new(
+        base.label().to_string(),
+        format!("{}_{}", base.key(), aggregate.key()),
+        base.unit(),
+        base.decimals(),
+    )
 }
 
 fn same_kind(left: Objects<'_>, right: Objects<'_>) -> bool {
