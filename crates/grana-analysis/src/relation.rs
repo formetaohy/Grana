@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use glam::Vec3;
 use grana_geometry::{Bvh, PackedMesh, Primitive};
 use grana_object::RelationFrame;
@@ -59,25 +61,32 @@ impl Reference {
                 let mut distance = Vec::with_capacity(mesh.object_count());
                 let mut inside = Vec::with_capacity(mesh.object_count());
                 let mut partner = Vec::with_capacity(mesh.object_count());
+                let mut votes: HashMap<u32, u32> = HashMap::new();
                 for object in 0..mesh.object_count() {
                     let vertices = mesh.groups()[object].vertex_count() as usize;
                     let mut reach = f32::INFINITY;
                     let mut nearest = 0;
                     let mut contained = 0usize;
+                    votes.clear();
                     for vertex in 0..vertices {
                         let point = Vec3::from(mesh.position(object, vertex));
                         let (value, target, within) = self.measure(point);
                         if within {
                             contained += 1;
+                            *votes.entry(target).or_insert(0) += 1;
                         }
                         if value < reach {
                             reach = value;
                             nearest = target;
                         }
                     }
+                    let containing = votes
+                        .iter()
+                        .max_by(|left, right| left.1.cmp(right.1).then(right.0.cmp(left.0)))
+                        .map(|(object, _)| *object);
                     distance.push(reach);
                     inside.push(contained as f32 / vertices as f32);
-                    partner.push(nearest + 1);
+                    partner.push(containing.unwrap_or(nearest) + 1);
                 }
                 RelationFrame::new(distance, inside, partner)
             }

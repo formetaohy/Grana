@@ -5,7 +5,7 @@ use grana_geometry::{Bounds, Mesh, MeshVertex};
 use grana_object::{IntensityTable, SurfaceSet, SurfaceStatistics};
 
 use super::assemble::Assembler;
-use super::{EMPTY, Node, SPLIT_FLOOR, find, union};
+use super::{EMPTY, Node, SPLIT_FLOOR, cap, find, union};
 
 const MAX_FOLD: u32 = 8;
 
@@ -194,10 +194,22 @@ impl Assembler<'_> {
                 areas[object as usize] += f64::from(area);
             }
         }
-        let mut map = vec![EMPTY; nodes.len()];
+        let mut surface: HashMap<u32, Vec<usize>> = HashMap::new();
+        for index in 0..triangles.len() {
+            if components[component_of[index]].closed {
+                continue;
+            }
+            let object = triangle_object[index];
+            if object != EMPTY {
+                surface.entry(object).or_default().push(index);
+            }
+        }
         let mut objects = Vec::new();
         let mut intensities = Vec::new();
         let mut kept = Vec::new();
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        let mut vertex_map: HashMap<(u32, u32), u32> = HashMap::new();
         for root in 0..nodes.len() {
             if find(&mut nodes, root as u32) != root as u32 {
                 continue;
@@ -206,6 +218,11 @@ impl Assembler<'_> {
             if node.voxels == 0 {
                 continue;
             }
+            let Some(selected) = surface.get(&(root as u32)) else {
+                continue;
+            };
+            let cut = cap::build(&positions, &triangles, selected);
+            let area = areas[root] + cut.area;
             let count = node.voxels as f64;
             let centroid = [0, 1, 2].map(|axis| {
                 ((node.sum[axis] / count + 0.5) * f64::from(plan.spacing[axis])
@@ -222,7 +239,6 @@ impl Assembler<'_> {
                 }),
             );
             let volume = count * plan.voxel_volume;
-            let area = areas[root];
             if volume < f64::from(plan.params.min_volume()) || area <= 0.0 {
                 continue;
             }
@@ -236,13 +252,48 @@ impl Assembler<'_> {
             if plan.span > 0.0 && mean / plan.span < plan.params.min_mean_intensity() {
                 continue;
             }
-            map[root] = objects.len() as u32;
+            let object = objects.len() as u32;
             objects.push(statistics);
             if folded[root] != EMPTY {
                 kept.push(folded[root]);
             }
             for channel in 0..plan.channels {
                 intensities.push(accumulators[root * plan.channels + channel].statistics());
+            }
+            for index in selected {
+                let triangle = triangles[*index];
+                let mut mapped = [0u32; 3];
+                for (slot, vertex) in triangle.iter().enumerate() {
+                    let key = (*vertex, object);
+                    mapped[slot] = match vertex_map.get(&key) {
+                        Some(mapped_vertex) => *mapped_vertex,
+                        None => {
+                            let welded = *vertex as usize;
+                            let normal = normals[welded].normalize_or_zero();
+                            let normal = if normal == Vec3::ZERO {
+                                Vec3::from(first_normals[welded])
+                            } else {
+                                normal
+                            };
+                            let mapped_vertex = vertices.len() as u32;
+                            vertices.push(MeshVertex::new(
+                                positions[welded],
+                                normal.to_array(),
+                                object,
+                            ));
+                            vertex_map.insert(key, mapped_vertex);
+                            mapped_vertex
+                        }
+                    };
+                }
+                indices.extend_from_slice(&mapped);
+            }
+            let base = vertices.len() as u32;
+            for (position, normal) in cut.positions.iter().zip(&cut.normals) {
+                vertices.push(MeshVertex::new(*position, *normal, object));
+            }
+            for index in &cut.triangles {
+                indices.push(base + *index);
             }
         }
         if kept.len() != self.seed_count {
@@ -253,45 +304,6 @@ impl Assembler<'_> {
                 "the seed point {} no longer marks an object of the detected surface",
                 missing + 1
             ));
-        }
-        let mut vertex_map: HashMap<(u32, u32), u32> = HashMap::new();
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-        for (index, triangle) in triangles.iter().enumerate() {
-            if components[component_of[index]].closed {
-                continue;
-            }
-            let object = triangle_object[index];
-            if object == EMPTY || map[object as usize] == EMPTY {
-                continue;
-            }
-            let object = map[object as usize];
-            let mut mapped = [0u32; 3];
-            for (slot, vertex) in triangle.iter().enumerate() {
-                let key = (*vertex, object);
-                let mapped_vertex = match vertex_map.get(&key) {
-                    Some(mapped_vertex) => *mapped_vertex,
-                    None => {
-                        let welded = *vertex as usize;
-                        let normal = normals[welded].normalize_or_zero();
-                        let normal = if normal == Vec3::ZERO {
-                            Vec3::from(first_normals[welded])
-                        } else {
-                            normal
-                        };
-                        let mapped_vertex = vertices.len() as u32;
-                        vertices.push(MeshVertex::new(
-                            positions[welded],
-                            normal.to_array(),
-                            object,
-                        ));
-                        vertex_map.insert(key, mapped_vertex);
-                        mapped_vertex
-                    }
-                };
-                mapped[slot] = mapped_vertex;
-            }
-            indices.extend_from_slice(&mapped);
         }
         Ok(SurfaceSet::new(
             plan.level_index,

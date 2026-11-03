@@ -42,6 +42,8 @@ pub struct SetSpec {
     pub name: String,
     pub channel: String,
     pub color: [f32; 3],
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seeds: Vec<Vec<[f32; 3]>>,
     pub detection: DetectionSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask: Option<String>,
@@ -223,10 +225,18 @@ impl Protocol {
                 } else {
                     MeasureSpec::default()
                 };
+                let seeds = if set.kind() == ObjectKind::Surfaces {
+                    (0..set.frame_count())
+                        .map(|time| set.seeds(time).to_vec())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 SetSpec {
                     name: set.name().to_string(),
                     channel: channels[set.channel()].clone(),
                     color: set.color(),
+                    seeds,
                     detection,
                     mask: None,
                     track,
@@ -429,6 +439,23 @@ impl Protocol {
                 )));
             }
             set.detection.checked(&set.name)?;
+            if !set.seeds.is_empty() && set.detection.kind() != ObjectKind::Surfaces {
+                return Err(ProtocolError::Invalid(format!(
+                    "{} is not a surface set and cannot carry seed points",
+                    set.name
+                )));
+            }
+            if set
+                .seeds
+                .iter()
+                .flatten()
+                .any(|point| point.iter().any(|value| !value.is_finite()))
+            {
+                return Err(ProtocolError::Invalid(format!(
+                    "a seed point of {} is not finite",
+                    set.name
+                )));
+            }
             match (set.detection.kind(), &set.track) {
                 (ObjectKind::Filaments, Some(_)) => {
                     return Err(ProtocolError::Invalid(format!(
@@ -596,6 +623,10 @@ impl SetSpec {
 
     pub fn mask(&self) -> Option<&str> {
         self.mask.as_deref()
+    }
+
+    pub fn seeds(&self) -> &[Vec<[f32; 3]>] {
+        &self.seeds
     }
 
     pub fn track_params(&self) -> Option<TrackParams> {

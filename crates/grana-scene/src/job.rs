@@ -12,11 +12,18 @@ pub enum Job {
 }
 
 impl Job {
-    pub fn set(self) -> Option<ObjectSetId> {
+    pub fn streams(self, set: ObjectSetId) -> bool {
         match self {
-            Self::Detect(set) | Self::Track(set) => Some(set),
-            Self::Relation { source, .. } => Some(source),
-            Self::Coloc => None,
+            Self::Detect(id) | Self::Track(id) => id == set,
+            Self::Relation { source, .. } => source == set,
+            Self::Coloc => false,
+        }
+    }
+
+    pub fn installs(self, set: ObjectSetId) -> bool {
+        match self {
+            Self::Detect(id) | Self::Track(id) => id == set,
+            Self::Relation { .. } | Self::Coloc => false,
         }
     }
 

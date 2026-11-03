@@ -195,6 +195,17 @@ fn splits_touching_lobes_at_their_neck() {
         (1.5..2.3).contains(&separation),
         "the lobes are {separation} apart in x"
     );
+    let capped = split
+        .objects()
+        .iter()
+        .map(|object| object.area())
+        .sum::<f64>();
+    assert!(
+        capped > merged.objects()[0].area(),
+        "the split lobes carry their neck caps: {capped} against {}",
+        merged.objects()[0].area()
+    );
+    assert!(watertight(&split), "each split lobe is a closed body");
 
     let coarse = extract(
         &volume,
@@ -233,6 +244,7 @@ fn cuts_touching_lobes_at_the_seed_points() {
         .map(|object| object.voxel_count())
         .sum::<u64>();
     assert_eq!(kept, total, "the seeded cut conserves the mask");
+    assert!(watertight(&set), "each seeded lobe is a closed body");
 }
 
 #[test]
@@ -287,6 +299,10 @@ fn splits_large_lobes_at_their_thick_neck() {
     assert!(
         (30.0..46.0).contains(&separation),
         "the lobes are {separation} voxels apart in x"
+    );
+    assert!(
+        watertight(&split),
+        "each thick necked lobe is a closed body"
     );
 }
 
@@ -393,32 +409,49 @@ fn keeps_a_large_flat_topped_object_solid() {
     assert!(watertight(&cut), "the region cut is capped without holes");
 }
 
+type Corner = [u32; 3];
+type EdgeKey = (Corner, Corner);
+type EdgeCounts = std::collections::HashMap<EdgeKey, u32>;
+
 fn watertight(set: &SurfaceSet) -> bool {
+    edge_counts(set)
+        .iter()
+        .all(|edges| edges.values().all(|count| *count == 2))
+}
+
+fn no_holes(set: &SurfaceSet) -> bool {
+    edge_counts(set)
+        .iter()
+        .all(|edges| edges.values().all(|count| *count != 1))
+}
+
+fn edge_counts(set: &SurfaceSet) -> Vec<EdgeCounts> {
     let geometry = set.geometry();
-    for (object, group) in geometry.groups().iter().enumerate() {
-        let mut edges: std::collections::HashMap<([u32; 3], [u32; 3]), u32> =
-            std::collections::HashMap::new();
-        for index in 0..group.index_count() as usize / 3 {
-            let corners = geometry
-                .triangle(object, index)
-                .map(|point| point.map(f32::to_bits));
-            for pair in [[0usize, 1usize], [1, 2], [2, 0]] {
-                let first = corners[pair[0]];
-                let second = corners[pair[1]];
-                assert_ne!(first, second, "a triangle edge holds a positive length");
-                let key = if first < second {
-                    (first, second)
-                } else {
-                    (second, first)
-                };
-                *edges.entry(key).or_insert(0) += 1;
+    geometry
+        .groups()
+        .iter()
+        .enumerate()
+        .map(|(object, group)| {
+            let mut edges: EdgeCounts = std::collections::HashMap::new();
+            for index in 0..group.index_count() as usize / 3 {
+                let corners = geometry
+                    .triangle(object, index)
+                    .map(|point| point.map(f32::to_bits));
+                for pair in [[0usize, 1usize], [1, 2], [2, 0]] {
+                    let first = corners[pair[0]];
+                    let second = corners[pair[1]];
+                    assert_ne!(first, second, "a triangle edge holds a positive length");
+                    let key = if first < second {
+                        (first, second)
+                    } else {
+                        (second, first)
+                    };
+                    *edges.entry(key).or_insert(0) += 1;
+                }
             }
-        }
-        if edges.values().any(|count| *count != 2) {
-            return false;
-        }
-    }
-    true
+            edges
+        })
+        .collect()
 }
 
 #[test]
@@ -427,14 +460,6 @@ fn detects_dim_objects_under_a_scattering_step() {
     let centres = [[60.0f32, 48.0, 48.0], [260.0, 48.0, 48.0]];
     let volume = scattering(extent, &[0.1, 0.1, 0.1], &centres, 10.0);
     let set = extract(&volume, params(0.25), Region::none());
-    eprintln!(
-        "scatter objects {} {:?}",
-        set.object_count(),
-        set.objects()
-            .iter()
-            .map(|object| object.voxel_count())
-            .collect::<Vec<_>>()
-    );
     assert_eq!(
         set.object_count(),
         centres.len(),
@@ -581,6 +606,10 @@ fn splits_solid_lobes_at_their_neck() {
         total,
         merged.objects()[0].voxel_count(),
         "splitting conserves the mask"
+    );
+    assert!(
+        no_holes(&split),
+        "each split solid lobe is closed at its neck"
     );
 }
 

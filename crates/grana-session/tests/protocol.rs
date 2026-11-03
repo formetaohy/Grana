@@ -294,13 +294,19 @@ fn captures_an_analysis_mask() {
     let first = scene.add_object(ObjectKind::Surfaces, 0);
     scene.add_object(ObjectKind::Spots, 0);
     scene.set_mask(Some(first));
+    assert!(scene.add_seed(first, [0.25, -0.5, 0.75]));
     let protocol =
         Protocol::capture(&scene, &Measure::new()).expect("the masked analysis captures");
     assert_eq!(protocol.sets().len(), 2);
     assert_eq!(protocol.sets()[0].name, "Surfaces 1");
     assert_eq!(protocol.sets()[0].mask(), None);
+    assert_eq!(
+        protocol.sets()[0].seeds().to_vec(),
+        vec![vec![[0.25, -0.5, 0.75]]]
+    );
     assert_eq!(protocol.sets()[1].name, "Spots 1");
     assert_eq!(protocol.sets()[1].mask(), Some("Surfaces 1"));
+    assert!(protocol.sets()[1].seeds().is_empty());
     let text = protocol.to_json().expect("the protocol serializes");
     let restored = Protocol::from_json(&text).expect("the protocol round trips");
     assert_eq!(protocol, restored);

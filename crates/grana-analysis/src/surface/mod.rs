@@ -1,5 +1,6 @@
 mod assemble;
 mod bits;
+mod cap;
 mod emit;
 mod finish;
 mod label;

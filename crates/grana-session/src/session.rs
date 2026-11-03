@@ -240,7 +240,7 @@ impl Session {
             && self.measure.set().is_some_and(|set| {
                 self.analysis
                     .iter()
-                    .any(|analysis| analysis.job().set() == Some(set))
+                    .any(|analysis| analysis.job().streams(set))
             });
         if let Some(scene) = self.scene.as_ref() {
             self.measure.sync(scene, busy);
@@ -1342,7 +1342,7 @@ impl Session {
         if self
             .analysis
             .iter()
-            .any(|analysis| analysis.job().set() == Some(set))
+            .any(|analysis| analysis.job().installs(set))
         {
             return;
         }

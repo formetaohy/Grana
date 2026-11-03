@@ -741,6 +741,19 @@ impl ObjectSet {
         true
     }
 
+    pub(crate) fn invalidate_relations(&mut self, time: u32, stamp: u64) -> bool {
+        let mut changed = false;
+        for relation in &mut self.relations {
+            changed |= relation.invalidate(time);
+        }
+        if !changed {
+            return false;
+        }
+        self.revision = stamp;
+        self.document += 1;
+        true
+    }
+
     pub(crate) fn install(&mut self, time: u32, frame: ObjectFrame, stamp: u64) {
         self.install_shared(time, Arc::new(frame), stamp);
     }

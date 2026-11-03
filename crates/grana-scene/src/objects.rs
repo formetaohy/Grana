@@ -146,7 +146,20 @@ impl Objects {
             return false;
         };
         set.install(time, frame, stamp);
+        self.invalidate_relations(id, time);
         true
+    }
+
+    fn invalidate_relations(&mut self, id: ObjectSetId, time: u32) {
+        for index in 0..self.sets.len() {
+            let stamp = take_stamp(&mut self.stamp);
+            let set = &mut self.sets[index];
+            if set.id() == id {
+                set.invalidate_relations(time, stamp);
+            } else {
+                set.invalidate_relation(id, time, stamp);
+            }
+        }
     }
 
     pub fn clear(&mut self, id: ObjectSetId) {

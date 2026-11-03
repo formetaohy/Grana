@@ -22,6 +22,10 @@ const RESULT: &str = "result.json";
 const PARTIAL: &str = "partial";
 pub const MAX_JOBS: usize = 16;
 const DEFAULT_JOBS: usize = 4;
+const ANALYSIS_REVISION: u32 = 1;
+const CONTENT_SAMPLE: u64 = 1 << 16;
+const HASH: u64 = 0xcbf2_9ce4_8422_2325;
+const PRIME: u64 = 0x0000_0100_0000_01b3;
 
 pub fn default_jobs() -> usize {
     std::thread::available_parallelism()
@@ -145,7 +149,8 @@ pub fn discover(root: &Path) -> Result<Vec<PathBuf>, DiscoverError> {
 #[serde(deny_unknown_fields)]
 struct Record {
     protocol: u64,
-    modified: u64,
+    build: String,
+    content: u64,
     objects: usize,
     detail: String,
 }
@@ -251,7 +256,7 @@ fn work(
     let dataset = &plan.datasets[index];
     let name = dataset_name(dataset);
     let folder = plan.output.join(folder_name(dataset));
-    if let Some(record) = completed(&folder, digest, modified(dataset)) {
+    if let Some(record) = completed(&folder, digest, &build(), content(dataset)) {
         let _ = events.send(Event::Dataset {
             index,
             outcome: Outcome::Complete {
@@ -527,7 +532,8 @@ fn write_dataset(
     };
     let record = serde_json::to_string(&Record {
         protocol: digest,
-        modified: modified(dataset),
+        build: build(),
+        content: content(dataset),
         objects: report.objects,
         detail: report.detail.clone(),
     })
@@ -570,13 +576,7 @@ fn detect(
     };
     run::detect(
         reader,
-        run::DetectRequest::new(
-            channel,
-            set.params(),
-            region,
-            roi,
-            vec![Vec::new(); reader.pyramid().frame_count() as usize],
-        ),
+        run::DetectRequest::new(channel, set.params(), region, roi, set.seeds().to_vec()),
         progress.cancel,
         &mut sink,
     )?;
@@ -690,18 +690,99 @@ fn table_frames<'a>(
         .collect()
 }
 
-fn completed(folder: &Path, digest: u64, modified: u64) -> Option<Record> {
+fn completed(folder: &Path, digest: u64, build: &str, content: u64) -> Option<Record> {
     let text = std::fs::read_to_string(folder.join(RESULT)).ok()?;
     let record = serde_json::from_str::<Record>(&text).ok()?;
-    (record.protocol == digest && record.modified == modified).then_some(record)
+    (record.protocol == digest && record.build == build && record.content == content)
+        .then_some(record)
 }
 
-fn modified(dataset: &Path) -> u64 {
-    std::fs::metadata(dataset)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |duration| duration.as_nanos() as u64)
+fn build() -> String {
+    format!("{}/{}", env!("CARGO_PKG_VERSION"), ANALYSIS_REVISION)
+}
+
+fn content(dataset: &Path) -> u64 {
+    match std::fs::metadata(dataset) {
+        Err(_) => 0,
+        Ok(metadata) if metadata.is_dir() => directory_content(dataset),
+        Ok(metadata) => file_content(dataset, metadata.len()),
+    }
+}
+
+fn file_content(path: &Path, length: u64) -> u64 {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut hash = mix_u64(HASH, length);
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return hash;
+    };
+    let span = CONTENT_SAMPLE.min(length);
+    let mut buffer = vec![0u8; span as usize];
+    for offset in [
+        0,
+        length.saturating_sub(span) / 2,
+        length.saturating_sub(span),
+    ] {
+        if file.seek(SeekFrom::Start(offset)).is_err() {
+            break;
+        }
+        let Ok(count) = file.read(&mut buffer) else {
+            break;
+        };
+        hash = mix_bytes(hash, &buffer[..count]);
+    }
+    hash
+}
+
+fn directory_content(root: &Path) -> u64 {
+    let mut entries = Vec::new();
+    collect(root, root, &mut entries);
+    entries.sort();
+    let mut hash = mix_u64(HASH, entries.len() as u64);
+    for (name, size, modified) in entries {
+        hash = mix_u64(hash, size);
+        hash = mix_u64(hash, modified);
+        hash = mix_u64(hash, name.len() as u64);
+        hash = mix_bytes(hash, name.as_bytes());
+    }
+    hash
+}
+
+fn collect(root: &Path, folder: &Path, entries: &mut Vec<(String, u64, u64)>) {
+    let Ok(listing) = std::fs::read_dir(folder) else {
+        return;
+    };
+    for entry in listing.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.is_dir() {
+            collect(root, &path, entries);
+            continue;
+        }
+        let name = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |duration| duration.as_nanos() as u64);
+        entries.push((name, metadata.len(), modified));
+    }
+}
+
+fn mix_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash = (hash ^ u64::from(*byte)).wrapping_mul(PRIME);
+    }
+    hash
+}
+
+fn mix_u64(hash: u64, value: u64) -> u64 {
+    mix_bytes(hash, &value.to_le_bytes())
 }
 
 fn clear(path: &Path) -> Result<(), String> {
