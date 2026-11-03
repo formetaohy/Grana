@@ -244,6 +244,27 @@ impl FilamentSet {
             self.intensities.without(object),
         )
     }
+
+    pub fn retain(&self, keep: &[bool]) -> Result<Self, grana_geometry::Error> {
+        assert_eq!(
+            keep.len(),
+            self.objects.len(),
+            "the kept objects cover every filament"
+        );
+        let geometry = self.geometry.retain(keep)?;
+        let mut objects = Vec::with_capacity(keep.iter().filter(|kept| **kept).count());
+        for (object, kept) in keep.iter().enumerate() {
+            if *kept {
+                objects.push(self.objects[object]);
+            }
+        }
+        Ok(Self {
+            level: self.level,
+            geometry,
+            objects,
+            intensities: self.intensities.retain(keep),
+        })
+    }
 }
 
 fn agrees(

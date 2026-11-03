@@ -94,15 +94,15 @@ impl Objects {
             .any(|set| Some(set.id()) != except && slug(set.name()).to_ascii_lowercase() == key)
     }
 
-    pub fn delete_object(
+    pub fn retain_objects(
         &mut self,
         id: ObjectSetId,
         time: u32,
-        object: usize,
+        keep: &[bool],
     ) -> Result<bool, String> {
         let stamp = take_stamp(&mut self.stamp);
         let removed = match self.get_mut(id) {
-            Some(set) => set.delete_object(time, object, stamp)?,
+            Some(set) => set.retain_objects(time, keep, stamp)?,
             None => false,
         };
         if !removed {
@@ -121,6 +121,28 @@ impl Objects {
             }
         }
         Ok(true)
+    }
+
+    pub fn derive(&mut self, id: ObjectSetId, suffix: &str) -> Option<ObjectSetId> {
+        let source = self.get(id)?;
+        let derived = ObjectSetId::new(self.next_id);
+        let base = format!("{} {suffix}", source.name());
+        let mut name = base.clone();
+        let mut ordinal = 2;
+        while self.occupied(&name, None) {
+            name = format!("{base} {ordinal}");
+            ordinal += 1;
+        }
+        let color = PALETTE[(derived.raw() as usize - 1) % PALETTE.len()];
+        let copy = source.duplicate(derived, name, color);
+        let position = self
+            .sets
+            .iter()
+            .position(|set| set.id() == id)
+            .expect("the derived object set exists");
+        self.next_id += 1;
+        self.sets.insert(position + 1, copy);
+        Some(derived)
     }
 
     pub fn add_relation(&mut self, id: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {

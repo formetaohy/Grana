@@ -228,4 +228,22 @@ impl IntensityTable {
         values.drain(object * self.channels..(object + 1) * self.channels);
         Self::new(self.channels, values)
     }
+
+    pub fn retain(&self, keep: &[bool]) -> Self {
+        assert_eq!(
+            keep.len(),
+            self.objects(),
+            "the kept objects are measured by the intensity table"
+        );
+        let mut values =
+            Vec::with_capacity(keep.iter().filter(|kept| **kept).count() * self.channels);
+        for (object, kept) in keep.iter().enumerate() {
+            if *kept {
+                values.extend_from_slice(
+                    &self.values[object * self.channels..(object + 1) * self.channels],
+                );
+            }
+        }
+        Self::new(self.channels, values)
+    }
 }

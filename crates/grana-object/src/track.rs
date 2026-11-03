@@ -287,27 +287,41 @@ impl TrackSet {
     }
 
     pub fn without(&self, time: u32, object: usize) -> Option<Self> {
-        let mut remapped = false;
+        self.without_objects(time, &[object])
+    }
+
+    pub fn without_objects(&self, time: u32, objects: &[usize]) -> Option<Self> {
+        if objects.is_empty() {
+            return None;
+        }
+        assert!(
+            objects.windows(2).all(|pair| pair[0] < pair[1]),
+            "removed track nodes are ordered and unique"
+        );
+        let mut changed = false;
         let mut tracks = Vec::with_capacity(self.tracks.len());
         for track in &self.tracks {
             let mut nodes = Vec::with_capacity(track.nodes().len());
             for node in track.nodes().iter().copied() {
-                if node.time() == time && node.object() >= object {
-                    remapped = true;
-                    if node.object() > object {
-                        nodes.push(TrackNode::new(
-                            node.time(),
-                            node.object() - 1,
-                            node.centroid(),
-                        ));
-                    }
+                let removed = if node.time() == time {
+                    objects.partition_point(|object| *object < node.object())
+                } else {
+                    0
+                };
+                if node.time() == time && objects.get(removed) == Some(&node.object()) {
+                    changed = true;
                     continue;
                 }
-                nodes.push(node);
+                changed |= removed > 0;
+                nodes.push(TrackNode::new(
+                    node.time(),
+                    node.object() - removed,
+                    node.centroid(),
+                ));
             }
             tracks.push((track.parent(), nodes));
         }
-        if !remapped {
+        if !changed {
             return None;
         }
         let mut index = vec![None; tracks.len()];

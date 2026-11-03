@@ -470,6 +470,52 @@ impl PackedMesh {
         }
     }
 
+    pub fn retain(&self, keep: &[bool]) -> Self {
+        assert_eq!(
+            keep.len(),
+            self.groups.len(),
+            "the kept objects cover every packed object"
+        );
+        let mut groups = Vec::with_capacity(keep.iter().filter(|kept| **kept).count());
+        let mut vertices = Vec::new();
+        let mut narrow = Vec::new();
+        let mut wide = Vec::new();
+        for (index, group) in self.groups.iter().enumerate() {
+            if !keep[index] {
+                continue;
+            }
+            let first_vertex = vertices.len() as u32;
+            let start = group.first_vertex as usize;
+            vertices.extend_from_slice(&self.vertices[start..start + group.vertex_count as usize]);
+            let first_index = if group.wide {
+                let first = wide.len() as u32;
+                let start = group.first_index as usize;
+                wide.extend_from_slice(&self.wide[start..start + group.index_count as usize]);
+                first
+            } else {
+                let first = narrow.len() as u32;
+                let start = group.first_index as usize;
+                narrow.extend_from_slice(&self.narrow[start..start + group.index_count as usize]);
+                first
+            };
+            groups.push(GeometryGroup::new(
+                group.min,
+                group.scale,
+                first_vertex,
+                group.vertex_count,
+                first_index,
+                group.index_count,
+                group.wide,
+            ));
+        }
+        Self {
+            groups,
+            vertices,
+            narrow,
+            wide,
+        }
+    }
+
     pub fn vertex_count(&self) -> usize {
         self.vertices.len()
     }

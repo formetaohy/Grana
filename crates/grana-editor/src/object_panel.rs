@@ -358,6 +358,7 @@ fn object(
                 }
                 let open = ui.popup_open(menu_key);
                 let mut rename = false;
+                let mut duplicate = false;
                 let mut remove = false;
                 let mut reorder = None;
                 grana_ui::popover::popover(ui, "object.menu", open, menu_rect, 188.0, |ui| {
@@ -369,6 +370,15 @@ fn object(
                         None,
                     ) {
                         rename = true;
+                    }
+                    if grana_ui::popover::action_row(
+                        ui,
+                        "duplicate",
+                        grana_ui::Icon::Layers,
+                        "Duplicate",
+                        None,
+                    ) {
+                        duplicate = true;
                     }
                     if position > 0
                         && grana_ui::popover::action_row(
@@ -405,6 +415,10 @@ fn object(
                 if rename {
                     ui.close_popup();
                     ui.begin_edit(name_key, &name);
+                }
+                if duplicate {
+                    ui.close_popup();
+                    commands.push(Command::DuplicateObject(id));
                 }
                 if let Some(index) = reorder {
                     ui.close_popup();

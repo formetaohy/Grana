@@ -173,7 +173,44 @@ impl Scene {
         time: u32,
         object: usize,
     ) -> Result<bool, String> {
-        if !self.objects.delete_object(id, time, object)? {
+        self.delete_objects(id, time, &[object])
+    }
+
+    pub fn delete_objects(
+        &mut self,
+        id: ObjectSetId,
+        time: u32,
+        objects: &[usize],
+    ) -> Result<bool, String> {
+        if objects.is_empty() {
+            return Ok(false);
+        }
+        let Some(count) = self
+            .objects
+            .get(id)
+            .and_then(|set| set.frame(time))
+            .map(ObjectFrame::object_count)
+        else {
+            return Ok(false);
+        };
+        let mut keep = vec![true; count];
+        for object in objects {
+            assert!(
+                *object < keep.len(),
+                "a deleted object lies inside its frame"
+            );
+            keep[*object] = false;
+        }
+        self.retain_objects(id, time, &keep)
+    }
+
+    pub fn retain_objects(
+        &mut self,
+        id: ObjectSetId,
+        time: u32,
+        keep: &[bool],
+    ) -> Result<bool, String> {
+        if !self.objects.retain_objects(id, time, keep)? {
             return Ok(false);
         }
         if let Some(Selection {
@@ -182,17 +219,25 @@ impl Scene {
         }) = self.selection
             && set == id
         {
-            self.selection = match index.cmp(&object) {
-                std::cmp::Ordering::Less => self.selection,
-                std::cmp::Ordering::Equal => None,
-                std::cmp::Ordering::Greater => Some(Selection {
+            self.selection = keep
+                .get(index)
+                .copied()
+                .unwrap_or(false)
+                .then(|| Selection {
                     set,
-                    item: Item::Object(index - 1),
-                }),
-            };
+                    item: Item::Object(keep[..index].iter().filter(|kept| **kept).count()),
+                });
         }
         self.sync_coloc_inputs();
         Ok(true)
+    }
+
+    pub fn derive_object(&mut self, id: ObjectSetId, suffix: &str) -> Option<ObjectSetId> {
+        self.objects.derive(id, suffix)
+    }
+
+    pub fn duplicate_object(&mut self, id: ObjectSetId) -> Option<ObjectSetId> {
+        self.derive_object(id, "copy")
     }
 
     pub fn set_mask(&mut self, source: Option<ObjectSetId>) {

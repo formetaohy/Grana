@@ -102,4 +102,19 @@ impl SpotSet {
             self.intensities.without(object),
         ))
     }
+
+    pub fn retain(&self, keep: &[bool]) -> Self {
+        assert_eq!(
+            keep.len(),
+            self.spots.len(),
+            "the kept objects cover every spot"
+        );
+        let mut spots = Vec::with_capacity(keep.iter().filter(|kept| **kept).count());
+        for (object, kept) in keep.iter().enumerate() {
+            if *kept {
+                spots.push(self.spots[object]);
+            }
+        }
+        Self::new(self.level, spots, self.intensities.retain(keep))
+    }
 }

@@ -827,10 +827,10 @@ impl ObjectSet {
         true
     }
 
-    pub(crate) fn delete_object(
+    pub(crate) fn retain_objects(
         &mut self,
         time: u32,
-        object: usize,
+        keep: &[bool],
         stamp: u64,
     ) -> Result<bool, String> {
         let Some(frame) = self
@@ -840,16 +840,36 @@ impl ObjectSet {
         else {
             return Ok(false);
         };
-        let Some(pruned) = frame.without(object).map_err(|error| error.to_string())? else {
+        assert_eq!(
+            keep.len(),
+            frame.object_count(),
+            "the kept objects cover every object of the frame"
+        );
+        if keep.iter().all(|kept| *kept) {
             return Ok(false);
-        };
-        let empty = pruned.is_empty();
+        }
+        let pruned = frame.retain(keep).map_err(|error| error.to_string())?;
+        let removed = (0..keep.len())
+            .filter(|object| !keep[*object])
+            .collect::<Vec<_>>();
+        self.install_retained(time, pruned, &removed, stamp);
+        Ok(true)
+    }
+
+    fn install_retained(
+        &mut self,
+        time: u32,
+        pruned: Option<ObjectFrame>,
+        objects: &[usize],
+        stamp: u64,
+    ) {
+        let empty = pruned.as_ref().is_none_or(ObjectFrame::is_empty);
         let mut visibility = match &self.visibility {
             Visibility::All => Visibility::All,
             Visibility::Object(frames) => {
                 let mut frames = frames.as_ref().clone();
                 if let Some(mask) = frames.get_mut(time as usize) {
-                    mask.remove(object);
+                    *mask = retained(mask, objects);
                 }
                 Visibility::Object(Arc::new(frames))
             }
@@ -859,15 +879,15 @@ impl ObjectSet {
             (
                 layer.thickness(),
                 layer.visible(),
-                layer.set().without(time, object),
+                layer.set().without_objects(time, objects),
             )
         });
         let slot = self
             .frames
             .get_mut(time as usize)
-            .expect("the deleted object lies inside the time series");
+            .expect("the pruned object lies inside the time series");
         slot.stamp = stamp;
-        slot.data = (!empty).then(|| Arc::new(pruned));
+        slot.data = if empty { None } else { pruned.map(Arc::new) };
         self.frame_bounds[time as usize] = self.frame_extent(time);
         if let Some((thickness, visible, pruned)) = pruned_tracks
             && let Some(set) = pruned
@@ -899,7 +919,46 @@ impl ObjectSet {
         self.document += 1;
         self.visibility = visibility;
         self.rebuild_track_bounds();
-        Ok(true)
+    }
+
+    pub(crate) fn duplicate(&self, id: ObjectSetId, name: String, color: [f32; 3]) -> Self {
+        let object_coloring = match self.object_coloring.metric() {
+            Some(ObjectColor::Relation { .. }) => Coloring::new(),
+            _ => self.object_coloring.clone(),
+        };
+        let mut duplicate = Self {
+            id,
+            kind: self.kind,
+            name,
+            channel: self.channel,
+            channels: self.channels,
+            color,
+            visible: true,
+            opacity: self.opacity,
+            voxel: self.voxel,
+            params: self.params,
+            track_style: self.track_style,
+            frames: self
+                .frames
+                .iter()
+                .map(|slot| FrameSlot {
+                    stamp: 0,
+                    data: slot.data.clone(),
+                })
+                .collect(),
+            frame_bounds: vec![None; self.frames.len()],
+            object_coloring,
+            track_coloring: Coloring::new(),
+            track_bounds: None,
+            revision: 1,
+            document: 1,
+            visibility: Visibility::All,
+            seeds: self.seeds.clone(),
+            tracks: None,
+            relations: Vec::new(),
+        };
+        duplicate.rebuild_frame_bounds();
+        duplicate
     }
 
     pub(crate) fn invalidate_relation(
@@ -1169,6 +1228,14 @@ impl ObjectSet {
     pub fn track_at(&self, time: u32, object: usize) -> Option<usize> {
         self.tracks.as_ref()?.set().track_at(time, object)
     }
+}
+
+fn retained(mask: &[bool], objects: &[usize]) -> Vec<bool> {
+    mask.iter()
+        .enumerate()
+        .filter(|(index, _)| objects.binary_search(index).is_err())
+        .map(|(_, value)| *value)
+        .collect()
 }
 
 fn accumulate(accumulated: Option<Extent>, value: f32) -> Option<Extent> {

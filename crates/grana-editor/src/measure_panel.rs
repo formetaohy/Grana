@@ -393,15 +393,24 @@ fn filters(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
             (index, text)
         })
         .collect::<Vec<_>>();
-    let mut visibility = state.measure.visibility();
+    let visibility = state.measure.visibility();
     let filtered = !state.measure.filters().is_empty();
-    if filtered {
-        ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-            if let Some(value) =
-                widget::checkbox(ui, "hide.filtered", "Hide filtered rows", visibility)
-            {
-                visibility = value;
-                commands.push(Command::SetMeasureVisibility(value));
+    if filtered || state.measure.lasso().is_some() {
+        if filtered {
+            ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
+                if let Some(value) =
+                    widget::checkbox(ui, "hide.filtered", "Hide filtered rows", visibility)
+                {
+                    commands.push(Command::SetMeasureVisibility(value));
+                }
+            });
+        }
+        ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
+            if widget::button(ui, "extract.filtered", "Extract filtered", Role::Tinted) {
+                commands.push(Command::ExtractFiltered);
+            }
+            if widget::button(ui, "delete.excluded", "Delete excluded", Role::Danger) {
+                commands.push(Command::DeleteFiltered);
             }
         });
     }

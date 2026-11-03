@@ -270,6 +270,43 @@ impl SurfaceSet {
             removed,
         }))
     }
+
+    pub fn retain(&self, keep: &[bool]) -> Result<Self, grana_geometry::Error> {
+        assert_eq!(
+            keep.len(),
+            self.objects.len(),
+            "the kept objects cover every surface"
+        );
+        let geometry = self.geometry.retain(keep)?;
+        let carries = self.leaves.len() == self.objects.len();
+        let kept_count = keep.iter().filter(|kept| **kept).count();
+        let mut objects = Vec::with_capacity(kept_count);
+        let mut leaves = Vec::with_capacity(kept_count);
+        let mut removed = self.removed.clone();
+        for (object, kept) in keep.iter().enumerate() {
+            if *kept {
+                objects.push(self.objects[object]);
+                if carries {
+                    leaves.push(self.leaves[object].clone());
+                }
+            } else if carries {
+                removed.extend_from_slice(&self.leaves[object]);
+            }
+        }
+        if carries {
+            removed.sort_unstable();
+            removed.dedup();
+        }
+        Ok(Self {
+            level: self.level,
+            geometry,
+            objects,
+            intensities: self.intensities.retain(keep),
+            topology: self.topology.clone(),
+            leaves,
+            removed,
+        })
+    }
 }
 
 impl PartialEq for SurfaceSet {

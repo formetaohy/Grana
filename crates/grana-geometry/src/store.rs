@@ -439,11 +439,24 @@ impl Geometry<PackedMesh> {
         if object >= mesh.object_count() {
             return Ok(None);
         }
-        let pruned = mesh.without(object);
-        Ok(Some(match &self.stored {
-            Stored::Resident(_) => Self::resident(pruned),
-            Stored::Paged(paged) => Self::paged(&paged.store, pruned)?,
-        }))
+        self.rebuild(mesh.without(object)).map(Some)
+    }
+
+    pub fn retain(&self, keep: &[bool]) -> Result<Self, Error> {
+        let mesh = self.load()?;
+        assert_eq!(
+            keep.len(),
+            mesh.object_count(),
+            "the kept objects cover every packed object"
+        );
+        self.rebuild(mesh.retain(keep))
+    }
+
+    fn rebuild(&self, payload: PackedMesh) -> Result<Self, Error> {
+        Ok(match &self.stored {
+            Stored::Resident(_) => Self::resident(payload),
+            Stored::Paged(paged) => Self::paged(&paged.store, payload)?,
+        })
     }
 }
 

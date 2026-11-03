@@ -427,4 +427,24 @@ impl ObjectFrame {
             Self::Filaments(set) => set.without(object)?.map(Self::Filaments),
         })
     }
+
+    pub fn retain(&self, keep: &[bool]) -> Result<Option<Self>, grana_geometry::Error> {
+        assert_eq!(
+            keep.len(),
+            self.object_count(),
+            "the kept objects cover every object of the frame"
+        );
+        let kept = keep.iter().filter(|kept| **kept).count();
+        if kept == 0 {
+            return Ok(None);
+        }
+        if kept == keep.len() {
+            return Ok(Some(self.clone()));
+        }
+        Ok(Some(match self {
+            Self::Spots(set) => Self::Spots(set.retain(keep)),
+            Self::Surfaces(set) => Self::Surfaces(set.retain(keep)?),
+            Self::Filaments(set) => Self::Filaments(set.retain(keep)?),
+        }))
+    }
 }
