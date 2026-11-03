@@ -8,7 +8,6 @@ mod protocol;
 mod run;
 mod sample;
 mod session;
-mod slug;
 mod view;
 
 pub use batch::{
@@ -18,6 +17,7 @@ pub use batch::{
 pub use command::{Action, Command, Export};
 pub use event::{Event, Poll};
 pub use grana_image::{Source, is_image};
+pub use grana_scene::slug;
 pub use job::{Analysis, coloc, detect, relation, track};
 pub use loader::Loader;
 pub use protocol::{
@@ -25,5 +25,4 @@ pub use protocol::{
     ProtocolError, RegionSpec, RelationSpec, SetSpec, TrackSpec,
 };
 pub use session::{Effects, Session};
-pub use slug::slug;
 pub use view::{BatchDataset, BatchView, HistoryView, IoView, Message, SessionView};

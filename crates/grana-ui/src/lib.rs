@@ -1,5 +1,6 @@
 mod atlas;
 mod color;
+mod edit;
 mod font;
 mod geometry;
 pub mod icon;
@@ -17,6 +18,7 @@ pub mod widget;
 
 pub use atlas::GlyphSlot;
 pub use color::Color;
+pub use edit::{Edit, Outcome as EditOutcome};
 pub use geometry::{Corners, Edges, Rect};
 pub use glam::Vec2;
 pub use icon::Icon;

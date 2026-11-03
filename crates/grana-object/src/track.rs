@@ -286,6 +286,69 @@ impl TrackSet {
         Some(graph.into_set(self.frame_interval))
     }
 
+    pub fn without(&self, time: u32, object: usize) -> Option<Self> {
+        let mut remapped = false;
+        let mut tracks = Vec::with_capacity(self.tracks.len());
+        for track in &self.tracks {
+            let mut nodes = Vec::with_capacity(track.nodes().len());
+            for node in track.nodes().iter().copied() {
+                if node.time() == time && node.object() >= object {
+                    remapped = true;
+                    if node.object() > object {
+                        nodes.push(TrackNode::new(
+                            node.time(),
+                            node.object() - 1,
+                            node.centroid(),
+                        ));
+                    }
+                    continue;
+                }
+                nodes.push(node);
+            }
+            tracks.push((track.parent(), nodes));
+        }
+        if !remapped {
+            return None;
+        }
+        let mut index = vec![None; tracks.len()];
+        let mut kept = Vec::with_capacity(tracks.len());
+        for (old, (parent, nodes)) in tracks.into_iter().enumerate() {
+            if nodes.is_empty() {
+                continue;
+            }
+            index[old] = Some(kept.len());
+            kept.push((parent, nodes));
+        }
+        let mut parents = kept
+            .iter()
+            .map(|(parent, _)| parent.and_then(|parent| index[parent as usize]))
+            .collect::<Vec<_>>();
+        loop {
+            let mut children = vec![0usize; kept.len()];
+            for parent in parents.iter().flatten() {
+                children[*parent] += 1;
+            }
+            let mut detached = false;
+            for parent in parents.iter_mut() {
+                if let Some(slot) = *parent
+                    && children[slot] != 2
+                {
+                    *parent = None;
+                    detached = true;
+                }
+            }
+            if !detached {
+                break;
+            }
+        }
+        let tracks = kept
+            .into_iter()
+            .zip(parents)
+            .map(|((_, nodes), parent)| Track::new(parent.map(|parent| parent as u32), nodes))
+            .collect::<Vec<_>>();
+        Some(Self::new(self.frame_interval, tracks))
+    }
+
     pub fn mesh(&self, radius: f32) -> grana_geometry::Mesh {
         assert!(
             radius.is_finite() && radius > 0.0,

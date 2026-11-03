@@ -255,6 +255,16 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
                 ui.theme().palette.text_tertiary,
             )
             .truncating();
+            let name_key = ui.id("name");
+            let editing = ui.is_editing(name_key);
+            let text_area = Rect::from_min_max(
+                Vec2::new(icon.max.x + 9.0, header.min.y),
+                Vec2::new(eye_rect.min.x - 20.0, header.max.y),
+            );
+            let name_rect = Rect::from_min_max(
+                Vec2::new(text_area.min.x, text_area.min.y + 1.0),
+                Vec2::new(text_area.max.x, text_area.center().y + 3.0),
+            );
             {
                 let mut painter = ui.painter();
                 painter.outlined(
@@ -275,19 +285,9 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
                     tint,
                     1.6,
                 );
-                let text_area = Rect::from_min_max(
-                    Vec2::new(icon.max.x + 9.0, header.min.y),
-                    Vec2::new(eye_rect.min.x - 20.0, header.max.y),
-                );
-                painter.text_in(
-                    Rect::from_min_max(
-                        text_area.min,
-                        Vec2::new(text_area.max.x, text_area.center().y + 3.0),
-                    ),
-                    &name,
-                    name_style,
-                    Align::Center,
-                );
+                if !editing {
+                    painter.text_in(name_rect, &name, name_style, Align::Center);
+                }
                 painter.text_in(
                     Rect::from_min_max(
                         Vec2::new(text_area.min.x, text_area.center().y + 1.0),
@@ -302,6 +302,16 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
                 let tip = centre + Vec2::new(angle.cos(), angle.sin()) * 2.4;
                 painter.segment(tip + Vec2::new(-2.2, -1.4), tip, 1.4, chevron);
                 painter.segment(tip, tip + Vec2::new(2.2, -1.4), 1.4, chevron);
+            }
+            if editing
+                && let Some((outcome, text)) = widget::text_field(ui, "name", name_rect, name_style)
+                && outcome == grana_ui::EditOutcome::Commit
+                && text.trim() != name
+            {
+                commands.push(Command::RenameObject {
+                    set: id,
+                    name: text.trim().to_string(),
+                });
             }
             ui.place(eye_rect, |ui| {
                 let tooltip = if visible {
@@ -337,8 +347,18 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
                     ui.toggle_popup(menu_key);
                 }
                 let open = ui.popup_open(menu_key);
+                let mut rename = false;
                 let mut remove = false;
                 grana_ui::popover::popover(ui, "object.menu", open, menu_rect, 188.0, |ui| {
+                    if grana_ui::popover::action_row(
+                        ui,
+                        "rename",
+                        grana_ui::Icon::Pencil,
+                        "Rename",
+                        None,
+                    ) {
+                        rename = true;
+                    }
                     if grana_ui::popover::action_row(
                         ui,
                         "remove",
@@ -349,6 +369,10 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
                         remove = true;
                     }
                 });
+                if rename {
+                    ui.close_popup();
+                    ui.begin_edit(name_key, &name);
+                }
                 if remove {
                     ui.close_popup();
                     commands.push(Command::RemoveObject(id));
@@ -827,6 +851,15 @@ fn measure(
                 ),
             );
         }
+    }
+    if let Some(object) = selected
+        && widget::button_with(ui, "delete", "Delete object", Role::Danger, Length::Fill).clicked
+    {
+        commands.push(Command::DeleteObject {
+            set: id,
+            time,
+            object,
+        });
     }
 }
 

@@ -220,4 +220,18 @@ impl FilamentSet {
     pub fn is_empty(&self) -> bool {
         self.objects.is_empty()
     }
+
+    pub fn without(&self, object: usize) -> Option<Self> {
+        if object >= self.objects.len() {
+            return None;
+        }
+        let mut objects = self.objects.clone();
+        objects.remove(object);
+        Self::from_parts(
+            self.level,
+            self.geometry.without(object),
+            objects,
+            self.intensities.without(object),
+        )
+    }
 }

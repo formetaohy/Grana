@@ -169,4 +169,14 @@ impl IntensityTable {
         );
         self.values[object * self.channels + channel]
     }
+
+    pub fn without(&self, object: usize) -> Self {
+        assert!(
+            object < self.objects(),
+            "the removed object is measured by the intensity table"
+        );
+        let mut values = self.values.clone();
+        values.drain(object * self.channels..(object + 1) * self.channels);
+        Self::new(self.channels, values)
+    }
 }

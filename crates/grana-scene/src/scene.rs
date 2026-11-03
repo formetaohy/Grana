@@ -145,6 +145,33 @@ impl Scene {
         self.sync_coloc_inputs();
     }
 
+    pub fn rename_object(&mut self, id: ObjectSetId, name: &str) -> bool {
+        self.objects.rename(id, name)
+    }
+
+    pub fn delete_object(&mut self, id: ObjectSetId, time: u32, object: usize) -> bool {
+        if !self.objects.delete_object(id, time, object) {
+            return false;
+        }
+        if let Some(Selection {
+            set,
+            item: Item::Object(index),
+        }) = self.selection
+            && set == id
+        {
+            self.selection = match index.cmp(&object) {
+                std::cmp::Ordering::Less => self.selection,
+                std::cmp::Ordering::Equal => None,
+                std::cmp::Ordering::Greater => Some(Selection {
+                    set,
+                    item: Item::Object(index - 1),
+                }),
+            };
+        }
+        self.sync_coloc_inputs();
+        true
+    }
+
     pub fn set_mask(&mut self, source: Option<ObjectSetId>) {
         if let Some(source) = source {
             assert!(

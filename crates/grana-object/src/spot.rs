@@ -89,4 +89,17 @@ impl SpotSet {
         let total: f32 = self.spots.iter().map(|spot| spot.quality).sum();
         Some(total / self.spots.len() as f32)
     }
+
+    pub fn without(&self, object: usize) -> Option<Self> {
+        if object >= self.spots.len() {
+            return None;
+        }
+        let mut spots = self.spots.clone();
+        spots.remove(object);
+        Some(Self::new(
+            self.level,
+            spots,
+            self.intensities.without(object),
+        ))
+    }
 }

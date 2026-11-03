@@ -3,9 +3,12 @@ use std::ops::RangeInclusive;
 use glam::Vec2;
 
 use crate::color::Color;
+use crate::edit::Outcome;
 use crate::geometry::{Corners, Rect};
 use crate::icon::{self, Icon};
+use crate::input::Button;
 use crate::motion::Motion;
+use crate::registry::Cursor;
 use crate::style::{Border, Fill, Shadow};
 use crate::text::{Align, TextStyle};
 use crate::theme::{Level, Role};
@@ -973,4 +976,196 @@ pub fn row(ui: &mut Ui, gap: f32, content: impl FnOnce(&mut Ui)) -> Rect {
 
 pub fn column(ui: &mut Ui, gap: f32, content: impl FnOnce(&mut Ui)) -> Rect {
     ui.column(Block::column().gaps(gap), content)
+}
+
+const FIELD_PAD: f32 = 8.0;
+
+pub fn text_field(
+    ui: &mut Ui,
+    id: &str,
+    rect: Rect,
+    style: TextStyle,
+) -> Option<(Outcome, String)> {
+    let key = ui.id(id);
+    if !ui.is_editing(key) {
+        return None;
+    }
+    ui.touch_edit();
+    let response = ui.interact(key, rect);
+    if response.hovered {
+        ui.set_cursor(Cursor::Text);
+    }
+    let time = ui.time();
+    let pointer = ui.input().position();
+    let primary = ui.input().button(Button::Primary);
+    let modifiers = ui.input().modifiers();
+    let offset = field_offset(ui, style, rect);
+    let outcome = match ui.poll_edit() {
+        Some(outcome) => Some(outcome),
+        None if primary.pressed => {
+            if rect.contains(pointer) {
+                let caret = caret_at(ui, style, rect, offset, pointer.x);
+                if let Some(edit) = ui.edit_mut() {
+                    edit.place(caret, modifiers.shift, time);
+                }
+                None
+            } else {
+                Some(Outcome::Commit)
+            }
+        }
+        None if primary.down && response.dragging => {
+            let caret = caret_at(ui, style, rect, offset, pointer.x);
+            if let Some(edit) = ui.edit_mut() {
+                edit.place(caret, true, time);
+            }
+            None
+        }
+        None => None,
+    };
+    let snapshot = ui.edit().map(|edit| {
+        (
+            edit.text().to_string(),
+            edit.caret(),
+            edit.anchor(),
+            edit.caret_visible(time),
+        )
+    });
+    if outcome.is_some() {
+        ui.end_edit();
+    }
+    let (text, caret, anchor, blinking) = snapshot?;
+    paint_field(
+        ui,
+        key,
+        &response,
+        rect,
+        style,
+        Field {
+            text: &text,
+            caret,
+            anchor,
+            blinking,
+        },
+    );
+    outcome.map(|outcome| (outcome, text))
+}
+
+struct Field<'a> {
+    text: &'a str,
+    caret: usize,
+    anchor: usize,
+    blinking: bool,
+}
+
+fn field_offset(ui: &mut Ui, style: TextStyle, rect: Rect) -> f32 {
+    let Some(edit) = ui.edit() else {
+        return 0.0;
+    };
+    let text = edit.text().to_string();
+    let caret_x = text_width(ui, style, prefix(&text, edit.caret()));
+    let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0)).width();
+    (caret_x - inner + 2.0).max(0.0)
+}
+
+fn paint_field(
+    ui: &mut Ui,
+    key: u64,
+    response: &Response,
+    rect: Rect,
+    style: TextStyle,
+    field: Field<'_>,
+) {
+    let Field {
+        text,
+        caret,
+        anchor,
+        blinking,
+    } = field;
+    let look = ui.look(key, Role::Field, response);
+    let radius = (ui.theme().metrics.radius * 0.6).min(rect.height() * 0.4);
+    let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0));
+    let caret_x = text_width(ui, style, prefix(text, caret));
+    let offset = (caret_x - inner.width() + 2.0).max(0.0);
+    let layout = ui.layout_text(text, style, 0.0);
+    let origin = Vec2::new(
+        inner.min.x - offset,
+        inner.min.y + (inner.height() - layout.size.y) * 0.5,
+    );
+    let height = (layout.size.y * 0.86).max(8.0);
+    let top = origin.y + (layout.size.y - height) * 0.5;
+    let selection = (caret != anchor).then(|| {
+        let (start, end) = (caret.min(anchor), caret.max(anchor));
+        (
+            text_width(ui, style, prefix(text, start)),
+            text_width(ui, style, prefix(text, end)),
+        )
+    });
+    let accent = ui.theme().palette.accent;
+    let mut painter = ui.painter();
+    painter.outlined(
+        rect,
+        Corners::all(radius),
+        look.fill,
+        look.border,
+        Shadow::NONE,
+    );
+    let clip = painter.clip();
+    painter.push_clip(inner, Corners::ZERO);
+    if let Some((left, right)) = selection {
+        painter.rect(
+            Rect::from_min_max(
+                Vec2::new(inner.min.x - offset + left, top),
+                Vec2::new(inner.min.x - offset + right, top + height),
+            ),
+            Corners::ZERO,
+            accent.with_alpha(0.28),
+        );
+    }
+    painter.glyphs(&layout, origin, style.color);
+    if blinking {
+        painter.rect(
+            Rect::from_min_size(
+                Vec2::new(inner.min.x - offset + caret_x, top),
+                Vec2::new(1.4, height),
+            ),
+            Corners::ZERO,
+            accent,
+        );
+    }
+    painter.pop_clip(clip);
+}
+
+fn caret_at(ui: &mut Ui, style: TextStyle, rect: Rect, offset: f32, x: f32) -> usize {
+    let Some(edit) = ui.edit() else {
+        return 0;
+    };
+    let text = edit.text().to_string();
+    let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0));
+    let x = x - inner.min.x + offset;
+    let mut best = 0usize;
+    let mut distance = f32::INFINITY;
+    for index in 0..=text.chars().count() {
+        let width = text_width(ui, style, prefix(&text, index));
+        let candidate = (width - x).abs();
+        if candidate < distance {
+            distance = candidate;
+            best = index;
+        }
+    }
+    best
+}
+
+fn text_width(ui: &mut Ui, style: TextStyle, text: &str) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    ui.measure_text(text, style).x
+}
+
+fn prefix(text: &str, index: usize) -> &str {
+    let offset = text
+        .char_indices()
+        .nth(index)
+        .map_or(text.len(), |(offset, _)| offset);
+    &text[..offset]
 }

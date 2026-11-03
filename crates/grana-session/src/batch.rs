@@ -9,7 +9,7 @@ use grana_image::{Image, Source};
 use grana_measure::{ColocPair, ColocSeries};
 use grana_measure::{Frame, RelationRow, Table};
 use grana_object::{RelationFrame, TrackSet};
-use grana_scene::ObjectFrame;
+use grana_scene::{ObjectFrame, slug};
 use grana_volume::{Pyramid, Region};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -17,7 +17,6 @@ use thiserror::Error;
 use crate::event::Event as RunEvent;
 use crate::protocol::Protocol;
 use crate::run;
-use crate::slug::slug;
 
 const RESULT: &str = "result.json";
 const PARTIAL: &str = "partial";

@@ -1,6 +1,7 @@
 use glam::Vec2;
 
 use crate::color::Color;
+use crate::edit::{Edit, Outcome as EditOutcome};
 use crate::geometry::{Corners, Edges, Rect};
 use crate::input::{Button, Input};
 use crate::motion::Motion;
@@ -207,6 +208,8 @@ pub struct Ui {
     occluders: Vec<Rect>,
     overlay_clip: Clip,
     overlay_mode: u32,
+    edit: Option<Edit>,
+    edit_seen: bool,
 }
 
 impl Ui {
@@ -230,6 +233,8 @@ impl Ui {
             occluders: Vec::new(),
             overlay_clip: Clip::new(Rect::ZERO, Corners::ZERO),
             overlay_mode: 0,
+            edit: None,
+            edit_seen: false,
         }
     }
 
@@ -269,6 +274,42 @@ impl Ui {
         &mut self.text
     }
 
+    pub fn begin_edit(&mut self, key: u64, text: &str) {
+        self.edit = Some(Edit::new(key, text, self.time));
+        self.edit_seen = true;
+    }
+
+    pub fn end_edit(&mut self) {
+        self.edit = None;
+    }
+
+    pub(crate) fn touch_edit(&mut self) {
+        self.edit_seen = true;
+    }
+
+    pub fn editing(&self) -> bool {
+        self.edit.is_some()
+    }
+
+    pub fn is_editing(&self, key: u64) -> bool {
+        self.edit.as_ref().is_some_and(|edit| edit.key() == key)
+    }
+
+    pub fn edit(&self) -> Option<&Edit> {
+        self.edit.as_ref()
+    }
+
+    pub fn edit_mut(&mut self) -> Option<&mut Edit> {
+        self.edit.as_mut()
+    }
+
+    pub fn poll_edit(&mut self) -> Option<EditOutcome> {
+        let time = self.time;
+        let outcome = self.edit.as_mut()?.poll(&self.input, time)?;
+        self.edit = None;
+        Some(outcome)
+    }
+
     pub fn renderer(&self) -> &Renderer {
         &self.renderer
     }
@@ -299,11 +340,15 @@ impl Ui {
         self.areas.clear();
         self.frames.clear();
         self.ids.clear();
+        self.edit_seen = false;
         self.overlay_clip = Clip::new(Rect::from_min_size(Vec2::ZERO, size), Corners::ZERO);
     }
 
     pub fn end(&mut self) -> Frame {
         self.registry.end(self.elapsed);
+        if !self.edit_seen {
+            self.end_edit();
+        }
         self.text.flush(self.renderer.queue());
         let pointer = self.input.position();
         self.renderer

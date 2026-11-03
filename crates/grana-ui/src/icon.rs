@@ -51,6 +51,7 @@ pub enum Icon {
     Columns,
     Undo,
     Redo,
+    Pencil,
 }
 
 pub fn paint(
@@ -412,6 +413,20 @@ pub fn paint(
             line(painter, (12.8, 8.0), (7.4, 8.0));
             arc(painter, 7.4, 11.6, 3.6, PI, PI * 0.5);
             line(painter, (3.8, 11.6), (3.8, 15.4));
+        }
+        Icon::Pencil => {
+            path(
+                painter,
+                &[
+                    (13.4, 3.6),
+                    (16.4, 6.6),
+                    (7.6, 15.4),
+                    (4.0, 16.0),
+                    (4.6, 12.4),
+                    (13.4, 3.6),
+                ],
+            );
+            line(painter, (11.6, 5.4), (14.6, 8.4));
         }
     }
 }

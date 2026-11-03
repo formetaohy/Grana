@@ -7,7 +7,7 @@ use grana_image::Format;
 use grana_measure::Group;
 use grana_object::TrackSet;
 use grana_project::{Project, Source as ProjectSource, ViewState};
-use grana_scene::{Dataset, Job, Measure, ObjectFrame, ObjectSetId, Origin, Progress, Scene};
+use grana_scene::{Dataset, Item, Job, Measure, ObjectFrame, ObjectSetId, Origin, Progress, Scene};
 use grana_volume::{BrickData, BrickRequest, Region};
 
 use crate::command::{Edit, Export};
@@ -307,6 +307,25 @@ impl Session {
         }
     }
 
+    pub fn delete_selected(&mut self) -> bool {
+        let Some(scene) = self.scene.as_ref() else {
+            return false;
+        };
+        let Some(selection) = scene.selection() else {
+            return false;
+        };
+        let Item::Object(object) = selection.item else {
+            return false;
+        };
+        let time = scene.time();
+        self.execute(Command::DeleteObject {
+            set: selection.set,
+            time,
+            object,
+        });
+        true
+    }
+
     pub fn insert_keyframe(&mut self, key: Keyframe) -> usize {
         let snapshot = if self.loading.is_none() {
             self.snapshot()
@@ -354,6 +373,20 @@ impl Session {
                 if let Some(scene) = self.scene.as_mut() {
                     let channel = scene.selected;
                     scene.add_object(kind, channel);
+                }
+            }
+            Command::RenameObject { set, name } => {
+                let renamed = self
+                    .scene
+                    .as_mut()
+                    .is_some_and(|scene| scene.rename_object(set, &name));
+                self.message = (!renamed).then(|| {
+                    Message::error("object set names differ and do not collide as file names")
+                });
+            }
+            Command::DeleteObject { set, time, object } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.delete_object(set, time, object);
                 }
             }
             Command::RemoveObject(set) => self.remove_object(set),

@@ -127,6 +127,17 @@ impl ObjectSet {
         &self.name
     }
 
+    pub fn set_name(&mut self, name: &str) -> bool {
+        let name = name.trim();
+        assert!(!name.is_empty(), "an object set carries a name");
+        if self.name == name {
+            return false;
+        }
+        self.name = name.to_string();
+        self.document += 1;
+        true
+    }
+
     pub fn channel(&self) -> usize {
         self.channel
     }
@@ -558,6 +569,89 @@ impl ObjectSet {
             Visibility::All | Visibility::Object(_) => true,
             Visibility::Track(tracks) => tracks.get(track).copied().unwrap_or(false),
         }
+    }
+
+    pub(crate) fn delete_object(&mut self, time: u32, object: usize, stamp: u64) -> bool {
+        let Some(frame) = self
+            .frames
+            .get(time as usize)
+            .and_then(|slot| slot.data.clone())
+        else {
+            return false;
+        };
+        let Some(pruned) = frame.without(object) else {
+            return false;
+        };
+        let empty = pruned.is_empty();
+        let mut visibility = match &self.visibility {
+            Visibility::All => Visibility::All,
+            Visibility::Object(frames) => {
+                let mut frames = frames.as_ref().clone();
+                if let Some(mask) = frames.get_mut(time as usize) {
+                    mask.remove(object);
+                }
+                Visibility::Object(Arc::new(frames))
+            }
+            Visibility::Track(tracks) => Visibility::Track(Arc::clone(tracks)),
+        };
+        let pruned_tracks = self.tracks.as_ref().map(|layer| {
+            (
+                layer.thickness(),
+                layer.visible(),
+                layer.set().without(time, object),
+            )
+        });
+        let slot = self
+            .frames
+            .get_mut(time as usize)
+            .expect("the deleted object lies inside the time series");
+        slot.stamp = stamp;
+        slot.data = (!empty).then(|| Arc::new(pruned));
+        let bounds = self.object_coloring.metric().and_then(|metric| {
+            slot.data
+                .as_deref()
+                .and_then(|frame| frame_extent(frame, metric))
+        });
+        self.frame_bounds[time as usize] = bounds;
+        if let Some((thickness, visible, pruned)) = pruned_tracks
+            && let Some(set) = pruned
+        {
+            self.tracks = (!set.is_empty()).then(|| {
+                let mut layer = TrackLayer::new(set, thickness, stamp);
+                layer.set_visible(visible);
+                layer
+            });
+            visibility = Visibility::All;
+        }
+        for relation in &mut self.relations {
+            relation.invalidate(time);
+        }
+        self.revision = stamp;
+        self.document += 1;
+        self.visibility = visibility;
+        self.rebuild_track_bounds();
+        true
+    }
+
+    pub(crate) fn invalidate_relation(
+        &mut self,
+        target: ObjectSetId,
+        time: u32,
+        stamp: u64,
+    ) -> bool {
+        let Some(relation) = self
+            .relations
+            .iter_mut()
+            .find(|relation| relation.target() == target)
+        else {
+            return false;
+        };
+        if !relation.invalidate(time) {
+            return false;
+        }
+        self.revision = stamp;
+        self.document += 1;
+        true
     }
 
     pub(crate) fn install(&mut self, time: u32, frame: ObjectFrame, stamp: u64) {

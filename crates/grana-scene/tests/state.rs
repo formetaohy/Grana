@@ -1,8 +1,8 @@
 use grana_measure::{
     ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
 };
-use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
-use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
+use grana_object::{IntensityTable, RelationFrame, SampleAccumulator, Spot, SpotSet};
+use grana_scene::{Dataset, Item, ObjectFrame, ObjectKind, Scene, Selection};
 use grana_volume::{Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
 fn scene() -> Scene {
@@ -39,6 +39,19 @@ fn frame(x: f32) -> ObjectFrame {
     ))
 }
 
+fn spots(centres: &[[f32; 3]]) -> ObjectFrame {
+    let mut accumulator = SampleAccumulator::new();
+    accumulator.push(0.5);
+    ObjectFrame::Spots(SpotSet::new(
+        0,
+        centres
+            .iter()
+            .map(|centre| Spot::new(*centre, 1.0, 0.5))
+            .collect(),
+        IntensityTable::new(1, vec![accumulator.statistics(); centres.len()]),
+    ))
+}
+
 fn coloc_series() -> ColocSeries {
     let bins = 32;
     let mut frame = ColocFrame::new(bins);
@@ -55,6 +68,85 @@ fn coloc_series() -> ColocSeries {
         Some(ColocSignificance::new(0.004_975, 200, 1.0)),
         ColocCost::new(2, 64, 1, 200, 4),
     )
+}
+
+#[test]
+fn renames_and_deletes_a_detection_without_losing_identities() {
+    let mut scene = scene();
+    let source = scene.add_object(ObjectKind::Spots, 0);
+    let target = scene.add_object(ObjectKind::Spots, 0);
+    let reserved = scene
+        .objects
+        .get(target)
+        .expect("the target set exists")
+        .name()
+        .to_string();
+
+    assert!(scene.rename_object(source, "Cells"));
+    assert_eq!(
+        scene.objects.get(source).map(|set| set.name()),
+        Some("Cells")
+    );
+    assert!(
+        !scene.rename_object(target, "Cells"),
+        "an object set name is unique"
+    );
+    assert!(
+        !scene.rename_object(target, "  "),
+        "an object set name is spoken"
+    );
+    assert!(
+        !scene.rename_object(target, "cells"),
+        "an object set name does not collide with an output name"
+    );
+    assert_eq!(
+        scene.objects.get(target).map(|set| set.name()),
+        Some(reserved.as_str())
+    );
+
+    scene.install(
+        source,
+        0,
+        spots(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
+    );
+    scene.install(target, 0, spots(&[[0.0, 0.0, 0.0]]));
+    assert!(scene.add_relation(target, source));
+    scene.install_relation(
+        target,
+        source,
+        0,
+        RelationFrame::new(vec![0.5], vec![0.0], vec![2]),
+    );
+    scene.select(Some(Selection {
+        set: source,
+        item: Item::Object(2),
+    }));
+
+    assert!(scene.delete_object(source, 0, 1));
+    assert_eq!(
+        scene
+            .objects
+            .get(source)
+            .and_then(|set| set.frame(0))
+            .map(ObjectFrame::object_count),
+        Some(2)
+    );
+    assert_eq!(
+        scene.selection(),
+        Some(Selection {
+            set: source,
+            item: Item::Object(1),
+        }),
+        "the selection follows the surviving identity"
+    );
+    assert!(
+        scene
+            .objects
+            .get(target)
+            .and_then(|set| set.relation(source))
+            .is_some_and(|relation| relation.frame(0).is_none()),
+        "a deleted detection invalidates the relation it fed"
+    );
 }
 
 #[test]

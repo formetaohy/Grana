@@ -16,7 +16,7 @@ use grana_ui::{
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
@@ -96,6 +96,7 @@ impl App {
                 .expect("failed to create the window"),
         );
         let size = window.inner_size();
+        window.set_ime_allowed(true);
         let gpu = Gpu::new(window.clone(), [size.width, size.height]);
         let ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
         let mut engine = Engine::new(&gpu.device, &gpu.queue, gpu.format());
@@ -906,6 +907,14 @@ impl App {
         if event.state != ElementState::Pressed || event.repeat {
             return;
         }
+        if self
+            .surface
+            .as_ref()
+            .is_some_and(|surface| surface.ui.editing())
+        {
+            self.request_redraw();
+            return;
+        }
         if shortcut(self.modifiers) {
             if let Key::Character(text) = &event.logical_key {
                 if text.as_str().eq_ignore_ascii_case("s") {
@@ -933,6 +942,13 @@ impl App {
             Key::Named(NamedKey::Space) => self.toggle_play(),
             Key::Named(NamedKey::ArrowRight) => self.step_time(1),
             Key::Named(NamedKey::ArrowLeft) => self.step_time(-1),
+            Key::Named(NamedKey::Delete) => {
+                if self.session.delete_selected()
+                    && let Some(engine) = self.engine.as_mut()
+                {
+                    engine.set_output_message(None);
+                }
+            }
             _ => return,
         }
         self.request_redraw();
@@ -1037,6 +1053,7 @@ fn interface_cursor(cursor: grana_ui::Cursor) -> CursorIcon {
         grana_ui::Cursor::ResizeHorizontal => CursorIcon::ColResize,
         grana_ui::Cursor::ResizeVertical => CursorIcon::RowResize,
         grana_ui::Cursor::Move => CursorIcon::Move,
+        grana_ui::Cursor::Text => CursorIcon::Text,
     }
 }
 
@@ -1096,6 +1113,15 @@ impl App {
                     pressed: event.state == ElementState::Pressed,
                     repeat: event.repeat,
                 });
+            }
+            WindowEvent::Ime(Ime::Commit(text)) => {
+                for character in text.chars() {
+                    input.push(UiEvent::Key {
+                        key: grana_ui::Key::Character(character),
+                        pressed: true,
+                        repeat: false,
+                    });
+                }
             }
             _ => {}
         }

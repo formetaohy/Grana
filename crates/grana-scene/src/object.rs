@@ -399,4 +399,15 @@ impl ObjectFrame {
             Self::Surfaces(_) | Self::Filaments(_) => &[],
         }
     }
+
+    pub fn without(&self, object: usize) -> Option<Self> {
+        if object >= self.object_count() {
+            return None;
+        }
+        match self {
+            Self::Spots(set) => Some(Self::Spots(set.without(object)?)),
+            Self::Surfaces(set) => Some(Self::Surfaces(set.without(object)?)),
+            Self::Filaments(set) => Some(Self::Filaments(set.without(object)?)),
+        }
+    }
 }

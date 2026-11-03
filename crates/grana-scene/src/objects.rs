@@ -3,6 +3,7 @@ use grana_object::{RelationFrame, TrackSet};
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId, take_stamp};
+use crate::slug::slug;
 use crate::state::SetState;
 
 const PALETTE: [[f32; 3]; 8] = [
@@ -46,7 +47,10 @@ impl Objects {
         );
         let id = ObjectSetId::new(self.next_id);
         self.next_id += 1;
-        let ordinal = self.ordinals[kind.index()] + 1;
+        let mut ordinal = self.ordinals[kind.index()] + 1;
+        while self.occupied(&format!("{} {ordinal}", kind.name()), None) {
+            ordinal += 1;
+        }
         self.ordinals[kind.index()] = ordinal;
         let color = PALETTE[(id.raw() as usize - 1) % PALETTE.len()];
         let name = format!("{} {ordinal}", kind.name());
@@ -58,6 +62,44 @@ impl Objects {
     pub fn remove(&mut self, id: ObjectSetId) {
         self.sets.retain(|set| set.id() != id);
         self.clear_relations(id);
+    }
+
+    pub fn rename(&mut self, id: ObjectSetId, name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() || self.occupied(name, Some(id)) {
+            return false;
+        }
+        self.get_mut(id).is_some_and(|set| set.set_name(name))
+    }
+
+    fn occupied(&self, name: &str, except: Option<ObjectSetId>) -> bool {
+        let key = slug(name).to_ascii_lowercase();
+        self.sets
+            .iter()
+            .any(|set| Some(set.id()) != except && slug(set.name()).to_ascii_lowercase() == key)
+    }
+
+    pub fn delete_object(&mut self, id: ObjectSetId, time: u32, object: usize) -> bool {
+        let stamp = take_stamp(&mut self.stamp);
+        if !self
+            .get_mut(id)
+            .is_some_and(|set| set.delete_object(time, object, stamp))
+        {
+            return false;
+        }
+        let targets = self
+            .sets
+            .iter()
+            .filter(|set| set.id() != id && set.relation(id).is_some())
+            .map(ObjectSet::id)
+            .collect::<Vec<_>>();
+        for target in targets {
+            let stamp = take_stamp(&mut self.stamp);
+            if let Some(set) = self.get_mut(target) {
+                set.invalidate_relation(id, time, stamp);
+            }
+        }
+        true
     }
 
     pub fn add_relation(&mut self, id: ObjectSetId, target: ObjectSetId) -> bool {

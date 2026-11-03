@@ -9,6 +9,7 @@ mod objects;
 mod pick;
 mod relation;
 mod scene;
+mod slug;
 mod state;
 mod track_layer;
 
@@ -23,5 +24,6 @@ pub use object_set::{ObjectSet, ObjectSetId, Visibility};
 pub use objects::Objects;
 pub use relation::Relation;
 pub use scene::{Item, Scene, Selection};
+pub use slug::slug;
 pub use state::{ChannelState, ItemState, RelationState, SceneState, SelectionState, SetState};
 pub use track_layer::TrackLayer;

@@ -168,6 +168,87 @@ fn restores_detections_tracks_and_measurements() {
 }
 
 #[test]
+fn undoes_a_rename_and_a_deleted_detection() {
+    let mut session = session();
+    let set = session
+        .scene()
+        .expect("the sample opens")
+        .objects
+        .iter()
+        .next()
+        .expect("the sample stages an object set")
+        .id();
+    let original = session
+        .scene()
+        .expect("the sample opens")
+        .objects
+        .get(set)
+        .expect("the object set exists")
+        .name()
+        .to_string();
+    session.execute(Command::RenameObject {
+        set,
+        name: "Cells".to_string(),
+    });
+    assert_eq!(
+        session
+            .scene()
+            .expect("the set is renamed")
+            .objects
+            .get(set)
+            .map(|set| set.name().to_string()),
+        Some("Cells".to_string())
+    );
+    session.execute(Command::Undo);
+    assert_eq!(
+        session
+            .scene()
+            .expect("the rename is undone")
+            .objects
+            .get(set)
+            .map(|set| set.name().to_string()),
+        Some(original)
+    );
+
+    settle(&mut session);
+    let detected = session
+        .scene()
+        .expect("the sample opens")
+        .objects
+        .get(set)
+        .and_then(|set| set.frame(0))
+        .map(grana_scene::ObjectFrame::object_count)
+        .expect("the sample detects the first frame");
+    assert!(detected > 0, "the sample detection produces objects");
+    session.execute(Command::DeleteObject {
+        set,
+        time: 0,
+        object: 0,
+    });
+    assert_eq!(
+        session
+            .scene()
+            .expect("the object is deleted")
+            .objects
+            .get(set)
+            .and_then(|set| set.frame(0))
+            .map(grana_scene::ObjectFrame::object_count),
+        Some(detected - 1)
+    );
+    session.execute(Command::Undo);
+    assert_eq!(
+        session
+            .scene()
+            .expect("the deletion is undone")
+            .objects
+            .get(set)
+            .and_then(|set| set.frame(0))
+            .map(grana_scene::ObjectFrame::object_count),
+        Some(detected)
+    );
+}
+
+#[test]
 fn keeps_the_history_consistent_after_removing_the_measured_set() {
     let mut session = session();
     settle(&mut session);

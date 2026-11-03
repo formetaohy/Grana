@@ -48,4 +48,11 @@ impl Relation {
         *slot = Some(Arc::new(frame));
         true
     }
+
+    pub(crate) fn invalidate(&mut self, time: u32) -> bool {
+        let Some(slot) = self.frames.get_mut(time as usize) else {
+            return false;
+        };
+        slot.take().is_some()
+    }
 }

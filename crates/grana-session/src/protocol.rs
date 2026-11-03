@@ -5,12 +5,10 @@ use grana_analysis::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, T
 use grana_measure::{
     Aggregate, COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocSettings, Filter, Group,
 };
-use grana_scene::{Measure, ObjectKind, ObjectParams, Scene};
+use grana_scene::{Measure, ObjectKind, ObjectParams, Scene, slug};
 use grana_volume::Region;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
-use crate::slug::slug;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

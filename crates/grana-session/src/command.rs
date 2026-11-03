@@ -34,6 +34,15 @@ pub enum Command {
     SaveSnapshot,
     SetTime(u32),
     Select(Option<Selection>),
+    RenameObject {
+        set: ObjectSetId,
+        name: String,
+    },
+    DeleteObject {
+        set: ObjectSetId,
+        time: u32,
+        object: usize,
+    },
     AddObject(ObjectKind),
     RemoveObject(ObjectSetId),
     Detect(ObjectSetId),
@@ -188,6 +197,8 @@ pub enum Command {
 pub enum Action {
     AddObject,
     RemoveObject,
+    RenameObject,
+    DeleteObject,
     ClearObject,
     Detect,
     Relation,
@@ -217,6 +228,11 @@ pub enum Action {
     MeasureGroup,
     MeasureAggregate,
     MeasureScope,
+    MeasureSet,
+    MeasureColumns,
+    MeasureView,
+    MeasureAxes,
+    MeasureSort,
     MeasureLasso,
     MeasureFilter,
     AddFilter,
@@ -237,6 +253,8 @@ impl Action {
         match self {
             Self::AddObject => "add an object set",
             Self::RemoveObject => "remove an object set",
+            Self::RenameObject => "rename an object set",
+            Self::DeleteObject => "delete an object",
             Self::ClearObject => "clear objects",
             Self::Detect => "detection",
             Self::Relation => "object relation",
@@ -266,6 +284,11 @@ impl Action {
             Self::MeasureGroup => "statistics group",
             Self::MeasureAggregate => "statistics aggregate",
             Self::MeasureScope => "statistics range",
+            Self::MeasureSet => "statistics object set",
+            Self::MeasureColumns => "statistics columns",
+            Self::MeasureView => "statistics view",
+            Self::MeasureAxes => "statistics axes",
+            Self::MeasureSort => "statistics order",
             Self::MeasureLasso => "statistics lasso",
             Self::MeasureFilter => "statistics filter",
             Self::AddFilter => "filter addition",
@@ -348,6 +371,8 @@ impl Command {
         let edit = match self {
             Self::AddObject(_) => Edit::new(Action::AddObject),
             Self::RemoveObject(_) => Edit::new(Action::RemoveObject),
+            Self::RenameObject { set, .. } => Edit::targeted(Action::RenameObject, set.raw()),
+            Self::DeleteObject { set, .. } => Edit::targeted(Action::DeleteObject, set.raw()),
             Self::ClearObject(_) => Edit::new(Action::ClearObject),
             Self::Detect(set) => Edit::targeted(Action::Detect, set.raw()),
             Self::AddRelation { target, .. } | Self::RemoveRelation { target, .. } => {
@@ -389,6 +414,14 @@ impl Command {
             Self::SetMeasureGroup(_) => Edit::new(Action::MeasureGroup),
             Self::SetMeasureAggregate(_) => Edit::new(Action::MeasureAggregate),
             Self::SetMeasureScope(_) => Edit::new(Action::MeasureScope),
+            Self::SetMeasureSet(_) => Edit::new(Action::MeasureSet),
+            Self::SetColumnVisible { index, .. } => {
+                Edit::targeted(Action::MeasureColumns, *index as u64)
+            }
+            Self::ShowAllColumns => Edit::new(Action::MeasureColumns),
+            Self::SetMeasureView(_) => Edit::new(Action::MeasureView),
+            Self::SetPlotAxis { column, .. } => Edit::targeted(Action::MeasureAxes, *column as u64),
+            Self::ToggleSort(column) => Edit::targeted(Action::MeasureSort, *column as u64),
             Self::SetLasso(_) => Edit::new(Action::MeasureLasso),
             Self::AddFilter => Edit::new(Action::AddFilter),
             Self::RemoveFilter(_) => Edit::new(Action::RemoveFilter),
