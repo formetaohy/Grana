@@ -169,26 +169,35 @@ impl<'a> Assembler<'a> {
         if start[0] >= end[0] || start[1] >= end[1] {
             return;
         }
-        let channels = self.plan.channels;
         for second in start[1]..end[1] {
             for first in start[0]..end[0] {
-                let cached_label = cached.labels[(first - cached.origin[0]) as usize
-                    + cached.dims[0] as usize * (second - cached.origin[1]) as usize];
+                let cached_slot = (first - cached.origin[0]) as usize
+                    + cached.dims[0] as usize * (second - cached.origin[1]) as usize;
+                let cached_label = cached.labels[cached_slot];
                 if cached_label == EMPTY {
                     continue;
                 }
-                let local_label = local.labels[(first - local.origin[0]) as usize
-                    + local.dims[0] as usize * (second - local.origin[1]) as usize];
+                let local_slot = (first - local.origin[0]) as usize
+                    + local.dims[0] as usize * (second - local.origin[1]) as usize;
+                let local_label = local.labels[local_slot];
                 if local_label == EMPTY {
                     continue;
                 }
-                union(
-                    &mut self.nodes,
-                    &mut self.accumulators,
-                    channels,
-                    local_label,
-                    cached_label,
-                );
+                if self.plan.split > 0.0 {
+                    if local_label == cached_label {
+                        continue;
+                    }
+                    let neck = cached.reach[cached_slot].min(local.reach[local_slot]);
+                    self.necks.push((local_label, cached_label, neck));
+                } else {
+                    union(
+                        &mut self.nodes,
+                        &mut self.accumulators,
+                        self.plan.channels,
+                        local_label,
+                        cached_label,
+                    );
+                }
             }
         }
     }

@@ -170,7 +170,7 @@ impl SurfaceFilter {
 pub struct SurfaceParams {
     threshold: f32,
     grain: f32,
-    seed: f32,
+    split: f32,
     min_volume: f32,
     filter: SurfaceFilter,
 }
@@ -181,7 +181,7 @@ impl SurfaceParams {
     pub fn new(
         threshold: f32,
         grain: f32,
-        seed: f32,
+        split: f32,
         min_volume: f32,
         filter: SurfaceFilter,
     ) -> Self {
@@ -194,8 +194,8 @@ impl SurfaceParams {
             "a surface grain is a non-negative length"
         );
         assert!(
-            seed.is_finite() && seed >= 0.0,
-            "a surface seed is a non-negative length"
+            (0.0..=1.0).contains(&split),
+            "a surface split is a fraction of the peak reach"
         );
         assert!(
             min_volume.is_finite() && min_volume >= 0.0,
@@ -204,7 +204,7 @@ impl SurfaceParams {
         Self {
             threshold,
             grain,
-            seed,
+            split,
             min_volume,
             filter,
         }
@@ -218,8 +218,8 @@ impl SurfaceParams {
         self.grain
     }
 
-    pub fn seed(self) -> f32 {
-        self.seed
+    pub fn split(self) -> f32 {
+        self.split
     }
 
     pub fn min_volume(self) -> f32 {
@@ -250,7 +250,7 @@ impl SurfaceParams {
         match index {
             0 => self.threshold,
             1 => self.grain,
-            2 => self.seed,
+            2 => self.split,
             3 => self.min_volume,
             4..=7 => self.filter.field(index - 4),
             _ => panic!("a surface carries eight parameters"),
@@ -261,7 +261,7 @@ impl SurfaceParams {
         match index {
             0 => self.set_threshold(value),
             1 => self.set_grain(value),
-            2 => self.set_seed(value),
+            2 => self.set_split(value),
             3 => self.set_min_volume(value),
             4..=7 => self.filter.set_field(index - 4, value),
             _ => panic!("a surface carries eight parameters"),
@@ -284,12 +284,12 @@ impl SurfaceParams {
         self.grain = grain;
     }
 
-    pub fn set_seed(&mut self, seed: f32) {
+    pub fn set_split(&mut self, split: f32) {
         assert!(
-            seed.is_finite() && seed >= 0.0,
-            "a surface seed is a non-negative length"
+            (0.0..=1.0).contains(&split),
+            "a surface split is a fraction of the peak reach"
         );
-        self.seed = seed;
+        self.split = split;
     }
 
     pub fn set_min_volume(&mut self, min_volume: f32) {

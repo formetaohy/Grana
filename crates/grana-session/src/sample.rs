@@ -15,7 +15,7 @@ const MEMBRANE_RADIAL: f32 = 1.24;
 const MEMBRANE_AXIAL: f32 = 1.35;
 const SURFACE_VOLUME: f32 = 2.0;
 const SURFACE_GRAIN: f32 = 0.15;
-const SURFACE_SEED: f32 = 1.2;
+const SURFACE_SPLIT: f32 = 0.4;
 const SURFACE_OPENING: f32 = 0.0;
 const SURFACE_CLOSING: f32 = 0.0;
 const SURFACE_MIN_SPHERICITY: f32 = 0.0;
@@ -80,7 +80,7 @@ pub fn stage(scene: &mut Scene) -> Staged {
         set.set_params(ObjectParams::Surfaces(SurfaceParams::new(
             NUCLEUS_THRESHOLD,
             SURFACE_GRAIN,
-            SURFACE_SEED,
+            SURFACE_SPLIT,
             SURFACE_VOLUME,
             SurfaceFilter::new(
                 SURFACE_OPENING,

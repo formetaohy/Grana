@@ -34,6 +34,7 @@ const WORKER_ARRAY_LIMIT: u64 = 320 << 20;
 const FRAME_ARRAY_LIMIT: u64 = 1024 << 20;
 const TILE_FRAGMENT_LIMIT: u64 = 96 << 20;
 const WORKER_LIMIT: usize = 16;
+const SPLIT_FLOOR: f64 = 1.0;
 
 pub const SURFACE_VOXEL_LIMIT: u64 = 1 << 30;
 
@@ -76,6 +77,7 @@ pub(super) struct Face {
     pub(super) origin: [u32; 2],
     pub(super) dims: [u32; 2],
     pub(super) labels: Vec<u32>,
+    pub(super) reach: Vec<u32>,
 }
 
 impl Face {
@@ -129,8 +131,7 @@ pub struct SurfaceBuilder {
     anchor: [i64; 3],
     tiles: [u32; 3],
     tile_count: usize,
-    split: bool,
-    merge_gap: u32,
+    split: f64,
     anisotropy: [u32; 3],
     kernels: [Vec<f32>; 3],
     opening: Option<Element>,
@@ -164,8 +165,7 @@ impl SurfaceBuilder {
         let grain = params.grain().min(GRAIN_LIMIT * narrowest);
         let anisotropy =
             spacing.map(|value| ((value / narrowest).round() as u32).clamp(1, ANISOTROPY_LIMIT));
-        let split = params.seed() > 0.0;
-        let merge_gap = (params.seed() / (2.0 * narrowest)).round().max(1.0) as u32;
+        let split = f64::from(params.split());
         let kernels = spacing.map(|value| gaussian((grain / value).min(GRAIN_LIMIT)));
         let opening = Element::new(level, params.opening());
         let closing = Element::new(level, params.closing());
@@ -201,7 +201,6 @@ impl SurfaceBuilder {
             tiles,
             tile_count,
             split,
-            merge_gap,
             anisotropy,
             kernels,
             opening,
@@ -304,7 +303,7 @@ impl SurfaceBuilder {
             .copied()
             .max()
             .expect("three axes exist");
-        let mut base = if self.split {
+        let mut base = if self.split > 0.0 {
             (DISTANCE_LIMIT * widest).min(DISTANCE_LIMIT_MAX)
         } else {
             0
@@ -313,7 +312,7 @@ impl SurfaceBuilder {
             base /= 2;
         }
         let mut runs = Vec::new();
-        let limits = if self.split {
+        let limits = if self.split > 0.0 {
             vec![base, base * 2, base * 4]
         } else {
             vec![0]

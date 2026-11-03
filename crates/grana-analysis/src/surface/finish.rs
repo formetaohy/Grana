@@ -5,7 +5,7 @@ use grana_geometry::{Bounds, Mesh, MeshVertex};
 use grana_object::{IntensityTable, SurfaceSet, SurfaceStatistics};
 
 use super::assemble::Assembler;
-use super::{EMPTY, Node, find, union};
+use super::{EMPTY, Node, SPLIT_FLOOR, find, union};
 
 const MAX_FOLD: u32 = 8;
 
@@ -31,7 +31,7 @@ impl Assembler<'_> {
         seams.sort_unstable_by(|(left_key, left_neck), (right_key, right_neck)| {
             right_neck.cmp(left_neck).then(left_key.cmp(right_key))
         });
-        let gap = f64::from(self.plan.merge_gap);
+        let split = self.plan.split;
         let channels = self.plan.channels;
         for ((left, right), neck) in seams {
             let left = find(&mut self.nodes, left);
@@ -39,11 +39,14 @@ impl Assembler<'_> {
             if left == right {
                 continue;
             }
-            let reach = f64::from(self.nodes[left as usize].reach)
-                .sqrt()
-                .min(f64::from(self.nodes[right as usize].reach).sqrt());
-            let drop = reach - f64::from(neck).sqrt();
-            if drop < gap {
+            let peak = f64::from(
+                self.nodes[left as usize]
+                    .reach
+                    .min(self.nodes[right as usize].reach),
+            )
+            .sqrt();
+            let drop = peak - f64::from(neck).sqrt();
+            if drop < (split * peak).max(SPLIT_FLOOR) {
                 union(
                     &mut self.nodes,
                     &mut self.accumulators,
@@ -152,9 +155,6 @@ impl Assembler<'_> {
         }
         let mut areas = vec![0.0f64; nodes.len()];
         for (index, triangle) in triangles.iter().enumerate() {
-            if components[component_of[index]].closed {
-                continue;
-            }
             let object = triangle_object[index];
             if object == EMPTY {
                 continue;

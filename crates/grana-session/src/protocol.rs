@@ -78,7 +78,7 @@ pub enum DetectionSpec {
     Surfaces {
         threshold: f32,
         grain: f32,
-        seed: f32,
+        split: f32,
         min_volume: f32,
         opening: f32,
         closing: f32,
@@ -199,7 +199,7 @@ impl Protocol {
                     ObjectParams::Surfaces(params) => DetectionSpec::Surfaces {
                         threshold: params.threshold(),
                         grain: params.grain(),
-                        seed: params.seed(),
+                        split: params.split(),
                         min_volume: params.min_volume(),
                         opening: params.opening(),
                         closing: params.closing(),
@@ -732,7 +732,7 @@ impl DetectionSpec {
             Self::Surfaces {
                 threshold,
                 grain,
-                seed,
+                split,
                 min_volume,
                 opening,
                 closing,
@@ -741,7 +741,7 @@ impl DetectionSpec {
             } => ObjectParams::Surfaces(SurfaceParams::new(
                 threshold,
                 grain,
-                seed,
+                split,
                 min_volume,
                 SurfaceFilter::new(opening, closing, min_sphericity, min_mean_intensity),
             )),
@@ -767,7 +767,7 @@ impl DetectionSpec {
             Self::Surfaces {
                 threshold,
                 grain,
-                seed,
+                split,
                 min_volume,
                 opening,
                 closing,
@@ -780,8 +780,8 @@ impl DetectionSpec {
                 if !(grain.is_finite() && grain >= 0.0) {
                     return invalid("needs a non-negative surface grain".to_string());
                 }
-                if !(seed.is_finite() && seed >= 0.0) {
-                    return invalid("needs a non-negative surface seed".to_string());
+                if !(0.0..=1.0).contains(&split) {
+                    return invalid("needs a unit surface split".to_string());
                 }
                 if !(min_volume.is_finite() && min_volume >= 0.0) {
                     return invalid("needs a non-negative minimum volume".to_string());

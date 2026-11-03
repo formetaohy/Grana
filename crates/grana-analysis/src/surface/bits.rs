@@ -1,6 +1,16 @@
+use crate::local::BlockField;
+
 pub(super) const SIDE: usize = crate::local::BLOCK as usize;
 
 const WORD: usize = 64;
+
+fn block_of(voxel: [usize; 3]) -> [i64; 3] {
+    [
+        (voxel[0] / SIDE) as i64,
+        (voxel[1] / SIDE) as i64,
+        (voxel[2] / SIDE) as i64,
+    ]
+}
 
 pub(super) struct Bits {
     dims: [usize; 3],
@@ -65,16 +75,25 @@ pub(super) struct Grid {
     occupied: Vec<bool>,
     outside: Vec<bool>,
     voxel: Bits,
+    growth: Bits,
+}
+
+pub(super) struct MaskInputs<'a> {
+    pub(super) foreground: &'a Bits,
+    pub(super) admitted: Option<&'a Bits>,
+    pub(super) raised: &'a Bits,
+    pub(super) field: &'a BlockField,
 }
 
 impl Grid {
     pub(super) fn new(
-        foreground: &Bits,
-        admitted: Option<&Bits>,
+        mask: &MaskInputs<'_>,
         occupied: &[bool],
         blocks: [usize; 3],
         dims: [usize; 3],
     ) -> Self {
+        let foreground = mask.foreground;
+        let admitted = mask.admitted;
         assert_eq!(dims, foreground.dims(), "the grid matches its mask");
         assert_eq!(
             occupied.len(),
@@ -139,8 +158,10 @@ impl Grid {
             occupied: occupied.to_vec(),
             outside,
             voxel: Bits::new(dims),
+            growth: Bits::new(dims),
         };
         grid.flood(foreground, admitted);
+        grid.grow(mask);
         grid
     }
 
@@ -158,13 +179,76 @@ impl Grid {
         if admitted.is_some_and(|admitted| !admitted.get(x, y, z)) {
             return false;
         }
-        if foreground.get(x, y, z) {
+        if foreground.get(x, y, z) || self.growth.get(x, y, z) {
             return true;
         }
         let block = [x / SIDE, y / SIDE, z / SIDE];
         !self.outside
             [self.shell[0] * (1 + block[1] + self.shell[1] * (1 + block[2])) + 1 + block[0]]
             && !self.voxel.get(x, y, z)
+    }
+
+    fn grow(&mut self, mask: &MaskInputs<'_>) {
+        let dims = self.dims;
+        let mut queue = std::collections::VecDeque::new();
+        for z in 0..dims[2] {
+            for y in 0..dims[1] {
+                for x in 0..dims[0] {
+                    if !mask.foreground.get(x, y, z) {
+                        continue;
+                    }
+                    let reference = mask.field.at(block_of([x, y, z])).1;
+                    for axis in 0..3 {
+                        for step in [-1i64, 1] {
+                            let reached = [x, y, z][axis] as i64 + step;
+                            if reached < 0 || reached >= dims[axis] as i64 {
+                                continue;
+                            }
+                            let mut neighbour = [x, y, z];
+                            neighbour[axis] = reached as usize;
+                            self.enter(&mut queue, mask, neighbour, reference);
+                        }
+                    }
+                }
+            }
+        }
+        while let Some(([x, y, z], reference)) = queue.pop_front() {
+            for axis in 0..3 {
+                for step in [-1i64, 1] {
+                    let reached = [x, y, z][axis] as i64 + step;
+                    if reached < 0 || reached >= dims[axis] as i64 {
+                        continue;
+                    }
+                    let mut neighbour = [x, y, z];
+                    neighbour[axis] = reached as usize;
+                    self.enter(&mut queue, mask, neighbour, reference);
+                }
+            }
+        }
+    }
+
+    fn enter(
+        &mut self,
+        queue: &mut std::collections::VecDeque<([usize; 3], f32)>,
+        mask: &MaskInputs<'_>,
+        voxel: [usize; 3],
+        reference: f32,
+    ) {
+        let [x, y, z] = voxel;
+        if mask.foreground.get(x, y, z)
+            || self.growth.get(x, y, z)
+            || !mask.raised.get(x, y, z)
+            || mask.admitted.is_some_and(|admitted| !admitted.get(x, y, z))
+        {
+            return;
+        }
+        let (background, signal) = mask.field.at(block_of(voxel));
+        if signal - background >= mask.field.floor() || background < reference - mask.field.floor()
+        {
+            return;
+        }
+        self.growth.set(x, y, z);
+        queue.push_back((voxel, reference));
     }
 
     fn barrier(&self, block: [usize; 3]) -> bool {

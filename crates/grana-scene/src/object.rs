@@ -17,7 +17,7 @@ const SPOT_DIAMETER: f32 = 4.0;
 const SPOT_CONTRAST: f32 = 0.2;
 const SURFACE_THRESHOLD: f32 = 0.5;
 const SURFACE_GRAIN: f32 = 1.0;
-const SURFACE_SEED: f32 = 6.0;
+const SURFACE_SPLIT: f32 = 0.4;
 const SURFACE_MIN_VOLUME: f32 = 0.0;
 const SURFACE_OPENING: f32 = 0.0;
 const SURFACE_CLOSING: f32 = 0.0;
@@ -82,10 +82,10 @@ const SURFACE_FIELDS: [ParamField; SurfaceParams::FIELD_COUNT] = [
         logarithmic: false,
     },
     ParamField {
-        label: "seed size",
-        suffix: " µm",
+        label: "splitting",
+        suffix: "",
         minimum: ParamScale::Absolute(0.0),
-        maximum: ParamScale::World(0.1),
+        maximum: ParamScale::Absolute(1.0),
         logarithmic: false,
     },
     ParamField {
@@ -211,7 +211,7 @@ impl ObjectKind {
             Self::Surfaces => ObjectParams::Surfaces(SurfaceParams::new(
                 SURFACE_THRESHOLD,
                 SURFACE_GRAIN * voxel,
-                SURFACE_SEED * voxel,
+                SURFACE_SPLIT,
                 SURFACE_MIN_VOLUME,
                 SurfaceFilter::new(
                     SURFACE_OPENING * voxel,

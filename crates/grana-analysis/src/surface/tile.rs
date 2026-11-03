@@ -146,7 +146,7 @@ impl<'a> Tile<'a> {
         self.indices.clear();
         self.triangles.clear();
         self.contacts.clear();
-        let split = pass.plan.split;
+        let split = pass.plan.split > 0.0;
         let saturated = if split {
             let saturated = self.watershed();
             self.record_necks();
@@ -250,19 +250,25 @@ impl<'a> Tile<'a> {
         let first = (axis + 1) % 3;
         let second = (axis + 2) % 3;
         let mut labels = Vec::with_capacity(dims[first] * dims[second]);
+        let mut reach = Vec::with_capacity(dims[first] * dims[second]);
         for second_position in 0..dims[second] {
             for first_position in 0..dims[first] {
-                labels.push(
-                    self.labels[strides[axis] * plane
-                        + strides[first] * first_position
-                        + strides[second] * second_position],
-                );
+                let slot = strides[axis] * plane
+                    + strides[first] * first_position
+                    + strides[second] * second_position;
+                labels.push(self.labels[slot]);
+                reach.push(if self.chamfer.is_empty() {
+                    0
+                } else {
+                    self.chamfer[slot]
+                });
             }
         }
         Face {
             origin: [array[first].start, array[second].start],
             dims: [dims[first] as u32, dims[second] as u32],
             labels,
+            reach,
         }
     }
 }

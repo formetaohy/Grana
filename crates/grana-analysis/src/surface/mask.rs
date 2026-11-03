@@ -4,8 +4,10 @@ use crate::local::{BLOCK, BlockField, LocalField, floor};
 use crate::mask::Mask;
 use crate::morphology;
 
-use super::bits::{Bits, Grid, SIDE};
+use super::bits::{Bits, Grid, MaskInputs, SIDE};
 use super::{Gate, Read, SurfaceBuilder, dims_of, parallel_tiles, smooth};
+
+const RAISED_TOLERANCE: f32 = 0.5;
 
 pub(super) struct SurfaceMask {
     pub(super) solid: SolidMask,
@@ -56,6 +58,7 @@ pub(super) fn build(
     let total = plan.tile_count();
     let step = total * 2;
     let mut foreground = Bits::new(dims);
+    let mut raised = Bits::new(dims);
     let mut admitted = roi.map(|_| Bits::new(dims));
     let mut field = BlockField::new(plan.anchor, blocks, floor(plan.intensity));
     let mut occupied = vec![false; blocks[0] * blocks[1] * blocks[2]];
@@ -68,22 +71,31 @@ pub(super) fn build(
         &mut |done, _| progress(done, step),
         |index| MaskWorker::run(plan, &gate, index, pad, read),
         |index, chunk| {
-            write_chunk(
-                plan,
-                index,
-                chunk,
-                &mut foreground,
-                admitted.as_mut(),
-                &mut field,
-                &mut occupied,
-            )
+            let mut sink = MaskSink {
+                foreground: &mut foreground,
+                raised: &mut raised,
+                admitted: admitted.as_mut(),
+                field: &mut field,
+                occupied: &mut occupied,
+            };
+            write_chunk(plan, index, chunk, &mut sink)
         },
     )?;
     if !completed {
         return Ok(None);
     }
     field.extrapolate();
-    let grid = Grid::new(&foreground, admitted.as_ref(), &occupied, blocks, dims);
+    let grid = Grid::new(
+        &MaskInputs {
+            foreground: &foreground,
+            admitted: admitted.as_ref(),
+            raised: &raised,
+            field: &field,
+        },
+        &occupied,
+        blocks,
+        dims,
+    );
     let solid = if plan.opening.is_some() || plan.closing.is_some() {
         let Some(bits) = morph(
             plan,
@@ -108,14 +120,19 @@ pub(super) fn build(
     Ok(Some(SurfaceMask { solid, field }))
 }
 
+struct MaskSink<'a> {
+    foreground: &'a mut Bits,
+    raised: &'a mut Bits,
+    admitted: Option<&'a mut Bits>,
+    field: &'a mut BlockField,
+    occupied: &'a mut [bool],
+}
+
 fn write_chunk(
     plan: &SurfaceBuilder,
     index: usize,
     chunk: MaskChunk,
-    foreground: &mut Bits,
-    mut admitted: Option<&mut Bits>,
-    field: &mut BlockField,
-    occupied: &mut [bool],
+    sink: &mut MaskSink<'_>,
 ) -> Result<(), String> {
     let core = plan.core_range(index);
     let dims = dims_of(&core);
@@ -131,8 +148,14 @@ fn write_chunk(
         for y in 0..dims[1] {
             let start = chunk.rows * (y + dims[1] * z);
             let row = &chunk.foreground[start..start + chunk.rows];
-            foreground.write_row(origin[0], origin[1] + y, origin[2] + z, row, dims[0]);
-            if let (Some(bits), Some(values)) = (admitted.as_deref_mut(), chunk.admitted.as_ref()) {
+            sink.foreground
+                .write_row(origin[0], origin[1] + y, origin[2] + z, row, dims[0]);
+            let row = &chunk.raised[start..start + chunk.rows];
+            sink.raised
+                .write_row(origin[0], origin[1] + y, origin[2] + z, row, dims[0]);
+            if let (Some(bits), Some(values)) =
+                (sink.admitted.as_deref_mut(), chunk.admitted.as_ref())
+            {
                 let row = &values[start..start + chunk.rows];
                 bits.write_row(origin[0], origin[1] + y, origin[2] + z, row, dims[0]);
             }
@@ -149,8 +172,8 @@ fn write_chunk(
                     chunk.block_origin[1] + y as i64,
                     chunk.block_origin[2] + z as i64,
                 ];
-                field.set(block, chunk.blocks[slot]);
-                occupied[block[0] as usize
+                sink.field.set(block, chunk.blocks[slot]);
+                sink.occupied[block[0] as usize
                     + global[0] * (block[1] as usize + global[1] * block[2] as usize)] =
                     chunk.occupied[slot];
             }
@@ -162,6 +185,7 @@ fn write_chunk(
 struct MaskChunk {
     rows: usize,
     foreground: Vec<u64>,
+    raised: Vec<u64>,
     admitted: Option<Vec<u64>>,
     blocks: Vec<(f32, f32)>,
     occupied: Vec<bool>,
@@ -211,6 +235,7 @@ impl MaskWorker {
         ];
         let rows = core_dims[0].div_ceil(64);
         let mut foreground = vec![0u64; rows * core_dims[1] * core_dims[2]];
+        let mut raised = vec![0u64; rows * core_dims[1] * core_dims[2]];
         let mut admitted = gate
             .roi
             .is_some()
@@ -256,6 +281,9 @@ impl MaskWorker {
                         let block = [x / SIDE, y / SIDE, z / SIDE];
                         occupied[block[0] + blocks[0] * (block[1] + blocks[1] * block[2])] = true;
                     }
+                    if contrast >= -RAISED_TOLERANCE {
+                        raised[row + x / 64] |= 1 << (x % 64);
+                    }
                 }
             }
         }
@@ -285,6 +313,7 @@ impl MaskWorker {
         Ok(MaskChunk {
             rows,
             foreground,
+            raised,
             admitted,
             blocks: values,
             occupied,

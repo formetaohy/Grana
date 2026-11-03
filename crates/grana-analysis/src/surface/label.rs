@@ -102,7 +102,7 @@ impl Tile<'_> {
                 );
                 self.labels[index] = self.labels[best as usize];
             } else {
-                self.labels[index] = self.create_node(level);
+                self.labels[index] = self.create_node(0);
             }
         }
         saturated
@@ -234,8 +234,10 @@ impl Tile<'_> {
                         core[1].start + y as u32,
                         core[2].start + z as u32,
                     ];
+                    let reach = self.chamfer.get(index).copied().unwrap_or(0);
                     let stats = &mut self.nodes[node];
                     stats.voxels += 1;
+                    stats.reach = stats.reach.max(reach);
                     for (axis, coordinate) in voxel.iter().enumerate() {
                         stats.sum[axis] += f64::from(*coordinate);
                         stats.low[axis] = stats.low[axis].min(*coordinate);

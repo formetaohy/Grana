@@ -1,9 +1,10 @@
+use std::collections::VecDeque;
+
 use grana_volume::Intensity;
 
 pub(crate) const BLOCK: i64 = 8;
 pub(crate) const WINDOW: i64 = 2;
 
-const BACKGROUND_QUANTILE: f64 = 0.5;
 const SIGNAL_QUANTILE: f64 = 0.995;
 const MINIMUM_RANGE: f32 = 0.02;
 const INVALID: f32 = f32::NAN;
@@ -108,28 +109,30 @@ impl LocalField {
                             }
                         }
                     }
-                    if bucket.is_empty() {
-                        continue;
+                    if !bucket.is_empty() {
+                        let total = bucket.len();
+                        let background_rank = total / 2;
+                        let background_level = *bucket
+                            .select_nth_unstable_by(background_rank, f32::total_cmp)
+                            .1;
+                        let signal_rank =
+                            ((total as f64 * SIGNAL_QUANTILE) as usize).min(total - 1);
+                        let signal_level =
+                            *bucket.select_nth_unstable_by(signal_rank, f32::total_cmp).1;
+                        let index = block_x + blocks[0] * (block_y + blocks[1] * block_z);
+                        background[index] = background_level;
+                        signal[index] = signal_level;
                     }
-                    let total = bucket.len();
-                    let background_rank =
-                        ((total as f64 * BACKGROUND_QUANTILE) as usize).min(total - 1);
-                    let background_level = *bucket
-                        .select_nth_unstable_by(background_rank, f32::total_cmp)
-                        .1;
-                    let signal_rank = ((total as f64 * SIGNAL_QUANTILE) as usize).min(total - 1);
-                    let signal_level =
-                        *bucket.select_nth_unstable_by(signal_rank, f32::total_cmp).1;
-                    let index = block_x + blocks[0] * (block_y + blocks[1] * block_z);
-                    background[index] = background_level;
-                    signal[index] = signal_level;
                 }
             }
         }
-        window_median(&mut background, blocks);
+        let windowed = window_median(&background, blocks);
+        for (level, window) in background.iter_mut().zip(&windowed) {
+            *level = level.min(*window);
+        }
         window_max(&mut signal, blocks);
-        fill_missing(&mut background, blocks, intensity.max());
-        fill_missing(&mut signal, blocks, intensity.max());
+        fill(&mut background, blocks, intensity.max());
+        fill(&mut signal, blocks, intensity.max());
         let padded = blocks.map(|value| value + 2);
         let mut background = pad(&background, padded);
         let mut signal = pad(&signal, padded);
@@ -191,14 +194,23 @@ impl BlockField {
         self.0.contrast(voxel, value)
     }
 
+    pub(crate) fn at(&self, block: [i64; 3]) -> (f32, f32) {
+        let index = self.index(block);
+        (self.0.background[index], self.0.signal[index])
+    }
+
+    pub(crate) fn floor(&self) -> f32 {
+        self.0.floor
+    }
+
     pub(crate) fn extrapolate(&mut self) {
         extrapolate(&mut self.0.background, self.0.blocks);
         extrapolate(&mut self.0.signal, self.0.blocks);
     }
 }
 
-fn window_median(values: &mut [f32], blocks: [usize; 3]) {
-    let mut filtered = vec![0.0f32; values.len()];
+fn window_median(values: &[f32], blocks: [usize; 3]) -> Vec<f32> {
+    let mut filtered = vec![INVALID; values.len()];
     let mut window = Vec::with_capacity((2 * WINDOW as usize + 1).pow(3));
     for z in 0..blocks[2] as i64 {
         for y in 0..blocks[1] as i64 {
@@ -207,34 +219,28 @@ fn window_median(values: &mut [f32], blocks: [usize; 3]) {
                 for dz in -WINDOW..=WINDOW {
                     for dy in -WINDOW..=WINDOW {
                         for dx in -WINDOW..=WINDOW {
-                            let neighbour = [
-                                (x + dx).clamp(0, blocks[0] as i64 - 1) as usize,
-                                (y + dy).clamp(0, blocks[1] as i64 - 1) as usize,
-                                (z + dz).clamp(0, blocks[2] as i64 - 1) as usize,
-                            ];
-                            let value = values[neighbour[0]
-                                + blocks[0] * (neighbour[1] + blocks[1] * neighbour[2])];
+                            let value = values[neighbour_slot([x + dx, y + dy, z + dz], blocks)];
                             if value.is_finite() {
                                 window.push(value);
                             }
                         }
                     }
                 }
-                let slot = x as usize + blocks[0] * (y as usize + blocks[1] * z as usize);
                 if window.is_empty() {
-                    filtered[slot] = INVALID;
-                } else {
-                    window.sort_unstable_by(f32::total_cmp);
-                    filtered[slot] = window[window.len() / 2];
+                    continue;
                 }
+                let rank = window.len() / 2;
+                window.select_nth_unstable_by(rank, f32::total_cmp);
+                let slot = block_slot([x as usize, y as usize, z as usize], blocks);
+                filtered[slot] = window[rank];
             }
         }
     }
-    values.copy_from_slice(&filtered);
+    filtered
 }
 
 fn window_max(values: &mut [f32], blocks: [usize; 3]) {
-    let mut filtered = vec![0.0f32; values.len()];
+    let mut filtered = vec![INVALID; values.len()];
     for z in 0..blocks[2] as i64 {
         for y in 0..blocks[1] as i64 {
             for x in 0..blocks[0] as i64 {
@@ -242,24 +248,19 @@ fn window_max(values: &mut [f32], blocks: [usize; 3]) {
                 for dz in -WINDOW..=WINDOW {
                     for dy in -WINDOW..=WINDOW {
                         for dx in -WINDOW..=WINDOW {
-                            let neighbour = [
-                                (x + dx).clamp(0, blocks[0] as i64 - 1) as usize,
-                                (y + dy).clamp(0, blocks[1] as i64 - 1) as usize,
-                                (z + dz).clamp(0, blocks[2] as i64 - 1) as usize,
-                            ];
-                            let value = values[neighbour[0]
-                                + blocks[0] * (neighbour[1] + blocks[1] * neighbour[2])];
-                            if value.is_finite() {
-                                best = if best.is_finite() {
-                                    best.max(value)
-                                } else {
-                                    value
-                                };
+                            let value = values[neighbour_slot([x + dx, y + dy, z + dz], blocks)];
+                            if !value.is_finite() {
+                                continue;
                             }
+                            best = if best.is_finite() {
+                                best.max(value)
+                            } else {
+                                value
+                            };
                         }
                     }
                 }
-                let slot = x as usize + blocks[0] * (y as usize + blocks[1] * z as usize);
+                let slot = block_slot([x as usize, y as usize, z as usize], blocks);
                 filtered[slot] = best;
             }
         }
@@ -267,55 +268,59 @@ fn window_max(values: &mut [f32], blocks: [usize; 3]) {
     values.copy_from_slice(&filtered);
 }
 
-fn fill_missing(values: &mut [f32], blocks: [usize; 3], fallback: f32) {
-    for _ in 0..3 {
-        if values.iter().all(|value| value.is_finite()) {
-            return;
+fn fill(values: &mut [f32], blocks: [usize; 3], fallback: f32) {
+    let mut queue = VecDeque::new();
+    let mut visited = vec![false; values.len()];
+    for (slot, value) in values.iter().enumerate() {
+        if value.is_finite() {
+            visited[slot] = true;
+            queue.push_back(slot);
         }
-        let previous = values.to_vec();
-        for z in 0..blocks[2] as i64 {
-            for y in 0..blocks[1] as i64 {
-                for x in 0..blocks[0] as i64 {
-                    let slot = x as usize + blocks[0] * (y as usize + blocks[1] * z as usize);
-                    if previous[slot].is_finite() {
-                        continue;
-                    }
-                    let mut total = 0.0f32;
-                    let mut count = 0u32;
-                    for (dx, dy, dz) in [
-                        (1, 0, 0),
-                        (-1, 0, 0),
-                        (0, 1, 0),
-                        (0, -1, 0),
-                        (0, 0, 1),
-                        (0, 0, -1),
-                    ] {
-                        let neighbour = [x + dx, y + dy, z + dz];
-                        if (0..3).any(|axis| {
-                            neighbour[axis] < 0 || neighbour[axis] >= blocks[axis] as i64
-                        }) {
-                            continue;
-                        }
-                        let value = previous[neighbour[0] as usize
-                            + blocks[0]
-                                * (neighbour[1] as usize + blocks[1] * neighbour[2] as usize)];
-                        if value.is_finite() {
-                            total += value;
-                            count += 1;
-                        }
-                    }
-                    if count > 0 {
-                        values[slot] = total / count as f32;
-                    }
+    }
+    if queue.is_empty() {
+        values.fill(fallback);
+        return;
+    }
+    while let Some(slot) = queue.pop_front() {
+        let block = [
+            slot % blocks[0],
+            (slot / blocks[0]) % blocks[1],
+            slot / (blocks[0] * blocks[1]),
+        ];
+        let value = values[slot];
+        for axis in 0..3 {
+            for step in [-1i64, 1] {
+                let reached = block[axis] as i64 + step;
+                if reached < 0 || reached >= blocks[axis] as i64 {
+                    continue;
                 }
+                let mut neighbour = block;
+                neighbour[axis] = reached as usize;
+                let target = block_slot(neighbour, blocks);
+                if visited[target] {
+                    continue;
+                }
+                visited[target] = true;
+                values[target] = value;
+                queue.push_back(target);
             }
         }
     }
-    for value in values {
-        if !value.is_finite() {
-            *value = fallback;
-        }
-    }
+}
+
+fn block_slot(block: [usize; 3], blocks: [usize; 3]) -> usize {
+    block[0] + blocks[0] * (block[1] + blocks[1] * block[2])
+}
+
+fn neighbour_slot(block: [i64; 3], blocks: [usize; 3]) -> usize {
+    block_slot(
+        [
+            block[0].clamp(0, blocks[0] as i64 - 1) as usize,
+            block[1].clamp(0, blocks[1] as i64 - 1) as usize,
+            block[2].clamp(0, blocks[2] as i64 - 1) as usize,
+        ],
+        blocks,
+    )
 }
 
 fn pad(values: &[f32], padded: [usize; 3]) -> Vec<f32> {

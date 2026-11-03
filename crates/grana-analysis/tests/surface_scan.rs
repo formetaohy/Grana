@@ -160,13 +160,13 @@ fn splits_touching_lobes_at_their_neck() {
 
     let split = extract(
         &volume,
-        SurfaceParams::new(0.5, 0.0, 0.6, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
+        SurfaceParams::new(0.5, 0.0, 0.3, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
         Region::none(),
     );
     assert_eq!(
         split.object_count(),
         2,
-        "the seed splits the lobes at their neck"
+        "the split separates the lobes at their neck"
     );
     let kept = split
         .objects()
@@ -198,13 +198,13 @@ fn splits_touching_lobes_at_their_neck() {
 
     let coarse = extract(
         &volume,
-        SurfaceParams::new(0.5, 0.0, 2.4, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
+        SurfaceParams::new(0.5, 0.0, 0.8, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
         Region::none(),
     );
     assert_eq!(
         coarse.object_count(),
         1,
-        "a seed wider than the neck keeps the lobes together"
+        "a split fraction deeper than the neck keeps the lobes together"
     );
 }
 
@@ -222,7 +222,7 @@ fn splits_large_lobes_at_their_thick_neck() {
 
     let split = extract(
         &volume,
-        SurfaceParams::new(0.5, 0.0, 0.6, 0.0, filter()),
+        SurfaceParams::new(0.5, 0.0, 0.3, 0.0, filter()),
         Region::none(),
     );
     assert_eq!(
@@ -322,6 +322,37 @@ fn fills_a_cavity_spanning_tiles() {
     );
 }
 
+#[test]
+fn keeps_a_large_flat_topped_object_solid() {
+    let extent = Extent::new(200, 200, 200);
+    let volume = block(extent, &[0.1, 0.1, 0.1], 21, 180);
+    let set = extract(&volume, params(0.5), Region::none());
+    assert_eq!(set.object_count(), 1, "the block is one object");
+    let expected = 159.0f64.powi(3);
+    let relative = (set.objects()[0].voxel_count() as f64 - expected).abs() / expected;
+    assert!(
+        relative < 0.03,
+        "the block is solid: {} voxels against {expected}",
+        set.objects()[0].voxel_count()
+    );
+    assert!(
+        watertight(&set),
+        "the block surface is watertight on every axis"
+    );
+
+    let region = Region::new(Vec3::new(-10.0, -5.0, -5.0), Vec3::new(10.0, 5.0, 5.0));
+    let cut = extract(&volume, params(0.5), region);
+    assert_eq!(cut.object_count(), 1, "the cut block stays one object");
+    let expected = 159.0 * 100.0 * 100.0;
+    let relative = (cut.objects()[0].voxel_count() as f64 - expected).abs() / expected;
+    assert!(
+        relative < 0.03,
+        "the cut block is solid: {} voxels against {expected}",
+        cut.objects()[0].voxel_count()
+    );
+    assert!(watertight(&cut), "the region cut is capped without holes");
+}
+
 fn watertight(set: &SurfaceSet) -> bool {
     let geometry = set.geometry();
     for (object, group) in geometry.groups().iter().enumerate() {
@@ -356,6 +387,14 @@ fn detects_dim_objects_under_a_scattering_step() {
     let centres = [[60.0f32, 48.0, 48.0], [260.0, 48.0, 48.0]];
     let volume = scattering(extent, &[0.1, 0.1, 0.1], &centres, 10.0);
     let set = extract(&volume, params(0.25), Region::none());
+    eprintln!(
+        "scatter objects {} {:?}",
+        set.object_count(),
+        set.objects()
+            .iter()
+            .map(|object| object.voxel_count())
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         set.object_count(),
         centres.len(),
@@ -485,13 +524,13 @@ fn splits_solid_lobes_at_their_neck() {
     assert_eq!(merged.object_count(), 1, "touching lobes form one object");
     let split = extract(
         &volume,
-        SurfaceParams::new(0.5, 0.0, 0.6, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
+        SurfaceParams::new(0.5, 0.0, 0.2, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
         Region::none(),
     );
     assert_eq!(
         split.object_count(),
         2,
-        "a seed shallower than the neck splits the solid lobes"
+        "a split shallower than the neck splits the solid lobes"
     );
     let total = split
         .objects()
@@ -606,6 +645,29 @@ fn blobs(extent: Extent, spacing: &[f32; 3], centres: &[[f32; 3]], radius: f32) 
                 VoxelData::U16(vec![MARKER; count]),
             ),
         ],
+    )
+}
+
+fn block(extent: Extent, spacing: &[f32; 3], low: u32, high: u32) -> Volume {
+    let count = extent.voxel_count() as usize;
+    let mut values = vec![0u16; count];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                if x >= low && x < high && y >= low && y < high && z >= low && z < high {
+                    values[extent.index(x, y, z) as usize] = HIGH;
+                }
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        Spacing::new(spacing[0], spacing[1], spacing[2]),
+        vec![Channel::new(
+            "block",
+            [0.3, 0.8, 1.0],
+            VoxelData::U16(values),
+        )],
     )
 }
 
