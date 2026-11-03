@@ -5,6 +5,8 @@ struct MarkerInstance {
 
 @group(1) @binding(0) var<storage, read> markers: array<MarkerInstance>;
 @group(1) @binding(1) var<storage, read> order: array<u32>;
+@group(4) @binding(0) var previous_depth: texture_depth_2d;
+@group(4) @binding(1) var opaque_depth: texture_depth_2d;
 
 struct MarkerOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -16,6 +18,11 @@ struct MarkerOutput {
 struct MarkerFragment {
     @location(0) color: vec4<f32>,
     @builtin(frag_depth) depth: f32,
+}
+
+struct Shaded {
+    color: vec4<f32>,
+    depth: f32,
 }
 
 @vertex
@@ -44,8 +51,7 @@ fn vs_main(@builtin(vertex_index) index: u32, @builtin(instance_index) instance:
     return output;
 }
 
-@fragment
-fn fs_main(input: MarkerOutput) -> MarkerFragment {
+fn shade(input: MarkerOutput) -> Shaded {
     let local = input.local;
     let squared = dot(local, local);
     if (squared > 1.0) {
@@ -70,8 +76,32 @@ fn fs_main(input: MarkerOutput) -> MarkerFragment {
     let pixel = max(fwidth(local.x), fwidth(local.y));
     let coverage = clamp((1.0 - sqrt(squared)) / max(pixel, 1.0e-6) + 0.5, 0.0, 1.0);
     let clip = frame.view_projection * vec4<f32>(surface, 1.0);
-    var output: MarkerFragment;
+    var output: Shaded;
     output.color = vec4<f32>(color, input.color_alpha.a * coverage);
     output.depth = clip.z / clip.w;
+    return output;
+}
+
+@fragment
+fn fs_main(input: MarkerOutput) -> MarkerFragment {
+    let shaded = shade(input);
+    var output: MarkerFragment;
+    output.color = shaded.color;
+    output.depth = shaded.depth;
+    return output;
+}
+
+@fragment
+fn fs_layer(input: MarkerOutput) -> MarkerFragment {
+    let shaded = shade(input);
+    let pixel = vec2<i32>(input.clip_position.xy);
+    if (shaded.depth > textureLoad(opaque_depth, pixel, 0)
+        || shaded.depth <= textureLoad(previous_depth, pixel, 0)) {
+        discard;
+    }
+    let alpha = shaded.color.a;
+    var output: MarkerFragment;
+    output.color = vec4<f32>(shaded.color.rgb * alpha, alpha);
+    output.depth = shaded.depth;
     return output;
 }

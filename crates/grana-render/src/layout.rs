@@ -1,4 +1,4 @@
-﻿use std::num::NonZeroU32;
+use std::num::NonZeroU32;
 
 use grana_gpu::layout::{sampler, storage, texture, uniform};
 use wgpu::{
@@ -25,12 +25,15 @@ pub(crate) struct Layouts {
     pub marker_cull: BindGroupLayout,
     pub marker_render: BindGroupLayout,
     pub census_level: BindGroupLayout,
+    pub peel: BindGroupLayout,
+    pub layers: BindGroupLayout,
     pub volume: PipelineLayout,
     pub section: PipelineLayout,
     pub cull: PipelineLayout,
     pub plan_pipeline: PipelineLayout,
     pub mesh_cull: PipelineLayout,
     pub marker_volume: PipelineLayout,
+    pub marker_layer: PipelineLayout,
     pub marker_section: PipelineLayout,
     pub marker_cull_pipeline: PipelineLayout,
     pub census: PipelineLayout,
@@ -198,6 +201,12 @@ impl Layouts {
                 storage(0, ShaderStages::COMPUTE, true),
                 storage(1, ShaderStages::COMPUTE, false),
                 storage(2, ShaderStages::COMPUTE, false),
+                storage(3, ShaderStages::COMPUTE, false),
+                storage(4, ShaderStages::COMPUTE, false),
+                storage(5, ShaderStages::COMPUTE, false),
+                storage(6, ShaderStages::COMPUTE, false),
+                storage(7, ShaderStages::COMPUTE, false),
+                storage(8, ShaderStages::COMPUTE, false),
             ],
         });
         let marker_render = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -207,10 +216,27 @@ impl Layouts {
                 storage(1, ShaderStages::VERTEX, true),
             ],
         });
+        let peel = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.peel.layout"),
+            entries: &[depth_texture(0), depth_texture(1)],
+        });
+        let layers = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.layers.layout"),
+            entries: &[
+                layer_texture(0),
+                layer_texture(1),
+                layer_texture(2),
+                layer_texture(3),
+                depth_texture(4),
+                depth_texture(5),
+                depth_texture(6),
+                depth_texture(7),
+            ],
+        });
         let volume = pipeline_layout(
             device,
             "grana.volume.layout",
-            &[&scene, &level, &atlas, &depth, &shadow],
+            &[&scene, &level, &atlas, &depth, &shadow, &layers],
         );
         let section = pipeline_layout(device, "grana.section.layout", &[&scene, &level, &atlas]);
         let cull = pipeline_layout(
@@ -226,6 +252,11 @@ impl Layouts {
         );
         let marker_volume =
             pipeline_layout(device, "grana.marker.layout", &[&scene, &marker_render]);
+        let marker_layer = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.marker.layer.layout"),
+            bind_group_layouts: &[Some(&scene), Some(&marker_render), None, None, Some(&peel)],
+            immediate_size: 0,
+        });
         let marker_section = pipeline_layout(
             device,
             "grana.marker.section.layout",
@@ -264,10 +295,13 @@ impl Layouts {
             plan_pipeline,
             mesh_cull,
             marker_volume,
+            marker_layer,
             marker_section,
             marker_cull_pipeline,
             census,
             shadow_pipeline,
+            peel,
+            layers,
         }
     }
 }
@@ -281,4 +315,30 @@ fn pipeline_layout(device: &Device, label: &str, layouts: &[&BindGroupLayout]) -
             .collect::<Vec<_>>(),
         immediate_size: 0,
     })
+}
+
+fn depth_texture(binding: u32) -> BindGroupLayoutEntry {
+    BindGroupLayoutEntry {
+        binding,
+        visibility: ShaderStages::FRAGMENT,
+        ty: BindingType::Texture {
+            sample_type: TextureSampleType::Depth,
+            view_dimension: TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+fn layer_texture(binding: u32) -> BindGroupLayoutEntry {
+    BindGroupLayoutEntry {
+        binding,
+        visibility: ShaderStages::FRAGMENT,
+        ty: BindingType::Texture {
+            sample_type: TextureSampleType::Float { filterable: false },
+            view_dimension: TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
 }

@@ -32,6 +32,7 @@ pub(crate) struct FrameData {
     pub light_view: [[f32; 4]; 4],
     pub light_inverse: [[f32; 4]; 4],
     pub light_reach: [f32; 4],
+    pub layers: [u32; 4],
 }
 
 #[repr(C)]
@@ -66,7 +67,7 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 624);
+    assert!(size_of::<FrameData>() == 640);
     assert!(std::mem::offset_of!(FrameData, planes) == 384);
     assert!(std::mem::offset_of!(FrameData, light_view) == 480);
     assert!(size_of::<SectionData>() == 176);
@@ -134,6 +135,7 @@ impl FrameData {
             light_view: space.view().to_cols_array_2d(),
             light_inverse: space.inverse().to_cols_array_2d(),
             light_reach: space.reach(),
+            layers: [0; 4],
         }
     }
 }

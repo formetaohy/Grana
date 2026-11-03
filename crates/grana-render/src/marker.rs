@@ -1,4 +1,4 @@
-﻿use std::hash::{Hash, Hasher};
+use std::hash::{Hash, Hasher};
 
 use bytemuck::{Pod, Zeroable};
 use grana_gpu::{InstanceCommands, Table};
@@ -81,6 +81,14 @@ impl Marker {
     pub(crate) fn radius(self) -> f32 {
         self.center_radius[3]
     }
+
+    pub(crate) fn alpha(self) -> f32 {
+        self.color_alpha[3]
+    }
+
+    pub(crate) fn transparent(self) -> bool {
+        self.alpha() < 1.0
+    }
 }
 
 impl Hash for Marker {
@@ -92,23 +100,25 @@ impl Hash for Marker {
 
 pub(crate) struct MarkerPasses {
     markers: Table<Marker>,
-    volume_order: Table<u32>,
+    opaque_order: Table<u32>,
+    layer_order: Table<u32>,
     behind_order: Table<u32>,
     front_order: Table<u32>,
-    volume_group: BindGroup,
+    opaque_group: BindGroup,
+    layer_group: BindGroup,
     behind_group: BindGroup,
     front_group: BindGroup,
     shadow_group: BindGroup,
-    volume_cull_group: BindGroup,
-    behind_cull_group: BindGroup,
-    front_cull_group: BindGroup,
-    volume_args: InstanceCommands,
+    cull_group: BindGroup,
+    opaque_args: InstanceCommands,
+    layer_args: InstanceCommands,
     behind_args: InstanceCommands,
     front_args: InstanceCommands,
     volume_cull: ComputePipeline,
     behind_cull: ComputePipeline,
     front_cull: ComputePipeline,
     volume_pipeline: RenderPipeline,
+    layer_pipeline: RenderPipeline,
     section_pipeline: RenderPipeline,
     shadow_pipeline: RenderPipeline,
     count: u32,
@@ -117,10 +127,12 @@ pub(crate) struct MarkerPasses {
 impl MarkerPasses {
     pub fn new(device: &Device, layouts: &Layouts) -> Self {
         let markers = Table::new(device, "grana.markers");
-        let volume_order = Table::new(device, "grana.marker.volume.order");
+        let opaque_order = Table::new(device, "grana.marker.opaque.order");
+        let layer_order = Table::new(device, "grana.marker.layer.order");
         let behind_order = Table::new(device, "grana.marker.behind.order");
         let front_order = Table::new(device, "grana.marker.front.order");
-        let volume_args = InstanceCommands::new(device, "grana.marker.volume.args");
+        let opaque_args = InstanceCommands::new(device, "grana.marker.opaque.args");
+        let layer_args = InstanceCommands::new(device, "grana.marker.layer.args");
         let behind_args = InstanceCommands::new(device, "grana.marker.behind.args");
         let front_args = InstanceCommands::new(device, "grana.marker.front.args");
         let groups = groups(
@@ -128,12 +140,14 @@ impl MarkerPasses {
             layouts,
             markers.buffer(),
             [
-                volume_order.buffer(),
+                opaque_order.buffer(),
+                layer_order.buffer(),
                 behind_order.buffer(),
                 front_order.buffer(),
             ],
             [
-                volume_args.buffer(),
+                opaque_args.buffer(),
+                layer_args.buffer(),
                 behind_args.buffer(),
                 front_args.buffer(),
             ],
@@ -206,6 +220,34 @@ impl MarkerPasses {
             multiview_mask: None,
             cache: None,
         });
+        let layer_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.marker.layer"),
+            layout: Some(&layouts.marker_layer),
+            vertex: VertexState {
+                module: &volume_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(depth_state(true, CompareFunction::Less)),
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &volume_module,
+                entry_point: Some("fs_layer"),
+                compilation_options: Default::default(),
+                targets: &[Some(ColorTargetState {
+                    format: SCENE_FORMAT,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let section_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.marker.section"),
             layout: Some(&layouts.marker_section),
@@ -264,23 +306,25 @@ impl MarkerPasses {
         });
         Self {
             markers,
-            volume_order,
+            opaque_order,
+            layer_order,
             behind_order,
             front_order,
-            volume_group: groups.volume_render,
+            opaque_group: groups.opaque_render,
+            layer_group: groups.layer_render,
             behind_group: groups.behind_render,
             front_group: groups.front_render,
             shadow_group: groups.shadow_render,
-            volume_cull_group: groups.volume_cull,
-            behind_cull_group: groups.behind_cull,
-            front_cull_group: groups.front_cull,
-            volume_args,
+            cull_group: groups.cull,
+            opaque_args,
+            layer_args,
             behind_args,
             front_args,
             volume_cull,
             behind_cull,
             front_cull,
             volume_pipeline,
+            layer_pipeline,
             section_pipeline,
             shadow_pipeline,
             count: 0,
@@ -300,7 +344,8 @@ impl MarkerPasses {
         }
         self.count = markers.len() as u32;
         let mut stale = self.markers.write(device, queue, markers);
-        stale |= self.volume_order.reserve(device, markers.len());
+        stale |= self.opaque_order.reserve(device, markers.len());
+        stale |= self.layer_order.reserve(device, markers.len());
         stale |= self.behind_order.reserve(device, markers.len());
         stale |= self.front_order.reserve(device, markers.len());
         if stale {
@@ -309,25 +354,27 @@ impl MarkerPasses {
                 layouts,
                 self.markers.buffer(),
                 [
-                    self.volume_order.buffer(),
+                    self.opaque_order.buffer(),
+                    self.layer_order.buffer(),
                     self.behind_order.buffer(),
                     self.front_order.buffer(),
                 ],
                 [
-                    self.volume_args.buffer(),
+                    self.opaque_args.buffer(),
+                    self.layer_args.buffer(),
                     self.behind_args.buffer(),
                     self.front_args.buffer(),
                 ],
             );
-            self.volume_group = groups.volume_render;
+            self.opaque_group = groups.opaque_render;
+            self.layer_group = groups.layer_render;
             self.behind_group = groups.behind_render;
             self.front_group = groups.front_render;
             self.shadow_group = groups.shadow_render;
-            self.volume_cull_group = groups.volume_cull;
-            self.behind_cull_group = groups.behind_cull;
-            self.front_cull_group = groups.front_cull;
+            self.cull_group = groups.cull;
         }
-        self.volume_args.reset(queue, 6);
+        self.opaque_args.reset(queue, 6);
+        self.layer_args.reset(queue, 6);
         self.behind_args.reset(queue, 6);
         self.front_args.reset(queue, 6);
     }
@@ -337,7 +384,7 @@ impl MarkerPasses {
             encoder,
             scene,
             &self.volume_cull,
-            &self.volume_cull_group,
+            &self.cull_group,
             "grana.marker.cull.volume.pass",
         );
     }
@@ -347,14 +394,14 @@ impl MarkerPasses {
             encoder,
             scene,
             &self.behind_cull,
-            &self.behind_cull_group,
+            &self.cull_group,
             "grana.marker.cull.section.behind.pass",
         );
         self.cull(
             encoder,
             scene,
             &self.front_cull,
-            &self.front_cull_group,
+            &self.cull_group,
             "grana.marker.cull.section.front.pass",
         );
     }
@@ -425,8 +472,24 @@ impl MarkerPasses {
         pass.set_scissor_rect(region[0], region[1], width, height);
         pass.set_pipeline(&self.volume_pipeline);
         pass.set_bind_group(0, scene, &[]);
-        pass.set_bind_group(1, &self.volume_group, &[]);
-        pass.draw_indirect(self.volume_args.buffer(), 0);
+        pass.set_bind_group(1, &self.opaque_group, &[]);
+        pass.draw_indirect(self.opaque_args.buffer(), 0);
+    }
+
+    pub fn draw_layer<'a>(
+        &'a self,
+        pass: &mut RenderPass<'a>,
+        scene: &'a BindGroup,
+        peel: &'a BindGroup,
+    ) {
+        if self.count == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.layer_pipeline);
+        pass.set_bind_group(0, scene, &[]);
+        pass.set_bind_group(1, &self.layer_group, &[]);
+        pass.set_bind_group(4, peel, &[]);
+        pass.draw_indirect(self.layer_args.buffer(), 0);
     }
 
     pub fn draw_shadow(
@@ -453,7 +516,7 @@ impl MarkerPasses {
         });
         pass.set_pipeline(&self.shadow_pipeline);
         pass.set_bind_group(0, scene, &[]);
-        pass.set_bind_group(1, &self.shadow_group, &[]);
+        pass.set_bind_group(1, &self.opaque_group, &[]);
         pass.draw(0..6, 0..self.count);
     }
 
@@ -483,24 +546,23 @@ impl MarkerPasses {
 }
 
 struct Groups {
-    volume_render: BindGroup,
+    opaque_render: BindGroup,
+    layer_render: BindGroup,
     behind_render: BindGroup,
     front_render: BindGroup,
     shadow_render: BindGroup,
-    volume_cull: BindGroup,
-    behind_cull: BindGroup,
-    front_cull: BindGroup,
+    cull: BindGroup,
 }
 
 fn groups(
     device: &Device,
     layouts: &Layouts,
     markers: &wgpu::Buffer,
-    orders: [&wgpu::Buffer; 3],
-    args: [&wgpu::Buffer; 3],
+    orders: [&wgpu::Buffer; 4],
+    args: [&wgpu::Buffer; 4],
 ) -> Groups {
-    let [volume_order, behind_order, front_order] = orders;
-    let [volume_args, behind_args, front_args] = args;
+    let [opaque_order, layer_order, behind_order, front_order] = orders;
+    let [opaque_args, layer_args, behind_args, front_args] = args;
     let render = |label: &str, order: &wgpu::Buffer| {
         device.create_bind_group(&BindGroupDescriptor {
             label: Some(label),
@@ -517,33 +579,54 @@ fn groups(
             ],
         })
     };
-    let cull = |label: &str, order: &wgpu::Buffer, args: &wgpu::Buffer| {
-        device.create_bind_group(&BindGroupDescriptor {
-            label: Some(label),
-            layout: &layouts.marker_cull,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: markers.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: order.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: args.as_entire_binding(),
-                },
-            ],
-        })
-    };
+    let cull = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("grana.marker.cull.group"),
+        layout: &layouts.marker_cull,
+        entries: &[
+            BindGroupEntry {
+                binding: 0,
+                resource: markers.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 1,
+                resource: opaque_order.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 2,
+                resource: layer_order.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 3,
+                resource: behind_order.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 4,
+                resource: front_order.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 5,
+                resource: opaque_args.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 6,
+                resource: layer_args.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 7,
+                resource: behind_args.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 8,
+                resource: front_args.as_entire_binding(),
+            },
+        ],
+    });
     Groups {
-        volume_render: render("grana.marker.volume.render.group", volume_order),
+        opaque_render: render("grana.marker.opaque.render.group", opaque_order),
+        layer_render: render("grana.marker.layer.render.group", layer_order),
         behind_render: render("grana.marker.behind.render.group", behind_order),
         front_render: render("grana.marker.front.render.group", front_order),
-        shadow_render: render("grana.marker.shadow.render.group", volume_order),
-        volume_cull: cull("grana.marker.cull.volume.group", volume_order, volume_args),
-        behind_cull: cull("grana.marker.cull.behind.group", behind_order, behind_args),
-        front_cull: cull("grana.marker.cull.front.group", front_order, front_args),
+        shadow_render: render("grana.marker.shadow.render.group", opaque_order),
+        cull,
     }
 }

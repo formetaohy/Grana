@@ -11,8 +11,14 @@ struct InstanceArgs {
 }
 
 @group(1) @binding(0) var<storage, read> markers: array<MarkerInstance>;
-@group(1) @binding(1) var<storage, read_write> order: array<u32>;
-@group(1) @binding(2) var<storage, read_write> args: InstanceArgs;
+@group(1) @binding(1) var<storage, read_write> opaque_order: array<u32>;
+@group(1) @binding(2) var<storage, read_write> layer_order: array<u32>;
+@group(1) @binding(3) var<storage, read_write> behind_order: array<u32>;
+@group(1) @binding(4) var<storage, read_write> front_order: array<u32>;
+@group(1) @binding(5) var<storage, read_write> opaque_args: InstanceArgs;
+@group(1) @binding(6) var<storage, read_write> layer_args: InstanceArgs;
+@group(1) @binding(7) var<storage, read_write> behind_args: InstanceArgs;
+@group(1) @binding(8) var<storage, read_write> front_args: InstanceArgs;
 
 fn outside_sphere(center: vec3<f32>, radius: f32) -> bool {
     for (var index = 0u; index < 6u; index += 1u) {
@@ -42,9 +48,24 @@ fn outside_section(center: vec3<f32>, radius: f32) -> bool {
     return false;
 }
 
-fn append(index: u32) {
-    let slot = atomicAdd(&args.instance_count, 1u);
-    order[slot] = index;
+fn append_volume(index: u32, opaque: bool) {
+    if (opaque) {
+        let slot = atomicAdd(&opaque_args.instance_count, 1u);
+        opaque_order[slot] = index;
+    } else {
+        let slot = atomicAdd(&layer_args.instance_count, 1u);
+        layer_order[slot] = index;
+    }
+}
+
+fn append_section(index: u32, front: bool) {
+    if (front) {
+        let slot = atomicAdd(&front_args.instance_count, 1u);
+        front_order[slot] = index;
+    } else {
+        let slot = atomicAdd(&behind_args.instance_count, 1u);
+        behind_order[slot] = index;
+    }
 }
 
 @compute @workgroup_size(64)
@@ -56,7 +77,7 @@ fn marker_cull_volume(@builtin(global_invocation_id) id: vec3<u32>) {
     let data = markers[index];
     if (!outside_sphere(data.center_radius.xyz, data.center_radius.w)
         && !outside_region_sphere(data.center_radius.xyz, data.center_radius.w)) {
-        append(index);
+        append_volume(index, data.color_alpha.a >= 1.0);
     }
 }
 
@@ -72,7 +93,7 @@ fn cull_section_side(index: u32, front: bool) {
     let uvw = (data.center_radius.xyz - section.box_min.xyz) / section.world.xyz;
     let ahead = uvw[section.mapping.z] >= section.plane.x;
     if (ahead == front) {
-        append(index);
+        append_section(index, front);
     }
 }
 

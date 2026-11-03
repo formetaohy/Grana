@@ -63,6 +63,7 @@ pub struct SetState {
     pub channel: usize,
     pub color: [f32; 3],
     pub visible: bool,
+    pub opacity: f32,
     pub params: ObjectParams,
     pub track_style: Option<TrackStyle>,
     pub tracks: Option<Arc<TrackSet>>,

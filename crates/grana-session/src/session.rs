@@ -455,6 +455,11 @@ impl Session {
                     target.set_color(color);
                 }
             }
+            Command::SetObjectOpacity { set, opacity } => {
+                if let Some(target) = self.object_mut(set) {
+                    target.set_opacity(opacity);
+                }
+            }
             Command::SetObjectParams { set, params } => {
                 if let Some(target) = self.object_mut(set) {
                     target.set_params(params);

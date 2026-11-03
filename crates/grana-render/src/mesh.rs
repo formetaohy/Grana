@@ -7,10 +7,10 @@ use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Buffer, BufferUsages,
     ColorTargetState, ColorWrites, CommandEncoder, CompareFunction, ComputePipeline,
     ComputePipelineDescriptor, Device, FragmentState, IndexFormat, LoadOp, MultisampleState,
-    Operations, PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPassColorAttachment,
-    RenderPassDepthStencilAttachment, RenderPassDescriptor, RenderPipeline,
-    RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, StoreOp, TextureView,
-    VertexAttribute, VertexBufferLayout, VertexFormat, VertexState, VertexStepMode,
+    Operations, PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPass,
+    RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor,
+    RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, StoreOp,
+    TextureView, VertexAttribute, VertexBufferLayout, VertexFormat, VertexState, VertexStepMode,
     util::DeviceExt,
 };
 
@@ -33,11 +33,13 @@ const VOLUME_SHADER: &str = concat!(
     include_str!("shader/mesh.wgsl")
 );
 
-const VOLUME_NARROW: usize = 0;
-const VOLUME_WIDE: usize = 1;
-const SHADOW_NARROW: usize = 2;
-const SHADOW_WIDE: usize = 3;
-const REGIONS: usize = 4;
+const OPAQUE_NARROW: usize = 0;
+const OPAQUE_WIDE: usize = 1;
+const LAYER_NARROW: usize = 2;
+const LAYER_WIDE: usize = 3;
+const SHADOW_NARROW: usize = 4;
+const SHADOW_WIDE: usize = 5;
+const REGIONS: usize = 6;
 const UNIT: f32 = 65535.0;
 const WORKGROUP: u32 = 64;
 
@@ -101,6 +103,7 @@ pub(crate) struct MeshPasses {
     cull: ComputePipeline,
     shadow_cull: ComputePipeline,
     volume_pipeline: RenderPipeline,
+    layer_pipeline: RenderPipeline,
     shadow_pipeline: RenderPipeline,
     uniforms: Buffer,
     uniform_group: BindGroup,
@@ -137,6 +140,17 @@ impl MeshPasses {
                 Some(&uniform_layout),
                 Some(&layouts.objects),
                 Some(&layouts.styles),
+            ],
+            immediate_size: 0,
+        });
+        let layer_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.mesh.layer.pipeline_layout"),
+            bind_group_layouts: &[
+                Some(&uniform_layout),
+                Some(&layouts.objects),
+                Some(&layouts.styles),
+                Some(&layouts.shadow),
+                Some(&layouts.peel),
             ],
             immediate_size: 0,
         });
@@ -205,6 +219,31 @@ impl MeshPasses {
             multiview_mask: None,
             cache: None,
         });
+        let layer_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.mesh.layer"),
+            layout: Some(&layer_layout),
+            vertex: VertexState {
+                module: &volume_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(vertex_layout())],
+            },
+            primitive: PrimitiveState::default(),
+            depth_stencil: Some(depth_state(true, CompareFunction::Less)),
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &volume_module,
+                entry_point: Some("fs_layer"),
+                compilation_options: Default::default(),
+                targets: &[Some(ColorTargetState {
+                    format: SCENE_FORMAT,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.mesh.uniforms"),
             size: size_of::<MeshUniforms>() as u64,
@@ -228,6 +267,7 @@ impl MeshPasses {
             cull,
             shadow_cull,
             volume_pipeline,
+            layer_pipeline,
             shadow_pipeline,
             uniforms,
             uniform_group,
@@ -428,7 +468,25 @@ impl MeshPasses {
         pass.set_bind_group(0, &self.uniform_group, &[]);
         pass.set_bind_group(3, shadow, &[]);
         for key in &self.active {
-            self.slots[key].draw(&mut pass, VOLUME_NARROW, VOLUME_WIDE);
+            self.slots[key].draw(&mut pass, OPAQUE_NARROW, OPAQUE_WIDE);
+        }
+    }
+
+    pub fn draw_layer<'a>(
+        &'a self,
+        pass: &mut RenderPass<'a>,
+        shadow: &'a BindGroup,
+        peel: &'a BindGroup,
+    ) {
+        if self.active.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.layer_pipeline);
+        pass.set_bind_group(0, &self.uniform_group, &[]);
+        pass.set_bind_group(3, shadow, &[]);
+        pass.set_bind_group(4, peel, &[]);
+        for key in &self.active {
+            self.slots[key].draw(pass, LAYER_NARROW, LAYER_WIDE);
         }
     }
 }
@@ -599,11 +657,11 @@ impl MeshSlot {
 pub(crate) fn style_data(style: Style) -> StyleData {
     let [red, green, blue] = srgb_to_linear(style.color());
     StyleData {
-        color: [red, green, blue, 1.0],
+        color: [red, green, blue, style.opacity()],
         flags: [
             if style.visible() { 1.0 } else { 0.0 },
             if style.selected() { 1.0 } else { 0.0 },
-            0.0,
+            if style.transparent() { 0.0 } else { 1.0 },
             0.0,
         ],
     }

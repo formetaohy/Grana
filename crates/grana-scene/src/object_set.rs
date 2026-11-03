@@ -61,6 +61,7 @@ pub struct ObjectSet {
     channels: usize,
     color: [f32; 3],
     visible: bool,
+    opacity: f32,
     voxel: f32,
     params: ObjectParams,
     track_style: Option<TrackStyle>,
@@ -99,6 +100,7 @@ impl ObjectSet {
             channels: dataset.channels().len(),
             color,
             visible: true,
+            opacity: 1.0,
             voxel,
             params,
             track_style,
@@ -155,6 +157,19 @@ impl ObjectSet {
             return;
         }
         self.color = color;
+        self.document += 1;
+    }
+
+    pub fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
+    pub fn set_opacity(&mut self, opacity: f32) {
+        let opacity = opacity.clamp(0.0, 1.0);
+        if self.opacity == opacity {
+            return;
+        }
+        self.opacity = opacity;
         self.document += 1;
     }
 
@@ -381,6 +396,7 @@ impl ObjectSet {
             channel: self.channel,
             color: self.color,
             visible: self.visible,
+            opacity: self.opacity,
             params: self.params,
             track_style: self.track_style,
             tracks: self.tracks.as_ref().map(TrackLayer::shared_set),
@@ -410,6 +426,7 @@ impl ObjectSet {
             channel,
             color,
             visible,
+            opacity,
             params,
             track_style,
             tracks,
@@ -446,6 +463,7 @@ impl ObjectSet {
             channels: dataset.channels().len(),
             color,
             visible,
+            opacity,
             voxel: dataset.voxel_size().min_element(),
             params,
             track_style,

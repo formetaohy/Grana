@@ -207,6 +207,7 @@ impl Encode for SetState {
             writer.f32(value);
         }
         writer.bool(self.visible);
+        writer.f32(self.opacity);
         self.params.encode(writer);
         self.track_style.encode(writer);
         self.tracks.encode(writer);

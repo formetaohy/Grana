@@ -85,6 +85,10 @@ pub enum Command {
         set: ObjectSetId,
         color: [f32; 3],
     },
+    SetObjectOpacity {
+        set: ObjectSetId,
+        opacity: f32,
+    },
     SetObjectParams {
         set: ObjectSetId,
         params: ObjectParams,
@@ -213,6 +217,7 @@ pub enum Action {
     Transfer,
     ObjectVisible,
     ObjectColor,
+    ObjectOpacity,
     ObjectParameters,
     ObjectColoring,
     Mask,
@@ -269,6 +274,7 @@ impl Action {
             Self::Transfer => "transfer function",
             Self::ObjectVisible => "object visibility",
             Self::ObjectColor => "object color",
+            Self::ObjectOpacity => "object opacity",
             Self::ObjectParameters => "object parameters",
             Self::ObjectColoring => "object colors",
             Self::Mask => "analysis mask",
@@ -312,6 +318,7 @@ impl Action {
                 | Self::Window
                 | Self::Transfer
                 | Self::ObjectColor
+                | Self::ObjectOpacity
                 | Self::ObjectParameters
                 | Self::ObjectColoring
                 | Self::TrackThickness
@@ -393,6 +400,7 @@ impl Command {
             Self::SetTransfer { channel, .. } => Edit::targeted(Action::Transfer, *channel as u64),
             Self::SetObjectVisible { set, .. } => Edit::targeted(Action::ObjectVisible, set.raw()),
             Self::SetObjectColor { set, .. } => Edit::targeted(Action::ObjectColor, set.raw()),
+            Self::SetObjectOpacity { set, .. } => Edit::targeted(Action::ObjectOpacity, set.raw()),
             Self::SetObjectParams { set, .. } => {
                 Edit::targeted(Action::ObjectParameters, set.raw())
             }

@@ -34,7 +34,7 @@ use crate::schema::SceneFrame;
 use crate::section::SectionPass;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
 use crate::slice::SlicePass;
-use crate::target::{self, SceneTarget};
+use crate::target::{self, LAYER_COUNT, LayerTargets, SceneTarget};
 use crate::volume::VolumePass;
 use grana_display::{Camera, SectionCamera};
 use grana_volume::CHANNEL_LIMIT;
@@ -166,9 +166,46 @@ struct FrameTarget {
     accumulation: TextureView,
     accumulate_group: BindGroup,
     present_group: BindGroup,
+    layers: Option<Layers>,
     size: [u32; 2],
     samples: u32,
     signature: Option<u64>,
+}
+
+struct Layers {
+    targets: LayerTargets,
+    volume_group: BindGroup,
+    peel_groups: Vec<BindGroup>,
+    size: [u32; 2],
+}
+
+impl Layers {
+    fn new(
+        device: &Device,
+        layouts: &Layouts,
+        opaque: &TextureView,
+        empty: &TextureView,
+        size: [u32; 2],
+    ) -> Self {
+        let targets = LayerTargets::new(device, size, "grana.layer");
+        let volume_group = crate::target::layer_group(device, &layouts.layers, &targets);
+        let peel_groups = (0..LAYER_COUNT)
+            .map(|index| {
+                let previous = if index == 0 {
+                    empty
+                } else {
+                    targets.depth(index - 1)
+                };
+                crate::target::peel_group(device, &layouts.peel, previous, opaque)
+            })
+            .collect();
+        Self {
+            targets,
+            volume_group,
+            peel_groups,
+            size,
+        }
+    }
 }
 
 impl FrameTarget {
@@ -187,6 +224,7 @@ impl FrameTarget {
             accumulation,
             accumulate_group,
             present_group,
+            layers: None,
             size,
             samples: 0,
             signature: None,
@@ -211,6 +249,8 @@ pub struct Renderer {
     meshes: MeshPasses,
     markers: MarkerPasses,
     dummy: TextureView,
+    empty_depth: TextureView,
+    dummy_layer_group: BindGroup,
     atlas_sampler: Sampler,
     pyramid: Option<Pyramid>,
     channels: usize,
@@ -236,6 +276,9 @@ impl Renderer {
         assert!(budget > 0, "a renderer needs a residency budget");
         let layouts = Layouts::new(device);
         let dummy = dummy_texture(device, queue);
+        let empty_depth = crate::target::depth_placeholder(device, queue, 0.0);
+        let dummy_layers = LayerTargets::new(device, [1, 1], "grana.layer.dummy");
+        let dummy_layer_group = crate::target::layer_group(device, &layouts.layers, &dummy_layers);
         let atlas_sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("grana.atlas.sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -263,6 +306,8 @@ impl Renderer {
             markers: MarkerPasses::new(device, &layouts),
             layouts,
             dummy,
+            empty_depth,
+            dummy_layer_group,
             atlas_sampler,
             pyramid: None,
             channels: 0,
@@ -542,6 +587,8 @@ impl Renderer {
             transparent,
             object_key,
             info,
+            empty_depth,
+            dummy_layer_group,
             ..
         } = self;
         let (Some(pyramid), Some(atlas), Some(scene_table), Some(planner), Some(census)) = (
@@ -682,6 +729,35 @@ impl Renderer {
             *channels,
             space,
         );
+        let layers = if scene
+            .styles
+            .iter()
+            .any(|style| style.visible() && style.transparent())
+            || scene.markers.iter().any(|marker| marker.transparent())
+        {
+            LAYER_COUNT
+        } else {
+            0
+        };
+        frame_data.layers = [layers as u32, 0, 0, 0];
+        if layers > 0
+            && target
+                .layers
+                .as_ref()
+                .is_none_or(|value| value.size != size)
+        {
+            target.layers = Some(Layers::new(
+                device,
+                layouts,
+                target.scene.depth(),
+                empty_depth,
+                size,
+            ));
+        }
+        let layer_group = match target.layers.as_ref() {
+            Some(value) if layers > 0 => &value.volume_group,
+            _ => dummy_layer_group,
+        };
         let signature = Signature {
             scene,
             data: &frame_data,
@@ -816,6 +892,18 @@ impl Renderer {
                 volume_region,
                 scene_group,
             );
+            if let Some(layers) = target.layers.as_ref().filter(|_| layers > 0) {
+                layers.encode(
+                    &mut encoder,
+                    LayerFrame {
+                        region: volume_region,
+                        scene: scene_group,
+                        shadow: shadow_group,
+                        meshes,
+                        markers,
+                    },
+                );
+            }
             volume.draw(
                 &mut encoder,
                 crate::volume::VolumeFrame {
@@ -826,6 +914,7 @@ impl Renderer {
                     atlas: atlas.group(),
                     depth_group: target.scene.depth_group(),
                     shadow: shadow_group,
+                    layers: layer_group,
                 },
             );
             section_pass.draw(
@@ -1050,6 +1139,7 @@ impl Signature<'_, '_> {
             style.color().map(f32::to_bits).hash(&mut hasher);
             style.visible().hash(&mut hasher);
             style.selected().hash(&mut hasher);
+            style.opacity().to_bits().hash(&mut hasher);
         }
         scene.markers.len().hash(&mut hasher);
         for marker in scene.markers {
@@ -1196,6 +1286,62 @@ fn ensure_brick(
 ) {
     if bricks[level].is_none() {
         bricks[level] = Some(BrickTable::new(device, layout, level, source, atlas));
+    }
+}
+
+struct LayerFrame<'a> {
+    region: [u32; 4],
+    scene: &'a BindGroup,
+    shadow: &'a BindGroup,
+    meshes: &'a crate::mesh::MeshPasses,
+    markers: &'a MarkerPasses,
+}
+
+impl Layers {
+    fn encode(&self, encoder: &mut CommandEncoder, frame: LayerFrame<'_>) {
+        let LayerFrame {
+            region,
+            scene,
+            shadow,
+            meshes,
+            markers,
+        } = frame;
+        let width = region[2].max(1);
+        let height = region[3].max(1);
+        for index in 0..LAYER_COUNT {
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("grana.layer.pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: self.targets.color(index),
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                    view: self.targets.depth(index),
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_viewport(
+                region[0] as f32,
+                region[1] as f32,
+                width as f32,
+                height as f32,
+                0.0,
+                1.0,
+            );
+            pass.set_scissor_rect(region[0], region[1], width, height);
+            meshes.draw_layer(&mut pass, shadow, &self.peel_groups[index]);
+            markers.draw_layer(&mut pass, scene, &self.peel_groups[index]);
+        }
     }
 }
 

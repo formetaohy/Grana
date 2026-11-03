@@ -68,6 +68,7 @@ pub fn frame(scene: &Scene) -> RenderedScene<'_> {
                     srgb_to_linear(color(index)),
                     set.visible_object(scene.time(), index),
                     scene.object_selected(set.id(), index),
+                    set.opacity(),
                 ));
             }
             layers.push(Layer {
@@ -97,6 +98,7 @@ pub fn frame(scene: &Scene) -> RenderedScene<'_> {
                     srgb_to_linear(color(index)),
                     tracks.visible() && set.visible_track(index),
                     scene.track_selected(set.id(), index),
+                    set.opacity(),
                 ));
             }
             layers.push(Layer {
@@ -132,10 +134,10 @@ fn marker(scene: &Scene, set: &ObjectSet, index: usize, spot: Spot, color: [f32;
         Marker::new(
             spot.center(),
             SELECTED_SCALE * spot.radius(),
-            srgb_to_linear(SELECTED_COLOR),
-            1.0,
+            SELECTED_COLOR,
+            set.opacity(),
         )
     } else {
-        Marker::new(spot.center(), spot.radius(), srgb_to_linear(color), 1.0)
+        Marker::new(spot.center(), spot.radius(), color, set.opacity())
     }
 }

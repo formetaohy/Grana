@@ -184,6 +184,7 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
     let channel_name = state.scene.dataset.channels()[channel].name().to_string();
     let color = set.color();
     let mut visible = set.visible();
+    let mut opacity = set.opacity();
     let detected = set.detected();
     let frames = state.scene.frame_count();
     let time = state.scene.time();
@@ -381,6 +382,17 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
             if expanded {
                 divider(ui);
                 widget::caption(ui, &format!("source channel {channel_name}"));
+                if let Some(value) = widget::slider_readout(
+                    ui,
+                    "opacity",
+                    Some("opacity"),
+                    opacity,
+                    0.0..=1.0,
+                    false,
+                    &format!("{:.0}%", opacity * 100.0),
+                ) {
+                    opacity = value;
+                }
                 params(ui, state, commands, id);
                 detect(ui, state, commands, id, kind, frames);
                 summary(
@@ -416,6 +428,12 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
         }
         if set.color() != color {
             commands.push(Command::SetObjectColor { set: id, color });
+        }
+        if set.opacity() != opacity {
+            commands.push(Command::SetObjectOpacity {
+                set: id,
+                opacity: opacity.clamp(0.0, 1.0),
+            });
         }
     }
 }

@@ -691,6 +691,139 @@ fn composites_objects_into_the_volume() {
 }
 
 #[test]
+fn reveals_objects_behind_a_transparent_object() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let empty = empty_volume();
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(empty.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let reach = 0.3 * Vec3::from(empty.world_extent()).length();
+    let red = [1.0, 0.1, 0.1];
+    let green = [0.1, 1.0, 0.1];
+    let pair = |alpha: f32| {
+        [
+            Marker::new([0.0, 0.0, reach], 0.6 * reach, red, alpha),
+            Marker::new([0.0, 0.0, -reach], 0.6 * reach, green, alpha),
+        ]
+    };
+    let job = || Job {
+        texture: &texture,
+        volume: &empty,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        focus_z: 0.0,
+        mesh: None,
+    };
+    let opaque = marker_scene(&device, &queue, job(), &camera, &section, &pair(1.0));
+    let blended = marker_scene(&device, &queue, job(), &camera, &section, &pair(0.5));
+    let opaque = pixel(&opaque, SIDE / 2, SIDE / 2).map(u32::from);
+    let blended = pixel(&blended, SIDE / 2, SIDE / 2).map(u32::from);
+    let hidden = opaque[0].min(opaque[1]);
+    let shown = blended[0].min(blended[1]);
+    assert!(
+        opaque[0].max(opaque[1]) > hidden + 100,
+        "the opaque objects do not hide one another: {opaque:?}"
+    );
+    assert!(
+        shown > hidden + 30,
+        "the transparent near object hides the far one: {opaque:?} {blended:?}"
+    );
+}
+
+#[test]
+fn orders_transparent_objects_by_depth() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let empty = empty_volume();
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(empty.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let red = [1.0, 0.1, 0.1];
+    let green = [0.1, 1.0, 0.1];
+    let reach = 0.3 * Vec3::from(empty.world_extent()).length();
+    let pair = |near: [f32; 3], far: [f32; 3]| {
+        [
+            Marker::new([0.0, 0.0, reach], 0.6 * reach, near, 0.5),
+            Marker::new([0.0, 0.0, -reach], 0.6 * reach, far, 0.5),
+        ]
+    };
+
+    let job = || Job {
+        texture: &texture,
+        volume: &empty,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        focus_z: 0.0,
+        mesh: None,
+    };
+    let first = marker_scene(&device, &queue, job(), &camera, &section, &pair(red, green));
+    let second = marker_scene(&device, &queue, job(), &camera, &section, &pair(green, red));
+    let centre = (SIDE / 2, SIDE / 2);
+    let first = pixel(&first, centre.0, centre.1);
+    let second = pixel(&second, centre.0, centre.1);
+    let first_warm = first[0] > first[1] + 8;
+    let second_warm = second[0] > second[1] + 8;
+    assert!(
+        first_warm != second_warm,
+        "the layer order ignores depth: {first:?} {second:?}"
+    );
+}
+
+#[test]
+fn blends_transparent_surfaces() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = empty_volume();
+    let mesh = PackedMesh::new(cubes());
+    let solid = [
+        Style::new([1.0, 0.12, 0.12], true, false, 1.0),
+        Style::new([0.12, 1.0, 0.12], true, false, 1.0),
+    ];
+    let faded = [
+        Style::new([1.0, 0.12, 0.12], true, false, 0.4),
+        Style::new([0.12, 1.0, 0.12], true, false, 0.4),
+    ];
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let job = Job {
+        texture: &texture,
+        volume: &volume,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        focus_z: 0.0,
+        mesh: Some((&mesh, &solid)),
+    };
+    let faded_job = Job {
+        mesh: Some((&mesh, &faded)),
+        ..job
+    };
+    let opaque = framing_scene(&device, &queue, job, &camera, None);
+    let blended = framing_scene(&device, &queue, faded_job, &camera, None);
+    assert!(red_count(&opaque, WHOLE) > 100, "the surfaces are missing");
+    assert!(
+        red_count(&blended, WHOLE) > 100,
+        "the transparent surfaces are missing"
+    );
+    let brightness = |pixels: &[[u8; 4]]| {
+        pixels
+            .iter()
+            .map(|pixel| u32::from(pixel[0]) + u32::from(pixel[1]) + u32::from(pixel[2]))
+            .sum::<u32>()
+    };
+    assert!(
+        brightness(&blended) < brightness(&opaque),
+        "the transparent surfaces are drawn opaque"
+    );
+}
+
+#[test]
 fn renders_surface_objects_and_sections() {
     let Some((device, queue)) = device() else {
         return;
@@ -699,16 +832,16 @@ fn renders_surface_objects_and_sections() {
     let volume = empty_volume();
     let mesh = PackedMesh::new(cubes());
     let visible = [
-        Style::new([1.0, 0.12, 0.12], true, false),
-        Style::new([0.12, 1.0, 0.12], true, false),
+        Style::new([1.0, 0.12, 0.12], true, false, 1.0),
+        Style::new([0.12, 1.0, 0.12], true, false, 1.0),
     ];
     let selected = [
-        Style::new([1.0, 0.12, 0.12], true, true),
-        Style::new([0.12, 1.0, 0.12], true, false),
+        Style::new([1.0, 0.12, 0.12], true, true, 1.0),
+        Style::new([0.12, 1.0, 0.12], true, false, 1.0),
     ];
     let hidden = [
-        Style::new([1.0, 0.12, 0.12], false, false),
-        Style::new([0.12, 1.0, 0.12], false, false),
+        Style::new([1.0, 0.12, 0.12], false, false, 1.0),
+        Style::new([0.12, 1.0, 0.12], false, false, 1.0),
     ];
 
     let pixels = scene_render(
@@ -819,12 +952,12 @@ fn renders_track_tubes_and_sections() {
     let volume = empty_volume();
     let mesh = PackedMesh::new(tracks().mesh(0.15));
     let visible = [
-        Style::new([1.0, 0.12, 0.12], true, false),
-        Style::new([0.12, 1.0, 0.12], true, false),
+        Style::new([1.0, 0.12, 0.12], true, false, 1.0),
+        Style::new([0.12, 1.0, 0.12], true, false, 1.0),
     ];
     let hidden = [
-        Style::new([1.0, 0.12, 0.12], false, false),
-        Style::new([0.12, 1.0, 0.12], false, false),
+        Style::new([1.0, 0.12, 0.12], false, false, 1.0),
+        Style::new([0.12, 1.0, 0.12], false, false, 1.0),
     ];
 
     let pixels = scene_render(
@@ -1446,7 +1579,7 @@ fn draws_wide_packed_objects() {
         !mesh.wide().is_empty(),
         "the grid is packed with wide indices"
     );
-    let styles = [Style::new([1.0, 0.12, 0.12], true, false)];
+    let styles = [Style::new([1.0, 0.12, 0.12], true, false, 1.0)];
     let pixels = scene_render(
         &device,
         &queue,
@@ -1476,7 +1609,7 @@ fn keeps_object_geometry_resident() {
     let volume = empty_volume();
     let pyramid = volume.pyramid();
     let mesh = PackedMesh::new(cubes());
-    let styles = [Style::new([1.0, 1.0, 1.0], true, false); 2];
+    let styles = [Style::new([1.0, 1.0, 1.0], true, false, 1.0); 2];
     let transfer = TransferFunction::tinted([0.3, 0.6, 1.0]);
     let transfers = [transfer];
     let channels = channels(&pyramid, &transfers);
@@ -1768,7 +1901,7 @@ fn objects_cast_shadows_onto_surfaces() {
     let volume = empty_volume();
     let pyramid = volume.pyramid();
     let mesh = PackedMesh::new(casting_planes([-0.6, 0.6]));
-    let styles = [Style::new([0.98, 0.72, 0.5], true, false); 2];
+    let styles = [Style::new([0.98, 0.72, 0.5], true, false, 1.0); 2];
     let layers = [Layer {
         key: LayerKey::at_frame(1, 0, 0, 1),
         mesh: &mesh,
@@ -1860,8 +1993,8 @@ fn refreshes_object_shadows_when_the_geometry_changes() {
     let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
     renderer.set_dataset(&device, &pyramid);
     let styles = [
-        Style::new([0.12, 1.0, 0.12], true, false),
-        Style::new([1.0, 0.12, 0.12], true, false),
+        Style::new([0.12, 1.0, 0.12], true, false, 1.0),
+        Style::new([1.0, 0.12, 0.12], true, false, 1.0),
     ];
     let first = PackedMesh::new(casting_planes([-0.6, 0.6]));
     let second = PackedMesh::new(casting_planes([0.6, 0.6]));
@@ -1927,8 +2060,8 @@ fn projects_object_shadows_outside_the_data_box() {
     let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
     renderer.set_dataset(&device, &pyramid);
     let styles = [
-        Style::new([0.12, 1.0, 0.12], true, false),
-        Style::new([1.0, 0.12, 0.12], true, false),
+        Style::new([0.12, 1.0, 0.12], true, false, 1.0),
+        Style::new([1.0, 0.12, 0.12], true, false, 1.0),
     ];
     let mesh = PackedMesh::new(shifted(
         casting_planes([-0.6, 0.6]),
@@ -2066,8 +2199,8 @@ fn cuts_objects_at_the_plane() {
     let volume = empty_volume();
     let mesh = PackedMesh::new(pyramids());
     let styles = [
-        Style::new([1.0, 0.12, 0.12], true, false),
-        Style::new([0.12, 1.0, 0.12], true, false),
+        Style::new([1.0, 0.12, 0.12], true, false, 1.0),
+        Style::new([0.12, 1.0, 0.12], true, false, 1.0),
     ];
     let mut measured = [0usize; 2];
     for (slot, focus) in [-0.7f32, 0.7].into_iter().enumerate() {
@@ -2183,7 +2316,7 @@ fn orders_section_markers_against_cut_faces() {
     let texture = target(&device, SIDE);
     let volume = empty_volume();
     let mesh = PackedMesh::new(slab());
-    let styles = [Style::new([1.0, 0.12, 0.12], true, false)];
+    let styles = [Style::new([1.0, 0.12, 0.12], true, false, 1.0)];
     let world = Vec3::from(volume.world_extent());
     let voxel = Vec3::new(0.1, 0.1, 0.1);
     let mut camera = Camera::new(35.0);
@@ -2278,8 +2411,8 @@ fn lights_cut_faces_with_the_surface_shading_model() {
     let volume = empty_volume();
     let mesh = PackedMesh::new(cubes());
     let styles = [
-        Style::new([1.0, 0.12, 0.12], true, false),
-        Style::new([0.12, 1.0, 0.12], true, false),
+        Style::new([1.0, 0.12, 0.12], true, false, 1.0),
+        Style::new([0.12, 1.0, 0.12], true, false, 1.0),
     ];
     let configs = [
         Shading {
@@ -2375,12 +2508,12 @@ fn outlines_cut_faces_in_screen_space() {
     let volume = empty_volume();
     let mesh = PackedMesh::new(cubes());
     let plain = [
-        Style::new([1.0, 0.12, 0.12], true, false),
-        Style::new([0.12, 1.0, 0.12], true, false),
+        Style::new([1.0, 0.12, 0.12], true, false, 1.0),
+        Style::new([0.12, 1.0, 0.12], true, false, 1.0),
     ];
     let selected = [
-        Style::new([1.0, 0.12, 0.12], true, true),
-        Style::new([0.12, 1.0, 0.12], true, false),
+        Style::new([1.0, 0.12, 0.12], true, true, 1.0),
+        Style::new([0.12, 1.0, 0.12], true, false, 1.0),
     ];
     let shaded = Shading {
         ambient: 0.0,
@@ -2519,12 +2652,12 @@ fn orders_overlapping_cut_faces_by_camera_depth() {
     let volume = empty_volume();
     let mesh = PackedMesh::new(overlapping_boxes());
     let styles = [
-        Style::new([1.0, 0.12, 0.12], true, false),
-        Style::new([0.12, 1.0, 0.12], true, false),
+        Style::new([1.0, 0.12, 0.12], true, false, 1.0),
+        Style::new([0.12, 1.0, 0.12], true, false, 1.0),
     ];
     let selected = [
-        Style::new([1.0, 0.12, 0.12], true, true),
-        Style::new([0.12, 1.0, 0.12], true, false),
+        Style::new([1.0, 0.12, 0.12], true, true, 1.0),
+        Style::new([0.12, 1.0, 0.12], true, false, 1.0),
     ];
     let mut positive = Camera::new(35.0);
     positive.fit(Vec3::from(volume.world_extent()), 1.0);
@@ -2627,8 +2760,8 @@ fn reuses_the_cut_target_and_batches_every_cut_face() {
     let pyramid = volume.pyramid();
     let mesh = PackedMesh::new(cubes());
     let styles = [
-        Style::new([1.0, 0.12, 0.12], true, false),
-        Style::new([0.12, 1.0, 0.12], true, false),
+        Style::new([1.0, 0.12, 0.12], true, false, 1.0),
+        Style::new([0.12, 1.0, 0.12], true, false, 1.0),
     ];
     let layers = [Layer {
         key: LayerKey::at_frame(1, 0, 0, 1),
@@ -2760,7 +2893,7 @@ fn needs_capped_geometry_to_fill_open_surfaces() {
     };
     let texture = target(&device, SIDE);
     let volume = empty_volume();
-    let styles = [Style::new([1.0, 0.12, 0.12], true, false)];
+    let styles = [Style::new([1.0, 0.12, 0.12], true, false, 1.0)];
     let open = PackedMesh::new(box_mesh(false));
     let capped = PackedMesh::new(box_mesh(true));
     let open_pixels = scene_render(

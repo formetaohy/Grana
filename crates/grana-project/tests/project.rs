@@ -318,6 +318,7 @@ fn stage(scene: &mut Scene) {
     scene.coloc.install(series);
     let spots = scene.objects.get_mut(spots).expect("the spots exist");
     spots.set_color([0.1, 0.2, 0.3]);
+    spots.set_opacity(0.35);
     spots.set_params(ObjectParams::Spots(SpotParams::new(3.0, 0.3)));
     let mut coloring = spots.object_coloring().clone();
     coloring.set_metric(Some(Measurement::Contrast));

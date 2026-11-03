@@ -35,6 +35,8 @@ struct Style {
 @group(3) @binding(2) var shadow_occlusion: texture_3d<f32>;
 @group(3) @binding(3) var shadow_objects: texture_depth_2d;
 @group(3) @binding(4) var shadow_compare: sampler_comparison;
+@group(4) @binding(0) var previous_depth: texture_depth_2d;
+@group(4) @binding(1) var opaque_depth: texture_depth_2d;
 
 struct VertexInput {
     @location(0) position: vec4<f32>,
@@ -103,12 +105,12 @@ fn vs_shadow(input: VertexInput) -> ShadowOutput {
     return output;
 }
 
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    if (mesh.region_min.w > 0.5
-        && (any(input.position < mesh.region_min.xyz) || any(input.position > mesh.region_max.xyz))) {
-        discard;
-    }
+fn is_outside(input: VertexOutput) -> bool {
+    return mesh.region_min.w > 0.5
+        && (any(input.position < mesh.region_min.xyz) || any(input.position > mesh.region_max.xyz));
+}
+
+fn shade(input: VertexOutput) -> vec4<f32> {
     let style = styles[input.object];
     var normal = normalize(input.normal);
     let view = normalize(mesh.eye.xyz - input.position);
@@ -129,5 +131,28 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     if (style.flags.y > 0.5) {
         color = mix(color, vec3<f32>(1.0, 0.86, 0.45), 0.55);
     }
-    return vec4<f32>(color, 1.0);
+    return vec4<f32>(color, style.color.a);
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    if (is_outside(input)) {
+        discard;
+    }
+    return shade(input);
+}
+
+@fragment
+fn fs_layer(input: VertexOutput) -> @location(0) vec4<f32> {
+    if (is_outside(input)) {
+        discard;
+    }
+    let pixel = vec2<i32>(input.clip_position.xy);
+    let depth = input.clip_position.z;
+    if (depth > textureLoad(opaque_depth, pixel, 0)
+        || depth <= textureLoad(previous_depth, pixel, 0)) {
+        discard;
+    }
+    let sample = shade(input);
+    return vec4<f32>(sample.rgb * sample.a, sample.a);
 }

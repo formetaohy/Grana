@@ -313,6 +313,7 @@ impl Decode for SetState {
             *value = unit(reader.f32()?)?;
         }
         let visible = reader.bool()?;
+        let opacity = unit(reader.f32()?)?;
         let params = ObjectParams::decode(reader)?;
         if params.kind() != kind {
             return Err(FAULT_SHAPE);
@@ -324,6 +325,7 @@ impl Decode for SetState {
             channel,
             color,
             visible,
+            opacity,
             params,
             track_style: Option::<TrackStyle>::decode(reader)?,
             tracks: Option::<Arc<TrackSet>>::decode(reader)?,

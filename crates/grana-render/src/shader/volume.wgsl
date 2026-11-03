@@ -4,6 +4,14 @@
 @group(4) @binding(2) var shadow_occlusion: texture_3d<f32>;
 @group(4) @binding(3) var shadow_objects: texture_depth_2d;
 @group(4) @binding(4) var shadow_compare: sampler_comparison;
+@group(5) @binding(0) var layer_color_0: texture_2d<f32>;
+@group(5) @binding(1) var layer_color_1: texture_2d<f32>;
+@group(5) @binding(2) var layer_color_2: texture_2d<f32>;
+@group(5) @binding(3) var layer_color_3: texture_2d<f32>;
+@group(5) @binding(4) var layer_depth_0: texture_depth_2d;
+@group(5) @binding(5) var layer_depth_1: texture_depth_2d;
+@group(5) @binding(6) var layer_depth_2: texture_depth_2d;
+@group(5) @binding(7) var layer_depth_3: texture_depth_2d;
 
 const MAX_CELL_STEPS: u32 = 4096u;
 const MINIMUM_TRANSMITTANCE: f32 = 0.003;
@@ -12,6 +20,7 @@ const AMBIENT_OCCLUSION: f32 = 0.55;
 const SHADING_THRESHOLD: f32 = 0.02;
 const SHADING_FLOOR: f32 = 0.02;
 const SHADING_CEIL: f32 = 0.10;
+const EMPTY_DISTANCE: f32 = 1.0e19;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -33,9 +42,43 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 
 fn object_distance(depth: f32, ndc: vec2<f32>) -> f32 {
     if (depth >= 1.0) {
-        return 1.0e20;
+        return EMPTY_DISTANCE;
     }
     return length(unproject(vec3<f32>(ndc, depth)) - frame.eye.xyz);
+}
+
+fn layer_color(index: u32, pixel: vec2<i32>) -> vec4<f32> {
+    switch index {
+        case 0u: {
+            return textureLoad(layer_color_0, pixel, 0);
+        }
+        case 1u: {
+            return textureLoad(layer_color_1, pixel, 0);
+        }
+        case 2u: {
+            return textureLoad(layer_color_2, pixel, 0);
+        }
+        default: {
+            return textureLoad(layer_color_3, pixel, 0);
+        }
+    }
+}
+
+fn layer_depth(index: u32, pixel: vec2<i32>) -> f32 {
+    switch index {
+        case 0u: {
+            return textureLoad(layer_depth_0, pixel, 0);
+        }
+        case 1u: {
+            return textureLoad(layer_depth_1, pixel, 0);
+        }
+        case 2u: {
+            return textureLoad(layer_depth_2, pixel, 0);
+        }
+        default: {
+            return textureLoad(layer_depth_3, pixel, 0);
+        }
+    }
 }
 
 fn region_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
@@ -113,55 +156,28 @@ fn shade_volume(
     return mix(color, lit(color, normal, direction, lighting(uvw, normal)), weight);
 }
 
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let eye = frame.eye.xyz;
-    let ndc = input.ndc + frame.jitter.xy;
-    let direction = normalize(unproject(vec3<f32>(ndc, 1.0)) - eye);
-    let box_min = frame.box_min.xyz;
-    let box_size = frame.box_size.xyz;
-    let box_max = box_min + box_size;
-
-    let inverse_direction = vec3<f32>(1.0) / direction;
-    let near_t = (box_min - eye) * inverse_direction;
-    let far_t = (box_max - eye) * inverse_direction;
-    let lowest_t = min(near_t, far_t);
-    let highest_t = max(near_t, far_t);
-    let entry = max(max(lowest_t.x, lowest_t.y), lowest_t.z);
-    let object = object_distance(
-        textureLoad(object_depth, vec2<i32>(input.clip_position.xy), 0),
-        ndc,
-    );
-    let clip = region_interval(eye, direction);
-    let exit = min(
-        min(min(highest_t.x, highest_t.y), highest_t.z),
-        min(object, clip.y),
-    );
-    let start = max(max(entry, 0.0), clip.x);
-
+fn march(begin: f32, finish: f32, direction: vec3<f32>) -> vec4<f32> {
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
-
-    if (exit > start) {
+    if (finish > begin) {
         let step_length = frame.march.x;
         let max_steps = 4096u;
         let channel_count = u32(frame.march.z);
-        let voxel_world = box_size / frame.dims.xyz;
+        let voxel_world = frame.box_size.xyz / frame.dims.xyz;
         let gradient_step = vec3<f32>(1.0) / frame.dims.xyz;
-        let direction_uvw = direction / box_size;
+        let direction_uvw = direction / frame.box_size.xyz;
         let voxels_per_world = length(direction / voxel_world);
-        let jitter = sample_noise(input.clip_position.xy, frame.jitter.z) * step_length;
 
-        var t = start + min(jitter, exit - start);
+        var t = begin;
         var steps = 0u;
         var cells = 0u;
         var complete = false;
-        while (t < exit && steps < max_steps && cells < MAX_CELL_STEPS && !complete) {
+        while (t < finish && steps < max_steps && cells < MAX_CELL_STEPS && !complete) {
             cells += 1u;
             let uvw = ray_uvw(t, direction);
             let cell = brick_cell(frame.grid.xyz, frame.dims.xyz, uvw);
             let record = bricks[brick_index(frame.grid.xyz, cell)];
-            let boundary = min(t + boundary_delta(uvw, direction_uvw, step_length * 0.25), exit);
+            let boundary = min(t + boundary_delta(uvw, direction_uvw, step_length * 0.25), finish);
             if (record.slot == 0u || record.flags == 0u) {
                 t = boundary;
                 continue;
@@ -209,6 +225,61 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 t = max(t, boundary);
             }
         }
+    }
+    return vec4<f32>(radiance, transmittance);
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let eye = frame.eye.xyz;
+    let ndc = input.ndc + frame.jitter.xy;
+    let pixel = vec2<i32>(input.clip_position.xy);
+    let direction = normalize(unproject(vec3<f32>(ndc, 1.0)) - eye);
+    let box_min = frame.box_min.xyz;
+    let box_max = box_min + frame.box_size.xyz;
+
+    let inverse_direction = vec3<f32>(1.0) / direction;
+    let near_t = (box_min - eye) * inverse_direction;
+    let far_t = (box_max - eye) * inverse_direction;
+    let lowest_t = min(near_t, far_t);
+    let highest_t = max(near_t, far_t);
+    let entry = max(max(lowest_t.x, lowest_t.y), lowest_t.z);
+    let object = object_distance(textureLoad(object_depth, pixel, 0), ndc);
+    let clip = region_interval(eye, direction);
+    let exit = min(
+        min(min(highest_t.x, highest_t.y), highest_t.z),
+        min(min(object, clip.y), 1.0e19),
+    );
+    let start = max(max(entry, 0.0), clip.x);
+    let jitter = sample_noise(input.clip_position.xy, frame.jitter.z) * frame.march.x;
+
+    var radiance = vec3<f32>(0.0);
+    var transmittance = 1.0;
+    var cursor = start + min(jitter, max(exit - start, 0.0));
+    let count = frame.layers.x;
+    for (var index = 0u; index < count; index += 1u) {
+        let depth = layer_depth(index, pixel);
+        if (depth >= 1.0) {
+            continue;
+        }
+        let limit = min(object_distance(depth, ndc), exit);
+        if (limit > cursor) {
+            let segment = march(cursor, limit, direction);
+            radiance += transmittance * segment.rgb;
+            transmittance *= segment.a;
+            cursor = limit;
+        }
+        let sample = layer_color(index, pixel);
+        radiance += transmittance * sample.rgb;
+        transmittance *= 1.0 - sample.a;
+        if (transmittance < MINIMUM_TRANSMITTANCE) {
+            break;
+        }
+    }
+    if (cursor < exit) {
+        let segment = march(cursor, exit, direction);
+        radiance += transmittance * segment.rgb;
+        transmittance *= segment.a;
     }
 
     return vec4<f32>(radiance, 1.0 - transmittance);
