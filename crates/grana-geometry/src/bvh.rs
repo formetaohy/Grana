@@ -57,6 +57,11 @@ impl Primitive {
         }
     }
 
+    pub fn hit(self, origin: Vec3, direction: Vec3) -> Option<f32> {
+        let (near, far) = self.span(origin, direction)?;
+        (far >= 0.0).then(|| near.max(0.0))
+    }
+
     fn span(self, origin: Vec3, direction: Vec3) -> Option<(f32, f32)> {
         match self {
             Self::Triangle(points) => {
@@ -465,7 +470,7 @@ fn box_distance(low: Vec3, high: Vec3, point: Vec3) -> f32 {
     offset.length()
 }
 
-fn box_span(low: Vec3, high: Vec3, origin: Vec3, direction: Vec3) -> Option<(f32, f32)> {
+pub(crate) fn box_span(low: Vec3, high: Vec3, origin: Vec3, direction: Vec3) -> Option<(f32, f32)> {
     let mut entry = f32::NEG_INFINITY;
     let mut exit = f32::INFINITY;
     for axis in 0..3 {

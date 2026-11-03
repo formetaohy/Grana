@@ -178,6 +178,24 @@ impl Objects {
             .is_some_and(|set| set.cut_track(time, object, stamp))
     }
 
+    pub fn add_seed(&mut self, id: ObjectSetId, time: u32, position: [f32; 3]) -> bool {
+        self.get_mut(id)
+            .is_some_and(|set| set.add_seed(time, position))
+    }
+
+    pub fn remove_seed(&mut self, id: ObjectSetId, time: u32, index: usize) -> bool {
+        self.get_mut(id)
+            .is_some_and(|set| set.remove_seed(time, index))
+    }
+
+    pub fn clear_seeds(&mut self, id: ObjectSetId, time: u32) -> bool {
+        self.get_mut(id).is_some_and(|set| set.clear_seeds(time))
+    }
+
+    pub fn seed_frames(&self, id: ObjectSetId) -> Option<Vec<Vec<[f32; 3]>>> {
+        Some(self.get(id)?.seed_frames())
+    }
+
     pub fn join_tracks(
         &mut self,
         id: ObjectSetId,

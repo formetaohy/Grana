@@ -68,6 +68,7 @@ pub struct Workspace {
     pub movie_size: [u32; 2],
     pub track_set: Option<ObjectSetId>,
     pub join: Option<(u32, usize)>,
+    pub seed: Option<ObjectSetId>,
     pub(crate) drag: PlotDrag,
 }
 

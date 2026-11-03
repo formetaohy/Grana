@@ -39,6 +39,13 @@ impl Assembler<'_> {
             if left == right {
                 continue;
             }
+            let seeds = (
+                self.nodes[left as usize].seed,
+                self.nodes[right as usize].seed,
+            );
+            if seeds.0 != EMPTY && seeds.1 != EMPTY && seeds.0 != seeds.1 {
+                continue;
+            }
             let peak = f64::from(
                 self.nodes[left as usize]
                     .reach
@@ -58,7 +65,7 @@ impl Assembler<'_> {
         }
     }
 
-    pub(super) fn build(self) -> SurfaceSet {
+    pub(super) fn build(self) -> Result<SurfaceSet, String> {
         let plan = self.plan;
         let mut nodes = self.nodes;
         let accumulators = self.accumulators;
@@ -69,6 +76,25 @@ impl Assembler<'_> {
         let mut targets = vec![EMPTY; nodes.len()];
         for (index, target) in targets.iter_mut().enumerate() {
             *target = fold(&mut nodes, index as u32);
+        }
+        let mut folded = vec![EMPTY; nodes.len()];
+        for (index, node) in nodes.iter().enumerate() {
+            if node.seed == EMPTY {
+                continue;
+            }
+            let target = targets[index];
+            if target == EMPTY {
+                continue;
+            }
+            let slot = &mut folded[target as usize];
+            if *slot != EMPTY && *slot != node.seed {
+                return Err(format!(
+                    "the seed points {} and {} share one watershed basin and cannot cut it apart",
+                    (*slot).min(node.seed) + 1,
+                    (*slot).max(node.seed) + 1
+                ));
+            }
+            *slot = node.seed;
         }
         let candidates = (0..nodes.len())
             .filter(|root| {
@@ -171,6 +197,7 @@ impl Assembler<'_> {
         let mut map = vec![EMPTY; nodes.len()];
         let mut objects = Vec::new();
         let mut intensities = Vec::new();
+        let mut kept = Vec::new();
         for root in 0..nodes.len() {
             if find(&mut nodes, root as u32) != root as u32 {
                 continue;
@@ -211,9 +238,21 @@ impl Assembler<'_> {
             }
             map[root] = objects.len() as u32;
             objects.push(statistics);
+            if folded[root] != EMPTY {
+                kept.push(folded[root]);
+            }
             for channel in 0..plan.channels {
                 intensities.push(accumulators[root * plan.channels + channel].statistics());
             }
+        }
+        if kept.len() != self.seed_count {
+            let missing = (0..self.seed_count)
+                .find(|seed| !kept.contains(&(*seed as u32)))
+                .expect("the kept seeds cover fewer seed points");
+            return Err(format!(
+                "the seed point {} no longer marks an object of the detected surface",
+                missing + 1
+            ));
         }
         let mut vertex_map: HashMap<(u32, u32), u32> = HashMap::new();
         let mut vertices = Vec::new();
@@ -254,12 +293,12 @@ impl Assembler<'_> {
             }
             indices.extend_from_slice(&mapped);
         }
-        SurfaceSet::new(
+        Ok(SurfaceSet::new(
             plan.level_index,
             Mesh::new(vertices, indices),
             objects,
             IntensityTable::new(plan.channels, intensities),
-        )
+        ))
     }
 }
 

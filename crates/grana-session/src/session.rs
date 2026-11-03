@@ -13,6 +13,7 @@ use grana_volume::{BrickData, BrickRequest, Region};
 use crate::command::{Edit, Export};
 use crate::history::{History, Snapshot};
 use crate::loader::{Event as LoaderEvent, Loader};
+use crate::run::DetectRequest;
 use crate::sample;
 use crate::view::{BatchDataset, BatchView, HistoryView, IoView, Message};
 use crate::{
@@ -398,6 +399,21 @@ impl Session {
                 self.clear_relations(set);
                 if let Some(scene) = self.scene.as_mut() {
                     scene.clear_object(set);
+                }
+            }
+            Command::AddSeed { set, position } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.add_seed(set, position);
+                }
+            }
+            Command::RemoveSeed { set, index } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.remove_seed(set, index);
+                }
+            }
+            Command::ClearSeeds(set) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.clear_seeds(set);
                 }
             }
             Command::AddRelation { source, target } => self.add_relation(source, target),
@@ -1273,6 +1289,7 @@ impl Session {
         let channel = object.channel();
         let params = object.params();
         let region = scene.region;
+        let seeds = scene.seed_frames(set).unwrap_or_default();
         let roi = match scene.mask {
             None => None,
             Some(source) => {
@@ -1314,10 +1331,7 @@ impl Session {
         self.analysis.push(crate::detect(
             Job::Detect(set),
             source,
-            channel,
-            params,
-            region,
-            roi,
+            DetectRequest::new(channel, params, region, roi, seeds),
         ));
     }
 

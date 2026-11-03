@@ -1,4 +1,50 @@
-use grana_geometry::{Mesh, MeshVertex, PackedMesh};
+use glam::Vec3;
+use grana_geometry::{Mesh, MeshVertex, PackedMesh, ray_hit};
+
+const CORNERS: [[f32; 3]; 8] = [
+    [-1.0, -1.0, -1.0],
+    [1.0, -1.0, -1.0],
+    [1.0, 1.0, -1.0],
+    [-1.0, 1.0, -1.0],
+    [-1.0, -1.0, 1.0],
+    [1.0, -1.0, 1.0],
+    [1.0, 1.0, 1.0],
+    [-1.0, 1.0, 1.0],
+];
+
+const FACES: [[u32; 4]; 6] = [
+    [0, 3, 2, 1],
+    [4, 5, 6, 7],
+    [0, 1, 5, 4],
+    [2, 3, 7, 6],
+    [1, 2, 6, 5],
+    [0, 4, 7, 3],
+];
+
+#[test]
+fn hits_the_surface_along_a_ray() {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for face in FACES {
+        let base = vertices.len() as u32;
+        for corner in face {
+            vertices.push(MeshVertex::new(
+                CORNERS[corner as usize],
+                [0.0, 0.0, 1.0],
+                0,
+            ));
+        }
+        indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    let packed = PackedMesh::new(Mesh::new(vertices, indices));
+    let front = ray_hit(&packed, Vec3::new(0.0, 0.0, 5.0), Vec3::NEG_Z)
+        .expect("the ray meets the front face");
+    assert!((front.z - 1.0).abs() < 1.0e-3, "the hit lies on the face");
+    assert!(
+        ray_hit(&packed, Vec3::new(5.0, 5.0, 5.0), Vec3::X).is_none(),
+        "a ray that misses the box reports no hit"
+    );
+}
 
 #[test]
 fn packs_objects_with_bounded_error() {

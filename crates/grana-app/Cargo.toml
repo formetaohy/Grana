@@ -16,6 +16,7 @@ grana-engine = { workspace = true }
 grana-gpu = { workspace = true }
 grana-project = { workspace = true }
 grana-render = { workspace = true }
+grana-scene = { workspace = true }
 grana-session = { workspace = true }
 grana-ui = { workspace = true }
 grana-volume = { workspace = true }

@@ -73,6 +73,7 @@ pub struct ObjectSet {
     revision: u64,
     document: u64,
     visibility: Visibility,
+    seeds: Vec<Vec<[f32; 3]>>,
     tracks: Option<TrackLayer>,
     relations: Vec<Relation>,
 }
@@ -112,6 +113,7 @@ impl ObjectSet {
             revision: 1,
             document: 1,
             visibility: Visibility::All,
+            seeds: vec![Vec::new(); dataset.frame_count() as usize],
             tracks: None,
             relations: Vec::new(),
         }
@@ -405,6 +407,7 @@ impl ObjectSet {
             object_color: self.object_coloring.state(),
             track_color: self.track_coloring.state(),
             visibility: self.visibility.clone(),
+            seeds: self.seeds.clone(),
             frames: self.frames.iter().map(|slot| slot.data.clone()).collect(),
             relations: self
                 .relations
@@ -435,6 +438,7 @@ impl ObjectSet {
             object_color,
             track_color,
             visibility,
+            seeds,
             frames,
             relations,
             document,
@@ -475,9 +479,27 @@ impl ObjectSet {
             revision: 1,
             document: 1,
             visibility: Visibility::All,
+            seeds: Vec::new(),
             tracks: None,
             relations: Vec::new(),
         };
+        assert_eq!(
+            seeds.len(),
+            frame_count,
+            "an object set state covers the seeds of every frame"
+        );
+        assert!(
+            seeds
+                .iter()
+                .flatten()
+                .all(|seed| seed.iter().all(|value| value.is_finite())),
+            "a restored seed point is finite"
+        );
+        assert!(
+            kind == ObjectKind::Surfaces || seeds.iter().all(Vec::is_empty),
+            "only a surface set carries seed points"
+        );
+        set.seeds = seeds;
         assert_eq!(
             set.frames.len(),
             dataset.frame_count() as usize,
@@ -587,6 +609,53 @@ impl ObjectSet {
             Visibility::All | Visibility::Object(_) => true,
             Visibility::Track(tracks) => tracks.get(track).copied().unwrap_or(false),
         }
+    }
+
+    pub fn seeds(&self, time: u32) -> &[[f32; 3]] {
+        self.seeds.get(time as usize).map_or(&[], Vec::as_slice)
+    }
+
+    pub(crate) fn add_seed(&mut self, time: u32, position: [f32; 3]) -> bool {
+        assert_eq!(
+            self.kind,
+            ObjectKind::Surfaces,
+            "seed points cut a surface detection"
+        );
+        assert!(
+            position.iter().all(|value| value.is_finite()),
+            "a seed point is finite"
+        );
+        let Some(seeds) = self.seeds.get_mut(time as usize) else {
+            return false;
+        };
+        seeds.push(position);
+        true
+    }
+
+    pub(crate) fn remove_seed(&mut self, time: u32, index: usize) -> bool {
+        let Some(seeds) = self.seeds.get_mut(time as usize) else {
+            return false;
+        };
+        if index >= seeds.len() {
+            return false;
+        }
+        seeds.remove(index);
+        true
+    }
+
+    pub(crate) fn clear_seeds(&mut self, time: u32) -> bool {
+        let Some(seeds) = self.seeds.get_mut(time as usize) else {
+            return false;
+        };
+        if seeds.is_empty() {
+            return false;
+        }
+        seeds.clear();
+        true
+    }
+
+    pub(crate) fn seed_frames(&self) -> Vec<Vec<[f32; 3]>> {
+        self.seeds.clone()
     }
 
     pub(crate) fn delete_object(&mut self, time: u32, object: usize, stamp: u64) -> bool {

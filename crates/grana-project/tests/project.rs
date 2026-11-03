@@ -53,6 +53,10 @@ fn round_trips_a_project() {
         .get_mut(surfaces)
         .expect("the surfaces exist")
         .set_visibility(Visibility::Track(Arc::new(vec![true, false, true])));
+    scene.set_time(1);
+    assert!(scene.add_seed(surfaces, [0.25, -0.5, 0.75]));
+    assert!(scene.add_seed(surfaces, [-0.25, 0.5, -0.75]));
+    scene.set_time(0);
     scene.select(Some(Selection {
         set: surfaces,
         item: Item::Track(2),
@@ -119,6 +123,9 @@ fn round_trips_a_project() {
     let mut restored_measure = Measure::new();
     restored_measure.restore(loaded.measure, &restored);
     assert_eq!(restored.state(), project.scene);
+    restored.set_time(1);
+    assert_eq!(restored.seed_count(surfaces), 2);
+    restored.set_time(0);
     assert_eq!(restored_measure.state(), project.measure);
     assert_eq!(loaded.view, project.view);
     let restored_result = restored

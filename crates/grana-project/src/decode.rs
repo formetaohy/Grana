@@ -318,6 +318,20 @@ impl Decode for SetState {
         if params.kind() != kind {
             return Err(FAULT_SHAPE);
         }
+        let track_style = Option::<TrackStyle>::decode(reader)?;
+        let tracks = Option::<Arc<TrackSet>>::decode(reader)?;
+        let track_thickness = Option::<f32>::decode(reader)?.map(positive).transpose()?;
+        let track_visible = Option::<bool>::decode(reader)?;
+        let object_color = ColorState::<Measurement>::decode(reader)?;
+        let track_color = ColorState::<TrackMeasurement>::decode(reader)?;
+        let visibility = Visibility::decode(reader)?;
+        let seeds = decode_seeds(reader)?;
+        let frames = Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?;
+        if seeds.len() != frames.len()
+            || (kind != ObjectKind::Surfaces && seeds.iter().any(|frame| !frame.is_empty()))
+        {
+            return Err(FAULT_SHAPE);
+        }
         let state = Self {
             id,
             kind,
@@ -327,14 +341,15 @@ impl Decode for SetState {
             visible,
             opacity,
             params,
-            track_style: Option::<TrackStyle>::decode(reader)?,
-            tracks: Option::<Arc<TrackSet>>::decode(reader)?,
-            track_thickness: Option::<f32>::decode(reader)?.map(positive).transpose()?,
-            track_visible: Option::<bool>::decode(reader)?,
-            object_color: ColorState::<Measurement>::decode(reader)?,
-            track_color: ColorState::<TrackMeasurement>::decode(reader)?,
-            visibility: Visibility::decode(reader)?,
-            frames: Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?,
+            track_style,
+            tracks,
+            track_thickness,
+            track_visible,
+            object_color,
+            track_color,
+            visibility,
+            seeds,
+            frames,
             relations: Vec::<RelationState>::decode(reader)?,
             document: reader.u64()?,
         };
@@ -1091,6 +1106,24 @@ impl<T: Decode> Decode for Option<T> {
 
 fn color_applies(kind: ObjectKind, channels: usize, measurement: Measurement) -> bool {
     measurement.colorable() && kind.measurements(channels).contains(&measurement)
+}
+
+fn decode_seeds(reader: &mut Reader<'_>) -> Result<Vec<Vec<[f32; 3]>>, &'static str> {
+    let frames = reader.count(4)?;
+    let mut seeds = Vec::new();
+    for _ in 0..frames {
+        let count = reader.count(12)?;
+        let mut frame = Vec::new();
+        for _ in 0..count {
+            let mut position = [0.0f32; 3];
+            for value in &mut position {
+                *value = finite(reader.f32()?)?;
+            }
+            frame.push(position);
+        }
+        seeds.push(frame);
+    }
+    Ok(seeds)
 }
 
 fn group(tag: u8) -> Result<Group, &'static str> {

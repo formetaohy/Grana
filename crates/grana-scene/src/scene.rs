@@ -1,4 +1,6 @@
+use glam::Vec3;
 use grana_display::{Shading, TransferFunction};
+use grana_geometry::ray_hit;
 use grana_measure::RelationRow;
 use grana_object::{RelationFrame, TrackSet};
 use grana_volume::{ChannelInfo, Intensity, Region};
@@ -297,6 +299,35 @@ impl Scene {
 
     pub fn set_track_thickness(&mut self, id: ObjectSetId, thickness: f32) {
         self.objects.set_track_thickness(id, thickness);
+    }
+
+    pub fn seeds(&self, id: ObjectSetId) -> &[[f32; 3]] {
+        self.objects.get(id).map_or(&[], |set| set.seeds(self.time))
+    }
+
+    pub fn seed_count(&self, id: ObjectSetId) -> usize {
+        self.seeds(id).len()
+    }
+
+    pub fn add_seed(&mut self, id: ObjectSetId, position: [f32; 3]) -> bool {
+        self.objects.add_seed(id, self.time, position)
+    }
+
+    pub fn remove_seed(&mut self, id: ObjectSetId, index: usize) -> bool {
+        self.objects.remove_seed(id, self.time, index)
+    }
+
+    pub fn clear_seeds(&mut self, id: ObjectSetId) -> bool {
+        self.objects.clear_seeds(id, self.time)
+    }
+
+    pub fn seed_frames(&self, id: ObjectSetId) -> Option<Vec<Vec<[f32; 3]>>> {
+        self.objects.seed_frames(id)
+    }
+
+    pub fn surface_ray(&self, id: ObjectSetId, origin: Vec3, direction: Vec3) -> Option<Vec3> {
+        let mesh = self.objects.get(id)?.frame(self.time)?.geometry()?;
+        ray_hit(mesh, origin, direction)
     }
 
     fn drop_track_selection(&mut self, id: ObjectSetId) {

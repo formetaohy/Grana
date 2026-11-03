@@ -5,11 +5,11 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use grana_analysis::{Roi, TrackParams};
 use grana_image::{Image, Source};
 use grana_measure::{ColocPair, ColocSettings};
-use grana_scene::{Job, ObjectFrame, ObjectParams};
+use grana_scene::{Job, ObjectFrame};
 use grana_volume::Region;
 
 use crate::event::{Event, Poll};
-use crate::run;
+use crate::run::{self, DetectRequest};
 
 pub struct Analysis {
     job: Job,
@@ -37,17 +37,10 @@ impl Drop for Analysis {
     }
 }
 
-pub fn detect(
-    job: Job,
-    source: Source,
-    channel: usize,
-    params: ObjectParams,
-    region: Region,
-    roi: Option<Roi>,
-) -> Analysis {
+pub fn detect(job: Job, source: Source, request: DetectRequest) -> Analysis {
     spawn(job, move |cancel, sink| {
         let reader = Image::open(&source)?;
-        run::detect(&reader, channel, params, region, roi, cancel, sink)
+        run::detect(&reader, request, cancel, sink)
     })
 }
 

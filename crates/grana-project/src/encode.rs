@@ -216,6 +216,15 @@ impl Encode for SetState {
         self.object_color.encode(writer);
         self.track_color.encode(writer);
         self.visibility.encode(writer);
+        writer.count(self.seeds.len());
+        for frame in &self.seeds {
+            writer.count(frame.len());
+            for seed in frame {
+                for value in seed {
+                    writer.f32(*value);
+                }
+            }
+        }
         self.frames.encode(writer);
         self.relations.encode(writer);
         writer.u64(self.document);

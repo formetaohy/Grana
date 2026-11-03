@@ -45,6 +45,15 @@ pub enum Command {
     },
     AddObject(ObjectKind),
     RemoveObject(ObjectSetId),
+    AddSeed {
+        set: ObjectSetId,
+        position: [f32; 3],
+    },
+    RemoveSeed {
+        set: ObjectSetId,
+        index: usize,
+    },
+    ClearSeeds(ObjectSetId),
     Detect(ObjectSetId),
     CancelDetect(ObjectSetId),
     ClearObject(ObjectSetId),
@@ -204,6 +213,7 @@ pub enum Action {
     RenameObject,
     DeleteObject,
     ClearObject,
+    Seed,
     Detect,
     Relation,
     Track,
@@ -261,6 +271,7 @@ impl Action {
             Self::RenameObject => "rename an object set",
             Self::DeleteObject => "delete an object",
             Self::ClearObject => "clear objects",
+            Self::Seed => "seed points",
             Self::Detect => "detection",
             Self::Relation => "object relation",
             Self::Track => "tracking",
@@ -381,6 +392,9 @@ impl Command {
             Self::RenameObject { set, .. } => Edit::targeted(Action::RenameObject, set.raw()),
             Self::DeleteObject { set, .. } => Edit::targeted(Action::DeleteObject, set.raw()),
             Self::ClearObject(_) => Edit::new(Action::ClearObject),
+            Self::AddSeed { set, .. } | Self::RemoveSeed { set, .. } | Self::ClearSeeds(set) => {
+                Edit::targeted(Action::Seed, set.raw())
+            }
             Self::Detect(set) => Edit::targeted(Action::Detect, set.raw()),
             Self::AddRelation { target, .. } | Self::RemoveRelation { target, .. } => {
                 Edit::targeted(Action::Relation, target.raw())

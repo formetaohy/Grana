@@ -72,6 +72,7 @@ pub struct SetState {
     pub object_color: ColorState<Measurement>,
     pub track_color: ColorState<TrackMeasurement>,
     pub visibility: Visibility,
+    pub seeds: Vec<Vec<[f32; 3]>>,
     pub frames: Vec<Option<Arc<ObjectFrame>>>,
     pub relations: Vec<RelationState>,
     pub document: u64,
@@ -223,6 +224,13 @@ impl Scene {
             hash = mix(hash, set.id().raw());
             hash = mix(hash, set.kind().index() as u64);
             hash = mix(hash, set.document());
+            for time in 0..self.frame_count() {
+                for seed in set.seeds(time) {
+                    for value in seed {
+                        hash = mix(hash, u64::from(value.to_bits()));
+                    }
+                }
+            }
         }
         hash = mix(hash, self.mask.map_or(0, ObjectSetId::raw));
         hash = mix(hash, self.coloc.document());

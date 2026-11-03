@@ -13,23 +13,42 @@ use grana_volume::VoxelData;
 
 use crate::event::Event;
 
-pub(crate) fn detect(
-    reader: &Image,
+pub struct DetectRequest {
     channel: usize,
     params: ObjectParams,
     region: grana_volume::Region,
     roi: Option<Roi>,
+    seeds: Vec<Vec<[f32; 3]>>,
+}
+
+impl DetectRequest {
+    pub fn new(
+        channel: usize,
+        params: ObjectParams,
+        region: grana_volume::Region,
+        roi: Option<Roi>,
+        seeds: Vec<Vec<[f32; 3]>>,
+    ) -> Self {
+        Self {
+            channel,
+            params,
+            region,
+            roi,
+            seeds,
+        }
+    }
+}
+
+pub(crate) fn detect(
+    reader: &Image,
+    request: DetectRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
-    match params {
-        ObjectParams::Spots(params) => spots(reader, channel, params, region, roi, cancel, sink),
-        ObjectParams::Surfaces(params) => {
-            surfaces(reader, channel, params, region, roi, cancel, sink)
-        }
-        ObjectParams::Filaments(params) => {
-            filaments(reader, channel, params, region, roi, cancel, sink)
-        }
+    match request.params {
+        ObjectParams::Spots(params) => spots(reader, params, request, cancel, sink),
+        ObjectParams::Surfaces(params) => surfaces(reader, params, request, cancel, sink),
+        ObjectParams::Filaments(params) => filaments(reader, params, request, cancel, sink),
     }
 }
 
@@ -259,13 +278,17 @@ pub(crate) fn coloc(
 
 fn spots(
     reader: &Image,
-    channel: usize,
     params: grana_analysis::SpotParams,
-    region: grana_volume::Region,
-    roi: Option<Roi>,
+    request: DetectRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
+    let DetectRequest {
+        channel,
+        region,
+        roi,
+        ..
+    } = request;
     let pyramid = reader.pyramid();
     if channel >= pyramid.channel_count() {
         return Err(format!(
@@ -355,13 +378,18 @@ fn spots(
 
 fn surfaces(
     reader: &Image,
-    channel: usize,
     params: grana_analysis::SurfaceParams,
-    region: grana_volume::Region,
-    roi: Option<Roi>,
+    request: DetectRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
+    let DetectRequest {
+        channel,
+        region,
+        roi,
+        seeds,
+        ..
+    } = request;
     let pyramid = reader.pyramid();
     if channel >= pyramid.channel_count() {
         return Err(format!(
@@ -390,7 +418,8 @@ fn surfaces(
             channel,
             region,
             pyramid.channels()[channel].intensity(),
-        );
+        )
+        .with_seeds(seeds.get(time as usize).map_or(&[], Vec::as_slice));
         let total = builder.tile_count() * 2;
         let mask = roi.as_ref().map(|roi| roi.mask(level, time));
         sink(Event::Progress {
@@ -428,13 +457,17 @@ fn surfaces(
 
 fn filaments(
     reader: &Image,
-    channel: usize,
     params: grana_analysis::FilamentParams,
-    region: grana_volume::Region,
-    roi: Option<Roi>,
+    request: DetectRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
+    let DetectRequest {
+        channel,
+        region,
+        roi,
+        ..
+    } = request;
     let pyramid = reader.pyramid();
     if channel >= pyramid.channel_count() {
         return Err(format!(

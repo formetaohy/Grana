@@ -15,7 +15,7 @@ const PROTOCOL: &str = r#"
       "name": "Nuclei",
       "channel": "DAPI",
       "color": [1.0, 0.7, 0.2],
-      "detection": {"kind": "surfaces", "threshold": 0.25, "grain": 0.1, "seed": 0.6, "min_volume": 2.0, "opening": 0.2, "closing": 0.3, "min_sphericity": 0.4, "min_mean_intensity": 0.05},
+      "detection": {"kind": "surfaces", "threshold": 0.25, "grain": 0.1, "split": 0.6, "min_volume": 2.0, "opening": 0.2, "closing": 0.3, "min_sphericity": 0.4, "min_mean_intensity": 0.05},
       "track": {
         "max_step": 0.8,
         "max_gap": 1,

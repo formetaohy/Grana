@@ -8,7 +8,7 @@ use grana_scene::{Dataset, Measure, MeasureState, Scene, SceneState};
 use crate::binary::{Decode, Encode, Reader, Writer};
 use crate::error::Error;
 
-const MAGIC: &[u8; 10] = b"granaproj8";
+const MAGIC: &[u8; 10] = b"granaproj9";
 const HEADER: usize = MAGIC.len() + size_of::<u64>();
 const COMPRESSION_LEVEL: i32 = 6;
 const RAW_LIMIT: u64 = 16 << 30;

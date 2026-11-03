@@ -24,13 +24,14 @@ pub struct ViewportFrame<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Picked {
     Hit(Selection),
+    Seed,
     Miss,
 }
 
 #[derive(Clone, Default)]
 struct Identities {
     styles: Vec<Selection>,
-    markers: Vec<Selection>,
+    markers: Vec<Option<Selection>>,
 }
 
 pub struct Engine {
@@ -126,15 +127,19 @@ impl Engine {
         self.pending_pick.as_ref()?;
         let pick = self.renderer.poll_pick(device)?;
         let identities = self.pending_pick.take().expect("the pick was pending");
-        let selection = match pick {
-            PickId::None => None,
-            PickId::Style(index) => identities.styles.get(index as usize).copied(),
-            PickId::Marker(index) => identities.markers.get(index as usize).copied(),
+        let picked = match pick {
+            PickId::None => Picked::Miss,
+            PickId::Style(index) => match identities.styles.get(index as usize).copied() {
+                Some(selection) => Picked::Hit(selection),
+                None => Picked::Miss,
+            },
+            PickId::Marker(index) => match identities.markers.get(index as usize) {
+                Some(Some(selection)) => Picked::Hit(*selection),
+                Some(None) => Picked::Seed,
+                None => Picked::Miss,
+            },
         };
-        Some(match selection {
-            Some(selection) => Picked::Hit(selection),
-            None => Picked::Miss,
-        })
+        Some(picked)
     }
 
     pub fn pick_pending(&self) -> bool {

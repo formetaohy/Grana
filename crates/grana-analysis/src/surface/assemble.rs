@@ -9,6 +9,7 @@ pub(super) struct Assembler<'a> {
     pub(super) nodes: Vec<Node>,
     pub(super) accumulators: Vec<SampleAccumulator>,
     pub(super) necks: Vec<(u32, u32, u32)>,
+    pub(super) seed_count: usize,
     pub(super) vertices: Vec<MeshVertex>,
     pub(super) keys: Vec<u64>,
     pub(super) indices: Vec<u32>,
@@ -28,6 +29,7 @@ impl<'a> Assembler<'a> {
             nodes: Vec::new(),
             accumulators: Vec::new(),
             necks: Vec::new(),
+            seed_count: pass.seeds.len(),
             vertices: Vec::new(),
             keys: Vec::new(),
             indices: Vec::new(),
@@ -39,7 +41,7 @@ impl<'a> Assembler<'a> {
         }
     }
 
-    pub(super) fn push(&mut self, index: usize, mut output: TileOutput) {
+    pub(super) fn push(&mut self, index: usize, mut output: TileOutput) -> Result<(), String> {
         assert_eq!(
             index, self.next,
             "surface tiles are assembled in raster order"
@@ -71,6 +73,21 @@ impl<'a> Assembler<'a> {
             face.rebase(base);
         }
         self.join(&output);
+        for (seed, local) in std::mem::take(&mut output.seeds) {
+            let root = find(&mut self.nodes, base + local);
+            let node = &mut self.nodes[root as usize];
+            if node.seed == seed {
+                continue;
+            }
+            if node.seed != EMPTY {
+                return Err(format!(
+                    "the seed points {} and {} share one watershed basin and cannot cut it apart",
+                    node.seed + 1,
+                    seed + 1
+                ));
+            }
+            node.seed = seed;
+        }
         let position = output.position;
         if let Some(face) = output.cache[0].take() {
             self.x_face = Some(face);
@@ -124,6 +141,7 @@ impl<'a> Assembler<'a> {
                 .into_iter()
                 .map(|vertex| offset + vertex),
         );
+        Ok(())
     }
 
     fn resolve(&mut self, base: u32, local: u32, resolved: &mut [u32]) -> u32 {

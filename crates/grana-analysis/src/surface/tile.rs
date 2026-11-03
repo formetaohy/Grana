@@ -20,6 +20,7 @@ pub(super) struct TileOutput {
     pub(super) nodes: Vec<Node>,
     pub(super) accumulators: Vec<SampleAccumulator>,
     pub(super) necks: Vec<(u32, u32, u32)>,
+    pub(super) seeds: Vec<(u32, u32)>,
     pub(super) vertices: Vec<MeshVertex>,
     pub(super) keys: Vec<u64>,
     pub(super) indices: Vec<u32>,
@@ -54,6 +55,7 @@ pub(super) struct Tile<'a> {
     pub(super) nodes: Vec<Node>,
     pub(super) accumulators: Vec<SampleAccumulator>,
     pub(super) necks: Vec<(u32, u32, u32)>,
+    pub(super) seeds: Vec<(u32, u32)>,
     pub(super) vertices: Vec<MeshVertex>,
     pub(super) keys: Vec<u64>,
     pub(super) indices: Vec<u32>,
@@ -87,6 +89,7 @@ impl<'a> Tile<'a> {
             nodes: Vec::new(),
             accumulators: Vec::new(),
             necks: Vec::new(),
+            seeds: Vec::new(),
             vertices: Vec::new(),
             keys: Vec::new(),
             indices: Vec::new(),
@@ -146,7 +149,7 @@ impl<'a> Tile<'a> {
         self.indices.clear();
         self.triangles.clear();
         self.contacts.clear();
-        let split = pass.plan.split > 0.0;
+        let split = pass.plan.split > 0.0 || !pass.seeds.is_empty();
         let saturated = if split {
             let saturated = self.watershed();
             self.record_necks();
@@ -157,6 +160,18 @@ impl<'a> Tile<'a> {
         };
         if super::halted(cancel, stop) {
             return TileResult::Cancelled;
+        }
+        self.seeds.clear();
+        for (index, seed) in pass.seeds.iter().enumerate() {
+            let inside = (0..3).all(|axis| {
+                seed[axis] >= core[axis].start as i64 && seed[axis] < core[axis].end as i64
+            });
+            if !inside {
+                continue;
+            }
+            if let Some(label) = self.seed_label(*seed) {
+                self.seeds.push((index as u32, label));
+            }
         }
         let nodes_bytes = self.nodes.len() as u64 * std::mem::size_of::<Node>() as u64
             + self.accumulators.len() as u64 * std::mem::size_of::<SampleAccumulator>() as u64;
@@ -189,6 +204,7 @@ impl<'a> Tile<'a> {
             nodes: std::mem::take(&mut self.nodes),
             accumulators: std::mem::take(&mut self.accumulators),
             necks: std::mem::take(&mut self.necks),
+            seeds: std::mem::take(&mut self.seeds),
             vertices: std::mem::take(&mut self.vertices),
             keys: std::mem::take(&mut self.keys),
             indices: std::mem::take(&mut self.indices),
@@ -243,6 +259,29 @@ impl<'a> Tile<'a> {
         Some(local[0] + dims[0] * (local[1] + dims[1] * local[2]))
     }
 
+    fn seed_label(&self, seed: [i64; 3]) -> Option<u32> {
+        let mut nearest: Option<(i64, u32)> = None;
+        for dz in -super::SEED_SNAP..=super::SEED_SNAP {
+            for dy in -super::SEED_SNAP..=super::SEED_SNAP {
+                for dx in -super::SEED_SNAP..=super::SEED_SNAP {
+                    let voxel = [seed[0] + dx, seed[1] + dy, seed[2] + dz];
+                    let Some(slot) = self.array_index(voxel) else {
+                        continue;
+                    };
+                    let label = self.labels[slot];
+                    if label == EMPTY {
+                        continue;
+                    }
+                    let distance = dx * dx + dy * dy + dz * dz;
+                    if nearest.is_none_or(|(current, _)| distance < current) {
+                        nearest = Some((distance, label));
+                    }
+                }
+            }
+        }
+        nearest.map(|(_, label)| label)
+    }
+
     fn slice(&self, axis: usize, plane: usize) -> Face {
         let dims = self.dims;
         let strides = strides_of(dims);
@@ -278,6 +317,7 @@ fn output_bytes(output: &TileOutput) -> u64 {
     let accumulators =
         output.accumulators.len() as u64 * std::mem::size_of::<SampleAccumulator>() as u64;
     let necks = output.necks.len() as u64 * 12;
+    let seeds = output.seeds.len() as u64 * 8;
     let vertices = output.vertices.len() as u64 * std::mem::size_of::<MeshVertex>() as u64;
     let keys = output.keys.len() as u64 * 8;
     let indices = output.indices.len() as u64 * 4;
@@ -289,5 +329,5 @@ fn output_bytes(output: &TileOutput) -> u64 {
         .filter_map(|face| face.as_ref())
         .map(|face| face.labels.len() as u64 * 4)
         .sum::<u64>();
-    nodes + accumulators + necks + vertices + keys + indices + triangles + contacts + faces
+    nodes + accumulators + necks + seeds + vertices + keys + indices + triangles + contacts + faces
 }

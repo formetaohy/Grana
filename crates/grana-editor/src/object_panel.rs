@@ -394,6 +394,9 @@ fn object(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: O
                     opacity = value;
                 }
                 params(ui, state, commands, id);
+                if kind == ObjectKind::Surfaces {
+                    seeds(ui, state, commands, id);
+                }
                 detect(ui, state, commands, id, kind, frames);
                 summary(
                     ui,
@@ -626,6 +629,44 @@ fn detect(
                 commands.push(Command::CancelDetect(id));
             }
         });
+    }
+}
+
+fn seeds(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: ObjectSetId) {
+    let count = state.scene.seed_count(id);
+    let armed = state.workspace.seed == Some(id);
+    ui.row(
+        Block::row()
+            .gaps(8.0)
+            .align(Align::Center)
+            .width(Length::Fill),
+        |ui| {
+            widget::section_title(ui, "Seeds");
+            ui.space(1.0);
+            widget::caption(ui, &format!("{count}"));
+        },
+    );
+    ui.row(
+        Block::row()
+            .gaps(6.0)
+            .align(Align::Center)
+            .width(Length::Fill),
+        |ui| {
+            let label = if armed { "Stop placing" } else { "Place seeds" };
+            let role = if armed { Role::Prominent } else { Role::Quiet };
+            if widget::button_with(ui, "seed.arm", label, role, Length::Fill).clicked {
+                state.workspace.seed = (!armed).then_some(id);
+            }
+            if count > 0 && widget::button(ui, "seed.clear", "Clear", Role::Quiet) {
+                commands.push(Command::ClearSeeds(id));
+            }
+        },
+    );
+    if armed {
+        widget::caption(ui, "click a surface to seed it");
+        widget::caption(ui, "option-click a seed to remove it");
+    } else if count > 0 {
+        widget::caption(ui, "detect again to cut the seeded necks");
     }
 }
 

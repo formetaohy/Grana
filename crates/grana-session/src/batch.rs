@@ -570,10 +570,13 @@ fn detect(
     };
     run::detect(
         reader,
-        channel,
-        set.params(),
-        region,
-        roi,
+        run::DetectRequest::new(
+            channel,
+            set.params(),
+            region,
+            roi,
+            vec![Vec::new(); reader.pyramid().frame_count() as usize],
+        ),
         progress.cancel,
         &mut sink,
     )?;

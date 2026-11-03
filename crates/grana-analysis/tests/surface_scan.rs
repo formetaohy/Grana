@@ -209,6 +209,46 @@ fn splits_touching_lobes_at_their_neck() {
 }
 
 #[test]
+fn cuts_touching_lobes_at_the_seed_points() {
+    let extent = Extent::new(200, 80, 80);
+    let spacing = [0.1f32, 0.1, 0.1];
+    let centres = [[86.5f32, 40.0, 40.0], [105.5, 40.0, 40.0]];
+    let volume = blobs(extent, &spacing, &centres, 10.0);
+    let level = Level::new(volume.extent(), volume.spacing());
+    let world = level.world_extent();
+    let merged = extract(&volume, params(0.5), Region::none());
+    assert_eq!(merged.object_count(), 1, "the lobes form one object");
+    let total = merged.objects()[0].voxel_count();
+
+    let seeds = centres.map(|centre| {
+        [0, 1, 2].map(|axis| (centre[axis] + 0.5) * spacing[axis] - 0.5 * world[axis])
+    });
+    let set = extract_seeded(&volume, params(0.5), &seeds)
+        .expect("the seeded surface is detected")
+        .expect("surface detection completes");
+    assert_eq!(set.object_count(), 2, "the seed points cut the neck");
+    let kept = set
+        .objects()
+        .iter()
+        .map(|object| object.voxel_count())
+        .sum::<u64>();
+    assert_eq!(kept, total, "the seeded cut conserves the mask");
+}
+
+#[test]
+fn rejects_a_seed_point_outside_the_surface() {
+    let extent = Extent::new(120, 96, 72);
+    let spacing = [0.1f32, 0.1, 0.2];
+    let volume = blobs(extent, &spacing, &[[36.0, 48.0, 36.0]], 12.0);
+    let level = Level::new(volume.extent(), volume.spacing());
+    let world = level.world_extent();
+    let seed = [0, 1, 2].map(|axis| (100.0f32 + 0.5) * spacing[axis] - 0.5 * world[axis]);
+    let failure = extract_seeded(&volume, params(0.5), &[seed])
+        .expect_err("a seed point outside the surface is rejected");
+    assert!(failure.contains("seed point"), "{failure}");
+}
+
+#[test]
 fn splits_large_lobes_at_their_thick_neck() {
     let volume = large_lobes();
     let filter = || SurfaceFilter::new(0.0, 0.8, 0.0, 0.0);
@@ -569,6 +609,41 @@ fn caps_a_surface_cut_by_the_region() {
 
 fn extract(volume: &Volume, params: SurfaceParams, region: Region) -> SurfaceSet {
     extract_with(volume, params, region, 1)
+}
+
+fn extract_seeded(
+    volume: &Volume,
+    params: SurfaceParams,
+    seeds: &[[f32; 3]],
+) -> Result<Option<SurfaceSet>, String> {
+    let level = Level::new(volume.extent(), volume.spacing());
+    let intensity = Intensity::new(0.0, f32::from(HIGH));
+    let channels = volume.channel_count();
+    let builder = SurfaceBuilder::new(0, level, params, channels, 0, Region::none(), intensity)
+        .with_seeds(seeds);
+    let cancel = AtomicBool::new(false);
+    builder.scan(
+        1,
+        &cancel,
+        None,
+        &mut |_done, _total| {},
+        &|_index, ranges| {
+            Ok(volume.channels()[0].data().region(
+                volume.extent(),
+                ranges[0].clone(),
+                ranges[1].clone(),
+                ranges[2].clone(),
+            ))
+        },
+        &|channel, core| {
+            Ok(volume.channels()[channel].data().region(
+                volume.extent(),
+                core[0].clone(),
+                core[1].clone(),
+                core[2].clone(),
+            ))
+        },
+    )
 }
 
 fn extract_with(

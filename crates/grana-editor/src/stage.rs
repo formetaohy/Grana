@@ -16,6 +16,7 @@ pub enum Pane {
 pub struct Interaction {
     pub camera: bool,
     pub pick: Option<(Pane, Vec2)>,
+    pub modifiers: Modifiers,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,6 +86,10 @@ impl Stage {
         self.section_region = section;
     }
 
+    pub fn volume_region(&self) -> [u32; 4] {
+        self.volume_region
+    }
+
     pub fn hovered(&self) -> Option<Pane> {
         self.hovered
     }
@@ -108,6 +113,7 @@ impl Stage {
         let blocked = ui.pointer_over_chrome() || ui.pointer_captured();
         let input = ui.input();
         self.modifiers = input.modifiers();
+        interaction.modifiers = self.modifiers;
         let pointer = input.position();
         self.cursor = input.inside().then_some(pointer);
         self.hovered = self.pane_at(pointer);

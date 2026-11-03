@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use glam::Vec2;
+use glam::{Vec2, Vec3};
 use grana_animation::Keyframe;
 use grana_display::Viewport;
 use grana_editor::{FrameStats, Pane, Stage, ViewStats, Workspace};
@@ -10,6 +10,7 @@ use grana_engine::{Destination, Engine, Outcome, Panels, Picked, Plan, Pose, SAM
 use grana_gpu::Gpu;
 use grana_project::ViewState;
 use grana_render::{FrameInfo, PickPane};
+use grana_scene::ObjectSetId;
 use grana_session::{Command, Effects, Export, Session, SessionView};
 use grana_ui::{
     Button as UiButton, Event as UiEvent, Modifiers as UiModifiers, Ui, Vec2 as UiVec2,
@@ -118,6 +119,14 @@ impl App {
 
     fn redraw(&mut self) {
         self.session.poll();
+        if let Some(set) = self.workspace.seed
+            && self
+                .session
+                .scene()
+                .is_none_or(|scene| scene.objects.get(set).is_none())
+        {
+            self.workspace.seed = None;
+        }
         self.exchange_bricks();
         self.poll_pick();
         self.session.sync_measure();
@@ -281,6 +290,7 @@ impl App {
             session,
             viewport,
             stage,
+            workspace,
             ..
         } = self;
         let Some(surface) = surface.as_mut() else {
@@ -292,9 +302,14 @@ impl App {
                 scene.dataset.spacing()
             });
         let interaction = stage.input(&mut surface.ui, viewport, spacing);
-        surface
-            .window
-            .set_cursor(interface_cursor(surface.ui.cursor()));
+        let seeding = workspace
+            .seed
+            .filter(|_| stage.hovered() == Some(Pane::Volume));
+        surface.window.set_cursor(if seeding.is_some() {
+            CursorIcon::Crosshair
+        } else {
+            interface_cursor(surface.ui.cursor())
+        });
         if interaction.camera {
             if let Some(scene) = session.scene() {
                 viewport.clamp_focus(0.5 * scene.dataset.world_size());
@@ -302,10 +317,62 @@ impl App {
             surface.window.request_redraw();
         }
         let pick = interaction.pick;
+        let modifiers = interaction.modifiers;
         if let Some((pane, point)) = pick {
-            self.pick(pane, point);
+            match seeding.filter(|_| pane == Pane::Volume) {
+                Some(set) => self.place_seed(set, point, modifiers.alt),
+                None => self.pick(pane, point),
+            }
             self.request_redraw();
         }
+    }
+
+    fn place_seed(&mut self, set: ObjectSetId, point: Vec2, remove: bool) {
+        let Some(surface) = self.surface.as_ref() else {
+            return;
+        };
+        let region = self.stage.volume_region();
+        if region[2] == 0 || region[3] == 0 {
+            return;
+        }
+        let scale = surface.window.scale_factor() as f32;
+        let x = point.x * scale;
+        let y = point.y * scale;
+        let ndc = Vec2::new(
+            2.0 * (x - region[0] as f32) / region[2] as f32 - 1.0,
+            1.0 - 2.0 * (y - region[1] as f32) / region[3] as f32,
+        );
+        let aspect = region[2] as f32 / region[3] as f32;
+        let ray = self.viewport.camera().ray(ndc, aspect);
+        let Some(scene) = self.session.scene() else {
+            return;
+        };
+        let threshold = 3.0 * scene.dataset.voxel_size().min_element();
+        if remove {
+            let mut nearest: Option<(f32, usize)> = None;
+            for (index, seed) in scene.seeds(set).iter().enumerate() {
+                let offset = Vec3::from(*seed) - ray.origin;
+                let along = offset.dot(ray.direction);
+                if along < 0.0 {
+                    continue;
+                }
+                let distance = (offset - ray.direction * along).length();
+                if distance <= threshold && nearest.is_none_or(|(best, _)| distance < best) {
+                    nearest = Some((distance, index));
+                }
+            }
+            if let Some((_, index)) = nearest {
+                self.apply(vec![Command::RemoveSeed { set, index }]);
+            }
+            return;
+        }
+        let Some(hit) = scene.surface_ray(set, ray.origin, ray.direction) else {
+            return;
+        };
+        self.apply(vec![Command::AddSeed {
+            set,
+            position: hit.to_array(),
+        }]);
     }
 
     fn apply(&mut self, commands: Vec<Command>) -> bool {
@@ -822,6 +889,7 @@ impl App {
         };
         let selection = match picked {
             Picked::Hit(selection) => Some(selection),
+            Picked::Seed => return,
             Picked::Miss => None,
         };
         self.apply(vec![Command::Select(selection)]);

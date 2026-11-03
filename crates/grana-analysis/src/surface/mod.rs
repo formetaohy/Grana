@@ -35,6 +35,7 @@ const FRAME_ARRAY_LIMIT: u64 = 1024 << 20;
 const TILE_FRAGMENT_LIMIT: u64 = 96 << 20;
 const WORKER_LIMIT: usize = 16;
 const SPLIT_FLOOR: f64 = 1.0;
+const SEED_SNAP: i64 = 2;
 
 pub const SURFACE_VOXEL_LIMIT: u64 = 1 << 30;
 
@@ -56,6 +57,7 @@ pub(crate) struct Node {
     pub(crate) low: [u32; 3],
     pub(crate) high: [u32; 3],
     pub(crate) contact: u32,
+    pub(crate) seed: u32,
 }
 
 impl Node {
@@ -69,6 +71,7 @@ impl Node {
             low: [u32::MAX; 3],
             high: [0; 3],
             contact: EMPTY,
+            seed: EMPTY,
         }
     }
 }
@@ -137,6 +140,7 @@ pub struct SurfaceBuilder {
     opening: Option<Element>,
     closing: Option<Element>,
     morph_radius: u32,
+    seeds: Vec<[i64; 3]>,
 }
 
 impl SurfaceBuilder {
@@ -206,6 +210,7 @@ impl SurfaceBuilder {
             opening,
             closing,
             morph_radius,
+            seeds: Vec::new(),
         }
     }
 
@@ -280,6 +285,23 @@ impl SurfaceBuilder {
         }
     }
 
+    pub fn with_seeds(mut self, seeds: &[[f32; 3]]) -> Self {
+        self.seeds = seeds
+            .iter()
+            .map(|seed| {
+                assert!(
+                    seed.iter().all(|value| value.is_finite()),
+                    "a surface seed point is finite"
+                );
+                [0, 1, 2].map(|axis| {
+                    let local = (seed[axis] + 0.5 * self.world[axis]) / self.spacing[axis] - 0.5;
+                    local.round() as i64
+                })
+            })
+            .collect();
+        self
+    }
+
     pub fn scan(
         self,
         workers: usize,
@@ -294,6 +316,7 @@ impl SurfaceBuilder {
             value => value,
         }
         .clamp(1, WORKER_LIMIT);
+        let seeds = &self.seeds;
         let Some(mask) = mask::build(&self, desired, cancel, roi, progress, read)? else {
             return Ok(None);
         };
@@ -303,22 +326,23 @@ impl SurfaceBuilder {
             .copied()
             .max()
             .expect("three axes exist");
-        let mut base = if self.split > 0.0 {
+        let split = self.split > 0.0 || !seeds.is_empty();
+        let mut base = if split {
             (DISTANCE_LIMIT * widest).min(DISTANCE_LIMIT_MAX)
         } else {
             0
         };
-        while base > DISTANCE_LIMIT && Pass::new(&self, base).max_workers().is_none() {
+        while base > DISTANCE_LIMIT && Pass::new(&self, base, seeds).max_workers().is_none() {
             base /= 2;
         }
         let mut runs = Vec::new();
-        let limits = if self.split > 0.0 {
+        let limits = if split {
             vec![base, base * 2, base * 4]
         } else {
             vec![0]
         };
         for limit in limits {
-            match Pass::new(&self, limit).max_workers() {
+            match Pass::new(&self, limit, seeds).max_workers() {
                 Some(capacity) => runs.push((limit, capacity)),
                 None => break,
             }
@@ -341,7 +365,7 @@ impl SurfaceBuilder {
         loop {
             let (limit, capacity) = runs[step];
             let last = step + 1 == runs.len();
-            let pass = Pass::new(&self, limit);
+            let pass = Pass::new(&self, limit, seeds);
             let workers = desired.min(capacity).min(pass.total().max(1));
             let outcome = run_pass(&pass, workers, last, &mut inputs)?;
             match outcome {
@@ -480,18 +504,24 @@ where
 
 struct Pass<'a> {
     plan: &'a SurfaceBuilder,
+    seeds: &'a [[i64; 3]],
     cap: u32,
     pad: [u32; 3],
 }
 
 impl<'a> Pass<'a> {
-    fn new(plan: &'a SurfaceBuilder, limit: u32) -> Self {
+    fn new(plan: &'a SurfaceBuilder, limit: u32, seeds: &'a [[i64; 3]]) -> Self {
         let cap = limit * limit;
         let pad = [0, 1, 2].map(|axis| {
             let needed = limit + (plan.kernels[axis].len() / 2) as u32 + 1;
             align(needed.max(crate::local::BLOCK as u32 * (crate::local::WINDOW as u32 + 1)))
         });
-        Self { plan, cap, pad }
+        Self {
+            plan,
+            seeds,
+            cap,
+            pad,
+        }
     }
 
     fn total(&self) -> usize {
@@ -633,7 +663,7 @@ fn assemble(
                         stop.store(true, Ordering::Relaxed);
                         return Ok(PassOutcome::Saturated);
                     }
-                    assembler.push(assembled, *output);
+                    assembler.push(assembled, *output)?;
                     assembled += 1;
                     if (assembled - 1).is_multiple_of(4) || assembled == total {
                         progress(pass.total() + assembled, pass.total() * 2);
@@ -643,7 +673,7 @@ fn assemble(
         }
     }
     assembler.merge_basins();
-    Ok(PassOutcome::Done(assembler.build()))
+    Ok(PassOutcome::Done(assembler.build()?))
 }
 
 fn halted(cancel: &AtomicBool, stop: &AtomicBool) -> bool {
@@ -695,6 +725,9 @@ fn union(
     }
     if target.contact == EMPTY {
         target.contact = loser.contact;
+    }
+    if loser.seed != EMPTY {
+        target.seed = target.seed.min(loser.seed);
     }
     if winner.rank == loser.rank {
         target.rank += 1;

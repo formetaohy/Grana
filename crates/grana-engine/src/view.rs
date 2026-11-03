@@ -5,6 +5,8 @@ use grana_scene::{Item, ObjectSet, Scene, Selection};
 
 const SELECTED_COLOR: [f32; 3] = [1.00, 0.93, 0.62];
 const SELECTED_SCALE: f32 = 1.3;
+const SEED_COLOR: [f32; 3] = [1.00, 0.97, 0.90];
+const SEED_SCALE: f32 = 2.0;
 
 pub struct RenderedScene<'a> {
     pub channels: Vec<ChannelRow<'a>>,
@@ -12,7 +14,7 @@ pub struct RenderedScene<'a> {
     pub layers: Vec<Layer<'a>>,
     pub markers: Vec<Marker>,
     pub style_ids: Vec<Selection>,
-    pub marker_ids: Vec<Selection>,
+    pub marker_ids: Vec<Option<Selection>>,
     pub shading: Shading,
     pub step_scale: f32,
 }
@@ -36,9 +38,14 @@ pub fn frame(scene: &Scene) -> RenderedScene<'_> {
     let mut markers = Vec::new();
     let mut style_ids = Vec::new();
     let mut marker_ids = Vec::new();
+    let seed_radius = SEED_SCALE * scene.dataset.voxel_size().min_element();
     for set in scene.objects.iter() {
         if !scene.shown(set) {
             continue;
+        }
+        for seed in scene.seeds(set.id()) {
+            markers.push(Marker::new(*seed, seed_radius, SEED_COLOR, 1.0));
+            marker_ids.push(None);
         }
         let Some(frame) = set.frame(scene.time()) else {
             continue;
@@ -61,10 +68,10 @@ pub fn frame(scene: &Scene) -> RenderedScene<'_> {
                     continue;
                 }
                 markers.push(marker(scene, set, index, *spot, color(index)));
-                marker_ids.push(Selection {
+                marker_ids.push(Some(Selection {
                     set: set.id(),
                     item: Item::Object(index),
-                });
+                }));
             }
         }
         if let (Some(mesh), Some(stamp)) = (frame.geometry(), set.frame_stamp(scene.time()))
