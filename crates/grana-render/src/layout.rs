@@ -234,6 +234,10 @@ impl Layouts {
             entries: &[
                 storage(0, ShaderStages::FRAGMENT, true),
                 storage(1, ShaderStages::FRAGMENT, true),
+                storage(2, ShaderStages::FRAGMENT, true),
+                texture(3, ShaderStages::FRAGMENT),
+                texture(4, ShaderStages::FRAGMENT),
+                texture(5, ShaderStages::FRAGMENT),
             ],
         });
         let volume = pipeline_layout(

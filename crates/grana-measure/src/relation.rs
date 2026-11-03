@@ -12,6 +12,18 @@ pub enum RelationField {
 impl RelationField {
     pub const ALL: [Self; 3] = [Self::Distance, Self::Inside, Self::Partner];
 
+    pub fn index(self) -> u8 {
+        match self {
+            Self::Distance => 0,
+            Self::Inside => 1,
+            Self::Partner => 2,
+        }
+    }
+
+    pub fn from_index(index: u8) -> Option<Self> {
+        Self::ALL.get(index as usize).copied()
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Distance => "distance",

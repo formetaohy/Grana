@@ -88,13 +88,14 @@ struct MeshUniforms {
     light_reach: [f32; 4],
     shadow: [f32; 4],
     viewport: [f32; 4],
+    oit: [u32; 4],
 }
 
 const _: () = {
     assert!(size_of::<PointData>() == 16);
     assert!(size_of::<ObjectData>() == 80);
     assert!(size_of::<StyleData>() == 32);
-    assert!(size_of::<MeshUniforms>() == 272);
+    assert!(size_of::<MeshUniforms>() == 288);
 };
 
 pub(crate) struct MeshPasses {
@@ -107,6 +108,7 @@ pub(crate) struct MeshPasses {
     shadow_cull: ComputePipeline,
     volume_pipeline: RenderPipeline,
     oit_pipeline: RenderPipeline,
+    tail_pipeline: RenderPipeline,
     pick_pipeline: RenderPipeline,
     shadow_pipeline: RenderPipeline,
     uniforms: Buffer,
@@ -244,6 +246,27 @@ impl MeshPasses {
             multiview_mask: None,
             cache: None,
         });
+        let tail_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.mesh.tail"),
+            layout: Some(&oit_layout),
+            vertex: VertexState {
+                module: &volume_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(vertex_layout())],
+            },
+            primitive: PrimitiveState::default(),
+            depth_stencil: Some(depth_state(false, CompareFunction::Less)),
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &volume_module,
+                entry_point: Some("fs_tail"),
+                compilation_options: Default::default(),
+                targets: &crate::oit::tail_targets(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let pick_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.mesh.pick.pipeline_layout"),
             bind_group_layouts: &[
@@ -305,6 +328,7 @@ impl MeshPasses {
             shadow_cull,
             volume_pipeline,
             oit_pipeline,
+            tail_pipeline,
             pick_pipeline,
             shadow_pipeline,
             uniforms,
@@ -404,6 +428,7 @@ impl MeshPasses {
             light_reach: frame.light_reach,
             shadow: [shading.shadows, 0.0, 0.0, 0.0],
             viewport: frame.viewport,
+            oit: frame.oit,
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }
@@ -522,6 +547,24 @@ impl MeshPasses {
             return;
         }
         pass.set_pipeline(&self.oit_pipeline);
+        pass.set_bind_group(0, &self.uniform_group, &[]);
+        pass.set_bind_group(3, shadow, &[]);
+        pass.set_bind_group(4, oit, &[]);
+        for key in &self.active {
+            self.slots[key].draw(pass, LAYER_NARROW, LAYER_WIDE);
+        }
+    }
+
+    pub fn draw_tail<'a>(
+        &'a self,
+        pass: &mut RenderPass<'a>,
+        shadow: &'a BindGroup,
+        oit: &'a BindGroup,
+    ) {
+        if self.active.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.tail_pipeline);
         pass.set_bind_group(0, &self.uniform_group, &[]);
         pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(4, oit, &[]);

@@ -11,8 +11,9 @@ use grana_object::{
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_scene::{
-    ChannelState, ColocResult, ColocState, ColorState, ItemState, MeasureState, ObjectFrame,
-    ObjectParams, RelationState, SceneState, SelectionState, SetState, TrackStyle, Visibility,
+    ChannelState, ColocResult, ColocState, ColorState, ItemState, MeasureState, ObjectColor,
+    ObjectFrame, ObjectParams, RelationState, SceneState, SelectionState, SetState, TrackStyle,
+    Visibility,
 };
 use grana_volume::{Intensity, Region};
 
@@ -355,6 +356,22 @@ impl Encode for Measurement {
                 writer.u8(12);
                 writer.count(*channel);
                 writer.u8(statistic.index());
+            }
+        }
+    }
+}
+
+impl Encode for ObjectColor {
+    fn encode(&self, writer: &mut Writer) {
+        match self {
+            Self::Measurement(measurement) => {
+                writer.u8(0);
+                measurement.encode(writer);
+            }
+            Self::Relation { target, field } => {
+                writer.u8(1);
+                writer.u64(target.raw());
+                writer.u8(field.index());
             }
         }
     }

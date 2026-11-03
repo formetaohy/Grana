@@ -1,6 +1,7 @@
 use glam::Vec2;
 use grana_scene::{
-    Item, Job, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, ParamField, ParamScale, Selection,
+    Item, Job, ObjectColor, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, ParamField,
+    ParamScale, Selection,
 };
 use grana_ui::{Align, Block, Color, Corners, Edges, Length, Rect, Role, TextStyle, Ui};
 
@@ -721,20 +722,39 @@ fn appearance(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, i
         .iter()
         .map(|channel| channel.name().to_string())
         .collect::<Vec<_>>();
-    let measurements = set
+    let mut metrics = set
         .colorable_measurements()
         .into_iter()
-        .map(|measurement| (measurement, measurement.label(&names)))
+        .map(|measurement| {
+            (
+                ObjectColor::Measurement(measurement),
+                measurement.label(&names),
+            )
+        })
         .collect::<Vec<_>>();
+    for relation in set.relations() {
+        let target = state
+            .scene
+            .objects
+            .get(relation.target())
+            .map_or_else(|| "target".to_string(), |target| target.name().to_string());
+        for field in ObjectColor::RELATION_FIELDS {
+            let metric = ObjectColor::Relation {
+                target: relation.target(),
+                field,
+            };
+            metrics.push((metric, format!("{target} · {}", field.label())));
+        }
+    }
     let extent = set.object_extent();
     let mut coloring = set.object_coloring().clone();
     if crate::coloring::edit(
         ui,
         &format!("object.{}.coloring", id.raw()),
         &mut coloring,
-        &measurements,
+        &metrics,
         extent,
-        |measurement| (measurement.unit(), measurement.decimals()),
+        |metric| (metric.unit(), metric.decimals()),
     ) {
         commands.push(Command::SetObjectColoring { set: id, coloring });
     }

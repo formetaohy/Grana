@@ -5,7 +5,8 @@ use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
 use grana_geometry::{Bounds, GeometryGroup, PackedMesh, PackedVertex};
 use grana_measure::{
-    Aggregate, Filter, Group, Lasso, MeasureView, Measurement, Scope, Statistic, TrackMeasurement,
+    Aggregate, Filter, Group, Lasso, MeasureView, Measurement, RelationField, Scope, Statistic,
+    TrackMeasurement,
 };
 use grana_measure::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocCost, ColocFrame,
@@ -17,9 +18,9 @@ use grana_object::{
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_scene::{
-    ChannelState, ColocResult, ColocState, ColorState, ItemState, MeasureState, ObjectFrame,
-    ObjectKind, ObjectParams, RelationState, SceneState, SelectionState, SetState, TrackStyle,
-    Visibility,
+    ChannelState, ColocResult, ColocState, ColorState, ItemState, MeasureState, ObjectColor,
+    ObjectFrame, ObjectKind, ObjectParams, ObjectSetId, RelationState, SceneState, SelectionState,
+    SetState, TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Intensity, Region};
 
@@ -167,7 +168,7 @@ impl Decode for SceneState {
                 || set
                     .object_color
                     .metric
-                    .is_some_and(|metric| !color_applies(set.kind, channels, metric))
+                    .is_some_and(|metric| !color_applies(set, channels, metric))
                 || set
                     .track_color
                     .metric
@@ -322,7 +323,7 @@ impl Decode for SetState {
         let tracks = Option::<Arc<TrackSet>>::decode(reader)?;
         let track_thickness = Option::<f32>::decode(reader)?.map(positive).transpose()?;
         let track_visible = Option::<bool>::decode(reader)?;
-        let object_color = ColorState::<Measurement>::decode(reader)?;
+        let object_color = ColorState::<ObjectColor>::decode(reader)?;
         let track_color = ColorState::<TrackMeasurement>::decode(reader)?;
         let visibility = Visibility::decode(reader)?;
         let seeds = decode_seeds(reader)?;
@@ -600,6 +601,23 @@ impl Decode for Measurement {
             return Err(FAULT_VALUE);
         }
         Ok(measurement)
+    }
+}
+
+impl Decode for ObjectColor {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        match reader.u8()? {
+            0 => Ok(Self::Measurement(Measurement::decode(reader)?)),
+            1 => {
+                let target = ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?;
+                let field = RelationField::from_index(reader.u8()?).ok_or(FAULT_SHAPE)?;
+                if !ObjectColor::RELATION_FIELDS.contains(&field) {
+                    return Err(FAULT_VALUE);
+                }
+                Ok(Self::Relation { target, field })
+            }
+            _ => Err(FAULT_SHAPE),
+        }
     }
 }
 
@@ -1104,8 +1122,16 @@ impl<T: Decode> Decode for Option<T> {
     }
 }
 
-fn color_applies(kind: ObjectKind, channels: usize, measurement: Measurement) -> bool {
-    measurement.colorable() && kind.measurements(channels).contains(&measurement)
+fn color_applies(set: &SetState, channels: usize, metric: ObjectColor) -> bool {
+    match metric {
+        ObjectColor::Measurement(measurement) => {
+            measurement.colorable() && set.kind.measurements(channels).contains(&measurement)
+        }
+        ObjectColor::Relation { target, .. } => set
+            .relations
+            .iter()
+            .any(|relation| relation.target == target.raw()),
+    }
 }
 
 fn decode_seeds(reader: &mut Reader<'_>) -> Result<Vec<Vec<[f32; 3]>>, &'static str> {

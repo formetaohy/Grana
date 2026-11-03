@@ -4,6 +4,7 @@ use grana_analysis::TrackParams;
 use grana_measure::{Measurement, TrackMeasurement};
 use grana_object::{RelationFrame, TrackSet};
 
+use crate::color::ObjectColor;
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::relation::Relation;
@@ -67,7 +68,7 @@ pub struct ObjectSet {
     track_style: Option<TrackStyle>,
     frames: Vec<FrameSlot>,
     frame_bounds: Vec<Option<Extent>>,
-    object_coloring: Coloring<Measurement>,
+    object_coloring: Coloring<ObjectColor>,
     track_coloring: Coloring<TrackMeasurement>,
     track_bounds: Option<Extent>,
     revision: u64,
@@ -175,7 +176,7 @@ impl ObjectSet {
         self.document += 1;
     }
 
-    pub fn object_coloring(&self) -> &Coloring<Measurement> {
+    pub fn object_coloring(&self) -> &Coloring<ObjectColor> {
         &self.object_coloring
     }
 
@@ -187,13 +188,8 @@ impl ObjectSet {
             .collect()
     }
 
-    pub fn set_object_coloring(&mut self, coloring: Coloring<Measurement>) -> bool {
-        if let Some(metric) = coloring.metric() {
-            assert!(
-                self.colorable_measurements().contains(&metric),
-                "the measurement colors the objects of this set"
-            );
-        }
+    pub fn set_object_coloring(&mut self, coloring: Coloring<ObjectColor>) -> bool {
+        self.check_coloring(coloring.metric());
         if self.object_coloring == coloring {
             return false;
         }
@@ -204,6 +200,26 @@ impl ObjectSet {
         }
         self.document += 1;
         true
+    }
+
+    fn check_coloring(&self, metric: Option<ObjectColor>) {
+        match metric {
+            None => {}
+            Some(ObjectColor::Measurement(measurement)) => assert!(
+                self.colorable_measurements().contains(&measurement),
+                "the measurement colors the objects of this set"
+            ),
+            Some(ObjectColor::Relation { target, field }) => {
+                assert!(
+                    self.relation(target).is_some(),
+                    "the relation colors the objects of this set"
+                );
+                assert!(
+                    ObjectColor::RELATION_FIELDS.contains(&field),
+                    "a relation field colors the objects of this set"
+                );
+            }
+        }
     }
 
     pub fn object_extent(&self) -> Option<Extent> {
@@ -336,6 +352,10 @@ impl ObjectSet {
         if self.relations.len() == count {
             return false;
         }
+        if self.object_coloring.metric().and_then(ObjectColor::target) == Some(target) {
+            self.object_coloring.set_metric(None);
+            self.rebuild_frame_bounds();
+        }
         self.revision = stamp;
         self.document += 1;
         true
@@ -358,6 +378,7 @@ impl ObjectSet {
         if !relation.install(time, frame) {
             return;
         }
+        self.refresh_relation_bounds(target, time);
         self.revision = stamp;
         self.document += 1;
     }
@@ -367,6 +388,15 @@ impl ObjectSet {
             return;
         }
         self.relations.clear();
+        if self
+            .object_coloring
+            .metric()
+            .and_then(ObjectColor::target)
+            .is_some()
+        {
+            self.object_coloring.set_metric(None);
+            self.rebuild_frame_bounds();
+        }
         self.revision = stamp;
         self.document += 1;
     }
@@ -534,16 +564,11 @@ impl ObjectSet {
 
     fn restore_coloring(
         &mut self,
-        object: ColorState<Measurement>,
+        object: ColorState<ObjectColor>,
         track: ColorState<TrackMeasurement>,
     ) {
         let object = Coloring::restore(object);
-        if let Some(metric) = object.metric() {
-            assert!(
-                self.colorable_measurements().contains(&metric),
-                "a restored measurement colors the objects of its set"
-            );
-        }
+        self.check_coloring(object.metric());
         self.object_coloring = object;
         self.rebuild_frame_bounds();
         let track = Coloring::restore(track);
@@ -694,12 +719,7 @@ impl ObjectSet {
             .expect("the deleted object lies inside the time series");
         slot.stamp = stamp;
         slot.data = (!empty).then(|| Arc::new(pruned));
-        let bounds = self.object_coloring.metric().and_then(|metric| {
-            slot.data
-                .as_deref()
-                .and_then(|frame| frame_extent(frame, metric))
-        });
-        self.frame_bounds[time as usize] = bounds;
+        self.frame_bounds[time as usize] = self.frame_extent(time);
         if let Some((thickness, visible, pruned)) = pruned_tracks
             && let Some(set) = pruned
         {
@@ -736,6 +756,7 @@ impl ObjectSet {
         if !relation.invalidate(time) {
             return false;
         }
+        self.refresh_relation_bounds(target, time);
         self.revision = stamp;
         self.document += 1;
         true
@@ -743,11 +764,18 @@ impl ObjectSet {
 
     pub(crate) fn invalidate_relations(&mut self, time: u32, stamp: u64) -> bool {
         let mut changed = false;
+        let mut cleared = None;
         for relation in &mut self.relations {
-            changed |= relation.invalidate(time);
+            if relation.invalidate(time) {
+                changed = true;
+                cleared = Some(relation.target());
+            }
         }
         if !changed {
             return false;
+        }
+        if let Some(target) = cleared {
+            self.refresh_relation_bounds(target, time);
         }
         self.revision = stamp;
         self.document += 1;
@@ -764,10 +792,6 @@ impl ObjectSet {
             self.kind,
             "an object frame matches its object set"
         );
-        let bounds = self
-            .object_coloring
-            .metric()
-            .and_then(|metric| frame_extent(&frame, metric));
         let slot = self
             .frames
             .get_mut(time as usize)
@@ -777,7 +801,7 @@ impl ObjectSet {
         self.visibility = Visibility::All;
         slot.stamp = stamp;
         slot.data = Some(frame);
-        self.frame_bounds[time as usize] = bounds;
+        self.frame_bounds[time as usize] = self.frame_extent(time);
     }
 
     pub(crate) fn clear(&mut self, stamp: u64) {
@@ -873,13 +897,29 @@ impl ObjectSet {
     }
 
     fn rebuild_frame_bounds(&mut self) {
-        let metric = self.object_coloring.metric();
-        for (slot, bounds) in self.frames.iter().zip(self.frame_bounds.iter_mut()) {
-            *bounds = slot
-                .data
-                .as_deref()
-                .and_then(|frame| metric.and_then(|metric| frame_extent(frame, metric)));
+        for time in 0..self.frames.len() {
+            self.frame_bounds[time] = self.frame_extent(time as u32);
         }
+    }
+
+    fn refresh_relation_bounds(&mut self, target: ObjectSetId, time: u32) {
+        if self.object_coloring.metric().and_then(ObjectColor::target) != Some(target) {
+            return;
+        }
+        let bounds = self.frame_extent(time);
+        if let Some(slot) = self.frame_bounds.get_mut(time as usize) {
+            *slot = bounds;
+        }
+    }
+
+    fn frame_extent(&self, time: u32) -> Option<Extent> {
+        let metric = self.object_coloring.metric()?;
+        let frame = self.frames.get(time as usize)?.data.as_deref()?;
+        let relation = metric
+            .target()
+            .and_then(|target| self.relation(target))
+            .and_then(|relation| relation.frame(time));
+        metric.extent(frame, relation)
     }
 
     fn rebuild_track_bounds(&mut self) {
@@ -923,13 +963,6 @@ impl ObjectSet {
     pub fn track_at(&self, time: u32, object: usize) -> Option<usize> {
         self.tracks.as_ref()?.set().track_at(time, object)
     }
-}
-
-fn frame_extent(frame: &ObjectFrame, metric: Measurement) -> Option<Extent> {
-    let objects = frame.objects();
-    (0..frame.object_count()).fold(None, |accumulated, object| {
-        accumulate(accumulated, metric.value(objects, object))
-    })
 }
 
 fn track_extent(set: &TrackSet, metric: TrackMeasurement) -> Option<Extent> {

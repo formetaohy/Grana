@@ -1,8 +1,9 @@
 use grana_measure::{
     ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
+    RelationField,
 };
 use grana_object::{IntensityTable, RelationFrame, SampleAccumulator, Spot, SpotSet};
-use grana_scene::{Dataset, Item, ObjectFrame, ObjectKind, Scene, Selection};
+use grana_scene::{Dataset, Item, ObjectColor, ObjectFrame, ObjectKind, Scene, Selection};
 use grana_volume::{Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
 fn scene() -> Scene {
@@ -146,6 +147,67 @@ fn renames_and_deletes_a_detection_without_losing_identities() {
             .and_then(|set| set.relation(source))
             .is_some_and(|relation| relation.frame(0).is_none()),
         "a deleted detection invalidates the relation it fed"
+    );
+}
+
+#[test]
+fn colors_objects_by_their_relation_to_another_set() {
+    let mut scene = scene();
+    let source = scene.add_object(ObjectKind::Spots, 0);
+    let target = scene.add_object(ObjectKind::Spots, 0);
+    scene.install(
+        source,
+        0,
+        spots(&[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [4.0, 0.0, 0.0]]),
+    );
+    scene.install(target, 0, spots(&[[0.0, 0.0, 0.0]]));
+    assert!(scene.add_relation(source, target));
+    let set = scene
+        .objects
+        .get_mut(source)
+        .expect("the source set exists");
+    let mut coloring = set.object_coloring().clone();
+    coloring.set_metric(Some(ObjectColor::Relation {
+        target,
+        field: RelationField::Distance,
+    }));
+    assert!(set.set_object_coloring(coloring));
+    assert!(
+        scene
+            .objects
+            .get(source)
+            .expect("the source set exists")
+            .object_extent()
+            .is_none(),
+        "a relation that measured nothing colors no object"
+    );
+
+    scene.install_relation(
+        source,
+        target,
+        0,
+        RelationFrame::new(vec![0.5, 0.25, 0.75], vec![0.0, 1.0, 0.0], vec![1, 1, 1]),
+    );
+    assert_eq!(
+        scene
+            .objects
+            .get(source)
+            .expect("the source set exists")
+            .object_extent(),
+        Some((0.25, 0.75)),
+        "the relation colors spread over the measured distances"
+    );
+
+    assert!(scene.remove_relation(source, target));
+    assert!(
+        scene
+            .objects
+            .get(source)
+            .expect("the source set exists")
+            .object_coloring()
+            .metric()
+            .is_none(),
+        "removing the relation falls back to the set color"
     );
 }
 

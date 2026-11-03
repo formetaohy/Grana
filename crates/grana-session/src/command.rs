@@ -2,9 +2,9 @@ use grana_analysis::TrackParams;
 use grana_display::{Coloring, Shading, TransferFunction};
 use grana_measure::{
     Aggregate, ColocPair, ColocSettings, ColocThresholds, Filter, Group, Lasso, MeasureView,
-    Measurement, PlotAxis, Scope, TrackMeasurement,
+    PlotAxis, Scope, TrackMeasurement,
 };
-use grana_scene::{ObjectKind, ObjectParams, ObjectSetId, Selection};
+use grana_scene::{ObjectColor, ObjectKind, ObjectParams, ObjectSetId, Selection};
 use grana_volume::{Intensity, Region};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,7 +104,7 @@ pub enum Command {
     },
     SetObjectColoring {
         set: ObjectSetId,
-        coloring: Coloring<Measurement>,
+        coloring: Coloring<ObjectColor>,
     },
     SetMask(Option<ObjectSetId>),
     SetTrackParams {

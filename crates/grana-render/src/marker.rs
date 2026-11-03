@@ -121,6 +121,7 @@ pub(crate) struct MarkerPasses {
     front_cull: ComputePipeline,
     volume_pipeline: RenderPipeline,
     oit_pipeline: RenderPipeline,
+    tail_pipeline: RenderPipeline,
     section_pipeline: RenderPipeline,
     section_pick_pipeline: RenderPipeline,
     volume_pick_pipeline: RenderPipeline,
@@ -244,6 +245,30 @@ impl MarkerPasses {
                 entry_point: Some("fs_oit"),
                 compilation_options: Default::default(),
                 targets: &[],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let tail_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.marker.tail"),
+            layout: Some(&layouts.marker_oit),
+            vertex: VertexState {
+                module: &volume_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(depth_state(false, CompareFunction::Less)),
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &volume_module,
+                entry_point: Some("fs_tail"),
+                compilation_options: Default::default(),
+                targets: &crate::oit::tail_targets(),
             }),
             multiview_mask: None,
             cache: None,
@@ -381,6 +406,7 @@ impl MarkerPasses {
             front_cull,
             volume_pipeline,
             oit_pipeline,
+            tail_pipeline,
             section_pipeline,
             section_pick_pipeline,
             volume_pick_pipeline,
@@ -544,6 +570,22 @@ impl MarkerPasses {
             return;
         }
         pass.set_pipeline(&self.oit_pipeline);
+        pass.set_bind_group(0, scene, &[]);
+        pass.set_bind_group(1, &self.layer_group, &[]);
+        pass.set_bind_group(4, oit, &[]);
+        pass.draw_indirect(self.layer_args.buffer(), 0);
+    }
+
+    pub fn draw_tail<'a>(
+        &'a self,
+        pass: &mut RenderPass<'a>,
+        scene: &'a BindGroup,
+        oit: &'a BindGroup,
+    ) {
+        if self.count == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.tail_pipeline);
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.layer_group, &[]);
         pass.set_bind_group(4, oit, &[]);

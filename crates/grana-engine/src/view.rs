@@ -53,12 +53,22 @@ pub fn frame(scene: &Scene) -> RenderedScene<'_> {
         let extent = set.object_extent();
         let metric = set.object_coloring().metric();
         let objects = frame.objects();
+        let relation = metric.and_then(|metric| {
+            metric
+                .target()
+                .and_then(|target| set.relation(target))
+                .and_then(|relation| relation.frame(scene.time()))
+        });
         let color = |index: usize| {
             extent
                 .zip(metric)
                 .map(|(extent, metric)| {
-                    set.object_coloring()
-                        .color(extent, metric.value(objects, index))
+                    let value = metric.value(objects, relation, index);
+                    if value.is_finite() {
+                        set.object_coloring().color(extent, value)
+                    } else {
+                        set.color()
+                    }
                 })
                 .unwrap_or_else(|| set.color())
         };

@@ -10,6 +10,7 @@ struct MeshUniforms {
     light_reach: vec4<f32>,
     shadow: vec4<f32>,
     viewport: vec4<f32>,
+    oit: vec4<u32>,
 }
 
 struct ObjectData {
@@ -148,13 +149,38 @@ fn fs_oit(input: VertexOutput) {
         discard;
     }
     let sample = shade(input);
+    let origin = vec2<i32>(mesh.viewport.xy);
+    let size = vec2<i32>(mesh.viewport.zw);
     oit_push(
-        vec2<i32>(mesh.viewport.xy),
-        vec2<i32>(mesh.viewport.zw),
+        origin,
+        size,
+        mesh.oit.y,
         vec2<i32>(input.clip_position.xy),
         input.clip_position.z,
         vec4<f32>(sample.rgb * sample.a, sample.a),
     );
+}
+
+struct TailFragment {
+    @location(0) accumulate: vec4<f32>,
+    @location(1) reveal: vec4<f32>,
+    @location(2) depth: vec2<f32>,
+}
+
+@fragment
+fn fs_tail(input: VertexOutput) -> TailFragment {
+    let origin = vec2<i32>(mesh.viewport.xy);
+    let size = vec2<i32>(mesh.viewport.zw);
+    if (is_outside(input) || !oit_tail(origin, size, mesh.oit.y, vec2<i32>(input.clip_position.xy), input.clip_position.z)) {
+        discard;
+    }
+    let sample = shade(input);
+    let weight = oit_weight(input.clip_position.z, sample.a);
+    var output: TailFragment;
+    output.accumulate = vec4<f32>(sample.rgb * sample.a * weight, sample.a * weight);
+    output.reveal = vec4<f32>(sample.a);
+    output.depth = vec2<f32>(input.clip_position.z * sample.a * weight * OIT_DEPTH_SCALE);
+    return output;
 }
 
 @fragment

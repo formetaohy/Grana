@@ -1,62 +1,136 @@
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, Buffer, BufferUsages, CommandEncoder, Device,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BlendComponent, BlendFactor, BlendOperation,
+    BlendState, Buffer, BufferUsages, ColorTargetState, ColorWrites, CommandEncoder, Device,
+    Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
+    TextureViewDescriptor,
 };
 
 use crate::layout::Layouts;
 
-const FRAGMENTS_PER_PIXEL: u64 = 8;
-const NODE_BYTES: u64 = 16;
-const NODE_LIMIT: u64 = 64 << 20;
+const COUNT_BYTES: u64 = 4;
+const KEY_BYTES: u64 = 4;
+const COLOR_BYTES: u64 = 8;
+const TAIL_BYTES: u64 = 20;
+const MINIMUM_LAYERS: u64 = 2;
+const MAXIMUM_LAYERS: u64 = 8;
+const PANE_PIXELS_STEP: u64 = 1 << 17;
+
+pub(crate) const ACCUMULATE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+pub(crate) const REVEAL_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+pub(crate) const TAIL_DEPTH_FORMAT: TextureFormat = TextureFormat::Rg16Float;
+
+const ACCUMULATE_BLEND: BlendState = BlendState {
+    color: BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::One,
+        operation: BlendOperation::Add,
+    },
+    alpha: BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::One,
+        operation: BlendOperation::Add,
+    },
+};
+
+const REVEAL_BLEND: BlendState = BlendState {
+    color: BlendComponent {
+        src_factor: BlendFactor::Zero,
+        dst_factor: BlendFactor::OneMinusSrcAlpha,
+        operation: BlendOperation::Add,
+    },
+    alpha: BlendComponent {
+        src_factor: BlendFactor::Zero,
+        dst_factor: BlendFactor::OneMinusSrcAlpha,
+        operation: BlendOperation::Add,
+    },
+};
+
+pub(crate) fn tail_targets() -> [Option<ColorTargetState>; 3] {
+    [
+        Some(ColorTargetState {
+            format: ACCUMULATE_FORMAT,
+            blend: Some(ACCUMULATE_BLEND),
+            write_mask: ColorWrites::ALL,
+        }),
+        Some(ColorTargetState {
+            format: REVEAL_FORMAT,
+            blend: Some(REVEAL_BLEND),
+            write_mask: ColorWrites::ALL,
+        }),
+        Some(ColorTargetState {
+            format: TAIL_DEPTH_FORMAT,
+            blend: Some(ACCUMULATE_BLEND),
+            write_mask: ColorWrites::ALL,
+        }),
+    ]
+}
 
 pub(crate) struct Oit {
-    head: Buffer,
-    counter: Buffer,
+    counts: Buffer,
+    accumulate: TextureView,
+    reveal: TextureView,
+    tail_depth: TextureView,
     write_group: BindGroup,
     read_group: BindGroup,
-    pixels: u32,
+    layers: u32,
+    size: [u32; 2],
+    capacity: u64,
 }
 
 impl Oit {
-    pub fn new(device: &Device, layouts: &Layouts, region: [u32; 4]) -> Self {
+    pub fn new(
+        device: &Device,
+        layouts: &Layouts,
+        size: [u32; 2],
+        region: [u32; 4],
+        budget: u64,
+    ) -> Self {
         assert!(
-            region[2] > 0 && region[3] > 0,
-            "a fragment store covers a non empty pane"
+            region[2] > 0 && region[3] > 0 && size[0] > 0 && size[1] > 0,
+            "a fragment store covers a non empty pane of a non empty surface"
         );
-        let pixels = region[2] * region[3];
-        let capacity = (u64::from(pixels) * FRAGMENTS_PER_PIXEL).clamp(1, NODE_LIMIT / NODE_BYTES);
-        let head = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("grana.oit.head"),
-            size: u64::from(pixels) * size_of::<u32>() as u64,
+        let pixels = u64::from(region[2]) * u64::from(region[3]);
+        let capacity = pixels.div_ceil(PANE_PIXELS_STEP) * PANE_PIXELS_STEP;
+        let layers = ((budget / capacity).saturating_sub(TAIL_BYTES) / (KEY_BYTES + COLOR_BYTES))
+            .clamp(MINIMUM_LAYERS, MAXIMUM_LAYERS);
+        let layers = layers as u32;
+        let slots = capacity * u64::from(layers);
+        let keys = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("grana.oit.keys"),
+            size: (slots * KEY_BYTES).max(4),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let nodes = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("grana.oit.nodes"),
-            size: capacity * NODE_BYTES,
+        let colors = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("grana.oit.colors"),
+            size: (slots * COLOR_BYTES).max(8),
             usage: BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        let counter = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("grana.oit.counter"),
-            size: size_of::<u32>() as u64,
+        let counts = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("grana.oit.counts"),
+            size: (capacity * COUNT_BYTES).max(4),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let accumulate = tail(device, "grana.oit.accumulate", ACCUMULATE_FORMAT, size);
+        let reveal = tail(device, "grana.oit.reveal", REVEAL_FORMAT, size);
+        let tail_depth = tail(device, "grana.oit.tail.depth", TAIL_DEPTH_FORMAT, size);
         let write_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.oit.write.group"),
             layout: &layouts.oit_write,
             entries: &[
                 BindGroupEntry {
                     binding: 0,
-                    resource: nodes.as_entire_binding(),
+                    resource: keys.as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: head.as_entire_binding(),
+                    resource: colors.as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 2,
-                    resource: counter.as_entire_binding(),
+                    resource: counts.as_entire_binding(),
                 },
             ],
         });
@@ -66,25 +140,49 @@ impl Oit {
             entries: &[
                 BindGroupEntry {
                     binding: 0,
-                    resource: head.as_entire_binding(),
+                    resource: keys.as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: nodes.as_entire_binding(),
+                    resource: colors.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: counts.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&accumulate),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&reveal),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&tail_depth),
                 },
             ],
         });
         Self {
-            head,
-            counter,
+            counts,
+            accumulate,
+            reveal,
+            tail_depth,
             write_group,
             read_group,
-            pixels,
+            layers,
+            size,
+            capacity,
         }
     }
 
-    pub fn pixels(&self) -> u32 {
-        self.pixels
+    pub fn matches(&self, size: [u32; 2], region: [u32; 4]) -> bool {
+        self.size == size && u64::from(region[2]) * u64::from(region[3]) <= self.capacity
+    }
+
+    pub fn layers(&self) -> u32 {
+        self.layers
     }
 
     pub fn write_group(&self) -> &BindGroup {
@@ -95,8 +193,43 @@ impl Oit {
         &self.read_group
     }
 
-    pub fn clear(&self, encoder: &mut CommandEncoder) {
-        encoder.clear_buffer(&self.head, 0, None);
-        encoder.clear_buffer(&self.counter, 0, None);
+    pub fn accumulate(&self) -> &TextureView {
+        &self.accumulate
     }
+
+    pub fn reveal(&self) -> &TextureView {
+        &self.reveal
+    }
+
+    pub fn tail_depth(&self) -> &TextureView {
+        &self.tail_depth
+    }
+
+    pub fn clear(&self, encoder: &mut CommandEncoder) {
+        encoder.clear_buffer(&self.counts, 0, None);
+    }
+}
+
+fn tail(
+    device: &Device,
+    label: &'static str,
+    format: TextureFormat,
+    size: [u32; 2],
+) -> TextureView {
+    device
+        .create_texture(&TextureDescriptor {
+            label: Some(label),
+            size: Extent3d {
+                width: size[0].max(1),
+                height: size[1].max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&TextureViewDescriptor::default())
 }

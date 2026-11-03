@@ -8,6 +8,7 @@ use grana_display::{CameraState, Palette, SectionState, TransferFunction};
 use grana_geometry::{Bounds, Mesh, MeshVertex};
 use grana_measure::{
     ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
+    RelationField,
 };
 use grana_measure::{Measurement, TrackMeasurement};
 use grana_object::{
@@ -17,7 +18,8 @@ use grana_object::{
 };
 use grana_project::{Project, Source, ViewState};
 use grana_scene::{
-    Dataset, Item, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene, Selection, Visibility,
+    Dataset, Item, Measure, ObjectColor, ObjectFrame, ObjectKind, ObjectParams, Scene, Selection,
+    Visibility,
 };
 use grana_volume::{Axis, Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -328,7 +330,10 @@ fn stage(scene: &mut Scene) {
     spots.set_opacity(0.35);
     spots.set_params(ObjectParams::Spots(SpotParams::new(3.0, 0.3)));
     let mut coloring = spots.object_coloring().clone();
-    coloring.set_metric(Some(Measurement::Contrast));
+    coloring.set_metric(Some(ObjectColor::Relation {
+        target: surfaces,
+        field: RelationField::Distance,
+    }));
     coloring.set_palette(Palette::Inferno);
     coloring.set_reversed(true);
     coloring.set_manual(Some((0.2, 0.8)));
@@ -363,6 +368,10 @@ fn stage(scene: &mut Scene) {
         ),
     );
     let surfaces = scene.objects.get_mut(surfaces).expect("the surfaces exist");
+    let mut coloring = surfaces.object_coloring().clone();
+    coloring.set_metric(Some(ObjectColor::Measurement(Measurement::Volume)));
+    coloring.set_palette(Palette::Magma);
+    surfaces.set_object_coloring(coloring);
     surfaces.set_visible(false);
     scene.channels[1].opacity = 0.35;
     scene.channels[0].enabled = false;

@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use grana_display::{Shading, TransferFunction};
-use grana_measure::{Measurement, TrackMeasurement};
+use grana_measure::TrackMeasurement;
 use grana_object::{RelationFrame, TrackSet};
 use grana_volume::{Intensity, Region};
 
 use crate::coloc::{ColocState, MaskKey};
+use crate::color::ObjectColor;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::scene::{Item, Scene, Selection};
@@ -69,7 +70,7 @@ pub struct SetState {
     pub tracks: Option<Arc<TrackSet>>,
     pub track_thickness: Option<f32>,
     pub track_visible: Option<bool>,
-    pub object_color: ColorState<Measurement>,
+    pub object_color: ColorState<ObjectColor>,
     pub track_color: ColorState<TrackMeasurement>,
     pub visibility: Visibility,
     pub seeds: Vec<Vec<[f32; 3]>>,

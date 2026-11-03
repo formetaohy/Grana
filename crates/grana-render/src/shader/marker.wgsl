@@ -104,10 +104,33 @@ fn fs_oit(input: MarkerOutput) {
     oit_push(
         vec2<i32>(frame.viewport.xy),
         vec2<i32>(frame.viewport.zw),
+        frame.oit.y,
         vec2<i32>(input.clip_position.xy),
         shaded.depth,
         vec4<f32>(shaded.color.rgb * shaded.color.a, shaded.color.a),
     );
+}
+
+struct TailFragment {
+    @location(0) accumulate: vec4<f32>,
+    @location(1) reveal: vec4<f32>,
+    @location(2) depth: vec2<f32>,
+}
+
+@fragment
+fn fs_tail(input: MarkerOutput) -> TailFragment {
+    let origin = vec2<i32>(frame.viewport.xy);
+    let size = vec2<i32>(frame.viewport.zw);
+    let shaded = shade(input);
+    if (!oit_tail(origin, size, frame.oit.y, vec2<i32>(input.clip_position.xy), shaded.depth)) {
+        discard;
+    }
+    let weight = oit_weight(shaded.depth, shaded.color.a);
+    var output: TailFragment;
+    output.accumulate = vec4<f32>(shaded.color.rgb * shaded.color.a * weight, shaded.color.a * weight);
+    output.reveal = vec4<f32>(shaded.color.a);
+    output.depth = vec2<f32>(shaded.depth * shaded.color.a * weight * OIT_DEPTH_SCALE);
+    return output;
 }
 
 @fragment

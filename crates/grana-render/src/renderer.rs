@@ -44,6 +44,7 @@ use grana_volume::CHANNEL_LIMIT;
 const DUMMY_VOXEL: [u16; 1] = [0];
 const FEEDBACK_SLOTS: usize = 4;
 const SECTION_BUDGET_DIVISOR: usize = 2;
+const FRAGMENT_BUDGET_DIVISOR: u64 = 2;
 const PREFETCH_LIMIT: usize = 1024;
 const PREFETCH_SHARE: usize = 4;
 const CENSUS_BYTES: u64 = (CENSUS_LEVELS * size_of::<u32>()) as u64;
@@ -251,7 +252,7 @@ impl Renderer {
         assert!(budget > 0, "a renderer needs a residency budget");
         let layouts = Layouts::new(device);
         let dummy = dummy_texture(device, queue);
-        let dummy_oit = Oit::new(device, &layouts, [0, 0, 1, 1]);
+        let dummy_oit = Oit::new(device, &layouts, [1, 1], [0, 0, 1, 1], 1);
         let atlas_sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("grana.atlas.sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -687,6 +688,7 @@ impl Renderer {
             object_key,
             info,
             dummy_oit,
+            budget,
             ..
         } = self;
         let (Some(pyramid), Some(atlas), Some(scene_table), Some(planner), Some(census)) = (
@@ -843,9 +845,18 @@ impl Renderer {
             && target
                 .oit
                 .as_ref()
-                .is_none_or(|oit| oit.pixels() != volume_width * volume_height)
+                .is_none_or(|oit| !oit.matches(size, volume_region))
         {
-            target.oit = Some(Oit::new(device, layouts, volume_region));
+            target.oit = Some(Oit::new(
+                device,
+                layouts,
+                size,
+                volume_region,
+                *budget / FRAGMENT_BUDGET_DIVISOR,
+            ));
+        }
+        if let Some(oit) = target.oit.as_ref().filter(|_| translucent) {
+            frame_data.oit[1] = oit.layers();
         }
         let oit_group = match target.oit.as_ref() {
             Some(oit) if translucent => oit.read_group(),
@@ -987,35 +998,96 @@ impl Renderer {
             );
             if let Some(oit) = target.oit.as_ref().filter(|_| translucent) {
                 oit.clear(&mut encoder);
-                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                    label: Some("grana.oit.pass"),
-                    color_attachments: &[],
-                    depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                        view: target.scene.depth(),
-                        depth_ops: Some(Operations {
-                            load: LoadOp::Load,
-                            store: StoreOp::Store,
+                {
+                    let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                        label: Some("grana.oit.pass"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                            view: target.scene.depth(),
+                            depth_ops: Some(Operations {
+                                load: LoadOp::Load,
+                                store: StoreOp::Store,
+                            }),
+                            stencil_ops: None,
                         }),
-                        stencil_ops: None,
-                    }),
-                    ..Default::default()
-                });
-                pass.set_viewport(
-                    volume_region[0] as f32,
-                    volume_region[1] as f32,
-                    volume_width as f32,
-                    volume_height as f32,
-                    0.0,
-                    1.0,
-                );
-                pass.set_scissor_rect(
-                    volume_region[0],
-                    volume_region[1],
-                    volume_width,
-                    volume_height,
-                );
-                meshes.draw_oit(&mut pass, shadow_group, oit.write_group());
-                markers.draw_oit(&mut pass, scene_group, oit.write_group());
+                        ..Default::default()
+                    });
+                    pass.set_viewport(
+                        volume_region[0] as f32,
+                        volume_region[1] as f32,
+                        volume_width as f32,
+                        volume_height as f32,
+                        0.0,
+                        1.0,
+                    );
+                    pass.set_scissor_rect(
+                        volume_region[0],
+                        volume_region[1],
+                        volume_width,
+                        volume_height,
+                    );
+                    meshes.draw_oit(&mut pass, shadow_group, oit.write_group());
+                    markers.draw_oit(&mut pass, scene_group, oit.write_group());
+                }
+                {
+                    let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                        label: Some("grana.oit.tail.pass"),
+                        color_attachments: &[
+                            Some(RenderPassColorAttachment {
+                                view: oit.accumulate(),
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: Operations {
+                                    load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: StoreOp::Store,
+                                },
+                            }),
+                            Some(RenderPassColorAttachment {
+                                view: oit.reveal(),
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: Operations {
+                                    load: LoadOp::Clear(wgpu::Color::WHITE),
+                                    store: StoreOp::Store,
+                                },
+                            }),
+                            Some(RenderPassColorAttachment {
+                                view: oit.tail_depth(),
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: Operations {
+                                    load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: StoreOp::Store,
+                                },
+                            }),
+                        ],
+                        depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                            view: target.scene.depth(),
+                            depth_ops: Some(Operations {
+                                load: LoadOp::Load,
+                                store: StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        ..Default::default()
+                    });
+                    pass.set_viewport(
+                        volume_region[0] as f32,
+                        volume_region[1] as f32,
+                        volume_width as f32,
+                        volume_height as f32,
+                        0.0,
+                        1.0,
+                    );
+                    pass.set_scissor_rect(
+                        volume_region[0],
+                        volume_region[1],
+                        volume_width,
+                        volume_height,
+                    );
+                    meshes.draw_tail(&mut pass, shadow_group, oit.write_group());
+                    markers.draw_tail(&mut pass, scene_group, oit.write_group());
+                }
             }
             volume.draw(
                 &mut encoder,

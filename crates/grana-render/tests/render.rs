@@ -906,6 +906,68 @@ fn composites_transparent_surfaces_beyond_the_layers() {
 }
 
 #[test]
+fn composites_transparent_surfaces_beyond_the_stored_layers() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = empty_volume();
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let mesh = PackedMesh::new(view_row(&camera, 20, 0.25));
+    let red = [1.0, 0.12, 0.12];
+    let blue = [0.12, 0.2, 1.0];
+    let styles = |far: bool| {
+        (0..20)
+            .map(|index| {
+                if index < 16 {
+                    Style::new(red, true, false, 0.05)
+                } else {
+                    Style::new(blue, far, false, 0.9)
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let shown_styles = styles(true);
+    let hidden_styles = styles(false);
+    let shown = framing_scene(
+        &device,
+        &queue,
+        Job {
+            texture: &texture,
+            volume: &volume,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            focus_z: 0.0,
+            mesh: Some((&mesh, &shown_styles)),
+        },
+        &camera,
+        None,
+    );
+    let hidden = framing_scene(
+        &device,
+        &queue,
+        Job {
+            texture: &texture,
+            volume: &volume,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            focus_z: 0.0,
+            mesh: Some((&mesh, &hidden_styles)),
+        },
+        &camera,
+        None,
+    );
+    let centre = (SIDE / 2, SIDE / 2);
+    let shown = pixel(&shown, centre.0, centre.1).map(u32::from);
+    let hidden = pixel(&hidden, centre.0, centre.1).map(u32::from);
+    assert!(
+        shown[2] > hidden[2] + 30,
+        "the surfaces beyond the stored layers are dropped: {shown:?} {hidden:?}"
+    );
+}
+
+#[test]
 fn orders_transparent_surfaces_independently_of_draw_order() {
     let Some((device, queue)) = device() else {
         return;
@@ -994,6 +1056,10 @@ fn style_of(index: usize, red: [f32; 3], blue: [f32; 3], visible: bool) -> Style
 }
 
 fn view_stack(camera: &Camera, count: usize) -> Mesh {
+    view_row(camera, count, 0.4)
+}
+
+fn view_row(camera: &Camera, count: usize, spacing: f32) -> Mesh {
     let eye = camera.eye();
     let forward = camera.forward();
     let right = camera.right();
@@ -1001,7 +1067,7 @@ fn view_stack(camera: &Camera, count: usize) -> Mesh {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     for object in 0..count {
-        let centre = eye + forward * (5.6 + 0.4 * object as f32);
+        let centre = eye + forward * (5.6 + spacing * object as f32);
         let base = vertices.len() as u32;
         for corner in [[-1.0f32, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]] {
             let position = centre + (right * corner[0] + up * corner[1]) * 0.9;

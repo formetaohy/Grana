@@ -5,14 +5,12 @@
 @group(4) @binding(3) var shadow_objects: texture_depth_2d;
 @group(4) @binding(4) var shadow_compare: sampler_comparison;
 
-struct OitFragment {
-    next: u32,
-    depth: f32,
-    color: vec2<u32>,
-}
-
-@group(5) @binding(0) var<storage, read> oit_heads: array<u32>;
-@group(5) @binding(1) var<storage, read> oit_nodes: array<OitFragment>;
+@group(5) @binding(0) var<storage, read> oit_keys: array<u32>;
+@group(5) @binding(1) var<storage, read> oit_colors: array<vec2<u32>>;
+@group(5) @binding(2) var<storage, read> oit_counts: array<u32>;
+@group(5) @binding(3) var oit_accumulate: texture_2d<f32>;
+@group(5) @binding(4) var oit_reveal: texture_2d<f32>;
+@group(5) @binding(5) var oit_tail_depth: texture_2d<f32>;
 
 const MAX_CELL_STEPS: u32 = 4096u;
 const MINIMUM_TRANSMITTANCE: f32 = 0.003;
@@ -22,8 +20,8 @@ const SHADING_THRESHOLD: f32 = 0.02;
 const SHADING_FLOOR: f32 = 0.02;
 const SHADING_CEIL: f32 = 0.10;
 const EMPTY_DISTANCE: f32 = 1.0e19;
-const MAX_FRAGMENTS: u32 = 16u;
-const CHAIN_LIMIT: u32 = 256u;
+const MAXIMUM_LAYERS: u32 = 8u;
+const TAIL_DEPTH_SCALE: f32 = 64.0;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -222,50 +220,41 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let start = max(max(entry, 0.0), clip.x);
     let jitter = sample_noise(input.clip_position.xy, frame.jitter.z) * frame.march.x;
 
-    var fragment_depth: array<f32, MAX_FRAGMENTS>;
-    var fragment_color: array<vec2<u32>, MAX_FRAGMENTS>;
-    var fragments = 0u;
+    var layer_depth: array<f32, MAXIMUM_LAYERS>;
+    var layer_color: array<vec2<u32>, MAXIMUM_LAYERS>;
+    var layers = 0u;
+    var tail = vec4<f32>(0.0);
+    var tail_depth = EMPTY_DISTANCE;
     if (frame.oit.x > 0u) {
         let origin = vec2<i32>(frame.viewport.xy);
         let size = vec2<i32>(frame.viewport.zw);
         let local = pixel - origin;
         if (local.x >= 0 && local.y >= 0 && local.x < size.x && local.y < size.y) {
-            var index = oit_heads[local.y * size.x + local.x];
-            var guard = 0u;
-            loop {
-                if (index == 0u || guard >= CHAIN_LIMIT) {
-                    break;
-                }
-                guard += 1u;
-                let node = oit_nodes[index - 1u];
-                let depth = node.depth;
-                if (fragments < MAX_FRAGMENTS) {
-                    var slot = fragments;
-                    loop {
-                        if (slot == 0u || fragment_depth[slot - 1u] <= depth) {
-                            break;
-                        }
-                        fragment_depth[slot] = fragment_depth[slot - 1u];
-                        fragment_color[slot] = fragment_color[slot - 1u];
-                        slot -= 1u;
+            let index = u32(local.y) * u32(size.x) + u32(local.x);
+            let base = index * frame.oit.y;
+            let stored = min(oit_counts[index], frame.oit.y);
+            for (var slot = 0u; slot < stored; slot += 1u) {
+                let key = oit_keys[base + slot];
+                let depth = bitcast<f32>(~key);
+                var position = layers;
+                loop {
+                    if (position == 0u || layer_depth[position - 1u] <= depth) {
+                        break;
                     }
-                    fragment_depth[slot] = depth;
-                    fragment_color[slot] = node.color;
-                    fragments += 1u;
-                } else if (depth < fragment_depth[MAX_FRAGMENTS - 1u]) {
-                    var slot = MAX_FRAGMENTS - 1u;
-                    loop {
-                        if (slot == 0u || fragment_depth[slot - 1u] <= depth) {
-                            break;
-                        }
-                        fragment_depth[slot] = fragment_depth[slot - 1u];
-                        fragment_color[slot] = fragment_color[slot - 1u];
-                        slot -= 1u;
-                    }
-                    fragment_depth[slot] = depth;
-                    fragment_color[slot] = node.color;
+                    layer_depth[position] = layer_depth[position - 1u];
+                    layer_color[position] = layer_color[position - 1u];
+                    position -= 1u;
                 }
-                index = node.next;
+                layer_depth[position] = depth;
+                layer_color[position] = oit_colors[base + slot];
+                layers += 1u;
+            }
+            let accumulation = textureLoad(oit_accumulate, pixel, 0);
+            if (accumulation.a > 0.0) {
+                let reveal = textureLoad(oit_reveal, pixel, 0).r;
+                let weighted = textureLoad(oit_tail_depth, pixel, 0).r;
+                tail = vec4<f32>(accumulation.rgb / accumulation.a, 1.0 - reveal);
+                tail_depth = weighted * TAIL_DEPTH_SCALE / accumulation.a;
             }
         }
     }
@@ -273,8 +262,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
     var cursor = start + min(jitter, max(exit - start, 0.0));
-    for (var index = 0u; index < fragments; index += 1u) {
-        let limit = min(object_distance(fragment_depth[index], ndc), exit);
+    for (var index = 0u; index < layers; index += 1u) {
+        let limit = min(object_distance(layer_depth[index], ndc), exit);
         if (limit > cursor) {
             let segment = march(cursor, limit, direction);
             radiance += transmittance * segment.rgb;
@@ -282,8 +271,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             cursor = limit;
         }
         let sample = vec4<f32>(
-            unpack2x16float(fragment_color[index].x),
-            unpack2x16float(fragment_color[index].y),
+            unpack2x16float(layer_color[index].x),
+            unpack2x16float(layer_color[index].y),
         );
         radiance += transmittance * sample.rgb;
         transmittance *= 1.0 - sample.a;
@@ -291,11 +280,21 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             break;
         }
     }
+    if (tail.a > 0.0) {
+        let limit = min(object_distance(tail_depth, ndc), exit);
+        if (limit > cursor) {
+            let segment = march(cursor, limit, direction);
+            radiance += transmittance * segment.rgb;
+            transmittance *= segment.a;
+            cursor = limit;
+        }
+        radiance += transmittance * tail.rgb * tail.a;
+        transmittance *= 1.0 - tail.a;
+    }
     if (cursor < exit) {
         let segment = march(cursor, exit, direction);
         radiance += transmittance * segment.rgb;
         transmittance *= segment.a;
     }
-
     return vec4<f32>(radiance, 1.0 - transmittance);
 }

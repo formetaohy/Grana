@@ -1,7 +1,7 @@
 use glam::{Mat4, Vec2, Vec3};
 use grana_display::{Camera, Palette, SectionCamera, plane_basis};
 use grana_measure::Unit;
-use grana_scene::Scene;
+use grana_scene::{ObjectColor, Scene};
 use grana_ui::{
     Align, Color, Corners, Fill, Icon, Painter, Rect, Role, TextStyle, TypeStyle, Ui, icon,
 };
@@ -200,16 +200,16 @@ pub fn legends(scene: &Scene) -> Vec<Legend> {
             continue;
         }
         if set.detected() > 0
-            && let Some(measurement) = set.object_coloring().metric()
+            && let Some(metric) = set.object_coloring().metric()
             && let Some(extent) = set.object_extent()
         {
             legends.push(Legend {
-                title: format!("{} · {}", set.name(), measurement.label(&names)),
+                title: format!("{} · {}", set.name(), metric_label(scene, metric, &names)),
                 palette: set.object_coloring().palette(),
                 reversed: set.object_coloring().reversed(),
                 extent,
-                unit: measurement.unit(),
-                decimals: measurement.decimals(),
+                unit: metric.unit(),
+                decimals: metric.decimals(),
             });
         }
         if let Some(measurement) = set.track_coloring().metric()
@@ -227,6 +227,19 @@ pub fn legends(scene: &Scene) -> Vec<Legend> {
         }
     }
     legends
+}
+
+fn metric_label(scene: &Scene, metric: ObjectColor, channels: &[String]) -> String {
+    match metric {
+        ObjectColor::Measurement(measurement) => measurement.label(channels),
+        ObjectColor::Relation { target, field } => {
+            let target = scene
+                .objects
+                .get(target)
+                .map_or_else(|| "target".to_string(), |set| set.name().to_string());
+            format!("{target} · {}", field.label())
+        }
+    }
 }
 
 fn region_box(painter: &mut Painter, view_projection: Mat4, region: Region, rect: Rect) {

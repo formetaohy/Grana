@@ -1,5 +1,6 @@
 mod channel;
 mod coloc;
+mod color;
 mod dataset;
 mod job;
 mod measure;
@@ -14,6 +15,7 @@ mod track_layer;
 
 pub use channel::Channel;
 pub use coloc::{Coloc, ColocResult, ColocState, MaskKey};
+pub use color::ObjectColor;
 pub use dataset::{Dataset, Origin};
 pub use grana_display::{ColorState, Coloring, Extent};
 pub use job::{Job, Progress};
