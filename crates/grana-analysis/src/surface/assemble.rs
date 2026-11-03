@@ -1,19 +1,17 @@
-use grana_geometry::{MeshStore, MeshVertex};
-use grana_object::SampleAccumulator;
-use std::sync::Arc;
+use std::collections::HashMap;
+
+use grana_object::{Basin, SampleAccumulator, Seam, SurfacePatches, SurfaceTopology, TopologyInfo};
 
 use super::tile::TileOutput;
 use super::{EMPTY, Face, Node, Pass, SurfaceBuilder, find, union};
 
 pub(super) struct Assembler<'a> {
     pub(super) plan: &'a SurfaceBuilder,
-    pub(super) store: &'a Arc<MeshStore>,
-    pub(super) workers: usize,
     pub(super) nodes: Vec<Node>,
     pub(super) accumulators: Vec<SampleAccumulator>,
     pub(super) necks: Vec<(u32, u32, u32)>,
     pub(super) seed_count: usize,
-    pub(super) vertices: Vec<MeshVertex>,
+    pub(super) vertices: Vec<grana_geometry::MeshVertex>,
     pub(super) keys: Vec<u64>,
     pub(super) indices: Vec<u32>,
     pub(super) triangle_objects: Vec<u32>,
@@ -24,13 +22,11 @@ pub(super) struct Assembler<'a> {
 }
 
 impl<'a> Assembler<'a> {
-    pub(super) fn new(pass: &Pass<'a>, workers: usize) -> Self {
+    pub(super) fn new(pass: &Pass<'a>) -> Self {
         let plan = pass.plan;
         let tiles = plan.tiles;
         Self {
             plan,
-            store: pass.store,
-            workers,
             nodes: Vec::new(),
             accumulators: Vec::new(),
             necks: Vec::new(),
@@ -147,6 +143,86 @@ impl<'a> Assembler<'a> {
                 .map(|vertex| offset + vertex),
         );
         Ok(())
+    }
+
+    pub(super) fn topology(self) -> SurfaceTopology {
+        let plan = self.plan;
+        let mut nodes = self.nodes;
+        let accumulators = self.accumulators;
+        let vertices = self.vertices;
+        let keys = self.keys;
+        let indices = self.indices;
+        let mut weld: HashMap<u64, u32> = HashMap::new();
+        let mut positions = Vec::with_capacity(vertices.len());
+        let mut normals: Vec<[f32; 3]> = Vec::with_capacity(vertices.len());
+        let mut welded = Vec::with_capacity(vertices.len());
+        for (index, vertex) in vertices.iter().enumerate() {
+            let slot = match weld.get(&keys[index]) {
+                Some(slot) => *slot,
+                None => {
+                    let slot = positions.len() as u32;
+                    weld.insert(keys[index], slot);
+                    positions.push(vertex.position());
+                    normals.push([0.0; 3]);
+                    slot
+                }
+            };
+            let normal = &mut normals[slot as usize];
+            for (axis, value) in vertex.normal().iter().enumerate() {
+                normal[axis] += value;
+            }
+            welded.push(slot);
+        }
+        let mut triangles = Vec::with_capacity(indices.len() / 3);
+        for triangle in indices.as_chunks::<3>().0 {
+            triangles.push(triangle.map(|index| welded[index as usize]));
+        }
+        assert!(
+            self.triangle_objects.iter().all(|object| *object != EMPTY),
+            "every surface triangle names a watershed basin"
+        );
+        let mut basin_of_triangle = self.triangle_objects;
+        for object in &mut basin_of_triangle {
+            *object = find(&mut nodes, *object);
+        }
+        let mut seams = Vec::with_capacity(self.necks.len());
+        for (left, right, saddle) in self.necks {
+            let left = find(&mut nodes, left);
+            let right = find(&mut nodes, right);
+            if left != right {
+                seams.push(Seam::new(left, right, saddle));
+            }
+        }
+        for index in 0..nodes.len() {
+            let contact = nodes[index].contact;
+            if contact != EMPTY {
+                nodes[index].contact = find(&mut nodes, contact);
+            }
+        }
+        let basins = nodes
+            .iter()
+            .map(|node| {
+                Basin::new(
+                    node.reach,
+                    node.voxels,
+                    node.sum,
+                    node.low,
+                    node.high,
+                    (node.contact != EMPTY).then_some(node.contact),
+                    (node.seed != EMPTY).then_some(node.seed),
+                )
+            })
+            .collect();
+        let patches = SurfacePatches::new(positions, normals, triangles, basin_of_triangle);
+        let info = TopologyInfo::new(
+            plan.level_index,
+            plan.channels,
+            plan.detection,
+            plan.spacing,
+            plan.world,
+        )
+        .with_sampling(plan.voxel_volume, plan.span, self.seed_count);
+        SurfaceTopology::new(info, basins, accumulators, seams, patches)
     }
 
     fn resolve(&mut self, base: u32, local: u32, resolved: &mut [u32]) -> u32 {

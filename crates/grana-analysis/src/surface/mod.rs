@@ -1,8 +1,8 @@
 mod assemble;
 mod bits;
 mod cap;
+mod cut;
 mod emit;
-mod finish;
 mod label;
 mod mask;
 mod prepare;
@@ -20,6 +20,7 @@ use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 use crate::SurfaceParams;
 use crate::mask::Mask;
 use crate::morphology::Element;
+use crate::params::SurfaceCut;
 
 use assemble::Assembler;
 use mask::SolidMask;
@@ -36,7 +37,6 @@ const ARRAY_BYTES_PER_VOXEL: u64 = 28;
 const WORKER_ARRAY_LIMIT: u64 = 320 << 20;
 const FRAME_ARRAY_LIMIT: u64 = 1024 << 20;
 const TILE_FRAGMENT_LIMIT: u64 = 96 << 20;
-const SPLIT_FLOOR: f64 = 1.0;
 const SEED_SNAP: i64 = 2;
 
 pub const SURFACE_VOXEL_LIMIT: u64 = 1 << 30;
@@ -346,8 +346,7 @@ impl SurfaceBuilder {
         } else {
             0
         };
-        while base > DISTANCE_LIMIT && Pass::new(&self, base, seeds, store).max_workers().is_none()
-        {
+        while base > DISTANCE_LIMIT && Pass::new(&self, base, seeds).max_workers().is_none() {
             base /= 2;
         }
         let mut runs = Vec::new();
@@ -357,7 +356,7 @@ impl SurfaceBuilder {
             vec![0]
         };
         for limit in limits {
-            match Pass::new(&self, limit, seeds, store).max_workers() {
+            match Pass::new(&self, limit, seeds).max_workers() {
                 Some(capacity) => runs.push((limit, capacity)),
                 None => break,
             }
@@ -380,7 +379,7 @@ impl SurfaceBuilder {
         loop {
             let (limit, capacity) = runs[step];
             let last = step + 1 == runs.len();
-            let pass = Pass::new(&self, limit, seeds, store);
+            let pass = Pass::new(&self, limit, seeds);
             let workers = desired.min(capacity).min(pass.total().max(1));
             let outcome = run_pass(&pass, workers, last, &mut inputs)?;
             match outcome {
@@ -389,7 +388,11 @@ impl SurfaceBuilder {
                     assert!(!last, "the final surface pass accepts a saturated field");
                     step += 1;
                 }
-                PassOutcome::Done(set) => return Ok(Some(set)),
+                PassOutcome::Done(topology) => {
+                    let topology = Arc::new(*topology);
+                    let set = cut::cut(&topology, self.params.cut(), desired, Some(store))?;
+                    return Ok(Some(set.with_topology(topology)));
+                }
             }
         }
     }
@@ -403,6 +406,25 @@ pub fn surface_level(pyramid: &Pyramid, region: Region) -> Option<usize> {
             None => true,
         }
     })
+}
+
+pub fn cuttable(set: &SurfaceSet, spec: SurfaceCut) -> bool {
+    set.topology()
+        .is_some_and(|topology| spec.split() <= 0.0 || !topology.seams().is_empty())
+}
+
+pub fn recut(
+    set: &SurfaceSet,
+    spec: SurfaceCut,
+    workers: usize,
+    store: Option<&Arc<MeshStore>>,
+) -> Result<Option<SurfaceSet>, String> {
+    let Some(topology) = set.topology() else {
+        return Ok(None);
+    };
+    let workers = crate::schedule::workers(workers);
+    let set = cut::cut(topology, spec, workers, store)?.with_topology(Arc::clone(topology));
+    Ok(Some(set))
 }
 
 fn voxel_count(ranges: &[Range<u32>; 3]) -> u64 {
@@ -450,18 +472,12 @@ pub(super) fn smooth(raw: &mut [f32], dims: [usize; 3], kernels: &[Vec<f32>; 3])
 struct Pass<'a> {
     plan: &'a SurfaceBuilder,
     seeds: &'a [[i64; 3]],
-    store: &'a Arc<MeshStore>,
     cap: u32,
     pad: [u32; 3],
 }
 
 impl<'a> Pass<'a> {
-    fn new(
-        plan: &'a SurfaceBuilder,
-        limit: u32,
-        seeds: &'a [[i64; 3]],
-        store: &'a Arc<MeshStore>,
-    ) -> Self {
+    fn new(plan: &'a SurfaceBuilder, limit: u32, seeds: &'a [[i64; 3]]) -> Self {
         let cap = limit * limit;
         let pad = [0, 1, 2].map(|axis| {
             let needed = limit + (plan.kernels[axis].len() / 2) as u32 + 1;
@@ -470,7 +486,6 @@ impl<'a> Pass<'a> {
         Self {
             plan,
             seeds,
-            store,
             cap,
             pad,
         }
@@ -501,7 +516,7 @@ impl<'a> Pass<'a> {
 }
 
 enum PassOutcome {
-    Done(SurfaceSet),
+    Done(Box<grana_object::SurfaceTopology>),
     Saturated,
     Cancelled,
 }
@@ -556,21 +571,12 @@ fn run_pass(
             });
         }
         drop(sender);
-        assemble(
-            pass,
-            workers,
-            receiver,
-            cancel,
-            stop,
-            accept,
-            &mut *inputs.progress,
-        )
+        assemble(pass, receiver, cancel, stop, accept, &mut *inputs.progress)
     })
 }
 
 fn assemble(
     pass: &Pass<'_>,
-    workers: usize,
     receiver: mpsc::Receiver<(usize, TileResult)>,
     cancel: &AtomicBool,
     stop: &AtomicBool,
@@ -578,7 +584,7 @@ fn assemble(
     progress: &mut dyn FnMut(usize, usize),
 ) -> Result<PassOutcome, String> {
     let total = pass.total();
-    let mut assembler = Assembler::new(pass, workers);
+    let mut assembler = Assembler::new(pass);
     let mut pending: Vec<Option<TileResult>> = (0..total).map(|_| None).collect();
     let mut assembled = 0usize;
     while assembled < total {
@@ -625,8 +631,7 @@ fn assemble(
             }
         }
     }
-    assembler.merge_basins();
-    Ok(PassOutcome::Done(assembler.build()?))
+    Ok(PassOutcome::Done(Box::new(assembler.topology())))
 }
 
 fn halted(cancel: &AtomicBool, stop: &AtomicBool) -> bool {

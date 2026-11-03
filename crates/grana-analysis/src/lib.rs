@@ -18,9 +18,11 @@ pub use coloc::{
 };
 pub use filament::{FilamentScan, filament_level};
 pub use mask::{Mask, Roi};
-pub use params::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
+pub use params::{
+    FilamentParams, SpotParams, SurfaceCut, SurfaceFilter, SurfaceParams, TrackParams,
+};
 pub use relation::{Reference, relate_frames};
 pub use scan::{ChannelRead, SpotScan, SpotScanner};
 pub use shape::Shape;
-pub use surface::{Sources, SurfaceBuilder, surface_level};
+pub use surface::{Sources, SurfaceBuilder, cuttable, recut, surface_level};
 pub use track::TrackBuilder;

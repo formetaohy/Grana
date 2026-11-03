@@ -701,7 +701,9 @@ fn detect(
     kind: ObjectKind,
     frames: u32,
 ) {
-    let running = progress(state.jobs, Job::Detect(id));
+    let running = progress(state.jobs, Job::Detect(id))
+        .map(|running| (Job::Detect(id), running))
+        .or_else(|| progress(state.jobs, Job::Recut(id)).map(|running| (Job::Recut(id), running)));
     if running.is_none() {
         if widget::button_with(ui, "detect", "Detect", Role::Prominent, Length::Fill).clicked {
             commands.push(Command::Detect(id));
@@ -709,10 +711,10 @@ fn detect(
     } else {
         ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
             widget::spinner(ui, 14.0);
-            if let Some(running) = running {
+            if let Some((job, running)) = running {
                 caption(
                     ui,
-                    &crate::panel::progress_caption(kind, Job::Detect(id), running, frames),
+                    &crate::panel::progress_caption(kind, job, running, frames),
                 );
                 let fraction = if running.total > 0 {
                     running.done as f32 / running.total as f32

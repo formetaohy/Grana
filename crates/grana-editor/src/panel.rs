@@ -1,4 +1,4 @@
-﻿use glam::Vec2;
+use glam::Vec2;
 use grana_ui::{
     Align, Block, Border, Color, Corners, Cursor, Edges, Fill, Icon, Length, Level, Rect, Role,
     Shadow, TextStyle, TypeStyle, Ui, icon,
@@ -438,12 +438,14 @@ pub fn progress_caption(
             grana_scene::ObjectKind::Filaments => "frames",
         },
         grana_scene::Job::Track(_)
+        | grana_scene::Job::Recut(_)
         | grana_scene::Job::Relation { .. }
         | grana_scene::Job::Coloc => "frames",
     };
     let prefix = match job {
         grana_scene::Job::Detect(_) if frames > 1 => format!("frame {} · ", progress.time + 1),
         grana_scene::Job::Detect(_)
+        | grana_scene::Job::Recut(_)
         | grana_scene::Job::Track(_)
         | grana_scene::Job::Relation { .. }
         | grana_scene::Job::Coloc => String::new(),

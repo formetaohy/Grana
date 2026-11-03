@@ -10,5 +10,7 @@ pub use filament::{FilamentSet, FilamentStatistics, FilamentTopology};
 pub use intensity::{IntensityTable, SampleAccumulator, SampleStatistics};
 pub use relation::RelationFrame;
 pub use spot::{Spot, SpotSet};
-pub use surface::{SurfaceSet, SurfaceStatistics};
+pub use surface::{
+    Basin, Seam, SurfacePatches, SurfaceSet, SurfaceStatistics, SurfaceTopology, TopologyInfo,
+};
 pub use track::{Track, TrackNode, TrackSet, TrackStatistics};

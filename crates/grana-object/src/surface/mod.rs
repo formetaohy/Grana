@@ -1,7 +1,12 @@
+mod topology;
+
 use std::sync::Arc;
 
-use crate::IntensityTable;
 use grana_geometry::{Bounds, Geometry, Mesh, MeshStore, PackedMesh};
+
+use crate::IntensityTable;
+
+pub use topology::{Basin, Seam, SurfacePatches, SurfaceTopology, TopologyInfo};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceStatistics {
@@ -71,12 +76,13 @@ impl SurfaceStatistics {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct SurfaceSet {
     level: usize,
     geometry: Geometry,
     objects: Vec<SurfaceStatistics>,
     intensities: IntensityTable,
+    topology: Option<Arc<SurfaceTopology>>,
 }
 
 impl SurfaceSet {
@@ -96,6 +102,7 @@ impl SurfaceSet {
             geometry: Geometry::resident(geometry),
             objects,
             intensities,
+            topology: None,
         }
     }
 
@@ -116,6 +123,7 @@ impl SurfaceSet {
             geometry: Geometry::paged(store, geometry)?,
             objects,
             intensities,
+            topology: None,
         })
     }
 
@@ -134,7 +142,25 @@ impl SurfaceSet {
             geometry,
             objects,
             intensities,
+            topology: None,
         }))
+    }
+
+    pub fn with_topology(mut self, topology: Arc<SurfaceTopology>) -> Self {
+        assert!(
+            topology.level() == self.level,
+            "a surface topology describes the level of its set"
+        );
+        self.topology = Some(topology);
+        self
+    }
+
+    pub fn topology(&self) -> Option<&Arc<SurfaceTopology>> {
+        self.topology.as_ref()
+    }
+
+    pub fn cuttable(&self) -> bool {
+        self.topology.is_some()
     }
 
     pub fn level(&self) -> usize {
@@ -147,6 +173,10 @@ impl SurfaceSet {
 
     pub fn bytes(&self) -> u64 {
         self.geometry.bytes()
+            + self
+                .topology
+                .as_ref()
+                .map_or(0, |topology| topology.bytes())
     }
 
     pub fn objects(&self) -> &[SurfaceStatistics] {
@@ -184,6 +214,15 @@ impl SurfaceSet {
             objects,
             self.intensities.without(object),
         )
+    }
+}
+
+impl PartialEq for SurfaceSet {
+    fn eq(&self, other: &Self) -> bool {
+        self.level == other.level
+            && self.geometry == other.geometry
+            && self.objects == other.objects
+            && self.intensities == other.intensities
     }
 }
 

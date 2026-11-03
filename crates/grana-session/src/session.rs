@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use grana_analysis::SurfaceCut;
 use grana_animation::{Keyframe, Timeline};
 use grana_display::Shading;
 use grana_geometry::{DEFAULT_BUDGET, MeshStore};
@@ -9,7 +10,9 @@ use grana_image::Format;
 use grana_measure::{ColocPair, ColocThresholds, Group};
 use grana_object::TrackSet;
 use grana_project::{Project, Source as ProjectSource, ViewState};
-use grana_scene::{Dataset, Item, Job, Measure, ObjectFrame, ObjectSetId, Origin, Progress, Scene};
+use grana_scene::{
+    Dataset, Item, Job, Measure, ObjectFrame, ObjectParams, ObjectSetId, Origin, Progress, Scene,
+};
 use grana_volume::{BrickData, BrickRequest, Region};
 
 use crate::command::{Edit, Export};
@@ -108,6 +111,7 @@ pub struct Session {
     history: History,
     export: Export,
     resume: Vec<(ObjectSetId, ObjectSetId, i32)>,
+    recut: Option<(ObjectSetId, SurfaceCut)>,
 }
 
 impl Default for Session {
@@ -154,6 +158,7 @@ impl Session {
             history: History::default(),
             export: Export::NATIVE,
             resume: Vec::new(),
+            recut: None,
         }
     }
 
@@ -172,6 +177,7 @@ impl Session {
         self.progress.clear();
         self.recipe = None;
         self.resume.clear();
+        self.recut = None;
         self.in_flight.clear();
         self.bricks.clear();
         self.measure.reset();
@@ -479,10 +485,20 @@ impl Session {
             }
             Command::RemoveObject(set) => self.remove_object(set),
             Command::Detect(set) => self.start_detect(set),
-            Command::CancelDetect(set) => self.cancel(Job::Detect(set)),
+            Command::CancelDetect(set) => {
+                self.cancel(Job::Detect(set));
+                self.cancel(Job::Recut(set));
+                if self.recut.is_some_and(|(pending, _)| pending == set) {
+                    self.recut = None;
+                }
+            }
             Command::ClearObject(set) => {
                 self.cancel(Job::Detect(set));
+                self.cancel(Job::Recut(set));
                 self.cancel(Job::Track(set));
+                if self.recut.is_some_and(|(pending, _)| pending == set) {
+                    self.recut = None;
+                }
                 self.clear_relations(set);
                 if let Some(scene) = self.scene.as_mut() {
                     scene.clear_object(set);
@@ -573,8 +589,13 @@ impl Session {
                 }
             }
             Command::SetObjectParams { set, params } => {
-                if let Some(target) = self.object_mut(set) {
+                let previous = self.object_mut(set).map(|target| {
+                    let previous = target.params();
                     target.set_params(params);
+                    previous
+                });
+                if let Some(previous) = previous {
+                    self.recut(set, previous, params);
                 }
             }
             Command::SetObjectColoring { set, coloring } => {
@@ -1058,6 +1079,7 @@ impl Session {
         self.abort_recipe();
         self.analysis.clear();
         self.progress.clear();
+        self.recut = None;
         self.message = None;
         self.in_flight.clear();
         self.failed.clear();
@@ -1214,6 +1236,7 @@ impl Session {
         }
         let mut removed = Vec::new();
         let mut detected = Vec::new();
+        let mut recutted = Vec::new();
         let mut finished = Vec::new();
         for (index, job, update) in updates {
             repaint = true;
@@ -1222,7 +1245,9 @@ impl Session {
                     self.record_progress(job, time, done, total);
                 }
                 Update::Frame(time, frame) => {
-                    if let (Job::Detect(set), Some(scene)) = (job, self.scene.as_mut()) {
+                    if let (Job::Detect(set) | Job::Recut(set), Some(scene)) =
+                        (job, self.scene.as_mut())
+                    {
                         scene.install(set, time, frame);
                     }
                 }
@@ -1257,8 +1282,10 @@ impl Session {
                     self.progress.retain(|progress| progress.job != job);
                     removed.push(index);
                     finished.push(job);
-                    if let Job::Detect(set) = job {
-                        detected.push(set);
+                    match job {
+                        Job::Detect(set) => detected.push(set),
+                        Job::Recut(set) => recutted.push(set),
+                        Job::Track(_) | Job::Relation { .. } | Job::Coloc => {}
                     }
                 }
                 Update::Failed(detail) => {
@@ -1283,7 +1310,30 @@ impl Session {
         for job in finished {
             self.advance_recipe(job);
         }
-        for set in detected {
+        if let Some((set, cut)) = self.recut.take()
+            && !self
+                .analysis
+                .iter()
+                .any(|analysis| analysis.job() == Job::Recut(set))
+        {
+            self.start_recut(set, cut);
+        }
+        for (set, recut) in detected
+            .into_iter()
+            .map(|set| (set, false))
+            .chain(recutted.into_iter().map(|set| (set, true)))
+        {
+            if self.recut.is_some_and(|(pending, _)| pending == set)
+                || self
+                    .analysis
+                    .iter()
+                    .any(|analysis| analysis.job() == Job::Recut(set))
+            {
+                continue;
+            }
+            if recut {
+                self.defer_relations(set);
+            }
             self.start_tracks(set);
             self.resume_relations(set);
         }
@@ -1342,7 +1392,10 @@ impl Session {
         };
         let busy = |pair: &(ObjectSetId, ObjectSetId, i32)| {
             self.analysis.iter().any(|analysis| {
-                analysis.job() == Job::Detect(pair.0) || analysis.job() == Job::Detect(pair.1)
+                matches!(
+                    analysis.job(),
+                    Job::Detect(id) | Job::Recut(id) if id == pair.0 || id == pair.1
+                )
             })
         };
         let ready = self
@@ -1381,9 +1434,12 @@ impl Session {
     }
 
     fn add_relation(&mut self, source: ObjectSetId, target: ObjectSetId, shift: i32) {
-        let busy = self.analysis.iter().any(
-            |analysis| matches!(analysis.job(), Job::Detect(id) if id == source || id == target),
-        );
+        let busy = self.analysis.iter().any(|analysis| {
+            matches!(
+                analysis.job(),
+                Job::Detect(id) | Job::Recut(id) if id == source || id == target
+            )
+        });
         if busy {
             self.message = Some(Message::error(
                 "the object sets are being detected before they relate",
@@ -1477,6 +1533,10 @@ impl Session {
         if self.loading.is_some() {
             return;
         }
+        self.cancel(Job::Recut(set));
+        if self.recut.is_some_and(|(pending, _)| pending == set) {
+            self.recut = None;
+        }
         if self
             .analysis
             .iter()
@@ -1550,6 +1610,76 @@ impl Session {
             source,
             DetectRequest::new(channel, params, region, roi, seeds, 0, self.store()),
         ));
+    }
+
+    fn recut(&mut self, set: ObjectSetId, previous: ObjectParams, params: ObjectParams) {
+        let (ObjectParams::Surfaces(previous), ObjectParams::Surfaces(params)) = (previous, params)
+        else {
+            return;
+        };
+        if previous == params
+            || previous.threshold() != params.threshold()
+            || previous.grain() != params.grain()
+            || previous.opening() != params.opening()
+            || previous.closing() != params.closing()
+        {
+            return;
+        }
+        let cut = params.cut();
+        if !self.cuttable(set, cut) {
+            return;
+        }
+        if self
+            .analysis
+            .iter()
+            .any(|analysis| matches!(analysis.job(), Job::Detect(id) if id == set))
+        {
+            return;
+        }
+        if self
+            .analysis
+            .iter()
+            .any(|analysis| analysis.job() == Job::Recut(set))
+        {
+            self.recut = Some((set, cut));
+            return;
+        }
+        self.start_recut(set, cut);
+    }
+
+    fn cuttable(&self, set: ObjectSetId, cut: SurfaceCut) -> bool {
+        let Some(scene) = self.scene.as_ref() else {
+            return false;
+        };
+        let Some(object) = scene.objects.get(set) else {
+            return false;
+        };
+        object.detected() > 0
+            && (0..scene.frame_count()).all(|time| {
+                object.frame(time).is_none_or(|frame| match frame {
+                    ObjectFrame::Surfaces(surface) => grana_analysis::cuttable(surface, cut),
+                    _ => false,
+                })
+            })
+    }
+
+    fn start_recut(&mut self, set: ObjectSetId, cut: SurfaceCut) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(object) = scene.objects.get(set) else {
+            return;
+        };
+        let frames = (0..scene.frame_count())
+            .map(|time| object.frame_shared(time))
+            .collect::<Vec<_>>();
+        if frames.iter().all(Option::is_none) {
+            return;
+        }
+        self.message = None;
+        self.record_progress(Job::Recut(set), 0, 0, frames.len());
+        self.analysis
+            .push(crate::recut(Job::Recut(set), frames, cut, 0, self.store()));
     }
 
     fn store(&self) -> Arc<MeshStore> {
@@ -1779,6 +1909,7 @@ impl Session {
         self.analysis.clear();
         self.progress.clear();
         self.resume.clear();
+        self.recut = None;
         if let Some(scene) = self.scene.as_ref()
             && let Err(error) = protocol.validate(scene)
         {
@@ -2140,7 +2271,11 @@ impl Session {
 
     fn remove_object(&mut self, set: ObjectSetId) {
         self.cancel(Job::Detect(set));
+        self.cancel(Job::Recut(set));
         self.cancel(Job::Track(set));
+        if self.recut.is_some_and(|(pending, _)| pending == set) {
+            self.recut = None;
+        }
         self.clear_relations(set);
         if let Some(scene) = self.scene.as_mut() {
             scene.remove_object(set);

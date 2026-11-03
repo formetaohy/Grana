@@ -2,7 +2,7 @@ use std::f64::consts::PI;
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_analysis::{Sources, SurfaceBuilder, SurfaceFilter, SurfaceParams};
+use grana_analysis::{Sources, SurfaceBuilder, SurfaceFilter, SurfaceParams, cuttable, recut};
 use grana_geometry::MeshStore;
 use grana_object::SurfaceSet;
 use grana_volume::{Channel, Extent, Intensity, Level, Region, Spacing, Volume, VoxelData};
@@ -315,6 +315,64 @@ fn splits_large_lobes_at_their_thick_neck() {
 }
 
 #[test]
+fn recuts_a_detection_without_reading_the_volume() {
+    let volume = large_lobes();
+    let filter = SurfaceFilter::new(0.0, 0.8, 0.0, 0.0);
+    let params = SurfaceParams::new(0.5, 0.0, 0.7, 0.0, filter);
+    let set = extract(&volume, params, Region::none());
+    assert_eq!(
+        set.object_count(),
+        1,
+        "the shallow split keeps the lobes joined"
+    );
+    let mut recut_params = params;
+    recut_params.set_split(0.3);
+    let cut = recut(&set, recut_params.cut(), 2, None)
+        .expect("the carried topology is cut")
+        .expect("a detected surface carries its topology");
+    let fresh = extract(&volume, recut_params, Region::none());
+    assert_eq!(cut, fresh, "a recut matches a detection at the same split");
+}
+
+#[test]
+fn recuts_objects_that_a_filter_dropped() {
+    let volume = large_lobes();
+    let filter = SurfaceFilter::new(0.0, 0.8, 0.0, 0.0);
+    let params = SurfaceParams::new(0.5, 0.0, 0.3, 1.0e6, filter);
+    let set = extract(&volume, params, Region::none());
+    assert!(set.is_empty(), "the volume filter drops every lobe");
+    let mut open = params;
+    open.set_min_volume(0.0);
+    let cut = recut(&set, open.cut(), 2, None)
+        .expect("the carried topology is cut")
+        .expect("a filtered surface keeps its topology");
+    assert_eq!(cut.object_count(), 2, "the filter revival splits the lobes");
+}
+
+#[test]
+fn refuses_to_split_a_surface_that_was_not_watershed() {
+    let volume = large_lobes();
+    let filter = SurfaceFilter::new(0.0, 0.8, 0.0, 0.0);
+    let merged = extract(
+        &volume,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.0, filter),
+        Region::none(),
+    );
+    let split = SurfaceParams::new(0.5, 0.0, 0.3, 0.0, filter);
+    assert!(
+        !cuttable(&merged, split.cut()),
+        "an unsplit detection carries no watershed seams"
+    );
+    assert!(
+        cuttable(
+            &merged,
+            SurfaceParams::new(0.5, 0.0, 0.0, 0.0, filter).cut()
+        ),
+        "an unsplit detection recuts to its own split"
+    );
+}
+
+#[test]
 fn keeps_surfaces_deterministic_across_worker_counts() {
     let volume = large_lobes();
     let surface = SurfaceParams::new(0.5, 0.0, 0.6, 0.0, SurfaceFilter::new(0.0, 0.8, 0.0, 0.0));
@@ -426,7 +484,6 @@ fn watertight(set: &SurfaceSet) -> bool {
         .iter()
         .all(|edges| edges.values().all(|count| *count == 2))
 }
-
 fn no_holes(set: &SurfaceSet) -> bool {
     edge_counts(set)
         .iter()

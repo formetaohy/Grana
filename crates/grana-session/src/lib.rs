@@ -22,7 +22,7 @@ pub use event::Event;
 pub use grana_image::{Source, is_image};
 pub use grana_project::Export;
 pub use grana_scene::slug;
-pub use job::{Analysis, coloc, detect, relation, track};
+pub use job::{Analysis, coloc, detect, recut, relation, track};
 pub use loader::Loader;
 pub use protocol::{
     AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec,

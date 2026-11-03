@@ -1,7 +1,8 @@
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_analysis::TrackParams;
+use grana_analysis::{SurfaceCut, TrackParams};
+use grana_geometry::MeshStore;
 use grana_image::{Image, Source};
 use grana_scene::{Job, ObjectFrame};
 
@@ -28,6 +29,54 @@ pub fn detect(job: Job, source: Source, request: DetectRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
         let reader = Image::open(&source)?;
         run::detect(&reader, request, cancel, sink)
+    })
+}
+
+pub fn recut(
+    job: Job,
+    frames: Vec<Option<Arc<ObjectFrame>>>,
+    cut: SurfaceCut,
+    workers: usize,
+    store: Arc<MeshStore>,
+) -> Analysis {
+    analyse(job, move |cancel, sink| {
+        let total = frames.len();
+        if total == 0 {
+            sink(Event::Done);
+            return Ok(());
+        }
+        sink(Event::Progress {
+            time: 0,
+            done: 0,
+            total,
+        });
+        for (time, frame) in frames.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            let Some(ObjectFrame::Surfaces(set)) = frame.as_deref() else {
+                continue;
+            };
+            let Some(frame) = grana_analysis::recut(set, cut, workers, Some(&store))? else {
+                continue;
+            };
+            sink(Event::Frame {
+                time: time as u32,
+                frame: ObjectFrame::Surfaces(frame),
+            });
+            if time % 8 == 0 || time + 1 == total {
+                sink(Event::Progress {
+                    time: time as u32,
+                    done: time + 1,
+                    total,
+                });
+            }
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        sink(Event::Done);
+        Ok(())
     })
 }
 

@@ -1,4 +1,55 @@
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceCut {
+    split: f32,
+    min_volume: f32,
+    min_sphericity: f32,
+    min_mean_intensity: f32,
+}
+
+impl SurfaceCut {
+    pub fn new(split: f32, min_volume: f32, min_sphericity: f32, min_mean_intensity: f32) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&split),
+            "a surface split is a fraction of the peak reach"
+        );
+        assert!(
+            min_volume.is_finite() && min_volume >= 0.0,
+            "a surface volume filter must be a non-negative volume"
+        );
+        assert!(
+            (0.0..=1.0).contains(&min_sphericity),
+            "a surface sphericity filter is a unit fraction"
+        );
+        assert!(
+            (0.0..=1.0).contains(&min_mean_intensity),
+            "a surface intensity filter is a unit fraction"
+        );
+        Self {
+            split,
+            min_volume,
+            min_sphericity,
+            min_mean_intensity,
+        }
+    }
+
+    pub fn split(self) -> f32 {
+        self.split
+    }
+
+    pub fn min_volume(self) -> f32 {
+        self.min_volume
+    }
+
+    pub fn min_sphericity(self) -> f32 {
+        self.min_sphericity
+    }
+
+    pub fn min_mean_intensity(self) -> f32 {
+        self.min_mean_intensity
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpotParams {
     diameter: f32,
     threshold: f32,
@@ -177,7 +228,6 @@ pub struct SurfaceParams {
 
 impl SurfaceParams {
     pub const FIELD_COUNT: usize = 8;
-
     pub fn new(
         threshold: f32,
         grain: f32,
@@ -244,6 +294,15 @@ impl SurfaceParams {
 
     pub fn min_mean_intensity(self) -> f32 {
         self.filter.min_mean_intensity()
+    }
+
+    pub fn cut(self) -> SurfaceCut {
+        SurfaceCut::new(
+            self.split,
+            self.min_volume,
+            self.filter.min_sphericity(),
+            self.filter.min_mean_intensity(),
+        )
     }
 
     pub fn field(&self, index: usize) -> f32 {
