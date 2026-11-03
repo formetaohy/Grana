@@ -44,6 +44,12 @@ fn protocol(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
             {
                 commands.push(Command::SaveProtocol);
             }
+            if !running
+                && state.batch_protocol().is_some()
+                && widget::action_button(ui, "apply", Icon::Play, "Apply", Role::Quiet).clicked
+            {
+                commands.push(Command::ApplyProtocol);
+            }
             if state.batch_protocol().is_some() {
                 ui.space(2.0);
                 widget::badge(ui, "Ready", ui.theme().palette.success);
@@ -69,7 +75,7 @@ fn protocol(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
             None => {
                 widget::weak(
                     ui,
-                    "Capture the current region, objects, detection parameters, statistics grouping and colocalization pair into a reusable protocol.",
+                    "Capture the region, objects, detection parameters, presentation, statistics grouping and colocalization pair into a reusable protocol. Apply replays it on the open dataset; the batch runs it over a folder.",
                 );
             }
         }
@@ -213,6 +219,14 @@ fn output(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
                     ),
                 );
             });
+            if let Some(value) = widget::toggle_row(
+                ui,
+                "batch.project",
+                "Write a project per dataset",
+                state.batch_project(),
+            ) {
+                commands.push(Command::SetBatchProject(value));
+            }
         }
         ui.separator();
         let running = state.batch_running();
@@ -244,7 +258,7 @@ fn output(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         }
         widget::weak(
             ui,
-            "Each dataset writes the tables of the protocol grouping into its own folder. Re-running the same protocol resumes where it stopped.",
+            "Each dataset writes the tables of the protocol grouping into its own folder. Re-running the same protocol resumes where it stopped. A project carries the detected objects, their presentation and the camera, so a dataset can be opened and reviewed.",
         );
     });
 }

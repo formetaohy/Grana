@@ -207,6 +207,14 @@ impl Coloc {
         }
     }
 
+    pub fn clear(&mut self) {
+        if self.results.is_empty() {
+            return;
+        }
+        self.results.clear();
+        self.revision += 1;
+    }
+
     pub fn install(&mut self, series: ColocSeries) {
         assert!(
             self.pair == Some(series.pair()),

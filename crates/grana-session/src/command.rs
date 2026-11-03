@@ -187,12 +187,14 @@ pub enum Command {
     ExportColoc,
     ExportMeasure,
     CaptureProtocol,
+    ApplyProtocol,
     LoadProtocol,
     SaveProtocol,
     AddBatchDatasets,
     ClearBatchDatasets,
     ChooseBatchOutput,
     SetBatchJobs(u32),
+    SetBatchProject(bool),
     RunBatch,
     CancelBatch,
     SetKeyframe,
@@ -263,6 +265,7 @@ pub enum Action {
     ColocSettings,
     ColocResult,
     ComputeColoc,
+    ApplyProtocol,
     Keyframe,
     TimelineFps,
     TimelineDuration,
@@ -322,6 +325,7 @@ impl Action {
             Self::ColocSettings => "colocalization settings",
             Self::ColocResult => "colocalization result",
             Self::ComputeColoc => "colocalization",
+            Self::ApplyProtocol => "protocol replay",
             Self::Keyframe => "keyframes",
             Self::TimelineFps => "frame rate",
             Self::TimelineDuration => "duration",
@@ -354,7 +358,10 @@ impl Action {
     }
 
     fn asynchronous(self) -> bool {
-        matches!(self, Self::Detect | Self::Track | Self::ComputeColoc)
+        matches!(
+            self,
+            Self::Detect | Self::Track | Self::ComputeColoc | Self::ApplyProtocol
+        )
     }
 }
 
@@ -464,6 +471,7 @@ impl Command {
             Self::SetColocSettings(_) => Edit::new(Action::ColocSettings),
             Self::RemoveColocResult(_) => Edit::new(Action::ColocResult),
             Self::ComputeColoc => Edit::new(Action::ComputeColoc),
+            Self::ApplyProtocol => Edit::new(Action::ApplyProtocol),
             Self::ClearKeyframes | Self::DeleteKeyframe(_) => Edit::new(Action::Keyframe),
             Self::SetTimelineFps(_) => Edit::new(Action::TimelineFps),
             Self::SetTimelineDuration(_) => Edit::new(Action::TimelineDuration),

@@ -381,6 +381,8 @@ impl App {
     }
 
     fn apply(&mut self, commands: Vec<Command>) -> bool {
+        let view = self.view_state();
+        self.session.observe_view(view);
         for command in commands {
             let effects = self.session.execute(command);
             if self.react(effects) {

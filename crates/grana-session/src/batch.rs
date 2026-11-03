@@ -6,18 +6,21 @@ use std::sync::{Mutex, MutexGuard};
 
 use glam::Vec3;
 use grana_analysis::Roi;
+use grana_animation::Timeline;
+use grana_display::{Camera, SectionCamera};
 use grana_geometry::{DEFAULT_BUDGET, MeshStore};
-use grana_image::{Image, Source};
+use grana_image::{Format, Image, Source};
 use grana_measure::{ColocPair, ColocSeries};
 use grana_measure::{Frame, RelationRow, Table};
 use grana_object::{RelationFrame, TrackSet};
-use grana_scene::{ObjectFrame, slug};
-use grana_volume::{Pyramid, Region};
+use grana_project::{Project, Source as ProjectSource, ViewState};
+use grana_scene::{Dataset, Measure, ObjectFrame, Scene, slug};
+use grana_volume::{Axis, Pyramid, Region};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::event::Event as RunEvent;
-use crate::protocol::Protocol;
+use crate::protocol::{Protocol, ProtocolError};
 use crate::run;
 
 const RESULT: &str = "result.json";
@@ -47,6 +50,7 @@ pub struct Plan {
     pub datasets: Vec<PathBuf>,
     pub output: PathBuf,
     pub jobs: usize,
+    pub project: bool,
 }
 
 pub enum Event {
@@ -160,6 +164,8 @@ struct Record {
     protocol: u64,
     build: String,
     content: u64,
+    #[serde(default)]
+    project: bool,
     objects: usize,
     detail: String,
 }
@@ -180,6 +186,7 @@ struct Task<'a> {
     workers: usize,
     digest: u64,
     index: usize,
+    project: bool,
     events: &'a Sender<Event>,
     cancel: &'a AtomicBool,
 }
@@ -224,6 +231,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
                             workers,
                             digest,
                             index,
+                            project: plan.project,
                             events: &events,
                             cancel: &cancel,
                         },
@@ -280,7 +288,13 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
     let dataset = &plan.datasets[index];
     let name = dataset_name(dataset);
     let folder = plan.output.join(folder_name(dataset));
-    if let Some(record) = completed(&folder, task.digest, &build(), content(dataset)) {
+    if let Some(record) = completed(
+        &folder,
+        task.digest,
+        &build(),
+        content(dataset),
+        task.project,
+    ) {
         let _ = task.events.send(Event::Dataset {
             index,
             outcome: Outcome::Complete {
@@ -551,16 +565,139 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
         objects,
         detail: detail.join("; "),
     };
+    if task.project {
+        let _ = task.events.send(Event::Step {
+            index: task.index,
+            label: format!("writing the project of {}", reader.name()),
+        });
+        write_project(task, dataset, &reader, detected, folder)?;
+    }
     let record = serde_json::to_string(&Record {
         protocol: task.digest,
         build: build(),
         content: content(dataset),
+        project: task.project,
         objects: report.objects,
         detail: report.detail.clone(),
     })
     .map_err(|error| format!("failed to record the dataset: {error}"))?;
     write(&folder.join(RESULT), &record)?;
     Ok(report)
+}
+
+fn write_project(
+    task: &Task<'_>,
+    dataset: &Path,
+    reader: &Image,
+    detected: Vec<Detected<'_>>,
+    folder: &Path,
+) -> Result<(), String> {
+    let name = reader.name().to_string();
+    let mut scene = Scene::new(dataset_of(reader.format(), &name, reader.pyramid()));
+    let staged = task
+        .protocol
+        .stage(&mut scene)
+        .map_err(|error: ProtocolError| error.to_string())?;
+    let order = staged.sets().to_vec();
+    let mut pending = Vec::new();
+    let position = |name: &str| {
+        task.protocol
+            .sets()
+            .iter()
+            .position(|set| set.name == name)
+            .expect("a checked protocol names its own object sets")
+    };
+    for (index, detected) in detected.into_iter().enumerate() {
+        let id = order[index];
+        let Detected {
+            frames,
+            tracks,
+            relations,
+            ..
+        } = detected;
+        for (time, frame) in frames.into_iter().enumerate() {
+            if let Some(frame) = frame {
+                scene.install_shared(id, time as u32, frame);
+            }
+        }
+        if let Some(tracks) = tracks
+            && !tracks.is_empty()
+        {
+            scene.install_tracks(id, tracks);
+        }
+        pending.extend(
+            relations
+                .into_iter()
+                .map(|(target, frames)| (id, position(&target), frames)),
+        );
+    }
+    for (id, target, frames) in pending {
+        let target = order[target];
+        for (time, frame) in frames.into_iter().enumerate() {
+            if let Some(frame) = frame {
+                scene.install_relation(id, target, time as u32, frame);
+            }
+        }
+    }
+    let mut measure = Measure::new();
+    task.protocol
+        .present_measure(staged.sets(), &mut measure, &scene);
+    let view = view_state(task.protocol, &scene);
+    let project = Project::capture(
+        &scene,
+        &measure,
+        ProjectSource::File {
+            name: name.clone(),
+            path: dataset.to_path_buf(),
+        },
+        view,
+    );
+    let file = folder.join(format!("{}.granaproj", slug(&name)));
+    let mut progress = |done: usize, total: usize| {
+        let _ = task.events.send(Event::Progress {
+            index: task.index,
+            done,
+            total,
+        });
+    };
+    project
+        .write(&file, task.cancel, &mut progress)
+        .map_err(|error| format!("failed to write {}: {error}", file.display()))
+}
+
+fn dataset_of(format: Option<Format>, name: &str, pyramid: &Pyramid) -> Dataset {
+    let pyramid = pyramid.clone();
+    match format {
+        Some(Format::Zarr) => Dataset::zarr(name, pyramid),
+        Some(Format::Tiff) => Dataset::tiff(name, pyramid),
+        Some(Format::Czi) => Dataset::czi(name, pyramid),
+        None => Dataset::synthetic(name, pyramid),
+    }
+}
+
+fn view_state(protocol: &Protocol, scene: &Scene) -> ViewState {
+    let duration = (scene.frame_count() as f32 * scene.dataset.frame_interval())
+        .clamp(1.0, Timeline::MAX_DURATION);
+    let timeline = Timeline::new(30, duration);
+    if let Some(view) = protocol.view() {
+        return ViewState {
+            camera: view.camera(),
+            section: view.section(),
+            split: view.split,
+            timeline,
+        };
+    }
+    let world = scene.dataset.world_size();
+    let mut camera = Camera::new(35.0);
+    camera.fit(world, 1.6);
+    let mut section = SectionCamera::new(Axis::Z);
+    section.fit(world, scene.dataset.voxel_size(), 1.6);
+    ViewState {
+        camera: camera.state(),
+        section: section.state(),
+        split: 0.62,
+        timeline,
+    }
 }
 
 struct Detected<'a> {
@@ -736,10 +873,19 @@ fn table_frames<'a>(
         .collect()
 }
 
-fn completed(folder: &Path, digest: u64, build: &str, content: u64) -> Option<Record> {
+fn completed(
+    folder: &Path,
+    digest: u64,
+    build: &str,
+    content: u64,
+    project: bool,
+) -> Option<Record> {
     let text = std::fs::read_to_string(folder.join(RESULT)).ok()?;
     let record = serde_json::from_str::<Record>(&text).ok()?;
-    (record.protocol == digest && record.build == build && record.content == content)
+    (record.protocol == digest
+        && record.build == build
+        && record.content == content
+        && record.project == project)
         .then_some(record)
 }
 

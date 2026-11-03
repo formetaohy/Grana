@@ -6,7 +6,7 @@ use grana_animation::{Keyframe, Timeline};
 use grana_display::Shading;
 use grana_geometry::{DEFAULT_BUDGET, MeshStore};
 use grana_image::Format;
-use grana_measure::Group;
+use grana_measure::{ColocThresholds, Group};
 use grana_object::TrackSet;
 use grana_project::{Project, Source as ProjectSource, ViewState};
 use grana_scene::{Dataset, Item, Job, Measure, ObjectFrame, ObjectSetId, Origin, Progress, Scene};
@@ -16,13 +16,14 @@ use crate::command::{Edit, Export};
 use crate::document::{self, Document};
 use crate::history::{History, Snapshot};
 use crate::loader::{Event as LoaderEvent, Loader};
+use crate::recipe::{Recipe, Step};
 use crate::run::DetectRequest;
 use crate::sample;
 use crate::task::Poll;
 use crate::view::{BatchDataset, BatchView, HistoryView, IoView, Message, StoreView};
 use crate::{
     Action, Analysis, Batch, BatchEvent, BatchPoll, Command, Event, Outcome, Plan as BatchPlan,
-    Protocol, Source,
+    Protocol, Source, ViewSpec,
 };
 
 const MAX_IN_FLIGHT: usize = 8192;
@@ -73,12 +74,16 @@ pub struct Session {
     saved: Option<u64>,
     protocol: Option<Protocol>,
     protocol_text: Option<String>,
+    recipe: Option<Recipe>,
+    coloc_thresholds: Option<(grana_measure::ColocPair, ColocThresholds)>,
+    current_view: Option<ViewState>,
     batch: Option<Batch>,
     batch_datasets: Vec<PathBuf>,
     batch_rows: Vec<BatchDataset>,
     batch_output: Option<PathBuf>,
     batch_running: bool,
     batch_jobs: usize,
+    batch_project: bool,
     batch_message: Option<String>,
     generation: u64,
     view: Option<ViewState>,
@@ -115,12 +120,16 @@ impl Session {
             saved: None,
             protocol: None,
             protocol_text: None,
+            recipe: None,
+            coloc_thresholds: None,
+            current_view: None,
             batch: None,
             batch_datasets: Vec::new(),
             batch_rows: Vec::new(),
             batch_output: None,
             batch_running: false,
             batch_jobs: crate::default_jobs(),
+            batch_project: false,
             batch_message: None,
             generation: 0,
             view: None,
@@ -130,20 +139,47 @@ impl Session {
         }
     }
 
-    pub fn open_sample(&mut self) {
-        let (source, pyramid) = Loader::memory(sample::series());
-        let mut scene = Scene::new(Dataset::synthetic("synthetic fluorescence", pyramid));
-        let staged = sample::stage(&mut scene);
+    pub fn open_series(&mut self, name: &str, series: grana_volume::VolumeSeries) {
+        let (source, pyramid) = Loader::memory(series);
         self.source = Some(source);
-        self.scene = Some(scene);
+        self.scene = Some(Scene::new(Dataset::synthetic(name, pyramid)));
         self.timeline = Timeline::new(30, self.frame_duration());
         self.message = None;
         self.loading = None;
         self.generation += 1;
+        self.project = None;
+        self.saved = None;
         self.history.clear();
+        self.analysis.clear();
+        self.progress.clear();
+        self.recipe = None;
+        self.resume.clear();
+        self.in_flight.clear();
+        self.bricks.clear();
+        self.measure.reset();
+        self.set_time(0);
+    }
+
+    pub fn open_sample(&mut self) {
+        self.open_series("synthetic fluorescence", sample::series());
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        let staged = sample::stage(scene);
         for set in [staged.spots, staged.surfaces, staged.filaments] {
             self.start_detect(set);
         }
+    }
+
+    pub fn set_protocol(&mut self, protocol: Protocol) {
+        self.protocol_text = Some(protocol.summary());
+        self.protocol = Some(protocol);
+        self.reset_batch_rows();
+        self.batch_message = None;
+    }
+
+    pub fn replaying(&self) -> bool {
+        self.recipe.is_some()
     }
 
     pub fn scene(&self) -> Option<&Scene> {
@@ -202,6 +238,7 @@ impl Session {
                 .as_ref()
                 .map(|path| path.display().to_string()),
             jobs: self.batch_jobs,
+            project: self.batch_project,
             running: self.batch_running,
             message: self.batch_message.clone(),
         })
@@ -251,6 +288,10 @@ impl Session {
 
     pub fn take_view(&mut self) -> Option<ViewState> {
         self.view.take()
+    }
+
+    pub fn observe_view(&mut self, view: ViewState) {
+        self.current_view = Some(view);
     }
 
     pub fn take_bricks(&mut self) -> Vec<(BrickRequest, BrickData)> {
@@ -650,6 +691,7 @@ impl Session {
             Command::ExportColoc => self.export_coloc(),
             Command::ExportMeasure => self.export_measure(),
             Command::CaptureProtocol => self.capture_protocol(),
+            Command::ApplyProtocol => self.apply_protocol(),
             Command::LoadProtocol => self.load_protocol(),
             Command::SaveProtocol => self.save_protocol(),
             Command::AddBatchDatasets => self.add_batch_datasets(),
@@ -659,6 +701,10 @@ impl Session {
             }
             Command::ChooseBatchOutput => self.choose_batch_output(),
             Command::SetBatchJobs(jobs) => self.set_batch_jobs(jobs),
+            Command::SetBatchProject(project) => {
+                self.batch_project = project;
+                self.reset_batch_rows();
+            }
             Command::RunBatch => self.run_batch(),
             Command::CancelBatch => {
                 if let Some(batch) = &self.batch {
@@ -759,6 +805,12 @@ impl Session {
     }
 
     fn abandon(&mut self, edit: Edit) {
+        if edit.action() == Action::ApplyProtocol {
+            self.abort_recipe();
+            self.analysis.clear();
+            self.progress.clear();
+            self.resume.clear();
+        }
         if let Some(set) = ObjectSetId::from_raw(edit.target()) {
             match edit.action() {
                 Action::Detect => {
@@ -972,6 +1024,7 @@ impl Session {
 
     fn reset(&mut self) {
         self.measure.reset();
+        self.abort_recipe();
         self.analysis.clear();
         self.progress.clear();
         self.message = None;
@@ -987,6 +1040,7 @@ impl Session {
         let mut scene = Scene::new(dataset);
         self.loading = None;
         self.message = None;
+        self.abort_recipe();
         self.analysis.clear();
         self.progress.clear();
         self.measure.reset();
@@ -1128,6 +1182,7 @@ impl Session {
         }
         let mut removed = Vec::new();
         let mut detected = Vec::new();
+        let mut finished = Vec::new();
         for (index, job, update) in updates {
             repaint = true;
             match update {
@@ -1152,17 +1207,24 @@ impl Session {
                     }
                 }
                 Update::Coloc(series, region) => {
+                    let pair = series.pair();
                     if let Some(scene) = self.scene.as_mut()
-                        && scene.coloc.pair() == Some(series.pair())
+                        && scene.coloc.pair() == Some(pair)
                         && scene.region == region
                         && series.mask() == scene.mask.map(|set| set.raw())
                     {
                         scene.coloc.install(*series);
+                        if let Some((current, thresholds)) = self.coloc_thresholds
+                            && current == pair
+                        {
+                            scene.coloc.set_thresholds(thresholds);
+                        }
                     }
                 }
                 Update::Done => {
                     self.progress.retain(|progress| progress.job != job);
                     removed.push(index);
+                    finished.push(job);
                     if let Job::Detect(set) = job {
                         detected.push(set);
                     }
@@ -1170,6 +1232,13 @@ impl Session {
                 Update::Failed(detail) => {
                     self.progress.retain(|progress| progress.job != job);
                     removed.push(index);
+                    if self
+                        .recipe
+                        .as_ref()
+                        .is_some_and(|recipe| recipe.job() == Some(job))
+                    {
+                        self.abort_recipe();
+                    }
                     self.message = Some(Message::error(detail));
                 }
             }
@@ -1178,6 +1247,9 @@ impl Session {
         removed.dedup();
         for index in removed.into_iter().rev() {
             self.analysis.remove(index);
+        }
+        for job in finished {
+            self.advance_recipe(job);
         }
         for set in detected {
             self.start_tracks(set);
@@ -1205,6 +1277,13 @@ impl Session {
     }
 
     fn cancel(&mut self, job: Job) {
+        if self
+            .recipe
+            .as_ref()
+            .is_some_and(|recipe| recipe.job() == Some(job))
+        {
+            self.abort_recipe();
+        }
         self.analysis.retain(|analysis| analysis.job() != job);
         self.progress.retain(|progress| progress.job != job);
     }
@@ -1362,8 +1441,10 @@ impl Session {
             return;
         }
         self.cancel(Job::Track(set));
-        self.defer_relations(set);
-        self.clear_relations(set);
+        if self.recipe.is_none() {
+            self.defer_relations(set);
+            self.clear_relations(set);
+        }
         if let Some(scene) = self.scene.as_mut() {
             scene.clear_tracks(set);
         }
@@ -1627,15 +1708,192 @@ impl Session {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        match Protocol::capture(scene, &self.measure) {
-            Ok(protocol) => {
-                self.protocol_text = Some(protocol.summary());
-                self.protocol = Some(protocol);
-                self.reset_batch_rows();
-                self.batch_message = None;
-            }
+        let time = scene.time();
+        let view = self
+            .current_view
+            .as_ref()
+            .map(|view| ViewSpec::of(view.camera, view.section, view.split, time));
+        match Protocol::capture(scene, &self.measure, view) {
+            Ok(protocol) => self.set_protocol(protocol),
             Err(error) => self.batch_message = Some(error.to_string()),
         }
+    }
+
+    fn apply_protocol(&mut self) {
+        let Some(protocol) = self.protocol.clone() else {
+            self.message = Some(Message::error("capture or load a protocol first"));
+            return;
+        };
+        if self.loading.is_some() {
+            return;
+        }
+        if self.source.is_none() || self.scene.is_none() {
+            self.message = Some(Message::error("open a dataset before applying a protocol"));
+            return;
+        }
+        self.abort_recipe();
+        self.analysis.clear();
+        self.progress.clear();
+        self.resume.clear();
+        if let Some(scene) = self.scene.as_ref()
+            && let Err(error) = protocol.validate(scene)
+        {
+            self.message = Some(Message::error(error.to_string()));
+            return;
+        }
+        let staged = {
+            let Some(scene) = self.scene.as_mut() else {
+                return;
+            };
+            scene.clear_objects();
+            match protocol.stage(scene) {
+                Ok(staged) => staged,
+                Err(error) => {
+                    self.message = Some(Message::error(error.to_string()));
+                    return;
+                }
+            }
+        };
+        let order = protocol
+            .sets()
+            .iter()
+            .map(|set| set.name.as_str())
+            .collect::<Vec<_>>();
+        let position = |name: &str| {
+            order
+                .iter()
+                .position(|candidate| *candidate == name)
+                .expect("a checked protocol names its own object sets")
+        };
+        let sets = staged.sets().to_vec();
+        let masks = (0..sets.len())
+            .map(|index| staged.mask_of(index).map(|mask| sets[mask]))
+            .collect::<Vec<_>>();
+        let relations = protocol
+            .relations()
+            .iter()
+            .map(|relation| {
+                (
+                    sets[position(&relation.source)],
+                    sets[position(&relation.target)],
+                )
+            })
+            .collect::<Vec<_>>();
+        let pairs = match protocol.coloc() {
+            Some(coloc) => staged
+                .pairs()
+                .iter()
+                .zip(&coloc.pairs)
+                .map(|(pair, spec)| {
+                    (
+                        *pair,
+                        ColocThresholds::new(spec.thresholds[0], spec.thresholds[1]),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        };
+        let settings = protocol
+            .coloc()
+            .map_or_else(Default::default, |coloc| coloc.settings());
+        let mask = protocol
+            .coloc()
+            .and_then(|coloc| coloc.mask.as_deref())
+            .map(|name| sets[position(name)]);
+        self.recipe = Some(Recipe::new(sets, masks, relations, pairs, settings, mask));
+        self.message = None;
+        self.drive_recipe();
+    }
+
+    fn drive_recipe(&mut self) {
+        let Some(recipe) = self.recipe.as_ref() else {
+            return;
+        };
+        let step = recipe.step();
+        let settings = recipe.settings();
+        match step {
+            Step::Detect { set, mask } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_mask(mask);
+                }
+                self.start_detect(set);
+            }
+            Step::Relation { source, target } => self.start_relation(source, target),
+            Step::Coloc {
+                pair,
+                thresholds,
+                mask,
+            } => {
+                self.coloc_thresholds = Some((pair, thresholds));
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.coloc.set_settings(settings);
+                    scene.coloc.set_pair(pair);
+                    scene.set_mask(mask);
+                }
+                self.start_coloc();
+            }
+            Step::Present => {
+                self.present_recipe();
+                return;
+            }
+        }
+        let running = self.recipe.as_ref().is_some_and(|recipe| {
+            self.analysis
+                .iter()
+                .any(|analysis| Some(analysis.job()) == recipe.job())
+        });
+        if !running && self.recipe.is_some() {
+            self.abort_recipe();
+            if self.message.is_none() {
+                self.message = Some(Message::error("the protocol could not start its next step"));
+            }
+        }
+    }
+
+    fn advance_recipe(&mut self, job: Job) {
+        let Some(recipe) = self.recipe.as_mut() else {
+            return;
+        };
+        if recipe.job() != Some(job) {
+            return;
+        }
+        recipe.advance();
+        self.drive_recipe();
+    }
+
+    fn present_recipe(&mut self) {
+        let Some(recipe) = self.recipe.take() else {
+            return;
+        };
+        self.coloc_thresholds = None;
+        let Some(protocol) = self.protocol.clone() else {
+            return;
+        };
+        if let Some(view) = protocol.view() {
+            if let Some(scene) = self.scene.as_mut() {
+                let time = view.time.min(scene.frame_count().saturating_sub(1));
+                scene.set_time(time);
+                self.in_flight.retain(|request| request.time >= time);
+                if let Some(source) = self.source.as_ref() {
+                    source.set_time(time);
+                }
+            }
+            self.view = Some(ViewState {
+                camera: view.camera(),
+                section: view.section(),
+                split: view.split,
+                timeline: self.timeline.clone(),
+            });
+        }
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        protocol.present_measure(recipe.sets(), &mut self.measure, scene);
+    }
+
+    fn abort_recipe(&mut self) {
+        self.recipe = None;
+        self.coloc_thresholds = None;
     }
 
     fn load_protocol(&mut self) {
@@ -1647,12 +1905,7 @@ impl Session {
             return;
         };
         match Protocol::read(&path) {
-            Ok(protocol) => {
-                self.protocol_text = Some(protocol.summary());
-                self.protocol = Some(protocol);
-                self.reset_batch_rows();
-                self.batch_message = None;
-            }
+            Ok(protocol) => self.set_protocol(protocol),
             Err(error) => self.batch_message = Some(error.to_string()),
         }
     }
@@ -1755,6 +2008,7 @@ impl Session {
             datasets: self.batch_datasets.clone(),
             output,
             jobs: self.batch_jobs,
+            project: self.batch_project,
         }));
     }
 

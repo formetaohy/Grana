@@ -16,7 +16,13 @@ pub fn gui(capture: Option<PathBuf>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-pub fn batch(protocol: &Path, datasets: &Path, output: &Path, jobs: Option<usize>) -> ExitCode {
+pub fn batch(
+    protocol: &Path,
+    datasets: &Path,
+    output: &Path,
+    jobs: Option<usize>,
+    project: bool,
+) -> ExitCode {
     let protocol = match Protocol::read(protocol) {
         Ok(protocol) => protocol,
         Err(error) => {
@@ -40,6 +46,7 @@ pub fn batch(protocol: &Path, datasets: &Path, output: &Path, jobs: Option<usize
         datasets,
         output: output.to_path_buf(),
         jobs: jobs.unwrap_or_else(grana_session::default_jobs),
+        project,
     });
     let mut failures = 0;
     while let Some(event) = running.wait() {

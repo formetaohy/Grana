@@ -683,6 +683,31 @@ impl ObjectSet {
         self.seeds.clone()
     }
 
+    pub(crate) fn set_seed_frames(&mut self, seeds: Vec<Vec<[f32; 3]>>) -> bool {
+        assert_eq!(
+            seeds.len(),
+            self.frames.len(),
+            "the seed points cover every frame of the set"
+        );
+        assert!(
+            self.kind == ObjectKind::Surfaces || seeds.iter().all(Vec::is_empty),
+            "only a surface set carries seed points"
+        );
+        assert!(
+            seeds
+                .iter()
+                .flatten()
+                .all(|seed| seed.iter().all(|value| value.is_finite())),
+            "a seed point is finite"
+        );
+        if self.seeds == seeds {
+            return false;
+        }
+        self.seeds = seeds;
+        self.document += 1;
+        true
+    }
+
     pub(crate) fn delete_object(
         &mut self,
         time: u32,
@@ -791,7 +816,7 @@ impl ObjectSet {
         self.install_shared(time, Arc::new(frame), stamp);
     }
 
-    fn install_shared(&mut self, time: u32, frame: Arc<ObjectFrame>, stamp: u64) {
+    pub(crate) fn install_shared(&mut self, time: u32, frame: Arc<ObjectFrame>, stamp: u64) {
         assert_eq!(
             frame.kind(),
             self.kind,
@@ -836,6 +861,26 @@ impl ObjectSet {
             self.track_style = Some(TrackStyle::new(params, style.thickness()));
             self.document += 1;
         }
+    }
+
+    pub fn set_track_style(&mut self, params: TrackParams, thickness: f32, stamp: u64) -> bool {
+        let Some(style) = self.track_style else {
+            return false;
+        };
+        let next = TrackStyle::new(
+            params,
+            thickness.clamp(self.min_thickness(), self.max_thickness()),
+        );
+        if style == next {
+            return false;
+        }
+        self.track_style = Some(next);
+        if let Some(layer) = self.tracks.as_mut() {
+            layer.set_thickness(next.thickness(), stamp);
+        }
+        self.revision = stamp;
+        self.document += 1;
+        true
     }
 
     pub(crate) fn install_tracks(&mut self, set: TrackSet, stamp: u64) {

@@ -1,8 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::AtomicBool;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use grana_session::{Batch, BatchEvent, Outcome, Plan, Protocol, discover};
+use grana_geometry::{DEFAULT_BUDGET, MeshStore};
+use grana_measure::Measurement;
+use grana_project::{Project, Source as ProjectSource};
+use grana_scene::ObjectColor;
+use grana_session::{Batch, BatchEvent, Outcome, Plan, Protocol, Session, discover};
 
 const EXTENT: [u32; 3] = [40, 40, 8];
 const FRAMES: u32 = 2;
@@ -77,7 +82,7 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
     assert!(datasets[1].ends_with("beta.zarr"));
 
     let protocol = Protocol::from_json(PROTOCOL).expect("the protocol is valid");
-    let completed = run(&protocol, &datasets, &output, 2);
+    let completed = run(&protocol, &datasets, &output, 2, false);
     assert_eq!(
         completed,
         [Status::Ok, Status::Failed],
@@ -126,7 +131,7 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
             .expect("the modification time is writable");
     }
 
-    let resumed = run(&protocol, &datasets, &output, 2);
+    let resumed = run(&protocol, &datasets, &output, 2, false);
     assert_eq!(
         resumed,
         [Status::Resumed, Status::Failed],
@@ -147,7 +152,7 @@ fn applies_the_region_and_the_statistics_filters() {
     let output = temp.path().join("out");
     let datasets = discover(&root).expect("the folder lists its datasets");
     let protocol = Protocol::from_json(LIMITED).expect("the protocol is valid");
-    let completed = run(&protocol, &datasets, &output, 1);
+    let completed = run(&protocol, &datasets, &output, 1, true);
     assert_eq!(completed, [Status::Ok], "the batch finishes");
     let summary = read(&output.join("summary.csv"));
     assert!(summary.contains("alpha,ok,0,Puncta=0"), "{summary}");
@@ -170,12 +175,19 @@ enum Status {
     Failed,
 }
 
-fn run(protocol: &Protocol, datasets: &[PathBuf], output: &Path, jobs: usize) -> Vec<Status> {
+fn run(
+    protocol: &Protocol,
+    datasets: &[PathBuf],
+    output: &Path,
+    jobs: usize,
+    project: bool,
+) -> Vec<Status> {
     let batch = Batch::start(Plan {
         protocol: protocol.clone(),
         datasets: datasets.to_vec(),
         output: output.to_path_buf(),
         jobs,
+        project,
     });
     let mut completed = vec![Status::Failed; datasets.len()];
     while let Some(event) = batch.wait() {
@@ -315,4 +327,140 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
+}
+
+const PROJECT: &str = r#"
+{
+  "channels": [
+    {"name": "Cells", "enabled": true, "opacity": 0.8, "window": {"low": 0.0, "high": 65535.0}},
+    {"name": "Signal", "enabled": false, "opacity": 0.5, "window": {"low": 0.0, "high": 65535.0}}
+  ],
+  "sets": [
+    {
+      "name": "Puncta",
+      "channel": "Cells",
+      "color": [0.3, 0.8, 1.0],
+      "opacity": 0.6,
+      "detection": {"kind": "spots", "diameter": 5.0, "contrast": 0.05},
+      "track": {
+        "max_step": 2.0,
+        "max_gap": 1,
+        "division": false,
+        "division_range": 2.0,
+        "thickness": 0.5
+      }
+    },
+    {
+      "name": "Nuclei",
+      "channel": "Cells",
+      "color": [1.0, 0.7, 0.2],
+      "color_by": {"key": "sphericity", "palette": "magma", "reversed": true},
+      "detection": {"kind": "surfaces", "threshold": 0.3, "grain": 0.1, "split": 0.6, "min_volume": 1.0, "opening": 0.0, "closing": 0.0, "min_sphericity": 0.0, "min_mean_intensity": 0.0},
+      "measure": {"group": "objects", "aggregate": "mean", "columns": ["volume_um3"]}
+    }
+  ],
+  "relations": [{"source": "Puncta", "target": "Nuclei"}],
+  "view": {"camera": {"pivot": [0.0, 0.0, 0.0], "yaw": 0.3, "pitch": 0.2, "distance": 120.0, "fov_y": 0.61}, "section": {"axis": "z", "span": 9.0}, "split": 0.4}
+}
+"#;
+
+#[test]
+fn writes_a_project_that_reopens() {
+    let temp = TempDir::new("grana-batch-project");
+    let root = temp.path().join("datasets");
+    write_dataset(&root.join("alpha.zarr"), "Cells", "Signal");
+    let output = temp.path().join("out");
+    let datasets = discover(&root).expect("the folder lists its datasets");
+    let protocol = Protocol::from_json(PROJECT).expect("the protocol is valid");
+    let completed = run(&protocol, &datasets, &output, 1, true);
+    assert_eq!(completed, [Status::Ok], "the batch finishes");
+    let folder = output.join("alpha");
+    let file = fs::read_dir(&folder)
+        .expect("the dataset folder lists its files")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|kind| kind == "granaproj"))
+        .expect("the batch writes the project");
+    let store = MeshStore::temporary(DEFAULT_BUDGET).expect("the geometry store opens");
+    let cancel = AtomicBool::new(false);
+    let project = Project::read(&file, store, &cancel, &mut |_, _| {}).expect("the project reads");
+    let names = project
+        .scene
+        .sets
+        .iter()
+        .map(|set| set.name.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["Puncta", "Nuclei"]);
+    assert!(matches!(project.source, ProjectSource::File { .. }));
+    assert_eq!(project.scene.channels.len(), 2);
+    assert!(project.scene.channels[0].enabled);
+    assert_eq!(project.scene.channels[0].opacity, 0.8);
+    assert!(!project.scene.channels[1].enabled);
+    assert_eq!(project.scene.channels[1].opacity, 0.5);
+    assert_eq!(project.scene.channels[1].window.min(), 0.0);
+    assert_eq!(project.scene.channels[1].window.max(), 65_535.0);
+    let puncta = &project.scene.sets[0];
+    assert_eq!(puncta.opacity, 0.6);
+    assert_eq!(puncta.color, [0.3, 0.8, 1.0]);
+    assert_eq!(puncta.frames.len(), FRAMES as usize);
+    assert_eq!(
+        puncta.frames.iter().filter(|frame| frame.is_some()).count(),
+        FRAMES as usize
+    );
+    assert!(puncta.tracks.is_some(), "the project carries the tracks");
+    assert_eq!(puncta.relations.len(), 1);
+    assert!(
+        puncta.relations[0]
+            .frames
+            .iter()
+            .all(|frame| frame.is_some()),
+        "the project carries the relation of every frame"
+    );
+    let nuclei = &project.scene.sets[1];
+    assert_eq!(
+        nuclei.object_color.metric,
+        Some(ObjectColor::Measurement(Measurement::Sphericity))
+    );
+    assert!(project.measure.set.is_some());
+    assert_eq!(project.measure.set, Some(nuclei.id));
+    assert!(project.measure.columns[..4].iter().all(|shown| *shown));
+    assert!(
+        project.measure.columns.iter().any(|shown| !*shown),
+        "the protocol hides the columns it does not show"
+    );
+    assert_eq!(project.view.camera.distance, 120.0);
+    assert_eq!(project.view.section.span, 9.0);
+    assert_eq!(project.view.split, 0.4);
+    drop(project);
+
+    let mut reopened = Session::new();
+    reopened.begin_project(file.clone());
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while reopened.transferring() || reopened.loading().is_some() {
+        assert!(Instant::now() < deadline, "the session opens the project");
+        reopened.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    reopened.poll();
+    let scene = reopened.scene().expect("the project opens its dataset");
+    let names = scene
+        .objects
+        .iter()
+        .map(|set| set.name().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["Puncta", "Nuclei"]);
+    assert_eq!(
+        scene
+            .objects
+            .get(scene.objects.iter().next().unwrap().id())
+            .unwrap()
+            .detected(),
+        FRAMES as usize
+    );
+    assert_eq!(
+        reopened.measure().set(),
+        Some(scene.objects.iter().nth(1).unwrap().id())
+    );
+    let view = reopened.take_view().expect("the project restores its view");
+    assert_eq!(view.camera.distance, 120.0);
 }

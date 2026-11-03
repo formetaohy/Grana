@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_analysis::Shape;
+use grana_analysis::{Shape, TrackParams};
 use grana_display::{Shading, TransferFunction};
 use grana_geometry::ray_hit;
 use grana_measure::RelationRow;
@@ -155,6 +155,14 @@ impl Scene {
         self.objects.rename(id, name)
     }
 
+    pub fn clear_objects(&mut self) {
+        self.objects = Objects::new();
+        self.mask = None;
+        self.selection = None;
+        self.coloc.clear();
+        self.sync_coloc_inputs();
+    }
+
     pub fn reorder_object(&mut self, id: ObjectSetId, index: usize) -> bool {
         self.objects.reorder(id, index)
     }
@@ -267,6 +275,17 @@ impl Scene {
         if !self.objects.install(id, time, frame) {
             return;
         }
+        self.settle_install(id, time);
+    }
+
+    pub fn install_shared(&mut self, id: ObjectSetId, time: u32, frame: Arc<ObjectFrame>) {
+        if !self.objects.install_shared(id, time, frame) {
+            return;
+        }
+        self.settle_install(id, time);
+    }
+
+    fn settle_install(&mut self, id: ObjectSetId, time: u32) {
         if time == self.time {
             let stale = self.selection.is_some_and(|selection| {
                 selection.set == id && matches!(selection.item, Item::Object(_))
@@ -323,6 +342,15 @@ impl Scene {
         self.objects.set_track_thickness(id, thickness);
     }
 
+    pub fn set_track_style(
+        &mut self,
+        id: ObjectSetId,
+        params: TrackParams,
+        thickness: f32,
+    ) -> bool {
+        self.objects.set_track_style(id, params, thickness)
+    }
+
     pub fn seeds(&self, id: ObjectSetId) -> &[[f32; 3]] {
         self.objects.get(id).map_or(&[], |set| set.seeds(self.time))
     }
@@ -345,6 +373,10 @@ impl Scene {
 
     pub fn seed_frames(&self, id: ObjectSetId) -> Option<Vec<Vec<[f32; 3]>>> {
         self.objects.seed_frames(id)
+    }
+
+    pub fn set_seed_frames(&mut self, id: ObjectSetId, seeds: Vec<Vec<[f32; 3]>>) -> bool {
+        self.objects.set_seed_frames(id, seeds)
     }
 
     pub fn surface_ray(

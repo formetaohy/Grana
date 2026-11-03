@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use grana_object::{RelationFrame, TrackSet};
 
 use crate::dataset::Dataset;
@@ -169,6 +171,16 @@ impl Objects {
         true
     }
 
+    pub fn install_shared(&mut self, id: ObjectSetId, time: u32, frame: Arc<ObjectFrame>) -> bool {
+        let stamp = take_stamp(&mut self.stamp);
+        let Some(set) = self.get_mut(id) else {
+            return false;
+        };
+        set.install_shared(time, frame, stamp);
+        self.invalidate_relations(id, time);
+        true
+    }
+
     fn invalidate_relations(&mut self, id: ObjectSetId, time: u32) {
         for index in 0..self.sets.len() {
             let stamp = take_stamp(&mut self.stamp);
@@ -228,6 +240,11 @@ impl Objects {
         Some(self.get(id)?.seed_frames())
     }
 
+    pub fn set_seed_frames(&mut self, id: ObjectSetId, seeds: Vec<Vec<[f32; 3]>>) -> bool {
+        self.get_mut(id)
+            .is_some_and(|set| set.set_seed_frames(seeds))
+    }
+
     pub fn join_tracks(
         &mut self,
         id: ObjectSetId,
@@ -244,6 +261,17 @@ impl Objects {
         if let Some(set) = self.get_mut(id) {
             set.set_track_thickness(thickness, stamp);
         }
+    }
+
+    pub fn set_track_style(
+        &mut self,
+        id: ObjectSetId,
+        params: grana_analysis::TrackParams,
+        thickness: f32,
+    ) -> bool {
+        let stamp = take_stamp(&mut self.stamp);
+        self.get_mut(id)
+            .is_some_and(|set| set.set_track_style(params, thickness, stamp))
     }
 
     pub(crate) fn restore(&mut self, states: Vec<SetState>, dataset: &Dataset) {

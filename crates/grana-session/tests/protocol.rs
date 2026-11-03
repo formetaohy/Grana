@@ -1,11 +1,12 @@
 use glam::Vec3;
+use grana_display::{CameraState, Coloring, Palette, SectionState};
 use grana_measure::{
     ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
-    ColocThresholds,
+    ColocThresholds, Measurement, TrackMeasurement,
 };
-use grana_scene::{Dataset, Measure, ObjectKind, Scene};
-use grana_session::{DetectionSpec, Protocol};
-use grana_volume::{Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
+use grana_scene::{Dataset, Measure, ObjectColor, ObjectKind, Scene};
+use grana_session::{DetectionSpec, Protocol, ViewSpec};
+use grana_volume::{Axis, Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
 const PROTOCOL: &str = r#"
 {
@@ -74,17 +75,16 @@ fn reads_and_writes_a_protocol() {
     assert_eq!(track.max_gap(), 1);
     assert!(track.division());
     assert_eq!(track.division_range(), 2.0);
-    let measure = &protocol.sets()[0].measure;
+    let measure = protocol.sets()[0]
+        .measure()
+        .expect("the surface set is measured");
     assert_eq!(measure.group(), grana_measure::Group::Track);
     assert_eq!(measure.aggregate(), grana_measure::Aggregate::Maximum);
     assert_eq!(measure.filters.len(), 1);
     assert_eq!(measure.filters[0].column, "volume_um3");
     assert_eq!(measure.filters[0].minimum, 1.0);
     assert_eq!(measure.filters[0].maximum, 9.0);
-    assert_eq!(
-        protocol.sets()[1].measure.group(),
-        grana_measure::Group::Object
-    );
+    assert!(protocol.sets()[1].measure().is_none());
     let coloc = protocol.coloc().expect("the protocol colocalizes");
     assert_eq!(coloc.settings.permutations, 200);
     assert_eq!(coloc.settings.block, 3);
@@ -175,10 +175,6 @@ fn rejects_an_invalid_protocol() {
         "a colocalization specification names a pair"
     );
     assert!(
-        invalid(&PROTOCOL.replace(", \"mask\": null", "")),
-        "a colocalization specification carries a mask field"
-    );
-    assert!(
         invalid(&PROTOCOL.replace("\"group\": \"tracks\"", "\"group\": \"steps\"")),
         "an unknown grouping is rejected"
     );
@@ -255,7 +251,8 @@ fn captures_the_analysis_of_a_scene() {
     ));
     scene.coloc.set_thresholds(ColocThresholds::new(0.2, 0.8));
     let measure = Measure::new();
-    let protocol = Protocol::capture(&scene, &measure).expect("the scene analysis is capturable");
+    let protocol =
+        Protocol::capture(&scene, &measure, None).expect("the scene analysis is capturable");
     assert_eq!(protocol.sets().len(), 1);
     let spec = &protocol.sets()[0];
     assert_eq!(spec.name, "Spots 1");
@@ -263,7 +260,7 @@ fn captures_the_analysis_of_a_scene() {
     assert_eq!(spec.kind(), ObjectKind::Spots);
     assert_eq!(spec.color, [0.2, 0.7, 0.9]);
     assert!(spec.track_params().is_some());
-    assert_eq!(spec.measure.group(), grana_measure::Group::Object);
+    assert!(spec.measure().is_none(), "no statistics set is selected");
     let coloc = protocol.coloc().expect("the scene colocalization captures");
     assert_eq!(coloc.pairs.len(), 1);
     assert_eq!(coloc.pairs[0].a, "DAPI");
@@ -296,7 +293,7 @@ fn captures_an_analysis_mask() {
     scene.set_mask(Some(first));
     assert!(scene.add_seed(first, [0.25, -0.5, 0.75]));
     let protocol =
-        Protocol::capture(&scene, &Measure::new()).expect("the masked analysis captures");
+        Protocol::capture(&scene, &Measure::new(), None).expect("the masked analysis captures");
     assert_eq!(protocol.sets().len(), 2);
     assert_eq!(protocol.sets()[0].name, "Surfaces 1");
     assert_eq!(protocol.sets()[0].mask(), None);
@@ -310,4 +307,161 @@ fn captures_an_analysis_mask() {
     let text = protocol.to_json().expect("the protocol serializes");
     let restored = Protocol::from_json(&text).expect("the protocol round trips");
     assert_eq!(protocol, restored);
+}
+
+#[test]
+fn stages_the_presentation_of_a_captured_protocol() {
+    let extent = Extent::new(8, 8, 8);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(0.5, 0.5, 1.0),
+        vec![
+            Channel::new(
+                "DAPI",
+                [0.3, 0.4, 1.0],
+                VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+            ),
+            Channel::new(
+                "GFP",
+                [0.3, 1.0, 0.4],
+                VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+            ),
+        ],
+    );
+    let series = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let nuclei = scene.add_object(ObjectKind::Surfaces, 0);
+    let beads = scene.add_object(ObjectKind::Spots, 1);
+    assert!(scene.rename_object(nuclei, "Nuclei"));
+    assert!(scene.rename_object(beads, "Beads"));
+    scene.channels[0].enabled = false;
+    scene.channels[1].opacity = 0.4;
+    scene.set_region(Region::new(
+        Vec3::new(-1.0, -1.0, -2.0),
+        Vec3::new(1.0, 1.0, 2.0),
+    ));
+    scene.set_mask(Some(nuclei));
+    assert!(scene.add_seed(nuclei, [0.5, -1.0, 1.5]));
+    assert!(scene.add_relation(beads, nuclei));
+    let set = scene.objects.get_mut(nuclei).expect("the surface set");
+    set.set_color([0.9, 0.5, 0.2]);
+    set.set_opacity(0.35);
+    set.set_visible(false);
+    let mut object = Coloring::new();
+    object.set_metric(Some(ObjectColor::Measurement(Measurement::Diameter)));
+    object.set_palette(Palette::Magma);
+    object.set_reversed(true);
+    object.set_manual(Some((0.5, 2.5)));
+    scene
+        .objects
+        .get_mut(beads)
+        .expect("the spot set")
+        .set_object_coloring(object);
+    let mut track = Coloring::new();
+    track.set_metric(Some(TrackMeasurement::Speed));
+    scene
+        .objects
+        .get_mut(beads)
+        .expect("the spot set")
+        .set_track_coloring(track);
+    let view = ViewSpec::of(
+        CameraState {
+            pivot: [1.0, 2.0, 3.0],
+            yaw: 0.4,
+            pitch: -0.2,
+            distance: 42.0,
+            fov_y: 0.6,
+        },
+        SectionState {
+            axis: Axis::X,
+            span: 7.5,
+        },
+        0.5,
+        0,
+    );
+    let protocol =
+        Protocol::capture(&scene, &Measure::new(), Some(view)).expect("the scene captures");
+    let text = protocol.to_json().expect("the protocol serializes");
+    let protocol = Protocol::from_json(&text).expect("the protocol round trips");
+    assert_eq!(protocol.sets()[0].name, "Nuclei");
+    assert_eq!(protocol.sets()[0].mask(), None);
+    assert_eq!(protocol.sets()[1].mask(), Some("Nuclei"));
+    assert_eq!(protocol.channels().len(), 2);
+    assert!(!protocol.channels()[0].enabled);
+    assert_eq!(protocol.channels()[1].opacity, 0.4);
+    assert_eq!(protocol.view(), Some(view));
+
+    let mut target = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let staged = protocol
+        .stage(&mut target)
+        .expect("the protocol stages onto a fresh scene");
+    assert_eq!(staged.len(), 2);
+    assert_eq!(staged.mask_of(0), None);
+    assert_eq!(staged.mask_of(1), Some(0));
+    assert_eq!(staged.mask(), Some(0));
+    let staged_nuclei = staged.set(0);
+    let staged_beads = staged.set(1);
+    let names = target
+        .objects
+        .iter()
+        .map(|set| set.name().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["Nuclei", "Beads"]);
+    assert!(!target.channels[0].enabled);
+    assert_eq!(target.channels[1].opacity, 0.4);
+    assert_eq!(target.mask, Some(staged_nuclei));
+    assert_eq!(target.region.min(), scene.region.min());
+    assert_eq!(target.region.max(), scene.region.max());
+    let nuclei_set = target.objects.get(staged_nuclei).expect("the surface set");
+    assert_eq!(nuclei_set.color(), [0.9, 0.5, 0.2]);
+    assert_eq!(nuclei_set.opacity(), 0.35);
+    assert!(!nuclei_set.visible());
+    assert_eq!(nuclei_set.seeds(0), [[0.5, -1.0, 1.5]]);
+    let beads_set = target.objects.get(staged_beads).expect("the spot set");
+    assert!(beads_set.relation(staged_nuclei).is_some());
+    let coloring = beads_set.object_coloring();
+    assert_eq!(
+        coloring.metric(),
+        Some(ObjectColor::Measurement(Measurement::Diameter))
+    );
+    assert_eq!(coloring.palette(), Palette::Magma);
+    assert!(coloring.reversed());
+    assert_eq!(coloring.manual(), Some((0.5, 2.5)));
+    assert_eq!(
+        beads_set.track_coloring().metric(),
+        Some(TrackMeasurement::Speed)
+    );
+}
+
+#[test]
+fn rejects_a_protocol_that_names_presentation_it_cannot_reach() {
+    let invalid = |text: &str| Protocol::from_json(text).is_err();
+    assert!(
+        invalid(&PROTOCOL.replace(
+            "\"color\": [0.3, 0.8, 1.0],",
+            "\"color\": [0.3, 0.8, 1.0], \"opacity\": 1.5,"
+        )),
+        "an object set opacity is a unit fraction"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace(
+            "\"color\": [0.3, 0.8, 1.0],",
+            "\"color\": [0.3, 0.8, 1.0], \"color_by\": {\"key\": \"volume_um3\", \"palette\": \"ember\"},"
+        )),
+        "a color names a palette"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace(
+            "\"color\": [0.3, 0.8, 1.0],",
+            "\"color\": [0.3, 0.8, 1.0], \"color_by\": {\"target\": \"Missing\", \"field\": \"distance\", \"palette\": \"viridis\"},"
+        )),
+        "a color names a relation within the protocol"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace(
+            "  \"region\":",
+            "  \"view\": {\"camera\": {\"pivot\": [0.0, 0.0, 0.0], \"yaw\": 0.0, \"pitch\": 0.0, \"distance\": -1.0, \"fov_y\": 0.6}, \"section\": {\"axis\": \"z\", \"span\": 1.0}, \"split\": 0.5},\n  \"region\":"
+        )),
+        "a view describes a plausible camera"
+    );
 }

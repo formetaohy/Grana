@@ -698,7 +698,7 @@ fn same_kind(left: Objects<'_>, right: Objects<'_>) -> bool {
     )
 }
 
-fn channel_keys(channels: &[String]) -> Vec<String> {
+pub fn channel_keys(channels: &[String]) -> Vec<String> {
     let mut keys = Vec::with_capacity(channels.len());
     for (index, name) in channels.iter().enumerate() {
         let mut key = sanitize(name);

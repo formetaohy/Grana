@@ -109,6 +109,10 @@ impl State<'_> {
         self.batch.map_or(1, |batch| batch.jobs)
     }
 
+    pub fn batch_project(&self) -> bool {
+        self.batch.is_some_and(|batch| batch.project)
+    }
+
     pub fn batch_message(&self) -> Option<&str> {
         self.batch.and_then(|batch| batch.message.as_deref())
     }

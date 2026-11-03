@@ -25,4 +25,4 @@ pub use plot::{
 };
 pub use relation::{RelationField, RelationRow};
 pub use scope::Scope;
-pub use table::{Aggregate, Frame, Group, Objects, Observation, Table};
+pub use table::{Aggregate, Frame, Group, Objects, Observation, Table, channel_keys};

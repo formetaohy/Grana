@@ -1,30 +1,57 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: grana [--batch <protocol.json> <datasets> <output> [--jobs <n>]] | grana [--capture <image.png>]";
+const USAGE: &str = "usage: grana [--batch <protocol.json> <datasets> <output> [--jobs <n>] [--project]] | grana [--capture <image.png>]";
 
 fn main() -> ExitCode {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
-    match arguments.as_slice() {
-        [] => grana_app::gui(None),
-        [flag, path] if flag == "--capture" => grana_app::gui(Some(PathBuf::from(path))),
-        [flag, protocol, datasets, output] if flag == "--batch" => {
-            grana_app::batch(protocol.as_ref(), datasets.as_ref(), output.as_ref(), None)
-        }
-        [flag, protocol, datasets, output, option, jobs]
-            if flag == "--batch" && option == "--jobs" =>
-        {
-            match parse_jobs(jobs) {
-                Some(jobs) => grana_app::batch(
-                    protocol.as_ref(),
-                    datasets.as_ref(),
-                    output.as_ref(),
-                    Some(jobs),
-                ),
-                None => usage(),
+    match run(&arguments) {
+        Some(outcome) => outcome,
+        None => usage(),
+    }
+}
+
+fn run(arguments: &[String]) -> Option<ExitCode> {
+    match arguments.first().map(String::as_str) {
+        None => Some(grana_app::gui(None)),
+        Some("--capture") => match arguments {
+            [_, path] => Some(grana_app::gui(Some(PathBuf::from(path)))),
+            _ => None,
+        },
+        Some("--batch") => {
+            let mut paths = Vec::new();
+            let mut jobs = None;
+            let mut project = false;
+            let mut index = 1;
+            while index < arguments.len() {
+                match arguments[index].as_str() {
+                    "--jobs" => {
+                        jobs = Some(parse_jobs(arguments.get(index + 1)?)?);
+                        index += 2;
+                    }
+                    "--project" => {
+                        project = true;
+                        index += 1;
+                    }
+                    option if option.starts_with("--") => return None,
+                    value => {
+                        paths.push(PathBuf::from(value));
+                        index += 1;
+                    }
+                }
+            }
+            match paths.as_slice() {
+                [protocol, datasets, output] => Some(grana_app::batch(
+                    protocol.as_path(),
+                    datasets.as_path(),
+                    output.as_path(),
+                    jobs,
+                    project,
+                )),
+                _ => None,
             }
         }
-        _ => usage(),
+        Some(_) => None,
     }
 }
 
