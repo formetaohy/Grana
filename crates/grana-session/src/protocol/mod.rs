@@ -12,9 +12,9 @@ use thiserror::Error;
 
 pub use spec::{
     AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec,
-    DetectionSpec, FilterSpec, KeySpec, MeasureSpec, RegionSpec, RelationSpec, RenderSpec,
-    SectionSpec, SetSpec, ShadingSpec, SortSpec, StopSpec, TimelineSpec, TrackSpec, TransferSpec,
-    ViewSpec, WindowSpec,
+    DetectionSpec, ExportSpec, FilterSpec, KeySpec, LassoSpec, MeasureSpec, RegionSpec,
+    RelationSpec, RenderSpec, SectionSpec, SetSpec, ShadingSpec, SortSpec, StopSpec, TimelineSpec,
+    TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub(crate) use step::Step;
@@ -165,7 +165,11 @@ impl Protocol {
         for relation in &self.relations {
             summary.push_str(&format!(
                 " · relates {} to {}",
-                relation.source, relation.target
+                relation.source,
+                match relation.shift {
+                    0 => relation.target.clone(),
+                    shift => format!("{} (t{shift:+})", relation.target),
+                }
             ));
         }
         if let Some(coloc) = &self.coloc {

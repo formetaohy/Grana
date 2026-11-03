@@ -34,6 +34,10 @@ impl MeasureView {
         }
     }
 
+    pub fn parse(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|view| view.name() == key)
+    }
+
     pub fn plot(self) -> Option<Self> {
         match self {
             Self::Table => None,

@@ -114,6 +114,7 @@ pub fn relate_frames(
     counts: &[Option<usize>],
     source: impl Fn(usize) -> Result<Option<Shape>, String> + Sync,
     target: impl Fn(usize) -> Result<Option<Shape>, String> + Sync,
+    shift: i32,
     workers: usize,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(usize, usize),
@@ -129,7 +130,10 @@ pub fn relate_frames(
         },
         || (),
         |(), time| {
-            let Some(place) = target(time)? else {
+            let Some(index) = shifted(time, shift, total) else {
+                return Ok(None);
+            };
+            let Some(place) = target(index)? else {
                 return Ok(counts[time].map(RelationFrame::empty));
             };
             let shape = source(time)?;
@@ -144,4 +148,9 @@ pub fn relate_frames(
         |()| {},
     )?;
     Ok(completed.then_some(frames))
+}
+
+fn shifted(time: usize, shift: i32, total: usize) -> Option<usize> {
+    let index = time as i64 + i64::from(shift);
+    (index >= 0 && index < total as i64).then_some(index as usize)
 }

@@ -8,20 +8,20 @@ use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, TransferFunction};
 use grana_geometry::MeshStore;
 use grana_geometry::{Bounds, Mesh, MeshVertex};
+use grana_measure::Measurement;
 use grana_measure::{
-    ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
+    Aggregate, ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
     RelationField,
 };
-use grana_measure::{Measurement, TrackMeasurement};
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, RelationFrame,
     SampleAccumulator, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track,
     TrackNode, TrackSet,
 };
-use grana_project::{Project, Source, ViewState};
+use grana_project::{Export, Project, Source, ViewState};
 use grana_scene::{
     Dataset, Item, Measure, ObjectColor, ObjectFrame, ObjectKind, ObjectParams, Scene, Selection,
-    Visibility,
+    TrackColor, Visibility,
 };
 use grana_volume::{Axis, Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -111,6 +111,7 @@ fn round_trips_a_project() {
         },
         split: 0.42,
         timeline: timeline(),
+        export: Export::new(2048, true),
     };
     let source = Source::Synthetic {
         name: "fixture".to_string(),
@@ -201,6 +202,7 @@ fn round_trips_object_set_order() {
             },
             split: 0.5,
             timeline: Timeline::default(),
+            export: Export::NATIVE,
         },
     );
     let path = std::env::temp_dir().join(format!("grana-order-{}.grana", std::process::id()));
@@ -251,6 +253,7 @@ fn rejects_damaged_projects() {
             },
             split: 0.5,
             timeline: Timeline::default(),
+            export: Export::NATIVE,
         },
     );
     let path = std::env::temp_dir().join(format!("grana-damaged-{}.grana", std::process::id()));
@@ -394,7 +397,7 @@ fn stage(scene: &mut Scene) {
             )),
         );
     }
-    scene.add_relation(spots, surfaces);
+    scene.add_relation(spots, surfaces, -1);
     for time in 0..2 {
         scene.install_relation(
             spots,
@@ -441,7 +444,11 @@ fn stage(scene: &mut Scene) {
     coloring.set_manual(Some((0.2, 0.8)));
     spots.set_object_coloring(coloring);
     let mut track_coloring = spots.track_coloring().clone();
-    track_coloring.set_metric(Some(TrackMeasurement::Speed));
+    track_coloring.set_metric(Some(TrackColor::Relation {
+        target: surfaces,
+        field: RelationField::Inside,
+        aggregate: Aggregate::Maximum,
+    }));
     track_coloring.set_palette(Palette::Plasma);
     spots.set_track_coloring(track_coloring);
     let spot_set = spots.id();

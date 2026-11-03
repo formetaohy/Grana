@@ -839,6 +839,7 @@ impl App {
             section: self.viewport.section_state(),
             split: self.viewport.split(),
             timeline: self.session.timeline().clone(),
+            export: self.session.export(),
         }
     }
 

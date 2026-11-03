@@ -123,10 +123,16 @@ impl Objects {
         Ok(true)
     }
 
-    pub fn add_relation(&mut self, id: ObjectSetId, target: ObjectSetId) -> bool {
+    pub fn add_relation(&mut self, id: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {
         let stamp = take_stamp(&mut self.stamp);
         self.get_mut(id)
-            .is_some_and(|set| set.add_relation(target, stamp))
+            .is_some_and(|set| set.add_relation(target, shift, stamp))
+    }
+
+    pub fn set_relation_shift(&mut self, id: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {
+        let stamp = take_stamp(&mut self.stamp);
+        self.get_mut(id)
+            .is_some_and(|set| set.set_relation_shift(target, shift, stamp))
     }
 
     pub fn remove_relation(&mut self, id: ObjectSetId, target: ObjectSetId) -> bool {
@@ -298,8 +304,8 @@ impl Objects {
                     "a relation names an object set of the scene"
                 );
                 assert!(
-                    relation.target() != set.id(),
-                    "a relation names another object set"
+                    relation.target() != set.id() || relation.shift() != 0,
+                    "a relation names another object set or shifts in time"
                 );
             }
         }

@@ -58,6 +58,7 @@ fn view(session: &Session) -> ViewState {
         },
         split: 0.5,
         timeline: session.timeline().clone(),
+        export: grana_session::Export::NATIVE,
     }
 }
 

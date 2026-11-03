@@ -12,13 +12,13 @@ use grana_object::{
 };
 use grana_scene::{
     ChannelState, ColocResult, ColocState, ColorState, ItemState, MeasureState, ObjectColor,
-    ObjectFrame, ObjectParams, RelationState, SceneState, SelectionState, SetState, TrackStyle,
-    Visibility,
+    ObjectFrame, ObjectParams, RelationState, SceneState, SelectionState, SetState, TrackColor,
+    TrackStyle, Visibility,
 };
 use grana_volume::{Intensity, Region};
 
 use crate::binary::{Encode, Writer};
-use crate::project::{Project, Shape, Source, ViewState};
+use crate::project::{Export, Project, Shape, Source, ViewState};
 
 pub(crate) const TAG_SPOTS: u8 = 0;
 pub(crate) const TAG_SURFACES: u8 = 1;
@@ -67,6 +67,14 @@ impl Encode for ViewState {
         self.section.encode(writer);
         writer.f32(self.split);
         self.timeline.encode(writer);
+        self.export.encode(writer);
+    }
+}
+
+impl Encode for Export {
+    fn encode(&self, writer: &mut Writer) {
+        writer.u32(self.width);
+        writer.bool(self.transparent);
     }
 }
 
@@ -235,6 +243,7 @@ impl Encode for SetState {
 impl Encode for RelationState {
     fn encode(&self, writer: &mut Writer) {
         writer.u64(self.target);
+        writer.i32(self.shift);
         self.frames.encode(writer);
     }
 }
@@ -380,6 +389,27 @@ impl Encode for ObjectColor {
 impl Encode for TrackMeasurement {
     fn encode(&self, writer: &mut Writer) {
         writer.u8(self.index());
+    }
+}
+
+impl Encode for TrackColor {
+    fn encode(&self, writer: &mut Writer) {
+        match self {
+            Self::Measurement(measurement) => {
+                writer.u8(0);
+                measurement.encode(writer);
+            }
+            Self::Relation {
+                target,
+                field,
+                aggregate,
+            } => {
+                writer.u8(1);
+                writer.u64(target.raw());
+                writer.u8(field.index());
+                writer.u8(aggregate.index());
+            }
+        }
     }
 }
 

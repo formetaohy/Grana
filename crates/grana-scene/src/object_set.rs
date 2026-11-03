@@ -9,6 +9,7 @@ use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::relation::Relation;
 use crate::state::{RelationState, SetState};
+use crate::track_color::TrackColor;
 use crate::track_layer::TrackLayer;
 use grana_display::{ColorState, Coloring, Extent, merged};
 
@@ -69,7 +70,7 @@ pub struct ObjectSet {
     frames: Vec<FrameSlot>,
     frame_bounds: Vec<Option<Extent>>,
     object_coloring: Coloring<ObjectColor>,
-    track_coloring: Coloring<TrackMeasurement>,
+    track_coloring: Coloring<TrackColor>,
     track_bounds: Option<Extent>,
     revision: u64,
     document: u64,
@@ -215,7 +216,7 @@ impl ObjectSet {
                     "the relation colors the objects of this set"
                 );
                 assert!(
-                    ObjectColor::RELATION_FIELDS.contains(&field),
+                    crate::color::RELATION_FIELDS.contains(&field),
                     "a relation field colors the objects of this set"
                 );
             }
@@ -229,7 +230,26 @@ impl ObjectSet {
             .or_else(|| merged(self.frame_bounds.iter().flatten().copied()))
     }
 
-    pub fn track_coloring(&self) -> &Coloring<TrackMeasurement> {
+    pub fn object_color(&self, time: u32, frame: &ObjectFrame, object: usize) -> [f32; 3] {
+        let Some(metric) = self.object_coloring.metric() else {
+            return self.color;
+        };
+        let Some(extent) = self.object_extent() else {
+            return self.color;
+        };
+        let relation = metric
+            .target()
+            .and_then(|target| self.relation(target))
+            .and_then(|relation| relation.frame(time));
+        let value = metric.value(frame.objects(), relation, object);
+        if value.is_finite() {
+            self.object_coloring.color(extent, value)
+        } else {
+            self.color
+        }
+    }
+
+    pub fn track_coloring(&self) -> &Coloring<TrackColor> {
         &self.track_coloring
     }
 
@@ -240,16 +260,33 @@ impl ObjectSet {
             .collect()
     }
 
-    pub fn set_track_coloring(&mut self, coloring: Coloring<TrackMeasurement>) -> bool {
-        if let Some(metric) = coloring.metric() {
-            assert!(
-                self.kind.trackable(),
-                "only trackable objects carry track colors"
-            );
-            assert!(
-                metric.colorable(),
-                "an identity column does not color tracks"
-            );
+    pub fn set_track_coloring(&mut self, coloring: Coloring<TrackColor>) -> bool {
+        match coloring.metric() {
+            None => {}
+            Some(TrackColor::Measurement(measurement)) => {
+                assert!(
+                    self.kind.trackable(),
+                    "only trackable objects carry track colors"
+                );
+                assert!(
+                    measurement.colorable(),
+                    "an identity column does not color tracks"
+                );
+            }
+            Some(TrackColor::Relation { target, field, .. }) => {
+                assert!(
+                    self.kind.trackable(),
+                    "only trackable objects carry track colors"
+                );
+                assert!(
+                    self.relation(target).is_some(),
+                    "the relation colors the tracks of this set"
+                );
+                assert!(
+                    crate::color::RELATION_FIELDS.contains(&field),
+                    "a relation field colors the tracks of this set"
+                );
+            }
         }
         if self.track_coloring == coloring {
             return false;
@@ -266,6 +303,29 @@ impl ObjectSet {
     pub fn track_extent(&self) -> Option<Extent> {
         self.track_coloring.metric()?;
         self.track_coloring.manual().or(self.track_bounds)
+    }
+
+    pub fn track_color(&self, track: usize) -> [f32; 3] {
+        let Some(metric) = self.track_coloring.metric() else {
+            return self.color;
+        };
+        let Some(extent) = self.track_extent() else {
+            return self.color;
+        };
+        let value = self.track_value(track, metric);
+        if value.is_finite() {
+            self.track_coloring.color(extent, value)
+        } else {
+            self.color
+        }
+    }
+
+    fn track_value(&self, track: usize, metric: TrackColor) -> f32 {
+        let Some(layer) = self.tracks.as_ref() else {
+            return f32::NAN;
+        };
+        let relation = metric.target().and_then(|target| self.relation(target));
+        metric.value(track, layer.set(), relation)
     }
 
     pub fn visible(&self) -> bool {
@@ -332,16 +392,44 @@ impl ObjectSet {
             .find(|relation| relation.target() == target)
     }
 
-    pub(crate) fn add_relation(&mut self, target: ObjectSetId, stamp: u64) -> bool {
+    pub(crate) fn add_relation(&mut self, target: ObjectSetId, shift: i32, stamp: u64) -> bool {
         if self.relation(target).is_some() {
             return false;
         }
         self.relations.push(Relation::new(
             target,
+            shift,
             vec![None; self.frame_count() as usize],
         ));
         self.revision = stamp;
         self.document += 1;
+        true
+    }
+
+    pub(crate) fn set_relation_shift(
+        &mut self,
+        target: ObjectSetId,
+        shift: i32,
+        stamp: u64,
+    ) -> bool {
+        let Some(relation) = self
+            .relations
+            .iter_mut()
+            .find(|relation| relation.target() == target)
+        else {
+            return false;
+        };
+        if !relation.shift_to(shift) {
+            return false;
+        }
+        self.revision = stamp;
+        self.document += 1;
+        if self.object_coloring.metric().and_then(ObjectColor::target) == Some(target) {
+            self.rebuild_frame_bounds();
+        }
+        if self.track_coloring.metric().and_then(TrackColor::target) == Some(target) {
+            self.rebuild_track_bounds();
+        }
         true
     }
 
@@ -355,6 +443,10 @@ impl ObjectSet {
         if self.object_coloring.metric().and_then(ObjectColor::target) == Some(target) {
             self.object_coloring.set_metric(None);
             self.rebuild_frame_bounds();
+        }
+        if self.track_coloring.metric().and_then(TrackColor::target) == Some(target) {
+            self.track_coloring.set_metric(None);
+            self.rebuild_track_bounds();
         }
         self.revision = stamp;
         self.document += 1;
@@ -396,6 +488,15 @@ impl ObjectSet {
         {
             self.object_coloring.set_metric(None);
             self.rebuild_frame_bounds();
+        }
+        if self
+            .track_coloring
+            .metric()
+            .and_then(TrackColor::target)
+            .is_some()
+        {
+            self.track_coloring.set_metric(None);
+            self.rebuild_track_bounds();
         }
         self.revision = stamp;
         self.document += 1;
@@ -444,6 +545,7 @@ impl ObjectSet {
                 .iter()
                 .map(|relation| RelationState {
                     target: relation.target().raw(),
+                    shift: relation.shift(),
                     frames: relation.shared_frames().to_vec(),
                 })
                 .collect(),
@@ -547,7 +649,8 @@ impl ObjectSet {
                 frame_count,
                 "a restored relation covers every frame of its set"
             );
-            set.relations.push(Relation::new(target, relation.frames));
+            set.relations
+                .push(Relation::new(target, relation.shift, relation.frames));
         }
         if let Some(tracks) = tracks {
             let thickness = track_thickness.expect("a restored track layer carries a thickness");
@@ -565,11 +668,7 @@ impl ObjectSet {
         set
     }
 
-    fn restore_coloring(
-        &mut self,
-        object: ColorState<ObjectColor>,
-        track: ColorState<TrackMeasurement>,
-    ) {
+    fn restore_coloring(&mut self, object: ColorState<ObjectColor>, track: ColorState<TrackColor>) {
         let object = Coloring::restore(object);
         self.check_coloring(object.metric());
         self.object_coloring = object;
@@ -580,7 +679,24 @@ impl ObjectSet {
                 self.kind.trackable(),
                 "only trackable objects carry track colors"
             );
-            assert!(metric.colorable(), "a restored measurement colors tracks");
+            match metric {
+                TrackColor::Measurement(measurement) => {
+                    assert!(
+                        measurement.colorable(),
+                        "a restored measurement colors tracks"
+                    );
+                }
+                TrackColor::Relation { target, field, .. } => {
+                    assert!(
+                        self.relation(target).is_some(),
+                        "a restored track color names a relation of its set"
+                    );
+                    assert!(
+                        crate::color::RELATION_FIELDS.contains(&field),
+                        "a restored track color names a relation field"
+                    );
+                }
+            }
         }
         self.track_coloring = track;
         self.rebuild_track_bounds();
@@ -763,8 +879,21 @@ impl ObjectSet {
             });
             visibility = Visibility::All;
         }
+        let id = self.id;
+        let mut cleared = Vec::new();
         for relation in &mut self.relations {
-            relation.invalidate(time);
+            if relation.invalidate(time) {
+                cleared.push((relation.target(), time));
+            }
+            if relation.target() == id
+                && let Some(source) = relation.source_of(time)
+                && relation.invalidate(source)
+            {
+                cleared.push((id, source));
+            }
+        }
+        for (target, source) in cleared {
+            self.refresh_relation_bounds(target, source);
         }
         self.revision = stamp;
         self.document += 1;
@@ -786,29 +915,37 @@ impl ObjectSet {
         else {
             return false;
         };
-        if !relation.invalidate(time) {
+        let Some(source) = relation.source_of(time) else {
+            return false;
+        };
+        if !relation.invalidate(source) {
             return false;
         }
-        self.refresh_relation_bounds(target, time);
+        self.refresh_relation_bounds(target, source);
         self.revision = stamp;
         self.document += 1;
         true
     }
 
     pub(crate) fn invalidate_relations(&mut self, time: u32, stamp: u64) -> bool {
-        let mut changed = false;
-        let mut cleared = None;
+        let id = self.id;
+        let mut cleared = Vec::new();
         for relation in &mut self.relations {
             if relation.invalidate(time) {
-                changed = true;
-                cleared = Some(relation.target());
+                cleared.push((relation.target(), time));
+            }
+            if relation.target() == id
+                && let Some(source) = relation.source_of(time)
+                && relation.invalidate(source)
+            {
+                cleared.push((id, source));
             }
         }
-        if !changed {
+        if cleared.is_empty() {
             return false;
         }
-        if let Some(target) = cleared {
-            self.refresh_relation_bounds(target, time);
+        for (target, source) in cleared {
+            self.refresh_relation_bounds(target, source);
         }
         self.revision = stamp;
         self.document += 1;
@@ -894,14 +1031,10 @@ impl ObjectSet {
             .tracks
             .as_ref()
             .map_or(style.thickness(), TrackLayer::thickness);
-        let bounds = self
-            .track_coloring
-            .metric()
-            .and_then(|metric| track_extent(&set, metric));
         let mut layer = TrackLayer::new(set, thickness, stamp);
         layer.set_visible(style.visible());
         self.tracks = Some(layer);
-        self.track_bounds = bounds;
+        self.rebuild_track_bounds();
         self.revision = stamp;
         self.document += 1;
         self.visibility = Visibility::All;
@@ -954,13 +1087,17 @@ impl ObjectSet {
         }
     }
 
-    fn refresh_relation_bounds(&mut self, target: ObjectSetId, time: u32) {
-        if self.object_coloring.metric().and_then(ObjectColor::target) != Some(target) {
-            return;
+    fn refresh_relation_bounds(&mut self, target: ObjectSetId, source: u32) {
+        let object = self.object_coloring.metric().and_then(ObjectColor::target) == Some(target);
+        let track = self.track_coloring.metric().and_then(TrackColor::target) == Some(target);
+        if object {
+            let bounds = self.frame_extent(source);
+            if let Some(slot) = self.frame_bounds.get_mut(source as usize) {
+                *slot = bounds;
+            }
         }
-        let bounds = self.frame_extent(time);
-        if let Some(slot) = self.frame_bounds.get_mut(time as usize) {
-            *slot = bounds;
+        if track {
+            self.rebuild_track_bounds();
         }
     }
 
@@ -975,11 +1112,18 @@ impl ObjectSet {
     }
 
     fn rebuild_track_bounds(&mut self) {
-        self.track_bounds = self.track_coloring.metric().and_then(|metric| {
-            self.tracks
-                .as_ref()
-                .and_then(|layer| track_extent(layer.set(), metric))
-        });
+        let bounds = self
+            .track_coloring
+            .metric()
+            .and_then(|metric| self.track_bounds_of(metric));
+        self.track_bounds = bounds;
+    }
+
+    fn track_bounds_of(&self, metric: TrackColor) -> Option<Extent> {
+        let set = self.tracks.as_ref()?.set();
+        (0..set.len()).fold(None, |accumulated, track| {
+            accumulate(accumulated, self.track_value(track, metric))
+        })
     }
 
     pub fn min_thickness(&self) -> f32 {
@@ -1025,12 +1169,6 @@ impl ObjectSet {
     pub fn track_at(&self, time: u32, object: usize) -> Option<usize> {
         self.tracks.as_ref()?.set().track_at(time, object)
     }
-}
-
-fn track_extent(set: &TrackSet, metric: TrackMeasurement) -> Option<Extent> {
-    (0..set.len()).fold(None, |accumulated, track| {
-        accumulate(accumulated, metric.value(track, set))
-    })
 }
 
 fn accumulate(accumulated: Option<Extent>, value: f32) -> Option<Extent> {

@@ -5,4 +5,4 @@ mod error;
 mod project;
 
 pub use error::Error;
-pub use project::{Project, Source, ViewState};
+pub use project::{Export, Project, Source, ViewState};

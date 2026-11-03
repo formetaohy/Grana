@@ -481,11 +481,12 @@ fn relations(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: Ob
     let Some(set) = state.scene.objects.get(id) else {
         return;
     };
+    let frames = state.scene.frame_count();
     let targets = state
         .scene
         .objects
         .iter()
-        .filter(|other| other.id() != id && other.detected() > 0)
+        .filter(|other| other.detected() > 0)
         .map(|other| (other.id(), other.name().to_string()))
         .collect::<Vec<_>>();
     if targets.is_empty() && set.relations().is_empty() {
@@ -526,11 +527,54 @@ fn relations(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: Ob
                 }
             },
         );
+        if frames > 1 {
+            let shift = relation.shift();
+            let limit = frames as i32 - 1;
+            let mut next = shift;
+            ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
+                widget::field_label(ui, "shift");
+                if widget::icon_button(
+                    ui,
+                    &format!("relation.{}.back", target.raw()),
+                    grana_ui::Icon::ChevronLeft,
+                    22.0,
+                    Role::Quiet,
+                    "Relate to the target one frame earlier",
+                ) {
+                    next = (shift - 1).max(-limit);
+                }
+                widget::caption(ui, &shift_label(shift));
+                if widget::icon_button(
+                    ui,
+                    &format!("relation.{}.forward", target.raw()),
+                    grana_ui::Icon::ChevronRight,
+                    22.0,
+                    Role::Quiet,
+                    "Relate to the target one frame later",
+                ) {
+                    next = (shift + 1).min(limit);
+                }
+            });
+            if next != shift {
+                commands.push(Command::SetRelationShift {
+                    source: id,
+                    target,
+                    shift: next,
+                });
+            }
+        }
     }
     let unlinked = targets
         .iter()
-        .filter(|(target, _)| set.relation(*target).is_none())
-        .map(|(target, name)| (*target, name.as_str()))
+        .filter(|(target, _)| set.relation(*target).is_none() && (*target != id || frames > 1))
+        .map(|(target, name)| {
+            let label = if *target == id {
+                format!("{name} · earlier frames")
+            } else {
+                name.clone()
+            };
+            (*target, label)
+        })
         .collect::<Vec<_>>();
     if !unlinked.is_empty() {
         let response = widget::button_with(
@@ -555,14 +599,31 @@ fn relations(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: Ob
         });
         if let Some(target) = chosen {
             ui.close_popup();
-            commands.push(Command::AddRelation { source: id, target });
+            commands.push(Command::AddRelation {
+                source: id,
+                target,
+                shift: if target == id { -1 } else { 0 },
+            });
         }
     }
     if !set.relations().is_empty() {
-        widget::caption(ui, "distances and containment join the statistics table");
+        widget::caption(
+            ui,
+            "distances and containment join the statistics table and color the objects",
+        );
     }
     if let Some(target) = removed {
         commands.push(Command::RemoveRelation { source: id, target });
+    }
+}
+
+fn shift_label(shift: i32) -> String {
+    match shift {
+        0 => "same frame".to_string(),
+        1 => "target one frame later".to_string(),
+        -1 => "target one frame earlier".to_string(),
+        value if value > 0 => format!("target {value} frames later"),
+        value => format!("target {} frames earlier", -value),
     }
 }
 
@@ -773,12 +834,16 @@ fn appearance(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, i
             .objects
             .get(relation.target())
             .map_or_else(|| "target".to_string(), |target| target.name().to_string());
-        for field in ObjectColor::RELATION_FIELDS {
+        let shift = match relation.shift() {
+            0 => String::new(),
+            shift => format!(" · t{shift:+}"),
+        };
+        for field in grana_scene::RELATION_FIELDS {
             let metric = ObjectColor::Relation {
                 target: relation.target(),
                 field,
             };
-            metrics.push((metric, format!("{target} · {}", field.label())));
+            metrics.push((metric, format!("{target} · {}{shift}", field.label())));
         }
     }
     let extent = set.object_extent();

@@ -2,8 +2,8 @@ use glam::Vec3;
 use grana_analysis::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
-use grana_measure::{Aggregate, Filter, Group, RelationField, Table};
-use grana_project::ViewState;
+use grana_measure::{Aggregate, Filter, Group, MeasureView, RelationField, Scope, Table};
+use grana_project::{Export, ViewState};
 use grana_scene::{ObjectKind, ObjectParams};
 use grana_volume::Axis;
 use serde::{Deserialize, Serialize};
@@ -69,6 +69,8 @@ pub struct ColorSpec {
     pub target: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregate: Option<String>,
     pub palette: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub reversed: bool,
@@ -86,6 +88,15 @@ pub struct ViewSpec {
     pub time: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeline: Option<TimelineSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export: Option<ExportSpec>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExportSpec {
+    pub width: u32,
+    pub transparent: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -136,6 +147,8 @@ pub enum AxisSpec {
 pub struct RelationSpec {
     pub source: String,
     pub target: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub shift: i32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -175,12 +188,30 @@ pub struct SetSpec {
 pub struct MeasureSpec {
     pub group: String,
     pub aggregate: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(default = "truth", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axes: Option<[String; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lasso: Option<LassoSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filters: Vec<FilterSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sort: Option<SortSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LassoSpec {
+    pub x: String,
+    pub y: String,
+    pub points: Vec<[f32; 2]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -294,6 +325,11 @@ impl ColorSpec {
             .find(|candidate| candidate.key() == field)
     }
 
+    pub fn aggregate(&self) -> Option<Aggregate> {
+        let aggregate = self.aggregate.as_deref()?;
+        Aggregate::parse(aggregate)
+    }
+
     pub(super) fn checked(&self, what: &str) -> Result<(), ProtocolError> {
         let invalid = |detail: String| {
             Err(ProtocolError::Invalid(format!(
@@ -314,6 +350,9 @@ impl ColorSpec {
                 if self.field.is_some() {
                     return invalid("names a relation field without a target".to_string());
                 }
+                if self.aggregate.is_some() {
+                    return invalid("names a reduction without a relation".to_string());
+                }
             }
             (None, Some(target)) => {
                 if target.trim().is_empty() {
@@ -321,6 +360,11 @@ impl ColorSpec {
                 }
                 if self.field().is_none() {
                     return invalid("names an unknown relation field".to_string());
+                }
+                if let Some(aggregate) = &self.aggregate
+                    && Aggregate::parse(aggregate).is_none()
+                {
+                    return invalid("names an unknown reduction".to_string());
                 }
             }
             _ => return invalid("names exactly one measurement or relation".to_string()),
@@ -345,6 +389,7 @@ impl ViewSpec {
             split: view.split,
             time,
             timeline: Some(TimelineSpec::of(&view.timeline)),
+            export: Some(ExportSpec::of(view.export)),
         }
     }
 
@@ -362,6 +407,10 @@ impl ViewSpec {
                 .timeline()
                 .expect("a checked timeline is plausible")
         })
+    }
+
+    pub fn export(&self) -> Option<Export> {
+        self.export.map(ExportSpec::export)
     }
 
     pub(super) fn checked(&self) -> Result<(), ProtocolError> {
@@ -394,7 +443,27 @@ impl ViewSpec {
                 .timeline()
                 .map_err(|detail| ProtocolError::Invalid(format!("a view {detail}")))?;
         }
+        if let Some(export) = &self.export
+            && !export.export().matches()
+        {
+            return Err(ProtocolError::Invalid(
+                "a view exports at a plausible width".to_string(),
+            ));
+        }
         Ok(())
+    }
+}
+
+impl ExportSpec {
+    pub fn of(export: Export) -> Self {
+        Self {
+            width: export.width,
+            transparent: export.transparent,
+        }
+    }
+
+    pub fn export(self) -> Export {
+        Export::new(self.width, self.transparent)
     }
 }
 
@@ -726,6 +795,30 @@ impl MeasureSpec {
         Aggregate::parse(&self.aggregate).expect("a measure aggregate names a reduction")
     }
 
+    pub fn scope(&self) -> Scope {
+        self.scope.as_deref().map_or(Scope::All, |scope| {
+            Scope::parse(scope).expect("a measure scope names a range")
+        })
+    }
+
+    pub fn visible(&self) -> bool {
+        self.visible
+    }
+
+    pub fn view(&self) -> Option<MeasureView> {
+        self.view
+            .as_deref()
+            .map(|view| MeasureView::parse(view).expect("a measure view names a plot"))
+    }
+
+    pub fn axes(&self) -> Option<[&str; 2]> {
+        self.axes.as_ref().map(|[x, y]| [x.as_str(), y.as_str()])
+    }
+
+    pub fn lasso(&self) -> Option<&LassoSpec> {
+        self.lasso.as_ref()
+    }
+
     pub fn filters(&self, table: &Table) -> Result<Vec<Filter>, String> {
         self.filters
             .iter()
@@ -757,6 +850,40 @@ impl MeasureSpec {
         }
         if group == Group::Track && !tracked {
             return invalid("groups by tracks without tracking".to_string());
+        }
+        if let Some(scope) = &self.scope
+            && Scope::parse(scope).is_none()
+        {
+            return invalid("names an unknown statistics range".to_string());
+        }
+        if let Some(view) = &self.view
+            && MeasureView::parse(view).is_none()
+        {
+            return invalid("names an unknown statistics view".to_string());
+        }
+        if let Some([x, y]) = &self.axes
+            && (x.trim().is_empty() || y.trim().is_empty())
+        {
+            return invalid("names an empty plot axis".to_string());
+        }
+        if let Some(lasso) = &self.lasso {
+            if lasso.x.trim().is_empty() || lasso.y.trim().is_empty() {
+                return invalid("names an empty lasso axis".to_string());
+            }
+            if lasso.x == lasso.y {
+                return invalid("gates the plot on one axis twice".to_string());
+            }
+            if lasso.points.len() < 3 {
+                return invalid("gates the plot with a polygon".to_string());
+            }
+            if lasso
+                .points
+                .iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+            {
+                return invalid("gates the plot with finite points".to_string());
+            }
         }
         for filter in &self.filters {
             if filter.column.trim().is_empty() {
@@ -925,6 +1052,10 @@ pub(super) fn palette(name: &str) -> Option<Palette> {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_zero(value: &i32) -> bool {
+    *value == 0
 }
 
 fn one() -> f32 {

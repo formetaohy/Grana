@@ -19,14 +19,14 @@ use grana_object::{
 };
 use grana_scene::{
     ChannelState, ColocResult, ColocState, ColorState, ItemState, MeasureState, ObjectColor,
-    ObjectFrame, ObjectKind, ObjectParams, ObjectSetId, RelationState, SceneState, SelectionState,
-    SetState, TrackStyle, Visibility,
+    ObjectFrame, ObjectKind, ObjectParams, ObjectSetId, RELATION_FIELDS, RelationState, SceneState,
+    SelectionState, SetState, TrackColor, TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Intensity, Region};
 
 use crate::binary::{Decode, Reader};
 use crate::encode::{TAG_FILAMENTS, TAG_SPOTS, TAG_SURFACES};
-use crate::project::{Project, Shape, Source, ViewState};
+use crate::project::{Export, Project, Shape, Source, ViewState};
 
 const FAULT_VALUE: &str = "the project data carries a value outside its domain";
 const FAULT_SHAPE: &str = "the project data carries an inconsistent shape";
@@ -84,11 +84,21 @@ impl Decode for ViewState {
             section: SectionState::decode(reader)?,
             split: finite(reader.f32()?)?,
             timeline: Timeline::decode(reader)?,
+            export: Export::decode(reader)?,
         };
-        if !(0.0..=1.0).contains(&view.split) {
+        if !(0.0..=1.0).contains(&view.split) || !view.export.matches() {
             return Err(FAULT_VALUE);
         }
         Ok(view)
+    }
+}
+
+impl Decode for Export {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        Ok(Self {
+            width: reader.u32()?,
+            transparent: reader.bool()?,
+        })
     }
 }
 
@@ -175,7 +185,7 @@ impl Decode for SceneState {
                 || set
                     .track_color
                     .metric
-                    .is_some_and(|metric| !metric.colorable())
+                    .is_some_and(|metric| !track_color_applies(set, metric))
         }) {
             return Err(FAULT_SHAPE);
         }
@@ -327,7 +337,7 @@ impl Decode for SetState {
         let track_thickness = Option::<f32>::decode(reader)?.map(positive).transpose()?;
         let track_visible = Option::<bool>::decode(reader)?;
         let object_color = ColorState::<ObjectColor>::decode(reader)?;
-        let track_color = ColorState::<TrackMeasurement>::decode(reader)?;
+        let track_color = ColorState::<TrackColor>::decode(reader)?;
         let visibility = Visibility::decode(reader)?;
         let seeds = decode_seeds(reader)?;
         let frames = Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?;
@@ -372,7 +382,10 @@ impl Decode for SetState {
             return Err(FAULT_SHAPE);
         }
         for relation in &state.relations {
-            if relation.target == id || relation.frames.len() != state.frames.len() {
+            if (relation.target == id && relation.shift == 0)
+                || relation.frames.len() != state.frames.len()
+                || (relation.shift.unsigned_abs() as usize) >= state.frames.len()
+            {
                 return Err(FAULT_SHAPE);
             }
             for (frame, relation) in state.frames.iter().zip(&relation.frames) {
@@ -395,8 +408,10 @@ impl Decode for RelationState {
         if target == 0 {
             return Err(FAULT_VALUE);
         }
+        let shift = reader.i32()?;
         Ok(Self {
             target,
+            shift,
             frames: Vec::<Option<Arc<RelationFrame>>>::decode(reader)?,
         })
     }
@@ -614,10 +629,32 @@ impl Decode for ObjectColor {
             1 => {
                 let target = ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?;
                 let field = RelationField::from_index(reader.u8()?).ok_or(FAULT_SHAPE)?;
-                if !ObjectColor::RELATION_FIELDS.contains(&field) {
+                if !RELATION_FIELDS.contains(&field) {
                     return Err(FAULT_VALUE);
                 }
                 Ok(Self::Relation { target, field })
+            }
+            _ => Err(FAULT_SHAPE),
+        }
+    }
+}
+
+impl Decode for TrackColor {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        match reader.u8()? {
+            0 => Ok(Self::Measurement(TrackMeasurement::decode(reader)?)),
+            1 => {
+                let target = ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?;
+                let field = RelationField::from_index(reader.u8()?).ok_or(FAULT_SHAPE)?;
+                if !RELATION_FIELDS.contains(&field) {
+                    return Err(FAULT_VALUE);
+                }
+                let aggregate = Aggregate::from_index(reader.u8()?).ok_or(FAULT_SHAPE)?;
+                Ok(Self::Relation {
+                    target,
+                    field,
+                    aggregate,
+                })
             }
             _ => Err(FAULT_SHAPE),
         }
@@ -1109,6 +1146,19 @@ fn color_applies(set: &SetState, channels: usize, metric: ObjectColor) -> bool {
             .relations
             .iter()
             .any(|relation| relation.target == target.raw()),
+    }
+}
+
+fn track_color_applies(set: &SetState, metric: TrackColor) -> bool {
+    match metric {
+        TrackColor::Measurement(measurement) => measurement.colorable(),
+        TrackColor::Relation { target, field, .. } => {
+            RELATION_FIELDS.contains(&field)
+                && set
+                    .relations
+                    .iter()
+                    .any(|relation| relation.target == target.raw())
+        }
     }
 }
 

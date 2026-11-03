@@ -1,11 +1,11 @@
 use grana_display::Coloring;
-use grana_measure::{Aggregate, Group, TrackMeasurement, channel_keys};
-use grana_scene::{Measure, ObjectColor, ObjectKind, ObjectParams, Scene};
+use grana_measure::{Aggregate, Group, channel_keys};
+use grana_scene::{Measure, ObjectColor, ObjectKind, ObjectParams, Scene, TrackColor};
 
 use super::{
     ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, DetectionSpec, FilterSpec,
-    MeasureSpec, Protocol, ProtocolError, RegionSpec, RelationSpec, RenderSpec, SetSpec, SortSpec,
-    TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    LassoSpec, MeasureSpec, Protocol, ProtocolError, RegionSpec, RelationSpec, RenderSpec, SetSpec,
+    SortSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -52,7 +52,7 @@ impl Protocol {
                     visible: set.visible(),
                     opacity: set.opacity(),
                     color_by: object_color(set.object_coloring(), scene, &keys),
-                    track_by: track_color(set.track_coloring()),
+                    track_by: track_color(set.track_coloring(), scene),
                     seeds: if set.kind() == ObjectKind::Surfaces {
                         (0..set.frame_count())
                             .map(|time| set.seeds(time).to_vec())
@@ -95,6 +95,7 @@ impl Protocol {
                     Some(RelationSpec {
                         source: set.name().to_string(),
                         target: target.name().to_string(),
+                        shift: relation.shift(),
                     })
                 })
             })
@@ -181,6 +182,7 @@ fn object_color(
         key: None,
         target: None,
         field: None,
+        aggregate: None,
     };
     Some(match metric {
         ObjectColor::Measurement(measurement) => ColorSpec {
@@ -195,15 +197,32 @@ fn object_color(
     })
 }
 
-fn track_color(coloring: &Coloring<TrackMeasurement>) -> Option<ColorSpec> {
+fn track_color(coloring: &Coloring<TrackColor>, scene: &Scene) -> Option<ColorSpec> {
     let metric = coloring.metric()?;
-    Some(ColorSpec {
-        key: Some(metric.column().key().to_string()),
+    let color = ColorSpec {
+        key: None,
         target: None,
         field: None,
+        aggregate: None,
         palette: coloring.palette().name().to_ascii_lowercase(),
         reversed: coloring.reversed(),
         range: coloring.manual().map(|(low, high)| [low, high]),
+    };
+    Some(match metric {
+        TrackColor::Measurement(measurement) => ColorSpec {
+            key: Some(measurement.column().key().to_string()),
+            ..color
+        },
+        TrackColor::Relation {
+            target,
+            field,
+            aggregate,
+        } => ColorSpec {
+            target: Some(scene.objects.get(target)?.name().to_string()),
+            field: Some(field.key().to_string()),
+            aggregate: Some(aggregate.key().to_string()),
+            ..color
+        },
     })
 }
 
@@ -215,7 +234,8 @@ impl MeasureSpec {
         } else {
             measure.aggregate()
         };
-        let columns = match (measure.table(), measure.visible()) {
+        let table = measure.table();
+        let columns = match (table, measure.visible()) {
             (Some(table), visible) => table
                 .columns()
                 .iter()
@@ -225,7 +245,7 @@ impl MeasureSpec {
                 .collect(),
             _ => Vec::new(),
         };
-        let filters = match measure.table() {
+        let filters = match table {
             Some(table) => measure
                 .filters()
                 .iter()
@@ -243,13 +263,31 @@ impl MeasureSpec {
                 .collect(),
             None => Vec::new(),
         };
+        let axes = table.map(|table| {
+            measure
+                .axes()
+                .map(|axis| table.columns()[axis].key().to_string())
+        });
+        let lasso = table.and_then(|table| {
+            let lasso = measure.lasso()?;
+            Some(LassoSpec {
+                x: table.columns().get(lasso.x())?.key().to_string(),
+                y: table.columns().get(lasso.y())?.key().to_string(),
+                points: lasso.points().to_vec(),
+            })
+        });
         Self {
             group: group.key().to_string(),
             aggregate: aggregate.key().to_string(),
+            scope: Some(measure.scope().label().to_string()),
+            visible: measure.visibility(),
+            view: Some(measure.view().name().to_string()),
+            axes,
+            lasso,
             filters,
             columns,
-            sort: measure.sort().and_then(|(column, descending)| {
-                let table = measure.table()?;
+            sort: table.and_then(|table| {
+                let (column, descending) = measure.sort()?;
                 Some(SortSpec {
                     column: table.columns().get(column)?.key().to_string(),
                     descending,

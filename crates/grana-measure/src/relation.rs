@@ -56,9 +56,14 @@ impl RelationField {
         }
     }
 
-    pub fn column(self, target: &str, key: &str) -> Column {
+    pub fn column(self, target: &str, key: &str, shift: i32) -> Column {
+        let label = if shift == 0 {
+            format!("{target} {}", self.label())
+        } else {
+            format!("{target} {} · t{shift}", self.label())
+        };
         Column::new(
-            format!("{target} {}", self.label()),
+            label,
             format!("{key}_{}", self.key()),
             self.unit(),
             self.decimals(),
@@ -91,16 +96,25 @@ impl RelationField {
 #[derive(Clone, Copy, Debug)]
 pub struct RelationRow<'a> {
     target: &'a str,
+    shift: i32,
     frame: Option<&'a RelationFrame>,
 }
 
 impl<'a> RelationRow<'a> {
-    pub fn new(target: &'a str, frame: Option<&'a RelationFrame>) -> Self {
-        Self { target, frame }
+    pub fn new(target: &'a str, shift: i32, frame: Option<&'a RelationFrame>) -> Self {
+        Self {
+            target,
+            shift,
+            frame,
+        }
     }
 
     pub fn target(self) -> &'a str {
         self.target
+    }
+
+    pub fn shift(self) -> i32 {
+        self.shift
     }
 
     pub fn frame(self) -> Option<&'a RelationFrame> {

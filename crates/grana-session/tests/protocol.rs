@@ -4,11 +4,12 @@ use grana_display::{
     CameraState, Coloring, Palette, SectionState, Shading, Stop, TransferFunction,
 };
 use grana_measure::{
-    ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
-    ColocThresholds, Measurement, TrackMeasurement,
+    Aggregate, ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
+    ColocThresholds, Lasso, MeasureView, Measurement, RelationField, Scope, TrackMeasurement,
 };
+use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
 use grana_project::ViewState;
-use grana_scene::{Dataset, Measure, ObjectColor, ObjectKind, Scene};
+use grana_scene::{Dataset, Measure, ObjectColor, ObjectFrame, ObjectKind, Scene, TrackColor};
 use grana_session::{DetectionSpec, Protocol, ViewSpec};
 use grana_volume::{Axis, Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -362,7 +363,7 @@ fn stages_the_presentation_of_a_captured_protocol() {
     ));
     scene.set_mask(Some(nuclei));
     assert!(scene.add_seed(nuclei, [0.5, -1.0, 1.5]));
-    assert!(scene.add_relation(beads, nuclei));
+    assert!(scene.add_relation(beads, nuclei, 0));
     let set = scene.objects.get_mut(nuclei).expect("the surface set");
     set.set_color([0.9, 0.5, 0.2]);
     set.set_opacity(0.35);
@@ -379,7 +380,7 @@ fn stages_the_presentation_of_a_captured_protocol() {
         .expect("the spot set")
         .set_object_coloring(object);
     let mut track = Coloring::new();
-    track.set_metric(Some(TrackMeasurement::Speed));
+    track.set_metric(Some(TrackColor::Measurement(TrackMeasurement::Speed)));
     scene
         .objects
         .get_mut(beads)
@@ -421,6 +422,7 @@ fn stages_the_presentation_of_a_captured_protocol() {
             section,
             split: 0.5,
             timeline: timeline.clone(),
+            export: grana_session::Export::new(1280, true),
         },
         0,
     );
@@ -498,8 +500,175 @@ fn stages_the_presentation_of_a_captured_protocol() {
     assert_eq!(coloring.manual(), Some((0.5, 2.5)));
     assert_eq!(
         beads_set.track_coloring().metric(),
-        Some(TrackMeasurement::Speed)
+        Some(TrackColor::Measurement(TrackMeasurement::Speed))
     );
+    assert_eq!(
+        protocol.view().and_then(ViewSpec::export),
+        Some(grana_session::Export::new(1280, true)),
+        "the export settings travel with the view"
+    );
+}
+
+#[test]
+fn captures_and_stages_a_relation_across_a_shifted_frame() {
+    let extent = Extent::new(4, 4, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "DAPI",
+            [1.0, 1.0, 1.0],
+            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+        )],
+    );
+    let series = VolumeSeries::new(vec![volume.clone(); 3], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let nuclei = scene.add_object(ObjectKind::Surfaces, 0);
+    let beads = scene.add_object(ObjectKind::Spots, 0);
+    assert!(scene.rename_object(nuclei, "Nuclei"));
+    assert!(scene.rename_object(beads, "Beads"));
+    assert!(scene.add_relation(beads, nuclei, -2));
+    let mut coloring = scene
+        .objects
+        .get(beads)
+        .expect("the spot set")
+        .track_coloring()
+        .clone();
+    coloring.set_metric(Some(TrackColor::Relation {
+        target: nuclei,
+        field: RelationField::Inside,
+        aggregate: Aggregate::Minimum,
+    }));
+    scene
+        .objects
+        .get_mut(beads)
+        .expect("the spot set")
+        .set_track_coloring(coloring);
+
+    let protocol =
+        Protocol::capture(&scene, &Measure::new(), None).expect("the shifted relation captures");
+    assert_eq!(protocol.relations()[0].shift, -2);
+    let text = protocol.to_json().expect("the protocol serializes");
+    let restored = Protocol::from_json(&text).expect("the protocol round trips");
+    assert_eq!(restored, protocol);
+
+    let mut target = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let staged = restored
+        .stage(&mut target)
+        .expect("the protocol stages onto a fresh scene");
+    let relation = target
+        .objects
+        .get(staged.set(1))
+        .and_then(|set| set.relation(staged.set(0)))
+        .expect("the staged relation joins the two sets");
+    assert_eq!(relation.shift(), -2);
+    assert_eq!(
+        target
+            .objects
+            .get(staged.set(1))
+            .expect("the staged spot set")
+            .track_coloring()
+            .metric(),
+        Some(TrackColor::Relation {
+            target: staged.set(0),
+            field: RelationField::Inside,
+            aggregate: Aggregate::Minimum,
+        })
+    );
+
+    let single = VolumeSeries::new(vec![volume], 1.0);
+    let mut narrow = Scene::new(Dataset::synthetic("fixture", single.pyramid().clone()));
+    assert!(
+        restored.stage(&mut narrow).is_err(),
+        "a shift outside the frames of the dataset is refused"
+    );
+}
+
+#[test]
+fn round_trips_the_statistics_presentation() {
+    let extent = Extent::new(4, 4, 2);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![
+            Channel::new(
+                "DAPI",
+                [0.3, 0.4, 1.0],
+                VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+            ),
+            Channel::new(
+                "GFP",
+                [0.3, 1.0, 0.4],
+                VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+            ),
+        ],
+    );
+    let series = VolumeSeries::new(vec![volume.clone(); 2], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let spots = scene.add_object(ObjectKind::Spots, 0);
+    assert!(scene.rename_object(spots, "Puncta"));
+    for time in 0..2 {
+        let mut accumulator = SampleAccumulator::new();
+        accumulator.push(0.5);
+        scene.install(
+            spots,
+            time,
+            ObjectFrame::Spots(SpotSet::new(
+                0,
+                vec![
+                    Spot::new([0.5 * time as f32, 0.0, 0.0], 0.5, 0.4),
+                    Spot::new([1.0 + time as f32, 0.0, 0.0], 0.75, 0.6),
+                ],
+                IntensityTable::new(2, vec![accumulator.statistics(); 4]),
+            )),
+        );
+    }
+    let mut measure = Measure::new();
+    measure.select(spots, &scene);
+    measure.set_scope(Scope::Current);
+    measure.set_view(MeasureView::Scatter);
+    measure.set_visibility(false);
+    let (x, y) = {
+        let table = measure.table().expect("the table exists");
+        (
+            table
+                .column("contrast")
+                .expect("the table measures contrast"),
+            table
+                .column("diameter_um")
+                .expect("the table measures diameter"),
+        )
+    };
+    measure.set_axis(grana_measure::PlotAxis::X, x);
+    measure.set_axis(grana_measure::PlotAxis::Y, y);
+    measure.set_lasso(Some(
+        Lasso::new(x, y, vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]])
+            .expect("the polygon covers the plot"),
+    ));
+    let last = measure.visible().len() - 1;
+    let shown = measure.visible()[last];
+    measure.set_column_visible(last, !shown);
+
+    let protocol = Protocol::capture(&scene, &measure, None).expect("the statistics capture");
+    let text = protocol.to_json().expect("the protocol serializes");
+    let restored = Protocol::from_json(&text).expect("the protocol round trips");
+    let spec = restored.sets()[0]
+        .measure()
+        .expect("the protocol carries the statistics");
+    assert_eq!(spec.scope(), Scope::Current);
+    assert_eq!(spec.view(), Some(MeasureView::Scatter));
+    assert_eq!(spec.axes(), Some(["contrast", "diameter_um"]));
+    assert!(!spec.visible());
+    assert!(spec.lasso().is_some());
+
+    let mut presented = Measure::new();
+    restored.present_measure(&[spots], &mut presented, &scene);
+    assert_eq!(presented.scope(), Scope::Current);
+    assert_eq!(presented.view(), MeasureView::Scatter);
+    assert!(!presented.visibility());
+    assert_eq!(presented.axes(), [x, y]);
+    assert!(presented.lasso().is_some());
+    assert_eq!(presented.visible()[last], !shown);
 }
 
 #[test]

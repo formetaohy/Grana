@@ -24,4 +24,8 @@ impl Scope {
             Self::Current => "current",
         }
     }
+
+    pub fn parse(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|scope| scope.label() == key)
+    }
 }

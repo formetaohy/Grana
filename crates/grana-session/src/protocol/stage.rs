@@ -1,6 +1,6 @@
 use grana_display::Coloring;
 use grana_measure::{ColocPair, TrackMeasurement, channel_keys};
-use grana_scene::{ObjectColor, ObjectSetId, Scene};
+use grana_scene::{ObjectColor, ObjectSetId, Scene, TrackColor};
 use grana_volume::Region;
 
 use super::{ColorSpec, Protocol, ProtocolError};
@@ -56,6 +56,14 @@ impl Protocol {
                 return Err(ProtocolError::Invalid(format!(
                     "the seeds of {} cover every frame of the dataset",
                     spec.name
+                )));
+            }
+        }
+        for relation in &self.relations {
+            if (i64::from(relation.shift).unsigned_abs() as usize) >= scene.frame_count() as usize {
+                return Err(ProtocolError::Invalid(format!(
+                    "the relation of {} to {} shifts within the frames of the dataset",
+                    relation.source, relation.target
                 )));
             }
         }
@@ -148,7 +156,7 @@ impl Protocol {
         for relation in &self.relations {
             let source = position(&order, &relation.source, &relation.source)?;
             let target = position(&order, &relation.target, &relation.target)?;
-            if !scene.add_relation(sets[source], sets[target]) {
+            if !scene.add_relation(sets[source], sets[target], relation.shift) {
                 return Err(ProtocolError::Invalid(format!(
                     "{} cannot relate to {}",
                     relation.source, relation.target
@@ -166,7 +174,7 @@ impl Protocol {
                     .set_object_coloring(coloring);
             }
             if let Some(color) = &spec.track_by {
-                let coloring = track_coloring(color)?;
+                let coloring = track_coloring(color, scene)?;
                 scene
                     .objects
                     .get_mut(id)
@@ -300,24 +308,47 @@ fn object_coloring(
     Ok(coloring)
 }
 
-fn track_coloring(spec: &ColorSpec) -> Result<Coloring<TrackMeasurement>, ProtocolError> {
+fn track_coloring(spec: &ColorSpec, scene: &Scene) -> Result<Coloring<TrackColor>, ProtocolError> {
     let mut coloring = Coloring::new();
     coloring.set_palette(spec.palette());
     coloring.set_reversed(spec.reversed);
     if let Some([low, high]) = spec.range {
         coloring.set_manual(Some((low, high)));
     }
-    let key = spec
-        .key
-        .as_deref()
-        .expect("a checked track color names a measurement");
-    let measurement = TrackMeasurement::ALL
-        .into_iter()
-        .filter(|measurement| measurement.colorable())
-        .find(|measurement| measurement.column().key() == key)
-        .ok_or_else(|| {
-            ProtocolError::Invalid(format!("the tracks have no colorable measurement {key}"))
-        })?;
-    coloring.set_metric(Some(measurement));
+    let metric = match (&spec.key, &spec.target) {
+        (Some(key), None) => {
+            let measurement = TrackMeasurement::ALL
+                .into_iter()
+                .filter(|measurement| measurement.colorable())
+                .find(|measurement| measurement.column().key() == key.as_str())
+                .ok_or_else(|| {
+                    ProtocolError::Invalid(format!(
+                        "the tracks have no colorable measurement {key}"
+                    ))
+                })?;
+            TrackColor::Measurement(measurement)
+        }
+        (None, Some(target)) => {
+            let target = scene
+                .objects
+                .iter()
+                .find(|set| set.name() == target)
+                .map(|set| set.id())
+                .ok_or_else(|| {
+                    ProtocolError::Invalid(format!(
+                        "the color names the relation target {target}, which is not an object set of the scene"
+                    ))
+                })?;
+            TrackColor::Relation {
+                target,
+                field: spec
+                    .field()
+                    .expect("a checked color names a relation field"),
+                aggregate: spec.aggregate().unwrap_or(grana_measure::Aggregate::Mean),
+            }
+        }
+        _ => unreachable!("a checked color names one measurement or relation"),
+    };
+    coloring.set_metric(Some(metric));
     Ok(coloring)
 }

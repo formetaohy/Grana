@@ -9,8 +9,8 @@ use grana_animation::Timeline;
 use grana_display::{Camera, SectionCamera};
 use grana_geometry::{DEFAULT_BUDGET, MeshStore};
 use grana_image::{Format, Image, Source};
-use grana_measure::{ColocPair, ColocSeries};
-use grana_project::{Project, Source as ProjectSource, ViewState};
+use grana_measure::{ColocPair, ColocSeries, Lasso};
+use grana_project::{Export, Project, Source as ProjectSource, ViewState};
 use grana_scene::{Dataset, Measure, ObjectFrame, ObjectSetId, Scene, slug};
 use grana_volume::{Axis, Pyramid, Region};
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,7 @@ const RESULT: &str = "result.json";
 const PARTIAL: &str = "partial";
 pub const MAX_JOBS: usize = 16;
 const DEFAULT_JOBS: usize = 4;
-const ANALYSIS_REVISION: u32 = 1;
+const ANALYSIS_REVISION: u32 = 2;
 const CONTENT_SAMPLE: u64 = 1 << 16;
 const HASH: u64 = 0xcbf2_9ce4_8422_2325;
 const PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -423,7 +423,15 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
             .table(sets[index], spec.group(), spec.aggregate())
             .ok_or_else(|| format!("the set {} detected no frame", spec.name))?;
         let filters = spec.filters(&table)?;
-        let mut rows = table.matching(&filters, None, None);
+        let lasso = spec
+            .measure()
+            .and_then(|measure| measure.lasso())
+            .and_then(|lasso| {
+                let x = table.column(&lasso.x)?;
+                let y = table.column(&lasso.y)?;
+                Lasso::new(x, y, lasso.points.clone())
+            });
+        let mut rows = table.matching(&filters, lasso.as_ref(), None);
         if let Some(measure) = spec.measure()
             && let Some(sort) = &measure.sort
         {
@@ -629,6 +637,12 @@ impl Run<'_, '_> {
             .to_string();
         let source_frames = frames_of(&self.scene, source_id);
         let target_frames = frames_of(&self.scene, target_id);
+        let shift = self
+            .scene
+            .objects
+            .get(source_id)
+            .and_then(|set| set.relation(target_id))
+            .map_or(0, |relation| relation.shift());
         let _ = task.events.send(Event::Step {
             index: task.index,
             label: format!("relating {source_name} to {target_name}"),
@@ -653,6 +667,7 @@ impl Run<'_, '_> {
         run::relation(
             source_frames,
             target_frames,
+            shift,
             task.workers,
             task.cancel,
             &mut sink,
@@ -781,6 +796,7 @@ fn view_state(protocol: &Protocol, scene: &Scene) -> ViewState {
             section: view.section(),
             split: view.split,
             timeline: view.timeline().unwrap_or_else(fitted),
+            export: view.export().unwrap_or(Export::NATIVE),
         },
         None => {
             let world = scene.dataset.world_size();
@@ -793,6 +809,7 @@ fn view_state(protocol: &Protocol, scene: &Scene) -> ViewState {
                 section: section.state(),
                 split: 0.62,
                 timeline: fitted(),
+                export: Export::NATIVE,
             }
         }
     }

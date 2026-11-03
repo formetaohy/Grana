@@ -123,6 +123,7 @@ pub(crate) fn tracks(
 pub(crate) fn relation(
     source: Vec<Option<Arc<ObjectFrame>>>,
     target: Vec<Option<Arc<ObjectFrame>>>,
+    shift: i32,
     workers: usize,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
@@ -140,6 +141,7 @@ pub(crate) fn relation(
         &counts,
         |time| shape(source.get(time).and_then(Option::as_deref)),
         |time| shape(target.get(time).and_then(Option::as_deref)),
+        shift,
         workers,
         cancel,
         &mut |done, total| {

@@ -12,7 +12,7 @@ use grana_scene::{Dataset, Measure, MeasureState, ObjectKind, Scene, SceneState}
 use crate::binary::{Decode, Encode, Reader, Writer};
 use crate::error::Error;
 
-const MAGIC: &[u8; 11] = b"granaproj12";
+const MAGIC: &[u8; 11] = b"granaproj13";
 const LENGTH: usize = size_of::<u64>();
 const STEPS: usize = size_of::<u32>();
 const HEADER: usize = MAGIC.len() + LENGTH + STEPS;
@@ -47,6 +47,28 @@ pub struct ViewState {
     pub section: SectionState,
     pub split: f32,
     pub timeline: Timeline,
+    pub export: Export,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Export {
+    pub width: u32,
+    pub transparent: bool,
+}
+
+impl Export {
+    pub const NATIVE: Self = Self {
+        width: 0,
+        transparent: false,
+    };
+
+    pub const fn new(width: u32, transparent: bool) -> Self {
+        Self { width, transparent }
+    }
+
+    pub fn matches(&self) -> bool {
+        self.width == 0 || (64..=16384).contains(&self.width)
+    }
 }
 
 impl Project {

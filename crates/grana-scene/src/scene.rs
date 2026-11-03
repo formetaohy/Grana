@@ -226,15 +226,43 @@ impl Scene {
         }))
     }
 
-    pub fn add_relation(&mut self, source: ObjectSetId, target: ObjectSetId) -> bool {
-        if source == target {
+    pub fn add_relation(&mut self, source: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {
+        if source == target && shift == 0 {
             return false;
         }
         let valid = self.objects.get(source).is_some() && self.objects.get(target).is_some();
         if !valid {
             return false;
         }
-        self.objects.add_relation(source, target)
+        let frame_count = self.frame_count();
+        if (i64::from(shift).unsigned_abs() as usize) >= frame_count as usize {
+            return false;
+        }
+        self.objects.add_relation(source, target, shift)
+    }
+
+    pub fn set_relation_shift(
+        &mut self,
+        source: ObjectSetId,
+        target: ObjectSetId,
+        shift: i32,
+    ) -> bool {
+        if source == target && shift == 0 {
+            return false;
+        }
+        let frame_count = self.frame_count();
+        if (i64::from(shift).unsigned_abs() as usize) >= frame_count as usize {
+            return false;
+        }
+        if self
+            .objects
+            .get(source)
+            .and_then(|set| set.relation(target))
+            .is_some_and(|relation| relation.shift() == shift)
+        {
+            return false;
+        }
+        self.objects.set_relation_shift(source, target, shift)
     }
 
     pub fn remove_relation(&mut self, source: ObjectSetId, target: ObjectSetId) -> bool {
@@ -266,7 +294,7 @@ impl Scene {
                     .objects
                     .get(relation.target())
                     .map_or("target", ObjectSet::name);
-                RelationRow::new(target, relation.frame(time))
+                RelationRow::new(target, relation.shift(), relation.frame(time))
             })
             .collect()
     }

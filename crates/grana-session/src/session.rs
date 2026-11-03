@@ -107,7 +107,7 @@ pub struct Session {
     view: Option<ViewState>,
     history: History,
     export: Export,
-    resume: Vec<(ObjectSetId, ObjectSetId)>,
+    resume: Vec<(ObjectSetId, ObjectSetId, i32)>,
 }
 
 impl Default for Session {
@@ -210,6 +210,10 @@ impl Session {
 
     pub fn timeline(&self) -> &Timeline {
         &self.timeline
+    }
+
+    pub fn export(&self) -> Export {
+        self.export
     }
 
     pub fn progress(&self) -> &[Progress] {
@@ -499,7 +503,16 @@ impl Session {
                     scene.clear_seeds(set);
                 }
             }
-            Command::AddRelation { source, target } => self.add_relation(source, target),
+            Command::AddRelation {
+                source,
+                target,
+                shift,
+            } => self.add_relation(source, target, shift),
+            Command::SetRelationShift {
+                source,
+                target,
+                shift,
+            } => self.set_relation_shift(source, target, shift),
             Command::RemoveRelation { source, target } => self.remove_relation(source, target),
             Command::Track(set) => self.start_tracks(set),
             Command::CancelTrack(set) => self.cancel(Job::Track(set)),
@@ -1071,6 +1084,7 @@ impl Session {
             if pending.project.matches(&scene.dataset) {
                 scene.restore(pending.project.scene);
                 self.measure.restore(pending.project.measure, &scene);
+                self.export = pending.project.view.export;
                 self.view = Some(pending.project.view);
                 self.project = Some(pending.path);
                 self.saved = Some(
@@ -1313,7 +1327,7 @@ impl Session {
         let mut pairs = Vec::new();
         for object in scene.objects.iter() {
             for relation in object.relations() {
-                let pair = (object.id(), relation.target());
+                let pair = (object.id(), relation.target(), relation.shift());
                 if (pair.0 == set || pair.1 == set) && !self.resume.contains(&pair) {
                     pairs.push(pair);
                 }
@@ -1326,7 +1340,7 @@ impl Session {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        let busy = |pair: &(ObjectSetId, ObjectSetId)| {
+        let busy = |pair: &(ObjectSetId, ObjectSetId, i32)| {
             self.analysis.iter().any(|analysis| {
                 analysis.job() == Job::Detect(pair.0) || analysis.job() == Job::Detect(pair.1)
             })
@@ -1349,8 +1363,8 @@ impl Session {
             .collect::<Vec<_>>();
         self.resume
             .retain(|candidate| !(candidate.0 == set || candidate.1 == set));
-        for (source, target) in ready {
-            self.add_relation(source, target);
+        for (source, target, shift) in ready {
+            self.add_relation(source, target, shift);
         }
     }
 
@@ -1366,7 +1380,7 @@ impl Session {
         }
     }
 
-    fn add_relation(&mut self, source: ObjectSetId, target: ObjectSetId) {
+    fn add_relation(&mut self, source: ObjectSetId, target: ObjectSetId, shift: i32) {
         let busy = self.analysis.iter().any(
             |analysis| matches!(analysis.job(), Job::Detect(id) if id == source || id == target),
         );
@@ -1399,9 +1413,20 @@ impl Session {
             ));
             return;
         }
-        if !scene.add_relation(source, target) {
+        if !scene.add_relation(source, target, shift) {
             return;
         }
+        self.start_relation(source, target);
+    }
+
+    fn set_relation_shift(&mut self, source: ObjectSetId, target: ObjectSetId, shift: i32) {
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        if !scene.set_relation_shift(source, target, shift) {
+            return;
+        }
+        self.cancel(Job::Relation { source, target });
         self.start_relation(source, target);
     }
 
@@ -1431,6 +1456,7 @@ impl Session {
                 ));
                 return;
             }
+            let shift = from.relation(target).map_or(0, |relation| relation.shift());
             let frames = scene.frame_count();
             let source_frames = (0..frames)
                 .map(|time| from.frame_shared(time))
@@ -1438,13 +1464,13 @@ impl Session {
             let target_frames = (0..frames)
                 .map(|time| to.frame_shared(time))
                 .collect::<Vec<_>>();
-            (source_frames, target_frames, frames as usize)
+            (source_frames, target_frames, shift, frames as usize)
         };
-        let (source_frames, target_frames, total) = prepared;
+        let (source_frames, target_frames, shift, total) = prepared;
         self.message = None;
         self.record_progress(job, 0, 0, total);
         self.analysis
-            .push(crate::relation(job, source_frames, target_frames, 0));
+            .push(crate::relation(job, source_frames, target_frames, shift, 0));
     }
 
     fn start_detect(&mut self, set: ObjectSetId) {
@@ -1889,11 +1915,15 @@ impl Session {
             if let Some(timeline) = view.timeline() {
                 self.timeline = timeline;
             }
+            if let Some(export) = view.export() {
+                self.export = export;
+            }
             self.view = Some(ViewState {
                 camera: view.camera(),
                 section: view.section(),
                 split: view.split,
                 timeline: self.timeline.clone(),
+                export: self.export,
             });
         }
         let Some(scene) = self.scene.as_ref() else {

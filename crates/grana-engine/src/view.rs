@@ -50,28 +50,7 @@ pub fn frame(scene: &Scene) -> Result<RenderedScene<'_>, String> {
         let Some(frame) = set.frame(scene.time()) else {
             continue;
         };
-        let extent = set.object_extent();
-        let metric = set.object_coloring().metric();
-        let objects = frame.objects();
-        let relation = metric.and_then(|metric| {
-            metric
-                .target()
-                .and_then(|target| set.relation(target))
-                .and_then(|relation| relation.frame(scene.time()))
-        });
-        let color = |index: usize| {
-            extent
-                .zip(metric)
-                .map(|(extent, metric)| {
-                    let value = metric.value(objects, relation, index);
-                    if value.is_finite() {
-                        set.object_coloring().color(extent, value)
-                    } else {
-                        set.color()
-                    }
-                })
-                .unwrap_or_else(|| set.color())
-        };
+        let color = |index: usize| set.object_color(scene.time(), frame, index);
         if let Some(spots) = frame.spots() {
             for (index, spot) in spots.spots().iter().enumerate() {
                 if !set.visible_object(scene.time(), index) {
@@ -111,21 +90,10 @@ pub fn frame(scene: &Scene) -> Result<RenderedScene<'_>, String> {
         if let Some(tracks) = set.tracks()
             && !tracks.set().is_empty()
         {
-            let extent = set.track_extent();
-            let metric = set.track_coloring().metric();
-            let color = |index: usize| {
-                extent
-                    .zip(metric)
-                    .map(|(extent, metric)| {
-                        set.track_coloring()
-                            .color(extent, metric.value(index, tracks.set()))
-                    })
-                    .unwrap_or_else(|| set.color())
-            };
             let start = styles.len();
             for index in 0..tracks.set().len() {
                 styles.push(Style::new(
-                    color(index),
+                    set.track_color(index),
                     tracks.visible() && set.visible_track(index),
                     scene.track_selected(set.id(), index),
                     set.opacity(),

@@ -107,12 +107,6 @@ impl Protocol {
             }
             if let Some(color) = &set.track_by {
                 color.checked(&format!("the tracks of {}", set.name))?;
-                if color.target.is_some() {
-                    return Err(ProtocolError::Invalid(format!(
-                        "the tracks of {} are colored by a measurement",
-                        set.name
-                    )));
-                }
                 if set.track.is_none() {
                     return Err(ProtocolError::Invalid(format!(
                         "{} carries track colors without tracking",
@@ -156,9 +150,9 @@ impl Protocol {
                     relation.target
                 )));
             }
-            if relation.source == relation.target {
+            if relation.source == relation.target && relation.shift == 0 {
                 return Err(ProtocolError::Invalid(format!(
-                    "{} cannot relate to itself",
+                    "{} cannot relate to itself without shifting in time",
                     relation.source
                 )));
             }
@@ -172,17 +166,19 @@ impl Protocol {
             pairs.push(pair);
         }
         for set in &self.sets {
-            let Some(color) = &set.color_by else {
-                continue;
-            };
-            let Some(target) = &color.target else {
-                continue;
-            };
-            if !pairs.contains(&(&set.name, target)) {
-                return Err(ProtocolError::Invalid(format!(
-                    "{} is colored by a relation to {target} that the protocol does not measure",
-                    set.name
-                )));
+            for color in [set.color_by.as_ref(), set.track_by.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                let Some(target) = &color.target else {
+                    continue;
+                };
+                if !pairs.contains(&(&set.name, target)) {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{} is colored by a relation to {target} that the protocol does not measure",
+                        set.name
+                    )));
+                }
             }
         }
         if let Some(coloc) = &self.coloc {

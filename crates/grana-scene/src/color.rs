@@ -4,6 +4,9 @@ use grana_object::RelationFrame;
 
 use crate::object::ObjectFrame;
 use crate::object_set::ObjectSetId;
+use crate::track_color::relation_value;
+
+pub const RELATION_FIELDS: [RelationField; 2] = [RelationField::Distance, RelationField::Inside];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ObjectColor {
@@ -15,9 +18,6 @@ pub enum ObjectColor {
 }
 
 impl ObjectColor {
-    pub const RELATION_FIELDS: [RelationField; 2] =
-        [RelationField::Distance, RelationField::Inside];
-
     pub fn unit(self) -> Unit {
         match self {
             Self::Measurement(measurement) => measurement.unit(),
@@ -47,14 +47,7 @@ impl ObjectColor {
     ) -> f32 {
         match self {
             Self::Measurement(measurement) => measurement.value(objects, object),
-            Self::Relation { field, .. } => match relation {
-                Some(frame) if object < frame.objects() => match field {
-                    RelationField::Distance => frame.distance(object),
-                    RelationField::Inside => 100.0 * frame.inside(object),
-                    RelationField::Partner => f32::NAN,
-                },
-                _ => f32::NAN,
-            },
+            Self::Relation { field, .. } => relation_value(field, relation, object),
         }
     }
 

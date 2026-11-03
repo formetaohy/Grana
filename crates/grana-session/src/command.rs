@@ -2,27 +2,12 @@ use grana_analysis::TrackParams;
 use grana_display::{Coloring, Shading, TransferFunction};
 use grana_measure::{
     Aggregate, ColocPair, ColocSettings, ColocThresholds, Filter, Group, Lasso, MeasureView,
-    PlotAxis, Scope, TrackMeasurement,
+    PlotAxis, Scope,
 };
-use grana_scene::{ObjectColor, ObjectKind, ObjectParams, ObjectSetId, Selection};
+use grana_scene::{ObjectColor, ObjectKind, ObjectParams, ObjectSetId, Selection, TrackColor};
 use grana_volume::{Intensity, Region};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Export {
-    pub width: u32,
-    pub transparent: bool,
-}
-
-impl Export {
-    pub const NATIVE: Self = Self {
-        width: 0,
-        transparent: false,
-    };
-
-    pub const fn new(width: u32, transparent: bool) -> Self {
-        Self { width, transparent }
-    }
-}
+pub use grana_project::Export;
 
 pub enum Command {
     OpenDataset,
@@ -64,6 +49,12 @@ pub enum Command {
     AddRelation {
         source: ObjectSetId,
         target: ObjectSetId,
+        shift: i32,
+    },
+    SetRelationShift {
+        source: ObjectSetId,
+        target: ObjectSetId,
+        shift: i32,
     },
     RemoveRelation {
         source: ObjectSetId,
@@ -125,7 +116,7 @@ pub enum Command {
     },
     SetTrackColoring {
         set: ObjectSetId,
-        coloring: Coloring<TrackMeasurement>,
+        coloring: Coloring<TrackColor>,
     },
     SelectTrack {
         set: ObjectSetId,
@@ -410,9 +401,9 @@ impl Command {
                 Edit::targeted(Action::Seed, set.raw())
             }
             Self::Detect(set) => Edit::targeted(Action::Detect, set.raw()),
-            Self::AddRelation { target, .. } | Self::RemoveRelation { target, .. } => {
-                Edit::targeted(Action::Relation, target.raw())
-            }
+            Self::AddRelation { target, .. }
+            | Self::SetRelationShift { target, .. }
+            | Self::RemoveRelation { target, .. } => Edit::targeted(Action::Relation, target.raw()),
             Self::Track(set) => Edit::targeted(Action::Track, set.raw()),
             Self::ClearTracks(_) => Edit::new(Action::ClearTracks),
             Self::CutTrack { .. } => Edit::new(Action::CutTrack),

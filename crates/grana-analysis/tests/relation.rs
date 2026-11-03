@@ -86,6 +86,7 @@ fn keeps_relations_deterministic_across_worker_counts() {
         &counts,
         |time| Ok(source[time].clone()),
         |time| Ok(target[time].clone()),
+        0,
         1,
         &cancel,
         &mut |_, _| {},
@@ -96,6 +97,7 @@ fn keeps_relations_deterministic_across_worker_counts() {
         &counts,
         |time| Ok(source[time].clone()),
         |time| Ok(target[time].clone()),
+        0,
         8,
         &cancel,
         &mut |_, _| {},
@@ -108,6 +110,56 @@ fn keeps_relations_deterministic_across_worker_counts() {
         (single[2].as_ref().expect("the frame relates").distance(0) - 3.0).abs() < 1.0e-2,
         "every frame measures its own target"
     );
+}
+
+#[test]
+fn measures_the_target_of_a_shifted_frame() {
+    let target = (0..4)
+        .map(|index| {
+            Some(Shape::mesh(Arc::new(cubes(&[(
+                0,
+                Vec3::new(6.0 * index as f32, 0.0, 0.0),
+                2.0,
+            )]))))
+        })
+        .collect::<Vec<_>>();
+    let source = (0..4)
+        .map(|index| {
+            Some(Shape::spots(Arc::from([Spot::new(
+                [6.0 * index as f32, 0.0, 0.0],
+                0.5,
+                1.0,
+            )])))
+        })
+        .collect::<Vec<_>>();
+    let cancel = AtomicBool::new(false);
+    let counts = source
+        .iter()
+        .map(|frame| frame.as_ref().map(Shape::objects))
+        .collect::<Vec<_>>();
+    let frames = relate_frames(
+        &counts,
+        |time| Ok(source[time].clone()),
+        |time| Ok(target[time].clone()),
+        -2,
+        4,
+        &cancel,
+        &mut |_, _| {},
+    )
+    .expect("the relation frames are measured")
+    .expect("the relation finishes");
+    assert_eq!(frames.len(), 4);
+    assert!(
+        frames[..2].iter().all(Option::is_none),
+        "a target before the series leaves the frame unmeasured"
+    );
+    let measured = frames[2].as_ref().expect("the shifted target is measured");
+    assert!(
+        (measured.distance(0) - 10.0).abs() < 1.0e-2,
+        "the frame relates to the target two frames earlier: {}",
+        measured.distance(0)
+    );
+    assert_eq!(measured.inside(0), 0.0);
 }
 
 fn cubes(cubes: &[(u32, Vec3, f32)]) -> PackedMesh {

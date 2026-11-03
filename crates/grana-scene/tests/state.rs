@@ -1,12 +1,16 @@
 use grana_measure::{
-    ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
+    Aggregate, ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
     RelationField,
 };
-use grana_object::{IntensityTable, RelationFrame, SampleAccumulator, Spot, SpotSet};
-use grana_scene::{Dataset, Item, ObjectColor, ObjectFrame, ObjectKind, Scene, Selection};
+use grana_object::{
+    IntensityTable, RelationFrame, SampleAccumulator, Spot, SpotSet, Track, TrackNode, TrackSet,
+};
+use grana_scene::{
+    Dataset, Item, ObjectColor, ObjectFrame, ObjectKind, Scene, Selection, TrackColor,
+};
 use grana_volume::{Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
-fn scene() -> Scene {
+fn series(frames: usize) -> Scene {
     let extent = Extent::new(4, 4, 2);
     let volume = Volume::new(
         extent,
@@ -26,8 +30,14 @@ fn scene() -> Scene {
     );
     Scene::new(Dataset::synthetic(
         "fixture",
-        VolumeSeries::new(vec![volume], 1.0).pyramid().clone(),
+        VolumeSeries::new(vec![volume; frames], 1.0)
+            .pyramid()
+            .clone(),
     ))
+}
+
+fn scene() -> Scene {
+    series(1)
 }
 
 fn frame(x: f32) -> ObjectFrame {
@@ -111,7 +121,7 @@ fn renames_and_deletes_a_detection_without_losing_identities() {
         spots(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
     );
     scene.install(target, 0, spots(&[[0.0, 0.0, 0.0]]));
-    assert!(scene.add_relation(target, source));
+    assert!(scene.add_relation(target, source, 0));
     scene.install_relation(
         target,
         source,
@@ -165,7 +175,7 @@ fn colors_objects_by_their_relation_to_another_set() {
         spots(&[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [4.0, 0.0, 0.0]]),
     );
     scene.install(target, 0, spots(&[[0.0, 0.0, 0.0]]));
-    assert!(scene.add_relation(source, target));
+    assert!(scene.add_relation(source, target, 0));
     let set = scene
         .objects
         .get_mut(source)
@@ -212,6 +222,131 @@ fn colors_objects_by_their_relation_to_another_set() {
             .metric()
             .is_none(),
         "removing the relation falls back to the set color"
+    );
+}
+
+#[test]
+fn shifts_a_relation_in_time_and_trims_its_frames() {
+    let mut scene = series(3);
+    let source = scene.add_object(ObjectKind::Spots, 0);
+    let target = scene.add_object(ObjectKind::Spots, 0);
+    for time in 0..3 {
+        scene.install(source, time, spots(&[[0.0, 0.0, 0.0]]));
+        scene.install(target, time, spots(&[[1.0, 0.0, 0.0]]));
+    }
+    assert!(scene.add_relation(source, target, -1));
+    assert_eq!(
+        scene
+            .objects
+            .get(source)
+            .and_then(|set| set.relation(target))
+            .map(|relation| relation.shift()),
+        Some(-1)
+    );
+    scene.install_relation(
+        source,
+        target,
+        2,
+        RelationFrame::new(vec![2.0], vec![0.0], vec![1]),
+    );
+    scene.install(target, 1, spots(&[[3.0, 0.0, 0.0]]));
+    assert!(
+        scene
+            .objects
+            .get(source)
+            .and_then(|set| set.relation(target))
+            .is_some_and(|relation| relation.frame(2).is_none()),
+        "a changed target frame invalidates the relation that measured it"
+    );
+
+    scene.install_relation(
+        source,
+        target,
+        2,
+        RelationFrame::new(vec![2.0], vec![0.0], vec![1]),
+    );
+    assert!(scene.set_relation_shift(source, target, 0));
+    assert!(
+        scene
+            .objects
+            .get(source)
+            .and_then(|set| set.relation(target))
+            .is_some_and(|relation| relation.computed() == 0),
+        "changing the shift unmeasures the relation"
+    );
+    assert!(
+        !scene.add_relation(source, source, 0),
+        "a relation to the same frame of itself measures nothing"
+    );
+    assert!(scene.add_relation(source, source, -2));
+    assert!(
+        !scene.set_relation_shift(source, target, 3),
+        "a shift outside the series is refused"
+    );
+}
+
+#[test]
+fn colors_tracks_by_a_reduced_relation() {
+    let mut scene = series(2);
+    let source = scene.add_object(ObjectKind::Spots, 0);
+    let target = scene.add_object(ObjectKind::Spots, 0);
+    for time in 0..2 {
+        scene.install(source, time, spots(&[[0.0, 0.0, 0.0]]));
+        scene.install(target, time, spots(&[[1.0, 0.0, 0.0]]));
+    }
+    assert!(scene.add_relation(source, target, 0));
+    for (time, reach) in [(0, 0.0), (1, 6.0)] {
+        scene.install_relation(
+            source,
+            target,
+            time,
+            RelationFrame::new(vec![reach], vec![0.0], vec![1]),
+        );
+    }
+    let centre = |time: u32| TrackNode::new(time, 0, [time as f32, 0.0, 0.0]);
+    assert!(scene.objects.install_tracks(
+        source,
+        TrackSet::new(1.0, vec![Track::new(None, vec![centre(0), centre(1)])]),
+    ));
+    let set = scene
+        .objects
+        .get_mut(source)
+        .expect("the source set exists");
+    let mut coloring = set.track_coloring().clone();
+    coloring.set_metric(Some(TrackColor::Relation {
+        target,
+        field: RelationField::Distance,
+        aggregate: Aggregate::Maximum,
+    }));
+    assert!(set.set_track_coloring(coloring));
+    assert_eq!(
+        scene
+            .objects
+            .get(source)
+            .expect("the source set exists")
+            .track_extent(),
+        Some((6.0, 6.0)),
+        "a track takes the maximum of the distances it measured"
+    );
+    let set = scene
+        .objects
+        .get_mut(source)
+        .expect("the source set exists");
+    let mut coloring = set.track_coloring().clone();
+    coloring.set_metric(Some(TrackColor::Relation {
+        target,
+        field: RelationField::Distance,
+        aggregate: Aggregate::Mean,
+    }));
+    assert!(set.set_track_coloring(coloring));
+    assert_eq!(
+        scene
+            .objects
+            .get(source)
+            .expect("the source set exists")
+            .track_extent(),
+        Some((3.0, 3.0)),
+        "the reducer of a track color is explicit"
     );
 }
 

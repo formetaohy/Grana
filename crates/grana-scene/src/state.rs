@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use grana_display::{Shading, TransferFunction};
-use grana_measure::TrackMeasurement;
 use grana_object::{RelationFrame, TrackSet};
 use grana_volume::{Intensity, Region};
 
@@ -10,6 +9,7 @@ use crate::color::ObjectColor;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::scene::{Item, Scene, Selection};
+use crate::track_color::TrackColor;
 use grana_display::ColorState;
 
 pub(crate) const HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -53,6 +53,7 @@ pub enum ItemState {
 #[derive(Debug, PartialEq)]
 pub struct RelationState {
     pub target: u64,
+    pub shift: i32,
     pub frames: Vec<Option<Arc<RelationFrame>>>,
 }
 
@@ -71,7 +72,7 @@ pub struct SetState {
     pub track_thickness: Option<f32>,
     pub track_visible: Option<bool>,
     pub object_color: ColorState<ObjectColor>,
-    pub track_color: ColorState<TrackMeasurement>,
+    pub track_color: ColorState<TrackColor>,
     pub visibility: Visibility,
     pub seeds: Vec<Vec<[f32; 3]>>,
     pub frames: Vec<Option<Arc<ObjectFrame>>>,

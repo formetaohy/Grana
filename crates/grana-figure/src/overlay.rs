@@ -1,7 +1,7 @@
 use glam::{Mat4, Vec2, Vec3};
 use grana_display::{Camera, Palette, SectionCamera, plane_basis};
 use grana_measure::Unit;
-use grana_scene::{ObjectColor, Scene};
+use grana_scene::{ObjectColor, Scene, TrackColor};
 use grana_ui::{
     Align, Color, Corners, Fill, Icon, Painter, Rect, Role, TextStyle, TypeStyle, Ui, icon,
 };
@@ -212,17 +212,17 @@ pub fn legends(scene: &Scene) -> Vec<Legend> {
                 decimals: metric.decimals(),
             });
         }
-        if let Some(measurement) = set.track_coloring().metric()
+        if let Some(metric) = set.track_coloring().metric()
             && set.tracks().is_some_and(|layer| layer.visible())
             && let Some(extent) = set.track_extent()
         {
             legends.push(Legend {
-                title: format!("{} tracks · {}", set.name(), measurement.label()),
+                title: format!("{} tracks · {}", set.name(), track_label(scene, metric)),
                 palette: set.track_coloring().palette(),
                 reversed: set.track_coloring().reversed(),
                 extent,
-                unit: measurement.unit(),
-                decimals: measurement.decimals(),
+                unit: metric.unit(),
+                decimals: metric.decimals(),
             });
         }
     }
@@ -238,6 +238,23 @@ fn metric_label(scene: &Scene, metric: ObjectColor, channels: &[String]) -> Stri
                 .get(target)
                 .map_or_else(|| "target".to_string(), |set| set.name().to_string());
             format!("{target} · {}", field.label())
+        }
+    }
+}
+
+fn track_label(scene: &Scene, metric: TrackColor) -> String {
+    match metric {
+        TrackColor::Measurement(measurement) => measurement.label().to_string(),
+        TrackColor::Relation {
+            target,
+            field,
+            aggregate,
+        } => {
+            let target = scene
+                .objects
+                .get(target)
+                .map_or_else(|| "target".to_string(), |set| set.name().to_string());
+            format!("{target} {} · {}", field.label(), aggregate.name())
         }
     }
 }

@@ -68,6 +68,10 @@ impl Aggregate {
         }
     }
 
+    pub fn from_index(index: u8) -> Option<Self> {
+        Self::ALL.get(index as usize).copied()
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Self::Mean => "mean",
@@ -94,7 +98,7 @@ impl Aggregate {
             .find(|aggregate| aggregate.key() == key)
     }
 
-    fn apply(self, statistics: SampleStatistics) -> f32 {
+    pub fn apply(self, statistics: SampleStatistics) -> f32 {
         match self {
             Self::Mean => statistics.mean(),
             Self::Sum => statistics.sum() as f32,
@@ -203,7 +207,7 @@ impl ObjectCell {
             Self::Measure(measurement) => measurement.column(channels, keys),
             Self::Relation { index, field } => {
                 let target = relations[*index].target();
-                field.column(target, &sanitize(target))
+                field.column(target, &sanitize(target), relations[*index].shift())
             }
         }
     }
@@ -680,7 +684,7 @@ fn aggregate_relation_column(
     aggregate: Aggregate,
 ) -> Column {
     let target = row.target();
-    let base = field.column(target, &sanitize(target));
+    let base = field.column(target, &sanitize(target), row.shift());
     Column::new(
         base.label().to_string(),
         format!("{}_{}", base.key(), aggregate.key()),

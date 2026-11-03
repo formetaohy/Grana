@@ -44,6 +44,12 @@ impl Encode for u32 {
     }
 }
 
+impl Encode for i32 {
+    fn encode(&self, writer: &mut Writer<'_>) {
+        writer.i32(*self);
+    }
+}
+
 impl Encode for u64 {
     fn encode(&self, writer: &mut Writer<'_>) {
         writer.u64(*self);
@@ -95,6 +101,12 @@ impl Decode for u16 {
 impl Decode for u32 {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         reader.u32()
+    }
+}
+
+impl Decode for i32 {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        reader.i32()
     }
 }
 
@@ -193,6 +205,10 @@ impl<'a> Writer<'a> {
     }
 
     pub fn u32(&mut self, value: u32) {
+        self.bytes(&value.to_le_bytes());
+    }
+
+    pub fn i32(&mut self, value: i32) {
         self.bytes(&value.to_le_bytes());
     }
 
@@ -303,6 +319,10 @@ impl<'a> Reader<'a> {
         let mut bytes = [0u8; 4];
         self.fill(&mut bytes)?;
         Ok(u32::from_le_bytes(bytes))
+    }
+
+    pub fn i32(&mut self) -> Result<i32, &'static str> {
+        self.u32().map(|value| value as i32)
     }
 
     pub fn u64(&mut self) -> Result<u64, &'static str> {

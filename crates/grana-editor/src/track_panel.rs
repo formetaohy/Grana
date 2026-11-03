@@ -1,7 +1,8 @@
 use glam::Vec2;
 use grana_analysis::TrackParams;
+use grana_measure::Aggregate;
 use grana_object::TrackSet;
-use grana_scene::{Job, ObjectSet, ObjectSetId};
+use grana_scene::{Job, ObjectSet, ObjectSetId, TrackColor};
 use grana_ui::{Align, Block, Color, Corners, Icon, Length, Rect, Role, TextStyle, TypeStyle, Ui};
 
 use crate::panel::{Panel, empty_state, progress};
@@ -73,6 +74,7 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     };
     header(ui, state, commands, &sets, id, object);
     parameters(ui, state, commands, id, object);
+    appearance(ui, state, commands, id, object);
     let Some(set) = object.tracks().map(|layer| layer.set()) else {
         widget::weak(
             ui,
@@ -88,6 +90,9 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         full.min,
         Vec2::new((full.width() - stats - 16.0).max(240.0), height),
     );
+    let colors = (0..set.len())
+        .map(|index| object.track_color(index))
+        .collect::<Vec<_>>();
     ui.place(tree, |ui| {
         lineage(
             ui,
@@ -95,7 +100,7 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
             Tree {
                 set,
                 id,
-                color: object.color(),
+                colors: &colors,
                 selected,
                 time: scene.time(),
                 frames: scene.frame_count(),
@@ -309,10 +314,72 @@ fn parameters(
     }
 }
 
+fn appearance(
+    ui: &mut Ui,
+    state: &State<'_>,
+    commands: &mut Vec<Command>,
+    id: ObjectSetId,
+    object: &ObjectSet,
+) {
+    if object.tracks().is_none() {
+        return;
+    }
+    let mut metrics = object
+        .colorable_track_measurements()
+        .into_iter()
+        .map(|measurement| {
+            (
+                TrackColor::Measurement(measurement),
+                measurement.label().to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    for relation in object.relations() {
+        let name = state
+            .scene
+            .objects
+            .get(relation.target())
+            .map_or_else(|| "target".to_string(), |target| target.name().to_string());
+        let shift = match relation.shift() {
+            0 => String::new(),
+            shift => format!(" t{shift:+}"),
+        };
+        for field in grana_scene::RELATION_FIELDS {
+            for aggregate in Aggregate::ALL {
+                metrics.push((
+                    TrackColor::Relation {
+                        target: relation.target(),
+                        field,
+                        aggregate,
+                    },
+                    format!("{name} {}{shift} · {}", field.label(), aggregate.name()),
+                ));
+            }
+        }
+    }
+    if metrics.is_empty() {
+        return;
+    }
+    ui.separator();
+    widget::section_title(ui, "Tubes");
+    let extent = object.track_extent();
+    let mut coloring = object.track_coloring().clone();
+    if crate::coloring::edit(
+        ui,
+        &format!("tracks.{}.coloring", id.raw()),
+        &mut coloring,
+        &metrics,
+        extent,
+        |metric| (metric.unit(), metric.decimals()),
+    ) {
+        commands.push(Command::SetTrackColoring { set: id, coloring });
+    }
+}
+
 struct Tree<'a> {
     set: &'a TrackSet,
     id: ObjectSetId,
-    color: [f32; 3],
+    colors: &'a [[f32; 3]],
     selected: Option<usize>,
     time: u32,
     frames: u32,
@@ -328,7 +395,7 @@ fn lineage(
     let Tree {
         set,
         id,
-        color,
+        colors,
         selected,
         time,
         frames,
@@ -336,7 +403,6 @@ fn lineage(
     let radius = ui.theme().metrics.card_radius;
     let accent = ui.theme().palette.accent;
     let tertiary = ui.theme().palette.text_tertiary;
-    let base = Color::from_rgb_f32(color);
     let rect = ui.allocate(Vec2::new(ui.available().x, height));
     let inner = Rect::from_min_max(
         rect.min + Vec2::new(SIDE, AXIS),
@@ -411,7 +477,11 @@ fn lineage(
             let start = x(track.start());
             let end = x(track.end());
             let chosen = selected == Some(*index);
-            let tint = if chosen { accent } else { base };
+            let tint = if chosen {
+                accent
+            } else {
+                Color::from_rgb_f32(colors.get(*index).copied().unwrap_or([0.6, 0.6, 0.6]))
+            };
             if let Some(parent) = track.parent() {
                 let parent = parent as usize;
                 if let Some(track) = set.track(parent) {
