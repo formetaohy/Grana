@@ -83,6 +83,8 @@ pub struct SurfaceSet {
     objects: Vec<SurfaceStatistics>,
     intensities: IntensityTable,
     topology: Option<Geometry<SurfaceTopology>>,
+    leaves: Vec<Vec<u32>>,
+    removed: Vec<u32>,
 }
 
 impl SurfaceSet {
@@ -103,6 +105,8 @@ impl SurfaceSet {
             objects,
             intensities,
             topology: None,
+            leaves: Vec::new(),
+            removed: Vec::new(),
         }
     }
 
@@ -124,6 +128,8 @@ impl SurfaceSet {
             objects,
             intensities,
             topology: None,
+            leaves: Vec::new(),
+            removed: Vec::new(),
         })
     }
 
@@ -143,17 +149,43 @@ impl SurfaceSet {
             objects,
             intensities,
             topology: None,
+            leaves: Vec::new(),
+            removed: Vec::new(),
         }))
+    }
+
+    pub fn with_cut(mut self, leaves: Vec<Vec<u32>>, removed: Vec<u32>) -> Self {
+        assert_eq!(
+            leaves.len(),
+            self.objects.len(),
+            "every cut surface names the watershed basins it holds"
+        );
+        assert!(
+            removed.windows(2).all(|pair| pair[0] < pair[1]),
+            "removed watershed basins are ordered and unique"
+        );
+        self.leaves = leaves;
+        self.removed = removed;
+        self
     }
 
     pub fn with_topology(
         mut self,
         topology: Geometry<SurfaceTopology>,
     ) -> Result<Self, grana_geometry::Error> {
-        let level = topology.load()?.level();
+        let loaded = topology.load()?;
         assert!(
-            level == self.level,
+            loaded.level() == self.level,
             "a surface topology describes the level of its set"
+        );
+        let basins = loaded.basins().len() as u32;
+        assert!(
+            self.leaves.iter().flatten().all(|basin| *basin < basins),
+            "a cut surface names the watershed basins of its topology"
+        );
+        assert!(
+            self.removed.iter().all(|basin| *basin < basins),
+            "a removed surface names the watershed basins of its topology"
         );
         self.topology = Some(topology);
         Ok(self)
@@ -161,6 +193,14 @@ impl SurfaceSet {
 
     pub fn topology(&self) -> Option<&Geometry<SurfaceTopology>> {
         self.topology.as_ref()
+    }
+
+    pub fn leaves(&self) -> &[Vec<u32>] {
+        &self.leaves
+    }
+
+    pub fn removed(&self) -> &[u32] {
+        &self.removed
     }
 
     pub fn cuttable(&self) -> bool {
@@ -212,12 +252,23 @@ impl SurfaceSet {
         };
         let mut objects = self.objects.clone();
         objects.remove(object);
-        Self::from_geometry(
-            self.level,
+        let intensities = self.intensities.without(object);
+        let mut removed = self.removed.clone();
+        let mut leaves = self.leaves.clone();
+        if let Some(mut pruned) = (object < leaves.len()).then(|| leaves.remove(object)) {
+            removed.append(&mut pruned);
+            removed.sort_unstable();
+            removed.dedup();
+        }
+        Ok(Some(Self {
+            level: self.level,
             geometry,
             objects,
-            self.intensities.without(object),
-        )
+            intensities,
+            topology: self.topology.clone(),
+            leaves,
+            removed,
+        }))
     }
 }
 
@@ -227,6 +278,8 @@ impl PartialEq for SurfaceSet {
             && self.geometry == other.geometry
             && self.objects == other.objects
             && self.intensities == other.intensities
+            && self.leaves == other.leaves
+            && self.removed == other.removed
     }
 }
 

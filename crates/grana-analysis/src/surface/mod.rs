@@ -381,7 +381,7 @@ impl SurfaceBuilder {
                     let topology =
                         Geometry::paged(store, *topology).map_err(|error| error.to_string())?;
                     let loaded = topology.load().map_err(|error| error.to_string())?;
-                    let set = cut::cut(&loaded, self.params.cut(), desired, Some(store))?;
+                    let set = cut::cut(&loaded, self.params.cut(), &[], desired, Some(store))?;
                     return Ok(Some(
                         set.with_topology(topology)
                             .map_err(|error| error.to_string())?,
@@ -413,7 +413,7 @@ pub fn recut(
     };
     let workers = crate::schedule::workers(workers);
     let loaded = topology.load().map_err(|error| error.to_string())?;
-    let cut = cut::cut(&loaded, spec, workers, store)?
+    let cut = cut::cut(&loaded, spec, set.removed(), workers, store)?
         .with_topology(topology.clone())
         .map_err(|error| error.to_string())?;
     Ok(Some(cut))

@@ -19,22 +19,30 @@ const MAX_FOLD: u32 = 8;
 pub(super) fn cut(
     topology: &SurfaceTopology,
     spec: SurfaceCut,
+    removed: &[u32],
     workers: usize,
     store: Option<&Arc<GeometryStore>>,
 ) -> Result<SurfaceSet, String> {
     let info = topology.info();
-    let mut merged = Merged::new(topology);
+    let mut merged = Merged::new(topology, removed);
     merged.close(spec.split());
     let targets = merged.targets();
     merged.check_seeds(&targets)?;
     let (order, offsets) = grouped(topology, &targets);
     let candidates = (0..topology.basins().len() as u32)
         .filter(|root| {
-            merged.find(*root) == *root
+            !merged.removed[*root as usize]
+                && merged.find(*root) == *root
                 && merged.nodes[*root as usize].voxels() > 0
                 && offsets[*root as usize + 1] > offsets[*root as usize]
         })
         .collect::<Vec<_>>();
+    let mut leaves_of = vec![Vec::new(); topology.basins().len()];
+    for (basin, target) in targets.iter().enumerate() {
+        if *target != EMPTY {
+            leaves_of[*target as usize].push(basin as u32);
+        }
+    }
     let meshed = Meshed {
         topology,
         merged: &merged,
@@ -45,11 +53,15 @@ pub(super) fn cut(
         meshed.chunk(*root, &order[range])
     });
     let mut objects = Vec::new();
+    let mut leaves = Vec::new();
     let mut intensities = Vec::new();
     let mut kept = Vec::new();
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    for chunk in chunks.into_iter().flatten() {
+    for (root, chunk) in candidates.into_iter().zip(chunks) {
+        let Some(chunk) = chunk else {
+            continue;
+        };
         let object = objects.len() as u32;
         let base = vertices.len() as u32;
         for (position, normal) in &chunk.vertices {
@@ -57,6 +69,7 @@ pub(super) fn cut(
         }
         indices.extend(chunk.indices.iter().map(|index| base + index));
         objects.push(chunk.statistics);
+        leaves.push(std::mem::take(&mut leaves_of[root as usize]));
         if let Some(seed) = chunk.seed {
             kept.push(seed);
         }
@@ -73,10 +86,14 @@ pub(super) fn cut(
     }
     let mesh = Mesh::new(vertices, indices);
     let intensities = IntensityTable::new(info.channels(), intensities);
+    let removed = removed.to_vec();
     match store {
         Some(store) => SurfaceSet::paged(info.level(), store, mesh, objects, intensities)
+            .map(|set| set.with_cut(leaves, removed))
             .map_err(|error| error.to_string()),
-        None => Ok(SurfaceSet::new(info.level(), mesh, objects, intensities)),
+        None => {
+            Ok(SurfaceSet::new(info.level(), mesh, objects, intensities).with_cut(leaves, removed))
+        }
     }
 }
 
@@ -114,13 +131,22 @@ struct Merged<'a> {
     parent: Vec<u32>,
     rank: Vec<u8>,
     channels: usize,
+    removed: Vec<bool>,
 }
 
 impl<'a> Merged<'a> {
-    fn new(topology: &'a SurfaceTopology) -> Self {
+    fn new(topology: &'a SurfaceTopology, removed: &[u32]) -> Self {
         let nodes = topology.basins().to_vec();
         let parent = (0..nodes.len() as u32).collect();
         let rank = vec![0; nodes.len()];
+        let mut excluded = vec![false; nodes.len()];
+        for basin in removed {
+            assert!(
+                (*basin as usize) < nodes.len(),
+                "a removed surface names a watershed basin"
+            );
+            excluded[*basin as usize] = true;
+        }
         Self {
             topology,
             nodes,
@@ -128,6 +154,7 @@ impl<'a> Merged<'a> {
             parent,
             rank,
             channels: topology.info().channels(),
+            removed: excluded,
         }
     }
     fn find(&mut self, node: u32) -> u32 {
@@ -163,7 +190,7 @@ impl<'a> Merged<'a> {
     fn join(&mut self, left: u32, right: u32, saddle: u32, split: f32, merge_all: bool) {
         let left = self.find(left);
         let right = self.find(right);
-        if left == right {
+        if left == right || self.removed[left as usize] || self.removed[right as usize] {
             return;
         }
         if merge_all {

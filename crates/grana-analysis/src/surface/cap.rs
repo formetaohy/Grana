@@ -26,11 +26,23 @@ impl Cap {
             .iter()
             .map(|vertex| Vec3::from(surface[*vertex as usize]))
             .collect::<Vec<_>>();
-        let normal = newell(&corners).normalize_or_zero();
+        let centroid = corners.iter().copied().sum::<Vec3>() / corners.len() as f32;
+        let mut normal = Vec3::ZERO;
+        let mut area = 0.0f64;
+        for side in sides {
+            let first = Vec3::from(surface[side.1 as usize]);
+            let second = Vec3::from(surface[side.0 as usize]);
+            let cross = (first - centroid).cross(second - centroid);
+            normal += cross;
+            let size = 0.5 * cross.length();
+            if size.is_finite() {
+                area += f64::from(size);
+            }
+        }
+        let normal = normal.normalize_or_zero();
         if normal == Vec3::ZERO {
             return;
         }
-        let centroid = corners.iter().copied().sum::<Vec3>() / corners.len() as f32;
         let base = self.positions.len() as u32;
         self.positions.push(centroid.to_array());
         self.normals.push(normal.to_array());
@@ -43,19 +55,11 @@ impl Cap {
                 slot
             });
         }
-        let mut area = 0.0f64;
         for side in sides {
             let start = slots[&side.1];
             let end = slots[&side.0];
             if start == end {
                 continue;
-            }
-            let first = Vec3::from(surface[side.1 as usize]);
-            let second = Vec3::from(surface[side.0 as usize]);
-            let cross = (first - centroid).cross(second - centroid);
-            let size = 0.5 * cross.length();
-            if size.is_finite() {
-                area += f64::from(size);
             }
             self.triangles.extend_from_slice(&[base, start, end]);
         }
@@ -149,16 +153,4 @@ fn take(
     let target = list.remove(slot);
     used.insert((vertex.min(target), vertex.max(target)));
     Some(target)
-}
-
-fn newell(points: &[Vec3]) -> Vec3 {
-    let mut normal = Vec3::ZERO;
-    for index in 0..points.len() {
-        let current = points[index];
-        let next = points[(index + 1) % points.len()];
-        normal.x += (current.y - next.y) * (current.z + next.z);
-        normal.y += (current.z - next.z) * (current.x + next.x);
-        normal.z += (current.x - next.x) * (current.y + next.y);
-    }
-    normal
 }

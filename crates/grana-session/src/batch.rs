@@ -24,7 +24,7 @@ const RESULT: &str = "result.json";
 const PARTIAL: &str = "partial";
 pub const MAX_JOBS: usize = 16;
 const DEFAULT_JOBS: usize = 4;
-const ANALYSIS_REVISION: u32 = 3;
+const ANALYSIS_REVISION: u32 = 4;
 const CONTENT_SAMPLE: u64 = 1 << 16;
 const HASH: u64 = 0xcbf2_9ce4_8422_2325;
 const PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -164,17 +164,32 @@ struct Record {
     artifacts: Vec<String>,
     objects: usize,
     detail: String,
+    quality: Vec<Quality>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Quality {
+    name: String,
+    kind: String,
+    objects: usize,
+    volume: Option<f64>,
+    area: Option<f64>,
+    size: Option<f64>,
+    intensity: Option<f64>,
 }
 
 struct Row {
     status: &'static str,
     objects: usize,
     detail: String,
+    quality: Vec<Quality>,
 }
 
 struct Report {
     objects: usize,
     detail: String,
+    quality: Vec<Quality>,
 }
 
 struct Task<'a> {
@@ -238,19 +253,27 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
         }
     });
     let mut summary = vec!["dataset,status,objects,detail".to_string()];
+    let mut quality =
+        vec!["dataset,status,set,kind,objects,volume_um3,area_um2,size_um,intensity".to_string()];
     for (index, row) in lock(&rows).iter().enumerate() {
         if let Some(row) = row {
-            summary.push(row_line(
-                &dataset_name(&plan.datasets[index]),
-                row.status,
-                row.objects,
-                &row.detail,
-            ));
+            let name = dataset_name(&plan.datasets[index]);
+            summary.push(row_line(&name, row.status, row.objects, &row.detail));
+            quality.extend(
+                row.quality
+                    .iter()
+                    .map(|entry| quality_line(&name, row.status, entry)),
+            );
         }
     }
     if let Err(error) = std::fs::write(plan.output.join("summary.csv"), summary.join("\n") + "\n") {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch summary: {error}"
+        )));
+    }
+    if let Err(error) = std::fs::write(plan.output.join("quality.csv"), quality.join("\n") + "\n") {
+        let _ = events.send(Event::Failed(format!(
+            "failed to write the batch quality report: {error}"
         )));
     }
     let _ = events.send(Event::Done {
@@ -301,6 +324,7 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
                 status: "resumed",
                 objects: record.objects,
                 detail: record.detail,
+                quality: record.quality,
             },
         );
         return;
@@ -326,6 +350,7 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
                     status: "ok",
                     objects: report.objects,
                     detail: report.detail,
+                    quality: report.quality,
                 },
             );
         }
@@ -346,6 +371,7 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
                     status: "failed",
                     objects: 0,
                     detail,
+                    quality: Vec::new(),
                 },
             );
         }
@@ -418,6 +444,15 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
     let Run { scene, sets, .. } = run;
     let mut objects = 0usize;
     let mut detail = Vec::new();
+    let mut quality = Vec::new();
+    let keys = grana_measure::channel_keys(
+        &scene
+            .dataset
+            .channels()
+            .iter()
+            .map(|channel| channel.name().to_string())
+            .collect::<Vec<_>>(),
+    );
     for (index, spec) in task.protocol.sets().iter().enumerate() {
         let table = scene
             .table(sets[index], spec.group(), spec.aggregate())
@@ -447,6 +482,7 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
         write(&folder.join(&file), &table.csv(&rows))?;
         objects += rows.len();
         detail.push(format!("{}={}", spec.name, rows.len()));
+        quality.push(quality_of(&scene, sets[index], &keys, &table, &rows));
     }
     if task.protocol.coloc().is_some() {
         let channels = scene
@@ -471,6 +507,7 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
     let report = Report {
         objects,
         detail: detail.join("; "),
+        quality,
     };
     if task.project {
         let _ = task.events.send(Event::Step {
@@ -505,10 +542,49 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
         artifacts,
         objects: report.objects,
         detail: report.detail.clone(),
+        quality: report.quality.clone(),
     })
     .map_err(|error| format!("failed to record the dataset: {error}"))?;
     write(&folder.join(RESULT), &record)?;
     Ok(report)
+}
+
+fn quality_of(
+    scene: &Scene,
+    set: ObjectSetId,
+    keys: &[String],
+    table: &grana_measure::Table,
+    rows: &[usize],
+) -> Quality {
+    let object = scene
+        .objects
+        .get(set)
+        .expect("the batch quality names its object set");
+    let mean = |key: &str| -> Option<f64> {
+        let column = table.column(key)?;
+        if rows.is_empty() {
+            return None;
+        }
+        let total = rows
+            .iter()
+            .map(|row| f64::from(table.value(*row, column)))
+            .sum::<f64>();
+        Some(total / rows.len() as f64)
+    };
+    let intensity = grana_measure::Measurement::Intensity {
+        channel: object.channel(),
+        statistic: grana_measure::Statistic::Mean,
+    }
+    .key(keys);
+    Quality {
+        name: object.name().to_string(),
+        kind: object.kind().name().to_string(),
+        objects: rows.len(),
+        volume: mean("volume_um3"),
+        area: mean("area_um2"),
+        size: mean("diameter_um").or_else(|| mean("length_um")),
+        intensity: mean(&intensity),
+    }
 }
 
 struct Run<'a, 'b> {
@@ -986,6 +1062,24 @@ pub fn dataset_name(path: &Path) -> String {
 
 fn row_line(dataset: &str, status: &str, objects: usize, detail: &str) -> String {
     format!("{},{status},{objects},{}", escape(dataset), escape(detail))
+}
+
+fn quality_line(dataset: &str, status: &str, quality: &Quality) -> String {
+    let formatted = |value: Option<f64>, decimals: usize| match value {
+        Some(value) => format!("{value:.decimals$}"),
+        None => String::new(),
+    };
+    format!(
+        "{},{status},{},{},{},{},{},{},{}",
+        escape(dataset),
+        escape(&quality.name),
+        escape(&quality.kind),
+        quality.objects,
+        formatted(quality.volume, 3),
+        formatted(quality.area, 3),
+        formatted(quality.size, 3),
+        formatted(quality.intensity, 2),
+    )
 }
 
 fn escape(value: &str) -> String {

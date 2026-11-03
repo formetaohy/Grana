@@ -120,6 +120,32 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
     assert!(coloc.starts_with("scope,frame"), "{coloc}");
     assert_eq!(coloc.lines().count(), 4, "{coloc}");
 
+    let quality = read(&output.join("quality.csv"));
+    let mut rows = quality.lines();
+    assert_eq!(
+        rows.next(),
+        Some("dataset,status,set,kind,objects,volume_um3,area_um2,size_um,intensity"),
+        "{quality}"
+    );
+    let rows = rows.collect::<Vec<_>>();
+    assert_eq!(rows.len(), 2, "{quality}");
+    let puncta = rows[0].split(',').collect::<Vec<_>>();
+    assert_eq!(
+        &puncta[..5],
+        ["alpha", "ok", "Puncta", "Spots", "2"],
+        "{quality}"
+    );
+    assert!(puncta[5].is_empty() && puncta[6].is_empty(), "{quality}");
+    assert!(!puncta[7].is_empty() && !puncta[8].is_empty(), "{quality}");
+    let nuclei = rows[1].split(',').collect::<Vec<_>>();
+    assert_eq!(
+        &nuclei[..5],
+        ["alpha", "ok", "Nuclei", "Surfaces", "2"],
+        "{quality}"
+    );
+    assert!(!nuclei[5].is_empty() && !nuclei[6].is_empty(), "{quality}");
+    assert!(nuclei[7].is_empty(), "{quality}");
+
     let stamp = SystemTime::now() + Duration::from_secs(3600);
     for file in [".zattrs", "0/.zarray", "0/0/0/0/0/0"] {
         let handle = fs::File::options()

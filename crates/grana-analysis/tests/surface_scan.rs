@@ -336,6 +336,44 @@ fn recuts_a_detection_without_reading_the_volume() {
 }
 
 #[test]
+fn recuts_around_the_objects_a_user_deleted() {
+    let volume = large_lobes();
+    let filter = SurfaceFilter::new(0.0, 0.8, 0.0, 0.0);
+    let params = SurfaceParams::new(0.5, 0.0, 0.3, 0.0, filter);
+    let split = extract(&volume, params, Region::none());
+    assert_eq!(
+        split.object_count(),
+        2,
+        "the deep split separates the lobes"
+    );
+    let pruned = split
+        .without(0)
+        .expect("the packed mesh prunes its object")
+        .expect("one lobe remains");
+    assert_eq!(pruned.object_count(), 1);
+    assert!(
+        pruned.cuttable(),
+        "a hand deleted object keeps the watershed topology"
+    );
+    let mut joined = params;
+    joined.set_split(0.7);
+    assert_eq!(
+        extract(&volume, joined, Region::none()).object_count(),
+        1,
+        "the shallow split joins the lobes"
+    );
+    let cut = recut(&pruned, joined.cut(), 2, None)
+        .expect("the carried topology is cut")
+        .expect("a hand edited surface keeps its topology");
+    assert_eq!(
+        cut.object_count(),
+        1,
+        "the deleted lobe never merges back into the kept lobe"
+    );
+    assert_eq!(cut.removed(), pruned.removed());
+}
+
+#[test]
 fn recuts_a_detection_whose_topology_spilled_to_disk() {
     let volume = large_lobes();
     let filter = SurfaceFilter::new(0.0, 0.8, 0.0, 0.0);

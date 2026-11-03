@@ -725,6 +725,34 @@ impl Decode for SurfaceSet {
                 reader.step();
                 let bytes = reader.blob()?;
                 let topology = SurfaceTopology::from_bytes(&bytes).ok_or(FAULT_SHAPE)?;
+                let basins = topology.basins().len() as u32;
+                let groups = reader.count(size_of::<u32>())?;
+                if groups != set.objects().len() {
+                    return Err(FAULT_SHAPE);
+                }
+                let mut leaves = Vec::with_capacity(groups);
+                for _ in 0..groups {
+                    let count = reader.count(size_of::<u32>())?;
+                    let mut held = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        let basin = reader.u32()?;
+                        if basin >= basins {
+                            return Err(FAULT_VALUE);
+                        }
+                        held.push(basin);
+                    }
+                    leaves.push(held);
+                }
+                let removed = reader.count(size_of::<u32>())?;
+                let mut pruned = Vec::with_capacity(removed);
+                for _ in 0..removed {
+                    let basin = reader.u32()?;
+                    if basin >= basins || pruned.last().is_some_and(|last| *last >= basin) {
+                        return Err(FAULT_VALUE);
+                    }
+                    pruned.push(basin);
+                }
+                let set = set.with_cut(leaves, pruned);
                 let topology = Geometry::paged(&store, topology).map_err(|_| FAULT_SPILL)?;
                 set.with_topology(topology).map_err(|_| FAULT_SPILL)
             }

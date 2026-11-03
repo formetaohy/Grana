@@ -73,6 +73,73 @@ fn reopens_a_project_with_its_surface_topology() {
     );
 }
 
+#[test]
+fn recuts_a_surface_set_after_a_hand_deleted_object() {
+    let mut session = Session::new();
+    session.open_sample();
+    wait(&mut session, Duration::from_secs(240));
+    let surfaces = surface_set(&session);
+    let detected = objects(&session, surfaces);
+    assert!(detected > 1, "the sample detects several surfaces");
+    session.execute(Command::DeleteObject {
+        set: surfaces,
+        time: 0,
+        object: 0,
+    });
+    assert_eq!(
+        objects(&session, surfaces),
+        detected - 1,
+        "the hand deleted object leaves the frame"
+    );
+    let params = session
+        .scene()
+        .expect("the sample opens")
+        .objects
+        .get(surfaces)
+        .expect("the sample stages surfaces")
+        .params();
+    let ObjectParams::Surfaces(mut surfaces_params) = params else {
+        panic!("the sample stages a surface set");
+    };
+    let frame = session
+        .scene()
+        .expect("the scene exists")
+        .objects
+        .get(surfaces)
+        .and_then(|set| set.frame(0))
+        .expect("the first frame is detected");
+    let ObjectFrame::Surfaces(frame) = frame else {
+        panic!("the first frame holds surfaces");
+    };
+    assert!(
+        frame.cuttable(),
+        "a hand deleted object keeps the watershed topology"
+    );
+
+    surfaces_params.set_min_volume(1.0e6);
+    session.execute(Command::SetObjectParams {
+        set: surfaces,
+        params: ObjectParams::Surfaces(surfaces_params),
+    });
+    wait(&mut session, Duration::from_secs(60));
+    assert_eq!(
+        objects(&session, surfaces),
+        0,
+        "the hand edited surface recuts its filters"
+    );
+    surfaces_params.set_min_volume(0.0);
+    session.execute(Command::SetObjectParams {
+        set: surfaces,
+        params: ObjectParams::Surfaces(surfaces_params),
+    });
+    wait(&mut session, Duration::from_secs(60));
+    assert_eq!(
+        objects(&session, surfaces),
+        detected - 1,
+        "the hand deleted object never returns from a recut"
+    );
+}
+
 fn surface_set(session: &Session) -> grana_scene::ObjectSetId {
     session
         .scene()

@@ -467,6 +467,17 @@ impl Encode for SurfaceSet {
                     writer.u8(1);
                     writer.step();
                     writer.blob(&topology.to_bytes());
+                    writer.count(self.leaves().len());
+                    for leaves in self.leaves() {
+                        writer.count(leaves.len());
+                        for basin in leaves {
+                            writer.u32(*basin);
+                        }
+                    }
+                    writer.count(self.removed().len());
+                    for basin in self.removed() {
+                        writer.u32(*basin);
+                    }
                 }
                 Err(error) => writer.fail(&error.to_string()),
             },

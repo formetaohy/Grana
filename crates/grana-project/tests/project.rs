@@ -590,6 +590,92 @@ fn round_trips_the_surface_topology() {
     );
 }
 
+#[test]
+fn round_trips_the_objects_a_user_deleted() {
+    let volume = lobes();
+    let params = lobe_params(0.3);
+    let set = detect(&volume, params);
+    assert_eq!(set.object_count(), 2, "the deep split separates the lobes");
+    let pruned = set
+        .without(0)
+        .expect("the packed mesh prunes its object")
+        .expect("one lobe remains");
+    assert_eq!(pruned.object_count(), 1);
+    assert!(
+        pruned.cuttable(),
+        "a hand deleted object keeps the watershed topology"
+    );
+    assert_eq!(pruned.removed(), &set.leaves()[0][..]);
+    let mut scene = surface_scene(&volume);
+    let surfaces = scene.add_object(ObjectKind::Surfaces, 0);
+    scene.install(surfaces, 0, ObjectFrame::Surfaces(pruned.clone()));
+    scene
+        .objects
+        .get_mut(surfaces)
+        .expect("the surfaces exist")
+        .set_params(ObjectParams::Surfaces(params));
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "lobes".to_string(),
+        },
+        ViewState {
+            camera: CameraState {
+                pivot: [0.0; 3],
+                yaw: 0.0,
+                pitch: 0.0,
+                distance: 10.0,
+                fov_y: 0.6,
+            },
+            section: SectionState {
+                axis: Axis::Z,
+                span: 10.0,
+            },
+            split: 0.5,
+            timeline: Timeline::default(),
+            export: Export::NATIVE,
+        },
+    );
+    let path = std::env::temp_dir().join(format!("grana-deleted-{}.grana", std::process::id()));
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_done, _total| {})
+        .expect("the project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_done, _total| {},
+    )
+    .expect("the project reads");
+    fs::remove_file(&path).ok();
+    let restored = loaded
+        .scene
+        .sets
+        .iter()
+        .find(|set| set.kind == ObjectKind::Surfaces)
+        .and_then(|set| set.frames[0].as_deref())
+        .expect("the project carries its surface frame");
+    let ObjectFrame::Surfaces(restored) = restored else {
+        panic!("the surface frame restores as surfaces");
+    };
+    assert_eq!(restored, &pruned, "the deleted lobes travel with the set");
+    let joined = lobe_params(0.7);
+    assert_eq!(
+        detect(&volume, joined).object_count(),
+        1,
+        "the shallow split joins the lobes"
+    );
+    let cut = recut(restored, joined.cut(), 2, None)
+        .expect("the restored topology is cut")
+        .expect("the restored surface carries its topology");
+    assert_eq!(
+        cut.object_count(),
+        1,
+        "the deleted lobe never merges back into the kept lobe"
+    );
+}
+
 fn lobes() -> Volume {
     let extent = Extent::new(200, 80, 80);
     let centres = [[80.0f32, 40.0, 40.0], [118.0, 40.0, 40.0]];
