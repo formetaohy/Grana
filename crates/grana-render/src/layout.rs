@@ -236,6 +236,8 @@ impl Layouts {
                 depth_texture(5),
                 depth_texture(6),
                 depth_texture(7),
+                layer_texture(8),
+                layer_texture(9),
             ],
         });
         let volume = pipeline_layout(

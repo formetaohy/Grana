@@ -29,6 +29,7 @@ struct PickFragment {
 struct Shaded {
     color: vec4<f32>,
     depth: f32,
+    surface: vec3<f32>,
 }
 
 @vertex
@@ -86,6 +87,7 @@ fn shade(input: MarkerOutput) -> Shaded {
     var output: Shaded;
     output.color = vec4<f32>(color, input.color_alpha.a * coverage);
     output.depth = clip.z / clip.w;
+    output.surface = surface;
     return output;
 }
 
@@ -119,5 +121,25 @@ fn fs_pick(input: MarkerOutput) -> PickFragment {
     var output: PickFragment;
     output.id = vec2<u32>(2u, input.marker + 1u);
     output.depth = shaded.depth;
+    return output;
+}
+
+struct TailFragment {
+    @location(0) color: vec4<f32>,
+    @location(1) distance: f32,
+}
+
+@fragment
+fn fs_tail(input: MarkerOutput) -> TailFragment {
+    let shaded = shade(input);
+    let pixel = vec2<i32>(input.clip_position.xy);
+    if (shaded.depth > textureLoad(opaque_depth, pixel, 0)
+        || shaded.depth <= textureLoad(previous_depth, pixel, 0)) {
+        discard;
+    }
+    let alpha = shaded.color.a;
+    var output: TailFragment;
+    output.color = vec4<f32>(shaded.color.rgb * alpha, alpha);
+    output.distance = length(frame.eye.xyz - shaded.surface);
     return output;
 }

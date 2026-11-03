@@ -4,19 +4,19 @@ use bytemuck::{Pod, Zeroable};
 use grana_geometry::PackedMesh;
 use grana_gpu::{IndexedCommands, Table};
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Buffer, BufferUsages,
-    ColorTargetState, ColorWrites, CommandEncoder, CompareFunction, ComputePipeline,
-    ComputePipelineDescriptor, Device, FragmentState, IndexFormat, LoadOp, MultisampleState,
-    Operations, PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPass,
-    RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor,
-    RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, StoreOp,
-    TextureView, VertexAttribute, VertexBufferLayout, VertexFormat, VertexState, VertexStepMode,
-    util::DeviceExt,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BlendComponent, BlendFactor,
+    BlendOperation, BlendState, Buffer, BufferUsages, ColorTargetState, ColorWrites,
+    CommandEncoder, CompareFunction, ComputePipeline, ComputePipelineDescriptor, Device,
+    FragmentState, IndexFormat, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor,
+    PrimitiveState, Queue, RenderPass, RenderPassColorAttachment, RenderPassDepthStencilAttachment,
+    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor,
+    ShaderSource, StoreOp, TextureView, VertexAttribute, VertexBufferLayout, VertexFormat,
+    VertexState, VertexStepMode, util::DeviceExt,
 };
 
 use crate::layout::Layouts;
 use crate::schema::{LayerKey, SceneFrame, Style};
-use crate::target::{PICK_FORMAT, SCENE_FORMAT};
+use crate::target::{PICK_FORMAT, SCENE_FORMAT, TAIL_DISTANCE_FORMAT};
 use crate::volume::depth_state;
 use grana_display::{Shading, srgb_to_linear};
 
@@ -104,6 +104,7 @@ pub(crate) struct MeshPasses {
     shadow_cull: ComputePipeline,
     volume_pipeline: RenderPipeline,
     layer_pipeline: RenderPipeline,
+    tail_pipeline: RenderPipeline,
     pick_pipeline: RenderPipeline,
     shadow_pipeline: RenderPipeline,
     uniforms: Buffer,
@@ -245,6 +246,38 @@ impl MeshPasses {
             multiview_mask: None,
             cache: None,
         });
+        let tail_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.mesh.tail"),
+            layout: Some(&layer_layout),
+            vertex: VertexState {
+                module: &volume_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(vertex_layout())],
+            },
+            primitive: PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &volume_module,
+                entry_point: Some("fs_tail"),
+                compilation_options: Default::default(),
+                targets: &[
+                    Some(ColorTargetState {
+                        format: SCENE_FORMAT,
+                        blend: Some(tail_over()),
+                        write_mask: ColorWrites::ALL,
+                    }),
+                    Some(ColorTargetState {
+                        format: TAIL_DISTANCE_FORMAT,
+                        blend: Some(farthest()),
+                        write_mask: ColorWrites::ALL,
+                    }),
+                ],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let pick_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.mesh.pick.pipeline_layout"),
             bind_group_layouts: &[
@@ -306,6 +339,7 @@ impl MeshPasses {
             shadow_cull,
             volume_pipeline,
             layer_pipeline,
+            tail_pipeline,
             pick_pipeline,
             shadow_pipeline,
             uniforms,
@@ -522,6 +556,24 @@ impl MeshPasses {
             return;
         }
         pass.set_pipeline(&self.layer_pipeline);
+        pass.set_bind_group(0, &self.uniform_group, &[]);
+        pass.set_bind_group(3, shadow, &[]);
+        pass.set_bind_group(4, peel, &[]);
+        for key in &self.active {
+            self.slots[key].draw(pass, LAYER_NARROW, LAYER_WIDE);
+        }
+    }
+
+    pub fn draw_tail<'a>(
+        &'a self,
+        pass: &mut RenderPass<'a>,
+        shadow: &'a BindGroup,
+        peel: &'a BindGroup,
+    ) {
+        if self.active.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.tail_pipeline);
         pass.set_bind_group(0, &self.uniform_group, &[]);
         pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(4, peel, &[]);
@@ -763,6 +815,30 @@ pub(crate) fn style_data(style: Style) -> StyleData {
             if style.transparent() { 0.0 } else { 1.0 },
             0.0,
         ],
+    }
+}
+
+pub(crate) fn farthest() -> BlendState {
+    let component = BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::One,
+        operation: BlendOperation::Max,
+    };
+    BlendState {
+        color: component,
+        alpha: component,
+    }
+}
+
+pub(crate) fn tail_over() -> BlendState {
+    let component = BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::OneMinusSrcAlpha,
+        operation: BlendOperation::Add,
+    };
+    BlendState {
+        color: component,
+        alpha: component,
     }
 }
 

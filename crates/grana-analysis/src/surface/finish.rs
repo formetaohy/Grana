@@ -221,9 +221,22 @@ impl Assembler<'_> {
             let Some(selected) = surface.get(&(root as u32)) else {
                 continue;
             };
+            let count = node.voxels as f64;
+            let volume = count * plan.voxel_volume;
+            if volume < f64::from(plan.params.min_volume()) {
+                continue;
+            }
+            let mean = accumulators[root * plan.channels + plan.detection]
+                .statistics()
+                .mean();
+            if plan.span > 0.0 && mean / plan.span < plan.params.min_mean_intensity() {
+                continue;
+            }
             let cut = cap::build(&positions, &triangles, selected);
             let area = areas[root] + cut.area;
-            let count = node.voxels as f64;
+            if area <= 0.0 {
+                continue;
+            }
             let centroid = [0, 1, 2].map(|axis| {
                 ((node.sum[axis] / count + 0.5) * f64::from(plan.spacing[axis])
                     - 0.5 * f64::from(plan.world[axis])) as f32
@@ -238,18 +251,8 @@ impl Assembler<'_> {
                         - 0.5 * f64::from(plan.world[axis])) as f32
                 }),
             );
-            let volume = count * plan.voxel_volume;
-            if volume < f64::from(plan.params.min_volume()) || area <= 0.0 {
-                continue;
-            }
             let statistics = SurfaceStatistics::new(node.voxels, volume, area, centroid, bounds);
             if statistics.sphericity() < f64::from(plan.params.min_sphericity()) {
-                continue;
-            }
-            let mean = accumulators[root * plan.channels + plan.detection]
-                .statistics()
-                .mean();
-            if plan.span > 0.0 && mean / plan.span < plan.params.min_mean_intensity() {
                 continue;
             }
             let object = objects.len() as u32;

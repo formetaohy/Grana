@@ -158,6 +158,29 @@ fn fs_layer(input: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(sample.rgb * sample.a, sample.a);
 }
 
+struct TailFragment {
+    @location(0) color: vec4<f32>,
+    @location(1) distance: f32,
+}
+
+@fragment
+fn fs_tail(input: VertexOutput) -> TailFragment {
+    if (is_outside(input)) {
+        discard;
+    }
+    let pixel = vec2<i32>(input.clip_position.xy);
+    let depth = input.clip_position.z;
+    if (depth > textureLoad(opaque_depth, pixel, 0)
+        || depth <= textureLoad(previous_depth, pixel, 0)) {
+        discard;
+    }
+    let sample = shade(input);
+    var output: TailFragment;
+    output.color = vec4<f32>(sample.rgb * sample.a, sample.a);
+    output.distance = length(mesh.eye.xyz - input.position);
+    return output;
+}
+
 @fragment
 fn fs_pick(input: VertexOutput) -> @location(0) vec2<u32> {
     if (is_outside(input)) {

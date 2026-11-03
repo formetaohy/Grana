@@ -824,6 +824,119 @@ fn blends_transparent_surfaces() {
 }
 
 #[test]
+fn composites_transparent_markers_beyond_the_layers() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let empty = empty_volume();
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(empty.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let eye = camera.eye();
+    let forward = camera.forward();
+    let red = [1.0, 0.12, 0.12];
+    let blue = [0.12, 0.2, 1.0];
+    let along = |index: usize| eye + forward * (5.6 + 0.4 * index as f32);
+    let mut markers = (0..4)
+        .map(|index| Marker::new(along(index).to_array(), 0.25, red, 0.15))
+        .collect::<Vec<_>>();
+    let near = markers.clone();
+    for index in 4..6 {
+        markers.push(Marker::new(along(index).to_array(), 0.25, blue, 0.9));
+    }
+    let job = || Job {
+        texture: &texture,
+        volume: &empty,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        focus_z: 0.0,
+        mesh: None,
+    };
+    let near = marker_scene(&device, &queue, job(), &camera, &section, &near);
+    let all = marker_scene(&device, &queue, job(), &camera, &section, &markers);
+    let centre = (SIDE / 2, SIDE / 2);
+    let near = pixel(&near, centre.0, centre.1).map(u32::from);
+    let all = pixel(&all, centre.0, centre.1).map(u32::from);
+    assert!(
+        all[2] > near[2] + 30,
+        "the markers beyond the fourth layer are dropped: {near:?} {all:?}"
+    );
+}
+
+#[test]
+fn composites_transparent_surfaces_beyond_the_layers() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = empty_volume();
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let mesh = PackedMesh::new(view_stack(&camera, 6));
+    let red = [1.0, 0.12, 0.12];
+    let blue = [0.12, 0.2, 1.0];
+    let shown = (0..6)
+        .map(|index| style_of(index, red, blue, true))
+        .collect::<Vec<_>>();
+    let job = || Job {
+        texture: &texture,
+        volume: &volume,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        focus_z: 0.0,
+        mesh: Some((&mesh, &shown)),
+    };
+    let blocked = (0..6)
+        .map(|index| style_of(index, red, blue, index < 4))
+        .collect::<Vec<_>>();
+    let blocked_job = Job {
+        mesh: Some((&mesh, &blocked)),
+        ..job()
+    };
+    let near = framing_scene(&device, &queue, job(), &camera, None);
+    let blocked = framing_scene(&device, &queue, blocked_job, &camera, None);
+    let centre = (SIDE / 2, SIDE / 2);
+    let near = pixel(&near, centre.0, centre.1).map(u32::from);
+    let blocked = pixel(&blocked, centre.0, centre.1).map(u32::from);
+    assert!(
+        near[2] > blocked[2] + 30,
+        "the surfaces beyond the fourth layer are dropped: {near:?} {blocked:?}"
+    );
+}
+
+fn style_of(index: usize, red: [f32; 3], blue: [f32; 3], visible: bool) -> Style {
+    if index < 4 {
+        Style::new(red, visible, false, 0.15)
+    } else {
+        Style::new(blue, visible, false, 0.9)
+    }
+}
+
+fn view_stack(camera: &Camera, count: usize) -> Mesh {
+    let eye = camera.eye();
+    let forward = camera.forward();
+    let right = camera.right();
+    let up = camera.up();
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for object in 0..count {
+        let centre = eye + forward * (5.6 + 0.4 * object as f32);
+        let base = vertices.len() as u32;
+        for corner in [[-1.0f32, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]] {
+            let position = centre + (right * corner[0] + up * corner[1]) * 0.9;
+            vertices.push(MeshVertex::new(
+                position.to_array(),
+                (-forward).to_array(),
+                object as u32,
+            ));
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    Mesh::new(vertices, indices)
+}
+
+#[test]
 fn renders_surface_objects_and_sections() {
     let Some((device, queue)) = device() else {
         return;
@@ -2813,6 +2926,77 @@ fn reuses_the_cut_target_and_batches_every_cut_face() {
     );
     assert_eq!(settled.cut.draws, 0, "a settled frame draws no cut face");
     assert_eq!(settled.cut.targets, 1, "the settled frame keeps the target");
+}
+
+#[test]
+fn cuts_every_object_through_the_parallel_path() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let count = 9usize;
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = empty_volume();
+    let pyramid = volume.pyramid();
+    let mesh = PackedMesh::new(many_boxes(count));
+    let styles = (0..count)
+        .map(|_| Style::new([1.0, 0.12, 0.12], true, false, 1.0))
+        .collect::<Vec<_>>();
+    let layers = [Layer {
+        key: LayerKey::at_frame(1, 0, 0, 1),
+        mesh: &mesh,
+        style_start: 0,
+        style_count: count,
+    }];
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &styles,
+        layers: &layers,
+        markers: &[],
+    };
+    let camera = Camera::new(35.0);
+    let section = SectionCamera::new(Axis::Z);
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    let session = Session {
+        device: &device,
+        queue: &queue,
+        target: &view,
+        camera: &camera,
+        section: &section,
+        scene: &scene,
+        volume_region: CORNER,
+        section_region: WHOLE,
+        region: Region::none(),
+        time: 0,
+    };
+    let info = renderer.draw(&device, &queue, common::frame(&session));
+    assert_eq!(
+        info.cut.objects, count as u32,
+        "every object crossing the plane holds a cut face"
+    );
+}
+
+fn many_boxes(count: usize) -> Mesh {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let span = count as f32 * 0.24;
+    for object in 0..count {
+        let centre = -0.5 * span + 0.24 * object as f32;
+        box_faces(
+            &mut vertices,
+            &mut indices,
+            object as u32,
+            [centre - 0.08, -0.5, -0.5],
+            [centre + 0.08, 0.5, 0.5],
+            true,
+        );
+    }
+    Mesh::new(vertices, indices)
 }
 
 #[test]

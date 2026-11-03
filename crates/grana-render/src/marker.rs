@@ -13,7 +13,8 @@ use wgpu::{
 
 use crate::cut;
 use crate::layout::Layouts;
-use crate::target::{PICK_FORMAT, SCENE_FORMAT};
+use crate::mesh::{farthest, tail_over};
+use crate::target::{PICK_FORMAT, SCENE_FORMAT, TAIL_DISTANCE_FORMAT};
 use crate::volume::depth_state;
 use grana_display::srgb_to_linear;
 
@@ -119,6 +120,7 @@ pub(crate) struct MarkerPasses {
     front_cull: ComputePipeline,
     volume_pipeline: RenderPipeline,
     layer_pipeline: RenderPipeline,
+    tail_pipeline: RenderPipeline,
     section_pipeline: RenderPipeline,
     section_pick_pipeline: RenderPipeline,
     volume_pick_pipeline: RenderPipeline,
@@ -285,6 +287,41 @@ impl MarkerPasses {
             multiview_mask: None,
             cache: None,
         });
+        let tail_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.marker.tail"),
+            layout: Some(&layouts.marker_layer),
+            vertex: VertexState {
+                module: &volume_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &volume_module,
+                entry_point: Some("fs_tail"),
+                compilation_options: Default::default(),
+                targets: &[
+                    Some(ColorTargetState {
+                        format: SCENE_FORMAT,
+                        blend: Some(tail_over()),
+                        write_mask: ColorWrites::ALL,
+                    }),
+                    Some(ColorTargetState {
+                        format: TAIL_DISTANCE_FORMAT,
+                        blend: Some(farthest()),
+                        write_mask: ColorWrites::ALL,
+                    }),
+                ],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let shadow_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.marker.shadow"),
             layout: Some(&layouts.marker_volume),
@@ -383,6 +420,7 @@ impl MarkerPasses {
             front_cull,
             volume_pipeline,
             layer_pipeline,
+            tail_pipeline,
             section_pipeline,
             section_pick_pipeline,
             volume_pick_pipeline,
@@ -546,6 +584,22 @@ impl MarkerPasses {
             return;
         }
         pass.set_pipeline(&self.layer_pipeline);
+        pass.set_bind_group(0, scene, &[]);
+        pass.set_bind_group(1, &self.layer_group, &[]);
+        pass.set_bind_group(4, peel, &[]);
+        pass.draw_indirect(self.layer_args.buffer(), 0);
+    }
+
+    pub fn draw_tail<'a>(
+        &'a self,
+        pass: &mut RenderPass<'a>,
+        scene: &'a BindGroup,
+        peel: &'a BindGroup,
+    ) {
+        if self.count == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.tail_pipeline);
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.layer_group, &[]);
         pass.set_bind_group(4, peel, &[]);

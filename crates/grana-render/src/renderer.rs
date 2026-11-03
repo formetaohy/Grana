@@ -183,6 +183,7 @@ struct Layers {
     targets: LayerTargets,
     volume_group: BindGroup,
     peel_groups: Vec<BindGroup>,
+    tail_group: BindGroup,
     size: [u32; 2],
 }
 
@@ -206,10 +207,17 @@ impl Layers {
                 crate::target::peel_group(device, &layouts.peel, previous, opaque)
             })
             .collect();
+        let tail_group = crate::target::peel_group(
+            device,
+            &layouts.peel,
+            targets.depth(LAYER_COUNT - 1),
+            opaque,
+        );
         Self {
             targets,
             volume_group,
             peel_groups,
+            tail_group,
             size,
         }
     }
@@ -877,7 +885,7 @@ impl Renderer {
         } else {
             0
         };
-        frame_data.layers = [layers as u32, 0, 0, 0];
+        frame_data.layers = [layers as u32, u32::from(layers > 0), 0, 0];
         if layers == 0 {
             target.layers = None;
         }
@@ -1483,6 +1491,42 @@ impl Layers {
             meshes.draw_layer(&mut pass, shadow, &self.peel_groups[index]);
             markers.draw_layer(&mut pass, scene, &self.peel_groups[index]);
         }
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("grana.tail.pass"),
+            color_attachments: &[
+                Some(RenderPassColorAttachment {
+                    view: self.targets.tail_color(),
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: StoreOp::Store,
+                    },
+                }),
+                Some(RenderPassColorAttachment {
+                    view: self.targets.tail_distance(),
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: StoreOp::Store,
+                    },
+                }),
+            ],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
+        pass.set_viewport(
+            region[0] as f32,
+            region[1] as f32,
+            width as f32,
+            height as f32,
+            0.0,
+            1.0,
+        );
+        pass.set_scissor_rect(region[0], region[1], width, height);
+        meshes.draw_tail(&mut pass, shadow, &self.tail_group);
+        markers.draw_tail(&mut pass, scene, &self.tail_group);
     }
 }
 

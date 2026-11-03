@@ -9,6 +9,7 @@ pub(crate) const ACCUMULATION_FORMAT: TextureFormat = TextureFormat::Rgba16Float
 pub(crate) const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 pub(crate) const CUT_ID_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 pub(crate) const PICK_FORMAT: TextureFormat = TextureFormat::Rg32Uint;
+pub(crate) const TAIL_DISTANCE_FORMAT: TextureFormat = TextureFormat::R16Float;
 pub(crate) const LAYER_COUNT: usize = 4;
 
 pub(crate) struct SceneTarget {
@@ -102,6 +103,8 @@ pub(crate) fn accumulation(device: &Device, size: [u32; 2]) -> TextureView {
 pub(crate) struct LayerTargets {
     colors: Vec<TextureView>,
     depths: Vec<TextureView>,
+    tail_color: TextureView,
+    tail_distance: TextureView,
 }
 
 impl LayerTargets {
@@ -153,7 +156,42 @@ impl LayerTargets {
                     })
             })
             .collect();
-        Self { colors, depths }
+        let tail_color = device
+            .create_texture(&TextureDescriptor {
+                label: Some("grana.tail.color"),
+                size: extent,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: SCENE_FORMAT,
+                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&TextureViewDescriptor {
+                label: Some(label),
+                ..TextureViewDescriptor::default()
+            });
+        let tail_distance = device
+            .create_texture(&TextureDescriptor {
+                label: Some("grana.tail.distance"),
+                size: extent,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TAIL_DISTANCE_FORMAT,
+                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&TextureViewDescriptor {
+                label: Some(label),
+                ..TextureViewDescriptor::default()
+            });
+        Self {
+            colors,
+            depths,
+            tail_color,
+            tail_distance,
+        }
     }
 
     pub fn color(&self, index: usize) -> &TextureView {
@@ -162,6 +200,14 @@ impl LayerTargets {
 
     pub fn depth(&self, index: usize) -> &TextureView {
         &self.depths[index]
+    }
+
+    pub fn tail_color(&self) -> &TextureView {
+        &self.tail_color
+    }
+
+    pub fn tail_distance(&self) -> &TextureView {
+        &self.tail_distance
     }
 }
 
@@ -179,6 +225,16 @@ pub(crate) fn layer_group(
             binding: (LAYER_COUNT + index) as u32,
             resource: BindingResource::TextureView(layers.depth(index)),
         }))
+        .chain([
+            BindGroupEntry {
+                binding: (2 * LAYER_COUNT) as u32,
+                resource: BindingResource::TextureView(layers.tail_color()),
+            },
+            BindGroupEntry {
+                binding: (2 * LAYER_COUNT + 1) as u32,
+                resource: BindingResource::TextureView(layers.tail_distance()),
+            },
+        ])
         .collect::<Vec<_>>();
     device.create_bind_group(&BindGroupDescriptor {
         label: Some("grana.layer.group"),

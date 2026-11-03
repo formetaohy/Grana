@@ -12,6 +12,8 @@
 @group(5) @binding(5) var layer_depth_1: texture_depth_2d;
 @group(5) @binding(6) var layer_depth_2: texture_depth_2d;
 @group(5) @binding(7) var layer_depth_3: texture_depth_2d;
+@group(5) @binding(8) var tail_color: texture_2d<f32>;
+@group(5) @binding(9) var tail_distance: texture_2d<f32>;
 
 const MAX_CELL_STEPS: u32 = 4096u;
 const MINIMUM_TRANSMITTANCE: f32 = 0.003;
@@ -274,6 +276,20 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         transmittance *= 1.0 - sample.a;
         if (transmittance < MINIMUM_TRANSMITTANCE) {
             break;
+        }
+    }
+    if (frame.layers.y > 0u) {
+        let tail = textureLoad(tail_color, pixel, 0);
+        if (tail.a > 0.0) {
+            let reach = clamp(textureLoad(tail_distance, pixel, 0).r, cursor, exit);
+            if (reach > cursor) {
+                let segment = march(cursor, reach, direction);
+                radiance += transmittance * segment.rgb;
+                transmittance *= segment.a;
+                cursor = reach;
+            }
+            radiance += transmittance * tail.rgb;
+            transmittance *= 1.0 - tail.a;
         }
     }
     if (cursor < exit) {

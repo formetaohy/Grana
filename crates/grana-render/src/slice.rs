@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
@@ -31,6 +33,18 @@ const SHADER: &str = concat!(
 const UNIT: f32 = 65535.0;
 const QUAD_INDICES: [u32; 6] = [0, 1, 2, 0, 2, 3];
 const QUAD_LIMIT: u32 = 1 << 18;
+const PARALLEL_FLOOR: usize = 8;
+const WORKER_LIMIT: usize = 16;
+
+type Cut = (u32, Vec<[f32; 2]>);
+
+struct Candidate<'a> {
+    mesh: &'a PackedMesh,
+    object: usize,
+    style: usize,
+    low: [f32; 3],
+    high: [f32; 3],
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -290,6 +304,7 @@ impl SlicePass {
     fn build(&mut self, scene: &SceneFrame<'_>, axis: usize, plane: f32) {
         self.runs.clear();
         self.staged.clear();
+        let mut candidates = Vec::new();
         for layer in scene.layers {
             let mesh = layer.mesh;
             for object in 0..mesh.object_count() {
@@ -302,34 +317,103 @@ impl SlicePass {
                 if !self.solid(layer.key, mesh, object) {
                     continue;
                 }
-                self.scratch.clear();
-                let first_vertex = self.staged.len() as u32;
-                let quads = cross_section(mesh, object, axis, plane, &mut self.scratch) as u32;
-                assert!(
-                    quads <= QUAD_LIMIT,
-                    "a cut face spans more than {QUAD_LIMIT} quads"
-                );
-                if quads == 0 {
-                    continue;
-                }
-                let style = layer.style_start + object;
-                assert!(style < scene.styles.len(), "a cut face names a scene style");
-                self.staged.extend(self.scratch.iter().map(|uv| FaceVertex {
-                    uv: *uv,
-                    style: style as u32,
-                }));
-                self.runs.push(FaceRun {
-                    style: style as u32,
-                    first_vertex,
-                    quads,
+                candidates.push(Candidate {
+                    mesh,
+                    object,
+                    style: layer.style_start + object,
                     low,
                     high,
                 });
             }
         }
-        self.scratch.clear();
+        let cuts = self.cut(&candidates, axis, plane);
+        for (candidate, (quads, vertices)) in candidates.iter().zip(cuts) {
+            assert!(
+                quads <= QUAD_LIMIT,
+                "a cut face spans more than {QUAD_LIMIT} quads"
+            );
+            if quads == 0 {
+                continue;
+            }
+            let style = candidate.style;
+            assert!(style < scene.styles.len(), "a cut face names a scene style");
+            let first_vertex = self.staged.len() as u32;
+            self.staged
+                .extend(vertices.into_iter().map(|uv| FaceVertex {
+                    uv,
+                    style: style as u32,
+                }));
+            self.runs.push(FaceRun {
+                style: style as u32,
+                first_vertex,
+                quads,
+                low: candidate.low,
+                high: candidate.high,
+            });
+        }
         self.closed
             .retain(|key, _| scene.layers.iter().any(|layer| layer.key == *key));
+    }
+
+    fn cut(&mut self, candidates: &[Candidate<'_>], axis: usize, plane: f32) -> Vec<Cut> {
+        if candidates.len() < PARALLEL_FLOOR {
+            return candidates
+                .iter()
+                .map(|candidate| {
+                    self.scratch.clear();
+                    let quads = cross_section(
+                        candidate.mesh,
+                        candidate.object,
+                        axis,
+                        plane,
+                        &mut self.scratch,
+                    );
+                    (quads as u32, std::mem::take(&mut self.scratch))
+                })
+                .collect();
+        }
+        let workers = std::thread::available_parallelism()
+            .map_or(1, |value| value.get())
+            .min(WORKER_LIMIT)
+            .min(candidates.len());
+        let next = AtomicUsize::new(0);
+        let (sender, receiver) = mpsc::channel();
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                let sender = sender.clone();
+                let next = &next;
+                scope.spawn(move || {
+                    let mut scratch = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        if index >= candidates.len() {
+                            break;
+                        }
+                        let candidate = &candidates[index];
+                        let quads = cross_section(
+                            candidate.mesh,
+                            candidate.object,
+                            axis,
+                            plane,
+                            &mut scratch,
+                        );
+                        let vertices = std::mem::take(&mut scratch);
+                        if sender.send((index, quads as u32, vertices)).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            drop(sender);
+        });
+        let mut cuts = vec![(0u32, Vec::new()); candidates.len()];
+        let mut filled = 0usize;
+        for (index, quads, vertices) in receiver {
+            cuts[index] = (quads, vertices);
+            filled += 1;
+        }
+        assert_eq!(filled, candidates.len(), "every cut face is measured");
+        cuts
     }
 
     fn upload(&mut self, device: &Device, queue: &Queue) {
