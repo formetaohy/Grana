@@ -1,14 +1,12 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use grana_analysis::{Roi, TrackParams};
+use grana_analysis::TrackParams;
 use grana_image::{Image, Source};
-use grana_measure::{ColocPair, ColocSettings};
 use grana_scene::{Job, ObjectFrame};
-use grana_volume::Region;
 
 use crate::event::Event;
-use crate::run::{self, DetectRequest};
+use crate::run::{self, ColocRequest, DetectRequest};
 use crate::task::{Poll, Task};
 
 pub struct Analysis {
@@ -57,23 +55,10 @@ pub fn relation(
     })
 }
 
-pub fn coloc(
-    job: Job,
-    source: Source,
-    pair: ColocPair,
-    region: Region,
-    roi: Option<Roi>,
-    mask: Option<u64>,
-    settings: ColocSettings,
-) -> Analysis {
+pub fn coloc(job: Job, source: Source, request: ColocRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
         let reader = Image::open(&source)?;
-        run::coloc(
-            &reader,
-            run::ColocRequest::new(pair, region, roi, mask, settings),
-            cancel,
-            sink,
-        )
+        run::coloc(&reader, request, cancel, sink)
     })
 }
 

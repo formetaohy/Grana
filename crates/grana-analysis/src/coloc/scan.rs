@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::sync::atomic::AtomicBool;
 
 use grana_measure::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo,
@@ -6,11 +7,12 @@ use grana_measure::{
 };
 use grana_volume::{Intensity, Level, Region, VoxelData};
 
-use crate::mask::Mask;
+use crate::Mask;
+use crate::schedule;
 
-use super::{ColocLevels, scale, unit};
+use super::{ColocLevels, ColocRead, scale, unit};
 
-const TILE: [u32; 3] = [256, 256, 32];
+const TILE: [u32; 3] = [128, 128, 16];
 const WORKING_BINS: usize = COLOC_BINS_MAX;
 
 pub struct ColocScanConfig {
@@ -52,11 +54,44 @@ pub struct ColocScan {
     permutation_level: usize,
     permutation_stride: u32,
     mask: Option<u64>,
-    ranges: [Range<u32>; 3],
-    counts: [usize; 3],
+    grid: TileGrid,
     scales: [[f32; 2]; 2],
     frames: Vec<ColocFrame>,
     joint: Vec<u64>,
+}
+
+struct TileGrid {
+    ranges: [Range<u32>; 3],
+    counts: [usize; 3],
+}
+
+impl TileGrid {
+    fn new(ranges: [Range<u32>; 3]) -> Self {
+        let counts = [0, 1, 2].map(|axis| {
+            let (start, end) = (ranges[axis].start, ranges[axis].end);
+            ((end - start).div_ceil(TILE[axis])) as usize
+        });
+        Self { ranges, counts }
+    }
+
+    fn count(&self) -> usize {
+        self.counts[0] * self.counts[1] * self.counts[2]
+    }
+
+    fn tile(&self, index: usize) -> [Range<u32>; 3] {
+        assert!(
+            index < self.count(),
+            "the tile index lies on the colocalization grid"
+        );
+        let x = index % self.counts[0];
+        let y = (index / self.counts[0]) % self.counts[1];
+        let z = index / (self.counts[0] * self.counts[1]);
+        [0, 1, 2].map(|axis| {
+            let offset = [x, y, z][axis] as u32 * TILE[axis];
+            let start = self.ranges[axis].start + offset;
+            start..(start + TILE[axis]).min(self.ranges[axis].end)
+        })
+    }
 }
 
 impl ColocScan {
@@ -70,18 +105,13 @@ impl ColocScan {
         let Some(ranges) = region.voxel_range(info) else {
             panic!("the colocalization region overlaps the dataset");
         };
-        let counts = [0, 1, 2].map(|axis| {
-            let (start, end) = (ranges[axis].start, ranges[axis].end);
-            ((end - start).div_ceil(TILE[axis])) as usize
-        });
         Self {
             pair,
             level: levels.scan(),
             permutation_level: levels.permutation(),
             permutation_stride: levels.stride(),
             mask,
-            ranges,
-            counts,
+            grid: TileGrid::new(ranges),
             scales: intensities.map(scale),
             frames: (0..frames).map(|_| ColocFrame::new(WORKING_BINS)).collect(),
             joint: vec![0; WORKING_BINS * WORKING_BINS],
@@ -100,60 +130,70 @@ impl ColocScan {
     }
 
     pub fn tile_count(&self) -> usize {
-        self.counts[0] * self.counts[1] * self.counts[2]
+        self.grid.count()
     }
 
     pub fn tile(&self, index: usize) -> [Range<u32>; 3] {
-        assert!(index < self.tile_count(), "the tile index lies on the grid");
-        let x = index % self.counts[0];
-        let y = (index / self.counts[0]) % self.counts[1];
-        let z = index / (self.counts[0] * self.counts[1]);
-        [0, 1, 2].map(|axis| {
-            let offset = [x, y, z][axis] as u32 * TILE[axis];
-            let start = self.ranges[axis].start + offset;
-            start..(start + TILE[axis]).min(self.ranges[axis].end)
-        })
+        self.grid.tile(index)
     }
-
-    pub fn add(
+    pub fn scan(
         &mut self,
-        time: u32,
-        index: usize,
-        a: &VoxelData,
-        b: &VoxelData,
-        mask: Option<&Mask>,
-    ) {
-        let tile = self.tile(index);
-        let dims = [0, 1, 2].map(|axis| tile[axis].end - tile[axis].start);
-        let voxels = dims.iter().map(|dim| *dim as usize).product::<usize>();
-        assert!(
-            a.voxel_count() == voxels && b.voxel_count() == voxels,
-            "a colocalization tile carries both channels voxel for voxel"
-        );
+        workers: usize,
+        cancel: &AtomicBool,
+        read: &ColocRead<'_>,
+        mask: &(dyn Fn(u32) -> Result<Option<Mask>, String> + Sync),
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<bool, String> {
+        let tiles = self.grid.count();
+        let total = self.frames.len() * tiles;
+        let pair = self.pair;
         let scales = self.scales;
-        let frame = &mut self.frames[time as usize];
-        for z in 0..dims[2] {
-            let global_z = tile[2].start + z;
-            for y in 0..dims[1] {
-                let global_y = tile[1].start + y;
-                for x in 0..dims[0] {
-                    let global_x = tile[0].start + x;
-                    if let Some(mask) = mask
-                        && !mask.contains_cell([global_x, global_y, global_z])
-                    {
-                        continue;
-                    }
-                    let voxel = x as usize
-                        + dims[0] as usize * (y as usize + dims[1] as usize * z as usize);
-                    let first = unit(scales[0], a.value(voxel));
-                    let second = unit(scales[1], b.value(voxel));
-                    let bin_a = working_bin(first);
-                    let bin_b = working_bin(second);
-                    frame.push(first, second);
-                    self.joint[bin_a + WORKING_BINS * bin_b] += 1;
+        let grid = &self.grid;
+        let frames = &mut self.frames;
+        let joint = &mut self.joint;
+        let completed = schedule::ordered(
+            schedule::Run {
+                total,
+                workers: schedule::workers(workers),
+                cancel,
+                progress,
+            },
+            ColocWorker::new,
+            |worker, index| {
+                let time = index / tiles;
+                let time = u32::try_from(time).expect("a colocalization frame fits the u32 range");
+                if worker
+                    .mask
+                    .as_ref()
+                    .is_none_or(|(cached, _)| *cached != time)
+                {
+                    worker.mask = Some((time, mask(time)?));
                 }
-            }
-        }
+                let cached = worker.mask.as_ref().and_then(|(_, mask)| mask.as_ref());
+                let ranges = grid.tile(index % tiles);
+                let a = read(time, pair.a(), &ranges)?;
+                let b = read(time, pair.b(), &ranges)?;
+                Ok(ColocTile {
+                    time,
+                    frame: accumulate(&mut worker.joint, &ranges, &a, &b, cached, scales),
+                })
+            },
+            |index, tile| {
+                assert_eq!(
+                    index / tiles,
+                    tile.time as usize,
+                    "a colocalization tile lands on its frame"
+                );
+                frames[tile.time as usize].merge(&tile.frame);
+                Ok(())
+            },
+            |worker| {
+                for (slot, count) in worker.joint.into_iter().enumerate() {
+                    joint[slot] += count;
+                }
+            },
+        )?;
+        Ok(completed)
     }
 
     pub fn finish(
@@ -194,6 +234,64 @@ impl ColocScan {
         );
         ColocSeries::from_parts(self.pair, info, bins, frames, joint, significance, cost)
     }
+}
+
+struct ColocWorker {
+    joint: Vec<u64>,
+    mask: Option<(u32, Option<Mask>)>,
+}
+
+struct ColocTile {
+    time: u32,
+    frame: ColocFrame,
+}
+
+impl ColocWorker {
+    fn new() -> Self {
+        Self {
+            joint: vec![0; WORKING_BINS * WORKING_BINS],
+            mask: None,
+        }
+    }
+}
+
+fn accumulate(
+    joint: &mut [u64],
+    tile: &[Range<u32>; 3],
+    a: &VoxelData,
+    b: &VoxelData,
+    mask: Option<&Mask>,
+    scales: [[f32; 2]; 2],
+) -> ColocFrame {
+    let dims = [0, 1, 2].map(|axis| tile[axis].end - tile[axis].start);
+    let voxels = dims.iter().map(|dim| *dim as usize).product::<usize>();
+    assert!(
+        a.voxel_count() == voxels && b.voxel_count() == voxels,
+        "a colocalization tile carries both channels voxel for voxel"
+    );
+    let mut frame = ColocFrame::new(WORKING_BINS);
+    for z in 0..dims[2] {
+        let global_z = tile[2].start + z;
+        for y in 0..dims[1] {
+            let global_y = tile[1].start + y;
+            for x in 0..dims[0] {
+                let global_x = tile[0].start + x;
+                if let Some(mask) = mask
+                    && !mask.contains_cell([global_x, global_y, global_z])
+                {
+                    continue;
+                }
+                let voxel =
+                    x as usize + dims[0] as usize * (y as usize + dims[1] as usize * z as usize);
+                let first = unit(scales[0], a.value(voxel));
+                let second = unit(scales[1], b.value(voxel));
+                frame.push(first, second);
+                let bin = working_bin(first) + WORKING_BINS * working_bin(second);
+                joint[bin] += 1;
+            }
+        }
+    }
+    frame
 }
 
 fn working_bin(unit: f32) -> usize {

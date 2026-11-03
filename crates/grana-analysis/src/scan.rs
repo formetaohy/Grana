@@ -83,13 +83,15 @@ impl SpotScanner {
         let mut spots = Vec::new();
         let mut accumulators = Vec::new();
         let completed = crate::schedule::ordered(
-            total,
-            workers,
-            cancel,
-            &mut |done, total| {
-                if done.is_multiple_of(PROGRESS_STRIDE) || done == total {
-                    progress(done, total);
-                }
+            crate::schedule::Run {
+                total,
+                workers,
+                cancel,
+                progress: &mut |done, total| {
+                    if done.is_multiple_of(PROGRESS_STRIDE) || done == total {
+                        progress(done, total);
+                    }
+                },
             },
             || SpotWorker::new(&self.template),
             |worker, index| worker.run(index, channels, detection, read, roi),
@@ -98,6 +100,7 @@ impl SpotScanner {
                 accumulators.extend(block.accumulators);
                 Ok(())
             },
+            |_| {},
         )?;
         if !completed {
             return Ok(None);

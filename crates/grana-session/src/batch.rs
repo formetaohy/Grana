@@ -529,8 +529,16 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
                 resolve(pyramid, &spec.b).map_err(|detail| format!("colocalization: {detail}"))?,
             );
             let roi = mask_frames.as_ref().map(|frames| paged_roi(frames));
-            let series = colocalize(&reader, pair, region, roi, settings, task.cancel)?
-                .ok_or_else(|| "cancelled".to_string())?;
+            let series = colocalize(
+                &reader,
+                pair,
+                region,
+                roi,
+                settings,
+                task.workers,
+                task.cancel,
+            )?
+            .ok_or_else(|| "cancelled".to_string())?;
             let thresholds =
                 grana_measure::ColocThresholds::new(spec.thresholds[0], spec.thresholds[1]);
             write(
@@ -638,6 +646,7 @@ fn colocalize(
     region: Region,
     roi: Option<grana_analysis::Roi>,
     settings: grana_measure::ColocSettings,
+    workers: usize,
     cancel: &AtomicBool,
 ) -> Result<Option<ColocSeries>, String> {
     let mut series = None;
@@ -648,7 +657,7 @@ fn colocalize(
     };
     run::coloc(
         reader,
-        run::ColocRequest::new(pair, region, roi, None, settings),
+        run::ColocRequest::new(pair, region, roi, None, settings, workers),
         cancel,
         &mut sink,
     )?;

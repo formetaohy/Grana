@@ -11,28 +11,41 @@ pub(crate) fn workers(requested: usize) -> usize {
     .clamp(1, WORKER_LIMIT)
 }
 
+pub(crate) struct Run<'a> {
+    pub total: usize,
+    pub workers: usize,
+    pub cancel: &'a AtomicBool,
+    pub progress: &'a mut dyn FnMut(usize, usize),
+}
+
 pub(crate) fn ordered<L, T>(
-    total: usize,
-    workers: usize,
-    cancel: &AtomicBool,
-    progress: &mut dyn FnMut(usize, usize),
+    run: Run<'_>,
     local: impl Fn() -> L + Sync,
     work: impl Fn(&mut L, usize) -> Result<T, String> + Sync,
     mut sink: impl FnMut(usize, T) -> Result<(), String>,
+    mut finish: impl FnMut(L),
 ) -> Result<bool, String>
 where
     L: Send,
     T: Send,
 {
+    let Run {
+        total,
+        workers,
+        cancel,
+        progress,
+    } = run;
     if total == 0 {
         return Ok(true);
     }
     let next = AtomicUsize::new(0);
     let stop = AtomicBool::new(false);
     let (sender, receiver) = mpsc::sync_channel::<Result<(usize, T), String>>(workers.max(1) * 2);
-    std::thread::scope(|scope| {
+    let (retired, retired_receiver) = mpsc::channel::<Option<L>>();
+    let completed = std::thread::scope(|scope| {
         for _ in 0..workers.max(1) {
             let sender = sender.clone();
+            let retired = retired.clone();
             let next = &next;
             let stop = &stop;
             let local = &local;
@@ -58,9 +71,11 @@ where
                         break;
                     }
                 }
+                let _ = retired.send(state);
             });
         }
         drop(sender);
+        drop(retired);
         let mut pending: Vec<Option<T>> = (0..total).map(|_| None).collect();
         let mut assembled = 0usize;
         let mut done = 0usize;
@@ -91,7 +106,11 @@ where
             return Ok(false);
         }
         Err("a worker stopped before its unit of work was completed".to_string())
-    })
+    })?;
+    for state in retired_receiver.into_iter().flatten() {
+        finish(state);
+    }
+    Ok(completed)
 }
 
 pub(crate) fn map<T, R>(items: &[T], workers: usize, work: impl Fn(&T) -> R + Sync) -> Vec<R>

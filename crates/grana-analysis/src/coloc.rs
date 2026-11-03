@@ -3,10 +3,13 @@ mod significance;
 
 use std::ops::Range;
 
-use grana_volume::{Intensity, Level, Pyramid, Region};
+use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
 pub use scan::{ColocScan, ColocScanConfig};
 pub use significance::ColocPermutation;
+
+pub type ColocRead<'a> =
+    dyn Fn(u32, usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
 
 const SCAN_VOXELS: u64 = 1 << 22;
 const PERMUTATION_VOXELS: u64 = 1 << 17;

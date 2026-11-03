@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
 use grana_analysis::{ColocPermutation, ColocScan, ColocScanConfig, Roi, Shape, coloc_levels};
@@ -159,6 +160,37 @@ fn gates_the_scan_by_the_analysis_mask() {
 }
 
 #[test]
+fn keeps_the_series_identical_across_worker_counts() {
+    let pyramid = pyramid(EXTENT, 3);
+    let first = (0..3)
+        .map(|frame| volume(EXTENT, move |x, y, z| hash(x, y, z, 1 + frame)))
+        .collect::<Vec<_>>();
+    let second = (0..3)
+        .map(|frame| volume(EXTENT, move |x, y, z| hash(x, y, z, 7 + frame)))
+        .collect::<Vec<_>>();
+    let data = Channels {
+        first: &first,
+        second: &second,
+    };
+    let settings = ColocSettings::new(64, 3);
+    let setup = |workers| {
+        measured(
+            Setup {
+                pyramid: &pyramid,
+                frames: 3,
+                region: Region::none(),
+                scan: &data,
+                permutation: &data,
+                roi: None,
+                settings,
+            },
+            workers,
+        )
+    };
+    assert_eq!(setup(1), setup(8));
+}
+
+#[test]
 fn adapts_the_bin_count_to_the_sample() {
     let small = Extent::new(24, 24, 24);
     let large = Extent::new(48, 48, 48);
@@ -236,20 +268,23 @@ fn samples_a_coarser_permutation_level() {
         })
         .collect::<Vec<_>>();
     let permutation_second = permutation_first.clone();
-    let series = scan_with(
-        &pyramid,
-        frames,
-        Region::none(),
-        &Channels {
-            first: &scan_first,
-            second: &scan_second,
+    let series = measured(
+        Setup {
+            pyramid: &pyramid,
+            frames,
+            region: Region::none(),
+            scan: &Channels {
+                first: &scan_first,
+                second: &scan_second,
+            },
+            permutation: &Channels {
+                first: &permutation_first,
+                second: &permutation_second,
+            },
+            roi: None,
+            settings: ColocSettings::new(40, 3),
         },
-        &Channels {
-            first: &permutation_first,
-            second: &permutation_second,
-        },
-        None,
-        ColocSettings::new(40, 3),
+        4,
     );
     assert_eq!(series.level(), 0);
     assert_eq!(series.permutation_level(), 1);
@@ -376,6 +411,16 @@ struct Channels<'a> {
     second: &'a [VoxelData],
 }
 
+struct Setup<'a> {
+    pyramid: &'a Pyramid,
+    frames: u32,
+    region: Region,
+    scan: &'a Channels<'a>,
+    permutation: &'a Channels<'a>,
+    roi: Option<&'a Roi>,
+    settings: ColocSettings,
+}
+
 fn scan(
     extent: Extent,
     frames: u32,
@@ -387,18 +432,30 @@ fn scan(
 ) -> ColocSeries {
     let pyramid = pyramid(extent, frames);
     let data = Channels { first, second };
-    scan_with(&pyramid, frames, region, &data, &data, roi, settings)
+    measured(
+        Setup {
+            pyramid: &pyramid,
+            frames,
+            region,
+            scan: &data,
+            permutation: &data,
+            roi,
+            settings,
+        },
+        4,
+    )
 }
 
-fn scan_with(
-    pyramid: &Pyramid,
-    frames: u32,
-    region: Region,
-    scan_data: &Channels<'_>,
-    permutation_data: &Channels<'_>,
-    roi: Option<&Roi>,
-    settings: ColocSettings,
-) -> ColocSeries {
+fn measured(setup: Setup<'_>, workers: usize) -> ColocSeries {
+    let Setup {
+        pyramid,
+        frames,
+        region,
+        scan: scan_data,
+        permutation: permutation_data,
+        roi,
+        settings,
+    } = setup;
     let levels = coloc_levels(pyramid, region, frames);
     let info = pyramid.level(levels.scan());
     let scan_extent = info.extent();
@@ -412,43 +469,55 @@ fn scan_with(
     );
     let mut permutation =
         ColocPermutation::new(pyramid, region, pair, &levels, settings, intensities);
-    for time in 0..frames {
-        let mask = roi.map(|roi| roi.mask(info, time).expect("the mask rasterizes"));
-        for index in 0..scan.tile_count() {
-            let ranges = scan.tile(index);
-            let a = slice(&scan_data.first[time as usize], scan_extent, &ranges);
-            let b = slice(&scan_data.second[time as usize], scan_extent, &ranges);
-            scan.add(time, index, &a, &b, mask.as_ref());
-        }
-    }
+    let cancel = AtomicBool::new(false);
+    let mut quiet = |_: usize, _: usize| {};
+    let scanned = scan
+        .scan(
+            workers,
+            &cancel,
+            &|time, channel, ranges| {
+                let data = if channel == pair.a() {
+                    &scan_data.first[time as usize]
+                } else {
+                    &scan_data.second[time as usize]
+                };
+                Ok(slice(data, scan_extent, ranges))
+            },
+            &|time| Ok(roi.map(|roi| roi.mask(info, time).expect("the mask rasterizes"))),
+            &mut quiet,
+        )
+        .expect("the scan completes");
+    assert!(scanned, "the scan is not cancelled");
     let permutation_info = pyramid.level(levels.permutation());
     let permutation_extent = permutation_info.extent();
-    let permutation_frames = levels.frames().to_vec();
-    for (slot, time) in permutation_frames.iter().enumerate() {
-        let mask = roi.map(|roi| {
-            roi.mask(permutation_info, *time)
-                .expect("the mask rasterizes")
-        });
-        for index in 0..permutation.tile_count() {
-            let ranges = permutation.tile(index);
-            let a = slice(
-                &permutation_data.first[*time as usize],
-                permutation_extent,
-                &ranges,
-            );
-            let b = slice(
-                &permutation_data.second[*time as usize],
-                permutation_extent,
-                &ranges,
-            );
-            permutation.add(slot, index, &a, &b, mask.as_ref());
-        }
-    }
+    let loaded = permutation
+        .load(
+            levels.frames(),
+            workers,
+            &cancel,
+            &|time, channel, ranges| {
+                let data = if channel == pair.a() {
+                    &permutation_data.first[time as usize]
+                } else {
+                    &permutation_data.second[time as usize]
+                };
+                Ok(slice(data, permutation_extent, ranges))
+            },
+            &|time| {
+                Ok(roi.map(|roi| {
+                    roi.mask(permutation_info, time)
+                        .expect("the mask rasterizes")
+                }))
+            },
+            &mut quiet,
+        )
+        .expect("the permutation samples its grid");
+    assert!(loaded, "the permutation load is not cancelled");
     let permutation_voxels = permutation.sampled_voxels();
     let permutation_frames = permutation.sampled_frames();
     let blocks = permutation.blocks();
     let randomizations = permutation.randomizations();
-    let significance = permutation.test();
+    let significance = permutation.test(workers, &cancel, &mut quiet);
     scan.finish(
         significance,
         permutation_voxels,

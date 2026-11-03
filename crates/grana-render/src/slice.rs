@@ -35,7 +35,9 @@ const QUAD_INDICES: [u32; 6] = [0, 1, 2, 0, 2, 3];
 const QUAD_LIMIT: u32 = 1 << 18;
 const PARALLEL_FLOOR: usize = 8;
 const WORKER_LIMIT: usize = 16;
-const INDEX_BUDGET: u64 = 64 << 20;
+const INDEX_BYTES_PER_PIXEL: u64 = 64;
+const INDEX_BUDGET_FLOOR: u64 = 1 << 20;
+const INDEX_BUDGET_CEIL: u64 = 128 << 20;
 
 type Cut = (u32, Vec<[f32; 2]>);
 
@@ -77,6 +79,12 @@ struct FaceRun {
     quads: u32,
     low: [f32; 3],
     high: [f32; 3],
+}
+
+pub(crate) struct CutView<'a> {
+    pub section: &'a SectionData,
+    pub size: [u32; 2],
+    pub camera: &'a Camera,
 }
 
 pub(crate) struct SlicePass {
@@ -253,12 +261,17 @@ impl SlicePass {
         queue: &Queue,
         layouts: &Layouts,
         scene: &SceneFrame<'_>,
-        section: &SectionData,
-        camera: &Camera,
+        view: CutView<'_>,
     ) {
+        let CutView {
+            section,
+            size,
+            camera,
+        } = view;
         if section.uv_scale[0] <= 0.0 || section.uv_scale[1] <= 0.0 {
             self.objects = 0;
             self.draws = 0;
+            self.index.clear();
             return;
         }
         self.write_styles(device, queue, layouts, scene);
@@ -266,9 +279,11 @@ impl SlicePass {
         let box_min = section.box_min;
         let world = section.world;
         let plane = box_min[axis] + section.plane[0] * world[axis];
+        let budget = index_budget(size);
+        self.index.fit(budget);
         let key = span_key(scene, axis, plane);
         if self.span_key != Some(key) {
-            self.build(scene, axis, plane);
+            self.build(scene, axis, plane, budget);
             self.upload(device, queue);
             self.span_key = Some(key);
         }
@@ -298,7 +313,7 @@ impl SlicePass {
         }
     }
 
-    fn build(&mut self, scene: &SceneFrame<'_>, axis: usize, plane: f32) {
+    fn build(&mut self, scene: &SceneFrame<'_>, axis: usize, plane: f32, budget: u64) {
         self.runs.clear();
         self.staged.clear();
         self.retain(scene);
@@ -323,7 +338,7 @@ impl SlicePass {
             }
         }
         self.keep_solid(&mut candidates);
-        self.index.prepare(&candidates, axis);
+        self.index.prepare(&candidates, axis, budget);
         let cuts = self.cut(&candidates, axis, plane);
         for (candidate, (quads, vertices)) in candidates.iter().zip(cuts) {
             assert!(
@@ -584,6 +599,7 @@ struct CachedIndex {
 struct SectionCache {
     entries: HashMap<(LayerKey, usize, usize), CachedIndex>,
     resident: u64,
+    budget: u64,
     order: u64,
 }
 
@@ -592,11 +608,13 @@ impl SectionCache {
         Self {
             entries: HashMap::new(),
             resident: 0,
+            budget: INDEX_BUDGET_CEIL,
             order: 0,
         }
     }
 
-    fn prepare(&mut self, candidates: &[Candidate<'_>], axis: usize) {
+    fn prepare(&mut self, candidates: &[Candidate<'_>], axis: usize, budget: u64) {
+        self.budget = budget;
         self.order += 1;
         let order = self.order;
         let mut missing = Vec::new();
@@ -639,11 +657,33 @@ impl SectionCache {
     }
 
     fn evict(&mut self, order: u64) {
-        while self.resident > INDEX_BUDGET {
+        while self.resident > self.budget {
             let victim = self
                 .entries
                 .iter()
                 .filter(|(_, entry)| entry.used < order)
+                .min_by_key(|(_, entry)| entry.used)
+                .map(|(key, _)| *key);
+            let Some(key) = victim else {
+                break;
+            };
+            if let Some(entry) = self.entries.remove(&key) {
+                self.resident -= entry.bytes;
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.resident = 0;
+    }
+
+    fn fit(&mut self, budget: u64) {
+        self.budget = budget;
+        while self.resident > self.budget {
+            let victim = self
+                .entries
+                .iter()
                 .min_by_key(|(_, entry)| entry.used)
                 .map(|(key, _)| *key);
             let Some(key) = victim else {
@@ -711,6 +751,11 @@ fn parallel_over<U: Send>(
         .into_iter()
         .map(|outcome| outcome.expect("every cut plane task completes"))
         .collect()
+}
+
+fn index_budget(size: [u32; 2]) -> u64 {
+    let pixels = u64::from(size[0]) * u64::from(size[1]);
+    (pixels * INDEX_BYTES_PER_PIXEL).clamp(INDEX_BUDGET_FLOOR, INDEX_BUDGET_CEIL)
 }
 
 fn span_key(scene: &SceneFrame<'_>, axis: usize, plane: f32) -> u64 {

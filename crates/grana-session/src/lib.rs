@@ -26,7 +26,7 @@ pub use protocol::{
     ColocPairSpec, ColocSettingsSpec, ColocSpec, DetectionSpec, FilterSpec, MeasureSpec, Protocol,
     ProtocolError, RegionSpec, RelationSpec, SetSpec, TrackSpec,
 };
-pub use run::DetectRequest;
+pub use run::{ColocRequest, DetectRequest};
 pub use session::{Effects, Session};
 pub use task::Poll;
 pub use view::{BatchDataset, BatchView, HistoryView, IoView, Message, SessionView, StoreView};

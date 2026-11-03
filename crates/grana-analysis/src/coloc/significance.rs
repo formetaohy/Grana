@@ -1,13 +1,15 @@
 use std::ops::Range;
+use std::sync::atomic::AtomicBool;
 
 use grana_measure::{ColocPair, ColocSettings, ColocSignificance};
-use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
+use grana_volume::{Intensity, Level, Pyramid, Region};
 
-use crate::mask::Mask;
+use crate::Mask;
+use crate::schedule;
 
-use super::{ColocLevels, scale, unit};
+use super::{ColocLevels, ColocRead, scale, unit};
 
-const TILE: [u32; 3] = [256, 256, 32];
+const TILE: [u32; 3] = [128, 128, 16];
 const SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 const EPSILON: f64 = 1.0e-12;
 const MINIMUM: u64 = 3;
@@ -18,17 +20,56 @@ struct Frame {
     included: Vec<u32>,
 }
 
+#[derive(Clone)]
+struct Grid {
+    ranges: [Range<u32>; 3],
+    tiles: [usize; 3],
+    dims: [u32; 3],
+    block: [u32; 3],
+    stride: u32,
+}
+
+impl Grid {
+    fn tile_count(&self) -> usize {
+        self.tiles[0] * self.tiles[1] * self.tiles[2]
+    }
+
+    fn tile(&self, index: usize) -> [Range<u32>; 3] {
+        assert!(
+            index < self.tile_count(),
+            "the tile index lies on the colocalization grid"
+        );
+        let x = index % self.tiles[0];
+        let y = (index / self.tiles[0]) % self.tiles[1];
+        let z = index / (self.tiles[0] * self.tiles[1]);
+        [0, 1, 2].map(|axis| {
+            let offset = [x, y, z][axis] as u32 * TILE[axis];
+            let start = self.ranges[axis].start + offset;
+            start..(start + TILE[axis]).min(self.ranges[axis].end)
+        })
+    }
+
+    fn voxels(&self) -> usize {
+        self.dims.iter().map(|dim| *dim as usize).product()
+    }
+
+    fn blocks(&self) -> usize {
+        [0, 1, 2]
+            .map(|axis| self.dims[axis].div_ceil(self.block[axis]) as usize)
+            .iter()
+            .product()
+    }
+}
+
 pub struct ColocPermutation {
     pair: ColocPair,
     level: usize,
     stride: u32,
     settings: ColocSettings,
-    ranges: [Range<u32>; 3],
-    tiles: [usize; 3],
-    dims: [u32; 3],
-    block: [u32; 3],
+    grid: Grid,
     scales: [[f32; 2]; 2],
     frames: Vec<Frame>,
+    loaded: Vec<bool>,
 }
 
 impl ColocPermutation {
@@ -50,86 +91,208 @@ impl ColocPermutation {
         let dims = lengths.map(|length| length.div_ceil(stride));
         let tiles = [0, 1, 2].map(|axis| lengths[axis].div_ceil(TILE[axis]) as usize);
         let block = block_size(settings.block(), info, pyramid.level(0), stride, dims);
-        let voxels = dims.iter().map(|dim| *dim as usize).product::<usize>();
+        let slots = levels.frames().len();
         Self {
             pair,
             level,
             stride,
             settings,
-            ranges,
-            tiles,
-            dims,
-            block,
+            grid: Grid {
+                ranges,
+                tiles,
+                dims,
+                block,
+                stride,
+            },
             scales: intensities.map(scale),
-            frames: (0..levels.frames().len())
+            frames: (0..slots)
                 .map(|_| Frame {
-                    a: vec![0.0; voxels],
-                    b: vec![0.0; voxels],
-                    included: Vec::with_capacity(voxels),
+                    a: Vec::new(),
+                    b: Vec::new(),
+                    included: Vec::new(),
                 })
                 .collect(),
+            loaded: vec![false; slots],
         }
     }
 
     pub fn tile_count(&self) -> usize {
-        self.tiles[0] * self.tiles[1] * self.tiles[2]
+        self.grid.tile_count()
     }
 
     pub fn tile(&self, index: usize) -> [Range<u32>; 3] {
-        assert!(index < self.tile_count(), "the tile index lies on the grid");
-        let x = index % self.tiles[0];
-        let y = (index / self.tiles[0]) % self.tiles[1];
-        let z = index / (self.tiles[0] * self.tiles[1]);
-        [0, 1, 2].map(|axis| {
-            let offset = [x, y, z][axis] as u32 * TILE[axis];
-            let start = self.ranges[axis].start + offset;
-            start..(start + TILE[axis]).min(self.ranges[axis].end)
-        })
+        self.grid.tile(index)
     }
 
-    pub fn add(
+    pub fn load(
         &mut self,
-        slot: usize,
-        index: usize,
-        a: &VoxelData,
-        b: &VoxelData,
-        mask: Option<&Mask>,
-    ) {
-        let tile = self.tile(index);
-        let dims = [0, 1, 2].map(|axis| (tile[axis].end - tile[axis].start) as usize);
-        let voxels = dims.iter().product::<usize>();
+        times: &[u32],
+        workers: usize,
+        cancel: &AtomicBool,
+        read: &ColocRead<'_>,
+        mask: &(dyn Fn(u32) -> Result<Option<Mask>, String> + Sync),
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<bool, String> {
+        assert_eq!(
+            times.len(),
+            self.frames.len(),
+            "the permutation samples one frame per slot"
+        );
+        let grid = &self.grid;
+        let pair = self.pair;
+        let scales = self.scales;
+        let (frames, loaded) = (&mut self.frames, &mut self.loaded);
+        let completed = schedule::ordered(
+            schedule::Run {
+                total: times.len(),
+                workers: schedule::workers(workers),
+                cancel,
+                progress,
+            },
+            || (),
+            |(), slot| {
+                let mask = mask(times[slot])?;
+                let mut frame = Frame {
+                    a: vec![0.0; grid.voxels()],
+                    b: vec![0.0; grid.voxels()],
+                    included: Vec::with_capacity(grid.voxels()),
+                };
+                sample(
+                    grid,
+                    pair,
+                    scales,
+                    mask.as_ref(),
+                    read,
+                    times[slot],
+                    &mut frame,
+                )?;
+                Ok(frame)
+            },
+            |slot, mut frame| {
+                std::mem::swap(&mut frames[slot].a, &mut frame.a);
+                std::mem::swap(&mut frames[slot].b, &mut frame.b);
+                std::mem::swap(&mut frames[slot].included, &mut frame.included);
+                loaded[slot] = true;
+                Ok(())
+            },
+            |()| {},
+        )?;
+        Ok(completed)
+    }
+
+    pub fn sampled_voxels(&self) -> u64 {
+        self.grid.voxels() as u64
+    }
+
+    pub fn sampled_frames(&self) -> u32 {
+        self.frames.len() as u32
+    }
+
+    pub fn blocks(&self) -> u64 {
+        self.grid.blocks() as u64 * self.frames.len() as u64
+    }
+
+    pub fn randomizations(&self) -> u32 {
+        self.settings.permutations()
+    }
+
+    pub fn test(
+        self,
+        workers: usize,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Option<ColocSignificance> {
+        assert!(
+            self.loaded.iter().all(|loaded| *loaded),
+            "the significance test runs on a loaded permutation grid"
+        );
+        let observed = observed_pearson(&self.frames)?;
+        let randomizations = self.randomizations();
+        let frames = &self.frames;
+        let dims = self.grid.dims;
+        let block = self.grid.block;
+        let base = seed(self.pair, self.level, self.stride);
+        let mut count = 0u64;
+        let completed = schedule::ordered(
+            schedule::Run {
+                total: randomizations as usize,
+                workers: schedule::workers(workers),
+                cancel,
+                progress,
+            },
+            || TestWorker::new(self.grid.blocks(), self.grid.voxels()),
+            |worker, index| {
+                let randomization = u32::try_from(index)
+                    .expect("a colocalization randomization fits the u32 range");
+                Ok(worker.randomize(
+                    frames,
+                    dims,
+                    block,
+                    observed,
+                    randomization_seed(base, randomization),
+                ))
+            },
+            |_, significant| {
+                if significant {
+                    count += 1;
+                }
+                Ok(())
+            },
+            |_| {},
+        )
+        .ok()?;
+        if !completed {
+            return None;
+        }
+        let p = (1.0 + count as f64) / (1.0 + f64::from(randomizations));
+        Some(ColocSignificance::new(p, randomizations, observed))
+    }
+}
+
+fn sample(
+    grid: &Grid,
+    pair: ColocPair,
+    scales: [[f32; 2]; 2],
+    mask: Option<&Mask>,
+    read: &ColocRead<'_>,
+    time: u32,
+    frame: &mut Frame,
+) -> Result<(), String> {
+    let stride = grid.stride as usize;
+    for index in 0..grid.tile_count() {
+        let tile = grid.tile(index);
+        let a = read(time, pair.a(), &tile)?;
+        let b = read(time, pair.b(), &tile)?;
+        let tile_dims = [0, 1, 2].map(|axis| (tile[axis].end - tile[axis].start) as usize);
+        let voxels = tile_dims.iter().product::<usize>();
         assert!(
             a.voxel_count() == voxels && b.voxel_count() == voxels,
             "a colocalization tile carries both channels voxel for voxel"
         );
-        let stride = self.stride as usize;
-        let scales = self.scales;
-        let grid = self.dims;
         let mut offsets = [0usize; 3];
         let mut starts = [0usize; 3];
         for axis in 0..3 {
-            let relative = (tile[axis].start - self.ranges[axis].start) as usize;
+            let relative = (tile[axis].start - grid.ranges[axis].start) as usize;
             offsets[axis] = (stride - relative % stride) % stride;
             starts[axis] = (relative + offsets[axis]) / stride;
         }
-        let frame = &mut self.frames[slot];
         let mut z = offsets[2];
         let mut compact_z = starts[2];
-        while z < dims[2] {
+        while z < tile_dims[2] {
             let mut y = offsets[1];
             let mut compact_y = starts[1];
-            while y < dims[1] {
+            while y < tile_dims[1] {
                 let mut x = offsets[0];
                 let mut compact_x = starts[0];
-                while x < dims[0] {
+                while x < tile_dims[0] {
                     let global = [
                         tile[0].start + x as u32,
                         tile[1].start + y as u32,
                         tile[2].start + z as u32,
                     ];
-                    let voxel = x + dims[0] * (y + dims[1] * z);
-                    let compact =
-                        compact_x + grid[0] as usize * (compact_y + grid[1] as usize * compact_z);
+                    let voxel = x + tile_dims[0] * (y + tile_dims[1] * z);
+                    let compact = compact_x
+                        + grid.dims[0] as usize * (compact_y + grid.dims[1] as usize * compact_z);
                     frame.a[compact] = unit(scales[0], a.value(voxel));
                     frame.b[compact] = unit(scales[1], b.value(voxel));
                     if mask.is_none_or(|mask| mask.contains_cell(global)) {
@@ -148,67 +311,7 @@ impl ColocPermutation {
             compact_z += 1;
         }
     }
-
-    pub fn sampled_voxels(&self) -> u64 {
-        self.dims.iter().map(|dim| u64::from(*dim)).product()
-    }
-
-    pub fn sampled_frames(&self) -> u32 {
-        self.frames.len() as u32
-    }
-
-    pub fn blocks(&self) -> u64 {
-        self.blocks_per_frame() as u64 * self.frames.len() as u64
-    }
-
-    pub fn randomizations(&self) -> u32 {
-        self.settings.permutations()
-    }
-
-    pub fn test(self) -> Option<ColocSignificance> {
-        let randomizations = self.settings.permutations();
-        let mut observed = Totals::default();
-        for frame in &self.frames {
-            for index in &frame.included {
-                let index = *index as usize;
-                observed.push(frame.a[index], frame.b[index]);
-            }
-        }
-        let observed_pearson = observed.pearson()?;
-        let dims = self.dims;
-        let block = self.block;
-        let blocks = self.blocks_per_frame();
-        let mut rng = SplitMix64::new(seed(self.pair, self.level, self.stride));
-        let mut order = (0..blocks as u32).collect::<Vec<_>>();
-        let mut shuffled = vec![0.0f32; self.frames[0].a.len()];
-        let mut count = 0u64;
-        for _ in 0..randomizations {
-            let mut totals = Totals::default();
-            for frame in &self.frames {
-                shuffle(&mut order, &mut rng);
-                fill(&mut shuffled, &frame.a, dims, block, &order);
-                for index in &frame.included {
-                    let index = *index as usize;
-                    totals.push(shuffled[index], frame.b[index]);
-                }
-            }
-            if totals
-                .pearson()
-                .is_some_and(|pearson| pearson >= observed_pearson - EPSILON)
-            {
-                count += 1;
-            }
-        }
-        let p = (1.0 + count as f64) / (1.0 + f64::from(randomizations));
-        Some(ColocSignificance::new(p, randomizations, observed_pearson))
-    }
-
-    fn blocks_per_frame(&self) -> usize {
-        [0, 1, 2]
-            .map(|axis| self.dims[axis].div_ceil(self.block[axis]) as usize)
-            .iter()
-            .product()
-    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Default)]
@@ -247,6 +350,57 @@ impl Totals {
     }
 }
 
+fn observed_pearson(frames: &[Frame]) -> Option<f64> {
+    let mut observed = Totals::default();
+    for frame in frames {
+        for index in &frame.included {
+            let index = *index as usize;
+            observed.push(frame.a[index], frame.b[index]);
+        }
+    }
+    observed.pearson()
+}
+
+struct TestWorker {
+    order: Vec<u32>,
+    shuffled: Vec<f32>,
+}
+
+impl TestWorker {
+    fn new(blocks: usize, voxels: usize) -> Self {
+        Self {
+            order: (0..blocks as u32).collect(),
+            shuffled: vec![0.0f32; voxels],
+        }
+    }
+
+    fn randomize(
+        &mut self,
+        frames: &[Frame],
+        dims: [u32; 3],
+        block: [u32; 3],
+        observed: f64,
+        seed: u64,
+    ) -> bool {
+        let mut rng = SplitMix64::new(seed);
+        for (slot, value) in self.order.iter_mut().enumerate() {
+            *value = slot as u32;
+        }
+        shuffle(&mut self.order, &mut rng);
+        let mut totals = Totals::default();
+        for frame in frames {
+            fill(&mut self.shuffled, &frame.a, dims, block, &self.order);
+            for index in &frame.included {
+                let index = *index as usize;
+                totals.push(self.shuffled[index], frame.b[index]);
+            }
+        }
+        totals
+            .pearson()
+            .is_some_and(|pearson| pearson >= observed - EPSILON)
+    }
+}
+
 struct SplitMix64 {
     state: u64,
 }
@@ -276,6 +430,10 @@ fn seed(pair: ColocPair, level: usize, stride: u32) -> u64 {
         ^ u64::from(stride)
 }
 
+fn randomization_seed(base: u64, randomization: u32) -> u64 {
+    SplitMix64::new(base ^ (u64::from(randomization) << 1 | 1)).next()
+}
+
 fn shuffle(order: &mut [u32], rng: &mut SplitMix64) {
     for index in (1..order.len()).rev() {
         let other = rng.below(index + 1);
@@ -289,8 +447,6 @@ fn fill(shuffled: &mut [f32], source: &[f32], dims: [u32; 3], block: [u32; 3], o
         dims[1].div_ceil(block[1]),
         dims[2].div_ceil(block[2]),
     ];
-    #[cfg(debug_assertions)]
-    let mut written = 0usize;
     for (destination, origin) in order.iter().enumerate() {
         let origin = decode(*origin, blocks);
         let target = decode(destination as u32, blocks);
@@ -312,36 +468,18 @@ fn fill(shuffled: &mut [f32], source: &[f32], dims: [u32; 3], block: [u32; 3], o
                         break;
                     }
                     let source_x = mirror(origin[0] * block[0] + local_x, dims[0]);
-                    debug_assert!(
-                        x < dims[0] && y < dims[1] && z < dims[2],
-                        "a randomization writes target cells inside the sampled grid"
-                    );
-                    debug_assert!(
-                        source_x < dims[0] && source_y < dims[1] && source_z < dims[2],
-                        "a randomization reads mirrored source cells inside the sampled grid"
-                    );
                     let target_index = (x + dims[0] * (y + dims[1] * z)) as usize;
                     let source_index =
                         (source_x + dims[0] * (source_y + dims[1] * source_z)) as usize;
                     shuffled[target_index] = source[source_index];
-                    #[cfg(debug_assertions)]
-                    {
-                        written += 1;
-                    }
                 }
             }
         }
     }
-    #[cfg(debug_assertions)]
-    debug_assert_eq!(
-        written,
-        shuffled.len(),
-        "a randomization fills every sampled voxel"
-    );
 }
 
 fn mirror(index: u32, dim: u32) -> u32 {
-    debug_assert!(dim > 0, "a sampled grid spans a positive extent");
+    assert!(dim > 0, "a sampled grid spans a positive extent");
     if dim == 1 {
         return 0;
     }

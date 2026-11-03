@@ -1540,11 +1540,7 @@ impl Session {
         self.analysis.push(crate::coloc(
             Job::Coloc,
             source,
-            pair,
-            region,
-            roi,
-            mask.map(|set| set.raw()),
-            settings,
+            crate::ColocRequest::new(pair, region, roi, mask.map(|set| set.raw()), settings, 0),
         ));
     }
 

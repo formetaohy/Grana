@@ -13,7 +13,9 @@ mod surface;
 mod table;
 mod track;
 
-pub use coloc::{ColocLevels, ColocPermutation, ColocScan, ColocScanConfig, coloc_levels};
+pub use coloc::{
+    ColocLevels, ColocPermutation, ColocRead, ColocScan, ColocScanConfig, coloc_levels,
+};
 pub use filament::{FilamentScan, filament_level};
 pub use mask::{Mask, Roi};
 pub use params::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};

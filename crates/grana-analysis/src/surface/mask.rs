@@ -65,10 +65,12 @@ pub(super) fn build(
     let gate = plan.gate(roi);
     let pad = plan.pad_mask();
     let completed = crate::schedule::ordered(
-        total,
-        workers,
-        cancel,
-        &mut |done, _| progress(done, step),
+        crate::schedule::Run {
+            total,
+            workers,
+            cancel,
+            progress: &mut |done, _| progress(done, step),
+        },
         || (),
         |(), index| MaskWorker::run(plan, &gate, index, pad, read),
         |index, chunk| {
@@ -81,6 +83,7 @@ pub(super) fn build(
             };
             write_chunk(plan, index, chunk, &mut sink)
         },
+        |()| {},
     )?;
     if !completed {
         return Ok(None);
@@ -339,10 +342,12 @@ fn morph(
     let pad = plan.pad_morph();
     let mut solid = Bits::new(dims);
     let completed = crate::schedule::ordered(
-        total,
-        workers,
-        cancel,
-        &mut |done, _| progress(done, step),
+        crate::schedule::Run {
+            total,
+            workers,
+            cancel,
+            progress: &mut |done, _| progress(done, step),
+        },
         || (),
         |(), index| MorphWorker::run(plan, index, pad, foreground, admitted, grid),
         |index, chunk| {
@@ -365,6 +370,7 @@ fn morph(
             }
             Ok(())
         },
+        |()| {},
     )?;
     Ok(completed.then_some(solid))
 }

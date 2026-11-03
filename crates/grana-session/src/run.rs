@@ -176,21 +176,23 @@ fn shape(frame: Option<&ObjectFrame>) -> Result<Option<grana_analysis::Shape>, S
     frame.shape().map(Some).map_err(|error| error.to_string())
 }
 
-pub(crate) struct ColocRequest {
+pub struct ColocRequest {
     pair: ColocPair,
     region: grana_volume::Region,
     roi: Option<Roi>,
     mask: Option<u64>,
     settings: ColocSettings,
+    workers: usize,
 }
 
 impl ColocRequest {
-    pub(crate) fn new(
+    pub fn new(
         pair: ColocPair,
         region: grana_volume::Region,
         roi: Option<Roi>,
         mask: Option<u64>,
         settings: ColocSettings,
+        workers: usize,
     ) -> Self {
         Self {
             pair,
@@ -198,6 +200,7 @@ impl ColocRequest {
             roi,
             mask,
             settings,
+            workers,
         }
     }
 }
@@ -214,6 +217,7 @@ pub(crate) fn coloc(
         roi,
         mask: mask_id,
         settings,
+        workers,
     } = request;
     let pyramid = reader.pyramid();
     let channels = pyramid.channel_count();
@@ -236,6 +240,7 @@ pub(crate) fn coloc(
     let scan_level = levels.scan();
     let permutation_level = levels.permutation();
     let scan_info = pyramid.level(scan_level);
+    let permutation_info = pyramid.level(permutation_level);
     let permutation_frames = levels.frames().to_vec();
     let mut scan = ColocScan::new(
         scan_info,
@@ -245,77 +250,74 @@ pub(crate) fn coloc(
     );
     let mut permutation =
         ColocPermutation::new(pyramid, region, pair, &levels, settings, intensities);
-    let scan_tiles = scan.tile_count();
-    let permutation_tiles = permutation.tile_count();
-    let piggyback = permutation_level == scan_level
-        && permutation_frames
-            .iter()
-            .enumerate()
-            .all(|(time, sampled)| *sampled == time as u32)
-        && permutation_frames.len() == frames as usize;
-    let permutation_work = if piggyback {
-        0
-    } else {
-        permutation_tiles * permutation_frames.len()
-    };
-    let total = scan_tiles * frames as usize + permutation_work;
-    let mut done = 0usize;
-    for time in 0..frames {
-        let mask = roi
-            .as_ref()
-            .map(|roi| roi.mask(scan_info, time))
-            .transpose()?;
-        for index in 0..scan_tiles {
-            if cancel.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            let ranges = scan.tile(index);
-            let first = reader.read_region(time, scan_level, pair.a(), &ranges)?;
-            let second = reader.read_region(time, scan_level, pair.b(), &ranges)?;
-            scan.add(time, index, &first, &second, mask.as_ref());
-            if piggyback {
-                permutation.add(time as usize, index, &first, &second, mask.as_ref());
-            }
-            done += 1;
-            if index % 16 == 0 || index + 1 == scan_tiles {
-                sink(Event::Progress { time, done, total });
-            }
-        }
+    let scan_units = scan.tile_count() * frames as usize;
+    let permutation_units = permutation.tile_count() * permutation_frames.len();
+    let randomization_units = settings.permutations() as usize;
+    let total = scan_units + permutation_units + randomization_units;
+    let scanned = scan.scan(
+        workers,
+        cancel,
+        &|time, channel, ranges| {
+            reader
+                .read_region(time, scan_level, channel, ranges)
+                .map_err(String::from)
+        },
+        &|time| match &roi {
+            None => Ok(None),
+            Some(roi) => roi.mask(scan_info, time).map(Some),
+        },
+        &mut |done, _| {
+            sink(Event::Progress {
+                time: 0,
+                done,
+                total,
+            });
+        },
+    )?;
+    if !scanned {
+        return Ok(());
     }
     if scan.voxels() == 0 {
         return Err("the analysis mask covers no voxels of the colocalization region".to_string());
     }
-    if !piggyback {
-        let permutation_info = pyramid.level(permutation_level);
-        for (slot, time) in permutation_frames.iter().enumerate() {
-            let mask = roi
-                .as_ref()
-                .map(|roi| roi.mask(permutation_info, *time))
-                .transpose()?;
-            for index in 0..permutation_tiles {
-                if cancel.load(Ordering::Relaxed) {
-                    return Ok(());
-                }
-                let ranges = permutation.tile(index);
-                let first = reader.read_region(*time, permutation_level, pair.a(), &ranges)?;
-                let second = reader.read_region(*time, permutation_level, pair.b(), &ranges)?;
-                permutation.add(slot, index, &first, &second, mask.as_ref());
-                done += 1;
-                if index % 16 == 0 || index + 1 == permutation_tiles {
-                    sink(Event::Progress {
-                        time: *time,
-                        done,
-                        total,
-                    });
-                }
-            }
-        }
+    let loaded = permutation.load(
+        &permutation_frames,
+        workers,
+        cancel,
+        &|time, channel, ranges| {
+            reader
+                .read_region(time, permutation_level, channel, ranges)
+                .map_err(String::from)
+        },
+        &|time| match &roi {
+            None => Ok(None),
+            Some(roi) => roi.mask(permutation_info, time).map(Some),
+        },
+        &mut |done, _| {
+            sink(Event::Progress {
+                time: 0,
+                done: scan_units + done,
+                total,
+            });
+        },
+    )?;
+    if !loaded {
+        return Ok(());
     }
     let permutation_voxels = permutation.sampled_voxels();
     let permutation_frame_count = permutation.sampled_frames();
     let blocks = permutation.blocks();
     let randomizations = permutation.randomizations();
-    let significance = permutation.test();
+    let significance = permutation.test(workers, cancel, &mut |done, _| {
+        sink(Event::Progress {
+            time: 0,
+            done: scan_units + permutation_units + done,
+            total,
+        });
+    });
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(());
+    }
     let series = scan.finish(
         significance,
         permutation_voxels,

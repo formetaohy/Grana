@@ -121,10 +121,12 @@ pub fn relate_frames(
     let total = counts.len();
     let mut frames = (0..total).map(|_| None).collect::<Vec<_>>();
     let completed = crate::schedule::ordered(
-        total,
-        crate::schedule::workers(workers),
-        cancel,
-        progress,
+        crate::schedule::Run {
+            total,
+            workers: crate::schedule::workers(workers),
+            cancel,
+            progress,
+        },
         || (),
         |(), time| {
             let Some(place) = target(time)? else {
@@ -139,6 +141,7 @@ pub fn relate_frames(
             frames[time] = frame;
             Ok(())
         },
+        |()| {},
     )?;
     Ok(completed.then_some(frames))
 }

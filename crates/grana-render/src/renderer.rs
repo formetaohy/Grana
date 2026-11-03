@@ -885,7 +885,17 @@ impl Renderer {
         info.samples = target.samples;
         if target.samples < samples {
             meshes.set(device, queue, layouts, scene);
-            slice.prepare(device, queue, layouts, scene, &section_data, camera);
+            slice.prepare(
+                device,
+                queue,
+                layouts,
+                scene,
+                crate::slice::CutView {
+                    section: &section_data,
+                    size: cut_size,
+                    camera,
+                },
+            );
         }
         if target.samples < samples {
             target.samples += 1;
