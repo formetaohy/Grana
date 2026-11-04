@@ -15,6 +15,6 @@ pub use coloc::{
 };
 pub use filament::{FilamentScan, filament_level};
 pub use relation::{Reference, relate_frames};
-pub use scan::{ChannelRead, SpotScan, SpotScanner};
+pub use scan::{ChannelRead, SpotScan, SpotScanner, spot_level};
 pub use surface::{Sources, SurfaceBuilder, recut, surface_level};
 pub use track::TrackBuilder;

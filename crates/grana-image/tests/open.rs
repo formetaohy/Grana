@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use grana_image::{Format, Image, Source, is_image};
 use grana_volume::{
@@ -76,4 +78,163 @@ fn resolves_coarser_levels_from_the_stored_level() {
     assert_eq!(samples[side * (1 + side)], 14);
     assert_eq!(samples[side * side * side - 1], 854);
     assert!(image.read_region(0, 2, 0, &[0..1, 0..1, 0..1]).is_err());
+}
+
+#[test]
+fn persists_resolved_tiles_across_sessions() {
+    let temporary = Temporary::new("grana-image-pyramid");
+    let dataset = temporary.path().join("fixture.zarr");
+    write_zarr(&dataset);
+    let source = Source::file(dataset.clone());
+    let cache = temporary.path().join("cache");
+
+    let first = Image::open_with_cache(&source, Some(cache.clone())).expect("the fixture opens");
+    let region = [40..104, 10..60, 0..4];
+    let resolved = first
+        .read_region(0, 1, 0, &region)
+        .expect("the resolved region reads");
+    let brick = first
+        .read_brick(0, 1, BrickCoord::new(1, 1, 0))
+        .expect("the resolved brick reads");
+    let VoxelData::U16(values) = &resolved else {
+        panic!("the resolved level keeps the voxel format");
+    };
+    assert_eq!(values[0], 4 * 40 + 8 * 10 + 7);
+    let side = PADDED_SIDE as usize;
+    let VoxelData::U16(samples) = &brick.channels()[0] else {
+        panic!("the resolved brick keeps the voxel format");
+    };
+    assert_eq!(samples[1 + side * (1 + side)], 4 * 32 + 8 * 32 + 7);
+    drop(first);
+
+    let second = Image::open_with_cache(&source, Some(cache.clone())).expect("the fixture reopens");
+    fs::remove_dir_all(&dataset).expect("the fixture is removed");
+    assert_eq!(
+        second
+            .read_region(0, 1, 0, &region)
+            .expect("the cached region reads"),
+        resolved,
+        "the second session reads the persisted tiles"
+    );
+    assert_eq!(
+        second
+            .read_brick(0, 1, BrickCoord::new(1, 1, 0))
+            .expect("the cached brick reads"),
+        brick,
+        "the second session assembles the persisted bricks"
+    );
+    assert!(
+        entries(&cache) > 0,
+        "the resolved tiles are written to the cache directory"
+    );
+    drop(second);
+
+    write_zarr(&dataset);
+    let source = Source::file(dataset.clone());
+    let uncached = temporary.path().join("uncached");
+    let third = Image::open_with_cache(&source, Some(uncached)).expect("the fixture reopens");
+    fs::remove_dir_all(&dataset).expect("the fixture is removed again");
+    let recovered = third.read_region(0, 1, 0, &region).ok();
+    assert!(
+        recovered.as_ref() != Some(&resolved),
+        "an empty cache cannot recover the removed source"
+    );
+}
+
+fn entries(root: &Path) -> usize {
+    let Ok(directories) = fs::read_dir(root) else {
+        return 0;
+    };
+    directories
+        .flatten()
+        .filter_map(|directory| fs::read_dir(directory.path()).ok())
+        .map(|files| files.flatten().count())
+        .sum()
+}
+
+fn write_zarr(root: &Path) {
+    let (width, height, depth) = (256u32, 128u32, 8u32);
+    write(root.join(".zgroup"), br#"{"zarr_format":2}"#);
+    write(
+        root.join(".zattrs"),
+        br#"{
+            "multiscales": [{
+                "version": "0.4",
+                "name": "fixture",
+                "axes": [
+                    {"name": "t", "type": "time", "unit": "second"},
+                    {"name": "c", "type": "channel"},
+                    {"name": "z", "type": "space", "unit": "micrometer"},
+                    {"name": "y", "type": "space", "unit": "micrometer"},
+                    {"name": "x", "type": "space", "unit": "micrometer"}
+                ],
+                "datasets": [
+                    {"path": "0", "coordinateTransformations": [{"type": "scale", "scale": [1.0, 1.0, 1.0, 1.0, 1.0]}]}
+                ]
+            }],
+            "omero": {
+                "channels": [
+                    {"color": "FF0000", "window": {"min": 0, "max": 65535, "start": 0, "end": 65535}, "label": "signal"}
+                ]
+            }
+        }"#,
+    );
+    write(
+        root.join("0").join(".zarray"),
+        format!(
+            r#"{{"zarr_format":2,"shape":[1,1,{depth},{height},{width}],"chunks":[1,1,{depth},{height},{width}],"dtype":"<u2","compressor":null,"fill_value":0,"filters":null,"order":"C","dimension_separator":"/"}}"#
+        )
+        .as_bytes(),
+    );
+    let mut data = Vec::with_capacity((width * height * depth * 2) as usize);
+    for z in 0..depth {
+        for y in 0..height {
+            for x in 0..width {
+                let value = (2 * x + 4 * y + 8 * z) as u16;
+                data.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+    }
+    write(
+        root.join("0")
+            .join("0")
+            .join("0")
+            .join("0")
+            .join("0")
+            .join("0"),
+        &data,
+    );
+}
+
+fn write(path: PathBuf, content: &[u8]) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("the fixture directories are created");
+    }
+    fs::write(path, content).expect("the fixture files are written");
+}
+
+struct Temporary {
+    path: PathBuf,
+}
+
+impl Temporary {
+    fn new(name: &str) -> Self {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("the clock is after the epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{name}-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&path).expect("the temporary directory is created");
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for Temporary {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
 }

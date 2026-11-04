@@ -1,13 +1,8 @@
-use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::Arc;
 
-use grana_volume::{
-    BRICK_SIDE, BrickCoord, ChannelInfo, Extent, Level, Pyramid, VoxelData, VoxelFormat,
-};
+use grana_volume::{BRICK_SIDE, ChannelInfo, Extent, Level, Pyramid, VoxelData, VoxelFormat};
 
 const RESOLVED_LIMIT: usize = 8;
-const CACHE_BYTES: u64 = 256 << 20;
 const CHUNK: u32 = 64;
 
 pub(crate) fn extended(
@@ -48,6 +43,10 @@ impl Scale {
         }
     }
 
+    pub(crate) fn extent(&self) -> Extent {
+        self.extent
+    }
+
     pub(crate) fn source(&self) -> usize {
         self.source
     }
@@ -71,14 +70,6 @@ impl Scale {
             ranges[1].start << self.shift,
             ranges[2].start << self.shift,
         ]
-    }
-
-    pub(crate) fn target(&self, ranges: &[Range<u32>; 3]) -> Extent {
-        Extent::new(
-            ranges[0].end - ranges[0].start,
-            ranges[1].end - ranges[1].start,
-            ranges[2].end - ranges[2].start,
-        )
     }
 
     pub(crate) fn within(&self, ranges: &[Range<u32>; 3]) -> bool {
@@ -200,77 +191,4 @@ impl Field {
             }
         }
     }
-}
-
-pub(crate) type Key = (u32, usize, BrickCoord);
-
-struct Entry {
-    bricks: Arc<Vec<VoxelData>>,
-    stamp: u64,
-}
-
-pub(crate) struct Cache {
-    entries: HashMap<Key, Entry>,
-    bytes: u64,
-    stamp: u64,
-}
-
-impl Cache {
-    pub(crate) fn new() -> Self {
-        Self {
-            entries: HashMap::new(),
-            bytes: 0,
-            stamp: 0,
-        }
-    }
-
-    pub(crate) fn fetch(&mut self, key: Key) -> Option<Arc<Vec<VoxelData>>> {
-        self.stamp += 1;
-        let stamp = self.stamp;
-        let entry = self.entries.get_mut(&key)?;
-        entry.stamp = stamp;
-        Some(Arc::clone(&entry.bricks))
-    }
-
-    pub(crate) fn insert(&mut self, key: Key, bricks: Arc<Vec<VoxelData>>) {
-        self.stamp += 1;
-        let bytes = measure(&bricks);
-        let previous = self.entries.insert(
-            key,
-            Entry {
-                bricks,
-                stamp: self.stamp,
-            },
-        );
-        if let Some(previous) = previous {
-            let freed = measure(&previous.bricks);
-            self.bytes -= freed;
-        }
-        self.bytes += bytes;
-        while self.bytes > CACHE_BYTES && self.entries.len() > 1 {
-            let oldest = *self
-                .entries
-                .iter()
-                .min_by_key(|(_, entry)| entry.stamp)
-                .map(|(key, _)| key)
-                .expect("the cache holds an entry to evict");
-            if let Some(removed) = self.entries.remove(&oldest) {
-                self.bytes -= measure(&removed.bricks);
-            }
-        }
-    }
-}
-
-fn measure(bricks: &[VoxelData]) -> u64 {
-    bricks
-        .iter()
-        .map(|channel| {
-            let sample = match channel.format() {
-                VoxelFormat::U8 => 1,
-                VoxelFormat::U16 => 2,
-                VoxelFormat::F32 => 4,
-            };
-            channel.voxel_count() as u64 * sample
-        })
-        .sum()
 }

@@ -1,10 +1,12 @@
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_analysis::{SpotScan, SpotScanner};
+use grana_analysis::{SpotScan, SpotScanner, spot_level};
 use grana_object::SpotParams;
 use grana_object::{Spot, SpotSet};
-use grana_volume::{Extent, Level, Region, Spacing, VoxelData};
+use grana_volume::{
+    ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, VoxelData, VoxelFormat,
+};
 
 const EXTENT: Extent = Extent::new(200, 96, 40);
 const DIAMETER: f32 = 0.4;
@@ -223,4 +225,73 @@ fn scan_frame(level: Level, span: f32, data: &VoxelData, workers: usize) -> Spot
         )
         .expect("the frame scans")
         .expect("the spot scan completes")
+}
+
+#[test]
+fn picks_the_coarsest_resolvable_spot_level_within_the_scan_budget() {
+    let mut levels = vec![Level::new(
+        Extent::new(8192, 8192, 512),
+        Spacing::new(0.5, 0.5, 0.5),
+    )];
+    for _ in 1..7 {
+        levels.push(levels.last().expect("a level exists").coarser());
+    }
+    let pyramid = Pyramid::new(
+        levels,
+        1,
+        vec![ChannelInfo::new(
+            "signal",
+            [1.0, 0.0, 0.0],
+            Intensity::new(0.0, 65535.0),
+            Intensity::new(0.0, 65535.0),
+            VoxelFormat::U16,
+        )],
+        1,
+        1.0,
+    );
+    assert_eq!(
+        spot_level(&pyramid, Region::none(), SpotParams::new(8.0, 0.2)),
+        2,
+        "a spot diameter of eight micrometres scans the level that fits the budget"
+    );
+    assert_eq!(
+        spot_level(&pyramid, Region::none(), SpotParams::new(4.0, 0.2)),
+        1,
+        "a small spot keeps the finest level the gaussian resolves"
+    );
+    assert_eq!(
+        spot_level(&pyramid, Region::none(), SpotParams::new(100.0, 0.2)),
+        2,
+        "a large spot never scans finer than the budget"
+    );
+    let window = Region::new(
+        Vec3::new(-20.0, -20.0, -20.0),
+        Vec3::new(-10.0, -10.0, -10.0),
+    );
+    assert_eq!(
+        spot_level(&pyramid, window, SpotParams::new(100.0, 0.2)),
+        0,
+        "a small region stays at the stored level"
+    );
+    let small = Pyramid::new(
+        vec![Level::new(
+            Extent::new(128, 128, 8),
+            Spacing::new(0.5, 0.5, 0.5),
+        )],
+        1,
+        vec![ChannelInfo::new(
+            "signal",
+            [1.0, 0.0, 0.0],
+            Intensity::new(0.0, 65535.0),
+            Intensity::new(0.0, 65535.0),
+            VoxelFormat::U16,
+        )],
+        1,
+        1.0,
+    );
+    assert_eq!(
+        spot_level(&small, Region::none(), SpotParams::new(8.0, 0.2)),
+        0,
+        "a small dataset keeps the precision of its finest level"
+    );
 }

@@ -2,12 +2,14 @@ use std::ops::Range;
 use std::sync::atomic::AtomicBool;
 
 use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
-use grana_volume::{Level, Region as VolumeRegion, VoxelData};
+use grana_volume::{Level, Pyramid, Region as VolumeRegion, VoxelData};
 
 use grana_object::{Mask, SpotParams};
 
 const FWHM_PER_SIGMA: f32 = 2.354_82;
 const MIN_SIGMA: f32 = 0.5;
+const SIGMA_FLOOR: f32 = 1.0;
+const SPOT_VOXEL_LIMIT: u64 = 1 << 30;
 const CORE_MIN: u32 = 64;
 const CORE_MAX: u32 = 256;
 const CORE_STEP: u32 = 32;
@@ -19,6 +21,23 @@ const WORKER_BYTES_LIMIT: u64 = 512 << 20;
 pub type ChannelRead<'a> = dyn Fn(usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
 
 type Region = [[usize; 2]; 3];
+
+pub fn spot_level(pyramid: &Pyramid, region: VolumeRegion, params: SpotParams) -> usize {
+    let sigma = params.diameter() / FWHM_PER_SIGMA;
+    let resolvable = (0..pyramid.level_count())
+        .rev()
+        .find(|index| {
+            let spacing = pyramid.level(*index).spacing();
+            [spacing.x(), spacing.y(), spacing.z()]
+                .into_iter()
+                .all(|step| sigma / step >= SIGMA_FLOOR)
+        })
+        .unwrap_or(0);
+    let affordable = pyramid
+        .fit_level(region, SPOT_VOXEL_LIMIT)
+        .unwrap_or(pyramid.level_count() - 1);
+    affordable.min(resolvable)
+}
 
 pub struct SpotScanner {
     level_index: usize,

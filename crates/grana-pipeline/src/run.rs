@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{
     ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, Sources, SpotScanner,
-    SurfaceBuilder, TrackBuilder, coloc_levels, filament_level, relate_frames, surface_level,
+    SurfaceBuilder, TrackBuilder, coloc_levels, filament_level, relate_frames, spot_level,
+    surface_level,
 };
 use grana_geometry::GeometryStore;
 use grana_image::Image;
@@ -364,8 +365,9 @@ fn spots(
         return Err("the selected channel has no intensity range to detect".to_string());
     }
     let channels = pyramid.channel_count();
-    let level = pyramid.level(0);
-    let scanner = SpotScanner::new(0, level, span, params, region, channels, channel);
+    let level_index = spot_level(pyramid, region, params);
+    let level = pyramid.level(level_index);
+    let scanner = SpotScanner::new(level_index, level, span, params, region, channels, channel);
     let totals = pyramid.frame_count();
     let window = frame_window(totals, workers, FRAME_WORKERS);
     let share = (workers / window).max(1);
@@ -378,7 +380,7 @@ fn spots(
             let mask = roi.as_ref().map(|roi| roi.mask(level, time)).transpose()?;
             let read = |measured: usize, ranges: &[Range<u32>; 3]| {
                 reader
-                    .read_region(time, 0, measured, ranges)
+                    .read_region(time, level_index, measured, ranges)
                     .map_err(String::from)
             };
             let set = scanner.frame(share, cancel, mask.as_ref(), &read, &mut |done, total| {

@@ -1,15 +1,20 @@
 use std::fs::File;
 use std::io::Read;
 use std::ops::Range;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, Extent, Pyramid, VolumeSeries, VoxelData, pad_brick,
+    BrickCoord, BrickData, BrickGrid, Extent, Pyramid, VolumeSeries, VoxelData, VoxelFormat,
+    pad_brick,
 };
 
-use crate::level::{self, Cache, Field, Key, Scale};
+use crate::cache::{self, Key, Memory, Shape, Store};
+use crate::level::{self, Field, Scale};
+use crate::tile::{self, Grid};
 use crate::{Error, Series, Source};
+
+const RESOLVED_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
@@ -30,11 +35,17 @@ pub struct Image {
     pyramid: Pyramid,
     series: Vec<Series>,
     selected: usize,
-    resolved: Mutex<Cache>,
+    identity: u64,
+    tiles: Mutex<Memory>,
+    store: Option<Store>,
 }
 
 impl Image {
     pub fn open(source: &Source) -> Result<Self, Error> {
+        Self::open_with_cache(source, cache::default_root())
+    }
+
+    pub fn open_with_cache(source: &Source, cache: Option<PathBuf>) -> Result<Self, Error> {
         let (inner, series) = match source {
             Source::Memory(series) => {
                 let inner = Inner::Memory(Arc::clone(series));
@@ -55,12 +66,19 @@ impl Image {
             declared.frame_count(),
             declared.frame_interval(),
         );
+        let identity = cache::identity(source, &geometry(&pyramid));
+        let store = match source {
+            Source::Memory(_) => None,
+            Source::File { .. } => cache.as_deref().and_then(Store::open),
+        };
         Ok(Self {
             inner,
             pyramid,
             series,
             selected: source.series(),
-            resolved: Mutex::new(Cache::new()),
+            identity,
+            tiles: Mutex::new(Memory::new()),
+            store,
         })
     }
 
@@ -125,10 +143,6 @@ impl Image {
                 detail: "the brick lies outside the resolved level".to_string(),
             });
         }
-        let key: Key = (time, level, coord);
-        if let Some(bricks) = self.cache().fetch(key) {
-            return Ok(BrickData::new((*bricks).clone()));
-        }
         let spatial = grid.padded_range(coord);
         let region = Extent::new(
             spatial[0].end - spatial[0].start,
@@ -141,9 +155,7 @@ impl Image {
             let data = self.resolved_region(time, level, channel, &spatial)?;
             bricks.push(pad_brick(&data, origin, region, grid.origin(coord), extent));
         }
-        let bricks = Arc::new(bricks);
-        self.cache().insert(key, Arc::clone(&bricks));
-        Ok(BrickData::new((*bricks).clone()))
+        Ok(BrickData::new(bricks))
     }
 
     fn stored_region(
@@ -223,9 +235,72 @@ impl Image {
                 detail: "the region lies outside the resolved level".to_string(),
             });
         }
-        let base = scale.base(ranges);
-        let source = scale.source_ranges(ranges);
-        let mut field = Field::new(scale.target(ranges));
+        let grid = Grid::of(scale.extent());
+        let mut data = tile::allocate(info.format(), ranges);
+        let (first, last) = grid.cover(ranges);
+        for z in first[2]..=last[2] {
+            for y in first[1]..=last[1] {
+                for x in first[0]..=last[0] {
+                    let coord = [x, y, z];
+                    let tile = self.tile(time, level, channel, coord, &grid, info.format())?;
+                    tile::copy_intersection(&mut data, ranges, &tile, &grid.range(coord));
+                }
+            }
+        }
+        Ok(data)
+    }
+
+    fn tile(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        coord: [u32; 3],
+        grid: &Grid,
+        format: VoxelFormat,
+    ) -> Result<Arc<VoxelData>, Error> {
+        let key = Key {
+            identity: self.identity,
+            level: u32::try_from(level).expect("a pyramid holds fewer than 4G levels"),
+            time,
+            channel: u32::try_from(channel).expect("a pyramid holds fewer than 4G channels"),
+            coord,
+        };
+        if let Some(data) = self.tiles().fetch(key) {
+            return Ok(data);
+        }
+        let shape = Shape {
+            extent: grid.extent_of(coord),
+            format,
+        };
+        if let Some(data) = self.store.as_ref().and_then(|store| store.load(key, shape)) {
+            let data = Arc::new(data);
+            self.tiles().insert(key, Arc::clone(&data));
+            return Ok(data);
+        }
+        let data = Arc::new(self.synthesize(time, level, channel, coord, grid, format)?);
+        if let Some(store) = self.store.as_ref() {
+            store.save(key, shape, &data);
+        }
+        self.tiles().insert(key, Arc::clone(&data));
+        Ok(data)
+    }
+
+    fn synthesize(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        coord: [u32; 3],
+        grid: &Grid,
+        format: VoxelFormat,
+    ) -> Result<VoxelData, Error> {
+        let scale = Scale::of(&self.pyramid, level);
+        let ranges = grid.range(coord);
+        let extent = grid.extent_of(coord);
+        let source = scale.source_ranges(&ranges);
+        let base = scale.base(&ranges);
+        let mut field = Field::new(extent);
         level::chunks(&source, |chunk| {
             let data = self.stored_region(time, scale.source(), channel, &chunk)?;
             field.add(
@@ -244,7 +319,7 @@ impl Image {
             );
             Ok::<(), Error>(())
         })?;
-        Ok(field.finish(info.format()))
+        Ok(field.finish(format))
     }
 
     fn level_extent(&self, level: usize) -> Result<Extent, Error> {
@@ -256,11 +331,35 @@ impl Image {
         Ok(self.pyramid.level(level).extent())
     }
 
-    fn cache(&self) -> std::sync::MutexGuard<'_, Cache> {
-        self.resolved
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
+    fn tiles(&self) -> MutexGuard<'_, Memory> {
+        self.tiles.lock().unwrap_or_else(|error| error.into_inner())
     }
+}
+
+fn geometry(pyramid: &Pyramid) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&RESOLVED_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&(pyramid.stored() as u64).to_le_bytes());
+    bytes.extend_from_slice(&(pyramid.frame_count() as u64).to_le_bytes());
+    for level in pyramid.levels() {
+        let extent = level.extent();
+        for value in [extent.x(), extent.y(), extent.z()] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let spacing = level.spacing();
+        for value in [spacing.x(), spacing.y(), spacing.z()] {
+            bytes.extend_from_slice(&value.to_bits().to_le_bytes());
+        }
+    }
+    for channel in pyramid.channels() {
+        bytes.extend_from_slice(channel.name().as_bytes());
+        bytes.push(match channel.format() {
+            VoxelFormat::U8 => 0,
+            VoxelFormat::U16 => 1,
+            VoxelFormat::F32 => 2,
+        });
+    }
+    bytes
 }
 
 fn is_tiff(path: &Path) -> Result<bool, Error> {
