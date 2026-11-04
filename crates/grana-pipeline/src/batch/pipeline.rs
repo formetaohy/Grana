@@ -194,6 +194,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             ProjectSource::File {
                 name: name.clone(),
                 path: dataset.path().to_path_buf(),
+                series: 0,
             },
             view_state(task.protocol, &scene),
         );

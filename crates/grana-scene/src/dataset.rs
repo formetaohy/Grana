@@ -82,6 +82,10 @@ impl Dataset {
         self.pyramid.level_count()
     }
 
+    pub fn stored_levels(&self) -> usize {
+        self.pyramid.stored()
+    }
+
     pub fn frame_count(&self) -> u32 {
         self.pyramid.frame_count()
     }

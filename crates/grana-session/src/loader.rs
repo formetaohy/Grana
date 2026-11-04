@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 
-use grana_image::{Format, Image, Source};
+use grana_image::{Format, Image, Series, Source};
 use grana_volume::{BrickData, BrickRequest, CHANNEL_LIMIT, Pyramid, VolumeSeries};
 
 const ATTEMPTS: u8 = 3;
@@ -17,6 +17,8 @@ pub enum Event {
         name: String,
         pyramid: Pyramid,
         format: Format,
+        series: Vec<Series>,
+        selected: usize,
     },
     Brick {
         request: BrickRequest,
@@ -203,7 +205,14 @@ impl Loader {
     }
 
     pub fn file(path: PathBuf) -> Self {
-        let source = Source::file(path);
+        Self::open(Source::file(path))
+    }
+
+    pub fn file_series(path: PathBuf, series: usize) -> Self {
+        Self::open(Source::file_series(path, series))
+    }
+
+    fn open(source: Source) -> Self {
         let (sender, events) = mpsc::channel();
         let queue = Arc::new(Queue::new());
         let time = Arc::new(AtomicU32::new(0));
@@ -233,6 +242,8 @@ impl Loader {
                 name: reader.name().to_string(),
                 pyramid: reader.pyramid().clone(),
                 format,
+                series: reader.series().to_vec(),
+                selected: reader.selected(),
             };
             if opening_sender.send(opened).is_err() {
                 return;

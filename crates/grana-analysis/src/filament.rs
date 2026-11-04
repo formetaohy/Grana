@@ -18,7 +18,7 @@ const MAX_VOXELS: u64 = 1 << 25;
 const MAX_STEP: u32 = 32;
 
 pub fn filament_level(pyramid: &Pyramid) -> Option<usize> {
-    (0..pyramid.level_count()).find(|index| voxels(pyramid.level(*index)) <= MAX_VOXELS)
+    (0..pyramid.stored()).find(|index| voxels(pyramid.level(*index)) <= MAX_VOXELS)
 }
 
 fn voxels(level: Level) -> u64 {

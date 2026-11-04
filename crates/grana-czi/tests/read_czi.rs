@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use grana_czi::Image;
-use grana_volume::{BrickCoord, PADDED_SIDE, VoxelData, VoxelFormat};
+use grana_volume::{BrickCoord, Extent, PADDED_SIDE, VoxelData, VoxelFormat};
 
 const WIDTH: u32 = 4;
 const HEIGHT: u32 = 3;
@@ -53,7 +53,7 @@ struct Plane {
 #[test]
 fn reads_a_written_file() {
     let path = write();
-    let image = Image::open(&path).expect("the written file opens");
+    let image = Image::open(&path, 0).expect("the written file opens");
     let pyramid = image.pyramid();
     let level = pyramid.level(0);
     assert_eq!(
@@ -99,7 +99,7 @@ fn reads_a_written_file() {
 #[test]
 fn reads_a_pyramid() {
     let path = write_pyramid();
-    let image = Image::open(&path).expect("the pyramid opens");
+    let image = Image::open(&path, 0).expect("the pyramid opens");
     let pyramid = image.pyramid();
     assert_eq!(pyramid.level_count(), 2);
     assert_eq!(pyramid.channel_count(), 1);
@@ -172,7 +172,36 @@ fn reads_a_pyramid() {
 fn refuses_files_that_are_not_czi() {
     let path = std::env::temp_dir().join("grana-not-a-czi.czi");
     std::fs::write(&path, b"II*\0not a czi").expect("the file writes");
-    assert!(Image::open(&path).is_err());
+    assert!(Image::open(&path, 0).is_err());
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn reads_every_scene() {
+    let path = write_scenes();
+    let first = Image::open(&path, 0).expect("the first scene opens");
+    assert_eq!(first.scene(), 0);
+    assert_eq!(first.scenes().len(), 2);
+    assert_eq!(first.scenes()[1].extent(), Extent::new(2, 2, 1));
+    assert_eq!(first.pyramid().level(0).extent(), Extent::new(4, 3, 1));
+    let VoxelData::U8(values) = first
+        .read_region(0, 0, 0, 0..4, 0..3, 0..1)
+        .expect("the first scene reads")
+    else {
+        panic!("the scene stores eight bit voxels");
+    };
+    assert_eq!(values, (0..12).collect::<Vec<u8>>());
+    let second = Image::open(&path, 1).expect("the second scene opens");
+    assert_eq!(second.scene(), 1);
+    assert_eq!(second.pyramid().level(0).extent(), Extent::new(2, 2, 1));
+    let VoxelData::U8(values) = second
+        .read_region(0, 0, 0, 0..2, 0..2, 0..1)
+        .expect("the second scene reads")
+    else {
+        panic!("the scene stores eight bit voxels");
+    };
+    assert_eq!(values, vec![100, 101, 102, 103]);
+    assert!(Image::open(&path, 2).is_err());
     let _ = std::fs::remove_file(&path);
 }
 
@@ -476,4 +505,85 @@ fn pyramid_xml() -> String {
 </Items></Scaling>\
 </Metadata></ImageDocument>"
     )
+}
+
+fn write_scenes() -> PathBuf {
+    let xml = scenes_xml();
+    let metadata_length = METADATA_XML_OFFSET + xml.len();
+    let planes = scene_planes();
+    let directory_body = 128
+        + planes
+            .iter()
+            .map(|plane| 32 + plane.axes.len() * 20)
+            .sum::<usize>();
+    let metadata = 32 + FILE_HEADER_BODY;
+    let directory = metadata + 32 + metadata_length;
+    let first_subblock = directory + 32 + directory_body;
+    let payloads = planes.iter().map(subblock).collect::<Vec<_>>();
+    let mut positions = Vec::new();
+    let mut position = first_subblock;
+    for payload in &payloads {
+        positions.push(position);
+        position += payload.len();
+    }
+    let mut content = vec![0u8; 128];
+    content[..4].copy_from_slice(&(planes.len() as i32).to_le_bytes());
+    for (plane, position) in planes.iter().zip(positions.iter()) {
+        content.extend_from_slice(&entry(0, plane.compression, *position as u64, &plane.axes));
+    }
+    let mut file = segment(b"ZISRAWFILE", &[0u8; FILE_HEADER_BODY]);
+    file[32..36].copy_from_slice(&1i32.to_le_bytes());
+    file.extend_from_slice(&segment(b"ZISRAWMETADATA", &metadata_body(&xml)));
+    file.extend_from_slice(&segment(b"ZISRAWDIRECTORY", &content));
+    for payload in &payloads {
+        file.extend_from_slice(payload);
+    }
+    patch(&mut file, 52, directory as u64);
+    patch(&mut file, 60, metadata as u64);
+    let path = std::env::temp_dir().join("grana-scenes.czi");
+    std::fs::write(&path, &file).expect("the file writes");
+    path
+}
+
+fn scene_planes() -> Vec<Plane> {
+    vec![
+        Plane {
+            compression: 0,
+            axes: scene_axes(0, 4, 3),
+            data: (0..12).collect(),
+        },
+        Plane {
+            compression: 0,
+            axes: scene_axes(1, 2, 2),
+            data: vec![100, 101, 102, 103],
+        },
+    ]
+}
+
+fn scene_axes(scene: i32, width: u32, height: u32) -> Vec<Axis> {
+    vec![
+        Axis::new(*b"X\0\0\0", 0, width),
+        Axis::new(*b"Y\0\0\0", 0, height),
+        Axis::new(*b"Z\0\0\0", 0, 1),
+        Axis::new(*b"C\0\0\0", 0, 1),
+        Axis::new(*b"T\0\0\0", 0, 1),
+        Axis::new(*b"S\0\0\0", scene, 1),
+    ]
+}
+
+fn scenes_xml() -> String {
+    "<ImageDocument><Metadata><Information>\
+<Image><SizeX>4</SizeX><SizeY>3</SizeY><SizeZ>1</SizeZ><SizeC>1</SizeC><SizeT>1</SizeT>\
+<Dimensions><Channels>\
+<Channel Id=\"Channel:1\"><Color>#FFFF0000</Color><Fluor>Red</Fluor></Channel>\
+</Channels></Dimensions></Image>\
+<Image><SizeX>2</SizeX><SizeY>2</SizeY><SizeZ>1</SizeZ><SizeC>1</SizeC><SizeT>1</SizeT>\
+</Image></Information>\
+<Scaling><Items>\
+<Distance Id=\"X\"><Value>1E-06</Value></Distance>\
+<Distance Id=\"Y\"><Value>1E-06</Value></Distance>\
+<Distance Id=\"Z\"><Value>2E-06</Value></Distance>\
+</Items></Scaling>\
+</Metadata></ImageDocument>"
+        .to_string()
 }

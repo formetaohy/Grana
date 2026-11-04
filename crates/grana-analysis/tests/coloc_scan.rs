@@ -249,6 +249,7 @@ fn samples_a_coarser_permutation_level() {
             level(scan_extent),
             Level::new(permutation_extent, Spacing::new(0.2, 0.2, 0.6)),
         ],
+        2,
         channels(),
         frames,
         1.0,
@@ -533,7 +534,7 @@ fn level(extent: Extent) -> Level {
 }
 
 fn pyramid(extent: Extent, frames: u32) -> Pyramid {
-    Pyramid::new(vec![level(extent)], channels(), frames, 1.0)
+    Pyramid::new(vec![level(extent)], 1, channels(), frames, 1.0)
 }
 
 fn described_pyramid(frames: u32) -> Pyramid {
@@ -544,7 +545,7 @@ fn described_pyramid(frames: u32) -> Pyramid {
         Level::new(Extent::new(64, 64, 8), Spacing::new(0.8, 0.8, 2.4)),
         Level::new(Extent::new(32, 32, 4), Spacing::new(1.6, 1.6, 4.8)),
     ];
-    Pyramid::new(levels, channels(), frames, 1.0)
+    Pyramid::new(levels, 5, channels(), frames, 1.0)
 }
 
 fn channels() -> Vec<ChannelInfo> {

@@ -479,6 +479,7 @@ impl App {
             io: session.io(&adapter, export, export_message),
             batch: session.batch(),
             history: session.history(),
+            series: session.series(),
         };
         let frame = frame_stats(*info);
         let commands =

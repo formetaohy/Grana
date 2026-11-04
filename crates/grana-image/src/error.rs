@@ -14,8 +14,8 @@ pub enum Error {
     Open { path: PathBuf, detail: String },
     #[error("the image `{path}` is not supported: {detail}")]
     Unsupported { path: PathBuf, detail: String },
-    #[error("the in-memory image cannot serve the request: {detail}")]
-    Memory { detail: String },
+    #[error("the image cannot resolve the request: {detail}")]
+    Resolved { detail: String },
 }
 
 impl From<Error> for String {

@@ -134,6 +134,7 @@ impl VolumeSeries {
             .collect();
         Pyramid::new(
             vec![Level::new(first.extent(), first.spacing())],
+            1,
             channels,
             frames.len() as u32,
             frame_interval,

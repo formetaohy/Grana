@@ -154,12 +154,13 @@ impl Image {
         let level_metadata = levels
             .iter()
             .map(|level| Level::new(level.layout.extent, level.layout.spacing))
-            .collect();
+            .collect::<Vec<_>>();
+        let stored = level_metadata.len();
         Ok(Self {
             path: path.to_path_buf(),
             name,
             levels,
-            pyramid: Pyramid::new(level_metadata, channels, frames, interval),
+            pyramid: Pyramid::new(level_metadata, stored, channels, frames, interval),
         })
     }
 

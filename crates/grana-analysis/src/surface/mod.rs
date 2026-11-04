@@ -393,7 +393,7 @@ impl SurfaceBuilder {
 }
 
 pub fn surface_level(pyramid: &Pyramid, region: Region) -> Option<usize> {
-    (0..pyramid.level_count()).find(|index| {
+    (0..pyramid.stored()).find(|index| {
         let level = pyramid.level(*index);
         match region.voxel_range(level) {
             Some(ranges) => voxel_count(&ranges) <= SURFACE_VOXEL_LIMIT,

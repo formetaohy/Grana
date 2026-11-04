@@ -111,7 +111,7 @@ impl Volume {
                 )
             })
             .collect();
-        Pyramid::new(vec![level], channels, 1, 1.0)
+        Pyramid::new(vec![level], 1, channels, 1, 1.0)
     }
 
     pub fn brick(&self, grid: &BrickGrid, coord: BrickCoord) -> BrickData {

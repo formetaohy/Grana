@@ -18,6 +18,7 @@ pub enum Command {
     SaveProjectAs,
     SaveSnapshot,
     SetTime(u32),
+    SelectSeries(usize),
     Select(Option<Selection>),
     RenameObject {
         set: ObjectSetId,

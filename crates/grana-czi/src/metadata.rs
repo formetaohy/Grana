@@ -5,15 +5,20 @@ const METRES_PER_MICROMETRE: f32 = 1.0e6;
 
 #[derive(Default)]
 pub(crate) struct Metadata {
+    pub(crate) images: Vec<ImageMetadata>,
+    pub(crate) spacing: [Option<f32>; 3],
+    pub(crate) interval: Option<f32>,
+    pub(crate) channels: Vec<Channel>,
+    pub(crate) display: Vec<Display>,
+}
+
+#[derive(Default)]
+pub(crate) struct ImageMetadata {
     pub(crate) size_x: Option<u32>,
     pub(crate) size_y: Option<u32>,
     pub(crate) size_z: Option<u32>,
     pub(crate) size_c: Option<u32>,
     pub(crate) size_t: Option<u32>,
-    pub(crate) spacing: [Option<f32>; 3],
-    pub(crate) interval: Option<f32>,
-    pub(crate) channels: Vec<Channel>,
-    pub(crate) display: Vec<Display>,
 }
 
 #[derive(Default)]
@@ -101,7 +106,10 @@ pub(crate) fn parse(xml: &str) -> Result<Metadata, String> {
 impl State {
     fn enter(&mut self, start: &BytesStart) -> Result<(), String> {
         let depth = self.stack.len();
-        let field = if suffix(&self.stack, &["Information", "Image", "SizeX"]) {
+        let field = if suffix(&self.stack, &["Information", "Image"]) {
+            self.metadata.images.push(ImageMetadata::default());
+            return Ok(());
+        } else if suffix(&self.stack, &["Information", "Image", "SizeX"]) {
             Field::SizeX
         } else if suffix(&self.stack, &["Information", "Image", "SizeY"]) {
             Field::SizeY
@@ -187,11 +195,11 @@ impl State {
             return Ok(());
         }
         match field {
-            Field::SizeX => self.metadata.size_x = Some(count(text, "SizeX")?),
-            Field::SizeY => self.metadata.size_y = Some(count(text, "SizeY")?),
-            Field::SizeZ => self.metadata.size_z = Some(count(text, "SizeZ")?),
-            Field::SizeC => self.metadata.size_c = Some(count(text, "SizeC")?),
-            Field::SizeT => self.metadata.size_t = Some(count(text, "SizeT")?),
+            Field::SizeX => self.size(text, |image| &mut image.size_x, "SizeX")?,
+            Field::SizeY => self.size(text, |image| &mut image.size_y, "SizeY")?,
+            Field::SizeZ => self.size(text, |image| &mut image.size_z, "SizeZ")?,
+            Field::SizeC => self.size(text, |image| &mut image.size_c, "SizeC")?,
+            Field::SizeT => self.size(text, |image| &mut image.size_t, "SizeT")?,
             Field::Distance(dimension) => {
                 let length = number(text, "Distance")? * METRES_PER_MICROMETRE;
                 if length <= 0.0 {
@@ -240,6 +248,19 @@ impl State {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn size(
+        &mut self,
+        text: &str,
+        field: fn(&mut ImageMetadata) -> &mut Option<u32>,
+        label: &str,
+    ) -> Result<(), String> {
+        let Some(image) = self.metadata.images.last_mut() else {
+            return Ok(());
+        };
+        *field(image) = Some(count(text, label)?);
         Ok(())
     }
 }

@@ -72,6 +72,8 @@ impl Decode for Source {
             1 => Ok(Self::File {
                 name: reader.string()?,
                 path: PathBuf::from(reader.string()?),
+                series: usize::try_from(reader.u32()?)
+                    .map_err(|_| "the project names an impossible series")?,
             }),
             _ => Err("the project names an unknown dataset source"),
         }

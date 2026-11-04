@@ -13,7 +13,7 @@ use crate::binary::u32_at;
 use crate::cache::Cache;
 use crate::directory;
 use crate::header::{self, Header};
-use crate::layout::{Layout, LevelLayout, Plan, PlaneKey};
+use crate::layout::{Layout, LevelLayout, Plan, PlaneKey, SceneLayout};
 use crate::metadata::{self, Metadata};
 use crate::plane;
 use crate::segment;
@@ -34,27 +34,68 @@ const PALETTE: [[f32; 3]; 8] = [
     [0.85, 0.85, 0.30],
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scene {
+    extent: Extent,
+    channels: usize,
+    frames: u32,
+}
+
+impl Scene {
+    fn new(extent: Extent, channels: usize, frames: u32) -> Self {
+        Self {
+            extent,
+            channels,
+            frames,
+        }
+    }
+
+    pub fn extent(self) -> Extent {
+        self.extent
+    }
+
+    pub fn channels(self) -> usize {
+        self.channels
+    }
+
+    pub fn frames(self) -> u32 {
+        self.frames
+    }
+}
+
 pub struct Image {
     path: PathBuf,
     name: String,
+    scene: usize,
+    scenes: Vec<Scene>,
+    layouts: Vec<SceneLayout>,
     pyramid: Pyramid,
-    levels: Vec<LevelLayout>,
     store: Store,
     cache: Mutex<Cache>,
 }
 
 impl Image {
-    pub fn open(path: &Path) -> Result<Self, Error> {
+    pub fn open(path: &Path, scene: usize) -> Result<Self, Error> {
         let store = Store::open(path)?;
         let header = header::read(&store, path)?;
         let metadata = xml(&store, &header, path)?;
         let entries = directory::read(&store, header.directory, path)?;
         let layout = Layout::of(entries, &metadata, path)?;
+        let selected = layout.scenes.get(scene).ok_or_else(|| {
+            Error::region(
+                path,
+                format!(
+                    "the CZI image holds {} scenes and scene {} was requested",
+                    layout.scenes.len(),
+                    scene + 1
+                ),
+            )
+        })?;
         let cache = Cache::new(CACHE_BYTES);
-        let base = &layout.levels[0];
-        let mut channels = Vec::with_capacity(layout.pixels.len());
-        for index in 0..layout.pixels.len() {
-            let format = layout.pixels[index].format();
+        let base = &selected.levels[0];
+        let mut channels = Vec::with_capacity(selected.pixels.len());
+        for (index, pixel) in selected.pixels.iter().enumerate() {
+            let format = pixel.format();
             let intensity = intensity(format);
             let display = metadata.display.get(index);
             let window = display
@@ -74,21 +115,30 @@ impl Image {
                 .unwrap_or(PALETTE[index % PALETTE.len()]);
             channels.push(ChannelInfo::new(name, tint, intensity, window, format));
         }
+        let stored = selected.levels.len();
         let pyramid = Pyramid::new(
-            layout
+            selected
                 .levels
                 .iter()
                 .map(|level| Level::new(level.extent, level.spacing))
                 .collect(),
+            stored,
             channels,
-            layout.frames,
+            selected.frames,
             layout.interval,
         );
+        let scenes = layout
+            .scenes
+            .iter()
+            .map(|scene| Scene::new(scene.levels[0].extent, scene.pixels.len(), scene.frames))
+            .collect();
         Ok(Self {
             path: path.to_path_buf(),
             name: dataset_name(path),
+            scene,
+            scenes,
+            layouts: layout.scenes,
             pyramid,
-            levels: layout.levels,
             store,
             cache,
         })
@@ -96,6 +146,14 @@ impl Image {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn scene(&self) -> usize {
+        self.scene
+    }
+
+    pub fn scenes(&self) -> &[Scene] {
+        &self.scenes
     }
 
     pub fn pyramid(&self) -> &Pyramid {
@@ -112,7 +170,7 @@ impl Image {
         z: Range<u32>,
     ) -> Result<VoxelData, Error> {
         self.validate(time, level, channel, &x, &y, &z)?;
-        let level = &self.levels[level];
+        let level = &self.levels()[level];
         let channel = u32::try_from(channel)
             .map_err(|_| Error::region(&self.path, "the requested channel is out of range"))?;
         let format = self.pyramid.channels()[channel as usize].format();
@@ -134,7 +192,7 @@ impl Image {
         level: usize,
         coord: BrickCoord,
     ) -> Result<BrickData, Error> {
-        let Some(target) = self.levels.get(level) else {
+        let Some(target) = self.levels().get(level) else {
             return Err(Error::region(
                 &self.path,
                 "the requested resolution level does not exist",
@@ -169,6 +227,10 @@ impl Image {
         Ok(BrickData::new(channels))
     }
 
+    fn levels(&self) -> &[LevelLayout] {
+        &self.layouts[self.scene].levels
+    }
+
     fn validate(
         &self,
         time: u32,
@@ -178,7 +240,7 @@ impl Image {
         y: &Range<u32>,
         z: &Range<u32>,
     ) -> Result<(), Error> {
-        if level >= self.levels.len() {
+        if level >= self.levels().len() {
             return Err(Error::region(
                 &self.path,
                 "the requested resolution level does not exist",
@@ -196,7 +258,7 @@ impl Image {
                 "the requested channel does not exist",
             ));
         }
-        let extent = self.levels[level].extent;
+        let extent = self.levels()[level].extent;
         let inside = x.start < x.end
             && x.end <= extent.x()
             && y.start < y.end

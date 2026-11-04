@@ -59,6 +59,7 @@ fn fixture() -> Scene {
             Extent::new(16, 16, 16),
             Spacing::new(1.0, 1.0, 1.0),
         )],
+        1,
         vec![channel],
         1,
         1.0,

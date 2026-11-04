@@ -28,7 +28,7 @@ fn section_header(ui: &mut Ui, title: &str, detail: Option<&str>) {
     }
 }
 
-pub fn header(ui: &mut Ui, state: &State<'_>) {
+pub fn header(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
     let dataset = &state.scene.dataset;
     widget::field_label(ui, "Dataset");
     let name = dataset.name();
@@ -65,7 +65,10 @@ pub fn header(ui: &mut Ui, state: &State<'_>) {
         TypeStyle::new(11.0, 430.0, 14.0),
         ui.theme().palette.text_tertiary,
     );
-    ui.text_style(&summary, style);
+    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
+        ui.text_style(&summary, style);
+        series(ui, state, commands);
+    });
     let source = match dataset.origin() {
         grana_scene::Origin::Synthetic => "Synthetic",
         grana_scene::Origin::Zarr => "OME-Zarr",
@@ -104,6 +107,63 @@ pub fn header(ui: &mut Ui, state: &State<'_>) {
 
 fn plural(count: usize) -> &'static str {
     if count == 1 { "" } else { "s" }
+}
+
+fn series(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
+    let entries = state.series.entries;
+    if entries.len() < 2 {
+        return;
+    }
+    let unit = match state.scene.dataset.origin() {
+        grana_scene::Origin::Czi => "Scene",
+        _ => "Series",
+    };
+    let selected = state.series.selected;
+    let label = format!("{unit} {} of {}", selected + 1, entries.len());
+    let response = widget::button_with(
+        ui,
+        "dataset.series",
+        &label,
+        Role::Quiet,
+        Length::Maximum(136.0),
+    );
+    let anchor = response.rect;
+    if response.clicked {
+        ui.toggle_popup(ui.id("dataset.series.menu"));
+    }
+    let chevron = ui.theme().palette.text_tertiary;
+    {
+        let mut painter = ui.painter();
+        grana_ui::icon::paint(
+            grana_ui::Icon::ChevronDown,
+            &mut painter,
+            Vec2::new(anchor.max.x - 10.0, anchor.center().y),
+            10.0,
+            chevron,
+            1.5,
+        );
+    }
+    let open = ui.popup_open(ui.id("dataset.series.menu"));
+    let mut chosen = None;
+    grana_ui::popover::popover(ui, "dataset.series.menu", open, anchor, 248.0, |ui| {
+        for (index, entry) in entries.iter().enumerate() {
+            let extent = entry.extent();
+            let detail = format!(
+                "{unit} {} · {} × {} × {}",
+                index + 1,
+                extent.x(),
+                extent.y(),
+                extent.z()
+            );
+            if grana_ui::popover::menu_row(ui, index, &detail, index == selected) {
+                chosen = Some(index);
+            }
+        }
+    });
+    if let Some(index) = chosen {
+        ui.close_popup();
+        commands.push(Command::SelectSeries(index));
+    }
 }
 
 pub fn channels(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
@@ -699,6 +759,15 @@ pub fn streaming(ui: &mut Ui, state: &State<'_>) {
     let next = widget::disclosure(ui, "streaming", "Streaming", open, |ui| {
         widget::labelled(ui, "volume", &bricks(state.frame.volume));
         widget::labelled(ui, "section", &bricks(state.frame.section));
+        widget::labelled(
+            ui,
+            "levels",
+            &format!(
+                "{} levels · {} stored",
+                state.scene.dataset.level_count(),
+                state.scene.dataset.stored_levels()
+            ),
+        );
         widget::labelled(
             ui,
             "cache",

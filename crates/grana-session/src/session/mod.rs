@@ -29,8 +29,8 @@ use crate::loader::{Event as LoaderEvent, Loader};
 use crate::recipe::Recipe;
 use crate::sample;
 use crate::task::Poll;
-use crate::view::{BatchDataset, BatchView, HistoryView, IoView, Message, StoreView};
-use crate::{Action, Analysis, Command, Source};
+use crate::view::{BatchDataset, BatchView, HistoryView, IoView, Message, SeriesView, StoreView};
+use crate::{Action, Analysis, Command, Series, Source};
 use grana_pipeline::run::DetectRequest;
 use grana_pipeline::{
     Batch, BatchEvent, BatchPoll, Event, Outcome, Plan as BatchPlan, SnapshotFactory,
@@ -97,6 +97,8 @@ pub struct Session {
     resume: Vec<(ObjectSetId, ObjectSetId, i32)>,
     recut: Option<(ObjectSetId, SurfaceCut)>,
     snapshotter: Option<SnapshotFactory>,
+    series: Vec<Series>,
+    series_index: usize,
 }
 
 impl Default for Session {
@@ -145,6 +147,8 @@ impl Session {
             resume: Vec::new(),
             recut: None,
             snapshotter: None,
+            series: Vec::new(),
+            series_index: 0,
         }
     }
     pub fn insert_keyframe(&mut self, key: Keyframe) -> usize {
@@ -211,6 +215,12 @@ impl Session {
             running: self.batch_running,
             message: self.batch_message.clone(),
         })
+    }
+    pub fn series(&self) -> SeriesView<'_> {
+        SeriesView {
+            entries: &self.series,
+            selected: self.series_index,
+        }
     }
     pub fn io<'a>(
         &'a self,

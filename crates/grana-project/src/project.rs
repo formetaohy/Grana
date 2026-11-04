@@ -14,7 +14,7 @@ use grana_codec::Encoder;
 use crate::codec::{Decode, Encode, Reader};
 use crate::error::Error;
 
-const MAGIC: &[u8; 11] = b"granaproj15";
+const MAGIC: &[u8; 11] = b"granaproj16";
 const LENGTH: usize = size_of::<u64>();
 const STEPS: usize = size_of::<u32>();
 const HEADER: usize = MAGIC.len() + LENGTH + STEPS;
@@ -39,8 +39,14 @@ pub struct Shape {
 
 #[derive(Debug, PartialEq)]
 pub enum Source {
-    Synthetic { name: String },
-    File { name: String, path: PathBuf },
+    Synthetic {
+        name: String,
+    },
+    File {
+        name: String,
+        path: PathBuf,
+        series: usize,
+    },
 }
 
 #[derive(Debug, PartialEq)]

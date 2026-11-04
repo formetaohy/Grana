@@ -3,6 +3,8 @@ use super::*;
 impl Session {
     pub fn open_series(&mut self, name: &str, series: grana_volume::VolumeSeries) {
         let (source, pyramid) = Loader::memory(series);
+        self.series = vec![Series::of(&pyramid)];
+        self.series_index = 0;
         self.source = Some(source);
         self.scene = Some(Scene::new(Dataset::synthetic(name, pyramid)));
         self.timeline = Timeline::new(30, self.frame_duration());
@@ -48,6 +50,28 @@ impl Session {
         self.project = None;
         self.saved = None;
         self.reset();
+    }
+
+    pub fn select_series(&mut self, index: usize) -> bool {
+        if index == self.series_index || index >= self.series.len() {
+            return false;
+        }
+        let Some(source) = self.source.as_ref().map(Loader::source) else {
+            return false;
+        };
+        let Some(path) = source.path().map(Path::to_path_buf) else {
+            return false;
+        };
+        if self.reject_transfer() {
+            return false;
+        }
+        self.loading = Some(file_name(&path));
+        self.source = Some(Loader::file_series(path, index));
+        self.pending = None;
+        self.project = None;
+        self.saved = None;
+        self.reset();
+        true
     }
 
     pub fn begin_project(&mut self, path: PathBuf) {
@@ -115,8 +139,11 @@ impl Session {
                 self.reset();
                 self.open_dataset(Dataset::synthetic(name, pyramid));
             }
-            ProjectSource::File { path: data, .. } => {
+            ProjectSource::File {
+                path: data, series, ..
+            } => {
                 let data = data.clone();
+                let series = *series;
                 if !data.is_dir() && !data.is_file() {
                     self.message = Some(Message::error(format!(
                         "{} is not a readable image",
@@ -124,7 +151,7 @@ impl Session {
                     )));
                     return;
                 }
-                self.source = Some(Loader::file(data.clone()));
+                self.source = Some(Loader::file_series(data.clone(), series));
                 self.loading = Some(file_name(&data));
                 self.pending = Some(Pending {
                     path: path.to_path_buf(),
@@ -197,7 +224,7 @@ impl Session {
         match scene.dataset.origin() {
             Origin::Synthetic => Some(ProjectSource::Synthetic { name }),
             Origin::Zarr | Origin::Tiff | Origin::Czi => match self.source.as_ref()?.source() {
-                Source::File(path) => Some(ProjectSource::File { name, path }),
+                Source::File { path, series } => Some(ProjectSource::File { name, path, series }),
                 Source::Memory(_) => None,
             },
         }
@@ -283,7 +310,11 @@ impl Session {
                     name,
                     pyramid,
                     format,
+                    series,
+                    selected,
                 } => {
+                    self.series = series;
+                    self.series_index = selected;
                     let dataset = match format {
                         Format::Zarr => Dataset::zarr(name, pyramid),
                         Format::Tiff => Dataset::tiff(name, pyramid),

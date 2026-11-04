@@ -5,7 +5,7 @@ use grana_volume::{Extent, Spacing};
 
 use crate::Error;
 use crate::directory::{Dimension, Entry, PixelType};
-use crate::metadata::Metadata;
+use crate::metadata::{ImageMetadata, Metadata};
 use crate::plane::Tile;
 
 const MINIFICATION_FLOOR: f64 = 1.5;
@@ -29,16 +29,20 @@ pub(crate) struct LevelLayout {
     pub(crate) plans: HashMap<PlaneKey, Plan>,
 }
 
-pub(crate) struct Layout {
+pub(crate) struct SceneLayout {
     pub(crate) pixels: Vec<PixelType>,
     pub(crate) frames: u32,
-    pub(crate) interval: f32,
     pub(crate) levels: Vec<LevelLayout>,
+}
+
+pub(crate) struct Layout {
+    pub(crate) scenes: Vec<SceneLayout>,
+    pub(crate) interval: f32,
 }
 
 impl Layout {
     pub(crate) fn of(entries: Vec<Entry>, metadata: &Metadata, path: &Path) -> Result<Self, Error> {
-        let mut groups: BTreeMap<u32, Vec<Entry>> = BTreeMap::new();
+        let mut scenes: BTreeMap<u32, BTreeMap<u32, Vec<Entry>>> = BTreeMap::new();
         for entry in entries {
             block(&entry, path)?;
             if entry.file_part != 0 {
@@ -47,121 +51,42 @@ impl Layout {
                     "the CZI image is split over several files",
                 ));
             }
-            if entry.start(Dimension::Scene) > 0 {
-                continue;
-            }
             axes(&entry, path)?;
-            if let Some(scale) = minification(&entry) {
-                groups.entry(scale).or_default().push(entry);
-            }
-        }
-        if groups.is_empty() {
-            return Err(Error::metadata(path, "the CZI image holds no pixels"));
-        }
-        let base = groups.remove(&1).ok_or_else(|| {
-            Error::metadata(path, "the CZI image holds no full resolution subblocks")
-        })?;
-        let mut low = [i32::MAX; 2];
-        let mut high = [i32::MIN; 2];
-        let mut channels = 0;
-        let mut frames = 0;
-        let mut depth = 0;
-        for entry in &base {
-            let starts = [entry.start(Dimension::X), entry.start(Dimension::Y)];
-            let sizes = [entry.size(Dimension::X), entry.size(Dimension::Y)];
-            for axis in 0..2 {
-                low[axis] = low[axis].min(starts[axis]);
-                high[axis] =
-                    high[axis].max((i64::from(starts[axis]) + i64::from(sizes[axis])) as i32);
-            }
-            channels = channels.max(entry.start(Dimension::C) as u32 + 1);
-            frames = frames.max(entry.start(Dimension::T) as u32 + 1);
-            depth = depth.max(entry.start(Dimension::Z) as u32 + 1);
-        }
-        let extent = Extent::new((high[0] - low[0]) as u32, (high[1] - low[1]) as u32, depth);
-        if metadata.size_x.is_some_and(|size| size != extent.x())
-            || metadata.size_y.is_some_and(|size| size != extent.y())
-        {
-            return Err(Error::metadata(
-                path,
-                "the CZI metadata disagrees with the subblock extent",
-            ));
-        }
-        if metadata.size_c.is_some_and(|count| count != channels)
-            || metadata.size_t.is_some_and(|count| count != frames)
-            || metadata.size_z.is_some_and(|count| count != depth)
-        {
-            return Err(Error::metadata(
-                path,
-                "the CZI metadata disagrees with the subblock axis lengths",
-            ));
-        }
-        let mut pixels = vec![None; channels as usize];
-        for entry in &base {
-            let channel = entry.start(Dimension::C) as usize;
-            match &pixels[channel] {
-                Some(known) if *known != entry.pixel => {
-                    return Err(Error::unsupported(
-                        path,
-                        "the CZI channels disagree on their pixel type",
-                    ));
-                }
-                Some(_) => {}
-                None => pixels[channel] = Some(entry.pixel),
-            }
-        }
-        let pixels: Vec<PixelType> = pixels
-            .into_iter()
-            .enumerate()
-            .map(|(channel, pixel)| {
-                pixel.ok_or_else(|| {
-                    Error::metadata(
-                        path,
-                        format!("the CZI image has no subblock for channel {channel}"),
-                    )
-                })
-            })
-            .collect::<Result<_, Error>>()?;
-        let fallback = metadata
-            .spacing
-            .iter()
-            .flatten()
-            .next()
-            .copied()
-            .unwrap_or(1.0);
-        let spacing = metadata.spacing.map(|value| value.unwrap_or(fallback));
-        let context = Context {
-            path,
-            low,
-            logical_extent: [extent.x(), extent.y()],
-            frames,
-            channels,
-            base_depth: depth,
-            spacing: Spacing::new(spacing[0], spacing[1], spacing[2]),
-            pixels: &pixels,
-        };
-        let mut levels = vec![assemble(&context, &base, 1)?];
-        for (scale, entries) in groups {
-            let Ok(level) = assemble(&context, &entries, scale) else {
+            let Some(scale) = minification(&entry) else {
                 continue;
             };
-            let previous = levels.last().expect("the base level is present");
-            if level.extent.x() > previous.extent.x()
-                || level.extent.y() > previous.extent.y()
-                || level.extent.z() > previous.extent.z()
-                || level.spacing.x() < previous.spacing.x()
-                || level.spacing.y() < previous.spacing.y()
-                || level.spacing.z() < previous.spacing.z()
-            {
-                continue;
+            let scene = u32::try_from(entry.start(Dimension::Scene)).map_err(|_| {
+                Error::metadata(
+                    path,
+                    "a CZI subblock starts before the image along the scene axis",
+                )
+            })?;
+            scenes
+                .entry(scene)
+                .or_default()
+                .entry(scale)
+                .or_default()
+                .push(entry);
+        }
+        if scenes.is_empty() {
+            return Err(Error::metadata(path, "the CZI image holds no pixels"));
+        }
+        let count = scenes.len();
+        let checked = metadata.images.len() == count;
+        let mut layouts = Vec::with_capacity(count);
+        for (index, (scene, mut groups)) in scenes.into_iter().enumerate() {
+            if usize::try_from(scene).ok() != Some(index) {
+                return Err(Error::metadata(
+                    path,
+                    "the CZI scenes are not numbered from zero",
+                ));
             }
-            levels.push(level);
+            let image = checked.then(|| &metadata.images[index]);
+            layouts.push(assemble(image, &mut groups, metadata, path)?);
         }
         Ok(Self {
-            pixels,
-            frames,
+            scenes: layouts,
             interval: metadata.interval.unwrap_or(1.0),
-            levels,
         })
     }
 }
@@ -177,7 +102,124 @@ struct Context<'a> {
     pixels: &'a [PixelType],
 }
 
-fn assemble(context: &Context<'_>, entries: &[Entry], scale: u32) -> Result<LevelLayout, Error> {
+fn assemble(
+    image: Option<&ImageMetadata>,
+    groups: &mut BTreeMap<u32, Vec<Entry>>,
+    metadata: &Metadata,
+    path: &Path,
+) -> Result<SceneLayout, Error> {
+    let base = groups
+        .remove(&1)
+        .ok_or_else(|| Error::metadata(path, "the CZI image holds no full resolution subblocks"))?;
+    let mut low = [i32::MAX; 2];
+    let mut high = [i32::MIN; 2];
+    let mut channels = 0;
+    let mut frames = 0;
+    let mut depth = 0;
+    for entry in &base {
+        let starts = [entry.start(Dimension::X), entry.start(Dimension::Y)];
+        let sizes = [entry.size(Dimension::X), entry.size(Dimension::Y)];
+        for axis in 0..2 {
+            low[axis] = low[axis].min(starts[axis]);
+            high[axis] = high[axis].max((i64::from(starts[axis]) + i64::from(sizes[axis])) as i32);
+        }
+        channels = channels.max(entry.start(Dimension::C) as u32 + 1);
+        frames = frames.max(entry.start(Dimension::T) as u32 + 1);
+        depth = depth.max(entry.start(Dimension::Z) as u32 + 1);
+    }
+    let extent = Extent::new((high[0] - low[0]) as u32, (high[1] - low[1]) as u32, depth);
+    if let Some(image) = image {
+        if image.size_x.is_some_and(|size| size != extent.x())
+            || image.size_y.is_some_and(|size| size != extent.y())
+        {
+            return Err(Error::metadata(
+                path,
+                "the CZI metadata disagrees with the subblock extent",
+            ));
+        }
+        if image.size_c.is_some_and(|count| count != channels)
+            || image.size_t.is_some_and(|count| count != frames)
+            || image.size_z.is_some_and(|count| count != depth)
+        {
+            return Err(Error::metadata(
+                path,
+                "the CZI metadata disagrees with the subblock axis lengths",
+            ));
+        }
+    }
+    let mut pixels = vec![None; channels as usize];
+    for entry in &base {
+        let channel = entry.start(Dimension::C) as usize;
+        match &pixels[channel] {
+            Some(known) if *known != entry.pixel => {
+                return Err(Error::unsupported(
+                    path,
+                    "the CZI channels disagree on their pixel type",
+                ));
+            }
+            Some(_) => {}
+            None => pixels[channel] = Some(entry.pixel),
+        }
+    }
+    let pixels: Vec<PixelType> = pixels
+        .into_iter()
+        .enumerate()
+        .map(|(channel, pixel)| {
+            pixel.ok_or_else(|| {
+                Error::metadata(
+                    path,
+                    format!("the CZI image has no subblock for channel {channel}"),
+                )
+            })
+        })
+        .collect::<Result<_, Error>>()?;
+    let fallback = metadata
+        .spacing
+        .iter()
+        .flatten()
+        .next()
+        .copied()
+        .unwrap_or(1.0);
+    let spacing = metadata.spacing.map(|value| value.unwrap_or(fallback));
+    let context = Context {
+        path,
+        low,
+        logical_extent: [extent.x(), extent.y()],
+        frames,
+        channels,
+        base_depth: depth,
+        spacing: Spacing::new(spacing[0], spacing[1], spacing[2]),
+        pixels: &pixels,
+    };
+    let mut levels = vec![assemble_level(&context, &base, 1)?];
+    for (scale, entries) in groups.iter() {
+        let Ok(level) = assemble_level(&context, entries, *scale) else {
+            continue;
+        };
+        let previous = levels.last().expect("the base level is present");
+        if level.extent.x() > previous.extent.x()
+            || level.extent.y() > previous.extent.y()
+            || level.extent.z() > previous.extent.z()
+            || level.spacing.x() < previous.spacing.x()
+            || level.spacing.y() < previous.spacing.y()
+            || level.spacing.z() < previous.spacing.z()
+        {
+            continue;
+        }
+        levels.push(level);
+    }
+    Ok(SceneLayout {
+        pixels,
+        frames,
+        levels,
+    })
+}
+
+fn assemble_level(
+    context: &Context<'_>,
+    entries: &[Entry],
+    scale: u32,
+) -> Result<LevelLayout, Error> {
     let mut plans: HashMap<PlaneKey, Plan> = HashMap::new();
     let mut high = [0; 2];
     let mut depth = 0;
@@ -295,7 +337,7 @@ fn minification(entry: &Entry) -> Option<u32> {
 }
 
 fn axes(entry: &Entry, path: &Path) -> Result<(), Error> {
-    for dimension in [Dimension::Z, Dimension::C, Dimension::T] {
+    for dimension in [Dimension::Z, Dimension::C, Dimension::T, Dimension::Scene] {
         if entry.size(dimension) != 1 {
             return Err(Error::unsupported(
                 path,

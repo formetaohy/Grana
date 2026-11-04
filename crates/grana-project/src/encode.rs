@@ -54,10 +54,11 @@ impl Encode for Source {
                 writer.u8(0);
                 writer.string(name);
             }
-            Self::File { name, path } => {
+            Self::File { name, path, series } => {
                 writer.u8(1);
                 writer.string(name);
                 writer.string(&path.to_string_lossy());
+                writer.u32(u32::try_from(*series).expect("a series index fits a project"));
             }
         }
     }

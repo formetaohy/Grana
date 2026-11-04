@@ -3,6 +3,7 @@ use crate::{ChannelInfo, Level};
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pyramid {
     levels: Vec<Level>,
+    stored: usize,
     channels: Vec<ChannelInfo>,
     frames: u32,
     frame_interval: f32,
@@ -11,11 +12,16 @@ pub struct Pyramid {
 impl Pyramid {
     pub fn new(
         levels: Vec<Level>,
+        stored: usize,
         channels: Vec<ChannelInfo>,
         frames: u32,
         frame_interval: f32,
     ) -> Self {
         assert!(!levels.is_empty(), "a pyramid needs at least one level");
+        assert!(
+            stored > 0 && stored <= levels.len(),
+            "the stored levels form a prefix of the pyramid"
+        );
         assert!(!channels.is_empty(), "a pyramid needs at least one channel");
         assert!(frames > 0, "a pyramid holds at least one frame");
         assert!(
@@ -43,6 +49,7 @@ impl Pyramid {
         }
         Self {
             levels,
+            stored,
             channels,
             frames,
             frame_interval,
@@ -59,6 +66,10 @@ impl Pyramid {
 
     pub fn level_count(&self) -> usize {
         self.levels.len()
+    }
+
+    pub fn stored(&self) -> usize {
+        self.stored
     }
 
     pub fn channels(&self) -> &[ChannelInfo] {

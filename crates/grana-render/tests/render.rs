@@ -1487,6 +1487,7 @@ fn switches_levels() {
             .iter()
             .map(|(extent, spacing)| Level::new(*extent, *spacing))
             .collect(),
+        3,
         volumes[0].pyramid().channels().to_vec(),
         1,
         1.0,

@@ -207,10 +207,11 @@ impl Image {
             .and_then(|ome| ome.name.clone())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| dataset_name(path));
+        let stored = pyramid_levels.len();
         Ok(Self {
             path: path.to_path_buf(),
             name,
-            pyramid: Pyramid::new(pyramid_levels, channels, size_t, interval),
+            pyramid: Pyramid::new(pyramid_levels, stored, channels, size_t, interval),
             levels,
             store,
             cache,

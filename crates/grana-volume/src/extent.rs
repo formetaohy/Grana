@@ -26,14 +26,6 @@ impl Extent {
         self.z
     }
 
-    pub const fn halve(self) -> Self {
-        Self {
-            x: if self.x / 2 == 0 { 1 } else { self.x / 2 },
-            y: if self.y / 2 == 0 { 1 } else { self.y / 2 },
-            z: if self.z / 2 == 0 { 1 } else { self.z / 2 },
-        }
-    }
-
     pub const fn voxel_count(self) -> u64 {
         self.x as u64 * self.y as u64 * self.z as u64
     }

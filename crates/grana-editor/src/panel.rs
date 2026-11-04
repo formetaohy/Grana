@@ -119,6 +119,7 @@ pub fn build(
         io: &view.io,
         batch: view.batch.as_ref(),
         history: view.history,
+        series: &view.series,
         viewport,
         stage,
         workspace,
@@ -177,7 +178,7 @@ fn inspector_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mu
         );
         ui.place(header, |ui| {
             ui.column(Block::column().gaps(4.0), |ui| {
-                crate::inspector::header(ui, state);
+                crate::inspector::header(ui, state, commands);
             });
         });
         let tabs = Rect::from_min_size(

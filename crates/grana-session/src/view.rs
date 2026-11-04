@@ -1,4 +1,5 @@
 use grana_animation::Timeline;
+use grana_image::Series;
 use grana_scene::{Measure, Progress, Scene};
 
 use crate::command::Action;
@@ -58,6 +59,11 @@ pub struct HistoryView {
     pub redo: Option<Action>,
 }
 
+pub struct SeriesView<'a> {
+    pub entries: &'a [Series],
+    pub selected: usize,
+}
+
 pub struct SessionView<'a> {
     pub scene: &'a Scene,
     pub measure: &'a Measure,
@@ -66,4 +72,5 @@ pub struct SessionView<'a> {
     pub io: IoView<'a>,
     pub batch: Option<BatchView<'a>>,
     pub history: HistoryView,
+    pub series: SeriesView<'a>,
 }

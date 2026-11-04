@@ -25,6 +25,11 @@ impl Session {
             Command::SaveProjectAs => effects.save_project = Some(true),
             Command::SaveSnapshot => effects.snapshot = Some(self.export),
             Command::SetTime(time) => self.set_time(time),
+            Command::SelectSeries(index) => {
+                if index != self.series_index && !self.select_series(index) {
+                    self.message = Some(Message::error("the dataset does not hold that series"));
+                }
+            }
             Command::Select(selection) => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.select(selection);
