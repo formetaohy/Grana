@@ -83,6 +83,12 @@ impl<T: Encode + ?Sized> Encode for Arc<T> {
     }
 }
 
+impl<T: Encode + ?Sized> Encode for &T {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        (**self).encode(writer);
+    }
+}
+
 macro_rules! decode_primitive {
     ($type:ty, $method:ident) => {
         impl Decode for $type {

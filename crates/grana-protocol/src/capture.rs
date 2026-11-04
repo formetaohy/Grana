@@ -1,11 +1,13 @@
 use grana_display::Coloring;
 use grana_measure::{Aggregate, Group, channel_keys};
-use grana_scene::{Measure, ObjectColor, ObjectKind, ObjectParams, Scene, TrackColor};
+use grana_scene::{
+    Measure, ObjectColor, ObjectParams, ObjectSet, Provenance, Recipe, Scene, TrackColor,
+};
 
 use crate::{
-    ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, DetectionSpec, FilterSpec,
-    LassoSpec, MeasureSpec, Protocol, ProtocolError, RegionSpec, RelationSpec, RenderSpec, SetSpec,
-    SnapshotSpec, SortSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, FilterSpec, LassoSpec,
+    MeasureSpec, PartSpec, Protocol, ProtocolError, RegionSpec, RelationSpec, RenderSpec, SetSpec,
+    SnapshotSpec, SortSpec, SourceSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -44,23 +46,14 @@ impl Protocol {
             .objects
             .iter()
             .map(|set| {
-                let measure = (measure.set() == Some(set.id())).then(|| MeasureSpec::of(measure));
-                SetSpec {
+                Ok(SetSpec {
                     name: set.name().to_string(),
-                    channel: channels[set.channel()].clone(),
                     color: set.color(),
                     visible: set.visible(),
                     opacity: set.opacity(),
                     color_by: object_color(set.object_coloring(), scene, &keys),
                     track_by: track_color(set.track_coloring(), scene),
-                    seeds: if set.kind() == ObjectKind::Surfaces {
-                        (0..set.frame_count())
-                            .map(|time| set.seeds(time).to_vec())
-                            .collect()
-                    } else {
-                        Vec::new()
-                    },
-                    detection: detection(set.params()),
+                    source: source(scene, &channels, set)?,
                     mask: None,
                     track: set.track_style().map(|style| TrackSpec {
                         max_step: style.params().max_step(),
@@ -70,10 +63,10 @@ impl Protocol {
                         thickness: style.thickness(),
                         visible: set.track_visible(),
                     }),
-                    measure,
-                }
+                    measure: (measure.set() == Some(set.id())).then(|| MeasureSpec::of(measure)),
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, ProtocolError>>()?;
         if let Some(mask) = mask {
             let position = scene
                 .objects
@@ -83,7 +76,9 @@ impl Protocol {
             let name = sets[position].name.clone();
             sets.rotate_left(position);
             for set in &mut sets[1..] {
-                set.mask = Some(name.clone());
+                if detects(&set.source) {
+                    set.mask = Some(name.clone());
+                }
             }
         }
         let relations = scene
@@ -149,13 +144,123 @@ impl Protocol {
     }
 }
 
-fn detection(params: ObjectParams) -> DetectionSpec {
+fn source(
+    scene: &Scene,
+    channels: &[String],
+    set: &ObjectSet,
+) -> Result<SourceSpec, ProtocolError> {
+    match set.provenance() {
+        Provenance::Detection => Ok(detection(
+            &channels[set.channel()],
+            set.params(),
+            &(0..set.frame_count())
+                .map(|time| set.seeds(time).to_vec())
+                .collect::<Vec<_>>(),
+        )),
+        Provenance::Filtered { source, criteria } => {
+            let reference = scene.objects.get(*source).ok_or_else(|| {
+                ProtocolError::Invalid(format!(
+                    "{} filters an object set that left the scene",
+                    set.name()
+                ))
+            })?;
+            Ok(SourceSpec::Filtered {
+                source: reference.name().to_string(),
+                group: criteria.group().key().to_string(),
+                filters: criteria
+                    .filters()
+                    .iter()
+                    .map(|filter| FilterSpec {
+                        column: filter.key().to_string(),
+                        minimum: filter.minimum(),
+                        maximum: filter.maximum(),
+                    })
+                    .collect(),
+                lasso: criteria.lasso().map(|lasso| LassoSpec {
+                    x: lasso.x().to_string(),
+                    y: lasso.y().to_string(),
+                    points: lasso.points().to_vec(),
+                }),
+            })
+        }
+        Provenance::Copied { source } => match scene.objects.get(*source) {
+            Some(reference) => Ok(SourceSpec::Copy {
+                source: reference.name().to_string(),
+            }),
+            None => Ok(detection(
+                &channels[set.channel()],
+                set.params(),
+                &(0..set.frame_count())
+                    .map(|time| set.seeds(time).to_vec())
+                    .collect::<Vec<_>>(),
+            )),
+        },
+        Provenance::Merged { parts } => Ok(SourceSpec::Merged {
+            parts: parts
+                .iter()
+                .map(|part| part_spec(scene, channels, part))
+                .collect::<Result<Vec<_>, ProtocolError>>()?,
+        }),
+    }
+}
+
+fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSpec, ProtocolError> {
+    let source = match part.provenance() {
+        Provenance::Detection => detection(&channels[part.channel()], part.params(), part.seeds()),
+        Provenance::Filtered { source, criteria } => {
+            let reference = scene.objects.get(*source).ok_or_else(|| {
+                ProtocolError::Invalid(format!(
+                    "{} filters an object set that left the scene",
+                    part.name()
+                ))
+            })?;
+            SourceSpec::Filtered {
+                source: reference.name().to_string(),
+                group: criteria.group().key().to_string(),
+                filters: criteria
+                    .filters()
+                    .iter()
+                    .map(|filter| FilterSpec {
+                        column: filter.key().to_string(),
+                        minimum: filter.minimum(),
+                        maximum: filter.maximum(),
+                    })
+                    .collect(),
+                lasso: criteria.lasso().map(|lasso| LassoSpec {
+                    x: lasso.x().to_string(),
+                    y: lasso.y().to_string(),
+                    points: lasso.points().to_vec(),
+                }),
+            }
+        }
+        Provenance::Copied { source } => match scene.objects.get(*source) {
+            Some(reference) => SourceSpec::Copy {
+                source: reference.name().to_string(),
+            },
+            None => detection(&channels[part.channel()], part.params(), part.seeds()),
+        },
+        Provenance::Merged { parts } => SourceSpec::Merged {
+            parts: parts
+                .iter()
+                .map(|nested| part_spec(scene, channels, nested))
+                .collect::<Result<Vec<_>, ProtocolError>>()?,
+        },
+    };
+    Ok(PartSpec {
+        name: part.name().to_string(),
+        source,
+    })
+}
+
+fn detection(channel: &str, params: ObjectParams, seeds: &[Vec<[f32; 3]>]) -> SourceSpec {
     match params {
-        ObjectParams::Spots(params) => DetectionSpec::Spots {
+        ObjectParams::Spots(params) => SourceSpec::Spots {
+            channel: channel.to_string(),
             diameter: params.diameter(),
             contrast: params.threshold(),
         },
-        ObjectParams::Surfaces(params) => DetectionSpec::Surfaces {
+        ObjectParams::Surfaces(params) => SourceSpec::Surfaces {
+            channel: channel.to_string(),
             threshold: params.threshold(),
             grain: params.grain(),
             split: params.split(),
@@ -164,11 +269,23 @@ fn detection(params: ObjectParams) -> DetectionSpec {
             closing: params.closing(),
             min_sphericity: params.min_sphericity(),
             min_mean_intensity: params.min_mean_intensity(),
+            seeds: seeds.to_vec(),
         },
-        ObjectParams::Filaments(params) => DetectionSpec::Filaments {
+        ObjectParams::Filaments(params) => SourceSpec::Filaments {
+            channel: channel.to_string(),
             threshold: params.threshold(),
             min_length: params.min_length(),
         },
+    }
+}
+
+fn detects(source: &SourceSpec) -> bool {
+    match source {
+        SourceSpec::Spots { .. } | SourceSpec::Surfaces { .. } | SourceSpec::Filaments { .. } => {
+            true
+        }
+        SourceSpec::Filtered { .. } | SourceSpec::Copy { .. } => false,
+        SourceSpec::Merged { parts } => parts.iter().any(|part| detects(&part.source)),
     }
 }
 

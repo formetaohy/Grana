@@ -320,4 +320,44 @@ fn extracts_the_gated_objects_and_copies_a_set() {
         "a copied set carries no tracks"
     );
     assert_eq!(surfaces(&session, copy), surfaces(&session, source));
+
+    let provenance = session
+        .scene()
+        .expect("the sample opens")
+        .objects
+        .get(derived)
+        .expect("the derived set exists")
+        .provenance()
+        .clone();
+    assert!(matches!(
+        provenance,
+        grana_scene::Provenance::Filtered { .. }
+    ));
+    assert!(
+        provenance.depends_on(source),
+        "the derived set records the object set it filters"
+    );
+    let params = surfaces(&session, source);
+    let mut strict = params;
+    strict.set_min_volume(1.0e9);
+    session.execute(Command::SetObjectParams {
+        set: source,
+        params: ObjectParams::Surfaces(strict),
+    });
+    settle(&mut session);
+    assert_eq!(
+        total(&session, derived),
+        0,
+        "the derived set follows the source cut"
+    );
+    session.execute(Command::SetObjectParams {
+        set: source,
+        params: ObjectParams::Surfaces(params),
+    });
+    settle(&mut session);
+    assert_eq!(
+        total(&session, derived),
+        kept,
+        "the derived set re-derives the kept objects"
+    );
 }

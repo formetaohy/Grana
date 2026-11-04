@@ -11,9 +11,9 @@ use grana_object::{
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_scene::{
-    ChannelState, ColocResult, ColocState, ColorState, ItemState, MeasureState, ObjectColor,
-    ObjectFrame, ObjectParams, RelationState, SceneState, SelectionState, SetState, TrackColor,
-    TrackStyle, Visibility,
+    ChannelState, ColocResult, ColocState, ColorState, Criteria, FilterRange, ItemState, LassoPath,
+    MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe, RelationState,
+    SceneState, SelectionState, SetState, TrackColor, TrackStyle, Visibility,
 };
 use grana_volume::{Intensity, Region};
 
@@ -239,7 +239,75 @@ impl Encode for SetState {
         }
         self.frames.encode(writer);
         self.relations.encode(writer);
+        self.provenance.encode(writer);
         writer.u64(self.document);
+    }
+}
+
+impl Encode for Provenance {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        match self {
+            Self::Detection => writer.u8(0),
+            Self::Filtered { source, criteria } => {
+                writer.u8(1);
+                writer.u64(source.raw());
+                criteria.encode(writer);
+            }
+            Self::Copied { source } => {
+                writer.u8(2);
+                writer.u64(source.raw());
+            }
+            Self::Merged { parts } => {
+                writer.u8(3);
+                parts.encode(writer);
+            }
+        }
+    }
+}
+
+impl Encode for Criteria {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.u8(self.group().index());
+        self.filters().encode(writer);
+        self.lasso().encode(writer);
+    }
+}
+
+impl Encode for FilterRange {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.string(self.key());
+        writer.f32(self.minimum());
+        writer.f32(self.maximum());
+    }
+}
+
+impl Encode for LassoPath {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.string(self.x());
+        writer.string(self.y());
+        writer.count(self.points().len());
+        for point in self.points() {
+            writer.f32(point[0]);
+            writer.f32(point[1]);
+        }
+    }
+}
+
+impl Encode for Recipe {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.string(self.name());
+        writer.count(self.channel());
+        self.params().encode(writer);
+        writer.count(self.seeds().len());
+        for frame in self.seeds() {
+            writer.count(frame.len());
+            for seed in frame {
+                for value in seed {
+                    writer.f32(*value);
+                }
+            }
+        }
+        self.provenance().encode(writer);
     }
 }
 

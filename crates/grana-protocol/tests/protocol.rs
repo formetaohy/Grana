@@ -9,7 +9,7 @@ use grana_measure::{
 };
 use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
 use grana_project::{Export, ViewState};
-use grana_protocol::{DetectionSpec, Protocol, SnapshotSpec, ViewSpec};
+use grana_protocol::{Protocol, SnapshotSpec, SourceSpec, ViewSpec};
 use grana_scene::{Dataset, Measure, ObjectColor, ObjectFrame, ObjectKind, Scene, TrackColor};
 use grana_volume::{Axis, Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -20,9 +20,8 @@ const PROTOCOL: &str = r#"
   "sets": [
     {
       "name": "Nuclei",
-      "channel": "DAPI",
       "color": [1.0, 0.7, 0.2],
-      "detection": {"kind": "surfaces", "threshold": 0.25, "grain": 0.1, "split": 0.6, "min_volume": 2.0, "opening": 0.2, "closing": 0.3, "min_sphericity": 0.4, "min_mean_intensity": 0.05},
+      "source": {"kind": "surfaces", "channel": "DAPI", "threshold": 0.25, "grain": 0.1, "split": 0.6, "min_volume": 2.0, "opening": 0.2, "closing": 0.3, "min_sphericity": 0.4, "min_mean_intensity": 0.05},
       "track": {
         "max_step": 0.8,
         "max_gap": 1,
@@ -38,15 +37,13 @@ const PROTOCOL: &str = r#"
     },
     {
       "name": "Puncta",
-      "channel": "GFP",
       "color": [0.3, 0.8, 1.0],
-      "detection": {"kind": "spots", "diameter": 0.45, "contrast": 0.1}
+      "source": {"kind": "spots", "channel": "GFP", "diameter": 0.45, "contrast": 0.1}
     },
     {
       "name": "Vessels",
-      "channel": "RFP",
       "color": [0.4, 0.9, 0.6],
-      "detection": {"kind": "filaments", "threshold": 0.6, "min_length": 3.0}
+      "source": {"kind": "filaments", "channel": "RFP", "threshold": 0.6, "min_length": 3.0}
     }
   ],
   "coloc": {"settings": {"permutations": 200, "block": 3}, "pairs": [{"a": "GFP", "b": "RFP", "thresholds": [0.4, 0.6]}, {"a": "GFP", "b": "DAPI", "thresholds": [0.5, 0.5]}], "mask": null}
@@ -57,9 +54,9 @@ const PROTOCOL: &str = r#"
 fn reads_and_writes_a_protocol() {
     let protocol = Protocol::from_json(PROTOCOL).expect("the protocol is valid");
     assert_eq!(protocol.sets().len(), 3);
-    assert_eq!(protocol.sets()[0].kind(), ObjectKind::Surfaces);
-    assert_eq!(protocol.sets()[1].kind(), ObjectKind::Spots);
-    assert_eq!(protocol.sets()[2].kind(), ObjectKind::Filaments);
+    assert_eq!(protocol.kind_of("Nuclei"), Some(ObjectKind::Surfaces));
+    assert_eq!(protocol.kind_of("Puncta"), Some(ObjectKind::Spots));
+    assert_eq!(protocol.kind_of("Vessels"), Some(ObjectKind::Filaments));
     let region = protocol
         .region()
         .expect("the protocol restricts its region");
@@ -70,7 +67,10 @@ fn reads_and_writes_a_protocol() {
         .expect("the protocol renders a snapshot");
     assert_eq!(snapshot.size(), [1200, 750]);
     assert!(!snapshot.transparent);
-    let surface = protocol.sets()[0].params();
+    let surface = protocol.sets()[0]
+        .source
+        .params()
+        .expect("a surface set carries its detection parameters");
     assert_eq!(surface.value(0), 0.25);
     assert_eq!(surface.value(1), 0.1);
     assert_eq!(surface.value(2), 0.6);
@@ -108,8 +108,8 @@ fn reads_and_writes_a_protocol() {
     assert_eq!(coloc.mask, None);
     assert_eq!(coloc.settings().permutations(), 200);
     assert!(matches!(
-        protocol.sets()[1].detection,
-        DetectionSpec::Spots { .. }
+        protocol.sets()[1].source,
+        SourceSpec::Spots { .. }
     ));
 
     let text = protocol.to_json().expect("the protocol serializes");
@@ -152,8 +152,8 @@ fn rejects_an_invalid_protocol() {
     );
     assert!(
         invalid(&PROTOCOL.replace(
-            "\"detection\": {\"kind\": \"spots\", \"diameter\": 0.45, \"contrast\": 0.1}",
-            "\"detection\": {\"kind\": \"spots\", \"diameter\": 0.45, \"contrast\": 0.1}, \"extra\": 1"
+            "\"source\": {\"kind\": \"spots\", \"channel\": \"GFP\", \"diameter\": 0.45, \"contrast\": 0.1}",
+            "\"source\": {\"kind\": \"spots\", \"channel\": \"GFP\", \"diameter\": 0.45, \"contrast\": 0.1}, \"extra\": 1"
         )),
         "an unknown field is rejected"
     );
@@ -163,8 +163,8 @@ fn rejects_an_invalid_protocol() {
     );
     assert!(
         invalid(&PROTOCOL.replace(
-            "\"detection\": {\"kind\": \"filaments\", \"threshold\": 0.6, \"min_length\": 3.0}",
-            "\"detection\": {\"kind\": \"filaments\", \"threshold\": 0.6, \"min_length\": 3.0}, \"track\": {\"max_step\": 1.0, \"max_gap\": 1, \"division\": false, \"division_range\": 1.0, \"thickness\": 0.2}"
+            "\"source\": {\"kind\": \"filaments\", \"channel\": \"RFP\", \"threshold\": 0.6, \"min_length\": 3.0}",
+            "\"source\": {\"kind\": \"filaments\", \"channel\": \"RFP\", \"threshold\": 0.6, \"min_length\": 3.0}, \"track\": {\"max_step\": 1.0, \"max_gap\": 1, \"division\": false, \"division_range\": 1.0, \"thickness\": 0.2}"
         )),
         "a filament set cannot be tracked"
     );
@@ -233,8 +233,8 @@ fn rejects_an_invalid_protocol() {
     );
     assert!(
         invalid(&PROTOCOL.replace(
-            "\"name\": \"Puncta\",\n      \"channel\": \"GFP\",\n      \"color\": [0.3, 0.8, 1.0],\n      \"detection\": {\"kind\": \"spots\", \"diameter\": 0.45, \"contrast\": 0.1}",
-            "\"name\": \"Puncta\",\n      \"channel\": \"GFP\",\n      \"color\": [0.3, 0.8, 1.0],\n      \"detection\": {\"kind\": \"spots\", \"diameter\": 0.45, \"contrast\": 0.1},\n      \"measure\": {\"group\": \"tracks\", \"aggregate\": \"mean\"}"
+            "\"name\": \"Puncta\",\n      \"color\": [0.3, 0.8, 1.0],\n      \"source\": {\"kind\": \"spots\", \"channel\": \"GFP\", \"diameter\": 0.45, \"contrast\": 0.1}",
+            "\"name\": \"Puncta\",\n      \"color\": [0.3, 0.8, 1.0],\n      \"source\": {\"kind\": \"spots\", \"channel\": \"GFP\", \"diameter\": 0.45, \"contrast\": 0.1},\n      \"measure\": {\"group\": \"tracks\", \"aggregate\": \"mean\"}"
         )),
         "an untracked set does not group by tracks"
     );
@@ -287,8 +287,8 @@ fn captures_the_analysis_of_a_scene() {
     assert_eq!(protocol.sets().len(), 1);
     let spec = &protocol.sets()[0];
     assert_eq!(spec.name, "Spots 1");
-    assert_eq!(spec.channel, "DAPI");
-    assert_eq!(spec.kind(), ObjectKind::Spots);
+    assert_eq!(protocol.channel_of("Spots 1"), Some("DAPI"));
+    assert_eq!(protocol.kind_of("Spots 1"), Some(ObjectKind::Spots));
     assert_eq!(spec.color, [0.2, 0.7, 0.9]);
     assert!(spec.track_params().is_some());
     assert!(spec.measure().is_none(), "no statistics set is selected");
@@ -333,12 +333,12 @@ fn captures_an_analysis_mask() {
     assert_eq!(protocol.sets()[0].name, "Surfaces 1");
     assert_eq!(protocol.sets()[0].mask(), None);
     assert_eq!(
-        protocol.sets()[0].seeds().to_vec(),
+        protocol.sets()[0].source.seeds().to_vec(),
         vec![vec![[0.25, -0.5, 0.75]]]
     );
     assert_eq!(protocol.sets()[1].name, "Spots 1");
     assert_eq!(protocol.sets()[1].mask(), Some("Surfaces 1"));
-    assert!(protocol.sets()[1].seeds().is_empty());
+    assert!(protocol.sets()[1].source.seeds().is_empty());
     let text = protocol.to_json().expect("the protocol serializes");
     let restored = Protocol::from_json(&text).expect("the protocol round trips");
     assert_eq!(protocol, restored);
@@ -699,6 +699,136 @@ fn round_trips_the_statistics_presentation() {
     assert_eq!(presented.axes(), [x, y]);
     assert!(presented.lasso().is_some());
     assert_eq!(presented.visible()[last], !shown);
+}
+
+#[test]
+fn stages_a_derived_object_set_graph() {
+    const DERIVED: &str = r#"
+{
+  "sets": [
+    {
+      "name": "Spots 1",
+      "color": [0.3, 0.8, 1.0],
+      "source": {"kind": "spots", "channel": "GFP", "diameter": 0.45, "contrast": 0.1}
+    },
+    {
+      "name": "Big spots",
+      "color": [1.0, 0.7, 0.2],
+      "source": {"kind": "filtered", "source": "Spots 1", "filters": [{"column": "diameter_um", "minimum": 0.5, "maximum": 1.0}]}
+    },
+    {
+      "name": "All spots",
+      "color": [0.4, 0.9, 0.6],
+      "source": {"kind": "copy", "source": "Spots 1"}
+    },
+    {
+      "name": "Union",
+      "color": [0.9, 0.5, 0.2],
+      "source": {"kind": "merged", "parts": [
+        {"name": "Spots 1", "source": {"kind": "spots", "channel": "GFP", "diameter": 0.45, "contrast": 0.1}},
+        {"name": "All spots", "source": {"kind": "copy", "source": "Spots 1"}}
+      ]}
+    }
+  ]
+}
+"#;
+    let protocol = Protocol::from_json(DERIVED).expect("the derived protocol is valid");
+    assert_eq!(protocol.kind_of("Big spots"), Some(ObjectKind::Spots));
+    assert_eq!(protocol.channel_of("Union"), Some("GFP"));
+    assert_eq!(
+        protocol.sets()[1].source,
+        SourceSpec::Filtered {
+            source: "Spots 1".to_string(),
+            group: "objects".to_string(),
+            filters: vec![grana_protocol::FilterSpec {
+                column: "diameter_um".to_string(),
+                minimum: 0.5,
+                maximum: 1.0,
+            }],
+            lasso: None,
+        }
+    );
+    let text = protocol.to_json().expect("the protocol serializes");
+    let restored = Protocol::from_json(&text).expect("the derived protocol round trips");
+    assert_eq!(protocol, restored);
+
+    let extent = Extent::new(4, 4, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![
+            Channel::new(
+                "DAPI",
+                [0.3, 0.4, 1.0],
+                VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+            ),
+            Channel::new(
+                "GFP",
+                [0.3, 1.0, 0.4],
+                VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+            ),
+        ],
+    );
+    let series = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let staged = restored
+        .stage(&mut scene)
+        .expect("the derived protocol stages");
+    assert_eq!(staged.len(), 4);
+    let filtered = scene
+        .objects
+        .get(staged.set(1))
+        .expect("the filtered set is staged");
+    assert!(matches!(
+        filtered.provenance(),
+        grana_scene::Provenance::Filtered { .. }
+    ));
+    assert_eq!(filtered.name(), "Big spots");
+    let copied = scene
+        .objects
+        .get(staged.set(2))
+        .expect("the copied set is staged");
+    assert!(matches!(
+        copied.provenance(),
+        grana_scene::Provenance::Copied { .. }
+    ));
+    for step in staged.steps() {
+        if let grana_protocol::Step::Merge { set, part } = step {
+            scene
+                .merge_objects(*part, *set)
+                .expect("the staged parts merge");
+        }
+    }
+    let union = scene
+        .objects
+        .get(staged.set(3))
+        .expect("the merged set is staged");
+    assert!(union.provenance().is_merged());
+    assert_eq!(union.provenance().parts().len(), 2);
+    assert_eq!(
+        staged
+            .steps()
+            .iter()
+            .filter(|step| matches!(step, grana_protocol::Step::Merge { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        staged
+            .steps()
+            .iter()
+            .filter(|step| matches!(step, grana_protocol::Step::Filter { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        staged
+            .steps()
+            .iter()
+            .filter(|step| matches!(step, grana_protocol::Step::Copy { .. }))
+            .count(),
+        2
+    );
 }
 
 #[test]

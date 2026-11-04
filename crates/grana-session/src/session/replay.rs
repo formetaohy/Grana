@@ -1,22 +1,5 @@
 use super::*;
 
-enum Next {
-    Detect {
-        set: ObjectSetId,
-        mask: Option<ObjectSetId>,
-    },
-    Relation {
-        source: ObjectSetId,
-        target: ObjectSetId,
-    },
-    Coloc {
-        pair: ColocPair,
-        thresholds: ColocThresholds,
-        mask: Option<ObjectSetId>,
-    },
-    Present,
-}
-
 impl Session {
     pub fn set_protocol(&mut self, protocol: Protocol) {
         self.protocol_text = Some(protocol.summary());
@@ -81,6 +64,7 @@ impl Session {
             }
         };
         let sets = staged.sets().to_vec();
+        let steps = staged.steps().to_vec();
         let pairs = match protocol.coloc() {
             Some(coloc) => staged
                 .pairs()
@@ -98,71 +82,116 @@ impl Session {
         let settings = protocol
             .coloc()
             .map_or_else(Default::default, |coloc| coloc.settings());
-        self.recipe = Some(Recipe::new(protocol.steps(), sets, pairs, settings));
+        self.recipe = Some(Recipe::new(steps, sets, pairs, settings));
         self.message = None;
         self.drive_recipe();
     }
 
     pub(super) fn drive_recipe(&mut self) {
-        let Some(recipe) = self.recipe.as_ref() else {
-            return;
-        };
-        let settings = recipe.settings();
-        let next = match recipe.step() {
-            Step::Detect { set, mask } => Next::Detect {
-                set: recipe.set(set),
-                mask: recipe.mask(mask),
-            },
-            Step::Relation { source, target } => Next::Relation {
-                source: recipe.set(source),
-                target: recipe.set(target),
-            },
-            Step::Coloc { pair, mask } => {
-                let (pair, thresholds) = recipe.pair(pair);
-                Next::Coloc {
-                    pair,
-                    thresholds,
-                    mask: recipe.mask(mask),
-                }
-            }
-            Step::Present => Next::Present,
-        };
-        match next {
-            Next::Detect { set, mask } => {
-                if let Some(scene) = self.scene.as_mut() {
-                    scene.set_mask(mask);
-                }
-                self.start_detect(set);
-            }
-            Next::Relation { source, target } => self.start_relation(source, target),
-            Next::Coloc {
-                pair,
-                thresholds,
-                mask,
-            } => {
-                self.coloc_thresholds = Some((pair, thresholds));
-                if let Some(scene) = self.scene.as_mut() {
-                    scene.coloc.set_settings(settings);
-                    scene.coloc.set_pair(pair);
-                    scene.set_mask(mask);
-                }
-                self.start_coloc();
-            }
-            Next::Present => {
-                self.present_recipe();
+        loop {
+            let Some(recipe) = self.recipe.as_ref() else {
                 return;
+            };
+            let step = recipe.step().clone();
+            let settings = recipe.settings();
+            match step {
+                Step::Present => {
+                    self.present_recipe();
+                    return;
+                }
+                Step::Detect { set, mask } => {
+                    if let Some(scene) = self.scene.as_mut() {
+                        scene.set_mask(mask);
+                    }
+                    self.start_detect(set);
+                }
+                Step::Relation { source, target } => self.start_relation(source, target),
+                Step::Coloc { pair, mask } => {
+                    let Some(recipe) = self.recipe.as_ref() else {
+                        return;
+                    };
+                    let (pair, thresholds) = recipe.pair(pair);
+                    self.coloc_thresholds = Some((pair, thresholds));
+                    if let Some(scene) = self.scene.as_mut() {
+                        scene.coloc.set_settings(settings);
+                        scene.coloc.set_pair(pair);
+                        scene.set_mask(mask);
+                    }
+                    self.start_coloc();
+                }
+                Step::Filter { set, .. } => match self.reload_filtered(set) {
+                    Ok(()) => {
+                        self.derive_settled(set);
+                        self.advance_step();
+                        continue;
+                    }
+                    Err(detail) => {
+                        self.abort_recipe();
+                        self.message = Some(Message::error(detail));
+                        return;
+                    }
+                },
+                Step::Copy { set, source } => match self.copy_frames(set, source) {
+                    Ok(()) => {
+                        self.derive_settled(set);
+                        self.advance_step();
+                        continue;
+                    }
+                    Err(detail) => {
+                        self.abort_recipe();
+                        self.message = Some(Message::error(detail));
+                        return;
+                    }
+                },
+                Step::Merge { set, part } => match self.merge_sets(set, part) {
+                    Ok(()) => {
+                        self.advance_step();
+                        let merging = self
+                            .recipe
+                            .as_ref()
+                            .is_some_and(|recipe| recipe.merging(set));
+                        if !merging {
+                            self.start_tracks(set);
+                        }
+                        continue;
+                    }
+                    Err(detail) => {
+                        self.abort_recipe();
+                        self.message = Some(Message::error(detail));
+                        return;
+                    }
+                },
             }
+            let running = self.recipe.as_ref().is_some_and(|recipe| {
+                self.analysis
+                    .iter()
+                    .any(|analysis| Some(analysis.job()) == recipe.job())
+            });
+            if !running && self.recipe.is_some() {
+                self.abort_recipe();
+                if self.message.is_none() {
+                    self.message =
+                        Some(Message::error("the protocol could not start its next step"));
+                }
+            }
+            return;
         }
-        let running = self.recipe.as_ref().is_some_and(|recipe| {
-            self.analysis
-                .iter()
-                .any(|analysis| Some(analysis.job()) == recipe.job())
-        });
-        if !running && self.recipe.is_some() {
-            self.abort_recipe();
-            if self.message.is_none() {
-                self.message = Some(Message::error("the protocol could not start its next step"));
-            }
+    }
+
+    pub(super) fn advance_step(&mut self) {
+        if let Some(recipe) = self.recipe.as_mut() {
+            recipe.advance();
+        }
+    }
+
+    fn derive_settled(&mut self, set: ObjectSetId) {
+        self.defer_relations(set);
+        if self.recipe.is_none() {
+            self.resume_relations(set);
+        }
+        let part = self.recipe.as_ref().is_some_and(|recipe| recipe.part(set));
+        if !part {
+            self.start_tracks(set);
         }
     }
 

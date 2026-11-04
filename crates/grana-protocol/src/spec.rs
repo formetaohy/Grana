@@ -8,6 +8,7 @@ use grana_scene::{ObjectKind, ObjectParams};
 use grana_volume::Axis;
 use serde::{Deserialize, Serialize};
 
+use crate::Protocol;
 use crate::ProtocolError;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -171,7 +172,6 @@ pub struct RegionSpec {
 #[serde(deny_unknown_fields)]
 pub struct SetSpec {
     pub name: String,
-    pub channel: String,
     pub color: [f32; 3],
     #[serde(default = "truth", skip_serializing_if = "is_true")]
     pub visible: bool,
@@ -181,15 +181,63 @@ pub struct SetSpec {
     pub color_by: Option<ColorSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_by: Option<ColorSpec>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub seeds: Vec<Vec<[f32; 3]>>,
-    pub detection: DetectionSpec,
+    pub source: SourceSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track: Option<TrackSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub measure: Option<MeasureSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum SourceSpec {
+    Spots {
+        channel: String,
+        diameter: f32,
+        contrast: f32,
+    },
+    Surfaces {
+        channel: String,
+        threshold: f32,
+        grain: f32,
+        split: f32,
+        min_volume: f32,
+        opening: f32,
+        closing: f32,
+        min_sphericity: f32,
+        min_mean_intensity: f32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        seeds: Vec<Vec<[f32; 3]>>,
+    },
+    Filaments {
+        channel: String,
+        threshold: f32,
+        min_length: f32,
+    },
+    Filtered {
+        source: String,
+        #[serde(default = "objects", skip_serializing_if = "is_objects")]
+        group: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        filters: Vec<FilterSpec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lasso: Option<LassoSpec>,
+    },
+    Copy {
+        source: String,
+    },
+    Merged {
+        parts: Vec<PartSpec>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PartSpec {
+    pub name: String,
+    pub source: SourceSpec,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -237,29 +285,6 @@ pub struct FilterSpec {
     pub column: String,
     pub minimum: f32,
     pub maximum: f32,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum DetectionSpec {
-    Spots {
-        diameter: f32,
-        contrast: f32,
-    },
-    Surfaces {
-        threshold: f32,
-        grain: f32,
-        split: f32,
-        min_volume: f32,
-        opening: f32,
-        closing: f32,
-        min_sphericity: f32,
-        min_mean_intensity: f32,
-    },
-    Filaments {
-        threshold: f32,
-        min_length: f32,
-    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -771,20 +796,8 @@ impl RegionSpec {
 }
 
 impl SetSpec {
-    pub fn kind(&self) -> ObjectKind {
-        self.detection.kind()
-    }
-
-    pub fn params(&self) -> ObjectParams {
-        self.detection.params()
-    }
-
     pub fn mask(&self) -> Option<&str> {
         self.mask.as_deref()
-    }
-
-    pub fn seeds(&self) -> &[Vec<[f32; 3]>] {
-        &self.seeds
     }
 
     pub fn track_params(&self) -> Option<TrackParams> {
@@ -911,34 +924,10 @@ impl MeasureSpec {
             return invalid("names an empty plot axis".to_string());
         }
         if let Some(lasso) = &self.lasso {
-            if lasso.x.trim().is_empty() || lasso.y.trim().is_empty() {
-                return invalid("names an empty lasso axis".to_string());
-            }
-            if lasso.x == lasso.y {
-                return invalid("gates the plot on one axis twice".to_string());
-            }
-            if lasso.points.len() < 3 {
-                return invalid("gates the plot with a polygon".to_string());
-            }
-            if lasso
-                .points
-                .iter()
-                .flatten()
-                .any(|value| !value.is_finite())
-            {
-                return invalid("gates the plot with finite points".to_string());
-            }
+            lasso.checked(set)?;
         }
         for filter in &self.filters {
-            if filter.column.trim().is_empty() {
-                return invalid("filters an unnamed column".to_string());
-            }
-            if !(filter.minimum.is_finite() && filter.maximum.is_finite()) {
-                return invalid("filters a range that is not finite".to_string());
-            }
-            if filter.minimum > filter.maximum {
-                return invalid("filters a range that is not ordered".to_string());
-            }
+            filter.checked(set)?;
         }
         for (index, column) in self.columns.iter().enumerate() {
             if column.trim().is_empty() {
@@ -957,20 +946,30 @@ impl MeasureSpec {
     }
 }
 
-impl DetectionSpec {
-    pub fn kind(&self) -> ObjectKind {
+impl SourceSpec {
+    pub fn kind(&self) -> Option<ObjectKind> {
         match self {
-            Self::Spots { .. } => ObjectKind::Spots,
-            Self::Surfaces { .. } => ObjectKind::Surfaces,
-            Self::Filaments { .. } => ObjectKind::Filaments,
+            Self::Spots { .. } => Some(ObjectKind::Spots),
+            Self::Surfaces { .. } => Some(ObjectKind::Surfaces),
+            Self::Filaments { .. } => Some(ObjectKind::Filaments),
+            Self::Filtered { .. } | Self::Copy { .. } | Self::Merged { .. } => None,
         }
     }
 
-    pub fn params(&self) -> ObjectParams {
-        match *self {
-            Self::Spots { diameter, contrast } => {
-                ObjectParams::Spots(SpotParams::new(diameter, contrast))
-            }
+    pub fn channel(&self) -> Option<&str> {
+        match self {
+            Self::Spots { channel, .. }
+            | Self::Surfaces { channel, .. }
+            | Self::Filaments { channel, .. } => Some(channel),
+            Self::Filtered { .. } | Self::Copy { .. } | Self::Merged { .. } => None,
+        }
+    }
+
+    pub fn params(&self) -> Option<ObjectParams> {
+        Some(match *self {
+            Self::Spots {
+                diameter, contrast, ..
+            } => ObjectParams::Spots(SpotParams::new(diameter, contrast)),
             Self::Surfaces {
                 threshold,
                 grain,
@@ -980,6 +979,7 @@ impl DetectionSpec {
                 closing,
                 min_sphericity,
                 min_mean_intensity,
+                ..
             } => ObjectParams::Surfaces(SurfaceParams::new(
                 threshold,
                 grain,
@@ -990,23 +990,42 @@ impl DetectionSpec {
             Self::Filaments {
                 threshold,
                 min_length,
+                ..
             } => ObjectParams::Filaments(FilamentParams::new(threshold, min_length)),
+            Self::Filtered { .. } | Self::Copy { .. } | Self::Merged { .. } => return None,
+        })
+    }
+
+    pub fn seeds(&self) -> &[Vec<[f32; 3]>] {
+        match self {
+            Self::Surfaces { seeds, .. } => seeds,
+            Self::Spots { .. }
+            | Self::Filaments { .. }
+            | Self::Filtered { .. }
+            | Self::Copy { .. }
+            | Self::Merged { .. } => &[],
         }
     }
 
     pub(super) fn checked(&self, set: &str) -> Result<(), ProtocolError> {
         let invalid =
             |detail: String| Err(ProtocolError::Invalid(format!("the set {set} {detail}")));
-        match *self {
-            Self::Spots { diameter, contrast } => {
-                if !(diameter.is_finite() && diameter > 0.0) {
+        match self {
+            Self::Spots {
+                channel,
+                diameter,
+                contrast,
+            } => {
+                validate(channel, &format!("the channel of {set}"))?;
+                if !(diameter.is_finite() && *diameter > 0.0) {
                     return invalid("needs a positive spot diameter".to_string());
                 }
-                if !(0.0..=1.0).contains(&contrast) {
+                if !(0.0..=1.0).contains(contrast) {
                     return invalid("needs a unit contrast threshold".to_string());
                 }
             }
             Self::Surfaces {
+                channel,
                 threshold,
                 grain,
                 split,
@@ -1015,45 +1034,214 @@ impl DetectionSpec {
                 closing,
                 min_sphericity,
                 min_mean_intensity,
+                seeds,
             } => {
-                if !(0.0..=1.0).contains(&threshold) {
+                validate(channel, &format!("the channel of {set}"))?;
+                if !(0.0..=1.0).contains(threshold) {
                     return invalid("needs a unit surface threshold".to_string());
                 }
-                if !(grain.is_finite() && grain >= 0.0) {
+                if !(grain.is_finite() && *grain >= 0.0) {
                     return invalid("needs a non-negative surface grain".to_string());
                 }
-                if !(0.0..=1.0).contains(&split) {
+                if !(0.0..=1.0).contains(split) {
                     return invalid("needs a unit surface split".to_string());
                 }
-                if !(min_volume.is_finite() && min_volume >= 0.0) {
+                if !(min_volume.is_finite() && *min_volume >= 0.0) {
                     return invalid("needs a non-negative minimum volume".to_string());
                 }
-                if !(opening.is_finite() && opening >= 0.0) {
+                if !(opening.is_finite() && *opening >= 0.0) {
                     return invalid("needs a non-negative surface opening radius".to_string());
                 }
-                if !(closing.is_finite() && closing >= 0.0) {
+                if !(closing.is_finite() && *closing >= 0.0) {
                     return invalid("needs a non-negative surface closing radius".to_string());
                 }
-                if !(0.0..=1.0).contains(&min_sphericity) {
+                if !(0.0..=1.0).contains(min_sphericity) {
                     return invalid("needs a unit sphericity filter".to_string());
                 }
-                if !(0.0..=1.0).contains(&min_mean_intensity) {
+                if !(0.0..=1.0).contains(min_mean_intensity) {
                     return invalid("needs a unit intensity filter".to_string());
+                }
+                if seeds
+                    .iter()
+                    .flatten()
+                    .any(|point| point.iter().any(|value| !value.is_finite()))
+                {
+                    return invalid("seeds finite points".to_string());
                 }
             }
             Self::Filaments {
+                channel,
                 threshold,
                 min_length,
             } => {
-                if !(0.0..=1.0).contains(&threshold) {
+                validate(channel, &format!("the channel of {set}"))?;
+                if !(0.0..=1.0).contains(threshold) {
                     return invalid("needs a unit filament threshold".to_string());
                 }
-                if !(min_length.is_finite() && min_length > 0.0) {
+                if !(min_length.is_finite() && *min_length > 0.0) {
                     return invalid("needs a positive minimum length".to_string());
+                }
+            }
+            Self::Filtered {
+                source,
+                group,
+                filters,
+                lasso,
+            } => {
+                validate(source, &format!("the source of {set}"))?;
+                let group = Group::parse(group).ok_or_else(|| {
+                    ProtocolError::Invalid(format!("the set {set} filters an unknown grouping"))
+                })?;
+                if group == Group::Timepoint {
+                    return invalid("filters objects or tracks".to_string());
+                }
+                if filters.is_empty() && lasso.is_none() {
+                    return invalid("filters at least one measurement".to_string());
+                }
+                for filter in filters {
+                    filter.checked(set)?;
+                }
+                if let Some(lasso) = lasso {
+                    lasso.checked(set)?;
+                }
+            }
+            Self::Copy { source } => {
+                validate(source, &format!("the source of {set}"))?;
+            }
+            Self::Merged { parts } => {
+                if parts.is_empty() {
+                    return invalid("merges at least one part".to_string());
+                }
+                for part in parts {
+                    validate(&part.name, &format!("a merged part of {set}"))?;
+                    part.source.checked(&part.name)?;
                 }
             }
         }
         Ok(())
+    }
+}
+
+impl FilterSpec {
+    pub(super) fn checked(&self, set: &str) -> Result<(), ProtocolError> {
+        if self.column.trim().is_empty() {
+            return Err(ProtocolError::Invalid(format!(
+                "the set {set} filters an unnamed column"
+            )));
+        }
+        if !(self.minimum.is_finite() && self.maximum.is_finite()) {
+            return Err(ProtocolError::Invalid(format!(
+                "the set {set} filters a range that is not finite"
+            )));
+        }
+        if self.minimum > self.maximum {
+            return Err(ProtocolError::Invalid(format!(
+                "the set {set} filters a range that is not ordered"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl LassoSpec {
+    pub(super) fn checked(&self, set: &str) -> Result<(), ProtocolError> {
+        if self.x.trim().is_empty() || self.y.trim().is_empty() {
+            return Err(ProtocolError::Invalid(format!(
+                "the set {set} gates an unnamed column"
+            )));
+        }
+        if self.x == self.y {
+            return Err(ProtocolError::Invalid(format!(
+                "the set {set} gates one column twice"
+            )));
+        }
+        if self.points.len() < 3 || self.points.iter().flatten().any(|value| !value.is_finite()) {
+            return Err(ProtocolError::Invalid(format!(
+                "the set {set} gates a polygon"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl Protocol {
+    const MAX_NESTING: usize = 16;
+
+    pub fn kind_of(&self, name: &str) -> Option<ObjectKind> {
+        self.kind_of_name(name, 0)
+    }
+
+    pub fn channel_of<'a>(&'a self, name: &str) -> Option<&'a str> {
+        self.channel_of_name(name, 0)
+    }
+
+    pub fn kind_of_source(&self, source: &SourceSpec) -> Option<ObjectKind> {
+        self.kind_of_source_at(source, 0)
+    }
+
+    fn kind_of_name(&self, name: &str, depth: usize) -> Option<ObjectKind> {
+        if depth >= Self::MAX_NESTING {
+            return None;
+        }
+        let spec = self.sets.iter().find(|set| set.name == name)?;
+        self.kind_of_source_at(&spec.source, depth + 1)
+    }
+
+    fn kind_of_source_at(&self, source: &SourceSpec, depth: usize) -> Option<ObjectKind> {
+        if depth >= Self::MAX_NESTING {
+            return None;
+        }
+        match source {
+            SourceSpec::Spots { .. }
+            | SourceSpec::Surfaces { .. }
+            | SourceSpec::Filaments { .. } => source.kind(),
+            SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
+                self.kind_of_name(source, depth + 1)
+            }
+            SourceSpec::Merged { parts } => {
+                self.kind_of_source_at(&parts.first()?.source, depth + 1)
+            }
+        }
+    }
+
+    fn channel_of_name<'a>(&'a self, name: &str, depth: usize) -> Option<&'a str> {
+        if depth >= Self::MAX_NESTING {
+            return None;
+        }
+        let spec = self.sets.iter().find(|set| set.name == name)?;
+        self.channel_of_source_at(&spec.source, depth + 1)
+    }
+
+    fn channel_of_source_at<'a>(&'a self, source: &'a SourceSpec, depth: usize) -> Option<&'a str> {
+        if depth >= Self::MAX_NESTING {
+            return None;
+        }
+        match source {
+            SourceSpec::Spots { .. }
+            | SourceSpec::Surfaces { .. }
+            | SourceSpec::Filaments { .. } => source.channel(),
+            SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
+                self.channel_of_name(source, depth + 1)
+            }
+            SourceSpec::Merged { parts } => {
+                self.channel_of_source_at(&parts.first()?.source, depth + 1)
+            }
+        }
+    }
+
+    pub(super) fn source_kind_consistent(&self, set: &str) -> bool {
+        let Some(kind) = self.kind_of(set) else {
+            return false;
+        };
+        self.sets
+            .iter()
+            .find(|spec| spec.name == set)
+            .is_some_and(|spec| match &spec.source {
+                SourceSpec::Merged { parts } => parts
+                    .iter()
+                    .all(|part| self.kind_of_source(&part.source) == Some(kind)),
+                _ => true,
+            })
     }
 }
 
@@ -1082,6 +1270,21 @@ impl TrackSpec {
 
 fn truth() -> bool {
     true
+}
+
+fn objects() -> String {
+    "objects".to_string()
+}
+
+fn is_objects(value: &str) -> bool {
+    value == "objects"
+}
+
+pub(super) fn validate(value: &str, what: &str) -> Result<(), ProtocolError> {
+    if value.trim().is_empty() {
+        return Err(ProtocolError::Invalid(format!("{what} is empty")));
+    }
+    Ok(())
 }
 
 fn is_true(value: &bool) -> bool {

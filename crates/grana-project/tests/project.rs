@@ -21,8 +21,8 @@ use grana_object::{
 use grana_object::{SpotParams, SurfaceFilter, SurfaceParams};
 use grana_project::{Export, Project, Source, ViewState};
 use grana_scene::{
-    Dataset, Item, Measure, ObjectColor, ObjectFrame, ObjectKind, ObjectParams, Scene, Selection,
-    TrackColor, Visibility,
+    Criteria, Dataset, FilterRange, Item, Measure, ObjectColor, ObjectFrame, ObjectKind,
+    ObjectParams, Scene, Selection, TrackColor, Visibility,
 };
 use grana_volume::{Axis, Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -228,6 +228,80 @@ fn round_trips_object_set_order() {
             .collect::<Vec<_>>(),
         order
     );
+}
+
+#[test]
+fn round_trips_the_provenance_of_derived_sets() {
+    let mut scene = fixture();
+    stage(&mut scene);
+    let spots = scene
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Spots)
+        .expect("the fixture stages spots")
+        .id();
+    let criteria = Criteria::new(
+        grana_measure::Group::Object,
+        vec![FilterRange::new("diameter_um", 0.5, 2.0)],
+        None,
+    );
+    let filtered = scene
+        .filter_object(spots, "filtered", criteria)
+        .expect("the spots filter into a derived set");
+    let copy = scene.copy_object(spots).expect("the spots copy");
+    scene
+        .merge_objects(copy, spots)
+        .expect("the copied spots merge back");
+
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "fixture".to_string(),
+        },
+        ViewState {
+            camera: CameraState {
+                pivot: [0.0; 3],
+                yaw: 0.0,
+                pitch: 0.0,
+                distance: 1.0,
+                fov_y: 0.6,
+            },
+            section: SectionState {
+                axis: Axis::Z,
+                span: 1.0,
+            },
+            split: 0.5,
+            timeline: Timeline::default(),
+            export: Export::NATIVE,
+        },
+    );
+    let path = std::env::temp_dir().join(format!("grana-derived-{}.grana", std::process::id()));
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the project reads");
+    fs::remove_file(&path).ok();
+    assert_eq!(loaded, project);
+    let mut restored = fixture();
+    restored.restore(loaded.scene);
+    let filtered = restored
+        .objects
+        .get(filtered)
+        .expect("the derived set restores");
+    assert!(filtered.provenance().depends_on(spots));
+    let merged = restored
+        .objects
+        .get(spots)
+        .expect("the merged set restores");
+    assert!(merged.provenance().is_merged());
+    assert_eq!(merged.provenance().parts().len(), 2);
 }
 
 #[test]

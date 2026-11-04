@@ -8,6 +8,7 @@ use crate::coloc::{ColocState, MaskKey};
 use crate::color::ObjectColor;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::{ObjectSetId, Visibility};
+use crate::provenance::Provenance;
 use crate::scene::{Item, Scene, Selection};
 use crate::track_color::TrackColor;
 use grana_display::ColorState;
@@ -77,6 +78,7 @@ pub struct SetState {
     pub seeds: Vec<Vec<[f32; 3]>>,
     pub frames: Vec<Option<Arc<ObjectFrame>>>,
     pub relations: Vec<RelationState>,
+    pub provenance: Provenance,
     pub document: u64,
 }
 

@@ -125,9 +125,6 @@ impl Session {
         for index in removed.into_iter().rev() {
             self.analysis.remove(index);
         }
-        for job in finished {
-            self.advance_recipe(job);
-        }
         if let Some((set, cut)) = self.recut.take()
             && !self
                 .analysis
@@ -152,8 +149,17 @@ impl Session {
             if recut {
                 self.defer_relations(set);
             }
-            self.start_tracks(set);
+            let part = self.recipe.as_ref().is_some_and(|recipe| recipe.part(set));
+            if !part {
+                self.start_tracks(set);
+            }
             self.resume_relations(set);
+            if self.recipe.is_none() {
+                self.refresh_dependents(set);
+            }
+        }
+        for job in finished {
+            self.advance_recipe(job);
         }
         repaint
     }
@@ -352,6 +358,28 @@ impl Session {
             .push(crate::relation(job, source_frames, target_frames, shift, 0));
     }
 
+    pub(super) fn detection_root(&self, set: ObjectSetId) -> Option<ObjectSetId> {
+        self.scene.as_ref()?.detection_root(set)
+    }
+
+    pub(super) fn detect_root(&mut self, set: ObjectSetId) {
+        let Some(root) = self.detection_root(set) else {
+            return;
+        };
+        let merged = self
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.objects.get(root))
+            .is_some_and(|object| object.provenance().is_merged());
+        if merged {
+            self.message = Some(Message::error(
+                "a merged object set carries no detection to run",
+            ));
+            return;
+        }
+        self.start_detect(root);
+    }
+
     pub(super) fn start_detect(&mut self, set: ObjectSetId) {
         if self.loading.is_some() {
             return;
@@ -436,6 +464,7 @@ impl Session {
     }
 
     pub(super) fn recut(&mut self, set: ObjectSetId, previous: ObjectParams, params: ObjectParams) {
+        let restore = previous;
         let (ObjectParams::Surfaces(previous), ObjectParams::Surfaces(params)) = (previous, params)
         else {
             return;
@@ -450,6 +479,20 @@ impl Session {
         }
         let cut = params.cut();
         if !self.cuttable(set) {
+            let merged = self
+                .scene
+                .as_ref()
+                .and_then(|scene| scene.objects.get(set))
+                .is_some_and(|object| object.provenance().is_merged());
+            if merged {
+                if let Some(target) = self.object_mut(set) {
+                    target.set_params(restore);
+                }
+                self.message = Some(Message::error(
+                    "a merged object set only changes its cut filters",
+                ));
+                return;
+            }
             let detected = self
                 .scene
                 .as_ref()

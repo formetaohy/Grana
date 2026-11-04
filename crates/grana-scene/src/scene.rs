@@ -14,6 +14,7 @@ use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
+use crate::provenance::{Criteria, Provenance};
 
 fn shape_at(frames: &[Option<Arc<ObjectFrame>>], time: u32) -> Result<Option<Shape>, String> {
     let Some(frame) = frames.get(time as usize).and_then(|frame| frame.as_deref()) else {
@@ -232,8 +233,96 @@ impl Scene {
         Ok(true)
     }
 
-    pub fn derive_object(&mut self, id: ObjectSetId, suffix: &str) -> Option<ObjectSetId> {
-        self.objects.derive(id, suffix)
+    pub fn copy_object(&mut self, id: ObjectSetId) -> Option<ObjectSetId> {
+        self.objects.copy(id)
+    }
+
+    pub fn filter_object(
+        &mut self,
+        id: ObjectSetId,
+        suffix: &str,
+        criteria: Criteria,
+    ) -> Option<ObjectSetId> {
+        self.objects.filter(id, suffix, criteria)
+    }
+
+    pub fn detection_root(&self, id: ObjectSetId) -> Option<ObjectSetId> {
+        let mut current = id;
+        loop {
+            let set = self.objects.get(current)?;
+            match set.provenance() {
+                Provenance::Filtered { source, .. } => current = *source,
+                Provenance::Detection | Provenance::Copied { .. } | Provenance::Merged { .. } => {
+                    return Some(current);
+                }
+            }
+        }
+    }
+
+    pub fn filtered_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
+        self.objects.filtered_dependents(id)
+    }
+
+    pub fn refresh_filtered(&mut self, id: ObjectSetId) -> Result<bool, String> {
+        let Some(set) = self.objects.get(id) else {
+            return Ok(false);
+        };
+        let Provenance::Filtered { source, criteria } = set.provenance().clone() else {
+            return Ok(false);
+        };
+        let Some(filtered) = self.objects.get(source) else {
+            return Err(format!(
+                "{} filters an object set that left the scene",
+                set.name()
+            ));
+        };
+        let counts = (0..self.frame_count())
+            .map(|time| filtered.frame(time).map_or(0, ObjectFrame::object_count))
+            .collect::<Vec<_>>();
+        let params = filtered.params();
+        if counts.iter().all(|count| *count == 0) {
+            for time in 0..self.frame_count() {
+                self.install_optional(id, time, None);
+            }
+            if let Some(set) = self.objects.get_mut(id) {
+                set.set_params(params);
+            }
+            return Ok(true);
+        }
+        let tracks = filtered.tracks().map(|layer| layer.set());
+        let table = self
+            .table(source, criteria.group(), Aggregate::Mean)
+            .ok_or_else(|| {
+                format!(
+                    "{} holds no objects to filter into {}",
+                    filtered.name(),
+                    set.name()
+                )
+            })?;
+        let keep = criteria.keep(&table, tracks, &counts)?;
+        if keep.iter().flatten().all(|kept| !kept) {
+            return Err(format!(
+                "the filter of {} keeps no object of {}",
+                set.name(),
+                filtered.name()
+            ));
+        }
+        let frames = (0..self.frame_count())
+            .map(|time| filtered.frame_shared(time))
+            .collect::<Vec<_>>();
+        for (time, frame) in frames.into_iter().enumerate() {
+            let pruned = match frame {
+                Some(frame) => frame
+                    .retain(&keep[time])
+                    .map_err(|error| error.to_string())?,
+                None => None,
+            };
+            self.install_optional(id, time as u32, pruned);
+        }
+        if let Some(set) = self.objects.get_mut(id) {
+            set.set_params(params);
+        }
+        Ok(true)
     }
 
     pub fn merge_objects(
@@ -256,7 +345,7 @@ impl Scene {
     }
 
     pub fn duplicate_object(&mut self, id: ObjectSetId) -> Option<ObjectSetId> {
-        self.derive_object(id, "copy")
+        self.copy_object(id)
     }
 
     pub fn set_mask(&mut self, source: Option<ObjectSetId>) {
@@ -401,6 +490,13 @@ impl Scene {
 
     pub fn install_shared(&mut self, id: ObjectSetId, time: u32, frame: Arc<ObjectFrame>) {
         if !self.objects.install_shared(id, time, frame) {
+            return;
+        }
+        self.settle_install(id, time);
+    }
+
+    pub fn install_optional(&mut self, id: ObjectSetId, time: u32, frame: Option<ObjectFrame>) {
+        if !self.objects.install_optional(id, time, frame.map(Arc::new)) {
             return;
         }
         self.settle_install(id, time);
@@ -570,7 +666,7 @@ impl Scene {
     }
 
     pub fn shown(&self, set: &ObjectSet) -> bool {
-        set.visible() && self.channels[set.channel()].enabled
+        set.visible() && (set.provenance().is_merged() || self.channels[set.channel()].enabled)
     }
 
     pub fn object_selected(&self, set: ObjectSetId, index: usize) -> bool {

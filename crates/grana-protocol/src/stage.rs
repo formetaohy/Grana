@@ -1,13 +1,17 @@
+use std::collections::HashMap;
+
 use grana_display::Coloring;
-use grana_measure::{ColocPair, TrackMeasurement, channel_keys};
-use grana_scene::{ObjectColor, ObjectSetId, Scene, TrackColor};
+use grana_measure::{ColocPair, Group, TrackMeasurement, channel_keys};
+use grana_scene::{Criteria, FilterRange, LassoPath, ObjectColor, ObjectSetId, Scene, TrackColor};
 use grana_volume::Region;
 
-use crate::{ColorSpec, Protocol, ProtocolError};
+use crate::step::Step;
+use crate::{ColorSpec, FilterSpec, LassoSpec, Protocol, ProtocolError, SourceSpec};
 
 pub struct Staged {
     sets: Vec<ObjectSetId>,
     pairs: Vec<ColocPair>,
+    steps: Vec<Step>,
 }
 
 impl Staged {
@@ -30,6 +34,17 @@ impl Staged {
     pub fn pairs(&self) -> &[ColocPair] {
         &self.pairs
     }
+
+    pub fn steps(&self) -> &[Step] {
+        &self.steps
+    }
+}
+
+struct Builder<'a> {
+    scene: &'a mut Scene,
+    names: &'a [String],
+    ids: HashMap<String, ObjectSetId>,
+    steps: Vec<Step>,
 }
 
 impl Protocol {
@@ -51,10 +66,12 @@ impl Protocol {
             channel(&names, &spec.name)?;
         }
         for spec in &self.sets {
-            channel(&names, &spec.channel)?;
-            if !spec.seeds.is_empty() && spec.seeds.len() != scene.frame_count() as usize {
+            self.validate_source(&spec.source, &names, scene.frame_count())?;
+            if let Some(mask) = &spec.mask
+                && !self.sets.iter().any(|other| other.name == *mask)
+            {
                 return Err(ProtocolError::Invalid(format!(
-                    "the seeds of {} cover every frame of the dataset",
+                    "the set {} is masked by {mask}, which is not an object set of the protocol",
                     spec.name
                 )));
             }
@@ -71,6 +88,52 @@ impl Protocol {
             for pair in &coloc.pairs {
                 channel(&names, &pair.a)?;
                 channel(&names, &pair.b)?;
+            }
+            if let Some(mask) = &coloc.mask
+                && !self.sets.iter().any(|set| set.name == *mask)
+            {
+                return Err(ProtocolError::Invalid(format!(
+                    "the colocalization mask {mask} is not an object set of the protocol"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_source(
+        &self,
+        source: &SourceSpec,
+        names: &[String],
+        frames: u32,
+    ) -> Result<(), ProtocolError> {
+        match source {
+            SourceSpec::Spots { channel: name, .. }
+            | SourceSpec::Filaments { channel: name, .. } => {
+                channel(names, name)?;
+            }
+            SourceSpec::Surfaces {
+                channel: name,
+                seeds,
+                ..
+            } => {
+                channel(names, name)?;
+                if !seeds.is_empty() && seeds.len() != frames as usize {
+                    return Err(ProtocolError::Invalid(
+                        "the seeds of an object set cover every frame of the dataset".to_string(),
+                    ));
+                }
+            }
+            SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
+                if !self.sets.iter().any(|set| set.name == *source) {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{source} is not an object set of the protocol"
+                    )));
+                }
+            }
+            SourceSpec::Merged { parts } => {
+                for part in parts {
+                    self.validate_source(&part.source, names, frames)?;
+                }
             }
         }
         Ok(())
@@ -97,85 +160,60 @@ impl Protocol {
             Some(region) => region.region(world),
             None => Region::none(),
         });
-        let order = self
-            .sets
-            .iter()
-            .map(|set| set.name.as_str())
-            .collect::<Vec<_>>();
+        let mut builder = Builder {
+            scene,
+            names: &names,
+            ids: HashMap::new(),
+            steps: Vec::new(),
+        };
         let mut sets = Vec::new();
         let mut masks = Vec::new();
         for spec in &self.sets {
-            let channel = channel(&names, &spec.channel)?;
-            let id = scene.add_object(spec.kind(), channel);
-            if !scene.rename_object(id, &spec.name)
-                && !scene
-                    .objects
-                    .get(id)
-                    .is_some_and(|set| set.name() == spec.name)
+            let mask = spec
+                .mask
+                .as_deref()
+                .and_then(|name| builder.ids.get(name).copied());
+            let id = builder.build(&spec.source, &spec.name, true, spec.track, mask)?;
             {
-                return Err(ProtocolError::Invalid(format!(
-                    "the object set {} collides with another object set of the scene",
-                    spec.name
-                )));
-            }
-            {
-                let set = scene
+                let set = builder
+                    .scene
                     .objects
                     .get_mut(id)
                     .expect("the staged object set exists");
                 set.set_color(spec.color);
                 set.set_opacity(spec.opacity);
                 set.set_visible(spec.visible);
-                set.set_params(spec.params());
             }
-            if let (Some(params), Some(thickness), Some(visible)) =
-                (spec.track_params(), spec.thickness(), spec.track_visible())
-            {
-                scene.set_track_style(id, params, thickness);
-                scene
-                    .objects
-                    .get_mut(id)
-                    .expect("the staged object set exists")
-                    .set_track_visible(visible);
-            }
-            if !spec.seeds.is_empty() {
-                if spec.seeds.len() != scene.frame_count() as usize {
-                    return Err(ProtocolError::Invalid(format!(
-                        "the seeds of {} cover every frame of the dataset",
-                        spec.name
-                    )));
-                }
-                scene.set_seed_frames(id, spec.seeds.clone());
-            }
-            masks.push(match spec.mask() {
-                Some(mask) => Some(position(&order, mask, &spec.name)?),
-                None => None,
-            });
+            builder.ids.insert(spec.name.clone(), id);
+            masks.push(mask);
             sets.push(id);
         }
         for relation in &self.relations {
-            let source = position(&order, &relation.source, &relation.source)?;
-            let target = position(&order, &relation.target, &relation.target)?;
-            if !scene.add_relation(sets[source], sets[target], relation.shift) {
+            let source = builder.ids[&relation.source];
+            let target = builder.ids[&relation.target];
+            if !builder.scene.add_relation(source, target, relation.shift) {
                 return Err(ProtocolError::Invalid(format!(
                     "{} cannot relate to {}",
                     relation.source, relation.target
                 )));
             }
+            builder.steps.push(Step::Relation { source, target });
         }
-        for (index, spec) in self.sets.iter().enumerate() {
-            let id = sets[index];
+        for spec in &self.sets {
+            let id = builder.ids[&spec.name];
             if let Some(color) = &spec.color_by {
-                let coloring = object_coloring(color, scene, id, &keys)?;
-                scene
+                let coloring = object_coloring(color, builder.scene, id, &keys)?;
+                builder
+                    .scene
                     .objects
                     .get_mut(id)
                     .expect("the staged object set exists")
                     .set_object_coloring(coloring);
             }
             if let Some(color) = &spec.track_by {
-                let coloring = track_coloring(color, scene)?;
-                scene
+                let coloring = track_coloring(color, builder.scene)?;
+                builder
+                    .scene
                     .objects
                     .get_mut(id)
                     .expect("the staged object set exists")
@@ -183,7 +221,7 @@ impl Protocol {
             }
         }
         let mask = masks.iter().rev().flatten().next().copied();
-        scene.set_mask(mask.map(|index| sets[index]));
+        builder.scene.set_mask(mask);
         let pairs = match &self.coloc {
             Some(coloc) => coloc
                 .pairs
@@ -197,7 +235,21 @@ impl Protocol {
                 .collect::<Result<Vec<_>, ProtocolError>>()?,
             None => Vec::new(),
         };
-        Ok(Staged { sets, pairs })
+        if let Some(coloc) = &self.coloc {
+            let mask = coloc
+                .mask
+                .as_deref()
+                .and_then(|name| builder.ids.get(name).copied());
+            for pair in 0..coloc.pairs.len() {
+                builder.steps.push(Step::Coloc { pair, mask });
+            }
+        }
+        builder.steps.push(Step::Present);
+        Ok(Staged {
+            sets,
+            pairs,
+            steps: builder.steps,
+        })
     }
 
     fn stage_channels(&self, scene: &mut Scene, names: &[String]) -> Result<(), ProtocolError> {
@@ -224,15 +276,168 @@ impl Protocol {
     }
 }
 
-fn position(names: &[&str], name: &str, set: &str) -> Result<usize, ProtocolError> {
-    names
-        .iter()
-        .position(|candidate| *candidate == name)
-        .ok_or_else(|| {
+impl Builder<'_> {
+    fn build(
+        &mut self,
+        source: &SourceSpec,
+        name: &str,
+        named: bool,
+        track: Option<crate::TrackSpec>,
+        mask: Option<ObjectSetId>,
+    ) -> Result<ObjectSetId, ProtocolError> {
+        match source {
+            SourceSpec::Spots { .. }
+            | SourceSpec::Surfaces { .. }
+            | SourceSpec::Filaments { .. } => self.detect(source, name, named, track, mask),
+            SourceSpec::Filtered {
+                source: reference,
+                group,
+                filters,
+                lasso,
+            } => {
+                let source = self.reference(reference)?;
+                let criteria = criteria(group, filters, lasso.as_ref())?;
+                let id = self
+                    .scene
+                    .filter_object(source, "filtered", criteria.clone())
+                    .ok_or_else(|| {
+                        ProtocolError::Invalid(format!(
+                            "{name} filters an object set that left the scene"
+                        ))
+                    })?;
+                self.rename(id, name, named)?;
+                self.apply_track(id, track);
+                self.steps.push(Step::Filter {
+                    set: id,
+                    source,
+                    criteria,
+                });
+                Ok(id)
+            }
+            SourceSpec::Copy { source: reference } => {
+                let source = self.reference(reference)?;
+                let id = self.scene.copy_object(source).ok_or_else(|| {
+                    ProtocolError::Invalid(format!(
+                        "{name} copies an object set that left the scene"
+                    ))
+                })?;
+                self.rename(id, name, named)?;
+                self.apply_track(id, track);
+                self.steps.push(Step::Copy { set: id, source });
+                Ok(id)
+            }
+            SourceSpec::Merged { parts } => {
+                let mut built = Vec::with_capacity(parts.len());
+                for part in parts {
+                    built.push(self.build(&part.source, &part.name, false, None, mask)?);
+                }
+                let mut built = built.into_iter();
+                let target = built
+                    .next()
+                    .expect("a merged object set holds at least one part");
+                self.rename(target, name, named)?;
+                self.apply_track(target, track);
+                for part in built {
+                    self.steps.push(Step::Merge { set: target, part });
+                }
+                Ok(target)
+            }
+        }
+    }
+
+    fn detect(
+        &mut self,
+        source: &SourceSpec,
+        name: &str,
+        named: bool,
+        track: Option<crate::TrackSpec>,
+        mask: Option<ObjectSetId>,
+    ) -> Result<ObjectSetId, ProtocolError> {
+        let channel = channel(
+            self.names,
+            source.channel().expect("a detection names its channel"),
+        )?;
+        let kind = source.kind().expect("a detection names its object kind");
+        let params = source.params().expect("a detection carries its parameters");
+        let id = self.scene.add_object(kind, channel);
+        self.rename(id, name, named)?;
+        self.scene
+            .objects
+            .get_mut(id)
+            .expect("the staged object set exists")
+            .set_params(params);
+        if !source.seeds().is_empty() {
+            self.scene.set_seed_frames(id, source.seeds().to_vec());
+        }
+        self.apply_track(id, track);
+        self.steps.push(Step::Detect { set: id, mask });
+        Ok(id)
+    }
+
+    fn reference(&self, name: &str) -> Result<ObjectSetId, ProtocolError> {
+        self.ids.get(name).copied().ok_or_else(|| {
             ProtocolError::Invalid(format!(
-                "the set {set} names {name}, which is not an object set of the protocol"
+                "{name} is referenced before the protocol stages it"
             ))
         })
+    }
+
+    fn rename(&mut self, id: ObjectSetId, name: &str, named: bool) -> Result<(), ProtocolError> {
+        if !named {
+            return Ok(());
+        }
+        let current = self
+            .scene
+            .objects
+            .get(id)
+            .map_or_else(String::new, |set| set.name().to_string());
+        if self.scene.rename_object(id, name) || current == name {
+            return Ok(());
+        }
+        Err(ProtocolError::Invalid(format!(
+            "the object set {name} collides with another object set of the scene"
+        )))
+    }
+
+    fn apply_track(&mut self, id: ObjectSetId, track: Option<crate::TrackSpec>) {
+        let Some(track) = track else {
+            return;
+        };
+        let Some(kind) = self.scene.objects.get(id).map(|set| set.kind()) else {
+            return;
+        };
+        if !kind.trackable() {
+            return;
+        }
+        let params = grana_object::TrackParams::new(
+            track.max_step,
+            track.max_gap,
+            track.division,
+            track.division_range,
+        );
+        self.scene.set_track_style(id, params, track.thickness);
+        if let Some(set) = self.scene.objects.get_mut(id) {
+            set.set_track_visible(track.visible);
+        }
+    }
+}
+
+fn criteria(
+    group: &str,
+    filters: &[FilterSpec],
+    lasso: Option<&LassoSpec>,
+) -> Result<Criteria, ProtocolError> {
+    let group = Group::parse(group).ok_or_else(|| {
+        ProtocolError::Invalid("a derived object set filters an unknown grouping".to_string())
+    })?;
+    Ok(Criteria::new(
+        group,
+        filters
+            .iter()
+            .map(|filter| FilterRange::new(&filter.column, filter.minimum, filter.maximum))
+            .collect(),
+        lasso.and_then(|lasso| LassoPath::new(&lasso.x, &lasso.y, lasso.points.clone())),
+    ))
 }
 
 fn channel(names: &[String], name: &str) -> Result<usize, ProtocolError> {

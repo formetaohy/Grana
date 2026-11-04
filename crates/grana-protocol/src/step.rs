@@ -1,43 +1,43 @@
-use crate::Protocol;
+use grana_scene::{Criteria, ObjectSetId};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Step {
-    Detect { set: usize, mask: Option<usize> },
-    Relation { source: usize, target: usize },
-    Coloc { pair: usize, mask: Option<usize> },
+    Detect {
+        set: ObjectSetId,
+        mask: Option<ObjectSetId>,
+    },
+    Filter {
+        set: ObjectSetId,
+        source: ObjectSetId,
+        criteria: Criteria,
+    },
+    Copy {
+        set: ObjectSetId,
+        source: ObjectSetId,
+    },
+    Merge {
+        set: ObjectSetId,
+        part: ObjectSetId,
+    },
+    Relation {
+        source: ObjectSetId,
+        target: ObjectSetId,
+    },
+    Coloc {
+        pair: usize,
+        mask: Option<ObjectSetId>,
+    },
     Present,
 }
 
-impl Protocol {
-    pub fn steps(&self) -> Vec<Step> {
-        let position = |name: &str| {
-            self.sets
-                .iter()
-                .position(|set| set.name == name)
-                .expect("a checked protocol names its own object sets")
-        };
-        let mut steps = self
-            .sets
-            .iter()
-            .enumerate()
-            .map(|(index, set)| Step::Detect {
-                set: index,
-                mask: set.mask.as_deref().map(position),
-            })
-            .collect::<Vec<_>>();
-        for relation in &self.relations {
-            steps.push(Step::Relation {
-                source: position(&relation.source),
-                target: position(&relation.target),
-            });
+impl Step {
+    pub fn installs(&self) -> Option<ObjectSetId> {
+        match self {
+            Self::Detect { set, .. }
+            | Self::Filter { set, .. }
+            | Self::Copy { set, .. }
+            | Self::Merge { set, .. } => Some(*set),
+            Self::Relation { .. } | Self::Coloc { .. } | Self::Present => None,
         }
-        if let Some(coloc) = &self.coloc {
-            let mask = coloc.mask.as_deref().map(position);
-            for pair in 0..coloc.pairs.len() {
-                steps.push(Step::Coloc { pair, mask });
-            }
-        }
-        steps.push(Step::Present);
-        steps
     }
 }

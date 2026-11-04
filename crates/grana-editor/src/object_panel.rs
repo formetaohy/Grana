@@ -1,6 +1,6 @@
 use glam::Vec2;
 use grana_scene::{
-    Item, Job, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, ParamField, ParamScale,
+    Item, Job, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, ParamField, ParamScale, Provenance,
 };
 use grana_ui::{
     Align, Block, Color, Corners, Edges, Icon, Length, Level, Rect, Role, TextStyle, Ui,
@@ -135,6 +135,7 @@ fn object(
     let mut visible = set.visible();
     let mut opacity = set.opacity();
     let detected = set.detected();
+    let merged = set.provenance().is_merged();
     let frames = state.scene.frame_count();
     let time = state.scene.time();
     let current = set
@@ -301,11 +302,7 @@ fn object(
                     .scene
                     .objects
                     .iter()
-                    .filter(|candidate| {
-                        candidate.id() != id
-                            && candidate.kind() == kind
-                            && candidate.channel() == channel
-                    })
+                    .filter(|candidate| candidate.id() != id && candidate.kind() == kind)
                     .map(|candidate| (candidate.id(), candidate.name().to_string()))
                     .collect::<Vec<_>>();
                 grana_ui::popover::popover(ui, "object.menu", open, menu_rect, 184.0, |ui| {
@@ -397,11 +394,14 @@ fn object(
                 ) {
                     opacity = value;
                 }
-                params(ui, state, commands, id);
-                if kind == ObjectKind::Surfaces {
-                    seeds(ui, state, commands, id);
+                origin(ui, state, id);
+                if !merged {
+                    params(ui, state, commands, id);
+                    if kind == ObjectKind::Surfaces {
+                        seeds(ui, state, commands, id);
+                    }
+                    detect(ui, state, commands, id, kind, frames);
                 }
-                detect(ui, state, commands, id, kind, frames);
                 summary(ui, kind, current, mean, detected, frames, time);
                 measure(ui, state, commands, id, time);
                 appearance(ui, state, commands, id);
@@ -573,6 +573,33 @@ fn shift_label(shift: i32) -> String {
     }
 }
 
+fn origin(ui: &mut Ui, state: &State<'_>, id: ObjectSetId) {
+    let Some(set) = state.scene.objects.get(id) else {
+        return;
+    };
+    let name = |id: ObjectSetId| {
+        state
+            .scene
+            .objects
+            .get(id)
+            .map_or("an object set".to_string(), |set| set.name().to_string())
+    };
+    let text = match set.provenance() {
+        Provenance::Detection => return,
+        Provenance::Filtered { source, .. } => format!("Filtered from {}", name(*source)),
+        Provenance::Copied { source } => format!("Copy of {}", name(*source)),
+        Provenance::Merged { parts } => format!(
+            "Merged from {}",
+            parts
+                .iter()
+                .map(|part| part.name())
+                .collect::<Vec<_>>()
+                .join(" + ")
+        ),
+    };
+    widget::labelled(ui, "Origin", &text);
+}
+
 fn params(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: ObjectSetId) {
     let Some(set) = state.scene.objects.get(id) else {
         return;
@@ -636,9 +663,17 @@ fn detect(
     kind: ObjectKind,
     frames: u32,
 ) {
-    let running = progress(state.jobs, Job::Detect(id))
-        .map(|running| (Job::Detect(id), running))
-        .or_else(|| progress(state.jobs, Job::Recut(id)).map(|running| (Job::Recut(id), running)));
+    let root = state.scene.detection_root(id).unwrap_or(id);
+    let root_name = state
+        .scene
+        .objects
+        .get(root)
+        .map_or_else(String::new, |set| set.name().to_string());
+    let running = progress(state.jobs, Job::Detect(root))
+        .map(|running| (Job::Detect(root), running))
+        .or_else(|| {
+            progress(state.jobs, Job::Recut(root)).map(|running| (Job::Recut(root), running))
+        });
     match running {
         Some((job, running)) => {
             ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
@@ -659,7 +694,12 @@ fn detect(
             }
         }
         None => {
-            if widget::button_with(ui, "detect", "Detect", Role::Prominent, Length::Fill).clicked {
+            let label = if root == id {
+                "Detect".to_string()
+            } else {
+                format!("Detect {root_name}")
+            };
+            if widget::button_with(ui, "detect", &label, Role::Prominent, Length::Fill).clicked {
                 commands.push(Command::Detect(id));
             }
         }

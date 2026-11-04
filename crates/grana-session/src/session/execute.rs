@@ -61,8 +61,10 @@ impl Session {
                     .scene
                     .as_mut()
                     .map(|scene| scene.delete_object(set, time, object));
-                if let Some(Err(detail)) = removed {
-                    self.message = Some(Message::error(detail));
+                match removed {
+                    Some(Ok(true)) => self.refresh_dependents(set),
+                    Some(Err(detail)) => self.message = Some(Message::error(detail)),
+                    Some(Ok(false)) | None => {}
                 }
             }
             Command::DeleteFiltered => {
@@ -84,8 +86,9 @@ impl Session {
                 self.merge_objects(source, target);
             }
             Command::RemoveObject(set) => self.remove_object(set),
-            Command::Detect(set) => self.start_detect(set),
+            Command::Detect(set) => self.detect_root(set),
             Command::CancelDetect(set) => {
+                let set = self.detection_root(set).unwrap_or(set);
                 self.cancel(Job::Detect(set));
                 self.cancel(Job::Recut(set));
                 if self.recut.is_some_and(|(pending, _)| pending == set) {
@@ -103,6 +106,7 @@ impl Session {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.clear_object(set);
                 }
+                self.refresh_dependents(set);
             }
             Command::AddSeed { set, position } => {
                 if let Some(scene) = self.scene.as_mut() {
@@ -189,13 +193,14 @@ impl Session {
                 }
             }
             Command::SetObjectParams { set, params } => {
-                let previous = self.object_mut(set).map(|target| {
+                let root = self.detection_root(set).unwrap_or(set);
+                let previous = self.object_mut(root).map(|target| {
                     let previous = target.params();
                     target.set_params(params);
                     previous
                 });
                 if let Some(previous) = previous {
-                    self.recut(set, previous, params);
+                    self.recut(root, previous, params);
                 }
             }
             Command::SetObjectColoring { set, coloring } => {

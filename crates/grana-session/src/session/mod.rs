@@ -19,7 +19,8 @@ use grana_object::SurfaceCut;
 use grana_object::TrackSet;
 use grana_project::{Project, Source as ProjectSource, ViewState};
 use grana_scene::{
-    Dataset, Item, Job, Measure, ObjectFrame, ObjectParams, ObjectSetId, Origin, Progress, Scene,
+    Criteria, Dataset, FilterRange, Item, Job, LassoPath, Measure, ObjectFrame, ObjectParams,
+    ObjectSetId, Origin, Progress, Scene,
 };
 use grana_volume::{BrickData, BrickRequest, Region};
 

@@ -18,17 +18,15 @@ const PROTOCOL: &str = r#"
   "sets": [
     {
       "name": "Nuclei",
-      "channel": "Cells",
       "color": [1.0, 0.7, 0.2],
       "opacity": 0.5,
-      "detection": {"kind": "surfaces", "threshold": 0.5, "grain": 0.0, "split": 0.0, "min_volume": 0.0, "opening": 0.0, "closing": 0.0, "min_sphericity": 0.0, "min_mean_intensity": 0.0}
+      "source": {"kind": "surfaces", "channel": "Cells", "threshold": 0.5, "grain": 0.0, "split": 0.0, "min_volume": 0.0, "opening": 0.0, "closing": 0.0, "min_sphericity": 0.0, "min_mean_intensity": 0.0}
     },
     {
       "name": "Beads",
-      "channel": "Cells",
       "color": [0.3, 0.8, 1.0],
       "color_by": {"key": "diameter_um", "palette": "inferno"},
-      "detection": {"kind": "spots", "diameter": 5.0, "contrast": 0.05},
+      "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05},
       "mask": "Nuclei",
       "measure": {"group": "objects", "aggregate": "mean", "sort": {"column": "diameter_um", "descending": true}}
     }

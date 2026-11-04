@@ -50,6 +50,7 @@ impl Session {
             ));
             return false;
         }
+        self.refresh_dependents(set);
         true
     }
 
@@ -148,30 +149,155 @@ impl Session {
     }
 
     pub(super) fn extract_filtered(&mut self) -> bool {
-        let (source, keep) = match self.filtered_keeps(false) {
+        let (source, _) = match self.filtered_keeps(false) {
             Ok(plan) => plan,
             Err(detail) => {
                 self.message = Some(Message::error(detail));
                 return false;
             }
         };
-        let Some(scene) = self.scene.as_mut() else {
-            return false;
-        };
-        let Some(derived) = scene.derive_object(source, "filtered") else {
-            self.message = Some(Message::error("the object set cannot be derived"));
-            return false;
-        };
-        for (time, mask) in keep.iter().enumerate() {
-            if mask.iter().all(|kept| *kept) {
-                continue;
-            }
-            if let Err(detail) = scene.retain_objects(derived, time as u32, mask) {
+        let criteria = match self.filtered_criteria() {
+            Ok(criteria) => criteria,
+            Err(detail) => {
                 self.message = Some(Message::error(detail));
                 return false;
             }
+        };
+        let derived = {
+            let Some(scene) = self.scene.as_mut() else {
+                return false;
+            };
+            let Some(derived) = scene.filter_object(source, "filtered", criteria) else {
+                self.message = Some(Message::error("the object set cannot be derived"));
+                return false;
+            };
+            if let Err(detail) = scene.refresh_filtered(derived) {
+                self.message = Some(Message::error(detail));
+                return false;
+            }
+            scene.clear_tracks(derived);
+            derived
+        };
+        self.defer_relations(derived);
+        self.resume_relations(derived);
+        self.start_tracks(derived);
+        if let Some(scene) = self.scene.as_ref() {
+            self.measure.select(derived, scene);
         }
         true
+    }
+
+    fn filtered_criteria(&self) -> Result<Criteria, String> {
+        let table = self
+            .measure
+            .table()
+            .ok_or("the object set holds no measurement table")?;
+        let group = self.measure.group();
+        if group == Group::Timepoint {
+            return Err("objects cannot be filtered by a timepoint table".to_string());
+        }
+        let key = |column: usize| {
+            table
+                .columns()
+                .get(column)
+                .map(|column| column.key().to_string())
+                .ok_or_else(|| "the statistics filter names a missing column".to_string())
+        };
+        let filters = self
+            .measure
+            .filters()
+            .iter()
+            .map(|filter| {
+                Ok(FilterRange::new(
+                    &key(filter.column())?,
+                    filter.minimum(),
+                    filter.maximum(),
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let lasso = match self.measure.lasso() {
+            Some(lasso) => Some(
+                LassoPath::new(&key(lasso.x())?, &key(lasso.y())?, lasso.points().to_vec())
+                    .ok_or_else(|| "the statistics lasso gates a degenerate polygon".to_string())?,
+            ),
+            None => None,
+        };
+        Ok(Criteria::new(group, filters, lasso))
+    }
+
+    pub(super) fn reload_filtered(&mut self, set: ObjectSetId) -> Result<(), String> {
+        let Some(scene) = self.scene.as_mut() else {
+            return Err("no dataset is open".to_string());
+        };
+        if !scene.refresh_filtered(set)? {
+            return Err("the object set holds no statistics filter".to_string());
+        }
+        scene.clear_tracks(set);
+        Ok(())
+    }
+
+    pub(super) fn copy_frames(
+        &mut self,
+        set: ObjectSetId,
+        source: ObjectSetId,
+    ) -> Result<(), String> {
+        let Some(scene) = self.scene.as_mut() else {
+            return Err("no dataset is open".to_string());
+        };
+        let frames = (0..scene.frame_count())
+            .map(|time| {
+                scene
+                    .objects
+                    .get(source)
+                    .and_then(|object| object.frame_shared(time))
+            })
+            .collect::<Vec<_>>();
+        for (time, frame) in frames.into_iter().enumerate() {
+            if let Some(frame) = frame {
+                scene.install_shared(set, time as u32, frame);
+            }
+        }
+        scene.clear_tracks(set);
+        Ok(())
+    }
+
+    pub(super) fn merge_sets(&mut self, set: ObjectSetId, part: ObjectSetId) -> Result<(), String> {
+        let Some(scene) = self.scene.as_mut() else {
+            return Err("no dataset is open".to_string());
+        };
+        scene.merge_objects(part, set)?;
+        if self.measure.set() == Some(part)
+            && let Some(scene) = self.scene.as_ref()
+        {
+            self.measure.select(set, scene);
+        }
+        Ok(())
+    }
+
+    pub(super) fn refresh_dependents(&mut self, root: ObjectSetId) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let dependents = scene.filtered_dependents(root);
+        for set in dependents {
+            let refreshed = self.scene.as_mut().map(|scene| scene.refresh_filtered(set));
+            match refreshed {
+                Some(Ok(true)) => {
+                    if let Some(scene) = self.scene.as_mut() {
+                        scene.clear_tracks(set);
+                    }
+                    self.defer_relations(set);
+                    self.resume_relations(set);
+                    self.start_tracks(set);
+                }
+                Some(Ok(false)) => {}
+                Some(Err(detail)) => {
+                    self.message = Some(Message::error(detail));
+                    return;
+                }
+                None => return,
+            }
+        }
     }
 
     pub(super) fn merge_objects(&mut self, source: ObjectSetId, target: ObjectSetId) -> bool {
@@ -194,6 +320,9 @@ impl Session {
                 {
                     self.measure.select(target, scene);
                 }
+                self.defer_relations(target);
+                self.resume_relations(target);
+                self.refresh_dependents(target);
                 self.message = None;
                 true
             }

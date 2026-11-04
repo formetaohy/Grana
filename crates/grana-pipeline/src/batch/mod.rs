@@ -30,7 +30,7 @@ const SNAPSHOT: &str = "snapshot.png";
 
 pub const MAX_JOBS: usize = 16;
 
-const ANALYSIS_REVISION: u32 = 5;
+const ANALYSIS_REVISION: u32 = 6;
 
 pub struct Plan {
     pub protocol: Protocol,

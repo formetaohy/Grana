@@ -19,9 +19,10 @@ use grana_object::{
     TrackNode, TrackSet,
 };
 use grana_scene::{
-    ChannelState, ColocResult, ColocState, ColorState, ItemState, MeasureState, ObjectColor,
-    ObjectFrame, ObjectKind, ObjectParams, ObjectSetId, RELATION_FIELDS, RelationState, SceneState,
-    SelectionState, SetState, TrackColor, TrackStyle, Visibility,
+    ChannelState, ColocResult, ColocState, ColorState, Criteria, FilterRange, ItemState, LassoPath,
+    MeasureState, ObjectColor, ObjectFrame, ObjectKind, ObjectParams, ObjectSetId, Provenance,
+    RELATION_FIELDS, Recipe, RelationState, SceneState, SelectionState, SetState, TrackColor,
+    TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Intensity, Region};
 
@@ -33,6 +34,7 @@ const FAULT_VALUE: &str = "the project data carries a value outside its domain";
 const FAULT_SHAPE: &str = "the project data carries an inconsistent shape";
 const FAULT_TAG: &str = "the project data carries an unknown variant tag";
 const FAULT_SPILL: &str = "the project cannot store the geometry of a frame";
+const MAX_PROVENANCE_DEPTH: usize = 32;
 
 impl Decode for Project {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
@@ -190,6 +192,22 @@ impl Decode for SceneState {
                     .metric
                     .is_some_and(|metric| !track_color_applies(set, metric))
         }) {
+            return Err(FAULT_SHAPE);
+        }
+        if !provenance_acyclic(&state.sets)
+            || state.sets.iter().any(|set| {
+                set.provenance.sources().iter().any(|source| {
+                    !state
+                        .sets
+                        .iter()
+                        .any(|candidate| candidate.id == source.raw())
+                }) || set
+                    .provenance
+                    .parts()
+                    .iter()
+                    .any(|part| part.channel() >= channels)
+            })
+        {
             return Err(FAULT_SHAPE);
         }
         if state
@@ -368,6 +386,7 @@ impl Decode for SetState {
             seeds,
             frames,
             relations: Vec::<RelationState>::decode(reader)?,
+            provenance: Provenance::decode(reader)?,
             document: reader.u64()?,
         };
         if state.document == 0 {
@@ -401,7 +420,124 @@ impl Decode for SetState {
                 }
             }
         }
+        if state
+            .provenance
+            .sources()
+            .iter()
+            .any(|source| source.raw() == id)
+            || state.provenance.parts().iter().any(|part| {
+                part.kind() != kind
+                    || (part.kind() == ObjectKind::Surfaces
+                        && !part.seeds().is_empty()
+                        && part.seeds().len() != state.frames.len())
+                    || (part.kind() != ObjectKind::Surfaces
+                        && part.seeds().iter().any(|frame| !frame.is_empty()))
+            })
+        {
+            return Err(FAULT_SHAPE);
+        }
         Ok(state)
+    }
+}
+
+impl Decode for Provenance {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        decode_provenance(reader, 0)
+    }
+}
+
+fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance, &'static str> {
+    if depth >= MAX_PROVENANCE_DEPTH {
+        return Err(FAULT_SHAPE);
+    }
+    match reader.u8()? {
+        0 => Ok(Provenance::Detection),
+        1 => Ok(Provenance::Filtered {
+            source: ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?,
+            criteria: Criteria::decode(reader)?,
+        }),
+        2 => Ok(Provenance::Copied {
+            source: ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?,
+        }),
+        3 => {
+            let count = reader.count(1)?;
+            let mut parts = Vec::new();
+            for _ in 0..count {
+                parts.push(decode_recipe(reader, depth + 1)?);
+            }
+            Ok(Provenance::Merged { parts })
+        }
+        _ => Err(FAULT_TAG),
+    }
+}
+
+fn decode_recipe(reader: &mut Reader<'_>, depth: usize) -> Result<Recipe, &'static str> {
+    let name = reader.string()?;
+    if name.trim().is_empty() {
+        return Err(FAULT_VALUE);
+    }
+    let channel = reader.count(1)?;
+    let params = ObjectParams::decode(reader)?;
+    let seeds = decode_seeds(reader)?;
+    if params.kind() != ObjectKind::Surfaces && seeds.iter().any(|frame| !frame.is_empty()) {
+        return Err(FAULT_SHAPE);
+    }
+    Ok(Recipe::new(
+        name,
+        channel,
+        params,
+        seeds,
+        decode_provenance(reader, depth)?,
+    ))
+}
+
+impl Decode for Criteria {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let group = group(reader.u8()?)?;
+        if group == Group::Timepoint {
+            return Err(FAULT_VALUE);
+        }
+        let filters = Vec::<FilterRange>::decode(reader)?;
+        let lasso = Option::<LassoPath>::decode(reader)?;
+        if filters.is_empty() && lasso.is_none() {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Criteria::new(group, filters, lasso))
+    }
+}
+
+impl Decode for FilterRange {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let key = reader.string()?;
+        if key.trim().is_empty() {
+            return Err(FAULT_VALUE);
+        }
+        let minimum = reader.f32()?;
+        let maximum = reader.f32()?;
+        if !(minimum.is_finite() && maximum.is_finite()) || minimum > maximum {
+            return Err(FAULT_VALUE);
+        }
+        Ok(FilterRange::new(&key, minimum, maximum))
+    }
+}
+
+impl Decode for LassoPath {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let x = reader.string()?;
+        let y = reader.string()?;
+        if x.trim().is_empty() || y.trim().is_empty() || x == y {
+            return Err(FAULT_VALUE);
+        }
+        let count = reader.count(3)?;
+        let mut points = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut point = [0.0f32; 2];
+            for value in &mut point {
+                *value = finite(reader.f32()?)?;
+            }
+            points.push(point);
+        }
+        LassoPath::new(&x, &y, points).ok_or(FAULT_VALUE)
     }
 }
 
@@ -1177,6 +1313,41 @@ impl<T: Decode> Decode for Option<T> {
             false => Ok(None),
         }
     }
+}
+
+fn provenance_acyclic(sets: &[SetState]) -> bool {
+    let mut remaining = sets
+        .iter()
+        .map(|set| {
+            (
+                set.id,
+                set.provenance
+                    .sources()
+                    .into_iter()
+                    .map(ObjectSetId::raw)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    while !remaining.is_empty() {
+        let removable = remaining
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, sources))| {
+                sources
+                    .iter()
+                    .all(|source| !remaining.iter().any(|(id, _)| id == source))
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if removable.is_empty() {
+            return false;
+        }
+        for index in removable.into_iter().rev() {
+            remaining.remove(index);
+        }
+    }
+    true
 }
 
 fn color_applies(set: &SetState, channels: usize, metric: ObjectColor) -> bool {

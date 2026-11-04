@@ -305,7 +305,7 @@ pub fn legends(scene: &Scene) -> Vec<Legend> {
         .collect::<Vec<_>>();
     let mut legends = Vec::new();
     for set in scene.objects.iter() {
-        if !set.visible() || !scene.channels[set.channel()].enabled {
+        if !scene.shown(set) {
             continue;
         }
         if set.detected() > 0

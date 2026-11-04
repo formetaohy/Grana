@@ -25,9 +25,9 @@ const PROTOCOL: &str = r#"
   "sets": [
     {
       "name": "Puncta",
-      "channel": "Cells",
+
       "color": [0.3, 0.8, 1.0],
-      "detection": {"kind": "spots", "diameter": 5.0, "contrast": 0.05},
+      "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05},
       "track": {
         "max_step": 2.0,
         "max_gap": 1,
@@ -38,9 +38,9 @@ const PROTOCOL: &str = r#"
     },
     {
       "name": "Nuclei",
-      "channel": "Cells",
+
       "color": [1.0, 0.7, 0.2],
-      "detection": {"kind": "surfaces", "threshold": 0.3, "grain": 0.1, "split": 0.6, "min_volume": 1.0, "opening": 0.0, "closing": 0.0, "min_sphericity": 0.0, "min_mean_intensity": 0.0}
+      "source": {"kind": "surfaces", "channel": "Cells", "threshold": 0.3, "grain": 0.1, "split": 0.6, "min_volume": 1.0, "opening": 0.0, "closing": 0.0, "min_sphericity": 0.0, "min_mean_intensity": 0.0}
     }
   ],
   "relations": [{"source": "Puncta", "target": "Nuclei"}],
@@ -54,9 +54,9 @@ const LIMITED: &str = r#"
   "sets": [
     {
       "name": "Puncta",
-      "channel": "Cells",
+
       "color": [0.3, 0.8, 1.0],
-      "detection": {"kind": "spots", "diameter": 5.0, "contrast": 0.05},
+      "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05},
       "track": {
         "max_step": 2.0,
         "max_gap": 1,
@@ -255,6 +255,71 @@ fn applies_the_region_and_the_statistics_filters() {
     );
 }
 
+#[test]
+fn replays_derived_and_merged_object_sets() {
+    const DERIVED: &str = r#"
+{
+  "sets": [
+    {
+      "name": "Puncta",
+      "color": [0.3, 0.8, 1.0],
+      "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05}
+    },
+    {
+      "name": "Signal",
+      "color": [1.0, 0.7, 0.2],
+      "source": {"kind": "spots", "channel": "Signal", "diameter": 5.0, "contrast": 0.05}
+    },
+    {
+      "name": "Union",
+      "color": [0.4, 0.9, 0.6],
+      "source": {"kind": "merged", "parts": [
+        {"name": "Puncta", "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05}},
+        {"name": "Signal", "source": {"kind": "spots", "channel": "Signal", "diameter": 5.0, "contrast": 0.05}}
+      ]}
+    },
+    {
+      "name": "Big",
+      "color": [0.9, 0.5, 0.2],
+      "source": {"kind": "filtered", "source": "Puncta", "filters": [{"column": "diameter_um", "minimum": 0.0, "maximum": 1000.0}]}
+    }
+  ]
+}
+"#;
+    let temp = TempDir::new("grana-batch-derived");
+    let root = temp.path().join("datasets");
+    write_dataset(&root.join("alpha.zarr"), "Cells", "Signal");
+    let output = temp.path().join("out");
+    let datasets = discover(&root).expect("the folder lists its datasets");
+    let protocol = Protocol::from_json(DERIVED).expect("the derived protocol is valid");
+    let completed = run(&protocol, &datasets, &output, 1, false);
+    assert_eq!(completed, [Status::Ok], "the batch finishes");
+    let summary = read(&output.join("summary.csv"));
+    assert!(
+        summary.contains("alpha,,ok,10,Puncta=2; Signal=2; Union=4; Big=2"),
+        "{summary}"
+    );
+    let folder = output.join("alpha");
+    let union = read(&folder.join("union-objects.csv"));
+    assert_eq!(
+        union.lines().count(),
+        5,
+        "the merged set reports both halves in every frame: {union}"
+    );
+    let big = read(&folder.join("big-objects.csv"));
+    assert_eq!(
+        big.lines().count(),
+        3,
+        "the filtered set reports its subset: {big}"
+    );
+    let quality = read(&output.join("quality.csv"));
+    assert_eq!(
+        quality.lines().count(),
+        5,
+        "every object set reports one quality row: {quality}"
+    );
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Status {
     Ok,
@@ -437,10 +502,10 @@ const PROJECT: &str = r#"
   "sets": [
     {
       "name": "Puncta",
-      "channel": "Cells",
+
       "color": [0.3, 0.8, 1.0],
       "opacity": 0.6,
-      "detection": {"kind": "spots", "diameter": 5.0, "contrast": 0.05},
+      "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05},
       "track": {
         "max_step": 2.0,
         "max_gap": 1,
@@ -451,10 +516,10 @@ const PROJECT: &str = r#"
     },
     {
       "name": "Nuclei",
-      "channel": "Cells",
+
       "color": [1.0, 0.7, 0.2],
       "color_by": {"key": "sphericity", "palette": "magma", "reversed": true},
-      "detection": {"kind": "surfaces", "threshold": 0.3, "grain": 0.1, "split": 0.6, "min_volume": 1.0, "opening": 0.0, "closing": 0.0, "min_sphericity": 0.0, "min_mean_intensity": 0.0},
+      "source": {"kind": "surfaces", "channel": "Cells", "threshold": 0.3, "grain": 0.1, "split": 0.6, "min_volume": 1.0, "opening": 0.0, "closing": 0.0, "min_sphericity": 0.0, "min_mean_intensity": 0.0},
       "measure": {"group": "objects", "aggregate": "mean", "columns": ["volume_um3"]}
     }
   ],
@@ -577,9 +642,9 @@ const SNAPSHOT: &str = r#"
   "sets": [
     {
       "name": "Puncta",
-      "channel": "Cells",
+
       "color": [0.3, 0.8, 1.0],
-      "detection": {"kind": "spots", "diameter": 5.0, "contrast": 0.05}
+      "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05}
     }
   ],
   "snapshot": {"width": 320, "height": 200}
@@ -669,9 +734,9 @@ const SCENES: &str = r#"
   "sets": [
     {
       "name": "Puncta",
-      "channel": "Cells",
+
       "color": [0.3, 0.8, 1.0],
-      "detection": {"kind": "spots", "diameter": 5.0, "contrast": 0.05}
+      "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05}
     }
   ]
 }

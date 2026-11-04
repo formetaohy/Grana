@@ -196,7 +196,7 @@ fn merges_the_tracks_of_the_absorbed_set() {
 }
 
 #[test]
-fn refuses_to_merge_other_kinds_channels_and_itself() {
+fn refuses_to_merge_other_kinds_and_itself() {
     let mut session = opened();
     let spots = set_of(&session, ObjectKind::Spots);
     let surfaces = set_of(&session, ObjectKind::Surfaces);
@@ -219,13 +219,19 @@ fn refuses_to_merge_other_kinds_channels_and_itself() {
         source: elsewhere,
         target: spots,
     });
-    assert!(
-        session
-            .message()
-            .is_some_and(|message| message.text().contains("channel")),
-        "a merge refuses two detection channels"
+    assert_eq!(
+        session.message().map(grana_session::Message::text),
+        None,
+        "a merge combines detection channels of one kind"
     );
-    assert_eq!(sets(&session), before + 1);
+    assert_eq!(sets(&session), before);
+    let merged = session
+        .scene()
+        .expect("the sample opens")
+        .objects
+        .get(spots)
+        .expect("the merged set exists");
+    assert!(merged.provenance().is_merged());
 
     session.execute(Command::MergeObjects {
         source: surfaces,
@@ -237,10 +243,16 @@ fn refuses_to_merge_other_kinds_channels_and_itself() {
             .is_some_and(|message| message.text().contains("kind")),
         "a merge refuses two object kinds"
     );
+    assert_eq!(sets(&session), before);
     session.execute(Command::MergeObjects {
         source: spots,
         target: spots,
     });
-    assert_eq!(sets(&session), before + 1);
-    assert_ne!(session.history().undo, Some(Action::MergeObjects));
+    assert!(
+        session
+            .message()
+            .is_some_and(|message| message.text().contains("another object set")),
+        "a merge refuses itself"
+    );
+    assert_eq!(sets(&session), before);
 }

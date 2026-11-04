@@ -12,8 +12,8 @@ use thiserror::Error;
 
 pub use spec::{
     AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec,
-    DetectionSpec, ExportSpec, FilterSpec, KeySpec, LassoSpec, MeasureSpec, RegionSpec,
-    RelationSpec, RenderSpec, SectionSpec, SetSpec, ShadingSpec, SnapshotSpec, SortSpec, StopSpec,
+    ExportSpec, FilterSpec, KeySpec, LassoSpec, MeasureSpec, PartSpec, RegionSpec, RelationSpec,
+    RenderSpec, SectionSpec, SetSpec, ShadingSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec,
     TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
@@ -122,7 +122,30 @@ impl Protocol {
             .sets
             .iter()
             .map(|set| {
-                let mut text = format!("{} on {}", set.name, set.channel);
+                let mut text = format!(
+                    "{} on {}",
+                    set.name,
+                    self.channel_of(&set.name).unwrap_or("an unknown channel")
+                );
+                match &set.source {
+                    SourceSpec::Filtered { source, .. } => {
+                        text = format!("{text} · filtered from {source}");
+                    }
+                    SourceSpec::Copy { source } => {
+                        text = format!("{text} · copy of {source}");
+                    }
+                    SourceSpec::Merged { parts } => {
+                        let names = parts
+                            .iter()
+                            .map(|part| part.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" + ");
+                        text = format!("{text} · merged from {names}");
+                    }
+                    SourceSpec::Spots { .. }
+                    | SourceSpec::Surfaces { .. }
+                    | SourceSpec::Filaments { .. } => {}
+                }
                 if let Some(measure) = &set.measure {
                     let group = measure.group();
                     if group != grana_measure::Group::Object {

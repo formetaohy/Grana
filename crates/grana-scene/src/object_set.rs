@@ -7,6 +7,7 @@ use grana_object::{RelationFrame, TrackSet};
 use crate::color::ObjectColor;
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
+use crate::provenance::{Provenance, Recipe};
 use crate::relation::Relation;
 use crate::state::{RelationState, SetState};
 use crate::track_color::TrackColor;
@@ -78,6 +79,7 @@ pub struct ObjectSet {
     seeds: Vec<Vec<[f32; 3]>>,
     tracks: Option<TrackLayer>,
     relations: Vec<Relation>,
+    provenance: Provenance,
 }
 
 impl ObjectSet {
@@ -118,6 +120,7 @@ impl ObjectSet {
             seeds: vec![Vec::new(); dataset.frame_count() as usize],
             tracks: None,
             relations: Vec::new(),
+            provenance: Provenance::detection(),
         }
     }
 
@@ -146,6 +149,34 @@ impl ObjectSet {
 
     pub fn channel(&self) -> usize {
         self.channel
+    }
+
+    pub fn provenance(&self) -> &Provenance {
+        &self.provenance
+    }
+
+    pub(crate) fn set_provenance(&mut self, provenance: Provenance) {
+        if self.provenance == provenance {
+            return;
+        }
+        self.provenance = provenance;
+        self.document += 1;
+    }
+
+    pub(crate) fn recipe(&self) -> Recipe {
+        Recipe::new(
+            self.name.clone(),
+            self.channel,
+            self.params,
+            self.seeds.clone(),
+            self.provenance.clone(),
+        )
+    }
+
+    pub(crate) fn forget_copies(&mut self, removed: &[ObjectSetId]) {
+        let mut provenance = self.provenance.clone();
+        provenance.forget_copied(removed);
+        self.set_provenance(provenance);
     }
 
     pub fn color(&self) -> [f32; 3] {
@@ -549,6 +580,7 @@ impl ObjectSet {
                     frames: relation.shared_frames().to_vec(),
                 })
                 .collect(),
+            provenance: self.provenance.clone(),
             document: self.document,
         }
     }
@@ -573,6 +605,7 @@ impl ObjectSet {
             seeds,
             frames,
             relations,
+            provenance,
             document,
         } = state;
         assert_eq!(
@@ -614,6 +647,7 @@ impl ObjectSet {
             seeds: Vec::new(),
             tracks: None,
             relations: Vec::new(),
+            provenance,
         };
         assert_eq!(
             seeds.len(),
@@ -921,7 +955,13 @@ impl ObjectSet {
         self.rebuild_track_bounds();
     }
 
-    pub(crate) fn duplicate(&self, id: ObjectSetId, name: String, color: [f32; 3]) -> Self {
+    pub(crate) fn duplicate(
+        &self,
+        id: ObjectSetId,
+        name: String,
+        color: [f32; 3],
+        provenance: Provenance,
+    ) -> Self {
         let object_coloring = match self.object_coloring.metric() {
             Some(ObjectColor::Relation { .. }) => Coloring::new(),
             _ => self.object_coloring.clone(),
@@ -956,6 +996,7 @@ impl ObjectSet {
             seeds: self.seeds.clone(),
             tracks: None,
             relations: Vec::new(),
+            provenance,
         };
         duplicate.rebuild_frame_bounds();
         duplicate
@@ -967,12 +1008,6 @@ impl ObjectSet {
             self.channels, other.channels,
             "a merge measures one set of channels"
         );
-        if self.channel != other.channel {
-            return Err(format!(
-                "the object set {} detects another channel",
-                other.name
-            ));
-        }
         if self.frames.len() != other.frames.len() {
             return Err(format!(
                 "the object set {} covers another set of frames",
@@ -1037,7 +1072,7 @@ impl ObjectSet {
                 Relation::new(
                     relation.target(),
                     relation.shift(),
-                    relation.shared_frames().to_vec(),
+                    vec![None; self.frames.len()],
                 )
             })
             .collect();
@@ -1074,6 +1109,7 @@ impl ObjectSet {
             seeds,
             tracks,
             relations,
+            provenance: self.provenance.clone(),
         };
         merged.rebuild_frame_bounds();
         merged.rebuild_track_bounds();
@@ -1149,6 +1185,31 @@ impl ObjectSet {
         self.visibility = Visibility::All;
         slot.stamp = stamp;
         slot.data = Some(frame);
+        self.frame_bounds[time as usize] = self.frame_extent(time);
+    }
+
+    pub(crate) fn install_optional(
+        &mut self,
+        time: u32,
+        frame: Option<Arc<ObjectFrame>>,
+        stamp: u64,
+    ) {
+        if let Some(frame) = &frame {
+            assert_eq!(
+                frame.kind(),
+                self.kind,
+                "an object frame matches its object set"
+            );
+        }
+        let slot = self
+            .frames
+            .get_mut(time as usize)
+            .expect("the object frame lies inside the time series");
+        self.revision = stamp;
+        self.document += 1;
+        self.visibility = Visibility::All;
+        slot.stamp = stamp;
+        slot.data = frame;
         self.frame_bounds[time as usize] = self.frame_extent(time);
     }
 

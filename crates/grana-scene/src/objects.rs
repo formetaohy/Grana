@@ -5,6 +5,7 @@ use grana_object::{RelationFrame, TrackSet};
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId, take_stamp};
+use crate::provenance::{Criteria, Provenance};
 use crate::slug::slug;
 use crate::state::SetState;
 
@@ -62,8 +63,24 @@ impl Objects {
     }
 
     pub fn remove(&mut self, id: ObjectSetId) {
-        self.sets.retain(|set| set.id() != id);
-        self.clear_relations(id);
+        let mut doomed = vec![id];
+        let mut index = 0;
+        while index < doomed.len() {
+            let dependency = doomed[index];
+            index += 1;
+            for set in &self.sets {
+                if set.provenance().depends_on(dependency) && !doomed.contains(&set.id()) {
+                    doomed.push(set.id());
+                }
+            }
+        }
+        self.sets.retain(|set| !doomed.contains(&set.id()));
+        for set in &mut self.sets {
+            set.forget_copies(&doomed);
+        }
+        for dependency in doomed {
+            self.clear_relations(dependency);
+        }
     }
 
     pub fn reorder(&mut self, id: ObjectSetId, index: usize) -> bool {
@@ -123,7 +140,28 @@ impl Objects {
         Ok(true)
     }
 
-    pub fn derive(&mut self, id: ObjectSetId, suffix: &str) -> Option<ObjectSetId> {
+    pub fn copy(&mut self, id: ObjectSetId) -> Option<ObjectSetId> {
+        self.derive(id, "copy", || Provenance::Copied { source: id })
+    }
+
+    pub fn filter(
+        &mut self,
+        id: ObjectSetId,
+        suffix: &str,
+        criteria: Criteria,
+    ) -> Option<ObjectSetId> {
+        self.derive(id, suffix, || Provenance::Filtered {
+            source: id,
+            criteria,
+        })
+    }
+
+    fn derive(
+        &mut self,
+        id: ObjectSetId,
+        suffix: &str,
+        provenance: impl FnOnce() -> Provenance,
+    ) -> Option<ObjectSetId> {
         let source = self.get(id)?;
         let derived = ObjectSetId::new(self.next_id);
         let base = format!("{} {suffix}", source.name());
@@ -134,7 +172,7 @@ impl Objects {
             ordinal += 1;
         }
         let color = PALETTE[(derived.raw() as usize - 1) % PALETTE.len()];
-        let copy = source.duplicate(derived, name, color);
+        let copy = source.duplicate(derived, name, color, provenance());
         let position = self
             .sets
             .iter()
@@ -162,8 +200,34 @@ impl Objects {
         if self.sets[source_index].kind() != self.sets[target_index].kind() {
             return Err("an object set merges into a set of its own kind".to_string());
         }
+        if self
+            .sets
+            .iter()
+            .any(|set| set.provenance().depends_on(source))
+        {
+            return Err(
+                "an object set that other object sets filter from cannot be merged".to_string(),
+            );
+        }
+        if self.sets[source_index].provenance().depends_on(target) {
+            return Err(
+                "an object set derived from the merged object set cannot be merged into it"
+                    .to_string(),
+            );
+        }
         let stamp = take_stamp(&mut self.stamp);
-        let merged = self.sets[target_index].merged(&self.sets[source_index], stamp)?;
+        let mut merged = self.sets[target_index].merged(&self.sets[source_index], stamp)?;
+        let mut parts = match merged.provenance() {
+            Provenance::Merged { parts } => parts.clone(),
+            Provenance::Detection | Provenance::Filtered { .. } | Provenance::Copied { .. } => {
+                vec![self.sets[target_index].recipe()]
+            }
+        };
+        parts.push(self.sets[source_index].recipe());
+        for part in &mut parts {
+            part.forget_copied(&[source, target]);
+        }
+        merged.set_provenance(Provenance::Merged { parts });
         self.sets.remove(source_index);
         let position = if source_index < target_index {
             target_index - 1
@@ -171,8 +235,30 @@ impl Objects {
             target_index
         };
         self.sets[position] = merged;
+        for set in &mut self.sets {
+            set.forget_copies(&[source]);
+        }
         self.clear_relations(source);
         Ok(())
+    }
+
+    pub fn filtered_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
+        let mut ordered = Vec::new();
+        let mut frontier = vec![id];
+        while !frontier.is_empty() {
+            let mut next = Vec::new();
+            for set in &self.sets {
+                if let Provenance::Filtered { source, .. } = set.provenance()
+                    && frontier.contains(source)
+                    && !ordered.contains(&set.id())
+                {
+                    ordered.push(set.id());
+                    next.push(set.id());
+                }
+            }
+            frontier = next;
+        }
+        ordered
     }
 
     pub fn add_relation(&mut self, id: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {
@@ -235,6 +321,21 @@ impl Objects {
             return false;
         };
         set.install_shared(time, frame, stamp);
+        self.invalidate_relations(id, time);
+        true
+    }
+
+    pub fn install_optional(
+        &mut self,
+        id: ObjectSetId,
+        time: u32,
+        frame: Option<Arc<ObjectFrame>>,
+    ) -> bool {
+        let stamp = take_stamp(&mut self.stamp);
+        let Some(set) = self.get_mut(id) else {
+            return false;
+        };
+        set.install_optional(time, frame, stamp);
         self.invalidate_relations(id, time);
         true
     }
@@ -360,6 +461,25 @@ impl Objects {
                     "a relation names another object set or shifts in time"
                 );
             }
+        }
+        for set in &self.sets {
+            for source in set.provenance().sources() {
+                assert!(
+                    source != set.id(),
+                    "an object set never derives from itself"
+                );
+                assert!(
+                    self.sets.iter().any(|candidate| candidate.id() == source),
+                    "a provenance names an object set of the scene"
+                );
+            }
+            assert!(
+                set.provenance()
+                    .parts()
+                    .iter()
+                    .all(|part| { part.params().kind() == set.kind() }),
+                "a merged object set holds parts of its own kind"
+            );
         }
     }
 

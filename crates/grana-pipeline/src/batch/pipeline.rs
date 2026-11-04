@@ -9,7 +9,7 @@ use grana_image::{Format, Image, Source};
 use grana_measure::{ColocPair, ColocSeries, Lasso};
 use grana_object::Roi;
 use grana_project::{Export, Project, Source as ProjectSource, ViewState};
-use grana_scene::{Dataset, Measure, ObjectFrame, ObjectSetId, Scene, slug};
+use grana_scene::{Dataset, Measure, ObjectFrame, ObjectParams, ObjectSetId, Scene, slug};
 use grana_volume::{Axis, Pyramid, Region};
 
 use crate::event::Event as RunEvent;
@@ -84,14 +84,17 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         },
     };
     let mut measure = Measure::new();
-    for step in task.protocol.steps() {
+    for step in staged.steps() {
         if task.cancel.load(Ordering::Relaxed) {
             return Err("cancelled".to_string());
         }
         match step {
-            Step::Detect { set, mask } => run.detect(set, mask)?,
-            Step::Relation { source, target } => run.relate(source, target)?,
-            Step::Coloc { pair, mask } => run.colocalize(pair, mask)?,
+            Step::Detect { set, mask } => run.detect(*set, *mask)?,
+            Step::Filter { set, .. } => run.refilter(*set)?,
+            Step::Copy { set, source } => run.copy(*set, *source)?,
+            Step::Merge { set, part } => run.merge(*set, *part)?,
+            Step::Relation { source, target } => run.relate(*source, *target)?,
+            Step::Coloc { pair, mask } => run.colocalize(*pair, *mask)?,
             Step::Present => {
                 task.protocol
                     .present_measure(&run.sets, &mut measure, &run.scene);
@@ -235,11 +238,8 @@ struct Run<'a, 'b> {
 }
 
 impl Run<'_, '_> {
-    fn detect(&mut self, set: usize, mask: Option<usize>) -> Result<(), String> {
+    fn detect(&mut self, id: ObjectSetId, mask: Option<ObjectSetId>) -> Result<(), String> {
         let task = self.task;
-        let spec = &task.protocol.sets()[set];
-        let id = self.sets[set];
-        let mask = mask.map(|mask| self.sets[mask]);
         self.scene.set_mask(mask);
         let roi = match mask {
             None => None,
@@ -255,33 +255,37 @@ impl Run<'_, '_> {
                         .objects
                         .get(mask)
                         .map_or("the analysis mask", |set| set.name());
+                    let set = self.name(id);
                     return Err(format!(
-                        "the set {} is masked by {name}, which detected no objects",
-                        spec.name
+                        "the set {set} is masked by {name}, which detected no objects"
                     ));
                 }
                 self.scene.mask_frames()
             }
         };
-        let channel = self
+        let object = self
             .scene
             .objects
             .get(id)
-            .expect("the staged object set exists")
-            .channel();
+            .expect("the staged object set exists");
+        let name = object.name().to_string();
+        let channel = object.channel();
+        let params = object.params();
+        let seeds = self.scene.seed_frames(id).unwrap_or_default();
         let _ = task.events.send(Event::Step {
             index: task.index,
-            label: format!("detecting {}", spec.name),
+            label: format!("detecting {name}"),
         });
         let frames = detect(
             task,
-            spec,
             Reading {
                 reader: self.reader,
                 channel,
                 region: self.scene.region,
                 roi,
             },
+            params,
+            seeds,
             self.store,
             &self.progress,
         )?;
@@ -290,13 +294,54 @@ impl Run<'_, '_> {
                 self.scene.install_shared(id, time as u32, Arc::new(frame));
             }
         }
-        self.track(id, &spec.name)
+        self.track(id)
     }
 
-    fn track(&mut self, id: ObjectSetId, name: &str) -> Result<(), String> {
+    fn refilter(&mut self, id: ObjectSetId) -> Result<(), String> {
+        let name = self.name(id);
+        let _ = self.task.events.send(Event::Step {
+            index: self.task.index,
+            label: format!("filtering {name}"),
+        });
+        self.scene.refresh_filtered(id)?;
+        self.scene.clear_tracks(id);
+        self.track(id)
+    }
+
+    fn copy(&mut self, id: ObjectSetId, source: ObjectSetId) -> Result<(), String> {
+        let frames = (0..self.scene.frame_count())
+            .map(|time| {
+                self.scene
+                    .objects
+                    .get(source)
+                    .and_then(|set| set.frame_shared(time))
+            })
+            .collect::<Vec<_>>();
+        for (time, frame) in frames.into_iter().enumerate() {
+            if let Some(frame) = frame {
+                self.scene.install_shared(id, time as u32, frame);
+            }
+        }
+        self.track(id)
+    }
+
+    fn merge(&mut self, id: ObjectSetId, part: ObjectSetId) -> Result<(), String> {
+        self.scene.merge_objects(part, id)?;
+        self.track(id)
+    }
+
+    fn name(&self, id: ObjectSetId) -> String {
+        self.scene
+            .objects
+            .get(id)
+            .map_or_else(String::new, |set| set.name().to_string())
+    }
+
+    fn track(&mut self, id: ObjectSetId) -> Result<(), String> {
         let Some(object) = self.scene.objects.get(id) else {
             return Ok(());
         };
+        let name = object.name().to_string();
         if self.scene.frame_count() < 2 || !object.kind().trackable() || object.detected() == 0 {
             return Ok(());
         }
@@ -330,10 +375,8 @@ impl Run<'_, '_> {
         Ok(())
     }
 
-    fn relate(&mut self, source: usize, target: usize) -> Result<(), String> {
+    fn relate(&mut self, source_id: ObjectSetId, target_id: ObjectSetId) -> Result<(), String> {
         let task = self.task;
-        let source_id = self.sets[source];
-        let target_id = self.sets[target];
         let source_name = self
             .scene
             .objects
@@ -394,7 +437,7 @@ impl Run<'_, '_> {
         Ok(())
     }
 
-    fn colocalize(&mut self, pair: usize, mask: Option<usize>) -> Result<(), String> {
+    fn colocalize(&mut self, pair: usize, mask: Option<ObjectSetId>) -> Result<(), String> {
         let task = self.task;
         let coloc = task
             .protocol
@@ -403,7 +446,6 @@ impl Run<'_, '_> {
         let spec = &coloc.pairs[pair];
         let settings = coloc.settings();
         let pair = self.pairs[pair];
-        let mask = mask.map(|mask| self.sets[mask]);
         self.scene.set_mask(mask);
         self.scene.coloc.set_settings(settings);
         self.scene.coloc.set_pair(pair);
@@ -540,8 +582,9 @@ struct Reading<'a> {
 
 fn detect(
     task: &Task<'_>,
-    set: &grana_protocol::SetSpec,
     reading: Reading<'_>,
+    params: ObjectParams,
+    seeds: Vec<Vec<[f32; 3]>>,
     store: &Arc<GeometryStore>,
     progress: &Progress<'_>,
 ) -> Result<Vec<Option<ObjectFrame>>, String> {
@@ -566,10 +609,10 @@ fn detect(
         reading.reader,
         run::DetectRequest::new(
             reading.channel,
-            set.params(),
+            params,
             reading.region,
             reading.roi,
-            set.seeds().to_vec(),
+            seeds,
             task.workers,
             Arc::clone(store),
         ),

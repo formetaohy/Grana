@@ -1,6 +1,7 @@
 use grana_measure::{COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX};
-use grana_scene::{ObjectKind, slug};
+use grana_scene::slug;
 
+use crate::spec::{SourceSpec, validate};
 use crate::{Protocol, ProtocolError};
 
 impl Protocol {
@@ -31,9 +32,7 @@ impl Protocol {
         let mut names = Vec::new();
         let mut slugs = Vec::new();
         for set in &self.sets {
-            let name = set.name.as_str();
             validate(&set.name, "a set name")?;
-            validate(&set.channel, "a channel name")?;
             if names.contains(&set.name) {
                 return Err(ProtocolError::Invalid(format!(
                     "the set name {} appears twice",
@@ -47,19 +46,19 @@ impl Protocol {
                     set.name
                 )));
             }
-            names.push(set.name.clone());
-            slugs.push(key);
+            set.source.checked(&set.name)?;
+            self.dependencies(&set.source, &names, &set.name)?;
+            if !self.source_kind_consistent(&set.name) {
+                return Err(ProtocolError::Invalid(format!(
+                    "{} merges object sets of another kind",
+                    set.name
+                )));
+            }
             if let Some(mask) = &set.mask {
                 validate(mask, "an analysis mask")?;
-                if !names[..names.len() - 1].contains(mask) {
+                if !names.contains(mask) {
                     return Err(ProtocolError::Invalid(format!(
                         "{} is masked by an object set that does not run before it",
-                        set.name
-                    )));
-                }
-                if mask == name {
-                    return Err(ProtocolError::Invalid(format!(
-                        "{} cannot be masked by itself",
                         set.name
                     )));
                 }
@@ -73,24 +72,6 @@ impl Protocol {
             if !(0.0..=1.0).contains(&set.opacity) {
                 return Err(ProtocolError::Invalid(format!(
                     "the opacity of {} is a unit fraction",
-                    set.name
-                )));
-            }
-            set.detection.checked(&set.name)?;
-            if !set.seeds.is_empty() && set.detection.kind() != ObjectKind::Surfaces {
-                return Err(ProtocolError::Invalid(format!(
-                    "{} is not a surface set and cannot carry seed points",
-                    set.name
-                )));
-            }
-            if set
-                .seeds
-                .iter()
-                .flatten()
-                .any(|point| point.iter().any(|value| !value.is_finite()))
-            {
-                return Err(ProtocolError::Invalid(format!(
-                    "a seed point of {} is not a finite position",
                     set.name
                 )));
             }
@@ -114,19 +95,29 @@ impl Protocol {
                     )));
                 }
             }
-            match (set.detection.kind(), &set.track) {
-                (ObjectKind::Filaments, Some(_)) => {
+            match (self.kind_of(&set.name), &set.track) {
+                (Some(kind), Some(track)) => {
+                    if !kind.trackable() {
+                        return Err(ProtocolError::Invalid(format!(
+                            "{} holds untrackable objects and cannot be tracked",
+                            set.name
+                        )));
+                    }
+                    track.checked(&set.name)?;
+                }
+                (Some(_), None) => {}
+                (None, _) => {
                     return Err(ProtocolError::Invalid(format!(
-                        "{} is a filament set and cannot be tracked",
+                        "{} does not resolve to an object kind",
                         set.name
                     )));
                 }
-                (_, Some(track)) => track.checked(&set.name)?,
-                (_, None) => {}
             }
             if let Some(measure) = &set.measure {
                 measure.checked(&set.name, set.track.is_some())?;
             }
+            names.push(set.name.clone());
+            slugs.push(key);
         }
         let measured = self.sets.iter().filter(|set| set.measure.is_some()).count();
         if measured > 1 {
@@ -243,11 +234,31 @@ impl Protocol {
         }
         Ok(self)
     }
-}
 
-fn validate(value: &str, what: &str) -> Result<(), ProtocolError> {
-    if value.trim().is_empty() {
-        return Err(ProtocolError::Invalid(format!("{what} is empty")));
+    fn dependencies(
+        &self,
+        source: &SourceSpec,
+        earlier: &[String],
+        set: &str,
+    ) -> Result<(), ProtocolError> {
+        match source {
+            SourceSpec::Spots { .. }
+            | SourceSpec::Surfaces { .. }
+            | SourceSpec::Filaments { .. } => Ok(()),
+            SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
+                if !earlier.contains(source) {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{set} derives from {source}, which does not run before it"
+                    )));
+                }
+                Ok(())
+            }
+            SourceSpec::Merged { parts } => {
+                for part in parts {
+                    self.dependencies(&part.source, earlier, set)?;
+                }
+                Ok(())
+            }
+        }
     }
-    Ok(())
 }
