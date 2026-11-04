@@ -89,6 +89,7 @@ fn paint_overlay(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: 
     let mut region = state.scene.region;
     let clip = state.scene.clip;
     let legends = overlay::legends(state.scene);
+    let labels = overlay::labels(state.scene, state.scene.time());
     let mut overlay = Overlay {
         camera: state.viewport.camera(),
         section: state.viewport.section(),
@@ -100,6 +101,7 @@ fn paint_overlay(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: 
         region: &mut region,
         clip,
         legends: &legends,
+        labels: &labels,
         recording: state.io.export,
     };
     overlay::paint(ui, &mut overlay);

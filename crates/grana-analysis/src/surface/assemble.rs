@@ -268,6 +268,7 @@ impl<'a> Assembler<'a> {
         if start[0] >= end[0] || start[1] >= end[1] {
             return;
         }
+        let mut pairs = Vec::new();
         for second in start[1]..end[1] {
             for first in start[0]..end[0] {
                 let cached_slot = (first - cached.origin[0]) as usize
@@ -282,12 +283,23 @@ impl<'a> Assembler<'a> {
                 if local_label == EMPTY {
                     continue;
                 }
-                if local_label == cached_label {
-                    continue;
-                }
                 let neck = cached.reach[cached_slot].min(local.reach[local_slot]);
-                self.necks.push((local_label, cached_label, neck));
+                pairs.push((local_label, cached_label, neck));
             }
+        }
+        if pairs.is_empty() {
+            return;
+        }
+        pairs.sort_unstable_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+        let mut index = 0;
+        while index < pairs.len() {
+            let (first, second, _) = pairs[index];
+            let mut saddle = 0;
+            while index < pairs.len() && pairs[index].0 == first && pairs[index].1 == second {
+                saddle = saddle.max(pairs[index].2);
+                index += 1;
+            }
+            self.necks.push((first, second, saddle));
         }
     }
 }

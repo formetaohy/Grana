@@ -360,7 +360,7 @@ fn output_bytes(output: &TileOutput) -> u64 {
         .into_iter()
         .flatten()
         .filter_map(|face| face.as_ref())
-        .map(|face| face.labels.len() as u64 * 4)
+        .map(|face| face.labels.len() as u64 * 8)
         .sum::<u64>();
     nodes + accumulators + necks + seeds + vertices + keys + indices + triangles + contacts + faces
 }

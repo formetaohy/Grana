@@ -133,6 +133,7 @@ fn object(
     let channel_name = state.scene.dataset.channels()[channel].name().to_string();
     let color = set.color();
     let mut visible = set.visible();
+    let mut labels = set.labels();
     let mut opacity = set.opacity();
     let detected = set.detected();
     let merged = set.provenance().is_merged();
@@ -398,6 +399,9 @@ fn object(
                 ) {
                     opacity = value;
                 }
+                if let Some(value) = widget::toggle_row(ui, "labels", "Object numbers", labels) {
+                    labels = value;
+                }
                 origin(ui, state, id);
                 curated(ui, state, id);
                 if !merged {
@@ -428,6 +432,9 @@ fn object(
     if let Some(set) = state.scene.objects.get(id) {
         if set.visible() != visible {
             commands.push(Command::SetObjectVisible { set: id, visible });
+        }
+        if set.labels() != labels {
+            commands.push(Command::SetObjectLabels { set: id, labels });
         }
         if set.opacity() != opacity {
             commands.push(Command::SetObjectOpacity {

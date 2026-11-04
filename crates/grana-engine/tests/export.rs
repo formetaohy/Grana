@@ -319,6 +319,119 @@ fn writes_a_frame_sequence() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+#[test]
+fn numbers_the_exported_objects() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let volume = sphere();
+    let mut scene = Scene::new(Dataset::synthetic("cells", volume.pyramid()));
+    let id = scene.add_object(grana_scene::ObjectKind::Surfaces, 0);
+    scene.install(
+        id,
+        0,
+        grana_scene::ObjectFrame::Surfaces(numbered_surfaces()),
+    );
+    let Some((camera, section)) = view(&volume) else {
+        return;
+    };
+    let root = scratch("labels");
+    let mut images = Vec::new();
+    for labels in [false, true] {
+        scene
+            .objects
+            .get_mut(id)
+            .expect("the surfaces exist")
+            .set_labels(labels);
+        let path = root.join(format!("labels-{labels}.png"));
+        let mut engine = Engine::new(&device, &queue, FORMAT);
+        engine.set_dataset(&device, scene.dataset.pyramid());
+        let mut ui = grana_ui::Ui::new(&device, &queue, FORMAT);
+        ui.resize([WIDTH, 240]);
+        let outcome = run(
+            &mut engine,
+            &mut ui,
+            &volume,
+            &mut scene,
+            &device,
+            &queue,
+            Plan {
+                destination: Destination::Image { path: path.clone() },
+                panels: panels(),
+                width: WIDTH,
+                transparent: false,
+                poses: vec![Pose {
+                    time: 0,
+                    camera,
+                    section,
+                }],
+                fps: 0,
+            },
+        );
+        assert!(matches!(outcome, Outcome::Complete { .. }));
+        images.push(decode(&path));
+    }
+    let mut changed = 0;
+    let mut text = 0;
+    for (plain, numbered) in images[0]
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(images[1].pixels.as_chunks::<4>().0)
+    {
+        if plain != numbered {
+            changed += 1;
+        }
+        let bright = |pixel: &[u8]| pixel[..3].iter().all(|value| *value > 240);
+        if bright(numbered) && !bright(plain) {
+            text += 1;
+        }
+    }
+    assert!(changed > 200, "the object numbers draw into the export");
+    assert!(text > 5, "the object numbers carry their glyphs");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+fn numbered_surfaces() -> grana_object::SurfaceSet {
+    let placements = [[-1.1f32, -0.8, 0.0], [0.5, -0.6, 0.2], [-0.2, 0.9, -0.2]];
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for (object, offset) in placements.into_iter().enumerate() {
+        let base = vertices.len() as u32;
+        for (x, y) in [(-0.35, -0.35), (0.35, -0.35), (0.35, 0.35), (-0.35, 0.35)] {
+            vertices.push(grana_geometry::MeshVertex::new(
+                [offset[0] + x, offset[1] + y, offset[2]],
+                [0.0, 0.0, 1.0],
+                object as u32,
+            ));
+        }
+        indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    let objects = placements
+        .iter()
+        .map(|offset| {
+            grana_object::SurfaceStatistics::new(
+                4,
+                4.0,
+                4.0,
+                *offset,
+                grana_geometry::Bounds::new(
+                    [offset[0] - 0.35, offset[1] - 0.35, offset[2]],
+                    [offset[0] + 0.35, offset[1] + 0.35, offset[2]],
+                ),
+            )
+        })
+        .collect();
+    let measured = grana_object::SampleStatistics::new(1.0, 1.0, 1.0, 0.0, 4.0);
+    grana_object::SurfaceSet::new(
+        0,
+        grana_geometry::Mesh::new(vertices, indices),
+        objects,
+        grana_object::IntensityTable::new(1, vec![measured; placements.len()]),
+    )
+}
+
 fn run(
     engine: &mut Engine,
     ui: &mut grana_ui::Ui,

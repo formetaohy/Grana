@@ -10,6 +10,7 @@ use grana_ui::{
 };
 use grana_volume::{Axis, Clip, Region};
 
+use crate::labels::{self, Label};
 use crate::value;
 
 const LABEL: Color = Color::rgba(1.0, 1.0, 1.0, 0.82);
@@ -120,6 +121,7 @@ pub struct Overlay<'a> {
     pub region: &'a mut Region,
     pub clip: Clip,
     pub legends: &'a [Legend],
+    pub labels: &'a [Label],
     pub recording: Option<(u32, u32)>,
 }
 
@@ -184,6 +186,12 @@ fn paint_volume(ui: &mut Ui, overlay: &mut Overlay<'_>) {
             true,
         );
     }
+    if !overlay.labels.is_empty() {
+        let placed =
+            labels::volume_labels(overlay.labels, view_projection, overlay.camera.eye(), rect);
+        let mut painter = ui.painter_in(bounds);
+        labels::paint(&mut painter, rect, &placed);
+    }
     chip(
         ui,
         overlay.volume_safe,
@@ -224,6 +232,17 @@ fn paint_section(ui: &mut Ui, overlay: &Overlay<'_>) {
         &format!("{} · {} = {plane:.2} µm", plane_name(axis), axis.name()),
         LABEL,
     );
+    if !overlay.labels.is_empty() {
+        let placed = labels::section_labels(
+            overlay.labels,
+            focus,
+            overlay.section.axis(),
+            overlay.section.span(),
+            rect,
+        );
+        let mut painter = ui.painter_in(clip);
+        labels::paint(&mut painter, rect, &placed);
+    }
 }
 pub(crate) fn figure(
     painter: &mut Painter,

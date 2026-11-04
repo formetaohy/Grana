@@ -100,6 +100,10 @@ pub enum Command {
         set: ObjectSetId,
         visible: bool,
     },
+    SetObjectLabels {
+        set: ObjectSetId,
+        labels: bool,
+    },
     SetObjectColor {
         set: ObjectSetId,
         color: [f32; 3],
@@ -250,6 +254,7 @@ pub enum Action {
     ResetWindow,
     Transfer,
     ObjectVisible,
+    ObjectLabels,
     ObjectColor,
     ObjectOpacity,
     ObjectParameters,
@@ -316,6 +321,7 @@ impl Action {
             Self::ResetWindow => "window reset",
             Self::Transfer => "transfer function",
             Self::ObjectVisible => "object visibility",
+            Self::ObjectLabels => "object labels",
             Self::ObjectColor => "object color",
             Self::ObjectOpacity => "object opacity",
             Self::ObjectParameters => "object parameters",
@@ -456,6 +462,7 @@ impl Command {
             Self::ResetWindow(channel) => Edit::targeted(Action::ResetWindow, *channel as u64),
             Self::SetTransfer { channel, .. } => Edit::targeted(Action::Transfer, *channel as u64),
             Self::SetObjectVisible { set, .. } => Edit::targeted(Action::ObjectVisible, set.raw()),
+            Self::SetObjectLabels { set, .. } => Edit::targeted(Action::ObjectLabels, set.raw()),
             Self::SetObjectColor { set, .. } => Edit::targeted(Action::ObjectColor, set.raw()),
             Self::SetObjectOpacity { set, .. } => Edit::targeted(Action::ObjectOpacity, set.raw()),
             Self::SetObjectParams { set, .. } => {

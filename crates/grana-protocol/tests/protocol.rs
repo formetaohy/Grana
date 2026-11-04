@@ -557,6 +557,7 @@ fn stages_the_presentation_of_a_captured_protocol() {
     set.set_color([0.9, 0.5, 0.2]);
     set.set_opacity(0.35);
     set.set_visible(false);
+    set.set_labels(true);
     set.set_track_visible(false);
     let mut object = Coloring::new();
     object.set_metric(Some(ObjectColor::Measurement(Measurement::Diameter)));
@@ -621,6 +622,7 @@ fn stages_the_presentation_of_a_captured_protocol() {
     let protocol = Protocol::from_json(&text).expect("the protocol round trips");
     assert_eq!(protocol.sets()[0].name, "Nuclei");
     assert_eq!(protocol.sets()[0].mask(), None);
+    assert!(protocol.sets()[0].labels, "the object labels capture");
     assert_eq!(protocol.sets()[1].mask(), Some("Nuclei"));
     assert_eq!(protocol.channels().len(), 2);
     assert!(!protocol.channels()[0].enabled);
@@ -676,6 +678,7 @@ fn stages_the_presentation_of_a_captured_protocol() {
     assert_eq!(nuclei_set.color(), [0.9, 0.5, 0.2]);
     assert_eq!(nuclei_set.opacity(), 0.35);
     assert!(!nuclei_set.visible());
+    assert!(nuclei_set.labels(), "the staged set carries its labels");
     assert!(!nuclei_set.track_visible());
     assert_eq!(nuclei_set.seeds(0), [[0.5, -1.0, 1.5]]);
     let beads_set = target.objects.get(staged_beads).expect("the spot set");

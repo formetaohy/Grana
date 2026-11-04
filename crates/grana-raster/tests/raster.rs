@@ -20,15 +20,21 @@ fn round_trips_decodes_and_labels_rasters() {
         ],
     )
     .scaled(1, 1);
-    assert_eq!(halved.pixel(0, 0), [128, 128, 128, 255]);
+    assert_eq!(halved.pixel(0, 0), [188, 188, 188, 255]);
 
     let under = Raster::solid(2, 2, [0, 0, 0, 255]);
     let above = Raster::solid(2, 2, [255, 255, 255, 128]);
     let blended = composite(&under, &above);
     assert_eq!(blended.pixel(0, 0)[3], 255, "an opaque sheet stays opaque");
     assert!(
-        (i32::from(blended.pixel(0, 0)[0]) - 128).abs() <= 1,
-        "a half transparent layer blends"
+        (i32::from(blended.pixel(0, 0)[0]) - 188).abs() <= 1,
+        "a half transparent layer blends in linear light"
+    );
+    let premultiplied = Raster::solid(2, 2, [128, 128, 128, 128]);
+    let composited = grana_raster::composite_premultiplied(&under, &premultiplied);
+    assert!(
+        (i32::from(composited.pixel(0, 0)[0]) - 188).abs() <= 1,
+        "a premultiplied layer blends in linear light"
     );
 
     let green = Raster::solid(8, 8, [0, 255, 0, 255]);
@@ -41,16 +47,23 @@ fn round_trips_decodes_and_labels_rasters() {
                 image: &green,
                 title: "green",
                 detail: "ok",
+                accent: Some([255, 0, 0, 255]),
             },
             Cell {
                 image: &blue,
                 title: "blue",
                 detail: "resumed",
+                accent: None,
             },
         ],
     };
     let sheet = Sheet::new([8, 8], 2).compose(&mut fonts, &[group]);
     assert_eq!(sheet.size(), [76, 172], "the sheet lays out its bands");
+    assert_eq!(
+        sheet.pixel(16, 82),
+        [255, 0, 0, 255],
+        "a status accent lands beside its cell"
+    );
     assert_eq!(
         sheet.pixel(28, 82),
         [0, 255, 0, 255],

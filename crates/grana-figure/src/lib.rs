@@ -1,7 +1,9 @@
 mod figure;
+mod labels;
 mod overlay;
 
-pub use figure::instances;
+pub use figure::{Contents, instances};
+pub use labels::{Label, Placed, labels, section_labels, volume_labels};
 pub use overlay::{Caption, Legend, Overlay, caption, legends, paint};
 
 pub fn value(value: f32, unit: grana_measure::Unit, decimals: u8) -> String {

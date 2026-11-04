@@ -201,6 +201,11 @@ impl Session {
                     target.set_visible(visible);
                 }
             }
+            Command::SetObjectLabels { set, labels } => {
+                if let Some(target) = self.object_mut(set) {
+                    target.set_labels(labels);
+                }
+            }
             Command::SetObjectColor { set, color } => {
                 if let Some(target) = self.object_mut(set) {
                     target.set_color(color);

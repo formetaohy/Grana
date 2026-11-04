@@ -46,6 +46,42 @@ fn assembles_the_render_frame() {
     );
 }
 
+#[test]
+fn numbers_the_objects_of_a_labelled_set() {
+    let mut scene = fixture();
+    let id = scene.add_object(ObjectKind::Surfaces, 0);
+    scene.install(id, 0, ObjectFrame::Surfaces(surfaces()));
+    assert!(
+        grana_figure::labels(&scene, 0).is_empty(),
+        "a set without labels names no object"
+    );
+    scene
+        .objects
+        .get_mut(id)
+        .expect("the surfaces exist")
+        .set_labels(true);
+    let labels = grana_figure::labels(&scene, 0);
+    assert_eq!(labels.len(), 2);
+    assert_eq!(labels[0].text, "1");
+    assert_eq!(labels[1].text, "2");
+    assert_eq!(labels[0].position, [-1.0, -1.0, 0.0]);
+    assert!(!labels[0].selected);
+    scene.select(Some(Selection {
+        set: id,
+        item: Item::Object(1),
+    }));
+    assert!(grana_figure::labels(&scene, 0)[1].selected);
+    scene
+        .objects
+        .get_mut(id)
+        .expect("the surfaces exist")
+        .set_visible(false);
+    assert!(
+        grana_figure::labels(&scene, 0).is_empty(),
+        "a hidden set names no object"
+    );
+}
+
 fn fixture() -> Scene {
     let channel = ChannelInfo::new(
         "signal",

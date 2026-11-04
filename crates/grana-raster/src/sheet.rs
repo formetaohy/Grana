@@ -21,6 +21,7 @@ pub struct Cell<'a> {
     pub image: &'a Raster,
     pub title: &'a str,
     pub detail: &'a str,
+    pub accent: Option<[u8; 4]>,
 }
 
 pub struct Group<'a> {
@@ -96,6 +97,10 @@ impl Sheet {
                     top + (self.tile[1] - fitted.height()) / 2,
                 ];
                 sheet.paste(&fitted, at);
+                if let Some(accent) = cell.accent {
+                    let bar = Raster::solid(3, self.tile[1] + CAPTION - 8, accent);
+                    sheet.paste(&bar, [x.saturating_sub(8), top + 4]);
+                }
                 sheet.text(
                     fonts,
                     cell.title,

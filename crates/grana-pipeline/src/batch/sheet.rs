@@ -16,6 +16,7 @@ struct Entry {
     group: String,
     title: String,
     detail: String,
+    accent: [u8; 4],
     image: Raster,
 }
 
@@ -36,6 +37,7 @@ pub(super) fn write(plan: &Plan, rows: &[Option<Row>]) -> Result<(), String> {
             group: dataset.group().to_string(),
             title: dataset.name(),
             detail: format!("{} · {}", dataset.scene_label(), row.status),
+            accent: status_color(row.status),
             image,
         });
     }
@@ -87,10 +89,20 @@ fn groups<'a>(entries: &'a [Entry]) -> Vec<Group<'a>> {
                 image: &entry.image,
                 title: &entry.title,
                 detail: &entry.detail,
+                accent: Some(entry.accent),
             })
             .collect();
         groups.push(Group { name, cells });
         start = end;
     }
     groups
+}
+
+fn status_color(status: &str) -> [u8; 4] {
+    match status {
+        "ok" => [86, 190, 126, 255],
+        "resumed" => [96, 156, 240, 255],
+        "failed" => [232, 96, 96, 255],
+        _ => [120, 126, 138, 255],
+    }
 }

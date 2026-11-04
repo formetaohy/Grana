@@ -255,14 +255,27 @@ impl Export {
     ) -> Result<Option<PathBuf>, String> {
         let legends = grana_figure::legends(scene);
         let caption = grana_figure::caption(scene, pose.time);
+        let camera = frame::restored_camera(&pose.camera);
+        let world = scene.dataset.world_size();
+        let aspect = self.panes.volume_points[2] / self.panes.volume_points[3].max(1.0e-3);
+        let labels = grana_figure::labels(scene, pose.time);
+        let label = overlay::LabelView {
+            labels: &labels,
+            view_projection: camera.view_projection(aspect, 0.5 * world.length()),
+            eye: camera.eye(),
+            focus: camera.focus(),
+        };
         let instances = overlay::instances(
             ui,
-            &self.panes,
-            &pose.camera,
-            &pose.section,
-            &legends,
-            Some(&caption),
-            !self.transparent,
+            overlay::Figure {
+                panes: &self.panes,
+                camera: &pose.camera,
+                section: &pose.section,
+                labels: &label,
+                legends: &legends,
+                caption: Some(&caption),
+                backdrop: !self.transparent,
+            },
         );
         let pixels = self.capture(device, queue, ui, &instances)?;
         let size = self.panes.size;

@@ -150,15 +150,14 @@ impl Raster {
                         alpha += coverage * area;
                         weight += area;
                         for channel in 0..3 {
-                            sum[channel] += f64::from(sample[channel]) * coverage * area;
+                            sum[channel] += f64::from(linear(sample[channel])) * coverage * area;
                         }
                     }
                 }
                 let index = (x + width * y) as usize * 4;
                 if alpha > 0.0 {
                     for channel in 0..3 {
-                        out[index + channel] =
-                            (sum[channel] / alpha).round().clamp(0.0, 255.0) as u8;
+                        out[index + channel] = encode((sum[channel] / alpha) as f32);
                     }
                     out[index + 3] = (alpha / weight * 255.0).round().clamp(0.0, 255.0) as u8;
                 }
@@ -201,7 +200,7 @@ fn blend(corners: &[([u8; 4], f64); 4]) -> [u8; 4] {
         let coverage = f64::from(pixel[3]) / 255.0;
         alpha += coverage * weight;
         for channel in 0..3 {
-            sum[channel] += f64::from(pixel[channel]) * coverage * weight;
+            sum[channel] += f64::from(linear(pixel[channel])) * coverage * weight;
         }
     }
     if alpha <= 0.0 {
@@ -209,7 +208,7 @@ fn blend(corners: &[([u8; 4], f64); 4]) -> [u8; 4] {
     }
     let mut pixel = [0u8; 4];
     for channel in 0..3 {
-        pixel[channel] = (sum[channel] / alpha).round().clamp(0.0, 255.0) as u8;
+        pixel[channel] = encode((sum[channel] / alpha) as f32);
     }
     pixel[3] = (alpha * 255.0).round().clamp(0.0, 255.0) as u8;
     pixel
@@ -238,6 +237,12 @@ pub fn composite_premultiplied(under: &Raster, over: &Raster) -> Raster {
 }
 
 pub(crate) fn over(below: [u8; 4], above: [u8; 4]) -> [u8; 4] {
+    if above[3] == 255 {
+        return above;
+    }
+    if above[3] == 0 {
+        return below;
+    }
     let front = f32::from(above[3]) / 255.0;
     let back = f32::from(below[3]) / 255.0;
     let alpha = front + back * (1.0 - front);
@@ -246,16 +251,22 @@ pub(crate) fn over(below: [u8; 4], above: [u8; 4]) -> [u8; 4] {
     }
     let mut pixel = [0u8; 4];
     for channel in 0..3 {
-        let value = (f32::from(above[channel]) * front
-            + f32::from(below[channel]) * back * (1.0 - front))
+        let value = (linear(above[channel]) * front
+            + linear(below[channel]) * back * (1.0 - front))
             / alpha;
-        pixel[channel] = value.round().clamp(0.0, 255.0) as u8;
+        pixel[channel] = encode(value);
     }
     pixel[3] = (alpha * 255.0).round().clamp(0.0, 255.0) as u8;
     pixel
 }
 
 fn over_premultiplied(below: [u8; 4], above: [u8; 4]) -> [u8; 4] {
+    if above[3] == 255 {
+        return above;
+    }
+    if above[3] == 0 {
+        return below;
+    }
     let front = f32::from(above[3]) / 255.0;
     let back = f32::from(below[3]) / 255.0;
     let covered = back * (1.0 - front);
@@ -265,9 +276,36 @@ fn over_premultiplied(below: [u8; 4], above: [u8; 4]) -> [u8; 4] {
     }
     let mut pixel = [0u8; 4];
     for channel in 0..3 {
-        let value = (f32::from(above[channel]) + f32::from(below[channel]) * covered) / alpha;
-        pixel[channel] = value.round().clamp(0.0, 255.0) as u8;
+        let premultiplied = if front > 0.0 {
+            linear_value(f32::from(above[channel]) / 255.0 / front) * front
+        } else {
+            0.0
+        };
+        let value = (premultiplied + linear(below[channel]) * covered) / alpha;
+        pixel[channel] = encode(value);
     }
     pixel[3] = (alpha * 255.0).round().clamp(0.0, 255.0) as u8;
     pixel
+}
+
+fn linear(value: u8) -> f32 {
+    linear_value(f32::from(value) / 255.0)
+}
+
+fn linear_value(encoded: f32) -> f32 {
+    if encoded <= 0.04045 {
+        encoded / 12.92
+    } else {
+        ((encoded + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn encode(value: f32) -> u8 {
+    let value = value.clamp(0.0, 1.0);
+    let encoded = if value <= 0.003_130_8 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    };
+    (encoded * 255.0).round().clamp(0.0, 255.0) as u8
 }

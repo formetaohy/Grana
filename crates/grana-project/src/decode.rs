@@ -367,6 +367,7 @@ impl Decode for SetState {
             *value = unit(reader.f32()?)?;
         }
         let visible = reader.bool()?;
+        let labels = reader.bool()?;
         let opacity = unit(reader.f32()?)?;
         let params = ObjectParams::decode(reader)?;
         if params.kind() != kind {
@@ -403,6 +404,7 @@ impl Decode for SetState {
             channel,
             color,
             visible,
+            labels,
             opacity,
             params,
             track_style,

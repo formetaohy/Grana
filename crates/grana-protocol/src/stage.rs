@@ -192,6 +192,7 @@ impl Protocol {
                 set.set_color(spec.color);
                 set.set_opacity(spec.opacity);
                 set.set_visible(spec.visible);
+                set.set_labels(spec.labels);
             }
             if let Some(curation) = &spec.curation {
                 builder.apply_curation(id, Some(curation), &spec.name)?;

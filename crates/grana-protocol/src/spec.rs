@@ -186,6 +186,8 @@ pub struct SetSpec {
     pub color: [f32; 3],
     #[serde(default = "truth", skip_serializing_if = "is_true")]
     pub visible: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub labels: bool,
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub opacity: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -66,6 +66,7 @@ pub struct ObjectSet {
     channels: usize,
     color: [f32; 3],
     visible: bool,
+    labels: bool,
     opacity: f32,
     voxel: f32,
     params: ObjectParams,
@@ -108,6 +109,7 @@ impl ObjectSet {
             channels: dataset.channels().len(),
             color,
             visible: true,
+            labels: false,
             opacity: 1.0,
             voxel,
             params,
@@ -411,6 +413,18 @@ impl ObjectSet {
         self.visible
     }
 
+    pub fn labels(&self) -> bool {
+        self.labels
+    }
+
+    pub fn set_labels(&mut self, labels: bool) {
+        if self.labels == labels {
+            return;
+        }
+        self.labels = labels;
+        self.document += 1;
+    }
+
     pub fn set_visible(&mut self, visible: bool) {
         if self.visible == visible {
             return;
@@ -665,6 +679,7 @@ impl ObjectSet {
             channel: self.channel,
             color: self.color,
             visible: self.visible,
+            labels: self.labels,
             opacity: self.opacity,
             params: self.params,
             track_style: self.track_style,
@@ -699,6 +714,7 @@ impl ObjectSet {
             channel,
             color,
             visible,
+            labels,
             opacity,
             params,
             track_style,
@@ -740,6 +756,7 @@ impl ObjectSet {
             channels: dataset.channels().len(),
             color,
             visible,
+            labels,
             opacity,
             voxel: dataset.voxel_size().min_element(),
             params,
@@ -1289,6 +1306,7 @@ impl ObjectSet {
             channels: self.channels,
             color,
             visible: self.visible,
+            labels: self.labels,
             opacity: self.opacity,
             voxel: self.voxel,
             params: self.params,
@@ -1416,6 +1434,7 @@ impl ObjectSet {
             channels: self.channels,
             color: self.color,
             visible: self.visible,
+            labels: self.labels,
             opacity: self.opacity,
             voxel: self.voxel,
             params: self.params,

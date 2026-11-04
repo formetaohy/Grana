@@ -51,6 +51,7 @@ impl Protocol {
                     name: set.name().to_string(),
                     color: set.color(),
                     visible: set.visible(),
+                    labels: set.labels(),
                     opacity: set.opacity(),
                     color_by: object_color(set.object_coloring(), scene, &keys),
                     track_by: track_color(set.track_coloring(), scene),
