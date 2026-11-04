@@ -106,6 +106,10 @@ impl State<'_> {
         self.batch.is_some_and(|batch| batch.running)
     }
 
+    pub fn batch_paused(&self) -> bool {
+        self.batch.is_some_and(|batch| batch.paused)
+    }
+
     pub fn batch_jobs(&self) -> usize {
         self.batch.map_or(1, |batch| batch.jobs)
     }

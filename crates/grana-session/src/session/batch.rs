@@ -64,6 +64,7 @@ impl Session {
         };
         self.reset_batch_rows();
         self.batch_running = true;
+        self.batch_paused = false;
         self.batch_message = None;
         self.batch = Some(Batch::start(BatchPlan {
             protocol,
@@ -73,6 +74,19 @@ impl Session {
             project: self.batch_project,
             snapshot: self.snapshotter.as_ref().map(|factory| factory()),
         }));
+    }
+
+    pub(super) fn set_batch_paused(&mut self, paused: bool) {
+        let Some(batch) = &self.batch else {
+            return;
+        };
+        if paused {
+            batch.pause();
+        } else {
+            batch.resume();
+        }
+        self.batch_paused = batch.paused();
+        self.batch_message = None;
     }
 
     pub(super) fn reset_batch_rows(&mut self) {
@@ -101,6 +115,7 @@ impl Session {
                 BatchPoll::Closed => {
                     if !finished {
                         self.batch_running = false;
+                        self.batch_paused = false;
                         self.batch_message = Some("the batch worker stopped".to_string());
                     }
                     return repaint;
@@ -147,6 +162,7 @@ impl Session {
                 BatchEvent::Done { cancelled } => {
                     finished = true;
                     self.batch_running = false;
+                    self.batch_paused = false;
                     if !fatal {
                         self.batch_message =
                             cancelled.then(|| "the batch was cancelled".to_string());

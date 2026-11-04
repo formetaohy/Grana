@@ -366,10 +366,13 @@ impl Session {
                 self.reset_batch_rows();
             }
             Command::RunBatch => self.run_batch(),
+            Command::PauseBatch => self.set_batch_paused(true),
+            Command::ResumeBatch => self.set_batch_paused(false),
             Command::CancelBatch => {
                 if let Some(batch) = &self.batch {
                     batch.cancel();
                 }
+                self.batch_paused = false;
             }
             Command::SetKeyframe => effects.keyframe = true,
             Command::ClearKeyframes => self.timeline.clear(),

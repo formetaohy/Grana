@@ -1,4 +1,5 @@
 mod discover;
+mod gate;
 mod pipeline;
 mod quality;
 mod resume;
@@ -16,6 +17,7 @@ use thiserror::Error;
 
 use crate::snapshot::Snapshotter;
 use discover::dataset_workers;
+use gate::Gate;
 use pipeline::{analyse, artifacts};
 use quality::Row;
 use resume::{build, completed, content};
@@ -91,17 +93,21 @@ pub enum DiscoverError {
 pub struct Batch {
     events: Receiver<Event>,
     cancel: Arc<AtomicBool>,
+    gate: Arc<Gate>,
 }
 
 impl Batch {
     pub fn start(plan: Plan) -> Self {
         let (events, receiver) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
+        let gate = Gate::new();
         let token = Arc::clone(&cancel);
-        std::thread::spawn(move || execute(plan, events, token));
+        let pause = Arc::clone(&gate);
+        std::thread::spawn(move || execute(plan, events, token, pause));
         Self {
             events: receiver,
             cancel,
+            gate,
         }
     }
 
@@ -117,14 +123,28 @@ impl Batch {
         self.events.recv().ok()
     }
 
+    pub fn pause(&self) {
+        self.gate.pause();
+    }
+
+    pub fn resume(&self) {
+        self.gate.resume();
+    }
+
+    pub fn paused(&self) -> bool {
+        self.gate.paused()
+    }
+
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
+        self.gate.resume();
     }
 }
 
 impl Drop for Batch {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
+        self.gate.resume();
     }
 }
 
@@ -138,15 +158,23 @@ struct Task<'a> {
     snapshot: Option<&'a dyn Snapshotter>,
     events: &'a Sender<Event>,
     cancel: &'a AtomicBool,
+    gate: &'a Gate,
 }
 
 struct Progress<'a> {
     index: usize,
     events: &'a Sender<Event>,
     cancel: &'a AtomicBool,
+    gate: &'a Gate,
 }
 
-fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
+impl Progress<'_> {
+    fn hold(&self) -> bool {
+        self.gate.hold(self.cancel)
+    }
+}
+
+fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc<Gate>) {
     if let Err(detail) = prepare(&plan) {
         let _ = events.send(Event::Failed(detail));
         let _ = events.send(Event::Done { cancelled: false });
@@ -162,15 +190,13 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
         for _ in 0..jobs {
             let events = events.clone();
             let cancel = Arc::clone(&cancel);
+            let gate = Arc::clone(&gate);
             let next = &next;
             let rows = &rows;
             let plan = &plan;
             let contents = &contents;
             scope.spawn(move || {
-                loop {
-                    if cancel.load(Ordering::Relaxed) {
-                        break;
-                    }
+                while gate.hold(&cancel) {
                     let index = next.fetch_add(1, Ordering::Relaxed);
                     if index >= plan.datasets.len() {
                         break;
@@ -188,6 +214,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
                             snapshot: plan.snapshot.as_deref(),
                             events: &events,
                             cancel: &cancel,
+                            gate: &gate,
                         },
                         rows,
                     );

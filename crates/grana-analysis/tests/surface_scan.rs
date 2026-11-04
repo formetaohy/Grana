@@ -423,6 +423,40 @@ fn splits_large_lobes_at_their_thick_neck() {
 }
 
 #[test]
+fn splits_a_neck_wider_than_the_distance_cap() {
+    let volume = wide_lobes();
+    let filter = SurfaceFilter::new(0.0, 0.0, 0.0, 0.0);
+    let merged = extract_with(&volume, params(0.5), Region::none(), 4);
+    assert_eq!(merged.object_count(), 1, "the lobes form one object");
+    let total = merged.objects()[0].voxel_count();
+    let split = extract_with(
+        &volume,
+        SurfaceParams::new(0.5, 0.0, 0.2, 0.0, filter),
+        Region::none(),
+        4,
+    );
+    assert_eq!(
+        split.object_count(),
+        2,
+        "a neck wider than the distance cap still splits the lobes"
+    );
+    let kept = split
+        .objects()
+        .iter()
+        .map(|object| object.voxel_count())
+        .sum::<u64>();
+    assert_eq!(kept, total, "splitting conserves the mask");
+    for object in split.objects() {
+        assert!(
+            object.voxel_count() > 1_000_000,
+            "a lobe holds {} voxels of the pair",
+            object.voxel_count()
+        );
+    }
+    assert!(no_holes(&split), "each split lobe keeps its neck cap");
+}
+
+#[test]
 fn recuts_a_detection_without_reading_the_volume() {
     let volume = large_lobes();
     let filter = SurfaceFilter::new(0.0, 0.8, 0.0, 0.0);
@@ -1107,6 +1141,12 @@ fn large_lobes() -> Volume {
     let extent = Extent::new(200, 80, 80);
     let centres = [[80.0f32, 40.0, 40.0], [118.0, 40.0, 40.0]];
     blobs(extent, &[0.1, 0.1, 0.1], &centres, 22.0)
+}
+
+fn wide_lobes() -> Volume {
+    let extent = Extent::new(252, 160, 160);
+    let centres = [[73.0f32, 80.0, 80.0], [171.0, 80.0, 80.0]];
+    blobs(extent, &[0.1, 0.1, 0.1], &centres, 70.0)
 }
 
 fn world(volume: &Volume, voxel: [f32; 3]) -> [f32; 3] {

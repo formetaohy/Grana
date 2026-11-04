@@ -228,10 +228,29 @@ fn output(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         ui.separator();
         let running = state.batch_running();
         if running {
+            let paused = state.batch_paused();
             ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
                 widget::spinner(ui, 14.0);
-                widget::caption(ui, "Running the protocol over every dataset");
+                widget::caption(
+                    ui,
+                    if paused {
+                        "Paused between analysis steps"
+                    } else {
+                        "Running the protocol over every dataset"
+                    },
+                );
                 ui.space(1.0);
+                if paused {
+                    if widget::action_button(ui, "resume", Icon::Play, "Resume", Role::Quiet)
+                        .clicked
+                    {
+                        commands.push(Command::ResumeBatch);
+                    }
+                } else if widget::action_button(ui, "pause", Icon::Pause, "Pause", Role::Quiet)
+                    .clicked
+                {
+                    commands.push(Command::PauseBatch);
+                }
                 if widget::button(ui, "cancel", "Cancel", Role::Quiet) {
                     commands.push(Command::CancelBatch);
                 }

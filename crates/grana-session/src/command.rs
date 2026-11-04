@@ -200,6 +200,8 @@ pub enum Command {
     SetBatchJobs(u32),
     SetBatchProject(bool),
     RunBatch,
+    PauseBatch,
+    ResumeBatch,
     CancelBatch,
     SetKeyframe,
     ClearKeyframes,

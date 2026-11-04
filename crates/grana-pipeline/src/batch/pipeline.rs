@@ -81,11 +81,12 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             index: task.index,
             events: task.events,
             cancel: task.cancel,
+            gate: task.gate,
         },
     };
     let mut measure = Measure::new();
     for step in staged.steps() {
-        if task.cancel.load(Ordering::Relaxed) {
+        if !task.gate.hold(task.cancel) {
             return Err("cancelled".to_string());
         }
         match step {
@@ -434,7 +435,7 @@ impl Run<'_, '_> {
                 scene.install_relation(source_id, target_id, time, frame);
             }
             RunEvent::Failed(detail) => failure = Some(detail),
-            RunEvent::Progress { done, total, .. } => {
+            RunEvent::Progress { done, total, .. } if progress.hold() => {
                 let _ = progress.events.send(Event::Progress {
                     index: progress.index,
                     done,
@@ -493,7 +494,7 @@ impl Run<'_, '_> {
         let mut series: Option<Box<ColocSeries>> = None;
         let mut sink = |event: RunEvent| match event {
             RunEvent::Coloc { series: found, .. } => series = Some(found),
-            RunEvent::Progress { done, total, .. } => {
+            RunEvent::Progress { done, total, .. } if progress.hold() => {
                 let _ = progress.events.send(Event::Progress {
                     index: progress.index,
                     done,
@@ -616,13 +617,14 @@ fn detect(
     let mut collected = vec![None; frames];
     let mut sink = |event: RunEvent| match event {
         RunEvent::Frame { time, frame } => collected[time as usize] = Some(frame),
-        RunEvent::Progress { done, total, .. } => {
+        RunEvent::Progress { done, total, .. } if progress.hold() => {
             let _ = progress.events.send(Event::Progress {
                 index: progress.index,
                 done,
                 total,
             });
         }
+        RunEvent::Progress { .. } => {}
         RunEvent::Tracks(_)
         | RunEvent::Relation { .. }
         | RunEvent::Coloc { .. }

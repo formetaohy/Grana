@@ -89,6 +89,7 @@ pub struct Session {
     batch_rows: Vec<BatchDataset>,
     batch_output: Option<PathBuf>,
     batch_running: bool,
+    batch_paused: bool,
     batch_jobs: usize,
     batch_project: bool,
     batch_message: Option<String>,
@@ -139,6 +140,7 @@ impl Session {
             batch_rows: Vec::new(),
             batch_output: None,
             batch_running: false,
+            batch_paused: false,
             batch_jobs: grana_pipeline::default_jobs(),
             batch_project: false,
             batch_message: None,
@@ -218,6 +220,7 @@ impl Session {
             jobs: self.batch_jobs,
             project: self.batch_project,
             running: self.batch_running,
+            paused: self.batch_paused,
             message: self.batch_message.clone(),
         })
     }

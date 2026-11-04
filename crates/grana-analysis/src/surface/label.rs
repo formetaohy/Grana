@@ -5,37 +5,17 @@ use super::{EMPTY, Measure, Tile, find, parabola, strides_of};
 
 impl Tile<'_> {
     pub(super) fn watershed(&mut self) -> bool {
-        self.fill_distance();
+        let saturated = self.fill_distance();
         let dims = self.dims;
         let strides = strides_of(dims);
         let count = dims[0] * dims[1] * dims[2];
-        let cap = self.pass.cap as usize;
-        let mut counts = vec![0u32; cap + 1];
-        let mut saturated = false;
-        for index in 0..count {
-            if !self.mask[index] {
-                continue;
-            }
-            let bucket = self.chamfer[index] as usize;
-            saturated |= bucket == cap;
-            counts[bucket] += 1;
-        }
-        let mut cursor = vec![0u32; cap + 1];
-        let mut total = 0u32;
-        for bucket in (0..=cap).rev() {
-            cursor[bucket] = total;
-            total += counts[bucket];
-        }
         self.order.clear();
-        self.order.resize(total as usize, 0);
         for index in 0..count {
-            if !self.mask[index] {
-                continue;
+            if self.mask[index] {
+                self.order.push(index as u32);
             }
-            let bucket = self.chamfer[index] as usize;
-            self.order[cursor[bucket] as usize] = index as u32;
-            cursor[bucket] += 1;
         }
+        self.order_descending();
         for position in 0..self.order.len() {
             let index = self.order[position] as usize;
             let level = self.chamfer[index];
@@ -76,7 +56,49 @@ impl Tile<'_> {
         saturated
     }
 
-    fn fill_distance(&mut self) {
+    fn order_descending(&mut self) {
+        let length = self.order.len();
+        self.order_scratch.clear();
+        self.order_scratch.resize(length, 0);
+        let mut counts = [0usize; 256];
+        let mut offsets = [0usize; 256];
+        let mut source_is_order = true;
+        for shift in [0u32, 8, 16, 24] {
+            counts.fill(0);
+            {
+                let source = if source_is_order {
+                    &self.order
+                } else {
+                    &self.order_scratch
+                };
+                for index in source.iter() {
+                    counts[((self.chamfer[*index as usize] >> shift) & 0xFF) as usize] += 1;
+                }
+            }
+            let mut total = 0usize;
+            for bucket in (0..256).rev() {
+                offsets[bucket] = total;
+                total += counts[bucket];
+            }
+            let (source, target) = if source_is_order {
+                (&self.order, &mut self.order_scratch)
+            } else {
+                (&self.order_scratch, &mut self.order)
+            };
+            for index in source.iter() {
+                let digit = ((self.chamfer[*index as usize] >> shift) & 0xFF) as usize;
+                target[offsets[digit]] = *index;
+                offsets[digit] += 1;
+            }
+            source_is_order = !source_is_order;
+        }
+        assert!(
+            source_is_order,
+            "four radix passes land in the order buffer"
+        );
+    }
+
+    fn fill_distance(&mut self) -> bool {
         let plan = self.pass.plan;
         let dims = self.dims;
         let strides = strides_of(dims);
@@ -106,6 +128,26 @@ impl Tile<'_> {
                     }
                 }
             }
+        }
+        match self.pass.distance {
+            Some(distance) => {
+                for index in 0..count {
+                    if !self.mask[index] || self.chamfer[index] < cap {
+                        continue;
+                    }
+                    let voxel = [
+                        self.start[0] + (index % dims[0]) as i64,
+                        self.start[1] + ((index / strides[1]) % dims[1]) as i64,
+                        self.start[2] + (index / strides[2]) as i64,
+                    ];
+                    let value = distance.at(voxel);
+                    if value > self.chamfer[index] {
+                        self.chamfer[index] = value;
+                    }
+                }
+                false
+            }
+            None => (0..count).any(|index| self.mask[index] && self.chamfer[index] == cap),
         }
     }
 

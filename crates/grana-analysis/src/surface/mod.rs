@@ -2,6 +2,7 @@ mod assemble;
 mod bits;
 mod cap;
 mod cut;
+mod distance;
 mod emit;
 mod label;
 mod mask;
@@ -23,6 +24,7 @@ use grana_object::SurfaceCut;
 use grana_object::SurfaceParams;
 
 use assemble::Assembler;
+use distance::Distance;
 use mask::SolidMask;
 use tile::{Tile, TileResult};
 
@@ -33,8 +35,8 @@ const GRAIN_LIMIT: f32 = 3.0;
 const GRAIN_SUPPORT: f32 = 3.0;
 const ANISOTROPY_LIMIT: u32 = 16;
 const PAD_ALIGN: u32 = 8;
-const ARRAY_BYTES_PER_VOXEL: u64 = 28;
-const VALUE_BYTES_PER_VOXEL: u64 = 8;
+const ARRAY_BYTES_PER_VOXEL: u64 = 17;
+const VALUE_BYTES_PER_VOXEL: u64 = 12;
 const WORKER_ARRAY_LIMIT: u64 = 320 << 20;
 const FRAME_ARRAY_LIMIT: u64 = 1024 << 20;
 const TILE_FRAGMENT_LIMIT: u64 = 96 << 20;
@@ -431,25 +433,39 @@ impl SurfaceBuilder {
             let last = step + 1 == runs.len();
             let pass = Pass::new(&self, limit, seeds);
             let workers = desired.min(capacity).min(pass.total().max(1));
-            let outcome = run_pass(&pass, workers, last, &mut inputs)?;
-            match outcome {
+            match run_pass(&pass, workers, false, &mut inputs)? {
                 PassOutcome::Cancelled => return Ok(None),
-                PassOutcome::Saturated => {
-                    assert!(!last, "the final surface pass accepts a saturated field");
-                    step += 1;
+                PassOutcome::Saturated if last => {
+                    let distance = Distance::build(&self, &mask.solid);
+                    let pass = Pass::refined(&self, limit, seeds, &distance);
+                    let workers = desired.min(capacity).min(pass.total().max(1));
+                    return match run_pass(&pass, workers, false, &mut inputs)? {
+                        PassOutcome::Cancelled => Ok(None),
+                        PassOutcome::Done(topology) => self.finish(*topology, desired, store),
+                        PassOutcome::Saturated => Err(format!(
+                            "the refined surface pass keeps a saturated distance of {limit} voxels"
+                        )),
+                    };
                 }
-                PassOutcome::Done(topology) => {
-                    let topology =
-                        Geometry::paged(store, *topology).map_err(|error| error.to_string())?;
-                    let loaded = topology.load().map_err(|error| error.to_string())?;
-                    let set = cut::cut(&loaded, self.params.cut(), &[], desired, Some(store))?;
-                    return Ok(Some(
-                        set.with_topology(topology)
-                            .map_err(|error| error.to_string())?,
-                    ));
-                }
+                PassOutcome::Saturated => step += 1,
+                PassOutcome::Done(topology) => return self.finish(*topology, desired, store),
             }
         }
+    }
+
+    fn finish(
+        &self,
+        topology: grana_object::SurfaceTopology,
+        workers: usize,
+        store: &Arc<GeometryStore>,
+    ) -> Result<Option<SurfaceSet>, String> {
+        let topology = Geometry::paged(store, topology).map_err(|error| error.to_string())?;
+        let loaded = topology.load().map_err(|error| error.to_string())?;
+        let set = cut::cut(&loaded, self.params.cut(), &[], workers, Some(store))?;
+        Ok(Some(
+            set.with_topology(topology)
+                .map_err(|error| error.to_string())?,
+        ))
     }
 }
 
@@ -515,10 +531,29 @@ struct Pass<'a> {
     cap: u32,
     pad: [u32; 3],
     values: [u32; 3],
+    distance: Option<&'a Distance>,
 }
 
 impl<'a> Pass<'a> {
     fn new(plan: &'a SurfaceBuilder, limit: u32, seeds: &'a [[i64; 3]]) -> Self {
+        Self::with_distance(plan, limit, seeds, None)
+    }
+
+    fn refined(
+        plan: &'a SurfaceBuilder,
+        limit: u32,
+        seeds: &'a [[i64; 3]],
+        distance: &'a Distance,
+    ) -> Self {
+        Self::with_distance(plan, limit, seeds, Some(distance))
+    }
+
+    fn with_distance(
+        plan: &'a SurfaceBuilder,
+        limit: u32,
+        seeds: &'a [[i64; 3]],
+        distance: Option<&'a Distance>,
+    ) -> Self {
         let cap = limit * limit;
         let radius = [0, 1, 2].map(|axis| (plan.kernels[axis].len() / 2) as u32);
         let pad = [0, 1, 2].map(|axis| {
@@ -532,6 +567,7 @@ impl<'a> Pass<'a> {
             cap,
             pad,
             values,
+            distance,
         }
     }
 
