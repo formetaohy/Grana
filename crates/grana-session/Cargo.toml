@@ -6,6 +6,9 @@ description.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dev-dependencies]
+grana-raster = { workspace = true }
+
 [dependencies]
 glam = { workspace = true }
 grana-analysis = { workspace = true }
@@ -15,14 +18,12 @@ grana-geometry = { workspace = true }
 grana-image = { workspace = true }
 grana-measure = { workspace = true }
 grana-object = { workspace = true }
+grana-pipeline = { workspace = true }
 grana-project = { workspace = true }
-grana-raster = { workspace = true }
+grana-protocol = { workspace = true }
 grana-scene = { workspace = true }
 grana-volume = { workspace = true }
 rfd = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
 
 [lints]
 workspace = true

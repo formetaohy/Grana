@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use grana_session::{Batch, BatchEvent, Outcome, Plan, Protocol, discover};
+use grana_pipeline::{Batch, BatchEvent, Outcome, Plan, discover};
+use grana_protocol::Protocol;
 use winit::event_loop::{ControlFlow, EventLoop};
 
 use crate::app::App;
@@ -47,7 +48,7 @@ pub fn batch(
         protocol,
         datasets,
         output: output.to_path_buf(),
-        jobs: jobs.unwrap_or_else(grana_session::default_jobs),
+        jobs: jobs.unwrap_or_else(grana_pipeline::default_jobs),
         project,
         snapshot: Some(Arc::new(Snapshot::new())),
     });

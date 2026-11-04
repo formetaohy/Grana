@@ -1,7 +1,7 @@
 use grana_measure::{ColocPair, ColocSettings, ColocThresholds};
 use grana_scene::{Job, ObjectSetId};
 
-use crate::protocol::Step;
+use grana_protocol::Step;
 
 pub(crate) struct Recipe {
     steps: Vec<Step>,

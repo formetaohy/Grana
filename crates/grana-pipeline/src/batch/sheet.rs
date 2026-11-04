@@ -3,7 +3,9 @@ use grana_raster::Grid;
 use super::{Plan, Row, SNAPSHOT};
 
 pub(super) const SHEET: &str = "sheet.png";
+
 pub(super) const MANIFEST: &str = "sheet.csv";
+
 const TILE: [u32; 2] = [800, 500];
 
 pub(super) fn write(plan: &Plan, rows: &[Option<Row>]) -> Result<(), String> {

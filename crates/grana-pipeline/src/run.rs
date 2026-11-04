@@ -21,7 +21,9 @@ use self::frames::Notice;
 use self::frames::frames as pipeline;
 
 const FRAME_WORKERS: usize = 4;
+
 const FILAMENT_BYTES: u64 = 512 << 20;
+
 const FILAMENT_VOXEL_BYTES: u64 = 12;
 
 fn frame_window(totals: u32, workers: usize, per_frame: usize) -> usize {
@@ -74,7 +76,7 @@ impl DetectRequest {
     }
 }
 
-pub(crate) fn detect(
+pub fn detect(
     reader: &Image,
     request: DetectRequest,
     cancel: &AtomicBool,
@@ -87,7 +89,7 @@ pub(crate) fn detect(
     }
 }
 
-pub(crate) fn tracks(
+pub fn tracks(
     frames: Vec<Vec<[f32; 3]>>,
     params: grana_object::TrackParams,
     frame_interval: f32,
@@ -121,7 +123,7 @@ pub(crate) fn tracks(
     sink(Event::Done);
 }
 
-pub(crate) fn relation(
+pub fn relation(
     source: Vec<Option<Arc<ObjectFrame>>>,
     target: Vec<Option<Arc<ObjectFrame>>>,
     shift: i32,
@@ -208,7 +210,7 @@ impl ColocRequest {
     }
 }
 
-pub(crate) fn coloc(
+pub fn coloc(
     reader: &Image,
     request: ColocRequest,
     cancel: &AtomicBool,
@@ -391,6 +393,7 @@ fn spots(
     }
     Ok(())
 }
+
 fn surfaces(
     reader: &Image,
     params: grana_object::SurfaceParams,

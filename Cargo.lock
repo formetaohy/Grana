@@ -895,7 +895,9 @@ dependencies = [
  "grana-engine",
  "grana-gpu",
  "grana-image",
+ "grana-pipeline",
  "grana-project",
+ "grana-protocol",
  "grana-raster",
  "grana-render",
  "grana-scene",
@@ -1027,6 +1029,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-pipeline"
+version = "0.1.1"
+dependencies = [
+ "grana-analysis",
+ "grana-animation",
+ "grana-display",
+ "grana-geometry",
+ "grana-image",
+ "grana-measure",
+ "grana-object",
+ "grana-project",
+ "grana-protocol",
+ "grana-raster",
+ "grana-scene",
+ "grana-volume",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "grana-project"
 version = "0.1.1"
 dependencies = [
@@ -1042,6 +1065,23 @@ dependencies = [
  "grana-volume",
  "thiserror 2.0.21",
  "zstd",
+]
+
+[[package]]
+name = "grana-protocol"
+version = "0.1.1"
+dependencies = [
+ "glam",
+ "grana-animation",
+ "grana-display",
+ "grana-measure",
+ "grana-object",
+ "grana-project",
+ "grana-scene",
+ "grana-volume",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1091,14 +1131,13 @@ dependencies = [
  "grana-image",
  "grana-measure",
  "grana-object",
+ "grana-pipeline",
  "grana-project",
+ "grana-protocol",
  "grana-raster",
  "grana-scene",
  "grana-volume",
  "rfd",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
 ]
 
 [[package]]

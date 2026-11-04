@@ -1,8 +1,9 @@
 use std::time::{Duration, Instant};
 
 use grana_measure::Measurement;
+use grana_protocol::Protocol;
 use grana_scene::ObjectColor;
-use grana_session::{Command, Protocol, Session};
+use grana_session::{Command, Session};
 use grana_volume::{Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
 const EXTENT: Extent = Extent::new(32, 32, 8);

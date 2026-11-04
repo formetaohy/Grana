@@ -3,8 +3,9 @@ use std::time::{Duration, Instant};
 
 use grana_geometry::GeometryStore;
 use grana_object::{SurfaceFilter, SurfaceParams};
+use grana_pipeline::{DetectRequest, Event};
 use grana_scene::{Job, ObjectParams, ObjectSetId};
-use grana_session::{DetectRequest, Event, Poll, Source, detect};
+use grana_session::{Poll, Source, detect};
 use grana_volume::{Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
 const HIGH: u16 = 65_535;

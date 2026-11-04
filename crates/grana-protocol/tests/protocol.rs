@@ -9,8 +9,8 @@ use grana_measure::{
 };
 use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
 use grana_project::{Export, ViewState};
+use grana_protocol::{DetectionSpec, Protocol, SnapshotSpec, ViewSpec};
 use grana_scene::{Dataset, Measure, ObjectColor, ObjectFrame, ObjectKind, Scene, TrackColor};
-use grana_session::{DetectionSpec, Protocol, SnapshotSpec, ViewSpec};
 use grana_volume::{Axis, Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
 const PROTOCOL: &str = r#"
@@ -452,7 +452,7 @@ fn stages_the_presentation_of_a_captured_protocol() {
             section,
             split: 0.5,
             timeline: timeline.clone(),
-            export: grana_session::Export::new(1280, true),
+            export: Export::new(1280, true),
         },
         0,
     );
@@ -534,7 +534,7 @@ fn stages_the_presentation_of_a_captured_protocol() {
     );
     assert_eq!(
         protocol.view().and_then(ViewSpec::export),
-        Some(grana_session::Export::new(1280, true)),
+        Some(Export::new(1280, true)),
         "the export settings travel with the view"
     );
 }

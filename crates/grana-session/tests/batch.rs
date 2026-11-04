@@ -7,12 +7,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
 use grana_image::Image;
 use grana_measure::Measurement;
-use grana_project::{Project, Source as ProjectSource};
-use grana_scene::{ObjectColor, Scene};
-use grana_session::{
-    Batch, BatchEvent, DatasetEntry, Outcome, Plan, Protocol, Session, SnapshotRequest,
-    Snapshotter, discover,
+use grana_pipeline::{
+    Batch, BatchEvent, DatasetEntry, Outcome, Plan, SnapshotRequest, Snapshotter, discover,
 };
+use grana_project::{Project, Source as ProjectSource};
+use grana_protocol::Protocol;
+use grana_scene::{ObjectColor, Scene};
+use grana_session::Session;
 
 const EXTENT: [u32; 3] = [40, 40, 8];
 const FRAMES: u32 = 2;

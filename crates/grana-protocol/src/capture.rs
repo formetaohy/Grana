@@ -2,7 +2,7 @@ use grana_display::Coloring;
 use grana_measure::{Aggregate, Group, channel_keys};
 use grana_scene::{Measure, ObjectColor, ObjectKind, ObjectParams, Scene, TrackColor};
 
-use super::{
+use crate::{
     ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, DetectionSpec, FilterSpec,
     LassoSpec, MeasureSpec, Protocol, ProtocolError, RegionSpec, RelationSpec, RenderSpec, SetSpec,
     SnapshotSpec, SortSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,

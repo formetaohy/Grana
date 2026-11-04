@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use grana_app::Snapshot;
 use grana_image::{Image, Source};
+use grana_pipeline::{SnapshotRequest, Snapshotter};
 use grana_scene::{Dataset, Scene};
-use grana_session::{SnapshotRequest, Snapshotter};
 use grana_volume::{Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
 #[test]

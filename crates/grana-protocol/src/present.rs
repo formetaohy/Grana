@@ -1,7 +1,7 @@
 use grana_measure::{Lasso, PlotAxis};
 use grana_scene::{Measure, ObjectSetId, Scene};
 
-use super::Protocol;
+use crate::Protocol;
 
 impl Protocol {
     pub fn present_measure(&self, sets: &[ObjectSetId], measure: &mut Measure, scene: &Scene) {

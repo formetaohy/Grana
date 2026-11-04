@@ -1,7 +1,7 @@
 use grana_measure::{COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX};
 use grana_scene::{ObjectKind, slug};
 
-use super::{Protocol, ProtocolError};
+use crate::{Protocol, ProtocolError};
 
 impl Protocol {
     pub(crate) fn checked(self) -> Result<Self, ProtocolError> {

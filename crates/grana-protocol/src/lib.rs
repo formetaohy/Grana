@@ -17,7 +17,7 @@ pub use spec::{
     TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
-pub(crate) use step::Step;
+pub use step::Step;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

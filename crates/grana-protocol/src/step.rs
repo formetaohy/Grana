@@ -1,7 +1,7 @@
-use super::Protocol;
+use crate::Protocol;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Step {
+pub enum Step {
     Detect { set: usize, mask: Option<usize> },
     Relation { source: usize, target: usize },
     Coloc { pair: usize, mask: Option<usize> },
@@ -9,7 +9,7 @@ pub(crate) enum Step {
 }
 
 impl Protocol {
-    pub(crate) fn steps(&self) -> Vec<Step> {
+    pub fn steps(&self) -> Vec<Step> {
         let position = |name: &str| {
             self.sets
                 .iter()

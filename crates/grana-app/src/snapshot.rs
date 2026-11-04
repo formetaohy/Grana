@@ -5,8 +5,8 @@ use grana_display::{Camera, CameraState, SectionCamera, SectionState, Viewport};
 use grana_engine::{Destination, Engine, Outcome, Panels, Panes, Plan, Pose};
 use grana_gpu::Headless;
 use grana_image::Image;
+use grana_pipeline::{SnapshotRequest, Snapshotter};
 use grana_scene::Scene;
-use grana_session::{SnapshotRequest, Snapshotter};
 use grana_ui::{Rect, Ui, Vec2};
 use grana_volume::Axis;
 

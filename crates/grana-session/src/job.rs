@@ -6,9 +6,9 @@ use grana_image::{Image, Source};
 use grana_object::{SurfaceCut, TrackParams};
 use grana_scene::{Job, ObjectFrame};
 
-use crate::event::Event;
-use crate::run::{self, ColocRequest, DetectRequest};
 use crate::task::{Poll, Task};
+use grana_pipeline::Event;
+use grana_pipeline::run::{self, ColocRequest, DetectRequest};
 
 pub struct Analysis {
     job: Job,

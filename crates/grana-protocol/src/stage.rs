@@ -3,7 +3,7 @@ use grana_measure::{ColocPair, TrackMeasurement, channel_keys};
 use grana_scene::{ObjectColor, ObjectSetId, Scene, TrackColor};
 use grana_volume::Region;
 
-use super::{ColorSpec, Protocol, ProtocolError};
+use crate::{ColorSpec, Protocol, ProtocolError};
 
 pub struct Staged {
     sets: Vec<ObjectSetId>,

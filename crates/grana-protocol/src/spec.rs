@@ -8,7 +8,7 @@ use grana_scene::{ObjectKind, ObjectParams};
 use grana_volume::Axis;
 use serde::{Deserialize, Serialize};
 
-use super::ProtocolError;
+use crate::ProtocolError;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
