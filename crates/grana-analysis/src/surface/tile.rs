@@ -66,6 +66,7 @@ pub(super) struct Tile<'a> {
     pub(super) triangles: Vec<u32>,
     pub(super) contacts: Vec<Contact>,
     pub(super) edges: HashMap<u64, u32>,
+    pub(super) space: ([usize; 3], [usize; 3]),
 }
 
 impl<'a> Tile<'a> {
@@ -104,6 +105,7 @@ impl<'a> Tile<'a> {
             triangles: Vec::new(),
             contacts: Vec::new(),
             edges: HashMap::new(),
+            space: ([0; 3], [0; 3]),
         }
     }
 
@@ -172,7 +174,7 @@ impl<'a> Tile<'a> {
             }
             self.field.clear();
             self.field.resize(value_count, 0.0);
-            self.field();
+            self.field(&core);
             saturated = self.watershed();
             self.record_necks();
             if super::halted(cancel, stop) {

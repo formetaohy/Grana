@@ -1,55 +1,135 @@
+use super::bits::BlockFill;
 use super::tile::Tile;
 use super::{OUTSIDE, REMOVED};
 
 impl Tile<'_> {
     pub(super) fn mark(&mut self) -> bool {
-        let Self {
-            pass,
-            solid,
-            gate,
-            array,
-            dims,
-            mask,
-            ..
-        } = self;
+        let pass = self.pass;
         let anchor = pass.plan.anchor;
+        let array = self.array.clone();
+        let dims = self.dims;
+        let gate = self.gate;
+        let solid = self.solid;
+        let mask = &mut self.mask;
+        let mut low = [usize::MAX; 3];
+        let mut high = [0usize; 3];
         let mut occupied = false;
-        for z in 0..dims[2] {
-            for y in 0..dims[1] {
-                let base = dims[0] * (y + dims[1] * z);
-                for x in 0..dims[0] {
-                    let voxel = [
-                        array[0].start as i64 + x as i64,
-                        array[1].start as i64 + y as i64,
-                        array[2].start as i64 + z as i64,
-                    ];
-                    let inside = gate.admits(voxel) && solid.get(voxel, anchor);
-                    mask[base + x] = inside;
-                    occupied |= inside;
+        let shift = [
+            array[0].start as i64 - anchor[0],
+            array[1].start as i64 - anchor[1],
+            array[2].start as i64 - anchor[2],
+        ];
+        let blocks = [
+            shift[0].div_euclid(crate::local::BLOCK),
+            shift[1].div_euclid(crate::local::BLOCK),
+            shift[2].div_euclid(crate::local::BLOCK),
+        ];
+        let mut ends = [0i64; 3];
+        for axis in 0..3 {
+            ends[axis] = (shift[axis] + dims[axis] as i64 - 1).div_euclid(crate::local::BLOCK) + 1;
+        }
+        for block_z in blocks[2]..ends[2] {
+            for block_y in blocks[1]..ends[1] {
+                for block_x in blocks[0]..ends[0] {
+                    let block = [block_x, block_y, block_z];
+                    let mut start = [0usize; 3];
+                    let mut stop = [0usize; 3];
+                    let mut whole = true;
+                    for axis in 0..3 {
+                        let first = block[axis] * crate::local::BLOCK - shift[axis];
+                        whole &= first >= 0 && first + crate::local::BLOCK <= dims[axis] as i64;
+                        start[axis] = (first.max(0) as usize).min(dims[axis]);
+                        stop[axis] = ((first + crate::local::BLOCK).min(dims[axis] as i64)
+                            as usize)
+                            .max(start[axis]);
+                    }
+                    let fill = if whole {
+                        solid.block_fill(block)
+                    } else {
+                        BlockFill::Mixed
+                    };
+                    match fill {
+                        BlockFill::Empty => continue,
+                        BlockFill::Solid => {
+                            for z in start[2]..stop[2] {
+                                for y in start[1]..stop[1] {
+                                    let base = dims[0] * (y + dims[1] * z);
+                                    mask[base + start[0]..base + stop[0]].fill(true);
+                                }
+                            }
+                            occupied = true;
+                            for axis in 0..3 {
+                                low[axis] = low[axis].min(start[axis]);
+                                high[axis] = high[axis].max(stop[axis]);
+                            }
+                        }
+                        BlockFill::Mixed => {
+                            for z in start[2]..stop[2] {
+                                for y in start[1]..stop[1] {
+                                    let base = dims[0] * (y + dims[1] * z);
+                                    for x in start[0]..stop[0] {
+                                        let voxel = [
+                                            array[0].start as i64 + x as i64,
+                                            array[1].start as i64 + y as i64,
+                                            array[2].start as i64 + z as i64,
+                                        ];
+                                        if gate.admits(voxel) && solid.get(voxel, anchor) {
+                                            mask[base + x] = true;
+                                            occupied = true;
+                                            low[0] = low[0].min(x);
+                                            low[1] = low[1].min(y);
+                                            low[2] = low[2].min(z);
+                                            high[0] = high[0].max(x + 1);
+                                            high[1] = high[1].max(y + 1);
+                                            high[2] = high[2].max(z + 1);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
+        self.space = if occupied {
+            let mut space = [0usize; 3];
+            for axis in 0..3 {
+                space[axis] = low[axis].saturating_sub(1);
+            }
+            let mut far = [0usize; 3];
+            for axis in 0..3 {
+                far[axis] = (high[axis] + 1).min(dims[axis]);
+            }
+            (space, far)
+        } else {
+            ([0; 3], [0; 3])
+        };
         occupied
     }
 
-    pub(super) fn field(&mut self) {
-        let Self {
-            pass,
-            solid,
-            grid,
-            gate,
-            value_dims,
-            value_start,
-            smoothed,
-            field,
-            ..
-        } = self;
-        let threshold = pass.plan.threshold;
+    pub(super) fn field(&mut self, core: &[std::ops::Range<u32>; 3]) {
+        let pass = self.pass;
         let anchor = pass.plan.anchor;
-        for z in 0..value_dims[2] {
-            for y in 0..value_dims[1] {
+        let value_dims = self.value_dims;
+        let value_start = self.value_start;
+        let mut low = [0usize; 3];
+        let mut high = [0usize; 3];
+        for axis in 0..3 {
+            let first = (core[axis].start as i64 - 2).max(value_start[axis]);
+            let last = (core[axis].end as i64 + 2).min(value_start[axis] + value_dims[axis] as i64);
+            low[axis] = (first - value_start[axis]) as usize;
+            high[axis] = (last - value_start[axis]) as usize;
+        }
+        let gate = self.gate;
+        let solid = self.solid;
+        let grid = self.grid;
+        let smoothed = &self.smoothed;
+        let field = &mut self.field;
+        let threshold = pass.plan.threshold;
+        for z in low[2]..high[2] {
+            for y in low[1]..high[1] {
                 let base = value_dims[0] * (y + value_dims[1] * z);
-                for x in 0..value_dims[0] {
+                for x in low[0]..high[0] {
                     let voxel = [
                         value_start[0] + x as i64,
                         value_start[1] + y as i64,

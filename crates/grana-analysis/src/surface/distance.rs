@@ -1,5 +1,5 @@
 use super::mask::SolidMask;
-use super::{SurfaceBuilder, parabola};
+use super::{Envelope, SurfaceBuilder};
 
 const SCALE: u32 = 4;
 const UNREACHED: f32 = 1.0e12;
@@ -126,13 +126,14 @@ fn transform(values: &mut [f32], dims: [usize; 3], weights: [f64; 3], workers: u
     if dims[0] > 1 {
         planes(values, plane, workers, |chunk, _| {
             let mut line = vec![0.0f64; dims[0]];
+            let mut envelope = Envelope::new();
             for plane_values in chunk.chunks_mut(plane) {
                 for y in 0..dims[1] {
                     let base = y * dims[0];
                     for (slot, value) in line.iter_mut().zip(&plane_values[base..base + dims[0]]) {
                         *slot = f64::from(*value);
                     }
-                    parabola(&mut line, weights[0]);
+                    super::parabola(&mut line, weights[0], &mut envelope);
                     for (value, slot) in line.iter().zip(&mut plane_values[base..base + dims[0]]) {
                         *slot = *value as f32;
                     }
@@ -143,12 +144,13 @@ fn transform(values: &mut [f32], dims: [usize; 3], weights: [f64; 3], workers: u
     if dims[1] > 1 {
         planes(values, plane, workers, |chunk, _| {
             let mut line = vec![0.0f64; dims[1]];
+            let mut envelope = Envelope::new();
             for plane_values in chunk.chunks_mut(plane) {
                 for x in 0..dims[0] {
                     for (step, slot) in line.iter_mut().enumerate() {
                         *slot = f64::from(plane_values[x + step * dims[0]]);
                     }
-                    parabola(&mut line, weights[1]);
+                    super::parabola(&mut line, weights[1], &mut envelope);
                     for (step, value) in line.iter().enumerate() {
                         plane_values[x + step * dims[0]] = *value as f32;
                     }
@@ -158,13 +160,14 @@ fn transform(values: &mut [f32], dims: [usize; 3], weights: [f64; 3], workers: u
     }
     if dims[2] > 1 {
         let mut line = vec![0.0f64; dims[2]];
+        let mut envelope = Envelope::new();
         for y in 0..dims[1] {
             for x in 0..dims[0] {
                 let base = x + dims[0] * y;
                 for (step, slot) in line.iter_mut().enumerate() {
                     *slot = f64::from(values[base + step * plane]);
                 }
-                parabola(&mut line, weights[2]);
+                super::parabola(&mut line, weights[2], &mut envelope);
                 for (step, value) in line.iter().enumerate() {
                     values[base + step * plane] = *value as f32;
                 }

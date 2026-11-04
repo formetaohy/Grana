@@ -4,7 +4,7 @@ use crate::local::{BLOCK, BlockField, LocalField, floor};
 use crate::morphology;
 use grana_object::Mask;
 
-use super::bits::{Bits, Grid, MaskInputs, SIDE};
+use super::bits::{Bits, BlockFill, Grid, MaskInputs, SIDE};
 use super::{Gate, Read, SurfaceBuilder, dims_of, smooth};
 
 const RAISED_TOLERANCE: f32 = 0.5;
@@ -26,6 +26,17 @@ pub(super) struct Flooded {
 }
 
 impl SolidMask {
+    pub(super) fn block_fill(&self, block: [i64; 3]) -> BlockFill {
+        match self {
+            Self::Flooded(flooded) => {
+                flooded
+                    .grid
+                    .block_fill(&flooded.foreground, flooded.admitted.as_ref(), block)
+            }
+            Self::Materialized(_) => BlockFill::Mixed,
+        }
+    }
+
     pub(super) fn get(&self, voxel: [i64; 3], anchor: [i64; 3]) -> bool {
         let local = [0, 1, 2].map(|axis| voxel[axis] - anchor[axis]);
         if local.iter().any(|value| *value < 0) {
@@ -56,7 +67,7 @@ pub(super) fn build(
     let dims = plan.dims();
     let blocks = plan.blocks();
     let total = plan.tile_count();
-    let step = total * 2;
+    let step = total * 2 + 1;
     let mut foreground = Bits::new(dims);
     let mut raised = Bits::new(dims);
     let mut admitted = roi.map(|_| Bits::new(dims));
@@ -123,7 +134,6 @@ pub(super) fn build(
     };
     Ok(Some(SurfaceMask { solid, field }))
 }
-
 struct MaskSink<'a> {
     foreground: &'a mut Bits,
     raised: &'a mut Bits,
@@ -338,7 +348,7 @@ fn morph(
 ) -> Result<Option<Bits>, String> {
     let dims = plan.dims();
     let total = plan.tile_count();
-    let step = total * 2;
+    let step = total * 2 + 1;
     let pad = plan.pad_morph();
     let mut solid = Bits::new(dims);
     let completed = crate::schedule::ordered(

@@ -290,9 +290,10 @@ impl SurfaceBuilder {
     }
 
     pub(super) fn pad_mask(&self) -> [u32; 3] {
+        let window = crate::local::BLOCK as u32 * crate::local::WINDOW as u32;
         [0, 1, 2].map(|axis| {
             let kernel = (self.kernels[axis].len() / 2) as u32;
-            align(kernel + 1) + crate::local::BLOCK as u32 * (crate::local::WINDOW as u32 + 1)
+            align(window + kernel + 1)
         })
     }
 
@@ -436,24 +437,29 @@ impl SurfaceBuilder {
         };
         let pass = Pass::refined(&self, limit, seeds, &distance);
         let workers = desired.min(capacity).min(pass.total().max(1));
-        match run_pass(&pass, workers, false, &mut inputs)? {
-            PassOutcome::Cancelled => Ok(None),
-            PassOutcome::Done(topology) => self.finish(*topology, desired, store),
-            PassOutcome::Saturated => Err(format!(
-                "the refined surface pass keeps a saturated distance of {limit} voxels"
-            )),
-        }
-    }
-
-    fn finish(
-        &self,
-        topology: grana_object::SurfaceTopology,
-        workers: usize,
-        store: &Arc<GeometryStore>,
-    ) -> Result<Option<SurfaceSet>, String> {
+        let topology = match run_pass(&pass, workers, false, &mut inputs)? {
+            PassOutcome::Cancelled => return Ok(None),
+            PassOutcome::Done(topology) => *topology,
+            PassOutcome::Saturated => {
+                return Err(format!(
+                    "the refined surface pass keeps a saturated distance of {limit} voxels"
+                ));
+            }
+        };
         let topology = Geometry::paged(store, topology).map_err(|error| error.to_string())?;
         let loaded = topology.load().map_err(|error| error.to_string())?;
-        let set = cut::cut(&loaded, self.params.cut(), &[], workers, Some(store))?;
+        let Some(set) = cut::cut(
+            &loaded,
+            self.params.cut(),
+            &[],
+            desired,
+            Some(store),
+            Some(cancel),
+        )?
+        else {
+            return Ok(None);
+        };
+        progress(pass.total() * 2 + 1, pass.total() * 2 + 1);
         Ok(Some(
             set.with_topology(topology)
                 .map_err(|error| error.to_string())?,
@@ -476,7 +482,10 @@ pub fn recut(
     };
     let workers = crate::schedule::workers(workers);
     let loaded = topology.load().map_err(|error| error.to_string())?;
-    let cut = cut::cut(&loaded, spec, set.removed(), workers, store)?
+    let Some(cut) = cut::cut(&loaded, spec, set.removed(), workers, store, None)? else {
+        return Ok(None);
+    };
+    let cut = cut
         .with_topology(topology.clone())
         .map_err(|error| error.to_string())?;
     Ok(Some(cut))
@@ -700,7 +709,7 @@ fn assemble(
                     assembler.push(assembled, *output)?;
                     assembled += 1;
                     if (assembled - 1).is_multiple_of(4) || assembled == total {
-                        progress(pass.total() + assembled, pass.total() * 2);
+                        progress(pass.total() + assembled, pass.total() * 2 + 1);
                     }
                 }
             }
@@ -745,34 +754,54 @@ fn gaussian(sigma: f32) -> Vec<f32> {
     kernel
 }
 
-fn parabola(line: &mut [f64], weight: f64) {
+pub(crate) struct Envelope {
+    locations: Vec<usize>,
+    boundaries: Vec<f64>,
+}
+
+impl Envelope {
+    pub(crate) fn new() -> Self {
+        Self {
+            locations: Vec::new(),
+            boundaries: Vec::new(),
+        }
+    }
+}
+
+fn parabola(line: &mut [f64], weight: f64, envelope: &mut Envelope) {
     let length = line.len();
     if length < 3 {
         return;
     }
-    let mut locations = vec![0usize; length];
-    let mut boundaries = vec![0.0f64; length + 1];
-    let mut envelope = 0usize;
+    let Envelope {
+        locations,
+        boundaries,
+    } = envelope;
+    locations.clear();
+    locations.resize(length, 0);
+    boundaries.clear();
+    boundaries.resize(length + 1, 0.0);
+    let mut size = 0usize;
     boundaries[0] = f64::NEG_INFINITY;
     boundaries[1] = f64::INFINITY;
     for position in 1..length {
-        let mut boundary = crossing(line, &locations, envelope, position, weight);
-        while envelope > 0 && boundary <= boundaries[envelope] {
-            envelope -= 1;
-            boundary = crossing(line, &locations, envelope, position, weight);
+        let mut boundary = crossing(line, locations, size, position, weight);
+        while size > 0 && boundary <= boundaries[size] {
+            size -= 1;
+            boundary = crossing(line, locations, size, position, weight);
         }
-        envelope += 1;
-        locations[envelope] = position;
-        boundaries[envelope] = boundary;
-        boundaries[envelope + 1] = f64::INFINITY;
+        size += 1;
+        locations[size] = position;
+        boundaries[size] = boundary;
+        boundaries[size + 1] = f64::INFINITY;
     }
-    let mut envelope = 0usize;
+    let mut slot = 0usize;
     for position in 0..length {
-        while boundaries[envelope + 1] < position as f64 {
-            envelope += 1;
+        while boundaries[slot + 1] < position as f64 {
+            slot += 1;
         }
-        let distance = position as f64 - locations[envelope] as f64;
-        line[position] = weight * distance * distance + line[locations[envelope]];
+        let distance = position as f64 - locations[slot] as f64;
+        line[position] = weight * distance * distance + line[locations[slot]];
     }
 }
 

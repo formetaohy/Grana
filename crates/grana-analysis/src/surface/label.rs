@@ -1,18 +1,23 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use super::{EMPTY, Measure, Tile, find, parabola, strides_of};
+use super::{EMPTY, Measure, Tile, find, strides_of};
 
 impl Tile<'_> {
     pub(super) fn watershed(&mut self) -> bool {
-        let saturated = self.fill_distance();
+        let (low, high) = self.space;
+        let saturated = self.fill_distance(low, high);
         let dims = self.dims;
         let strides = strides_of(dims);
-        let count = dims[0] * dims[1] * dims[2];
         self.order.clear();
-        for index in 0..count {
-            if self.mask[index] {
-                self.order.push(index as u32);
+        for z in low[2]..high[2] {
+            for y in low[1]..high[1] {
+                let base = dims[0] * (y + dims[1] * z);
+                for x in low[0]..high[0] {
+                    if self.mask[base + x] {
+                        self.order.push((base + x) as u32);
+                    }
+                }
             }
         }
         self.order_descending();
@@ -98,7 +103,7 @@ impl Tile<'_> {
         );
     }
 
-    fn fill_distance(&mut self) -> bool {
+    fn fill_distance(&mut self, low: [usize; 3], high: [usize; 3]) -> bool {
         let plan = self.pass.plan;
         let dims = self.dims;
         let strides = strides_of(dims);
@@ -106,22 +111,30 @@ impl Tile<'_> {
         let cap = self.pass.cap;
         self.chamfer.clear();
         self.chamfer.resize(count, 0);
-        for index in 0..count {
-            self.chamfer[index] = if self.mask[index] { cap } else { 0 };
+        for z in low[2]..high[2] {
+            for y in low[1]..high[1] {
+                let base = dims[0] * (y + dims[1] * z);
+                for x in low[0]..high[0] {
+                    self.chamfer[base + x] = if self.mask[base + x] { cap } else { 0 };
+                }
+            }
         }
         let anisotropy = plan.anisotropy;
         for axis in 0..3 {
             let weight = f64::from(anisotropy[axis] * anisotropy[axis]);
             let (first, second) = ((axis + 1) % 3, (axis + 2) % 3);
-            let length = dims[axis];
+            let length = high[axis] - low[axis];
             let mut line = vec![0.0f64; length];
-            for position in 0..dims[second] {
-                for row in 0..dims[first] {
-                    let base = strides[first] * row + strides[second] * position;
+            let mut envelope = super::Envelope::new();
+            for position in low[second]..high[second] {
+                for row in low[first]..high[first] {
+                    let base = strides[first] * row
+                        + strides[second] * position
+                        + strides[axis] * low[axis];
                     for (step, slot) in line.iter_mut().enumerate() {
                         *slot = f64::from(self.chamfer[base + strides[axis] * step]);
                     }
-                    parabola(&mut line, weight);
+                    super::parabola(&mut line, weight, &mut envelope);
                     for (step, value) in line.iter().enumerate() {
                         self.chamfer[base + strides[axis] * step] =
                             value.min(f64::from(cap)) as u32;
@@ -131,33 +144,45 @@ impl Tile<'_> {
         }
         match self.pass.distance {
             Some(distance) => {
-                for index in 0..count {
-                    if !self.mask[index] || self.chamfer[index] < cap {
-                        continue;
-                    }
-                    let voxel = [
-                        self.start[0] + (index % dims[0]) as i64,
-                        self.start[1] + ((index / strides[1]) % dims[1]) as i64,
-                        self.start[2] + (index / strides[2]) as i64,
-                    ];
-                    let value = distance.at(voxel);
-                    if value > self.chamfer[index] {
-                        self.chamfer[index] = value;
+                for z in low[2]..high[2] {
+                    for y in low[1]..high[1] {
+                        let base = dims[0] * (y + dims[1] * z);
+                        for x in low[0]..high[0] {
+                            let index = base + x;
+                            if !self.mask[index] || self.chamfer[index] < cap {
+                                continue;
+                            }
+                            let voxel = [
+                                self.start[0] + x as i64,
+                                self.start[1] + y as i64,
+                                self.start[2] + z as i64,
+                            ];
+                            let value = distance.at(voxel);
+                            if value > self.chamfer[index] {
+                                self.chamfer[index] = value;
+                            }
+                        }
                     }
                 }
                 false
             }
-            None => (0..count).any(|index| self.mask[index] && self.chamfer[index] == cap),
+            None => (low[2]..high[2]).any(|z| {
+                (low[1]..high[1]).any(|y| {
+                    let base = dims[0] * (y + dims[1] * z);
+                    (low[0]..high[0]).any(|x| self.mask[base + x] && self.chamfer[base + x] == cap)
+                })
+            }),
         }
     }
 
     pub(super) fn record_necks(&mut self) {
         let dims = self.dims;
         let strides = strides_of(dims);
+        let (low, high) = self.space;
         let mut pairs: HashMap<(u32, u32), u32> = HashMap::new();
-        for z in 0..dims[2] {
-            for y in 0..dims[1] {
-                for x in 0..dims[0] {
+        for z in low[2]..high[2] {
+            for y in low[1]..high[1] {
+                for x in low[0]..high[0] {
                     let index = x + dims[0] * (y + dims[1] * z);
                     if !self.mask[index] {
                         continue;

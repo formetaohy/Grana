@@ -39,6 +39,47 @@ impl Bits {
         self.words[self.rows * (y + self.dims[1] * z) + x / WORD] & (1 << (x % WORD)) != 0
     }
 
+    pub(super) fn any(&self, block: [usize; 3]) -> bool {
+        let Some((word, mask, first, last)) = self.span(block) else {
+            return false;
+        };
+        (first[1]..last[1]).any(|y| {
+            (first[2]..last[2]).any(|z| {
+                let row = self.rows * (y + self.dims[1] * z) + word;
+                self.words[row] & mask != 0
+            })
+        })
+    }
+
+    pub(super) fn all(&self, block: [usize; 3]) -> bool {
+        let Some((word, mask, first, last)) = self.span(block) else {
+            return false;
+        };
+        (first[1]..last[1]).all(|y| {
+            (first[2]..last[2]).all(|z| {
+                let row = self.rows * (y + self.dims[1] * z) + word;
+                self.words[row] & mask == mask
+            })
+        })
+    }
+
+    fn span(&self, block: [usize; 3]) -> Option<(usize, u64, [usize; 3], [usize; 3])> {
+        let mut first = [0usize; 3];
+        let mut last = [0usize; 3];
+        for axis in 0..3 {
+            let start = block[axis] * SIDE;
+            if start + SIDE > self.dims[axis] {
+                return None;
+            }
+            first[axis] = start;
+            last[axis] = start + SIDE;
+        }
+        let word = first[0] / WORD;
+        let offset = first[0] % WORD;
+        let mask = ((1u64 << SIDE) - 1) << offset;
+        Some((word, mask, first, last))
+    }
+
     pub(super) fn set(&mut self, x: usize, y: usize, z: usize) {
         self.words[self.rows * (y + self.dims[1] * z) + x / WORD] |= 1 << (x % WORD);
     }
@@ -163,6 +204,50 @@ impl Grid {
         grid.flood(foreground, admitted);
         grid.grow(mask);
         grid
+    }
+}
+
+pub(super) enum BlockFill {
+    Empty,
+    Solid,
+    Mixed,
+}
+
+impl Grid {
+    pub(super) fn block_fill(
+        &self,
+        foreground: &Bits,
+        admitted: Option<&Bits>,
+        block: [i64; 3],
+    ) -> BlockFill {
+        let mut index = [0usize; 3];
+        for axis in 0..3 {
+            let start = block[axis] * SIDE as i64;
+            if start < 0 || start + SIDE as i64 > self.dims[axis] as i64 {
+                return BlockFill::Mixed;
+            }
+            index[axis] = start as usize / SIDE;
+        }
+        if let Some(admitted) = admitted {
+            if !admitted.any(index) {
+                return BlockFill::Empty;
+            }
+            if !admitted.all(index) {
+                return BlockFill::Mixed;
+            }
+        }
+        if foreground.any(index) || self.growth.any(index) {
+            return BlockFill::Mixed;
+        }
+        if self.outside
+            [self.shell[0] * (1 + index[1] + self.shell[1] * (1 + index[2])) + 1 + index[0]]
+        {
+            return BlockFill::Empty;
+        }
+        if self.voxel.any(index) {
+            return BlockFill::Mixed;
+        }
+        BlockFill::Solid
     }
 
     pub(super) fn is_solid(

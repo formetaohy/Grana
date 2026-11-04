@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use glam::Vec3;
 use grana_geometry::{Bounds, GeometryStore, Mesh, MeshVertex};
@@ -16,17 +17,25 @@ const EMPTY: u32 = u32::MAX;
 const SPLIT_FLOOR: f64 = 1.0;
 const MAX_FOLD: u32 = 8;
 
+fn cancelled(cancel: Option<&AtomicBool>) -> bool {
+    cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+}
+
 pub(super) fn cut(
     topology: &SurfaceTopology,
     spec: SurfaceCut,
     removed: &[u32],
     workers: usize,
     store: Option<&Arc<GeometryStore>>,
-) -> Result<SurfaceSet, String> {
+    cancel: Option<&AtomicBool>,
+) -> Result<Option<SurfaceSet>, String> {
     let info = topology.info();
     let seeded = info.seeds() > 0;
     let mut merged = Merged::new(topology, removed);
-    merged.close(spec.split());
+    merged.close(spec.split(), cancel);
+    if cancelled(cancel) {
+        return Ok(None);
+    }
     let targets = merged.targets();
     merged.check_seeds(&targets)?;
     let (order, offsets) = grouped(topology, &targets);
@@ -51,9 +60,15 @@ pub(super) fn cut(
         spec,
     };
     let chunks = schedule::map(&candidates, workers, |root| {
+        if cancelled(cancel) {
+            return None;
+        }
         let range = offsets[*root as usize] as usize..offsets[*root as usize + 1] as usize;
         meshed.chunk(*root, &order[range])
     });
+    if cancelled(cancel) {
+        return Ok(None);
+    }
     let mut objects = Vec::new();
     let mut leaves = Vec::new();
     let mut intensities = Vec::new();
@@ -89,14 +104,13 @@ pub(super) fn cut(
     let mesh = Mesh::new(vertices, indices);
     let intensities = IntensityTable::new(info.channels(), intensities);
     let removed = removed.to_vec();
-    match store {
+    let set = match store {
         Some(store) => SurfaceSet::paged(info.level(), store, mesh, objects, intensities)
             .map(|set| set.with_cut(leaves, removed))
-            .map_err(|error| error.to_string()),
-        None => {
-            Ok(SurfaceSet::new(info.level(), mesh, objects, intensities).with_cut(leaves, removed))
-        }
-    }
+            .map_err(|error| error.to_string())?,
+        None => SurfaceSet::new(info.level(), mesh, objects, intensities).with_cut(leaves, removed),
+    };
+    Ok(Some(set))
 }
 
 fn grouped(topology: &SurfaceTopology, targets: &[u32]) -> (Vec<u32>, Vec<u32>) {
@@ -173,7 +187,7 @@ impl<'a> Merged<'a> {
         root
     }
 
-    fn close(&mut self, split: f32) {
+    fn close(&mut self, split: f32, cancel: Option<&AtomicBool>) {
         let seeded = self.topology.info().seeds() > 0;
         let merge_all = split == 0.0 && !seeded;
         let mut seams = HashMap::<(u32, u32), u32>::new();
@@ -185,7 +199,10 @@ impl<'a> Merged<'a> {
         seams.sort_unstable_by(|(left_key, left_saddle), (right_key, right_saddle)| {
             right_saddle.cmp(left_saddle).then(left_key.cmp(right_key))
         });
-        for ((left, right), saddle) in seams {
+        for (index, ((left, right), saddle)) in seams.into_iter().enumerate() {
+            if index.is_multiple_of(4096) && cancelled(cancel) {
+                return;
+            }
             self.join(left, right, saddle, split, merge_all, seeded);
         }
     }
