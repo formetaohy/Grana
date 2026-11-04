@@ -1,3 +1,4 @@
+use std::io::BufReader;
 use std::path::PathBuf;
 
 use glam::Vec2;
@@ -174,6 +175,82 @@ fn writes_a_transparent_viewport() {
         }
     }
     assert!(edge > 0, "the volume carries no semi transparent edge");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn writes_a_transparent_animation() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let volume = sphere();
+    let mut scene = Scene::new(Dataset::synthetic("cells", volume.pyramid()));
+    let Some((camera, section)) = view(&volume) else {
+        return;
+    };
+    let root = scratch("animation");
+    let path = root.join("cells.png");
+    let mut engine = Engine::new(&device, &queue, FORMAT);
+    engine.set_dataset(&device, scene.dataset.pyramid());
+    let mut ui = grana_ui::Ui::new(&device, &queue, FORMAT);
+    let poses = (0..2)
+        .map(|_| Pose {
+            time: 0,
+            camera,
+            section,
+        })
+        .collect::<Vec<_>>();
+    let outcome = run(
+        &mut engine,
+        &mut ui,
+        &volume,
+        &mut scene,
+        &device,
+        &queue,
+        Plan {
+            destination: Destination::Animation { path: path.clone() },
+            panels: panels(),
+            width: WIDTH,
+            transparent: true,
+            poses,
+            fps: 12,
+        },
+    );
+    assert!(matches!(outcome, Outcome::Complete { .. }));
+    let file = std::fs::File::open(&path).expect("the animation reads");
+    let mut reader = png::Decoder::new(BufReader::new(file))
+        .read_info()
+        .expect("the animation header reads");
+    assert_eq!(
+        reader
+            .info()
+            .animation_control()
+            .expect("the animation carries its control")
+            .num_frames,
+        2
+    );
+    assert_eq!(
+        reader
+            .info()
+            .frame_control()
+            .expect("the first frame carries its delay")
+            .delay_den,
+        12
+    );
+    let mut buffer = vec![0; reader.output_buffer_size().expect("the frames are sized")];
+    let first = reader
+        .next_frame(&mut buffer)
+        .expect("the first frame reads");
+    assert_eq!(first.color_type, png::ColorType::Rgba);
+    assert_eq!(buffer[3], 0, "the animation keeps a transparent background");
+    let centre = ((first.height / 2 * first.width + first.width / 4) * 4) as usize;
+    assert!(
+        buffer[centre + 3] > 0,
+        "the animation keeps the volume of its frames"
+    );
+    reader
+        .next_frame(&mut buffer)
+        .expect("the second frame reads");
     std::fs::remove_dir_all(&root).ok();
 }
 

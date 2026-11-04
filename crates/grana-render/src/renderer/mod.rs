@@ -227,6 +227,11 @@ impl Renderer {
         self.transparent = transparent;
     }
 
+    pub fn begin_export(&mut self) {
+        self.frame_target = None;
+        self.settled = None;
+    }
+
     pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) {
         let channels = pyramid.channel_count();
         assert!(

@@ -1,29 +1,16 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use grana_raster::{Grid, Raster, composite, read, write};
+use grana_raster::{Cell, Group, Raster, Sheet, composite, read, write};
+use grana_text::Fonts;
 
 #[test]
-fn round_trips_decodes_and_tiles_rasters() {
+fn round_trips_decodes_and_labels_rasters() {
     let root = scratch("grana-raster");
     let file = root.join("red.png");
     let red = Raster::solid(4, 2, [255, 0, 0, 255]);
     write(&file, &red).expect("the raster writes");
     assert_eq!(read(&file).expect("the raster reads"), red);
-
-    let green = Raster::solid(4, 2, [0, 255, 0, 255]);
-    let blue = Raster::solid(4, 2, [0, 0, 255, 255]);
-    let grid = Grid::new([8, 8], 3);
-    let sheet = grid.compose(&[red.clone(), green, blue]);
-    assert_eq!(sheet.size(), [48, 48], "the sheet wraps three tiles twice");
-    assert_eq!(sheet.pixel(16, 16), [255, 0, 0, 255]);
-    assert_eq!(sheet.pixel(32, 16), [0, 255, 0, 255]);
-    assert_eq!(sheet.pixel(16, 32), [0, 0, 255, 255]);
-    assert_eq!(
-        sheet.pixel(0, 0),
-        [18, 20, 24, 255],
-        "the margin stays empty"
-    );
 
     let halved = Raster::new(
         2,
@@ -43,6 +30,42 @@ fn round_trips_decodes_and_tiles_rasters() {
         (i32::from(blended.pixel(0, 0)[0]) - 128).abs() <= 1,
         "a half transparent layer blends"
     );
+
+    let green = Raster::solid(8, 8, [0, 255, 0, 255]);
+    let blue = Raster::solid(8, 8, [0, 0, 255, 255]);
+    let mut fonts = Fonts::system();
+    let group = Group {
+        name: "group",
+        cells: vec![
+            Cell {
+                image: &green,
+                title: "green",
+                detail: "ok",
+            },
+            Cell {
+                image: &blue,
+                title: "blue",
+                detail: "resumed",
+            },
+        ],
+    };
+    let sheet = Sheet::new([8, 8], 2).compose(&mut fonts, &[group]);
+    assert_eq!(sheet.size(), [76, 172], "the sheet lays out its bands");
+    assert_eq!(
+        sheet.pixel(28, 82),
+        [0, 255, 0, 255],
+        "the first tile lands"
+    );
+    assert_eq!(
+        sheet.pixel(48, 82),
+        [0, 0, 255, 255],
+        "the second tile lands"
+    );
+    let ink = (24..62)
+        .flat_map(|y| (24..72).map(move |x| (x, y)))
+        .filter(|(x, y)| sheet.pixel(*x, *y) != [18, 20, 24, 255])
+        .count();
+    assert!(ink > 0, "the group heading draws its ink");
     std::fs::remove_dir_all(&root).expect("the scratch folder is released");
 }
 

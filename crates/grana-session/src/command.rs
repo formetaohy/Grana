@@ -214,6 +214,9 @@ pub enum Command {
     ExportMovie {
         width: u32,
     },
+    ExportAnimation {
+        width: u32,
+    },
     SetExport(Export),
     ExportSequence(Export),
     CancelExport,

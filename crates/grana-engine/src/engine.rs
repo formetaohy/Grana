@@ -150,6 +150,7 @@ impl Engine {
         if self.export.is_some() {
             return Err("an export is already running".to_string());
         }
+        self.renderer.begin_export();
         self.export = Some(Export::start(device, self.renderer.format(), plan)?);
         self.output_message = None;
         Ok(())

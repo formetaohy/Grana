@@ -697,7 +697,13 @@ fn renders_a_snapshot_at_the_end_of_every_dataset() {
     );
 
     let sheet = grana_raster::read(&output.join("sheet.png")).expect("the quality sheet composes");
-    assert_eq!(sheet.size(), [824, 524], "the sheet tiles its snapshots");
+    assert_eq!(sheet.size(), [768, 614], "the sheet tiles its snapshots");
+    let corner = sheet.pixel(4, 4);
+    assert_eq!(
+        [corner[0], corner[1], corner[2]],
+        [18, 20, 24],
+        "the sheet keeps its own ground"
+    );
     let manifest = read(&output.join("sheet.csv"));
     assert!(
         manifest.starts_with("cell,group,dataset,scene,status"),
@@ -721,7 +727,7 @@ fn renders_a_snapshot_at_the_end_of_every_dataset() {
     );
     assert_eq!(recorder.calls.load(Ordering::Relaxed), 2);
     let rebuilt = grana_raster::read(&output.join("sheet.png")).expect("the sheet is rewritten");
-    assert_eq!(rebuilt.size(), [824, 524]);
+    assert_eq!(rebuilt.size(), [768, 614]);
 
     let orphaned = run(&protocol, &datasets, &output, 1, false);
     assert_eq!(

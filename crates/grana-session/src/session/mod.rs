@@ -58,6 +58,7 @@ pub struct Effects {
     pub save_project: Option<bool>,
     pub snapshot: Option<Export>,
     pub export_movie: Option<u32>,
+    pub export_animation: Option<u32>,
     pub sequence: Option<Export>,
     pub cancel_export: bool,
     pub keyframe: bool,

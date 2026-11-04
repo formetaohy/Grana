@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use glam::Vec2;
+use grana_text::Fonts;
 
 use crate::atlas::{Atlas, GlyphSlot};
 use crate::color::Color;
-use crate::font::Fonts;
 use crate::theme::TypeStyle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,14 +227,16 @@ impl Text {
             for token in tokenize(paragraph) {
                 let character = token.chars().next().unwrap_or(' ');
                 let face = self.fonts.face_for(character);
-                let run = self.fonts.shape(face, token, style, 1.0);
+                let run = self.fonts.shape(face, token, style.size, style.weight, 1.0);
                 let whitespace = token.starts_with(' ');
                 if wrap && bounded && !whitespace && pen > 0.0 && pen + run.width > max_width + 0.01
                 {
                     flush(&mut lines, &mut glyphs, &mut pen);
                 }
                 if truncate && !wrap && bounded && pen + run.width > max_width {
-                    let ellipsis = self.fonts.shape(face, "\u{2026}", style, 1.0);
+                    let ellipsis =
+                        self.fonts
+                            .shape(face, "\u{2026}", style.size, style.weight, 1.0);
                     if pen + ellipsis.width <= max_width {
                         for glyph in &ellipsis.glyphs {
                             glyphs.push(PlacedGlyph {

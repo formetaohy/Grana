@@ -964,6 +964,7 @@ dependencies = [
  "grana-ui",
  "grana-video",
  "grana-volume",
+ "png",
  "wgpu",
 ]
 
@@ -1043,6 +1044,7 @@ dependencies = [
  "grana-protocol",
  "grana-raster",
  "grana-scene",
+ "grana-text",
  "grana-volume",
  "serde",
  "serde_json",
@@ -1089,6 +1091,7 @@ dependencies = [
 name = "grana-raster"
 version = "0.1.1"
 dependencies = [
+ "grana-text",
  "png",
  "thiserror 2.0.21",
 ]
@@ -1142,6 +1145,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-text"
+version = "0.1.1"
+dependencies = [
+ "swash",
+]
+
+[[package]]
 name = "grana-tiff"
 version = "0.1.1"
 dependencies = [
@@ -1158,7 +1168,7 @@ dependencies = [
  "bytemuck",
  "glam",
  "grana-gpu",
- "swash",
+ "grana-text",
  "wgpu",
 ]
 
@@ -1167,6 +1177,7 @@ name = "grana-video"
 version = "0.1.1"
 dependencies = [
  "openh264",
+ "png",
  "thiserror 2.0.21",
 ]
 

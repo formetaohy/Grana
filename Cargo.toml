@@ -44,6 +44,7 @@ grana-project = { version = "0.1.1", path = "crates/grana-project" }
 grana-protocol = { version = "0.1.1", path = "crates/grana-protocol" }
 grana-pipeline = { version = "0.1.1", path = "crates/grana-pipeline" }
 grana-raster = { version = "0.1.1", path = "crates/grana-raster" }
+grana-text = { version = "0.1.1", path = "crates/grana-text" }
 grana-ui = { version = "0.1.1", path = "crates/grana-ui" }
 grana-editor = { version = "0.1.1", path = "crates/grana-editor" }
 grana-analysis = { version = "0.1.1", path = "crates/grana-analysis" }

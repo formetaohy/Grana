@@ -23,6 +23,7 @@ wgpu = { workspace = true }
 glam = { workspace = true }
 grana-geometry = { workspace = true }
 grana-volume = { workspace = true }
+png = { workspace = true }
 
 [lints]
 workspace = true

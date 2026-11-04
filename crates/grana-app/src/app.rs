@@ -436,6 +436,9 @@ impl App {
         if let Some(width) = effects.export_movie {
             self.begin_movie(width);
         }
+        if let Some(width) = effects.export_animation {
+            self.begin_animation(width);
+        }
         if let Some(export) = effects.sequence {
             self.begin_sequence(export);
         }
@@ -729,6 +732,42 @@ impl App {
             panels,
             width,
             transparent: false,
+            poses,
+            fps,
+        });
+    }
+
+    fn begin_animation(&mut self, width: u32) {
+        if self.engine.as_ref().is_some_and(Engine::exporting) || self.session.loading().is_some() {
+            return;
+        }
+        if self.session.timeline().is_empty() {
+            self.set_output_message("set a keyframe before exporting");
+            return;
+        }
+        let Some(scene) = self.session.scene() else {
+            return;
+        };
+        let suggested = format!(
+            "{}-animation.png",
+            grana_session::slug(scene.dataset.name())
+        );
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Save a transparent animation")
+            .set_file_name(suggested)
+            .add_filter("APNG", &["png"])
+            .save_file()
+        else {
+            return;
+        };
+        let poses = poses(self.session.timeline());
+        let fps = self.session.timeline().fps();
+        let panels = self.panels();
+        self.start_export(Plan {
+            destination: Destination::Animation { path },
+            panels,
+            width,
+            transparent: true,
             poses,
             fps,
         });

@@ -1,0 +1,13 @@
+[package]
+name = "grana-text"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+swash = "0.2"
+
+[lints]
+workspace = true

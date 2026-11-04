@@ -403,6 +403,7 @@ impl Session {
             Command::SetTimelineFps(fps) => self.timeline.set_fps(fps),
             Command::SetTimelineDuration(duration) => self.timeline.set_duration(duration),
             Command::ExportMovie { width } => effects.export_movie = Some(width),
+            Command::ExportAnimation { width } => effects.export_animation = Some(width),
             Command::SetExport(export) => self.export = export,
             Command::ExportSequence(export) => {
                 self.export = export;

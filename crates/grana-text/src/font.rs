@@ -1,64 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use swash::scale::{Render, ScaleContext, Scaler, Source};
 use swash::shape::{ShapeContext, Shaper};
 use swash::zeno::{Format, Vector};
 use swash::{FontRef, Setting};
 
-use crate::theme::TypeStyle;
-
-const FACE_CANDIDATES: &[(&str, &[&str])] = &[
-    (
-        "windows",
-        &[
-            "C:/Windows/Fonts/SegUIVar.ttf",
-            "C:/Windows/Fonts/segoeui.ttf",
-        ],
-    ),
-    (
-        "macos",
-        &[
-            "/System/Library/Fonts/SFNS.ttf",
-            "/System/Library/Fonts/SFNSDisplay.ttf",
-            "/System/Library/Fonts/Helvetica.ttc",
-        ],
-    ),
-    (
-        "linux",
-        &[
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        ],
-    ),
-];
-
-const FALLBACK_CANDIDATES: &[&str] = &[
-    "C:/Windows/Fonts/seguisym.ttf",
-    "C:/Windows/Fonts/msyh.ttc",
-    "C:/Windows/Fonts/msjh.ttc",
-    "C:/Windows/Fonts/simsun.ttc",
-    "/System/Library/Fonts/PingFang.ttc",
-    "/System/Library/Fonts/Hiragino Sans GB.ttc",
-    "/System/Library/Fonts/STHeiti Light.ttc",
-    "/System/Library/Fonts/Apple Symbols.ttf",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-];
-
-pub struct Face {
-    font: FontRef<'static>,
-}
-
-impl Face {
-    fn load(path: &Path) -> Option<Self> {
-        let data = std::fs::read(path).ok()?;
-        let leaked: &'static [u8] = Box::leak(data.into_boxed_slice());
-        let font = FontRef::from_index(leaked, 0)?;
-        Some(Self { font })
-    }
-}
+use crate::face::{self, Face};
+use crate::glyph::GlyphRaster;
 
 pub struct Fonts {
     faces: Vec<Face>,
@@ -70,19 +18,10 @@ pub struct Fonts {
 
 impl Fonts {
     pub fn system() -> Self {
-        let mut paths = Vec::new();
-        if let Ok(path) = std::env::var("GRANA_UI_FONT") {
-            paths.push(PathBuf::from(path));
-        }
-        for (platform, candidates) in FACE_CANDIDATES {
-            if std::env::consts::OS == *platform {
-                paths.extend(candidates.iter().map(PathBuf::from));
-            }
-        }
         let mut faces = Vec::new();
         let mut names = Vec::new();
-        for path in &paths {
-            if let Some(face) = Face::load(path) {
+        for path in face::primary_paths() {
+            if let Some(face) = Face::load(&path) {
                 faces.push(face);
                 names.push(path.display().to_string());
             }
@@ -96,7 +35,7 @@ impl Fonts {
             shape: ShapeContext::new(),
             scale: ScaleContext::new(),
             names,
-            pending: FALLBACK_CANDIDATES.iter().map(PathBuf::from).collect(),
+            pending: face::fallback_paths(),
         }
     }
 
@@ -109,11 +48,7 @@ impl Fonts {
     }
 
     pub fn face_for(&mut self, character: char) -> usize {
-        if let Some(index) = self
-            .faces
-            .iter()
-            .position(|face| face.font.charmap().map(character) != 0)
-        {
+        if let Some(index) = self.faces.iter().position(|face| face.covers(character)) {
             return index;
         }
         while !self.pending.is_empty() {
@@ -121,7 +56,7 @@ impl Fonts {
             let Some(face) = Face::load(&path) else {
                 continue;
             };
-            let has_glyph = face.font.charmap().map(character) != 0;
+            let has_glyph = face.covers(character);
             self.faces.push(face);
             self.names.push(path.display().to_string());
             if has_glyph {
@@ -131,16 +66,21 @@ impl Fonts {
         0
     }
 
+    fn font(&self, index: usize) -> FontRef<'static> {
+        self.faces[index].font
+    }
+
     fn shaper(
         &mut self,
         font: FontRef<'static>,
-        style: TypeStyle,
+        size: f32,
+        weight: f32,
         pixels_per_point: f32,
     ) -> Shaper<'_> {
         self.shape
             .builder(font)
-            .size(style.size * pixels_per_point)
-            .variations([Setting::from(("wght", style.weight))])
+            .size(size * pixels_per_point)
+            .variations([Setting::from(("wght", weight))])
             .build()
     }
 
@@ -148,11 +88,12 @@ impl Fonts {
         &mut self,
         index: usize,
         text: &str,
-        style: TypeStyle,
+        size: f32,
+        weight: f32,
         pixels_per_point: f32,
     ) -> ShapedRun {
-        let font = self.faces[index].font;
-        let mut shaper = self.shaper(font, style, pixels_per_point);
+        let font = self.font(index);
+        let mut shaper = self.shaper(font, size, weight, pixels_per_point);
         let metrics = shaper.metrics();
         shaper.add_str(text);
         let mut glyphs = Vec::new();
@@ -182,38 +123,43 @@ impl Fonts {
         &mut self,
         index: usize,
         glyph: u16,
-        style: TypeStyle,
+        style: GlyphStyle,
         pixels_per_point: f32,
-        hint: bool,
-        offset: Vector,
+        offset: [f32; 2],
     ) -> Option<GlyphRaster> {
-        let font = self.faces[index].font;
-        let scaler: Scaler<'_> = self
+        let font = self.font(index);
+        let mut scaler: Scaler<'_> = self
             .scale
             .builder(font)
             .size(style.size * pixels_per_point)
-            .hint(hint)
+            .hint(style.hint)
             .variations([Setting::from(("wght", style.weight))])
             .build();
-        let mut scaler = scaler;
-        let render = Render::new(&[Source::Outline]);
-        let mut render = render;
-        render.format(Format::Alpha).offset(offset);
+        let mut render = Render::new(&[Source::Outline]);
+        render
+            .format(Format::Alpha)
+            .offset(Vector::new(offset[0], offset[1]));
         let image = render.render(&mut scaler, glyph)?;
         let placement = image.placement;
-        let data = image.data.to_vec();
         Some(GlyphRaster {
             left: placement.left,
             top: placement.top,
             width: placement.width,
             height: placement.height,
-            data,
+            data: image.data.to_vec(),
         })
     }
 
     pub fn has_glyph(&self, index: usize, character: char) -> bool {
-        self.faces[index].font.charmap().map(character) != 0
+        self.faces[index].covers(character)
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct GlyphStyle {
+    pub size: f32,
+    pub weight: f32,
+    pub hint: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -231,13 +177,4 @@ pub struct ShapedRun {
     pub ascent: f32,
     pub descent: f32,
     pub leading: f32,
-}
-
-#[derive(Clone, Debug)]
-pub struct GlyphRaster {
-    pub left: i32,
-    pub top: i32,
-    pub width: u32,
-    pub height: u32,
-    pub data: Vec<u8>,
 }

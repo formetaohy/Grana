@@ -178,12 +178,25 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                             {
                                 commands.push(Command::ExportMovie { width });
                             }
+                            if widget::button_with(
+                                ui,
+                                "export.animation",
+                                "Transparent animation",
+                                if enabled { Role::Control } else { Role::Quiet },
+                                Length::Fill,
+                            )
+                            .clicked
+                                && enabled
+                            {
+                                commands.push(Command::ExportAnimation { width });
+                            }
                         }
                     }
                     widget::weak(
                         ui,
                         "Exports the full viewport: volume, section and figure overlay.",
                     );
+                    widget::weak(ui, "An animation keeps the alpha channel (APNG).");
                 });
                 card(ui, 8.0, |ui| {
                     card_title(ui, Icon::Camera, "Image", None);

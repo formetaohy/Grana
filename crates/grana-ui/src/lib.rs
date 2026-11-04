@@ -2,7 +2,6 @@ mod atlas;
 mod clipboard;
 mod color;
 mod edit;
-mod font;
 mod geometry;
 pub mod icon;
 mod input;

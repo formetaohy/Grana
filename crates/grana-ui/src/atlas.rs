@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
+use grana_text::{Fonts, GlyphRaster, GlyphStyle};
 use wgpu::{
     Device, FilterMode, Queue, Sampler, SamplerDescriptor, Texture, TextureDescriptor,
     TextureDimension, TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
 };
 
-use crate::font::{Fonts, GlyphRaster};
 use crate::theme::TypeStyle;
 
 const PADDING: u32 = 1;
@@ -132,10 +132,13 @@ impl Atlas {
         let raster = fonts.rasterize(
             request.face,
             request.id,
-            request.style,
+            GlyphStyle {
+                size: request.style.size,
+                weight: request.style.weight,
+                hint: request.hint,
+            },
             request.pixels_per_point,
-            request.hint,
-            swash::zeno::Vector::new(quantized_x as f32 / 4.0, quantized_y as f32 / 4.0),
+            [quantized_x as f32 / 4.0, quantized_y as f32 / 4.0],
         )?;
         let slot = self.insert(&raster)?;
         self.slots.insert(key, slot);

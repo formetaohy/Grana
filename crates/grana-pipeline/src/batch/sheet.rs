@@ -1,4 +1,5 @@
-use grana_raster::Grid;
+use grana_raster::{Cell, Group, Raster, Sheet};
+use grana_text::Fonts;
 
 use super::{Plan, Row, SNAPSHOT};
 
@@ -6,29 +7,52 @@ pub(super) const SHEET: &str = "sheet.png";
 
 pub(super) const MANIFEST: &str = "sheet.csv";
 
-const TILE: [u32; 2] = [800, 500];
+const TILE: [u32; 2] = [720, 450];
+
+const COLUMNS: u32 = 3;
+
+struct Entry {
+    dataset: usize,
+    group: String,
+    title: String,
+    detail: String,
+    image: Raster,
+}
 
 pub(super) fn write(plan: &Plan, rows: &[Option<Row>]) -> Result<(), String> {
-    let mut tiles = Vec::new();
+    let mut entries = Vec::new();
     let mut cells = vec![None; plan.datasets.len()];
     for (index, row) in rows.iter().enumerate() {
-        if row.is_none() {
-            continue;
-        }
-        let path = plan
-            .output
-            .join(plan.datasets[index].folder())
-            .join(SNAPSHOT);
-        let Ok(tile) = grana_raster::read(&path) else {
+        let Some(row) = row else {
             continue;
         };
-        cells[index] = Some(tiles.len() + 1);
-        tiles.push(tile);
+        let dataset = &plan.datasets[index];
+        let path = plan.output.join(dataset.folder()).join(SNAPSHOT);
+        let Ok(image) = grana_raster::read(&path) else {
+            continue;
+        };
+        entries.push(Entry {
+            dataset: index,
+            group: dataset.group().to_string(),
+            title: dataset.name(),
+            detail: format!("{} · {}", dataset.scene_label(), row.status),
+            image,
+        });
     }
-    if tiles.is_empty() {
+    if entries.is_empty() {
         return Ok(());
     }
-    let sheet = Grid::new(TILE, tiles.len()).compose(&tiles);
+    entries.sort_by(|left, right| {
+        left.group
+            .cmp(&right.group)
+            .then(left.dataset.cmp(&right.dataset))
+    });
+    for (ordinal, entry) in entries.iter().enumerate() {
+        cells[entry.dataset] = Some(ordinal + 1);
+    }
+    let groups = groups(&entries);
+    let mut fonts = Fonts::system();
+    let sheet = Sheet::new(TILE, COLUMNS).compose(&mut fonts, &groups);
     grana_raster::write(&plan.output.join(SHEET), &sheet).map_err(String::from)?;
     let mut lines = vec![grana_measure::csv::line(&[
         "cell", "group", "dataset", "scene", "status",
@@ -46,4 +70,27 @@ pub(super) fn write(plan: &Plan, rows: &[Option<Row>]) -> Result<(), String> {
     }
     std::fs::write(plan.output.join(MANIFEST), lines.concat())
         .map_err(|error| format!("failed to write the quality sheet manifest: {error}"))
+}
+
+fn groups<'a>(entries: &'a [Entry]) -> Vec<Group<'a>> {
+    let mut groups = Vec::new();
+    let mut start = 0usize;
+    while start < entries.len() {
+        let name = entries[start].group.as_str();
+        let end = entries[start..]
+            .iter()
+            .position(|entry| entry.group != entries[start].group)
+            .map_or(entries.len(), |offset| start + offset);
+        let cells = entries[start..end]
+            .iter()
+            .map(|entry| Cell {
+                image: &entry.image,
+                title: &entry.title,
+                detail: &entry.detail,
+            })
+            .collect();
+        groups.push(Group { name, cells });
+        start = end;
+    }
+    groups
 }
