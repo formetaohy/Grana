@@ -576,6 +576,36 @@ impl Session {
         true
     }
 
+    fn merge_objects(&mut self, source: ObjectSetId, target: ObjectSetId) -> bool {
+        if self.recipe.is_some() {
+            self.message = Some(Message::error("a protocol replay merges no object sets"));
+            return false;
+        }
+        if self.busy(source) || self.busy(target) {
+            self.message = Some(Message::error("the object set is busy with an analysis"));
+            return false;
+        }
+        let merged = match self.scene.as_mut() {
+            Some(scene) => scene.merge_objects(source, target),
+            None => return false,
+        };
+        match merged {
+            Ok(()) => {
+                if self.measure.set() == Some(source)
+                    && let Some(scene) = self.scene.as_ref()
+                {
+                    self.measure.select(target, scene);
+                }
+                self.message = None;
+                true
+            }
+            Err(detail) => {
+                self.message = Some(Message::error(detail));
+                false
+            }
+        }
+    }
+
     fn busy(&self, set: ObjectSetId) -> bool {
         self.analysis
             .iter()
@@ -661,6 +691,9 @@ impl Session {
                 self.message = copied
                     .is_none()
                     .then(|| Message::error("the object set cannot be copied"));
+            }
+            Command::MergeObjects { source, target } => {
+                self.merge_objects(source, target);
             }
             Command::RemoveObject(set) => self.remove_object(set),
             Command::Detect(set) => self.start_detect(set),

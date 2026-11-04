@@ -206,6 +206,13 @@ fn object(
         .and_then(|spots| spots.mean_quality());
     let open_id = format!("object.{}.open", id.raw());
     let expanded = ui.disclosure_open(&open_id, false);
+    let merges = state
+        .scene
+        .objects
+        .iter()
+        .filter(|set| set.id() != id && set.kind() == kind && set.channel() == channel)
+        .map(|set| (set.id(), set.name().to_string()))
+        .collect::<Vec<_>>();
     let look = state_card(ui);
     ui.push_id(&format!("object.{}", id.raw()));
     ui.column(
@@ -359,6 +366,7 @@ fn object(
                 let open = ui.popup_open(menu_key);
                 let mut rename = false;
                 let mut duplicate = false;
+                let mut merge = None;
                 let mut remove = false;
                 let mut reorder = None;
                 grana_ui::popover::popover(ui, "object.menu", open, menu_rect, 188.0, |ui| {
@@ -379,6 +387,16 @@ fn object(
                         None,
                     ) {
                         duplicate = true;
+                    }
+                    if !merges.is_empty() {
+                        grana_ui::popover::separator(ui);
+                        widget::caption(ui, "Merge into");
+                        for (index, (candidate, label)) in merges.iter().enumerate() {
+                            if grana_ui::popover::menu_row(ui, index, label, false) {
+                                merge = Some(*candidate);
+                            }
+                        }
+                        grana_ui::popover::separator(ui);
                     }
                     if position > 0
                         && grana_ui::popover::action_row(
@@ -419,6 +437,10 @@ fn object(
                 if duplicate {
                     ui.close_popup();
                     commands.push(Command::DuplicateObject(id));
+                }
+                if let Some(target) = merge {
+                    ui.close_popup();
+                    commands.push(Command::MergeObjects { source: id, target });
                 }
                 if let Some(index) = reorder {
                     ui.close_popup();

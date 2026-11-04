@@ -431,6 +431,13 @@ impl<T: Decode> Geometry<T> {
             Stored::Paged(paged) => paged.bytes(),
         }
     }
+
+    pub fn replace(&self, payload: T) -> Result<Self, Error> {
+        Ok(match &self.stored {
+            Stored::Resident(_) => Self::resident(payload),
+            Stored::Paged(paged) => Self::paged(&paged.store, payload)?,
+        })
+    }
 }
 
 impl Geometry<PackedMesh> {
@@ -439,7 +446,7 @@ impl Geometry<PackedMesh> {
         if object >= mesh.object_count() {
             return Ok(None);
         }
-        self.rebuild(mesh.without(object)).map(Some)
+        self.replace(mesh.without(object)).map(Some)
     }
 
     pub fn retain(&self, keep: &[bool]) -> Result<Self, Error> {
@@ -449,14 +456,13 @@ impl Geometry<PackedMesh> {
             mesh.object_count(),
             "the kept objects cover every packed object"
         );
-        self.rebuild(mesh.retain(keep))
+        self.replace(mesh.retain(keep))
     }
 
-    fn rebuild(&self, payload: PackedMesh) -> Result<Self, Error> {
-        Ok(match &self.stored {
-            Stored::Resident(_) => Self::resident(payload),
-            Stored::Paged(paged) => Self::paged(&paged.store, payload)?,
-        })
+    pub fn merge(&self, other: &Self) -> Result<Self, Error> {
+        let mesh = self.load()?;
+        let absorbed = other.load()?;
+        self.replace(mesh.merge(&absorbed))
     }
 }
 

@@ -246,4 +246,14 @@ impl IntensityTable {
         }
         Self::new(self.channels, values)
     }
+
+    pub fn merge(&self, other: &Self) -> Self {
+        assert_eq!(
+            self.channels, other.channels,
+            "a merged intensity table measures one set of channels"
+        );
+        let mut values = self.values.clone();
+        values.extend_from_slice(&other.values);
+        Self::new(self.channels, values)
+    }
 }

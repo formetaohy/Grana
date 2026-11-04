@@ -145,6 +145,36 @@ impl Objects {
         Some(derived)
     }
 
+    pub fn merge(&mut self, source: ObjectSetId, target: ObjectSetId) -> Result<(), String> {
+        if source == target {
+            return Err("an object set merges into another object set".to_string());
+        }
+        let source_index = self
+            .sets
+            .iter()
+            .position(|set| set.id() == source)
+            .ok_or("the absorbed object set is missing from the scene")?;
+        let target_index = self
+            .sets
+            .iter()
+            .position(|set| set.id() == target)
+            .ok_or("the merged object set is missing from the scene")?;
+        if self.sets[source_index].kind() != self.sets[target_index].kind() {
+            return Err("an object set merges into a set of its own kind".to_string());
+        }
+        let stamp = take_stamp(&mut self.stamp);
+        let merged = self.sets[target_index].merged(&self.sets[source_index], stamp)?;
+        self.sets.remove(source_index);
+        let position = if source_index < target_index {
+            target_index - 1
+        } else {
+            target_index
+        };
+        self.sets[position] = merged;
+        self.clear_relations(source);
+        Ok(())
+    }
+
     pub fn add_relation(&mut self, id: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {
         let stamp = take_stamp(&mut self.stamp);
         self.get_mut(id)

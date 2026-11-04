@@ -265,6 +265,28 @@ impl FilamentSet {
             intensities: self.intensities.retain(keep),
         })
     }
+
+    pub fn merge(&self, other: &Self) -> Result<Self, grana_geometry::Error> {
+        assert_eq!(
+            self.level, other.level,
+            "a merged filament set holds one resolution level"
+        );
+        let geometry = self.geometry.merge(&other.geometry)?;
+        let mut objects = self.objects.clone();
+        objects.extend_from_slice(&other.objects);
+        let intensities = self.intensities.merge(&other.intensities);
+        let packed = geometry.load()?;
+        assert!(
+            agrees(&packed, &objects, &intensities),
+            "a merged filament set names every object it holds"
+        );
+        Ok(Self {
+            level: self.level,
+            geometry,
+            objects,
+            intensities,
+        })
+    }
 }
 
 fn agrees(

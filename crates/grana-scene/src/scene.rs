@@ -236,6 +236,25 @@ impl Scene {
         self.objects.derive(id, suffix)
     }
 
+    pub fn merge_objects(
+        &mut self,
+        source: ObjectSetId,
+        target: ObjectSetId,
+    ) -> Result<(), String> {
+        self.objects.merge(source, target)?;
+        if self.mask == Some(source) {
+            self.mask = None;
+        }
+        if self
+            .selection
+            .is_some_and(|selection| selection.set == source)
+        {
+            self.selection = None;
+        }
+        self.sync_coloc_inputs();
+        Ok(())
+    }
+
     pub fn duplicate_object(&mut self, id: ObjectSetId) -> Option<ObjectSetId> {
         self.derive_object(id, "copy")
     }

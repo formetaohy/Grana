@@ -1,5 +1,5 @@
 use grana_display::{CameraState, SectionState};
-use grana_figure::Legend;
+use grana_figure::{Caption, Legend};
 use grana_ui::{Instance, Ui, Vec2};
 
 use crate::panels::Panes;
@@ -10,6 +10,7 @@ pub(crate) fn instances(
     camera: &CameraState,
     section: &SectionState,
     legends: &[Legend],
+    caption: Option<&Caption>,
     backdrop: bool,
 ) -> Vec<Instance> {
     let scale = panes.pixels_per_point;
@@ -22,6 +23,7 @@ pub(crate) fn instances(
         scale,
         volume_world_per_point,
         legends,
+        caption,
         backdrop,
     );
     translate(&mut instances, panes.volume_points);
@@ -31,6 +33,7 @@ pub(crate) fn instances(
         scale,
         section_world_per_point,
         &[],
+        None,
         backdrop,
     );
     translate(&mut scale_bars, panes.section_points);

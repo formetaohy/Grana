@@ -1337,6 +1337,10 @@ impl Ui {
         self.text.atlas()
     }
 
+    pub fn flush(&mut self, queue: &wgpu::Queue) {
+        self.text.flush(queue);
+    }
+
     pub fn cursor(&self) -> Cursor {
         self.registry.cursor()
     }

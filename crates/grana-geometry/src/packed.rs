@@ -425,6 +425,43 @@ impl PackedMesh {
         self.groups.len()
     }
 
+    pub fn merge(&self, other: &Self) -> Self {
+        if other.groups.is_empty() {
+            return self.clone();
+        }
+        if self.groups.is_empty() {
+            return other.clone();
+        }
+        let base_vertex = self.vertices.len() as u32;
+        let base_narrow = self.narrow.len() as u32;
+        let base_wide = self.wide.len() as u32;
+        let mut groups = Vec::with_capacity(self.groups.len() + other.groups.len());
+        groups.extend_from_slice(&self.groups);
+        groups.extend(other.groups.iter().map(|group| {
+            GeometryGroup::new(
+                group.min,
+                group.scale,
+                group.first_vertex + base_vertex,
+                group.vertex_count,
+                group.first_index + if group.wide { base_wide } else { base_narrow },
+                group.index_count,
+                group.wide,
+            )
+        }));
+        let mut vertices = self.vertices.clone();
+        vertices.extend_from_slice(&other.vertices);
+        let mut narrow = self.narrow.clone();
+        narrow.extend_from_slice(&other.narrow);
+        let mut wide = self.wide.clone();
+        wide.extend_from_slice(&other.wide);
+        Self {
+            groups,
+            vertices,
+            narrow,
+            wide,
+        }
+    }
+
     pub fn without(&self, object: usize) -> Self {
         assert!(
             object < self.groups.len(),

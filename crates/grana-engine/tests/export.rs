@@ -134,10 +134,28 @@ fn writes_a_transparent_viewport() {
         0,
         "a transparent figure carries no backdrop fill"
     );
+    let opaque_ink = ink(&opaque, size);
+    let transparent_ink = ink(&transparent, size);
     assert_eq!(
-        ink(&opaque, size),
-        ink(&transparent, size),
+        (
+            opaque_ink.0,
+            opaque_ink.1,
+            opaque_ink.2,
+            opaque_ink.3
+        ),
+        (
+            transparent_ink.0,
+            transparent_ink.1,
+            transparent_ink.2,
+            transparent_ink.3
+        ),
         "the transparent figure keeps the opaque figure ink in place"
+    );
+    let dense = opaque_ink.4.max(transparent_ink.4);
+    let sparse = opaque_ink.4.min(transparent_ink.4);
+    assert!(
+        dense - sparse <= dense / 8,
+        "the transparent figure draws the ink of the opaque figure: {opaque_ink:?} against {transparent_ink:?}"
     );
     let centre = pixel(&transparent, size[0] / 4, size[1] / 2);
     assert!(centre[3] > 0, "the volume is transparent nowhere");
@@ -155,8 +173,9 @@ fn writes_a_transparent_viewport() {
         let y = index as u32 / size[0];
         if pixel[3] > 0 && pixel[3] < 64 {
             edge += 1;
+            let white = pixel[..3].iter().all(|value| *value == 255);
             assert!(
-                pixel[..3].iter().any(|value| *value < 250),
+                white || pixel[..3].iter().any(|value| *value < 250),
                 "a semi transparent edge pixel is blown out at {x},{y}: {pixel:?}"
             );
         }

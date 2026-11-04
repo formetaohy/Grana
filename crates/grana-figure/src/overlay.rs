@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use glam::{Mat4, Vec2, Vec3};
 use grana_display::{Camera, Palette, SectionCamera, plane_basis};
 use grana_measure::Unit;
 use grana_scene::{ObjectColor, Scene, TrackColor};
 use grana_ui::{
-    Align, Color, Corners, Fill, Icon, Painter, Rect, Role, TextStyle, TypeStyle, Ui, icon,
+    Align, Color, Corners, Fill, Icon, Painter, Rect, Role, TextLayout, TextStyle, TypeStyle, Ui,
+    icon,
 };
 use grana_volume::{Axis, Region};
 
@@ -23,6 +26,11 @@ const LEGEND_BAR_WIDTH: f32 = 10.0;
 const LEGEND_BAR_HEIGHT: f32 = 78.0;
 const LEGEND_MARGIN: f32 = 16.0;
 const LEGEND_SAMPLES: usize = 48;
+const CAPTION_WIDTH: f32 = 340.0;
+const CAPTION_MARGIN: f32 = 16.0;
+const CAPTION_TITLE: Color = Color::rgba(1.0, 1.0, 1.0, 0.95);
+const CAPTION_DETAIL: Color = Color::rgba(1.0, 1.0, 1.0, 0.60);
+const CAPTION_LINE: Color = Color::rgba(1.0, 1.0, 1.0, 0.82);
 
 const REGION_EDGES: [(usize, usize); 12] = [
     (0, 1),
@@ -46,6 +54,59 @@ pub struct Legend {
     pub extent: (f32, f32),
     pub unit: Unit,
     pub decimals: u8,
+}
+
+pub struct Caption {
+    pub title: String,
+    pub detail: String,
+    pub lines: Vec<String>,
+}
+
+pub(crate) struct Placed {
+    title: Arc<TextLayout>,
+    detail: Arc<TextLayout>,
+    lines: Vec<Arc<TextLayout>>,
+    width: f32,
+    height: f32,
+}
+
+impl Placed {
+    pub(crate) fn new(ui: &mut Ui, caption: &Caption, rect: Rect) -> Self {
+        let title = ui.layout_text(&caption.title, title_style(), CAPTION_WIDTH);
+        let detail = ui.layout_text(&caption.detail, detail_style(), CAPTION_WIDTH);
+        let mut lines = caption
+            .lines
+            .iter()
+            .map(|line| ui.layout_text(line, line_style(), CAPTION_WIDTH))
+            .collect::<Vec<_>>();
+        let room = (rect.height() - CAPTION_MARGIN - 34.0).max(0.0);
+        let mut height = height_of(&title, &detail, &lines);
+        while !lines.is_empty() && height > room {
+            lines.pop();
+            height = height_of(&title, &detail, &lines);
+        }
+        let width = lines
+            .iter()
+            .fold(title.size.x.max(detail.size.x), |width, line| {
+                width.max(line.size.x)
+            });
+        Self {
+            title,
+            detail,
+            lines,
+            width,
+            height,
+        }
+    }
+}
+
+fn height_of(title: &TextLayout, detail: &TextLayout, lines: &[Arc<TextLayout>]) -> f32 {
+    title.size.y
+        + detail.size.y
+        + lines.iter().map(|line| line.size.y).sum::<f32>()
+        + 4.0
+        + 9.0
+        + lines.len() as f32 * 3.0
 }
 
 pub struct Overlay<'a> {
@@ -119,6 +180,7 @@ fn paint_volume(ui: &mut Ui, overlay: &mut Overlay<'_>) {
             overlay.volume_safe,
             world_per_point,
             overlay.legends,
+            None,
             true,
         );
     }
@@ -176,15 +238,84 @@ fn paint_section(ui: &mut Ui, overlay: &Overlay<'_>) {
         LABEL,
     );
 }
-pub fn figure(
+pub(crate) fn figure(
     painter: &mut Painter,
     rect: Rect,
     world_per_point: f32,
     legends: &[Legend],
+    caption: Option<&Placed>,
     backdrop: bool,
 ) {
     scale_bar(painter, rect, world_per_point, backdrop);
+    paint_caption(painter, rect, caption, backdrop);
     paint_legends(painter, rect, legends, backdrop);
+}
+
+pub fn caption(scene: &Scene, time: u32) -> Caption {
+    let frames = scene.frame_count();
+    let detail = if frames > 1 {
+        let seconds = time as f32 * scene.dataset.frame_interval();
+        format!("frame {} of {frames} · {seconds:.2} s", time + 1)
+    } else {
+        "single frame".to_string()
+    };
+    let lines = scene
+        .objects
+        .iter()
+        .filter(|set| scene.shown(set) && set.detected() > 0)
+        .map(|set| {
+            let count = set.frame(time).map_or(0, |frame| frame.object_count());
+            format!("{} · {count} {}", set.name(), set.kind().count_noun())
+        })
+        .collect();
+    Caption {
+        title: scene.dataset.name().to_string(),
+        detail,
+        lines,
+    }
+}
+
+fn paint_caption(painter: &mut Painter, rect: Rect, caption: Option<&Placed>, backdrop: bool) {
+    let Some(placed) = caption else {
+        return;
+    };
+    if rect.width() < 160.0 || rect.height() < 72.0 {
+        return;
+    }
+    let origin = rect.min + Vec2::splat(CAPTION_MARGIN);
+    if backdrop {
+        let card = Rect::from_min_size(
+            origin - Vec2::new(10.0, 8.0),
+            Vec2::new(placed.width + 20.0, placed.height + 14.0),
+        );
+        painter.outlined(
+            card,
+            Corners::all(9.0),
+            Fill::Solid(Color::black_alpha(0.42)),
+            grana_ui::Border {
+                width: 0.5,
+                color: Color::white_alpha(0.10),
+            },
+            grana_ui::Shadow::NONE,
+        );
+    }
+    let mut top = origin.y;
+    painter.text(
+        placed.title.as_ref(),
+        Vec2::new(origin.x, top),
+        CAPTION_TITLE,
+    );
+    top += placed.title.size.y + 2.0;
+    painter.text(
+        placed.detail.as_ref(),
+        Vec2::new(origin.x, top),
+        CAPTION_DETAIL,
+    );
+    top += placed.detail.size.y + 9.0;
+    for line in &placed.lines {
+        painter.text(line.as_ref(), Vec2::new(origin.x, top), CAPTION_LINE);
+        top += line.size.y + 3.0;
+    }
 }
 
 pub fn legends(scene: &Scene) -> Vec<Legend> {
@@ -379,6 +510,18 @@ fn cross(painter: &mut Painter, center: Vec2, radius: f32, width: f32, color: Co
 
 fn caption_style() -> TextStyle {
     TextStyle::new(TypeStyle::new(11.0, 400.0, 14.0), LABEL)
+}
+
+fn title_style() -> TextStyle {
+    TextStyle::new(TypeStyle::new(13.0, 600.0, 17.0), CAPTION_TITLE)
+}
+
+fn detail_style() -> TextStyle {
+    TextStyle::new(TypeStyle::new(10.5, 400.0, 13.0), CAPTION_DETAIL)
+}
+
+fn line_style() -> TextStyle {
+    TextStyle::new(TypeStyle::new(11.0, 400.0, 14.0), CAPTION_LINE)
 }
 
 fn chip(

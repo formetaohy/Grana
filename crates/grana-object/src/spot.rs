@@ -117,4 +117,18 @@ impl SpotSet {
         }
         Self::new(self.level, spots, self.intensities.retain(keep))
     }
+
+    pub fn merge(&self, other: &Self) -> Self {
+        assert_eq!(
+            self.level, other.level,
+            "a merged spot set holds one resolution level"
+        );
+        let mut spots = self.spots.clone();
+        spots.extend_from_slice(&other.spots);
+        Self::new(
+            self.level,
+            spots,
+            self.intensities.merge(&other.intensities),
+        )
+    }
 }

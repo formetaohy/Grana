@@ -235,12 +235,14 @@ impl Export {
         pose: Pose,
     ) -> Result<Option<PathBuf>, String> {
         let legends = grana_figure::legends(scene);
+        let caption = grana_figure::caption(scene, pose.time);
         let instances = overlay::instances(
             ui,
             &self.panes,
             &pose.camera,
             &pose.section,
             &legends,
+            Some(&caption),
             !self.transparent,
         );
         let pixels = self.capture(device, queue, ui, &instances)?;
@@ -265,6 +267,7 @@ impl Export {
     ) -> Result<Vec<u8>, String> {
         let size = self.panes.size;
         let scale = self.panes.pixels_per_point;
+        ui.flush(queue);
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("grana.export.figure"),
         });

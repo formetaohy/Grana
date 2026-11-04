@@ -290,6 +290,41 @@ impl TrackSet {
         self.without_objects(time, &[object])
     }
 
+    pub fn shift(&self, offsets: &[usize]) -> Self {
+        let tracks = self
+            .tracks
+            .iter()
+            .map(|track| {
+                let nodes = track
+                    .nodes()
+                    .iter()
+                    .map(|node| {
+                        let offset = offsets.get(node.time() as usize).copied().unwrap_or(0);
+                        TrackNode::new(node.time(), node.object() + offset, node.centroid())
+                    })
+                    .collect::<Vec<_>>();
+                Track::new(track.parent(), nodes)
+            })
+            .collect::<Vec<_>>();
+        Self::new(self.frame_interval, tracks)
+    }
+
+    pub fn append(&self, other: &Self) -> Self {
+        assert_eq!(
+            self.frame_interval, other.frame_interval,
+            "a merged track set spans one frame interval"
+        );
+        let base = self.tracks.len() as u32;
+        let mut tracks = self.tracks.clone();
+        tracks.extend(other.tracks.iter().map(|track| {
+            Track::new(
+                track.parent().map(|parent| parent + base),
+                track.nodes().to_vec(),
+            )
+        }));
+        Self::new(self.frame_interval, tracks)
+    }
+
     pub fn without_objects(&self, time: u32, objects: &[usize]) -> Option<Self> {
         if objects.is_empty() {
             return None;

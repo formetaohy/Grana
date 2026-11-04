@@ -35,6 +35,10 @@ pub enum Command {
     DeleteFiltered,
     ExtractFiltered,
     DuplicateObject(ObjectSetId),
+    MergeObjects {
+        source: ObjectSetId,
+        target: ObjectSetId,
+    },
     AddObject(ObjectKind),
     RemoveObject(ObjectSetId),
     AddSeed {
@@ -216,6 +220,7 @@ pub enum Action {
     DeleteFiltered,
     ExtractFiltered,
     DuplicateObject,
+    MergeObjects,
     ClearObject,
     Seed,
     Detect,
@@ -279,6 +284,7 @@ impl Action {
             Self::DeleteFiltered => "delete excluded objects",
             Self::ExtractFiltered => "filtered object set",
             Self::DuplicateObject => "copy an object set",
+            Self::MergeObjects => "merge object sets",
             Self::ClearObject => "clear objects",
             Self::Seed => "seed points",
             Self::Detect => "detection",
@@ -408,6 +414,7 @@ impl Command {
             Self::DeleteFiltered => Edit::new(Action::DeleteFiltered),
             Self::ExtractFiltered => Edit::new(Action::ExtractFiltered),
             Self::DuplicateObject(_) => Edit::new(Action::DuplicateObject),
+            Self::MergeObjects { target, .. } => Edit::targeted(Action::MergeObjects, target.raw()),
             Self::ClearObject(_) => Edit::new(Action::ClearObject),
             Self::AddSeed { set, .. } | Self::RemoveSeed { set, .. } | Self::ClearSeeds(set) => {
                 Edit::targeted(Action::Seed, set.raw())

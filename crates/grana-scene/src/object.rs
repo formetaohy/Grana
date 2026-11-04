@@ -447,4 +447,17 @@ impl ObjectFrame {
             Self::Filaments(set) => Self::Filaments(set.retain(keep)?),
         }))
     }
+
+    pub fn merge(&self, other: &Self) -> Result<Self, String> {
+        Ok(match (self, other) {
+            (Self::Spots(carried), Self::Spots(absorbed)) => Self::Spots(carried.merge(absorbed)),
+            (Self::Surfaces(carried), Self::Surfaces(absorbed)) => {
+                Self::Surfaces(carried.merge(absorbed).map_err(|error| error.to_string())?)
+            }
+            (Self::Filaments(carried), Self::Filaments(absorbed)) => {
+                Self::Filaments(carried.merge(absorbed).map_err(|error| error.to_string())?)
+            }
+            _ => return Err("an object frame merges into a frame of its own kind".to_string()),
+        })
+    }
 }

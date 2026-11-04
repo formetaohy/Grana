@@ -961,6 +961,125 @@ impl ObjectSet {
         duplicate
     }
 
+    pub(crate) fn merged(&self, other: &Self, stamp: u64) -> Result<Self, String> {
+        assert_eq!(self.kind, other.kind, "a merge combines one object kind");
+        assert_eq!(
+            self.channels, other.channels,
+            "a merge measures one set of channels"
+        );
+        if self.channel != other.channel {
+            return Err(format!(
+                "the object set {} detects another channel",
+                other.name
+            ));
+        }
+        if self.frames.len() != other.frames.len() {
+            return Err(format!(
+                "the object set {} covers another set of frames",
+                other.name
+            ));
+        }
+        let mut frames = Vec::with_capacity(self.frames.len());
+        for (left, right) in self.frames.iter().zip(&other.frames) {
+            let frame = match (left.data.as_deref(), right.data.as_deref()) {
+                (Some(carried), Some(absorbed)) => {
+                    if carried.level() != absorbed.level() {
+                        return Err(format!(
+                            "the object set {} detects another resolution",
+                            other.name
+                        ));
+                    }
+                    Some(Arc::new(carried.merge(absorbed)?))
+                }
+                (Some(_), None) => left.data.clone(),
+                (None, Some(_)) => right.data.clone(),
+                (None, None) => None,
+            };
+            frames.push(FrameSlot { stamp, data: frame });
+        }
+        let offsets = self
+            .frames
+            .iter()
+            .map(|slot| slot.data.as_deref().map_or(0, ObjectFrame::object_count))
+            .collect::<Vec<_>>();
+        let tracks = match (&self.tracks, &other.tracks) {
+            (None, None) => None,
+            (Some(layer), None) => Some((layer.set().clone(), layer.thickness(), layer.visible())),
+            (None, Some(layer)) => Some((
+                layer.set().shift(&offsets),
+                layer.thickness(),
+                layer.visible(),
+            )),
+            (Some(layer), Some(absorbed)) => Some((
+                layer.set().append(&absorbed.set().shift(&offsets)),
+                layer.thickness(),
+                layer.visible(),
+            )),
+        };
+        let tracks = tracks.map(|(set, thickness, visible)| {
+            let mut layer = TrackLayer::new(set, thickness, stamp);
+            layer.set_visible(visible);
+            layer
+        });
+        let mut object_coloring = self.object_coloring.clone();
+        if object_coloring.metric().and_then(ObjectColor::target) == Some(other.id) {
+            object_coloring.set_metric(None);
+        }
+        let mut track_coloring = self.track_coloring.clone();
+        if track_coloring.metric().and_then(TrackColor::target) == Some(other.id) {
+            track_coloring.set_metric(None);
+        }
+        let relations = self
+            .relations
+            .iter()
+            .filter(|relation| relation.target() != other.id)
+            .map(|relation| {
+                Relation::new(
+                    relation.target(),
+                    relation.shift(),
+                    relation.shared_frames().to_vec(),
+                )
+            })
+            .collect();
+        let seeds = self
+            .seeds
+            .iter()
+            .zip(&other.seeds)
+            .map(|(left, right)| {
+                let mut seeds = left.clone();
+                seeds.extend_from_slice(right);
+                seeds
+            })
+            .collect();
+        let mut merged = Self {
+            id: self.id,
+            kind: self.kind,
+            name: self.name.clone(),
+            channel: self.channel,
+            channels: self.channels,
+            color: self.color,
+            visible: self.visible,
+            opacity: self.opacity,
+            voxel: self.voxel,
+            params: self.params,
+            track_style: self.track_style.or(other.track_style),
+            frames,
+            frame_bounds: vec![None; self.frames.len()],
+            object_coloring,
+            track_coloring,
+            track_bounds: None,
+            revision: stamp,
+            document: self.document + 1,
+            visibility: Visibility::All,
+            seeds,
+            tracks,
+            relations,
+        };
+        merged.rebuild_frame_bounds();
+        merged.rebuild_track_bounds();
+        Ok(merged)
+    }
+
     pub(crate) fn invalidate_relation(
         &mut self,
         target: ObjectSetId,

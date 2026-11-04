@@ -206,6 +206,16 @@ impl TopologyInfo {
     pub fn seeds(self) -> usize {
         self.seeds
     }
+
+    pub fn shares_detection(self, other: Self) -> bool {
+        self.level == other.level
+            && self.channels == other.channels
+            && self.detection == other.detection
+            && self.spacing == other.spacing
+            && self.world == other.world
+            && self.voxel_volume == other.voxel_volume
+            && self.span == other.span
+    }
 }
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SurfacePatches {
@@ -269,6 +279,29 @@ impl SurfacePatches {
 
     pub fn basins(&self) -> &[u32] {
         &self.basins
+    }
+
+    fn merge(&self, other: &Self, base_basin: u32) -> Self {
+        let mut positions = self.positions.clone();
+        positions.extend_from_slice(&other.positions);
+        let mut normals = self.normals.clone();
+        normals.extend_from_slice(&other.normals);
+        let base_vertex = self.positions.len() as u32;
+        let mut triangles = self.triangles.clone();
+        triangles.extend(
+            other
+                .triangles
+                .iter()
+                .map(|triangle| triangle.map(|vertex| vertex + base_vertex)),
+        );
+        let mut basins = self.basins.clone();
+        basins.extend(other.basins.iter().map(|basin| basin + base_basin));
+        Self {
+            positions,
+            normals,
+            triangles,
+            basins,
+        }
     }
 }
 
@@ -341,6 +374,48 @@ impl SurfaceTopology {
 
     pub fn patches(&self) -> &SurfacePatches {
         &self.patches
+    }
+
+    pub fn merge(&self, other: &Self) -> Option<Self> {
+        if !self.info.shares_detection(other.info) {
+            return None;
+        }
+        let base_basin = self.basins.len() as u32;
+        let base_seed = self.info.seeds() as u32;
+        let mut basins = self.basins.clone();
+        basins.extend(other.basins.iter().map(|basin| {
+            Basin::new(
+                basin.reach,
+                basin.voxels,
+                basin.sum,
+                basin.low,
+                basin.high,
+                basin.contact.map(|contact| contact + base_basin),
+                basin.seed.map(|seed| seed + base_seed),
+            )
+        }));
+        let mut accumulators = self.accumulators.clone();
+        accumulators.extend(other.accumulators.iter().copied());
+        let mut seams = self.seams.clone();
+        seams.extend(other.seams.iter().map(|seam| {
+            Seam::new(
+                seam.left() + base_basin,
+                seam.right() + base_basin,
+                seam.saddle(),
+            )
+        }));
+        let info = self
+            .info
+            .with_sampling(self.info.voxel_volume(), self.info.span(), {
+                self.info.seeds() + other.info.seeds()
+            });
+        Some(Self::new(
+            info,
+            basins,
+            accumulators,
+            seams,
+            self.patches.merge(&other.patches, base_basin),
+        ))
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {

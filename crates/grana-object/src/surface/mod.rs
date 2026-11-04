@@ -307,6 +307,66 @@ impl SurfaceSet {
             removed,
         })
     }
+
+    pub fn merge(&self, other: &Self) -> Result<Self, grana_geometry::Error> {
+        assert_eq!(
+            self.level, other.level,
+            "a merged surface set holds one resolution level"
+        );
+        let geometry = self.geometry.merge(&other.geometry)?;
+        let mut objects = self.objects.clone();
+        objects.extend_from_slice(&other.objects);
+        let intensities = self.intensities.merge(&other.intensities);
+        let grown = match (self.topology.as_ref(), other.topology.as_ref()) {
+            (Some(left), Some(right)) => {
+                assert_eq!(
+                    self.leaves.len(),
+                    self.objects.len(),
+                    "a cut surface set names the basins of every object"
+                );
+                assert_eq!(
+                    other.leaves.len(),
+                    other.objects.len(),
+                    "a cut surface set names the basins of every object"
+                );
+                let carried = left.load()?;
+                let absorbed = right.load()?;
+                match carried.merge(&absorbed) {
+                    Some(merged) => Some((left.replace(merged)?, carried.basins().len() as u32)),
+                    None => None,
+                }
+            }
+            _ => None,
+        };
+        let (topology, leaves, removed) = match grown {
+            Some((topology, base)) => {
+                let mut leaves = self.leaves.clone();
+                leaves.extend(unions(&other.leaves, base));
+                let mut removed = self.removed.clone();
+                removed.extend(other.removed.iter().map(|basin| basin + base));
+                removed.sort_unstable();
+                removed.dedup();
+                (Some(topology), leaves, removed)
+            }
+            None => (None, Vec::new(), Vec::new()),
+        };
+        Ok(Self {
+            level: self.level,
+            geometry,
+            objects,
+            intensities,
+            topology,
+            leaves,
+            removed,
+        })
+    }
+}
+
+fn unions(leaves: &[Vec<u32>], base: u32) -> Vec<Vec<u32>> {
+    leaves
+        .iter()
+        .map(|leaves| leaves.iter().map(|basin| basin + base).collect())
+        .collect()
 }
 
 impl PartialEq for SurfaceSet {
