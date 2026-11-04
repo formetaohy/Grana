@@ -32,7 +32,7 @@ const SNAPSHOT: &str = "snapshot.png";
 
 pub const MAX_JOBS: usize = 16;
 
-const ANALYSIS_REVISION: u32 = 7;
+const ANALYSIS_REVISION: u32 = 8;
 
 pub struct Plan {
     pub protocol: Protocol,
@@ -96,33 +96,13 @@ pub struct Batch {
     gate: Arc<Gate>,
 }
 
-impl Batch {
-    pub fn start(plan: Plan) -> Self {
-        let (events, receiver) = mpsc::channel();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let gate = Gate::new();
-        let token = Arc::clone(&cancel);
-        let pause = Arc::clone(&gate);
-        std::thread::spawn(move || execute(plan, events, token, pause));
-        Self {
-            events: receiver,
-            cancel,
-            gate,
-        }
-    }
+#[derive(Clone)]
+pub struct Control {
+    cancel: Arc<AtomicBool>,
+    gate: Arc<Gate>,
+}
 
-    pub fn poll(&self) -> BatchPoll {
-        match self.events.try_recv() {
-            Ok(event) => BatchPoll::Event(event),
-            Err(TryRecvError::Empty) => BatchPoll::Empty,
-            Err(TryRecvError::Disconnected) => BatchPoll::Closed,
-        }
-    }
-
-    pub fn wait(&self) -> Option<Event> {
-        self.events.recv().ok()
-    }
-
+impl Control {
     pub fn pause(&self) {
         self.gate.pause();
     }
@@ -138,6 +118,41 @@ impl Batch {
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
         self.gate.resume();
+    }
+}
+
+impl Batch {
+    pub fn start(plan: Plan) -> Self {
+        let (events, receiver) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let gate = Gate::new();
+        let token = Arc::clone(&cancel);
+        let pause = Arc::clone(&gate);
+        std::thread::spawn(move || execute(plan, events, token, pause));
+        Self {
+            events: receiver,
+            cancel,
+            gate,
+        }
+    }
+
+    pub fn control(&self) -> Control {
+        Control {
+            cancel: Arc::clone(&self.cancel),
+            gate: Arc::clone(&self.gate),
+        }
+    }
+
+    pub fn poll(&self) -> BatchPoll {
+        match self.events.try_recv() {
+            Ok(event) => BatchPoll::Event(event),
+            Err(TryRecvError::Empty) => BatchPoll::Empty,
+            Err(TryRecvError::Disconnected) => BatchPoll::Closed,
+        }
+    }
+
+    pub fn wait(&self) -> Option<Event> {
+        self.events.recv().ok()
     }
 }
 

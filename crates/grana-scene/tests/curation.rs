@@ -22,13 +22,17 @@ fn scene(frames: usize) -> Scene {
 }
 
 fn spots(centres: &[[f32; 3]]) -> ObjectFrame {
+    sized(centres, 1.0)
+}
+
+fn sized(centres: &[[f32; 3]], radius: f32) -> ObjectFrame {
     let mut accumulator = SampleAccumulator::new();
     accumulator.push(0.5);
     ObjectFrame::Spots(SpotSet::new(
         0,
         centres
             .iter()
-            .map(|centre| Spot::new(*centre, 1.0, 0.5))
+            .map(|centre| Spot::new(*centre, radius, 0.5))
             .collect::<Vec<_>>(),
         IntensityTable::new(1, vec![accumulator.statistics(); centres.len()]),
     ))
@@ -164,6 +168,78 @@ fn drops_the_manual_removals_of_a_frame_that_holds_other_objects() {
         .curation();
     assert_eq!(curation.removal_count(), 0);
     assert_eq!(curation.dropped(), 1);
+}
+
+#[test]
+fn replays_a_removal_after_the_object_splits() {
+    let mut scene = scene(1);
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    scene.install(set, 0, sized(&[[0.0, 0.0, 0.0]], 2.0));
+    assert!(
+        scene
+            .delete_objects(set, 0, &[0])
+            .expect("the large spot is pruned")
+    );
+
+    scene.install(set, 0, spots(&[[-1.5, 0.0, 0.0], [0.9, 0.0, 0.0]]));
+    assert_eq!(
+        scene.apply_curation(set),
+        1,
+        "the piece that keeps the removed centre is dropped after a split"
+    );
+    assert_eq!(
+        placed(&scene, set, 0),
+        [-1.5],
+        "the farther piece of the split survives"
+    );
+    assert_eq!(
+        scene
+            .objects
+            .get(set)
+            .expect("the object set exists")
+            .curation()
+            .dropped(),
+        0,
+        "the removal of a split object is never dropped"
+    );
+}
+
+#[test]
+fn replays_a_removal_after_the_object_merges() {
+    let mut scene = scene(1);
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    scene.install(set, 0, spots(&[[0.0, 0.0, 0.0]]));
+    assert!(
+        scene
+            .delete_objects(set, 0, &[0])
+            .expect("the spot is pruned")
+    );
+
+    scene.install(set, 0, sized(&[[0.9, 0.0, 0.0]], 2.0));
+    assert_eq!(
+        scene.apply_curation(set),
+        1,
+        "the object that swallowed the removed one is dropped after a merge"
+    );
+    assert!(
+        scene
+            .objects
+            .get(set)
+            .expect("the object set exists")
+            .frame(0)
+            .is_none(),
+        "the merged object leaves the rebuilt frame"
+    );
+    assert_eq!(
+        scene
+            .objects
+            .get(set)
+            .expect("the object set exists")
+            .curation()
+            .dropped(),
+        0,
+        "the removal of a merged object is never dropped"
+    );
 }
 
 #[test]

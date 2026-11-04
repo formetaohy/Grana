@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use grana_geometry::PackedMesh;
+use grana_geometry::{Bounds, PackedMesh};
 use grana_measure::{Measurement, Objects};
 use grana_object::{
     FilamentParams, FilamentSet, IntensityTable, Shape, Spot, SpotParams, SpotSet, SurfaceFilter,
@@ -326,27 +326,27 @@ impl ObjectFrame {
             Self::Spots(set) => set
                 .spots()
                 .iter()
-                .map(|spot| ObjectAnchor::new(spot.center(), spot.radius()))
+                .map(|spot| {
+                    let center = spot.center();
+                    let radius = spot.radius();
+                    ObjectAnchor::new(
+                        center,
+                        Bounds::new(
+                            [0, 1, 2].map(|axis| center[axis] - radius),
+                            [0, 1, 2].map(|axis| center[axis] + radius),
+                        ),
+                    )
+                })
                 .collect(),
             Self::Surfaces(set) => set
                 .objects()
                 .iter()
-                .map(|statistics| {
-                    let radius = (3.0 * statistics.volume() / (4.0 * std::f64::consts::PI))
-                        .cbrt()
-                        .max(1.0e-3);
-                    ObjectAnchor::new(statistics.centroid(), radius as f32)
-                })
+                .map(|statistics| ObjectAnchor::new(statistics.centroid(), statistics.bounds()))
                 .collect(),
             Self::Filaments(set) => set
                 .objects()
                 .iter()
-                .map(|statistics| {
-                    ObjectAnchor::new(
-                        statistics.centroid(),
-                        statistics.diameter().max(1.0e-3) as f32,
-                    )
-                })
+                .map(|statistics| ObjectAnchor::new(statistics.centroid(), statistics.bounds()))
                 .collect(),
         }
     }

@@ -1074,6 +1074,7 @@ dependencies = [
  "glam",
  "grana-animation",
  "grana-display",
+ "grana-geometry",
  "grana-measure",
  "grana-object",
  "grana-project",

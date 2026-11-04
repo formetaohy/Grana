@@ -1,29 +1,44 @@
+use grana_geometry::Bounds;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ObjectAnchor {
     position: [f32; 3],
-    scale: f32,
+    bounds: Bounds,
 }
 
 impl ObjectAnchor {
-    pub fn new(position: [f32; 3], scale: f32) -> Self {
+    pub fn new(position: [f32; 3], bounds: Bounds) -> Self {
         assert!(
-            position.iter().all(|value| value.is_finite()) && scale.is_finite() && scale > 0.0,
-            "an object anchor is a finite position and a positive size"
+            position.iter().all(|value| value.is_finite()),
+            "an object anchor names a finite position"
         );
-        Self { position, scale }
+        Self { position, bounds }
     }
 
     pub fn position(self) -> [f32; 3] {
         self.position
     }
 
-    pub fn scale(self) -> f32 {
-        self.scale
+    pub fn bounds(self) -> Bounds {
+        self.bounds
     }
 
-    fn distance(self, other: Self) -> f32 {
+    fn distance(self, point: [f32; 3]) -> f32 {
         (0..3)
-            .map(|axis| (self.position[axis] - other.position[axis]).powi(2))
+            .map(|axis| (self.position[axis] - point[axis]).powi(2))
+            .sum::<f32>()
+            .sqrt()
+    }
+
+    fn clearance(self, point: [f32; 3]) -> f32 {
+        let low = self.bounds.min();
+        let high = self.bounds.max();
+        (0..3)
+            .map(|axis| {
+                let below = low[axis] - point[axis];
+                let above = point[axis] - high[axis];
+                below.max(above).max(0.0).powi(2)
+            })
             .sum::<f32>()
             .sqrt()
     }
@@ -244,24 +259,12 @@ impl Curation {
         if removed.is_empty() {
             return None;
         }
-        let tolerance = 3.0 * voxel;
         let mut keep = vec![true; anchors.len()];
         let mut taken = vec![false; anchors.len()];
         let mut retained = Vec::with_capacity(removed.len());
         for record in removed.drain(..) {
-            let mut nearest: Option<(f32, usize)> = None;
-            for (object, anchor) in anchors.iter().enumerate() {
-                if taken[object] {
-                    continue;
-                }
-                let distance = record.distance(*anchor);
-                let limit = tolerance.min(0.5 * record.scale().min(anchor.scale()));
-                if distance <= limit && nearest.is_none_or(|(best, _)| distance < best) {
-                    nearest = Some((distance, object));
-                }
-            }
-            match nearest {
-                Some((_, object)) => {
+            match locate(anchors, Some(&taken), record.position(), voxel) {
+                Some(object) => {
                     taken[object] = true;
                     keep[object] = false;
                     retained.push(record);
@@ -321,17 +324,31 @@ pub(crate) fn match_anchor(
     position: [f32; 3],
     voxel: f32,
 ) -> Option<usize> {
+    locate(anchors, None, position, voxel)
+}
+
+fn locate(
+    anchors: &[ObjectAnchor],
+    taken: Option<&[bool]>,
+    position: [f32; 3],
+    voxel: f32,
+) -> Option<usize> {
     let tolerance = 3.0 * voxel;
-    let mut nearest: Option<(f32, usize)> = None;
-    for (object, anchor) in anchors.iter().enumerate() {
-        let distance = (0..3)
-            .map(|axis| (position[axis] - anchor.position[axis]).powi(2))
-            .sum::<f32>()
-            .sqrt();
-        let limit = tolerance.min(0.5 * anchor.scale());
-        if distance <= limit && nearest.is_none_or(|(best, _)| distance < best) {
-            nearest = Some((distance, object));
+    let mut best: Option<(f32, f32, usize)> = None;
+    for (index, anchor) in anchors.iter().enumerate() {
+        if taken.is_some_and(|taken| taken[index]) {
+            continue;
+        }
+        let clearance = anchor.clearance(position);
+        if clearance > tolerance {
+            continue;
+        }
+        let distance = anchor.distance(position);
+        if best.is_none_or(|(best_clearance, best_distance, _)| {
+            (clearance, distance) < (best_clearance, best_distance)
+        }) {
+            best = Some((clearance, distance, index));
         }
     }
-    nearest.map(|(_, object)| object)
+    best.map(|(_, _, index)| index)
 }

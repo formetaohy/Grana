@@ -257,7 +257,12 @@ impl Encode for Curation {
                 for value in anchor.position() {
                     writer.f32(value);
                 }
-                writer.f32(anchor.scale());
+                for value in anchor.bounds().min() {
+                    writer.f32(value);
+                }
+                for value in anchor.bounds().max() {
+                    writer.f32(value);
+                }
             }
         }
         writer.count(self.edits().len());

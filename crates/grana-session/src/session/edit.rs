@@ -50,7 +50,9 @@ impl Session {
             ));
             return false;
         }
+        self.defer_relations(set);
         self.refresh_dependents(set);
+        self.resume_relations(set);
         true
     }
 

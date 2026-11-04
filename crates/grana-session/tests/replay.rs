@@ -212,6 +212,114 @@ fn replays_the_manual_removals_of_a_captured_protocol() {
     );
 }
 
+#[test]
+fn copies_the_presentation_and_the_relations_of_an_object_set() {
+    let mut session = Session::new();
+    session.open_series("fixture", series());
+    session.set_protocol(Protocol::from_json(PROTOCOL).expect("the protocol is valid"));
+    session.execute(Command::ApplyProtocol);
+    settle(&mut session);
+    let beads = named(&session, "Beads");
+    let nuclei = named(&session, "Nuclei");
+    let (color, opacity, metric) = {
+        let scene = session.scene().expect("the dataset stays open");
+        let set = scene.objects.get(beads).expect("the spots are replayed");
+        (set.color(), set.opacity(), set.object_coloring().metric())
+    };
+    session.execute(Command::DuplicateObject(beads));
+    settle(&mut session);
+    let copy = named(&session, "Beads copy");
+    let scene = session.scene().expect("the dataset stays open");
+    let set = scene.objects.get(copy).expect("the copy is staged");
+    assert_eq!(set.color(), color, "the copy keeps the color of its source");
+    assert_eq!(
+        set.opacity(),
+        opacity,
+        "the copy keeps the opacity of its source"
+    );
+    assert_eq!(
+        set.object_coloring().metric(),
+        metric,
+        "the copy keeps the coloring of its source"
+    );
+    let relation = set
+        .relation(nuclei)
+        .expect("the copy relates to the target of its source");
+    assert_eq!(
+        relation.computed(),
+        2,
+        "the copied relation covers every frame"
+    );
+}
+
+#[test]
+fn replays_the_tracks_of_a_merged_set_like_the_commands_do() {
+    let mut interactive = Session::new();
+    interactive.open_series("fixture", series());
+    let mut sets = Vec::new();
+    for channel in 0..2 {
+        interactive.execute(Command::SelectChannel(channel));
+        interactive.execute(Command::AddObject(grana_scene::ObjectKind::Spots));
+        let scene = interactive.scene().expect("the dataset stays open");
+        let set = scene
+            .objects
+            .iter()
+            .filter(|set| set.kind() == grana_scene::ObjectKind::Spots)
+            .map(grana_scene::ObjectSet::id)
+            .last()
+            .expect("the spot set is staged");
+        sets.push(set);
+    }
+    for set in &sets {
+        interactive.execute(Command::Detect(*set));
+    }
+    settle(&mut interactive);
+    interactive.execute(Command::MergeObjects {
+        source: sets[1],
+        target: sets[0],
+    });
+    settle(&mut interactive);
+    let expected = track_nodes(&interactive, sets[0]);
+    assert!(!expected.is_empty(), "the merged set carries its tracks");
+    interactive.execute(Command::CaptureProtocol);
+    let protocol = interactive
+        .protocol()
+        .expect("the merged analysis captures")
+        .clone();
+
+    let mut replayed = Session::new();
+    replayed.open_series("fixture", series());
+    replayed.set_protocol(protocol);
+    replayed.execute(Command::ApplyProtocol);
+    settle(&mut replayed);
+    let merged = named(&replayed, "Spots 1");
+    assert_eq!(
+        track_nodes(&replayed, merged),
+        expected,
+        "the replay concatenates the tracks of the parts like the merge command"
+    );
+}
+
+fn track_nodes(session: &Session, set: grana_scene::ObjectSetId) -> Vec<(u32, usize)> {
+    let scene = session.scene().expect("the dataset stays open");
+    let layer = scene
+        .objects
+        .get(set)
+        .and_then(grana_scene::ObjectSet::tracks)
+        .expect("the merged set carries a track layer");
+    let mut nodes = Vec::new();
+    for index in 0..layer.set().len() {
+        let track = layer
+            .set()
+            .track(index)
+            .expect("the track index is in bounds");
+        for node in track.nodes() {
+            nodes.push((node.time(), node.object()));
+        }
+    }
+    nodes
+}
+
 fn settle(session: &mut Session) {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {

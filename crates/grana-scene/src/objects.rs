@@ -174,7 +174,7 @@ impl Objects {
             name = format!("{base} {ordinal}");
             ordinal += 1;
         }
-        let color = PALETTE[(derived.raw() as usize - 1) % PALETTE.len()];
+        let color = source.color();
         let copy = source.duplicate(derived, name, color, provenance());
         let position = self
             .sets

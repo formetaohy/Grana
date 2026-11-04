@@ -121,7 +121,7 @@ impl Session {
                 }
                 Step::Filter { set, .. } => match self.reload_filtered(set) {
                     Ok(()) => {
-                        self.derive_settled(set);
+                        self.derive_settled(set, true);
                         self.advance_step();
                         continue;
                     }
@@ -133,7 +133,7 @@ impl Session {
                 },
                 Step::Copy { set, source } => match self.copy_frames(set, source) {
                     Ok(()) => {
-                        self.derive_settled(set);
+                        self.derive_settled(set, false);
                         self.advance_step();
                         continue;
                     }
@@ -143,29 +143,30 @@ impl Session {
                         return;
                     }
                 },
-                Step::Merge { set, part } => match self.merge_sets(set, part) {
-                    Ok(()) => {
-                        self.advance_step();
-                        let merging = self
-                            .recipe
-                            .as_ref()
-                            .is_some_and(|recipe| recipe.merging(set));
-                        if !merging {
-                            self.start_tracks(set);
+                Step::Merge { set, part } => {
+                    let waiting = self.analysis.iter().any(|analysis| {
+                        analysis.job().involves(set) || analysis.job().involves(part)
+                    });
+                    if waiting {
+                        return;
+                    }
+                    match self.merge_sets(set, part) {
+                        Ok(()) => {
+                            self.advance_step();
+                            continue;
                         }
-                        continue;
+                        Err(detail) => {
+                            self.abort_recipe();
+                            self.message = Some(Message::error(detail));
+                            return;
+                        }
                     }
-                    Err(detail) => {
-                        self.abort_recipe();
-                        self.message = Some(Message::error(detail));
-                        return;
-                    }
-                },
+                }
             }
             let running = self.recipe.as_ref().is_some_and(|recipe| {
                 self.analysis
                     .iter()
-                    .any(|analysis| Some(analysis.job()) == recipe.job())
+                    .any(|analysis| recipe.matches(analysis.job()))
             });
             if !running && self.recipe.is_some() {
                 self.abort_recipe();
@@ -184,24 +185,39 @@ impl Session {
         }
     }
 
-    fn derive_settled(&mut self, set: ObjectSetId) {
+    fn derive_settled(&mut self, set: ObjectSetId, track: bool) {
         self.defer_relations(set);
         if self.recipe.is_none() {
             self.resume_relations(set);
         }
-        let part = self.recipe.as_ref().is_some_and(|recipe| recipe.part(set));
-        if !part {
+        if track {
             self.start_tracks(set);
         }
     }
 
     pub(super) fn advance_recipe(&mut self, job: Job) {
+        let Some(recipe) = self.recipe.as_ref() else {
+            return;
+        };
+        if recipe.job().is_none() {
+            self.drive_recipe();
+            return;
+        }
+        if !recipe.matches(job) {
+            return;
+        }
+        let waiting = self.analysis.iter().any(|analysis| {
+            recipe
+                .step_sets()
+                .iter()
+                .any(|set| analysis.job().involves(*set))
+        });
+        if waiting {
+            return;
+        }
         let Some(recipe) = self.recipe.as_mut() else {
             return;
         };
-        if recipe.job() != Some(job) {
-            return;
-        }
         recipe.advance();
         self.drive_recipe();
     }

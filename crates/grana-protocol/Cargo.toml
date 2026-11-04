@@ -10,6 +10,7 @@ repository.workspace = true
 glam = { workspace = true }
 grana-animation = { workspace = true }
 grana-display = { workspace = true }
+grana-geometry = { workspace = true }
 grana-measure = { workspace = true }
 grana-object = { workspace = true }
 grana-project = { workspace = true }

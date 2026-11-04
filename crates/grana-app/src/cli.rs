@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use grana_pipeline::{Batch, BatchEvent, Outcome, Plan, discover};
+use grana_pipeline::{Batch, BatchEvent, Control, Outcome, Plan, discover};
 use grana_protocol::Protocol;
 use winit::event_loop::{ControlFlow, EventLoop};
 
@@ -68,6 +68,7 @@ pub fn batch(
         project,
         snapshot: Some(Arc::new(Snapshot::new())),
     });
+    listen(running.control());
     let mut failures = 0;
     while let Some(event) = running.wait() {
         match event {
@@ -110,4 +111,36 @@ pub fn batch(
     }
     eprintln!("the batch stopped before it finished");
     ExitCode::FAILURE
+}
+
+fn listen(control: Control) {
+    println!("press p to pause or resume the batch, c to cancel it");
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match stdin.read_line(&mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+            match line.trim().to_ascii_lowercase().as_str() {
+                "p" if control.paused() => {
+                    control.resume();
+                    println!("the batch resumed");
+                }
+                "p" => {
+                    control.pause();
+                    println!("the batch paused");
+                }
+                "c" => {
+                    control.cancel();
+                    println!("the batch is cancelling");
+                    return;
+                }
+                "" => {}
+                _ => println!("press p to pause or resume the batch, c to cancel it"),
+            }
+        }
+    });
 }

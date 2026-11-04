@@ -1192,10 +1192,17 @@ impl ObjectSet {
         color: [f32; 3],
         provenance: Provenance,
     ) -> Self {
-        let object_coloring = match self.object_coloring.metric() {
-            Some(ObjectColor::Relation { .. }) => Coloring::new(),
-            _ => self.object_coloring.clone(),
-        };
+        let relations = self
+            .relations
+            .iter()
+            .map(|relation| {
+                Relation::new(
+                    relation.target(),
+                    relation.shift(),
+                    vec![None; self.frames.len()],
+                )
+            })
+            .collect::<Vec<_>>();
         let mut duplicate = Self {
             id,
             kind: self.kind,
@@ -1203,7 +1210,7 @@ impl ObjectSet {
             channel: self.channel,
             channels: self.channels,
             color,
-            visible: true,
+            visible: self.visible,
             opacity: self.opacity,
             voxel: self.voxel,
             params: self.params,
@@ -1217,19 +1224,20 @@ impl ObjectSet {
                 })
                 .collect(),
             frame_bounds: vec![None; self.frames.len()],
-            object_coloring,
-            track_coloring: Coloring::new(),
+            object_coloring: self.object_coloring.clone(),
+            track_coloring: self.track_coloring.clone(),
             track_bounds: None,
             revision: 1,
             document: 1,
             visibility: Visibility::All,
             seeds: self.seeds.clone(),
             tracks: None,
-            relations: Vec::new(),
+            relations,
             provenance,
             curation: Curation::default(),
         };
         duplicate.rebuild_frame_bounds();
+        duplicate.rebuild_track_bounds();
         duplicate
     }
 
@@ -1295,7 +1303,7 @@ impl ObjectSet {
         if track_coloring.metric().and_then(TrackColor::target) == Some(other.id) {
             track_coloring.set_metric(None);
         }
-        let relations = self
+        let mut relations = self
             .relations
             .iter()
             .filter(|relation| relation.target() != other.id)
@@ -1306,7 +1314,21 @@ impl ObjectSet {
                     vec![None; self.frames.len()],
                 )
             })
-            .collect();
+            .collect::<Vec<_>>();
+        for relation in &other.relations {
+            if relation.target() == self.id
+                || relations
+                    .iter()
+                    .any(|existing| existing.target() == relation.target())
+            {
+                continue;
+            }
+            relations.push(Relation::new(
+                relation.target(),
+                relation.shift(),
+                vec![None; self.frames.len()],
+            ));
+        }
         let seeds = self.seeds.clone();
         let mut merged = Self {
             id: self.id,

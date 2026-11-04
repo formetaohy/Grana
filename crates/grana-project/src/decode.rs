@@ -489,13 +489,27 @@ impl Decode for Curation {
             let objects = reader.count(8)?;
             let mut frame = Vec::with_capacity(objects);
             for _ in 0..objects {
+                let position = [
+                    finite(reader.f32()?)?,
+                    finite(reader.f32()?)?,
+                    finite(reader.f32()?)?,
+                ];
+                let low = [
+                    finite(reader.f32()?)?,
+                    finite(reader.f32()?)?,
+                    finite(reader.f32()?)?,
+                ];
+                let high = [
+                    finite(reader.f32()?)?,
+                    finite(reader.f32()?)?,
+                    finite(reader.f32()?)?,
+                ];
+                if (0..3).any(|axis| low[axis] > high[axis]) {
+                    return Err(FAULT_SHAPE);
+                }
                 frame.push(ObjectAnchor::new(
-                    [
-                        finite(reader.f32()?)?,
-                        finite(reader.f32()?)?,
-                        finite(reader.f32()?)?,
-                    ],
-                    positive(reader.f32()?)?,
+                    position,
+                    grana_geometry::Bounds::new(low, high),
                 ));
             }
             removed.push(frame);

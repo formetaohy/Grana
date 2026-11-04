@@ -314,7 +314,8 @@ pub struct RemovalSpec {
 #[serde(deny_unknown_fields)]
 pub struct AnchorSpec {
     pub position: [f32; 3],
-    pub scale: f32,
+    pub low: [f32; 3],
+    pub high: [f32; 3],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -381,14 +382,19 @@ impl CurationSpec {
 
 impl AnchorSpec {
     fn of(anchor: grana_scene::ObjectAnchor) -> Self {
+        let bounds = anchor.bounds();
         Self {
             position: anchor.position(),
-            scale: anchor.scale(),
+            low: bounds.min(),
+            high: bounds.max(),
         }
     }
 
     fn anchor(self) -> grana_scene::ObjectAnchor {
-        grana_scene::ObjectAnchor::new(self.position, self.scale)
+        grana_scene::ObjectAnchor::new(
+            self.position,
+            grana_geometry::Bounds::new(self.low, self.high),
+        )
     }
 }
 
@@ -1461,7 +1467,10 @@ impl CurationSpec {
             }
             if removal.anchors.iter().any(|anchor| {
                 anchor.position.iter().any(|value| !value.is_finite())
-                    || !(anchor.scale.is_finite() && anchor.scale > 0.0)
+                    || (0..3).any(|axis| {
+                        !(anchor.low[axis].is_finite() && anchor.high[axis].is_finite())
+                            || anchor.low[axis] > anchor.high[axis]
+                    })
             }) {
                 return invalid(format!(
                     "remove an object of the frame {} at a degenerate anchor",

@@ -345,13 +345,13 @@ impl Run<'_, '_> {
             }
         }
         self.scene.apply_curation(id);
-        self.track(id)
+        Ok(())
     }
 
     fn merge(&mut self, id: ObjectSetId, part: ObjectSetId) -> Result<(), String> {
         self.scene.merge_objects(part, id)?;
         self.scene.apply_curation(id);
-        self.track(id)
+        Ok(())
     }
 
     fn name(&self, id: ObjectSetId) -> String {

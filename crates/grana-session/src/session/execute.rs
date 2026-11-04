@@ -62,7 +62,11 @@ impl Session {
                     .as_mut()
                     .map(|scene| scene.delete_object(set, time, object));
                 match removed {
-                    Some(Ok(true)) => self.refresh_dependents(set),
+                    Some(Ok(true)) => {
+                        self.defer_relations(set);
+                        self.refresh_dependents(set);
+                        self.resume_relations(set);
+                    }
                     Some(Err(detail)) => self.message = Some(Message::error(detail)),
                     Some(Ok(false)) | None => {}
                 }
@@ -78,9 +82,16 @@ impl Session {
                     .scene
                     .as_mut()
                     .and_then(|scene| scene.duplicate_object(set));
-                self.message = copied
-                    .is_none()
-                    .then(|| Message::error("the object set cannot be copied"));
+                match copied {
+                    Some(copied) => {
+                        self.defer_relations(copied);
+                        self.resume_relations(copied);
+                        self.message = None;
+                    }
+                    None => {
+                        self.message = Some(Message::error("the object set cannot be copied"));
+                    }
+                }
             }
             Command::MergeObjects { source, target } => {
                 self.merge_objects(source, target);
@@ -370,7 +381,7 @@ impl Session {
             Command::ResumeBatch => self.set_batch_paused(false),
             Command::CancelBatch => {
                 if let Some(batch) = &self.batch {
-                    batch.cancel();
+                    batch.control().cancel();
                 }
                 self.batch_paused = false;
             }

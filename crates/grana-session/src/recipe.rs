@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use grana_measure::{ColocPair, ColocSettings, ColocThresholds};
 use grana_scene::{Job, ObjectSetId};
 
@@ -8,7 +6,6 @@ use grana_protocol::Step;
 pub(crate) struct Recipe {
     steps: Vec<Step>,
     sets: Vec<ObjectSetId>,
-    parts: HashSet<ObjectSetId>,
     pairs: Vec<(ColocPair, ColocThresholds)>,
     settings: ColocSettings,
     step: usize,
@@ -26,22 +23,9 @@ impl Recipe {
             "a recipe ends by presenting its analysis"
         );
         assert!(!sets.is_empty(), "a recipe detects at least one object set");
-        let parts = steps
-            .iter()
-            .filter_map(|step| match step {
-                Step::Merge { part, .. } => Some(*part),
-                Step::Detect { .. }
-                | Step::Filter { .. }
-                | Step::Copy { .. }
-                | Step::Relation { .. }
-                | Step::Coloc { .. }
-                | Step::Present => None,
-            })
-            .collect();
         Self {
             steps,
             sets,
-            parts,
             pairs,
             settings,
             step: 0,
@@ -68,14 +52,20 @@ impl Recipe {
         self.pairs[index]
     }
 
-    pub(crate) fn part(&self, set: ObjectSetId) -> bool {
-        self.parts.contains(&set)
+    pub(crate) fn step_sets(&self) -> Vec<ObjectSetId> {
+        match self.step() {
+            Step::Detect { set, .. } | Step::Filter { set, .. } | Step::Copy { set, .. } => {
+                vec![*set]
+            }
+            Step::Merge { set, part } => vec![*set, *part],
+            Step::Relation { source, target } => vec![*source, *target],
+            Step::Coloc { .. } | Step::Present => Vec::new(),
+        }
     }
 
-    pub(crate) fn merging(&self, set: ObjectSetId) -> bool {
-        self.steps[self.step + 1..]
-            .iter()
-            .any(|step| matches!(step, Step::Merge { set: merged, .. } if *merged == set))
+    pub(crate) fn matches(&self, job: Job) -> bool {
+        self.job()
+            .is_some_and(|expected| expected == job || follows(expected, job))
     }
 
     pub(crate) fn job(&self) -> Option<Job> {
@@ -88,5 +78,14 @@ impl Recipe {
             Step::Coloc { .. } => Some(Job::Coloc),
             Step::Filter { .. } | Step::Copy { .. } | Step::Merge { .. } | Step::Present => None,
         }
+    }
+}
+
+fn follows(expected: Job, actual: Job) -> bool {
+    match (expected, actual) {
+        (Job::Detect(set), Job::Track(track)) | (Job::Recut(set), Job::Track(track)) => {
+            set == track
+        }
+        _ => false,
     }
 }

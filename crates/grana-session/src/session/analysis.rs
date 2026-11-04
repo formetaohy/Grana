@@ -112,7 +112,7 @@ impl Session {
                     if self
                         .recipe
                         .as_ref()
-                        .is_some_and(|recipe| recipe.job() == Some(job))
+                        .is_some_and(|recipe| recipe.matches(job))
                     {
                         self.abort_recipe();
                     }
@@ -152,10 +152,7 @@ impl Session {
             if !recut && let Some(scene) = self.scene.as_mut() {
                 scene.apply_curation(set);
             }
-            let part = self.recipe.as_ref().is_some_and(|recipe| recipe.part(set));
-            if !part {
-                self.start_tracks(set);
-            }
+            self.start_tracks(set);
             self.resume_relations(set);
             if self.recipe.is_none() {
                 self.refresh_dependents(set);
@@ -241,10 +238,22 @@ impl Session {
                         .is_some_and(|object| object.detected() > 0)
             })
             .collect::<Vec<_>>();
-        self.resume
-            .retain(|candidate| !(candidate.0 == set || candidate.1 == set));
-        for (source, target, shift) in ready {
-            self.add_relation(source, target, shift);
+        let existing = ready
+            .iter()
+            .map(|(source, target, _)| {
+                scene
+                    .objects
+                    .get(*source)
+                    .is_some_and(|object| object.relation(*target).is_some())
+            })
+            .collect::<Vec<_>>();
+        self.resume.retain(|candidate| !ready.contains(candidate));
+        for ((source, target, shift), existing) in ready.into_iter().zip(existing) {
+            if existing {
+                self.start_relation(source, target);
+            } else {
+                self.add_relation(source, target, shift);
+            }
         }
     }
 

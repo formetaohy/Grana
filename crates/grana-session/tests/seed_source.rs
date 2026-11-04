@@ -98,6 +98,41 @@ fn add(session: &mut Session, channel: usize) -> ObjectSetId {
 }
 
 #[test]
+fn reseeds_after_a_manual_removal_from_the_source() {
+    let mut session = Session::new();
+    session.open_series("seeded cells", series());
+    let nuclei = add(&mut session, 0);
+    let cells = add(&mut session, 1);
+    session.execute(Command::Detect(nuclei));
+    settle(&mut session);
+    session.execute(Command::SetSeedSource {
+        set: cells,
+        source: Some(nuclei),
+    });
+    session.execute(Command::Detect(cells));
+    settle(&mut session);
+    assert_eq!(objects(&session, nuclei), 2);
+    assert_eq!(objects(&session, cells), 2);
+
+    session.execute(Command::DeleteObject {
+        set: nuclei,
+        time: 0,
+        object: 0,
+    });
+    settle(&mut session);
+    assert_eq!(
+        objects(&session, nuclei),
+        1,
+        "the removed nucleus leaves its frame"
+    );
+    assert_eq!(
+        objects(&session, cells),
+        1,
+        "the cells reseed from the edited source"
+    );
+}
+
+#[test]
 fn sources_seeds_from_another_object_set() {
     let mut session = Session::new();
     session.open_series("seeded cells", series());

@@ -282,7 +282,7 @@ fn replays_derived_and_merged_object_sets() {
       "name": "Big",
       "color": [0.9, 0.5, 0.2],
       "source": {"kind": "filtered", "source": "Puncta", "filters": [{"column": "diameter_um", "minimum": 0.0, "maximum": 1000.0}]},
-      "curation": {"expected": [1, 1], "removed": [{"frame": 0, "anchors": [{"position": [0.25, 0.25, 0.5], "scale": 2.5}]}]}
+      "curation": {"expected": [1, 1], "removed": [{"frame": 0, "anchors": [{"position": [0.25, 0.25, 0.5], "low": [-2.25, -2.25, -2.0], "high": [2.75, 2.75, 3.0]}]}]}
     }
   ]
 }

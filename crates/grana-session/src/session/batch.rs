@@ -80,12 +80,13 @@ impl Session {
         let Some(batch) = &self.batch else {
             return;
         };
+        let control = batch.control();
         if paused {
-            batch.pause();
+            control.pause();
         } else {
-            batch.resume();
+            control.resume();
         }
-        self.batch_paused = batch.paused();
+        self.batch_paused = control.paused();
         self.batch_message = None;
     }
 
