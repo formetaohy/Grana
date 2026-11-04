@@ -3,11 +3,13 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_analysis::{Sources, SurfaceBuilder, recut};
+use grana_analysis::{Sources, SurfaceBuilder, coloc_levels, filament_level, recut, surface_level};
 use grana_geometry::GeometryStore;
 use grana_object::SurfaceSet;
 use grana_object::{SurfaceFilter, SurfaceParams};
-use grana_volume::{Channel, Extent, Intensity, Level, Region, Spacing, Volume, VoxelData};
+use grana_volume::{
+    Channel, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, Volume, VoxelData,
+};
 
 const HIGH: u16 = 65_535;
 const MARKER: u16 = 7;
@@ -771,6 +773,45 @@ fn caps_a_surface_cut_by_the_region() {
         object.sphericity()
     );
     assert!(watertight(&set), "the region cut is capped without holes");
+}
+
+#[test]
+fn picks_the_finest_level_that_fits_each_analysis_budget() {
+    let mut levels = vec![Level::new(
+        Extent::new(4096, 4096, 1024),
+        Spacing::new(0.05, 0.05, 0.2),
+    )];
+    for _ in 0..5 {
+        levels.push(levels.last().copied().expect("the level exists").coarser());
+    }
+    let pyramid = Pyramid::new(
+        levels,
+        1,
+        vec![ChannelInfo::new(
+            "signal",
+            [1.0, 0.0, 0.0],
+            Intensity::new(0.0, f32::from(HIGH)),
+            Intensity::new(0.0, f32::from(HIGH)),
+            grana_volume::VoxelFormat::U16,
+        )],
+        1,
+        1.0,
+    );
+    assert_eq!(
+        surface_level(&pyramid, Region::none()),
+        Some(2),
+        "the surfaces halve the stored level until the voxel budget fits"
+    );
+    assert_eq!(
+        filament_level(&pyramid),
+        Some(3),
+        "the filaments pick the synthesized level that fits their budget"
+    );
+    assert_eq!(
+        coloc_levels(&pyramid, Region::none(), 1).scan(),
+        4,
+        "the colocalization scans the first level within its budget"
+    );
 }
 
 fn extract(volume: &Volume, params: SurfaceParams, region: Region) -> SurfaceSet {

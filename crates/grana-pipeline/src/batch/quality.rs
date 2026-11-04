@@ -78,6 +78,7 @@ pub(super) fn table(plan: &Plan, rows: &[Option<Row>]) -> String {
     let mut lines = vec![grana_measure::csv::line(&[
         "group",
         "dataset",
+        "scene",
         "status",
         "set",
         "kind",
@@ -92,11 +93,15 @@ pub(super) fn table(plan: &Plan, rows: &[Option<Row>]) -> String {
             continue;
         };
         let dataset = &plan.datasets[index];
-        lines.extend(
-            row.quality
-                .iter()
-                .map(|quality| line(dataset.group(), &dataset.name(), row.status, quality)),
-        );
+        lines.extend(row.quality.iter().map(|quality| {
+            line(
+                dataset.group(),
+                &dataset.name(),
+                &dataset.scene_label(),
+                row.status,
+                quality,
+            )
+        }));
     }
     lines.concat()
 }
@@ -212,10 +217,11 @@ fn deviation(values: &[f64]) -> Option<f64> {
     Some(variance.sqrt())
 }
 
-fn line(group: &str, dataset: &str, status: &str, quality: &Quality) -> String {
+fn line(group: &str, dataset: &str, scene: &str, status: &str, quality: &Quality) -> String {
     grana_measure::csv::line(&[
         group,
         dataset,
+        scene,
         status,
         &quality.name,
         &quality.kind,

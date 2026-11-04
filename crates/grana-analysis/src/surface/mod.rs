@@ -393,13 +393,7 @@ impl SurfaceBuilder {
 }
 
 pub fn surface_level(pyramid: &Pyramid, region: Region) -> Option<usize> {
-    (0..pyramid.stored()).find(|index| {
-        let level = pyramid.level(*index);
-        match region.voxel_range(level) {
-            Some(ranges) => voxel_count(&ranges) <= SURFACE_VOXEL_LIMIT,
-            None => true,
-        }
-    })
+    pyramid.fit_level(region, SURFACE_VOXEL_LIMIT)
 }
 
 pub fn recut(
@@ -417,13 +411,6 @@ pub fn recut(
         .with_topology(topology.clone())
         .map_err(|error| error.to_string())?;
     Ok(Some(cut))
-}
-
-fn voxel_count(ranges: &[Range<u32>; 3]) -> u64 {
-    ranges
-        .iter()
-        .map(|range| u64::from(range.end - range.start))
-        .product()
 }
 
 pub(super) fn smooth(raw: &mut [f32], dims: [usize; 3], kernels: &[Vec<f32>; 3]) {

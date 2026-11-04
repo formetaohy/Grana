@@ -31,7 +31,7 @@ pub(super) fn write(plan: &Plan, rows: &[Option<Row>]) -> Result<(), String> {
     let sheet = Grid::new(TILE, tiles.len()).compose(&tiles);
     grana_raster::write(&plan.output.join(SHEET), &sheet).map_err(String::from)?;
     let mut lines = vec![grana_measure::csv::line(&[
-        "cell", "group", "dataset", "status",
+        "cell", "group", "dataset", "scene", "status",
     ])];
     for (index, dataset) in plan.datasets.iter().enumerate() {
         let status = rows[index].as_ref().map_or("skipped", |row| row.status);
@@ -40,6 +40,7 @@ pub(super) fn write(plan: &Plan, rows: &[Option<Row>]) -> Result<(), String> {
             &cell,
             dataset.group(),
             &dataset.name(),
+            &dataset.scene_label(),
             status,
         ]));
     }

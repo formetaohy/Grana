@@ -94,7 +94,7 @@ fn datasets(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         if state.batch_datasets().is_empty() {
             widget::weak(
                 ui,
-                "Choose a folder of datasets that share this protocol. A subfolder groups its datasets in the comparison.",
+                "Choose a folder of datasets that share this protocol. A subfolder groups its datasets in the comparison, and a multi-scene image runs scene by scene.",
             );
         } else {
             let key = ui.id("batch.datasets");

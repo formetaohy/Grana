@@ -18,12 +18,7 @@ const MAX_VOXELS: u64 = 1 << 25;
 const MAX_STEP: u32 = 32;
 
 pub fn filament_level(pyramid: &Pyramid) -> Option<usize> {
-    (0..pyramid.stored()).find(|index| voxels(pyramid.level(*index)) <= MAX_VOXELS)
-}
-
-fn voxels(level: Level) -> u64 {
-    let extent = level.extent();
-    u64::from(extent.x()) * u64::from(extent.y()) * u64::from(extent.z())
+    pyramid.fit_level(Region::none(), MAX_VOXELS)
 }
 
 pub(super) struct Grid {

@@ -59,11 +59,11 @@ pub(super) fn analyse(
 }
 
 fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Result<Report, String> {
-    let source = Source::file(dataset.path().to_path_buf());
+    let source = Source::file_series(dataset.path().to_path_buf(), dataset.scene());
     let reader = Image::open(&source)?;
     let store = GeometryStore::temporary(DEFAULT_BUDGET)
         .map_err(|error| format!("the dataset cannot page its geometry: {error}"))?;
-    let name = dataset.name();
+    let name = dataset.title();
     let artifacts = artifacts(task.protocol, &name, task.project);
     let mut scene = Scene::new(dataset_of(reader.format(), &name, reader.pyramid()));
     let staged = task
@@ -194,7 +194,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             ProjectSource::File {
                 name: name.clone(),
                 path: dataset.path().to_path_buf(),
-                series: 0,
+                series: dataset.scene(),
             },
             view_state(task.protocol, &scene),
         );

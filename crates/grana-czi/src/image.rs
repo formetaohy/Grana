@@ -74,25 +74,56 @@ pub struct Image {
     cache: Mutex<Cache>,
 }
 
-impl Image {
-    pub fn open(path: &Path, scene: usize) -> Result<Self, Error> {
+struct Document {
+    store: Store,
+    metadata: Metadata,
+    scenes: Vec<SceneLayout>,
+    interval: f32,
+}
+
+impl Document {
+    fn read(path: &Path) -> Result<Self, Error> {
         let store = Store::open(path)?;
         let header = header::read(&store, path)?;
         let metadata = xml(&store, &header, path)?;
         let entries = directory::read(&store, header.directory, path)?;
         let layout = Layout::of(entries, &metadata, path)?;
-        let selected = layout.scenes.get(scene).ok_or_else(|| {
+        Ok(Self {
+            store,
+            metadata,
+            scenes: layout.scenes,
+            interval: layout.interval,
+        })
+    }
+
+    fn scenes(&self) -> Vec<Scene> {
+        self.scenes
+            .iter()
+            .map(|scene| Scene::new(scene.levels[0].extent, scene.pixels.len(), scene.frames))
+            .collect()
+    }
+}
+
+pub fn scenes(path: &Path) -> Result<Vec<Scene>, Error> {
+    Ok(Document::read(path)?.scenes())
+}
+
+impl Image {
+    pub fn open(path: &Path, scene: usize) -> Result<Self, Error> {
+        let document = Document::read(path)?;
+        let selected = document.scenes.get(scene).ok_or_else(|| {
             Error::region(
                 path,
                 format!(
                     "the CZI image holds {} scenes and scene {} was requested",
-                    layout.scenes.len(),
+                    document.scenes.len(),
                     scene + 1
                 ),
             )
         })?;
         let cache = Cache::new(CACHE_BYTES);
         let base = &selected.levels[0];
+        let metadata = &document.metadata;
         let mut channels = Vec::with_capacity(selected.pixels.len());
         for (index, pixel) in selected.pixels.iter().enumerate() {
             let format = pixel.format();
@@ -100,7 +131,7 @@ impl Image {
             let display = metadata.display.get(index);
             let window = display
                 .and_then(|display| window(display.low, display.high, intensity))
-                .or_else(|| probe(&store, path, base, &cache, format, index as u32))
+                .or_else(|| probe(&document.store, path, base, &cache, format, index as u32))
                 .filter(|window| window.span() > 0.0)
                 .unwrap_or(intensity);
             let source = metadata.channels.get(index);
@@ -125,21 +156,17 @@ impl Image {
             stored,
             channels,
             selected.frames,
-            layout.interval,
+            document.interval,
         );
-        let scenes = layout
-            .scenes
-            .iter()
-            .map(|scene| Scene::new(scene.levels[0].extent, scene.pixels.len(), scene.frames))
-            .collect();
+        let scenes = document.scenes();
         Ok(Self {
             path: path.to_path_buf(),
             name: dataset_name(path),
             scene,
             scenes,
-            layouts: layout.scenes,
+            layouts: document.scenes,
             pyramid,
-            store,
+            store: document.store,
             cache,
         })
     }

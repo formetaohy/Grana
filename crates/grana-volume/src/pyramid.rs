@@ -1,4 +1,4 @@
-use crate::{ChannelInfo, Level};
+use crate::{ChannelInfo, Level, Region};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pyramid {
@@ -86,5 +86,20 @@ impl Pyramid {
 
     pub fn frame_interval(&self) -> f32 {
         self.frame_interval
+    }
+
+    pub fn fit_level(&self, region: Region, voxels: u64) -> Option<usize> {
+        assert!(voxels > 0, "a level budget covers at least one voxel");
+        (0..self.levels.len()).find(|index| {
+            region
+                .voxel_range(self.levels[*index])
+                .is_none_or(|ranges| {
+                    ranges
+                        .iter()
+                        .map(|range| u64::from(range.end - range.start))
+                        .product::<u64>()
+                        <= voxels
+                })
+        })
     }
 }

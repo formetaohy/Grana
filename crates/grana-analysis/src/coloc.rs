@@ -45,7 +45,7 @@ impl ColocLevels {
 
 pub fn coloc_levels(pyramid: &Pyramid, region: Region, frames: u32) -> ColocLevels {
     assert!(frames > 0, "a colocalization scan covers a frame");
-    let levels = (0..pyramid.stored())
+    let levels = (0..pyramid.level_count())
         .filter_map(|index| voxels(region, pyramid.level(index)).map(|voxels| (index, voxels)))
         .collect::<Vec<_>>();
     assert!(

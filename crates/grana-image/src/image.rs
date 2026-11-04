@@ -301,6 +301,13 @@ pub fn is_image(path: &Path) -> bool {
     }
 }
 
+pub fn series_count(path: &Path) -> Result<usize, Error> {
+    if path.is_dir() || !is_czi(path)? {
+        return Ok(1);
+    }
+    Ok(grana_czi::scenes(path)?.len())
+}
+
 pub fn dataset_name(path: &Path) -> String {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return "dataset".to_string();

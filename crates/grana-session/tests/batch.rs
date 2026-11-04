@@ -106,12 +106,16 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
 
     let summary = read(&output.join("summary.csv"));
     assert!(
-        summary.contains("alpha,ok,4,Puncta=2; Nuclei=2"),
+        summary.starts_with("dataset,scene,status,objects,detail"),
         "{summary}"
     );
-    assert!(summary.contains("beta,failed"), "{summary}");
-    assert!(summary.contains("delta,ok,4"), "{summary}");
-    assert!(summary.contains("gamma,ok,4"), "{summary}");
+    assert!(
+        summary.contains("alpha,,ok,4,Puncta=2; Nuclei=2"),
+        "{summary}"
+    );
+    assert!(summary.contains("beta,,failed"), "{summary}");
+    assert!(summary.contains("delta,,ok,4"), "{summary}");
+    assert!(summary.contains("gamma,,ok,4"), "{summary}");
     assert!(output.join("protocol.json").exists());
     assert!(
         !output.join("control").join("beta").exists(),
@@ -142,27 +146,27 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
     let mut rows = quality.lines();
     assert_eq!(
         rows.next(),
-        Some("group,dataset,status,set,kind,objects,volume_um3,area_um2,size_um,intensity"),
+        Some("group,dataset,scene,status,set,kind,objects,volume_um3,area_um2,size_um,intensity"),
         "{quality}"
     );
     let rows = rows.collect::<Vec<_>>();
     assert_eq!(rows.len(), 6, "{quality}");
     let puncta = rows[0].split(',').collect::<Vec<_>>();
     assert_eq!(
-        &puncta[..6],
-        ["control", "alpha", "ok", "Puncta", "Spots", "2"],
+        &puncta[..7],
+        ["control", "alpha", "", "ok", "Puncta", "Spots", "2"],
         "{quality}"
     );
-    assert!(puncta[6].is_empty() && puncta[7].is_empty(), "{quality}");
-    assert!(!puncta[8].is_empty() && !puncta[9].is_empty(), "{quality}");
+    assert!(puncta[7].is_empty() && puncta[8].is_empty(), "{quality}");
+    assert!(!puncta[9].is_empty() && !puncta[10].is_empty(), "{quality}");
     let nuclei = rows[1].split(',').collect::<Vec<_>>();
     assert_eq!(
-        &nuclei[..6],
-        ["control", "alpha", "ok", "Nuclei", "Surfaces", "2"],
+        &nuclei[..7],
+        ["control", "alpha", "", "ok", "Nuclei", "Surfaces", "2"],
         "{quality}"
     );
-    assert!(!nuclei[6].is_empty() && !nuclei[7].is_empty(), "{quality}");
-    assert!(nuclei[8].is_empty(), "{quality}");
+    assert!(!nuclei[7].is_empty() && !nuclei[8].is_empty(), "{quality}");
+    assert!(nuclei[9].is_empty(), "{quality}");
 
     let comparison = read(&output.join("comparison.csv"));
     let mut rows = comparison.lines();
@@ -222,7 +226,7 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
     );
     let summary = read(&output.join("summary.csv"));
     assert!(
-        summary.contains("alpha,resumed,4,Puncta=2; Nuclei=2"),
+        summary.contains("alpha,,resumed,4,Puncta=2; Nuclei=2"),
         "{summary}"
     );
 }
@@ -238,7 +242,7 @@ fn applies_the_region_and_the_statistics_filters() {
     let completed = run(&protocol, &datasets, &output, 1, true);
     assert_eq!(completed, [Status::Ok], "the batch finishes");
     let summary = read(&output.join("summary.csv"));
-    assert!(summary.contains("alpha,ok,0,Puncta=0"), "{summary}");
+    assert!(summary.contains("alpha,,ok,0,Puncta=0"), "{summary}");
     let objects = read(&output.join("alpha").join("Puncta-objects.csv"));
     assert_eq!(
         objects.lines().count(),
@@ -629,10 +633,10 @@ fn renders_a_snapshot_at_the_end_of_every_dataset() {
     assert_eq!(sheet.size(), [824, 524], "the sheet tiles its snapshots");
     let manifest = read(&output.join("sheet.csv"));
     assert!(
-        manifest.starts_with("cell,group,dataset,status"),
+        manifest.starts_with("cell,group,dataset,scene,status"),
         "{manifest}"
     );
-    assert!(manifest.contains("1,,alpha,ok"), "{manifest}");
+    assert!(manifest.contains("1,,alpha,,ok"), "{manifest}");
 
     fs::remove_file(&file).expect("the snapshot is removable");
     let again = run_with(
@@ -658,6 +662,205 @@ fn renders_a_snapshot_at_the_end_of_every_dataset() {
         [Status::Failed],
         "a snapshot protocol needs a renderer"
     );
+}
+
+const SCENES: &str = r#"
+{
+  "sets": [
+    {
+      "name": "Puncta",
+      "channel": "Cells",
+      "color": [0.3, 0.8, 1.0],
+      "detection": {"kind": "spots", "diameter": 5.0, "contrast": 0.05}
+    }
+  ]
+}
+"#;
+
+#[test]
+fn runs_every_scene_of_a_multi_scene_image() {
+    let temp = TempDir::new("grana-batch-scenes");
+    let root = temp.path().join("datasets");
+    fs::create_dir_all(&root).expect("the dataset folder is created");
+    write_scene_image(&root.join("plate.czi"));
+    let datasets = discover(&root).expect("the folder lists its datasets");
+    assert_eq!(datasets.len(), 2, "the image holds two scenes");
+    assert_eq!(datasets[0].label(), "plate scene 1");
+    assert_eq!(datasets[1].label(), "plate scene 2");
+    let output = temp.path().join("out");
+    let protocol = Protocol::from_json(SCENES).expect("the protocol is valid");
+    let completed = run(&protocol, &datasets, &output, 1, false);
+    assert_eq!(completed, [Status::Ok, Status::Ok], "the batch finishes");
+    let summary = read(&output.join("summary.csv"));
+    assert!(summary.contains("plate,1,ok,1,Puncta=1"), "{summary}");
+    assert!(summary.contains("plate,2,ok,1,Puncta=1"), "{summary}");
+    let first = read(&output.join("plate-scene-1").join("Puncta-objects.csv"));
+    let second = read(&output.join("plate-scene-2").join("Puncta-objects.csv"));
+    assert_eq!(
+        first.lines().count(),
+        2,
+        "the scene writes its own table: {first}"
+    );
+    assert_eq!(second.lines().count(), 2, "{second}");
+    assert_ne!(first, second, "each scene reads its own voxels");
+    let quality = read(&output.join("quality.csv"));
+    assert!(quality.contains("plate,1,ok,Puncta"), "{quality}");
+    assert!(quality.contains("plate,2,ok,Puncta"), "{quality}");
+}
+
+const SCENE_SIDE: u32 = 40;
+const SCENE_DEPTH: u32 = 8;
+const CZI_FILE_HEADER_BODY: usize = 512;
+const CZI_XML_OFFSET: usize = 256;
+const CZI_SUBBLOCK_ENTRY: usize = 240;
+
+struct CziPlane {
+    scene: i32,
+    depth: u32,
+    data: Vec<u8>,
+}
+
+fn write_scene_image(path: &Path) {
+    let xml = scene_xml();
+    let mut planes = Vec::new();
+    for scene in 0..2 {
+        let centre = [(20.0, 20.0), (12.0, 28.0)][scene];
+        for depth in 0..SCENE_DEPTH {
+            planes.push(CziPlane {
+                scene: scene as i32,
+                depth,
+                data: scene_samples(centre, depth),
+            });
+        }
+    }
+    let metadata = 32 + CZI_FILE_HEADER_BODY;
+    let directory = metadata + 32 + CZI_XML_OFFSET + xml.len();
+    let directory_body = 128 + planes.len() * czi_entry(0, 0, &czi_axes(0, 0)).len();
+    let first_subblock = directory + 32 + directory_body;
+    let payloads = planes.iter().map(czi_subblock).collect::<Vec<Vec<u8>>>();
+    let mut positions = Vec::new();
+    let mut position = first_subblock;
+    for payload in &payloads {
+        positions.push(position);
+        position += payload.len();
+    }
+    let mut content = vec![0u8; 128];
+    content[..4].copy_from_slice(&(planes.len() as i32).to_le_bytes());
+    for (plane, position) in planes.iter().zip(positions.iter()) {
+        content.extend_from_slice(&czi_entry(
+            0,
+            *position as u64,
+            &czi_axes(plane.scene, plane.depth),
+        ));
+    }
+    let mut file = czi_segment(b"ZISRAWFILE", &[0u8; CZI_FILE_HEADER_BODY]);
+    file[32..36].copy_from_slice(&1i32.to_le_bytes());
+    file.extend_from_slice(&czi_segment(b"ZISRAWMETADATA", &czi_metadata(&xml)));
+    file.extend_from_slice(&czi_segment(b"ZISRAWDIRECTORY", &content));
+    for payload in &payloads {
+        file.extend_from_slice(payload);
+    }
+    czi_patch(&mut file, 52, directory);
+    czi_patch(&mut file, 60, metadata);
+    write(path, file);
+}
+
+fn czi_patch(file: &mut [u8], at: usize, value: usize) {
+    file[32 + at..32 + at + 8].copy_from_slice(&(value as i64).to_le_bytes());
+}
+
+fn czi_segment(id: &[u8], body: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0u8; 32];
+    bytes[..id.len()].copy_from_slice(id);
+    bytes[16..24].copy_from_slice(&(body.len() as i64).to_le_bytes());
+    bytes[24..32].copy_from_slice(&(body.len() as i64).to_le_bytes());
+    bytes.extend_from_slice(body);
+    bytes
+}
+
+fn czi_metadata(xml: &str) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&(xml.len() as u32).to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.resize(CZI_XML_OFFSET, 0);
+    body.extend_from_slice(xml.as_bytes());
+    body
+}
+
+fn czi_axes(scene: i32, depth: u32) -> Vec<([u8; 4], i32, u32)> {
+    vec![
+        (*b"X\0\0\0", 0, SCENE_SIDE),
+        (*b"Y\0\0\0", 0, SCENE_SIDE),
+        (*b"Z\0\0\0", depth as i32, 1),
+        (*b"C\0\0\0", 0, 1),
+        (*b"T\0\0\0", 0, 1),
+        (*b"S\0\0\0", scene, 1),
+    ]
+}
+
+fn czi_entry(pixel: i32, position: u64, axes: &[([u8; 4], i32, u32)]) -> Vec<u8> {
+    let mut bytes = vec![0u8; 32];
+    bytes[..2].copy_from_slice(b"DV");
+    bytes[2..6].copy_from_slice(&pixel.to_le_bytes());
+    bytes[6..14].copy_from_slice(&(position as i64).to_le_bytes());
+    bytes[28..32].copy_from_slice(&(axes.len() as i32).to_le_bytes());
+    for (code, start, size) in axes {
+        let mut fields = vec![0u8; 20];
+        fields[..4].copy_from_slice(code);
+        fields[4..8].copy_from_slice(&start.to_le_bytes());
+        fields[8..12].copy_from_slice(&(*size as i32).to_le_bytes());
+        bytes.extend_from_slice(&fields);
+    }
+    bytes
+}
+
+fn czi_subblock(plane: &CziPlane) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&(plane.data.len() as u64).to_le_bytes());
+    body.extend_from_slice(&czi_entry(0, 0, &czi_axes(plane.scene, plane.depth)));
+    body.resize(16 + CZI_SUBBLOCK_ENTRY, 0);
+    body.extend_from_slice(&plane.data);
+    czi_segment(b"ZISRAWSUBBLOCK", &body)
+}
+
+fn scene_samples(centre: (f32, f32), depth: u32) -> Vec<u8> {
+    let mut samples = vec![0u8; (SCENE_SIDE * SCENE_SIDE) as usize];
+    for y in 0..SCENE_SIDE {
+        for x in 0..SCENE_SIDE {
+            let distance = ((x as f32 - centre.0).powi(2)
+                + (y as f32 - centre.1).powi(2)
+                + (depth as f32 - 4.0).powi(2))
+            .sqrt();
+            if distance < 5.0 {
+                samples[(x + SCENE_SIDE * y) as usize] = u8::MAX;
+            }
+        }
+    }
+    samples
+}
+
+fn scene_xml() -> String {
+    let image = format!(
+        "<Image><SizeX>{SCENE_SIDE}</SizeX><SizeY>{SCENE_SIDE}</SizeY><SizeZ>{SCENE_DEPTH}</SizeZ>\
+<SizeC>1</SizeC><SizeT>1</SizeT>\
+<Dimensions><Channels>\
+<Channel Id=\"Channel:1\"><Color>#FF00FF00</Color><Fluor>Cells</Fluor></Channel>\
+</Channels></Dimensions></Image>"
+    );
+    format!(
+        "<ImageDocument><Metadata><Information>{image}{image}</Information>\
+<Scaling><Items>\
+<Distance Id=\"X\"><Value>0.5E-06</Value></Distance>\
+<Distance Id=\"Y\"><Value>0.5E-06</Value></Distance>\
+<Distance Id=\"Z\"><Value>1E-06</Value></Distance>\
+</Items></Scaling>\
+<DisplaySetting><Channels>\
+<Channel Id=\"Channel:1\" Name=\"Cells\"><Low>0</Low><High>1</High></Channel>\
+</Channels></DisplaySetting>\
+</Metadata></ImageDocument>"
+    )
 }
 
 struct SnapshotCall {

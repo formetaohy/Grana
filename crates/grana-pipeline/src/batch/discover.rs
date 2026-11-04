@@ -10,11 +10,31 @@ const DEFAULT_JOBS: usize = 4;
 pub struct DatasetEntry {
     path: PathBuf,
     group: String,
+    scene: usize,
+    scenes: usize,
 }
 
 impl DatasetEntry {
     pub fn new(path: PathBuf, group: String) -> Self {
-        Self { path, group }
+        Self {
+            path,
+            group,
+            scene: 0,
+            scenes: 1,
+        }
+    }
+
+    pub fn scene_of(path: PathBuf, group: String, scene: usize, scenes: usize) -> Self {
+        assert!(
+            scene < scenes && scenes > 1,
+            "a scene is one of the several scenes of its image"
+        );
+        Self {
+            path,
+            group,
+            scene,
+            scenes,
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -25,15 +45,34 @@ impl DatasetEntry {
         &self.group
     }
 
+    pub fn scene(&self) -> usize {
+        self.scene
+    }
+
+    pub fn scene_label(&self) -> String {
+        match self.scenes {
+            1 => String::new(),
+            _ => (self.scene + 1).to_string(),
+        }
+    }
+
     pub fn name(&self) -> String {
         dataset_name(&self.path)
     }
 
     pub fn label(&self) -> String {
+        let title = self.title();
         if self.group.is_empty() {
-            self.name()
+            title
         } else {
-            format!("{}/{}", self.group, self.name())
+            format!("{}/{}", self.group, title)
+        }
+    }
+
+    pub fn title(&self) -> String {
+        match self.scenes {
+            1 => self.name(),
+            _ => format!("{} scene {}", self.name(), self.scene + 1),
         }
     }
 
@@ -42,7 +81,7 @@ impl DatasetEntry {
         for group in self.group.split('/').filter(|group| !group.is_empty()) {
             folder.push(slug(group).to_ascii_lowercase());
         }
-        folder.push(slug(&self.name()).to_ascii_lowercase());
+        folder.push(slug(&self.title()).to_ascii_lowercase());
         folder
     }
 
@@ -70,7 +109,7 @@ pub(super) fn dataset_workers(jobs: usize) -> usize {
 
 pub fn discover(root: &Path) -> Result<Vec<DatasetEntry>, DiscoverError> {
     if grana_image::is_image(root) {
-        return Ok(vec![DatasetEntry::new(root.to_path_buf(), String::new())]);
+        return Ok(entries_of(root, ""));
     }
     let mut datasets = Vec::new();
     walk(root, root, &mut datasets)?;
@@ -78,8 +117,19 @@ pub fn discover(root: &Path) -> Result<Vec<DatasetEntry>, DiscoverError> {
         left.group
             .cmp(&right.group)
             .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.scene.cmp(&right.scene))
     });
     Ok(datasets)
+}
+
+fn entries_of(path: &Path, group: &str) -> Vec<DatasetEntry> {
+    let scenes = grana_image::series_count(path).unwrap_or(1);
+    if scenes < 2 {
+        return vec![DatasetEntry::new(path.to_path_buf(), group.to_string())];
+    }
+    (0..scenes)
+        .map(|scene| DatasetEntry::scene_of(path.to_path_buf(), group.to_string(), scene, scenes))
+        .collect()
 }
 
 fn walk(root: &Path, folder: &Path, datasets: &mut Vec<DatasetEntry>) -> Result<(), DiscoverError> {
@@ -94,7 +144,7 @@ fn walk(root: &Path, folder: &Path, datasets: &mut Vec<DatasetEntry>) -> Result<
     for entry in entries {
         let path = entry.path();
         if grana_image::is_image(&path) {
-            datasets.push(DatasetEntry::new(path, group_of(root, &entry.path())));
+            datasets.extend(entries_of(&path, &group_of(root, &entry.path())));
             continue;
         }
         let directory = entry.file_type().is_ok_and(|kind| kind.is_dir())
