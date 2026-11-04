@@ -19,10 +19,10 @@ use grana_object::{
     TrackNode, TrackSet,
 };
 use grana_scene::{
-    ChannelState, ColocResult, ColocState, ColorState, Criteria, FilterRange, ItemState, LassoPath,
-    MeasureState, ObjectColor, ObjectFrame, ObjectKind, ObjectParams, ObjectSetId, Provenance,
-    RELATION_FIELDS, Recipe, RelationState, SceneState, SelectionState, SetState, TrackColor,
-    TrackStyle, Visibility,
+    ChannelState, ColocResult, ColocState, ColorState, Criteria, Curation, FilterRange, ItemState,
+    LassoPath, MeasureState, ObjectColor, ObjectFrame, ObjectKind, ObjectParams, ObjectSetId,
+    Provenance, RELATION_FIELDS, Recipe, RelationState, SceneState, SelectionState, SetState,
+    TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Intensity, Region};
 
@@ -387,10 +387,14 @@ impl Decode for SetState {
             frames,
             relations: Vec::<RelationState>::decode(reader)?,
             provenance: Provenance::decode(reader)?,
+            curation: Curation::decode(reader)?,
             document: reader.u64()?,
         };
         if state.document == 0 {
             return Err(FAULT_VALUE);
+        }
+        if !state.curation.is_empty() && state.curation.expected().len() != state.frames.len() {
+            return Err(FAULT_SHAPE);
         }
         if kind.trackable() != state.track_style.is_some()
             || state.tracks.is_some() != state.track_thickness.is_some()
@@ -443,6 +447,60 @@ impl Decode for SetState {
 impl Decode for Provenance {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         decode_provenance(reader, 0)
+    }
+}
+
+impl Decode for Curation {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let frames = reader.count(2)?;
+        let mut expected = Vec::with_capacity(frames);
+        for _ in 0..frames {
+            expected.push(match reader.u8()? {
+                0 => None,
+                1 => Some(reader.count(1)?),
+                _ => return Err(FAULT_TAG),
+            });
+        }
+        let removed_frames = reader.count(8)?;
+        let mut removed = Vec::with_capacity(removed_frames);
+        for _ in 0..removed_frames {
+            let objects = reader.count(8)?;
+            let mut frame = Vec::with_capacity(objects);
+            for _ in 0..objects {
+                frame.push(reader.count(1)?);
+            }
+            removed.push(frame);
+        }
+        let edits = reader.count(9)?;
+        let mut edits_vec = Vec::with_capacity(edits);
+        for _ in 0..edits {
+            edits_vec.push(TrackEdit::decode(reader)?);
+        }
+        Curation::restored(&expected, &removed, &edits_vec).map_err(|_| FAULT_VALUE)
+    }
+}
+
+impl Decode for TrackEdit {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let time = |reader: &mut Reader<'_>| reader.u32();
+        let object = |reader: &mut Reader<'_>| reader.count(1);
+        Ok(match reader.u8()? {
+            0 => {
+                let time = time(reader)?;
+                Self::Cut(TrackAnchor::new(time, object(reader)?))
+            }
+            1 => {
+                let source_time = time(reader)?;
+                let source_object = object(reader)?;
+                let target_time = time(reader)?;
+                let target_object = object(reader)?;
+                Self::Join {
+                    source: TrackAnchor::new(source_time, source_object),
+                    target: TrackAnchor::new(target_time, target_object),
+                }
+            }
+            _ => return Err(FAULT_TAG),
+        })
     }
 }
 

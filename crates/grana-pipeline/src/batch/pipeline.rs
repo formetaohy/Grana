@@ -137,7 +137,21 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         let file = format!("{}-{}.csv", slug(&spec.name), spec.group().key());
         write(&folder.join(&file), &table.csv(&rows))?;
         objects += rows.len();
-        detail.push(format!("{}={}", spec.name, rows.len()));
+        let curation = scene
+            .objects
+            .get(sets[index])
+            .map(|set| set.curation().clone())
+            .unwrap_or_default();
+        let removed = curation.removal_count();
+        let dropped = curation.dropped();
+        let mut line = format!("{}={}", spec.name, rows.len());
+        if removed > 0 {
+            line.push_str(&format!(" ({} removed by hand)", removed));
+        }
+        if dropped > 0 {
+            line.push_str(&format!(" ({} manual edits dropped)", dropped));
+        }
+        detail.push(line);
         quality.push(quality::of(&scene, sets[index], &keys, &table, &rows));
     }
     if task.protocol.coloc().is_some() {
@@ -294,6 +308,7 @@ impl Run<'_, '_> {
                 self.scene.install_shared(id, time as u32, Arc::new(frame));
             }
         }
+        self.scene.apply_curation(id);
         self.track(id)
     }
 
@@ -322,11 +337,13 @@ impl Run<'_, '_> {
                 self.scene.install_shared(id, time as u32, frame);
             }
         }
+        self.scene.apply_curation(id);
         self.track(id)
     }
 
     fn merge(&mut self, id: ObjectSetId, part: ObjectSetId) -> Result<(), String> {
         self.scene.merge_objects(part, id)?;
+        self.scene.apply_curation(id);
         self.track(id)
     }
 

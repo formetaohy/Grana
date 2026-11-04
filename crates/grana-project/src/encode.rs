@@ -11,9 +11,10 @@ use grana_object::{
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_scene::{
-    ChannelState, ColocResult, ColocState, ColorState, Criteria, FilterRange, ItemState, LassoPath,
-    MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe, RelationState,
-    SceneState, SelectionState, SetState, TrackColor, TrackStyle, Visibility,
+    ChannelState, ColocResult, ColocState, ColorState, Criteria, Curation, FilterRange, ItemState,
+    LassoPath, MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe,
+    RelationState, SceneState, SelectionState, SetState, TrackColor, TrackEdit, TrackStyle,
+    Visibility,
 };
 use grana_volume::{Intensity, Region};
 
@@ -240,7 +241,53 @@ impl Encode for SetState {
         self.frames.encode(writer);
         self.relations.encode(writer);
         self.provenance.encode(writer);
+        self.curation.encode(writer);
         writer.u64(self.document);
+    }
+}
+
+impl Encode for Curation {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.count(self.expected().len());
+        for value in self.expected() {
+            match value {
+                None => writer.u8(0),
+                Some(count) => {
+                    writer.u8(1);
+                    writer.count(*count);
+                }
+            }
+        }
+        writer.count(self.removed().len());
+        for frame in self.removed() {
+            writer.count(frame.len());
+            for object in frame {
+                writer.count(*object);
+            }
+        }
+        writer.count(self.edits().len());
+        for edit in self.edits() {
+            edit.encode(writer);
+        }
+    }
+}
+
+impl Encode for TrackEdit {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        match self {
+            Self::Cut(node) => {
+                writer.u8(0);
+                writer.u32(node.time());
+                writer.count(node.object());
+            }
+            Self::Join { source, target } => {
+                writer.u8(1);
+                for node in [source, target] {
+                    writer.u32(node.time());
+                    writer.count(node.object());
+                }
+            }
+        }
     }
 }
 

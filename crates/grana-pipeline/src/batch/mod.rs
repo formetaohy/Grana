@@ -270,9 +270,8 @@ fn prepare(plan: &Plan) -> Result<(), String> {
 fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
     let index = task.index;
     let dataset = &plan.datasets[index];
-    let name = dataset.name();
     let folder = plan.output.join(dataset.folder());
-    let artifacts = artifacts(task.protocol, &name, task.project);
+    let artifacts = artifacts(task.protocol, &dataset.title(), task.project);
     if let Some(record) = completed(&folder, task.digest, &build(), task.content, &artifacts) {
         let _ = task.events.send(Event::Dataset {
             index,

@@ -12,9 +12,10 @@ use thiserror::Error;
 
 pub use spec::{
     AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec,
-    ExportSpec, FilterSpec, KeySpec, LassoSpec, MeasureSpec, PartSpec, RegionSpec, RelationSpec,
-    RenderSpec, SectionSpec, SetSpec, ShadingSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec,
-    TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    CurationSpec, EditSpec, ExportSpec, FilterSpec, KeySpec, LassoSpec, MeasureSpec, NodeSpec,
+    PartSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, SectionSpec, SetSpec, ShadingSpec,
+    SnapshotSpec, SortSpec, SourceSpec, StopSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec,
+    WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -161,6 +162,19 @@ impl Protocol {
                 }
                 if let Some(mask) = &set.mask {
                     text = format!("{text} within {mask}");
+                }
+                if let Some(curation) = &set.curation {
+                    let removed = curation
+                        .removed
+                        .iter()
+                        .map(|removal| removal.objects.len())
+                        .sum::<usize>();
+                    if removed > 0 {
+                        text = format!("{text} · {removed} removed by hand");
+                    }
+                    if !curation.edits.is_empty() {
+                        text = format!("{text} · {} track edits", curation.edits.len());
+                    }
                 }
                 text
             })

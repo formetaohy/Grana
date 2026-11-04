@@ -175,6 +175,76 @@ fn round_trips_a_project() {
 }
 
 #[test]
+fn round_trips_the_manual_edits_of_a_project() {
+    let mut scene = fixture();
+    stage(&mut scene);
+    let spots = scene
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Spots)
+        .expect("the fixture stages spots")
+        .id();
+    assert!(
+        scene
+            .delete_objects(spots, 0, &[1])
+            .expect("the spot leaves its frame")
+    );
+    let curation = scene
+        .objects
+        .get(spots)
+        .expect("the spots exist")
+        .curation()
+        .clone();
+    assert_eq!(curation.removal_count(), 1);
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "fixture".to_string(),
+        },
+        ViewState {
+            camera: CameraState {
+                pivot: [0.0; 3],
+                yaw: 0.0,
+                pitch: 0.0,
+                distance: 1.0,
+                fov_y: 0.6,
+            },
+            section: SectionState {
+                axis: Axis::Z,
+                span: 1.0,
+            },
+            split: 0.5,
+            timeline: Timeline::default(),
+            export: Export::NATIVE,
+        },
+    );
+    let path = std::env::temp_dir().join(format!("grana-curation-{}.grana", std::process::id()));
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the project reads");
+    fs::remove_file(&path).ok();
+    assert_eq!(loaded, project);
+    let mut restored = fixture();
+    restored.restore(loaded.scene);
+    assert_eq!(
+        restored
+            .objects
+            .get(spots)
+            .expect("the spots exist")
+            .curation(),
+        &curation
+    );
+}
+
+#[test]
 fn round_trips_object_set_order() {
     let mut scene = fixture();
     stage(&mut scene);

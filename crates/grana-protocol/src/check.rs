@@ -116,6 +116,9 @@ impl Protocol {
             if let Some(measure) = &set.measure {
                 measure.checked(&set.name, set.track.is_some())?;
             }
+            if let Some(curation) = &set.curation {
+                curation.checked(&set.name, set.track.is_some())?;
+            }
             names.push(set.name.clone());
             slugs.push(key);
         }

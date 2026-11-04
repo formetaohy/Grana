@@ -10,6 +10,7 @@ use grana_volume::{ChannelInfo, Intensity, Region};
 
 use crate::channel::Channel;
 use crate::coloc::{Coloc, MaskKey};
+use crate::curation::Curation;
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
@@ -322,6 +323,7 @@ impl Scene {
         if let Some(set) = self.objects.get_mut(id) {
             set.set_params(params);
         }
+        self.objects.apply_curation(id);
         Ok(true)
     }
 
@@ -527,6 +529,14 @@ impl Scene {
         if self.objects.install_tracks(id, set) {
             self.drop_track_selection(id);
         }
+    }
+
+    pub fn apply_curation(&mut self, id: ObjectSetId) -> usize {
+        self.objects.apply_curation(id)
+    }
+
+    pub fn set_curation(&mut self, id: ObjectSetId, curation: Curation) -> bool {
+        self.objects.set_curation(id, curation)
     }
 
     pub fn clear_tracks(&mut self, id: ObjectSetId) {

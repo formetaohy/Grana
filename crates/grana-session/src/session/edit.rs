@@ -257,6 +257,7 @@ impl Session {
                 scene.install_shared(set, time as u32, frame);
             }
         }
+        scene.apply_curation(set);
         scene.clear_tracks(set);
         Ok(())
     }

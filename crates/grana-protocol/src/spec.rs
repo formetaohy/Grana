@@ -187,6 +187,8 @@ pub struct SetSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track: Option<TrackSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curation: Option<CurationSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub measure: Option<MeasureSpec>,
 }
 
@@ -285,6 +287,110 @@ pub struct FilterSpec {
     pub column: String,
     pub minimum: f32,
     pub maximum: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CurationSpec {
+    pub expected: Vec<Option<usize>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<RemovalSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edits: Vec<EditSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemovalSpec {
+    pub frame: u32,
+    pub objects: Vec<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeSpec {
+    pub frame: u32,
+    pub object: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum EditSpec {
+    Cut { node: NodeSpec },
+    Join { source: NodeSpec, target: NodeSpec },
+}
+
+impl CurationSpec {
+    pub fn of(curation: &grana_scene::Curation) -> Option<Self> {
+        if curation.is_empty() {
+            return None;
+        }
+        let removed = curation
+            .removed()
+            .iter()
+            .enumerate()
+            .filter(|(_, objects)| !objects.is_empty())
+            .map(|(frame, objects)| RemovalSpec {
+                frame: frame as u32,
+                objects: objects.clone(),
+            })
+            .collect();
+        let edits = curation.edits().iter().map(EditSpec::of).collect();
+        Some(Self {
+            expected: curation.expected().to_vec(),
+            removed,
+            edits,
+        })
+    }
+
+    pub fn curation(&self) -> Result<grana_scene::Curation, String> {
+        let mut removed = vec![Vec::new(); self.expected.len()];
+        for spec in &self.removed {
+            let Some(slot) = removed.get_mut(spec.frame as usize) else {
+                return Err(format!(
+                    "the protocol removes objects from the frame {} of {}",
+                    spec.frame,
+                    self.expected.len()
+                ));
+            };
+            *slot = spec.objects.clone();
+        }
+        let edits = self
+            .edits
+            .iter()
+            .map(|edit| edit.edit())
+            .collect::<Vec<_>>();
+        grana_scene::Curation::restored(&self.expected, &removed, &edits)
+    }
+}
+
+impl EditSpec {
+    fn of(edit: &grana_scene::TrackEdit) -> Self {
+        let node = |node: grana_scene::TrackAnchor| NodeSpec {
+            frame: node.time(),
+            object: node.object(),
+        };
+        match edit {
+            grana_scene::TrackEdit::Cut(anchor) => Self::Cut {
+                node: node(*anchor),
+            },
+            grana_scene::TrackEdit::Join { source, target } => Self::Join {
+                source: node(*source),
+                target: node(*target),
+            },
+        }
+    }
+
+    pub fn edit(self) -> grana_scene::TrackEdit {
+        let node = |spec: NodeSpec| grana_scene::TrackAnchor::new(spec.frame, spec.object);
+        match self {
+            Self::Cut { node: spec } => grana_scene::TrackEdit::Cut(node(spec)),
+            Self::Join { source, target } => grana_scene::TrackEdit::Join {
+                source: node(source),
+                target: node(target),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -1263,6 +1369,80 @@ impl TrackSpec {
         }
         if !(self.thickness.is_finite() && self.thickness > 0.0) {
             return invalid("needs a positive tube thickness".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl CurationSpec {
+    pub(super) fn checked(&self, set: &str, tracked: bool) -> Result<(), ProtocolError> {
+        let invalid = |detail: String| {
+            Err(ProtocolError::Invalid(format!(
+                "the manual edits of {set} {detail}"
+            )))
+        };
+        if self.expected.is_empty() {
+            return invalid("cover no frame".to_string());
+        }
+        if !self.edits.is_empty() && !tracked {
+            return invalid("edit tracks the set does not measure".to_string());
+        }
+        let mut previous = None;
+        for removal in &self.removed {
+            if previous.is_some_and(|frame: u32| frame >= removal.frame) {
+                return invalid("are not ordered by frame".to_string());
+            }
+            previous = Some(removal.frame);
+            let Some(expected) = self.expected.get(removal.frame as usize).copied().flatten()
+            else {
+                return invalid(format!(
+                    "remove objects from the frame {} without an object count",
+                    removal.frame
+                ));
+            };
+            if removal.objects.is_empty() {
+                return invalid(format!("remove no object from the frame {}", removal.frame));
+            }
+            if !removal.objects.windows(2).all(|pair| pair[0] < pair[1]) {
+                return invalid(format!(
+                    "remove the objects of the frame {} out of order",
+                    removal.frame
+                ));
+            }
+            if removal.objects.last().copied().unwrap_or(0) >= expected {
+                return invalid(format!(
+                    "remove an object outside the frame {} of {expected}",
+                    removal.frame
+                ));
+            }
+        }
+        for edit in &self.edits {
+            let nodes = match edit {
+                EditSpec::Cut { node } => [*node, *node],
+                EditSpec::Join { source, target } => {
+                    if source.frame != target.frame || source.object == target.object {
+                        return invalid("join two objects of another frame".to_string());
+                    }
+                    [*source, *target]
+                }
+            };
+            for node in nodes {
+                match self.expected.get(node.frame as usize).copied().flatten() {
+                    Some(count) if node.object >= count => {
+                        return invalid(format!(
+                            "name an object outside the frame {} of {count}",
+                            node.frame
+                        ));
+                    }
+                    Some(_) => {}
+                    None => {
+                        return invalid(format!(
+                            "name an object of the frame {} without an object count",
+                            node.frame
+                        ));
+                    }
+                }
+            }
         }
         Ok(())
     }

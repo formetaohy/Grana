@@ -360,4 +360,39 @@ fn extracts_the_gated_objects_and_copies_a_set() {
         kept,
         "the derived set re-derives the kept objects"
     );
+
+    let frame = {
+        let scene = session.scene().expect("the sample opens");
+        let set = scene.objects.get(derived).expect("the derived set exists");
+        (0..scene.frame_count())
+            .find(|time| {
+                set.frame(*time)
+                    .is_some_and(|frame| frame.object_count() > 0)
+            })
+            .expect("the derived set holds an object")
+    };
+    session.execute(Command::DeleteObject {
+        set: derived,
+        time: frame,
+        object: 0,
+    });
+    assert_eq!(total(&session, derived), kept - 1);
+    session.execute(Command::Detect(source));
+    settle(&mut session);
+    assert_eq!(
+        total(&session, derived),
+        kept - 1,
+        "a re-detected source keeps the objects the user removed from its filtered set"
+    );
+    assert_eq!(
+        session
+            .scene()
+            .expect("the sample opens")
+            .objects
+            .get(derived)
+            .expect("the derived set exists")
+            .curation()
+            .removal_count(),
+        1
+    );
 }

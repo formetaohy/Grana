@@ -160,6 +160,93 @@ fn replays_a_protocol_on_the_open_dataset() {
 }
 
 #[test]
+fn replays_the_manual_removals_of_a_captured_protocol() {
+    let mut session = Session::new();
+    session.open_series("fixture", series());
+    session.set_protocol(Protocol::from_json(PROTOCOL).expect("the protocol is valid"));
+    session.execute(Command::ApplyProtocol);
+    settle(&mut session);
+    let nuclei = named(&session, "Nuclei");
+    assert_eq!(count(&session, nuclei, 0), 1);
+    session.execute(Command::SetTime(0));
+    session.execute(Command::Select(Some(grana_scene::Selection {
+        set: nuclei,
+        item: grana_scene::Item::Object(0),
+    })));
+    assert!(session.delete_selected(), "the object leaves its frame");
+    assert_eq!(count(&session, nuclei, 0), 0);
+
+    session.execute(Command::CaptureProtocol);
+    let captured = session
+        .protocol()
+        .expect("the protocol is captured")
+        .clone();
+    assert!(
+        captured
+            .to_json()
+            .expect("the protocol serializes")
+            .contains("\"expected\""),
+        "the capture records the object counts of the manual edits"
+    );
+    session.set_protocol(captured);
+
+    session.execute(Command::ApplyProtocol);
+    settle(&mut session);
+    let replayed = named(&session, "Nuclei");
+    assert_eq!(
+        count(&session, replayed, 0),
+        0,
+        "the replay removes the object the user deleted"
+    );
+    assert_eq!(count(&session, replayed, 1), 1);
+    assert_eq!(
+        session
+            .scene()
+            .expect("the dataset stays open")
+            .objects
+            .get(replayed)
+            .expect("the replayed set exists")
+            .curation()
+            .removal_count(),
+        1
+    );
+}
+
+fn settle(session: &mut Session) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        session.poll();
+        if !session.replaying() && session.progress().is_empty() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the replay did not finish");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    while session.poll() {}
+}
+
+fn named(session: &Session, name: &str) -> grana_scene::ObjectSetId {
+    session
+        .scene()
+        .expect("the dataset stays open")
+        .objects
+        .iter()
+        .find(|set| set.name() == name)
+        .unwrap_or_else(|| panic!("the replay stages {name}"))
+        .id()
+}
+
+fn count(session: &Session, set: grana_scene::ObjectSetId, time: u32) -> usize {
+    session
+        .scene()
+        .expect("the dataset stays open")
+        .objects
+        .get(set)
+        .and_then(|object| object.frame(time))
+        .map_or(0, grana_scene::ObjectFrame::object_count)
+}
+
+#[test]
 fn refuses_a_protocol_the_dataset_cannot_replay() {
     let mut session = Session::new();
     session.open_series("fixture", series());

@@ -171,6 +171,9 @@ impl Session {
     pub fn measure(&self) -> &Measure {
         &self.measure
     }
+    pub fn protocol(&self) -> Option<&Protocol> {
+        self.protocol.as_ref()
+    }
     pub fn timeline(&self) -> &Timeline {
         &self.timeline
     }

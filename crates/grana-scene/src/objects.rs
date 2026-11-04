@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use grana_object::{RelationFrame, TrackSet};
 
+use crate::curation::Curation;
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId, take_stamp};
@@ -373,6 +374,16 @@ impl Objects {
         if let Some(set) = self.get_mut(id) {
             set.clear_tracks(stamp);
         }
+    }
+
+    pub fn apply_curation(&mut self, id: ObjectSetId) -> usize {
+        let stamp = take_stamp(&mut self.stamp);
+        self.get_mut(id).map_or(0, |set| set.apply_curation(stamp))
+    }
+
+    pub fn set_curation(&mut self, id: ObjectSetId, curation: Curation) -> bool {
+        self.get_mut(id)
+            .is_some_and(|set| set.set_curation(curation))
     }
 
     pub fn cut_track(&mut self, id: ObjectSetId, time: u32, object: usize) -> bool {

@@ -5,6 +5,7 @@ use grana_object::TrackParams;
 use grana_object::{RelationFrame, TrackSet};
 
 use crate::color::ObjectColor;
+use crate::curation::{Curation, TrackAnchor, TrackEdit};
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::provenance::{Provenance, Recipe};
@@ -80,6 +81,7 @@ pub struct ObjectSet {
     tracks: Option<TrackLayer>,
     relations: Vec<Relation>,
     provenance: Provenance,
+    curation: Curation,
 }
 
 impl ObjectSet {
@@ -121,6 +123,7 @@ impl ObjectSet {
             tracks: None,
             relations: Vec::new(),
             provenance: Provenance::detection(),
+            curation: Curation::default(),
         }
     }
 
@@ -581,6 +584,7 @@ impl ObjectSet {
                 })
                 .collect(),
             provenance: self.provenance.clone(),
+            curation: self.curation.clone(),
             document: self.document,
         }
     }
@@ -606,6 +610,7 @@ impl ObjectSet {
             frames,
             relations,
             provenance,
+            curation,
             document,
         } = state;
         assert_eq!(
@@ -624,6 +629,7 @@ impl ObjectSet {
             "a restored track layer carries its thickness and visibility"
         );
         let frame_count = frames.len();
+        let applied = curation.applied();
         let mut set = Self {
             id: ObjectSetId::new(id),
             kind,
@@ -648,6 +654,7 @@ impl ObjectSet {
             tracks: None,
             relations: Vec::new(),
             provenance,
+            curation,
         };
         assert_eq!(
             seeds.len(),
@@ -675,6 +682,9 @@ impl ObjectSet {
             if let Some(frame) = frame {
                 set.install_shared(time as u32, frame, take_stamp(stamp));
             }
+        }
+        if applied {
+            set.curation.set_applied();
         }
         for relation in relations {
             let target = ObjectSetId::new(relation.target);
@@ -882,12 +892,137 @@ impl ObjectSet {
         if keep.iter().all(|kept| *kept) {
             return Ok(false);
         }
-        let pruned = frame.retain(keep).map_err(|error| error.to_string())?;
-        let removed = (0..keep.len())
-            .filter(|object| !keep[*object])
+        if !self.curation.is_empty() && !self.curation.applied() {
+            self.apply_curation(stamp);
+        }
+        let counts = self
+            .frames
+            .iter()
+            .map(|slot| slot.data.as_deref().map(ObjectFrame::object_count))
             .collect::<Vec<_>>();
+        self.curation.seed(counts.len(), |time| counts[time]);
+        let removed = self.curation.record(time, keep);
+        let pruned = frame.retain(keep).map_err(|error| error.to_string())?;
         self.install_retained(time, pruned, &removed, stamp);
+        self.curation.set_applied();
         Ok(true)
+    }
+
+    pub fn curation(&self) -> &Curation {
+        &self.curation
+    }
+
+    pub(crate) fn set_curation(&mut self, curation: Curation) -> bool {
+        if self.curation == curation {
+            return false;
+        }
+        self.curation = curation;
+        self.document += 1;
+        true
+    }
+
+    pub(crate) fn apply_curation(&mut self, stamp: u64) -> usize {
+        if self.curation.is_empty() || self.curation.applied() {
+            return 0;
+        }
+        let mut keeps = Vec::new();
+        for (time, slot) in self.frames.iter().enumerate() {
+            let Some(keep) = self.curation.keep(time as u32) else {
+                continue;
+            };
+            let Some(frame) = slot.data.as_deref() else {
+                continue;
+            };
+            if keep.len() != frame.object_count() {
+                return self.drop_curation();
+            }
+            keeps.push((time as u32, keep));
+        }
+        for (time, keep) in keeps {
+            let Some(frame) = self
+                .frames
+                .get(time as usize)
+                .and_then(|slot| slot.data.as_deref())
+            else {
+                continue;
+            };
+            let Ok(pruned) = frame.retain(&keep) else {
+                return self.drop_curation();
+            };
+            let removed = (0..keep.len())
+                .filter(|object| !keep[*object])
+                .collect::<Vec<_>>();
+            self.install_retained(time, pruned, &removed, stamp);
+        }
+        self.curation.set_applied();
+        self.curation.removal_count()
+    }
+
+    fn drop_curation(&mut self) -> usize {
+        let dropped = self.curation.clears();
+        self.document += 1;
+        dropped
+    }
+
+    pub(crate) fn apply_edits(&mut self, stamp: u64) -> usize {
+        if self.curation.edits().is_empty() {
+            return 0;
+        }
+        if self.tracks.is_none() {
+            let dropped = self.curation.forget_edits();
+            self.document += 1;
+            return dropped;
+        }
+        let edits = self.curation.edits().to_vec();
+        let mut applied = 0usize;
+        for edit in &edits {
+            let Some(layer) = self.tracks.as_mut() else {
+                break;
+            };
+            let done = match *edit {
+                TrackEdit::Cut(node) => layer.cut(node.time(), node.object(), stamp),
+                TrackEdit::Join { source, target } => layer.join(
+                    (source.time(), source.object()),
+                    (target.time(), target.object()),
+                    stamp,
+                ),
+            };
+            if !done {
+                let dropped = self.curation.forget_edits();
+                self.rebuild_track_bounds();
+                self.document += 1;
+                return dropped;
+            }
+            applied += 1;
+        }
+        if applied > 0 {
+            self.rebuild_track_bounds();
+            self.document += 1;
+        }
+        0
+    }
+
+    pub(crate) fn edit_track(&mut self, edit: TrackEdit, stamp: u64) -> bool {
+        let Some(layer) = self.tracks.as_mut() else {
+            return false;
+        };
+        let done = match edit {
+            TrackEdit::Cut(node) => layer.cut(node.time(), node.object(), stamp),
+            TrackEdit::Join { source, target } => layer.join(
+                (source.time(), source.object()),
+                (target.time(), target.object()),
+                stamp,
+            ),
+        };
+        if !done {
+            return false;
+        }
+        self.curation.record_edit(edit);
+        self.revision = stamp;
+        self.document += 1;
+        self.visibility = Visibility::All;
+        self.rebuild_track_bounds();
+        true
     }
 
     fn install_retained(
@@ -997,6 +1132,7 @@ impl ObjectSet {
             tracks: None,
             relations: Vec::new(),
             provenance,
+            curation: Curation::default(),
         };
         duplicate.rebuild_frame_bounds();
         duplicate
@@ -1110,6 +1246,7 @@ impl ObjectSet {
             tracks,
             relations,
             provenance: self.provenance.clone(),
+            curation: self.curation.clone(),
         };
         merged.rebuild_frame_bounds();
         merged.rebuild_track_bounds();
@@ -1186,6 +1323,7 @@ impl ObjectSet {
         slot.stamp = stamp;
         slot.data = Some(frame);
         self.frame_bounds[time as usize] = self.frame_extent(time);
+        self.curation.set_produced();
     }
 
     pub(crate) fn install_optional(
@@ -1211,6 +1349,7 @@ impl ObjectSet {
         slot.stamp = stamp;
         slot.data = frame;
         self.frame_bounds[time as usize] = self.frame_extent(time);
+        self.curation.set_produced();
     }
 
     pub(crate) fn clear(&mut self, stamp: u64) {
@@ -1223,6 +1362,7 @@ impl ObjectSet {
         self.document += 1;
         self.visibility = Visibility::All;
         self.tracks = None;
+        self.curation.set_produced();
     }
 
     pub fn tracks(&self) -> Option<&TrackLayer> {
@@ -1277,6 +1417,7 @@ impl ObjectSet {
         self.revision = stamp;
         self.document += 1;
         self.visibility = Visibility::All;
+        self.apply_edits(stamp);
     }
 
     pub(crate) fn clear_tracks(&mut self, stamp: u64) {
@@ -1288,17 +1429,7 @@ impl ObjectSet {
     }
 
     pub(crate) fn cut_track(&mut self, time: u32, object: usize, stamp: u64) -> bool {
-        let Some(layer) = self.tracks.as_mut() else {
-            return false;
-        };
-        if !layer.cut(time, object, stamp) {
-            return false;
-        }
-        self.revision = stamp;
-        self.document += 1;
-        self.visibility = Visibility::All;
-        self.rebuild_track_bounds();
-        true
+        self.edit_track(TrackEdit::Cut(TrackAnchor::new(time, object)), stamp)
     }
 
     pub(crate) fn join_tracks(
@@ -1307,17 +1438,13 @@ impl ObjectSet {
         target: (u32, usize),
         stamp: u64,
     ) -> bool {
-        let Some(layer) = self.tracks.as_mut() else {
-            return false;
-        };
-        if !layer.join(source, target, stamp) {
-            return false;
-        }
-        self.revision = stamp;
-        self.document += 1;
-        self.visibility = Visibility::All;
-        self.rebuild_track_bounds();
-        true
+        self.edit_track(
+            TrackEdit::Join {
+                source: TrackAnchor::new(source.0, source.1),
+                target: TrackAnchor::new(target.0, target.1),
+            },
+            stamp,
+        )
     }
 
     fn rebuild_frame_bounds(&mut self) {

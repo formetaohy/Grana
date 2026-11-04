@@ -184,6 +184,18 @@ impl Protocol {
                 set.set_opacity(spec.opacity);
                 set.set_visible(spec.visible);
             }
+            if let Some(curation) = &spec.curation {
+                if curation.expected.len() != builder.scene.dataset.frame_count() as usize {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the manual edits of {} cover {} frames and the dataset holds {}",
+                        spec.name,
+                        curation.expected.len(),
+                        builder.scene.dataset.frame_count()
+                    )));
+                }
+                let curation = curation.curation().map_err(ProtocolError::Invalid)?;
+                builder.scene.set_curation(id, curation);
+            }
             builder.ids.insert(spec.name.clone(), id);
             masks.push(mask);
             sets.push(id);

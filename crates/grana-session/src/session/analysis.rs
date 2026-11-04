@@ -149,6 +149,9 @@ impl Session {
             if recut {
                 self.defer_relations(set);
             }
+            if !recut && let Some(scene) = self.scene.as_mut() {
+                scene.apply_curation(set);
+            }
             let part = self.recipe.as_ref().is_some_and(|recipe| recipe.part(set));
             if !part {
                 self.start_tracks(set);

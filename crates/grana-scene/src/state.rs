@@ -6,6 +6,7 @@ use grana_volume::{Intensity, Region};
 
 use crate::coloc::{ColocState, MaskKey};
 use crate::color::ObjectColor;
+use crate::curation::Curation;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::provenance::Provenance;
@@ -79,6 +80,7 @@ pub struct SetState {
     pub frames: Vec<Option<Arc<ObjectFrame>>>,
     pub relations: Vec<RelationState>,
     pub provenance: Provenance,
+    pub curation: Curation,
     pub document: u64,
 }
 

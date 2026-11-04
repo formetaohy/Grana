@@ -399,6 +399,7 @@ fn object(
                     opacity = value;
                 }
                 origin(ui, state, id);
+                curated(ui, state, id);
                 if !merged {
                     params(ui, state, commands, id);
                     if kind == ObjectKind::Surfaces {
@@ -602,6 +603,36 @@ fn origin(ui: &mut Ui, state: &State<'_>, id: ObjectSetId) {
         ),
     };
     widget::labelled(ui, "Origin", &text);
+}
+
+fn curated(ui: &mut Ui, state: &State<'_>, id: ObjectSetId) {
+    let Some(set) = state.scene.objects.get(id) else {
+        return;
+    };
+    let curation = set.curation();
+    if curation.is_empty() && curation.dropped() == 0 {
+        return;
+    }
+    let mut parts = Vec::new();
+    let removed = curation.removal_count();
+    if removed > 0 {
+        parts.push(format!(
+            "{removed} object{} removed by hand",
+            if removed == 1 { "" } else { "s" }
+        ));
+    }
+    let edits = curation.edit_count();
+    if edits > 0 {
+        parts.push(format!(
+            "{edits} track edit{}",
+            if edits == 1 { "" } else { "s" }
+        ));
+    }
+    let dropped = curation.dropped();
+    if dropped > 0 {
+        parts.push(format!("{dropped} dropped after a rebuild"));
+    }
+    widget::labelled(ui, "Curated", &parts.join(" · "));
 }
 
 fn params(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: ObjectSetId) {

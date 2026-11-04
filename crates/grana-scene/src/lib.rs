@@ -1,6 +1,7 @@
 mod channel;
 mod coloc;
 mod color;
+mod curation;
 mod dataset;
 mod job;
 mod measure;
@@ -18,6 +19,7 @@ mod track_layer;
 pub use channel::Channel;
 pub use coloc::{Coloc, ColocResult, ColocState, MaskKey};
 pub use color::{ObjectColor, RELATION_FIELDS};
+pub use curation::{Curation, TrackAnchor, TrackEdit};
 pub use dataset::{Dataset, Origin};
 pub use grana_display::{ColorState, Coloring, Extent};
 pub use job::{Job, Progress};

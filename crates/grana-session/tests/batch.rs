@@ -281,7 +281,8 @@ fn replays_derived_and_merged_object_sets() {
     {
       "name": "Big",
       "color": [0.9, 0.5, 0.2],
-      "source": {"kind": "filtered", "source": "Puncta", "filters": [{"column": "diameter_um", "minimum": 0.0, "maximum": 1000.0}]}
+      "source": {"kind": "filtered", "source": "Puncta", "filters": [{"column": "diameter_um", "minimum": 0.0, "maximum": 1000.0}]},
+      "curation": {"expected": [1, 1], "removed": [{"frame": 0, "objects": [0]}]}
     }
   ]
 }
@@ -296,7 +297,7 @@ fn replays_derived_and_merged_object_sets() {
     assert_eq!(completed, [Status::Ok], "the batch finishes");
     let summary = read(&output.join("summary.csv"));
     assert!(
-        summary.contains("alpha,,ok,10,Puncta=2; Signal=2; Union=4; Big=2"),
+        summary.contains("alpha,,ok,9,Puncta=2; Signal=2; Union=4; Big=1 (1 removed by hand)"),
         "{summary}"
     );
     let folder = output.join("alpha");
@@ -309,8 +310,8 @@ fn replays_derived_and_merged_object_sets() {
     let big = read(&folder.join("big-objects.csv"));
     assert_eq!(
         big.lines().count(),
-        3,
-        "the filtered set reports its subset: {big}"
+        2,
+        "the curated set reports the object it keeps: {big}"
     );
     let quality = read(&output.join("quality.csv"));
     assert_eq!(
@@ -771,6 +772,20 @@ fn runs_every_scene_of_a_multi_scene_image() {
     let quality = read(&output.join("quality.csv"));
     assert!(quality.contains("plate,1,ok,Puncta"), "{quality}");
     assert!(quality.contains("plate,2,ok,Puncta"), "{quality}");
+
+    let projects = temp.path().join("projects");
+    let completed = run(&protocol, &datasets, &projects, 1, true);
+    assert_eq!(
+        completed,
+        [Status::Ok, Status::Ok],
+        "the project batch runs"
+    );
+    let resumed = run(&protocol, &datasets, &projects, 1, true);
+    assert_eq!(
+        resumed,
+        [Status::Resumed, Status::Resumed],
+        "a multi scene project resumes on its own artifacts"
+    );
 }
 
 const SCENE_SIDE: u32 = 40;
