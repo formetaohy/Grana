@@ -364,15 +364,21 @@ fn object_color(
         target: None,
         field: None,
         aggregate: None,
+        shift: 0,
     };
     Some(match metric {
         ObjectColor::Measurement(measurement) => ColorSpec {
             key: Some(measurement.key(keys)),
             ..color
         },
-        ObjectColor::Relation { target, field } => ColorSpec {
+        ObjectColor::Relation {
+            target,
+            field,
+            shift,
+        } => ColorSpec {
             target: Some(scene.objects.get(target)?.name().to_string()),
             field: Some(field.key().to_string()),
+            shift,
             ..color
         },
     })
@@ -385,6 +391,7 @@ fn track_color(coloring: &Coloring<TrackColor>, scene: &Scene) -> Option<ColorSp
         target: None,
         field: None,
         aggregate: None,
+        shift: 0,
         palette: coloring.palette().name().to_ascii_lowercase(),
         reversed: coloring.reversed(),
         range: coloring.manual().map(|(low, high)| [low, high]),
@@ -398,10 +405,12 @@ fn track_color(coloring: &Coloring<TrackColor>, scene: &Scene) -> Option<ColorSp
             target,
             field,
             aggregate,
+            shift,
         } => ColorSpec {
             target: Some(scene.objects.get(target)?.name().to_string()),
             field: Some(field.key().to_string()),
             aggregate: Some(aggregate.key().to_string()),
+            shift,
             ..color
         },
     })

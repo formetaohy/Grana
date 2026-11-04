@@ -5,12 +5,16 @@ use grana_display::{
 };
 use grana_measure::{
     Aggregate, ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
-    ColocThresholds, Lasso, MeasureView, Measurement, RelationField, Scope, TrackMeasurement,
+    ColocThresholds, Group, Lasso, MeasureView, Measurement, RelationField, Scope,
+    TrackMeasurement,
 };
 use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
 use grana_project::{Export, ViewState};
-use grana_protocol::{Protocol, SnapshotSpec, SourceSpec, ViewSpec};
-use grana_scene::{Dataset, Measure, ObjectColor, ObjectFrame, ObjectKind, Scene, TrackColor};
+use grana_protocol::{Protocol, SnapshotSpec, SourceSpec, Step, ViewSpec};
+use grana_scene::{
+    Criteria, Dataset, FilterRange, Measure, ObjectColor, ObjectFrame, ObjectKind, Scene,
+    TrackColor,
+};
 use grana_volume::{Axis, Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
 const PROTOCOL: &str = r#"
@@ -673,7 +677,7 @@ fn stages_the_presentation_of_a_captured_protocol() {
     assert!(!nuclei_set.track_visible());
     assert_eq!(nuclei_set.seeds(0), [[0.5, -1.0, 1.5]]);
     let beads_set = target.objects.get(staged_beads).expect("the spot set");
-    assert!(beads_set.relation(staged_nuclei).is_some());
+    assert!(beads_set.relation(staged_nuclei, 0).is_some());
     let coloring = beads_set.object_coloring();
     assert_eq!(
         coloring.metric(),
@@ -722,6 +726,7 @@ fn captures_and_stages_a_relation_across_a_shifted_frame() {
         target: nuclei,
         field: RelationField::Inside,
         aggregate: Aggregate::Minimum,
+        shift: -2,
     }));
     scene
         .objects
@@ -743,7 +748,7 @@ fn captures_and_stages_a_relation_across_a_shifted_frame() {
     let relation = target
         .objects
         .get(staged.set(1))
-        .and_then(|set| set.relation(staged.set(0)))
+        .and_then(|set| set.relation(staged.set(0), -2))
         .expect("the staged relation joins the two sets");
     assert_eq!(relation.shift(), -2);
     assert_eq!(
@@ -757,6 +762,7 @@ fn captures_and_stages_a_relation_across_a_shifted_frame() {
             target: staged.set(0),
             field: RelationField::Inside,
             aggregate: Aggregate::Minimum,
+            shift: -2,
         })
     );
 
@@ -1037,4 +1043,54 @@ fn rejects_a_protocol_that_names_presentation_it_cannot_reach() {
         )),
         "a view describes a plausible camera"
     );
+}
+
+#[test]
+fn stages_a_relation_before_the_filtered_set_that_reads_it() {
+    let extent = Extent::new(4, 4, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "DAPI",
+            [1.0, 1.0, 1.0],
+            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+        )],
+    );
+    let series = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let puncta = scene.add_object(ObjectKind::Spots, 0);
+    let nuclei = scene.add_object(ObjectKind::Surfaces, 0);
+    assert!(scene.rename_object(puncta, "Puncta"));
+    assert!(scene.rename_object(nuclei, "Nuclei"));
+    assert!(scene.add_relation(puncta, nuclei, 0));
+    let criteria = Criteria::new(
+        Group::Object,
+        vec![FilterRange::new("nuclei_distance_um", 0.0, 1.0)],
+        None,
+    );
+    assert!(
+        scene.filter_object(puncta, "filtered", criteria).is_some(),
+        "the filtered set derives from the puncta"
+    );
+    let protocol =
+        Protocol::capture(&scene, &Measure::new(), None).expect("the relation filter captures");
+    let mut staged_scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let staged = protocol
+        .stage(&mut staged_scene)
+        .expect("the relation filter stages");
+    let steps = staged.steps();
+    let relation = steps
+        .iter()
+        .position(|step| matches!(step, Step::Relation { .. }))
+        .expect("the protocol measures the relation");
+    let filter = steps
+        .iter()
+        .position(|step| matches!(step, Step::Filter { .. }))
+        .expect("the protocol filters the puncta");
+    assert!(
+        relation < filter,
+        "the relation runs before the filter that reads its column"
+    );
+    assert_eq!(steps.last(), Some(&Step::Present));
 }

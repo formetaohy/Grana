@@ -129,7 +129,7 @@ impl Protocol {
                 "a protocol measures one object set".to_string(),
             ));
         }
-        let mut pairs = Vec::new();
+        let mut relations = Vec::new();
         for relation in &self.relations {
             validate(&relation.source, "a relation source")?;
             validate(&relation.target, "a relation target")?;
@@ -151,14 +151,14 @@ impl Protocol {
                     relation.source
                 )));
             }
-            let pair = (&relation.source, &relation.target);
-            if pairs.contains(&pair) {
+            let key = (&relation.source, &relation.target, relation.shift);
+            if relations.contains(&key) {
                 return Err(ProtocolError::Invalid(format!(
-                    "{} relates to {} twice",
-                    relation.source, relation.target
+                    "{} relates to {} at the offset {} twice",
+                    relation.source, relation.target, relation.shift
                 )));
             }
-            pairs.push(pair);
+            relations.push(key);
         }
         for set in &self.sets {
             for color in [set.color_by.as_ref(), set.track_by.as_ref()]
@@ -168,10 +168,10 @@ impl Protocol {
                 let Some(target) = &color.target else {
                     continue;
                 };
-                if !pairs.contains(&(&set.name, target)) {
+                if !relations.contains(&(&set.name, target, color.shift)) {
                     return Err(ProtocolError::Invalid(format!(
-                        "{} is colored by a relation to {target} that the protocol does not measure",
-                        set.name
+                        "{} is colored by a relation to {target} at the offset {} that the protocol does not measure",
+                        set.name, color.shift
                     )));
                 }
             }

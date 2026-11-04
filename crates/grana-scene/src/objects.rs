@@ -131,7 +131,13 @@ impl Objects {
         let targets = self
             .sets
             .iter()
-            .filter(|set| set.id() != id && set.relation(id).is_some())
+            .filter(|set| {
+                set.id() != id
+                    && set
+                        .relations()
+                        .iter()
+                        .any(|relation| relation.target() == id)
+            })
             .map(ObjectSet::id)
             .collect::<Vec<_>>();
         for target in targets {
@@ -278,22 +284,29 @@ impl Objects {
             .is_some_and(|set| set.add_relation(target, shift, stamp))
     }
 
-    pub fn set_relation_shift(&mut self, id: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {
+    pub fn move_relation(
+        &mut self,
+        id: ObjectSetId,
+        target: ObjectSetId,
+        from: i32,
+        to: i32,
+    ) -> bool {
         let stamp = take_stamp(&mut self.stamp);
         self.get_mut(id)
-            .is_some_and(|set| set.set_relation_shift(target, shift, stamp))
+            .is_some_and(|set| set.move_relation(target, from, to, stamp))
     }
 
-    pub fn remove_relation(&mut self, id: ObjectSetId, target: ObjectSetId) -> bool {
+    pub fn remove_relation(&mut self, id: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {
         let stamp = take_stamp(&mut self.stamp);
         self.get_mut(id)
-            .is_some_and(|set| set.remove_relation(target, stamp))
+            .is_some_and(|set| set.remove_relation(target, shift, stamp))
     }
 
     pub fn install_relation(
         &mut self,
         id: ObjectSetId,
         target: ObjectSetId,
+        shift: i32,
         time: u32,
         frame: RelationFrame,
     ) -> bool {
@@ -301,7 +314,7 @@ impl Objects {
         let Some(set) = self.get_mut(id) else {
             return false;
         };
-        set.install_relation(target, time, frame, stamp);
+        set.install_relation(target, shift, time, frame, stamp);
         true
     }
 
@@ -311,7 +324,7 @@ impl Objects {
             if set.id() == id {
                 set.clear_relations(stamp);
             } else {
-                set.remove_relation(id, stamp);
+                set.remove_relations_to(id, stamp);
             }
         }
     }

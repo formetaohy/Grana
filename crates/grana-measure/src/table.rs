@@ -299,7 +299,8 @@ impl Table {
                         .relations
                         .iter()
                         .zip(frames[0].relations)
-                        .all(|(row, first)| row.target() == first.target()),
+                        .all(|(row, first)| row.target() == first.target()
+                            && row.shift() == first.shift()),
                 "every frame carries the relations of its object set"
             );
         }
@@ -717,7 +718,7 @@ pub fn channel_keys(channels: &[String]) -> Vec<String> {
     keys
 }
 
-fn sanitize(name: &str) -> String {
+pub(crate) fn sanitize(name: &str) -> String {
     let key = name
         .chars()
         .map(|character| {

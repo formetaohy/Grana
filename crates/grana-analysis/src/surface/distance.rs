@@ -10,56 +10,56 @@ pub(super) struct Distance {
     values: Vec<f32>,
     limit: f64,
     reach: f64,
-    uncertainty: f64,
+    margin: f64,
 }
 
 impl Distance {
-    pub(super) fn build(plan: &SurfaceBuilder, solid: &SolidMask) -> Self {
+    pub(super) fn build(plan: &SurfaceBuilder, solid: &SolidMask, workers: usize) -> Self {
         let dims = plan.dims();
         let scale = SCALE as usize;
         let coarse = [0, 1, 2].map(|axis| dims[axis].div_ceil(scale));
         let padded = [coarse[0] + 2, coarse[1] + 2, coarse[2] + 2];
         let mut values = vec![0.0f32; padded[0] * padded[1] * padded[2]];
-        let mut reached = Vec::new();
-        for z in 0..coarse[2] {
-            for y in 0..coarse[1] {
-                for x in 0..coarse[0] {
-                    let voxel = [
-                        plan.anchor[0] + (x * scale) as i64 + scale as i64 / 2,
-                        plan.anchor[1] + (y * scale) as i64 + scale as i64 / 2,
-                        plan.anchor[2] + (z * scale) as i64 + scale as i64 / 2,
-                    ];
-                    if solid.get(voxel, plan.anchor) {
-                        let index = (x + 1) + padded[0] * ((y + 1) + padded[1] * (z + 1));
-                        values[index] = UNREACHED;
-                        reached.push(index);
+        let plane = padded[0] * padded[1];
+        let workers = workers.clamp(1, crate::schedule::WORKER_LIMIT);
+        planes(&mut values, plane, workers, |chunk, first| {
+            for (row, plane_values) in chunk.chunks_mut(plane).enumerate() {
+                let z = first + row;
+                if z == 0 || z > coarse[2] {
+                    continue;
+                }
+                for y in 0..coarse[1] {
+                    for x in 0..coarse[0] {
+                        if solid_cell(plan, solid, dims, scale, [x, y, z - 1]) {
+                            plane_values[(x + 1) + padded[0] * (y + 1)] = UNREACHED;
+                        }
                     }
                 }
             }
-        }
+        });
         let weights = [0, 1, 2].map(|axis| {
             let value = f64::from(plan.anisotropy[axis]);
             value * value
         });
-        transform(&mut values, padded, weights);
+        transform(&mut values, padded, weights, workers);
         let limit = (0..3).fold(0.0f64, |accumulated, axis| {
             accumulated + weights[axis] * (dims[axis] * dims[axis]) as f64
         }) + 1.0;
-        let reach = reached
-            .into_iter()
-            .map(|index| f64::from(values[index]))
+        let reach = values
+            .iter()
+            .map(|value| f64::from(*value))
             .fold(0.0f64, f64::max)
             .max(0.0)
             .sqrt()
             * f64::from(SCALE);
-        let uncertainty = (weights[0] + weights[1] + weights[2]).sqrt() * f64::from(SCALE) * 0.5;
+        let margin = (weights[0] + weights[1] + weights[2]).sqrt() * f64::from(SCALE);
         Self {
             origin: plan.anchor,
             dims: coarse,
             values,
             limit,
             reach,
-            uncertainty,
+            margin,
         }
     }
 
@@ -67,8 +67,8 @@ impl Distance {
         self.reach
     }
 
-    pub(super) fn uncertainty(&self) -> f64 {
-        self.uncertainty
+    pub(super) fn margin(&self) -> f64 {
+        self.margin
     }
 
     pub(super) fn at(&self, voxel: [i64; 3]) -> u32 {
@@ -91,25 +91,109 @@ impl Distance {
     }
 }
 
-fn transform(values: &mut [f32], dims: [usize; 3], weights: [f64; 3]) {
-    let strides = [1usize, dims[0], dims[0] * dims[1]];
-    let longest = dims[0].max(dims[1]).max(dims[2]);
-    let mut line = vec![0.0f64; longest];
+fn solid_cell(
+    plan: &SurfaceBuilder,
+    solid: &SolidMask,
+    dims: [usize; 3],
+    scale: usize,
+    cell: [usize; 3],
+) -> bool {
+    let start = [cell[0] * scale, cell[1] * scale, cell[2] * scale];
     for axis in 0..3 {
-        let weight = weights[axis];
-        let (first, second) = ((axis + 1) % 3, (axis + 2) % 3);
-        let length = dims[axis];
-        for second_position in 0..dims[second] {
-            for first_position in 0..dims[first] {
-                let base = strides[first] * first_position + strides[second] * second_position;
-                for (step, slot) in line[..length].iter_mut().enumerate() {
-                    *slot = f64::from(values[base + strides[axis] * step]);
-                }
-                parabola(&mut line[..length], weight);
-                for (step, value) in line[..length].iter().enumerate() {
-                    values[base + strides[axis] * step] = *value as f32;
+        if start[axis] + scale > dims[axis] {
+            return false;
+        }
+    }
+    for dz in 0..scale {
+        for dy in 0..scale {
+            for dx in 0..scale {
+                let voxel = [
+                    plan.anchor[0] + (start[0] + dx) as i64,
+                    plan.anchor[1] + (start[1] + dy) as i64,
+                    plan.anchor[2] + (start[2] + dz) as i64,
+                ];
+                if !solid.get(voxel, plan.anchor) {
+                    return false;
                 }
             }
         }
     }
+    true
+}
+
+fn transform(values: &mut [f32], dims: [usize; 3], weights: [f64; 3], workers: usize) {
+    let plane = dims[0] * dims[1];
+    if dims[0] > 1 {
+        planes(values, plane, workers, |chunk, _| {
+            let mut line = vec![0.0f64; dims[0]];
+            for plane_values in chunk.chunks_mut(plane) {
+                for y in 0..dims[1] {
+                    let base = y * dims[0];
+                    for (slot, value) in line.iter_mut().zip(&plane_values[base..base + dims[0]]) {
+                        *slot = f64::from(*value);
+                    }
+                    parabola(&mut line, weights[0]);
+                    for (value, slot) in line.iter().zip(&mut plane_values[base..base + dims[0]]) {
+                        *slot = *value as f32;
+                    }
+                }
+            }
+        });
+    }
+    if dims[1] > 1 {
+        planes(values, plane, workers, |chunk, _| {
+            let mut line = vec![0.0f64; dims[1]];
+            for plane_values in chunk.chunks_mut(plane) {
+                for x in 0..dims[0] {
+                    for (step, slot) in line.iter_mut().enumerate() {
+                        *slot = f64::from(plane_values[x + step * dims[0]]);
+                    }
+                    parabola(&mut line, weights[1]);
+                    for (step, value) in line.iter().enumerate() {
+                        plane_values[x + step * dims[0]] = *value as f32;
+                    }
+                }
+            }
+        });
+    }
+    if dims[2] > 1 {
+        let mut line = vec![0.0f64; dims[2]];
+        for y in 0..dims[1] {
+            for x in 0..dims[0] {
+                let base = x + dims[0] * y;
+                for (step, slot) in line.iter_mut().enumerate() {
+                    *slot = f64::from(values[base + step * plane]);
+                }
+                parabola(&mut line, weights[2]);
+                for (step, value) in line.iter().enumerate() {
+                    values[base + step * plane] = *value as f32;
+                }
+            }
+        }
+    }
+}
+
+fn planes(
+    values: &mut [f32],
+    plane: usize,
+    workers: usize,
+    body: impl Fn(&mut [f32], usize) + Sync,
+) {
+    if plane == 0 || values.is_empty() {
+        return;
+    }
+    let available = values.len().div_ceil(plane);
+    let workers = workers.clamp(1, available.max(1));
+    let each = available.div_ceil(workers).max(1);
+    if workers == 1 {
+        body(values, 0);
+        return;
+    }
+    std::thread::scope(|scope| {
+        let body = &body;
+        for (index, chunk) in values.chunks_mut(each * plane).enumerate() {
+            let first = index * each;
+            scope.spawn(move || body(chunk, first));
+        }
+    });
 }

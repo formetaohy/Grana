@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use grana_display::Coloring;
-use grana_measure::{ColocPair, Group, TrackMeasurement, channel_keys};
+use grana_measure::{ColocPair, Group, TrackMeasurement, channel_keys, relation_keys};
 use grana_scene::{Criteria, FilterRange, LassoPath, ObjectColor, ObjectSetId, Scene, TrackColor};
 use grana_volume::Region;
 
@@ -204,11 +204,15 @@ impl Protocol {
             let target = builder.ids[&relation.target];
             if !builder.scene.add_relation(source, target, relation.shift) {
                 return Err(ProtocolError::Invalid(format!(
-                    "{} cannot relate to {}",
-                    relation.source, relation.target
+                    "{} cannot relate to {} at the offset {}",
+                    relation.source, relation.target, relation.shift
                 )));
             }
-            builder.steps.push(Step::Relation { source, target });
+            builder.steps.push(Step::Relation {
+                source,
+                target,
+                shift: relation.shift,
+            });
         }
         for spec in &self.sets {
             let id = builder.ids[&spec.name];
@@ -256,11 +260,8 @@ impl Protocol {
             }
         }
         builder.steps.push(Step::Present);
-        Ok(Staged {
-            sets,
-            pairs,
-            steps: builder.steps,
-        })
+        let steps = ordered_steps(builder.steps, builder.scene)?;
+        Ok(Staged { sets, pairs, steps })
     }
 
     fn stage_channels(&self, scene: &mut Scene, names: &[String]) -> Result<(), ProtocolError> {
@@ -547,6 +548,7 @@ fn object_coloring(
                 field: spec
                     .field()
                     .expect("a checked color names a relation field"),
+                shift: spec.shift,
             }
         }
         _ => unreachable!("a checked color names one measurement or relation"),
@@ -592,10 +594,130 @@ fn track_coloring(spec: &ColorSpec, scene: &Scene) -> Result<Coloring<TrackColor
                     .field()
                     .expect("a checked color names a relation field"),
                 aggregate: spec.aggregate().unwrap_or(grana_measure::Aggregate::Mean),
+                shift: spec.shift,
             }
         }
         _ => unreachable!("a checked color names one measurement or relation"),
     };
     coloring.set_metric(Some(metric));
     Ok(coloring)
+}
+
+fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolError> {
+    let count = steps.len();
+    let mut ready = HashMap::<ObjectSetId, usize>::new();
+    let mut base = HashMap::<ObjectSetId, usize>::new();
+    for (index, step) in steps.iter().enumerate() {
+        let Some(set) = step.installs() else {
+            continue;
+        };
+        ready.insert(set, index);
+        if !matches!(step, Step::Merge { .. }) {
+            base.insert(set, index);
+        }
+    }
+    let mut dependencies = vec![Vec::new(); count];
+    let mut merges = HashMap::<ObjectSetId, usize>::new();
+    for (index, step) in steps.iter().enumerate() {
+        match step {
+            Step::Detect { set, mask } => {
+                if let Some(mask) = mask {
+                    dependencies[index].push(settled(&ready, *mask)?);
+                }
+                if let Some(seed) = scene.seed_source(*set) {
+                    dependencies[index].push(settled(&ready, seed)?);
+                }
+            }
+            Step::Filter {
+                source, criteria, ..
+            } => {
+                dependencies[index].push(settled(&ready, *source)?);
+                let keys = criteria_keys(criteria);
+                for (relation, step) in steps.iter().enumerate() {
+                    let Step::Relation {
+                        source: related,
+                        target,
+                        shift,
+                    } = step
+                    else {
+                        continue;
+                    };
+                    if related != source {
+                        continue;
+                    }
+                    let name = scene
+                        .objects
+                        .get(*target)
+                        .map_or(String::new(), |set| set.name().to_string());
+                    if relation_keys(&name, *shift)
+                        .iter()
+                        .any(|key| keys.contains(key))
+                    {
+                        dependencies[index].push(relation);
+                    }
+                }
+            }
+            Step::Copy { source, .. } => dependencies[index].push(settled(&ready, *source)?),
+            Step::Merge { set, part } => {
+                dependencies[index].push(settled(&ready, *part)?);
+                match merges.insert(*set, index) {
+                    Some(previous) => dependencies[index].push(previous),
+                    None => {
+                        dependencies[index].push(*base.get(set).ok_or_else(|| unproduced(*set))?)
+                    }
+                }
+            }
+            Step::Relation { source, target, .. } => {
+                dependencies[index].push(settled(&ready, *source)?);
+                dependencies[index].push(settled(&ready, *target)?);
+            }
+            Step::Coloc { mask, .. } => {
+                if let Some(mask) = mask {
+                    dependencies[index].push(settled(&ready, *mask)?);
+                }
+            }
+            Step::Present => dependencies[index].extend(0..index),
+        }
+    }
+    let mut emitted = vec![false; count];
+    let mut ordered = Vec::with_capacity(count);
+    while ordered.len() < count {
+        let Some(next) = (0..count).find(|index| {
+            !emitted[*index]
+                && dependencies[*index]
+                    .iter()
+                    .all(|dependency| emitted[*dependency])
+        }) else {
+            return Err(ProtocolError::Invalid(
+                "the protocol relates object sets that wait for the relation itself".to_string(),
+            ));
+        };
+        emitted[next] = true;
+        ordered.push(steps[next].clone());
+    }
+    Ok(ordered)
+}
+
+fn criteria_keys(criteria: &Criteria) -> Vec<String> {
+    let mut keys = criteria
+        .filters()
+        .iter()
+        .map(|filter| filter.key().to_string())
+        .collect::<Vec<_>>();
+    if let Some(lasso) = criteria.lasso() {
+        keys.push(lasso.x().to_string());
+        keys.push(lasso.y().to_string());
+    }
+    keys
+}
+
+fn settled(ready: &HashMap<ObjectSetId, usize>, set: ObjectSetId) -> Result<usize, ProtocolError> {
+    ready.get(&set).copied().ok_or_else(|| unproduced(set))
+}
+
+fn unproduced(set: ObjectSetId) -> ProtocolError {
+    ProtocolError::Invalid(format!(
+        "the object set {} has no step that produces it",
+        set.raw()
+    ))
 }

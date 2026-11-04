@@ -996,3 +996,58 @@ impl Snapshotter for Recorder {
         grana_raster::write(path, &raster).map_err(String::from)
     }
 }
+
+const RELATION_FILTER: &str = r#"
+{
+  "sets": [
+    {
+      "name": "Puncta",
+
+      "color": [0.3, 0.8, 1.0],
+      "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05}
+    },
+    {
+      "name": "Nuclei",
+
+      "color": [1.0, 0.7, 0.2],
+      "source": {"kind": "surfaces", "channel": "Cells", "threshold": 0.3, "grain": 0.1, "split": 0.6, "min_volume": 1.0, "opening": 0.0, "closing": 0.0, "min_sphericity": 0.0, "min_mean_intensity": 0.0}
+    },
+    {
+      "name": "Inner",
+
+      "color": [0.4, 0.9, 0.6],
+      "source": {"kind": "filtered", "source": "Puncta", "filters": [{"column": "nuclei_distance_um", "minimum": 0.0, "maximum": 0.5}]}
+    }
+  ],
+  "relations": [{"source": "Puncta", "target": "Nuclei"}, {"source": "Inner", "target": "Nuclei"}]
+}
+"#;
+
+#[test]
+fn replays_a_filtered_set_that_reads_a_relation() {
+    let temp = TempDir::new("grana-batch-relation");
+    let root = temp.path().join("datasets");
+    write_dataset(&root.join("alpha.zarr"), "Cells", "Signal");
+    let output = temp.path().join("out");
+    let datasets = discover(&root).expect("the folder lists its datasets");
+    let protocol = Protocol::from_json(RELATION_FILTER).expect("the protocol is valid");
+    assert_eq!(
+        run(&protocol, &datasets, &output, 1, false),
+        [Status::Ok],
+        "the relation filter replays"
+    );
+    let summary = read(&output.join("summary.csv"));
+    assert!(
+        summary.contains("alpha,,ok,6,Puncta=2; Nuclei=2; Inner=2"),
+        "{summary}"
+    );
+    let inner = read(&output.join("alpha").join("Inner-objects.csv"));
+    let lines = inner.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 3, "both frames keep their spot: {inner}");
+    assert!(lines[0].contains("nuclei_distance_um"), "{inner}");
+    assert!(lines[0].contains("nuclei_inside"), "{inner}");
+    assert!(
+        lines[1].ends_with(",0.000,100.00,1"),
+        "the kept spot sits inside its nucleus: {inner}"
+    );
+}

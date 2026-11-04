@@ -1,6 +1,6 @@
 use grana_measure::{
     Aggregate, ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
-    RelationField,
+    Group, RelationField,
 };
 use grana_object::{
     IntensityTable, RelationFrame, SampleAccumulator, Spot, SpotSet, Track, TrackNode, TrackSet,
@@ -126,6 +126,7 @@ fn renames_and_deletes_a_detection_without_losing_identities() {
         target,
         source,
         0,
+        0,
         RelationFrame::new(vec![0.5], vec![0.0], vec![2]),
     );
     scene.select(Some(Selection {
@@ -158,7 +159,7 @@ fn renames_and_deletes_a_detection_without_losing_identities() {
         scene
             .objects
             .get(target)
-            .and_then(|set| set.relation(source))
+            .and_then(|set| set.relation(source, 0))
             .is_some_and(|relation| relation.frame(0).is_none()),
         "a deleted detection invalidates the relation it fed"
     );
@@ -184,6 +185,7 @@ fn colors_objects_by_their_relation_to_another_set() {
     coloring.set_metric(Some(ObjectColor::Relation {
         target,
         field: RelationField::Distance,
+        shift: 0,
     }));
     assert!(set.set_object_coloring(coloring));
     assert!(
@@ -200,6 +202,7 @@ fn colors_objects_by_their_relation_to_another_set() {
         source,
         target,
         0,
+        0,
         RelationFrame::new(vec![0.5, 0.25, 0.75], vec![0.0, 1.0, 0.0], vec![1, 1, 1]),
     );
     assert_eq!(
@@ -212,7 +215,7 @@ fn colors_objects_by_their_relation_to_another_set() {
         "the relation colors spread over the measured distances"
     );
 
-    assert!(scene.remove_relation(source, target));
+    assert!(scene.remove_relation(source, target, 0));
     assert!(
         scene
             .objects
@@ -239,13 +242,14 @@ fn shifts_a_relation_in_time_and_trims_its_frames() {
         scene
             .objects
             .get(source)
-            .and_then(|set| set.relation(target))
+            .and_then(|set| set.relation(target, -1))
             .map(|relation| relation.shift()),
         Some(-1)
     );
     scene.install_relation(
         source,
         target,
+        -1,
         2,
         RelationFrame::new(vec![2.0], vec![0.0], vec![1]),
     );
@@ -254,7 +258,7 @@ fn shifts_a_relation_in_time_and_trims_its_frames() {
         scene
             .objects
             .get(source)
-            .and_then(|set| set.relation(target))
+            .and_then(|set| set.relation(target, -1))
             .is_some_and(|relation| relation.frame(2).is_none()),
         "a changed target frame invalidates the relation that measured it"
     );
@@ -262,15 +266,16 @@ fn shifts_a_relation_in_time_and_trims_its_frames() {
     scene.install_relation(
         source,
         target,
+        -1,
         2,
         RelationFrame::new(vec![2.0], vec![0.0], vec![1]),
     );
-    assert!(scene.set_relation_shift(source, target, 0));
+    assert!(scene.move_relation(source, target, -1, 0));
     assert!(
         scene
             .objects
             .get(source)
-            .and_then(|set| set.relation(target))
+            .and_then(|set| set.relation(target, 0))
             .is_some_and(|relation| relation.computed() == 0),
         "changing the shift unmeasures the relation"
     );
@@ -280,7 +285,7 @@ fn shifts_a_relation_in_time_and_trims_its_frames() {
     );
     assert!(scene.add_relation(source, source, -2));
     assert!(
-        !scene.set_relation_shift(source, target, 3),
+        !scene.move_relation(source, target, 0, 3),
         "a shift outside the series is refused"
     );
 }
@@ -299,6 +304,7 @@ fn colors_tracks_by_a_reduced_relation() {
         scene.install_relation(
             source,
             target,
+            0,
             time,
             RelationFrame::new(vec![reach], vec![0.0], vec![1]),
         );
@@ -317,6 +323,7 @@ fn colors_tracks_by_a_reduced_relation() {
         target,
         field: RelationField::Distance,
         aggregate: Aggregate::Maximum,
+        shift: 0,
     }));
     assert!(set.set_track_coloring(coloring));
     assert_eq!(
@@ -337,6 +344,7 @@ fn colors_tracks_by_a_reduced_relation() {
         target,
         field: RelationField::Distance,
         aggregate: Aggregate::Mean,
+        shift: 0,
     }));
     assert!(set.set_track_coloring(coloring));
     assert_eq!(
@@ -423,4 +431,66 @@ fn invalidates_colocation_results_when_the_inputs_change() {
     assert_ne!(scene.document_hash(), document);
     scene.restore(state);
     assert_eq!(scene.coloc.results().len(), 1);
+}
+
+fn pair_spots(centres: &[[f32; 3]]) -> ObjectFrame {
+    let mut accumulator = SampleAccumulator::new();
+    accumulator.push(0.5);
+    let statistics = accumulator.statistics();
+    ObjectFrame::Spots(SpotSet::new(
+        0,
+        centres
+            .iter()
+            .map(|centre| Spot::new(*centre, 1.0, 0.5))
+            .collect(),
+        IntensityTable::new(2, vec![statistics; 2 * centres.len()]),
+    ))
+}
+#[test]
+fn measures_one_relation_at_several_offsets() {
+    let mut scene = series(3);
+    let source = scene.add_object(ObjectKind::Spots, 0);
+    let target = scene.add_object(ObjectKind::Spots, 0);
+    for time in 0..3 {
+        scene.install(source, time, pair_spots(&[[0.0, 0.0, 0.0]]));
+        scene.install(target, time, pair_spots(&[[1.0, 0.0, 0.0]]));
+    }
+    assert!(scene.add_relation(source, target, 0));
+    assert!(scene.add_relation(source, target, -1));
+    assert!(
+        !scene.add_relation(source, target, 0),
+        "an offset is measured once per target"
+    );
+    scene.install_relation(
+        source,
+        target,
+        0,
+        0,
+        RelationFrame::new(vec![1.0], vec![0.0], vec![1]),
+    );
+    scene.install_relation(
+        source,
+        target,
+        -1,
+        2,
+        RelationFrame::new(vec![2.0], vec![0.0], vec![1]),
+    );
+    let table = scene
+        .table(source, Group::Object, Aggregate::Mean)
+        .expect("the source set measures its frames");
+    assert!(
+        table.column("spots_2_distance_um").is_some(),
+        "the same frame offset keeps the plain column"
+    );
+    assert!(
+        table.column("spots_2_t-1_distance_um").is_some(),
+        "a shifted offset names its own column"
+    );
+    assert!(scene.remove_relation(source, target, 0));
+    let set = scene.objects.get(source).expect("the source set exists");
+    assert!(
+        set.relation(target, -1).is_some(),
+        "the other offset survives the removal"
+    );
+    assert!(set.relation(target, 0).is_none());
 }

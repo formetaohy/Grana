@@ -402,42 +402,50 @@ impl Scene {
         self.objects.add_relation(source, target, shift)
     }
 
-    pub fn set_relation_shift(
+    pub fn move_relation(
         &mut self,
         source: ObjectSetId,
         target: ObjectSetId,
-        shift: i32,
+        from: i32,
+        to: i32,
     ) -> bool {
-        if source == target && shift == 0 {
+        if source == target && to == 0 {
             return false;
         }
         let frame_count = self.frame_count();
-        if (i64::from(shift).unsigned_abs() as usize) >= frame_count as usize {
+        if (i64::from(to).unsigned_abs() as usize) >= frame_count as usize {
             return false;
         }
         if self
             .objects
             .get(source)
-            .and_then(|set| set.relation(target))
-            .is_some_and(|relation| relation.shift() == shift)
+            .and_then(|set| set.relation(target, from))
+            .is_none()
         {
             return false;
         }
-        self.objects.set_relation_shift(source, target, shift)
+        self.objects.move_relation(source, target, from, to)
     }
 
-    pub fn remove_relation(&mut self, source: ObjectSetId, target: ObjectSetId) -> bool {
-        self.objects.remove_relation(source, target)
+    pub fn remove_relation(
+        &mut self,
+        source: ObjectSetId,
+        target: ObjectSetId,
+        shift: i32,
+    ) -> bool {
+        self.objects.remove_relation(source, target, shift)
     }
 
     pub fn install_relation(
         &mut self,
         source: ObjectSetId,
         target: ObjectSetId,
+        shift: i32,
         time: u32,
         frame: RelationFrame,
     ) {
-        self.objects.install_relation(source, target, time, frame);
+        self.objects
+            .install_relation(source, target, shift, time, frame);
     }
 
     pub fn clear_relations(&mut self, id: ObjectSetId) {

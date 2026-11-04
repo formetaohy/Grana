@@ -11,6 +11,7 @@ pub enum TrackColor {
         target: ObjectSetId,
         field: RelationField,
         aggregate: Aggregate,
+        shift: i32,
     },
 }
 
@@ -29,11 +30,15 @@ impl TrackColor {
         }
     }
 
-    pub fn target(self) -> Option<ObjectSetId> {
+    pub fn relation(self) -> Option<(ObjectSetId, i32)> {
         match self {
             Self::Measurement(_) => None,
-            Self::Relation { target, .. } => Some(target),
+            Self::Relation { target, shift, .. } => Some((target, shift)),
         }
+    }
+
+    pub fn target(self) -> Option<ObjectSetId> {
+        self.relation().map(|(target, _)| target)
     }
 
     pub fn value(self, track: usize, set: &TrackSet, relation: Option<&Relation>) -> f32 {

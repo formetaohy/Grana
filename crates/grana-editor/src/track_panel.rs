@@ -351,6 +351,7 @@ fn appearance(
                         target: relation.target(),
                         field,
                         aggregate,
+                        shift: relation.shift(),
                     },
                     format!("{name} {}{shift} · {}", field.label(), aggregate.name()),
                 ));

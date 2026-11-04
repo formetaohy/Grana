@@ -547,6 +547,7 @@ fn stage(scene: &mut Scene) {
         scene.install_relation(
             spots,
             surfaces,
+            -1,
             time,
             RelationFrame::new(vec![0.5 + time as f32, 1.5], vec![1.0, 0.0], vec![1, 1]),
         );
@@ -583,6 +584,7 @@ fn stage(scene: &mut Scene) {
     coloring.set_metric(Some(ObjectColor::Relation {
         target: surfaces,
         field: RelationField::Distance,
+        shift: -1,
     }));
     coloring.set_palette(Palette::Inferno);
     coloring.set_reversed(true);
@@ -593,6 +595,7 @@ fn stage(scene: &mut Scene) {
         target: surfaces,
         field: RelationField::Inside,
         aggregate: Aggregate::Maximum,
+        shift: -1,
     }));
     track_coloring.set_palette(Palette::Plasma);
     spots.set_track_coloring(track_coloring);

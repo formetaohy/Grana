@@ -94,7 +94,11 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             Step::Filter { set, .. } => run.refilter(*set)?,
             Step::Copy { set, source } => run.copy(*set, *source)?,
             Step::Merge { set, part } => run.merge(*set, *part)?,
-            Step::Relation { source, target } => run.relate(*source, *target)?,
+            Step::Relation {
+                source,
+                target,
+                shift,
+            } => run.relate(*source, *target, *shift)?,
             Step::Coloc { pair, mask } => run.colocalize(*pair, *mask)?,
             Step::Present => {
                 task.protocol
@@ -403,7 +407,12 @@ impl Run<'_, '_> {
         Ok(())
     }
 
-    fn relate(&mut self, source_id: ObjectSetId, target_id: ObjectSetId) -> Result<(), String> {
+    fn relate(
+        &mut self,
+        source_id: ObjectSetId,
+        target_id: ObjectSetId,
+        shift: i32,
+    ) -> Result<(), String> {
         let task = self.task;
         let source_name = self
             .scene
@@ -421,12 +430,6 @@ impl Run<'_, '_> {
             .to_string();
         let source_frames = frames_of(&self.scene, source_id);
         let target_frames = frames_of(&self.scene, target_id);
-        let shift = self
-            .scene
-            .objects
-            .get(source_id)
-            .and_then(|set| set.relation(target_id))
-            .map_or(0, |relation| relation.shift());
         let _ = task.events.send(Event::Step {
             index: task.index,
             label: format!("relating {source_name} to {target_name}"),
@@ -436,7 +439,7 @@ impl Run<'_, '_> {
         let mut failure = None;
         let mut sink = |event: RunEvent| match event {
             RunEvent::Relation { time, frame } => {
-                scene.install_relation(source_id, target_id, time, frame);
+                scene.install_relation(source_id, target_id, shift, time, frame);
             }
             RunEvent::Failed(detail) => failure = Some(detail),
             RunEvent::Progress { done, total, .. } if progress.hold() => {

@@ -22,6 +22,7 @@ pub enum Step {
     Relation {
         source: ObjectSetId,
         target: ObjectSetId,
+        shift: i32,
     },
     Coloc {
         pair: usize,

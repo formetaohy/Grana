@@ -8,6 +8,7 @@ pub enum Job {
     Relation {
         source: ObjectSetId,
         target: ObjectSetId,
+        shift: i32,
     },
     Coloc,
 }
@@ -31,7 +32,7 @@ impl Job {
     pub fn involves(self, set: ObjectSetId) -> bool {
         match self {
             Self::Detect(id) | Self::Recut(id) | Self::Track(id) => id == set,
-            Self::Relation { source, target } => source == set || target == set,
+            Self::Relation { source, target, .. } => source == set || target == set,
             Self::Coloc => false,
         }
     }

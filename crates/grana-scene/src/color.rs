@@ -14,6 +14,7 @@ pub enum ObjectColor {
     Relation {
         target: ObjectSetId,
         field: RelationField,
+        shift: i32,
     },
 }
 
@@ -32,11 +33,15 @@ impl ObjectColor {
         }
     }
 
-    pub fn target(self) -> Option<ObjectSetId> {
+    pub fn relation(self) -> Option<(ObjectSetId, i32)> {
         match self {
             Self::Measurement(_) => None,
-            Self::Relation { target, .. } => Some(target),
+            Self::Relation { target, shift, .. } => Some((target, shift)),
         }
+    }
+
+    pub fn target(self) -> Option<ObjectSetId> {
+        self.relation().map(|(target, _)| target)
     }
 
     pub fn value(

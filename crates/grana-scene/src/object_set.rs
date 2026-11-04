@@ -278,9 +278,13 @@ impl ObjectSet {
                 self.colorable_measurements().contains(&measurement),
                 "the measurement colors the objects of this set"
             ),
-            Some(ObjectColor::Relation { target, field }) => {
+            Some(ObjectColor::Relation {
+                target,
+                field,
+                shift,
+            }) => {
                 assert!(
-                    self.relation(target).is_some(),
+                    self.relation(target, shift).is_some(),
                     "the relation colors the objects of this set"
                 );
                 assert!(
@@ -306,8 +310,8 @@ impl ObjectSet {
             return self.color;
         };
         let relation = metric
-            .target()
-            .and_then(|target| self.relation(target))
+            .relation()
+            .and_then(|(target, shift)| self.relation(target, shift))
             .and_then(|relation| relation.frame(time));
         let value = metric.value(frame.objects(), relation, object);
         if value.is_finite() {
@@ -341,13 +345,18 @@ impl ObjectSet {
                     "an identity column does not color tracks"
                 );
             }
-            Some(TrackColor::Relation { target, field, .. }) => {
+            Some(TrackColor::Relation {
+                target,
+                field,
+                shift,
+                ..
+            }) => {
                 assert!(
                     self.kind.trackable(),
                     "only trackable objects carry track colors"
                 );
                 assert!(
-                    self.relation(target).is_some(),
+                    self.relation(target, shift).is_some(),
                     "the relation colors the tracks of this set"
                 );
                 assert!(
@@ -392,7 +401,9 @@ impl ObjectSet {
         let Some(layer) = self.tracks.as_ref() else {
             return f32::NAN;
         };
-        let relation = metric.target().and_then(|target| self.relation(target));
+        let relation = metric
+            .relation()
+            .and_then(|(target, shift)| self.relation(target, shift));
         metric.value(track, layer.set(), relation)
     }
 
@@ -454,14 +465,14 @@ impl ObjectSet {
         &self.relations
     }
 
-    pub fn relation(&self, target: ObjectSetId) -> Option<&Relation> {
+    pub fn relation(&self, target: ObjectSetId, shift: i32) -> Option<&Relation> {
         self.relations
             .iter()
-            .find(|relation| relation.target() == target)
+            .find(|relation| relation.target() == target && relation.shift() == shift)
     }
 
     pub(crate) fn add_relation(&mut self, target: ObjectSetId, shift: i32, stamp: u64) -> bool {
-        if self.relation(target).is_some() {
+        if self.relation(target, shift).is_some() {
             return false;
         }
         self.relations.push(Relation::new(
@@ -474,34 +485,90 @@ impl ObjectSet {
         true
     }
 
-    pub(crate) fn set_relation_shift(
+    pub(crate) fn move_relation(
         &mut self,
         target: ObjectSetId,
-        shift: i32,
+        from: i32,
+        to: i32,
         stamp: u64,
     ) -> bool {
-        let Some(relation) = self
+        if self.relation(target, to).is_some() {
+            return false;
+        }
+        let Some(index) = self
             .relations
-            .iter_mut()
-            .find(|relation| relation.target() == target)
+            .iter()
+            .position(|relation| relation.target() == target && relation.shift() == from)
         else {
             return false;
         };
-        if !relation.shift_to(shift) {
-            return false;
+        let moved = self.relations[index].moved(to);
+        self.relations[index] = moved;
+        if let Some(ObjectColor::Relation {
+            target: current,
+            field,
+            shift,
+        }) = self.object_coloring.metric()
+            && current == target
+            && shift == from
+        {
+            self.object_coloring.set_metric(Some(ObjectColor::Relation {
+                target,
+                field,
+                shift: to,
+            }));
+            self.rebuild_frame_bounds();
+        }
+        if let Some(TrackColor::Relation {
+            target: current,
+            field,
+            aggregate,
+            shift,
+        }) = self.track_coloring.metric()
+            && current == target
+            && shift == from
+        {
+            self.track_coloring.set_metric(Some(TrackColor::Relation {
+                target,
+                field,
+                aggregate,
+                shift: to,
+            }));
+            self.rebuild_track_bounds();
         }
         self.revision = stamp;
         self.document += 1;
-        if self.object_coloring.metric().and_then(ObjectColor::target) == Some(target) {
-            self.rebuild_frame_bounds();
-        }
-        if self.track_coloring.metric().and_then(TrackColor::target) == Some(target) {
-            self.rebuild_track_bounds();
-        }
         true
     }
 
-    pub(crate) fn remove_relation(&mut self, target: ObjectSetId, stamp: u64) -> bool {
+    pub(crate) fn remove_relation(&mut self, target: ObjectSetId, shift: i32, stamp: u64) -> bool {
+        let Some(index) = self
+            .relations
+            .iter()
+            .position(|relation| relation.target() == target && relation.shift() == shift)
+        else {
+            return false;
+        };
+        self.relations.remove(index);
+        if self
+            .object_coloring
+            .metric()
+            .and_then(ObjectColor::relation)
+            == Some((target, shift))
+        {
+            self.object_coloring.set_metric(None);
+            self.rebuild_frame_bounds();
+        }
+        if self.track_coloring.metric().and_then(TrackColor::relation) == Some((target, shift)) {
+            self.track_coloring.set_metric(None);
+            self.rebuild_track_bounds();
+        }
+        self.revision = stamp;
+        self.document += 1;
+        true
+    }
+
+    pub(crate) fn remove_relations_to(&mut self, target: ObjectSetId, stamp: u64) -> bool {
         let count = self.relations.len();
         self.relations
             .retain(|relation| relation.target() != target);
@@ -524,6 +591,7 @@ impl ObjectSet {
     pub(crate) fn install_relation(
         &mut self,
         target: ObjectSetId,
+        shift: i32,
         time: u32,
         frame: RelationFrame,
         stamp: u64,
@@ -531,7 +599,7 @@ impl ObjectSet {
         let Some(relation) = self
             .relations
             .iter_mut()
-            .find(|relation| relation.target() == target)
+            .find(|relation| relation.target() == target && relation.shift() == shift)
         else {
             return;
         };
@@ -551,7 +619,7 @@ impl ObjectSet {
         if self
             .object_coloring
             .metric()
-            .and_then(ObjectColor::target)
+            .and_then(ObjectColor::relation)
             .is_some()
         {
             self.object_coloring.set_metric(None);
@@ -560,7 +628,7 @@ impl ObjectSet {
         if self
             .track_coloring
             .metric()
-            .and_then(TrackColor::target)
+            .and_then(TrackColor::relation)
             .is_some()
         {
             self.track_coloring.set_metric(None);
@@ -742,6 +810,10 @@ impl ObjectSet {
                 frame_count,
                 "a restored relation covers every frame of its set"
             );
+            assert!(
+                set.relation(target, relation.shift).is_none(),
+                "a restored relation measures one offset of its target"
+            );
             set.relations
                 .push(Relation::new(target, relation.shift, relation.frames));
         }
@@ -779,9 +851,14 @@ impl ObjectSet {
                         "a restored measurement colors tracks"
                     );
                 }
-                TrackColor::Relation { target, field, .. } => {
+                TrackColor::Relation {
+                    target,
+                    field,
+                    shift,
+                    ..
+                } => {
                     assert!(
-                        self.relation(target).is_some(),
+                        self.relation(target, shift).is_some(),
                         "a restored track color names a relation of its set"
                     );
                     assert!(
@@ -1318,9 +1395,9 @@ impl ObjectSet {
             .collect::<Vec<_>>();
         for relation in &other.relations {
             if relation.target() == self.id
-                || relations
-                    .iter()
-                    .any(|existing| existing.target() == relation.target())
+                || relations.iter().any(|existing| {
+                    existing.target() == relation.target() && existing.shift() == relation.shift()
+                })
             {
                 continue;
             }
@@ -1368,20 +1445,25 @@ impl ObjectSet {
         time: u32,
         stamp: u64,
     ) -> bool {
-        let Some(relation) = self
+        let mut cleared = Vec::new();
+        for relation in self
             .relations
             .iter_mut()
-            .find(|relation| relation.target() == target)
-        else {
-            return false;
-        };
-        let Some(source) = relation.source_of(time) else {
-            return false;
-        };
-        if !relation.invalidate(source) {
+            .filter(|relation| relation.target() == target)
+        {
+            let Some(source) = relation.source_of(time) else {
+                continue;
+            };
+            if relation.invalidate(source) {
+                cleared.push(source);
+            }
+        }
+        if cleared.is_empty() {
             return false;
         }
-        self.refresh_relation_bounds(target, source);
+        for source in cleared {
+            self.refresh_relation_bounds(target, source);
+        }
         self.revision = stamp;
         self.document += 1;
         true
@@ -1597,8 +1679,8 @@ impl ObjectSet {
         let metric = self.object_coloring.metric()?;
         let frame = self.frames.get(time as usize)?.data.as_deref()?;
         let relation = metric
-            .target()
-            .and_then(|target| self.relation(target))
+            .relation()
+            .and_then(|(target, shift)| self.relation(target, shift))
             .and_then(|relation| relation.frame(time));
         metric.extent(frame, relation)
     }

@@ -23,6 +23,6 @@ pub use metric::{Measurement, Statistic, TrackMeasurement};
 pub use plot::{
     HISTOGRAM_BINS, Histogram, MeasureView, Plot, PlotAxis, SCATTER_BINS, Scatter, Summary,
 };
-pub use relation::{RelationField, RelationRow};
+pub use relation::{RelationField, RelationRow, relation_keys};
 pub use scope::Scope;
 pub use table::{Aggregate, Frame, Group, Objects, Observation, Table, channel_keys};

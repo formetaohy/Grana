@@ -114,7 +114,7 @@ fn replays_a_protocol_on_the_open_dataset() {
             Some(ObjectColor::Measurement(Measurement::Diameter))
         );
         let relation = beads
-            .relation(nuclei.id())
+            .relation(nuclei.id(), 0)
             .expect("the relation is measured");
         assert_eq!(relation.computed(), 2, "the relation covers every frame");
         assert_eq!(scene.mask, Some(nuclei.id()), "the mask settles on its set");
@@ -243,7 +243,7 @@ fn copies_the_presentation_and_the_relations_of_an_object_set() {
         "the copy keeps the coloring of its source"
     );
     let relation = set
-        .relation(nuclei)
+        .relation(nuclei, 0)
         .expect("the copy relates to the target of its source");
     assert_eq!(
         relation.computed(),

@@ -142,12 +142,17 @@ impl Session {
                 target,
                 shift,
             } => self.add_relation(source, target, shift),
-            Command::SetRelationShift {
+            Command::MoveRelation {
                 source,
                 target,
                 shift,
-            } => self.set_relation_shift(source, target, shift),
-            Command::RemoveRelation { source, target } => self.remove_relation(source, target),
+                next,
+            } => self.move_relation(source, target, shift, next),
+            Command::RemoveRelation {
+                source,
+                target,
+                shift,
+            } => self.remove_relation(source, target, shift),
             Command::Track(set) => self.start_tracks(set),
             Command::CancelTrack(set) => self.cancel(Job::Track(set)),
             Command::ClearTracks(set) => {

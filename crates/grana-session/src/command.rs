@@ -64,14 +64,16 @@ pub enum Command {
         target: ObjectSetId,
         shift: i32,
     },
-    SetRelationShift {
+    MoveRelation {
         source: ObjectSetId,
         target: ObjectSetId,
         shift: i32,
+        next: i32,
     },
     RemoveRelation {
         source: ObjectSetId,
         target: ObjectSetId,
+        shift: i32,
     },
     Track(ObjectSetId),
     CancelTrack(ObjectSetId),
@@ -432,7 +434,7 @@ impl Command {
             Self::SetSeedSource { set, .. } => Edit::targeted(Action::SeedSource, set.raw()),
             Self::Detect(set) => Edit::targeted(Action::Detect, set.raw()),
             Self::AddRelation { target, .. }
-            | Self::SetRelationShift { target, .. }
+            | Self::MoveRelation { target, .. }
             | Self::RemoveRelation { target, .. } => Edit::targeted(Action::Relation, target.raw()),
             Self::Track(set) => Edit::targeted(Action::Track, set.raw()),
             Self::ClearTracks(_) => Edit::new(Action::ClearTracks),

@@ -72,6 +72,8 @@ pub struct ColorSpec {
     pub field: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregate: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub shift: i32,
     pub palette: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub reversed: bool,
@@ -528,6 +530,9 @@ impl ColorSpec {
                 }
                 if self.aggregate.is_some() {
                     return invalid("names a reduction without a relation".to_string());
+                }
+                if self.shift != 0 {
+                    return invalid("shifts a measurement that names no relation".to_string());
                 }
             }
             (None, Some(target)) => {

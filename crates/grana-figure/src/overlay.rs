@@ -341,12 +341,21 @@ pub fn legends(scene: &Scene) -> Vec<Legend> {
 fn metric_label(scene: &Scene, metric: ObjectColor, channels: &[String]) -> String {
     match metric {
         ObjectColor::Measurement(measurement) => measurement.label(channels),
-        ObjectColor::Relation { target, field } => {
+        ObjectColor::Relation {
+            target,
+            field,
+            shift,
+        } => {
             let target = scene
                 .objects
                 .get(target)
                 .map_or_else(|| "target".to_string(), |set| set.name().to_string());
-            format!("{target} · {}", field.label())
+            let offset = if shift == 0 {
+                String::new()
+            } else {
+                format!(" · t{shift:+}")
+            };
+            format!("{target}{offset} · {}", field.label())
         }
     }
 }
@@ -358,12 +367,18 @@ fn track_label(scene: &Scene, metric: TrackColor) -> String {
             target,
             field,
             aggregate,
+            shift,
         } => {
             let target = scene
                 .objects
                 .get(target)
                 .map_or_else(|| "target".to_string(), |set| set.name().to_string());
-            format!("{target} {} · {}", field.label(), aggregate.name())
+            let offset = if shift == 0 {
+                String::new()
+            } else {
+                format!(" · t{shift:+}")
+            };
+            format!("{target}{offset} {} · {}", field.label(), aggregate.name())
         }
     }
 }

@@ -516,10 +516,15 @@ impl Encode for ObjectColor {
                 writer.u8(0);
                 measurement.encode(writer);
             }
-            Self::Relation { target, field } => {
+            Self::Relation {
+                target,
+                field,
+                shift,
+            } => {
                 writer.u8(1);
                 writer.u64(target.raw());
                 writer.u8(field.index());
+                writer.i32(*shift);
             }
         }
     }
@@ -542,11 +547,13 @@ impl Encode for TrackColor {
                 target,
                 field,
                 aggregate,
+                shift,
             } => {
                 writer.u8(1);
                 writer.u64(target.raw());
                 writer.u8(field.index());
                 writer.u8(aggregate.index());
+                writer.i32(*shift);
             }
         }
     }

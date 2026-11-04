@@ -453,75 +453,152 @@ fn relations(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: Ob
     if targets.is_empty() && set.relations().is_empty() {
         return;
     }
+    let relations = set
+        .relations()
+        .iter()
+        .map(|relation| {
+            (
+                relation.target(),
+                relation.shift(),
+                relation.computed(),
+                relation.frame_count(),
+            )
+        })
+        .collect::<Vec<_>>();
     let open = ui.disclosure_open("relations", false);
     let next = widget::disclosure(ui, "relations", "Relations", open, |ui| {
-        let mut removed = None;
-        for relation in set.relations() {
-            let target = relation.target();
+        for (target, shift, computed, total) in relations.iter().copied() {
             let name = targets
                 .iter()
                 .find(|(candidate, _)| *candidate == target)
                 .map_or("another set", |(_, name)| name.as_str());
-            let running = progress(state.jobs, Job::Relation { source: id, target });
+            let running = progress(
+                state.jobs,
+                Job::Relation {
+                    source: id,
+                    target,
+                    shift,
+                },
+            );
+            let taken = relations
+                .iter()
+                .filter(|(candidate, _, _, _)| *candidate == target)
+                .map(|(_, taken, _, _)| *taken)
+                .collect::<Vec<_>>();
             ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
-                widget::caption(ui, name);
+                let mut label = name.to_string();
+                if shift != 0 {
+                    label.push_str(&format!(" · t{shift:+}"));
+                }
+                widget::caption(ui, &label);
                 ui.space(1.0);
                 let (done, total) = match running {
                     Some(running) => (running.done, running.total),
-                    None => (relation.computed(), relation.frame_count()),
+                    None => (computed, total),
                 };
                 widget::caption(ui, &format!("{done}/{total}"));
                 if widget::icon_button(
                     ui,
-                    &format!("relation.{}.remove", target.raw()),
+                    &format!("relation.{}.{}.remove", target.raw(), shift),
                     Icon::Close,
                     22.0,
                     Role::Quiet,
                     "Remove the relation",
                 ) {
-                    removed = Some(target);
+                    commands.push(Command::RemoveRelation {
+                        source: id,
+                        target,
+                        shift,
+                    });
                 }
             });
             if frames > 1 {
-                let shift = relation.shift();
                 let limit = frames as i32 - 1;
-                let mut next = shift;
+                let mut next_shift = None;
                 ui.row(Block::row().gaps(4.0).align(Align::Center), |ui| {
                     widget::field_label(ui, "shift");
                     if widget::icon_button(
                         ui,
-                        &format!("relation.{}.back", target.raw()),
+                        &format!("relation.{}.{}.back", target.raw(), shift),
                         Icon::ChevronLeft,
                         20.0,
                         Role::Quiet,
                         "Relate to the target one frame earlier",
-                    ) {
-                        next = (shift - 1).max(-limit);
+                    ) && shift > -limit
+                        && !taken.contains(&(shift - 1))
+                    {
+                        next_shift = Some(shift - 1);
                     }
                     widget::caption(ui, &shift_label(shift));
                     if widget::icon_button(
                         ui,
-                        &format!("relation.{}.forward", target.raw()),
+                        &format!("relation.{}.{}.forward", target.raw(), shift),
                         Icon::ChevronRight,
                         20.0,
                         Role::Quiet,
                         "Relate to the target one frame later",
-                    ) {
-                        next = (shift + 1).min(limit);
+                    ) && shift < limit
+                        && !taken.contains(&(shift + 1))
+                    {
+                        next_shift = Some(shift + 1);
+                    }
+                    ui.space(1.0);
+                    let free = free_offsets(target, id, limit, &taken);
+                    if !free.is_empty() {
+                        let key = format!("relation.{}.{}.offset", target.raw(), shift);
+                        let response = widget::icon_button_response(
+                            ui,
+                            &key,
+                            Icon::Plus,
+                            20.0,
+                            Role::Quiet,
+                            "Relate to the target at another offset",
+                        );
+                        if response.clicked {
+                            ui.toggle_popup(ui.id(&key));
+                        }
+                        let open = ui.popup_open(ui.id(&key));
+                        let mut chosen = None;
+                        grana_ui::popover::popover(ui, &key, open, response.rect, 176.0, |ui| {
+                            for (index, offset) in free.iter().enumerate() {
+                                if grana_ui::popover::menu_row(
+                                    ui,
+                                    index,
+                                    &shift_label(*offset),
+                                    false,
+                                ) {
+                                    chosen = Some(*offset);
+                                }
+                            }
+                        });
+                        if let Some(offset) = chosen {
+                            ui.close_popup();
+                            commands.push(Command::AddRelation {
+                                source: id,
+                                target,
+                                shift: offset,
+                            });
+                        }
                     }
                 });
-                if next != shift {
-                    commands.push(Command::SetRelationShift {
+                if let Some(next_shift) = next_shift {
+                    commands.push(Command::MoveRelation {
                         source: id,
                         target,
-                        shift: next,
+                        shift,
+                        next: next_shift,
                     });
                 }
             }
         }
         let unlinked = targets
             .iter()
-            .filter(|(target, _)| set.relation(*target).is_none() && (*target != id || frames > 1))
+            .filter(|(target, _)| {
+                !relations
+                    .iter()
+                    .any(|(candidate, _, _, _)| candidate == target)
+                    && (*target != id || frames > 1)
+            })
             .map(|(target, name)| {
                 let label = if *target == id {
                     format!("{name} · earlier frames")
@@ -561,11 +638,16 @@ fn relations(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: Ob
                 });
             }
         }
-        if let Some(target) = removed {
-            commands.push(Command::RemoveRelation { source: id, target });
-        }
     });
     ui.store_open("relations", next);
+}
+
+fn free_offsets(target: ObjectSetId, source: ObjectSetId, limit: i32, taken: &[i32]) -> Vec<i32> {
+    let mut free = (-limit..=limit)
+        .filter(|offset| !taken.contains(offset) && (target != source || *offset != 0))
+        .collect::<Vec<_>>();
+    free.sort_by_key(|offset| (offset.abs(), *offset));
+    free
 }
 
 fn shift_label(shift: i32) -> String {
@@ -886,6 +968,7 @@ fn appearance(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, i
             let metric = grana_scene::ObjectColor::Relation {
                 target: relation.target(),
                 field,
+                shift: relation.shift(),
             };
             metrics.push((metric, format!("{target} · {}{shift}", field.label())));
         }

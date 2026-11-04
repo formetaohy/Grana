@@ -424,8 +424,10 @@ impl Decode for SetState {
         {
             return Err(FAULT_SHAPE);
         }
+        let mut seen = std::collections::BTreeSet::new();
         for relation in &state.relations {
-            if (relation.target == id && relation.shift == 0)
+            if !seen.insert((relation.target, relation.shift))
+                || (relation.target == id && relation.shift == 0)
                 || relation.frames.len() != state.frames.len()
                 || (relation.shift.unsigned_abs() as usize) >= state.frames.len()
             {
@@ -882,7 +884,12 @@ impl Decode for ObjectColor {
                 if !RELATION_FIELDS.contains(&field) {
                     return Err(FAULT_VALUE);
                 }
-                Ok(Self::Relation { target, field })
+                let shift = reader.i32()?;
+                Ok(Self::Relation {
+                    target,
+                    field,
+                    shift,
+                })
             }
             _ => Err(FAULT_SHAPE),
         }
@@ -900,10 +907,12 @@ impl Decode for TrackColor {
                     return Err(FAULT_VALUE);
                 }
                 let aggregate = Aggregate::from_index(reader.u8()?).ok_or(FAULT_SHAPE)?;
+                let shift = reader.i32()?;
                 Ok(Self::Relation {
                     target,
                     field,
                     aggregate,
+                    shift,
                 })
             }
             _ => Err(FAULT_SHAPE),
@@ -1466,22 +1475,34 @@ fn color_applies(set: &SetState, channels: usize, metric: ObjectColor) -> bool {
         ObjectColor::Measurement(measurement) => {
             measurement.colorable() && set.kind.measurements(channels).contains(&measurement)
         }
-        ObjectColor::Relation { target, .. } => set
-            .relations
-            .iter()
-            .any(|relation| relation.target == target.raw()),
+        ObjectColor::Relation {
+            target,
+            field,
+            shift,
+        } => {
+            RELATION_FIELDS.contains(&field)
+                && set
+                    .relations
+                    .iter()
+                    .any(|relation| relation.target == target.raw() && relation.shift == shift)
+        }
     }
 }
 
 fn track_color_applies(set: &SetState, metric: TrackColor) -> bool {
     match metric {
         TrackColor::Measurement(measurement) => measurement.colorable(),
-        TrackColor::Relation { target, field, .. } => {
+        TrackColor::Relation {
+            target,
+            field,
+            shift,
+            ..
+        } => {
             RELATION_FIELDS.contains(&field)
                 && set
                     .relations
                     .iter()
-                    .any(|relation| relation.target == target.raw())
+                    .any(|relation| relation.target == target.raw() && relation.shift == shift)
         }
     }
 }

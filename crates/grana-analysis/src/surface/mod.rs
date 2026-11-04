@@ -411,9 +411,9 @@ impl SurfaceBuilder {
                 "a surface tile needs more than {WORKER_ARRAY_LIMIT} bytes of array memory"
             ));
         }
-        let distance = Distance::build(&self, &mask.solid);
+        let distance = Distance::build(&self, &mask.solid, desired);
         let ceiling = base * 4;
-        let margin = distance.uncertainty().ceil() as u32 + 1;
+        let margin = distance.margin().ceil() as u32 + 1;
         let wanted = (distance.reach().ceil() as u32)
             .saturating_add(margin)
             .clamp(base, ceiling);

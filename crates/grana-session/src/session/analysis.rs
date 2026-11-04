@@ -75,10 +75,16 @@ impl Session {
                     }
                 }
                 Update::Relation(time, frame) => {
-                    if let (Job::Relation { source, target }, Some(scene)) =
-                        (job, self.scene.as_mut())
+                    if let (
+                        Job::Relation {
+                            source,
+                            target,
+                            shift,
+                        },
+                        Some(scene),
+                    ) = (job, self.scene.as_mut())
                     {
-                        scene.install_relation(source, target, time, frame);
+                        scene.install_relation(source, target, shift, time, frame);
                     }
                 }
                 Update::Coloc(series, region) => {
@@ -240,17 +246,17 @@ impl Session {
             .collect::<Vec<_>>();
         let existing = ready
             .iter()
-            .map(|(source, target, _)| {
+            .map(|(source, target, shift)| {
                 scene
                     .objects
                     .get(*source)
-                    .is_some_and(|object| object.relation(*target).is_some())
+                    .is_some_and(|object| object.relation(*target, *shift).is_some())
             })
             .collect::<Vec<_>>();
         self.resume.retain(|candidate| !ready.contains(candidate));
         for ((source, target, shift), existing) in ready.into_iter().zip(existing) {
             if existing {
-                self.start_relation(source, target);
+                self.start_relation(source, target, shift);
             } else {
                 self.add_relation(source, target, shift);
             }
@@ -308,34 +314,47 @@ impl Session {
         if !scene.add_relation(source, target, shift) {
             return;
         }
-        self.start_relation(source, target);
+        self.start_relation(source, target, shift);
     }
 
-    pub(super) fn set_relation_shift(
+    pub(super) fn move_relation(
         &mut self,
         source: ObjectSetId,
         target: ObjectSetId,
-        shift: i32,
+        from: i32,
+        to: i32,
     ) {
         let Some(scene) = self.scene.as_mut() else {
             return;
         };
-        if !scene.set_relation_shift(source, target, shift) {
+        if !scene.move_relation(source, target, from, to) {
             return;
         }
-        self.cancel(Job::Relation { source, target });
-        self.start_relation(source, target);
+        self.cancel(Job::Relation {
+            source,
+            target,
+            shift: from,
+        });
+        self.start_relation(source, target, to);
     }
 
-    pub(super) fn remove_relation(&mut self, source: ObjectSetId, target: ObjectSetId) {
-        self.cancel(Job::Relation { source, target });
+    pub(super) fn remove_relation(&mut self, source: ObjectSetId, target: ObjectSetId, shift: i32) {
+        self.cancel(Job::Relation {
+            source,
+            target,
+            shift,
+        });
         if let Some(scene) = self.scene.as_mut() {
-            scene.remove_relation(source, target);
+            scene.remove_relation(source, target, shift);
         }
     }
 
-    pub(super) fn start_relation(&mut self, source: ObjectSetId, target: ObjectSetId) {
-        let job = Job::Relation { source, target };
+    pub(super) fn start_relation(&mut self, source: ObjectSetId, target: ObjectSetId, shift: i32) {
+        let job = Job::Relation {
+            source,
+            target,
+            shift,
+        };
         if self.loading.is_some() || self.analysis.iter().any(|analysis| analysis.job() == job) {
             return;
         }
@@ -353,7 +372,6 @@ impl Session {
                 ));
                 return;
             }
-            let shift = from.relation(target).map_or(0, |relation| relation.shift());
             let frames = scene.frame_count();
             let source_frames = (0..frames)
                 .map(|time| from.frame_shared(time))
@@ -361,9 +379,9 @@ impl Session {
             let target_frames = (0..frames)
                 .map(|time| to.frame_shared(time))
                 .collect::<Vec<_>>();
-            (source_frames, target_frames, shift, frames as usize)
+            (source_frames, target_frames, frames as usize)
         };
-        let (source_frames, target_frames, shift, total) = prepared;
+        let (source_frames, target_frames, total) = prepared;
         self.message = None;
         self.record_progress(job, 0, 0, total);
         self.analysis

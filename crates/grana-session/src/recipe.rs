@@ -58,7 +58,7 @@ impl Recipe {
                 vec![*set]
             }
             Step::Merge { set, part } => vec![*set, *part],
-            Step::Relation { source, target } => vec![*source, *target],
+            Step::Relation { source, target, .. } => vec![*source, *target],
             Step::Coloc { .. } | Step::Present => Vec::new(),
         }
     }
@@ -71,9 +71,14 @@ impl Recipe {
     pub(crate) fn job(&self) -> Option<Job> {
         match self.step() {
             Step::Detect { set, .. } => Some(Job::Detect(*set)),
-            Step::Relation { source, target } => Some(Job::Relation {
+            Step::Relation {
+                source,
+                target,
+                shift,
+            } => Some(Job::Relation {
                 source: *source,
                 target: *target,
+                shift: *shift,
             }),
             Step::Coloc { .. } => Some(Job::Coloc),
             Step::Filter { .. } | Step::Copy { .. } | Step::Merge { .. } | Step::Present => None,

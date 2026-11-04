@@ -78,16 +78,7 @@ impl Relation {
         slot.take().is_some()
     }
 
-    pub(crate) fn shift_to(&mut self, shift: i32) -> bool {
-        assert!(
-            (i64::from(shift).unsigned_abs() as usize) < self.frames.len(),
-            "a relation shifts within the frames of its dataset"
-        );
-        if self.shift == shift {
-            return false;
-        }
-        self.shift = shift;
-        self.frames.iter_mut().for_each(|frame| *frame = None);
-        true
+    pub(crate) fn moved(&self, shift: i32) -> Self {
+        Self::new(self.target, shift, vec![None; self.frames.len()])
     }
 }
