@@ -27,6 +27,7 @@ pub enum Icon {
     EyeOff,
     Folder,
     Save,
+    Copy,
     Camera,
     Film,
     Export,
@@ -180,6 +181,23 @@ pub fn paint(
             path(
                 painter,
                 &[(4.2, 12.4), (4.2, 16.2), (15.8, 16.2), (15.8, 12.4)],
+            );
+        }
+        Icon::Copy => {
+            rounded(
+                painter,
+                Rect::from_min_max(point(6.8, 6.8), point(16.6, 16.6)),
+                2.0,
+            );
+            path(
+                painter,
+                &[
+                    (12.8, 6.8),
+                    (12.8, 4.6),
+                    (4.6, 4.6),
+                    (4.6, 12.8),
+                    (6.8, 12.8),
+                ],
             );
         }
         Icon::Camera => {

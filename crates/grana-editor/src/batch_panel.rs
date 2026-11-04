@@ -50,6 +50,12 @@ fn protocol(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
             {
                 commands.push(Command::ApplyProtocol);
             }
+            if !running
+                && let Some(text) = state.batch_protocol()
+                && widget::action_button(ui, "copy", Icon::Copy, "Copy", Role::Quiet).clicked
+            {
+                ui.copy(text);
+            }
             if state.batch_protocol().is_some() {
                 ui.space(2.0);
                 widget::badge(ui, "Ready", ui.theme().palette.success);

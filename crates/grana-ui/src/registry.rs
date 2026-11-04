@@ -188,6 +188,7 @@ impl Registry {
             self.popup = None;
         }
         self.focus_order.clear();
+        self.click = None;
         self.next_hits.clear();
         self.next_occluders.clear();
         self.next_wheel_targets.clear();

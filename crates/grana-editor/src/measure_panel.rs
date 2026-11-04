@@ -1,7 +1,9 @@
 use glam::Vec2;
 use grana_measure::{Aggregate, Column, Filter, Group, MeasureView, Observation, PlotAxis, Scope};
 use grana_scene::{Item, ObjectSetId, Selection};
-use grana_ui::{Align, Axis, Block, Corners, Icon, Length, Rect, Role, TextStyle, Ui, icon};
+use grana_ui::{
+    Align, Axis, Block, Corners, Cursor, Icon, Length, Rect, Role, TextStyle, Ui, icon,
+};
 
 use crate::panel::empty_state;
 use crate::plot;
@@ -574,7 +576,7 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let surface = Rect::from_min_size(ui.cursor_position(), ui.available());
     crate::panel::card_surface(ui, surface);
     let available = surface.width();
-    let widths = column_widths(&columns, available - 1.0);
+    let widths = column_widths(ui, &columns, available - 1.0);
     let total = widths.iter().sum::<f32>();
     let band = ui.allocate(Vec2::new(total, HEADER_HEIGHT));
     let palette = ui.theme().palette;
@@ -604,6 +606,23 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         let key = ui.id_index("head", *index);
         if header_cell(ui, key, &crate::panel::column_label(column), sorted, rect) {
             toggled.push(*index);
+        }
+        let grip = Rect::from_min_max(
+            Vec2::new(rect.max.x - 3.0, rect.min.y),
+            Vec2::new(rect.max.x + 1.0, rect.max.y),
+        );
+        let grip_key = ui.id_index("measure.grip", *index);
+        let grip_response = ui.interact(grip_key, grip);
+        if grip_response.hovered || grip_response.dragging {
+            ui.set_cursor(Cursor::ResizeHorizontal);
+        }
+        if grip_response.dragging {
+            let width_key = ui.id_index("measure.width", *index);
+            let current = ui.value_of(width_key).unwrap_or(*width);
+            let spare = available - 1.0 - total;
+            let maximum = (current + spare).max(MIN_COLUMN_WIDTH);
+            let next = (current + ui.input().delta().x).clamp(MIN_COLUMN_WIDTH, maximum);
+            ui.store_value(width_key, next);
         }
         left += *width;
     }
@@ -792,7 +811,7 @@ fn header_cell(ui: &mut Ui, key: u64, text: &str, sorted: Option<bool>, rect: Re
     response.clicked
 }
 
-fn column_widths(columns: &[(usize, Column)], available: f32) -> Vec<f32> {
+fn column_widths(ui: &Ui, columns: &[(usize, Column)], available: f32) -> Vec<f32> {
     let initial = columns
         .iter()
         .map(|(_, column)| {
@@ -802,10 +821,24 @@ fn column_widths(columns: &[(usize, Column)], available: f32) -> Vec<f32> {
         })
         .collect::<Vec<_>>();
     let total = initial.iter().sum::<f32>();
-    if total <= available {
+    let mut widths: Vec<f32> = if total <= available {
         let extra = (available - total) / columns.len() as f32;
-        return initial.iter().map(|width| width + extra).collect();
+        initial.iter().map(|width| width + extra).collect()
+    } else {
+        let scale = available / total;
+        initial.iter().map(|width| width * scale).collect()
+    };
+    for (slot, (index, _)) in columns.iter().enumerate() {
+        if let Some(width) = ui.value_of(ui.id_index("measure.width", *index)) {
+            widths[slot] = width.max(MIN_COLUMN_WIDTH);
+        }
     }
-    let scale = available / total;
-    initial.iter().map(|width| width * scale).collect()
+    let total = widths.iter().sum::<f32>();
+    if total > available && total > 0.0 {
+        let scale = available / total;
+        for width in &mut widths {
+            *width *= scale;
+        }
+    }
+    widths
 }

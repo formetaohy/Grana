@@ -244,7 +244,7 @@ pub struct Ui {
     time: f32,
     elapsed: f32,
     occluders: Vec<Rect>,
-    focus_rings: Vec<(Rect, Corners)>,
+    focus_rings: Vec<(Rect, Corners, Clip)>,
     overlay_clip: Clip,
     overlay_mode: u32,
     edit: Option<Edit>,
@@ -333,6 +333,10 @@ impl Ui {
 
     pub fn set_clipboard(&mut self, clipboard: Box<dyn Clipboard>) {
         self.clipboard = clipboard;
+    }
+
+    pub fn copy(&mut self, text: &str) {
+        self.clipboard.write(text);
     }
 
     pub fn edit_caret(&self) -> Option<Rect> {
@@ -443,12 +447,11 @@ impl Ui {
             self.end_edit();
         }
         if !self.focus_rings.is_empty() {
-            let clip = self.overlay_clip;
             let dark = self.theme.dark;
             let color = self.theme.palette.focus;
             let rings = std::mem::take(&mut self.focus_rings);
-            let mut painter = Painter::new(&mut self.overlay, &mut self.text, clip, dark);
-            for (rect, corners) in rings {
+            for (rect, corners, clip) in rings {
+                let mut painter = Painter::new(&mut self.overlay, &mut self.text, clip, dark);
                 painter.outlined(
                     rect.expand(2.0),
                     corners,
@@ -1295,13 +1298,14 @@ impl Ui {
     }
 
     pub fn focusable(&mut self, key: u64, rect: Rect, corners: Corners) -> bool {
-        if rect.is_empty() || !self.area().clip.rect.intersects(rect) {
+        let clip = self.area().clip;
+        if rect.is_empty() || !clip.rect.intersects(rect) {
             return false;
         }
         self.registry.register_focus(key);
         let focused = self.registry.focused(key);
         if focused && self.registry.focus_visible() {
-            self.focus_rings.push((rect, corners));
+            self.focus_rings.push((rect, corners, clip));
         }
         focused
     }
@@ -1529,6 +1533,10 @@ impl Ui {
 
     pub fn popup_open(&self, key: u64) -> bool {
         self.registry.popup() == Some(key)
+    }
+
+    pub fn popup_open_any(&self) -> bool {
+        self.registry.popup().is_some()
     }
 
     pub fn toggle_popup(&mut self, key: u64) {
@@ -1899,6 +1907,11 @@ mod tests {
     }
 
     #[test]
+    fn instance_layout_is_packed() {
+        assert_eq!(std::mem::size_of::<Instance>(), 144);
+    }
+
+    #[test]
     fn paints_instances_into_the_color_target() {
         let gpu = Headless::new().expect("the headless device is available");
         let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
@@ -1924,6 +1937,48 @@ mod tests {
             pixels.chunks(4).any(|pixel| pixel[3] > 0),
             "the instances reach the colour target"
         );
+    }
+
+    #[test]
+    fn combo_chooses_with_the_keyboard() {
+        let gpu = Headless::new().expect("the headless device is available");
+        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let items = [
+            (0u8, "A".to_string()),
+            (1, "B".to_string()),
+            (2, "C".to_string()),
+        ];
+        let mut chosen = None;
+        let mut render = |ui: &mut Ui| {
+            ui.resize([400, 300]);
+            ui.begin(Vec2::new(400.0, 300.0), 1.0, 0.0);
+            ui.root(|ui| {
+                chosen = crate::popover::combo(ui, "combo", 180.0, &items, Some(0));
+            });
+            let _ = ui.end();
+        };
+        render(&mut ui);
+        ui.input_mut()
+            .push(crate::input::Event::Moved(Vec2::new(10.0, 10.0)));
+        ui.input_mut()
+            .push(crate::input::Event::Down(crate::input::Button::Primary));
+        render(&mut ui);
+        ui.input_mut()
+            .push(crate::input::Event::Up(crate::input::Button::Primary));
+        render(&mut ui);
+        ui.input_mut().push(crate::input::Event::Key {
+            key: crate::input::Key::Down,
+            pressed: true,
+            repeat: false,
+        });
+        render(&mut ui);
+        ui.input_mut().push(crate::input::Event::Key {
+            key: crate::input::Key::Enter,
+            pressed: true,
+            repeat: false,
+        });
+        render(&mut ui);
+        assert_eq!(chosen, Some(1));
     }
 
     #[test]

@@ -96,6 +96,41 @@ pub fn combo<T: Copy + PartialEq>(
     );
     let mut chosen = None;
     let open = ui.popup_open(key);
+    let highlight_key = key ^ 0x51ed_2701_9e37_79b9;
+    if response.clicked && ui.popup_open(key) {
+        let index = selected
+            .and_then(|value| items.iter().position(|(item, _)| *item == value))
+            .unwrap_or(0);
+        ui.store_value(highlight_key, index as f32);
+    }
+    let mut highlight = ui
+        .value_of(highlight_key)
+        .map_or(0, |value| value.round().max(0.0) as usize);
+    if highlight >= items.len() {
+        highlight = 0;
+    }
+    if open && !items.is_empty() {
+        let keys = ui.input().keys().to_vec();
+        for event in keys {
+            if !event.pressed || event.repeat {
+                continue;
+            }
+            match event.key {
+                Some(crate::input::Key::Up) => {
+                    highlight = (highlight + items.len() - 1) % items.len();
+                    ui.store_value(highlight_key, highlight as f32);
+                }
+                Some(crate::input::Key::Down) => {
+                    highlight = (highlight + 1) % items.len();
+                    ui.store_value(highlight_key, highlight as f32);
+                }
+                Some(crate::input::Key::Enter | crate::input::Key::Space) => {
+                    chosen = Some(items[highlight].0);
+                }
+                _ => {}
+            }
+        }
+    }
     let scroll = ui.id(&format!("{id}.scroll"));
     let stays = popover(ui, id, open, rect, width.max(160.0), |ui| {
         let room = ui.available().y;
@@ -106,10 +141,14 @@ pub fn combo<T: Copy + PartialEq>(
                 crate::ui::Axis::Column,
                 crate::ui::Length::Fixed(room),
                 Some(content),
-                |ui| chosen = rows(ui, items, selected),
+                |ui| {
+                    if let Some(value) = rows(ui, items, selected, highlight) {
+                        chosen = Some(value);
+                    }
+                },
             );
-        } else {
-            chosen = rows(ui, items, selected);
+        } else if let Some(value) = rows(ui, items, selected, highlight) {
+            chosen = Some(value);
         }
     });
     if chosen.is_some() || (!stays && open) {
@@ -120,10 +159,21 @@ pub fn combo<T: Copy + PartialEq>(
 
 const MENU_ROW: f32 = 30.0;
 
-fn rows<T: Copy + PartialEq>(ui: &mut Ui, items: &[(T, String)], selected: Option<T>) -> Option<T> {
+fn rows<T: Copy + PartialEq>(
+    ui: &mut Ui,
+    items: &[(T, String)],
+    selected: Option<T>,
+    highlight: usize,
+) -> Option<T> {
     let mut chosen = None;
     for (index, (value, text)) in items.iter().enumerate() {
-        if menu_row(ui, index, text, selected == Some(*value)) {
+        if menu_row_highlighted(
+            ui,
+            index,
+            text,
+            selected == Some(*value),
+            index == highlight,
+        ) {
             chosen = Some(*value);
         }
     }
@@ -131,13 +181,27 @@ fn rows<T: Copy + PartialEq>(ui: &mut Ui, items: &[(T, String)], selected: Optio
 }
 
 pub fn menu_row(ui: &mut Ui, index: usize, label: &str, checked: bool) -> bool {
+    menu_row_highlighted(ui, index, label, checked, false)
+}
+
+fn menu_row_highlighted(
+    ui: &mut Ui,
+    index: usize,
+    label: &str,
+    checked: bool,
+    highlighted: bool,
+) -> bool {
     let key = ui.id(&format!("menu.row.{index}"));
     let height = MENU_ROW;
     let rect = ui.allocate(Vec2::new(ui.available().x, height));
     let response = ui.interact(key, rect);
     let hover = ui.animate(
         key,
-        if response.hovered { 1.0 } else { 0.0 },
+        if response.hovered || highlighted {
+            1.0
+        } else {
+            0.0
+        },
         Motion::quick(),
     );
     let palette = ui.theme().palette;

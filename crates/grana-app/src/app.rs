@@ -1067,7 +1067,7 @@ impl App {
         let focused = self
             .surface
             .as_ref()
-            .is_some_and(|surface| surface.ui.focus_visible());
+            .is_some_and(|surface| surface.ui.focus_visible() || surface.ui.popup_open_any());
         if focused
             && matches!(
                 event.logical_key,
