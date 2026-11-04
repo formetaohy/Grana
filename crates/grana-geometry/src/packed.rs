@@ -576,6 +576,21 @@ impl PackedMesh {
     }
 
     pub fn triangle(&self, object: usize, triangle: usize) -> [[f32; 3]; 3] {
+        let group = self.packed_group(object, triangle);
+        let start = group.first_index as usize + triangle * 3;
+        [0, 1, 2].map(|corner| {
+            let index = self.corner(group, start + corner);
+            self.dequantize(group, index)
+        })
+    }
+
+    pub fn triangle_vertices(&self, object: usize, triangle: usize) -> [u32; 3] {
+        let group = self.packed_group(object, triangle);
+        let start = group.first_index as usize + triangle * 3;
+        [0, 1, 2].map(|corner| self.corner(group, start + corner))
+    }
+
+    fn packed_group(&self, object: usize, triangle: usize) -> &GeometryGroup {
         let group = self
             .groups
             .get(object)
@@ -584,17 +599,20 @@ impl PackedMesh {
             triangle < group.index_count as usize / 3,
             "the triangle lies inside its packed object"
         );
-        let start = group.first_index as usize + triangle * 3;
-        [0, 1, 2].map(|corner| {
-            let index = if group.wide {
-                self.wide[start + corner]
-            } else {
-                u32::from(self.narrow[start + corner])
-            };
-            let vertex = self.vertices[group.first_vertex as usize + index as usize];
-            [0, 1, 2]
-                .map(|axis| group.min[axis] + f32::from(vertex.position[axis]) * group.scale[axis])
-        })
+        group
+    }
+
+    fn corner(&self, group: &GeometryGroup, index: usize) -> u32 {
+        if group.wide {
+            self.wide[index]
+        } else {
+            u32::from(self.narrow[index])
+        }
+    }
+
+    fn dequantize(&self, group: &GeometryGroup, vertex: u32) -> [f32; 3] {
+        let packed = self.vertices[group.first_vertex as usize + vertex as usize];
+        [0, 1, 2].map(|axis| group.min[axis] + f32::from(packed.position[axis]) * group.scale[axis])
     }
 
     pub fn position(&self, object: usize, vertex: usize) -> [f32; 3] {
@@ -606,8 +624,7 @@ impl PackedMesh {
             vertex < group.vertex_count as usize,
             "the vertex lies inside its packed object"
         );
-        let packed = self.vertices[group.first_vertex as usize + vertex];
-        [0, 1, 2].map(|axis| group.min[axis] + f32::from(packed.position[axis]) * group.scale[axis])
+        self.dequantize(group, vertex as u32)
     }
 }
 

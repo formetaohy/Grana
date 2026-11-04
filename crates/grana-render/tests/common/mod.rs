@@ -1,7 +1,7 @@
 use grana_display::{Camera, SectionCamera, TransferFunction};
 use grana_render::{Frame, Renderer, Requests, SceneFrame};
 use grana_volume::BrickRequest;
-use grana_volume::{BrickData, Pyramid, Region};
+use grana_volume::{BrickData, Clip, Pyramid, Region};
 
 pub const SIDE: u32 = 256;
 pub const SAMPLES: u32 = 4;
@@ -25,14 +25,23 @@ pub fn settle(
     session: Session<'_>,
     source: impl Fn(BrickRequest) -> BrickData,
 ) -> Requests {
+    settle_clipped(renderer, session, Clip::none(), source)
+}
+
+pub fn settle_clipped(
+    renderer: &mut Renderer,
+    session: Session<'_>,
+    clip: Clip,
+    source: impl Fn(BrickRequest) -> BrickData,
+) -> Requests {
     let mut latest = Requests::default();
     for _ in 0..96 {
-        renderer.draw(session.device, session.queue, frame(&session));
+        renderer.draw(session.device, session.queue, clipped(&session, clip));
         if !renderer.requests_pending() {
             return latest;
         }
         if let Some(requests) = next_demand(renderer, &session) {
-            for request in requests.volume.iter().chain(requests.section.iter()) {
+            for request in requests.volume.iter().chain(&requests.section) {
                 let brick = source(*request);
                 let _ = renderer.upload(session.device, session.queue, *request, &brick);
             }
@@ -67,10 +76,18 @@ pub fn frame<'a>(session: &Session<'a>) -> Frame<'a, 'a> {
         camera: session.camera,
         section: session.section,
         region: session.region,
+        clip: Clip::none(),
         exposure: 1.0,
         samples: SAMPLES,
         scene: session.scene,
         prefetch: false,
+    }
+}
+
+pub fn clipped<'a>(session: &Session<'a>, clip: Clip) -> Frame<'a, 'a> {
+    Frame {
+        clip,
+        ..frame(session)
     }
 }
 

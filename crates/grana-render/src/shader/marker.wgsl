@@ -67,7 +67,7 @@ fn shade(input: MarkerOutput) -> Shaded {
     let radius = input.center_radius.w;
     let surface = input.center_radius.xyz
         + (frame.right.xyz * local.x + frame.up.xyz * local.y - frame.forward.xyz * depth) * radius;
-    if (outside_region(surface)) {
+    if (outside_region(surface) || outside_clip(surface)) {
         discard;
     }
     let normal = normalize(

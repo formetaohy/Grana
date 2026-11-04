@@ -97,10 +97,11 @@ pub fn relation(
     source: Vec<Option<Arc<ObjectFrame>>>,
     target: Vec<Option<Arc<ObjectFrame>>>,
     shift: i32,
+    gate: f32,
     workers: usize,
 ) -> Analysis {
     analyse(job, move |cancel, sink| {
-        run::relation(source, target, shift, workers, cancel, sink);
+        run::relation(source, target, shift, gate, workers, cancel, sink);
         Ok(())
     })
 }

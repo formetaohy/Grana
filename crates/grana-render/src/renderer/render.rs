@@ -19,6 +19,7 @@ impl Renderer {
             camera,
             section,
             region,
+            clip,
             exposure,
             samples,
             scene,
@@ -199,6 +200,7 @@ impl Renderer {
             VolumeView {
                 camera,
                 region,
+                clip,
                 aspect: volume_aspect,
                 height: volume_height,
             },

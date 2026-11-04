@@ -2,7 +2,8 @@ mod common;
 
 use common::{
     SAMPLES, SIDE, Session, blue, bright_fraction, channels, dark_fraction, device, green,
-    green_pixels, green_sum, lit, pixel, read_pixels, red_count, red_pixels, settle, target,
+    green_pixels, green_sum, lit, pixel, read_pixels, red_count, red_pixels, settle,
+    settle_clipped, target,
 };
 use std::sync::Arc;
 
@@ -17,7 +18,7 @@ use grana_render::{
     CutInfo, Frame, Layer, LayerKey, Marker, PickId, PickPane, Renderer, SceneFrame, Style,
 };
 use grana_volume::{
-    Axis, BrickGrid, Channel, Extent, Level, Pyramid, Region, Spacing, Volume, VolumeSeries,
+    Axis, BrickGrid, Channel, Clip, Extent, Level, Pyramid, Region, Spacing, Volume, VolumeSeries,
     VoxelData,
 };
 
@@ -572,6 +573,97 @@ fn clips_to_a_region_box() {
     assert!(
         dark_fraction(&section, 0.0, 1.0, 0.0, 1.0) > 0.9,
         "the section ignores the region"
+    );
+}
+
+#[test]
+fn clips_to_a_plane() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = sphere(Extent::new(128, 128, 64), Spacing::new(0.1, 0.1, 0.2));
+    let pyramid = volume.pyramid();
+    let world = Vec3::from(volume.world_extent());
+    let half = 0.5 * world;
+    let mut camera = Camera::new(35.0);
+    camera.fit(world, 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let transfer = TransferFunction::new(vec![
+        Stop::new(0.0, [0.0, 0.0, 0.0], 0.0),
+        Stop::new(0.49, [0.0, 0.0, 0.0], 0.0),
+        Stop::new(0.51, [1.0, 1.0, 1.0], 1.0),
+        Stop::new(1.0, [1.0, 1.0, 1.0], 1.0),
+    ]);
+    let channels = vec![grana_render::ChannelRow {
+        visible: true,
+        opacity: 1.0,
+        window: pyramid.channels()[0].window(),
+        transfer: &transfer,
+    }];
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    let source = |request: grana_volume::BrickRequest| {
+        let grid = BrickGrid::new(volume.extent());
+        volume.brick(&grid, request.coord)
+    };
+    let session = || Session {
+        device: &device,
+        queue: &queue,
+        target: &view,
+        camera: &camera,
+        section: &section,
+        scene: &scene,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        region: Region::none(),
+        time: 0,
+    };
+
+    settle(&mut renderer, session(), source);
+    let full = bright_pixels(&read_pixels(&device, &queue, &texture, SIDE));
+
+    settle_clipped(&mut renderer, session(), Clip::new(Vec3::X, 0.0), source);
+    let cut = bright_pixels(&read_pixels(&device, &queue, &texture, SIDE));
+
+    settle_clipped(
+        &mut renderer,
+        session(),
+        Clip::new(Vec3::X, -0.65 * half.x),
+        source,
+    );
+    let erased = bright_pixels(&read_pixels(&device, &queue, &texture, SIDE));
+
+    assert!(full > 0, "the unclipped volume is empty");
+    assert!(
+        cut > 0 && cut < full,
+        "the plane does not cut the volume: {cut} of {full}"
+    );
+    assert_eq!(erased, 0, "a plane away from the volume still renders it");
+
+    settle_clipped(
+        &mut renderer,
+        Session {
+            volume_region: CORNER,
+            section_region: WHOLE,
+            ..session()
+        },
+        Clip::new(-Vec3::Z, -0.65 * half.z),
+        source,
+    );
+    let section = read_pixels(&device, &queue, &texture, SIDE);
+    assert!(
+        dark_fraction(&section, 0.0, 1.0, 0.0, 1.0) > 0.9,
+        "the section ignores the plane"
     );
 }
 
@@ -2058,6 +2150,7 @@ impl Resident<'_> {
                     camera: self.camera,
                     section: self.section,
                     region: Region::none(),
+                    clip: Clip::none(),
                     exposure: 1.0,
                     samples: SAMPLES,
                     scene: &scene,

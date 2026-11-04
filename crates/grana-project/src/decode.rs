@@ -24,7 +24,7 @@ use grana_scene::{
     ObjectSetId, Provenance, RELATION_FIELDS, Recipe, RelationState, SceneState, Seeds,
     SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
 };
-use grana_volume::{Axis, Intensity, Region};
+use grana_volume::{Axis, Clip, Intensity, Region};
 
 use crate::codec::{Decode, Reader};
 use crate::encode::{TAG_FILAMENTS, TAG_SPOTS, TAG_SURFACES};
@@ -165,6 +165,7 @@ impl Decode for SceneState {
             step_scale: positive(reader.f32()?)?,
             exposure: positive(reader.f32()?)?,
             region: Region::decode(reader)?,
+            clip: Clip::decode(reader)?,
             mask: match reader.u64()? {
                 0 => None,
                 set => Some(set),
@@ -307,6 +308,17 @@ impl Decode for Region {
         let mut region = Self::new(minimum.into(), maximum.into());
         region.set_enabled(reader.bool()?);
         Ok(region)
+    }
+}
+
+impl Decode for Clip {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let mut normal = [0.0; 3];
+        for value in &mut normal {
+            *value = finite(reader.f32()?)?;
+        }
+        let offset = finite(reader.f32()?)?;
+        Self::restore(normal, offset).ok_or(FAULT_VALUE)
     }
 }
 
@@ -671,9 +683,10 @@ impl Decode for RelationState {
 
 impl Decode for RelationFrame {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let count = reader.count(12)?;
+        let count = reader.count(16)?;
         let mut distance = Vec::with_capacity(count.min(1 << 16));
         let mut inside = Vec::with_capacity(count.min(1 << 16));
+        let mut contact = Vec::with_capacity(count.min(1 << 16));
         let mut partner = Vec::with_capacity(count.min(1 << 16));
         for _ in 0..count {
             let reach = reader.f32()?;
@@ -686,9 +699,14 @@ impl Decode for RelationFrame {
                 return Err(FAULT_VALUE);
             }
             inside.push(within);
+            let area = reader.f32()?;
+            if !area.is_finite() || area < 0.0 {
+                return Err(FAULT_VALUE);
+            }
+            contact.push(area);
             partner.push(reader.u32()?);
         }
-        Ok(Self::new(distance, inside, partner))
+        Ok(Self::new(distance, inside, contact, partner))
     }
 }
 

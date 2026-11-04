@@ -6,7 +6,7 @@ use grana_geometry::ray_hit;
 use grana_measure::{Aggregate, Frame, Group, RelationRow, Table};
 use grana_object::{RelationFrame, TrackSet};
 use grana_object::{Shape, TrackParams};
-use grana_volume::{ChannelInfo, Intensity, Region};
+use grana_volume::{ChannelInfo, Clip, Intensity, Region};
 
 use crate::channel::Channel;
 use crate::coloc::{Coloc, MaskKey};
@@ -44,6 +44,7 @@ pub struct Scene {
     pub step_scale: f32,
     pub exposure: f32,
     pub region: Region,
+    pub clip: Clip,
     pub mask: Option<ObjectSetId>,
     pub objects: Objects,
     pub coloc: Coloc,
@@ -75,6 +76,7 @@ impl Scene {
             step_scale: 1.0,
             exposure: 1.0,
             region,
+            clip: Clip::none(),
             mask: None,
             objects: Objects::new(),
             coloc: Coloc::new(channel_count, region),
@@ -375,6 +377,10 @@ impl Scene {
         self.sync_coloc_inputs();
     }
 
+    pub fn set_clip(&mut self, clip: Clip) {
+        self.clip = clip;
+    }
+
     pub fn mask_frames(&self) -> Option<grana_object::Roi> {
         let set = self.objects.get(self.mask?)?;
         let frames = Arc::new(
@@ -385,6 +391,20 @@ impl Scene {
         Some(grana_object::Roi::paged(frames.len(), move |time| {
             shape_at(&frames, time)
         }))
+    }
+
+    pub fn relation_gate(&self, source: ObjectSetId, target: ObjectSetId) -> f32 {
+        let voxel = |set: ObjectSetId| {
+            let set = self.objects.get(set)?;
+            let (_, frame) = set.frames().next()?;
+            let spacing = self.dataset.pyramid().level(frame.level()).spacing();
+            Some(spacing.x().min(spacing.y()).min(spacing.z()))
+        };
+        [source, target]
+            .into_iter()
+            .filter_map(voxel)
+            .fold(0.0, f32::max)
+            .max(self.dataset.voxel_size().min_element())
     }
 
     pub fn add_relation(&mut self, source: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {

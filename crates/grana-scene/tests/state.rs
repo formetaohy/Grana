@@ -127,7 +127,7 @@ fn renames_and_deletes_a_detection_without_losing_identities() {
         source,
         0,
         0,
-        RelationFrame::new(vec![0.5], vec![0.0], vec![2]),
+        RelationFrame::new(vec![0.5], vec![0.0], vec![0.0], vec![2]),
     );
     scene.select(Some(Selection {
         set: source,
@@ -203,7 +203,12 @@ fn colors_objects_by_their_relation_to_another_set() {
         target,
         0,
         0,
-        RelationFrame::new(vec![0.5, 0.25, 0.75], vec![0.0, 1.0, 0.0], vec![1, 1, 1]),
+        RelationFrame::new(
+            vec![0.5, 0.25, 0.75],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 0.0],
+            vec![1, 1, 1],
+        ),
     );
     assert_eq!(
         scene
@@ -251,7 +256,7 @@ fn shifts_a_relation_in_time_and_trims_its_frames() {
         target,
         -1,
         2,
-        RelationFrame::new(vec![2.0], vec![0.0], vec![1]),
+        RelationFrame::new(vec![2.0], vec![0.0], vec![0.0], vec![1]),
     );
     scene.install(target, 1, spots(&[[3.0, 0.0, 0.0]]));
     assert!(
@@ -268,7 +273,7 @@ fn shifts_a_relation_in_time_and_trims_its_frames() {
         target,
         -1,
         2,
-        RelationFrame::new(vec![2.0], vec![0.0], vec![1]),
+        RelationFrame::new(vec![2.0], vec![0.0], vec![0.0], vec![1]),
     );
     assert!(scene.move_relation(source, target, -1, 0));
     assert!(
@@ -306,7 +311,7 @@ fn colors_tracks_by_a_reduced_relation() {
             target,
             0,
             time,
-            RelationFrame::new(vec![reach], vec![0.0], vec![1]),
+            RelationFrame::new(vec![reach], vec![0.0], vec![0.0], vec![1]),
         );
     }
     let centre = |time: u32| TrackNode::new(time, 0, [time as f32, 0.0, 0.0]);
@@ -466,14 +471,14 @@ fn measures_one_relation_at_several_offsets() {
         target,
         0,
         0,
-        RelationFrame::new(vec![1.0], vec![0.0], vec![1]),
+        RelationFrame::new(vec![1.0], vec![0.0], vec![0.0], vec![1]),
     );
     scene.install_relation(
         source,
         target,
         -1,
         2,
-        RelationFrame::new(vec![2.0], vec![0.0], vec![1]),
+        RelationFrame::new(vec![2.0], vec![0.0], vec![0.0], vec![1]),
     );
     let table = scene
         .table(source, Group::Object, Aggregate::Mean)

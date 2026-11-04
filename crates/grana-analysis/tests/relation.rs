@@ -2,10 +2,12 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
-use grana_analysis::{Reference, relate_frames};
+use grana_analysis::{Reference, RelationRun, relate_frames};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::Shape;
 use grana_object::Spot;
+
+const GATE: f32 = 1.0;
 
 #[test]
 fn measures_the_distance_and_containment_of_spots() {
@@ -14,7 +16,7 @@ fn measures_the_distance_and_containment_of_spots() {
         Spot::new([5.0, 0.0, 0.0], 0.5, 1.0),
         Spot::new([0.0, 0.0, 0.0], 0.5, 1.0),
     ]);
-    let frame = reference.relate(&Shape::spots(spots));
+    let frame = reference.relate(&Shape::spots(spots), GATE);
     assert_eq!(frame.objects(), 2);
     assert!(
         (frame.distance(0) - 3.0).abs() < 1.0e-3,
@@ -22,9 +24,11 @@ fn measures_the_distance_and_containment_of_spots() {
         frame.distance(0)
     );
     assert_eq!(frame.inside(0), 0.0);
+    assert_eq!(frame.contact(0), 0.0);
     assert_eq!(frame.partner(0), 1);
     assert_eq!(frame.distance(1), 0.0);
     assert_eq!(frame.inside(1), 1.0);
+    assert_eq!(frame.contact(1), 0.0);
     assert_eq!(frame.partner(1), 1);
 }
 
@@ -32,7 +36,7 @@ fn measures_the_distance_and_containment_of_spots() {
 fn measures_the_distance_and_containment_of_meshes() {
     let reference = Reference::new(&Shape::mesh(Arc::new(cubes(&[(0, Vec3::ZERO, 2.0)]))));
     let outside = Shape::mesh(Arc::new(cubes(&[(0, Vec3::new(8.0, 0.0, 0.0), 1.0)])));
-    let frame = reference.relate(&outside);
+    let frame = reference.relate(&outside, GATE);
     assert_eq!(frame.objects(), 1);
     assert!(
         (frame.distance(0) - 5.0).abs() < 1.0e-2,
@@ -40,21 +44,55 @@ fn measures_the_distance_and_containment_of_meshes() {
         frame.distance(0)
     );
     assert_eq!(frame.inside(0), 0.0);
+    assert_eq!(frame.contact(0), 0.0);
     assert_eq!(frame.partner(0), 1);
     let inside = Shape::mesh(Arc::new(cubes(&[(0, Vec3::new(0.5, 0.0, 0.0), 1.0)])));
-    let frame = reference.relate(&inside);
+    let frame = reference.relate(&inside, GATE);
     assert_eq!(frame.distance(0), 0.0);
     assert_eq!(frame.inside(0), 1.0);
+    assert_eq!(frame.contact(0), 0.0);
+}
+
+#[test]
+fn measures_the_contact_area_of_touching_surfaces() {
+    let reference = Reference::new(&Shape::mesh(Arc::new(cubes(&[(0, Vec3::ZERO, 2.0)]))));
+    let facing = Shape::mesh(Arc::new(cubes(&[(0, Vec3::new(4.5, 0.0, 0.0), 1.0)])));
+    let frame = reference.relate(&facing, 2.0);
+    assert!(
+        (frame.distance(0) - 1.5).abs() < 1.0e-2,
+        "{}",
+        frame.distance(0)
+    );
+    assert!(
+        (frame.contact(0) - 4.0).abs() < 1.0e-2,
+        "the facing face of the cube touches: {}",
+        frame.contact(0)
+    );
+    let narrow = reference.relate(&facing, 1.0);
+    assert_eq!(
+        narrow.contact(0),
+        0.0,
+        "a gate shorter than the gap measures no contact"
+    );
+    let spots = Arc::from([Spot::new([2.6, 0.0, 0.0], 0.5, 1.0)]);
+    let frame = reference.relate(&Shape::spots(spots), 0.25);
+    let expected = std::f32::consts::TAU * 0.5 * 0.15;
+    assert!(
+        (frame.contact(0) - expected).abs() < 1.0e-3,
+        "the spherical cap of a touching spot: {}",
+        frame.contact(0)
+    );
 }
 
 #[test]
 fn an_empty_reference_reaches_nothing() {
     let reference = Reference::new(&Shape::mesh(Arc::new(cubes(&[]))));
     let spots = Arc::from([Spot::new([1.0, 0.0, 0.0], 0.5, 1.0)]);
-    let frame = reference.relate(&Shape::spots(spots));
+    let frame = reference.relate(&Shape::spots(spots), GATE);
     assert_eq!(frame.objects(), 1);
     assert!(frame.distance(0).is_infinite());
     assert_eq!(frame.inside(0), 0.0);
+    assert_eq!(frame.contact(0), 0.0);
     assert_eq!(frame.partner(0), 0);
 }
 
@@ -87,10 +125,13 @@ fn keeps_relations_deterministic_across_worker_counts() {
         &counts,
         |time| Ok(source[time].clone()),
         |time| Ok(target[time].clone()),
-        0,
-        1,
-        &cancel,
-        &mut |_, _| {},
+        RelationRun {
+            shift: 0,
+            gate: GATE,
+            workers: 1,
+            cancel: &cancel,
+            progress: &mut |_, _| {},
+        },
     )
     .expect("the relation frames are measured")
     .expect("the relation finishes");
@@ -98,10 +139,13 @@ fn keeps_relations_deterministic_across_worker_counts() {
         &counts,
         |time| Ok(source[time].clone()),
         |time| Ok(target[time].clone()),
-        0,
-        8,
-        &cancel,
-        &mut |_, _| {},
+        RelationRun {
+            shift: 0,
+            gate: GATE,
+            workers: 8,
+            cancel: &cancel,
+            progress: &mut |_, _| {},
+        },
     )
     .expect("the relation frames are measured")
     .expect("the relation finishes");
@@ -142,10 +186,13 @@ fn measures_the_target_of_a_shifted_frame() {
         &counts,
         |time| Ok(source[time].clone()),
         |time| Ok(target[time].clone()),
-        -2,
-        4,
-        &cancel,
-        &mut |_, _| {},
+        RelationRun {
+            shift: -2,
+            gate: GATE,
+            workers: 4,
+            cancel: &cancel,
+            progress: &mut |_, _| {},
+        },
     )
     .expect("the relation frames are measured")
     .expect("the relation finishes");

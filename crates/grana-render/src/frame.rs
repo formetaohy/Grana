@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
-use grana_volume::Region;
+use grana_volume::{Clip, Region};
 
 use crate::brick::BrickTable;
 use crate::shadow::ShadowSpace;
@@ -33,6 +33,7 @@ pub(crate) struct FrameData {
     pub light_inverse: [[f32; 4]; 4],
     pub light_reach: [f32; 4],
     pub oit: [u32; 4],
+    pub clip: [f32; 4],
 }
 
 #[repr(C)]
@@ -67,7 +68,7 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 640);
+    assert!(size_of::<FrameData>() == 656);
     assert!(std::mem::offset_of!(FrameData, planes) == 384);
     assert!(std::mem::offset_of!(FrameData, light_view) == 480);
     assert!(size_of::<SectionData>() == 176);
@@ -76,6 +77,7 @@ const _: () = {
 pub(crate) struct VolumeView<'a> {
     pub camera: &'a Camera,
     pub region: Region,
+    pub clip: Clip,
     pub aspect: f32,
     pub height: u32,
 }
@@ -92,6 +94,7 @@ impl FrameData {
         let VolumeView {
             camera,
             region,
+            clip,
             aspect,
             height,
         } = view;
@@ -136,6 +139,10 @@ impl FrameData {
             light_inverse: space.inverse().to_cols_array_2d(),
             light_reach: space.reach(),
             oit: [0; 4],
+            clip: {
+                let (normal, offset) = clip.parts();
+                [normal[0], normal[1], normal[2], offset]
+            },
         }
     }
 }

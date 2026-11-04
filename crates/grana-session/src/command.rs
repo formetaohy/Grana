@@ -5,7 +5,7 @@ use grana_measure::{
 };
 use grana_object::TrackParams;
 use grana_scene::{ObjectColor, ObjectKind, ObjectParams, ObjectSetId, Selection, TrackColor};
-use grana_volume::{Intensity, Region};
+use grana_volume::{Clip, Intensity, Region};
 
 pub use grana_project::Export;
 
@@ -148,6 +148,7 @@ pub enum Command {
         target: (u32, usize),
     },
     SetRegion(Region),
+    SetClip(Clip),
     SetExposure(f32),
     SetStepScale(f32),
     SetShading(Shading),
@@ -256,6 +257,7 @@ pub enum Action {
     TrackColoring,
     TrackParameters,
     Region,
+    Clip,
     Exposure,
     StepScale,
     Shading,
@@ -321,6 +323,7 @@ impl Action {
             Self::TrackColoring => "track colors",
             Self::TrackParameters => "track parameters",
             Self::Region => "region",
+            Self::Clip => "clipping plane",
             Self::Exposure => "exposure",
             Self::StepScale => "sampling",
             Self::Shading => "lighting",
@@ -466,6 +469,7 @@ impl Command {
             Self::SetTrackColoring { set, .. } => Edit::targeted(Action::TrackColoring, set.raw()),
             Self::SetTrackParams { set, .. } => Edit::targeted(Action::TrackParameters, set.raw()),
             Self::SetRegion(_) => Edit::new(Action::Region),
+            Self::SetClip(_) => Edit::new(Action::Clip),
             Self::SetExposure(_) => Edit::new(Action::Exposure),
             Self::SetStepScale(_) => Edit::new(Action::StepScale),
             Self::SetShading(_) => Edit::new(Action::Shading),

@@ -39,6 +39,7 @@ pub(crate) fn draw(
             camera: frame.camera,
             section: frame.section,
             region: frame.scene.region,
+            clip: frame.scene.clip,
             exposure: frame.scene.exposure,
             samples: frame.samples,
             scene: &scene,

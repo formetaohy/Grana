@@ -284,6 +284,11 @@ impl Session {
                     scene.set_region(region);
                 }
             }
+            Command::SetClip(clip) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_clip(clip);
+                }
+            }
             Command::SetExposure(exposure) => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.exposure = exposure;

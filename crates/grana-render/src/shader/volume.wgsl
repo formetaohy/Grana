@@ -211,7 +211,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let highest_t = max(near_t, far_t);
     let entry = max(max(lowest_t.x, lowest_t.y), lowest_t.z);
     let object = object_distance(textureLoad(object_depth, pixel, 0), ndc);
-    let clip = region_interval(eye, direction);
+    let region = region_interval(eye, direction);
+    let plane = clip_interval(eye, direction);
+    let clip = vec2<f32>(max(region.x, plane.x), min(region.y, plane.y));
     let exit = min(
         min(min(highest_t.x, highest_t.y), highest_t.z),
         min(min(object, clip.y), 1.0e19),

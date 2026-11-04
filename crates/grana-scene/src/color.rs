@@ -6,7 +6,11 @@ use crate::object::ObjectFrame;
 use crate::object_set::ObjectSetId;
 use crate::track_color::relation_value;
 
-pub const RELATION_FIELDS: [RelationField; 2] = [RelationField::Distance, RelationField::Inside];
+pub const RELATION_FIELDS: [RelationField; 3] = [
+    RelationField::Distance,
+    RelationField::Inside,
+    RelationField::Contact,
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ObjectColor {

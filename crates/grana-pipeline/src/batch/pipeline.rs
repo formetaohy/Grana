@@ -430,6 +430,7 @@ impl Run<'_, '_> {
             .to_string();
         let source_frames = frames_of(&self.scene, source_id);
         let target_frames = frames_of(&self.scene, target_id);
+        let gate = self.scene.relation_gate(source_id, target_id);
         let _ = task.events.send(Event::Step {
             index: task.index,
             label: format!("relating {source_name} to {target_name}"),
@@ -455,6 +456,7 @@ impl Run<'_, '_> {
             source_frames,
             target_frames,
             shift,
+            gate,
             task.workers,
             task.cancel,
             &mut sink,

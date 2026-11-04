@@ -133,8 +133,9 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
         "the spot belongs to one track: {objects}"
     );
     assert!(lines[0].contains("nuclei_distance_um"), "{objects}");
+    assert!(lines[0].contains("nuclei_contact_um2"), "{objects}");
     assert!(
-        lines[1].ends_with(",0.000,100.00,1"),
+        lines[1].ends_with(",0.000,100.00,1,0.000"),
         "the spot sits inside its nucleus: {objects}"
     );
 
@@ -1047,7 +1048,7 @@ fn replays_a_filtered_set_that_reads_a_relation() {
     assert!(lines[0].contains("nuclei_distance_um"), "{inner}");
     assert!(lines[0].contains("nuclei_inside"), "{inner}");
     assert!(
-        lines[1].ends_with(",0.000,100.00,1"),
+        lines[1].ends_with(",0.000,100.00,1,0.000"),
         "the kept spot sits inside its nucleus: {inner}"
     );
 }

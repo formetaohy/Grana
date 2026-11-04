@@ -8,7 +8,7 @@ use grana_ui::{
     Align, Color, Corners, Fill, Icon, Painter, Rect, Role, TextLayout, TextStyle, TypeStyle, Ui,
     icon,
 };
-use grana_volume::{Axis, Region};
+use grana_volume::{Axis, Clip, Region};
 
 use crate::value;
 
@@ -17,6 +17,7 @@ const BAR: Color = Color::rgba(1.0, 1.0, 1.0, 0.90);
 const PLANE: Color = Color::rgba(1.0, 1.0, 1.0, 0.22);
 const REGION: Color = Color::rgba(0.98, 0.75, 0.29, 0.40);
 const REGION_ACTIVE: Color = Color::rgba(0.98, 0.83, 0.45, 0.95);
+const CUT: Color = Color::rgba(1.00, 0.48, 0.44, 0.60);
 const HANDLE_SIDE: f32 = 9.0;
 const HANDLE_MINIMUM: f32 = 1.0e-3;
 const SCALE_TARGET: f32 = 104.0;
@@ -117,6 +118,7 @@ pub struct Overlay<'a> {
     pub volume_rect: Rect,
     pub section_rect: Rect,
     pub region: &'a mut Region,
+    pub clip: Clip,
     pub legends: &'a [Legend],
     pub recording: Option<(u32, u32)>,
 }
@@ -151,21 +153,28 @@ fn paint_volume(ui: &mut Ui, overlay: &mut Overlay<'_>) {
         overlay.world,
     );
     let projected = corners.map(|corner| project(view_projection, corner, rect));
-    let clip = ui.clip().intersect(rect, Corners::ZERO);
+    let bounds = ui.clip().intersect(rect, Corners::ZERO);
     {
-        let mut painter = ui.painter_in(clip);
+        let mut painter = ui.painter_in(bounds);
         if let [Some(a), Some(b), Some(c), Some(d)] = projected {
             for (from, to) in [(a, b), (b, c), (c, d), (d, a)] {
                 painter.segment(from, to, 1.0, PLANE);
             }
         }
         region_box(&mut painter, view_projection, *overlay.region, rect);
+        clip_plane(
+            &mut painter,
+            view_projection,
+            overlay.clip,
+            overlay.world,
+            rect,
+        );
     }
     region_handles(ui, view_projection, overlay.region, rect, overlay.world);
     let world_per_point =
         2.0 * overlay.camera.distance() * (overlay.camera.fov_y() * 0.5).tan() / rect.height();
     {
-        let mut painter = ui.painter_in(clip);
+        let mut painter = ui.painter_in(bounds);
         figure(
             &mut painter,
             overlay.volume_safe,
@@ -402,6 +411,65 @@ fn region_box(painter: &mut Painter, view_projection: Mat4, region: Region, rect
             painter.segment(from, to, 1.0, REGION);
         }
     }
+}
+
+fn clip_plane(painter: &mut Painter, view_projection: Mat4, clip: Clip, world: Vec3, rect: Rect) {
+    if !clip.enabled() {
+        return;
+    }
+    let normal = clip.normal();
+    let guide = if normal.x.abs() < 0.9 {
+        Vec3::X
+    } else {
+        Vec3::Y
+    };
+    let across = normal.cross(guide).normalize();
+    let down = normal.cross(across).normalize();
+    let centre = normal * clip.offset();
+    let reach = world.length();
+    let corners = vec![
+        centre - across * reach - down * reach,
+        centre + across * reach - down * reach,
+        centre + across * reach + down * reach,
+        centre - across * reach + down * reach,
+    ];
+    let half = 0.5 * world;
+    let mut polygon = corners;
+    for axis in 0..3 {
+        let mut direction = Vec3::ZERO;
+        direction[axis] = 1.0;
+        polygon = clipped(polygon, direction, half[axis]);
+        polygon = clipped(polygon, -direction, half[axis]);
+    }
+    if polygon.len() < 3 {
+        return;
+    }
+    let projected = polygon
+        .iter()
+        .map(|point| project(view_projection, *point, rect))
+        .collect::<Vec<_>>();
+    for (index, from) in projected.iter().enumerate() {
+        let to = projected[(index + 1) % projected.len()];
+        if let (Some(from), Some(to)) = (from, to) {
+            painter.segment(*from, to, 1.0, CUT);
+        }
+    }
+}
+
+fn clipped(points: Vec<Vec3>, normal: Vec3, offset: f32) -> Vec<Vec3> {
+    let mut kept = Vec::with_capacity(points.len() + 1);
+    for (index, point) in points.iter().enumerate() {
+        let next = points[(index + 1) % points.len()];
+        let here = normal.dot(*point) - offset;
+        let there = normal.dot(next) - offset;
+        if here <= 0.0 {
+            kept.push(*point);
+        }
+        if (here < 0.0) != (there < 0.0) {
+            kept.push(*point + (next - *point) * (here / (here - there)));
+        }
+    }
+    kept
 }
 
 fn region_handles(

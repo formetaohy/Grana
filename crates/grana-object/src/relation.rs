@@ -2,15 +2,21 @@
 pub struct RelationFrame {
     distance: Vec<f32>,
     inside: Vec<f32>,
+    contact: Vec<f32>,
     partner: Vec<u32>,
 }
 
 impl RelationFrame {
-    pub fn new(distance: Vec<f32>, inside: Vec<f32>, partner: Vec<u32>) -> Self {
+    pub fn new(distance: Vec<f32>, inside: Vec<f32>, contact: Vec<f32>, partner: Vec<u32>) -> Self {
         assert_eq!(
             distance.len(),
             inside.len(),
             "a relation frame measures every object it counts"
+        );
+        assert_eq!(
+            distance.len(),
+            contact.len(),
+            "a relation frame measures the contact of every object"
         );
         assert_eq!(
             distance.len(),
@@ -25,9 +31,16 @@ impl RelationFrame {
             inside.iter().all(|value| (0.0..=1.0).contains(value)),
             "a relation containment is a fraction"
         );
+        assert!(
+            contact
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0),
+            "a relation contact is an area"
+        );
         Self {
             distance,
             inside,
+            contact,
             partner,
         }
     }
@@ -36,6 +49,7 @@ impl RelationFrame {
         Self {
             distance: vec![f32::INFINITY; objects],
             inside: vec![0.0; objects],
+            contact: vec![0.0; objects],
             partner: vec![0; objects],
         }
     }
@@ -50,6 +64,10 @@ impl RelationFrame {
 
     pub fn inside(&self, object: usize) -> f32 {
         self.inside[object]
+    }
+
+    pub fn contact(&self, object: usize) -> f32 {
+        self.contact[object]
     }
 
     pub fn partner(&self, object: usize) -> u32 {

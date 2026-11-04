@@ -8,16 +8,18 @@ pub enum RelationField {
     Distance,
     Inside,
     Partner,
+    Contact,
 }
 
 impl RelationField {
-    pub const ALL: [Self; 3] = [Self::Distance, Self::Inside, Self::Partner];
+    pub const ALL: [Self; 4] = [Self::Distance, Self::Inside, Self::Partner, Self::Contact];
 
     pub fn index(self) -> u8 {
         match self {
             Self::Distance => 0,
             Self::Inside => 1,
             Self::Partner => 2,
+            Self::Contact => 3,
         }
     }
 
@@ -30,6 +32,7 @@ impl RelationField {
             Self::Distance => "distance",
             Self::Inside => "inside",
             Self::Partner => "partner",
+            Self::Contact => "contact",
         }
     }
 
@@ -38,6 +41,7 @@ impl RelationField {
             Self::Distance => "distance_um",
             Self::Inside => "inside",
             Self::Partner => "partner",
+            Self::Contact => "contact_um2",
         }
     }
 
@@ -46,6 +50,7 @@ impl RelationField {
             Self::Distance => Unit::Micrometer,
             Self::Inside => Unit::Percent,
             Self::Partner => Unit::Count,
+            Self::Contact => Unit::SquareMicrometer,
         }
     }
 
@@ -54,6 +59,7 @@ impl RelationField {
             Self::Distance => 3,
             Self::Inside => 2,
             Self::Partner => 0,
+            Self::Contact => 3,
         }
     }
 
@@ -83,13 +89,14 @@ impl RelationField {
             Self::Distance => frame.distance(object),
             Self::Inside => 100.0 * frame.inside(object),
             Self::Partner => frame.partner(object) as f32,
+            Self::Contact => frame.contact(object),
         }
     }
 
     fn missing(self) -> f32 {
         match self {
             Self::Distance => f32::INFINITY,
-            Self::Inside | Self::Partner => 0.0,
+            Self::Inside | Self::Partner | Self::Contact => 0.0,
         }
     }
 }

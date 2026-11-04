@@ -12,7 +12,7 @@ use bytemuck::cast_slice;
 use glam::Vec3;
 use grana_gpu::Readback;
 use grana_volume::{
-    BRICK_SIDE, BrickData, BrickGrid, BrickRequest, Level, PADDED_SIDE, Pyramid, Region,
+    BRICK_SIDE, BrickData, BrickGrid, BrickRequest, Clip, Level, PADDED_SIDE, Pyramid, Region,
 };
 use wgpu::{
     BindGroup, BindGroupLayout, CommandEncoder, Device, LoadOp, Operations, Queue,
@@ -111,6 +111,7 @@ pub struct Frame<'a, 'b> {
     pub camera: &'a Camera,
     pub section: &'a SectionCamera,
     pub region: Region,
+    pub clip: Clip,
     pub exposure: f32,
     pub samples: u32,
     pub scene: &'a SceneFrame<'b>,

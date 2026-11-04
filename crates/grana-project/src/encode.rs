@@ -16,7 +16,7 @@ use grana_scene::{
     RelationState, SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit,
     TrackStyle, Visibility,
 };
-use grana_volume::{Intensity, Region};
+use grana_volume::{Clip, Intensity, Region};
 
 use grana_codec::Encoder;
 
@@ -126,6 +126,7 @@ impl Encode for SceneState {
         writer.f32(self.step_scale);
         writer.f32(self.exposure);
         self.region.encode(writer);
+        self.clip.encode(writer);
         writer.u64(self.mask.unwrap_or(0));
         writer.u32(self.time);
         self.selection.encode(writer);
@@ -185,6 +186,16 @@ impl Encode for Region {
             writer.f32(value);
         }
         writer.bool(self.enabled());
+    }
+}
+
+impl Encode for Clip {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        let (normal, offset) = self.parts();
+        for value in normal {
+            writer.f32(value);
+        }
+        writer.f32(offset);
     }
 }
 
@@ -394,6 +405,7 @@ impl Encode for RelationFrame {
         for object in 0..objects {
             writer.f32(self.distance(object));
             writer.f32(self.inside(object));
+            writer.f32(self.contact(object));
             writer.u32(self.partner(object));
         }
     }

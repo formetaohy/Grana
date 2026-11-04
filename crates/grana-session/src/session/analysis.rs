@@ -373,19 +373,26 @@ impl Session {
                 return;
             }
             let frames = scene.frame_count();
+            let gate = scene.relation_gate(source, target);
             let source_frames = (0..frames)
                 .map(|time| from.frame_shared(time))
                 .collect::<Vec<_>>();
             let target_frames = (0..frames)
                 .map(|time| to.frame_shared(time))
                 .collect::<Vec<_>>();
-            (source_frames, target_frames, frames as usize)
+            (source_frames, target_frames, gate, frames as usize)
         };
-        let (source_frames, target_frames, total) = prepared;
+        let (source_frames, target_frames, gate, total) = prepared;
         self.message = None;
         self.record_progress(job, 0, 0, total);
-        self.analysis
-            .push(crate::relation(job, source_frames, target_frames, shift, 0));
+        self.analysis.push(crate::relation(
+            job,
+            source_frames,
+            target_frames,
+            shift,
+            gate,
+            0,
+        ));
     }
 
     pub(super) fn detection_root(&self, set: ObjectSetId) -> Option<ObjectSetId> {

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use grana_display::{Shading, TransferFunction};
 use grana_object::{RelationFrame, TrackSet};
-use grana_volume::{Intensity, Region};
+use grana_volume::{Clip, Intensity, Region};
 
 use crate::coloc::{ColocState, MaskKey};
 use crate::color::ObjectColor;
@@ -26,6 +26,7 @@ pub struct SceneState {
     pub step_scale: f32,
     pub exposure: f32,
     pub region: Region,
+    pub clip: Clip,
     pub mask: Option<u64>,
     pub time: u32,
     pub selection: Option<SelectionState>,
@@ -142,6 +143,7 @@ impl Scene {
             step_scale: self.step_scale,
             exposure: self.exposure,
             region: self.region,
+            clip: self.clip,
             mask: self.mask.map(|set| set.raw()),
             time: self.time(),
             selection: self.selection().map(|selection| SelectionState {
@@ -172,6 +174,7 @@ impl Scene {
         self.step_scale = state.step_scale;
         self.exposure = state.exposure;
         self.region = state.region;
+        self.clip = state.clip;
         self.objects.restore(state.sets, &self.dataset);
         self.mask = state
             .mask
@@ -231,6 +234,15 @@ impl Scene {
             hash = mix(hash, u64::from(self.region.max()[axis].to_bits()));
         }
         hash = mix(hash, u64::from(u8::from(self.region.enabled())));
+        for value in self
+            .clip
+            .normal()
+            .to_array()
+            .into_iter()
+            .chain([self.clip.offset()])
+        {
+            hash = mix(hash, u64::from(value.to_bits()));
+        }
         for set in self.objects.iter() {
             hash = mix(hash, set.id().raw());
             hash = mix(hash, set.kind().index() as u64);

@@ -162,6 +162,7 @@ impl Protocol {
             scene.exposure = render.exposure;
             scene.step_scale = render.step_scale;
             scene.shading = render.shading();
+            scene.set_clip(render.clip());
         }
         let world = scene.dataset.world_size();
         scene.set_region(match self.region {

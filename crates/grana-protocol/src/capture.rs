@@ -134,6 +134,7 @@ impl Protocol {
                 scene.shading,
                 scene.exposure,
                 scene.step_scale,
+                scene.clip,
             )),
             channels: specs,
             sets,

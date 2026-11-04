@@ -22,6 +22,7 @@ struct FrameData {
     light_inverse: mat4x4<f32>,
     light_reach: vec4<f32>,
     oit: vec4<u32>,
+    clip: vec4<f32>,
 }
 
 struct SectionData {
@@ -90,4 +91,34 @@ fn outside_region_sphere(center: vec3<f32>, radius: f32) -> bool {
     }
     let reach = vec3<f32>(radius);
     return outside_region_bounds(center - reach, center + reach);
+}
+
+fn clip_active() -> bool {
+    return dot(frame.clip.xyz, frame.clip.xyz) > 1.0e-6;
+}
+
+fn outside_clip(point: vec3<f32>) -> bool {
+    if (!clip_active()) {
+        return false;
+    }
+    return dot(frame.clip.xyz, point) > frame.clip.w;
+}
+
+fn clip_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
+    if (!clip_active()) {
+        return vec2<f32>(-1.0e20, 1.0e20);
+    }
+    let rate = dot(frame.clip.xyz, direction);
+    let reach = frame.clip.w - dot(frame.clip.xyz, origin);
+    if (abs(rate) < 1.0e-9) {
+        if (reach < 0.0) {
+            return vec2<f32>(1.0, -1.0);
+        }
+        return vec2<f32>(-1.0e20, 1.0e20);
+    }
+    let crossing = reach / rate;
+    if (rate > 0.0) {
+        return vec2<f32>(-1.0e20, crossing);
+    }
+    return vec2<f32>(crossing, 1.0e20);
 }

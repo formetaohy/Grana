@@ -92,7 +92,7 @@ fn fs_main(input: FaceOutput) -> FaceFragment {
         alpha = SELECTED_ALPHA;
     }
     let point = plane_point(input.uv);
-    if (outside_region(point)) {
+    if (outside_region(point) || outside_clip(point)) {
         fragment.color = vec4<f32>(0.0);
         fragment.identity = vec4<f32>(0.0);
         return fragment;
@@ -105,7 +105,7 @@ fn fs_main(input: FaceOutput) -> FaceFragment {
 @fragment
 fn fs_pick(input: FaceOutput) -> @location(0) vec2<u32> {
     let point = plane_point(input.uv);
-    if (outside_region(point)) {
+    if (outside_region(point) || outside_clip(point)) {
         discard;
     }
     return vec2<u32>(1u, input.style + 1u);

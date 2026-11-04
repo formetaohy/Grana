@@ -84,5 +84,6 @@ pub(crate) fn relation_value(
         RelationField::Distance => frame.distance(object),
         RelationField::Inside => 100.0 * frame.inside(object),
         RelationField::Partner => frame.partner(object) as f32,
+        RelationField::Contact => frame.contact(object),
     }
 }

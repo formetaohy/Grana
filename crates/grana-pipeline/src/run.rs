@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{
-    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, SeedPolicy, Sources, SpotScanner,
-    SurfaceBuilder, TrackBuilder, coloc_levels, filament_level, relate_frames, spot_level,
-    surface_level,
+    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, RelationRun, SeedPolicy, Sources,
+    SpotScanner, SurfaceBuilder, TrackBuilder, coloc_levels, filament_level, relate_frames,
+    spot_level, surface_level,
 };
 use grana_geometry::GeometryStore;
 use grana_image::Image;
@@ -135,6 +135,7 @@ pub fn relation(
     source: Vec<Option<Arc<ObjectFrame>>>,
     target: Vec<Option<Arc<ObjectFrame>>>,
     shift: i32,
+    gate: f32,
     workers: usize,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
@@ -152,15 +153,18 @@ pub fn relation(
         &counts,
         |time| shape(source.get(time).and_then(Option::as_deref)),
         |time| shape(target.get(time).and_then(Option::as_deref)),
-        shift,
-        workers,
-        cancel,
-        &mut |done, total| {
-            sink(Event::Progress {
-                time: done as u32,
-                done,
-                total,
-            });
+        RelationRun {
+            shift,
+            gate,
+            workers,
+            cancel,
+            progress: &mut |done, total| {
+                sink(Event::Progress {
+                    time: done as u32,
+                    done,
+                    total,
+                });
+            },
         },
     ) {
         Ok(Some(frames)) => frames,

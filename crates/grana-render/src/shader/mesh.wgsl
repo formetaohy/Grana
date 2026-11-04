@@ -11,6 +11,7 @@ struct MeshUniforms {
     shadow: vec4<f32>,
     viewport: vec4<f32>,
     oit: vec4<u32>,
+    clip: vec4<f32>,
 }
 
 struct ObjectData {
@@ -107,8 +108,14 @@ fn vs_shadow(input: VertexInput) -> ShadowOutput {
 }
 
 fn is_outside(input: VertexOutput) -> bool {
-    return mesh.region_min.w > 0.5
-        && (any(input.position < mesh.region_min.xyz) || any(input.position > mesh.region_max.xyz));
+    if (mesh.region_min.w > 0.5
+        && (any(input.position < mesh.region_min.xyz) || any(input.position > mesh.region_max.xyz))) {
+        return true;
+    }
+    if (dot(mesh.clip.xyz, mesh.clip.xyz) <= 1.0e-6) {
+        return false;
+    }
+    return dot(mesh.clip.xyz, input.position) > mesh.clip.w;
 }
 
 fn shade(input: VertexOutput) -> vec4<f32> {

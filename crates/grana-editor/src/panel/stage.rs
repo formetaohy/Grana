@@ -87,6 +87,7 @@ fn paint_overlay(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: 
     )
     .intersect(layout.section);
     let mut region = state.scene.region;
+    let clip = state.scene.clip;
     let legends = overlay::legends(state.scene);
     let mut overlay = Overlay {
         camera: state.viewport.camera(),
@@ -97,6 +98,7 @@ fn paint_overlay(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: 
         volume_rect: layout.volume,
         section_rect: layout.section,
         region: &mut region,
+        clip,
         legends: &legends,
         recording: state.io.export,
     };

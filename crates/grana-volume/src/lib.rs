@@ -1,6 +1,7 @@
 mod axis;
 mod brick;
 mod channel;
+mod clip;
 mod extent;
 mod intensity;
 mod level;
@@ -17,6 +18,7 @@ pub use brick::{
     PADDED_SIDE, pad_brick,
 };
 pub use channel::ChannelInfo;
+pub use clip::Clip;
 pub use extent::Extent;
 pub use intensity::Intensity;
 pub use level::Level;

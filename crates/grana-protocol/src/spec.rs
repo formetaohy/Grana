@@ -5,7 +5,7 @@ use grana_measure::{Aggregate, Filter, Group, MeasureView, RelationField, Scope,
 use grana_object::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
 use grana_project::{Export, ViewState};
 use grana_scene::{ObjectKind, ObjectParams};
-use grana_volume::Axis;
+use grana_volume::{Axis, Clip};
 use serde::{Deserialize, Serialize};
 
 use crate::Protocol;
@@ -49,6 +49,15 @@ pub struct RenderSpec {
     pub exposure: f32,
     pub step_scale: f32,
     pub shading: ShadingSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip: Option<ClipSpec>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClipSpec {
+    pub normal: [f32; 3],
+    pub offset: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -838,7 +847,7 @@ impl TransferSpec {
 }
 
 impl RenderSpec {
-    pub fn of(shading: Shading, exposure: f32, step_scale: f32) -> Self {
+    pub fn of(shading: Shading, exposure: f32, step_scale: f32, clip: Clip) -> Self {
         Self {
             exposure,
             step_scale,
@@ -849,7 +858,14 @@ impl RenderSpec {
                 shininess: shading.shininess,
                 shadows: shading.shadows,
             },
+            clip: ClipSpec::of(clip),
         }
+    }
+
+    pub fn clip(self) -> Clip {
+        self.clip
+            .and_then(ClipSpec::clip)
+            .unwrap_or_else(Clip::none)
     }
 
     pub fn shading(self) -> Shading {
@@ -883,7 +899,23 @@ impl RenderSpec {
         if !shading.shadows.is_finite() || !(0.0..=1.0).contains(&shading.shadows) {
             return invalid("carries a unit shadow strength".to_string());
         }
+        if let Some(clip) = self.clip
+            && clip.clip().is_none()
+        {
+            return invalid("clips along a unit plane at a finite depth".to_string());
+        }
         Ok(())
+    }
+}
+
+impl ClipSpec {
+    pub fn of(clip: Clip) -> Option<Self> {
+        let (normal, offset) = clip.parts();
+        clip.enabled().then_some(Self { normal, offset })
+    }
+
+    pub fn clip(self) -> Option<Clip> {
+        Clip::restore(self.normal, self.offset)
     }
 }
 

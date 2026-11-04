@@ -41,57 +41,92 @@ impl Reference {
         self.bvh.is_empty()
     }
 
-    pub fn relate(&self, source: &Shape) -> RelationFrame {
+    pub fn relate(&self, source: &Shape, gate: f32) -> RelationFrame {
+        assert!(
+            gate.is_finite() && gate >= 0.0,
+            "the contact gate of a relation is a length"
+        );
         if self.is_empty() {
             return RelationFrame::empty(sources(source));
         }
         match source {
-            Shape::Spots(spots) => {
-                let mut distance = Vec::with_capacity(spots.len());
-                let mut inside = Vec::with_capacity(spots.len());
-                let mut partner = Vec::with_capacity(spots.len());
-                for spot in spots.iter() {
-                    let (reach, object, contained) = self.measure(Vec3::from(spot.center()));
-                    distance.push(reach);
-                    inside.push(if contained { 1.0 } else { 0.0 });
-                    partner.push(object + 1);
-                }
-                RelationFrame::new(distance, inside, partner)
-            }
-            Shape::Mesh(mesh) => {
-                let mut distance = Vec::with_capacity(mesh.object_count());
-                let mut inside = Vec::with_capacity(mesh.object_count());
-                let mut partner = Vec::with_capacity(mesh.object_count());
-                let mut votes: HashMap<u32, u32> = HashMap::new();
-                for object in 0..mesh.object_count() {
-                    let vertices = mesh.groups()[object].vertex_count() as usize;
-                    let mut reach = f32::INFINITY;
-                    let mut nearest = 0;
-                    let mut contained = 0usize;
-                    votes.clear();
-                    for vertex in 0..vertices {
-                        let point = Vec3::from(mesh.position(object, vertex));
-                        let (value, target, within) = self.measure(point);
-                        if within {
-                            contained += 1;
-                            *votes.entry(target).or_insert(0) += 1;
-                        }
-                        if value < reach {
-                            reach = value;
-                            nearest = target;
-                        }
-                    }
-                    let containing = votes
-                        .iter()
-                        .max_by(|left, right| left.1.cmp(right.1).then(right.0.cmp(left.0)))
-                        .map(|(object, _)| *object);
-                    distance.push(reach);
-                    inside.push(contained as f32 / vertices as f32);
-                    partner.push(containing.unwrap_or(nearest) + 1);
-                }
-                RelationFrame::new(distance, inside, partner)
-            }
+            Shape::Spots(spots) => self.relate_spots(spots, gate),
+            Shape::Mesh(mesh) => self.relate_mesh(mesh, gate),
         }
+    }
+
+    fn relate_spots(&self, spots: &[grana_object::Spot], gate: f32) -> RelationFrame {
+        let mut distance = Vec::with_capacity(spots.len());
+        let mut inside = Vec::with_capacity(spots.len());
+        let mut contact = Vec::with_capacity(spots.len());
+        let mut partner = Vec::with_capacity(spots.len());
+        for spot in spots {
+            let (reach, object, contained) = self.measure(Vec3::from(spot.center()));
+            distance.push(reach);
+            inside.push(if contained { 1.0 } else { 0.0 });
+            contact.push(if contained {
+                0.0
+            } else {
+                cap(spot.radius(), reach, gate)
+            });
+            partner.push(object + 1);
+        }
+        RelationFrame::new(distance, inside, contact, partner)
+    }
+
+    fn relate_mesh(&self, mesh: &PackedMesh, gate: f32) -> RelationFrame {
+        let mut distance = Vec::with_capacity(mesh.object_count());
+        let mut inside = Vec::with_capacity(mesh.object_count());
+        let mut contact = Vec::with_capacity(mesh.object_count());
+        let mut partner = Vec::with_capacity(mesh.object_count());
+        let mut votes: HashMap<u32, u32> = HashMap::new();
+        let mut reaches: Vec<f32> = Vec::new();
+        let mut contained: Vec<bool> = Vec::new();
+        for object in 0..mesh.object_count() {
+            let group = mesh.groups()[object];
+            let vertices = group.vertex_count() as usize;
+            let triangles = group.index_count() as usize / 3;
+            reaches.clear();
+            contained.clear();
+            let mut reach = f32::INFINITY;
+            let mut nearest = 0;
+            let mut within = 0usize;
+            votes.clear();
+            for vertex in 0..vertices {
+                let point = Vec3::from(mesh.position(object, vertex));
+                let (value, target, holds) = self.measure(point);
+                reaches.push(value);
+                contained.push(holds);
+                if holds {
+                    within += 1;
+                    *votes.entry(target).or_insert(0) += 1;
+                }
+                if value < reach {
+                    reach = value;
+                    nearest = target;
+                }
+            }
+            let mut area = 0.0f64;
+            for triangle in 0..triangles {
+                let corners = mesh.triangle_vertices(object, triangle);
+                if corners
+                    .iter()
+                    .any(|corner| contained[*corner as usize] || reaches[*corner as usize] > gate)
+                {
+                    continue;
+                }
+                area += area_of(mesh.triangle(object, triangle));
+            }
+            let containing = votes
+                .iter()
+                .max_by(|left, right| left.1.cmp(right.1).then(right.0.cmp(left.0)))
+                .map(|(object, _)| *object);
+            distance.push(reach);
+            inside.push(within as f32 / vertices as f32);
+            contact.push(area as f32);
+            partner.push(containing.unwrap_or(nearest) + 1);
+        }
+        RelationFrame::new(distance, inside, contact, partner)
     }
 
     fn measure(&self, point: Vec3) -> (f32, u32, bool) {
@@ -106,19 +141,46 @@ impl Reference {
     }
 }
 
+fn area_of(points: [[f32; 3]; 3]) -> f64 {
+    let first = Vec3::from(points[0]);
+    let second = Vec3::from(points[1]);
+    let third = Vec3::from(points[2]);
+    0.5 * f64::from((second - first).cross(third - first).length())
+}
+
+fn cap(radius: f32, reach: f32, gate: f32) -> f32 {
+    if !(radius.is_finite() && radius > 0.0) || reach < radius {
+        return 0.0;
+    }
+    let height = (radius + gate - reach).clamp(0.0, 2.0 * radius);
+    std::f32::consts::TAU * radius * height
+}
+
 fn sources(shape: &Shape) -> usize {
     shape.objects()
+}
+
+pub struct RelationRun<'a> {
+    pub shift: i32,
+    pub gate: f32,
+    pub workers: usize,
+    pub cancel: &'a AtomicBool,
+    pub progress: &'a mut dyn FnMut(usize, usize),
 }
 
 pub fn relate_frames(
     counts: &[Option<usize>],
     source: impl Fn(usize) -> Result<Option<Shape>, String> + Sync,
     target: impl Fn(usize) -> Result<Option<Shape>, String> + Sync,
-    shift: i32,
-    workers: usize,
-    cancel: &AtomicBool,
-    progress: &mut dyn FnMut(usize, usize),
+    run: RelationRun<'_>,
 ) -> Result<Option<Vec<Option<RelationFrame>>>, String> {
+    let RelationRun {
+        shift,
+        gate,
+        workers,
+        cancel,
+        progress,
+    } = run;
     let total = counts.len();
     let mut frames = (0..total).map(|_| None).collect::<Vec<_>>();
     let completed = crate::schedule::ordered(
@@ -139,7 +201,7 @@ pub fn relate_frames(
             let shape = source(time)?;
             let reference = Reference::new(&place);
             drop(place);
-            Ok(shape.map(|shape| reference.relate(&shape)))
+            Ok(shape.map(|shape| reference.relate(&shape, gate)))
         },
         |time, frame| {
             frames[time] = frame;

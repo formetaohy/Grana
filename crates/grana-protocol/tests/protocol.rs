@@ -15,7 +15,7 @@ use grana_scene::{
     Criteria, Dataset, FilterRange, Measure, ObjectColor, ObjectFrame, ObjectKind, Scene,
     TrackColor,
 };
-use grana_volume::{Axis, Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
+use grana_volume::{Axis, Channel, Clip, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
 const PROTOCOL: &str = r#"
 {
@@ -549,6 +549,7 @@ fn stages_the_presentation_of_a_captured_protocol() {
         Vec3::new(-1.0, -1.0, -2.0),
         Vec3::new(1.0, 1.0, 2.0),
     ));
+    scene.set_clip(Clip::new(Vec3::new(0.0, 0.0, -1.0), 1.2));
     scene.set_mask(Some(nuclei));
     assert!(scene.add_seed(nuclei, [0.5, -1.0, 1.5]));
     assert!(scene.add_relation(beads, nuclei, 0));
@@ -670,6 +671,7 @@ fn stages_the_presentation_of_a_captured_protocol() {
     assert_eq!(target.mask, Some(staged_nuclei));
     assert_eq!(target.region.min(), scene.region.min());
     assert_eq!(target.region.max(), scene.region.max());
+    assert_eq!(target.clip, scene.clip, "the clipping plane captures");
     let nuclei_set = target.objects.get(staged_nuclei).expect("the surface set");
     assert_eq!(nuclei_set.color(), [0.9, 0.5, 0.2]);
     assert_eq!(nuclei_set.opacity(), 0.35);

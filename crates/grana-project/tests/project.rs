@@ -24,7 +24,7 @@ use grana_scene::{
     Criteria, Dataset, FilterRange, Item, Measure, ObjectColor, ObjectFrame, ObjectKind,
     ObjectParams, Scene, Selection, TrackColor, Visibility,
 };
-use grana_volume::{Axis, Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
+use grana_volume::{Axis, Channel, Clip, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
 const EXTENT: Extent = Extent::new(8, 8, 4);
 
@@ -549,7 +549,12 @@ fn stage(scene: &mut Scene) {
             surfaces,
             -1,
             time,
-            RelationFrame::new(vec![0.5 + time as f32, 1.5], vec![1.0, 0.0], vec![1, 1]),
+            RelationFrame::new(
+                vec![0.5 + time as f32, 1.5],
+                vec![1.0, 0.0],
+                vec![2.5 + time as f32, 0.25],
+                vec![1, 1],
+            ),
         );
     }
     let node = |time: u32, x: f32| TrackNode::new(time, time as usize, [x, 0.0, 0.0]);
@@ -641,6 +646,7 @@ fn stage(scene: &mut Scene) {
     scene
         .region
         .set_bounds(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.5, 1.5, 1.5));
+    scene.set_clip(Clip::new(Vec3::new(1.0, 0.5, 0.25), 0.5));
     scene.set_time(1);
     scene.select(Some(Selection {
         set: spot_set,

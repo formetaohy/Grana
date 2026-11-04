@@ -61,7 +61,7 @@ fn fs_main(input: MarkerOutput) -> @location(0) vec4<f32> {
     var world = input.center;
     world[section.mapping.x] += input.local.x * input.cross;
     world[section.mapping.y] += input.local.y * input.cross;
-    if (outside_region(world)) {
+    if (outside_region(world) || outside_clip(world)) {
         discard;
     }
     let width = fwidth(distance);
@@ -85,7 +85,7 @@ fn fs_pick(input: MarkerOutput) -> @location(0) vec2<u32> {
     var world = input.center;
     world[section.mapping.x] += input.local.x * input.cross;
     world[section.mapping.y] += input.local.y * input.cross;
-    if (outside_region(world)) {
+    if (outside_region(world) || outside_clip(world)) {
         discard;
     }
     return vec2<u32>(2u, input.marker + 1u);

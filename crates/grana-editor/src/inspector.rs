@@ -1,7 +1,7 @@
-use glam::Vec2;
+use glam::{Vec2, Vec3};
 use grana_scene::Scene;
 use grana_ui::{Align, Block, Color, Corners, Icon, Level, Rect, Role, TextStyle, Ui};
-use grana_volume::{Axis, Intensity};
+use grana_volume::{Axis, Clip, Intensity};
 
 use crate::panel::{divider, section_header};
 use crate::state::State;
@@ -131,6 +131,8 @@ pub fn view_body(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>
     display(ui, state.scene, commands);
     divider(ui);
     section(ui, state);
+    divider(ui);
+    clip(ui, state.scene, commands);
     divider(ui);
     rendering(ui, state.scene, commands);
 }
@@ -485,6 +487,102 @@ fn mask(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         Some((_, name)) => widget::caption(ui, &format!("Detect inside {name} only")),
         None => widget::caption(ui, "Detect across the whole dataset"),
     }
+}
+
+fn clip(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
+    let open = ui.disclosure_open("clip", false);
+    let next = widget::disclosure(ui, "clip", "Clipping plane", open, |ui| {
+        let world = scene.dataset.world_size();
+        let reach = 0.5 * world.length();
+        let current = scene.clip;
+        let mut enabled = current.enabled();
+        let mut normal = if enabled { current.normal() } else { Vec3::X };
+        let mut offset = if enabled { current.offset() } else { 0.0 };
+        let mut touched = false;
+        if let Some(value) = widget::toggle_row(ui, "clip.enabled", "Cut the view", enabled) {
+            enabled = value;
+            touched = true;
+        }
+        let mut azimuth = normal.y.atan2(normal.x).to_degrees();
+        let mut elevation = normal.z.clamp(-1.0, 1.0).asin().to_degrees();
+        if let Some(value) = widget::slider_readout(
+            ui,
+            "clip.azimuth",
+            Some("Azimuth"),
+            azimuth,
+            -180.0..=180.0,
+            false,
+            &format!("{azimuth:.0}°"),
+        ) {
+            azimuth = value;
+            touched = true;
+        }
+        if let Some(value) = widget::slider_readout(
+            ui,
+            "clip.elevation",
+            Some("Elevation"),
+            elevation,
+            -90.0..=90.0,
+            false,
+            &format!("{elevation:.0}°"),
+        ) {
+            elevation = value;
+            touched = true;
+        }
+        if let Some(value) = widget::slider_readout(
+            ui,
+            "clip.offset",
+            Some("Cut at"),
+            offset,
+            -reach..=reach,
+            false,
+            &format!("{offset:.2} µm"),
+        ) {
+            offset = value;
+            touched = true;
+        }
+        if touched {
+            normal = direction(azimuth, elevation);
+            enabled = true;
+        }
+        ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
+            if widget::button(ui, "clip.flip", "Flip", Role::Control) {
+                let flipped = Clip::new(normal, offset).flipped();
+                normal = flipped.normal();
+                offset = flipped.offset();
+                enabled = true;
+                touched = true;
+            }
+            if widget::button(ui, "clip.reset", "Reset", Role::Control) {
+                enabled = false;
+                touched = true;
+            }
+        });
+        if enabled {
+            widget::caption(ui, "The far side of the plane is cut away");
+        } else {
+            widget::caption(ui, "The whole dataset is drawn");
+        }
+        let clip = if enabled {
+            Clip::new(normal, offset.clamp(-reach, reach))
+        } else {
+            Clip::none()
+        };
+        if touched && clip != current {
+            commands.push(Command::SetClip(clip));
+        }
+    });
+    ui.store_open("clip", next);
+}
+
+fn direction(azimuth: f32, elevation: f32) -> Vec3 {
+    let (sine_azimuth, cosine_azimuth) = azimuth.to_radians().sin_cos();
+    let (sine_elevation, cosine_elevation) = elevation.to_radians().sin_cos();
+    Vec3::new(
+        cosine_elevation * cosine_azimuth,
+        cosine_elevation * sine_azimuth,
+        sine_elevation,
+    )
 }
 
 fn rendering(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
