@@ -49,6 +49,7 @@ pub struct Edit {
     last_click: Option<(f32, Vec2)>,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
+    multiline: bool,
 }
 
 impl Edit {
@@ -63,6 +64,14 @@ impl Edit {
             last_click: None,
             undo: Vec::new(),
             redo: Vec::new(),
+            multiline: false,
+        }
+    }
+
+    pub fn multiline(key: u64, text: &str, time: f32) -> Self {
+        Self {
+            multiline: true,
+            ..Self::new(key, text, time)
         }
     }
 
@@ -192,6 +201,68 @@ impl Edit {
         index
     }
 
+    fn line_span(&self, line: usize) -> (usize, usize) {
+        let characters = self.text.chars().collect::<Vec<_>>();
+        let mut start = 0;
+        let mut current = 0;
+        for (index, character) in characters.iter().enumerate() {
+            if current == line {
+                if *character == '\n' {
+                    return (start, index);
+                }
+            } else if *character == '\n' {
+                current += 1;
+                start = index + 1;
+            }
+        }
+        (start, characters.len())
+    }
+
+    fn caret_line(&self) -> (usize, usize) {
+        let characters = self.text.chars().collect::<Vec<_>>();
+        let caret = self.caret.min(characters.len());
+        let mut line = 0;
+        let mut start = 0;
+        for (index, character) in characters.iter().enumerate().take(caret) {
+            if *character == '\n' {
+                line += 1;
+                start = index + 1;
+            }
+        }
+        (line, caret - start)
+    }
+
+    fn vertical(&mut self, delta: i32, extend: bool, time: f32) {
+        let (line, column) = self.caret_line();
+        let characters = self.text.chars().collect::<Vec<_>>();
+        let count = characters
+            .iter()
+            .filter(|character| **character == '\n')
+            .count()
+            + 1;
+        let target = (line as i32 + delta).clamp(0, count as i32 - 1) as usize;
+        let (start, end) = self.line_span(target);
+        self.place((start + column).min(end), extend, time);
+    }
+
+    fn home(&mut self, extend: bool, time: f32) {
+        if self.multiline {
+            let (start, _) = self.line_span(self.caret_line().0);
+            self.place(start, extend, time);
+        } else {
+            self.place(0, extend, time);
+        }
+    }
+
+    fn end(&mut self, extend: bool, time: f32) {
+        if self.multiline {
+            let (_, end) = self.line_span(self.caret_line().0);
+            self.place(end, extend, time);
+        } else {
+            self.place(self.length(), extend, time);
+        }
+    }
+
     fn remember(&mut self) {
         self.undo.push(self.snapshot());
         if self.undo.len() > 128 {
@@ -233,7 +304,11 @@ impl Edit {
     }
 
     pub fn insert(&mut self, text: &str, time: f32) {
-        let text = text.replace(['\n', '\r', '\t'], " ");
+        let text = if self.multiline {
+            text.replace(['\r', '\t'], " ")
+        } else {
+            text.replace(['\n', '\r', '\t'], " ")
+        };
         if text.is_empty() {
             return;
         }
@@ -295,8 +370,11 @@ impl Edit {
                     self.place(target, modifiers.shift, time);
                 }
                 Key::Right => self.step(1, modifiers.shift, time),
-                Key::Home => self.jump(0, modifiers.shift, time),
-                Key::End => self.jump(self.length(), modifiers.shift, time),
+                Key::Home => self.home(modifiers.shift, time),
+                Key::End => self.end(modifiers.shift, time),
+                Key::Up if self.multiline => self.vertical(-1, modifiers.shift, time),
+                Key::Down if self.multiline => self.vertical(1, modifiers.shift, time),
+                Key::Enter if self.multiline => self.insert("\n", time),
                 Key::Enter | Key::Tab => return Some(Outcome::Commit),
                 Key::Escape => return Some(Outcome::Cancel),
                 Key::Space | Key::Up | Key::Down | Key::PageUp | Key::PageDown => {}
@@ -413,9 +491,5 @@ impl Edit {
         };
         let caret = (caret as i32 + delta).clamp(0, self.length() as i32) as usize;
         self.place(caret, extend, time);
-    }
-
-    fn jump(&mut self, target: usize, extend: bool, time: f32) {
-        self.place(target, extend, time);
     }
 }

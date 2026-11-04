@@ -13,12 +13,13 @@ pub enum Align {
     Start,
     Center,
     End,
+    Baseline,
 }
 
 impl Align {
     fn factor(self) -> f32 {
         match self {
-            Self::Start => 0.0,
+            Self::Start | Self::Baseline => 0.0,
             Self::Center => 0.5,
             Self::End => 1.0,
         }

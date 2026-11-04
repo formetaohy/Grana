@@ -331,7 +331,7 @@ impl<'a> Painter<'a> {
             style.align,
         );
         let factor = match vertical {
-            crate::text::Align::Start => 0.0,
+            crate::text::Align::Start | crate::text::Align::Baseline => 0.0,
             crate::text::Align::Center => 0.5,
             crate::text::Align::End => 1.0,
         };

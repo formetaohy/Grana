@@ -141,6 +141,7 @@ struct Span {
     offset: f32,
     size: f32,
     direct: bool,
+    baseline: Option<f32>,
 }
 
 #[derive(Default)]
@@ -320,8 +321,17 @@ impl Ui {
     }
 
     pub fn begin_edit(&mut self, key: u64, text: &str) {
+        self.begin_edit_with(Edit::new(key, text, self.time));
+    }
+
+    pub fn begin_edit_multiline(&mut self, key: u64, text: &str) {
+        self.begin_edit_with(Edit::multiline(key, text, self.time));
+    }
+
+    fn begin_edit_with(&mut self, edit: Edit) {
         self.input.clear_preedit();
-        self.edit = Some(Edit::new(key, text, self.time));
+        let key = edit.key();
+        self.edit = Some(edit);
         self.edit_seen = true;
         self.registry.set_focus(key);
     }
@@ -376,7 +386,6 @@ impl Ui {
             ..
         } = self;
         let outcome = edit.as_mut()?.poll(input, clipboard.as_mut(), *time)?;
-        *edit = None;
         Some(outcome)
     }
 
@@ -552,6 +561,7 @@ impl Ui {
             offset,
             size,
             direct,
+            baseline: None,
         };
         let frame = self.frames.last_mut().expect("a layout frame is active");
         if let Some(open) = frame.open.replace(span) {
@@ -568,6 +578,17 @@ impl Ui {
             open.size = size;
         }
         frame.spans.push(open);
+    }
+
+    fn note_baseline(&mut self, baseline: f32) {
+        let Some(frame) = self.frames.last_mut() else {
+            return;
+        };
+        if let Some(open) = frame.open.as_mut()
+            && open.baseline.is_none()
+        {
+            open.baseline = Some(baseline);
+        }
     }
 
     fn settle_frame(
@@ -591,9 +612,19 @@ impl Ui {
         let overlay_end = self.overlay.len();
         let hit_end = self.registry.hit_count();
         let wheel_end = self.registry.wheel_count();
+        let baseline = (axis == Axis::Row && align == Align::Baseline)
+            .then(|| {
+                spans
+                    .iter()
+                    .filter_map(|span| span.baseline)
+                    .fold(f32::MIN, f32::max)
+            })
+            .filter(|baseline| *baseline > f32::MIN);
         for index in 0..spans.len() {
             let span = spans[index];
-            let cross = if auto_cross && !span.direct {
+            let cross = if let Some(baseline) = baseline {
+                span.baseline.map_or(0.0, |own| baseline - own)
+            } else if auto_cross && !span.direct {
                 (content_cross - span.size) * cross_factor(align) - span.offset
             } else {
                 0.0
@@ -1071,7 +1102,7 @@ impl Ui {
         let width = if style.wrap { available } else { 0.0 };
         let layout = self.layout_text(text, style, width);
         let size = Vec2::new(
-            if style.align == Align::Start || available <= 0.0 {
+            if matches!(style.align, Align::Start | Align::Baseline) || available <= 0.0 {
                 layout.size.x
             } else {
                 available
@@ -1079,6 +1110,7 @@ impl Ui {
             layout.size.y,
         );
         let rect = self.allocate(size);
+        self.note_baseline(rect.min.y + layout.baseline);
         let mut painter = self.painter();
         painter.text(&layout, rect.min, style.color);
         rect
@@ -1087,6 +1119,7 @@ impl Ui {
     pub fn text_style_wrapped(&mut self, text: &str, style: TextStyle, width: f32) -> Rect {
         let layout = self.layout_text(text, style, width);
         let rect = self.allocate(layout.size);
+        self.note_baseline(rect.min.y + layout.baseline);
         let mut painter = self.painter();
         painter.text(&layout, rect.min, style.color);
         rect
@@ -1196,7 +1229,7 @@ impl Ui {
         width: f32,
     ) -> std::sync::Arc<TextLayout> {
         let wrap = style.wrap;
-        let max = if wrap || style.align != Align::Start {
+        let max = if wrap || !matches!(style.align, Align::Start | Align::Baseline) {
             width
         } else {
             0.0
@@ -1790,7 +1823,7 @@ pub fn resolve(length: Length, available: f32) -> f32 {
 
 fn cross_factor(align: Align) -> f32 {
     match align {
-        Align::Start => 0.0,
+        Align::Start | Align::Baseline => 0.0,
         Align::Center => 0.5,
         Align::End => 1.0,
     }
@@ -1979,6 +2012,96 @@ mod tests {
         });
         render(&mut ui);
         assert_eq!(chosen, Some(1));
+    }
+
+    #[test]
+    fn text_field_returns_the_committed_text() {
+        let gpu = Headless::new().expect("the headless device is available");
+        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let key = ui.id("field");
+        let style = TextStyle::new(ui.theme().font(Level::Body), crate::color::Color::WHITE);
+        let mut result = None;
+        ui.input_mut()
+            .push(crate::input::Event::Text("New".to_string()));
+        ui.input_mut().push(crate::input::Event::Key {
+            key: crate::input::Key::Enter,
+            pressed: true,
+            repeat: false,
+        });
+        ui.resize([400, 300]);
+        ui.begin(Vec2::new(400.0, 300.0), 1.0, 0.0);
+        ui.begin_edit(key, "Old");
+        ui.root(|ui| {
+            result = crate::widget::text_field(
+                ui,
+                "field",
+                Rect::from_min_size(Vec2::ZERO, Vec2::new(200.0, 30.0)),
+                style,
+            );
+        });
+        let _ = ui.end();
+        assert_eq!(
+            result,
+            Some((crate::edit::Outcome::Commit, "New".to_string()))
+        );
+    }
+
+    #[test]
+    fn text_area_commits_multiline_text() {
+        let gpu = Headless::new().expect("the headless device is available");
+        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let key = ui.id("area");
+        let style = TextStyle::new(ui.theme().font(Level::Body), crate::color::Color::WHITE);
+        let mut result = None;
+        ui.input_mut()
+            .push(crate::input::Event::Text("a\nb".to_string()));
+        ui.input_mut().push(crate::input::Event::Key {
+            key: crate::input::Key::Tab,
+            pressed: true,
+            repeat: false,
+        });
+        ui.resize([400, 300]);
+        ui.begin(Vec2::new(400.0, 300.0), 1.0, 0.0);
+        ui.begin_edit_multiline(key, "old");
+        ui.root(|ui| {
+            result = crate::widget::text_area(
+                ui,
+                "area",
+                Rect::from_min_size(Vec2::ZERO, Vec2::new(200.0, 120.0)),
+                style,
+            );
+        });
+        let _ = ui.end();
+        assert_eq!(
+            result,
+            Some((crate::edit::Outcome::Commit, "a\nb".to_string()))
+        );
+    }
+
+    #[test]
+    fn baseline_alignment_uses_text_baselines() {
+        let gpu = Headless::new().expect("the headless device is available");
+        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let mut second = Rect::ZERO;
+        frame(&mut ui, |ui| {
+            ui.row(Block::row().align(Align::Baseline).gaps(20.0), |ui| {
+                let _ = ui.label("A", Level::LargeTitle);
+                second = ui.label("B", Level::Micro);
+            });
+        });
+        let glyphs = ui
+            .instances()
+            .iter()
+            .filter(|instance| instance.meta[0] == crate::paint::KIND_GLYPH)
+            .collect::<Vec<_>>();
+        let bottom = |left: bool| {
+            glyphs
+                .iter()
+                .filter(|glyph| (glyph.rect[0] < second.min.x) == left)
+                .map(|glyph| glyph.rect[1] + glyph.rect[3])
+                .fold(f32::MIN, f32::max)
+        };
+        assert!((bottom(true) - bottom(false)).abs() < 2.0);
     }
 
     #[test]

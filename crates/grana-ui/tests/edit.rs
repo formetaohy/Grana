@@ -138,6 +138,39 @@ fn keeps_a_preedit_beside_the_committed_text() {
 }
 
 #[test]
+fn navigates_multiline_text() {
+    let mut input = Input::new();
+    let mut clipboard = FakeClipboard::default();
+    let mut edit = Edit::multiline(13, "ab\ncde\nf", 0.0);
+    edit.place(1, false, 0.0);
+
+    press(&mut input, Key::Down);
+    step(&mut input, 0.1);
+    assert!(edit.poll(&input, &mut clipboard, 0.1).is_none());
+    assert_eq!(edit.caret(), 4);
+
+    press(&mut input, Key::End);
+    step(&mut input, 0.2);
+    assert!(edit.poll(&input, &mut clipboard, 0.2).is_none());
+    assert_eq!(edit.caret(), 6);
+
+    press(&mut input, Key::Down);
+    step(&mut input, 0.3);
+    assert!(edit.poll(&input, &mut clipboard, 0.3).is_none());
+    assert_eq!(edit.caret(), 8);
+
+    press(&mut input, Key::Home);
+    step(&mut input, 0.4);
+    assert!(edit.poll(&input, &mut clipboard, 0.4).is_none());
+    assert_eq!(edit.caret(), 7);
+
+    press(&mut input, Key::Enter);
+    step(&mut input, 0.5);
+    assert!(edit.poll(&input, &mut clipboard, 0.5).is_none());
+    assert_eq!(edit.text(), "ab\ncde\n\nf");
+}
+
+#[test]
 fn counts_clicks_and_selects_words() {
     let mut edit = Edit::new(9, "nucleus 42 / cell", 0.0);
     assert_eq!(edit.click(Vec2::splat(10.0), 0.0), 1);
