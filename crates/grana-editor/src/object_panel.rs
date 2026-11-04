@@ -742,7 +742,54 @@ fn detect(
 }
 
 fn seeds(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: ObjectSetId) {
+    let source = state.scene.seed_source(id);
     let count = state.scene.seed_count(id);
+    let candidates = state
+        .scene
+        .objects
+        .iter()
+        .filter(|set| set.id() != id && (set.detected() > 0 || Some(set.id()) == source))
+        .filter(|set| !state.scene.depends_on(set.id(), id))
+        .map(|set| (set.id(), set.name().to_string()))
+        .collect::<Vec<_>>();
+    let mut options = vec![(0usize, "Manual seeds".to_string())];
+    options.extend(
+        candidates
+            .iter()
+            .enumerate()
+            .map(|(index, (_, name))| (index + 1, format!("From {name}"))),
+    );
+    let selected = source.and_then(|source| {
+        candidates
+            .iter()
+            .position(|(candidate, _)| *candidate == source)
+            .map(|position| position + 1)
+    });
+    let width = ui.available().x;
+    if let Some(index) =
+        grana_ui::popover::combo(ui, "seed.source", width, &options, selected.or(Some(0)))
+    {
+        let chosen = (index > 0).then(|| candidates[index - 1].0);
+        if chosen != source {
+            commands.push(Command::SetSeedSource {
+                set: id,
+                source: chosen,
+            });
+        }
+    }
+    if let Some(source) = source {
+        state.workspace.seed = None;
+        let name = candidates
+            .iter()
+            .find(|(candidate, _)| *candidate == source)
+            .map_or("the seed source", |(_, name)| name.as_str());
+        ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
+            widget::field_label(ui, "Seeds");
+            widget::caption(ui, &format!("{count} from {name}"));
+        });
+        widget::weak(ui, "One surface object per seeded object.");
+        return;
+    }
     let armed = state.workspace.seed == Some(id);
     ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
         widget::field_label(ui, "Seeds");

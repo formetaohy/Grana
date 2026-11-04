@@ -47,6 +47,7 @@ impl Protocol {
                 )));
             }
             set.source.checked(&set.name)?;
+            self.check_parts(&set.source)?;
             self.dependencies(&set.source, &names, &set.name)?;
             if !self.source_kind_consistent(&set.name) {
                 return Err(ProtocolError::Invalid(format!(
@@ -238,6 +239,19 @@ impl Protocol {
         Ok(self)
     }
 
+    fn check_parts(&self, source: &SourceSpec) -> Result<(), ProtocolError> {
+        let SourceSpec::Merged { parts } = source else {
+            return Ok(());
+        };
+        for part in parts {
+            if let Some(curation) = &part.curation {
+                curation.checked(&part.name, true)?;
+            }
+            self.check_parts(&part.source)?;
+        }
+        Ok(())
+    }
+
     fn dependencies(
         &self,
         source: &SourceSpec,
@@ -245,9 +259,17 @@ impl Protocol {
         set: &str,
     ) -> Result<(), ProtocolError> {
         match source {
-            SourceSpec::Spots { .. }
-            | SourceSpec::Surfaces { .. }
-            | SourceSpec::Filaments { .. } => Ok(()),
+            SourceSpec::Surfaces { seed_source, .. } => {
+                if let Some(source) = seed_source
+                    && !earlier.contains(source)
+                {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{set} seeds from {source}, which does not run before it"
+                    )));
+                }
+                Ok(())
+            }
+            SourceSpec::Spots { .. } | SourceSpec::Filaments { .. } => Ok(()),
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
                 if !earlier.contains(source) {
                     return Err(ProtocolError::Invalid(format!(

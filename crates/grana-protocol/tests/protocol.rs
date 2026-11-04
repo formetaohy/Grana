@@ -51,6 +51,83 @@ const PROTOCOL: &str = r#"
 "#;
 
 #[test]
+fn captures_the_manual_edits_of_a_merged_part() {
+    let extent = Extent::new(4, 4, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "DAPI",
+            [0.3, 0.4, 1.0],
+            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+        )],
+    );
+    let series = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let target = scene.add_object(ObjectKind::Spots, 0);
+    let absorbed = scene.add_object(ObjectKind::Spots, 0);
+    let mut accumulator = SampleAccumulator::new();
+    accumulator.push(0.5);
+    let statistics = accumulator.statistics();
+    let frame = |centres: &[[f32; 3]]| {
+        ObjectFrame::Spots(SpotSet::new(
+            0,
+            centres
+                .iter()
+                .map(|centre| Spot::new(*centre, 1.0, 0.5))
+                .collect(),
+            IntensityTable::new(1, vec![statistics; centres.len()]),
+        ))
+    };
+    scene.install(target, 0, frame(&[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]));
+    scene.install(absorbed, 0, frame(&[[4.0, 0.0, 0.0]]));
+    assert!(
+        scene
+            .delete_objects(target, 0, &[1])
+            .expect("the spot is pruned")
+    );
+    scene
+        .merge_objects(absorbed, target)
+        .expect("the two spot sets merge");
+
+    let protocol =
+        Protocol::capture(&scene, &Measure::new(), None).expect("the merged analysis captures");
+    let SourceSpec::Merged { parts } = &protocol.sets()[0].source else {
+        panic!("the merged set holds its parts");
+    };
+    assert_eq!(parts.len(), 2, "the merged set keeps both parts");
+    let curated = parts
+        .iter()
+        .find(|part| part.curation.is_some())
+        .expect("a part keeps its manual edits");
+    assert_eq!(
+        curated
+            .curation
+            .as_ref()
+            .expect("the part is curated")
+            .expected,
+        [Some(2)],
+        "the part records the object count of its edits"
+    );
+    let text = protocol.to_json().expect("the protocol serializes");
+    assert!(text.contains("anchors"), "{text}");
+
+    let mut staged_scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let staged = protocol
+        .stage(&mut staged_scene)
+        .expect("the curated merge stages");
+    let merged = staged_scene
+        .objects
+        .get(staged.set(0))
+        .expect("the merged set is staged");
+    assert_eq!(
+        merged.curation().removal_count(),
+        1,
+        "the staged part carries the object the user removed"
+    );
+}
+
+#[test]
 fn reads_and_writes_a_protocol() {
     let protocol = Protocol::from_json(PROTOCOL).expect("the protocol is valid");
     assert_eq!(protocol.sets().len(), 3);
@@ -342,6 +419,83 @@ fn captures_an_analysis_mask() {
     let text = protocol.to_json().expect("the protocol serializes");
     let restored = Protocol::from_json(&text).expect("the protocol round trips");
     assert_eq!(protocol, restored);
+}
+
+#[test]
+fn captures_and_stages_a_surface_seeded_from_another_set() {
+    let extent = Extent::new(4, 4, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![
+            Channel::new(
+                "DAPI",
+                [0.3, 0.4, 1.0],
+                VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+            ),
+            Channel::new(
+                "Membrane",
+                [0.3, 1.0, 0.4],
+                VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+            ),
+        ],
+    );
+    let movie = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", movie.pyramid().clone()));
+    let cells = scene.add_object(ObjectKind::Surfaces, 1);
+    let nuclei = scene.add_object(ObjectKind::Surfaces, 0);
+    assert!(scene.set_seed_source(cells, Some(nuclei)));
+    assert!(scene.add_seed(nuclei, [0.25, -0.5, 0.75]));
+
+    let protocol =
+        Protocol::capture(&scene, &Measure::new(), None).expect("the seeded analysis captures");
+    assert_eq!(protocol.sets().len(), 2);
+    assert_eq!(
+        protocol.sets()[0].name,
+        "Surfaces 2",
+        "the seed source stages before the seeded set"
+    );
+    assert_eq!(protocol.sets()[1].name, "Surfaces 1");
+    assert_eq!(
+        protocol.sets()[1].source.seed_source(),
+        Some("Surfaces 2"),
+        "the seeded set names its source"
+    );
+    assert!(protocol.sets()[1].source.seeds().is_empty());
+    assert_eq!(
+        protocol.sets()[0].source.seeds().to_vec(),
+        vec![vec![[0.25, -0.5, 0.75]]],
+        "the source keeps its manual seeds"
+    );
+    let text = protocol.to_json().expect("the protocol serializes");
+    let restored = Protocol::from_json(&text).expect("the protocol round trips");
+    assert_eq!(protocol, restored);
+
+    let mut staged_scene = Scene::new(Dataset::synthetic("fixture", movie.pyramid().clone()));
+    let staged = protocol
+        .stage(&mut staged_scene)
+        .expect("the seeded protocol stages");
+    assert_eq!(
+        staged_scene.seed_source(staged.set(1)),
+        Some(staged.set(0)),
+        "the staged cells seed from the staged nuclei"
+    );
+    assert_eq!(
+        staged_scene.seeded_dependents(staged.set(0)),
+        [staged.set(1)]
+    );
+
+    let mut json = serde_json::to_value(&protocol).expect("the protocol carries into json");
+    let sets = json["sets"]
+        .as_array_mut()
+        .expect("the protocol names sets");
+    sets.reverse();
+    let failure = Protocol::from_json(&serde_json::to_string(&json).expect("the json is text"))
+        .expect_err("a seed source cannot run after its dependent");
+    assert!(
+        failure.to_string().contains("does not run before"),
+        "{failure}"
+    );
 }
 
 #[test]

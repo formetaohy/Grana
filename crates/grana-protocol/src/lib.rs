@@ -11,11 +11,11 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use spec::{
-    AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec,
-    CurationSpec, EditSpec, ExportSpec, FilterSpec, KeySpec, LassoSpec, MeasureSpec, NodeSpec,
-    PartSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, SectionSpec, SetSpec, ShadingSpec,
-    SnapshotSpec, SortSpec, SourceSpec, StopSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec,
-    WindowSpec,
+    AnchorSpec, AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec,
+    ColorSpec, CurationSpec, EditSpec, ExportSpec, FilterSpec, KeySpec, LassoSpec, MeasureSpec,
+    NodeSpec, PartSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, SectionSpec, SetSpec,
+    ShadingSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec, TimelineSpec, TrackSpec,
+    TransferSpec, ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -143,6 +143,12 @@ impl Protocol {
                             .join(" + ");
                         text = format!("{text} · merged from {names}");
                     }
+                    SourceSpec::Surfaces {
+                        seed_source: Some(source),
+                        ..
+                    } => {
+                        text = format!("{text} · seeded from {source}");
+                    }
                     SourceSpec::Spots { .. }
                     | SourceSpec::Surfaces { .. }
                     | SourceSpec::Filaments { .. } => {}
@@ -167,7 +173,7 @@ impl Protocol {
                     let removed = curation
                         .removed
                         .iter()
-                        .map(|removal| removal.objects.len())
+                        .map(|removal| removal.anchors.len())
                         .sum::<usize>();
                     if removed > 0 {
                         text = format!("{text} · {removed} removed by hand");

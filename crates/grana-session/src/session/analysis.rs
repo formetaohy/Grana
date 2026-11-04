@@ -418,7 +418,20 @@ impl Session {
         let channel = object.channel();
         let params = object.params();
         let region = scene.region;
-        let seeds = scene.seed_frames(set).unwrap_or_default();
+        let seed_source = scene.seed_source(set);
+        let seeds = scene.seed_frames(set);
+        if let Some(source) = seed_source
+            && seeds.iter().all(|frame| frame.is_empty())
+        {
+            let name = scene
+                .objects
+                .get(source)
+                .map_or("the seed source", |set| set.name());
+            self.message = Some(Message::error(format!(
+                "the seed source {name} detected no objects"
+            )));
+            return;
+        }
         let roi = match scene.mask {
             None => None,
             Some(source) => {
@@ -459,10 +472,18 @@ impl Session {
         }
         self.message = None;
         self.record_progress(Job::Detect(set), 0, 0, 0);
+        let policy = match seed_source {
+            Some(_) => grana_pipeline::SeedPolicy::Sourced,
+            None if seeds.iter().any(|frame| !frame.is_empty()) => {
+                grana_pipeline::SeedPolicy::Strict
+            }
+            None => grana_pipeline::SeedPolicy::Unseeded,
+        };
         self.analysis.push(crate::detect(
             Job::Detect(set),
             source,
-            DetectRequest::new(channel, params, region, roi, seeds, 0, self.store()),
+            DetectRequest::new(channel, params, region, roi, 0, self.store())
+                .with_seeds(seeds, policy),
         ));
     }
 

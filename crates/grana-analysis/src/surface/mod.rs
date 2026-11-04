@@ -42,6 +42,13 @@ const SEED_SNAP: i64 = 2;
 
 pub const SURFACE_VOXEL_LIMIT: u64 = 1 << 30;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeedPolicy {
+    Unseeded,
+    Strict,
+    Sourced,
+}
+
 pub(crate) const EMPTY: u32 = u32::MAX;
 pub(crate) const OUTSIDE: f32 = -1.0;
 pub(crate) const REMOVED: f32 = 1.0e-3;
@@ -160,7 +167,8 @@ pub struct SurfaceBuilder {
     opening: Option<Element>,
     closing: Option<Element>,
     morph_radius: u32,
-    seeds: Vec<[i64; 3]>,
+    seeds: Vec<[f32; 3]>,
+    seed_policy: SeedPolicy,
 }
 
 impl SurfaceBuilder {
@@ -229,6 +237,7 @@ impl SurfaceBuilder {
             closing,
             morph_radius,
             seeds: Vec::new(),
+            seed_policy: SeedPolicy::Unseeded,
         }
     }
 
@@ -303,21 +312,69 @@ impl SurfaceBuilder {
         }
     }
 
-    pub fn with_seeds(mut self, seeds: &[[f32; 3]]) -> Self {
-        self.seeds = seeds
-            .iter()
-            .map(|seed| {
-                assert!(
-                    seed.iter().all(|value| value.is_finite()),
-                    "a surface seed point is finite"
-                );
-                [0, 1, 2].map(|axis| {
-                    let local = (seed[axis] + 0.5 * self.world[axis]) / self.spacing[axis] - 0.5;
-                    local.round() as i64
-                })
-            })
-            .collect();
+    pub fn with_seeds(mut self, seeds: &[[f32; 3]], policy: SeedPolicy) -> Self {
+        assert!(
+            seeds
+                .iter()
+                .all(|seed| seed.iter().all(|value| value.is_finite())),
+            "a surface seed point is finite"
+        );
+        self.seeds = seeds.to_vec();
+        self.seed_policy = policy;
         self
+    }
+
+    fn landing(&self, solid: &SolidMask, seed: [f32; 3]) -> Option<[i64; 3]> {
+        let centre = [0, 1, 2].map(|axis| {
+            ((seed[axis] + 0.5 * self.world[axis]) / self.spacing[axis] - 0.5).round() as i64
+        });
+        let mut nearest: Option<(i64, [i64; 3])> = None;
+        for dz in -SEED_SNAP..=SEED_SNAP {
+            for dy in -SEED_SNAP..=SEED_SNAP {
+                for dx in -SEED_SNAP..=SEED_SNAP {
+                    let voxel = [centre[0] + dx, centre[1] + dy, centre[2] + dz];
+                    if !solid.get(voxel, self.anchor) {
+                        continue;
+                    }
+                    let distance = dx * dx + dy * dy + dz * dz;
+                    if nearest.is_none_or(|(current, _)| distance < current) {
+                        nearest = Some((distance, voxel));
+                    }
+                }
+            }
+        }
+        nearest.map(|(_, voxel)| voxel)
+    }
+
+    fn seeds(&self, solid: &SolidMask) -> Result<Option<Vec<[i64; 3]>>, String> {
+        if self.seed_policy == SeedPolicy::Unseeded {
+            return Ok(Some(Vec::new()));
+        }
+        let strict = self.seed_policy == SeedPolicy::Strict;
+        let mut landed = Vec::with_capacity(self.seeds.len());
+        let mut seen = std::collections::HashSet::new();
+        for (index, seed) in self.seeds.iter().enumerate() {
+            let Some(voxel) = self.landing(solid, *seed) else {
+                if strict {
+                    return Err(format!(
+                        "the seed point {} does not mark a solid surface voxel",
+                        index + 1
+                    ));
+                }
+                continue;
+            };
+            if !seen.insert(voxel) {
+                if strict {
+                    return Err(format!(
+                        "the seed point {} marks the voxel of another seed point",
+                        index + 1
+                    ));
+                }
+                continue;
+            }
+            landed.push(voxel);
+        }
+        Ok((!landed.is_empty()).then_some(landed))
     }
 
     pub fn scan(
@@ -329,11 +386,14 @@ impl SurfaceBuilder {
         sources: Sources<'_>,
     ) -> Result<Option<SurfaceSet>, String> {
         let desired = crate::schedule::workers(workers);
-        let seeds = &self.seeds;
         let store = sources.store;
         let Some(mask) = mask::build(&self, desired, cancel, roi, progress, sources.read)? else {
             return Ok(None);
         };
+        let Some(seeds) = self.seeds(&mask.solid)? else {
+            return Ok(None);
+        };
+        let seeds = &seeds[..];
         let widest = self
             .anisotropy
             .iter()

@@ -24,6 +24,7 @@ pub(super) fn cut(
     store: Option<&Arc<GeometryStore>>,
 ) -> Result<SurfaceSet, String> {
     let info = topology.info();
+    let seeded = info.seeds() > 0;
     let mut merged = Merged::new(topology, removed);
     merged.close(spec.split());
     let targets = merged.targets();
@@ -35,6 +36,7 @@ pub(super) fn cut(
                 && merged.find(*root) == *root
                 && merged.nodes[*root as usize].voxels() > 0
                 && offsets[*root as usize + 1] > offsets[*root as usize]
+                && (!seeded || merged.nodes[*root as usize].seed().is_some())
         })
         .collect::<Vec<_>>();
     let mut leaves_of = vec![Vec::new(); topology.basins().len()];
@@ -172,7 +174,8 @@ impl<'a> Merged<'a> {
     }
 
     fn close(&mut self, split: f32) {
-        let merge_all = split == 0.0 && self.topology.info().seeds() == 0;
+        let seeded = self.topology.info().seeds() > 0;
+        let merge_all = split == 0.0 && !seeded;
         let mut seams = HashMap::<(u32, u32), u32>::new();
         for seam in self.topology.seams() {
             let slot = seams.entry((seam.left(), seam.right())).or_insert(0);
@@ -183,11 +186,19 @@ impl<'a> Merged<'a> {
             right_saddle.cmp(left_saddle).then(left_key.cmp(right_key))
         });
         for ((left, right), saddle) in seams {
-            self.join(left, right, saddle, split, merge_all);
+            self.join(left, right, saddle, split, merge_all, seeded);
         }
     }
 
-    fn join(&mut self, left: u32, right: u32, saddle: u32, split: f32, merge_all: bool) {
+    fn join(
+        &mut self,
+        left: u32,
+        right: u32,
+        saddle: u32,
+        split: f32,
+        merge_all: bool,
+        seeded: bool,
+    ) {
         let left = self.find(left);
         let right = self.find(right);
         if left == right || self.removed[left as usize] || self.removed[right as usize] {
@@ -201,10 +212,13 @@ impl<'a> Merged<'a> {
             self.nodes[left as usize].seed(),
             self.nodes[right as usize].seed(),
         );
-        if let (Some(first), Some(second)) = seeds
-            && first != second
-        {
-            return;
+        match seeds {
+            (Some(first), Some(second)) if first != second => return,
+            (Some(_), _) | (_, Some(_)) if seeded => {
+                self.merge(left, right);
+                return;
+            }
+            _ => {}
         }
         let peak = f64::from(
             self.nodes[left as usize]

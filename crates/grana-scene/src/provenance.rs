@@ -1,8 +1,10 @@
 use grana_measure::{Filter, Group, Lasso, Table};
 use grana_object::TrackSet;
 
+use crate::curation::Curation;
 use crate::object::{ObjectKind, ObjectParams};
 use crate::object_set::ObjectSetId;
+use crate::seed::Seeds;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilterRange {
@@ -284,7 +286,8 @@ pub struct Recipe {
     name: String,
     channel: usize,
     params: ObjectParams,
-    seeds: Vec<Vec<[f32; 3]>>,
+    seeds: Seeds,
+    curation: Curation,
     provenance: Provenance,
 }
 
@@ -293,29 +296,39 @@ impl Recipe {
         name: String,
         channel: usize,
         params: ObjectParams,
-        seeds: Vec<Vec<[f32; 3]>>,
+        seeds: Seeds,
+        curation: Curation,
         provenance: Provenance,
     ) -> Self {
         assert!(
             !name.trim().is_empty(),
             "a merged part names its object set"
         );
-        assert!(
-            params.kind() == ObjectKind::Surfaces || seeds.iter().all(Vec::is_empty),
-            "only a surface part carries seed points"
-        );
-        assert!(
-            seeds
-                .iter()
-                .flatten()
-                .all(|seed| seed.iter().all(|value| value.is_finite())),
-            "a merged part seeds finite points"
-        );
+        match &seeds {
+            Seeds::Points(frames) => {
+                assert!(
+                    params.kind() == ObjectKind::Surfaces || frames.iter().all(Vec::is_empty),
+                    "only a surface part carries seed points"
+                );
+                assert!(
+                    frames
+                        .iter()
+                        .flatten()
+                        .all(|seed| seed.iter().all(|value| value.is_finite())),
+                    "a merged part seeds finite points"
+                );
+            }
+            Seeds::Source(_) => assert!(
+                params.kind() == ObjectKind::Surfaces,
+                "only a surface part seeds from another object set"
+            ),
+        }
         Self {
             name,
             channel,
             params,
             seeds,
+            curation,
             provenance,
         }
     }
@@ -336,8 +349,12 @@ impl Recipe {
         self.params
     }
 
-    pub fn seeds(&self) -> &[Vec<[f32; 3]>] {
+    pub fn seeds(&self) -> &Seeds {
         &self.seeds
+    }
+
+    pub fn curation(&self) -> &Curation {
+        &self.curation
     }
 
     pub fn provenance(&self) -> &Provenance {
@@ -345,6 +362,11 @@ impl Recipe {
     }
 
     pub(crate) fn forget_copied(&mut self, removed: &[ObjectSetId]) {
+        if let Seeds::Source(source) = &self.seeds
+            && removed.contains(source)
+        {
+            self.seeds = Seeds::Points(Vec::new());
+        }
         self.provenance.forget_copied(removed);
     }
 }

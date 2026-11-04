@@ -821,6 +821,58 @@ fn round_trips_the_objects_a_user_deleted() {
     );
 }
 
+#[test]
+fn round_trips_the_seed_source_of_a_surface() {
+    let volume = lobes();
+    let mut scene = surface_scene(&volume);
+    let nuclei = scene.add_object(ObjectKind::Surfaces, 0);
+    let cells = scene.add_object(ObjectKind::Surfaces, 0);
+    assert!(scene.set_seed_source(cells, Some(nuclei)));
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "lobes".to_string(),
+        },
+        ViewState {
+            camera: CameraState {
+                pivot: [0.0; 3],
+                yaw: 0.0,
+                pitch: 0.0,
+                distance: 10.0,
+                fov_y: 0.6,
+            },
+            section: SectionState {
+                axis: Axis::Z,
+                span: 10.0,
+            },
+            split: 0.5,
+            timeline: Timeline::default(),
+            export: Export::NATIVE,
+        },
+    );
+    let path = std::env::temp_dir().join(format!("grana-seeded-{}.grana", std::process::id()));
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_done, _total| {})
+        .expect("the project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_done, _total| {},
+    )
+    .expect("the project reads");
+    fs::remove_file(&path).ok();
+    assert_eq!(loaded, project, "the seeded surface travels with its set");
+    let mut restored = surface_scene(&volume);
+    restored.restore(loaded.scene);
+    assert_eq!(restored.seed_source(cells), Some(nuclei));
+    assert_eq!(
+        restored.seed_frames(cells).len(),
+        restored.frame_count() as usize
+    );
+}
+
 fn lobes() -> Volume {
     let extent = Extent::new(200, 80, 80);
     let centres = [[80.0f32, 40.0, 40.0], [118.0, 40.0, 40.0]];

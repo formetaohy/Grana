@@ -114,6 +114,7 @@ impl Protocol {
             SourceSpec::Surfaces {
                 channel: name,
                 seeds,
+                seed_source,
                 ..
             } => {
                 channel(names, name)?;
@@ -121,6 +122,13 @@ impl Protocol {
                     return Err(ProtocolError::Invalid(
                         "the seeds of an object set cover every frame of the dataset".to_string(),
                     ));
+                }
+                if let Some(source) = seed_source
+                    && !self.sets.iter().any(|set| set.name == *source)
+                {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the seed source {source} is not an object set of the protocol"
+                    )));
                 }
             }
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
@@ -185,16 +193,7 @@ impl Protocol {
                 set.set_visible(spec.visible);
             }
             if let Some(curation) = &spec.curation {
-                if curation.expected.len() != builder.scene.dataset.frame_count() as usize {
-                    return Err(ProtocolError::Invalid(format!(
-                        "the manual edits of {} cover {} frames and the dataset holds {}",
-                        spec.name,
-                        curation.expected.len(),
-                        builder.scene.dataset.frame_count()
-                    )));
-                }
-                let curation = curation.curation().map_err(ProtocolError::Invalid)?;
-                builder.scene.set_curation(id, curation);
+                builder.apply_curation(id, Some(curation), &spec.name)?;
             }
             builder.ids.insert(spec.name.clone(), id);
             masks.push(mask);
@@ -341,7 +340,9 @@ impl Builder<'_> {
             SourceSpec::Merged { parts } => {
                 let mut built = Vec::with_capacity(parts.len());
                 for part in parts {
-                    built.push(self.build(&part.source, &part.name, false, None, mask)?);
+                    let id = self.build(&part.source, &part.name, false, None, mask)?;
+                    self.apply_curation(id, part.curation.as_ref(), &part.name)?;
+                    built.push(id);
                 }
                 let mut built = built.into_iter();
                 let target = built
@@ -381,6 +382,14 @@ impl Builder<'_> {
         if !source.seeds().is_empty() {
             self.scene.set_seed_frames(id, source.seeds().to_vec());
         }
+        if let Some(seed_source) = source.seed_source() {
+            let seeds = self.reference(seed_source)?;
+            if !self.scene.set_seed_source(id, Some(seeds)) {
+                return Err(ProtocolError::Invalid(format!(
+                    "{seed_source} cannot seed the object set {name}"
+                )));
+            }
+        }
         self.apply_track(id, track);
         self.steps.push(Step::Detect { set: id, mask });
         Ok(id)
@@ -409,6 +418,27 @@ impl Builder<'_> {
         Err(ProtocolError::Invalid(format!(
             "the object set {name} collides with another object set of the scene"
         )))
+    }
+
+    fn apply_curation(
+        &mut self,
+        id: ObjectSetId,
+        curation: Option<&crate::CurationSpec>,
+        name: &str,
+    ) -> Result<(), ProtocolError> {
+        let Some(curation) = curation else {
+            return Ok(());
+        };
+        if curation.expected.len() != self.scene.dataset.frame_count() as usize {
+            return Err(ProtocolError::Invalid(format!(
+                "the manual edits of {name} cover {} frames and the dataset holds {}",
+                curation.expected.len(),
+                self.scene.dataset.frame_count()
+            )));
+        }
+        let curation = curation.curation().map_err(ProtocolError::Invalid)?;
+        self.scene.set_curation(id, curation);
+        Ok(())
     }
 
     fn apply_track(&mut self, id: ObjectSetId, track: Option<crate::TrackSpec>) {

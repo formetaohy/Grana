@@ -282,7 +282,7 @@ fn replays_derived_and_merged_object_sets() {
       "name": "Big",
       "color": [0.9, 0.5, 0.2],
       "source": {"kind": "filtered", "source": "Puncta", "filters": [{"column": "diameter_um", "minimum": 0.0, "maximum": 1000.0}]},
-      "curation": {"expected": [1, 1], "removed": [{"frame": 0, "objects": [0]}]}
+      "curation": {"expected": [1, 1], "removed": [{"frame": 0, "anchors": [{"position": [0.25, 0.25, 0.5], "scale": 2.5}]}]}
     }
   ]
 }
@@ -751,17 +751,23 @@ fn runs_every_scene_of_a_multi_scene_image() {
     write_scene_image(&root.join("plate.czi"));
     let datasets = discover(&root).expect("the folder lists its datasets");
     assert_eq!(datasets.len(), 2, "the image holds two scenes");
-    assert_eq!(datasets[0].label(), "plate scene 1");
-    assert_eq!(datasets[1].label(), "plate scene 2");
+    assert_eq!(datasets[0].label(), "plate Brightfield");
+    assert_eq!(datasets[1].label(), "plate Fluorescence");
     let output = temp.path().join("out");
     let protocol = Protocol::from_json(SCENES).expect("the protocol is valid");
     let completed = run(&protocol, &datasets, &output, 1, false);
     assert_eq!(completed, [Status::Ok, Status::Ok], "the batch finishes");
     let summary = read(&output.join("summary.csv"));
-    assert!(summary.contains("plate,1,ok,1,Puncta=1"), "{summary}");
-    assert!(summary.contains("plate,2,ok,1,Puncta=1"), "{summary}");
-    let first = read(&output.join("plate-scene-1").join("Puncta-objects.csv"));
-    let second = read(&output.join("plate-scene-2").join("Puncta-objects.csv"));
+    assert!(
+        summary.contains("plate,Brightfield,ok,1,Puncta=1"),
+        "{summary}"
+    );
+    assert!(
+        summary.contains("plate,Fluorescence,ok,1,Puncta=1"),
+        "{summary}"
+    );
+    let first = read(&output.join("plate-brightfield").join("Puncta-objects.csv"));
+    let second = read(&output.join("plate-fluorescence").join("Puncta-objects.csv"));
     assert_eq!(
         first.lines().count(),
         2,
@@ -770,8 +776,11 @@ fn runs_every_scene_of_a_multi_scene_image() {
     assert_eq!(second.lines().count(), 2, "{second}");
     assert_ne!(first, second, "each scene reads its own voxels");
     let quality = read(&output.join("quality.csv"));
-    assert!(quality.contains("plate,1,ok,Puncta"), "{quality}");
-    assert!(quality.contains("plate,2,ok,Puncta"), "{quality}");
+    assert!(quality.contains("plate,Brightfield,ok,Puncta"), "{quality}");
+    assert!(
+        quality.contains("plate,Fluorescence,ok,Puncta"),
+        "{quality}"
+    );
 
     let projects = temp.path().join("projects");
     let completed = run(&protocol, &datasets, &projects, 1, true);
@@ -922,15 +931,17 @@ fn scene_samples(centre: (f32, f32), depth: u32) -> Vec<u8> {
 }
 
 fn scene_xml() -> String {
-    let image = format!(
-        "<Image><SizeX>{SCENE_SIDE}</SizeX><SizeY>{SCENE_SIDE}</SizeY><SizeZ>{SCENE_DEPTH}</SizeZ>\
+    let image = |name: &str| {
+        format!(
+            "<Image Name=\"{name}\"><SizeX>{SCENE_SIDE}</SizeX><SizeY>{SCENE_SIDE}</SizeY><SizeZ>{SCENE_DEPTH}</SizeZ>\
 <SizeC>1</SizeC><SizeT>1</SizeT>\
 <Dimensions><Channels>\
 <Channel Id=\"Channel:1\"><Color>#FF00FF00</Color><Fluor>Cells</Fluor></Channel>\
 </Channels></Dimensions></Image>"
-    );
+        )
+    };
     format!(
-        "<ImageDocument><Metadata><Information>{image}{image}</Information>\
+        "<ImageDocument><Metadata><Information>{}{}</Information>\
 <Scaling><Items>\
 <Distance Id=\"X\"><Value>0.5E-06</Value></Distance>\
 <Distance Id=\"Y\"><Value>0.5E-06</Value></Distance>\
@@ -939,7 +950,9 @@ fn scene_xml() -> String {
 <DisplaySetting><Channels>\
 <Channel Id=\"Channel:1\" Name=\"Cells\"><Low>0</Low><High>1</High></Channel>\
 </Channels></DisplaySetting>\
-</Metadata></ImageDocument>"
+</Metadata></ImageDocument>",
+        image("Brightfield"),
+        image("Fluorescence"),
     )
 }
 

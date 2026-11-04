@@ -474,6 +474,16 @@ pub fn series_count(path: &Path) -> Result<usize, Error> {
     Ok(grana_czi::scene_count(path)?)
 }
 
+pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
+    if path.is_dir() || !is_czi(path)? {
+        return Ok(Vec::new());
+    }
+    Ok(grana_czi::scenes(path)?
+        .into_iter()
+        .map(|scene| scene.name().map(str::to_string))
+        .collect())
+}
+
 pub fn dataset_name(path: &Path) -> String {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return "dataset".to_string();

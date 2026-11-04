@@ -1,12 +1,52 @@
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ObjectAnchor {
+    position: [f32; 3],
+    scale: f32,
+}
+
+impl ObjectAnchor {
+    pub fn new(position: [f32; 3], scale: f32) -> Self {
+        assert!(
+            position.iter().all(|value| value.is_finite()) && scale.is_finite() && scale > 0.0,
+            "an object anchor is a finite position and a positive size"
+        );
+        Self { position, scale }
+    }
+
+    pub fn position(self) -> [f32; 3] {
+        self.position
+    }
+
+    pub fn scale(self) -> f32 {
+        self.scale
+    }
+
+    fn distance(self, other: Self) -> f32 {
+        (0..3)
+            .map(|axis| (self.position[axis] - other.position[axis]).powi(2))
+            .sum::<f32>()
+            .sqrt()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrackAnchor {
     time: u32,
     object: usize,
+    position: [f32; 3],
 }
 
 impl TrackAnchor {
-    pub fn new(time: u32, object: usize) -> Self {
-        Self { time, object }
+    pub fn new(time: u32, object: usize, position: [f32; 3]) -> Self {
+        assert!(
+            position.iter().all(|value| value.is_finite()),
+            "a track anchor names a finite position"
+        );
+        Self {
+            time,
+            object,
+            position,
+        }
     }
 
     pub fn time(self) -> u32 {
@@ -16,9 +56,13 @@ impl TrackAnchor {
     pub fn object(self) -> usize {
         self.object
     }
+
+    pub fn position(self) -> [f32; 3] {
+        self.position
+    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TrackEdit {
     Cut(TrackAnchor),
     Join {
@@ -39,9 +83,10 @@ impl TrackEdit {
 #[derive(Clone, Debug, Default)]
 pub struct Curation {
     expected: Vec<Option<usize>>,
-    removed: Vec<Vec<usize>>,
+    removed: Vec<Vec<ObjectAnchor>>,
     edits: Vec<TrackEdit>,
     pruned: bool,
+    produced: Vec<bool>,
     dropped: usize,
 }
 
@@ -56,7 +101,7 @@ impl PartialEq for Curation {
 impl Curation {
     pub fn restored(
         expected: &[Option<usize>],
-        removed: &[Vec<usize>],
+        removed: &[Vec<ObjectAnchor>],
         edits: &[TrackEdit],
     ) -> Result<Self, String> {
         if removed.len() != expected.len() {
@@ -66,26 +111,16 @@ impl Curation {
             if objects.is_empty() {
                 continue;
             }
-            let Some(count) = expected[time] else {
+            if expected[time].is_none() {
                 return Err(format!(
                     "the manual removals of frame {time} record no object count"
-                ));
-            };
-            if !objects.windows(2).all(|pair| pair[0] < pair[1]) {
-                return Err(format!(
-                    "the manual removals of frame {time} are not ordered"
-                ));
-            }
-            if objects.last().copied().unwrap_or(0) >= count {
-                return Err(format!(
-                    "the manual removals of frame {time} leave the object count {count}"
                 ));
             }
         }
         for edit in edits {
             let [first, second] = edit.nodes();
             if let TrackEdit::Join { .. } = edit
-                && (first == second || first.time != second.time)
+                && (first.time != second.time || first.object == second.object)
             {
                 return Err("a track join names two objects of one frame".to_string());
             }
@@ -112,6 +147,7 @@ impl Curation {
             removed: removed.to_vec(),
             edits: edits.to_vec(),
             pruned: true,
+            produced: vec![false; expected.len()],
             dropped: 0,
         })
     }
@@ -122,17 +158,26 @@ impl Curation {
 
     pub(crate) fn set_applied(&mut self) {
         self.pruned = true;
+        self.produced.clear();
     }
 
-    pub(crate) fn set_produced(&mut self) {
+    pub(crate) fn set_produced(&mut self, time: u32) {
         self.pruned = false;
+        if self.produced.len() <= time as usize {
+            self.produced.resize(time as usize + 1, false);
+        }
+        self.produced[time as usize] = true;
+    }
+
+    pub(crate) fn produced(&self, time: u32) -> bool {
+        self.produced.get(time as usize).copied().unwrap_or(false)
     }
 
     pub fn expected(&self) -> &[Option<usize>] {
         &self.expected
     }
 
-    pub fn removed(&self) -> &[Vec<usize>] {
+    pub fn removed(&self) -> &[Vec<ObjectAnchor>] {
         &self.removed
     }
 
@@ -162,37 +207,25 @@ impl Curation {
         }
         self.expected = (0..frames).map(counts).collect();
         self.removed = vec![Vec::new(); frames];
+        self.produced = vec![false; frames];
     }
 
-    pub(crate) fn record(&mut self, time: u32, keep: &[bool]) -> Vec<usize> {
+    pub(crate) fn record(&mut self, time: u32, keep: &[bool], anchors: &[ObjectAnchor]) {
         let time = time as usize;
         assert!(
             time < self.expected.len(),
             "a curated frame lies inside the seeded frames"
         );
         assert_eq!(
-            keep.len() + self.removed[time].len(),
-            self.expected[time].unwrap_or_else(|| keep.len() + self.removed[time].len()),
-            "the curated frame holds the recorded object count"
+            keep.len(),
+            anchors.len(),
+            "the curated frame anchors every object"
         );
-        let existing = &mut self.removed[time];
-        let mut cursor = 0usize;
-        let mut produced = Vec::new();
-        let mut deleted = Vec::new();
-        for (current, kept) in keep.iter().enumerate() {
-            while existing.binary_search(&cursor).is_ok() {
-                cursor += 1;
-            }
+        for (object, kept) in keep.iter().enumerate() {
             if !kept {
-                deleted.push(current);
-                produced.push(cursor);
+                self.removed[time].push(anchors[object]);
             }
-            cursor += 1;
         }
-        existing.extend(produced);
-        existing.sort_unstable();
-        existing.dedup();
-        deleted
     }
 
     pub(crate) fn record_edit(&mut self, edit: TrackEdit) {
@@ -201,29 +234,43 @@ impl Curation {
         }
     }
 
-    pub(crate) fn keep(&self, time: u32) -> Option<Vec<bool>> {
-        let removed = self.removed.get(time as usize)?;
+    pub(crate) fn keep(
+        &mut self,
+        time: u32,
+        anchors: &[ObjectAnchor],
+        voxel: f32,
+    ) -> Option<Vec<bool>> {
+        let removed = self.removed.get_mut(time as usize)?;
         if removed.is_empty() {
             return None;
         }
-        let count = self.expected.get(time as usize).copied().flatten()?;
-        let mut keep = vec![true; count];
-        for object in removed {
-            if *object >= count {
-                return None;
+        let tolerance = 3.0 * voxel;
+        let mut keep = vec![true; anchors.len()];
+        let mut taken = vec![false; anchors.len()];
+        let mut retained = Vec::with_capacity(removed.len());
+        for record in removed.drain(..) {
+            let mut nearest: Option<(f32, usize)> = None;
+            for (object, anchor) in anchors.iter().enumerate() {
+                if taken[object] {
+                    continue;
+                }
+                let distance = record.distance(*anchor);
+                let limit = tolerance.min(0.5 * record.scale().min(anchor.scale()));
+                if distance <= limit && nearest.is_none_or(|(best, _)| distance < best) {
+                    nearest = Some((distance, object));
+                }
             }
-            keep[*object] = false;
+            match nearest {
+                Some((_, object)) => {
+                    taken[object] = true;
+                    keep[object] = false;
+                    retained.push(record);
+                }
+                None => self.dropped += 1,
+            }
         }
+        *removed = retained;
         Some(keep)
-    }
-
-    pub(crate) fn clears(&mut self) -> usize {
-        let dropped = self.removal_count() + self.edit_count();
-        self.expected.clear();
-        self.removed.clear();
-        self.edits.clear();
-        self.dropped += dropped;
-        dropped
     }
 
     pub(crate) fn forget_edits(&mut self) -> usize {
@@ -232,4 +279,59 @@ impl Curation {
         self.dropped += dropped;
         dropped
     }
+
+    pub(crate) fn combined(&self, other: &Self) -> Self {
+        let frames = self.removed.len().max(other.removed.len());
+        Self {
+            expected: (0..frames)
+                .map(|time| {
+                    let left = self.expected.get(time).copied().flatten();
+                    let right = other.expected.get(time).copied().flatten();
+                    match (left, right) {
+                        (Some(left), Some(right)) => Some(left + right),
+                        (left, right) => left.or(right),
+                    }
+                })
+                .collect(),
+            removed: (0..frames)
+                .map(|time| {
+                    let mut anchors = self.removed.get(time).cloned().unwrap_or_default();
+                    anchors.extend(other.removed.get(time).cloned().unwrap_or_default());
+                    anchors
+                })
+                .collect(),
+            edits: {
+                let mut edits = self.edits.clone();
+                for edit in &other.edits {
+                    if !edits.contains(edit) {
+                        edits.push(*edit);
+                    }
+                }
+                edits
+            },
+            pruned: self.pruned && other.pruned,
+            produced: vec![false; frames],
+            dropped: self.dropped + other.dropped,
+        }
+    }
+}
+
+pub(crate) fn match_anchor(
+    anchors: &[ObjectAnchor],
+    position: [f32; 3],
+    voxel: f32,
+) -> Option<usize> {
+    let tolerance = 3.0 * voxel;
+    let mut nearest: Option<(f32, usize)> = None;
+    for (object, anchor) in anchors.iter().enumerate() {
+        let distance = (0..3)
+            .map(|axis| (position[axis] - anchor.position[axis]).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        let limit = tolerance.min(0.5 * anchor.scale());
+        if distance <= limit && nearest.is_none_or(|(best, _)| distance < best) {
+            nearest = Some((distance, object));
+        }
+    }
+    nearest.map(|(_, object)| object)
 }

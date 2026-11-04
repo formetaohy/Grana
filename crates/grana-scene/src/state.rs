@@ -11,6 +11,7 @@ use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::provenance::Provenance;
 use crate::scene::{Item, Scene, Selection};
+use crate::seed::Seeds;
 use crate::track_color::TrackColor;
 use grana_display::ColorState;
 
@@ -76,7 +77,7 @@ pub struct SetState {
     pub object_color: ColorState<ObjectColor>,
     pub track_color: ColorState<TrackColor>,
     pub visibility: Visibility,
-    pub seeds: Vec<Vec<[f32; 3]>>,
+    pub seeds: Seeds,
     pub frames: Vec<Option<Arc<ObjectFrame>>>,
     pub relations: Vec<RelationState>,
     pub provenance: Provenance,
@@ -93,6 +94,10 @@ impl SceneState {
                 .sets
                 .iter()
                 .all(|set| set.channel < channel_count && set.frames.len() == frame_count as usize)
+            && self.sets.iter().all(|set| match &set.seeds {
+                Seeds::Points(frames) => frames.len() == frame_count as usize,
+                Seeds::Source(source) => source.raw() > 0 && source.raw() != set.id,
+            })
             && self
                 .coloc
                 .pair
@@ -230,6 +235,7 @@ impl Scene {
             hash = mix(hash, set.id().raw());
             hash = mix(hash, set.kind().index() as u64);
             hash = mix(hash, set.document());
+            hash = mix(hash, set.seed_source().map_or(0, ObjectSetId::raw));
             for time in 0..self.frame_count() {
                 for seed in set.seeds(time) {
                     for value in seed {

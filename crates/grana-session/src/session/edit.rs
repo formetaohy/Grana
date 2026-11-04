@@ -148,6 +148,50 @@ impl Session {
         Ok((set, deletions))
     }
 
+    pub(super) fn set_seed_source(
+        &mut self,
+        set: ObjectSetId,
+        source: Option<ObjectSetId>,
+    ) -> bool {
+        if self.recipe.is_some() {
+            self.message = Some(Message::error(
+                "a protocol replay keeps the seeds it staged",
+            ));
+            return false;
+        }
+        if self.busy(set) {
+            self.message = Some(Message::error("the object set is busy with an analysis"));
+            return false;
+        }
+        let Some(scene) = self.scene.as_mut() else {
+            return false;
+        };
+        let Some(object) = scene.objects.get(set) else {
+            return false;
+        };
+        if object.kind() != grana_scene::ObjectKind::Surfaces {
+            self.message = Some(Message::error("only surfaces carry seed points"));
+            return false;
+        }
+        if let Some(source) = source {
+            if source == set {
+                self.message = Some(Message::error("an object set cannot seed from itself"));
+                return false;
+            }
+            if scene.objects.get(source).is_none() {
+                self.message = Some(Message::error("the seed source left the scene"));
+                return false;
+            }
+            if scene.depends_on(source, set) {
+                self.message = Some(Message::error(
+                    "the seed source already derives from the object set",
+                ));
+                return false;
+            }
+        }
+        scene.set_seed_source(set, source)
+    }
+
     pub(super) fn extract_filtered(&mut self) -> bool {
         let (source, _) = match self.filtered_keeps(false) {
             Ok(plan) => plan,
@@ -276,11 +320,17 @@ impl Session {
     }
 
     pub(super) fn refresh_dependents(&mut self, root: ObjectSetId) {
-        let Some(scene) = self.scene.as_ref() else {
-            return;
+        let (filtered, seeded) = {
+            let Some(scene) = self.scene.as_ref() else {
+                return;
+            };
+            (
+                scene.filtered_dependents(root),
+                scene.seeded_dependents(root),
+            )
         };
-        let dependents = scene.filtered_dependents(root);
-        for set in dependents {
+        let mut seeded = seeded;
+        for set in filtered {
             let refreshed = self.scene.as_mut().map(|scene| scene.refresh_filtered(set));
             match refreshed {
                 Some(Ok(true)) => {
@@ -290,6 +340,9 @@ impl Session {
                     self.defer_relations(set);
                     self.resume_relations(set);
                     self.start_tracks(set);
+                    if let Some(scene) = self.scene.as_ref() {
+                        seeded.extend(scene.seeded_dependents(set));
+                    }
                 }
                 Some(Ok(false)) => {}
                 Some(Err(detail)) => {
@@ -298,6 +351,14 @@ impl Session {
                 }
                 None => return,
             }
+        }
+        seeded.sort_unstable_by_key(|set| set.raw());
+        seeded.dedup();
+        for set in seeded {
+            if self.recipe.is_some() {
+                return;
+            }
+            self.start_detect(set);
         }
     }
 

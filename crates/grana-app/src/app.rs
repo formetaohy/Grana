@@ -334,6 +334,13 @@ impl App {
         let Some(surface) = self.surface.as_ref() else {
             return;
         };
+        if self
+            .session
+            .scene()
+            .is_none_or(|scene| scene.seed_source(set).is_some())
+        {
+            return;
+        }
         let region = self.stage.volume_region();
         if region[2] == 0 || region[3] == 0 {
             return;

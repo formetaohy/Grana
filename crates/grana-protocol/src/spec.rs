@@ -212,6 +212,8 @@ pub enum SourceSpec {
         min_mean_intensity: f32,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         seeds: Vec<Vec<[f32; 3]>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed_source: Option<String>,
     },
     Filaments {
         channel: String,
@@ -240,6 +242,8 @@ pub enum SourceSpec {
 pub struct PartSpec {
     pub name: String,
     pub source: SourceSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curation: Option<CurationSpec>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -303,17 +307,25 @@ pub struct CurationSpec {
 #[serde(deny_unknown_fields)]
 pub struct RemovalSpec {
     pub frame: u32,
-    pub objects: Vec<usize>,
+    pub anchors: Vec<AnchorSpec>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnchorSpec {
+    pub position: [f32; 3],
+    pub scale: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeSpec {
     pub frame: u32,
     pub object: usize,
+    pub position: [f32; 3],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum EditSpec {
     Cut { node: NodeSpec },
@@ -329,10 +341,13 @@ impl CurationSpec {
             .removed()
             .iter()
             .enumerate()
-            .filter(|(_, objects)| !objects.is_empty())
-            .map(|(frame, objects)| RemovalSpec {
+            .filter(|(_, anchors)| !anchors.is_empty())
+            .map(|(frame, anchors)| RemovalSpec {
                 frame: frame as u32,
-                objects: objects.clone(),
+                anchors: anchors
+                    .iter()
+                    .map(|anchor| AnchorSpec::of(*anchor))
+                    .collect(),
             })
             .collect();
         let edits = curation.edits().iter().map(EditSpec::of).collect();
@@ -353,7 +368,7 @@ impl CurationSpec {
                     self.expected.len()
                 ));
             };
-            *slot = spec.objects.clone();
+            *slot = spec.anchors.iter().map(|anchor| anchor.anchor()).collect();
         }
         let edits = self
             .edits
@@ -364,11 +379,25 @@ impl CurationSpec {
     }
 }
 
+impl AnchorSpec {
+    fn of(anchor: grana_scene::ObjectAnchor) -> Self {
+        Self {
+            position: anchor.position(),
+            scale: anchor.scale(),
+        }
+    }
+
+    fn anchor(self) -> grana_scene::ObjectAnchor {
+        grana_scene::ObjectAnchor::new(self.position, self.scale)
+    }
+}
+
 impl EditSpec {
     fn of(edit: &grana_scene::TrackEdit) -> Self {
         let node = |node: grana_scene::TrackAnchor| NodeSpec {
             frame: node.time(),
             object: node.object(),
+            position: node.position(),
         };
         match edit {
             grana_scene::TrackEdit::Cut(anchor) => Self::Cut {
@@ -382,7 +411,8 @@ impl EditSpec {
     }
 
     pub fn edit(self) -> grana_scene::TrackEdit {
-        let node = |spec: NodeSpec| grana_scene::TrackAnchor::new(spec.frame, spec.object);
+        let node =
+            |spec: NodeSpec| grana_scene::TrackAnchor::new(spec.frame, spec.object, spec.position);
         match self {
             Self::Cut { node: spec } => grana_scene::TrackEdit::Cut(node(spec)),
             Self::Join { source, target } => grana_scene::TrackEdit::Join {
@@ -1113,6 +1143,17 @@ impl SourceSpec {
         }
     }
 
+    pub fn seed_source(&self) -> Option<&str> {
+        match self {
+            Self::Surfaces { seed_source, .. } => seed_source.as_deref(),
+            Self::Spots { .. }
+            | Self::Filaments { .. }
+            | Self::Filtered { .. }
+            | Self::Copy { .. }
+            | Self::Merged { .. } => None,
+        }
+    }
+
     pub(super) fn checked(&self, set: &str) -> Result<(), ProtocolError> {
         let invalid =
             |detail: String| Err(ProtocolError::Invalid(format!("the set {set} {detail}")));
@@ -1141,6 +1182,7 @@ impl SourceSpec {
                 min_sphericity,
                 min_mean_intensity,
                 seeds,
+                seed_source,
             } => {
                 validate(channel, &format!("the channel of {set}"))?;
                 if !(0.0..=1.0).contains(threshold) {
@@ -1173,6 +1215,15 @@ impl SourceSpec {
                     .any(|point| point.iter().any(|value| !value.is_finite()))
                 {
                     return invalid("seeds finite points".to_string());
+                }
+                if let Some(source) = seed_source {
+                    validate(source, "a seed source")?;
+                    if !seeds.is_empty() {
+                        return invalid("seeds from one source or from points".to_string());
+                    }
+                    if source == set {
+                        return invalid("seeds from itself".to_string());
+                    }
                 }
             }
             Self::Filaments {
@@ -1393,25 +1444,27 @@ impl CurationSpec {
                 return invalid("are not ordered by frame".to_string());
             }
             previous = Some(removal.frame);
-            let Some(expected) = self.expected.get(removal.frame as usize).copied().flatten()
-            else {
+            if self
+                .expected
+                .get(removal.frame as usize)
+                .copied()
+                .flatten()
+                .is_none()
+            {
                 return invalid(format!(
                     "remove objects from the frame {} without an object count",
                     removal.frame
                 ));
-            };
-            if removal.objects.is_empty() {
+            }
+            if removal.anchors.is_empty() {
                 return invalid(format!("remove no object from the frame {}", removal.frame));
             }
-            if !removal.objects.windows(2).all(|pair| pair[0] < pair[1]) {
+            if removal.anchors.iter().any(|anchor| {
+                anchor.position.iter().any(|value| !value.is_finite())
+                    || !(anchor.scale.is_finite() && anchor.scale > 0.0)
+            }) {
                 return invalid(format!(
-                    "remove the objects of the frame {} out of order",
-                    removal.frame
-                ));
-            }
-            if removal.objects.last().copied().unwrap_or(0) >= expected {
-                return invalid(format!(
-                    "remove an object outside the frame {} of {expected}",
+                    "remove an object of the frame {} at a degenerate anchor",
                     removal.frame
                 ));
             }
@@ -1427,6 +1480,12 @@ impl CurationSpec {
                 }
             };
             for node in nodes {
+                if node.position.iter().any(|value| !value.is_finite()) {
+                    return invalid(format!(
+                        "name an object of the frame {} at a degenerate position",
+                        node.frame
+                    ));
+                }
                 match self.expected.get(node.frame as usize).copied().flatten() {
                     Some(count) if node.object >= count => {
                         return invalid(format!(

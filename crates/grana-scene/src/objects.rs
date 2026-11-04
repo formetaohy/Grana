@@ -70,7 +70,9 @@ impl Objects {
             let dependency = doomed[index];
             index += 1;
             for set in &self.sets {
-                if set.provenance().depends_on(dependency) && !doomed.contains(&set.id()) {
+                let depends = set.provenance().depends_on(dependency)
+                    || set.seed_source() == Some(dependency);
+                if depends && !doomed.contains(&set.id()) {
                     doomed.push(set.id());
                 }
             }
@@ -262,6 +264,14 @@ impl Objects {
         ordered
     }
 
+    pub fn seeded_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
+        self.sets
+            .iter()
+            .filter(|set| set.seed_source() == Some(id))
+            .map(ObjectSet::id)
+            .collect()
+    }
+
     pub fn add_relation(&mut self, id: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {
         let stamp = take_stamp(&mut self.stamp);
         self.get_mut(id)
@@ -406,8 +416,14 @@ impl Objects {
         self.get_mut(id).is_some_and(|set| set.clear_seeds(time))
     }
 
-    pub fn seed_frames(&self, id: ObjectSetId) -> Option<Vec<Vec<[f32; 3]>>> {
-        Some(self.get(id)?.seed_frames())
+    pub fn set_seed_source(
+        &mut self,
+        id: ObjectSetId,
+        source: Option<ObjectSetId>,
+        frames: usize,
+    ) -> bool {
+        self.get_mut(id)
+            .is_some_and(|set| set.set_seed_source(source, frames))
     }
 
     pub fn set_seed_frames(&mut self, id: ObjectSetId, seeds: Vec<Vec<[f32; 3]>>) -> bool {
@@ -491,6 +507,21 @@ impl Objects {
                     .all(|part| { part.params().kind() == set.kind() }),
                 "a merged object set holds parts of its own kind"
             );
+        }
+        for set in &self.sets {
+            let mut source = set.seed_source();
+            while let Some(current) = source {
+                assert_ne!(current, set.id(), "an object set never seeds from itself");
+                assert!(
+                    self.sets.iter().any(|candidate| candidate.id() == current),
+                    "a seed source names an object set of the scene"
+                );
+                source = self
+                    .sets
+                    .iter()
+                    .find(|candidate| candidate.id() == current)
+                    .and_then(ObjectSet::seed_source);
+            }
         }
     }
 

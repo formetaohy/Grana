@@ -144,10 +144,16 @@ impl Scene {
 
     pub fn remove_object(&mut self, id: ObjectSetId) {
         self.objects.remove(id);
-        if self.selection.is_some_and(|selection| selection.set == id) {
+        if self
+            .selection
+            .is_some_and(|selection| self.objects.get(selection.set).is_none())
+        {
             self.selection = None;
         }
-        if self.mask == Some(id) {
+        if self
+            .mask
+            .is_some_and(|mask| self.objects.get(mask).is_none())
+        {
             self.mask = None;
         }
         self.sync_coloc_inputs();
@@ -582,8 +588,19 @@ impl Scene {
         self.objects.get(id).map_or(&[], |set| set.seeds(self.time))
     }
 
+    pub fn seed_source(&self, id: ObjectSetId) -> Option<ObjectSetId> {
+        self.objects.get(id).and_then(ObjectSet::seed_source)
+    }
+
     pub fn seed_count(&self, id: ObjectSetId) -> usize {
-        self.seeds(id).len()
+        match self.seed_source(id) {
+            Some(source) => self
+                .objects
+                .get(source)
+                .and_then(|set| set.frame(self.time))
+                .map_or(0, ObjectFrame::object_count),
+            None => self.seeds(id).len(),
+        }
     }
 
     pub fn add_seed(&mut self, id: ObjectSetId, position: [f32; 3]) -> bool {
@@ -598,8 +615,66 @@ impl Scene {
         self.objects.clear_seeds(id, self.time)
     }
 
-    pub fn seed_frames(&self, id: ObjectSetId) -> Option<Vec<Vec<[f32; 3]>>> {
-        self.objects.seed_frames(id)
+    pub fn set_seed_source(&mut self, id: ObjectSetId, source: Option<ObjectSetId>) -> bool {
+        if let Some(source) = source {
+            assert!(
+                self.objects.get(source).is_some(),
+                "a seed source names an object set of the scene"
+            );
+            if source == id || self.depends_on(source, id) {
+                return false;
+            }
+        } else if self.seed_source(id).is_none() {
+            return false;
+        }
+        self.objects
+            .set_seed_source(id, source, self.frame_count() as usize)
+    }
+
+    pub fn depends_on(&self, id: ObjectSetId, ancestor: ObjectSetId) -> bool {
+        let mut stack = vec![id];
+        let mut seen = Vec::new();
+        while let Some(current) = stack.pop() {
+            if current == ancestor {
+                return true;
+            }
+            if seen.contains(&current) {
+                continue;
+            }
+            seen.push(current);
+            let Some(set) = self.objects.get(current) else {
+                continue;
+            };
+            stack.extend(set.provenance().sources());
+            stack.extend(set.seed_source());
+        }
+        false
+    }
+
+    pub fn seeded_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
+        self.objects.seeded_dependents(id)
+    }
+
+    pub fn seed_frames(&self, id: ObjectSetId) -> Vec<Vec<[f32; 3]>> {
+        let Some(set) = self.objects.get(id) else {
+            return Vec::new();
+        };
+        if let Some(frames) = set.manual_seed_frames() {
+            return frames.to_vec();
+        }
+        let Some(source) = set.seed_source() else {
+            return Vec::new();
+        };
+        let Some(source) = self.objects.get(source) else {
+            return vec![Vec::new(); self.frame_count() as usize];
+        };
+        (0..self.frame_count())
+            .map(|time| {
+                source
+                    .frame(time)
+                    .map_or_else(Vec::new, ObjectFrame::centroids)
+            })
+            .collect()
     }
 
     pub fn set_seed_frames(&mut self, id: ObjectSetId, seeds: Vec<Vec<[f32; 3]>>) -> bool {

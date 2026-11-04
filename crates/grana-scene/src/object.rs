@@ -7,6 +7,8 @@ use grana_object::{
     SurfaceParams, SurfaceSet, TrackParams,
 };
 
+use crate::curation::ObjectAnchor;
+
 const SPOT_STEP: f32 = 8.0;
 const SURFACE_STEP: f32 = 12.0;
 const SPOT_THICKNESS: f32 = 1.0;
@@ -319,6 +321,36 @@ pub enum ObjectFrame {
 }
 
 impl ObjectFrame {
+    pub fn anchors(&self) -> Vec<ObjectAnchor> {
+        match self {
+            Self::Spots(set) => set
+                .spots()
+                .iter()
+                .map(|spot| ObjectAnchor::new(spot.center(), spot.radius()))
+                .collect(),
+            Self::Surfaces(set) => set
+                .objects()
+                .iter()
+                .map(|statistics| {
+                    let radius = (3.0 * statistics.volume() / (4.0 * std::f64::consts::PI))
+                        .cbrt()
+                        .max(1.0e-3);
+                    ObjectAnchor::new(statistics.centroid(), radius as f32)
+                })
+                .collect(),
+            Self::Filaments(set) => set
+                .objects()
+                .iter()
+                .map(|statistics| {
+                    ObjectAnchor::new(
+                        statistics.centroid(),
+                        statistics.diameter().max(1.0e-3) as f32,
+                    )
+                })
+                .collect(),
+        }
+    }
+
     pub fn kind(&self) -> ObjectKind {
         match self {
             Self::Spots(_) => ObjectKind::Spots,

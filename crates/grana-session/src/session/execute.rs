@@ -123,6 +123,9 @@ impl Session {
                     scene.clear_seeds(set);
                 }
             }
+            Command::SetSeedSource { set, source } => {
+                self.set_seed_source(set, source);
+            }
             Command::AddRelation {
                 source,
                 target,

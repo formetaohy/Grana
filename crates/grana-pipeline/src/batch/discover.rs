@@ -12,6 +12,7 @@ pub struct DatasetEntry {
     group: String,
     scene: usize,
     scenes: usize,
+    scene_name: Option<String>,
 }
 
 impl DatasetEntry {
@@ -21,10 +22,17 @@ impl DatasetEntry {
             group,
             scene: 0,
             scenes: 1,
+            scene_name: None,
         }
     }
 
-    pub fn scene_of(path: PathBuf, group: String, scene: usize, scenes: usize) -> Self {
+    pub fn scene_of(
+        path: PathBuf,
+        group: String,
+        scene: usize,
+        scenes: usize,
+        scene_name: Option<String>,
+    ) -> Self {
         assert!(
             scene < scenes && scenes > 1,
             "a scene is one of the several scenes of its image"
@@ -34,6 +42,7 @@ impl DatasetEntry {
             group,
             scene,
             scenes,
+            scene_name,
         }
     }
 
@@ -52,7 +61,10 @@ impl DatasetEntry {
     pub fn scene_label(&self) -> String {
         match self.scenes {
             1 => String::new(),
-            _ => (self.scene + 1).to_string(),
+            _ => self
+                .scene_name
+                .clone()
+                .unwrap_or_else(|| self.scene.to_string()),
         }
     }
 
@@ -72,7 +84,10 @@ impl DatasetEntry {
     pub fn title(&self) -> String {
         match self.scenes {
             1 => self.name(),
-            _ => format!("{} scene {}", self.name(), self.scene + 1),
+            _ => match &self.scene_name {
+                Some(name) => format!("{} {}", self.name(), name),
+                None => format!("{} scene {}", self.name(), self.scene + 1),
+            },
         }
     }
 
@@ -127,8 +142,17 @@ fn entries_of(path: &Path, group: &str) -> Vec<DatasetEntry> {
     if scenes < 2 {
         return vec![DatasetEntry::new(path.to_path_buf(), group.to_string())];
     }
+    let names = grana_image::series_names(path).unwrap_or_default();
     (0..scenes)
-        .map(|scene| DatasetEntry::scene_of(path.to_path_buf(), group.to_string(), scene, scenes))
+        .map(|scene| {
+            DatasetEntry::scene_of(
+                path.to_path_buf(),
+                group.to_string(),
+                scene,
+                scenes,
+                names.get(scene).cloned().flatten(),
+            )
+        })
         .collect()
 }
 

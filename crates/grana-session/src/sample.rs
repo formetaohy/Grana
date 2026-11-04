@@ -36,9 +36,16 @@ const VESSEL_FLOOR: f32 = 30.0;
 pub const SURFACE_CHANNEL: usize = 0;
 pub const SPOT_CHANNEL: usize = 2;
 const VESSEL_CHANNEL: usize = 3;
+const CELL_CHANNEL: usize = 1;
 const SPOT_COLOR: [f32; 3] = [0.42, 0.74, 1.00];
 const SURFACE_COLOR: [f32; 3] = [1.00, 0.72, 0.28];
 const VESSEL_COLOR: [f32; 3] = [0.45, 0.95, 0.70];
+const CELL_COLOR: [f32; 3] = [0.86, 0.55, 1.00];
+const CELL_OPACITY: f32 = 0.35;
+const CELL_THRESHOLD: f32 = 0.15;
+const CELL_GRAIN: f32 = 0.15;
+const CELL_SPLIT: f32 = 0.5;
+const CELL_VOLUME: f32 = 0.0;
 
 pub struct Staged {
     pub spots: ObjectSetId,
@@ -68,6 +75,7 @@ pub fn stage(scene: &mut Scene) -> Staged {
     let spots = scene.add_object(ObjectKind::Spots, SPOT_CHANNEL);
     let surfaces = scene.add_object(ObjectKind::Surfaces, SURFACE_CHANNEL);
     let filaments = scene.add_object(ObjectKind::Filaments, VESSEL_CHANNEL);
+    let cells = scene.add_object(ObjectKind::Surfaces, CELL_CHANNEL);
     if let Some(set) = scene.objects.get_mut(spots) {
         set.set_color(SPOT_COLOR);
         set.set_params(ObjectParams::Spots(SpotParams::new(
@@ -97,6 +105,19 @@ pub fn stage(scene: &mut Scene) -> Staged {
             VESSEL_MIN_LENGTH,
         )));
     }
+    if let Some(set) = scene.objects.get_mut(cells) {
+        set.set_color(CELL_COLOR);
+        set.set_opacity(CELL_OPACITY);
+        set.set_params(ObjectParams::Surfaces(SurfaceParams::new(
+            CELL_THRESHOLD,
+            CELL_GRAIN,
+            CELL_SPLIT,
+            CELL_VOLUME,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )));
+    }
+    scene.rename_object(cells, "Cells");
+    scene.set_seed_source(cells, Some(surfaces));
     Staged {
         spots,
         surfaces,

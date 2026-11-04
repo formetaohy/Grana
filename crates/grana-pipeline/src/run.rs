@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{
-    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, Sources, SpotScanner,
+    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, SeedPolicy, Sources, SpotScanner,
     SurfaceBuilder, TrackBuilder, coloc_levels, filament_level, relate_frames, spot_level,
     surface_level,
 };
@@ -51,6 +51,7 @@ pub struct DetectRequest {
     region: grana_volume::Region,
     roi: Option<Roi>,
     seeds: Vec<Vec<[f32; 3]>>,
+    seed_policy: SeedPolicy,
     workers: usize,
     store: Arc<GeometryStore>,
 }
@@ -61,7 +62,6 @@ impl DetectRequest {
         params: ObjectParams,
         region: grana_volume::Region,
         roi: Option<Roi>,
-        seeds: Vec<Vec<[f32; 3]>>,
         workers: usize,
         store: Arc<GeometryStore>,
     ) -> Self {
@@ -70,10 +70,17 @@ impl DetectRequest {
             params,
             region,
             roi,
-            seeds,
+            seeds: Vec::new(),
+            seed_policy: SeedPolicy::Unseeded,
             workers,
             store,
         }
+    }
+
+    pub fn with_seeds(mut self, seeds: Vec<Vec<[f32; 3]>>, policy: SeedPolicy) -> Self {
+        self.seeds = seeds;
+        self.seed_policy = policy;
+        self
     }
 }
 
@@ -408,6 +415,7 @@ fn surfaces(
         region,
         roi,
         seeds,
+        seed_policy,
         workers,
         store,
         ..
@@ -436,6 +444,11 @@ fn surfaces(
         cancel,
         || (),
         |(), time, report| {
+            let frame_seeds = seeds.get(time as usize).map_or(&[][..], Vec::as_slice);
+            let policy = match seed_policy {
+                SeedPolicy::Strict if frame_seeds.is_empty() => SeedPolicy::Unseeded,
+                policy => policy,
+            };
             let builder = SurfaceBuilder::new(
                 level_index,
                 level,
@@ -445,7 +458,7 @@ fn surfaces(
                 region,
                 pyramid.channels()[channel].intensity(),
             )
-            .with_seeds(seeds.get(time as usize).map_or(&[], Vec::as_slice));
+            .with_seeds(frame_seeds, policy);
             let mask = roi.as_ref().map(|roi| roi.mask(level, time)).transpose()?;
             let set = builder.scan(
                 share,

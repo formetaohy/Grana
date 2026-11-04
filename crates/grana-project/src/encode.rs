@@ -13,8 +13,8 @@ use grana_object::{
 use grana_scene::{
     ChannelState, ColocResult, ColocState, ColorState, Criteria, Curation, FilterRange, ItemState,
     LassoPath, MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe,
-    RelationState, SceneState, SelectionState, SetState, TrackColor, TrackEdit, TrackStyle,
-    Visibility,
+    RelationState, SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit,
+    TrackStyle, Visibility,
 };
 use grana_volume::{Intensity, Region};
 
@@ -229,15 +229,7 @@ impl Encode for SetState {
         self.object_color.encode(writer);
         self.track_color.encode(writer);
         self.visibility.encode(writer);
-        writer.count(self.seeds.len());
-        for frame in &self.seeds {
-            writer.count(frame.len());
-            for seed in frame {
-                for value in seed {
-                    writer.f32(*value);
-                }
-            }
-        }
+        self.seeds.encode(writer);
         self.frames.encode(writer);
         self.relations.encode(writer);
         self.provenance.encode(writer);
@@ -261,8 +253,11 @@ impl Encode for Curation {
         writer.count(self.removed().len());
         for frame in self.removed() {
             writer.count(frame.len());
-            for object in frame {
-                writer.count(*object);
+            for anchor in frame {
+                for value in anchor.position() {
+                    writer.f32(value);
+                }
+                writer.f32(anchor.scale());
             }
         }
         writer.count(self.edits().len());
@@ -277,17 +272,22 @@ impl Encode for TrackEdit {
         match self {
             Self::Cut(node) => {
                 writer.u8(0);
-                writer.u32(node.time());
-                writer.count(node.object());
+                encode_node(*node, writer);
             }
             Self::Join { source, target } => {
                 writer.u8(1);
-                for node in [source, target] {
-                    writer.u32(node.time());
-                    writer.count(node.object());
-                }
+                encode_node(*source, writer);
+                encode_node(*target, writer);
             }
         }
+    }
+}
+
+fn encode_node(node: TrackAnchor, writer: &mut Encoder<'_>) {
+    writer.u32(node.time());
+    writer.count(node.object());
+    for value in node.position() {
+        writer.f32(value);
     }
 }
 
@@ -345,16 +345,32 @@ impl Encode for Recipe {
         writer.string(self.name());
         writer.count(self.channel());
         self.params().encode(writer);
-        writer.count(self.seeds().len());
-        for frame in self.seeds() {
-            writer.count(frame.len());
-            for seed in frame {
-                for value in seed {
-                    writer.f32(*value);
+        self.seeds().encode(writer);
+        self.curation().encode(writer);
+        self.provenance().encode(writer);
+    }
+}
+
+impl Encode for Seeds {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        match self {
+            Self::Points(frames) => {
+                writer.u8(0);
+                writer.count(frames.len());
+                for frame in frames {
+                    writer.count(frame.len());
+                    for seed in frame {
+                        for value in seed {
+                            writer.f32(*value);
+                        }
+                    }
                 }
             }
+            Self::Source(source) => {
+                writer.u8(1);
+                writer.u64(source.raw());
+            }
         }
-        self.provenance().encode(writer);
     }
 }
 

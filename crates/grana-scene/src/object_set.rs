@@ -10,6 +10,7 @@ use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::provenance::{Provenance, Recipe};
 use crate::relation::Relation;
+use crate::seed::Seeds;
 use crate::state::{RelationState, SetState};
 use crate::track_color::TrackColor;
 use crate::track_layer::TrackLayer;
@@ -77,7 +78,7 @@ pub struct ObjectSet {
     revision: u64,
     document: u64,
     visibility: Visibility,
-    seeds: Vec<Vec<[f32; 3]>>,
+    seeds: Seeds,
     tracks: Option<TrackLayer>,
     relations: Vec<Relation>,
     provenance: Provenance,
@@ -119,7 +120,7 @@ impl ObjectSet {
             revision: 1,
             document: 1,
             visibility: Visibility::All,
-            seeds: vec![Vec::new(); dataset.frame_count() as usize],
+            seeds: Seeds::points(dataset.frame_count() as usize),
             tracks: None,
             relations: Vec::new(),
             provenance: Provenance::detection(),
@@ -172,8 +173,41 @@ impl ObjectSet {
             self.channel,
             self.params,
             self.seeds.clone(),
+            self.curation.clone(),
             self.provenance.clone(),
         )
+    }
+
+    pub fn seed_source(&self) -> Option<ObjectSetId> {
+        self.seeds.source()
+    }
+
+    pub fn surface_seeds(&self) -> &Seeds {
+        &self.seeds
+    }
+
+    pub(crate) fn set_seed_source(&mut self, source: Option<ObjectSetId>, frames: usize) -> bool {
+        assert_eq!(
+            self.kind,
+            ObjectKind::Surfaces,
+            "seed points cut a surface detection"
+        );
+        let seeds = match source {
+            Some(source) => {
+                assert_ne!(
+                    source, self.id,
+                    "an object set seeds from another object set"
+                );
+                Seeds::Source(source)
+            }
+            None => Seeds::points(frames),
+        };
+        if self.seeds == seeds {
+            return false;
+        }
+        self.seeds = seeds;
+        self.document += 1;
+        true
     }
 
     pub(crate) fn forget_copies(&mut self, removed: &[ObjectSetId]) {
@@ -650,28 +684,43 @@ impl ObjectSet {
             revision: 1,
             document: 1,
             visibility: Visibility::All,
-            seeds: Vec::new(),
+            seeds: Seeds::points(frame_count),
             tracks: None,
             relations: Vec::new(),
             provenance,
             curation,
         };
-        assert_eq!(
-            seeds.len(),
-            frame_count,
-            "an object set state covers the seeds of every frame"
-        );
-        assert!(
-            seeds
-                .iter()
-                .flatten()
-                .all(|seed| seed.iter().all(|value| value.is_finite())),
-            "a restored seed point is finite"
-        );
-        assert!(
-            kind == ObjectKind::Surfaces || seeds.iter().all(Vec::is_empty),
-            "only a surface set carries seed points"
-        );
+        match &seeds {
+            Seeds::Points(frames) => {
+                assert_eq!(
+                    frames.len(),
+                    frame_count,
+                    "an object set state covers the seeds of every frame"
+                );
+                assert!(
+                    frames
+                        .iter()
+                        .flatten()
+                        .all(|seed| seed.iter().all(|value| value.is_finite())),
+                    "a restored seed point is finite"
+                );
+                assert!(
+                    kind == ObjectKind::Surfaces || frames.iter().all(Vec::is_empty),
+                    "only a surface set carries seed points"
+                );
+            }
+            Seeds::Source(source) => {
+                assert_eq!(
+                    kind,
+                    ObjectKind::Surfaces,
+                    "only a surface set seeds from another object set"
+                );
+                assert!(
+                    source.raw() > 0 && *source != ObjectSetId::new(id),
+                    "a restored surface seeds from another object set"
+                );
+            }
+        }
         set.seeds = seeds;
         assert_eq!(
             set.frames.len(),
@@ -800,7 +849,14 @@ impl ObjectSet {
     }
 
     pub fn seeds(&self, time: u32) -> &[[f32; 3]] {
-        self.seeds.get(time as usize).map_or(&[], Vec::as_slice)
+        self.seeds.frame(time)
+    }
+
+    fn manual_seeds(&mut self) -> Option<&mut Vec<Vec<[f32; 3]>>> {
+        match &mut self.seeds {
+            Seeds::Points(frames) => Some(frames),
+            Seeds::Source(_) => None,
+        }
     }
 
     pub(crate) fn add_seed(&mut self, time: u32, position: [f32; 3]) -> bool {
@@ -813,7 +869,10 @@ impl ObjectSet {
             position.iter().all(|value| value.is_finite()),
             "a seed point is finite"
         );
-        let Some(seeds) = self.seeds.get_mut(time as usize) else {
+        let Some(frames) = self.manual_seeds() else {
+            return false;
+        };
+        let Some(seeds) = frames.get_mut(time as usize) else {
             return false;
         };
         seeds.push(position);
@@ -821,7 +880,10 @@ impl ObjectSet {
     }
 
     pub(crate) fn remove_seed(&mut self, time: u32, index: usize) -> bool {
-        let Some(seeds) = self.seeds.get_mut(time as usize) else {
+        let Some(frames) = self.manual_seeds() else {
+            return false;
+        };
+        let Some(seeds) = frames.get_mut(time as usize) else {
             return false;
         };
         if index >= seeds.len() {
@@ -832,7 +894,10 @@ impl ObjectSet {
     }
 
     pub(crate) fn clear_seeds(&mut self, time: u32) -> bool {
-        let Some(seeds) = self.seeds.get_mut(time as usize) else {
+        let Some(frames) = self.manual_seeds() else {
+            return false;
+        };
+        let Some(seeds) = frames.get_mut(time as usize) else {
             return false;
         };
         if seeds.is_empty() {
@@ -842,8 +907,8 @@ impl ObjectSet {
         true
     }
 
-    pub(crate) fn seed_frames(&self) -> Vec<Vec<[f32; 3]>> {
-        self.seeds.clone()
+    pub(crate) fn manual_seed_frames(&self) -> Option<&[Vec<[f32; 3]>]> {
+        self.seeds.manual()
     }
 
     pub(crate) fn set_seed_frames(&mut self, seeds: Vec<Vec<[f32; 3]>>) -> bool {
@@ -863,10 +928,10 @@ impl ObjectSet {
                 .all(|seed| seed.iter().all(|value| value.is_finite())),
             "a seed point is finite"
         );
-        if self.seeds == seeds {
+        if self.seeds == Seeds::Points(seeds.clone()) {
             return false;
         }
-        self.seeds = seeds;
+        self.seeds = Seeds::Points(seeds);
         self.document += 1;
         true
     }
@@ -901,7 +966,13 @@ impl ObjectSet {
             .map(|slot| slot.data.as_deref().map(ObjectFrame::object_count))
             .collect::<Vec<_>>();
         self.curation.seed(counts.len(), |time| counts[time]);
-        let removed = self.curation.record(time, keep);
+        self.curation.record(time, keep, &frame.anchors());
+        let removed = keep
+            .iter()
+            .enumerate()
+            .filter(|(_, kept)| !**kept)
+            .map(|(object, _)| object)
+            .collect::<Vec<_>>();
         let pruned = frame.retain(keep).map_err(|error| error.to_string())?;
         self.install_retained(time, pruned, &removed, stamp);
         self.curation.set_applied();
@@ -925,43 +996,42 @@ impl ObjectSet {
         if self.curation.is_empty() || self.curation.applied() {
             return 0;
         }
+        let before = self.curation.dropped();
         let mut keeps = Vec::new();
-        for (time, slot) in self.frames.iter().enumerate() {
-            let Some(keep) = self.curation.keep(time as u32) else {
+        for time in 0..self.frames.len() {
+            if !self.curation.produced(time as u32) {
                 continue;
-            };
-            let Some(frame) = slot.data.as_deref() else {
-                continue;
-            };
-            if keep.len() != frame.object_count() {
-                return self.drop_curation();
             }
-            keeps.push((time as u32, keep));
+            let anchors = self.frames[time]
+                .data
+                .as_deref()
+                .map_or_else(Vec::new, ObjectFrame::anchors);
+            if let Some(keep) = self.curation.keep(time as u32, &anchors, self.voxel)
+                && keep.iter().any(|kept| !kept)
+            {
+                keeps.push((time as u32, keep));
+            }
         }
+        let mut applied = 0usize;
         for (time, keep) in keeps {
-            let Some(frame) = self
-                .frames
-                .get(time as usize)
-                .and_then(|slot| slot.data.as_deref())
-            else {
+            let Some(frame) = self.frames[time as usize].data.clone() else {
                 continue;
             };
-            let Ok(pruned) = frame.retain(&keep) else {
-                return self.drop_curation();
-            };
-            let removed = (0..keep.len())
-                .filter(|object| !keep[*object])
+            let removed = keep
+                .iter()
+                .enumerate()
+                .filter(|(_, kept)| !**kept)
+                .map(|(object, _)| object)
                 .collect::<Vec<_>>();
+            applied += removed.len();
+            let Ok(pruned) = frame.retain(&keep) else {
+                continue;
+            };
             self.install_retained(time, pruned, &removed, stamp);
         }
+        let dropped = self.curation.dropped() - before;
         self.curation.set_applied();
-        self.curation.removal_count()
-    }
-
-    fn drop_curation(&mut self) -> usize {
-        let dropped = self.curation.clears();
-        self.document += 1;
-        dropped
+        applied + dropped
     }
 
     pub(crate) fn apply_edits(&mut self, stamp: u64) -> usize {
@@ -974,12 +1044,21 @@ impl ObjectSet {
             return dropped;
         }
         let edits = self.curation.edits().to_vec();
-        let mut applied = 0usize;
+        let mut resolved = Vec::with_capacity(edits.len());
         for edit in &edits {
+            let Some(edit) = self.resolve_edit(*edit) else {
+                let dropped = self.curation.forget_edits();
+                self.document += 1;
+                return dropped;
+            };
+            resolved.push(edit);
+        }
+        let mut applied = 0usize;
+        for edit in resolved {
             let Some(layer) = self.tracks.as_mut() else {
                 break;
             };
-            let done = match *edit {
+            let done = match edit {
                 TrackEdit::Cut(node) => layer.cut(node.time(), node.object(), stamp),
                 TrackEdit::Join { source, target } => layer.join(
                     (source.time(), source.object()),
@@ -1000,6 +1079,22 @@ impl ObjectSet {
             self.document += 1;
         }
         0
+    }
+
+    fn resolve_edit(&self, edit: TrackEdit) -> Option<TrackEdit> {
+        let resolve = |node: TrackAnchor| -> Option<TrackAnchor> {
+            let frame = self.frames.get(node.time() as usize)?.data.as_deref()?;
+            let object =
+                crate::curation::match_anchor(&frame.anchors(), node.position(), self.voxel)?;
+            Some(TrackAnchor::new(node.time(), object, node.position()))
+        };
+        match edit {
+            TrackEdit::Cut(node) => Some(TrackEdit::Cut(resolve(node)?)),
+            TrackEdit::Join { source, target } => Some(TrackEdit::Join {
+                source: resolve(source)?,
+                target: resolve(target)?,
+            }),
+        }
     }
 
     pub(crate) fn edit_track(&mut self, edit: TrackEdit, stamp: u64) -> bool {
@@ -1212,16 +1307,7 @@ impl ObjectSet {
                 )
             })
             .collect();
-        let seeds = self
-            .seeds
-            .iter()
-            .zip(&other.seeds)
-            .map(|(left, right)| {
-                let mut seeds = left.clone();
-                seeds.extend_from_slice(right);
-                seeds
-            })
-            .collect();
+        let seeds = self.seeds.clone();
         let mut merged = Self {
             id: self.id,
             kind: self.kind,
@@ -1246,7 +1332,7 @@ impl ObjectSet {
             tracks,
             relations,
             provenance: self.provenance.clone(),
-            curation: self.curation.clone(),
+            curation: self.curation.combined(&other.curation),
         };
         merged.rebuild_frame_bounds();
         merged.rebuild_track_bounds();
@@ -1323,7 +1409,7 @@ impl ObjectSet {
         slot.stamp = stamp;
         slot.data = Some(frame);
         self.frame_bounds[time as usize] = self.frame_extent(time);
-        self.curation.set_produced();
+        self.curation.set_produced(time);
     }
 
     pub(crate) fn install_optional(
@@ -1349,7 +1435,7 @@ impl ObjectSet {
         slot.stamp = stamp;
         slot.data = frame;
         self.frame_bounds[time as usize] = self.frame_extent(time);
-        self.curation.set_produced();
+        self.curation.set_produced(time);
     }
 
     pub(crate) fn clear(&mut self, stamp: u64) {
@@ -1362,7 +1448,6 @@ impl ObjectSet {
         self.document += 1;
         self.visibility = Visibility::All;
         self.tracks = None;
-        self.curation.set_produced();
     }
 
     pub fn tracks(&self) -> Option<&TrackLayer> {
@@ -1429,7 +1514,13 @@ impl ObjectSet {
     }
 
     pub(crate) fn cut_track(&mut self, time: u32, object: usize, stamp: u64) -> bool {
-        self.edit_track(TrackEdit::Cut(TrackAnchor::new(time, object)), stamp)
+        let Some(position) = self.anchor_at(time, object) else {
+            return false;
+        };
+        self.edit_track(
+            TrackEdit::Cut(TrackAnchor::new(time, object, position)),
+            stamp,
+        )
     }
 
     pub(crate) fn join_tracks(
@@ -1438,13 +1529,25 @@ impl ObjectSet {
         target: (u32, usize),
         stamp: u64,
     ) -> bool {
+        let (Some(source_position), Some(target_position)) = (
+            self.anchor_at(source.0, source.1),
+            self.anchor_at(target.0, target.1),
+        ) else {
+            return false;
+        };
         self.edit_track(
             TrackEdit::Join {
-                source: TrackAnchor::new(source.0, source.1),
-                target: TrackAnchor::new(target.0, target.1),
+                source: TrackAnchor::new(source.0, source.1, source_position),
+                target: TrackAnchor::new(target.0, target.1, target_position),
             },
             stamp,
         )
+    }
+
+    fn anchor_at(&self, time: u32, object: usize) -> Option<[f32; 3]> {
+        let frame = self.frames.get(time as usize)?.data.as_deref()?;
+        let anchors = frame.anchors();
+        Some(anchors.get(object)?.position())
     }
 
     fn rebuild_frame_bounds(&mut self) {

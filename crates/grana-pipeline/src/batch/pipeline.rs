@@ -285,7 +285,12 @@ impl Run<'_, '_> {
         let name = object.name().to_string();
         let channel = object.channel();
         let params = object.params();
-        let seeds = self.scene.seed_frames(id).unwrap_or_default();
+        let seeds = self.scene.seed_frames(id);
+        let policy = match self.scene.seed_source(id) {
+            Some(_) => crate::SeedPolicy::Sourced,
+            None if seeds.iter().any(|frame| !frame.is_empty()) => crate::SeedPolicy::Strict,
+            None => crate::SeedPolicy::Unseeded,
+        };
         let _ = task.events.send(Event::Step {
             index: task.index,
             label: format!("detecting {name}"),
@@ -300,6 +305,7 @@ impl Run<'_, '_> {
             },
             params,
             seeds,
+            policy,
             self.store,
             &self.progress,
         )?;
@@ -602,6 +608,7 @@ fn detect(
     reading: Reading<'_>,
     params: ObjectParams,
     seeds: Vec<Vec<[f32; 3]>>,
+    policy: grana_analysis::SeedPolicy,
     store: &Arc<GeometryStore>,
     progress: &Progress<'_>,
 ) -> Result<Vec<Option<ObjectFrame>>, String> {
@@ -629,10 +636,10 @@ fn detect(
             params,
             reading.region,
             reading.roi,
-            seeds,
             task.workers,
             Arc::clone(store),
-        ),
+        )
+        .with_seeds(seeds, policy),
         progress.cancel,
         &mut sink,
     )?;

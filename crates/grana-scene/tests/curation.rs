@@ -104,6 +104,33 @@ fn replays_manual_removals_on_a_rebuilt_frame() {
 }
 
 #[test]
+fn replays_a_removal_after_the_object_order_changes() {
+    let mut scene = scene(1);
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    let centres = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]];
+    scene.install(set, 0, spots(&centres));
+    assert!(
+        scene
+            .delete_objects(set, 0, &[1])
+            .expect("the spot is pruned")
+    );
+    assert_eq!(placed(&scene, set, 0), [0.0, 2.0]);
+
+    let reordered = [centres[1], centres[0], centres[2]];
+    scene.install(set, 0, spots(&reordered));
+    assert_eq!(
+        scene.apply_curation(set),
+        1,
+        "the rebuilt frame drops the anchor the user removed"
+    );
+    assert_eq!(
+        placed(&scene, set, 0),
+        [0.0, 2.0],
+        "the removal follows the object rather than its index"
+    );
+}
+
+#[test]
 fn drops_the_manual_removals_of_a_frame_that_holds_other_objects() {
     let mut scene = scene(1);
     let set = scene.add_object(ObjectKind::Spots, 0);

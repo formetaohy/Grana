@@ -52,6 +52,10 @@ pub enum Command {
         index: usize,
     },
     ClearSeeds(ObjectSetId),
+    SetSeedSource {
+        set: ObjectSetId,
+        source: Option<ObjectSetId>,
+    },
     Detect(ObjectSetId),
     CancelDetect(ObjectSetId),
     ClearObject(ObjectSetId),
@@ -225,6 +229,7 @@ pub enum Action {
     MergeObjects,
     ClearObject,
     Seed,
+    SeedSource,
     Detect,
     Relation,
     Track,
@@ -289,6 +294,7 @@ impl Action {
             Self::MergeObjects => "merge object sets",
             Self::ClearObject => "clear objects",
             Self::Seed => "seed points",
+            Self::SeedSource => "seed source",
             Self::Detect => "detection",
             Self::Relation => "object relation",
             Self::Track => "tracking",
@@ -421,6 +427,7 @@ impl Command {
             Self::AddSeed { set, .. } | Self::RemoveSeed { set, .. } | Self::ClearSeeds(set) => {
                 Edit::targeted(Action::Seed, set.raw())
             }
+            Self::SetSeedSource { set, .. } => Edit::targeted(Action::SeedSource, set.raw()),
             Self::Detect(set) => Edit::targeted(Action::Detect, set.raw()),
             Self::AddRelation { target, .. }
             | Self::SetRelationShift { target, .. }

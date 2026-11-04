@@ -8,5 +8,6 @@ pub use batch::{
     dataset_name, default_jobs, discover,
 };
 pub use event::Event;
+pub use grana_analysis::SeedPolicy;
 pub use run::{ColocRequest, DetectRequest};
 pub use snapshot::{SnapshotFactory, SnapshotRequest, Snapshotter};

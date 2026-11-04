@@ -20,9 +20,9 @@ use grana_object::{
 };
 use grana_scene::{
     ChannelState, ColocResult, ColocState, ColorState, Criteria, Curation, FilterRange, ItemState,
-    LassoPath, MeasureState, ObjectColor, ObjectFrame, ObjectKind, ObjectParams, ObjectSetId,
-    Provenance, RELATION_FIELDS, Recipe, RelationState, SceneState, SelectionState, SetState,
-    TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
+    LassoPath, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind, ObjectParams,
+    ObjectSetId, Provenance, RELATION_FIELDS, Recipe, RelationState, SceneState, Seeds,
+    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Intensity, Region};
 
@@ -206,6 +206,13 @@ impl Decode for SceneState {
                     .parts()
                     .iter()
                     .any(|part| part.channel() >= channels)
+                    || match &set.seeds {
+                        Seeds::Points(_) => false,
+                        Seeds::Source(source) => !state
+                            .sets
+                            .iter()
+                            .any(|candidate| candidate.id == source.raw()),
+                    }
             })
         {
             return Err(FAULT_SHAPE);
@@ -362,10 +369,20 @@ impl Decode for SetState {
         let visibility = Visibility::decode(reader)?;
         let seeds = decode_seeds(reader)?;
         let frames = Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?;
-        if seeds.len() != frames.len()
-            || (kind != ObjectKind::Surfaces && seeds.iter().any(|frame| !frame.is_empty()))
-        {
-            return Err(FAULT_SHAPE);
+        match &seeds {
+            Seeds::Points(seeded) => {
+                if seeded.len() != frames.len()
+                    || (kind != ObjectKind::Surfaces
+                        && seeded.iter().any(|frame| !frame.is_empty()))
+                {
+                    return Err(FAULT_SHAPE);
+                }
+            }
+            Seeds::Source(source) => {
+                if kind != ObjectKind::Surfaces || source.raw() == id {
+                    return Err(FAULT_SHAPE);
+                }
+            }
         }
         let state = Self {
             id,
@@ -431,11 +448,16 @@ impl Decode for SetState {
             .any(|source| source.raw() == id)
             || state.provenance.parts().iter().any(|part| {
                 part.kind() != kind
-                    || (part.kind() == ObjectKind::Surfaces
-                        && !part.seeds().is_empty()
-                        && part.seeds().len() != state.frames.len())
-                    || (part.kind() != ObjectKind::Surfaces
-                        && part.seeds().iter().any(|frame| !frame.is_empty()))
+                    || match part.seeds() {
+                        Seeds::Points(frames) => {
+                            (part.kind() == ObjectKind::Surfaces
+                                && !frames.is_empty()
+                                && frames.len() != state.frames.len())
+                                || (part.kind() != ObjectKind::Surfaces
+                                    && frames.iter().any(|frame| !frame.is_empty()))
+                        }
+                        Seeds::Source(_) => part.kind() != ObjectKind::Surfaces,
+                    }
             })
         {
             return Err(FAULT_SHAPE);
@@ -467,7 +489,14 @@ impl Decode for Curation {
             let objects = reader.count(8)?;
             let mut frame = Vec::with_capacity(objects);
             for _ in 0..objects {
-                frame.push(reader.count(1)?);
+                frame.push(ObjectAnchor::new(
+                    [
+                        finite(reader.f32()?)?,
+                        finite(reader.f32()?)?,
+                        finite(reader.f32()?)?,
+                    ],
+                    positive(reader.f32()?)?,
+                ));
             }
             removed.push(frame);
         }
@@ -482,23 +511,22 @@ impl Decode for Curation {
 
 impl Decode for TrackEdit {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let time = |reader: &mut Reader<'_>| reader.u32();
-        let object = |reader: &mut Reader<'_>| reader.count(1);
+        let node = |reader: &mut Reader<'_>| -> Result<TrackAnchor, &'static str> {
+            let time = reader.u32()?;
+            let object = reader.count(1)?;
+            let position = [
+                finite(reader.f32()?)?,
+                finite(reader.f32()?)?,
+                finite(reader.f32()?)?,
+            ];
+            Ok(TrackAnchor::new(time, object, position))
+        };
         Ok(match reader.u8()? {
-            0 => {
-                let time = time(reader)?;
-                Self::Cut(TrackAnchor::new(time, object(reader)?))
-            }
-            1 => {
-                let source_time = time(reader)?;
-                let source_object = object(reader)?;
-                let target_time = time(reader)?;
-                let target_object = object(reader)?;
-                Self::Join {
-                    source: TrackAnchor::new(source_time, source_object),
-                    target: TrackAnchor::new(target_time, target_object),
-                }
-            }
+            0 => Self::Cut(node(reader)?),
+            1 => Self::Join {
+                source: node(reader)?,
+                target: node(reader)?,
+            },
             _ => return Err(FAULT_TAG),
         })
     }
@@ -537,14 +565,25 @@ fn decode_recipe(reader: &mut Reader<'_>, depth: usize) -> Result<Recipe, &'stat
     let channel = reader.count(1)?;
     let params = ObjectParams::decode(reader)?;
     let seeds = decode_seeds(reader)?;
-    if params.kind() != ObjectKind::Surfaces && seeds.iter().any(|frame| !frame.is_empty()) {
-        return Err(FAULT_SHAPE);
+    match &seeds {
+        Seeds::Points(frames) => {
+            if params.kind() != ObjectKind::Surfaces && frames.iter().any(|frame| !frame.is_empty())
+            {
+                return Err(FAULT_SHAPE);
+            }
+        }
+        Seeds::Source(_) => {
+            if params.kind() != ObjectKind::Surfaces {
+                return Err(FAULT_SHAPE);
+            }
+        }
     }
     Ok(Recipe::new(
         name,
         channel,
         params,
         seeds,
+        Curation::decode(reader)?,
         decode_provenance(reader, depth)?,
     ))
 }
@@ -1433,22 +1472,31 @@ fn track_color_applies(set: &SetState, metric: TrackColor) -> bool {
     }
 }
 
-fn decode_seeds(reader: &mut Reader<'_>) -> Result<Vec<Vec<[f32; 3]>>, &'static str> {
-    let frames = reader.count(4)?;
-    let mut seeds = Vec::new();
-    for _ in 0..frames {
-        let count = reader.count(12)?;
-        let mut frame = Vec::new();
-        for _ in 0..count {
-            let mut position = [0.0f32; 3];
-            for value in &mut position {
-                *value = finite(reader.f32()?)?;
+fn decode_seeds(reader: &mut Reader<'_>) -> Result<Seeds, &'static str> {
+    match reader.u8()? {
+        0 => {
+            let frames = reader.count(4)?;
+            let mut seeds = Vec::new();
+            for _ in 0..frames {
+                let count = reader.count(12)?;
+                let mut frame = Vec::new();
+                for _ in 0..count {
+                    let mut position = [0.0f32; 3];
+                    for value in &mut position {
+                        *value = finite(reader.f32()?)?;
+                    }
+                    frame.push(position);
+                }
+                seeds.push(frame);
             }
-            frame.push(position);
+            Ok(Seeds::Points(seeds))
         }
-        seeds.push(frame);
+        1 => {
+            let source = ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?;
+            Ok(Seeds::Source(source))
+        }
+        _ => Err(FAULT_TAG),
     }
-    Ok(seeds)
 }
 
 fn group(tag: u8) -> Result<Group, &'static str> {

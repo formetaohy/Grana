@@ -1,7 +1,7 @@
 use grana_display::Coloring;
 use grana_measure::{Aggregate, Group, channel_keys};
 use grana_scene::{
-    Measure, ObjectColor, ObjectParams, ObjectSet, Provenance, Recipe, Scene, TrackColor,
+    Measure, ObjectColor, ObjectParams, ObjectSet, Provenance, Recipe, Scene, Seeds, TrackColor,
 };
 
 use crate::{
@@ -70,19 +70,19 @@ impl Protocol {
             })
             .collect::<Result<Vec<_>, ProtocolError>>()?;
         if let Some(mask) = mask {
-            let position = scene
+            let name = scene
                 .objects
-                .iter()
-                .position(|set| set.id() == mask)
-                .expect("the analysis mask names a set of the scene");
-            let name = sets[position].name.clone();
-            sets.rotate_left(position);
-            for set in &mut sets[1..] {
-                if detects(&set.source) {
+                .get(mask)
+                .expect("the analysis mask names a set of the scene")
+                .name()
+                .to_string();
+            for set in &mut sets {
+                if set.name != name {
                     set.mask = Some(name.clone());
                 }
             }
         }
+        let sets = ordered(sets)?;
         let relations = scene
             .objects
             .iter()
@@ -152,13 +152,12 @@ fn source(
     set: &ObjectSet,
 ) -> Result<SourceSpec, ProtocolError> {
     match set.provenance() {
-        Provenance::Detection => Ok(detection(
+        Provenance::Detection => detection(
+            scene,
             &channels[set.channel()],
             set.params(),
-            &(0..set.frame_count())
-                .map(|time| set.seeds(time).to_vec())
-                .collect::<Vec<_>>(),
-        )),
+            set.surface_seeds(),
+        ),
         Provenance::Filtered { source, criteria } => {
             let reference = scene.objects.get(*source).ok_or_else(|| {
                 ProtocolError::Invalid(format!(
@@ -189,13 +188,12 @@ fn source(
             Some(reference) => Ok(SourceSpec::Copy {
                 source: reference.name().to_string(),
             }),
-            None => Ok(detection(
+            None => detection(
+                scene,
                 &channels[set.channel()],
                 set.params(),
-                &(0..set.frame_count())
-                    .map(|time| set.seeds(time).to_vec())
-                    .collect::<Vec<_>>(),
-            )),
+                set.surface_seeds(),
+            ),
         },
         Provenance::Merged { parts } => Ok(SourceSpec::Merged {
             parts: parts
@@ -208,7 +206,12 @@ fn source(
 
 fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSpec, ProtocolError> {
     let source = match part.provenance() {
-        Provenance::Detection => detection(&channels[part.channel()], part.params(), part.seeds()),
+        Provenance::Detection => detection(
+            scene,
+            &channels[part.channel()],
+            part.params(),
+            part.seeds(),
+        )?,
         Provenance::Filtered { source, criteria } => {
             let reference = scene.objects.get(*source).ok_or_else(|| {
                 ProtocolError::Invalid(format!(
@@ -239,7 +242,12 @@ fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSp
             Some(reference) => SourceSpec::Copy {
                 source: reference.name().to_string(),
             },
-            None => detection(&channels[part.channel()], part.params(), part.seeds()),
+            None => detection(
+                scene,
+                &channels[part.channel()],
+                part.params(),
+                part.seeds(),
+            )?,
         },
         Provenance::Merged { parts } => SourceSpec::Merged {
             parts: parts
@@ -251,43 +259,94 @@ fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSp
     Ok(PartSpec {
         name: part.name().to_string(),
         source,
+        curation: CurationSpec::of(part.curation()),
     })
 }
 
-fn detection(channel: &str, params: ObjectParams, seeds: &[Vec<[f32; 3]>]) -> SourceSpec {
+fn detection(
+    scene: &Scene,
+    channel: &str,
+    params: ObjectParams,
+    seeds: &Seeds,
+) -> Result<SourceSpec, ProtocolError> {
     match params {
-        ObjectParams::Spots(params) => SourceSpec::Spots {
+        ObjectParams::Spots(params) => Ok(SourceSpec::Spots {
             channel: channel.to_string(),
             diameter: params.diameter(),
             contrast: params.threshold(),
-        },
-        ObjectParams::Surfaces(params) => SourceSpec::Surfaces {
-            channel: channel.to_string(),
-            threshold: params.threshold(),
-            grain: params.grain(),
-            split: params.split(),
-            min_volume: params.min_volume(),
-            opening: params.opening(),
-            closing: params.closing(),
-            min_sphericity: params.min_sphericity(),
-            min_mean_intensity: params.min_mean_intensity(),
-            seeds: seeds.to_vec(),
-        },
-        ObjectParams::Filaments(params) => SourceSpec::Filaments {
+        }),
+        ObjectParams::Surfaces(params) => {
+            let (points, seed_source) = match seeds {
+                Seeds::Points(frames) => (frames.clone(), None),
+                Seeds::Source(source) => {
+                    let source = scene.objects.get(*source).ok_or_else(|| {
+                        ProtocolError::Invalid(
+                            "a surface seeds from an object set that left the scene".to_string(),
+                        )
+                    })?;
+                    (Vec::new(), Some(source.name().to_string()))
+                }
+            };
+            Ok(SourceSpec::Surfaces {
+                channel: channel.to_string(),
+                threshold: params.threshold(),
+                grain: params.grain(),
+                split: params.split(),
+                min_volume: params.min_volume(),
+                opening: params.opening(),
+                closing: params.closing(),
+                min_sphericity: params.min_sphericity(),
+                min_mean_intensity: params.min_mean_intensity(),
+                seeds: points,
+                seed_source,
+            })
+        }
+        ObjectParams::Filaments(params) => Ok(SourceSpec::Filaments {
             channel: channel.to_string(),
             threshold: params.threshold(),
             min_length: params.min_length(),
-        },
+        }),
     }
 }
 
-fn detects(source: &SourceSpec) -> bool {
+fn ordered(mut sets: Vec<SetSpec>) -> Result<Vec<SetSpec>, ProtocolError> {
+    let mut ordered: Vec<SetSpec> = Vec::with_capacity(sets.len());
+    while !sets.is_empty() {
+        let position = sets
+            .iter()
+            .position(|set| {
+                dependencies(set)
+                    .iter()
+                    .all(|name| ordered.iter().any(|placed| placed.name == *name))
+            })
+            .ok_or_else(|| {
+                ProtocolError::Invalid(
+                    "the object sets of the protocol depend on each other in a cycle".to_string(),
+                )
+            })?;
+        ordered.push(sets.remove(position));
+    }
+    Ok(ordered)
+}
+
+fn dependencies(set: &SetSpec) -> Vec<String> {
+    let mut names = set.mask.iter().cloned().collect::<Vec<_>>();
+    collect_dependencies(&set.source, &mut names);
+    names
+}
+
+fn collect_dependencies(source: &SourceSpec, names: &mut Vec<String>) {
     match source {
-        SourceSpec::Spots { .. } | SourceSpec::Surfaces { .. } | SourceSpec::Filaments { .. } => {
-            true
+        SourceSpec::Surfaces { seed_source, .. } => names.extend(seed_source.clone()),
+        SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
+            names.push(source.clone());
         }
-        SourceSpec::Filtered { .. } | SourceSpec::Copy { .. } => false,
-        SourceSpec::Merged { parts } => parts.iter().any(|part| detects(&part.source)),
+        SourceSpec::Merged { parts } => {
+            for part in parts {
+                collect_dependencies(&part.source, names);
+            }
+        }
+        SourceSpec::Spots { .. } | SourceSpec::Filaments { .. } => {}
     }
 }
 

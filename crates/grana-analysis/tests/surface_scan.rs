@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use glam::Vec3;
-use grana_analysis::{Sources, SurfaceBuilder, coloc_levels, filament_level, recut, surface_level};
+use grana_analysis::{
+    SeedPolicy, Sources, SurfaceBuilder, coloc_levels, filament_level, recut, surface_level,
+};
 use grana_geometry::GeometryStore;
 use grana_object::SurfaceSet;
 use grana_object::{Roi, Shape, Spot, SurfaceFilter, SurfaceParams};
@@ -257,6 +259,108 @@ fn cuts_touching_lobes_at_the_seed_points() {
         .sum::<u64>();
     assert_eq!(kept, total, "the seeded cut conserves the mask");
     assert!(watertight(&set), "each seeded lobe is a closed body");
+}
+
+#[test]
+fn seeds_keep_one_object_per_marked_lobe() {
+    let extent = Extent::new(200, 80, 80);
+    let spacing = [0.1f32, 0.1, 0.1];
+    let centres = [[86.5f32, 40.0, 40.0], [105.5, 40.0, 40.0]];
+    let volume = blobs(extent, &spacing, &centres, 10.0);
+    let whole = extract(&volume, params(0.5), Region::none());
+    assert_eq!(whole.object_count(), 1, "touching lobes form one object");
+    let total = whole.objects()[0].voxel_count();
+
+    let seeds = centres.map(|centre| world(&volume, centre));
+    let split = extract_seeded(&volume, params(0.5), &seeds)
+        .expect("the seeded surface is detected")
+        .expect("surface detection completes");
+    assert_eq!(
+        split.object_count(),
+        2,
+        "each marked lobe becomes one object"
+    );
+    let kept = split
+        .objects()
+        .iter()
+        .map(|object| object.voxel_count())
+        .sum::<u64>();
+    assert_eq!(kept, total, "the markers partition the mask");
+    assert!(watertight(&split), "each marked object is a closed body");
+    let expected = 4.0 / 3.0 * PI * f64::from(10.0f32).powi(3);
+    for object in split.objects() {
+        let relative = (object.voxel_count() as f64 - expected).abs() / expected;
+        assert!(
+            relative < 0.03,
+            "a marked lobe holds {} voxels against {expected}",
+            object.voxel_count()
+        );
+    }
+
+    let single = extract_seeded(&volume, params(0.5), &seeds[..1])
+        .expect("the seeded surface is detected")
+        .expect("surface detection completes");
+    assert_eq!(
+        single.object_count(),
+        1,
+        "an unmarked lobe joins the marked lobe"
+    );
+    assert_eq!(
+        single.objects()[0].voxel_count(),
+        total,
+        "a single marker keeps the whole mask"
+    );
+}
+
+#[test]
+fn seeds_keep_only_the_marked_components() {
+    let extent = Extent::new(96, 72, 72);
+    let spacing = [0.1f32, 0.1, 0.1];
+    let volume = blobs(
+        extent,
+        &spacing,
+        &[[24.0, 36.0, 36.0], [72.0, 36.0, 36.0]],
+        12.0,
+    );
+    let seed = world(&volume, [24.0, 36.0, 36.0]);
+    let set = extract_seeded(&volume, params(0.5), &[seed])
+        .expect("the seeded surface is detected")
+        .expect("surface detection completes");
+    assert_eq!(
+        set.object_count(),
+        1,
+        "the unmarked blob leaves the seeded surface"
+    );
+    let expected = 4.0 / 3.0 * std::f64::consts::PI * 12.0f64.powi(3);
+    let relative = (set.objects()[0].voxel_count() as f64 - expected).abs() / expected;
+    assert!(
+        relative < 0.05,
+        "the marked blob keeps its voxels: {} against {expected}",
+        set.objects()[0].voxel_count()
+    );
+
+    let missing = world(&volume, [24.0, 6.0, 6.0]);
+    let lenient = extract_seeded_with(&volume, params(0.5), &[seed, missing], SeedPolicy::Sourced)
+        .expect("a sourced seed that marks nothing is dropped")
+        .expect("the marked blob survives");
+    assert_eq!(
+        lenient.object_count(),
+        1,
+        "a sourced surface keeps only the landed markers"
+    );
+    let none = extract_seeded_with(&volume, params(0.5), &[missing], SeedPolicy::Sourced)
+        .expect("a sourced seed that marks nothing is dropped");
+    assert!(
+        none.is_none(),
+        "a sourced surface without a landed marker keeps no object"
+    );
+    let strict = extract_seeded(&volume, params(0.5), &[missing]);
+    assert!(
+        strict
+            .expect_err("a manual seed that marks nothing is rejected")
+            .contains("seed point"),
+        "the manual seed failure names the seed point"
+    );
 }
 
 #[test]
@@ -905,11 +1009,20 @@ fn extract_seeded(
     params: SurfaceParams,
     seeds: &[[f32; 3]],
 ) -> Result<Option<SurfaceSet>, String> {
+    extract_seeded_with(volume, params, seeds, SeedPolicy::Strict)
+}
+
+fn extract_seeded_with(
+    volume: &Volume,
+    params: SurfaceParams,
+    seeds: &[[f32; 3]],
+    policy: SeedPolicy,
+) -> Result<Option<SurfaceSet>, String> {
     let level = Level::new(volume.extent(), volume.spacing());
     let intensity = Intensity::new(0.0, f32::from(HIGH));
     let channels = volume.channel_count();
     let builder = SurfaceBuilder::new(0, level, params, channels, 0, Region::none(), intensity)
-        .with_seeds(seeds);
+        .with_seeds(seeds, policy);
     let cancel = AtomicBool::new(false);
     builder.scan(
         1,
@@ -994,6 +1107,13 @@ fn large_lobes() -> Volume {
     let extent = Extent::new(200, 80, 80);
     let centres = [[80.0f32, 40.0, 40.0], [118.0, 40.0, 40.0]];
     blobs(extent, &[0.1, 0.1, 0.1], &centres, 22.0)
+}
+
+fn world(volume: &Volume, voxel: [f32; 3]) -> [f32; 3] {
+    let spacing = volume.spacing();
+    let spacing = [spacing.x(), spacing.y(), spacing.z()];
+    let world = volume.world_extent();
+    [0, 1, 2].map(|axis| (voxel[axis] + 0.5) * spacing[axis] - 0.5 * world[axis])
 }
 
 fn blobs(extent: Extent, spacing: &[f32; 3], centres: &[[f32; 3]], radius: f32) -> Volume {

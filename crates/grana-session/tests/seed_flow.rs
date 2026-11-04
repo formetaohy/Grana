@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use grana_geometry::GeometryStore;
 use grana_object::{SurfaceFilter, SurfaceParams};
-use grana_pipeline::{DetectRequest, Event};
+use grana_pipeline::{DetectRequest, Event, SeedPolicy};
 use grana_scene::{Job, ObjectParams, ObjectSetId};
 use grana_session::{Poll, Source, detect};
 use grana_volume::{Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
@@ -61,6 +61,11 @@ fn seeds() -> Vec<Vec<[f32; 3]>> {
 fn run(seeds: Vec<Vec<[f32; 3]>>) -> Result<Vec<usize>, String> {
     let series = series();
     let source = Source::Memory(Arc::new(series));
+    let policy = if seeds.iter().any(|frame| !frame.is_empty()) {
+        SeedPolicy::Strict
+    } else {
+        SeedPolicy::Unseeded
+    };
     let request = DetectRequest::new(
         0,
         ObjectParams::Surfaces(SurfaceParams::new(
@@ -72,10 +77,10 @@ fn run(seeds: Vec<Vec<[f32; 3]>>) -> Result<Vec<usize>, String> {
         )),
         Region::none(),
         None,
-        seeds,
         0,
         GeometryStore::memory(),
-    );
+    )
+    .with_seeds(seeds, policy);
     let analysis = detect(
         Job::Detect(ObjectSetId::from_raw(1).expect("a set id")),
         source,

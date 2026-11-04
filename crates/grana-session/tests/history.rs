@@ -219,7 +219,7 @@ fn undoes_a_rename_and_a_deleted_detection() {
         .to_string();
     session.execute(Command::RenameObject {
         set,
-        name: "Cells".to_string(),
+        name: "Renamed".to_string(),
     });
     assert_eq!(
         session
@@ -228,7 +228,7 @@ fn undoes_a_rename_and_a_deleted_detection() {
             .objects
             .get(set)
             .map(|set| set.name().to_string()),
-        Some("Cells".to_string())
+        Some("Renamed".to_string())
     );
     session.execute(Command::Undo);
     assert_eq!(
