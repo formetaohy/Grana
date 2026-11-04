@@ -24,7 +24,7 @@ pub(super) fn bar(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut
                 .height(Length::Fill),
             |ui| {
                 brand(ui);
-                ui.space(4.0);
+                ui.space(2.0);
                 vertical_rule(ui, 18.0);
                 ui.space(2.0);
                 open_menu(ui, state, commands);
@@ -125,27 +125,19 @@ pub(super) fn bar(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut
 }
 
 fn brand(ui: &mut Ui) {
-    let rect = ui.allocate(Vec2::splat(20.0));
-    let palette = ui.theme().palette;
-    {
-        let mut painter = ui.painter();
-        painter.rect(rect, Corners::all(5.0), palette.accent);
-        for (index, width) in [9.0f32, 6.5, 4.0].iter().enumerate() {
-            painter.rect(
-                Rect::from_min_size(
-                    Vec2::new(rect.min.x + 5.5, rect.min.y + 5.5 + index as f32 * 3.2),
-                    Vec2::new(*width, 1.8),
-                ),
-                Corners::all(0.9),
-                palette.text_on_accent,
-            );
-        }
+    let rect = ui.allocate(Vec2::splat(26.0));
+    let brand = ui.theme().palette.brand;
+    let widths = [7.0, 8.2, 9.4, 10.6, 11.8];
+    let mut y = rect.center().y - 7.75;
+    let mut painter = ui.painter();
+    for width in widths {
+        painter.rect(
+            Rect::from_min_size(Vec2::new(rect.center().x - 5.9, y), Vec2::new(width, 2.1)),
+            Corners::capsule(),
+            brand,
+        );
+        y += 3.35;
     }
-    let style = TextStyle::new(
-        grana_ui::TypeStyle::new(13.0, 600.0, 18.0),
-        palette.text_primary,
-    );
-    ui.text_style("grana", style);
 }
 
 fn vertical_rule(ui: &mut Ui, height: f32) {
