@@ -94,6 +94,17 @@ struct WheelTarget {
     overlay: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct FrameInput {
+    pub position: Vec2,
+    pub pressed: bool,
+    pub released: bool,
+    pub down: bool,
+    pub tab: Option<bool>,
+    pub escape: bool,
+    pub time: f32,
+}
+
 pub struct Registry {
     hits: Vec<Hit>,
     next_hits: Vec<Hit>,
@@ -119,6 +130,9 @@ pub struct Registry {
     wake: bool,
     hovered_since: Option<(u64, f32)>,
     tooltip: Option<String>,
+    focus: Option<u64>,
+    focus_order: Vec<u64>,
+    focus_visible: bool,
 }
 
 impl Registry {
@@ -148,10 +162,32 @@ impl Registry {
             wake: false,
             hovered_since: None,
             tooltip: None,
+            focus: None,
+            focus_order: Vec::new(),
+            focus_visible: false,
         }
     }
 
-    pub fn begin(&mut self, position: Vec2, pressed: bool, released: bool, down: bool, time: f32) {
+    pub fn begin(&mut self, input: FrameInput) {
+        let FrameInput {
+            position,
+            pressed,
+            released,
+            down,
+            tab,
+            escape,
+            time,
+        } = input;
+        if let Some(forward) = tab {
+            self.advance_focus(forward);
+            self.popup = None;
+        }
+        if escape {
+            self.focus = None;
+            self.focus_visible = false;
+            self.popup = None;
+        }
+        self.focus_order.clear();
         self.next_hits.clear();
         self.next_occluders.clear();
         self.next_wheel_targets.clear();
@@ -218,6 +254,49 @@ impl Registry {
         std::mem::swap(&mut self.hits, &mut self.next_hits);
         std::mem::swap(&mut self.occluders, &mut self.next_occluders);
         std::mem::swap(&mut self.wheel_targets, &mut self.next_wheel_targets);
+        if let Some(focus) = self.focus
+            && !self.focus_order.contains(&focus)
+        {
+            self.focus = None;
+            self.focus_visible = false;
+        }
+    }
+
+    fn advance_focus(&mut self, forward: bool) {
+        let count = self.focus_order.len();
+        if count == 0 {
+            return;
+        }
+        let current = self
+            .focus
+            .and_then(|focus| self.focus_order.iter().position(|key| *key == focus));
+        let next = match (current, forward) {
+            (Some(index), true) => (index + 1) % count,
+            (Some(index), false) => (index + count - 1) % count,
+            (None, true) => 0,
+            (None, false) => count - 1,
+        };
+        self.focus = Some(self.focus_order[next]);
+        self.focus_visible = true;
+    }
+
+    pub fn register_focus(&mut self, key: u64) {
+        if !self.focus_order.contains(&key) {
+            self.focus_order.push(key);
+        }
+    }
+
+    pub fn focused(&self, key: u64) -> bool {
+        self.focus == Some(key)
+    }
+
+    pub fn set_focus(&mut self, key: u64) {
+        self.focus = Some(key);
+        self.focus_visible = false;
+    }
+
+    pub fn focus_visible(&self) -> bool {
+        self.focus_visible
     }
 
     pub fn hits(&self) -> &[Hit] {

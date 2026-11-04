@@ -157,7 +157,11 @@ fn channels(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
         ui.push_id(&format!("channel.{index}"));
         let row = ui.allocate_full(CHANNEL_ROW);
         let control = Rect::from_min_max(row.min, Vec2::new(row.max.x - 30.0, row.max.y));
-        let response = ui.interact(ui.id("pick"), control);
+        let pick = ui.id("pick");
+        let mut response = ui.interact(pick, control);
+        if ui.focusable(pick, control, Corners::all(4.0)) && ui.activated(pick) {
+            response.clicked = true;
+        }
         if response.clicked {
             chosen = Some(index);
         }

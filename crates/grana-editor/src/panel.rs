@@ -147,6 +147,8 @@ pub fn build(
     let layout = Layout::new(ui, &state, full);
     ui.root(|ui| {
         paint_shell(ui, &layout);
+        header::bar(ui, layout.header, &mut state, &mut commands);
+        sidebar_panel(ui, layout.sidebar, &mut state, &mut commands);
         state.stage.set_rects(layout.volume, layout.section);
         stage::paint(ui, &layout, &mut state, &mut commands);
         if let Some(rect) = layout.transport {
@@ -155,8 +157,6 @@ pub fn build(
         if let Some(rect) = layout.dock {
             dock_panel(ui, rect, &mut state, &mut commands);
         }
-        header::bar(ui, layout.header, &mut state, &mut commands);
-        sidebar_panel(ui, layout.sidebar, &mut state, &mut commands);
         status::bar(ui, layout.status, &state);
         stage::toast(ui, layout.stage, &state);
         ui.paint_tooltip();

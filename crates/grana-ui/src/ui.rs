@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use glam::Vec2;
 
 use crate::clipboard::{Clipboard, NullClipboard};
@@ -6,13 +8,14 @@ use crate::geometry::{Corners, Edges, Rect};
 use crate::input::{Button, Input};
 use crate::motion::Motion;
 use crate::paint::{Clip, Instance, Painter};
-use crate::registry::{Cursor, Registry};
+use crate::registry::{Cursor, FrameInput, Registry};
 use crate::render::Renderer;
-use crate::style::{Look, State};
+use crate::style::{Border, Fill, Look, Shadow, State};
 use crate::text::{Align, Text, TextLayout, TextStyle};
 use crate::theme::{Level, Role, Theme};
 
 const PROPERTY_SALT: u64 = 0x9e37_79b9_7f4a_7c15;
+const GRID_SALT: u64 = 0x517c_c1b7_2722_0a95;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Axis {
@@ -25,6 +28,7 @@ pub enum Length {
     Auto,
     Fill,
     Fixed(f32),
+    Minimum(f32),
     Maximum(f32),
 }
 
@@ -38,6 +42,7 @@ pub struct Block {
     justify: Align,
     background: Option<Look>,
     clip: bool,
+    wrapping: bool,
 }
 
 impl Block {
@@ -51,6 +56,7 @@ impl Block {
             justify: Align::Start,
             background: None,
             clip: false,
+            wrapping: false,
         }
     }
 
@@ -101,6 +107,11 @@ impl Block {
         self.clip = true;
         self
     }
+
+    pub fn wrapping(mut self) -> Self {
+        self.wrapping = true;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -114,6 +125,11 @@ struct Area {
     origin: Vec2,
     cross: f32,
     main: f32,
+    loose_width: bool,
+    loose_height: bool,
+    wrapping: bool,
+    line: f32,
+    line_height: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -190,6 +206,27 @@ pub struct Frame {
     pub cursor: Cursor,
 }
 
+struct Cell {
+    instances: Range<usize>,
+    overlay: Range<usize>,
+    hits: Range<usize>,
+    wheels: Range<usize>,
+    height: f32,
+}
+
+pub struct Grid<'a> {
+    ui: &'a mut Ui,
+    widths: &'a [f32],
+    gap: f32,
+    origin: Vec2,
+    row: usize,
+    column: usize,
+    row_y: f32,
+    total_width: f32,
+    align: Align,
+    cells: Vec<Cell>,
+}
+
 pub struct Ui {
     renderer: Renderer,
     text: Text,
@@ -200,12 +237,14 @@ pub struct Ui {
     overlay: Vec<Instance>,
     areas: Vec<Area>,
     frames: Vec<SpanFrame>,
+    span_pool: Vec<Vec<Span>>,
     ids: Vec<u64>,
     scale: f32,
     size: Vec2,
     time: f32,
     elapsed: f32,
     occluders: Vec<Rect>,
+    focus_rings: Vec<(Rect, Corners)>,
     overlay_clip: Clip,
     overlay_mode: u32,
     edit: Option<Edit>,
@@ -227,12 +266,14 @@ impl Ui {
             overlay: Vec::new(),
             areas: Vec::new(),
             frames: Vec::new(),
+            span_pool: Vec::new(),
             ids: Vec::new(),
             scale: 1.0,
             size: Vec2::ZERO,
             time: 0.0,
             elapsed: 0.0,
             occluders: Vec::new(),
+            focus_rings: Vec::new(),
             overlay_clip: Clip::new(Rect::ZERO, Corners::ZERO),
             overlay_mode: 0,
             edit: None,
@@ -282,6 +323,7 @@ impl Ui {
         self.input.clear_preedit();
         self.edit = Some(Edit::new(key, text, self.time));
         self.edit_seen = true;
+        self.registry.set_focus(key);
     }
 
     pub fn end_edit(&mut self) {
@@ -342,6 +384,10 @@ impl Ui {
         &mut self.renderer
     }
 
+    pub fn renderer_and_atlas(&mut self) -> (&mut Renderer, &crate::atlas::Atlas) {
+        (&mut self.renderer, self.text.atlas())
+    }
+
     pub fn resize(&mut self, size: [u32; 2]) {
         self.renderer.resize(size);
     }
@@ -356,13 +402,35 @@ impl Ui {
         let pressed = self.input.button(Button::Primary).pressed;
         let released = self.input.button(Button::Primary).released;
         let down = self.input.button(Button::Primary).down;
-        self.registry
-            .begin(pointer, pressed, released, down, self.time);
+        let modifiers = self.input.modifiers();
+        let tab = self
+            .input
+            .keys()
+            .iter()
+            .find(|event| {
+                event.pressed && !event.repeat && event.key == Some(crate::input::Key::Tab)
+            })
+            .map(|_| !modifiers.shift);
+        let escape = self
+            .input
+            .keys()
+            .iter()
+            .any(|event| event.pressed && event.key == Some(crate::input::Key::Escape));
+        self.registry.begin(FrameInput {
+            position: pointer,
+            pressed,
+            released,
+            down,
+            tab,
+            escape,
+            time: self.time,
+        });
         self.instances.clear();
         self.overlay.clear();
         self.occluders.clear();
+        self.focus_rings.clear();
         self.areas.clear();
-        self.frames.clear();
+        self.recycle_frames();
         self.ids.clear();
         self.edit_seen = false;
         self.edit_caret = None;
@@ -374,12 +442,26 @@ impl Ui {
         if !self.edit_seen {
             self.end_edit();
         }
+        if !self.focus_rings.is_empty() {
+            let clip = self.overlay_clip;
+            let dark = self.theme.dark;
+            let color = self.theme.palette.focus;
+            let rings = std::mem::take(&mut self.focus_rings);
+            let mut painter = Painter::new(&mut self.overlay, &mut self.text, clip, dark);
+            for (rect, corners) in rings {
+                painter.outlined(
+                    rect.expand(2.0),
+                    corners,
+                    Fill::None,
+                    Border { width: 1.5, color },
+                    Shadow::NONE,
+                );
+            }
+        }
         self.text.flush(self.renderer.queue());
-        let pointer = self.input.position();
-        self.renderer
-            .write_uniforms(self.scale, self.time, [pointer.x, pointer.y]);
+        self.renderer.write_uniforms(self.scale);
         self.areas.clear();
-        self.frames.clear();
+        self.recycle_frames();
         self.ids.clear();
         Frame {
             animating: self.registry.animating(),
@@ -413,6 +495,11 @@ impl Ui {
             origin: rect.min,
             cross: 0.0,
             main: 0.0,
+            loose_width: false,
+            loose_height: false,
+            wrapping: false,
+            line: 0.0,
+            line_height: 0.0,
         });
         self.push_frame();
         content(self);
@@ -429,11 +516,28 @@ impl Ui {
     }
 
     fn push_frame(&mut self) {
-        self.frames.push(SpanFrame::default());
+        self.frames.push(SpanFrame {
+            spans: self.span_pool.pop().unwrap_or_default(),
+            open: None,
+        });
     }
 
     fn pop_frame(&mut self) {
-        self.frames.pop();
+        if let Some(frame) = self.frames.pop() {
+            self.recycle_frame(frame);
+        }
+    }
+
+    fn recycle_frame(&mut self, mut frame: SpanFrame) {
+        frame.spans.clear();
+        frame.open = None;
+        self.span_pool.push(frame.spans);
+    }
+
+    fn recycle_frames(&mut self) {
+        while let Some(frame) = self.frames.pop() {
+            self.recycle_frame(frame);
+        }
     }
 
     fn begin_span(&mut self, offset: f32, size: f32, direct: bool) {
@@ -513,6 +617,8 @@ impl Ui {
             self.registry.shift_hits(span.hit..hit_stop, delta);
             self.registry.shift_wheels(span.wheel..wheel_stop, delta);
         }
+        spans.clear();
+        self.span_pool.push(spans);
     }
 
     pub fn available(&self) -> Vec2 {
@@ -537,6 +643,7 @@ impl Ui {
         let width = match width {
             Length::Auto | Length::Fill => available,
             Length::Fixed(value) => value.min(available),
+            Length::Minimum(minimum) => available.max(minimum),
             Length::Maximum(maximum) => available.min(maximum),
         };
         self.allocate(Vec2::new(width, height))
@@ -561,18 +668,30 @@ impl Ui {
     }
 
     fn allocate_with(&mut self, size: Vec2, fill: bool) -> Rect {
-        let area = self.area();
+        let mut area = *self.area();
         let axis = area.axis;
+        let requested = size.x.max(0.0);
+        if axis == Axis::Row && area.wrapping {
+            let fits = area.cursor.x + requested <= area.rect.max.x + 0.01
+                || area.cursor.x <= area.rect.min.x + 0.01;
+            if !fits {
+                area.line += area.line_height + area.gap;
+                area.cursor.x = area.rect.min.x;
+                area.line_height = 0.0;
+            }
+        }
         let remaining = area.remaining();
         let width = if fill && axis == Axis::Column {
             remaining.x
+        } else if area.loose_width {
+            size.x.max(0.0)
         } else {
             size.x.min(remaining.x).max(0.0)
         };
         let height = if fill && axis == Axis::Row {
             remaining.y
         } else {
-            size.y
+            size.y.max(0.0)
         };
         let size = Vec2::new(width, height);
         let align = area.align;
@@ -581,6 +700,7 @@ impl Ui {
                 area.rect.min.x + (area.rect.width() - size.x) * cross_factor(align),
                 area.cursor.y,
             ),
+            Axis::Row if area.wrapping => Vec2::new(area.cursor.x, area.rect.min.y + area.line),
             Axis::Row => Vec2::new(
                 area.cursor.x,
                 area.rect.min.y + (area.rect.height() - size.y) * cross_factor(align),
@@ -599,12 +719,19 @@ impl Ui {
             },
             false,
         );
-        let area = self.area_mut();
         match axis {
             Axis::Column => {
                 area.cursor.y += size.y + area.gap;
                 area.cross = area.cross.max(size.x);
                 area.main = (area.cursor.y - area.origin.y - area.gap).max(0.0);
+            }
+            Axis::Row if area.wrapping => {
+                area.cursor.x += size.x + area.gap;
+                area.line_height = area.line_height.max(size.y);
+                area.cross = area.cross.max(area.line + area.line_height);
+                area.main = area
+                    .main
+                    .max((area.cursor.x - area.rect.min.x - area.gap).max(0.0));
             }
             Axis::Row => {
                 area.cursor.x += size.x + area.gap;
@@ -612,6 +739,7 @@ impl Ui {
                 area.main = (area.cursor.x - area.origin.x - area.gap).max(0.0);
             }
         }
+        *self.area_mut() = area;
         rect
     }
 
@@ -652,6 +780,10 @@ impl Ui {
             Axis::Row => height,
             Axis::Column => width,
         };
+        let loose_width = matches!(block.width, Length::Auto)
+            || (parent.loose_width && matches!(block.width, Length::Fill | Length::Maximum(_)));
+        let loose_height = matches!(block.height, Length::Auto)
+            || (parent.loose_height && matches!(block.height, Length::Fill | Length::Maximum(_)));
         self.begin_span(offset, initial_cross, false);
         let outer = Rect::from_min_size(origin, Vec2::new(width, height));
         let inner = block.padding.shrink(outer);
@@ -683,24 +815,41 @@ impl Ui {
             origin: inner.min,
             cross: 0.0,
             main: 0.0,
+            loose_width,
+            loose_height,
+            wrapping: block.wrapping,
+            line: 0.0,
+            line_height: 0.0,
         });
         self.push_frame();
         self.begin_span(0.0, 0.0, true);
         content(self);
         let area = self.areas.pop().expect("a layout area is active");
         let auto_cross = match axis {
-            Axis::Row => matches!(block.height, Length::Auto),
-            Axis::Column => matches!(block.width, Length::Auto),
+            Axis::Row => {
+                matches!(block.height, Length::Auto)
+                    || (parent.loose_height && matches!(block.height, Length::Fill))
+            }
+            Axis::Column => {
+                matches!(block.width, Length::Auto)
+                    || (parent.loose_width && matches!(block.width, Length::Fill))
+            }
         };
         let auto_main = match axis {
-            Axis::Row => matches!(block.width, Length::Auto),
-            Axis::Column => matches!(block.height, Length::Auto),
+            Axis::Row => {
+                matches!(block.width, Length::Auto)
+                    || (parent.loose_width && matches!(block.width, Length::Fill))
+            }
+            Axis::Column => {
+                matches!(block.height, Length::Auto)
+                    || (parent.loose_height && matches!(block.height, Length::Fill))
+            }
         };
         let inner_main = match axis {
             Axis::Row => area.rect.width(),
             Axis::Column => area.rect.height(),
         };
-        let main_space = if auto_main {
+        let main_space = if auto_main || block.wrapping {
             0.0
         } else {
             (inner_main - area.main).max(0.0)
@@ -709,19 +858,34 @@ impl Ui {
             axis,
             block.align,
             block.justify,
-            auto_cross,
+            auto_cross && !block.wrapping,
             area.cross,
             main_space,
         );
         let measured = area.content_size() + block.padding.size();
         let width = match block.width {
-            Length::Auto => measured.x.min(remaining.x),
-            Length::Maximum(maximum) => measured.x.min(maximum).min(remaining.x),
-            Length::Fill | Length::Fixed(_) => width,
+            Length::Auto => {
+                if parent.loose_width {
+                    measured.x
+                } else {
+                    measured.x.min(remaining.x)
+                }
+            }
+            Length::Maximum(maximum) => {
+                if parent.loose_width {
+                    measured.x.min(maximum)
+                } else {
+                    measured.x.min(maximum).min(remaining.x)
+                }
+            }
+            Length::Fill if parent.loose_width => measured.x,
+            Length::Fill | Length::Fixed(_) | Length::Minimum(_) => width,
         };
         let height = match block.height {
-            Length::Auto | Length::Maximum(_) => measured.y,
-            Length::Fill | Length::Fixed(_) => height,
+            Length::Auto => measured.y,
+            Length::Maximum(maximum) => measured.y.min(maximum),
+            Length::Fill if parent.loose_height => measured.y,
+            Length::Fill | Length::Fixed(_) | Length::Minimum(_) => height,
         };
         let rect = Rect::from_min_size(origin, Vec2::new(width, height));
         {
@@ -758,6 +922,43 @@ impl Ui {
         self.block(Axis::Row, block, content)
     }
 
+    pub fn grid(
+        &mut self,
+        columns: &[Length],
+        gap: f32,
+        content: impl FnOnce(&mut Grid<'_>),
+    ) -> Rect {
+        if columns.is_empty() {
+            return Rect::ZERO;
+        }
+        let widths = column_widths(columns, self.available().x, gap);
+        let total = widths.iter().sum::<f32>() + gap * (widths.len() - 1) as f32;
+        self.block(
+            Axis::Column,
+            Block::column()
+                .width(Length::Fixed(total))
+                .height(Length::Auto)
+                .gaps(0.0),
+            |ui| {
+                let origin = ui.cursor_position();
+                let mut grid = Grid {
+                    ui,
+                    widths: &widths,
+                    gap,
+                    origin,
+                    row: 0,
+                    column: 0,
+                    row_y: origin.y,
+                    total_width: total,
+                    align: Align::Center,
+                    cells: Vec::new(),
+                };
+                content(&mut grid);
+                grid.finish();
+            },
+        )
+    }
+
     pub fn place(&mut self, rect: Rect, content: impl FnOnce(&mut Self)) {
         let parent = *self.area();
         self.areas.push(Area {
@@ -770,6 +971,11 @@ impl Ui {
             origin: rect.min,
             cross: 0.0,
             main: 0.0,
+            loose_width: false,
+            loose_height: false,
+            wrapping: false,
+            line: 0.0,
+            line_height: 0.0,
         });
         self.push_frame();
         content(self);
@@ -793,6 +999,11 @@ impl Ui {
             origin: rect.min,
             cross: 0.0,
             main: 0.0,
+            loose_width: false,
+            loose_height: false,
+            wrapping: false,
+            line: 0.0,
+            line_height: 0.0,
         });
         self.push_frame();
         content(self);
@@ -857,7 +1068,7 @@ impl Ui {
         let width = if style.wrap { available } else { 0.0 };
         let layout = self.layout_text(text, style, width);
         let size = Vec2::new(
-            if style.align == Align::Start {
+            if style.align == Align::Start || available <= 0.0 {
                 layout.size.x
             } else {
                 available
@@ -891,6 +1102,11 @@ impl Ui {
             origin: rect.min,
             cross: 0.0,
             main: 0.0,
+            loose_width: false,
+            loose_height: false,
+            wrapping: false,
+            line: 0.0,
+            line_height: 0.0,
         });
         self.push_frame();
         content(self);
@@ -1010,6 +1226,10 @@ impl Ui {
         mix(hash, hash_string(salt))
     }
 
+    pub fn id_index(&self, salt: &str, index: usize) -> u64 {
+        mix(self.id(salt), index as u64)
+    }
+
     pub fn push_id(&mut self, salt: &str) {
         let id = self.id(salt);
         self.ids.push(id);
@@ -1072,6 +1292,44 @@ impl Ui {
 
     pub fn hovered(&self, key: u64) -> bool {
         self.registry.hovered(key)
+    }
+
+    pub fn focusable(&mut self, key: u64, rect: Rect, corners: Corners) -> bool {
+        if rect.is_empty() || !self.area().clip.rect.intersects(rect) {
+            return false;
+        }
+        self.registry.register_focus(key);
+        let focused = self.registry.focused(key);
+        if focused && self.registry.focus_visible() {
+            self.focus_rings.push((rect, corners));
+        }
+        focused
+    }
+
+    pub fn focus_key(&mut self, key: u64) {
+        self.registry.set_focus(key);
+    }
+
+    pub fn focused(&self, key: u64) -> bool {
+        self.registry.focused(key)
+    }
+
+    pub fn focus_visible(&self) -> bool {
+        self.registry.focus_visible()
+    }
+
+    pub fn activated(&self, key: u64) -> bool {
+        if self.editing() || !self.registry.focused(key) {
+            return false;
+        }
+        self.input.keys().iter().any(|event| {
+            event.pressed
+                && !event.repeat
+                && matches!(
+                    event.key,
+                    Some(crate::input::Key::Enter | crate::input::Key::Space)
+                )
+        })
     }
 
     pub fn animate(&mut self, key: u64, target: f32, motion: Motion) -> f32 {
@@ -1158,6 +1416,11 @@ impl Ui {
             origin: inner.min,
             cross: 0.0,
             main: 0.0,
+            loose_width: false,
+            loose_height: false,
+            wrapping: false,
+            line: 0.0,
+            line_height: 0.0,
         });
         self.push_frame();
         content(self);
@@ -1379,11 +1642,140 @@ impl Ui {
     }
 }
 
+impl<'a> Grid<'a> {
+    pub fn align(&mut self, align: Align) -> &mut Self {
+        self.align = align;
+        self
+    }
+
+    pub fn cell(&mut self, content: impl FnOnce(&mut Ui)) {
+        if self.column == 0 {
+            self.begin_row();
+        }
+        let column = self.column;
+        let offset = self.widths[..column].iter().sum::<f32>() + self.gap * column as f32;
+        let rect = Rect::from_min_size(
+            Vec2::new(self.origin.x + offset, self.row_y),
+            Vec2::new(self.widths[column], 0.0),
+        );
+        let ui = &mut *self.ui;
+        let clip = ui.clip();
+        let instances = ui.instances.len();
+        let overlay = ui.overlay.len();
+        let hits = ui.registry.hit_count();
+        let wheels = ui.registry.wheel_count();
+        ui.ids
+            .push(mix(mix(self.row as u64, column as u64), GRID_SALT));
+        ui.areas.push(Area {
+            rect,
+            cursor: rect.min,
+            axis: Axis::Column,
+            gap: 0.0,
+            align: Align::Start,
+            clip,
+            origin: rect.min,
+            cross: 0.0,
+            main: 0.0,
+            loose_width: false,
+            loose_height: false,
+            wrapping: false,
+            line: 0.0,
+            line_height: 0.0,
+        });
+        ui.push_frame();
+        content(ui);
+        ui.pop_frame();
+        let area = ui.areas.pop().expect("a layout area is active");
+        ui.ids.pop();
+        self.cells.push(Cell {
+            instances: instances..ui.instances.len(),
+            overlay: overlay..ui.overlay.len(),
+            hits: hits..ui.registry.hit_count(),
+            wheels: wheels..ui.registry.wheel_count(),
+            height: area.main,
+        });
+        self.column += 1;
+        if self.column == self.widths.len() {
+            self.finish_row();
+        }
+    }
+
+    fn begin_row(&mut self) {
+        if self.row > 0 {
+            self.ui.area_mut().cursor.y += self.gap;
+        }
+        self.row_y = self.ui.cursor_position().y;
+    }
+
+    fn finish_row(&mut self) {
+        if self.cells.is_empty() {
+            return;
+        }
+        let height = self
+            .cells
+            .iter()
+            .fold(0.0f32, |height, cell| height.max(cell.height));
+        let factor = cross_factor(self.align);
+        for cell in self.cells.drain(..) {
+            let delta = Vec2::new(0.0, (height - cell.height) * factor);
+            if delta.y == 0.0 {
+                continue;
+            }
+            for instance in &mut self.ui.instances[cell.instances] {
+                instance.translate(delta);
+            }
+            for instance in &mut self.ui.overlay[cell.overlay] {
+                instance.translate(delta);
+            }
+            self.ui.registry.shift_hits(cell.hits, delta);
+            self.ui.registry.shift_wheels(cell.wheels, delta);
+        }
+        let area = self.ui.area_mut();
+        area.cursor.y += height;
+        area.main = (area.cursor.y - area.origin.y).max(0.0);
+        area.cross = self.total_width;
+        self.row += 1;
+        self.column = 0;
+    }
+
+    fn finish(&mut self) {
+        if self.column > 0 {
+            self.finish_row();
+        }
+    }
+}
+
+fn column_widths(columns: &[Length], available: f32, gap: f32) -> Vec<f32> {
+    let fills = columns
+        .iter()
+        .filter(|column| matches!(column, Length::Auto | Length::Fill))
+        .count();
+    let fixed = columns
+        .iter()
+        .map(|column| match column {
+            Length::Auto | Length::Fill => 0.0,
+            Length::Fixed(value) | Length::Minimum(value) | Length::Maximum(value) => *value,
+        })
+        .sum::<f32>();
+    let gaps = gap * columns.len().saturating_sub(1) as f32;
+    let share = (available - fixed - gaps).max(0.0) / fills.max(1) as f32;
+    columns
+        .iter()
+        .map(|column| match column {
+            Length::Auto | Length::Fill => share,
+            Length::Fixed(value) => *value,
+            Length::Minimum(value) => value.max(share),
+            Length::Maximum(value) => value.min(share),
+        })
+        .collect()
+}
+
 pub fn resolve(length: Length, available: f32) -> f32 {
     match length {
         Length::Auto => available,
         Length::Fill => available,
         Length::Fixed(value) => value,
+        Length::Minimum(minimum) => available.max(minimum),
         Length::Maximum(maximum) => available.min(maximum),
     }
 }
@@ -1411,4 +1803,158 @@ fn mix(left: u64, right: u64) -> u64 {
     hash = hash.wrapping_mul(0xff51_afd7_ed55_8ccd);
     hash ^= hash >> 33;
     hash
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grana_gpu::Headless;
+
+    fn frame(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
+        ui.resize([400, 300]);
+        ui.begin(Vec2::new(400.0, 300.0), 1.0, 0.0);
+        ui.root(content);
+        let _ = ui.end();
+    }
+
+    #[test]
+    fn columns_share_the_remaining_space() {
+        let widths = column_widths(
+            &[Length::Fixed(100.0), Length::Fill, Length::Fill],
+            400.0,
+            10.0,
+        );
+        assert_eq!(widths, [100.0, 140.0, 140.0]);
+    }
+
+    #[test]
+    fn grid_centers_cells_and_advances_rows() {
+        let gpu = Headless::new().expect("the headless device is available");
+        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let mut keys = [0u64; 2];
+        frame(&mut ui, |ui| {
+            ui.grid(&[Length::Fixed(100.0), Length::Fill], 10.0, |grid| {
+                grid.cell(|ui| {
+                    let rect = ui.allocate(Vec2::new(ui.available().x, 40.0));
+                    keys[0] = ui.id("cell");
+                    ui.interact(keys[0], rect);
+                });
+                grid.cell(|ui| {
+                    let rect = ui.allocate(Vec2::new(ui.available().x, 20.0));
+                    keys[1] = ui.id("cell");
+                    ui.interact(keys[1], rect);
+                });
+            });
+        });
+        let hits = ui.registry.hits();
+        let first = hits
+            .iter()
+            .find(|hit| hit.key == keys[0])
+            .expect("first cell");
+        let second = hits
+            .iter()
+            .find(|hit| hit.key == keys[1])
+            .expect("second cell");
+        assert_eq!(first.rect.min.x, 0.0);
+        assert_eq!(second.rect.min.x, 110.0);
+        assert_eq!(second.rect.min.y - first.rect.min.y, 10.0);
+    }
+
+    #[test]
+    fn auto_width_columns_measure_their_content() {
+        let gpu = Headless::new().expect("the headless device is available");
+        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let mut rect = Rect::ZERO;
+        frame(&mut ui, |ui| {
+            ui.column(Block::column().width(Length::Auto), |ui| {
+                rect = ui.label("Auto width", Level::Body);
+            });
+        });
+        assert!(rect.width() > 0.0);
+    }
+
+    #[test]
+    fn wrapping_rows_start_a_new_line() {
+        let gpu = Headless::new().expect("the headless device is available");
+        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let mut cells = [Rect::ZERO; 3];
+        let mut row = Rect::ZERO;
+        frame(&mut ui, |ui| {
+            row = ui.row(
+                Block::row()
+                    .width(Length::Fixed(100.0))
+                    .gaps(5.0)
+                    .wrapping(),
+                |ui| {
+                    for cell in &mut cells {
+                        *cell = ui.allocate(Vec2::new(40.0, 10.0));
+                    }
+                },
+            );
+        });
+        assert_eq!(cells[0].min, Vec2::new(0.0, 0.0));
+        assert_eq!(cells[1].min, Vec2::new(45.0, 0.0));
+        assert_eq!(cells[2].min, Vec2::new(0.0, 15.0));
+        assert_eq!(row.height(), 25.0);
+    }
+
+    #[test]
+    fn paints_instances_into_the_color_target() {
+        let gpu = Headless::new().expect("the headless device is available");
+        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        frame(&mut ui, |ui| {
+            ui.painter().rect(
+                Rect::from_min_size(Vec2::ZERO, Vec2::splat(64.0)),
+                Corners::ZERO,
+                crate::color::Color::WHITE,
+            );
+        });
+        ui.resize([64, 64]);
+        let target = grana_gpu::Target::new(&gpu.device, "grana.ui.test", [64, 64], gpu.format());
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("grana.ui.test"),
+            });
+        ui.paint(&mut encoder, &target.view);
+        gpu.queue.submit([encoder.finish()]);
+        let (pixels, size, _) = ui.renderer_mut().read_color();
+        assert_eq!(size, [64, 64]);
+        assert!(
+            pixels.chunks(4).any(|pixel| pixel[3] > 0),
+            "the instances reach the colour target"
+        );
+    }
+
+    #[test]
+    fn tab_focuses_and_enter_activates() {
+        let gpu = Headless::new().expect("the headless device is available");
+        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let first = ui.id("first");
+        let mut clicked = false;
+        let mut render = |ui: &mut Ui| {
+            ui.resize([400, 300]);
+            ui.begin(Vec2::new(400.0, 300.0), 1.0, 0.0);
+            ui.root(|ui| {
+                clicked = crate::widget::button(ui, "first", "First", Role::Control);
+                crate::widget::button(ui, "second", "Second", Role::Quiet);
+            });
+            let _ = ui.end();
+        };
+        render(&mut ui);
+        ui.input_mut().push(crate::input::Event::Key {
+            key: crate::input::Key::Tab,
+            pressed: true,
+            repeat: false,
+        });
+        render(&mut ui);
+        assert!(ui.focused(first));
+        ui.input_mut().push(crate::input::Event::Key {
+            key: crate::input::Key::Enter,
+            pressed: true,
+            repeat: false,
+        });
+        render(&mut ui);
+        assert!(clicked);
+    }
 }

@@ -195,9 +195,14 @@ impl Text {
         truncate: bool,
         align: Align,
     ) -> TextLayout {
-        let leading = style.leading.max(style.size * 1.05);
-        let ascent = style.size * 0.78;
-        let descent = style.size * 0.22;
+        let cjk = text.chars().any(is_cjk);
+        let leading = if cjk {
+            style.leading.max(style.size * 1.28)
+        } else {
+            style.leading.max(style.size * 1.05)
+        };
+        let ascent = style.size * if cjk { 0.88 } else { 0.78 };
+        let descent = style.size * if cjk { 0.18 } else { 0.22 };
         let baseline_offset = 0.5 * (leading - (ascent + descent)) + ascent;
         let bounded = max_width > 0.0;
         let mut lines: Vec<(Vec<PlacedGlyph>, f32)> = Vec::new();
@@ -346,21 +351,108 @@ pub struct GlyphPlot {
 fn tokenize(text: &str) -> Vec<&str> {
     let mut tokens = Vec::new();
     let mut start = 0usize;
-    let mut whitespace = None::<bool>;
+    let mut previous = None;
+    let mut whitespace = false;
     for (index, character) in text.char_indices() {
-        let is_space = character == ' ';
-        match whitespace {
-            None => whitespace = Some(is_space),
-            Some(current) if current != is_space => {
+        let space = character == ' ';
+        if let Some(before) = previous {
+            let boundary =
+                space != whitespace || (!space && !whitespace && allows_break(before, character));
+            if boundary {
                 tokens.push(&text[start..index]);
                 start = index;
-                whitespace = Some(is_space);
             }
-            _ => {}
         }
+        previous = Some(character);
+        whitespace = space;
     }
     if start < text.len() {
         tokens.push(&text[start..]);
     }
     tokens
+}
+
+fn allows_break(before: char, after: char) -> bool {
+    if is_opening(before) || is_closing(after) {
+        return false;
+    }
+    is_cjk(before) || is_cjk(after) || before == '-'
+}
+
+fn is_cjk(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x2E80..=0x2EFF
+            | 0x3000..=0x303F
+            | 0x3040..=0x30FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xAC00..=0xD7AF
+            | 0xF900..=0xFAFF
+            | 0xFF00..=0xFFEF
+            | 0x20000..=0x2FA1F
+    )
+}
+
+fn is_opening(character: char) -> bool {
+    matches!(
+        character,
+        '（' | '《' | '「' | '『' | '【' | '〔' | '〈' | '(' | '[' | '{'
+    )
+}
+
+fn is_closing(character: char) -> bool {
+    matches!(
+        character,
+        '，' | '。'
+            | '！'
+            | '？'
+            | '；'
+            | '：'
+            | '、'
+            | '）'
+            | '》'
+            | '」'
+            | '』'
+            | '】'
+            | '〕'
+            | '〉'
+            | '…'
+            | '—'
+            | '·'
+            | ','
+            | '.'
+            | ';'
+            | ':'
+            | '!'
+            | '?'
+            | ')'
+            | ']'
+            | '}'
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grana_gpu::Headless;
+
+    #[test]
+    fn cjk_text_breaks_between_characters() {
+        assert_eq!(tokenize("中文测试"), ["中", "文", "测", "试"]);
+        assert_eq!(tokenize("中文，测试"), ["中", "文，", "测", "试"]);
+        assert_eq!(tokenize("abc def"), ["abc", " ", "def"]);
+    }
+
+    #[test]
+    fn cjk_text_uses_a_fallback_face() {
+        let gpu = Headless::new().expect("the headless device is available");
+        let mut text = Text::new(&gpu.device);
+        text.begin(1.0);
+        let style = TypeStyle::new(14.0, 400.0, 18.0);
+        let layout = text.layout("中文测试", style, 0.0, false, false, Align::Start);
+        assert_eq!(layout.glyphs.len(), 4);
+        assert!(layout.size.x > 0.0);
+        assert!(layout.size.y > 0.0);
+    }
 }

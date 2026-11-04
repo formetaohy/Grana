@@ -176,7 +176,11 @@ fn object(
             );
             let hit =
                 Rect::from_min_max(text_area.min, Vec2::new(eye_rect.min.x - 8.0, header.max.y));
-            let response = ui.interact(ui.id("header"), hit);
+            let key = ui.id("header");
+            let mut response = ui.interact(key, hit);
+            if ui.focusable(key, hit, Corners::all(6.0)) && ui.activated(key) {
+                response.clicked = true;
+            }
             if response.clicked {
                 ui.store_open(&open_id, !expanded);
             }

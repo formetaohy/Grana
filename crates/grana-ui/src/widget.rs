@@ -6,7 +6,7 @@ use crate::color::Color;
 use crate::edit::Outcome;
 use crate::geometry::{Corners, Rect};
 use crate::icon::{self, Icon};
-use crate::input::Button;
+use crate::input::{Button, Key};
 use crate::motion::Motion;
 use crate::registry::Cursor;
 use crate::style::{Border, Fill, Shadow};
@@ -39,10 +39,15 @@ pub fn button_with(ui: &mut Ui, id: &str, label: &str, role: Role, width: Length
         Length::Auto => measured.x + 20.0,
         Length::Fill => ui.available().x,
         Length::Fixed(value) => value,
+        Length::Minimum(minimum) => (measured.x + 20.0).max(minimum),
         Length::Maximum(maximum) => (measured.x + 20.0).min(maximum),
     };
     let rect = ui.allocate(Vec2::new(width, metrics.control_height));
-    let response = ui.interact(key, rect);
+    let mut response = ui.interact(key, rect);
+    let corners = ui.radius();
+    if ui.focusable(key, rect, corners) && ui.activated(key) {
+        response.clicked = true;
+    }
     let press = ui.animate(
         key,
         if response.active { 1.0 } else { 0.0 },
@@ -64,7 +69,11 @@ pub fn action_button(ui: &mut Ui, id: &str, symbol: Icon, label: &str, role: Rol
     let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE));
     let width = measured.x + 44.0;
     let rect = ui.allocate(Vec2::new(width, metrics.control_height));
-    let response = ui.interact(key, rect);
+    let mut response = ui.interact(key, rect);
+    let corners = ui.radius();
+    if ui.focusable(key, rect, corners) && ui.activated(key) {
+        response.clicked = true;
+    }
     let press = ui.animate(
         key,
         if response.active { 1.0 } else { 0.0 },
@@ -117,7 +126,11 @@ pub fn icon_button_response(
 ) -> Response {
     let key = ui.id(id);
     let rect = ui.allocate(Vec2::splat(size));
-    let response = ui.interact(key, rect);
+    let mut response = ui.interact(key, rect);
+    let corners = ui.radius();
+    if ui.focusable(key, rect, corners) && ui.activated(key) {
+        response.clicked = true;
+    }
     if response.hovered {
         ui.tooltip(tooltip);
     }
@@ -192,7 +205,10 @@ pub fn badge(ui: &mut Ui, label: &str, tint: Color) -> Rect {
 pub fn toggle(ui: &mut Ui, id: &str, value: bool) -> Option<bool> {
     let key = ui.id(id);
     let rect = ui.allocate(Vec2::new(32.0, 18.0));
-    let response = ui.interact(key, rect);
+    let mut response = ui.interact(key, rect);
+    if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
+        response.clicked = true;
+    }
     let changed = response.clicked.then_some(!value);
     let on = ui.animate(key, if value { 1.0 } else { 0.0 }, Motion::snappy());
     let palette = ui.theme().palette;
@@ -224,7 +240,11 @@ pub fn toggle_row(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<boo
         Vec2::new(rect.max.x - 16.0, rect.center().y),
         Vec2::new(32.0, 18.0),
     );
-    let response = ui.interact(key, rect);
+    let mut response = ui.interact(key, rect);
+    let corners = Corners::all(ui.theme().metrics.radius - 2.0);
+    if ui.focusable(key, rect, corners) && ui.activated(key) {
+        response.clicked = true;
+    }
     let changed = response.clicked.then_some(!value);
     let on = ui.animate(key, if value { 1.0 } else { 0.0 }, Motion::snappy());
     let hover = ui.animate(
@@ -266,7 +286,11 @@ pub fn checkbox(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool>
     let font = ui.theme().font(Level::Callout);
     let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE));
     let rect = ui.allocate(Vec2::new(measured.x + 22.0, 22.0));
-    let response = ui.interact(key, rect);
+    let mut response = ui.interact(key, rect);
+    let corners = Corners::all(ui.theme().metrics.radius - 2.0);
+    if ui.focusable(key, rect, corners) && ui.activated(key) {
+        response.clicked = true;
+    }
     let changed = response.clicked.then_some(!value);
     let mark = ui.animate(key, if value { 1.0 } else { 0.0 }, Motion::snappy());
     let hover = ui.animate(
@@ -443,6 +467,29 @@ fn slider_core(
     if response.hovered && ui.input().wheel().y.abs() > 0.0 && !ui.input().modifiers().control {
         let step = (maximum - minimum) * 0.03;
         changed = Some((value + ui.input().wheel().y.signum() * step).clamp(minimum, maximum));
+    }
+    if ui.focusable(key, track, Corners::all(metrics.radius)) {
+        let step = (maximum - minimum)
+            * if ui.input().modifiers().shift {
+                0.1
+            } else {
+                0.01
+            };
+        for event in ui.input().keys() {
+            if !event.pressed || event.repeat {
+                continue;
+            }
+            let next = match event.key {
+                Some(Key::Left) => Some(value - step),
+                Some(Key::Right) => Some(value + step),
+                Some(Key::Home) => Some(minimum),
+                Some(Key::End) => Some(maximum),
+                _ => None,
+            };
+            if let Some(next) = next {
+                changed = Some(next.clamp(minimum, maximum));
+            }
+        }
     }
     let shown = changed.unwrap_or(value);
     let target = normalize(shown);
@@ -676,7 +723,12 @@ pub fn segmented(ui: &mut Ui, id: &str, options: &[&str], selected: usize) -> Op
         );
         cells.push(cell);
         let cell_key = key ^ (index as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-        if ui.interact(cell_key, cell).clicked {
+        let response = ui.interact(cell_key, cell);
+        let corners = Corners::all(metrics.radius - 2.0);
+        if ui.focusable(cell_key, cell, corners) && ui.activated(cell_key) {
+            changed = Some(index);
+        }
+        if response.clicked {
             changed = Some(index);
         }
         left += width;
@@ -776,7 +828,12 @@ pub fn tab_bar(
     let mut left = rect.min.x;
     for (index, width) in widths.iter().enumerate() {
         let cell = Rect::from_min_size(Vec2::new(left, rect.min.y), Vec2::new(*width, height));
-        let response = ui.interact(ui.id(&format!("{id}.tab.{index}")), cell);
+        let key = ui.id(&format!("{id}.tab.{index}"));
+        let response = ui.interact(key, cell);
+        let corners = Corners::all(ui.theme().metrics.radius - 2.0);
+        if ui.focusable(key, cell, corners) && ui.activated(key) {
+            changed = Some(index);
+        }
         if response.clicked {
             changed = Some(index);
         }
@@ -823,7 +880,11 @@ pub fn disclosure(
     let key = ui.id(id);
     let palette = ui.theme().palette;
     let header = ui.allocate_full(28.0);
-    let response = ui.interact(key, header);
+    let mut response = ui.interact(key, header);
+    let corners = Corners::all(ui.theme().metrics.radius - 2.0);
+    if ui.focusable(key, header, corners) && ui.activated(key) {
+        response.clicked = true;
+    }
     let next = if response.clicked { !open } else { open };
     let arrow = ui.animate(key, if open { 1.0 } else { 0.0 }, Motion::snappy());
     let font = ui.theme().font(Level::Callout).medium();
@@ -1040,6 +1101,7 @@ pub fn text_field(
     }
     ui.touch_edit();
     let response = ui.interact(key, rect);
+    ui.focusable(key, rect, Corners::all(ui.theme().metrics.radius));
     if response.hovered {
         ui.set_cursor(Cursor::Text);
     }

@@ -601,13 +601,8 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
             .sort()
             .filter(|(current, _)| current == index)
             .map(|(_, descending)| descending);
-        if header_cell(
-            ui,
-            &format!("head.{index}"),
-            &crate::panel::column_label(column),
-            sorted,
-            rect,
-        ) {
+        let key = ui.id_index("head", *index);
+        if header_cell(ui, key, &crate::panel::column_label(column), sorted, rect) {
             toggled.push(*index);
         }
         left += *width;
@@ -615,7 +610,10 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let shown = state.measure.rows().len();
     let content = shown as f32 * ROW_HEIGHT;
     let key = ui.id("measure.rows");
-    let info = ui.scroll_info(key);
+    let mut info = ui.scroll_info(key);
+    if info.viewport <= 0.0 {
+        info.viewport = ui.available().y;
+    }
     ui.scroll_axis(key, Axis::Column, Length::Fill, Some(content + 4.0), |ui| {
         let first = (info.offset / ROW_HEIGHT).floor().max(0.0) as usize;
         let visible_rows = (info.viewport / ROW_HEIGHT).ceil() as usize + 1;
@@ -649,9 +647,10 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                 },
             };
             let row_rect = ui.allocate(Vec2::new(total, ROW_HEIGHT));
-            let response = ui.interact(ui.id(&format!("row.{row}")), row_rect);
+            let row_key = ui.id_index("row", row);
+            let response = ui.interact(row_key, row_rect);
             let hover = ui.animate(
-                ui.id(&format!("row.{row}.hover")),
+                ui.id_index("row.hover", row),
                 if response.hovered { 1.0 } else { 0.0 },
                 grana_ui::Motion::quick(),
             );
@@ -741,9 +740,11 @@ pub(crate) fn locate(commands: &mut Vec<Command>, set: ObjectSetId, observation:
     }
 }
 
-fn header_cell(ui: &mut Ui, id: &str, text: &str, sorted: Option<bool>, rect: Rect) -> bool {
-    let key = ui.id(id);
-    let response = ui.interact(key, rect);
+fn header_cell(ui: &mut Ui, key: u64, text: &str, sorted: Option<bool>, rect: Rect) -> bool {
+    let mut response = ui.interact(key, rect);
+    if ui.focusable(key, rect, Corners::ZERO) && ui.activated(key) {
+        response.clicked = true;
+    }
     let hover = ui.animate(
         key,
         if response.hovered { 1.0 } else { 0.0 },

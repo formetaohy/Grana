@@ -116,8 +116,8 @@ impl Atlas {
     pub fn slot(&mut self, fonts: &mut Fonts, request: GlyphRequest) -> Option<GlyphSlot> {
         let fraction_x = request.position.0.rem_euclid(1.0);
         let fraction_y = request.position.1.rem_euclid(1.0);
-        let quantized_x = (fraction_x * 2.0).round() as u8 & 1;
-        let quantized_y = (fraction_y * 2.0).round() as u8 & 1;
+        let quantized_x = ((fraction_x * 4.0).round() as u8).min(3);
+        let quantized_y = ((fraction_y * 4.0).round() as u8).min(3);
         let key = GlyphKey::new(
             request.face,
             request.id,
@@ -135,7 +135,7 @@ impl Atlas {
             request.style,
             request.pixels_per_point,
             request.hint,
-            swash::zeno::Vector::new(quantized_x as f32 / 2.0, quantized_y as f32 / 2.0),
+            swash::zeno::Vector::new(quantized_x as f32 / 4.0, quantized_y as f32 / 4.0),
         )?;
         let slot = self.insert(&raster)?;
         self.slots.insert(key, slot);

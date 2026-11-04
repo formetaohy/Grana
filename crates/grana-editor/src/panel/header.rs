@@ -159,7 +159,11 @@ fn menu_button(ui: &mut Ui, id: &str, label: &str, dot: bool, maximum: f32) -> R
     let label_width = measured.min(maximum);
     let width = label_width + if dot { 26.0 } else { 22.0 };
     let rect = ui.allocate(Vec2::new(width, 26.0));
-    let response = ui.interact(key, rect);
+    let mut response = ui.interact(key, rect);
+    let corners = Corners::all(ui.theme().metrics.radius - 2.0);
+    if ui.focusable(key, rect, corners) && ui.activated(key) {
+        response.clicked = true;
+    }
     if response.clicked {
         ui.toggle_popup(key);
     }

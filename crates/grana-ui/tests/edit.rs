@@ -152,3 +152,58 @@ fn counts_clicks_and_selects_words() {
     assert_eq!(edit.word(9), (8, 10), "digits form a word");
     assert_eq!(edit.word(11), (11, 12), "a symbol is its own run");
 }
+
+#[test]
+fn undoes_and_redoes_edits() {
+    let mut input = Input::new();
+    let mut clipboard = FakeClipboard::default();
+    let mut edit = Edit::new(11, "abc", 0.0);
+
+    input.push(Event::Text("x".to_string()));
+    step(&mut input, 0.1);
+    assert!(edit.poll(&input, &mut clipboard, 0.1).is_none());
+    assert_eq!(edit.text(), "x");
+
+    shortcut(&mut input, 'z');
+    step(&mut input, 0.2);
+    assert!(edit.poll(&input, &mut clipboard, 0.2).is_none());
+    assert_eq!(edit.text(), "abc");
+
+    shortcut(&mut input, 'y');
+    step(&mut input, 0.3);
+    assert!(edit.poll(&input, &mut clipboard, 0.3).is_none());
+    assert_eq!(edit.text(), "x");
+}
+
+#[test]
+fn moves_and_erases_by_word() {
+    let mut input = Input::new();
+    let mut clipboard = FakeClipboard::default();
+    let mut edit = Edit::new(12, "alpha beta gamma", 0.0);
+    edit.place(0, false, 0.0);
+    input.push(Event::Modifiers(Modifiers {
+        control: true,
+        ..Default::default()
+    }));
+
+    press(&mut input, Key::Right);
+    step(&mut input, 0.1);
+    assert!(edit.poll(&input, &mut clipboard, 0.1).is_none());
+    assert_eq!(edit.caret(), 5);
+
+    press(&mut input, Key::Right);
+    step(&mut input, 0.2);
+    assert!(edit.poll(&input, &mut clipboard, 0.2).is_none());
+    assert_eq!(edit.caret(), 10);
+
+    press(&mut input, Key::Left);
+    step(&mut input, 0.3);
+    assert!(edit.poll(&input, &mut clipboard, 0.3).is_none());
+    assert_eq!(edit.caret(), 6);
+
+    press(&mut input, Key::Delete);
+    step(&mut input, 0.4);
+    assert!(edit.poll(&input, &mut clipboard, 0.4).is_none());
+    assert_eq!(edit.text(), "alpha  gamma");
+    assert_eq!(edit.caret(), 6);
+}

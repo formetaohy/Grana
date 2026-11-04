@@ -1157,7 +1157,6 @@ dependencies = [
  "bytemuck",
  "glam",
  "grana-gpu",
- "png",
  "swash",
  "wgpu",
 ]

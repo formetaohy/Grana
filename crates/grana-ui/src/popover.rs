@@ -64,7 +64,11 @@ pub fn combo<T: Copy + PartialEq>(
     let metrics = ui.theme().metrics;
     let font = ui.theme().font(Level::Callout);
     let rect = ui.allocate(Vec2::new(width, metrics.control_height));
-    let response = ui.interact(key, rect);
+    let mut response = ui.interact(key, rect);
+    let corners = Corners::all(metrics.radius);
+    if ui.focusable(key, rect, corners) && ui.activated(key) {
+        response.clicked = true;
+    }
     if response.clicked {
         ui.toggle_popup(key);
     }

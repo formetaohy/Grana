@@ -3,24 +3,19 @@ use glam::Vec2;
 
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
-use crate::style::{Ambient, Border, Fill, Glass, Shadow};
+use crate::style::{Border, Fill, Shadow};
 use crate::text::{Text, TextLayout, TextStyle};
 
 pub const KIND_SURFACE: u32 = 0;
-pub const KIND_GLASS: u32 = 1;
-pub const GLASS_MARGIN: f32 = 0.0;
-pub const KIND_SHADOW: u32 = 2;
-pub const KIND_GLYPH: u32 = 3;
-pub const KIND_SCENE: u32 = 4;
-pub const KIND_SEGMENT: u32 = 5;
-pub const KIND_RING: u32 = 6;
-pub const KIND_AMBIENT: u32 = 7;
-pub const KIND_GLOW: u32 = 8;
-pub const KIND_TRIANGLE: u32 = 9;
+pub const KIND_SHADOW: u32 = 1;
+pub const KIND_GLYPH: u32 = 2;
+pub const KIND_SCENE: u32 = 3;
+pub const KIND_SEGMENT: u32 = 4;
+pub const KIND_RING: u32 = 5;
+pub const KIND_TRIANGLE: u32 = 6;
 
 pub const FLAG_GRADIENT: u32 = 1 << 0;
 pub const FLAG_BORDER: u32 = 1 << 1;
-pub const FLAG_CHROME: u32 = 1 << 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -29,8 +24,6 @@ pub struct Instance {
     pub corners: [f32; 4],
     pub color: [f32; 4],
     pub color2: [f32; 4],
-    pub glass: [f32; 4],
-    pub glass2: [f32; 4],
     pub uv: [f32; 4],
     pub clip: [f32; 4],
     pub clip_corners: [f32; 4],
@@ -71,8 +64,6 @@ impl Instance {
             corners: [0.0; 4],
             color: [1.0, 1.0, 1.0, 1.0],
             color2: [0.0; 4],
-            glass: [0.0; 4],
-            glass2: [0.0; 4],
             uv: [0.0, 0.0, 1.0, 1.0],
             clip: [0.0, 0.0, 0.0, 0.0],
             clip_corners: [0.0; 4],
@@ -141,21 +132,9 @@ impl<'a> Painter<'a> {
         self.clip = previous;
     }
 
-    fn push(&mut self, mut instance: Instance) {
+    fn push(&mut self, instance: Instance) {
         let clip = self.clip;
-        instance.clip = [
-            clip.rect.min.x,
-            clip.rect.min.y,
-            clip.rect.width(),
-            clip.rect.height(),
-        ];
-        instance.clip_corners = [
-            clip.corners.top_left,
-            clip.corners.top_right,
-            clip.corners.bottom_right,
-            clip.corners.bottom_left,
-        ];
-        self.instances.push(instance);
+        self.instances.push(clipped(instance, clip));
     }
 
     pub fn count(&self) -> usize {
@@ -196,17 +175,11 @@ impl<'a> Painter<'a> {
     ) {
         if shadow.color.alpha > 0.0 && shadow.radius > 0.0 {
             self.shadow(rect, corners, shadow);
-            if matches!(fill, Fill::Glass(_))
-                && let Some(instance) = self.instances.last_mut()
-            {
-                instance.meta[1] |= FLAG_CHROME;
-            }
         }
         match fill {
             Fill::None => {}
             Fill::Solid(color) => self.rect(rect, corners, color),
             Fill::Gradient(top, bottom) => self.gradient(rect, corners, top, bottom),
-            Fill::Glass(glass) => self.glass(rect, corners, glass),
             Fill::Scene(uv) => self.scene(rect, corners, uv),
         }
         if border.width > 0.0 && border.color.alpha > 0.0 {
@@ -226,25 +199,6 @@ impl<'a> Painter<'a> {
             instance.extra = [border.width, 0.0, 0.0, 0.0];
             self.push(instance);
         }
-    }
-
-    pub fn glass(&mut self, rect: Rect, corners: Corners, glass: Glass) {
-        if rect.is_empty() {
-            return;
-        }
-        let mut instance = Instance::blank(KIND_GLASS);
-        instance.rect = [rect.min.x, rect.min.y, rect.width(), rect.height()];
-        instance.corners = corners_array(corners.resolved(rect.size()));
-        instance.color = glass.tint.to_array();
-        instance.glass = [
-            glass.displacement,
-            glass.aberration,
-            glass.saturation,
-            glass.rim,
-        ];
-        instance.glass2 = [glass.frost, glass.refraction, glass.specular, glass.blur];
-        instance.extra = [GLASS_MARGIN, 0.0, 0.0, 0.0];
-        self.push(instance);
     }
 
     pub fn shadow(&mut self, rect: Rect, corners: Corners, shadow: Shadow) {
@@ -275,35 +229,6 @@ impl<'a> Painter<'a> {
         instance.rect = [rect.min.x, rect.min.y, rect.width(), rect.height()];
         instance.corners = corners_array(corners.resolved(rect.size()));
         instance.uv = uv;
-        self.push(instance);
-    }
-
-    pub fn ambient(&mut self, rect: Rect, corners: Corners, ambient: Ambient) {
-        if rect.is_empty() || ambient.opacity <= 0.0 {
-            return;
-        }
-        let mut instance = Instance::blank(KIND_AMBIENT);
-        instance.rect = [rect.min.x, rect.min.y, rect.width(), rect.height()];
-        instance.corners = corners_array(corners.resolved(rect.size()));
-        instance.uv = ambient.uv;
-        instance.color = ambient.tint.to_array();
-        instance.extra = [
-            ambient.blur,
-            ambient.saturation,
-            ambient.brightness,
-            ambient.opacity,
-        ];
-        self.push(instance);
-    }
-
-    pub fn glow(&mut self, rect: Rect, color: Color, falloff: f32) {
-        if rect.is_empty() || color.alpha <= 0.0 {
-            return;
-        }
-        let mut instance = Instance::blank(KIND_GLOW);
-        instance.rect = [rect.min.x, rect.min.y, rect.width(), rect.height()];
-        instance.color = color.to_array();
-        instance.extra = [falloff.clamp(0.0, 1.0), 0.0, 0.0, 0.0];
         self.push(instance);
     }
 
@@ -361,18 +286,22 @@ impl<'a> Painter<'a> {
     }
 
     pub fn glyphs(&mut self, layout: &TextLayout, origin: Vec2, color: Color) {
-        let gamma = self.gamma;
-        let mut plots = Vec::with_capacity(layout.glyphs.len());
-        self.text
-            .emit(layout, origin, color, |plot| plots.push(plot));
-        for plot in plots {
+        let Self {
+            instances,
+            text,
+            clip,
+            gamma,
+        } = self;
+        let clip = *clip;
+        let gamma = *gamma;
+        text.emit(layout, origin, color, |plot| {
             let mut instance = Instance::blank(KIND_GLYPH);
             instance.rect = [plot.left, plot.top, plot.width, plot.height];
             instance.color = plot.color.to_array();
             instance.uv = plot.slot.uv;
             instance.extra = [gamma, 0.0, 0.0, 0.0];
-            self.push(instance);
-        }
+            instances.push(clipped(instance, clip));
+        });
     }
 
     pub fn text(&mut self, layout: &TextLayout, position: Vec2, color: Color) {
@@ -421,4 +350,20 @@ pub fn corners_array(corners: Corners) -> [f32; 4] {
         corners.bottom_right,
         corners.bottom_left,
     ]
+}
+
+fn clipped(mut instance: Instance, clip: Clip) -> Instance {
+    instance.clip = [
+        clip.rect.min.x,
+        clip.rect.min.y,
+        clip.rect.width(),
+        clip.rect.height(),
+    ];
+    instance.clip_corners = [
+        clip.corners.top_left,
+        clip.corners.top_right,
+        clip.corners.bottom_right,
+        clip.corners.bottom_left,
+    ];
+    instance
 }

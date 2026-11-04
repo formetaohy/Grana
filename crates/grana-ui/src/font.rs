@@ -35,8 +35,15 @@ const FACE_CANDIDATES: &[(&str, &[&str])] = &[
 
 const FALLBACK_CANDIDATES: &[&str] = &[
     "C:/Windows/Fonts/seguisym.ttf",
-    "C:/Windows/Fonts/segoeuisl.ttf",
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/msjh.ttc",
+    "C:/Windows/Fonts/simsun.ttc",
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
     "/System/Library/Fonts/Apple Symbols.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 ];
 
@@ -58,6 +65,7 @@ pub struct Fonts {
     shape: ShapeContext,
     scale: ScaleContext,
     names: Vec<String>,
+    pending: Vec<PathBuf>,
 }
 
 impl Fonts {
@@ -79,13 +87,6 @@ impl Fonts {
                 names.push(path.display().to_string());
             }
         }
-        for candidate in FALLBACK_CANDIDATES {
-            let path = Path::new(candidate);
-            if let Some(face) = Face::load(path) {
-                faces.push(face);
-                names.push(candidate.to_string());
-            }
-        }
         assert!(
             !faces.is_empty(),
             "no system UI font is available; set GRANA_UI_FONT to a TrueType font file"
@@ -95,6 +96,7 @@ impl Fonts {
             shape: ShapeContext::new(),
             scale: ScaleContext::new(),
             names,
+            pending: FALLBACK_CANDIDATES.iter().map(PathBuf::from).collect(),
         }
     }
 
@@ -106,10 +108,24 @@ impl Fonts {
         self.faces.len()
     }
 
-    pub fn face_for(&self, character: char) -> usize {
-        for (index, face) in self.faces.iter().enumerate() {
-            if face.font.charmap().map(character) != 0 {
-                return index;
+    pub fn face_for(&mut self, character: char) -> usize {
+        if let Some(index) = self
+            .faces
+            .iter()
+            .position(|face| face.font.charmap().map(character) != 0)
+        {
+            return index;
+        }
+        while !self.pending.is_empty() {
+            let path = self.pending.remove(0);
+            let Some(face) = Face::load(&path) else {
+                continue;
+            };
+            let has_glyph = face.font.charmap().map(character) != 0;
+            self.faces.push(face);
+            self.names.push(path.display().to_string());
+            if has_glyph {
+                return self.faces.len() - 1;
             }
         }
         0

@@ -1,9 +1,7 @@
 struct Uniforms {
     viewport: vec2<f32>,
     scale: f32,
-    time: f32,
-    pointer: vec2<f32>,
-    padding: vec2<f32>,
+    padding: f32,
 };
 
 struct Instance {
@@ -11,8 +9,6 @@ struct Instance {
     corners: vec4<f32>,
     color: vec4<f32>,
     color2: vec4<f32>,
-    glass: vec4<f32>,
-    glass2: vec4<f32>,
     uv: vec4<f32>,
     clip: vec4<f32>,
     clip_corners: vec4<f32>,
@@ -22,32 +18,21 @@ struct Instance {
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var<storage, read> instances: array<Instance>;
-@group(0) @binding(2) var backdrop: texture_2d<f32>;
-@group(0) @binding(3) var backdrop_sampler: sampler;
-@group(0) @binding(4) var scene: texture_2d<f32>;
-@group(0) @binding(5) var scene_sampler: sampler;
-@group(0) @binding(6) var atlas: texture_2d<f32>;
-@group(0) @binding(7) var atlas_sampler: sampler;
-@group(0) @binding(8) var glass_map: texture_2d<f32>;
-@group(0) @binding(9) var glass_map_sampler: sampler;
-@group(0) @binding(10) var sharp_backdrop: texture_2d<f32>;
+@group(0) @binding(2) var scene: texture_2d<f32>;
+@group(0) @binding(3) var scene_sampler: sampler;
+@group(0) @binding(4) var atlas: texture_2d<f32>;
+@group(0) @binding(5) var atlas_sampler: sampler;
 
 const KIND_SURFACE: u32 = 0u;
-const KIND_GLASS: u32 = 1u;
-const KIND_SHADOW: u32 = 2u;
-const KIND_GLYPH: u32 = 3u;
-const KIND_SCENE: u32 = 4u;
-const KIND_SEGMENT: u32 = 5u;
-const KIND_RING: u32 = 6u;
-const KIND_AMBIENT: u32 = 7u;
-const KIND_GLOW: u32 = 8u;
-const KIND_TRIANGLE: u32 = 9u;
+const KIND_SHADOW: u32 = 1u;
+const KIND_GLYPH: u32 = 2u;
+const KIND_SCENE: u32 = 3u;
+const KIND_SEGMENT: u32 = 4u;
+const KIND_RING: u32 = 5u;
+const KIND_TRIANGLE: u32 = 6u;
 
 const FLAG_GRADIENT: u32 = 1u;
 const FLAG_BORDER: u32 = 2u;
-
-const MAP_SIZE: f32 = 256.0;
-const RING: f32 = 1.5;
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
@@ -110,7 +95,7 @@ fn vs_main(@builtin(vertex_index) vertex: u32, @builtin(instance_index) index: u
 
 fn squircle(p: vec2<f32>, half: vec2<f32>, radius: vec4<f32>) -> f32 {
     var r = radius.x;
-    var quadrant = p;
+    let quadrant = p;
     if (p.x > 0.0 && p.y < 0.0) {
         r = radius.y;
     } else if (p.x > 0.0 && p.y >= 0.0) {
@@ -142,234 +127,6 @@ fn premultiplied(color: vec4<f32>, mask: f32) -> vec4<f32> {
 
 fn normal_cdf(x: f32) -> f32 {
     return 1.0 / (1.0 + exp(-1.702 * x));
-}
-
-fn backdrop_sample(local: vec2<f32>, size: vec2<f32>, margin: f32) -> vec3<f32> {
-    let clamped = clamp(local, vec2<f32>(0.5), size - vec2<f32>(0.5));
-    let surface = size + vec2<f32>(2.0 * margin);
-    return textureSampleLevel(backdrop, backdrop_sampler, (clamped + vec2<f32>(margin)) / surface, 0.0).rgb;
-}
-
-fn sharp_sample(screen: vec2<f32>) -> vec3<f32> {
-    let viewport = uniforms.viewport;
-    let uv = clamp(screen / viewport, vec2<f32>(0.5) / viewport, vec2<f32>(1.0) - vec2<f32>(0.5) / viewport);
-    return textureSampleLevel(sharp_backdrop, backdrop_sampler, uv, 0.0).rgb;
-}
-
-fn glass_gradient_alpha(t: f32, low: f32, high: f32, low_stop: f32, high_stop: f32) -> f32 {
-    if (t <= 0.0) {
-        return 0.0;
-    }
-    if (t < low_stop) {
-        return mix(0.0, low, t / max(low_stop, 0.0001));
-    }
-    if (t < high_stop) {
-        return mix(low, high, (t - low_stop) / max(high_stop - low_stop, 0.0001));
-    }
-    return mix(high, 0.0, (t - high_stop) / max(1.0 - high_stop, 0.0001));
-}
-
-fn ring_layer(
-    white_low: f32,
-    white_high: f32,
-    gradient_t: f32,
-    low_stop: f32,
-    high_stop: f32,
-    inset: f32,
-) -> vec4<f32> {
-    let a = glass_gradient_alpha(gradient_t, white_low, white_high, low_stop, high_stop);
-    var rgb = vec3<f32>(a);
-    var alpha = a;
-    let white_hard = 0.650 * clamp(1.50 - inset, 0.0, 1.0);
-    let white_soft = 0.160 * exp(-pow((inset - 1.00) / 1.50, 2.0) * 0.5);
-    let black_soft = 0.350 * exp(-pow((inset - 1.00) / 2.00, 2.0) * 0.5);
-    let white = clamp(white_hard + white_soft, 0.0, 1.0);
-    rgb = rgb * (1.0 - white) + white;
-    alpha = alpha * (1.0 - white) + white;
-    rgb = rgb * (1.0 - black_soft);
-    alpha = alpha * (1.0 - black_soft) + black_soft;
-    return vec4<f32>(rgb, alpha);
-}
-
-const GLASS_CHROMA: f32 = 0.06;
-
-fn apple_glass(
-    p: vec2<f32>,
-    size: vec2<f32>,
-    half: vec2<f32>,
-    radius: vec4<f32>,
-    origin: vec2<f32>,
-    sdf: f32,
-    tint: vec4<f32>,
-    specular: f32,
-    refraction: f32,
-    haze: f32,
-    margin: f32,
-) -> vec3<f32> {
-    let local = p + size * 0.5;
-    let base = origin + local;
-    let inside = max(-sdf, 0.0);
-    let thickness = mix(18.0, 26.0, haze) * uniforms.scale;
-    let falloff = 1.0 - smoothstep(0.0, thickness, inside);
-
-    let epsilon = max(uniforms.scale, 0.75);
-    let normal_x = squircle(p + vec2<f32>(epsilon, 0.0), half, radius)
-        - squircle(p - vec2<f32>(epsilon, 0.0), half, radius);
-    let normal_y = squircle(p + vec2<f32>(0.0, epsilon), half, radius)
-        - squircle(p - vec2<f32>(0.0, epsilon), half, radius);
-    let normal = normalize(vec2<f32>(normal_x, normal_y) + vec2<f32>(0.0001, 0.0001));
-
-    let amplitude = mix(32.0, 16.0, haze) * uniforms.scale * refraction;
-    let offset = -normal * falloff * amplitude;
-    let refracted = vec3<f32>(
-        mix(
-            sharp_sample(base + offset * (1.0 + GLASS_CHROMA)).r,
-            backdrop_sample(local + offset * (1.0 + GLASS_CHROMA), size, margin).r,
-            haze,
-        ),
-        mix(
-            sharp_sample(base + offset).g,
-            backdrop_sample(local + offset, size, margin).g,
-            haze,
-        ),
-        mix(
-            sharp_sample(base + offset * (1.0 - GLASS_CHROMA)).b,
-            backdrop_sample(local + offset * (1.0 - GLASS_CHROMA), size, margin).b,
-            haze,
-        ),
-    );
-    let interior = mix(
-        sharp_sample(base),
-        backdrop_sample(local, size, margin),
-        haze,
-    );
-    let neutral = vec3<f32>(dot(interior, vec3<f32>(0.2126, 0.7152, 0.0722)));
-    var color = mix(interior, neutral, 0.18 * haze);
-    color = mix(color, refracted, clamp(falloff * refraction, 0.0, 1.0));
-
-    let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
-    let dim = smoothstep(0.42, 0.86, luma) * mix(0.24, 0.16, haze);
-    color = mix(color, vec3<f32>(0.012, 0.018, 0.028), dim);
-    color = mix(color, vec3<f32>(0.34, 0.36, 0.40), 0.16 * haze);
-    color = mix(color, tint.rgb, tint.a);
-
-    let rim = pow(1.0 - smoothstep(0.0, 1.8 * uniforms.scale, inside), 4.0);
-    color = mix(color, vec3<f32>(1.0), rim * 0.34 * specular);
-    return color;
-}
-
-fn shade_glass(
-    p: vec2<f32>,
-    size: vec2<f32>,
-    radius: vec4<f32>,
-    origin: vec2<f32>,
-    glass: vec4<f32>,
-    tint: vec4<f32>,
-    rim_strength: f32,
-    refraction: f32,
-    specular: f32,
-    haze: f32,
-    margin: f32,
-) -> vec3<f32> {
-    let displacement = glass.x * uniforms.scale;
-    let aberration = glass.y;
-    let map_scale = max(size.x, size.y) / MAP_SIZE;
-    let draw = (size - vec2<f32>(MAP_SIZE) * map_scale) * 0.5;
-    let local = p + size * 0.5;
-    let m = textureSampleLevel(glass_map, glass_map_sampler, (local - draw) / map_scale / MAP_SIZE, 0.0).rgb;
-    let shift = vec2<f32>((0.5 - m.r) * displacement, (0.5 - m.b) * displacement);
-
-    let half = size * 0.5;
-    let sdf = squircle(p, half, radius);
-    let inset = abs(sdf);
-    if (refraction > 0.0) {
-        return apple_glass(
-            p,
-            size,
-            half,
-            radius,
-            origin,
-            sdf,
-            tint,
-            specular,
-            refraction,
-            haze,
-            margin,
-        );
-    }
-    let lens = clamp(min(size.x, size.y) * 0.11, 14.0 * uniforms.scale, 44.0 * uniforms.scale);
-    let edge = 1.0 - smoothstep(0.0, lens, inset);
-
-    let frost_red = backdrop_sample(local + shift, size, margin);
-    let frost_green = backdrop_sample(
-        local + shift * (1.0 + aberration * 0.05),
-        size,
-        margin,
-    );
-    let frost_blue = backdrop_sample(
-        local + shift * (1.0 + aberration * 0.10),
-        size,
-        margin,
-    );
-    let frost = mix(vec3<f32>(frost_red.r, frost_green.g, frost_blue.b), tint.rgb, tint.a);
-
-    let base = origin + local;
-    let refracted = vec3<f32>(
-        sharp_sample(base + shift).r,
-        sharp_sample(base + shift * (1.0 - aberration * 0.04)).g,
-        sharp_sample(base + shift * (1.0 - aberration * 0.08)).b,
-    );
-    let refracted_tinted = mix(refracted, tint.rgb, tint.a * 0.35);
-    var color = mix(frost, refracted_tinted, clamp(edge * refraction, 0.0, 1.0));
-
-    let pointer = uniforms.pointer;
-    let inside = all(pointer >= origin) && all(pointer <= origin + size);
-    let offset = select(vec2<f32>(0.0), (pointer - (origin + size * 0.5)) / max(size, vec2<f32>(1.0)) * 100.0, inside);
-    let variation_x = abs(offset.x);
-
-    let angle = (135.0 + offset.x * 1.2) * 0.017453292;
-    let direction = vec2<f32>(sin(angle), cos(angle));
-    let gradient_length = abs(size.x * sin(angle)) + abs(size.y * cos(angle));
-    let t = clamp(dot(p, direction) / max(gradient_length, 0.0001) + 0.5, 0.0, 1.0);
-    let low_stop = clamp(33.0 + offset.y * 0.3, 10.0, 90.0) / 100.0;
-    let high_stop = clamp(66.0 + offset.y * 0.4, 10.0, 90.0) / 100.0;
-    let inset_css = inset / max(uniforms.scale, 0.0001);
-    let first = ring_layer(0.120 + variation_x * 0.008, 0.400 + variation_x * 0.012, t, low_stop, high_stop, inset_css);
-    let second = ring_layer(0.320 + variation_x * 0.008, 0.600 + variation_x * 0.012, t, low_stop, high_stop, inset_css);
-    let ring_rgb = first.rgb * 0.2;
-    var overlaid = clamp(color + ring_rgb - color * ring_rgb, vec3<f32>(0.0), vec3<f32>(1.0));
-    if (second.a > 0.0001) {
-        let source = second.rgb / second.a;
-        let low = 2.0 * overlaid * source;
-        let high = 1.0 - 2.0 * (1.0 - overlaid) * (1.0 - source);
-        let blended = select(high, low, overlaid < vec3<f32>(0.5));
-        overlaid = mix(overlaid, clamp(blended, vec3<f32>(0.0), vec3<f32>(1.0)), second.a);
-    }
-    let ring = clamp((1.3551 + 0.5) * uniforms.scale - inset, 0.0, 1.0) * rim_strength;
-    return mix(color, overlaid, clamp(ring, 0.0, 1.0));
-}
-
-fn scene_tap(uv: vec2<f32>) -> vec3<f32> {
-    return textureSampleLevel(scene, scene_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).rgb;
-}
-
-fn ambient_color(in: VertexOut, instance: Instance) -> vec3<f32> {
-    let size = max(instance.rect.zw, vec2<f32>(1.0));
-    let step = (instance.uv.zw - instance.uv.xy) / size * instance.extra.x;
-    let uv = in.uv;
-    var color = scene_tap(uv) * 0.24;
-    color += scene_tap(uv + vec2<f32>(step.x, 0.0)) * 0.11;
-    color += scene_tap(uv - vec2<f32>(step.x, 0.0)) * 0.11;
-    color += scene_tap(uv + vec2<f32>(0.0, step.y)) * 0.11;
-    color += scene_tap(uv - vec2<f32>(0.0, step.y)) * 0.11;
-    color += scene_tap(uv + step * 0.7) * 0.08;
-    color += scene_tap(uv - step * 0.7) * 0.08;
-    color += scene_tap(uv + vec2<f32>(step.x, -step.y) * 0.7) * 0.08;
-    color += scene_tap(uv + vec2<f32>(-step.x, step.y) * 0.7) * 0.08;
-    let luminance = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
-    color = mix(vec3<f32>(luminance), color, instance.extra.y);
-    color *= instance.extra.z;
-    return mix(color, instance.color.rgb, instance.color.a);
 }
 
 fn cross2(a: vec2<f32>, b: vec2<f32>) -> f32 {
@@ -476,50 +233,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let half = size * 0.5;
     let radius = instance.corners * scale;
     let distance = squircle(p, half, radius);
-    let feathered = kind == KIND_GLASS && instance.glass2.x > 0.5;
-    if (distance > select(0.5, 1.5, feathered)) {
+    if (distance > 0.5) {
         discard;
     }
     let mask = coverage(distance) * clip_mask;
 
-    if (kind == KIND_AMBIENT) {
-        let alpha = clamp(instance.extra.w, 0.0, 1.0) * mask;
-        return vec4<f32>(ambient_color(in, instance) * alpha, alpha);
-    }
-
-    if (kind == KIND_GLOW) {
-        let radial = length(p / max(half, vec2<f32>(1.0)));
-        let falloff = mix(2.0, 8.0, instance.extra.x);
-        let alpha = pow(clamp(1.0 - radial, 0.0, 1.0), falloff);
-        return premultiplied(instance.color, alpha * mask);
-    }
-
     if (kind == KIND_SCENE) {
         let color = textureSampleLevel(scene, scene_sampler, in.uv, 0.0);
         return vec4<f32>(color.rgb * mask, mask);
-    }
-
-    if (kind == KIND_GLASS) {
-        let origin = centre - half;
-        let color = shade_glass(
-            p,
-            size,
-            radius,
-            origin,
-            instance.glass,
-            instance.color,
-            instance.glass.w,
-            instance.glass2.y,
-            instance.glass2.z,
-            instance.glass2.x,
-            instance.extra.x * uniforms.scale,
-        );
-        let glass_mask = select(
-            coverage(distance),
-            smoothstep(1.5, -1.5, distance),
-            feathered,
-        ) * clip_mask;
-        return vec4<f32>(color * glass_mask, glass_mask);
     }
 
     var color = instance.color;
@@ -527,8 +248,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let t = clamp((in.position_px.y - (instance.rect.y * scale)) / max(size.y, 1.0), 0.0, 1.0);
         color = mix(color, instance.color2, t);
     }
-    var rgb = color.rgb;
-    var alpha = color.a;
+    let rgb = color.rgb;
+    let alpha = color.a;
     if ((flags & FLAG_BORDER) != 0u) {
         let width = max(instance.extra.x * scale, 0.5);
         let depth = -distance;
@@ -538,6 +259,5 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let ink = band * border.a * mask;
         return fill * (1.0 - ink) + vec4<f32>(border.rgb * ink, ink);
     }
-    let result = premultiplied(vec4<f32>(rgb, alpha), mask);
-    return result;
+    return premultiplied(vec4<f32>(rgb, alpha), mask);
 }

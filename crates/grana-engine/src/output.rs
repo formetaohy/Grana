@@ -275,8 +275,8 @@ impl Export {
         if self.transparent {
             let (texture, view) = self.layer.as_ref().expect("the export carries a layer");
             clear(&mut encoder, view);
-            ui.renderer()
-                .paint_figure(&mut encoder, view, size, scale, ui.atlas(), instances);
+            let (renderer, atlas) = ui.renderer_and_atlas();
+            renderer.paint_figure(&mut encoder, view, size, scale, atlas, instances);
             queue.submit([encoder.finish()]);
             let below = grana_render::read_image(device, queue, &self.texture, size, self.format);
             let above = grana_render::read_image(device, queue, texture, size, self.format);
@@ -286,8 +286,8 @@ impl Export {
                 .pixels()
                 .to_vec());
         }
-        ui.renderer()
-            .paint_figure(&mut encoder, &self.view, size, scale, ui.atlas(), instances);
+        let (renderer, atlas) = ui.renderer_and_atlas();
+        renderer.paint_figure(&mut encoder, &self.view, size, scale, atlas, instances);
         queue.submit([encoder.finish()]);
         let image = grana_render::read_image(device, queue, &self.texture, size, self.format);
         Ok(image.pixels().to_vec())

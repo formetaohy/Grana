@@ -32,6 +32,13 @@ fn class(character: char) -> Class {
 }
 
 #[derive(Clone, Debug)]
+struct Snapshot {
+    text: String,
+    anchor: usize,
+    caret: usize,
+}
+
+#[derive(Clone, Debug)]
 pub struct Edit {
     key: u64,
     text: String,
@@ -40,6 +47,8 @@ pub struct Edit {
     active_at: f32,
     clicks: u32,
     last_click: Option<(f32, Vec2)>,
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
 }
 
 impl Edit {
@@ -52,6 +61,8 @@ impl Edit {
             active_at: time,
             clicks: 0,
             last_click: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
         }
     }
 
@@ -149,6 +160,78 @@ impl Edit {
         (start, end)
     }
 
+    fn previous_word(&self, caret: usize) -> usize {
+        let characters = self.text.chars().collect::<Vec<_>>();
+        let mut index = caret.min(characters.len());
+        while index > 0 && class(characters[index - 1]) == Class::Space {
+            index -= 1;
+        }
+        if index == 0 {
+            return 0;
+        }
+        let kind = class(characters[index - 1]);
+        while index > 0 && class(characters[index - 1]) == kind {
+            index -= 1;
+        }
+        index
+    }
+
+    fn next_word(&self, caret: usize) -> usize {
+        let characters = self.text.chars().collect::<Vec<_>>();
+        let mut index = caret.min(characters.len());
+        while index < characters.len() && class(characters[index]) == Class::Space {
+            index += 1;
+        }
+        if index == characters.len() {
+            return index;
+        }
+        let kind = class(characters[index]);
+        while index < characters.len() && class(characters[index]) == kind {
+            index += 1;
+        }
+        index
+    }
+
+    fn remember(&mut self) {
+        self.undo.push(self.snapshot());
+        if self.undo.len() > 128 {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            text: self.text.clone(),
+            anchor: self.anchor,
+            caret: self.caret,
+        }
+    }
+
+    fn restore(&mut self, snapshot: Snapshot) {
+        self.text = snapshot.text;
+        self.anchor = snapshot.anchor;
+        self.caret = snapshot.caret;
+    }
+
+    fn undo(&mut self, time: f32) {
+        let Some(snapshot) = self.undo.pop() else {
+            return;
+        };
+        self.redo.push(self.snapshot());
+        self.restore(snapshot);
+        self.active_at = time;
+    }
+
+    fn redo(&mut self, time: f32) {
+        let Some(snapshot) = self.redo.pop() else {
+            return;
+        };
+        self.undo.push(self.snapshot());
+        self.restore(snapshot);
+        self.active_at = time;
+    }
+
     pub fn insert(&mut self, text: &str, time: f32) {
         let text = text.replace(['\n', '\r', '\t'], " ");
         if text.is_empty() {
@@ -174,15 +257,17 @@ impl Edit {
             let Some(key) = event.key else {
                 continue;
             };
-            if modifiers.control || modifiers.logo {
-                let Key::Character(character) = key else {
-                    continue;
-                };
+            if (modifiers.control || modifiers.logo)
+                && let Key::Character(character) = key
+            {
                 match character.to_ascii_lowercase() {
                     'a' => self.select_all(time),
                     'c' => self.copy(clipboard),
                     'x' => self.cut(clipboard, time),
                     'v' => self.paste(clipboard, time),
+                    'z' if modifiers.shift => self.redo(time),
+                    'z' => self.undo(time),
+                    'y' => self.redo(time),
                     _ => {}
                 }
                 continue;
@@ -194,9 +279,21 @@ impl Edit {
                     }
                     self.insert(&character.to_string(), time);
                 }
+                Key::Backspace if modifiers.control || modifiers.logo => {
+                    self.erase_word_before(time);
+                }
                 Key::Backspace => self.erase_before(time),
+                Key::Delete if modifiers.control || modifiers.logo => self.erase_word_after(time),
                 Key::Delete => self.erase_after(time),
+                Key::Left if modifiers.control || modifiers.logo => {
+                    let target = self.previous_word(self.caret);
+                    self.place(target, modifiers.shift, time);
+                }
                 Key::Left => self.step(-1, modifiers.shift, time),
+                Key::Right if modifiers.control || modifiers.logo => {
+                    let target = self.next_word(self.caret);
+                    self.place(target, modifiers.shift, time);
+                }
                 Key::Right => self.step(1, modifiers.shift, time),
                 Key::Home => self.jump(0, modifiers.shift, time),
                 Key::End => self.jump(self.length(), modifiers.shift, time),
@@ -235,6 +332,7 @@ impl Edit {
     }
 
     fn replace(&mut self, text: &str, time: f32) {
+        self.remember();
         let (start, end) = match self.selection() {
             Some((start, end)) => (start, end),
             None => (self.caret, self.caret),
@@ -251,6 +349,7 @@ impl Edit {
         if self.selection().is_some() {
             self.replace("", time);
         } else if self.caret > 0 {
+            self.remember();
             let end = self.offset(self.caret);
             let start = self.offset(self.caret - 1);
             self.text.replace_range(start..end, "");
@@ -264,9 +363,42 @@ impl Edit {
         if self.selection().is_some() {
             self.replace("", time);
         } else if self.caret < self.length() {
+            self.remember();
             let start = self.offset(self.caret);
             let end = self.offset(self.caret + 1);
             self.text.replace_range(start..end, "");
+            self.active_at = time;
+        }
+    }
+
+    fn erase_word_before(&mut self, time: f32) {
+        if self.selection().is_some() {
+            self.replace("", time);
+            return;
+        }
+        let start = self.previous_word(self.caret);
+        if start < self.caret {
+            self.remember();
+            let start_offset = self.offset(start);
+            let end_offset = self.offset(self.caret);
+            self.text.replace_range(start_offset..end_offset, "");
+            self.caret = start;
+            self.anchor = start;
+            self.active_at = time;
+        }
+    }
+
+    fn erase_word_after(&mut self, time: f32) {
+        if self.selection().is_some() {
+            self.replace("", time);
+            return;
+        }
+        let end = self.next_word(self.caret);
+        if self.caret < end {
+            self.remember();
+            let start_offset = self.offset(self.caret);
+            let end_offset = self.offset(end);
+            self.text.replace_range(start_offset..end_offset, "");
             self.active_at = time;
         }
     }

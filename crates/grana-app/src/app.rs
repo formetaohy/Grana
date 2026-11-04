@@ -1064,6 +1064,26 @@ impl App {
             self.request_redraw();
             return;
         }
+        let focused = self
+            .surface
+            .as_ref()
+            .is_some_and(|surface| surface.ui.focus_visible());
+        if focused
+            && matches!(
+                event.logical_key,
+                Key::Named(NamedKey::Space)
+                    | Key::Named(NamedKey::ArrowLeft)
+                    | Key::Named(NamedKey::ArrowRight)
+                    | Key::Named(NamedKey::ArrowUp)
+                    | Key::Named(NamedKey::ArrowDown)
+                    | Key::Named(NamedKey::Delete)
+                    | Key::Named(NamedKey::Home)
+                    | Key::Named(NamedKey::End)
+            )
+        {
+            self.request_redraw();
+            return;
+        }
         if shortcut(self.modifiers) {
             if let Key::Character(text) = &event.logical_key {
                 if text.as_str().eq_ignore_ascii_case("s") {
@@ -1275,6 +1295,7 @@ impl App {
             }
             _ => {}
         }
+        self.request_redraw();
     }
 }
 
