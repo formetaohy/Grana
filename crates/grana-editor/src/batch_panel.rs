@@ -94,7 +94,7 @@ fn datasets(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         if state.batch_datasets().is_empty() {
             widget::weak(
                 ui,
-                "Choose a folder of OME-Zarr datasets that share this protocol.",
+                "Choose a folder of datasets that share this protocol. A subfolder groups its datasets in the comparison.",
             );
         } else {
             let key = ui.id("batch.datasets");
@@ -258,7 +258,7 @@ fn output(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         }
         widget::weak(
             ui,
-            "Each dataset writes the tables of the protocol grouping into its own folder. Re-running the same protocol resumes where it stopped. A project carries the detected objects, their presentation and the camera, so a dataset can be opened and reviewed.",
+            "Each dataset writes the tables of the protocol grouping into its own folder. Re-running the same protocol resumes where it stopped. The run closes with a comparison of its groups and, when the protocol requests snapshots, a quality sheet of every dataset. A project carries the detected objects, their presentation and the camera, so a dataset can be opened and reviewed.",
         );
     });
 }

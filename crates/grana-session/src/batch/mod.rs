@@ -1,3 +1,6 @@
+mod quality;
+mod sheet;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -20,16 +23,66 @@ use crate::event::Event as RunEvent;
 use crate::protocol::{Protocol, ProtocolError, Step};
 use crate::run;
 use crate::snapshot::{SnapshotRequest, Snapshotter};
+use quality::{Quality, Row};
 
 const RESULT: &str = "result.json";
 const PARTIAL: &str = "partial";
-const SNAPSHOT: &str = "snapshot.png";
+pub(super) const SNAPSHOT: &str = "snapshot.png";
 pub const MAX_JOBS: usize = 16;
 const DEFAULT_JOBS: usize = 4;
 const ANALYSIS_REVISION: u32 = 5;
 const CONTENT_SAMPLE: u64 = 1 << 16;
 const HASH: u64 = 0xcbf2_9ce4_8422_2325;
 const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DatasetEntry {
+    path: PathBuf,
+    group: String,
+}
+
+impl DatasetEntry {
+    pub fn new(path: PathBuf, group: String) -> Self {
+        Self { path, group }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn group(&self) -> &str {
+        &self.group
+    }
+
+    pub fn name(&self) -> String {
+        dataset_name(&self.path)
+    }
+
+    pub fn label(&self) -> String {
+        if self.group.is_empty() {
+            self.name()
+        } else {
+            format!("{}/{}", self.group, self.name())
+        }
+    }
+
+    pub(super) fn folder(&self) -> PathBuf {
+        let mut folder = PathBuf::new();
+        for group in self.group.split('/').filter(|group| !group.is_empty()) {
+            folder.push(slug(group).to_ascii_lowercase());
+        }
+        folder.push(slug(&self.name()).to_ascii_lowercase());
+        folder
+    }
+
+    fn key(&self) -> String {
+        self.folder()
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("-")
+    }
+}
 
 pub fn default_jobs() -> usize {
     std::thread::available_parallelism()
@@ -46,7 +99,7 @@ fn dataset_workers(jobs: usize) -> usize {
 
 pub struct Plan {
     pub protocol: Protocol,
-    pub datasets: Vec<PathBuf>,
+    pub datasets: Vec<DatasetEntry>,
     pub output: PathBuf,
     pub jobs: usize,
     pub project: bool,
@@ -140,22 +193,56 @@ impl Drop for Batch {
     }
 }
 
-pub fn discover(root: &Path) -> Result<Vec<PathBuf>, DiscoverError> {
-    let fail = |error: std::io::Error| DiscoverError::Read {
-        path: root.display().to_string(),
-        detail: error.to_string(),
-    };
+pub fn discover(root: &Path) -> Result<Vec<DatasetEntry>, DiscoverError> {
     if grana_image::is_image(root) {
-        return Ok(vec![root.to_path_buf()]);
+        return Ok(vec![DatasetEntry::new(root.to_path_buf(), String::new())]);
     }
-    let mut datasets = std::fs::read_dir(root)
-        .map_err(fail)?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| grana_image::is_image(path))
-        .collect::<Vec<_>>();
-    datasets.sort();
+    let mut datasets = Vec::new();
+    walk(root, root, &mut datasets)?;
+    datasets.sort_by(|left, right| {
+        left.group
+            .cmp(&right.group)
+            .then_with(|| left.path.cmp(&right.path))
+    });
     Ok(datasets)
+}
+
+fn walk(root: &Path, folder: &Path, datasets: &mut Vec<DatasetEntry>) -> Result<(), DiscoverError> {
+    let mut entries = std::fs::read_dir(folder)
+        .map_err(|error| DiscoverError::Read {
+            path: folder.display().to_string(),
+            detail: error.to_string(),
+        })?
+        .filter_map(|entry| entry.ok())
+        .collect::<Vec<_>>();
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        if grana_image::is_image(&path) {
+            datasets.push(DatasetEntry::new(path, group_of(root, &entry.path())));
+            continue;
+        }
+        let directory = entry.file_type().is_ok_and(|kind| kind.is_dir())
+            && !entry.file_name().to_string_lossy().starts_with('.');
+        if directory {
+            walk(root, &path, datasets)?;
+        }
+    }
+    Ok(())
+}
+
+fn group_of(root: &Path, dataset: &Path) -> String {
+    let Some(parent) = dataset.parent() else {
+        return String::new();
+    };
+    let Ok(relative) = parent.strip_prefix(root) else {
+        return String::new();
+    };
+    relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -165,25 +252,6 @@ struct Record {
     build: String,
     content: u64,
     artifacts: Vec<String>,
-    objects: usize,
-    detail: String,
-    quality: Vec<Quality>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Quality {
-    name: String,
-    kind: String,
-    objects: usize,
-    volume: Option<f64>,
-    area: Option<f64>,
-    size: Option<f64>,
-    intensity: Option<f64>,
-}
-
-struct Row {
-    status: &'static str,
     objects: usize,
     detail: String,
     quality: Vec<Quality>,
@@ -260,26 +328,11 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
     let mut summary = vec![grana_measure::csv::line(&[
         "dataset", "status", "objects", "detail",
     ])];
-    let mut quality = vec![grana_measure::csv::line(&[
-        "dataset",
-        "status",
-        "set",
-        "kind",
-        "objects",
-        "volume_um3",
-        "area_um2",
-        "size_um",
-        "intensity",
-    ])];
-    for (index, row) in lock(&rows).iter().enumerate() {
+    let rows = lock(&rows);
+    for (index, row) in rows.iter().enumerate() {
         if let Some(row) = row {
-            let name = dataset_name(&plan.datasets[index]);
+            let name = plan.datasets[index].name();
             summary.push(row_line(&name, row.status, row.objects, &row.detail));
-            quality.extend(
-                row.quality
-                    .iter()
-                    .map(|entry| quality_line(&name, row.status, entry)),
-            );
         }
     }
     if let Err(error) = std::fs::write(plan.output.join("summary.csv"), summary.concat()) {
@@ -287,11 +340,26 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
             "failed to write the batch summary: {error}"
         )));
     }
-    if let Err(error) = std::fs::write(plan.output.join("quality.csv"), quality.concat()) {
+    if let Err(error) = std::fs::write(
+        plan.output.join("quality.csv"),
+        quality::table(&plan, &rows),
+    ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch quality report: {error}"
         )));
     }
+    if let Err(error) = std::fs::write(
+        plan.output.join("comparison.csv"),
+        quality::comparison(&plan, &rows),
+    ) {
+        let _ = events.send(Event::Failed(format!(
+            "failed to write the batch comparison: {error}"
+        )));
+    }
+    if let Err(detail) = sheet::write(&plan, &rows) {
+        let _ = events.send(Event::Failed(detail));
+    }
+    drop(rows);
     let _ = events.send(Event::Done {
         cancelled: cancel.load(Ordering::Relaxed),
     });
@@ -311,26 +379,31 @@ fn prepare(plan: &Plan) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let mut folders = Vec::new();
     for dataset in &plan.datasets {
-        let folder = folder_name(dataset);
+        let folder = dataset.folder();
         if folders.contains(&folder) {
-            return Err(format!("two datasets share the output folder {folder}"));
+            return Err(format!(
+                "two datasets share the output folder {}",
+                folder.display()
+            ));
         }
         folders.push(folder);
     }
     Ok(())
 }
 
-fn folder_name(dataset: &Path) -> String {
-    slug(&dataset_name(dataset)).to_ascii_lowercase()
-}
-
 fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
     let index = task.index;
     let dataset = &plan.datasets[index];
-    let name = dataset_name(dataset);
-    let folder = plan.output.join(folder_name(dataset));
+    let name = dataset.name();
+    let folder = plan.output.join(dataset.folder());
     let artifacts = artifacts(task.protocol, &name, task.project);
-    if let Some(record) = completed(&folder, task.digest, &build(), content(dataset), &artifacts) {
+    if let Some(record) = completed(
+        &folder,
+        task.digest,
+        &build(),
+        content(dataset.path()),
+        &artifacts,
+    ) {
         let _ = task.events.send(Event::Dataset {
             index,
             outcome: Outcome::Complete {
@@ -353,7 +426,7 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
     }
     let _ = task.events.send(Event::Started {
         index,
-        name: name.clone(),
+        name: dataset.label(),
     });
     match analyse(task, dataset, &plan.output) {
         Ok(report) => {
@@ -400,9 +473,9 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
     }
 }
 
-fn analyse(task: &Task<'_>, dataset: &Path, output: &Path) -> Result<Report, String> {
-    let folder = output.join(folder_name(dataset));
-    let partial = output.join(format!(".{PARTIAL}-{}", folder_name(dataset)));
+fn analyse(task: &Task<'_>, dataset: &DatasetEntry, output: &Path) -> Result<Report, String> {
+    let folder = output.join(dataset.folder());
+    let partial = output.join(format!(".{PARTIAL}-{}", dataset.key()));
     clear(&partial)?;
     clear(&folder)?;
     std::fs::create_dir_all(&partial)
@@ -415,6 +488,12 @@ fn analyse(task: &Task<'_>, dataset: &Path, output: &Path) -> Result<Report, Str
             return Err(detail);
         }
     };
+    if let Some(parent) = folder.parent()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        let _ = std::fs::remove_dir_all(&partial);
+        return Err(format!("failed to create {}: {error}", parent.display()));
+    }
     std::fs::rename(&partial, &folder).map_err(|error| {
         let _ = std::fs::remove_dir_all(&partial);
         format!("failed to write {}: {error}", folder.display())
@@ -422,12 +501,12 @@ fn analyse(task: &Task<'_>, dataset: &Path, output: &Path) -> Result<Report, Str
     Ok(report)
 }
 
-fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Report, String> {
-    let source = Source::file(dataset.to_path_buf());
+fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Result<Report, String> {
+    let source = Source::file(dataset.path().to_path_buf());
     let reader = Image::open(&source)?;
     let store = GeometryStore::temporary(DEFAULT_BUDGET)
         .map_err(|error| format!("the dataset cannot page its geometry: {error}"))?;
-    let name = dataset_name(dataset);
+    let name = dataset.name();
     let artifacts = artifacts(task.protocol, &name, task.project);
     let mut scene = Scene::new(dataset_of(reader.format(), &name, reader.pyramid()));
     let staged = task
@@ -469,14 +548,7 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
     let mut objects = 0usize;
     let mut detail = Vec::new();
     let mut quality = Vec::new();
-    let keys = grana_measure::channel_keys(
-        &scene
-            .dataset
-            .channels()
-            .iter()
-            .map(|channel| channel.name().to_string())
-            .collect::<Vec<_>>(),
-    );
+    let keys = quality::keys(&scene);
     for (index, spec) in task.protocol.sets().iter().enumerate() {
         let table = scene
             .table(sets[index], spec.group(), spec.aggregate())
@@ -506,7 +578,7 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
         write(&folder.join(&file), &table.csv(&rows))?;
         objects += rows.len();
         detail.push(format!("{}={}", spec.name, rows.len()));
-        quality.push(quality_of(&scene, sets[index], &keys, &table, &rows));
+        quality.push(quality::of(&scene, sets[index], &keys, &table, &rows));
     }
     if task.protocol.coloc().is_some() {
         let channels = scene
@@ -564,7 +636,7 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
             &measure,
             ProjectSource::File {
                 name: name.clone(),
-                path: dataset.to_path_buf(),
+                path: dataset.path().to_path_buf(),
             },
             view_state(task.protocol, &scene),
         );
@@ -583,7 +655,7 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
     let record = serde_json::to_string(&Record {
         protocol: task.digest,
         build: build(),
-        content: content(dataset),
+        content: content(dataset.path()),
         artifacts,
         objects: report.objects,
         detail: report.detail.clone(),
@@ -592,44 +664,6 @@ fn write_dataset(task: &Task<'_>, dataset: &Path, folder: &Path) -> Result<Repor
     .map_err(|error| format!("failed to record the dataset: {error}"))?;
     write(&folder.join(RESULT), &record)?;
     Ok(report)
-}
-
-fn quality_of(
-    scene: &Scene,
-    set: ObjectSetId,
-    keys: &[String],
-    table: &grana_measure::Table,
-    rows: &[usize],
-) -> Quality {
-    let object = scene
-        .objects
-        .get(set)
-        .expect("the batch quality names its object set");
-    let mean = |key: &str| -> Option<f64> {
-        let column = table.column(key)?;
-        if rows.is_empty() {
-            return None;
-        }
-        let total = rows
-            .iter()
-            .map(|row| f64::from(table.value(*row, column)))
-            .sum::<f64>();
-        Some(total / rows.len() as f64)
-    };
-    let intensity = grana_measure::Measurement::Intensity {
-        channel: object.channel(),
-        statistic: grana_measure::Statistic::Mean,
-    }
-    .key(keys);
-    Quality {
-        name: object.name().to_string(),
-        kind: object.kind().name().to_string(),
-        objects: rows.len(),
-        volume: mean("volume_um3"),
-        area: mean("area_um2"),
-        size: mean("diameter_um").or_else(|| mean("length_um")),
-        intensity: mean(&intensity),
-    }
 }
 
 struct Run<'a, 'b> {
@@ -1110,24 +1144,6 @@ pub fn dataset_name(path: &Path) -> String {
 
 fn row_line(dataset: &str, status: &str, objects: usize, detail: &str) -> String {
     grana_measure::csv::line(&[dataset, status, &objects.to_string(), detail])
-}
-
-fn quality_line(dataset: &str, status: &str, quality: &Quality) -> String {
-    let formatted = |value: Option<f64>, decimals: usize| match value {
-        Some(value) => format!("{value:.decimals$}"),
-        None => String::new(),
-    };
-    grana_measure::csv::line(&[
-        dataset,
-        status,
-        &quality.name,
-        &quality.kind,
-        &quality.objects.to_string(),
-        &formatted(quality.volume, 3),
-        &formatted(quality.area, 3),
-        &formatted(quality.size, 3),
-        &formatted(quality.intensity, 2),
-    ])
 }
 
 fn lock(rows: &Mutex<Vec<Option<Row>>>) -> MutexGuard<'_, Vec<Option<Row>>> {

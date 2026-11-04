@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use grana_display::{CameraState, SectionState};
+use grana_raster::Raster;
 use grana_render::Renderer;
 use grana_scene::Scene;
 use grana_ui::Ui;
@@ -12,7 +13,6 @@ use wgpu::{
 };
 
 use crate::frame::{self, View};
-use crate::image;
 use crate::overlay;
 use crate::panels::{Panels, Panes};
 
@@ -57,13 +57,14 @@ enum Sink {
 
 impl Sink {
     fn push(&mut self, time: u32, size: [u32; 2], pixels: &[u8]) -> Result<(), String> {
+        let raster = || Raster::new(size[0], size[1], pixels.to_vec());
         match self {
-            Self::Image { path } => image::write_rgba(path, size[0], size[1], pixels),
+            Self::Image { path } => grana_raster::write(path, &raster()).map_err(String::from),
             Self::Movie { recorder, .. } => {
                 recorder.push(pixels).map_err(|error| error.to_string())
             }
             Self::Sequence { sequence } => {
-                let png = image::encode(size[0], size[1], pixels)?;
+                let png = grana_raster::encode(&raster()).map_err(String::from)?;
                 sequence.push(time, &png).map_err(|error| error.to_string())
             }
         }
@@ -279,7 +280,11 @@ impl Export {
             queue.submit([encoder.finish()]);
             let below = grana_render::read_image(device, queue, &self.texture, size, self.format);
             let above = grana_render::read_image(device, queue, texture, size, self.format);
-            return Ok(image::composite(below.pixels(), above.pixels()));
+            let below = Raster::new(size[0], size[1], below.pixels().to_vec());
+            let above = Raster::new(size[0], size[1], above.pixels().to_vec());
+            return Ok(grana_raster::composite_premultiplied(&below, &above)
+                .pixels()
+                .to_vec());
         }
         ui.renderer()
             .paint_figure(&mut encoder, &self.view, size, scale, ui.atlas(), instances);

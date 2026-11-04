@@ -27,6 +27,7 @@ zarrs = { version = "0.23", default-features = false, features = ["filesystem", 
 ome_zarr_metadata = "0.3"
 openh264 = "0.9"
 openreadout-jpegxr = "0.4"
+png = "0.18"
 zstd = "0.13"
 grana-animation = { version = "0.1.1", path = "crates/grana-animation" }
 grana-volume = { version = "0.1.1", path = "crates/grana-volume" }
@@ -40,6 +41,7 @@ grana-geometry = { version = "0.1.1", path = "crates/grana-geometry" }
 grana-display = { version = "0.1.1", path = "crates/grana-display" }
 grana-scene = { version = "0.1.1", path = "crates/grana-scene" }
 grana-project = { version = "0.1.1", path = "crates/grana-project" }
+grana-raster = { version = "0.1.1", path = "crates/grana-raster" }
 grana-ui = { version = "0.1.1", path = "crates/grana-ui" }
 grana-editor = { version = "0.1.1", path = "crates/grana-editor" }
 grana-analysis = { version = "0.1.1", path = "crates/grana-analysis" }

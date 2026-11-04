@@ -10,7 +10,7 @@ repository.workspace = true
 bytemuck = { workspace = true }
 glam = { workspace = true }
 grana-gpu = { workspace = true }
-png = "0.18"
+png = { workspace = true }
 swash = "0.2"
 wgpu = { workspace = true }
 

@@ -11,12 +11,12 @@ grana-display = { workspace = true }
 grana-figure = { workspace = true }
 grana-gpu = { workspace = true }
 grana-object = { workspace = true }
+grana-raster = { workspace = true }
 grana-render = { workspace = true }
 grana-scene = { workspace = true }
 grana-ui = { workspace = true }
 grana-video = { workspace = true }
 grana-volume = { workspace = true }
-png = "0.18"
 wgpu = { workspace = true }
 
 [dev-dependencies]

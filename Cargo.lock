@@ -896,12 +896,12 @@ dependencies = [
  "grana-gpu",
  "grana-image",
  "grana-project",
+ "grana-raster",
  "grana-render",
  "grana-scene",
  "grana-session",
  "grana-ui",
  "grana-volume",
- "png",
  "rfd",
  "wgpu",
  "winit",
@@ -956,12 +956,12 @@ dependencies = [
  "grana-geometry",
  "grana-gpu",
  "grana-object",
+ "grana-raster",
  "grana-render",
  "grana-scene",
  "grana-ui",
  "grana-video",
  "grana-volume",
- "png",
  "wgpu",
 ]
 
@@ -1045,6 +1045,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-raster"
+version = "0.1.1"
+dependencies = [
+ "png",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "grana-render"
 version = "0.1.1"
 dependencies = [
@@ -1084,6 +1092,7 @@ dependencies = [
  "grana-measure",
  "grana-object",
  "grana-project",
+ "grana-raster",
  "grana-scene",
  "grana-volume",
  "rfd",

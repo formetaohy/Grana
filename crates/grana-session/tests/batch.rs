@@ -10,7 +10,8 @@ use grana_measure::Measurement;
 use grana_project::{Project, Source as ProjectSource};
 use grana_scene::{ObjectColor, Scene};
 use grana_session::{
-    Batch, BatchEvent, Outcome, Plan, Protocol, Session, SnapshotRequest, Snapshotter, discover,
+    Batch, BatchEvent, DatasetEntry, Outcome, Plan, Protocol, Session, SnapshotRequest,
+    Snapshotter, discover,
 };
 
 const EXTENT: [u32; 3] = [40, 40, 8];
@@ -76,20 +77,29 @@ const LIMITED: &str = r#"
 fn runs_a_protocol_over_a_folder_of_datasets() {
     let temp = TempDir::new("grana-batch");
     let root = temp.path().join("datasets");
-    write_dataset(&root.join("alpha.zarr"), "Cells", "Signal");
-    write_dataset(&root.join("beta.zarr"), "Other", "Signal");
+    write_dataset(&root.join("control").join("alpha.zarr"), "Cells", "Signal");
+    write_dataset(&root.join("control").join("beta.zarr"), "Other", "Signal");
+    write_dataset(&root.join("control").join("delta.zarr"), "Cells", "Signal");
+    write_dataset(
+        &root.join("treatment").join("gamma.zarr"),
+        "Cells",
+        "Signal",
+    );
     let output = temp.path().join("out");
 
     let datasets = discover(&root).expect("the folder lists its datasets");
-    assert_eq!(datasets.len(), 2);
-    assert!(datasets[0].ends_with("alpha.zarr"));
-    assert!(datasets[1].ends_with("beta.zarr"));
+    assert_eq!(datasets.len(), 4);
+    assert_eq!(datasets[0].group(), "control");
+    assert_eq!(datasets[0].label(), "control/alpha");
+    assert_eq!(datasets[1].group(), "control");
+    assert_eq!(datasets[3].group(), "treatment");
+    assert_eq!(datasets[3].label(), "treatment/gamma");
 
     let protocol = Protocol::from_json(PROTOCOL).expect("the protocol is valid");
     let completed = run(&protocol, &datasets, &output, 2, false);
     assert_eq!(
         completed,
-        [Status::Ok, Status::Failed],
+        [Status::Ok, Status::Failed, Status::Ok, Status::Ok],
         "the batch finishes"
     );
 
@@ -99,13 +109,16 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
         "{summary}"
     );
     assert!(summary.contains("beta,failed"), "{summary}");
+    assert!(summary.contains("delta,ok,4"), "{summary}");
+    assert!(summary.contains("gamma,ok,4"), "{summary}");
     assert!(output.join("protocol.json").exists());
     assert!(
-        !output.join("beta").exists(),
+        !output.join("control").join("beta").exists(),
         "a failed dataset leaves no partial output"
     );
 
-    let objects = read(&output.join("alpha").join("Puncta-objects.csv"));
+    let folder = output.join("control").join("alpha");
+    let objects = read(&folder.join("Puncta-objects.csv"));
     let lines = objects.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 3, "both frames report their spot: {objects}");
     assert!(lines[0].contains("diameter_um"), "{objects}");
@@ -120,7 +133,7 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
         "the spot sits inside its nucleus: {objects}"
     );
 
-    let coloc = read(&output.join("alpha").join("coloc-Cells-Signal.csv"));
+    let coloc = read(&folder.join("coloc-Cells-Signal.csv"));
     assert!(coloc.starts_with("scope,frame"), "{coloc}");
     assert_eq!(coloc.lines().count(), 4, "{coloc}");
 
@@ -128,33 +141,67 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
     let mut rows = quality.lines();
     assert_eq!(
         rows.next(),
-        Some("dataset,status,set,kind,objects,volume_um3,area_um2,size_um,intensity"),
+        Some("group,dataset,status,set,kind,objects,volume_um3,area_um2,size_um,intensity"),
         "{quality}"
     );
     let rows = rows.collect::<Vec<_>>();
-    assert_eq!(rows.len(), 2, "{quality}");
+    assert_eq!(rows.len(), 6, "{quality}");
     let puncta = rows[0].split(',').collect::<Vec<_>>();
     assert_eq!(
-        &puncta[..5],
-        ["alpha", "ok", "Puncta", "Spots", "2"],
+        &puncta[..6],
+        ["control", "alpha", "ok", "Puncta", "Spots", "2"],
         "{quality}"
     );
-    assert!(puncta[5].is_empty() && puncta[6].is_empty(), "{quality}");
-    assert!(!puncta[7].is_empty() && !puncta[8].is_empty(), "{quality}");
+    assert!(puncta[6].is_empty() && puncta[7].is_empty(), "{quality}");
+    assert!(!puncta[8].is_empty() && !puncta[9].is_empty(), "{quality}");
     let nuclei = rows[1].split(',').collect::<Vec<_>>();
     assert_eq!(
-        &nuclei[..5],
-        ["alpha", "ok", "Nuclei", "Surfaces", "2"],
+        &nuclei[..6],
+        ["control", "alpha", "ok", "Nuclei", "Surfaces", "2"],
         "{quality}"
     );
-    assert!(!nuclei[5].is_empty() && !nuclei[6].is_empty(), "{quality}");
-    assert!(nuclei[7].is_empty(), "{quality}");
+    assert!(!nuclei[6].is_empty() && !nuclei[7].is_empty(), "{quality}");
+    assert!(nuclei[8].is_empty(), "{quality}");
+
+    let comparison = read(&output.join("comparison.csv"));
+    let mut rows = comparison.lines();
+    assert_eq!(
+        rows.next(),
+        Some(
+            "group,set,kind,datasets,objects,volume_um3_mean,volume_um3_std,area_um2_mean,area_um2_std,size_um_mean,size_um_std,intensity_mean,intensity_std"
+        ),
+        "{comparison}"
+    );
+    let rows = rows.collect::<Vec<_>>();
+    assert_eq!(rows.len(), 4, "{comparison}");
+    let nuclei = rows[0].split(',').collect::<Vec<_>>();
+    assert_eq!(
+        &nuclei[..4],
+        ["control", "Nuclei", "Surfaces", "2"],
+        "the group compares its two datasets: {comparison}"
+    );
+    let control = rows[1].split(',').collect::<Vec<_>>();
+    assert_eq!(
+        &control[..5],
+        ["control", "Puncta", "Spots", "2", "2.0"],
+        "{comparison}"
+    );
+    assert!(
+        !control[9].is_empty() && !control[10].is_empty(),
+        "a group of two datasets reports its deviation: {comparison}"
+    );
+    let treatment = rows[2].split(',').collect::<Vec<_>>();
+    assert_eq!(
+        &treatment[..4],
+        ["treatment", "Nuclei", "Surfaces", "1"],
+        "{comparison}"
+    );
 
     let stamp = SystemTime::now() + Duration::from_secs(3600);
     for file in [".zattrs", "0/.zarray", "0/0/0/0/0/0"] {
         let handle = fs::File::options()
             .write(true)
-            .open(root.join("alpha.zarr").join(file))
+            .open(root.join("control").join("alpha.zarr").join(file))
             .expect("the dataset files stay writable");
         handle
             .set_times(fs::FileTimes::new().set_modified(stamp))
@@ -164,8 +211,13 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
     let resumed = run(&protocol, &datasets, &output, 2, false);
     assert_eq!(
         resumed,
-        [Status::Resumed, Status::Failed],
-        "a repeated protocol resumes the completed dataset"
+        [
+            Status::Resumed,
+            Status::Failed,
+            Status::Resumed,
+            Status::Resumed
+        ],
+        "a repeated protocol resumes the completed datasets"
     );
     let summary = read(&output.join("summary.csv"));
     assert!(
@@ -207,7 +259,7 @@ enum Status {
 
 fn run(
     protocol: &Protocol,
-    datasets: &[PathBuf],
+    datasets: &[DatasetEntry],
     output: &Path,
     jobs: usize,
     project: bool,
@@ -217,7 +269,7 @@ fn run(
 
 fn run_with(
     protocol: &Protocol,
-    datasets: &[PathBuf],
+    datasets: &[DatasetEntry],
     output: &Path,
     jobs: usize,
     project: bool,
@@ -572,6 +624,15 @@ fn renders_a_snapshot_at_the_end_of_every_dataset() {
         "the run opens its renderer before any dataset"
     );
 
+    let sheet = grana_raster::read(&output.join("sheet.png")).expect("the quality sheet composes");
+    assert_eq!(sheet.size(), [824, 524], "the sheet tiles its snapshots");
+    let manifest = read(&output.join("sheet.csv"));
+    assert!(
+        manifest.starts_with("cell,group,dataset,status"),
+        "{manifest}"
+    );
+    assert!(manifest.contains("1,,alpha,ok"), "{manifest}");
+
     fs::remove_file(&file).expect("the snapshot is removable");
     let again = run_with(
         &protocol,
@@ -587,6 +648,8 @@ fn renders_a_snapshot_at_the_end_of_every_dataset() {
         "a deleted snapshot invalidates the resume marker"
     );
     assert_eq!(recorder.calls.load(Ordering::Relaxed), 2);
+    let rebuilt = grana_raster::read(&output.join("sheet.png")).expect("the sheet is rewritten");
+    assert_eq!(rebuilt.size(), [824, 524]);
 
     let orphaned = run(&protocol, &datasets, &output, 1, false);
     assert_eq!(
@@ -632,6 +695,7 @@ impl Snapshotter for Recorder {
             view: request.view.as_ref().map(|view| view.split),
             objects: scene.objects.iter().map(|set| set.detected()).sum(),
         });
-        fs::write(path, b"snapshot").map_err(|error| error.to_string())
+        let raster = grana_raster::Raster::solid(8, 4, [32, 64, 128, 255]);
+        grana_raster::write(path, &raster).map_err(String::from)
     }
 }

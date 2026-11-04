@@ -137,12 +137,7 @@ fn writes_a_transparent_viewport() {
     let opaque_ink = ink(&opaque, size);
     let transparent_ink = ink(&transparent, size);
     assert_eq!(
-        (
-            opaque_ink.0,
-            opaque_ink.1,
-            opaque_ink.2,
-            opaque_ink.3
-        ),
+        (opaque_ink.0, opaque_ink.1, opaque_ink.2, opaque_ink.3),
         (
             transparent_ink.0,
             transparent_ink.1,
@@ -336,16 +331,10 @@ struct Decoded {
 }
 
 fn decode(path: &std::path::Path) -> Decoded {
-    let file = std::io::BufReader::new(std::fs::File::open(path).expect("the image opens"));
-    let decoder = png::Decoder::new(file);
-    let mut reader = decoder.read_info().expect("the image header reads");
-    let mut pixels = vec![0; reader.output_buffer_size().expect("the image sizes")];
-    let info = reader
-        .next_frame(&mut pixels)
-        .expect("the image pixels read");
+    let raster = grana_raster::read(path).expect("the image reads");
     Decoded {
-        size: [info.width, info.height],
-        pixels,
+        size: raster.size(),
+        pixels: raster.pixels().to_vec(),
     }
 }
 

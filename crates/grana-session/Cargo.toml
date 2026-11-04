@@ -16,6 +16,7 @@ grana-image = { workspace = true }
 grana-measure = { workspace = true }
 grana-object = { workspace = true }
 grana-project = { workspace = true }
+grana-raster = { workspace = true }
 grana-scene = { workspace = true }
 grana-volume = { workspace = true }
 rfd = { workspace = true }

@@ -15,8 +15,8 @@ mod task;
 mod view;
 
 pub use batch::{
-    Batch, BatchPoll, DiscoverError, Event as BatchEvent, MAX_JOBS, Outcome, Plan, dataset_name,
-    default_jobs, discover,
+    Batch, BatchPoll, DatasetEntry, DiscoverError, Event as BatchEvent, MAX_JOBS, Outcome, Plan,
+    dataset_name, default_jobs, discover,
 };
 pub use command::{Action, Command};
 pub use event::Event;

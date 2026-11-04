@@ -280,7 +280,8 @@ impl App {
         } else {
             pixels
         };
-        match grana_engine::write_rgba(path, size[0], size[1], &pixels) {
+        let raster = grana_raster::Raster::new(size[0], size[1], pixels);
+        match grana_raster::write(path, &raster) {
             Ok(()) => eprintln!("grana: saved {}", path.display()),
             Err(detail) => eprintln!("{detail}"),
         }

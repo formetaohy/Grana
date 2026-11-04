@@ -101,7 +101,7 @@ pub struct Session {
     coloc_thresholds: Option<(ColocPair, ColocThresholds)>,
     current_view: Option<ViewState>,
     batch: Option<Batch>,
-    batch_datasets: Vec<PathBuf>,
+    batch_datasets: Vec<crate::DatasetEntry>,
     batch_rows: Vec<BatchDataset>,
     batch_output: Option<PathBuf>,
     batch_running: bool,
@@ -2345,9 +2345,9 @@ impl Session {
         match crate::discover(&root) {
             Ok(found) => {
                 let mut added = 0;
-                for path in found {
-                    if !self.batch_datasets.contains(&path) {
-                        self.batch_datasets.push(path);
+                for dataset in found {
+                    if !self.batch_datasets.contains(&dataset) {
+                        self.batch_datasets.push(dataset);
                         added += 1;
                     }
                 }
@@ -2413,8 +2413,8 @@ impl Session {
         self.batch_rows = self
             .batch_datasets
             .iter()
-            .map(|path| BatchDataset {
-                name: crate::dataset_name(path),
+            .map(|dataset| BatchDataset {
+                name: dataset.label(),
                 state: "queued".to_string(),
                 detail: String::new(),
             })

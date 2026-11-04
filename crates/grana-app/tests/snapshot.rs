@@ -88,16 +88,10 @@ impl Decoded {
 }
 
 fn decode(path: &std::path::Path) -> Decoded {
-    let file = std::io::BufReader::new(std::fs::File::open(path).expect("the snapshot opens"));
-    let decoder = png::Decoder::new(file);
-    let mut reader = decoder.read_info().expect("the snapshot header reads");
-    let mut pixels = vec![0; reader.output_buffer_size().expect("the snapshot sizes")];
-    let info = reader
-        .next_frame(&mut pixels)
-        .expect("the snapshot pixels read");
+    let raster = grana_raster::read(path).expect("the snapshot reads");
     Decoded {
-        size: [info.width, info.height],
-        pixels,
+        size: raster.size(),
+        pixels: raster.pixels().to_vec(),
     }
 }
 
