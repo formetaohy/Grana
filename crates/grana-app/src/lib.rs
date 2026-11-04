@@ -4,5 +4,5 @@ mod clipboard;
 mod snapshot;
 
 pub use app::App;
-pub use cli::{batch, gui};
+pub use cli::{batch, clear_cache, gui};
 pub use snapshot::Snapshot;

@@ -24,6 +24,7 @@ impl Session {
             Command::SaveProject => effects.save_project = Some(false),
             Command::SaveProjectAs => effects.save_project = Some(true),
             Command::SaveSnapshot => effects.snapshot = Some(self.export),
+            Command::ClearCache => self.clear_cache(),
             Command::SetTime(time) => self.set_time(time),
             Command::SelectSeries(index) => {
                 if index != self.series_index && !self.select_series(index) {

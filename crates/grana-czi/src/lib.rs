@@ -12,4 +12,4 @@ mod segment;
 mod store;
 
 pub use error::Error;
-pub use image::{Image, Scene, dataset_name, scenes};
+pub use image::{Image, Scene, dataset_name, scene_count, scenes};

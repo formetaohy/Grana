@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: grana [--batch <protocol.json> <datasets> <output> [--jobs <n>] [--project]] | grana [--capture <image.png>]";
+const USAGE: &str = "usage: grana [--batch <protocol.json> <datasets> <output> [--jobs <n>] [--project]] | grana [--capture <image.png>] | grana [--clear-cache]";
 
 fn main() -> ExitCode {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
@@ -16,6 +16,10 @@ fn run(arguments: &[String]) -> Option<ExitCode> {
         None => Some(grana_app::gui(None)),
         Some("--capture") => match arguments {
             [_, path] => Some(grana_app::gui(Some(PathBuf::from(path)))),
+            _ => None,
+        },
+        Some("--clear-cache") => match arguments {
+            [_] => Some(grana_app::clear_cache()),
             _ => None,
         },
         Some("--batch") => {

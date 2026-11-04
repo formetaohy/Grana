@@ -4,11 +4,12 @@ mod quality;
 mod resume;
 mod sheet;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use grana_protocol::Protocol;
 use thiserror::Error;
@@ -131,6 +132,7 @@ struct Task<'a> {
     protocol: &'a Protocol,
     workers: usize,
     digest: u64,
+    content: u64,
     index: usize,
     project: bool,
     snapshot: Option<&'a dyn Snapshotter>,
@@ -151,6 +153,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
         return;
     }
     let digest = plan.protocol.digest();
+    let contents = Mutex::new(HashMap::new());
     let next = AtomicUsize::new(0);
     let rows = Mutex::new((0..plan.datasets.len()).map(|_| None).collect::<Vec<_>>());
     let jobs = plan.jobs.clamp(1, MAX_JOBS).min(plan.datasets.len().max(1));
@@ -162,6 +165,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
             let next = &next;
             let rows = &rows;
             let plan = &plan;
+            let contents = &contents;
             scope.spawn(move || {
                 loop {
                     if cancel.load(Ordering::Relaxed) {
@@ -171,12 +175,14 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>) {
                     if index >= plan.datasets.len() {
                         break;
                     }
+                    let content = content_of(contents, plan.datasets[index].path());
                     work(
                         plan,
                         &Task {
                             protocol: &plan.protocol,
                             workers,
                             digest,
+                            content,
                             index,
                             project: plan.project,
                             snapshot: plan.snapshot.as_deref(),
@@ -267,13 +273,7 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
     let name = dataset.name();
     let folder = plan.output.join(dataset.folder());
     let artifacts = artifacts(task.protocol, &name, task.project);
-    if let Some(record) = completed(
-        &folder,
-        task.digest,
-        &build(),
-        content(dataset.path()),
-        &artifacts,
-    ) {
+    if let Some(record) = completed(&folder, task.digest, &build(), task.content, &artifacts) {
         let _ = task.events.send(Event::Dataset {
             index,
             outcome: Outcome::Complete {
@@ -341,6 +341,16 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
             );
         }
     }
+}
+
+type Contents = Mutex<HashMap<PathBuf, Arc<OnceLock<u64>>>>;
+
+fn content_of(contents: &Contents, path: &std::path::Path) -> u64 {
+    let cell = {
+        let mut known = contents.lock().unwrap_or_else(|error| error.into_inner());
+        Arc::clone(known.entry(path.to_path_buf()).or_default())
+    };
+    *cell.get_or_init(|| content(path))
 }
 
 fn row_line(dataset: &str, scene: &str, status: &str, objects: usize, detail: &str) -> String {

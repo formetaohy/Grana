@@ -34,32 +34,38 @@ const PALETTE: [[f32; 3]; 8] = [
     [0.85, 0.85, 0.30],
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Scene {
     extent: Extent,
     channels: usize,
     frames: u32,
+    name: Option<String>,
 }
 
 impl Scene {
-    fn new(extent: Extent, channels: usize, frames: u32) -> Self {
+    fn new(extent: Extent, channels: usize, frames: u32, name: Option<String>) -> Self {
         Self {
             extent,
             channels,
             frames,
+            name,
         }
     }
 
-    pub fn extent(self) -> Extent {
+    pub fn extent(&self) -> Extent {
         self.extent
     }
 
-    pub fn channels(self) -> usize {
+    pub fn channels(&self) -> usize {
         self.channels
     }
 
-    pub fn frames(self) -> u32 {
+    pub fn frames(&self) -> u32 {
         self.frames
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
 }
 
@@ -99,13 +105,27 @@ impl Document {
     fn scenes(&self) -> Vec<Scene> {
         self.scenes
             .iter()
-            .map(|scene| Scene::new(scene.levels[0].extent, scene.pixels.len(), scene.frames))
+            .map(|scene| {
+                Scene::new(
+                    scene.levels[0].extent,
+                    scene.pixels.len(),
+                    scene.frames,
+                    scene.name.clone(),
+                )
+            })
             .collect()
     }
 }
 
 pub fn scenes(path: &Path) -> Result<Vec<Scene>, Error> {
     Ok(Document::read(path)?.scenes())
+}
+
+pub fn scene_count(path: &Path) -> Result<usize, Error> {
+    let store = Store::open(path)?;
+    let header = header::read(&store, path)?;
+    let entries = directory::read(&store, header.directory, path)?;
+    crate::layout::scene_count(entries, path)
 }
 
 impl Image {

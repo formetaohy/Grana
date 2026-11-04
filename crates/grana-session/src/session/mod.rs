@@ -1,5 +1,6 @@
 mod analysis;
 mod batch;
+mod cache;
 mod edit;
 mod execute;
 mod export;

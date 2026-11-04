@@ -19,6 +19,22 @@ pub fn gui(capture: Option<PathBuf>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+pub fn clear_cache() -> ExitCode {
+    match grana_image::clear_cache() {
+        Ok(bytes) => {
+            println!(
+                "cleared {:.1} MiB of derived pyramid tiles",
+                bytes as f64 / (1024.0 * 1024.0)
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("failed to clear the derived pyramid cache: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 pub fn batch(
     protocol: &Path,
     datasets: &Path,

@@ -119,13 +119,16 @@ fn series(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         _ => "Series",
     };
     let selected = state.series.selected;
-    let label = format!("{unit} {} of {}", selected + 1, entries.len());
+    let label = match entries.get(selected).and_then(|entry| entry.name()) {
+        Some(name) => format!("{unit} {} of {} · {name}", selected + 1, entries.len()),
+        None => format!("{unit} {} of {}", selected + 1, entries.len()),
+    };
     let response = widget::button_with(
         ui,
         "dataset.series",
         &label,
         Role::Quiet,
-        Length::Maximum(136.0),
+        Length::Maximum(196.0),
     );
     let anchor = response.rect;
     if response.clicked {
@@ -148,13 +151,22 @@ fn series(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
     grana_ui::popover::popover(ui, "dataset.series.menu", open, anchor, 248.0, |ui| {
         for (index, entry) in entries.iter().enumerate() {
             let extent = entry.extent();
-            let detail = format!(
-                "{unit} {} · {} × {} × {}",
-                index + 1,
-                extent.x(),
-                extent.y(),
-                extent.z()
-            );
+            let detail = match entry.name() {
+                Some(name) => format!(
+                    "{unit} {} · {name} · {} × {} × {}",
+                    index + 1,
+                    extent.x(),
+                    extent.y(),
+                    extent.z()
+                ),
+                None => format!(
+                    "{unit} {} · {} × {} × {}",
+                    index + 1,
+                    extent.x(),
+                    extent.y(),
+                    extent.z()
+                ),
+            };
             if grana_ui::popover::menu_row(ui, index, &detail, index == selected) {
                 chosen = Some(index);
             }
@@ -754,7 +766,7 @@ pub fn rendering(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
     ui.store_open("rendering", next);
 }
 
-pub fn streaming(ui: &mut Ui, state: &State<'_>) {
+pub fn streaming(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
     let open = ui.disclosure_open("streaming", false);
     let next = widget::disclosure(ui, "streaming", "Streaming", open, |ui| {
         widget::labelled(ui, "volume", &bricks(state.frame.volume));
@@ -807,6 +819,9 @@ pub fn streaming(ui: &mut Ui, state: &State<'_>) {
                 widget::spinner(ui, 12.0);
                 widget::caption(ui, &format!("{} bricks in flight", state.io.pending));
             });
+        }
+        if widget::button(ui, "cache.clear", "Clear derived cache", Role::Quiet) {
+            commands.push(Command::ClearCache);
         }
     });
     ui.store_open("streaming", next);

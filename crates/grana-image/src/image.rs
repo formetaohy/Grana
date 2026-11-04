@@ -15,6 +15,7 @@ use crate::tile::{self, Grid};
 use crate::{Error, Series, Source};
 
 const RESOLVED_VERSION: u32 = 1;
+const PARTIAL_DIVISOR: u64 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
@@ -242,12 +243,63 @@ impl Image {
             for y in first[1]..=last[1] {
                 for x in first[0]..=last[0] {
                     let coord = [x, y, z];
-                    let tile = self.tile(time, level, channel, coord, &grid, info.format())?;
-                    tile::copy_intersection(&mut data, ranges, &tile, &grid.range(coord));
+                    let covered = grid.range(coord);
+                    if let Some(tile) =
+                        self.cached(time, level, channel, coord, &grid, info.format())
+                    {
+                        tile::copy_intersection(&mut data, ranges, &tile, &covered);
+                        continue;
+                    }
+                    let overlap = intersection(ranges, &covered);
+                    let partial = volume(&overlap) * PARTIAL_DIVISOR <= volume(&covered);
+                    if partial {
+                        let composed =
+                            self.compose(time, level, channel, &overlap, info.format())?;
+                        tile::copy_intersection(&mut data, ranges, &composed, &overlap);
+                    } else {
+                        let tile = self.tile(time, level, channel, coord, &grid, info.format())?;
+                        tile::copy_intersection(&mut data, ranges, &tile, &covered);
+                    }
                 }
             }
         }
         Ok(data)
+    }
+
+    fn cached(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        coord: [u32; 3],
+        grid: &Grid,
+        format: VoxelFormat,
+    ) -> Option<Arc<VoxelData>> {
+        let key = self.key(time, level, channel, coord);
+        if let Some(data) = self.tiles().fetch(key) {
+            return Some(data);
+        }
+        let shape = Shape {
+            extent: grid.extent_of(coord),
+            format,
+        };
+        let data = self
+            .store
+            .as_ref()
+            .and_then(|store| store.load(key, shape))?;
+        let data = Arc::new(data);
+        self.tiles().insert(key, Arc::clone(&data));
+        Some(data)
+    }
+
+    fn key(&self, time: u32, level: usize, channel: usize, coord: [u32; 3]) -> Key {
+        Key {
+            identity: self.identity,
+            level: u32::try_from(level).expect("a pyramid holds fewer than 4G levels"),
+            time,
+            channel: u32::try_from(channel).expect("a pyramid holds fewer than 4G channels"),
+            coord,
+        }
     }
 
     fn tile(
@@ -259,25 +311,14 @@ impl Image {
         grid: &Grid,
         format: VoxelFormat,
     ) -> Result<Arc<VoxelData>, Error> {
-        let key = Key {
-            identity: self.identity,
-            level: u32::try_from(level).expect("a pyramid holds fewer than 4G levels"),
-            time,
-            channel: u32::try_from(channel).expect("a pyramid holds fewer than 4G channels"),
-            coord,
-        };
-        if let Some(data) = self.tiles().fetch(key) {
+        if let Some(data) = self.cached(time, level, channel, coord, grid, format) {
             return Ok(data);
         }
+        let key = self.key(time, level, channel, coord);
         let shape = Shape {
             extent: grid.extent_of(coord),
             format,
         };
-        if let Some(data) = self.store.as_ref().and_then(|store| store.load(key, shape)) {
-            let data = Arc::new(data);
-            self.tiles().insert(key, Arc::clone(&data));
-            return Ok(data);
-        }
         let data = Arc::new(self.synthesize(time, level, channel, coord, grid, format)?);
         if let Some(store) = self.store.as_ref() {
             store.save(key, shape, &data);
@@ -295,11 +336,25 @@ impl Image {
         grid: &Grid,
         format: VoxelFormat,
     ) -> Result<VoxelData, Error> {
+        self.compose(time, level, channel, &grid.range(coord), format)
+    }
+
+    fn compose(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        ranges: &[Range<u32>; 3],
+        format: VoxelFormat,
+    ) -> Result<VoxelData, Error> {
         let scale = Scale::of(&self.pyramid, level);
-        let ranges = grid.range(coord);
-        let extent = grid.extent_of(coord);
-        let source = scale.source_ranges(&ranges);
-        let base = scale.base(&ranges);
+        let source = scale.source_ranges(ranges);
+        let base = scale.base(ranges);
+        let extent = Extent::new(
+            ranges[0].end - ranges[0].start,
+            ranges[1].end - ranges[1].start,
+            ranges[2].end - ranges[2].start,
+        );
         let mut field = Field::new(extent);
         level::chunks(&source, |chunk| {
             let data = self.stored_region(time, scale.source(), channel, &chunk)?;
@@ -334,6 +389,18 @@ impl Image {
     fn tiles(&self) -> MutexGuard<'_, Memory> {
         self.tiles.lock().unwrap_or_else(|error| error.into_inner())
     }
+}
+
+fn intersection(left: &[Range<u32>; 3], right: &[Range<u32>; 3]) -> [Range<u32>; 3] {
+    [0, 1, 2]
+        .map(|axis| left[axis].start.max(right[axis].start)..left[axis].end.min(right[axis].end))
+}
+
+fn volume(ranges: &[Range<u32>; 3]) -> u64 {
+    ranges
+        .iter()
+        .map(|range| u64::from(range.end.saturating_sub(range.start)))
+        .product()
 }
 
 fn geometry(pyramid: &Pyramid) -> Vec<u8> {
@@ -404,7 +471,7 @@ pub fn series_count(path: &Path) -> Result<usize, Error> {
     if path.is_dir() || !is_czi(path)? {
         return Ok(1);
     }
-    Ok(grana_czi::scenes(path)?.len())
+    Ok(grana_czi::scene_count(path)?)
 }
 
 pub fn dataset_name(path: &Path) -> String {
@@ -432,7 +499,14 @@ impl Inner {
             let scenes = image
                 .scenes()
                 .iter()
-                .map(|scene| Series::new(scene.extent(), scene.channels(), scene.frames()))
+                .map(|scene| {
+                    Series::new(
+                        scene.extent(),
+                        scene.channels(),
+                        scene.frames(),
+                        scene.name().map(str::to_string),
+                    )
+                })
                 .collect();
             return Ok((Self::Czi(image), scenes));
         }

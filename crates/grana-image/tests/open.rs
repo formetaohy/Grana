@@ -141,6 +141,37 @@ fn persists_resolved_tiles_across_sessions() {
     );
 }
 
+#[test]
+fn composes_small_resolved_regions_without_caching_whole_tiles() {
+    let temporary = Temporary::new("grana-image-partial");
+    let dataset = temporary.path().join("fixture.zarr");
+    write_zarr(&dataset);
+    let cache = temporary.path().join("cache");
+    let image = Image::open_with_cache(&Source::file(dataset), Some(cache.clone()))
+        .expect("the fixture opens");
+    let region = [4..6, 4..6, 0..1];
+    let small = image
+        .read_region(0, 1, 0, &region)
+        .expect("the small region reads");
+    assert_eq!(small, VoxelData::U16(vec![55, 59, 63, 67]));
+    assert_eq!(
+        entries(&cache),
+        0,
+        "a small region is composed without caching whole tiles"
+    );
+    let whole = image
+        .read_region(0, 1, 0, &[0..128, 0..64, 0..4])
+        .expect("the whole level reads");
+    let VoxelData::U16(samples) = &whole else {
+        panic!("the resolved level keeps the voxel format");
+    };
+    assert_eq!(samples[4 + 128 * 4], 55);
+    assert_eq!(samples[5 + 128 * 4], 59);
+    assert_eq!(samples[4 + 128 * 5], 63);
+    assert_eq!(samples[5 + 128 * 5], 67);
+    assert!(entries(&cache) > 0, "a whole region caches its tiles");
+}
+
 fn entries(root: &Path) -> usize {
     let Ok(directories) = fs::read_dir(root) else {
         return 0;

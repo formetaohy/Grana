@@ -4,15 +4,38 @@ use grana_scene::{Measure, Progress, Scene};
 
 use crate::command::Action;
 
-pub struct Message(String);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Error,
+    Info,
+}
+
+pub struct Message {
+    text: String,
+    kind: Kind,
+}
 
 impl Message {
     pub fn error(message: impl Into<String>) -> Self {
-        Self(message.into())
+        Self {
+            text: message.into(),
+            kind: Kind::Error,
+        }
+    }
+
+    pub fn info(message: impl Into<String>) -> Self {
+        Self {
+            text: message.into(),
+            kind: Kind::Info,
+        }
     }
 
     pub fn text(&self) -> &str {
-        &self.0
+        &self.text
+    }
+
+    pub fn kind(&self) -> Kind {
+        self.kind
     }
 }
 

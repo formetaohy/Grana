@@ -18,5 +18,5 @@ pub use loader::Loader;
 pub use session::{Effects, Session};
 pub use task::Poll;
 pub use view::{
-    BatchDataset, BatchView, HistoryView, IoView, Message, SeriesView, SessionView, StoreView,
+    BatchDataset, BatchView, HistoryView, IoView, Kind, Message, SeriesView, SessionView, StoreView,
 };

@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use grana_volume::{Extent, VoxelData, VoxelFormat};
 
 const MAGIC: [u8; 8] = *b"GRANATIL";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const HEADER: usize = 72;
 const TRAILER: usize = 4;
 const SUFFIX: &str = "tile";
@@ -163,7 +163,9 @@ impl Store {
         let Some(parent) = path.parent() else {
             return;
         };
-        if std::fs::create_dir_all(parent).is_err() {
+        if std::fs::create_dir_all(parent).is_err()
+            || std::fs::create_dir_all(&self.staging).is_err()
+        {
             return;
         }
         let payload = encode(data);
@@ -273,7 +275,7 @@ impl Store {
     }
 }
 
-pub(crate) fn default_root() -> Option<PathBuf> {
+pub fn default_root() -> Option<PathBuf> {
     if let Some(value) = std::env::var_os(OVERRIDE) {
         let root = PathBuf::from(value);
         return (!root.as_os_str().is_empty()).then_some(root);
@@ -295,17 +297,135 @@ pub(crate) fn identity(source: &crate::Source, geometry: &[u8]) -> u64 {
         let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
         hash = mix(hash, resolved.to_string_lossy().as_bytes());
         hash = mix(hash, &(*series as u64).to_le_bytes());
-        if let Ok(metadata) = std::fs::metadata(path) {
-            hash = mix(hash, &metadata.len().to_le_bytes());
-            let modified = metadata
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .map_or(0, |duration| duration.as_nanos());
-            hash = mix(hash, &modified.to_le_bytes());
-        }
+        hash = contents(hash, path);
     }
     hash
+}
+
+fn contents(hash: u64, path: &Path) -> u64 {
+    match std::fs::metadata(path) {
+        Err(_) => mix(hash, &u64::MAX.to_le_bytes()),
+        Ok(metadata) if metadata.is_dir() => listing(hash, path),
+        Ok(metadata) => stamp(hash, &metadata),
+    }
+}
+
+fn listing(hash: u64, root: &Path) -> u64 {
+    let mut entries = Vec::new();
+    collect(root, root, &mut entries);
+    entries.sort_unstable();
+    let mut hash = mix(hash, &(entries.len() as u64).to_le_bytes());
+    for (name, length, modified) in entries {
+        hash = mix(hash, name.as_bytes());
+        hash = mix(hash, &[0]);
+        hash = mix(hash, &length.to_le_bytes());
+        hash = mix(hash, &modified.to_le_bytes());
+    }
+    hash
+}
+
+fn collect(root: &Path, folder: &Path, entries: &mut Vec<(String, u64, u128)>) {
+    let Ok(listing) = std::fs::read_dir(folder) else {
+        return;
+    };
+    for entry in listing.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
+            collect(root, &path, entries);
+            continue;
+        }
+        let name = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        entries.push((name, metadata.len(), modified(&metadata)));
+    }
+}
+
+fn stamp(hash: u64, metadata: &std::fs::Metadata) -> u64 {
+    let hash = mix(hash, &metadata.len().to_le_bytes());
+    mix(hash, &modified(metadata).to_le_bytes())
+}
+
+fn modified(metadata: &std::fs::Metadata) -> u128 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_nanos())
+}
+
+pub fn clear(root: &Path) -> std::io::Result<u64> {
+    let mut freed = 0;
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = entry.metadata()?;
+        if metadata.is_dir() {
+            freed += directory_bytes(&path);
+            remove(&path, true)?;
+        } else {
+            freed += metadata.len();
+            remove(&path, false)?;
+        }
+    }
+    reset(root);
+    Ok(freed)
+}
+
+fn directory_bytes(path: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| {
+            let path = entry.path();
+            std::fs::symlink_metadata(&path).map_or(0, |metadata| {
+                if metadata.file_type().is_symlink() {
+                    0
+                } else if metadata.is_dir() {
+                    directory_bytes(&path)
+                } else {
+                    metadata.len()
+                }
+            })
+        })
+        .sum()
+}
+
+fn remove(path: &Path, directory: bool) -> std::io::Result<()> {
+    let outcome = if directory {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+    match outcome {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
+fn reset(root: &Path) {
+    let accounts = ACCOUNTING
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Some(account) = accounts.get(root) {
+        *account.lock().unwrap_or_else(|error| error.into_inner()) = Some(0);
+    }
 }
 
 fn mix(mut hash: u64, bytes: &[u8]) -> u64 {
@@ -507,6 +627,55 @@ mod tests {
         assert!(
             store.entries().is_empty(),
             "the store evicts its oldest tile"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn fingerprints_the_contents_of_a_directory_source() {
+        let directory = directory();
+        let nested = directory.join("0").join("0");
+        std::fs::create_dir_all(&nested).expect("the store layout is created");
+        let chunk = nested.join("0.0.0");
+        std::fs::write(&chunk, b"first").expect("the chunk is written");
+        let source = crate::Source::file_series(directory.clone(), 0);
+        let first = identity(&source, b"geometry");
+        assert_eq!(
+            identity(&source, b"geometry"),
+            first,
+            "an unchanged directory keeps its fingerprint"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&chunk, b"second").expect("the chunk is overwritten in place");
+        assert_ne!(
+            identity(&source, b"geometry"),
+            first,
+            "an overwritten chunk invalidates the fingerprint"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn clears_every_entry_of_a_cache_root() {
+        let directory = directory();
+        let store = Store::open(&directory).expect("the store opens");
+        let extent = Extent::new(4, 3, 2);
+        let data = VoxelData::U16((0..24u16).collect());
+        store.save(key([5, 0, 1]), shape(extent), &data);
+        assert_eq!(store.entries().len(), 1);
+        let freed = clear(&directory).expect("the cache root clears");
+        assert!(freed > 0, "the cleared entries report their bytes");
+        assert!(store.entries().is_empty(), "no entry survives the clear");
+        assert_eq!(
+            clear(&directory).expect("an empty cache root clears"),
+            0,
+            "clearing an empty cache frees nothing"
+        );
+        store.save(key([6, 0, 1]), shape(extent), &data);
+        assert_eq!(
+            store.entries().len(),
+            1,
+            "the store writes tiles after its root was cleared"
         );
         let _ = std::fs::remove_dir_all(&directory);
     }

@@ -17,6 +17,7 @@ pub enum Command {
     SaveProject,
     SaveProjectAs,
     SaveSnapshot,
+    ClearCache,
     SetTime(u32),
     SelectSeries(usize),
     Select(Option<Selection>),

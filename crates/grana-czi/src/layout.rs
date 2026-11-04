@@ -30,6 +30,7 @@ pub(crate) struct LevelLayout {
 }
 
 pub(crate) struct SceneLayout {
+    pub(crate) name: Option<String>,
     pub(crate) pixels: Vec<PixelType>,
     pub(crate) frames: u32,
     pub(crate) levels: Vec<LevelLayout>,
@@ -42,45 +43,11 @@ pub(crate) struct Layout {
 
 impl Layout {
     pub(crate) fn of(entries: Vec<Entry>, metadata: &Metadata, path: &Path) -> Result<Self, Error> {
-        let mut scenes: BTreeMap<u32, BTreeMap<u32, Vec<Entry>>> = BTreeMap::new();
-        for entry in entries {
-            block(&entry, path)?;
-            if entry.file_part != 0 {
-                return Err(Error::unsupported(
-                    path,
-                    "the CZI image is split over several files",
-                ));
-            }
-            axes(&entry, path)?;
-            let Some(scale) = minification(&entry) else {
-                continue;
-            };
-            let scene = u32::try_from(entry.start(Dimension::Scene)).map_err(|_| {
-                Error::metadata(
-                    path,
-                    "a CZI subblock starts before the image along the scene axis",
-                )
-            })?;
-            scenes
-                .entry(scene)
-                .or_default()
-                .entry(scale)
-                .or_default()
-                .push(entry);
-        }
-        if scenes.is_empty() {
-            return Err(Error::metadata(path, "the CZI image holds no pixels"));
-        }
+        let scenes = group(entries, path)?;
         let count = scenes.len();
         let checked = metadata.images.len() == count;
         let mut layouts = Vec::with_capacity(count);
-        for (index, (scene, mut groups)) in scenes.into_iter().enumerate() {
-            if usize::try_from(scene).ok() != Some(index) {
-                return Err(Error::metadata(
-                    path,
-                    "the CZI scenes are not numbered from zero",
-                ));
-            }
+        for (index, (_, mut groups)) in scenes.into_iter().enumerate() {
             let image = checked.then(|| &metadata.images[index]);
             layouts.push(assemble(image, &mut groups, metadata, path)?);
         }
@@ -89,6 +56,54 @@ impl Layout {
             interval: metadata.interval.unwrap_or(1.0),
         })
     }
+}
+
+pub(crate) fn scene_count(entries: Vec<Entry>, path: &Path) -> Result<usize, Error> {
+    Ok(group(entries, path)?.len())
+}
+
+fn group(
+    entries: Vec<Entry>,
+    path: &Path,
+) -> Result<BTreeMap<u32, BTreeMap<u32, Vec<Entry>>>, Error> {
+    let mut scenes: BTreeMap<u32, BTreeMap<u32, Vec<Entry>>> = BTreeMap::new();
+    for entry in entries {
+        block(&entry, path)?;
+        if entry.file_part != 0 {
+            return Err(Error::unsupported(
+                path,
+                "the CZI image is split over several files",
+            ));
+        }
+        axes(&entry, path)?;
+        let Some(scale) = minification(&entry) else {
+            continue;
+        };
+        let scene = u32::try_from(entry.start(Dimension::Scene)).map_err(|_| {
+            Error::metadata(
+                path,
+                "a CZI subblock starts before the image along the scene axis",
+            )
+        })?;
+        scenes
+            .entry(scene)
+            .or_default()
+            .entry(scale)
+            .or_default()
+            .push(entry);
+    }
+    if scenes.is_empty() {
+        return Err(Error::metadata(path, "the CZI image holds no pixels"));
+    }
+    for (index, scene) in scenes.keys().enumerate() {
+        if usize::try_from(*scene).ok() != Some(index) {
+            return Err(Error::metadata(
+                path,
+                "the CZI scenes are not numbered from zero",
+            ));
+        }
+    }
+    Ok(scenes)
 }
 
 struct Context<'a> {
@@ -209,6 +224,7 @@ fn assemble(
         levels.push(level);
     }
     Ok(SceneLayout {
+        name: image.and_then(|image| image.name.clone()),
         pixels,
         frames,
         levels,

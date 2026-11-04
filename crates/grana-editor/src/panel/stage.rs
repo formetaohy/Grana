@@ -249,16 +249,19 @@ pub(super) fn toast(ui: &mut Ui, stage: Rect, state: &State<'_>) {
         Vec2::new(width, height),
     );
     let look = ui.theme().look(Role::Hud, grana_ui::State::Rest);
-    let warning = ui.theme().palette.warning;
+    let (mark, tint) = match message.kind() {
+        grana_session::Kind::Error => (Icon::Warning, ui.theme().palette.warning),
+        grana_session::Kind::Info => (Icon::Info, ui.theme().palette.accent),
+    };
     let text_color = ui.theme().palette.text_primary;
     let mut painter = ui.painter();
     painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
     icon::paint(
-        Icon::Warning,
+        mark,
         &mut painter,
         Vec2::new(rect.min.x + 21.0, rect.center().y),
         15.0,
-        warning,
+        tint,
         1.5,
     );
     painter.text(

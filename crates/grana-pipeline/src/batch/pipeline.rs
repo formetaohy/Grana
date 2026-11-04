@@ -18,7 +18,7 @@ use crate::snapshot::SnapshotRequest;
 use grana_protocol::{Protocol, ProtocolError, Step};
 
 use super::quality::{self, Quality};
-use super::resume::{Record, build, content};
+use super::resume::{Record, build};
 use super::{DatasetEntry, Event, PARTIAL, Progress, RESULT, SNAPSHOT, Task};
 pub(super) struct Report {
     pub(super) objects: usize,
@@ -213,7 +213,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
     let record = serde_json::to_string(&Record {
         protocol: task.digest,
         build: build(),
-        content: content(dataset.path()),
+        content: task.content,
         artifacts,
         objects: report.objects,
         detail: report.detail.clone(),

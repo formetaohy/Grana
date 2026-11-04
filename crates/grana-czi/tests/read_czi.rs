@@ -182,6 +182,13 @@ fn reads_every_scene() {
     let first = Image::open(&path, 0).expect("the first scene opens");
     assert_eq!(first.scene(), 0);
     assert_eq!(first.scenes().len(), 2);
+    assert_eq!(first.scenes()[0].name(), Some("Overview"));
+    assert_eq!(first.scenes()[1].name(), Some("Detail"));
+    assert_eq!(
+        grana_czi::scene_count(&path).expect("the scene count reads the directory"),
+        2,
+        "the scene count needs no metadata"
+    );
     assert_eq!(first.scenes()[1].extent(), Extent::new(2, 2, 1));
     assert_eq!(first.pyramid().level(0).extent(), Extent::new(4, 3, 1));
     let VoxelData::U8(values) = first
@@ -573,11 +580,11 @@ fn scene_axes(scene: i32, width: u32, height: u32) -> Vec<Axis> {
 
 fn scenes_xml() -> String {
     "<ImageDocument><Metadata><Information>\
-<Image><SizeX>4</SizeX><SizeY>3</SizeY><SizeZ>1</SizeZ><SizeC>1</SizeC><SizeT>1</SizeT>\
+<Image Name=\"Overview\"><SizeX>4</SizeX><SizeY>3</SizeY><SizeZ>1</SizeZ><SizeC>1</SizeC><SizeT>1</SizeT>\
 <Dimensions><Channels>\
 <Channel Id=\"Channel:1\"><Color>#FFFF0000</Color><Fluor>Red</Fluor></Channel>\
 </Channels></Dimensions></Image>\
-<Image><SizeX>2</SizeX><SizeY>2</SizeY><SizeZ>1</SizeZ><SizeC>1</SizeC><SizeT>1</SizeT>\
+<Image Name=\"Detail\"><SizeX>2</SizeX><SizeY>2</SizeY><SizeZ>1</SizeZ><SizeC>1</SizeC><SizeT>1</SizeT>\
 </Image></Information>\
 <Scaling><Items>\
 <Distance Id=\"X\"><Value>1E-06</Value></Distance>\

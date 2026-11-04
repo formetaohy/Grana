@@ -14,6 +14,7 @@ pub(crate) struct Metadata {
 
 #[derive(Default)]
 pub(crate) struct ImageMetadata {
+    pub(crate) name: Option<String>,
     pub(crate) size_x: Option<u32>,
     pub(crate) size_y: Option<u32>,
     pub(crate) size_z: Option<u32>,
@@ -107,7 +108,10 @@ impl State {
     fn enter(&mut self, start: &BytesStart) -> Result<(), String> {
         let depth = self.stack.len();
         let field = if suffix(&self.stack, &["Information", "Image"]) {
-            self.metadata.images.push(ImageMetadata::default());
+            self.metadata.images.push(ImageMetadata {
+                name: attribute(start, b"Name")?.filter(|name| !name.trim().is_empty()),
+                ..ImageMetadata::default()
+            });
             return Ok(());
         } else if suffix(&self.stack, &["Information", "Image", "SizeX"]) {
             Field::SizeX

@@ -236,7 +236,7 @@ fn inspector_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mu
                                 ui.column(Block::column().gaps(6.0), |ui| {
                                     crate::inspector::region(ui, state, commands);
                                     crate::inspector::rendering(ui, state.scene, commands);
-                                    crate::inspector::streaming(ui, state);
+                                    crate::inspector::streaming(ui, state, commands);
                                 });
                             }
                         },
