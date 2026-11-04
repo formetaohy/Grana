@@ -14,20 +14,6 @@ pub fn edit(
     ui.push_id(salt);
     let mut stops = transfer.stops().to_vec();
     let mut changed = false;
-    ui.row(
-        Block::row().gaps(6.0).align(grana_ui::Align::Center),
-        |ui| {
-            widget::field_label(ui, "transfer");
-            if widget::button(ui, "tinted", "Tinted", Role::Quiet) {
-                stops = TransferFunction::tinted(tint).stops().to_vec();
-                changed = true;
-            }
-            if widget::button(ui, "gray", "Grayscale", Role::Quiet) {
-                stops = TransferFunction::grayscale().stops().to_vec();
-                changed = true;
-            }
-        },
-    );
     let lut = TransferFunction::new(stops.clone()).lut(96);
     let colors = lut
         .iter()
@@ -40,7 +26,7 @@ pub fn edit(
             )
         })
         .collect::<Vec<_>>();
-    widget::gradient(ui, &colors, 22.0);
+    widget::gradient(ui, &colors, 18.0);
     let mut removed = None;
     for (index, stop) in stops.iter_mut().enumerate() {
         ui.push_id(&format!("stop.{index}"));
@@ -48,6 +34,13 @@ pub fn edit(
         ui.row(
             Block::row().gaps(6.0).align(grana_ui::Align::Center),
             |ui| {
+                let text = format!("{:>6.0}", intensity.value(stop.position()));
+                widget::caption(ui, &text);
+                if let Some(color) = grana_ui::popover::color_field(ui, "color", stop.color(), 16.0)
+                {
+                    stop.set_color(color);
+                    changed = true;
+                }
                 if let Some(value) = widget::slider_sized(
                     ui,
                     "position",
@@ -55,17 +48,10 @@ pub fn edit(
                     position,
                     0.0..=1.0,
                     false,
-                    Length::Fixed(72.0),
+                    Length::Fill,
                 ) {
                     position = value;
                     stop.set_position(value);
-                    changed = true;
-                }
-                let text = format!("{:>6.0}", intensity.value(stop.position()));
-                widget::caption(ui, &text);
-                let base = stop.color();
-                if let Some(color) = grana_ui::popover::color_field(ui, "color", base, 18.0) {
-                    stop.set_color(color);
                     changed = true;
                 }
                 if let Some(value) = widget::slider_sized(
@@ -75,7 +61,7 @@ pub fn edit(
                     stop.opacity(),
                     0.0..=1.0,
                     false,
-                    Length::Fill,
+                    Length::Fixed(54.0),
                 ) {
                     stop.set_opacity(value);
                     changed = true;
@@ -100,15 +86,10 @@ pub fn edit(
         stops.remove(index);
         changed = true;
     }
-    ui.row(
-        Block::row().gaps(6.0).align(grana_ui::Align::Center),
-        |ui| {
-            if widget::button(ui, "add", "Add stop", Role::Quiet) {
-                stops.push(Stop::new(midpoint(&stops), tint, 0.5));
-                changed = true;
-            }
-        },
-    );
+    if widget::button(ui, "add", "Add stop", Role::Control) {
+        stops.push(Stop::new(midpoint(&stops), tint, 0.5));
+        changed = true;
+    }
     if changed {
         *transfer = TransferFunction::new(stops);
     }

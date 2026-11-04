@@ -21,7 +21,7 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
             ui,
             Icon::Grid,
             "Two channels required",
-            "Colocalization compares the intensities of two channels across every frame in the current region and analysis mask.",
+            "Compares two channels across every frame in the region and mask.",
         );
         return;
     };
@@ -35,7 +35,7 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
             if running.is_some() {
                 "Streaming both channels over every frame of the current region and analysis mask."
             } else {
-                "The current region and analysis mask are applied. Choose a channel pair, then compute correlation, overlap, Manders coefficients and the Costes significance test."
+                "Choose a channel pair, then compute overlap, Manders coefficients and Costes."
             },
         );
         return;
@@ -77,7 +77,7 @@ fn header(
             .align(Align::Center)
             .height(Length::Fixed(32.0)),
         |ui| {
-            widget::field_label(ui, "PAIR");
+            widget::field_label(ui, "Pair");
             let options = names
                 .iter()
                 .enumerate()
@@ -155,7 +155,7 @@ fn results_row(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, pair
                 let stored = result.pair();
                 let label = format!("{} × {}", names[stored.a()], names[stored.b()]);
                 let role = if stored == pair {
-                    Role::Prominent
+                    Role::Tinted
                 } else {
                     Role::Quiet
                 };
@@ -368,13 +368,13 @@ fn method(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         card_title(ui, Icon::Sparkles, "Method", None);
         widget::labelled(
             ui,
-            "resolution",
+            "Resolution",
             &format!("level {level} · permutation {permutation_level} · stride {stride}"),
         );
-        widget::labelled(ui, "scan", &format!("{} voxels", cost.scan_voxels()));
+        widget::labelled(ui, "Scan", &format!("{} voxels", cost.scan_voxels()));
         widget::labelled(
             ui,
-            "samples",
+            "Samples",
             &format!(
                 "{} × {} frames · {} blocks",
                 cost.permutation_voxels(),
@@ -382,9 +382,9 @@ fn method(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
                 cost.blocks()
             ),
         );
-        widget::labelled(ui, "mask", &mask);
+        widget::labelled(ui, "Mask", &mask);
         ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-            widget::field_label(ui, "SHUFFLES");
+            widget::field_label(ui, "Shuffles");
             if let Some(value) = widget::drag_value(ui, "coloc.permutations", permutations, 0.5, 0)
             {
                 permutations = value.round().clamp(1.0, max_permutations);

@@ -79,16 +79,15 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                         if widget::action_button(ui, "preview", symbol, label, Role::Prominent)
                             .clicked
                         {
-                            state.workspace.playback.previewing = !state.workspace.playback.previewing;
+                            state.workspace.playback.previewing =
+                                !state.workspace.playback.previewing;
                         }
                         if widget::action_button(ui, "key", Icon::Plus, "Keyframe", Role::Control)
                             .clicked
                         {
                             commands.push(Command::SetKeyframe);
                         }
-                        if !empty
-                            && widget::button(ui, "clear", "Clear", Role::Quiet)
-                        {
+                        if !empty && widget::button(ui, "clear", "Clear", Role::Quiet) {
                             commands.push(Command::ClearKeyframes);
                         }
                         ui.space(2.0);
@@ -97,9 +96,7 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                             ui.theme().palette.text_tertiary,
                         );
                         ui.text_style(
-                            &format!(
-                                "{position:.2} / {duration:.2} s · frame {current_frame}"
-                            ),
+                            &format!("{position:.2} / {duration:.2} s · frame {current_frame}"),
                             style,
                         );
                     });
@@ -115,9 +112,7 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
             },
         );
         ui.column(
-            Block::column()
-                .width(Length::Fixed(card_width))
-                .gaps(10.0),
+            Block::column().width(Length::Fixed(card_width)).gaps(10.0),
             |ui| {
                 card(ui, 8.0, |ui| {
                     card_title(ui, Icon::Film, "Movie", None);
@@ -125,39 +120,31 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                         widget::field_label(ui, "FPS");
                         if let Some(value) = widget::drag_value(ui, "fps", fps as f32, 0.5, 0) {
                             commands.push(Command::SetTimelineFps(
-                                (value.round() as u32)
-                                    .clamp(1, grana_animation::Timeline::MAX_FPS),
+                                (value.round() as u32).clamp(1, grana_animation::Timeline::MAX_FPS),
                             ));
                         }
-                        widget::field_label(ui, "LENGTH");
+                        widget::field_label(ui, "Length");
                         if let Some(value) = widget::drag_value(ui, "length", duration, 0.1, 2) {
                             commands.push(Command::SetTimelineDuration(value.clamp(0.5, 600.0)));
                         }
                         widget::caption(ui, "s");
                     });
                     ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-                        widget::field_label(ui, "WIDTH");
+                        widget::field_label(ui, "Width");
                         let options = WIDTHS
                             .iter()
                             .map(|width| (*width, width.to_string()))
                             .collect::<Vec<_>>();
-                        if let Some(value) = grana_ui::popover::combo(
-                            ui,
-                            "movie.width",
-                            96.0,
-                            &options,
-                            Some(width),
-                        ) {
+                        if let Some(value) =
+                            grana_ui::popover::combo(ui, "movie.width", 96.0, &options, Some(width))
+                        {
                             state.workspace.playback.width = value;
                         }
                         let style = TextStyle::new(
                             ui.theme().font(grana_ui::Level::Monospace),
                             ui.theme().palette.text_secondary,
                         );
-                        ui.text_style(
-                            &format!("{} × {}", movie_size[0], movie_size[1]),
-                            style,
-                        );
+                        ui.text_style(&format!("{} × {}", movie_size[0], movie_size[1]), style);
                     });
                     widget::caption(
                         ui,
@@ -185,14 +172,8 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                             } else {
                                 Role::Quiet
                             };
-                            if widget::button_with(
-                                ui,
-                                "export",
-                                "Export movie",
-                                role,
-                                Length::Fill,
-                            )
-                            .clicked
+                            if widget::button_with(ui, "export", "Export movie", role, Length::Fill)
+                                .clicked
                                 && enabled
                             {
                                 commands.push(Command::ExportMovie { width });
@@ -201,13 +182,13 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                     }
                     widget::weak(
                         ui,
-                        "The movie shows the full viewport: the 3D volume, the section pane and the figure overlay.",
+                        "Exports the full viewport: volume, section and figure overlay.",
                     );
                 });
                 card(ui, 8.0, |ui| {
                     card_title(ui, Icon::Camera, "Image", None);
                     ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-                        widget::field_label(ui, "WIDTH");
+                        widget::field_label(ui, "Width");
                         if let Some(value) = grana_ui::popover::combo(
                             ui,
                             "export.width",
@@ -263,21 +244,11 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                             transparent,
                         )));
                     }
-                    widget::caption(
-                        ui,
-                        &format!(
-                            "One PNG per time point · {frames} files · folder {}-sequence/ · names <stem>-<index>-t<time>.png",
-                            grana_session::slug(state.scene.dataset.name())
-                        ),
-                    );
+                    widget::caption(ui, &format!("One PNG per time point · {frames} files"));
                 });
                 if let Some(message) = message {
                     widget::weak(ui, &message);
                 }
-                widget::weak(
-                    ui,
-                    "Keyframes record the camera, section plane and time point. Motion eases through every keyframe.",
-                );
             },
         );
     });

@@ -1,7 +1,6 @@
 use glam::Vec2;
 
 use crate::clipboard::{Clipboard, NullClipboard};
-use crate::color::Color;
 use crate::edit::{Edit, Outcome as EditOutcome};
 use crate::geometry::{Corners, Edges, Rect};
 use crate::input::{Button, Input};
@@ -1037,6 +1036,10 @@ impl Ui {
         if self.input.button(Button::Primary).down {
             return true;
         }
+        self.pointer_over_widget()
+    }
+
+    pub fn pointer_over_widget(&self) -> bool {
         let pointer = self.input.position();
         self.registry
             .hits()
@@ -1189,11 +1192,11 @@ impl Ui {
 
     fn scrollbar(&mut self, key: u64, outer: Rect, axis: Axis, bar: f32) {
         let scroll = self.registry.scroll_state(key);
-        let (track, thumb) = match axis {
+        let thumb = match axis {
             Axis::Column => {
                 let track = Rect::from_min_size(
-                    Vec2::new(outer.max.x - 7.0, outer.min.y + 4.0),
-                    Vec2::new(3.0, (outer.height() - 8.0).max(8.0)),
+                    Vec2::new(outer.max.x - 8.0, outer.min.y + 4.0),
+                    Vec2::new(4.0, (outer.height() - 8.0).max(8.0)),
                 );
                 let ratio = (scroll.viewport / scroll.content.max(1.0)).clamp(0.1, 1.0);
                 let thumb_height = (track.height() * ratio).max(24.0).min(track.height());
@@ -1203,18 +1206,15 @@ impl Ui {
                 } else {
                     0.0
                 };
-                (
-                    track,
-                    Rect::from_min_size(
-                        Vec2::new(track.min.x, track.min.y + travel * position),
-                        Vec2::new(track.width(), thumb_height),
-                    ),
+                Rect::from_min_size(
+                    Vec2::new(track.min.x, track.min.y + travel * position),
+                    Vec2::new(track.width(), thumb_height),
                 )
             }
             Axis::Row => {
                 let track = Rect::from_min_size(
-                    Vec2::new(outer.min.x + 4.0, outer.max.y - 7.0),
-                    Vec2::new((outer.width() - 8.0).max(8.0), 3.0),
+                    Vec2::new(outer.min.x + 4.0, outer.max.y - 8.0),
+                    Vec2::new((outer.width() - 8.0).max(8.0), 4.0),
                 );
                 let ratio = (scroll.viewport / scroll.content.max(1.0)).clamp(0.1, 1.0);
                 let thumb_width = (track.width() * ratio).max(24.0).min(track.width());
@@ -1224,17 +1224,13 @@ impl Ui {
                 } else {
                     0.0
                 };
-                (
-                    track,
-                    Rect::from_min_size(
-                        Vec2::new(track.min.x + travel * position, track.min.y),
-                        Vec2::new(thumb_width, track.height()),
-                    ),
+                Rect::from_min_size(
+                    Vec2::new(track.min.x + travel * position, track.min.y),
+                    Vec2::new(thumb_width, track.height()),
                 )
             }
         };
-        let _ = track;
-        let color = Color::white_alpha(0.22 * bar);
+        let color = self.theme.palette.text_quaternary.with_alpha(0.7 * bar);
         let mut painter = self.overlay_painter();
         painter.rect(thumb, Corners::capsule(), color);
     }
@@ -1299,10 +1295,13 @@ impl Ui {
         if text.is_empty() {
             return;
         }
-        let style = TextStyle::new(self.theme.font(Level::Caption), Color::WHITE);
+        let style = TextStyle::new(
+            self.theme.font(Level::Caption),
+            self.theme.palette.text_primary,
+        );
         let layout = self.layout_text(&text, style, 0.0);
         let pointer = self.input.position();
-        let size = layout.size + Vec2::new(18.0, 12.0);
+        let size = layout.size + Vec2::new(14.0, 10.0);
         let mut origin = pointer + Vec2::new(14.0, 18.0);
         if origin.x + size.x > self.size.x - 8.0 {
             origin.x = self.size.x - 8.0 - size.x;
@@ -1311,16 +1310,24 @@ impl Ui {
             origin.y = pointer.y - 14.0 - size.y;
         }
         let rect = Rect::from_min_size(origin, size);
-        let look = self.theme.look(Role::Popover, State::Rest);
         let clip = self.overlay_clip;
         let dark = self.theme.dark;
         {
             let mut painter = Painter::new(&mut self.overlay, &mut self.text, clip, dark);
-            painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
+            painter.outlined(
+                rect,
+                Corners::all(5.0),
+                crate::style::Fill::Solid(self.theme.palette.raised),
+                crate::style::Border {
+                    width: 1.0,
+                    color: self.theme.palette.border,
+                },
+                crate::style::Shadow::NONE,
+            );
             painter.text(
                 &layout,
-                rect.min + Vec2::new(9.0, 6.0),
-                Color::white_alpha(0.94),
+                rect.min + Vec2::new(7.0, 5.0),
+                self.theme.palette.text_primary,
             );
         }
     }

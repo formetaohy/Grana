@@ -84,7 +84,7 @@ fn titles(ui: &mut Ui, plot: &Plot, table: &Table, card: Rect) {
         ),
     };
     let style = TextStyle::new(
-        TypeStyle::new(9.0, 560.0, 11.0),
+        TypeStyle::new(10.0, 500.0, 13.0),
         ui.theme().palette.text_tertiary,
     );
     let strip = Rect::from_min_max(
@@ -161,7 +161,7 @@ fn summary(ui: &mut Ui, plot: &Plot, table: &Table, readout: Readout, card: Rect
         }
     };
     let style = TextStyle::new(
-        TypeStyle::new(9.5, 460.0, 12.0),
+        TypeStyle::new(10.5, 400.0, 14.0),
         ui.theme().palette.text_tertiary,
     )
     .truncating();

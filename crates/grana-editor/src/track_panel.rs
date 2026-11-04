@@ -34,7 +34,7 @@ pub fn entry(ui: &mut Ui, state: &mut State<'_>, id: ObjectSetId) {
             None => widget::caption(ui, "not tracked yet"),
         }
         ui.space(1.0);
-        if widget::button(ui, "tracks.open", "Lineage", Role::Quiet) {
+        if widget::button(ui, "tracks.open", "Lineage", Role::Control) {
             state.workspace.panel = Some(Panel::Tracks);
             state.workspace.track_set = Some(id);
         }
@@ -175,7 +175,7 @@ fn header(
             .align(Align::Center)
             .height(Length::Fixed(30.0)),
         |ui| {
-            widget::field_label(ui, "SET");
+            widget::field_label(ui, "Set");
             if let Some(index) =
                 grana_ui::popover::combo(ui, "tracks.set", 176.0, &options, Some(chosen))
                 && index != chosen
@@ -238,7 +238,7 @@ fn parameters(
         if let Some(value) = widget::slider_readout(
             ui,
             "step",
-            Some("step"),
+            Some("Step"),
             step,
             voxel..=step_max,
             true,
@@ -249,7 +249,7 @@ fn parameters(
         if let Some(value) = widget::slider_readout(
             ui,
             "gap",
-            Some("gap"),
+            Some("Gap"),
             gap,
             0.0..=10.0,
             false,
@@ -257,7 +257,7 @@ fn parameters(
         ) {
             gap = value;
         }
-        if let Some(value) = widget::toggle_row(ui, "division", "division", division) {
+        if let Some(value) = widget::toggle_row(ui, "division", "Division", division) {
             division = value;
         }
         let minimum = step;
@@ -267,7 +267,7 @@ fn parameters(
             if let Some(value) = widget::slider_readout(
                 ui,
                 "division.range",
-                Some("division range"),
+                Some("Division range"),
                 range,
                 minimum..=maximum,
                 false,
@@ -284,13 +284,13 @@ fn parameters(
             });
         }
         ui.separator();
-        if let Some(value) = widget::toggle_row(ui, "visible", "visible", shown) {
+        if let Some(value) = widget::toggle_row(ui, "visible", "Visible", shown) {
             shown = value;
         }
         if let Some(value) = widget::slider_readout(
             ui,
             "width",
-            Some("tube width"),
+            Some("Tube width"),
             width,
             min_thickness..=max_thickness,
             true,
@@ -436,9 +436,19 @@ fn lineage(
     let x = |time: u32| inner.min.x + (time as f32 / span as f32) * inner.width();
     let lane_y = |lane: usize| inner.min.y + lane as f32 * ROW + ROW * 0.5 - offset;
     let source = workspace.join;
+    let palette = ui.theme().palette;
     {
         let mut painter = ui.painter();
-        painter.rect(rect, Corners::all(radius), Color::white_alpha(0.035));
+        painter.outlined(
+            rect,
+            Corners::all(radius),
+            grana_ui::Fill::Solid(palette.card),
+            grana_ui::Border {
+                width: 1.0,
+                color: palette.border,
+            },
+            grana_ui::Shadow::NONE,
+        );
         let clip = painter.clip();
         painter.push_clip(inner, Corners::ZERO);
         for part in 1..4 {
@@ -447,7 +457,7 @@ fn lineage(
                 Vec2::new(grid, inner.min.y),
                 Vec2::new(grid, inner.max.y),
                 0.5,
-                Color::white_alpha(0.05),
+                palette.separator,
             );
         }
         painter.segment(

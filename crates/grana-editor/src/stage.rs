@@ -110,7 +110,7 @@ impl Stage {
 
     pub fn input(&mut self, ui: &mut Ui, viewport: &mut Viewport, spacing: Spacing) -> Interaction {
         let mut interaction = Interaction::default();
-        let blocked = ui.pointer_over_chrome() || ui.pointer_captured();
+        let blocked = ui.pointer_over_chrome() || ui.pointer_over_widget() || ui.pointer_captured();
         let input = ui.input();
         self.modifiers = input.modifiers();
         interaction.modifiers = self.modifiers;

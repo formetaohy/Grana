@@ -2,7 +2,7 @@ use glam::Vec2;
 
 use crate::color::Color;
 use crate::geometry::Corners;
-use crate::style::{Border, Fill, Glass, Look, Shadow, State};
+use crate::style::{Border, Fill, Look, Shadow, State};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -56,6 +56,13 @@ impl TypeStyle {
             leading,
         }
     }
+
+    pub const fn medium(self) -> Self {
+        Self {
+            weight: 500.0,
+            ..self
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -73,6 +80,12 @@ pub struct Palette {
     pub warning: Color,
     pub success: Color,
     pub separator: Color,
+    pub border: Color,
+    pub raised: Color,
+    pub selected: Color,
+    pub card: Color,
+    pub field: Color,
+    pub focus: Color,
     pub scrim: Color,
     pub scene_backdrop: Color,
 }
@@ -80,41 +93,53 @@ pub struct Palette {
 impl Palette {
     pub fn dark() -> Self {
         Self {
-            text_primary: Color::rgba(1.0, 1.0, 1.0, 0.96),
-            text_secondary: Color::rgba(1.0, 1.0, 1.0, 0.76),
-            text_tertiary: Color::rgba(1.0, 1.0, 1.0, 0.54),
-            text_quaternary: Color::rgba(1.0, 1.0, 1.0, 0.28),
-            text_on_accent: Color::WHITE,
-            accent: Color::bytes(10, 132, 255),
-            accent_hover: Color::bytes(64, 156, 255),
-            accent_press: Color::bytes(0, 100, 214),
-            brand: Color::bytes(214, 232, 92),
-            danger: Color::bytes(255, 69, 58),
-            warning: Color::bytes(255, 214, 10),
-            success: Color::bytes(48, 209, 88),
-            separator: Color::rgba(1.0, 1.0, 1.0, 0.08),
-            scrim: Color::rgba(0.0, 0.0, 0.0, 0.34),
-            scene_backdrop: Color::bytes(8, 9, 13),
+            text_primary: Color::bytes(250, 250, 250),
+            text_secondary: Color::bytes(161, 161, 170),
+            text_tertiary: Color::bytes(113, 113, 122),
+            text_quaternary: Color::bytes(82, 82, 91),
+            text_on_accent: Color::bytes(24, 24, 27),
+            accent: Color::bytes(250, 250, 250),
+            accent_hover: Color::bytes(228, 228, 231),
+            accent_press: Color::bytes(212, 212, 216),
+            brand: Color::bytes(250, 250, 250),
+            danger: Color::bytes(248, 113, 113),
+            warning: Color::bytes(251, 191, 36),
+            success: Color::bytes(74, 222, 128),
+            separator: Color::bytes(31, 31, 35),
+            border: Color::bytes(39, 39, 42),
+            raised: Color::bytes(24, 24, 27),
+            selected: Color::bytes(39, 39, 42),
+            card: Color::bytes(10, 10, 11),
+            field: Color::bytes(10, 10, 11),
+            focus: Color::bytes(212, 212, 216),
+            scrim: Color::rgba(0.0, 0.0, 0.0, 0.6),
+            scene_backdrop: Color::bytes(5, 5, 6),
         }
     }
 
     pub fn light() -> Self {
         Self {
-            text_primary: Color::rgba(0.0, 0.0, 0.0, 0.94),
-            text_secondary: Color::rgba(0.0, 0.0, 0.0, 0.60),
-            text_tertiary: Color::rgba(0.0, 0.0, 0.0, 0.38),
-            text_quaternary: Color::rgba(0.0, 0.0, 0.0, 0.18),
-            text_on_accent: Color::WHITE,
-            accent: Color::bytes(0, 122, 255),
-            accent_hover: Color::bytes(38, 145, 255),
-            accent_press: Color::bytes(0, 100, 220),
-            brand: Color::bytes(121, 138, 22),
-            danger: Color::bytes(215, 0, 21),
-            warning: Color::bytes(178, 128, 0),
-            success: Color::bytes(28, 160, 60),
-            separator: Color::rgba(0.0, 0.0, 0.0, 0.08),
-            scrim: Color::rgba(0.0, 0.0, 0.0, 0.14),
-            scene_backdrop: Color::bytes(242, 242, 247),
+            text_primary: Color::bytes(9, 9, 11),
+            text_secondary: Color::bytes(82, 82, 91),
+            text_tertiary: Color::bytes(113, 113, 122),
+            text_quaternary: Color::bytes(161, 161, 170),
+            text_on_accent: Color::bytes(250, 250, 250),
+            accent: Color::bytes(24, 24, 27),
+            accent_hover: Color::bytes(39, 39, 42),
+            accent_press: Color::bytes(63, 63, 70),
+            brand: Color::bytes(9, 9, 11),
+            danger: Color::bytes(220, 38, 38),
+            warning: Color::bytes(180, 83, 9),
+            success: Color::bytes(22, 163, 74),
+            separator: Color::bytes(228, 228, 231),
+            border: Color::bytes(228, 228, 231),
+            raised: Color::bytes(244, 244, 245),
+            selected: Color::bytes(228, 228, 231),
+            card: Color::bytes(255, 255, 255),
+            field: Color::bytes(255, 255, 255),
+            focus: Color::bytes(24, 24, 27),
+            scrim: Color::rgba(0.0, 0.0, 0.0, 0.4),
+            scene_backdrop: Color::bytes(247, 247, 248),
         }
     }
 }
@@ -137,15 +162,15 @@ impl Metrics {
     pub const fn standard() -> Self {
         Self {
             control_height: 28.0,
-            row_height: 32.0,
-            gap: 8.0,
-            padding: 14.0,
+            row_height: 30.0,
+            gap: 6.0,
+            padding: 12.0,
             inset: 12.0,
-            radius: 10.0,
-            card_radius: 16.0,
-            popover_radius: 18.0,
-            panel_radius: 22.0,
-            hairline: 0.5,
+            radius: 6.0,
+            card_radius: 8.0,
+            popover_radius: 8.0,
+            panel_radius: 8.0,
+            hairline: 1.0,
         }
     }
 }
@@ -165,19 +190,19 @@ pub struct Typography {
 impl Typography {
     pub const fn standard() -> Self {
         Self {
-            large_title: TypeStyle::new(26.0, 700.0, 32.0),
-            title: TypeStyle::new(17.0, 600.0, 22.0),
-            headline: TypeStyle::new(13.0, 600.0, 18.0),
+            large_title: TypeStyle::new(22.0, 600.0, 28.0),
+            title: TypeStyle::new(15.0, 600.0, 20.0),
+            headline: TypeStyle::new(13.0, 500.0, 18.0),
             body: TypeStyle::new(13.0, 400.0, 18.0),
             callout: TypeStyle::new(12.0, 400.0, 16.0),
             caption: TypeStyle::new(11.0, 400.0, 14.0),
             micro: TypeStyle {
                 size: 10.0,
-                weight: 600.0,
-                tracking: 0.6,
+                weight: 500.0,
+                tracking: 0.3,
                 leading: 13.0,
             },
-            monospace: TypeStyle::new(11.5, 400.0, 16.0),
+            monospace: TypeStyle::new(11.0, 400.0, 15.0),
         }
     }
 
@@ -236,10 +261,17 @@ impl Theme {
         self.typography.style(level)
     }
 
+    pub fn button_font(&self) -> TypeStyle {
+        self.typography.body.medium()
+    }
+
+    pub fn label_font(&self) -> TypeStyle {
+        self.typography.caption.medium()
+    }
+
     pub fn look(&self, role: Role, state: State) -> Look {
         let palette = self.palette;
         let metrics = self.metrics;
-        let dark = self.dark;
         let disabled = state == State::Disabled;
         let pressed = state == State::Pressed;
         let hovered = state == State::Hover || pressed;
@@ -251,150 +283,121 @@ impl Theme {
                 base
             }
         };
-        let white = |alpha: f32| {
-            if dark {
-                Color::white_alpha(alpha)
-            } else {
-                Color::black_alpha(alpha * 0.72)
-            }
+        let border = Border {
+            width: metrics.hairline,
+            color: palette.border,
         };
+        let radius = Corners::all(metrics.radius);
+        let card = Corners::all(metrics.card_radius);
+        let popover = Corners::all(metrics.popover_radius);
         match role {
             Role::Panel => Look {
-                fill: Fill::Glass(Glass::REGULAR),
-                corners: Corners::all(metrics.panel_radius),
+                fill: Fill::Solid(palette.card),
+                corners: card,
                 border: Border::NONE,
-                shadow: Shadow::new(
-                    Color::rgba(0.0, 0.0, 0.0, if dark { 0.26 } else { 0.14 }),
-                    38.0,
-                    13.0,
-                ),
+                shadow: Shadow::NONE,
                 text: palette.text_primary,
             },
             Role::Sheet => Look {
-                fill: Fill::Glass(Glass::REGULAR),
-                corners: Corners::all(metrics.panel_radius),
+                fill: Fill::Solid(palette.card),
+                corners: Corners::ZERO,
                 border: Border::NONE,
-                shadow: Shadow::new(
-                    Color::rgba(0.0, 0.0, 0.0, if dark { 0.36 } else { 0.18 }),
-                    44.0,
-                    16.0,
-                ),
+                shadow: Shadow::NONE,
                 text: palette.text_primary,
             },
             Role::Toolbar => Look {
-                fill: Fill::Glass(Glass::REGULAR),
-                corners: Corners::capsule(),
-                border: Border::NONE,
-                shadow: Shadow::new(
-                    Color::rgba(0.0, 0.0, 0.0, if dark { 0.22 } else { 0.10 }),
-                    30.0,
-                    11.0,
-                ),
+                fill: Fill::Solid(palette.raised),
+                corners: radius,
+                border,
+                shadow: Shadow::NONE,
                 text: palette.text_primary,
             },
             Role::Transport => Look {
-                fill: Fill::Glass(Glass::CLEAR),
-                corners: Corners::capsule(),
-                border: Border {
-                    width: metrics.hairline,
-                    color: white(0.28),
-                },
-                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.28), 26.0, 9.0),
+                fill: Fill::Solid(palette.raised),
+                corners: radius,
+                border,
+                shadow: Shadow::NONE,
                 text: palette.text_primary,
             },
             Role::Popover => Look {
-                fill: Fill::Glass(Glass::REGULAR),
-                corners: Corners::all(metrics.popover_radius),
-                border: Border::NONE,
-                shadow: Shadow::new(
-                    Color::rgba(0.0, 0.0, 0.0, if dark { 0.42 } else { 0.20 }),
-                    42.0,
-                    16.0,
-                ),
+                fill: Fill::Solid(palette.card),
+                corners: popover,
+                border,
+                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.55), 32.0, 10.0),
                 text: palette.text_primary,
             },
             Role::Chip => Look {
-                fill: Fill::Glass(Glass::CLEAR),
-                corners: Corners::all(metrics.card_radius),
+                fill: Fill::Solid(Color::rgba(0.016, 0.016, 0.02, 0.72)),
+                corners: radius,
                 border: Border {
                     width: metrics.hairline,
-                    color: white(0.34),
+                    color: Color::white_alpha(0.10),
                 },
-                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.24), 22.0, 7.0),
+                shadow: Shadow::NONE,
                 text: palette.text_primary,
             },
             Role::Hud => Look {
-                fill: Fill::Solid(Color::rgba(
-                    if dark { 0.008 } else { 0.06 },
-                    if dark { 0.010 } else { 0.07 },
-                    if dark { 0.014 } else { 0.09 },
-                    if dark { 0.44 } else { 0.34 },
-                )),
-                corners: Corners::all(metrics.card_radius),
-                border: Border {
-                    width: metrics.hairline,
-                    color: white(0.10),
-                },
-                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.18), 16.0, 4.0),
-                text: palette.text_secondary,
+                fill: Fill::Solid(if pressed {
+                    palette.selected
+                } else if hovered {
+                    palette.raised
+                } else {
+                    Color::rgba(0.039, 0.039, 0.043, 0.96)
+                }),
+                corners: radius,
+                border,
+                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.4), 24.0, 8.0),
+                text: palette.text_primary,
             },
             Role::Card => Look {
-                fill: Fill::Solid(if dark {
-                    Color::rgba(0.035, 0.043, 0.060, 0.94)
-                } else {
-                    Color::rgba(1.0, 1.0, 1.0, 0.94)
-                }),
-                corners: Corners::all(metrics.card_radius),
-                border: Border {
-                    width: metrics.hairline,
-                    color: white(0.06),
-                },
+                fill: Fill::Solid(palette.card),
+                corners: card,
+                border,
                 shadow: Shadow::NONE,
                 text: palette.text_primary,
             },
             Role::Row => Look {
-                fill: if pressed {
-                    Fill::Solid(white(0.10))
-                } else if selected {
-                    Fill::Solid(palette.accent.with_alpha(if dark { 0.20 } else { 0.14 }))
+                fill: if pressed || selected {
+                    Fill::Solid(palette.selected)
                 } else if hovered {
-                    Fill::Solid(white(0.055))
+                    Fill::Solid(palette.raised)
                 } else {
                     Fill::None
                 },
-                corners: Corners::all(metrics.radius - 1.0),
-                border: Border {
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
+                corners: Corners::all(metrics.radius - 2.0),
+                border: Border::NONE,
                 shadow: Shadow::NONE,
-                text: text(if selected {
+                text: text(if selected || hovered {
                     palette.text_primary
                 } else {
                     palette.text_secondary
                 }),
             },
             Role::Control => Look {
-                fill: Fill::Solid(if disabled {
-                    white(0.025)
+                fill: if disabled {
+                    Fill::None
                 } else if pressed {
-                    white(0.18)
+                    Fill::Solid(palette.selected)
                 } else if hovered {
-                    white(0.13)
+                    Fill::Solid(palette.raised)
                 } else {
-                    white(0.085)
-                }),
-                corners: Corners::all(metrics.radius - 1.0),
+                    Fill::None
+                },
+                corners: radius,
                 border: Border {
                     width: metrics.hairline,
-                    color: white(0.07),
+                    color: if disabled {
+                        palette.separator
+                    } else {
+                        palette.border
+                    },
                 },
                 shadow: Shadow::NONE,
                 text: text(palette.text_primary),
             },
             Role::Prominent => Look {
                 fill: Fill::Solid(if disabled {
-                    palette.accent.with_alpha(0.32)
+                    palette.accent.with_alpha(0.4)
                 } else if pressed {
                     palette.accent_press
                 } else if hovered {
@@ -402,135 +405,108 @@ impl Theme {
                 } else {
                     palette.accent
                 }),
-                corners: Corners::all(metrics.radius - 1.0),
-                border: Border {
-                    width: metrics.hairline,
-                    color: Color::WHITE.with_alpha(0.18),
-                },
-                shadow: if disabled {
-                    Shadow::NONE
+                corners: radius,
+                border: Border::NONE,
+                shadow: Shadow::NONE,
+                text: if disabled {
+                    palette.text_quaternary
                 } else {
-                    Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.22), 14.0, 3.0)
+                    palette.text_on_accent
                 },
-                text: palette.text_on_accent,
             },
             Role::Tinted => Look {
-                fill: Fill::Solid(if pressed {
-                    palette.accent.with_alpha(0.32)
-                } else if hovered {
-                    palette.accent.with_alpha(0.24)
+                fill: Fill::Solid(if disabled {
+                    palette.raised.with_alpha(0.5)
+                } else if pressed || hovered {
+                    palette.selected
                 } else {
-                    palette.accent.with_alpha(0.16)
+                    palette.raised
                 }),
-                corners: Corners::all(metrics.radius - 1.0),
-                border: Border {
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
+                corners: radius,
+                border: Border::NONE,
                 shadow: Shadow::NONE,
-                text: text(palette.accent),
+                text: text(palette.text_primary),
             },
             Role::Segment => Look {
                 fill: if pressed {
-                    Fill::Solid(white(0.10))
+                    Fill::Solid(palette.selected)
                 } else if hovered {
-                    Fill::Solid(white(0.06))
+                    Fill::Solid(palette.raised)
                 } else {
                     Fill::None
                 },
-                corners: Corners::capsule(),
-                border: Border {
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
+                corners: Corners::all(metrics.radius - 2.0),
+                border: Border::NONE,
                 shadow: Shadow::NONE,
                 text: text(palette.text_secondary),
             },
             Role::SegmentSelected => Look {
-                fill: Fill::Solid(if dark {
-                    Color::rgba(1.0, 1.0, 1.0, 0.16)
-                } else {
-                    Color::rgba(1.0, 1.0, 1.0, 0.94)
-                }),
-                corners: Corners::capsule(),
+                fill: Fill::Solid(palette.selected),
+                corners: Corners::all(metrics.radius - 2.0),
                 border: Border {
                     width: metrics.hairline,
-                    color: white(0.10),
+                    color: palette.border,
                 },
-                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.16), 10.0, 2.0),
+                shadow: Shadow::NONE,
                 text: text(palette.text_primary),
             },
             Role::Track => Look {
-                fill: Fill::Solid(white(if hovered { 0.16 } else { 0.12 })),
+                fill: Fill::Solid(Color::bytes(63, 63, 70)),
                 corners: Corners::capsule(),
-                border: Border {
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
+                border: Border::NONE,
                 shadow: Shadow::NONE,
                 text: palette.text_secondary,
             },
             Role::Thumb => Look {
-                fill: Fill::Solid(if pressed {
-                    Color::rgba(1.0, 1.0, 1.0, 0.92)
-                } else {
-                    Color::WHITE
-                }),
+                fill: Fill::Solid(palette.accent),
                 corners: Corners::capsule(),
-                border: Border {
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                shadow: Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.30), 12.0, 2.0),
+                border: Border::NONE,
+                shadow: Shadow::NONE,
                 text: palette.text_primary,
             },
             Role::Quiet => Look {
                 fill: if pressed {
-                    Fill::Solid(white(0.13))
+                    Fill::Solid(palette.selected)
                 } else if hovered {
-                    Fill::Solid(white(0.07))
+                    Fill::Solid(palette.raised)
                 } else {
                     Fill::None
                 },
-                corners: Corners::all(metrics.radius - 1.0),
-                border: Border {
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
+                corners: radius,
+                border: Border::NONE,
                 shadow: Shadow::NONE,
                 text: text(palette.text_secondary),
             },
             Role::Field => Look {
-                fill: Fill::Solid(if disabled {
-                    white(0.025)
-                } else if hovered {
-                    white(0.10)
-                } else {
-                    white(0.065)
-                }),
-                corners: Corners::all(metrics.radius - 1.0),
+                fill: Fill::Solid(palette.field),
+                corners: radius,
                 border: Border {
                     width: metrics.hairline,
-                    color: white(0.06),
+                    color: if hovered && !disabled {
+                        Color::bytes(63, 63, 70)
+                    } else {
+                        palette.border
+                    },
                 },
                 shadow: Shadow::NONE,
                 text: text(palette.text_primary),
             },
             Role::Danger => Look {
                 fill: Fill::Solid(if pressed {
-                    palette.danger.with_alpha(0.34)
+                    palette.danger.with_alpha(0.18)
                 } else if hovered {
-                    palette.danger.with_alpha(0.26)
+                    palette.danger.with_alpha(0.12)
                 } else {
-                    palette.danger.with_alpha(0.16)
+                    Color::TRANSPARENT
                 }),
-                corners: Corners::all(metrics.radius - 1.0),
-                border: Border {
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
+                corners: radius,
+                border: Border::NONE,
                 shadow: Shadow::NONE,
-                text: palette.danger,
+                text: if disabled {
+                    palette.text_quaternary
+                } else {
+                    palette.danger
+                },
             },
         }
     }

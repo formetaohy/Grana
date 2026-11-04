@@ -20,15 +20,16 @@ pub fn popover(
     if !open {
         return false;
     }
-    let key = ui.id(id);
-    let gap = 6.0;
+    let gap = 4.0;
     let window = ui.size();
     let x = anchor.min.x.min(window.x - width - 8.0).max(8.0);
     let room = (window.y - anchor.max.y - gap - 12.0).max(120.0);
     let area = Rect::from_min_size(Vec2::new(x, anchor.max.y + gap), Vec2::new(width, room));
-    let padding = 6.0;
+    let padding = 4.0;
     let start = ui.overlay_len();
+    ui.push_id(id);
     let height = ui.overlay_scope(area.shrink(padding), content);
+    ui.pop_id();
     let body = Rect::from_min_size(
         area.min,
         Vec2::new(width, (height + padding * 2.0).min(room + padding * 2.0)),
@@ -39,7 +40,6 @@ pub fn popover(
     let pressed = ui.input().button(crate::input::Button::Primary).pressed;
     if pressed && !body.contains(pointer) && !anchor.contains(pointer) {
         ui.close_popup();
-        let _ = key;
         return false;
     }
     true
@@ -70,7 +70,7 @@ pub fn combo<T: Copy + PartialEq>(
     }
     let look = ui.look(key, Role::Field, &response);
     let chevron_color = ui.theme().palette.text_tertiary;
-    let text_style = TextStyle::new(font, look.text);
+    let text_style = TextStyle::new(font, look.text).truncating();
     let mut painter = ui.painter();
     painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
     painter.text_in(
@@ -82,18 +82,13 @@ pub fn combo<T: Copy + PartialEq>(
         text_style,
         Align::Center,
     );
-    let centre = Vec2::new(rect.max.x - 11.0, rect.center().y);
-    painter.segment(
-        centre + Vec2::new(-3.0, -1.6),
-        centre + Vec2::new(0.0, 1.6),
-        1.4,
+    icon::paint(
+        Icon::ChevronDown,
+        &mut painter,
+        Vec2::new(rect.max.x - 11.0, rect.center().y),
+        10.0,
         chevron_color,
-    );
-    painter.segment(
-        centre + Vec2::new(0.0, 1.6),
-        centre + Vec2::new(3.0, -1.6),
-        1.4,
-        chevron_color,
+        1.5,
     );
     let mut chosen = None;
     let open = ui.popup_open(key);
@@ -119,7 +114,7 @@ pub fn combo<T: Copy + PartialEq>(
     chosen
 }
 
-const MENU_ROW: f32 = 26.0;
+const MENU_ROW: f32 = 30.0;
 
 fn rows<T: Copy + PartialEq>(ui: &mut Ui, items: &[(T, String)], selected: Option<T>) -> Option<T> {
     let mut chosen = None;
@@ -141,36 +136,31 @@ pub fn menu_row(ui: &mut Ui, index: usize, label: &str, checked: bool) -> bool {
         if response.hovered { 1.0 } else { 0.0 },
         Motion::quick(),
     );
+    let palette = ui.theme().palette;
     let font = ui.theme().font(Level::Callout);
-    let text_color = ui
-        .theme()
-        .text(Level::Callout)
-        .lerp(ui.theme().palette.text_primary, hover);
-    let accent = ui.theme().palette.accent;
+    let text_color = if checked {
+        palette.text_primary
+    } else {
+        palette.text_secondary.lerp(palette.text_primary, hover)
+    };
     let mut painter = ui.painter();
     if hover > 0.01 {
-        painter.rect(rect, Corners::all(6.0), Color::white_alpha(0.08 * hover));
+        painter.rect(rect, Corners::all(4.0), palette.raised);
     }
     if checked {
-        let tick = Vec2::new(rect.min.x + 11.0, rect.center().y);
-        painter.segment(
-            tick + Vec2::new(-3.2, 0.0),
-            tick + Vec2::new(-0.8, 2.6),
+        icon::paint(
+            Icon::Check,
+            &mut painter,
+            Vec2::new(rect.min.x + 11.0, rect.center().y),
+            12.0,
+            palette.text_primary,
             1.6,
-            accent,
-        );
-        painter.segment(
-            tick + Vec2::new(-0.8, 2.6),
-            tick + Vec2::new(3.4, -2.8),
-            1.6,
-            accent,
         );
     }
-    let style = TextStyle::new(font, text_color);
     painter.text_in(
-        Rect::from_min_max(Vec2::new(rect.min.x + 20.0, rect.min.y), rect.max),
+        Rect::from_min_max(Vec2::new(rect.min.x + 24.0, rect.min.y), rect.max),
         label,
-        style,
+        TextStyle::new(font, text_color),
         Align::Center,
     );
     response.clicked
@@ -184,47 +174,50 @@ pub fn action_row(
     shortcut: Option<&str>,
 ) -> bool {
     let key = ui.id(id);
-    let rect = ui.allocate(Vec2::new(ui.available().x, 28.0));
+    let rect = ui.allocate(Vec2::new(ui.available().x, MENU_ROW));
     let response = ui.interact(key, rect);
     let hover = ui.animate(
         key,
         if response.hovered { 1.0 } else { 0.0 },
         Motion::quick(),
     );
-    let accent = ui.theme().palette.text_secondary;
-    let primary = ui.theme().palette.text_primary;
-    let tertiary = ui.theme().palette.text_tertiary;
+    let palette = ui.theme().palette;
     let font = ui.theme().font(Level::Callout);
     let caption = ui.theme().font(Level::Caption);
     let shortcut_width = shortcut.map_or(6.0, |text| {
-        18.0 + ui.measure_text(text, TextStyle::new(caption, tertiary)).x
+        16.0 + ui
+            .measure_text(text, TextStyle::new(caption, palette.text_tertiary))
+            .x
     });
     let mut painter = ui.painter();
     if hover > 0.01 {
-        painter.rect(rect, Corners::all(6.0), Color::white_alpha(0.08 * hover));
+        painter.rect(rect, Corners::all(4.0), palette.raised);
     }
     icon::paint(
         symbol,
         &mut painter,
-        Vec2::new(rect.min.x + 14.0, rect.center().y),
+        Vec2::new(rect.min.x + 13.0, rect.center().y),
         14.0,
-        accent.lerp(primary, hover),
+        palette.text_secondary.lerp(palette.text_primary, hover),
         1.5,
     );
     painter.text_in(
         Rect::from_min_max(
-            Vec2::new(rect.min.x + 27.0, rect.min.y),
+            Vec2::new(rect.min.x + 26.0, rect.min.y),
             Vec2::new(rect.max.x - shortcut_width, rect.max.y),
         ),
         label,
-        TextStyle::new(font, accent.lerp(primary, hover)),
+        TextStyle::new(
+            font,
+            palette.text_secondary.lerp(palette.text_primary, hover),
+        ),
         Align::Center,
     );
     if let Some(shortcut) = shortcut {
         painter.text_in(
             rect.shrink2(Vec2::new(8.0, 0.0)),
             shortcut,
-            TextStyle::new(caption, tertiary).aligned(Align::End),
+            TextStyle::new(caption, palette.text_tertiary).aligned(Align::End),
             Align::Center,
         );
     }
@@ -237,8 +230,8 @@ pub fn separator(ui: &mut Ui) {
     let mut painter = ui.painter();
     painter.rect(
         Rect::from_min_size(
-            Vec2::new(rect.min.x + 8.0, rect.center().y),
-            Vec2::new(rect.width() - 16.0, 0.5),
+            Vec2::new(rect.min.x + 4.0, rect.center().y),
+            Vec2::new(rect.width() - 8.0, 1.0),
         ),
         Corners::ZERO,
         separator,
@@ -247,31 +240,28 @@ pub fn separator(ui: &mut Ui) {
 
 pub fn disclosure_row(ui: &mut Ui, id: &str, label: &str, open: bool) -> bool {
     let key = ui.id(id);
-    let rect = ui.allocate(Vec2::new(ui.available().x, 24.0));
+    let rect = ui.allocate(Vec2::new(ui.available().x, 26.0));
     let response = ui.interact(key, rect);
     let hover = ui.animate(
         key,
         if response.hovered { 1.0 } else { 0.0 },
         Motion::quick(),
     );
-    let font = ui.theme().font(Level::Callout);
-    let color = ui
-        .theme()
-        .text(Level::Callout)
-        .lerp(ui.theme().palette.text_primary, hover);
-    let chevron = ui.theme().palette.text_tertiary;
+    let palette = ui.theme().palette;
+    let font = ui.theme().font(Level::Callout).medium();
+    let color = palette.text_secondary.lerp(palette.text_primary, hover);
     let rotation = ui.animate(key ^ 0x19, if open { 1.0 } else { 0.0 }, Motion::snappy());
     let mut painter = ui.painter();
     if hover > 0.01 {
-        painter.rect(rect, Corners::all(6.0), Color::white_alpha(0.07 * hover));
+        painter.rect(rect, Corners::all(4.0), palette.raised);
     }
-    let centre = Vec2::new(rect.min.x + 10.0, rect.center().y);
+    let centre = Vec2::new(rect.min.x + 9.0, rect.center().y);
     let angle = std::f32::consts::FRAC_PI_2 * (0.5 + 0.5 * rotation);
-    let tip = centre + Vec2::new(angle.cos(), angle.sin()) * 2.2;
-    painter.segment(tip + Vec2::new(-2.0, -1.4), tip, 1.4, chevron);
-    painter.segment(tip, tip + Vec2::new(2.0, -1.4), 1.4, chevron);
+    let tip = centre + Vec2::new(angle.cos(), angle.sin()) * 2.0;
+    painter.segment(tip + Vec2::new(-1.8, -1.2), tip, 1.4, palette.text_tertiary);
+    painter.segment(tip, tip + Vec2::new(1.8, -1.2), 1.4, palette.text_tertiary);
     painter.text_in(
-        Rect::from_min_max(Vec2::new(rect.min.x + 20.0, rect.min.y), rect.max),
+        Rect::from_min_max(Vec2::new(rect.min.x + 19.0, rect.min.y), rect.max),
         label,
         TextStyle::new(font, color),
         Align::Center,
@@ -298,7 +288,7 @@ pub fn color_picker(
     let mut changed = None;
     let size = 168.0;
     let square = Rect::from_min_size(Vec2::ZERO, Vec2::splat(size));
-    let inner = ui.theme().metrics.padding;
+    let inner = 6.0;
     let visible = popover(ui, id, open, anchor, size + inner * 2.0, |ui| {
         let origin = ui.cursor_position();
         let square = square.translate(origin);
@@ -351,7 +341,7 @@ pub fn color_picker(
             changed = Some(hsv_to_rgb(hue, s, v));
         }
         ui.space(size + 6.0);
-        let strip = Rect::from_min_size(ui.cursor_position(), Vec2::new(ui.available().x, 14.0));
+        let strip = Rect::from_min_size(ui.cursor_position(), Vec2::new(ui.available().x, 12.0));
         let stops = 24;
         {
             let mut painter = ui.painter();
@@ -367,7 +357,7 @@ pub fn color_picker(
                 );
             }
             let marker = Vec2::new(strip.min.x + strip.width() * hue, strip.center().y);
-            painter.ring(marker, 7.0, 1.6, 0.0, std::f32::consts::TAU, Color::WHITE);
+            painter.ring(marker, 6.0, 1.6, 0.0, std::f32::consts::TAU, Color::WHITE);
         }
         let strip_response = ui.interact(ui.id("hue"), strip);
         if strip_response.active

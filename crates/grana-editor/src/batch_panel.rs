@@ -75,7 +75,7 @@ fn protocol(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
             None => {
                 widget::weak(
                     ui,
-                    "Capture the region, objects, detection parameters, presentation, statistics grouping and colocalization pair into a reusable protocol. Apply replays it on the open dataset; the batch runs it over a folder.",
+                    "Capture the current region, objects and settings into a reusable protocol.",
                 );
             }
         }
@@ -92,10 +92,7 @@ fn datasets(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
             Some(&state.batch_datasets().len().to_string()),
         );
         if state.batch_datasets().is_empty() {
-            widget::weak(
-                ui,
-                "Choose a folder of datasets that share this protocol. A subfolder groups its datasets in the comparison, and a multi-scene image runs scene by scene.",
-            );
+            widget::weak(ui, "Choose a folder of datasets that share this protocol.");
         } else {
             let key = ui.id("batch.datasets");
             ui.scroll_axis(key, Axis::Column, Length::Fixed(136.0), None, |ui| {
@@ -204,20 +201,14 @@ fn output(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         if !state.batch_running() {
             let jobs = state.batch_jobs();
             ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-                widget::field_label(ui, "WORKERS");
+                widget::field_label(ui, "Workers");
                 if let Some(value) = widget::drag_value(ui, "batch.jobs", jobs as f32, 0.15, 0) {
                     let next = (value.round() as i64).clamp(1, 16) as u32;
                     if next as usize != jobs {
                         commands.push(Command::SetBatchJobs(next));
                     }
                 }
-                widget::caption(
-                    ui,
-                    &format!(
-                        "{jobs} dataset{} at a time",
-                        if jobs == 1 { "" } else { "s" }
-                    ),
-                );
+                widget::caption(ui, &format!("{jobs} at a time"));
             });
             if let Some(value) = widget::toggle_row(
                 ui,
@@ -256,10 +247,7 @@ fn output(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
             .wrapping();
             ui.text_style_wrapped(message, style, ui.available().x);
         }
-        widget::weak(
-            ui,
-            "Each dataset writes the tables of the protocol grouping into its own folder. Re-running the same protocol resumes where it stopped. The run closes with a comparison of its groups and, when the protocol requests snapshots, a quality sheet of every dataset. A project carries the detected objects, their presentation and the camera, so a dataset can be opened and reviewed.",
-        );
+        widget::weak(ui, "Re-running the same protocol resumes where it stopped.");
     });
 }
 
@@ -267,7 +255,7 @@ fn state_tint(state: &str, ui: &Ui) -> Color {
     match state {
         "complete" | "done" | "resumed" => ui.theme().palette.success,
         "failed" => ui.theme().palette.danger,
-        "running" => ui.theme().palette.accent,
+        "running" => ui.theme().palette.warning,
         _ => ui.theme().palette.text_secondary,
     }
 }
