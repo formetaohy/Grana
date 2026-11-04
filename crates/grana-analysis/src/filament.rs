@@ -59,6 +59,7 @@ pub struct FilamentScan {
     intensity: Intensity,
     threshold: f32,
     channels: usize,
+    detection: usize,
     grid: Grid,
     region: Region,
     empty: bool,
@@ -122,6 +123,7 @@ impl FilamentScan {
             intensity,
             threshold: params.threshold(),
             channels,
+            detection,
             grid: Grid {
                 dims,
                 padded,
@@ -190,13 +192,25 @@ impl FilamentScan {
         );
         let mut accumulators = vec![SampleAccumulator::new(); traced.len() * self.channels];
         for channel in 0..self.channels {
-            let data = read(channel)?;
-            if data.voxel_count() as u64 != expected {
-                return Err("the measured frame does not cover the requested level".to_string());
-            }
+            let measured = if channel == self.detection {
+                None
+            } else {
+                Some(read(channel)?)
+            };
+            let data = match &measured {
+                Some(data) => {
+                    if data.voxel_count() as u64 != expected {
+                        return Err(
+                            "the measured frame does not cover the requested level".to_string()
+                        );
+                    }
+                    data
+                }
+                None => detection,
+            };
             for (index, filament) in traced.iter().enumerate() {
                 for node in &filament.nodes {
-                    accumulators[index * self.channels + channel].push(self.sample(&data, *node));
+                    accumulators[index * self.channels + channel].push(self.sample(data, *node));
                 }
             }
         }

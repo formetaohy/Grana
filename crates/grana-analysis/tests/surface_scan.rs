@@ -1,12 +1,12 @@
 use std::f64::consts::PI;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use glam::Vec3;
 use grana_analysis::{Sources, SurfaceBuilder, coloc_levels, filament_level, recut, surface_level};
 use grana_geometry::GeometryStore;
 use grana_object::SurfaceSet;
-use grana_object::{SurfaceFilter, SurfaceParams};
+use grana_object::{Roi, Shape, Spot, SurfaceFilter, SurfaceParams};
 use grana_volume::{
     Channel, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, Volume, VoxelData,
 };
@@ -816,6 +816,88 @@ fn picks_the_finest_level_that_fits_each_analysis_budget() {
 
 fn extract(volume: &Volume, params: SurfaceParams, region: Region) -> SurfaceSet {
     extract_with(volume, params, region, 1)
+}
+
+fn counted_extract(
+    volume: &Volume,
+    params: SurfaceParams,
+    roi: Option<&grana_object::Mask>,
+) -> (SurfaceSet, u64) {
+    let level = Level::new(volume.extent(), volume.spacing());
+    let intensity = Intensity::new(0.0, f32::from(HIGH));
+    let channels = volume.channel_count();
+    let builder = SurfaceBuilder::new(0, level, params, channels, 0, Region::none(), intensity);
+    let cancel = AtomicBool::new(false);
+    let reads = AtomicU64::new(0);
+    let set = builder
+        .scan(
+            1,
+            &cancel,
+            roi,
+            &mut |_done, _total| {},
+            Sources::new(
+                &|_index, ranges| {
+                    reads.fetch_add(
+                        (ranges[0].end - ranges[0].start) as u64
+                            * (ranges[1].end - ranges[1].start) as u64
+                            * (ranges[2].end - ranges[2].start) as u64,
+                        Ordering::Relaxed,
+                    );
+                    Ok(volume.channels()[0].data().region(
+                        volume.extent(),
+                        ranges[0].clone(),
+                        ranges[1].clone(),
+                        ranges[2].clone(),
+                    ))
+                },
+                &|channel, core| {
+                    Ok(volume.channels()[channel].data().region(
+                        volume.extent(),
+                        core[0].clone(),
+                        core[1].clone(),
+                        core[2].clone(),
+                    ))
+                },
+                &GeometryStore::memory(),
+            ),
+        )
+        .expect("a surface frame is detected")
+        .expect("surface detection completes");
+    (set, reads.load(Ordering::Relaxed))
+}
+
+#[test]
+fn skips_the_tiles_outside_the_analysis_mask() {
+    let extent = Extent::new(240, 80, 80);
+    let volume = blobs(
+        extent,
+        &[0.1, 0.1, 0.1],
+        &[[48.0, 40.0, 40.0], [200.0, 40.0, 40.0]],
+        14.0,
+    );
+    let level = Level::new(volume.extent(), volume.spacing());
+    let roi = Roi::new(vec![Some(Shape::spots(Arc::from(vec![Spot::new(
+        [-6.0, 0.0, 0.0],
+        6.0,
+        0.0,
+    )])))]);
+    let mask = roi.mask(level, 0).expect("the analysis mask rasterizes");
+    let (unrestricted, reads) = counted_extract(&volume, params(0.5), None);
+    let (restricted, masked) = counted_extract(&volume, params(0.5), Some(&mask));
+    assert_eq!(
+        unrestricted.object_count(),
+        2,
+        "both blobs are detected without a mask"
+    );
+    assert_eq!(
+        restricted.object_count(),
+        1,
+        "the analysis mask keeps one blob"
+    );
+    assert!(
+        masked < reads,
+        "the tiles outside the analysis mask are not read: {masked} against {reads}"
+    );
 }
 
 fn extract_seeded(

@@ -70,6 +70,38 @@ const SEGMENTS: [([f32; 3], [f32; 3]); 4] = [
 ];
 
 #[test]
+fn reads_the_detection_channel_once() {
+    let data = tubes(&SEGMENTS);
+    let level = Level::new(EXTENT, Spacing::new(SPACING, SPACING, SPACING));
+    let mut scan = FilamentScan::new(
+        0,
+        level,
+        params(),
+        2,
+        0,
+        Region::none(),
+        channel_intensity(),
+    );
+    let mut read = Vec::new();
+    let set = scan
+        .frame(&data, None, &GeometryStore::memory(), |channel| {
+            read.push(channel);
+            Ok(data.clone())
+        })
+        .expect("the filament scan traces the frame");
+    assert_eq!(
+        read,
+        vec![1],
+        "the scan measures every channel but the detection channel it already holds"
+    );
+    assert_eq!(
+        set.intensities().channels(),
+        2,
+        "the filament measures both channels"
+    );
+}
+
+#[test]
 fn traces_branching_filaments() {
     let data = tubes(&SEGMENTS);
     let level = Level::new(EXTENT, Spacing::new(SPACING, SPACING, SPACING));

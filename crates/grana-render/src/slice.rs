@@ -280,7 +280,6 @@ impl SlicePass {
         let world = section.world;
         let plane = box_min[axis] + section.plane[0] * world[axis];
         let budget = index_budget(size);
-        self.index.fit(budget);
         let key = span_key(scene, axis, plane);
         if self.span_key != Some(key) {
             self.build(scene, axis, plane, budget);
@@ -614,7 +613,6 @@ impl SectionCache {
     }
 
     fn prepare(&mut self, candidates: &[Candidate<'_>], axis: usize, budget: u64) {
-        self.budget = budget;
         self.order += 1;
         let order = self.order;
         let mut missing = Vec::new();
@@ -647,6 +645,13 @@ impl SectionCache {
                 self.resident += bytes;
             }
         }
+        let working = self
+            .entries
+            .values()
+            .filter(|entry| entry.used == order)
+            .map(|entry| entry.bytes)
+            .sum::<u64>();
+        self.budget = budget.max(working);
         self.evict(order);
     }
 
@@ -676,23 +681,6 @@ impl SectionCache {
     fn clear(&mut self) {
         self.entries.clear();
         self.resident = 0;
-    }
-
-    fn fit(&mut self, budget: u64) {
-        self.budget = budget;
-        while self.resident > self.budget {
-            let victim = self
-                .entries
-                .iter()
-                .min_by_key(|(_, entry)| entry.used)
-                .map(|(key, _)| *key);
-            let Some(key) = victim else {
-                break;
-            };
-            if let Some(entry) = self.entries.remove(&key) {
-                self.resident -= entry.bytes;
-            }
-        }
     }
 
     fn retain(&mut self, keep: impl Fn(&LayerKey) -> bool) {

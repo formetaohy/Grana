@@ -34,6 +34,7 @@ const GRAIN_SUPPORT: f32 = 3.0;
 const ANISOTROPY_LIMIT: u32 = 16;
 const PAD_ALIGN: u32 = 8;
 const ARRAY_BYTES_PER_VOXEL: u64 = 28;
+const VALUE_BYTES_PER_VOXEL: u64 = 8;
 const WORKER_ARRAY_LIMIT: u64 = 320 << 20;
 const FRAME_ARRAY_LIMIT: u64 = 1024 << 20;
 const TILE_FRAGMENT_LIMIT: u64 = 96 << 20;
@@ -453,20 +454,24 @@ struct Pass<'a> {
     seeds: &'a [[i64; 3]],
     cap: u32,
     pad: [u32; 3],
+    values: [u32; 3],
 }
 
 impl<'a> Pass<'a> {
     fn new(plan: &'a SurfaceBuilder, limit: u32, seeds: &'a [[i64; 3]]) -> Self {
         let cap = limit * limit;
+        let radius = [0, 1, 2].map(|axis| (plan.kernels[axis].len() / 2) as u32);
         let pad = [0, 1, 2].map(|axis| {
-            let needed = limit + (plan.kernels[axis].len() / 2) as u32 + 1;
+            let needed = limit + radius[axis] + 1;
             align(needed.max(crate::local::BLOCK as u32 * (crate::local::WINDOW as u32 + 1)))
         });
+        let values = [0, 1, 2].map(|axis| align(radius[axis] + 3));
         Self {
             plan,
             seeds,
             cap,
             pad,
+            values,
         }
     }
 
@@ -476,13 +481,16 @@ impl<'a> Pass<'a> {
 
     fn array_bytes(&self) -> u64 {
         let plan = self.plan;
-        let mut voxels = 1u64;
-        for axis in 0..3 {
-            let size = (plan.region[axis].end - plan.region[axis].start) as u64;
-            let span = u64::from(TILE_SIDE + 2 * self.pad[axis]);
-            voxels *= size.min(span);
-        }
-        voxels * ARRAY_BYTES_PER_VOXEL
+        let extent = |pad: [u32; 3]| {
+            let mut voxels = 1u64;
+            for (axis, pad) in pad.into_iter().enumerate() {
+                let size = (plan.region[axis].end - plan.region[axis].start) as u64;
+                let span = u64::from(TILE_SIDE + 2 * pad);
+                voxels *= size.min(span);
+            }
+            voxels
+        };
+        extent(self.pad) * ARRAY_BYTES_PER_VOXEL + extent(self.values) * VALUE_BYTES_PER_VOXEL
     }
 
     fn max_workers(&self) -> Option<usize> {

@@ -68,16 +68,14 @@ impl Tile<'_> {
                     for (corner, offset) in CORNER.iter().enumerate() {
                         let cell = [bx + offset[0], by + offset[1], bz + offset[2]];
                         corners[corner] = cell;
-                        match self.array_index(cell) {
-                            Some(slot) => {
-                                values[corner] = self.field[slot];
-                                candidates[corner] = self.labels[slot];
-                            }
-                            None => {
-                                values[corner] = OUTSIDE;
-                                candidates[corner] = EMPTY;
-                            }
-                        }
+                        values[corner] = match self.value_index(cell) {
+                            Some(slot) => self.field[slot],
+                            None => OUTSIDE,
+                        };
+                        candidates[corner] = match self.mask_index(cell) {
+                            Some(slot) => self.labels[slot],
+                            None => EMPTY,
+                        };
                         if values[corner] < threshold {
                             index |= 1 << corner;
                         }
@@ -270,7 +268,7 @@ impl Tile<'_> {
                 }
             });
             let cell = [low[0] + offset[0], low[1] + offset[1], low[2] + offset[2]];
-            let value = match self.array_index(cell) {
+            let value = match self.value_index(cell) {
                 Some(slot) => self.field[slot],
                 None => OUTSIDE,
             };

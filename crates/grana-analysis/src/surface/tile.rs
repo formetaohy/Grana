@@ -45,7 +45,11 @@ pub(super) struct Tile<'a> {
     pub(super) array: [Range<u32>; 3],
     pub(super) dims: [usize; 3],
     pub(super) start: [i64; 3],
+    pub(super) values: [Range<u32>; 3],
+    pub(super) value_dims: [usize; 3],
+    pub(super) value_start: [i64; 3],
     pub(super) raw: Vec<f32>,
+    pub(super) smoothed: Vec<f32>,
     pub(super) field: Vec<f32>,
     pub(super) mask: Vec<bool>,
     pub(super) chamfer: Vec<u32>,
@@ -78,7 +82,11 @@ impl<'a> Tile<'a> {
             array: [0..0, 0..0, 0..0],
             dims: [0; 3],
             start: [0; 3],
+            values: [0..0, 0..0, 0..0],
+            value_dims: [0; 3],
+            value_start: [0; 3],
             raw: Vec::new(),
+            smoothed: Vec::new(),
             field: Vec::new(),
             mask: Vec::new(),
             chamfer: Vec::new(),
@@ -116,70 +124,87 @@ impl<'a> Tile<'a> {
             array[2].start as i64,
         ];
         let count = self.dims[0] * self.dims[1] * self.dims[2];
-        let detection = match read(index, &array) {
-            Ok(data) => data,
-            Err(detail) => return TileResult::Failed(detail),
-        };
-        if detection.voxel_count() != count {
-            return TileResult::Failed(
-                "the detection tile does not cover the requested region".to_string(),
-            );
-        }
-        self.raw.clear();
-        self.raw.resize(count, 0.0);
-        detection.write_values(&mut self.raw);
-        super::smooth(&mut self.raw, self.dims, &pass.plan.kernels);
-        if super::halted(cancel, stop) {
-            return TileResult::Cancelled;
-        }
-        self.field.clear();
-        self.field.resize(count, 0.0);
         self.mask.clear();
         self.mask.resize(count, false);
-        self.prepare();
+        let occupied = self.mark();
         self.labels.clear();
         self.labels.resize(count, EMPTY);
+        self.chamfer.clear();
         self.nodes.clear();
         self.accumulators.clear();
         self.necks.clear();
+        self.seeds.clear();
         self.vertices.clear();
         self.keys.clear();
         self.indices.clear();
         self.triangles.clear();
         self.contacts.clear();
-        let saturated = self.watershed();
-        self.record_necks();
-        if super::halted(cancel, stop) {
-            return TileResult::Cancelled;
-        }
-        self.seeds.clear();
-        for (index, seed) in pass.seeds.iter().enumerate() {
-            let inside = (0..3).all(|axis| {
-                seed[axis] >= core[axis].start as i64 && seed[axis] < core[axis].end as i64
-            });
-            if !inside {
-                continue;
+        let mut saturated = false;
+        if occupied {
+            let values = pass.plan.array_range(index, pass.values);
+            self.values = values.clone();
+            self.value_dims = dims_of(&values);
+            self.value_start = [
+                values[0].start as i64,
+                values[1].start as i64,
+                values[2].start as i64,
+            ];
+            let value_count = self.value_dims[0] * self.value_dims[1] * self.value_dims[2];
+            let detection = match read(index, &values) {
+                Ok(data) => data,
+                Err(detail) => return TileResult::Failed(detail),
+            };
+            if detection.voxel_count() != value_count {
+                return TileResult::Failed(
+                    "the detection tile does not cover the requested region".to_string(),
+                );
             }
-            if let Some(label) = self.seed_label(*seed) {
-                self.seeds.push((index as u32, label));
+            self.raw.clear();
+            self.raw.resize(value_count, 0.0);
+            detection.write_values(&mut self.raw);
+            self.smoothed.clear();
+            self.smoothed.extend_from_slice(&self.raw);
+            super::smooth(&mut self.smoothed, self.value_dims, &pass.plan.kernels);
+            if super::halted(cancel, stop) {
+                return TileResult::Cancelled;
             }
-        }
-        let nodes_bytes = self.nodes.len() as u64 * std::mem::size_of::<Node>() as u64
-            + self.accumulators.len() as u64 * std::mem::size_of::<SampleAccumulator>() as u64;
-        if nodes_bytes > super::TILE_FRAGMENT_LIMIT {
-            return TileResult::Failed(format!(
-                "the surface tile {index} exceeds the {} byte fragment limit",
-                super::TILE_FRAGMENT_LIMIT
-            ));
-        }
-        if let Err(detail) = self.accumulate(&core, &array, measure) {
-            return TileResult::Failed(detail);
-        }
-        if super::halted(cancel, stop) {
-            return TileResult::Cancelled;
-        }
-        if let Err(detail) = self.emit(&core) {
-            return TileResult::Failed(detail);
+            self.field.clear();
+            self.field.resize(value_count, 0.0);
+            self.field();
+            saturated = self.watershed();
+            self.record_necks();
+            if super::halted(cancel, stop) {
+                return TileResult::Cancelled;
+            }
+            for (seed, position) in pass.seeds.iter().enumerate() {
+                let inside = (0..3).all(|axis| {
+                    position[axis] >= core[axis].start as i64
+                        && position[axis] < core[axis].end as i64
+                });
+                if !inside {
+                    continue;
+                }
+                if let Some(label) = self.seed_label(*position) {
+                    self.seeds.push((seed as u32, label));
+                }
+            }
+            let nodes_bytes = self.nodes.len() as u64 * std::mem::size_of::<Node>() as u64
+                + self.accumulators.len() as u64 * std::mem::size_of::<SampleAccumulator>() as u64;
+            if nodes_bytes > super::TILE_FRAGMENT_LIMIT {
+                return TileResult::Failed(format!(
+                    "the surface tile {index} exceeds the {} byte fragment limit",
+                    super::TILE_FRAGMENT_LIMIT
+                ));
+            }
+            if let Err(detail) = self.accumulate(&core, &array, measure) {
+                return TileResult::Failed(detail);
+            }
+            if super::halted(cancel, stop) {
+                return TileResult::Cancelled;
+            }
+            if let Err(detail) = self.emit(&core) {
+                return TileResult::Failed(detail);
+            }
         }
         let position = pass.plan.tile_position(index);
         let join = [0, 1, 2].map(|axis| {
@@ -237,7 +262,20 @@ impl<'a> Tile<'a> {
         node
     }
 
-    pub(super) fn array_index(&self, voxel: [i64; 3]) -> Option<usize> {
+    pub(super) fn value_index(&self, voxel: [i64; 3]) -> Option<usize> {
+        let dims = self.value_dims;
+        let mut local = [0usize; 3];
+        for axis in 0..3 {
+            let value = voxel[axis] - self.value_start[axis];
+            if value < 0 || value >= dims[axis] as i64 {
+                return None;
+            }
+            local[axis] = value as usize;
+        }
+        Some(local[0] + dims[0] * (local[1] + dims[1] * local[2]))
+    }
+
+    pub(super) fn mask_index(&self, voxel: [i64; 3]) -> Option<usize> {
         let dims = self.dims;
         let mut local = [0usize; 3];
         for axis in 0..3 {
@@ -256,7 +294,7 @@ impl<'a> Tile<'a> {
             for dy in -super::SEED_SNAP..=super::SEED_SNAP {
                 for dx in -super::SEED_SNAP..=super::SEED_SNAP {
                     let voxel = [seed[0] + dx, seed[1] + dy, seed[2] + dz];
-                    let Some(slot) = self.array_index(voxel) else {
+                    let Some(slot) = self.mask_index(voxel) else {
                         continue;
                     };
                     let label = self.labels[slot];
