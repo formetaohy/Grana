@@ -98,6 +98,10 @@ impl State<'_> {
         self.batch.map_or(&[], |batch| batch.datasets)
     }
 
+    pub fn batch_comparison(&self) -> &[grana_session::BatchComparison] {
+        self.batch.map_or(&[], |batch| batch.comparison)
+    }
+
     pub fn batch_output(&self) -> Option<&str> {
         self.batch.and_then(|batch| batch.output.as_deref())
     }

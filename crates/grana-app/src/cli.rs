@@ -96,6 +96,14 @@ pub fn batch(
                 eprintln!("{detail}");
                 failures += 1;
             }
+            BatchEvent::Comparison(comparison) => {
+                for row in comparison {
+                    println!(
+                        "  {} · {} ({}) over {} datasets",
+                        row.group, row.name, row.kind, row.datasets
+                    );
+                }
+            }
             BatchEvent::Done { cancelled } => {
                 if cancelled {
                     eprintln!("the batch was cancelled");

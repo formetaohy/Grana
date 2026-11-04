@@ -19,6 +19,7 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         );
         ui.column(Block::column().gaps(12.0).width(Length::Fill), |ui| {
             output(ui, state, commands);
+            comparison(ui, state);
         });
     });
 }
@@ -274,6 +275,93 @@ fn output(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         }
         widget::weak(ui, "Re-running the same protocol resumes where it stopped.");
     });
+}
+
+fn comparison(ui: &mut Ui, state: &State<'_>) {
+    let rows = state.batch_comparison();
+    card(ui, 6.0, |ui| {
+        card_title(
+            ui,
+            Icon::Table,
+            "Comparison",
+            (!rows.is_empty())
+                .then(|| rows.len().to_string())
+                .as_deref(),
+        );
+        if rows.is_empty() {
+            widget::weak(
+                ui,
+                "Run the batch to compare the groups it reports into comparison.csv.",
+            );
+            return;
+        }
+        let key = ui.id("batch.comparison");
+        ui.scroll_axis(key, Axis::Column, Length::Fixed(196.0), None, |ui| {
+            for (index, row) in rows.iter().enumerate() {
+                entry(ui, index, rows.len(), row);
+            }
+        });
+    });
+}
+
+fn entry(ui: &mut Ui, index: usize, rows: usize, row: &grana_session::BatchComparison) {
+    let palette = ui.theme().palette;
+    let callout = ui.theme().font(grana_ui::Level::Callout);
+    let caption = ui.theme().font(grana_ui::Level::Caption);
+    ui.column(Block::column().gaps(2.0), |ui| {
+        let head = ui.allocate_full(18.0);
+        let mut painter = ui.painter();
+        painter.text_in(
+            head,
+            &format!("{} · {}", row.group, row.name),
+            TextStyle::new(callout, palette.text_primary).truncating(),
+            Align::Center,
+        );
+        painter.text_in(
+            head,
+            row.kind.as_str(),
+            TextStyle::new(caption, palette.text_tertiary).aligned(Align::End),
+            Align::Center,
+        );
+        let mut parts = vec![format!(
+            "{} dataset{}",
+            row.datasets,
+            if row.datasets == 1 { "" } else { "s" }
+        )];
+        if let Some(objects) = row.objects {
+            parts.push(format!("{objects:.1} objects"));
+        }
+        if let Some(volume) = row.volume {
+            parts.push(format!(
+                "volume {} µm³",
+                spread(volume, row.volume_deviation)
+            ));
+        }
+        if let Some(area) = row.area {
+            parts.push(format!("area {} µm²", spread(area, row.area_deviation)));
+        }
+        if let Some(size) = row.size {
+            parts.push(format!("size {} µm", spread(size, row.size_deviation)));
+        }
+        if let Some(intensity) = row.intensity {
+            parts.push(format!(
+                "intensity {}",
+                spread(intensity, row.intensity_deviation)
+            ));
+        }
+        let detail = TextStyle::new(caption, palette.text_secondary).wrapping();
+        ui.text_style_wrapped(&parts.join(" · "), detail, ui.available().x);
+    });
+    if index + 1 < rows {
+        ui.separator();
+    }
+}
+
+fn spread(mean: f64, deviation: Option<f64>) -> String {
+    match deviation {
+        Some(deviation) => format!("{mean:.3} ±{deviation:.3}"),
+        None => format!("{mean:.3}"),
+    }
 }
 
 fn state_tint(state: &str, ui: &Ui) -> Color {

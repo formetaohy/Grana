@@ -106,7 +106,24 @@ pub(super) fn table(plan: &Plan, rows: &[Option<Row>]) -> String {
     lines.concat()
 }
 
-pub(super) fn comparison(plan: &Plan, rows: &[Option<Row>]) -> String {
+#[derive(Clone, Debug)]
+pub struct Comparison {
+    pub group: String,
+    pub name: String,
+    pub kind: String,
+    pub datasets: usize,
+    pub objects: Option<f64>,
+    pub volume: Option<f64>,
+    pub volume_deviation: Option<f64>,
+    pub area: Option<f64>,
+    pub area_deviation: Option<f64>,
+    pub size: Option<f64>,
+    pub size_deviation: Option<f64>,
+    pub intensity: Option<f64>,
+    pub intensity_deviation: Option<f64>,
+}
+
+pub(super) fn comparison(plan: &Plan, rows: &[Option<Row>]) -> (Vec<Comparison>, String) {
     let mut groups = BTreeMap::<(String, String, String), Summary>::new();
     for (index, row) in rows.iter().enumerate() {
         let Some(row) = row else {
@@ -127,6 +144,28 @@ pub(super) fn comparison(plan: &Plan, rows: &[Option<Row>]) -> String {
                 .push(quality);
         }
     }
+    let mut compared = Vec::with_capacity(groups.len());
+    for ((group, name, kind), summary) in groups {
+        let (volume, volume_deviation) = summary.mean_deviation(&summary.volume);
+        let (area, area_deviation) = summary.mean_deviation(&summary.area);
+        let (size, size_deviation) = summary.mean_deviation(&summary.size);
+        let (intensity, intensity_deviation) = summary.mean_deviation(&summary.intensity);
+        compared.push(Comparison {
+            group,
+            name,
+            kind,
+            datasets: summary.datasets,
+            objects: mean(&summary.objects),
+            volume,
+            volume_deviation,
+            area,
+            area_deviation,
+            size,
+            size_deviation,
+            intensity,
+            intensity_deviation,
+        });
+    }
     let mut lines = vec![grana_measure::csv::line(&[
         "group",
         "set",
@@ -142,28 +181,24 @@ pub(super) fn comparison(plan: &Plan, rows: &[Option<Row>]) -> String {
         "intensity_mean",
         "intensity_std",
     ])];
-    for ((group, name, kind), summary) in groups {
-        let (volume, volume_deviation) = summary.mean_deviation(&summary.volume);
-        let (area, area_deviation) = summary.mean_deviation(&summary.area);
-        let (size, size_deviation) = summary.mean_deviation(&summary.size);
-        let (intensity, intensity_deviation) = summary.mean_deviation(&summary.intensity);
+    for comparison in &compared {
         lines.push(grana_measure::csv::line(&[
-            &group,
-            &name,
-            &kind,
-            &summary.datasets.to_string(),
-            &formatted(mean(&summary.objects), 1),
-            &formatted(volume, 3),
-            &formatted(volume_deviation, 3),
-            &formatted(area, 3),
-            &formatted(area_deviation, 3),
-            &formatted(size, 3),
-            &formatted(size_deviation, 3),
-            &formatted(intensity, 2),
-            &formatted(intensity_deviation, 2),
+            &comparison.group,
+            &comparison.name,
+            &comparison.kind,
+            &comparison.datasets.to_string(),
+            &formatted(comparison.objects, 1),
+            &formatted(comparison.volume, 3),
+            &formatted(comparison.volume_deviation, 3),
+            &formatted(comparison.area, 3),
+            &formatted(comparison.area_deviation, 3),
+            &formatted(comparison.size, 3),
+            &formatted(comparison.size_deviation, 3),
+            &formatted(comparison.intensity, 2),
+            &formatted(comparison.intensity_deviation, 2),
         ]));
     }
-    lines.concat()
+    (compared, lines.concat())
 }
 
 #[derive(Default)]

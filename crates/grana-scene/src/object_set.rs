@@ -996,8 +996,8 @@ impl ObjectSet {
         if self.curation.is_empty() || self.curation.applied() {
             return 0;
         }
-        let before = self.curation.dropped();
         let mut keeps = Vec::new();
+        let mut pending = 0;
         for time in 0..self.frames.len() {
             if !self.curation.produced(time as u32) {
                 continue;
@@ -1006,10 +1006,11 @@ impl ObjectSet {
                 .data
                 .as_deref()
                 .map_or_else(Vec::new, ObjectFrame::anchors);
-            if let Some(keep) = self.curation.keep(time as u32, &anchors, self.voxel)
-                && keep.iter().any(|kept| !kept)
-            {
-                keeps.push((time as u32, keep));
+            if let Some(kept) = self.curation.keep(time as u32, &anchors, self.voxel) {
+                pending += kept.pending;
+                if kept.keep.iter().any(|kept| !kept) {
+                    keeps.push((time as u32, kept.keep));
+                }
             }
         }
         let mut applied = 0usize;
@@ -1029,9 +1030,9 @@ impl ObjectSet {
             };
             self.install_retained(time, pruned, &removed, stamp);
         }
-        let dropped = self.curation.dropped() - before;
+        self.curation.set_pending(pending);
         self.curation.set_applied();
-        applied + dropped
+        applied
     }
 
     pub(crate) fn apply_edits(&mut self, stamp: u64) -> usize {

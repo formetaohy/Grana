@@ -628,6 +628,10 @@ fn curated(ui: &mut Ui, state: &State<'_>, id: ObjectSetId) {
             if edits == 1 { "" } else { "s" }
         ));
     }
+    let pending = curation.pending();
+    if pending > 0 {
+        parts.push(format!("{pending} awaiting a matching object"));
+    }
     let dropped = curation.dropped();
     if dropped > 0 {
         parts.push(format!("{dropped} dropped after a rebuild"));

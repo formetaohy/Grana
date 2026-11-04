@@ -31,7 +31,9 @@ use crate::loader::{Event as LoaderEvent, Loader};
 use crate::recipe::Recipe;
 use crate::sample;
 use crate::task::Poll;
-use crate::view::{BatchDataset, BatchView, HistoryView, IoView, Message, SeriesView, StoreView};
+use crate::view::{
+    BatchComparison, BatchDataset, BatchView, HistoryView, IoView, Message, SeriesView, StoreView,
+};
 use crate::{Action, Analysis, Command, Series, Source};
 use grana_pipeline::run::DetectRequest;
 use grana_pipeline::{
@@ -87,6 +89,7 @@ pub struct Session {
     batch: Option<Batch>,
     batch_datasets: Vec<grana_pipeline::DatasetEntry>,
     batch_rows: Vec<BatchDataset>,
+    batch_comparison: Vec<BatchComparison>,
     batch_output: Option<PathBuf>,
     batch_running: bool,
     batch_paused: bool,
@@ -138,6 +141,7 @@ impl Session {
             batch: None,
             batch_datasets: Vec::new(),
             batch_rows: Vec::new(),
+            batch_comparison: Vec::new(),
             batch_output: None,
             batch_running: false,
             batch_paused: false,
@@ -213,6 +217,7 @@ impl Session {
         Some(BatchView {
             protocol: self.protocol_text.as_deref(),
             datasets: &self.batch_rows,
+            comparison: &self.batch_comparison,
             output: self
                 .batch_output
                 .as_ref()

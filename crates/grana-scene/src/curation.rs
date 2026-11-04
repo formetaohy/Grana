@@ -23,6 +23,11 @@ impl ObjectAnchor {
         self.bounds
     }
 
+    fn scale(self) -> f32 {
+        let size = self.bounds.size();
+        (size[0] + size[1] + size[2]) / 6.0
+    }
+
     fn distance(self, point: [f32; 3]) -> f32 {
         (0..3)
             .map(|axis| (self.position[axis] - point[axis]).powi(2))
@@ -30,7 +35,12 @@ impl ObjectAnchor {
             .sqrt()
     }
 
-    fn clearance(self, point: [f32; 3]) -> f32 {
+    fn clearance(self, other: &Self) -> f32 {
+        self.clearance_of(other.position)
+            .min(other.clearance_of(self.position))
+    }
+
+    fn clearance_of(self, point: [f32; 3]) -> f32 {
         let low = self.bounds.min();
         let high = self.bounds.max();
         (0..3)
@@ -42,6 +52,13 @@ impl ObjectAnchor {
             .sum::<f32>()
             .sqrt()
     }
+}
+
+const SNAP_VOXELS: f32 = 3.0;
+const SNAP_SHARE: f32 = 0.5;
+
+fn tolerance(record: f32, candidate: f32, voxel: f32) -> f32 {
+    SNAP_VOXELS * voxel + SNAP_SHARE * record.min(candidate)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -103,6 +120,12 @@ pub struct Curation {
     pruned: bool,
     produced: Vec<bool>,
     dropped: usize,
+    pending: usize,
+}
+
+pub(crate) struct Kept {
+    pub(crate) keep: Vec<bool>,
+    pub(crate) pending: usize,
 }
 
 impl PartialEq for Curation {
@@ -164,6 +187,7 @@ impl Curation {
             pruned: true,
             produced: vec![false; expected.len()],
             dropped: 0,
+            pending: 0,
         })
     }
 
@@ -202,6 +226,14 @@ impl Curation {
 
     pub fn dropped(&self) -> usize {
         self.dropped
+    }
+
+    pub fn pending(&self) -> usize {
+        self.pending
+    }
+
+    pub(crate) fn set_pending(&mut self, pending: usize) {
+        self.pending = pending;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -249,31 +281,21 @@ impl Curation {
         }
     }
 
-    pub(crate) fn keep(
-        &mut self,
-        time: u32,
-        anchors: &[ObjectAnchor],
-        voxel: f32,
-    ) -> Option<Vec<bool>> {
-        let removed = self.removed.get_mut(time as usize)?;
+    pub(crate) fn keep(&mut self, time: u32, anchors: &[ObjectAnchor], voxel: f32) -> Option<Kept> {
+        let removed = self.removed.get(time as usize)?;
         if removed.is_empty() {
             return None;
         }
+        let assigned = assign(removed, anchors, voxel);
         let mut keep = vec![true; anchors.len()];
-        let mut taken = vec![false; anchors.len()];
-        let mut retained = Vec::with_capacity(removed.len());
-        for record in removed.drain(..) {
-            match locate(anchors, Some(&taken), record.position(), voxel) {
-                Some(object) => {
-                    taken[object] = true;
-                    keep[object] = false;
-                    retained.push(record);
-                }
-                None => self.dropped += 1,
+        let mut pending = 0;
+        for object in &assigned {
+            match object {
+                Some(object) => keep[*object] = false,
+                None => pending += 1,
             }
         }
-        *removed = retained;
-        Some(keep)
+        Some(Kept { keep, pending })
     }
 
     pub(crate) fn forget_edits(&mut self) -> usize {
@@ -315,6 +337,7 @@ impl Curation {
             pruned: self.pruned && other.pruned,
             produced: vec![false; frames],
             dropped: self.dropped + other.dropped,
+            pending: 0,
         }
     }
 }
@@ -324,23 +347,11 @@ pub(crate) fn match_anchor(
     position: [f32; 3],
     voxel: f32,
 ) -> Option<usize> {
-    locate(anchors, None, position, voxel)
-}
-
-fn locate(
-    anchors: &[ObjectAnchor],
-    taken: Option<&[bool]>,
-    position: [f32; 3],
-    voxel: f32,
-) -> Option<usize> {
-    let tolerance = 3.0 * voxel;
     let mut best: Option<(f32, f32, usize)> = None;
     for (index, anchor) in anchors.iter().enumerate() {
-        if taken.is_some_and(|taken| taken[index]) {
-            continue;
-        }
-        let clearance = anchor.clearance(position);
-        if clearance > tolerance {
+        let limit = tolerance(anchor.scale(), anchor.scale(), voxel);
+        let clearance = anchor.clearance_of(position);
+        if clearance > limit {
             continue;
         }
         let distance = anchor.distance(position);
@@ -351,4 +362,41 @@ fn locate(
         }
     }
     best.map(|(_, _, index)| index)
+}
+
+fn assign(records: &[ObjectAnchor], anchors: &[ObjectAnchor], voxel: f32) -> Vec<Option<usize>> {
+    let mut candidates = Vec::new();
+    for (record_index, record) in records.iter().enumerate() {
+        let scale = record.scale();
+        for (anchor_index, anchor) in anchors.iter().enumerate() {
+            let limit = tolerance(scale, anchor.scale(), voxel);
+            let clearance = record.clearance(anchor);
+            if clearance > limit {
+                continue;
+            }
+            candidates.push((
+                clearance / limit,
+                record.distance(anchor.position),
+                record_index,
+                anchor_index,
+            ));
+        }
+    }
+    candidates.sort_unstable_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then(left.1.total_cmp(&right.1))
+            .then(left.2.cmp(&right.2))
+            .then(left.3.cmp(&right.3))
+    });
+    let mut assigned = vec![None; records.len()];
+    let mut taken = vec![false; anchors.len()];
+    for (_, _, record, anchor) in candidates {
+        if assigned[record].is_some() || taken[anchor] {
+            continue;
+        }
+        assigned[record] = Some(anchor);
+        taken[anchor] = true;
+    }
+    assigned
 }

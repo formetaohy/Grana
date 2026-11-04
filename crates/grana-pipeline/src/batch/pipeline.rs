@@ -144,10 +144,14 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             .map(|set| set.curation().clone())
             .unwrap_or_default();
         let removed = curation.removal_count();
+        let pending = curation.pending();
         let dropped = curation.dropped();
         let mut line = format!("{}={}", spec.name, rows.len());
         if removed > 0 {
             line.push_str(&format!(" ({} removed by hand)", removed));
+        }
+        if pending > 0 {
+            line.push_str(&format!(" ({pending} awaiting a matching object)"));
         }
         if dropped > 0 {
             line.push_str(&format!(" ({} manual edits dropped)", dropped));

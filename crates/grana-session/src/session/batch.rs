@@ -63,6 +63,7 @@ impl Session {
             return;
         };
         self.reset_batch_rows();
+        self.batch_comparison.clear();
         self.batch_running = true;
         self.batch_paused = false;
         self.batch_message = None;
@@ -155,6 +156,9 @@ impl Session {
                             }
                         }
                     }
+                }
+                BatchEvent::Comparison(comparison) => {
+                    self.batch_comparison = comparison;
                 }
                 BatchEvent::Failed(detail) => {
                     fatal = true;

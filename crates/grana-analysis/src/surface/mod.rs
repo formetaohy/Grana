@@ -406,18 +406,25 @@ impl SurfaceBuilder {
         while base > DISTANCE_LIMIT && Pass::new(&self, base, seeds).max_workers().is_none() {
             base /= 2;
         }
-        let mut runs = Vec::new();
-        for limit in [base, base * 2, base * 4] {
-            match Pass::new(&self, limit, seeds).max_workers() {
-                Some(capacity) => runs.push((limit, capacity)),
-                None => break,
-            }
-        }
-        if runs.is_empty() {
+        if Pass::new(&self, base, seeds).max_workers().is_none() {
             return Err(format!(
                 "a surface tile needs more than {WORKER_ARRAY_LIMIT} bytes of array memory"
             ));
         }
+        let distance = Distance::build(&self, &mask.solid);
+        let ceiling = base * 4;
+        let margin = distance.uncertainty().ceil() as u32 + 1;
+        let wanted = (distance.reach().ceil() as u32)
+            .saturating_add(margin)
+            .clamp(base, ceiling);
+        let mut limit = wanted;
+        let capacity = loop {
+            if let Some(capacity) = Pass::new(&self, limit, seeds).max_workers() {
+                break capacity;
+            }
+            assert!(limit > base, "the base distance limit fits a tile array");
+            limit = limit.saturating_sub(PAD_ALIGN).max(base);
+        };
         let mut inputs = Inputs {
             cancel,
             progress,
@@ -427,29 +434,14 @@ impl SurfaceBuilder {
             field: &mask.field,
             roi,
         };
-        let mut step = 0;
-        loop {
-            let (limit, capacity) = runs[step];
-            let last = step + 1 == runs.len();
-            let pass = Pass::new(&self, limit, seeds);
-            let workers = desired.min(capacity).min(pass.total().max(1));
-            match run_pass(&pass, workers, false, &mut inputs)? {
-                PassOutcome::Cancelled => return Ok(None),
-                PassOutcome::Saturated if last => {
-                    let distance = Distance::build(&self, &mask.solid);
-                    let pass = Pass::refined(&self, limit, seeds, &distance);
-                    let workers = desired.min(capacity).min(pass.total().max(1));
-                    return match run_pass(&pass, workers, false, &mut inputs)? {
-                        PassOutcome::Cancelled => Ok(None),
-                        PassOutcome::Done(topology) => self.finish(*topology, desired, store),
-                        PassOutcome::Saturated => Err(format!(
-                            "the refined surface pass keeps a saturated distance of {limit} voxels"
-                        )),
-                    };
-                }
-                PassOutcome::Saturated => step += 1,
-                PassOutcome::Done(topology) => return self.finish(*topology, desired, store),
-            }
+        let pass = Pass::refined(&self, limit, seeds, &distance);
+        let workers = desired.min(capacity).min(pass.total().max(1));
+        match run_pass(&pass, workers, false, &mut inputs)? {
+            PassOutcome::Cancelled => Ok(None),
+            PassOutcome::Done(topology) => self.finish(*topology, desired, store),
+            PassOutcome::Saturated => Err(format!(
+                "the refined surface pass keeps a saturated distance of {limit} voxels"
+            )),
         }
     }
 

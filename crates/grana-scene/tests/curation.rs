@@ -135,7 +135,7 @@ fn replays_a_removal_after_the_object_order_changes() {
 }
 
 #[test]
-fn drops_the_manual_removals_of_a_frame_that_holds_other_objects() {
+fn keeps_a_manual_removal_until_an_object_lands_on_it() {
     let mut scene = scene(1);
     let set = scene.add_object(ObjectKind::Spots, 0);
     scene.install(set, 0, spots(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]));
@@ -153,21 +153,38 @@ fn drops_the_manual_removals_of_a_frame_that_holds_other_objects() {
     );
     assert_eq!(
         scene.apply_curation(set),
-        1,
-        "the curation is dropped when the frame holds another object count"
+        0,
+        "no produced object lands on the removed anchor"
     );
     assert_eq!(
         placed(&scene, set, 0),
         [4.0, 5.0, 6.0],
-        "a dropped curation keeps every produced object"
+        "a pending removal keeps every produced object"
     );
     let curation = scene
         .objects
         .get(set)
         .expect("the object set exists")
         .curation();
-    assert_eq!(curation.removal_count(), 0);
-    assert_eq!(curation.dropped(), 1);
+    assert_eq!(curation.removal_count(), 1, "the removal stays anchored");
+    assert_eq!(curation.pending(), 1, "the removal matches no object");
+
+    scene.install(set, 0, spots(&[[0.0, 0.0, 0.0], [5.0, 0.0, 0.0]]));
+    assert_eq!(
+        scene.apply_curation(set),
+        1,
+        "the anchored removal applies once an object lands on it"
+    );
+    assert_eq!(placed(&scene, set, 0), [5.0]);
+    assert_eq!(
+        scene
+            .objects
+            .get(set)
+            .expect("the object set exists")
+            .curation()
+            .pending(),
+        0
+    );
 }
 
 #[test]
@@ -239,6 +256,34 @@ fn replays_a_removal_after_the_object_merges() {
             .dropped(),
         0,
         "the removal of a merged object is never dropped"
+    );
+}
+
+#[test]
+fn replays_a_removal_after_the_object_moves() {
+    let mut scene = scene(1);
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    scene.install(set, 0, sized(&[[0.0, 0.0, 0.0]], 2.0));
+    assert!(
+        scene
+            .delete_objects(set, 0, &[0])
+            .expect("the large spot is pruned")
+    );
+
+    scene.install(set, 0, sized(&[[4.0, 0.0, 0.0]], 2.0));
+    assert_eq!(
+        scene.apply_curation(set),
+        1,
+        "the object is claimed after moving a distance of its own scale"
+    );
+    assert!(
+        scene
+            .objects
+            .get(set)
+            .expect("the object set exists")
+            .frame(0)
+            .is_none(),
+        "the moved object leaves the rebuilt frame"
     );
 }
 

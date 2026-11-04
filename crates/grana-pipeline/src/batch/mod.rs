@@ -23,6 +23,7 @@ use quality::Row;
 use resume::{build, completed, content};
 
 pub use discover::{DatasetEntry, dataset_name, default_jobs, discover};
+pub use quality::Comparison;
 
 const RESULT: &str = "result.json";
 
@@ -61,6 +62,7 @@ pub enum Event {
         index: usize,
         outcome: Outcome,
     },
+    Comparison(Vec<Comparison>),
     Failed(String),
     Done {
         cancelled: bool,
@@ -266,14 +268,13 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
             "failed to write the batch quality report: {error}"
         )));
     }
-    if let Err(error) = std::fs::write(
-        plan.output.join("comparison.csv"),
-        quality::comparison(&plan, &rows),
-    ) {
+    let (comparison, csv) = quality::comparison(&plan, &rows);
+    if let Err(error) = std::fs::write(plan.output.join("comparison.csv"), csv) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch comparison: {error}"
         )));
     }
+    let _ = events.send(Event::Comparison(comparison));
     if let Err(detail) = sheet::write(&plan, &rows) {
         let _ = events.send(Event::Failed(detail));
     }

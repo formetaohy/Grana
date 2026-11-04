@@ -45,9 +45,12 @@ pub struct BatchDataset {
     pub detail: String,
 }
 
+pub type BatchComparison = grana_pipeline::Comparison;
+
 pub struct BatchView<'a> {
     pub protocol: Option<&'a str>,
     pub datasets: &'a [BatchDataset],
+    pub comparison: &'a [BatchComparison],
     pub output: Option<String>,
     pub jobs: usize,
     pub project: bool,

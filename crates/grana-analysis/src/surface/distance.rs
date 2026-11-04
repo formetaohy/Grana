@@ -1,7 +1,7 @@
 use super::mask::SolidMask;
 use super::{SurfaceBuilder, parabola};
 
-const SCALE: i64 = 4;
+const SCALE: u32 = 4;
 const UNREACHED: f32 = 1.0e12;
 
 pub(super) struct Distance {
@@ -9,25 +9,30 @@ pub(super) struct Distance {
     dims: [usize; 3],
     values: Vec<f32>,
     limit: f64,
+    reach: f64,
+    uncertainty: f64,
 }
 
 impl Distance {
     pub(super) fn build(plan: &SurfaceBuilder, solid: &SolidMask) -> Self {
         let dims = plan.dims();
-        let coarse = [0, 1, 2].map(|axis| dims[axis].div_ceil(SCALE as usize));
+        let scale = SCALE as usize;
+        let coarse = [0, 1, 2].map(|axis| dims[axis].div_ceil(scale));
         let padded = [coarse[0] + 2, coarse[1] + 2, coarse[2] + 2];
         let mut values = vec![0.0f32; padded[0] * padded[1] * padded[2]];
+        let mut reached = Vec::new();
         for z in 0..coarse[2] {
             for y in 0..coarse[1] {
                 for x in 0..coarse[0] {
                     let voxel = [
-                        plan.anchor[0] + (x as i64) * SCALE + SCALE / 2,
-                        plan.anchor[1] + (y as i64) * SCALE + SCALE / 2,
-                        plan.anchor[2] + (z as i64) * SCALE + SCALE / 2,
+                        plan.anchor[0] + (x * scale) as i64 + scale as i64 / 2,
+                        plan.anchor[1] + (y * scale) as i64 + scale as i64 / 2,
+                        plan.anchor[2] + (z * scale) as i64 + scale as i64 / 2,
                     ];
                     if solid.get(voxel, plan.anchor) {
                         let index = (x + 1) + padded[0] * ((y + 1) + padded[1] * (z + 1));
                         values[index] = UNREACHED;
+                        reached.push(index);
                     }
                 }
             }
@@ -40,12 +45,30 @@ impl Distance {
         let limit = (0..3).fold(0.0f64, |accumulated, axis| {
             accumulated + weights[axis] * (dims[axis] * dims[axis]) as f64
         }) + 1.0;
+        let reach = reached
+            .into_iter()
+            .map(|index| f64::from(values[index]))
+            .fold(0.0f64, f64::max)
+            .max(0.0)
+            .sqrt()
+            * f64::from(SCALE);
+        let uncertainty = (weights[0] + weights[1] + weights[2]).sqrt() * f64::from(SCALE) * 0.5;
         Self {
             origin: plan.anchor,
             dims: coarse,
             values,
             limit,
+            reach,
+            uncertainty,
         }
+    }
+
+    pub(super) fn reach(&self) -> f64 {
+        self.reach
+    }
+
+    pub(super) fn uncertainty(&self) -> f64 {
+        self.uncertainty
     }
 
     pub(super) fn at(&self, voxel: [i64; 3]) -> u32 {
@@ -55,7 +78,7 @@ impl Distance {
             if local < 0 {
                 return 0;
             }
-            let index = (local / SCALE) as usize;
+            let index = (local / i64::from(SCALE)) as usize;
             if index >= self.dims[axis] {
                 return 0;
             }
@@ -63,7 +86,7 @@ impl Distance {
         }
         let padded = [self.dims[0] + 2, self.dims[1] + 2, self.dims[2] + 2];
         let index = (cell[0] + 1) + padded[0] * ((cell[1] + 1) + padded[1] * (cell[2] + 1));
-        let value = f64::from(self.values[index]) * (SCALE * SCALE) as f64;
+        let value = f64::from(self.values[index]) * f64::from(SCALE * SCALE);
         value.min(self.limit) as u32
     }
 }
