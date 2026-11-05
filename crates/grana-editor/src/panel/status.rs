@@ -6,8 +6,8 @@ use crate::state::State;
 
 pub(super) fn bar(ui: &mut Ui, rect: Rect, state: &State<'_>) {
     let palette = ui.theme().palette;
-    let font = grana_ui::TypeStyle::new(10.0, 400.0, 13.0);
-    let style = TextStyle::new(font, palette.text_quaternary);
+    let font = grana_ui::TypeStyle::new(10.5, 400.0, 14.0);
+    let style = TextStyle::new(font, palette.text_tertiary);
     let inner = Rect::from_min_max(
         Vec2::new(rect.min.x + 16.0, rect.min.y),
         Vec2::new(rect.max.x - 16.0, rect.max.y),
@@ -27,7 +27,7 @@ pub(super) fn bar(ui: &mut Ui, rect: Rect, state: &State<'_>) {
             Vec2::new(inner.max.x, inner.min.y + 28.0),
         ),
         state.io.adapter,
-        TextStyle::new(font, palette.text_tertiary).truncating(),
+        TextStyle::new(font, palette.text_secondary).truncating(),
         Align::Center,
     );
     let stats = format!(
@@ -62,7 +62,7 @@ pub(super) fn pill(ui: &mut Ui, anchor: Rect, state: &State<'_>) {
             .layer(CHROME)
             .with_shape(grana_ui::glass::GlassShape::Capsule),
     );
-    let font = grana_ui::TypeStyle::new(10.0, 400.0, 13.0);
+    let font = grana_ui::TypeStyle::new(10.5, 400.0, 14.0);
     let inner = Rect::from_min_max(
         Vec2::new(rect.min.x + 16.0, rect.min.y + 6.0),
         Vec2::new(rect.max.x - 16.0, rect.max.y - 6.0),
@@ -78,7 +78,7 @@ pub(super) fn pill(ui: &mut Ui, anchor: Rect, state: &State<'_>) {
     painter.text_in(
         Rect::from_min_max(inner.min, Vec2::new(inner.max.x, inner.center().y)),
         state.io.adapter,
-        TextStyle::new(font, palette.text_tertiary).truncating(),
+        TextStyle::new(font, palette.text_secondary).truncating(),
         Align::Center,
     );
     painter.text_in(
