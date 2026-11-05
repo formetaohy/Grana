@@ -4,15 +4,26 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::mem::size_of;
 use std::ops::Range;
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, Once, mpsc};
+use std::time::{Duration, SystemTime};
 
 use super::{Read, SurfaceBuilder};
 
 const BAND: u32 = 32;
+const BAND_BYTES: u64 = 64 << 20;
+const SCRATCH_MARGIN: u64 = 64 << 20;
+const SCRATCH_STALE: Duration = Duration::from_secs(6 * 60 * 60);
+const RETRY_LIMIT: u32 = 8;
+const SPILL_PREFIX: &str = "grana-detection-";
+const SPILL_SUFFIX: &str = ".spill";
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+static SWEEP: Once = Once::new();
+static RESERVED: Mutex<u64> = Mutex::new(0);
+
+type Band = (u32, Vec<f32>);
 
 pub(super) struct DetectionStore {
     storage: Storage,
@@ -23,7 +34,11 @@ pub(super) struct DetectionStore {
 
 enum Storage {
     Memory(Vec<f32>),
-    Spill { file: Mutex<File>, path: PathBuf },
+    Spill {
+        file: Mutex<File>,
+        path: PathBuf,
+        bytes: u64,
+    },
 }
 
 pub(super) struct DetectionSource<'a> {
@@ -44,9 +59,10 @@ pub(super) struct Detection<'a> {
 impl Drop for DetectionStore {
     fn drop(&mut self) {
         let storage = std::mem::replace(&mut self.storage, Storage::Memory(Vec::new()));
-        if let Storage::Spill { file, path } = storage {
+        if let Storage::Spill { file, path, bytes } = storage {
             drop(file);
             let _ = std::fs::remove_file(path);
+            release(bytes);
         }
     }
 }
@@ -71,21 +87,7 @@ impl DetectionStore {
         let storage = if bytes <= budget {
             Storage::Memory(vec![0.0; total])
         } else {
-            let path = spill_path();
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .open(&path)
-                .map_err(|error| format!("failed to open the detection spill file: {error}"))?;
-            file.set_len(bytes).map_err(|error| {
-                let _ = std::fs::remove_file(&path);
-                format!("failed to size the detection spill file: {error}")
-            })?;
-            Storage::Spill {
-                file: Mutex::new(file),
-                path,
-            }
+            spill(bytes)?
         };
         let mut store = Self {
             storage,
@@ -97,96 +99,118 @@ impl DetectionStore {
             dims,
             plane,
         };
-        let radius = plan.kernels[2].len() / 2;
-        let mut ring: VecDeque<Vec<f32>> = VecDeque::with_capacity(2 * radius + 1);
-        let mut smoothed = vec![0.0f32; plane];
-        let mut output = cover[2].start;
-        let mut z = cover[2].start;
-        let bands = (cover[2].end - cover[2].start).div_ceil(BAND) as usize;
+        let workers = workers.max(1);
+        let kernel = &plan.kernels[2];
+        let radius = kernel.len() / 2;
+        let first = cover[2].start;
+        let last = cover[2].end - 1;
+        let band = band_planes(plane);
+        let bands = (cover[2].end - cover[2].start).div_ceil(band) as usize;
         let mut done = 0usize;
-        let mut first = true;
-        let mut last = Vec::new();
-        while z < cover[2].end {
-            if cancel.load(Ordering::Relaxed) {
-                return Ok(None);
-            }
-            let end = cover[2].end.min(z.saturating_add(BAND));
-            let mut raw = vec![0.0f32; plane * (end - z) as usize];
-            let ranges = [cover[0].clone(), cover[1].clone(), z..end];
-            let data = read(&ranges)?;
-            if data.voxel_count() != raw.len() {
-                return Err("the detection band does not cover the requested region".to_string());
-            }
-            data.write_values(&mut raw);
-            for (axis, kernel) in plan.kernels.iter().enumerate().take(2) {
-                if kernel.len() <= 1 {
-                    continue;
-                }
-                planes(&mut raw, plane, workers.max(1), |part, _| {
-                    if axis == 0 {
-                        horizontal(part, dims, part.len() / plane, kernel);
-                    } else {
-                        vertical(part, dims, part.len() / plane, kernel);
+        let (sender, receiver) = mpsc::sync_channel::<Result<Band, String>>(1);
+        let (recycle_tx, recycle_rx) = mpsc::channel::<Vec<f32>>();
+        let mut window = Window::new(plane);
+        let mut available = first;
+        let mut output = first;
+        let completed = std::thread::scope(|scope| -> Result<bool, String> {
+            {
+                let read = &*read;
+                let cancel = &*cancel;
+                scope.spawn(move || {
+                    let mut z = cover[2].start;
+                    while z < cover[2].end {
+                        if cancel.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        let end = cover[2].end.min(z.saturating_add(band));
+                        let ranges = [cover[0].clone(), cover[1].clone(), z..end];
+                        let mut raw = recycle_rx.try_recv().unwrap_or_default();
+                        raw.resize(plane * (end - z) as usize, 0.0);
+                        let band = match read(&ranges) {
+                            Ok(data) if data.voxel_count() == raw.len() => {
+                                data.write_values(&mut raw);
+                                Ok((z, raw))
+                            }
+                            Ok(_) => Err("the detection band does not cover the requested region"
+                                .to_string()),
+                            Err(detail) => Err(detail),
+                        };
+                        let failed = band.is_err();
+                        if sender.send(band).is_err() || failed {
+                            return;
+                        }
+                        z = end;
                     }
                 });
             }
-            for local in 0..(end - z) as usize {
-                let start = local * plane;
-                let source = &raw[start..start + plane];
-                if first {
-                    first = false;
-                    for _ in 0..radius {
-                        ring.push_back(source.to_vec());
-                    }
+            while let Ok(message) = receiver.recv() {
+                let (z, mut raw) = message?;
+                let planes = (raw.len() / plane) as u32;
+                blur(&mut raw, plan, dims, plane, workers);
+                window.push(z, raw);
+                available = z + planes;
+                let ready = if available > last {
+                    cover[2].end
+                } else {
+                    available.saturating_sub(radius as u32).max(output)
+                };
+                if ready > output {
+                    store.write_block(&window, output, ready, radius, kernel, workers)?;
+                    output = ready;
                 }
-                ring.push_back(source.to_vec());
-                last.clear();
-                last.extend_from_slice(source);
-                while ring.len() > 2 * radius {
-                    depth(&ring, &plan.kernels[2], radius, &mut smoothed);
-                    store.write_plane(output, &smoothed)?;
-                    output += 1;
-                    ring.pop_front();
+                for retired in window.trim(output.saturating_sub(radius as u32)) {
+                    let _ = recycle_tx.send(retired);
+                }
+                done += 1;
+                progress(done, bands);
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(false);
                 }
             }
-            done += 1;
-            progress(done, bands);
-            z = end;
-        }
-        let full = 2 * radius + 1;
-        while output < cover[2].end {
-            if ring.len() < full {
-                ring.push_back(last.clone());
-                continue;
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(false);
             }
-            if output > cover[2].start {
-                ring.pop_front();
-                ring.push_back(last.clone());
+            if !window.is_empty() && output < cover[2].end {
+                store.write_block(&window, output, cover[2].end, radius, kernel, workers)?;
             }
-            depth(&ring, &plan.kernels[2], radius, &mut smoothed);
-            store.write_plane(output, &smoothed)?;
-            output += 1;
+            Ok(true)
+        })?;
+        if !completed {
+            return Ok(None);
         }
-        assert_eq!(
-            output, cover[2].end,
-            "the detection store covers every plane"
-        );
         Ok(Some(store))
     }
 
-    fn write_plane(&mut self, z: u32, values: &[f32]) -> Result<(), String> {
-        let offset = (z - self.start[2] as u32) as usize * self.plane;
+    fn write_block(
+        &mut self,
+        window: &Window,
+        start: u32,
+        end: u32,
+        radius: usize,
+        kernel: &[f32],
+        workers: usize,
+    ) -> Result<(), String> {
+        let plane = self.plane;
+        let low = self.start[2] as u32;
+        let planes = (end - start) as usize;
+        let target = |values: &mut [f32]| {
+            depth(window, start, radius, kernel, workers, plane, values);
+        };
         match &mut self.storage {
             Storage::Memory(store) => {
-                store[offset..offset + values.len()].copy_from_slice(values);
+                let offset = (start - low) as usize * plane;
+                target(&mut store[offset..offset + planes * plane]);
             }
             Storage::Spill { file, .. } => {
+                let mut values = vec![0.0f32; planes * plane];
+                target(&mut values);
                 let file = file
                     .get_mut()
                     .map_err(|_| "the detection spill file is poisoned".to_string())?;
-                file.seek(SeekFrom::Start(offset as u64 * 4))
+                let offset = (start - low) as u64 * plane as u64 * size_of::<f32>() as u64;
+                file.seek(SeekFrom::Start(offset))
                     .map_err(|error| format!("failed to seek the detection spill: {error}"))?;
-                file.write_all(bytemuck::cast_slice(values))
+                file.write_all(bytemuck::cast_slice(&values))
                     .map_err(|error| format!("failed to write the detection spill: {error}"))?;
             }
         }
@@ -311,23 +335,250 @@ impl Detection<'_> {
     }
 }
 
-fn depth(ring: &VecDeque<Vec<f32>>, kernel: &[f32], radius: usize, values: &mut [f32]) {
-    if radius == 0 {
-        values.copy_from_slice(&ring[0]);
+fn blur(values: &mut [f32], plan: &SurfaceBuilder, dims: [usize; 3], plane: usize, workers: usize) {
+    let active = plan
+        .kernels
+        .iter()
+        .take(2)
+        .enumerate()
+        .filter(|(_, kernel)| kernel.len() > 1)
+        .collect::<Vec<_>>();
+    if active.is_empty() {
         return;
     }
+    planes(values, plane, workers, |part, _| {
+        for (axis, kernel) in &active {
+            if *axis == 0 {
+                horizontal(part, dims, part.len() / plane, kernel);
+            } else {
+                vertical(part, dims, part.len() / plane, kernel);
+            }
+        }
+    });
+}
+
+fn depth(
+    window: &Window,
+    start: u32,
+    radius: usize,
+    kernel: &[f32],
+    workers: usize,
+    plane: usize,
+    target: &mut [f32],
+) {
+    if target.is_empty() {
+        return;
+    }
+    let planes = target.len() / plane;
+    let workers = workers.clamp(1, planes.max(1));
+    if workers == 1 {
+        for (index, values) in target.chunks_mut(plane).enumerate() {
+            depth_plane(window, start + index as u32, radius, kernel, values);
+        }
+        return;
+    }
+    let each = planes.div_ceil(workers);
+    std::thread::scope(|scope| {
+        for (block, values) in target.chunks_mut(each * plane).enumerate() {
+            let first = start + (block * each) as u32;
+            scope.spawn(move || {
+                for (index, plane) in values.chunks_mut(plane).enumerate() {
+                    depth_plane(window, first + index as u32, radius, kernel, plane);
+                }
+            });
+        }
+    });
+}
+
+fn depth_plane(window: &Window, z: u32, radius: usize, kernel: &[f32], values: &mut [f32]) {
     values.fill(0.0);
     for (tap, weight) in kernel.iter().enumerate() {
-        let source = &ring[tap];
+        let source = window.plane((z as i64 + tap as i64 - radius as i64).max(0) as u32);
         for (slot, value) in values.iter_mut().zip(source) {
             *slot += weight * value;
         }
     }
 }
 
-fn spill_path() -> PathBuf {
-    let id = NEXT.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("grana-detection-{}-{id}.spill", std::process::id()))
+struct Window {
+    bands: VecDeque<Band>,
+    plane: usize,
+}
+
+impl Window {
+    fn new(plane: usize) -> Self {
+        Self {
+            bands: VecDeque::new(),
+            plane,
+        }
+    }
+
+    fn push(&mut self, z: u32, values: Vec<f32>) {
+        assert!(
+            !values.is_empty() && values.len().is_multiple_of(self.plane),
+            "a detection band holds whole planes"
+        );
+        self.bands.push_back((z, values));
+    }
+
+    fn first(&self) -> u32 {
+        self.bands.front().map_or(0, |(z, _)| *z)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.bands.is_empty()
+    }
+
+    fn last(&self) -> u32 {
+        self.bands
+            .back()
+            .map_or(0, |(z, values)| z + (values.len() / self.plane) as u32 - 1)
+    }
+
+    fn plane(&self, z: u32) -> &[f32] {
+        let z = z.clamp(self.first(), self.last());
+        for (start, values) in self.bands.iter().rev() {
+            let count = (values.len() / self.plane) as u32;
+            if z >= *start && z < *start + count {
+                let offset = (z - *start) as usize * self.plane;
+                return &values[offset..offset + self.plane];
+            }
+        }
+        unreachable!("the detection window holds every retained plane")
+    }
+
+    fn trim(&mut self, low: u32) -> Vec<Vec<f32>> {
+        let mut retired = Vec::new();
+        while self.bands.len() > 1 {
+            let end = {
+                let (start, values) = self
+                    .bands
+                    .front()
+                    .expect("the detection window holds a band");
+                start + (values.len() / self.plane) as u32
+            };
+            if end > low {
+                break;
+            }
+            if let Some((_, values)) = self.bands.pop_front() {
+                retired.push(values);
+            }
+        }
+        retired
+    }
+}
+
+fn spill(bytes: u64) -> Result<Storage, String> {
+    let directory = std::env::temp_dir();
+    SWEEP.call_once(|| sweep(&directory));
+    let available = fs4::available_space(&directory).map_err(|error| {
+        format!(
+            "failed to measure the free space of {}: {error}",
+            directory.display()
+        )
+    })?;
+    {
+        let mut reserved = RESERVED
+            .lock()
+            .expect("the detection spill budget is never poisoned");
+        if available < *reserved + bytes + SCRATCH_MARGIN {
+            return Err(format!(
+                "the detection volume spills {:.2} GiB to {} and the drive holds {:.2} GiB available with {:.2} GiB already spilled",
+                gib(bytes),
+                directory.display(),
+                gib(available),
+                gib(*reserved)
+            ));
+        }
+        *reserved += bytes;
+    }
+    let (path, file) = match create(&directory, bytes) {
+        Ok(created) => created,
+        Err(detail) => {
+            release(bytes);
+            return Err(detail);
+        }
+    };
+    Ok(Storage::Spill {
+        file: Mutex::new(file),
+        path,
+        bytes,
+    })
+}
+
+fn release(bytes: u64) {
+    let mut reserved = RESERVED
+        .lock()
+        .expect("the detection spill budget is never poisoned");
+    *reserved = reserved.saturating_sub(bytes);
+}
+
+fn create(directory: &Path, bytes: u64) -> Result<(PathBuf, File), String> {
+    let mut attempt = 0;
+    loop {
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = directory.join(format!(
+            "{SPILL_PREFIX}{}-{id}{SPILL_SUFFIX}",
+            std::process::id()
+        ));
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => match file.set_len(bytes) {
+                Ok(()) => return Ok((path, file)),
+                Err(error) => {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(format!("failed to size the detection spill file: {error}"));
+                }
+            },
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists && attempt < RETRY_LIMIT =>
+            {
+                attempt += 1;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to open the detection spill file {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+    }
+}
+
+fn sweep(directory: &Path) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(SPILL_PREFIX) || !name.ends_with(SPILL_SUFFIX) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > SCRATCH_STALE);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn gib(bytes: u64) -> f64 {
+    bytes as f64 / (1u64 << 30) as f64
+}
+
+fn band_planes(plane: usize) -> u32 {
+    let bytes = (plane as u64 * size_of::<f32>() as u64).max(1);
+    (BAND_BYTES / bytes).clamp(1, u64::from(BAND)) as u32
 }
 
 fn planes(
@@ -370,7 +621,7 @@ fn horizontal(part: &mut [f32], dims: [usize; 3], depth: usize, kernel: &[f32]) 
             padded[..radius].fill(line[0]);
             padded[radius..radius + dims[0]].copy_from_slice(&line);
             padded[radius + dims[0]..].fill(line[last]);
-            blur(&padded, &mut blurred, kernel, radius);
+            blur_line(&padded, &mut blurred, kernel, radius);
             part[start..start + dims[0]].copy_from_slice(&blurred);
         }
     }
@@ -413,7 +664,7 @@ fn vertical(part: &mut [f32], dims: [usize; 3], depth: usize, kernel: &[f32]) {
     }
 }
 
-fn blur(padded: &[f32], blurred: &mut [f32], kernel: &[f32], radius: usize) {
+fn blur_line(padded: &[f32], blurred: &mut [f32], kernel: &[f32], radius: usize) {
     let length = blurred.len();
     for (x, slot) in blurred.iter_mut().enumerate() {
         let source = &padded[x..x + 2 * radius + 1];
@@ -436,8 +687,8 @@ mod tests {
     use grana_volume::{Extent, Intensity, Level, Region, Spacing, VoxelData};
 
     #[test]
-    fn reads_and_smooths_a_spilled_detection_once() {
-        let level = Level::new(Extent::new(32, 24, 6), Spacing::new(1.0, 1.0, 1.0));
+    fn smooths_the_same_value_from_memory_and_spill_across_worker_counts() {
+        let level = Level::new(Extent::new(16, 12, 40), Spacing::new(1.0, 1.0, 1.0));
         let params = SurfaceParams::new(0.5, 1.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0));
         let plan = SurfaceBuilder::new(
             0,
@@ -454,34 +705,52 @@ mod tests {
             * (cover[2].end - cover[2].start) as u64;
         let reads = std::sync::atomic::AtomicU64::new(0);
         let read = |ranges: &[Range<u32>; 3]| {
-            let count = (ranges[0].end - ranges[0].start) as usize
-                * (ranges[1].end - ranges[1].start) as usize
-                * (ranges[2].end - ranges[2].start) as usize;
-            reads.fetch_add(count as u64, Ordering::Relaxed);
-            Ok(VoxelData::F32(vec![0.25; count]))
+            let mut values = Vec::with_capacity(
+                ((ranges[0].end - ranges[0].start)
+                    * (ranges[1].end - ranges[1].start)
+                    * (ranges[2].end - ranges[2].start)) as usize,
+            );
+            for z in ranges[2].clone() {
+                for y in ranges[1].clone() {
+                    for x in ranges[0].clone() {
+                        values.push((x + 2 * y + 3 * z) as f32 * 0.001);
+                    }
+                }
+            }
+            reads.fetch_add(values.len() as u64, Ordering::Relaxed);
+            Ok(VoxelData::F32(values))
         };
         let cancel = AtomicBool::new(false);
         let mut progress = |_, _| {};
-        let memory =
-            DetectionStore::build(&plan, &cover, 2, &cancel, &read, u64::MAX, &mut progress)
-                .expect("the memory detection builds")
-                .expect("the memory detection covers voxels");
+        let single =
+            DetectionStore::build(&plan, &cover, 1, &cancel, &read, u64::MAX, &mut progress)
+                .expect("the single detection builds")
+                .expect("the single detection covers voxels");
         assert_eq!(reads.load(Ordering::Relaxed), volume);
         reads.store(0, Ordering::Relaxed);
-        let spill = DetectionStore::build(&plan, &cover, 2, &cancel, &read, 0, &mut progress)
+        let many = DetectionStore::build(&plan, &cover, 4, &cancel, &read, u64::MAX, &mut progress)
+            .expect("the parallel detection builds")
+            .expect("the parallel detection covers voxels");
+        assert_eq!(reads.load(Ordering::Relaxed), volume);
+        let spill = DetectionStore::build(&plan, &cover, 4, &cancel, &read, 0, &mut progress)
             .expect("the spilled detection builds")
             .expect("the spilled detection covers voxels");
         assert_eq!(
             reads.load(Ordering::Relaxed),
-            volume,
+            volume * 2,
             "a spilled detection reads its channel once"
         );
         assert!(matches!(spill.storage, Storage::Spill { .. }));
         let slab = cover[2].clone();
-        let memory = memory.slab(slab.clone()).expect("the memory slab").unwrap();
-        let spilled = spill.slab(slab).expect("the spilled slab").unwrap();
+        let single = single.slab(slab.clone()).expect("the slab reads").unwrap();
+        let many = many.slab(slab.clone()).expect("the slab reads").unwrap();
+        let spilled = spill.slab(slab).expect("the slab reads").unwrap();
         assert_eq!(
-            memory.values, spilled.values,
+            single.values, many.values,
+            "the detection does not depend on the worker count"
+        );
+        assert_eq!(
+            single.values, spilled.values,
             "the spilled detection smooths like the resident one"
         );
     }

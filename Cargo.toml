@@ -22,6 +22,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rfd = "0.17"
 flate2 = "1"
+fs4 = "1"
 quick-xml = "0.41"
 zarrs = { version = "0.23", default-features = false, features = ["filesystem", "blosc", "zstd", "gzip", "sharding", "crc32c"] }
 ome_zarr_metadata = "0.3"
