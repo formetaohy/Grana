@@ -22,5 +22,6 @@ pub use drift::{
 pub use filament::{FilamentScan, filament_level};
 pub use relation::{Reference, RelationRun, relate_frames};
 pub use scan::{ChannelRead, SpotScan, SpotScanner, spot_level};
+pub use schedule::workers;
 pub use surface::{SeedPolicy, Sources, SurfaceBuilder, recut, surface_level};
 pub use track::TrackBuilder;

@@ -1,6 +1,6 @@
 use std::ops::Range;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use grana_volume::VoxelFormat;
 
@@ -53,7 +53,7 @@ pub(crate) struct Region<'a> {
 
 pub(crate) struct Source<'a> {
     pub store: &'a Store,
-    pub cache: &'a Mutex<Cache>,
+    pub cache: &'a Cache,
     pub path: &'a Path,
 }
 
@@ -280,7 +280,7 @@ impl Page {
     ) -> Result<Arc<Vec<u8>>, Error> {
         let path = source.path;
         let key = (level, page_index, block.index);
-        if let Some(data) = Cache::lookup(source.cache, key) {
+        if let Some(data) = source.cache.lookup(key) {
             return Ok(data);
         }
         let expected = block.width as usize
@@ -314,7 +314,7 @@ impl Page {
             .map_err(|detail| Error::unsupported(path, detail))?;
         }
         let data = Arc::new(data);
-        Cache::insert(source.cache, key, Arc::clone(&data));
+        source.cache.insert(key, Arc::clone(&data));
         Ok(data)
     }
 }

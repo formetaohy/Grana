@@ -213,26 +213,37 @@ impl Tile<'_> {
         let plan = self.pass.plan;
         let dims = self.dims;
         let core_dims = super::dims_of(core);
-        let core_count = core_dims[0] * core_dims[1] * core_dims[2];
         let origin = [
             (core[0].start - array[0].start) as usize,
             (core[1].start - array[1].start) as usize,
             (core[2].start - array[2].start) as usize,
         ];
+        let (space, far) = self.space;
+        let span = [0, 1, 2].map(|axis| {
+            space[axis].max(origin[axis])..far[axis].min(origin[axis] + core_dims[axis])
+        });
+        if span.iter().any(Range::is_empty) {
+            return Ok(());
+        }
+        let ranges = [0, 1, 2].map(|axis| {
+            let start = core[axis].start + (span[axis].start - origin[axis]) as u32;
+            start..start + (span[axis].end - span[axis].start) as u32
+        });
+        let measured_dims = super::dims_of(&ranges);
+        let measured_count = measured_dims[0] * measured_dims[1] * measured_dims[2];
         let channels = plan.channels;
         let mut measured = Vec::with_capacity(channels);
         for channel in 0..channels {
-            let data = measure(channel, core)?;
-            if data.voxel_count() != core_count {
+            let data = measure(channel, &ranges)?;
+            if data.voxel_count() != measured_count {
                 return Err("the measured tile does not cover the requested region".to_string());
             }
             measured.push(data);
         }
-        for z in 0..core_dims[2] {
-            for y in 0..core_dims[1] {
-                for x in 0..core_dims[0] {
-                    let index =
-                        (origin[0] + x) + dims[0] * ((origin[1] + y) + dims[1] * (origin[2] + z));
+        for z in span[2].clone() {
+            for y in span[1].clone() {
+                for x in span[0].clone() {
+                    let index = x + dims[0] * (y + dims[1] * z);
                     if !self.mask[index] {
                         continue;
                     }
@@ -241,14 +252,16 @@ impl Tile<'_> {
                         node < self.nodes.len(),
                         "the accumulated voxel belongs to a tile node"
                     );
-                    let local = x + core_dims[0] * (y + core_dims[1] * z);
+                    let local = (x - span[0].start)
+                        + measured_dims[0]
+                            * ((y - span[1].start) + measured_dims[1] * (z - span[2].start));
                     for (channel, data) in measured.iter().enumerate() {
                         self.accumulators[node * channels + channel].push(data.value(local));
                     }
                     let voxel = [
-                        core[0].start + x as u32,
-                        core[1].start + y as u32,
-                        core[2].start + z as u32,
+                        core[0].start + (x - origin[0]) as u32,
+                        core[1].start + (y - origin[1]) as u32,
+                        core[2].start + (z - origin[2]) as u32,
                     ];
                     let reach = self.chamfer.get(index).copied().unwrap_or(0);
                     let stats = &mut self.nodes[node];

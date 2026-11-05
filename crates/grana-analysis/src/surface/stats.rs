@@ -4,6 +4,8 @@ use crate::local::{BLOCK, BlockField, block_levels};
 
 type Levels = Vec<Option<(f32, f32)>>;
 
+const LEVEL_CHUNK: usize = 64;
+
 pub(super) fn build(
     source: &DetectionSource<'_>,
     roi: Option<&grana_object::Mask>,
@@ -59,6 +61,7 @@ pub(super) fn build(
         plan.intensity,
         background,
         signal,
+        source.workers(),
     )))
 }
 
@@ -70,17 +73,29 @@ fn levels(
 ) -> Result<Option<Levels>, String> {
     let plan = source.plan();
     let mut output: Levels = (0..coords.len()).map(|_| None).collect();
+    let chunks = coords.len().div_ceil(LEVEL_CHUNK);
     let completed = crate::schedule::ordered(
         crate::schedule::Run {
-            total: coords.len(),
+            total: chunks,
             workers: source.workers(),
             cancel: source.cancel(),
             progress: &mut |_, _| {},
         },
         || Vec::with_capacity((BLOCK * BLOCK * BLOCK) as usize),
-        |bucket, index| Ok(collect(plan, gate, detection, coords[index], bucket)),
-        |index, level| {
-            output[index] = level;
+        |bucket, chunk| {
+            let first = chunk * LEVEL_CHUNK;
+            let last = (first + LEVEL_CHUNK).min(coords.len());
+            let mut levels = Vec::with_capacity(last - first);
+            for coord in &coords[first..last] {
+                levels.push(collect(plan, gate, detection, *coord, bucket));
+            }
+            Ok(levels)
+        },
+        |chunk, levels| {
+            let first = chunk * LEVEL_CHUNK;
+            for (offset, level) in levels.into_iter().enumerate() {
+                output[first + offset] = level;
+            }
             Ok(())
         },
         |_| {},

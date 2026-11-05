@@ -168,6 +168,7 @@ impl FilamentScan {
             [0, 0, 0],
             [0, 0, 0],
             self.intensity,
+            1,
             |index| detection.value(index),
             |_| true,
         );

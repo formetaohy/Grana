@@ -1,51 +1,75 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+const SHARDS: usize = 16;
+
 struct Entry {
     data: Arc<Vec<u8>>,
     stamp: u64,
 }
 
-pub(crate) struct Cache {
+struct Shard {
     blocks: HashMap<u64, Entry>,
     bytes: u64,
     stamp: u64,
     limit: u64,
 }
 
+pub(crate) struct Cache {
+    shards: Vec<Mutex<Shard>>,
+}
+
 impl Cache {
-    pub(crate) fn new(limit: u64) -> Mutex<Self> {
-        Mutex::new(Self {
-            blocks: HashMap::new(),
-            bytes: 0,
-            stamp: 0,
-            limit,
-        })
+    pub(crate) fn new(limit: u64) -> Self {
+        let limit = (limit / SHARDS as u64).max(1);
+        Self {
+            shards: (0..SHARDS)
+                .map(|_| {
+                    Mutex::new(Shard {
+                        blocks: HashMap::new(),
+                        bytes: 0,
+                        stamp: 0,
+                        limit,
+                    })
+                })
+                .collect(),
+        }
     }
 
-    pub(crate) fn lookup(cache: &Mutex<Self>, key: u64) -> Option<Arc<Vec<u8>>> {
-        let mut cache = cache.lock().expect("the block cache is not poisoned");
-        cache.stamp += 1;
-        let stamp = cache.stamp;
-        let entry = cache.blocks.get_mut(&key)?;
+    fn shard(&self, key: u64) -> &Mutex<Shard> {
+        let slot = key.wrapping_mul(0x9e37_79b1_85eb_ca87);
+        &self.shards[(slot >> 32) as usize % SHARDS]
+    }
+
+    pub(crate) fn lookup(&self, key: u64) -> Option<Arc<Vec<u8>>> {
+        let mut shard = self
+            .shard(key)
+            .lock()
+            .expect("the block cache is not poisoned");
+        shard.stamp += 1;
+        let stamp = shard.stamp;
+        let entry = shard.blocks.get_mut(&key)?;
         entry.stamp = stamp;
         Some(Arc::clone(&entry.data))
     }
 
-    pub(crate) fn insert(cache: &Mutex<Self>, key: u64, data: Arc<Vec<u8>>) {
-        let mut cache = cache.lock().expect("the block cache is not poisoned");
+    pub(crate) fn insert(&self, key: u64, data: Arc<Vec<u8>>) {
+        let mut shard = self
+            .shard(key)
+            .lock()
+            .expect("the block cache is not poisoned");
         let size = data.len() as u64;
-        if size > cache.limit {
+        if size > shard.limit {
             return;
         }
-        cache.stamp += 1;
-        let stamp = cache.stamp;
-        if let Some(previous) = cache.blocks.insert(key, Entry { data, stamp }) {
-            cache.bytes -= previous.data.len() as u64;
+        shard.stamp += 1;
+        let stamp = shard.stamp;
+        if let Some(previous) = shard.blocks.insert(key, Entry { data, stamp }) {
+            shard.bytes -= previous.data.len() as u64;
         }
-        cache.bytes += size;
-        while cache.bytes > cache.limit {
-            let oldest = cache
+        shard.bytes += size;
+        while shard.bytes > shard.limit {
+            let oldest = shard
                 .blocks
                 .iter()
                 .min_by_key(|(_, entry)| entry.stamp)
@@ -53,8 +77,8 @@ impl Cache {
             let Some(oldest) = oldest else {
                 break;
             };
-            if let Some(removed) = cache.blocks.remove(&oldest) {
-                cache.bytes -= removed.data.len() as u64;
+            if let Some(removed) = shard.blocks.remove(&oldest) {
+                shard.bytes -= removed.data.len() as u64;
             }
         }
     }

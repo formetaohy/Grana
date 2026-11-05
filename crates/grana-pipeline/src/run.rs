@@ -89,10 +89,11 @@ impl DetectRequest {
 
 pub fn detect(
     reader: &Image,
-    request: DetectRequest,
+    mut request: DetectRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
+    request.workers = grana_analysis::workers(request.workers);
     match request.params {
         ObjectParams::Spots(params) => spots(reader, params, request, cancel, sink),
         ObjectParams::Surfaces(params) => surfaces(reader, params, request, cancel, sink),

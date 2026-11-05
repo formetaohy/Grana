@@ -119,6 +119,7 @@ impl LocalField {
         start: [i64; 3],
         anchor: [i64; 3],
         intensity: Intensity,
+        workers: usize,
         value: impl Fn(usize) -> f32,
         admits: impl Fn([i64; 3]) -> bool,
     ) -> Self {
@@ -174,7 +175,7 @@ impl LocalField {
             }
         }
         Self(finish(
-            anchor, origin, blocks, intensity, background, signal,
+            anchor, origin, blocks, intensity, background, signal, workers,
         ))
     }
 
@@ -190,12 +191,14 @@ fn finish(
     intensity: Intensity,
     mut background: Vec<f32>,
     mut signal: Vec<f32>,
+    workers: usize,
 ) -> Grid {
-    let windowed = window_median(&background, blocks);
+    let windowed = window_median(&background, blocks, workers);
     for (level, window) in background.iter_mut().zip(&windowed) {
         *level = level.min(*window);
     }
-    window_max(&mut signal, blocks);
+    let superseded = window_max(&signal, blocks, workers);
+    signal.copy_from_slice(&superseded);
     fill(&mut background, blocks, intensity.max());
     fill(&mut signal, blocks, intensity.max());
     let padded = blocks.map(|value| value + 2);
@@ -222,6 +225,7 @@ impl BlockField {
         intensity: Intensity,
         background: Vec<f32>,
         signal: Vec<f32>,
+        workers: usize,
     ) -> Self {
         assert_eq!(
             background.len(),
@@ -234,7 +238,7 @@ impl BlockField {
             "a block field holds a signal level per background level"
         );
         Self(finish(
-            anchor, [0; 3], blocks, intensity, background, signal,
+            anchor, [0; 3], blocks, intensity, background, signal, workers,
         ))
     }
 
@@ -259,10 +263,13 @@ impl BlockField {
     }
 }
 
-fn window_median(values: &[f32], blocks: [usize; 3]) -> Vec<f32> {
-    let mut filtered = vec![INVALID; values.len()];
-    let mut window = Vec::with_capacity((2 * WINDOW as usize + 1).pow(3));
-    for z in 0..blocks[2] as i64 {
+fn window_median(values: &[f32], blocks: [usize; 3], workers: usize) -> Vec<f32> {
+    let plane = blocks[0] * blocks[1];
+    let slices = (0..blocks[2]).collect::<Vec<_>>();
+    let lines = crate::schedule::map(&slices, workers, |z| {
+        let z = *z as i64;
+        let mut window = Vec::with_capacity((2 * WINDOW as usize + 1).pow(3));
+        let mut line = vec![INVALID; plane];
         for y in 0..blocks[1] as i64 {
             for x in 0..blocks[0] as i64 {
                 window.clear();
@@ -281,17 +288,24 @@ fn window_median(values: &[f32], blocks: [usize; 3]) -> Vec<f32> {
                 }
                 let rank = window.len() / 2;
                 window.select_nth_unstable_by(rank, f32::total_cmp);
-                let slot = block_slot([x as usize, y as usize, z as usize], blocks);
-                filtered[slot] = window[rank];
+                line[(x + blocks[0] as i64 * y) as usize] = window[rank];
             }
         }
+        line
+    });
+    let mut filtered = vec![INVALID; values.len()];
+    for (slot, line) in filtered.chunks_mut(plane).zip(&lines) {
+        slot.copy_from_slice(line);
     }
     filtered
 }
 
-fn window_max(values: &mut [f32], blocks: [usize; 3]) {
-    let mut filtered = vec![INVALID; values.len()];
-    for z in 0..blocks[2] as i64 {
+fn window_max(values: &[f32], blocks: [usize; 3], workers: usize) -> Vec<f32> {
+    let plane = blocks[0] * blocks[1];
+    let slices = (0..blocks[2]).collect::<Vec<_>>();
+    let lines = crate::schedule::map(&slices, workers, |z| {
+        let z = *z as i64;
+        let mut line = vec![INVALID; plane];
         for y in 0..blocks[1] as i64 {
             for x in 0..blocks[0] as i64 {
                 let mut best = INVALID;
@@ -310,12 +324,16 @@ fn window_max(values: &mut [f32], blocks: [usize; 3]) {
                         }
                     }
                 }
-                let slot = block_slot([x as usize, y as usize, z as usize], blocks);
-                filtered[slot] = best;
+                line[(x + blocks[0] as i64 * y) as usize] = best;
             }
         }
+        line
+    });
+    let mut filtered = vec![INVALID; values.len()];
+    for (slot, line) in filtered.chunks_mut(plane).zip(&lines) {
+        slot.copy_from_slice(line);
     }
-    values.copy_from_slice(&filtered);
+    filtered
 }
 
 fn fill(values: &mut [f32], blocks: [usize; 3], fallback: f32) {

@@ -61,7 +61,7 @@ impl Budget {
     }
 }
 
-pub(crate) fn workers(requested: usize) -> usize {
+pub fn workers(requested: usize) -> usize {
     match requested {
         0 => std::thread::available_parallelism().map_or(1, |value| value.get()),
         value => value,

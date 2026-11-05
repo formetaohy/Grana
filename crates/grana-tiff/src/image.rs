@@ -1,6 +1,5 @@
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use grana_volume::{
     BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing,
@@ -39,7 +38,7 @@ pub struct Image {
     pyramid: Pyramid,
     levels: Vec<LevelPages>,
     store: Store,
-    cache: Mutex<Cache>,
+    cache: Cache,
 }
 
 struct LevelPages {
@@ -505,7 +504,7 @@ fn resolution(
 fn region(
     levels: &[LevelPages],
     store: &Store,
-    cache: &Mutex<Cache>,
+    cache: &Cache,
     path: &Path,
     request: &Request,
 ) -> Result<VoxelData, Error> {
@@ -603,7 +602,7 @@ fn region(
 fn sample_range(
     levels: &[LevelPages],
     store: &Store,
-    cache: &Mutex<Cache>,
+    cache: &Cache,
     path: &Path,
     channel: u32,
     frames: u32,

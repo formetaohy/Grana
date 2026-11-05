@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use grana_volume::{
     BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid, VoxelData,
@@ -77,7 +77,7 @@ pub struct Image {
     layouts: Vec<SceneLayout>,
     pyramid: Pyramid,
     store: Store,
-    cache: Mutex<Cache>,
+    cache: Cache,
 }
 
 struct Document {
@@ -335,7 +335,7 @@ fn region(
     store: &Store,
     path: &Path,
     plans: &HashMap<PlaneKey, Plan>,
-    cache: &Mutex<Cache>,
+    cache: &Cache,
     request: &Request<'_>,
 ) -> Result<Vec<u8>, Error> {
     let sample = sample_bytes(request.format);
@@ -364,7 +364,7 @@ fn blit(
     store: &Store,
     path: &Path,
     plan: &Plan,
-    cache: &Mutex<Cache>,
+    cache: &Cache,
     request: &Request<'_>,
     out: &mut [u8],
 ) -> Result<(), Error> {
@@ -396,14 +396,14 @@ fn blit(
 fn samples(
     store: &Store,
     path: &Path,
-    cache: &Mutex<Cache>,
+    cache: &Cache,
     tile: &plane::Tile,
 ) -> Result<Arc<Vec<u8>>, Error> {
-    if let Some(samples) = Cache::lookup(cache, tile.position) {
+    if let Some(samples) = cache.lookup(tile.position) {
         return Ok(samples);
     }
     let samples = Arc::new(plane::samples(store, path, tile)?);
-    Cache::insert(cache, tile.position, Arc::clone(&samples));
+    cache.insert(tile.position, Arc::clone(&samples));
     Ok(samples)
 }
 
@@ -460,7 +460,7 @@ fn probe(
     store: &Store,
     path: &Path,
     level: &LevelLayout,
-    cache: &Mutex<Cache>,
+    cache: &Cache,
     format: VoxelFormat,
     channel: u32,
 ) -> Option<Intensity> {
