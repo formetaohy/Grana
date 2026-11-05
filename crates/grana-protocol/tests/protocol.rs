@@ -93,6 +93,7 @@ fn captures_the_manual_edits_of_a_merged_part() {
     scene
         .merge_objects(absorbed, target)
         .expect("the two spot sets merge");
+    assert!(scene.set_object_hidden(target, 0, &[0], true));
 
     let protocol =
         Protocol::capture(&scene, &Measure::new(), None).expect("the merged analysis captures");
@@ -113,6 +114,18 @@ fn captures_the_manual_edits_of_a_merged_part() {
         [Some(2)],
         "the part records the object count of its edits"
     );
+    let hidden = protocol.sets()[0]
+        .curation
+        .as_ref()
+        .expect("the merged set keeps its curated hidden objects")
+        .hidden
+        .as_slice();
+    assert_eq!(
+        hidden.len(),
+        1,
+        "the protocol hides the objects of one frame"
+    );
+    assert_eq!(hidden[0].anchors.len(), 1, "one spot stays hidden");
     let text = protocol.to_json().expect("the protocol serializes");
     assert!(text.contains("anchors"), "{text}");
 
@@ -128,6 +141,11 @@ fn captures_the_manual_edits_of_a_merged_part() {
         merged.curation().removal_count(),
         1,
         "the staged part carries the object the user removed"
+    );
+    assert_eq!(
+        merged.curation().hidden_count(),
+        1,
+        "the staged set carries the object the user hid"
     );
 }
 

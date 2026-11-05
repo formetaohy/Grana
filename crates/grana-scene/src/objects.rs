@@ -404,6 +404,10 @@ impl Objects {
         self.get_mut(id).map_or(0, |set| set.apply_curation(stamp))
     }
 
+    pub fn reapply_hidden(&mut self, id: ObjectSetId) -> usize {
+        self.get_mut(id).map_or(0, ObjectSet::reapply_hidden)
+    }
+
     pub fn set_curation(&mut self, id: ObjectSetId, curation: Curation) -> bool {
         self.get_mut(id)
             .is_some_and(|set| set.set_curation(curation))

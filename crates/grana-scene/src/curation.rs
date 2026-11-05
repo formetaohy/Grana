@@ -116,6 +116,7 @@ impl TrackEdit {
 pub struct Curation {
     expected: Vec<Option<usize>>,
     removed: Vec<Vec<ObjectAnchor>>,
+    hidden: Vec<Vec<ObjectAnchor>>,
     edits: Vec<TrackEdit>,
     pruned: bool,
     produced: Vec<bool>,
@@ -132,6 +133,7 @@ impl PartialEq for Curation {
     fn eq(&self, other: &Self) -> bool {
         self.expected == other.expected
             && self.removed == other.removed
+            && self.hidden == other.hidden
             && self.edits == other.edits
     }
 }
@@ -140,10 +142,14 @@ impl Curation {
     pub fn restored(
         expected: &[Option<usize>],
         removed: &[Vec<ObjectAnchor>],
+        hidden: &[Vec<ObjectAnchor>],
         edits: &[TrackEdit],
     ) -> Result<Self, String> {
         if removed.len() != expected.len() {
             return Err("the manual removals cover another set of frames".to_string());
+        }
+        if !hidden.is_empty() && hidden.len() != expected.len() {
+            return Err("the hidden objects cover another set of frames".to_string());
         }
         for (time, objects) in removed.iter().enumerate() {
             if objects.is_empty() {
@@ -152,6 +158,16 @@ impl Curation {
             if expected[time].is_none() {
                 return Err(format!(
                     "the manual removals of frame {time} record no object count"
+                ));
+            }
+        }
+        for (time, objects) in hidden.iter().enumerate() {
+            if objects.is_empty() {
+                continue;
+            }
+            if expected.get(time).is_none_or(Option::is_none) {
+                return Err(format!(
+                    "the hidden objects of frame {time} record no object count"
                 ));
             }
         }
@@ -183,6 +199,7 @@ impl Curation {
         Ok(Self {
             expected: expected.to_vec(),
             removed: removed.to_vec(),
+            hidden: hidden.to_vec(),
             edits: edits.to_vec(),
             pruned: true,
             produced: vec![false; expected.len()],
@@ -220,6 +237,10 @@ impl Curation {
         &self.removed
     }
 
+    pub fn hidden(&self) -> &[Vec<ObjectAnchor>] {
+        &self.hidden
+    }
+
     pub fn edits(&self) -> &[TrackEdit] {
         &self.edits
     }
@@ -237,11 +258,17 @@ impl Curation {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.removed.iter().all(Vec::is_empty) && self.edits.is_empty()
+        self.removed.iter().all(Vec::is_empty)
+            && self.hidden.iter().all(Vec::is_empty)
+            && self.edits.is_empty()
     }
 
     pub fn removal_count(&self) -> usize {
         self.removed.iter().map(Vec::len).sum()
+    }
+
+    pub fn hidden_count(&self) -> usize {
+        self.hidden.iter().map(Vec::len).sum()
     }
 
     pub fn edit_count(&self) -> usize {
@@ -254,7 +281,41 @@ impl Curation {
         }
         self.expected = (0..frames).map(counts).collect();
         self.removed = vec![Vec::new(); frames];
+        self.hidden = vec![Vec::new(); frames];
         self.produced = vec![false; frames];
+    }
+
+    pub(crate) fn record_hidden(&mut self, time: u32, anchors: Vec<ObjectAnchor>) {
+        let time = time as usize;
+        assert!(
+            time < self.expected.len(),
+            "a hidden frame lies inside the seeded frames"
+        );
+        if self.hidden.len() != self.expected.len() {
+            self.hidden = vec![Vec::new(); self.expected.len()];
+        }
+        self.hidden[time] = anchors;
+    }
+
+    pub(crate) fn clear_hidden(&mut self) {
+        for frame in &mut self.hidden {
+            frame.clear();
+        }
+    }
+
+    pub(crate) fn hidden_targets(
+        &self,
+        time: u32,
+        anchors: &[ObjectAnchor],
+        voxel: f32,
+    ) -> Vec<usize> {
+        let Some(records) = self.hidden.get(time as usize) else {
+            return Vec::new();
+        };
+        assign(records, anchors, voxel)
+            .into_iter()
+            .flatten()
+            .collect()
     }
 
     pub(crate) fn record(&mut self, time: u32, keep: &[bool], anchors: &[ObjectAnchor]) {
@@ -306,7 +367,12 @@ impl Curation {
     }
 
     pub(crate) fn combined(&self, other: &Self) -> Self {
-        let frames = self.removed.len().max(other.removed.len());
+        let frames = self
+            .removed
+            .len()
+            .max(other.removed.len())
+            .max(self.hidden.len())
+            .max(other.hidden.len());
         Self {
             expected: (0..frames)
                 .map(|time| {
@@ -322,6 +388,13 @@ impl Curation {
                 .map(|time| {
                     let mut anchors = self.removed.get(time).cloned().unwrap_or_default();
                     anchors.extend(other.removed.get(time).cloned().unwrap_or_default());
+                    anchors
+                })
+                .collect(),
+            hidden: (0..frames)
+                .map(|time| {
+                    let mut anchors = self.hidden.get(time).cloned().unwrap_or_default();
+                    anchors.extend(other.hidden.get(time).cloned().unwrap_or_default());
                     anchors
                 })
                 .collect(),

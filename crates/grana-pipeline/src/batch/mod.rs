@@ -274,10 +274,10 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
             "failed to write the batch comparison: {error}"
         )));
     }
-    let _ = events.send(Event::Comparison(comparison));
-    if let Err(detail) = sheet::write(&plan, &rows) {
+    if let Err(detail) = sheet::write(&plan, &rows, &comparison) {
         let _ = events.send(Event::Failed(detail));
     }
+    let _ = events.send(Event::Comparison(comparison));
     drop(rows);
     let _ = events.send(Event::Done {
         cancelled: cancel.load(Ordering::Relaxed),

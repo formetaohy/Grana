@@ -272,22 +272,30 @@ impl Encode for Curation {
         }
         writer.count(self.removed().len());
         for frame in self.removed() {
-            writer.count(frame.len());
-            for anchor in frame {
-                for value in anchor.position() {
-                    writer.f32(value);
-                }
-                for value in anchor.bounds().min() {
-                    writer.f32(value);
-                }
-                for value in anchor.bounds().max() {
-                    writer.f32(value);
-                }
-            }
+            encode_anchors(frame, writer);
+        }
+        writer.count(self.hidden().len());
+        for frame in self.hidden() {
+            encode_anchors(frame, writer);
         }
         writer.count(self.edits().len());
         for edit in self.edits() {
             edit.encode(writer);
+        }
+    }
+}
+
+fn encode_anchors(anchors: &[grana_scene::ObjectAnchor], writer: &mut Encoder<'_>) {
+    writer.count(anchors.len());
+    for anchor in anchors {
+        for value in anchor.position() {
+            writer.f32(value);
+        }
+        for value in anchor.bounds().min() {
+            writer.f32(value);
+        }
+        for value in anchor.bounds().max() {
+            writer.f32(value);
         }
     }
 }

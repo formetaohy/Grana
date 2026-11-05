@@ -328,12 +328,21 @@ pub struct CurationSpec {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed: Vec<RemovalSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<HiddenSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edits: Vec<EditSpec>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RemovalSpec {
+    pub frame: u32,
+    pub anchors: Vec<AnchorSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HiddenSpec {
     pub frame: u32,
     pub anchors: Vec<AnchorSpec>,
 }
@@ -379,10 +388,24 @@ impl CurationSpec {
                     .collect(),
             })
             .collect();
+        let hidden = curation
+            .hidden()
+            .iter()
+            .enumerate()
+            .filter(|(_, anchors)| !anchors.is_empty())
+            .map(|(frame, anchors)| HiddenSpec {
+                frame: frame as u32,
+                anchors: anchors
+                    .iter()
+                    .map(|anchor| AnchorSpec::of(*anchor))
+                    .collect(),
+            })
+            .collect();
         let edits = curation.edits().iter().map(EditSpec::of).collect();
         Some(Self {
             expected: curation.expected().to_vec(),
             removed,
+            hidden,
             edits,
         })
     }
@@ -399,12 +422,23 @@ impl CurationSpec {
             };
             *slot = spec.anchors.iter().map(|anchor| anchor.anchor()).collect();
         }
+        let mut hidden = vec![Vec::new(); self.expected.len()];
+        for spec in &self.hidden {
+            let Some(slot) = hidden.get_mut(spec.frame as usize) else {
+                return Err(format!(
+                    "the protocol hides objects of the frame {} of {}",
+                    spec.frame,
+                    self.expected.len()
+                ));
+            };
+            *slot = spec.anchors.iter().map(|anchor| anchor.anchor()).collect();
+        }
         let edits = self
             .edits
             .iter()
             .map(|edit| edit.edit())
             .collect::<Vec<_>>();
-        grana_scene::Curation::restored(&self.expected, &removed, &edits)
+        grana_scene::Curation::restored(&self.expected, &removed, &hidden, &edits)
     }
 }
 
@@ -1599,38 +1633,19 @@ impl CurationSpec {
         if !self.edits.is_empty() && !tracked {
             return invalid("edit tracks the set does not measure".to_string());
         }
-        let mut previous = None;
-        for removal in &self.removed {
-            if previous.is_some_and(|frame: u32| frame >= removal.frame) {
-                return invalid("are not ordered by frame".to_string());
-            }
-            previous = Some(removal.frame);
-            if self
-                .expected
-                .get(removal.frame as usize)
-                .copied()
-                .flatten()
-                .is_none()
-            {
-                return invalid(format!(
-                    "remove objects from the frame {} without an object count",
-                    removal.frame
-                ));
-            }
-            if removal.anchors.is_empty() {
-                return invalid(format!("remove no object from the frame {}", removal.frame));
-            }
-            if removal.anchors.iter().any(|anchor| {
-                anchor.position.iter().any(|value| !value.is_finite())
-                    || (0..3).any(|axis| {
-                        !(anchor.low[axis].is_finite() && anchor.high[axis].is_finite())
-                            || anchor.low[axis] > anchor.high[axis]
-                    })
-            }) {
-                return invalid(format!(
-                    "remove an object of the frame {} at a degenerate anchor",
-                    removal.frame
-                ));
+        let removed = self
+            .removed
+            .iter()
+            .map(|removal| (removal.frame, removal.anchors.as_slice()))
+            .collect::<Vec<_>>();
+        let hidden = self
+            .hidden
+            .iter()
+            .map(|hidden| (hidden.frame, hidden.anchors.as_slice()))
+            .collect::<Vec<_>>();
+        for (entries, verb) in [(&removed, "remove"), (&hidden, "hide")] {
+            if let Err(detail) = check_anchors(&self.expected, entries, verb) {
+                return invalid(detail);
             }
         }
         for edit in &self.edits {
@@ -1673,6 +1688,40 @@ impl CurationSpec {
 
 fn truth() -> bool {
     true
+}
+
+fn check_anchors(
+    expected: &[Option<usize>],
+    entries: &[(u32, &[AnchorSpec])],
+    verb: &str,
+) -> Result<(), String> {
+    let mut previous = None;
+    for (frame, anchors) in entries {
+        if previous.is_some_and(|previous: u32| previous >= *frame) {
+            return Err("are not ordered by frame".to_string());
+        }
+        previous = Some(*frame);
+        if expected.get(*frame as usize).copied().flatten().is_none() {
+            return Err(format!(
+                "{verb} objects from the frame {frame} without an object count"
+            ));
+        }
+        if anchors.is_empty() {
+            return Err(format!("{verb} no object from the frame {frame}"));
+        }
+        if anchors.iter().any(|anchor| {
+            anchor.position.iter().any(|value| !value.is_finite())
+                || (0..3).any(|axis| {
+                    !(anchor.low[axis].is_finite() && anchor.high[axis].is_finite())
+                        || anchor.low[axis] > anchor.high[axis]
+                })
+        }) {
+            return Err(format!(
+                "{verb} an object of the frame {frame} at a degenerate anchor"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn objects() -> String {

@@ -697,7 +697,7 @@ fn renders_a_snapshot_at_the_end_of_every_dataset() {
     );
 
     let sheet = grana_raster::read(&output.join("sheet.png")).expect("the quality sheet composes");
-    assert_eq!(sheet.size(), [768, 614], "the sheet tiles its snapshots");
+    assert_eq!(sheet.size(), [768, 798], "the sheet tiles its snapshots");
     let corner = sheet.pixel(4, 4);
     assert_eq!(
         [corner[0], corner[1], corner[2]],
@@ -727,7 +727,7 @@ fn renders_a_snapshot_at_the_end_of_every_dataset() {
     );
     assert_eq!(recorder.calls.load(Ordering::Relaxed), 2);
     let rebuilt = grana_raster::read(&output.join("sheet.png")).expect("the sheet is rewritten");
-    assert_eq!(rebuilt.size(), [768, 614]);
+    assert_eq!(rebuilt.size(), [768, 798]);
 
     let orphaned = run(&protocol, &datasets, &output, 1, false);
     assert_eq!(

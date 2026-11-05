@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use grana_raster::{Cell, Group, Raster, Sheet, composite, read, write};
+use grana_raster::{Cell, Group, Raster, Row, Sheet, Table, composite, read, write};
 use grana_text::Fonts;
 
 #[test]
@@ -42,6 +42,7 @@ fn round_trips_decodes_and_labels_rasters() {
     let mut fonts = Fonts::system();
     let group = Group {
         name: "group",
+        table: None,
         cells: vec![
             Cell {
                 image: &green,
@@ -80,6 +81,57 @@ fn round_trips_decodes_and_labels_rasters() {
         .count();
     assert!(ink > 0, "the group heading draws its ink");
     std::fs::remove_dir_all(&root).expect("the scratch folder is released");
+}
+
+#[test]
+fn lays_out_the_summary_band_of_a_group() {
+    let image = Raster::solid(8, 8, [0, 255, 0, 255]);
+    let table = Table {
+        columns: vec!["Puncta".to_string(), "Nuclei".to_string()],
+        rows: vec![
+            Row {
+                label: "datasets".to_string(),
+                values: vec!["2".to_string(), "2".to_string()],
+            },
+            Row {
+                label: "volume µm³".to_string(),
+                values: vec!["3.214 ± 0.512".to_string(), "1.000".to_string()],
+            },
+        ],
+    };
+    let plain = Group {
+        name: "control",
+        table: None,
+        cells: vec![Cell {
+            image: &image,
+            title: "a",
+            detail: "",
+            accent: None,
+        }],
+    };
+    let banded = Group {
+        name: "control",
+        table: Some(&table),
+        cells: vec![Cell {
+            image: &image,
+            title: "a",
+            detail: "",
+            accent: None,
+        }],
+    };
+    let mut fonts = Fonts::system();
+    let without = Sheet::new([160, 40], 2).compose(&mut fonts, std::slice::from_ref(&plain));
+    let with = Sheet::new([160, 40], 2).compose(&mut fonts, std::slice::from_ref(&banded));
+    assert_eq!(
+        with.height() - without.height(),
+        96,
+        "the band adds its header, rows and gap"
+    );
+    let ink = (78..174)
+        .flat_map(|y| (24..184).map(move |x| (x, y)))
+        .filter(|(x, y)| with.pixel(*x, *y) != [18, 20, 24, 255])
+        .count();
+    assert!(ink > 0, "the summary band draws its table");
 }
 
 fn scratch(name: &str) -> PathBuf {

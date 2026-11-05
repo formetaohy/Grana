@@ -12,10 +12,10 @@ use thiserror::Error;
 
 pub use spec::{
     AnchorSpec, AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec,
-    ColorSpec, CurationSpec, EditSpec, ExportSpec, FilterSpec, KeySpec, LassoSpec, MeasureSpec,
-    MetricSpec, NodeSpec, PartSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, SectionSpec,
-    SetSpec, ShadingSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec, TimelineSpec, TrackSpec,
-    TransferSpec, ViewSpec, WindowSpec,
+    ColorSpec, CurationSpec, EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec,
+    MeasureSpec, MetricSpec, NodeSpec, PartSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec,
+    SectionSpec, SetSpec, ShadingSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec, TimelineSpec,
+    TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -177,6 +177,14 @@ impl Protocol {
                         .sum::<usize>();
                     if removed > 0 {
                         text = format!("{text} · {removed} removed by hand");
+                    }
+                    let hidden = curation
+                        .hidden
+                        .iter()
+                        .map(|hidden| hidden.anchors.len())
+                        .sum::<usize>();
+                    if hidden > 0 {
+                        text = format!("{text} · {hidden} hidden by hand");
                     }
                     if !curation.edits.is_empty() {
                         text = format!("{text} · {} track edits", curation.edits.len());

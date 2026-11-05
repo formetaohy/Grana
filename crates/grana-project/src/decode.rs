@@ -529,41 +529,50 @@ impl Decode for Curation {
         let removed_frames = reader.count(8)?;
         let mut removed = Vec::with_capacity(removed_frames);
         for _ in 0..removed_frames {
-            let objects = reader.count(8)?;
-            let mut frame = Vec::with_capacity(objects);
-            for _ in 0..objects {
-                let position = [
-                    finite(reader.f32()?)?,
-                    finite(reader.f32()?)?,
-                    finite(reader.f32()?)?,
-                ];
-                let low = [
-                    finite(reader.f32()?)?,
-                    finite(reader.f32()?)?,
-                    finite(reader.f32()?)?,
-                ];
-                let high = [
-                    finite(reader.f32()?)?,
-                    finite(reader.f32()?)?,
-                    finite(reader.f32()?)?,
-                ];
-                if (0..3).any(|axis| low[axis] > high[axis]) {
-                    return Err(FAULT_SHAPE);
-                }
-                frame.push(ObjectAnchor::new(
-                    position,
-                    grana_geometry::Bounds::new(low, high),
-                ));
-            }
-            removed.push(frame);
+            removed.push(decode_anchors(reader)?);
+        }
+        let hidden_frames = reader.count(8)?;
+        let mut hidden = Vec::with_capacity(hidden_frames);
+        for _ in 0..hidden_frames {
+            hidden.push(decode_anchors(reader)?);
         }
         let edits = reader.count(9)?;
         let mut edits_vec = Vec::with_capacity(edits);
         for _ in 0..edits {
             edits_vec.push(TrackEdit::decode(reader)?);
         }
-        Curation::restored(&expected, &removed, &edits_vec).map_err(|_| FAULT_VALUE)
+        Curation::restored(&expected, &removed, &hidden, &edits_vec).map_err(|_| FAULT_VALUE)
     }
+}
+
+fn decode_anchors(reader: &mut Reader<'_>) -> Result<Vec<ObjectAnchor>, &'static str> {
+    let objects = reader.count(8)?;
+    let mut frame = Vec::with_capacity(objects);
+    for _ in 0..objects {
+        let position = [
+            finite(reader.f32()?)?,
+            finite(reader.f32()?)?,
+            finite(reader.f32()?)?,
+        ];
+        let low = [
+            finite(reader.f32()?)?,
+            finite(reader.f32()?)?,
+            finite(reader.f32()?)?,
+        ];
+        let high = [
+            finite(reader.f32()?)?,
+            finite(reader.f32()?)?,
+            finite(reader.f32()?)?,
+        ];
+        if (0..3).any(|axis| low[axis] > high[axis]) {
+            return Err(FAULT_SHAPE);
+        }
+        frame.push(ObjectAnchor::new(
+            position,
+            grana_geometry::Bounds::new(low, high),
+        ));
+    }
+    Ok(frame)
 }
 
 impl Decode for TrackEdit {

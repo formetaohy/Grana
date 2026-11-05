@@ -159,6 +159,24 @@ fn recuts_do_not_revive_deleted_surfaces() {
     let kept = gate(&mut session, set);
     session.execute(Command::DeleteFiltered);
     assert_eq!(total(&session, set), kept);
+    let time = (0..session.scene().expect("the sample opens").frame_count())
+        .find(|time| {
+            session
+                .scene()
+                .expect("the sample opens")
+                .objects
+                .get(set)
+                .expect("the object set exists")
+                .frame(*time)
+                .is_some_and(|frame| frame.object_count() > 0)
+        })
+        .expect("a frame keeps an object");
+    session.execute(Command::SetObjectHidden {
+        set,
+        time,
+        objects: vec![0],
+        hidden: true,
+    });
 
     let params = surfaces(&session, set);
     let mut strict = params;
@@ -182,6 +200,17 @@ fn recuts_do_not_revive_deleted_surfaces() {
     );
     assert!(kept < before);
     assert_eq!(surfaces(&session, set), params);
+    assert_eq!(
+        session
+            .scene()
+            .expect("the sample opens")
+            .objects
+            .get(set)
+            .expect("the object set exists")
+            .hidden_count(),
+        1,
+        "the recut keeps the object the user hid"
+    );
 }
 
 #[test]
@@ -243,6 +272,91 @@ fn deletes_the_objects_of_excluded_tracks() {
     );
     session.execute(Command::Undo);
     assert_eq!(total(&session, set), before);
+}
+
+#[test]
+fn hides_objects_through_a_redetection() {
+    let mut session = opened();
+    let set = set_of(&session, ObjectKind::Surfaces);
+    let (time, count) = {
+        let scene = session.scene().expect("the sample opens");
+        let object = scene.objects.get(set).expect("the set exists");
+        (0..scene.frame_count())
+            .find(|time| {
+                object
+                    .frame(*time)
+                    .is_some_and(|frame| frame.object_count() > 1)
+            })
+            .map(|time| {
+                (
+                    time,
+                    object.frame(time).map_or(0, ObjectFrame::object_count),
+                )
+            })
+            .expect("a frame holds two surfaces")
+    };
+    session.execute(Command::SetObjectHidden {
+        set,
+        time,
+        objects: vec![0],
+        hidden: true,
+    });
+    let hidden_position = {
+        let scene = session.scene().expect("the sample opens");
+        let object = scene.objects.get(set).expect("the set exists");
+        assert_eq!(object.hidden_count(), 1);
+        assert!(object.hidden_object(time, 0));
+        object
+            .frame(time)
+            .expect("the frame exists")
+            .anchors()
+            .first()
+            .expect("the hidden object has an anchor")
+            .position()
+    };
+    assert_eq!(
+        session
+            .scene()
+            .expect("the sample opens")
+            .objects
+            .get(set)
+            .expect("the set exists")
+            .curation()
+            .hidden_count(),
+        1,
+        "hiding an object records it for replay"
+    );
+
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    let object = session
+        .scene()
+        .expect("the sample opens")
+        .objects
+        .get(set)
+        .expect("the set exists");
+    assert_eq!(object.hidden_count(), 1, "the hidden object stays hidden");
+    let n = object.frame(time).map_or(0, ObjectFrame::object_count);
+    let hidden = (0..n)
+        .find(|object| {
+            session
+                .scene()
+                .expect("the sample opens")
+                .objects
+                .get(set)
+                .expect("the set exists")
+                .hidden_object(time, *object)
+        })
+        .expect("the hidden object matches the redetected frame");
+    assert!(
+        n >= count,
+        "the redetection keeps at least the objects of the frame"
+    );
+    let position = object.frame(time).expect("the frame exists").anchors()[hidden].position();
+    assert!(
+        (0..3).all(|axis| (position[axis] - hidden_position[axis]).abs() < 2.0),
+        "the hidden object stands where the user hid it"
+    );
 }
 
 #[test]

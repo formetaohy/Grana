@@ -459,6 +459,14 @@ impl ObjectSet {
     }
 
     pub(crate) fn set_hidden(&mut self, time: u32, objects: &[usize], hidden: bool) -> bool {
+        let changed = self.hide(time, objects, hidden);
+        if changed {
+            self.record_hidden(time);
+        }
+        changed
+    }
+
+    fn hide(&mut self, time: u32, objects: &[usize], hidden: bool) -> bool {
         let Some(count) = self
             .frames
             .get(time as usize)
@@ -492,11 +500,32 @@ impl ObjectSet {
         changed
     }
 
+    fn record_hidden(&mut self, time: u32) {
+        let Some(frame) = self.frame_shared(time) else {
+            return;
+        };
+        let mask = self.hidden.get(time as usize).cloned().unwrap_or_default();
+        let anchors = frame
+            .anchors()
+            .into_iter()
+            .zip(mask)
+            .filter_map(|(anchor, hidden)| hidden.then_some(anchor))
+            .collect();
+        let counts = self
+            .frames
+            .iter()
+            .map(|slot| slot.data.as_deref().map(ObjectFrame::object_count))
+            .collect::<Vec<_>>();
+        self.curation.seed(counts.len(), |time| counts[time]);
+        self.curation.record_hidden(time, anchors);
+    }
+
     pub(crate) fn clear_hidden(&mut self) -> bool {
         if self.hidden.is_empty() {
             return false;
         }
         self.hidden.clear();
+        self.curation.clear_hidden();
         self.document += 1;
         true
     }
@@ -1228,9 +1257,28 @@ impl ObjectSet {
             };
             self.install_retained(time, pruned, &removed, stamp);
         }
+        self.reapply_hidden();
         self.curation.set_pending(pending);
         self.curation.set_applied();
         applied
+    }
+
+    pub(crate) fn reapply_hidden(&mut self) -> usize {
+        let mut hidden = 0;
+        for time in 0..self.frames.len() {
+            let Some(frame) = self.frame_shared(time as u32) else {
+                continue;
+            };
+            let targets = self
+                .curation
+                .hidden_targets(time as u32, &frame.anchors(), self.voxel);
+            if targets.is_empty() {
+                continue;
+            }
+            hidden += targets.len();
+            self.hide(time as u32, &targets, true);
+        }
+        hidden
     }
 
     pub(crate) fn apply_edits(&mut self, stamp: u64) -> usize {
@@ -1443,6 +1491,15 @@ impl ObjectSet {
         };
         duplicate.rebuild_frame_bounds();
         duplicate.rebuild_track_bounds();
+        if duplicate
+            .hidden
+            .iter()
+            .any(|mask| mask.iter().any(|hidden| *hidden))
+        {
+            for time in 0..duplicate.frames.len() {
+                duplicate.record_hidden(time as u32);
+            }
+        }
         duplicate
     }
 

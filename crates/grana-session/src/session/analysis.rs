@@ -155,8 +155,12 @@ impl Session {
             if recut {
                 self.defer_relations(set);
             }
-            if !recut && let Some(scene) = self.scene.as_mut() {
-                scene.apply_curation(set);
+            if let Some(scene) = self.scene.as_mut() {
+                if recut {
+                    scene.reapply_hidden(set);
+                } else {
+                    scene.apply_curation(set);
+                }
             }
             self.start_tracks(set);
             self.resume_relations(set);

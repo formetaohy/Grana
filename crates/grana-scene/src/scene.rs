@@ -598,6 +598,10 @@ impl Scene {
         self.objects.apply_curation(id)
     }
 
+    pub fn reapply_hidden(&mut self, id: ObjectSetId) -> usize {
+        self.objects.reapply_hidden(id)
+    }
+
     pub fn set_curation(&mut self, id: ObjectSetId, curation: Curation) -> bool {
         self.objects.set_curation(id, curation)
     }

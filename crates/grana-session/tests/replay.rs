@@ -175,6 +175,12 @@ fn replays_the_manual_removals_of_a_captured_protocol() {
     })));
     assert!(session.delete_selected(), "the object leaves its frame");
     assert_eq!(count(&session, nuclei, 0), 0);
+    session.execute(Command::SetTime(1));
+    session.execute(Command::Select(Some(grana_scene::Selection {
+        set: nuclei,
+        item: grana_scene::Item::Object(0),
+    })));
+    assert!(session.hide_selected(), "the object hides from the view");
 
     session.execute(Command::CaptureProtocol);
     let captured = session
@@ -199,16 +205,25 @@ fn replays_the_manual_removals_of_a_captured_protocol() {
         "the replay removes the object the user deleted"
     );
     assert_eq!(count(&session, replayed, 1), 1);
+    let replayed_set = session
+        .scene()
+        .expect("the dataset stays open")
+        .objects
+        .get(replayed)
+        .expect("the replayed set exists");
     assert_eq!(
-        session
-            .scene()
-            .expect("the dataset stays open")
-            .objects
-            .get(replayed)
-            .expect("the replayed set exists")
-            .curation()
-            .removal_count(),
-        1
+        replayed_set.curation().removal_count(),
+        1,
+        "the replay keeps the object the user deleted"
+    );
+    assert_eq!(
+        replayed_set.curation().hidden_count(),
+        1,
+        "the replay keeps the object the user hid"
+    );
+    assert!(
+        replayed_set.hidden_object(1, 0),
+        "the replayed object stays hidden"
     );
 }
 

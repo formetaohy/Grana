@@ -1,11 +1,18 @@
 use grana_text::Fonts;
 
 use crate::Raster;
+use crate::text::measure;
 
 const GAP: u32 = 12;
 const MARGIN: u32 = 24;
 const BAND: u32 = 42;
 const CAPTION: u32 = 50;
+const TABLE: u32 = 8;
+const TABLE_ROW: u32 = 22;
+const TABLE_HEADER: u32 = 24;
+const TABLE_LABEL: u32 = 132;
+const TABLE_CELL: u32 = 320;
+const TABLE_GAP: u32 = 10;
 const BACKGROUND: [u8; 4] = [18, 20, 24, 255];
 const RULE: [u8; 4] = [38, 42, 50, 255];
 const TITLE: [u8; 4] = [232, 236, 242, 255];
@@ -16,6 +23,7 @@ const TITLE_SIZE: f32 = 16.0;
 const DETAIL_SIZE: f32 = 13.0;
 const HEADING_SIZE: f32 = 19.0;
 const WEIGHT: f32 = 500.0;
+const HEADER_WEIGHT: f32 = 600.0;
 
 pub struct Cell<'a> {
     pub image: &'a Raster,
@@ -24,8 +32,19 @@ pub struct Cell<'a> {
     pub accent: Option<[u8; 4]>,
 }
 
+pub struct Row {
+    pub label: String,
+    pub values: Vec<String>,
+}
+
+pub struct Table {
+    pub columns: Vec<String>,
+    pub rows: Vec<Row>,
+}
+
 pub struct Group<'a> {
     pub name: &'a str,
+    pub table: Option<&'a Table>,
     pub cells: Vec<Cell<'a>>,
 }
 
@@ -57,14 +76,24 @@ impl Sheet {
         (count as u32).div_ceil(columns)
     }
 
+    fn table_height(table: &Table) -> u32 {
+        if table.rows.is_empty() || table.columns.is_empty() {
+            return 0;
+        }
+        2 * TABLE + TABLE_HEADER + table.rows.len() as u32 * TABLE_ROW + GAP
+    }
+
     pub fn size(&self, groups: &[Group<'_>]) -> [u32; 2] {
         let columns = self.columns(groups);
-        let rows = groups
+        let height = groups
             .iter()
-            .map(|group| self.rows(columns, group.cells.len()))
-            .sum::<u32>();
-        let height =
-            groups.len() as u32 * (BAND + GAP) + rows * (self.tile[1] + CAPTION + GAP) + 2 * MARGIN;
+            .map(|group| {
+                BAND + GAP
+                    + group.table.map_or(0, Self::table_height)
+                    + self.rows(columns, group.cells.len()) * (self.tile[1] + CAPTION + GAP)
+            })
+            .sum::<u32>()
+            + 2 * MARGIN;
         let width = 2 * MARGIN + columns * self.tile[0] + (columns - 1) * GAP;
         [width, height.max(BAND + 2 * MARGIN)]
     }
@@ -72,6 +101,7 @@ impl Sheet {
     pub fn compose(&self, fonts: &mut Fonts, groups: &[Group<'_>]) -> Raster {
         let size = self.size(groups);
         let columns = self.columns(groups);
+        let width = size[0] - 2 * MARGIN;
         let mut sheet = Raster::solid(size[0], size[1], BACKGROUND);
         let mut y = MARGIN;
         for group in groups {
@@ -83,9 +113,16 @@ impl Sheet {
                 WEIGHT,
                 HEADING,
             );
-            let rule = Raster::solid(size[0] - 2 * MARGIN, 1, RULE);
+            let rule = Raster::solid(width, 1, RULE);
             sheet.paste(&rule, [MARGIN, y + BAND - 1]);
             y += BAND + GAP;
+            if let Some(table) = group.table {
+                let height = Self::table_height(table);
+                if height > 0 {
+                    band(fonts, &mut sheet, table, width, [MARGIN, y]);
+                    y += height;
+                }
+            }
             for (index, cell) in group.cells.iter().enumerate() {
                 let column = index as u32 % columns;
                 let row = index as u32 / columns;
@@ -124,6 +161,66 @@ impl Sheet {
         }
         sheet
     }
+}
+
+fn band(fonts: &mut Fonts, sheet: &mut Raster, table: &Table, width: u32, at: [u32; 2]) {
+    let label = TABLE_LABEL.min(width / 3);
+    let count = table.columns.len() as u32;
+    let gap = TABLE_GAP;
+    let span = width - label;
+    let cell = span
+        .saturating_sub(gap * count.saturating_sub(1))
+        .checked_div(count)
+        .unwrap_or(0)
+        .min(TABLE_CELL);
+    let column = |index: u32| at[0] + label + index * (cell + gap);
+    for (index, name) in table.columns.iter().enumerate() {
+        let text = clipped(fonts, name, cell, HEADER_WEIGHT);
+        let ink = measure(fonts, &text, DETAIL_SIZE, HEADER_WEIGHT);
+        let x = column(index as u32) + cell.saturating_sub(ink);
+        sheet.text(
+            fonts,
+            &text,
+            [x, at[1] + TABLE + 4],
+            DETAIL_SIZE,
+            HEADER_WEIGHT,
+            HEADING,
+        );
+    }
+    let rule = Raster::solid(width, 1, RULE);
+    sheet.paste(&rule, [at[0], at[1] + TABLE + TABLE_HEADER - 1]);
+    for (index, row) in table.rows.iter().enumerate() {
+        let top = at[1] + TABLE + TABLE_HEADER + index as u32 * TABLE_ROW + 4;
+        let text = clipped(fonts, &row.label, label.saturating_sub(gap), WEIGHT);
+        sheet.text(fonts, &text, [at[0], top], DETAIL_SIZE, WEIGHT, DETAIL);
+        for (slot, value) in row.values.iter().take(table.columns.len()).enumerate() {
+            let text = clipped(fonts, value, cell, WEIGHT);
+            let ink = measure(fonts, &text, DETAIL_SIZE, WEIGHT);
+            let x = column(slot as u32) + cell.saturating_sub(ink);
+            sheet.text(fonts, &text, [x, top], DETAIL_SIZE, WEIGHT, TITLE);
+        }
+    }
+}
+
+fn clipped(fonts: &mut Fonts, text: &str, width: u32, weight: f32) -> String {
+    if measure(fonts, text, DETAIL_SIZE, weight) <= width {
+        return text.to_string();
+    }
+    let mut clipped = String::new();
+    for character in text.chars() {
+        let mut candidate = clipped.clone();
+        candidate.push(character);
+        candidate.push('…');
+        if measure(fonts, &candidate, DETAIL_SIZE, weight) > width {
+            break;
+        }
+        clipped.push(character);
+    }
+    if clipped.is_empty() {
+        return String::new();
+    }
+    clipped.push('…');
+    clipped
 }
 
 fn fitted(tile: &Raster, cell: [u32; 2]) -> Raster {
