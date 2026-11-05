@@ -394,6 +394,9 @@ impl Session {
             }
             Command::ComputeColoc => self.start_coloc(),
             Command::CancelColoc => self.cancel(Job::Coloc),
+            Command::ComputeDrift => self.start_drift(),
+            Command::CancelDrift => self.cancel(Job::Drift),
+            Command::ClearDrift => self.clear_drift(),
             Command::ExportColoc => self.export_coloc(),
             Command::ExportMeasure => self.export_measure(),
             Command::CaptureProtocol => self.capture_protocol(),
@@ -555,6 +558,7 @@ impl Session {
         if let Some(source) = &self.source {
             source.set_time(scene.time());
         }
+        self.realign();
         self.message = None;
     }
 

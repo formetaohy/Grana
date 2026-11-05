@@ -3,9 +3,10 @@ use std::collections::{BinaryHeap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 
 use grana_image::{Format, Image, Series, Source};
+use grana_scene::Drift;
 use grana_volume::{BrickData, BrickRequest, CHANNEL_LIMIT, Pyramid, VolumeSeries};
 
 const ATTEMPTS: u8 = 3;
@@ -35,6 +36,7 @@ pub struct Loader {
     events: Receiver<Event>,
     queue: Arc<Queue>,
     time: Arc<AtomicU32>,
+    drift: Arc<RwLock<Drift>>,
     source: Source,
 }
 
@@ -192,12 +194,14 @@ impl Loader {
         let (sender, events) = mpsc::channel();
         let queue = Arc::new(Queue::new());
         let time = Arc::new(AtomicU32::new(0));
-        spawn(Arc::new(reader), &queue, &time, &sender);
+        let drift = Arc::new(RwLock::new(Drift::default()));
+        spawn(Arc::new(reader), &queue, &time, &drift, &sender);
         (
             Self {
                 events,
                 queue,
                 time,
+                drift,
                 source,
             },
             pyramid,
@@ -216,10 +220,12 @@ impl Loader {
         let (sender, events) = mpsc::channel();
         let queue = Arc::new(Queue::new());
         let time = Arc::new(AtomicU32::new(0));
+        let drift = Arc::new(RwLock::new(Drift::default()));
         let opened = source.clone();
         let opening_sender = sender.clone();
         let opening_queue = Arc::clone(&queue);
         let opening_time = Arc::clone(&time);
+        let opening_drift = Arc::clone(&drift);
         std::thread::spawn(move || {
             let reader = match Image::open(&opened) {
                 Ok(reader) => reader,
@@ -252,6 +258,7 @@ impl Loader {
                 Arc::new(reader),
                 &opening_queue,
                 &opening_time,
+                &opening_drift,
                 &opening_sender,
             );
         });
@@ -259,6 +266,7 @@ impl Loader {
             events,
             queue,
             time,
+            drift,
             source,
         }
     }
@@ -276,6 +284,20 @@ impl Loader {
         self.queue.prune(time);
     }
 
+    pub fn set_drift(&self, drift: Drift) {
+        *self
+            .drift
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = drift;
+    }
+
+    pub fn drift(&self) -> Drift {
+        self.drift
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
     pub fn source(&self) -> Source {
         self.source.clone()
     }
@@ -287,19 +309,36 @@ impl Drop for Loader {
     }
 }
 
-fn spawn(reader: Arc<Image>, queue: &Arc<Queue>, time: &Arc<AtomicU32>, events: &Sender<Event>) {
+fn spawn(
+    reader: Arc<Image>,
+    queue: &Arc<Queue>,
+    time: &Arc<AtomicU32>,
+    drift: &Arc<RwLock<Drift>>,
+    events: &Sender<Event>,
+) {
     for _ in 0..workers() {
         let reader = Arc::clone(&reader);
         let queue = Arc::clone(queue);
         let time = Arc::clone(time);
+        let drift = Arc::clone(drift);
         let events = events.clone();
-        std::thread::spawn(move || serve(reader, queue, time, events));
+        std::thread::spawn(move || serve(reader, queue, time, drift, events));
     }
 }
 
-fn serve(reader: Arc<Image>, queue: Arc<Queue>, time: Arc<AtomicU32>, events: Sender<Event>) {
+fn serve(
+    reader: Arc<Image>,
+    queue: Arc<Queue>,
+    time: Arc<AtomicU32>,
+    drift: Arc<RwLock<Drift>>,
+    events: Sender<Event>,
+) {
     while let Some((request, attempts)) = queue.take(time.load(AtomicOrdering::Relaxed)) {
-        match reader.read_brick(request.time, request.level, request.coord) {
+        let shift = drift
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .offset(request.time);
+        match reader.read_brick(request.time, request.level, request.coord, shift) {
             Ok(data) => {
                 if events.send(Event::Brick { request, data }).is_err() {
                     return;

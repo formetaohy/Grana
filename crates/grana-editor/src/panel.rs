@@ -390,7 +390,8 @@ pub fn progress_caption(
         grana_scene::Job::Track(_)
         | grana_scene::Job::Recut(_)
         | grana_scene::Job::Relation { .. }
-        | grana_scene::Job::Coloc => "frames",
+        | grana_scene::Job::Coloc
+        | grana_scene::Job::Drift => "frames",
     };
     let prefix = match job {
         grana_scene::Job::Detect(_) if frames > 1 => format!("frame {} · ", progress.time + 1),
@@ -398,7 +399,8 @@ pub fn progress_caption(
         | grana_scene::Job::Recut(_)
         | grana_scene::Job::Track(_)
         | grana_scene::Job::Relation { .. }
-        | grana_scene::Job::Coloc => String::new(),
+        | grana_scene::Job::Coloc
+        | grana_scene::Job::Drift => String::new(),
     };
     if progress.total > 0 {
         format!("{prefix}{}/{} {unit}", progress.done, progress.total)

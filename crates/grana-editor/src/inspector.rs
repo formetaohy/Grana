@@ -140,9 +140,60 @@ pub fn view_body(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>
 pub fn objects_body(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     region(ui, state, commands);
     divider(ui);
+    drift(ui, state, commands);
+    divider(ui);
     mask(ui, state, commands);
     divider(ui);
     crate::object_panel::build(ui, state, commands);
+}
+
+fn drift(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
+    let open = ui.disclosure_open("drift", false);
+    let next = widget::disclosure(ui, "drift", "Drift correction", open, |ui| {
+        let drift = state.scene.drift();
+        match crate::panel::progress(state.jobs, grana_scene::Job::Drift) {
+            Some(progress) => {
+                ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
+                    widget::spinner(ui, 12.0);
+                    widget::caption(ui, "Aligning the frames");
+                });
+                if progress.total > 0 {
+                    widget::caption(ui, &format!("{}/{} frames", progress.done, progress.total));
+                }
+                if widget::button(ui, "drift.cancel", "Cancel", Role::Control) {
+                    commands.push(Command::CancelDrift);
+                }
+            }
+            None => {
+                if widget::button(ui, "drift.compute", "Correct drift", Role::Control) {
+                    commands.push(Command::ComputeDrift);
+                }
+                if drift.is_empty() {
+                    widget::caption(
+                        ui,
+                        &format!(
+                            "Aligns {} across the frames",
+                            state.scene.dataset.channels()[state.scene.selected].name()
+                        ),
+                    );
+                } else {
+                    widget::caption(
+                        ui,
+                        &format!(
+                            "{} frames aligned · up to {} voxels",
+                            drift.frames(),
+                            drift.magnitude()
+                        ),
+                    );
+                    widget::caption(ui, "Detect again to move the objects onto the frames");
+                    if widget::button(ui, "drift.clear", "Clear", Role::Danger) {
+                        commands.push(Command::ClearDrift);
+                    }
+                }
+            }
+        }
+    });
+    ui.store_open("drift", next);
 }
 
 fn channels(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {

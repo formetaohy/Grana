@@ -22,6 +22,7 @@ pub enum Event {
         series: Box<ColocSeries>,
         region: Region,
     },
+    Drift(Vec<[i32; 3]>),
     Done,
     Failed(String),
 }

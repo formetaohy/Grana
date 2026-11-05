@@ -514,7 +514,15 @@ impl Run<'_, '_> {
         };
         run::coloc(
             self.reader,
-            run::ColocRequest::new(pair, region, roi, mask_id, settings, task.workers),
+            run::ColocRequest::new(
+                pair,
+                region,
+                roi,
+                mask_id,
+                settings,
+                grana_scene::Drift::default(),
+                task.workers,
+            ),
             task.cancel,
             &mut sink,
         )?;
@@ -637,6 +645,7 @@ fn detect(
         RunEvent::Tracks(_)
         | RunEvent::Relation { .. }
         | RunEvent::Coloc { .. }
+        | RunEvent::Drift(_)
         | RunEvent::Done
         | RunEvent::Failed(_) => {}
     };
@@ -647,6 +656,7 @@ fn detect(
             params,
             reading.region,
             reading.roi,
+            grana_scene::Drift::default(),
             task.workers,
             Arc::clone(store),
         )

@@ -21,7 +21,7 @@ use grana_object::{
 use grana_object::{SpotParams, SurfaceFilter, SurfaceParams};
 use grana_project::{Export, Project, Source, ViewState};
 use grana_scene::{
-    Criteria, Dataset, FilterRange, Item, Measure, ObjectColor, ObjectFrame, ObjectKind,
+    Criteria, Dataset, Drift, FilterRange, Item, Measure, ObjectColor, ObjectFrame, ObjectKind,
     ObjectParams, Scene, Selection, TrackColor, Visibility,
 };
 use grana_volume::{Axis, Channel, Clip, Extent, Spacing, Volume, VolumeSeries, VoxelData};
@@ -528,6 +528,7 @@ fn fixture() -> Scene {
 }
 
 fn stage(scene: &mut Scene) {
+    scene.set_drift(Drift::new(vec![[0, 0, 0], [2, -1, 0]]));
     let spots = scene.add_object(ObjectKind::Spots, 0);
     let surfaces = scene.add_object(ObjectKind::Surfaces, 1);
     let filaments = scene.add_object(ObjectKind::Filaments, 0);

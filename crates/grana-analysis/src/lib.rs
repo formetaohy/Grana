@@ -1,5 +1,6 @@
 mod assignment;
 mod coloc;
+mod drift;
 mod filament;
 mod local;
 mod morphology;
@@ -12,6 +13,10 @@ mod track;
 
 pub use coloc::{
     ColocLevels, ColocPermutation, ColocRead, ColocScan, ColocScanConfig, coloc_levels,
+};
+pub use drift::{
+    shift as drift_shift, spans as drift_spans, window as drift_window,
+    working_level as drift_level,
 };
 pub use filament::{FilamentScan, filament_level};
 pub use relation::{Reference, RelationRun, relate_frames};

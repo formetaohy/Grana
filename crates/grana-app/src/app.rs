@@ -48,6 +48,7 @@ pub struct App {
     workspace: Workspace,
     info: FrameInfo,
     generation: u64,
+    reload: u64,
     needs_fit: bool,
     fit_section: bool,
     last_advance: Option<Instant>,
@@ -78,6 +79,7 @@ impl App {
             workspace: Workspace::default(),
             info: FrameInfo::default(),
             generation: 0,
+            reload: 0,
             needs_fit: true,
             fit_section: false,
             last_advance: None,
@@ -209,6 +211,14 @@ impl App {
             *info = FrameInfo::default();
         }
         let view = session.take_view();
+        let reload = session.reload();
+        if reload != self.reload {
+            self.reload = reload;
+            if let Some(scene) = session.scene() {
+                engine.set_dataset(&surface.gpu.device, scene.dataset.pyramid());
+            }
+            *info = FrameInfo::default();
+        }
         if let Some(view) = view {
             self.apply_view(&view);
         }

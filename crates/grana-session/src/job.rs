@@ -8,7 +8,7 @@ use grana_scene::{Job, ObjectFrame};
 
 use crate::task::{Poll, Task};
 use grana_pipeline::Event;
-use grana_pipeline::run::{self, ColocRequest, DetectRequest};
+use grana_pipeline::run::{self, ColocRequest, DetectRequest, DriftRequest};
 
 pub struct Analysis {
     job: Job,
@@ -110,6 +110,13 @@ pub fn coloc(job: Job, source: Source, request: ColocRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
         let reader = Image::open(&source)?;
         run::coloc(&reader, request, cancel, sink)
+    })
+}
+
+pub fn drift(job: Job, source: Source, request: DriftRequest) -> Analysis {
+    analyse(job, move |cancel, sink| {
+        let reader = Image::open(&source)?;
+        run::drift(&reader, request, cancel, sink)
     })
 }
 

@@ -19,10 +19,10 @@ use grana_object::{
     TrackNode, TrackSet,
 };
 use grana_scene::{
-    ChannelState, ColocResult, ColocState, ColorState, Criteria, Curation, FilterRange, ItemState,
-    LassoPath, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind, ObjectParams,
-    ObjectSetId, Provenance, RELATION_FIELDS, Recipe, RelationState, SceneState, Seeds,
-    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
+    ChannelState, ColocResult, ColocState, ColorState, Criteria, Curation, Drift, FilterRange,
+    ItemState, LassoPath, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind,
+    ObjectParams, ObjectSetId, Provenance, RELATION_FIELDS, Recipe, RelationState, SceneState,
+    Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Clip, Intensity, Region};
 
@@ -174,6 +174,7 @@ impl Decode for SceneState {
             selection: Option::<SelectionState>::decode(reader)?,
             sets: Vec::<SetState>::decode(reader)?,
             coloc: ColocState::decode(reader)?,
+            drift: Drift::decode(reader)?,
         };
         let mut ids = state.sets.iter().map(|set| set.id).collect::<Vec<_>>();
         ids.sort_unstable();
@@ -1282,6 +1283,24 @@ impl<T: Decode> Decode for Vec<T> {
             values.push(T::decode(reader)?);
         }
         Ok(values)
+    }
+}
+
+impl Decode for Drift {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let frames = reader.count(1)?;
+        let mut offsets = Vec::with_capacity(frames.min(1 << 16));
+        for _ in 0..frames {
+            let mut offset = [0i32; 3];
+            for value in &mut offset {
+                *value = reader.i32()?;
+                if value.unsigned_abs() > Drift::LIMIT as u32 {
+                    return Err(FAULT_VALUE);
+                }
+            }
+            offsets.push(offset);
+        }
+        Ok(Drift::new(offsets))
     }
 }
 

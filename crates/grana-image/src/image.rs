@@ -119,12 +119,13 @@ impl Image {
         level: usize,
         channel: usize,
         ranges: &[Range<u32>; 3],
+        shift: [i32; 3],
     ) -> Result<VoxelData, Error> {
         self.level_extent(level)?;
-        if level < self.pyramid.stored() {
-            return self.stored_region(time, level, channel, ranges);
+        if shift == [0; 3] {
+            return self.region_at(time, level, channel, ranges);
         }
-        self.resolved_region(time, level, channel, ranges)
+        self.shifted_region(time, level, channel, ranges, shift)
     }
 
     pub fn read_brick(
@@ -132,8 +133,9 @@ impl Image {
         time: u32,
         level: usize,
         coord: BrickCoord,
+        shift: [i32; 3],
     ) -> Result<BrickData, Error> {
-        if level < self.pyramid.stored() {
+        if shift == [0; 3] && level < self.pyramid.stored() {
             return self.stored_brick(time, level, coord);
         }
         let extent = self.level_extent(level)?;
@@ -153,10 +155,62 @@ impl Image {
         let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
         let mut bricks = Vec::with_capacity(self.pyramid.channel_count());
         for channel in 0..self.pyramid.channel_count() {
-            let data = self.resolved_region(time, level, channel, &spatial)?;
+            let data = self.read_region(time, level, channel, &spatial, shift)?;
             bricks.push(pad_brick(&data, origin, region, grid.origin(coord), extent));
         }
         Ok(BrickData::new(bricks))
+    }
+
+    fn region_at(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        ranges: &[Range<u32>; 3],
+    ) -> Result<VoxelData, Error> {
+        if level < self.pyramid.stored() {
+            return self.stored_region(time, level, channel, ranges);
+        }
+        self.resolved_region(time, level, channel, ranges)
+    }
+
+    fn shifted_region(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        ranges: &[Range<u32>; 3],
+        shift: [i32; 3],
+    ) -> Result<VoxelData, Error> {
+        let extent = self.level_extent(level)?;
+        let limits = [extent.x(), extent.y(), extent.z()];
+        let shift = voxel_shift(shift, level);
+        let mut source: [Range<u32>; 3] = [0..0, 0..0, 0..0];
+        let mut placed: [Range<u32>; 3] = [0..0, 0..0, 0..0];
+        for axis in 0..3 {
+            let offset = i64::from(shift[axis]);
+            let limit = i64::from(limits[axis]);
+            let start = (i64::from(ranges[axis].start) + offset).clamp(0, limit);
+            let end = (i64::from(ranges[axis].end) + offset).clamp(0, limit);
+            source[axis] = start as u32..end as u32;
+            placed[axis] = (start - offset) as u32..(end - offset) as u32;
+        }
+        let mut out = tile::allocate(self.channel_format(channel)?, ranges);
+        if source.iter().all(|range| range.start < range.end) {
+            let data = self.region_at(time, level, channel, &source)?;
+            tile::copy_intersection(&mut out, ranges, &data, &placed);
+        }
+        Ok(out)
+    }
+
+    fn channel_format(&self, channel: usize) -> Result<VoxelFormat, Error> {
+        self.pyramid
+            .channels()
+            .get(channel)
+            .map(grana_volume::ChannelInfo::format)
+            .ok_or_else(|| Error::Resolved {
+                detail: "the requested channel does not exist".to_string(),
+            })
     }
 
     fn stored_region(
@@ -389,6 +443,11 @@ impl Image {
     fn tiles(&self) -> MutexGuard<'_, Memory> {
         self.tiles.lock().unwrap_or_else(|error| error.into_inner())
     }
+}
+
+fn voxel_shift(shift: [i32; 3], level: usize) -> [i32; 3] {
+    let ratio = (1i64 << level) as f64;
+    shift.map(|value| (f64::from(value) / ratio).round() as i32)
 }
 
 fn intersection(left: &[Range<u32>; 3], right: &[Range<u32>; 3]) -> [Range<u32>; 3] {

@@ -11,8 +11,8 @@ use grana_object::{
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_scene::{
-    ChannelState, ColocResult, ColocState, ColorState, Criteria, Curation, FilterRange, ItemState,
-    LassoPath, MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe,
+    ChannelState, ColocResult, ColocState, ColorState, Criteria, Curation, Drift, FilterRange,
+    ItemState, LassoPath, MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe,
     RelationState, SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit,
     TrackStyle, Visibility,
 };
@@ -132,6 +132,18 @@ impl Encode for SceneState {
         self.selection.encode(writer);
         self.sets.encode(writer);
         self.coloc.encode(writer);
+        self.drift.encode(writer);
+    }
+}
+
+impl Encode for Drift {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.count(self.offsets().len());
+        for offset in self.offsets() {
+            for value in offset {
+                writer.i32(*value);
+            }
+        }
     }
 }
 

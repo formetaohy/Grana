@@ -7,6 +7,7 @@ use grana_volume::{Clip, Intensity, Region};
 use crate::coloc::{ColocState, MaskKey};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
+use crate::drift::Drift;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::provenance::Provenance;
@@ -27,6 +28,7 @@ pub struct SceneState {
     pub exposure: f32,
     pub region: Region,
     pub clip: Clip,
+    pub drift: Drift,
     pub mask: Option<u64>,
     pub time: u32,
     pub selection: Option<SelectionState>,
@@ -94,6 +96,7 @@ impl SceneState {
         self.channels.len() == channel_count
             && self.selected < channel_count
             && self.time < frame_count
+            && (self.drift.is_empty() || self.drift.frames() == frame_count)
             && self
                 .sets
                 .iter()
@@ -154,6 +157,7 @@ impl Scene {
             exposure: self.exposure,
             region: self.region,
             clip: self.clip,
+            drift: self.drift().clone(),
             mask: self.mask.map(|set| set.raw()),
             time: self.time(),
             selection: self.selection().map(|selection| SelectionState {
@@ -185,6 +189,7 @@ impl Scene {
         self.exposure = state.exposure;
         self.region = state.region;
         self.clip = state.clip;
+        self.set_drift(state.drift);
         self.objects.restore(state.sets, &self.dataset);
         self.mask = state
             .mask
@@ -267,6 +272,11 @@ impl Scene {
             }
         }
         hash = mix(hash, self.mask.map_or(0, ObjectSetId::raw));
+        for offset in self.drift().offsets() {
+            for value in offset {
+                hash = mix(hash, u64::from(*value as u32));
+            }
+        }
         hash = mix(hash, self.coloc.document());
         hash
     }

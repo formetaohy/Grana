@@ -98,6 +98,7 @@ pub struct Session {
     batch_project: bool,
     batch_message: Option<String>,
     generation: u64,
+    reload: u64,
     view: Option<ViewState>,
     history: History,
     export: Export,
@@ -150,6 +151,7 @@ impl Session {
             batch_project: false,
             batch_message: None,
             generation: 0,
+            reload: 0,
             view: None,
             history: History::default(),
             export: Export::NATIVE,
@@ -192,6 +194,10 @@ impl Session {
     }
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    pub fn reload(&self) -> u64 {
+        self.reload
     }
     pub fn pending(&self) -> usize {
         self.in_flight.len()

@@ -9,5 +9,5 @@ pub use batch::{
 };
 pub use event::Event;
 pub use grana_analysis::SeedPolicy;
-pub use run::{ColocRequest, DetectRequest};
+pub use run::{ColocRequest, DetectRequest, DriftRequest};
 pub use snapshot::{SnapshotFactory, SnapshotRequest, Snapshotter};

@@ -11,6 +11,7 @@ pub enum Job {
         shift: i32,
     },
     Coloc,
+    Drift,
 }
 
 impl Job {
@@ -18,14 +19,14 @@ impl Job {
         match self {
             Self::Detect(id) | Self::Recut(id) | Self::Track(id) => id == set,
             Self::Relation { source, .. } => source == set,
-            Self::Coloc => false,
+            Self::Coloc | Self::Drift => false,
         }
     }
 
     pub fn installs(self, set: ObjectSetId) -> bool {
         match self {
             Self::Detect(id) | Self::Recut(id) | Self::Track(id) => id == set,
-            Self::Relation { .. } | Self::Coloc => false,
+            Self::Relation { .. } | Self::Coloc | Self::Drift => false,
         }
     }
 
@@ -33,7 +34,7 @@ impl Job {
         match self {
             Self::Detect(id) | Self::Recut(id) | Self::Track(id) => id == set,
             Self::Relation { source, target, .. } => source == set || target == set,
-            Self::Coloc => false,
+            Self::Coloc | Self::Drift => false,
         }
     }
 }

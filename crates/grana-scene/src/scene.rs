@@ -13,6 +13,7 @@ use crate::coloc::{Coloc, MaskKey};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::dataset::Dataset;
+use crate::drift::Drift;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
@@ -47,6 +48,7 @@ pub struct Scene {
     pub region: Region,
     pub clip: Clip,
     pub mask: Option<ObjectSetId>,
+    drift: Drift,
     pub objects: Objects,
     pub coloc: Coloc,
     time: u32,
@@ -79,6 +81,7 @@ impl Scene {
             region,
             clip: Clip::none(),
             mask: None,
+            drift: Drift::default(),
             objects: Objects::new(),
             coloc: Coloc::new(channel_count, region),
             time: 0,
@@ -408,6 +411,18 @@ impl Scene {
 
     pub fn set_clip(&mut self, clip: Clip) {
         self.clip = clip;
+    }
+
+    pub fn drift(&self) -> &Drift {
+        &self.drift
+    }
+
+    pub fn set_drift(&mut self, drift: Drift) -> bool {
+        if self.drift == drift {
+            return false;
+        }
+        self.drift = drift;
+        true
     }
 
     pub fn mask_frames(&self) -> Option<grana_object::Roi> {

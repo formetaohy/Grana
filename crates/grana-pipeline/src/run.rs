@@ -11,7 +11,7 @@ use grana_geometry::GeometryStore;
 use grana_image::Image;
 use grana_measure::{ColocPair, ColocSettings};
 use grana_object::Roi;
-use grana_scene::{ObjectFrame, ObjectParams};
+use grana_scene::{Drift, ObjectFrame, ObjectParams};
 use grana_volume::VoxelData;
 
 use crate::event::Event;
@@ -52,6 +52,7 @@ pub struct DetectRequest {
     roi: Option<Roi>,
     seeds: Vec<Vec<[f32; 3]>>,
     seed_policy: SeedPolicy,
+    drift: Drift,
     workers: usize,
     store: Arc<GeometryStore>,
 }
@@ -62,6 +63,7 @@ impl DetectRequest {
         params: ObjectParams,
         region: grana_volume::Region,
         roi: Option<Roi>,
+        drift: Drift,
         workers: usize,
         store: Arc<GeometryStore>,
     ) -> Self {
@@ -72,6 +74,7 @@ impl DetectRequest {
             roi,
             seeds: Vec::new(),
             seed_policy: SeedPolicy::Unseeded,
+            drift,
             workers,
             store,
         }
@@ -199,6 +202,7 @@ pub struct ColocRequest {
     roi: Option<Roi>,
     mask: Option<u64>,
     settings: ColocSettings,
+    drift: Drift,
     workers: usize,
 }
 
@@ -209,6 +213,7 @@ impl ColocRequest {
         roi: Option<Roi>,
         mask: Option<u64>,
         settings: ColocSettings,
+        drift: Drift,
         workers: usize,
     ) -> Self {
         Self {
@@ -217,6 +222,7 @@ impl ColocRequest {
             roi,
             mask,
             settings,
+            drift,
             workers,
         }
     }
@@ -234,6 +240,7 @@ pub fn coloc(
         roi,
         mask: mask_id,
         settings,
+        drift,
         workers,
     } = request;
     let pyramid = reader.pyramid();
@@ -276,7 +283,7 @@ pub fn coloc(
         cancel,
         &|time, channel, ranges| {
             reader
-                .read_region(time, scan_level, channel, ranges)
+                .read_region(time, scan_level, channel, ranges, drift.offset(time))
                 .map_err(String::from)
         },
         &|time| match &roi {
@@ -303,7 +310,7 @@ pub fn coloc(
         cancel,
         &|time, channel, ranges| {
             reader
-                .read_region(time, permutation_level, channel, ranges)
+                .read_region(time, permutation_level, channel, ranges, drift.offset(time))
                 .map_err(String::from)
         },
         &|time| match &roi {
@@ -362,6 +369,7 @@ fn spots(
         region,
         roi,
         workers,
+        drift,
         ..
     } = request;
     let pyramid = reader.pyramid();
@@ -391,7 +399,7 @@ fn spots(
             let mask = roi.as_ref().map(|roi| roi.mask(level, time)).transpose()?;
             let read = |measured: usize, ranges: &[Range<u32>; 3]| {
                 reader
-                    .read_region(time, level_index, measured, ranges)
+                    .read_region(time, level_index, measured, ranges, drift.offset(time))
                     .map_err(String::from)
             };
             let set = scanner.frame(share, cancel, mask.as_ref(), &read, &mut |done, total| {
@@ -420,6 +428,7 @@ fn surfaces(
         roi,
         seeds,
         seed_policy,
+        drift,
         workers,
         store,
         ..
@@ -472,12 +481,12 @@ fn surfaces(
                 Sources::new(
                     &|_index, ranges| {
                         reader
-                            .read_region(time, level_index, channel, ranges)
+                            .read_region(time, level_index, channel, ranges, drift.offset(time))
                             .map_err(String::from)
                     },
                     &|measured, core| {
                         reader
-                            .read_region(time, level_index, measured, core)
+                            .read_region(time, level_index, measured, core, drift.offset(time))
                             .map_err(String::from)
                     },
                     &store,
@@ -504,6 +513,7 @@ fn filaments(
         channel,
         region,
         roi,
+        drift,
         store,
         workers,
         ..
@@ -535,10 +545,10 @@ fn filaments(
         cancel,
         || FilamentScan::new(level, info, params, channels, channel, region, intensity),
         |scan, time, _report| {
-            let detection = full_region(reader, pyramid, time, level, channel)?;
+            let detection = full_region(reader, pyramid, time, level, channel, drift.offset(time))?;
             let mask = roi.as_ref().map(|roi| roi.mask(info, time)).transpose()?;
             let set = scan.frame(&detection, mask.as_ref(), &store, |measured| {
-                full_region(reader, pyramid, time, level, measured)
+                full_region(reader, pyramid, time, level, measured, drift.offset(time))
             })?;
             Ok(Some(ObjectFrame::Filaments(set)))
         },
@@ -573,6 +583,7 @@ fn full_region(
     time: u32,
     level: usize,
     channel: usize,
+    shift: [i32; 3],
 ) -> Result<VoxelData, String> {
     let extent = pyramid.level(level).extent();
     reader
@@ -581,6 +592,87 @@ fn full_region(
             level,
             channel,
             &[0..extent.x(), 0..extent.y(), 0..extent.z()],
+            shift,
         )
         .map_err(String::from)
+}
+
+pub struct DriftRequest {
+    channel: usize,
+}
+
+impl DriftRequest {
+    pub fn new(channel: usize) -> Self {
+        Self { channel }
+    }
+}
+
+pub fn drift(
+    reader: &Image,
+    request: DriftRequest,
+    cancel: &AtomicBool,
+    sink: &mut dyn FnMut(Event),
+) -> Result<(), String> {
+    let DriftRequest { channel } = request;
+    let pyramid = reader.pyramid();
+    let frames = pyramid.frame_count();
+    if frames < 2 {
+        return Err("the dataset holds one frame to align".to_string());
+    }
+    if channel >= pyramid.channel_count() {
+        return Err(format!(
+            "the dataset has {} channels but channel {channel} was requested",
+            pyramid.channel_count()
+        ));
+    }
+    if pyramid.channels()[channel].intensity().span() <= 0.0 {
+        return Err("the selected channel has no intensity range to align".to_string());
+    }
+    let level = grana_analysis::drift_level(pyramid)
+        .ok_or_else(|| "the dataset is too small to align".to_string())?;
+    let ranges = grana_analysis::drift_spans(pyramid, level);
+    let dims = [
+        (ranges[0].end - ranges[0].start) as usize,
+        (ranges[1].end - ranges[1].start) as usize,
+        (ranges[2].end - ranges[2].start) as usize,
+    ];
+    let total = frames as usize;
+    sink(Event::Progress {
+        time: 0,
+        done: 0,
+        total,
+    });
+    let reference = grana_analysis::drift_window(
+        &reader
+            .read_region(0, level, channel, &ranges, [0; 3])
+            .map_err(String::from)?,
+        &ranges,
+    );
+    let ratio = 2i32.pow(level as u32);
+    let mut offsets = Vec::with_capacity(total);
+    offsets.push([0; 3]);
+    for time in 1..frames {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let moving = grana_analysis::drift_window(
+            &reader
+                .read_region(time, level, channel, &ranges, [0; 3])
+                .map_err(String::from)?,
+            &ranges,
+        );
+        let shift = grana_analysis::drift_shift(&reference, &moving, dims);
+        offsets.push(shift.map(|value| value * ratio));
+        sink(Event::Progress {
+            time,
+            done: time as usize + 1,
+            total,
+        });
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    sink(Event::Drift(offsets));
+    sink(Event::Done);
+    Ok(())
 }

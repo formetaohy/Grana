@@ -108,7 +108,7 @@ fn render(
     path: &Path,
 ) -> Result<(), String> {
     for _ in 0..ATTEMPTS {
-        pump(engine, gpu, reader)?;
+        pump(engine, gpu, reader, scene.drift())?;
         match engine.render_export(&gpu.device, &gpu.queue, ui, scene) {
             Outcome::Running => {}
             Outcome::Complete { .. } => return Ok(()),
@@ -150,7 +150,12 @@ fn aspect(region: [u32; 4]) -> f32 {
     region[2].max(1) as f32 / region[3].max(1) as f32
 }
 
-fn pump(engine: &mut Engine, gpu: &Headless, reader: &Image) -> Result<(), String> {
+fn pump(
+    engine: &mut Engine,
+    gpu: &Headless,
+    reader: &Image,
+    drift: &grana_scene::Drift,
+) -> Result<(), String> {
     let Some(requests) = engine.poll_requests(&gpu.device) else {
         return Ok(());
     };
@@ -161,7 +166,12 @@ fn pump(engine: &mut Engine, gpu: &Headless, reader: &Image) -> Result<(), Strin
         .chain(&requests.prefetch)
     {
         let data = reader
-            .read_brick(request.time, request.level, request.coord)
+            .read_brick(
+                request.time,
+                request.level,
+                request.coord,
+                drift.offset(request.time),
+            )
             .map_err(|error| error.to_string())?;
         engine.upload(&gpu.device, &gpu.queue, *request, &data);
     }

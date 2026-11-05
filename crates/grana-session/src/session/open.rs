@@ -283,6 +283,9 @@ impl Session {
         self.generation += 1;
         if let Some(source) = &self.source {
             source.set_time(0);
+            if let Some(scene) = self.scene.as_ref() {
+                source.set_drift(scene.drift().clone());
+            }
         }
     }
 

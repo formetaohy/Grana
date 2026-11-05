@@ -8,6 +8,7 @@ impl Session {
             Tracks(TrackSet),
             Relation(u32, grana_object::RelationFrame),
             Coloc(Box<grana_measure::ColocSeries>, Region),
+            Drift(Vec<[i32; 3]>),
             Done,
             Failed(String),
         }
@@ -31,6 +32,9 @@ impl Session {
                     }
                     Poll::Event(Event::Coloc { series, region }) => {
                         updates.push((index, job, Update::Coloc(series, region)));
+                    }
+                    Poll::Event(Event::Drift(offsets)) => {
+                        updates.push((index, job, Update::Drift(offsets)));
                     }
                     Poll::Event(Event::Done) => {
                         updates.push((index, job, Update::Done));
@@ -102,6 +106,12 @@ impl Session {
                         }
                     }
                 }
+                Update::Drift(offsets) => {
+                    if let (Job::Drift, Some(scene)) = (job, self.scene.as_mut()) {
+                        scene.set_drift(grana_scene::Drift::new(offsets));
+                    }
+                    self.realign();
+                }
                 Update::Done => {
                     self.progress.retain(|progress| progress.job != job);
                     removed.push(index);
@@ -109,7 +119,7 @@ impl Session {
                     match job {
                         Job::Detect(set) => detected.push(set),
                         Job::Recut(set) => recutted.push(set),
-                        Job::Track(_) | Job::Relation { .. } | Job::Coloc => {}
+                        Job::Track(_) | Job::Relation { .. } | Job::Coloc | Job::Drift => {}
                     }
                 }
                 Update::Failed(detail) => {
@@ -456,6 +466,7 @@ impl Session {
         let channel = object.channel();
         let params = object.params();
         let region = scene.region;
+        let drift = scene.drift().clone();
         let seed_source = scene.seed_source(set);
         let seeds = scene.seed_frames(set);
         if let Some(source) = seed_source
@@ -520,7 +531,7 @@ impl Session {
         self.analysis.push(crate::detect(
             Job::Detect(set),
             source,
-            DetectRequest::new(channel, params, region, roi, 0, self.store())
+            DetectRequest::new(channel, params, region, roi, drift, 0, self.store())
                 .with_seeds(seeds, policy),
         ));
     }
@@ -711,6 +722,7 @@ impl Session {
             return;
         }
         let settings = scene.coloc.settings();
+        let drift = scene.drift().clone();
         let mask = scene.mask;
         let roi = match mask {
             None => None,
@@ -741,8 +753,66 @@ impl Session {
                 roi,
                 mask.map(|set| set.raw()),
                 settings,
+                drift,
                 0,
             ),
         ));
+    }
+
+    pub(super) fn start_drift(&mut self) {
+        if self.loading.is_some()
+            || self
+                .analysis
+                .iter()
+                .any(|analysis| analysis.job() == Job::Drift)
+        {
+            return;
+        }
+        let Some(source) = self.source.as_ref().map(Loader::source) else {
+            return;
+        };
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        if scene.frame_count() < 2 {
+            self.message = Some(Message::error("the dataset holds one frame to align"));
+            return;
+        }
+        let channel = scene.selected;
+        if scene.dataset.channels()[channel].intensity().span() <= 0.0 {
+            self.message = Some(Message::error(
+                "the selected channel has no intensity range to align",
+            ));
+            return;
+        }
+        self.message = None;
+        self.record_progress(Job::Drift, 0, 0, scene.frame_count() as usize);
+        self.analysis.push(crate::drift(
+            Job::Drift,
+            source,
+            grana_pipeline::DriftRequest::new(channel),
+        ));
+    }
+
+    pub(super) fn clear_drift(&mut self) {
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        if scene.set_drift(grana_scene::Drift::default()) {
+            self.realign();
+        }
+    }
+
+    pub(super) fn realign(&mut self) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let drift = scene.drift().clone();
+        if let Some(source) = self.source.as_ref() {
+            source.set_drift(drift);
+        }
+        self.in_flight.clear();
+        self.bricks.clear();
+        self.reload += 1;
     }
 }

@@ -77,6 +77,7 @@ fn run(seeds: Vec<Vec<[f32; 3]>>) -> Result<Vec<usize>, String> {
         )),
         Region::none(),
         None,
+        grana_scene::Drift::default(),
         0,
         GeometryStore::memory(),
     )

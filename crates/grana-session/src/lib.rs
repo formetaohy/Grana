@@ -13,7 +13,7 @@ pub use command::{Action, Command};
 pub use grana_image::{Series, Source, is_image};
 pub use grana_project::Export;
 pub use grana_scene::slug;
-pub use job::{Analysis, coloc, detect, recut, relation, track};
+pub use job::{Analysis, coloc, detect, drift, recut, relation, track};
 pub use loader::Loader;
 pub use session::{Effects, Session};
 pub use task::Poll;
