@@ -28,6 +28,8 @@ use distance::Distance;
 use mask::SolidMask;
 use tile::{Tile, TileResult};
 
+use crate::schedule::Budget;
+
 const TILE_SIDE: u32 = 96;
 const DISTANCE_LIMIT: u32 = 12;
 const DISTANCE_LIMIT_MAX: u32 = 48;
@@ -35,6 +37,7 @@ const GRAIN_LIMIT: f32 = 3.0;
 const GRAIN_SUPPORT: f32 = 3.0;
 const ANISOTROPY_LIMIT: u32 = 16;
 const PAD_ALIGN: u32 = 8;
+const BLOCK_FLOOR: u32 = crate::local::BLOCK as u32 * (crate::local::WINDOW as u32 + 1);
 const ARRAY_BYTES_PER_VOXEL: u64 = 17;
 const VALUE_BYTES_PER_VOXEL: u64 = 12;
 const WORKER_ARRAY_LIMIT: u64 = 320 << 20;
@@ -403,29 +406,13 @@ impl SurfaceBuilder {
             .copied()
             .max()
             .expect("three axes exist");
-        let mut base = (DISTANCE_LIMIT * widest).min(DISTANCE_LIMIT_MAX);
-        while base > DISTANCE_LIMIT && Pass::new(&self, base, seeds).max_workers().is_none() {
-            base /= 2;
-        }
-        if Pass::new(&self, base, seeds).max_workers().is_none() {
-            return Err(format!(
-                "a surface tile needs more than {WORKER_ARRAY_LIMIT} bytes of array memory"
-            ));
-        }
+        let base = (DISTANCE_LIMIT * widest).min(DISTANCE_LIMIT_MAX);
         let distance = Distance::build(&self, &mask.solid, desired);
         let ceiling = base * 4;
         let margin = distance.margin().ceil() as u32 + 1;
-        let wanted = (distance.reach().ceil() as u32)
+        let limit = (distance.reach().ceil() as u32)
             .saturating_add(margin)
             .clamp(base, ceiling);
-        let mut limit = wanted;
-        let capacity = loop {
-            if let Some(capacity) = Pass::new(&self, limit, seeds).max_workers() {
-                break capacity;
-            }
-            assert!(limit > base, "the base distance limit fits a tile array");
-            limit = limit.saturating_sub(PAD_ALIGN).max(base);
-        };
         let mut inputs = Inputs {
             cancel,
             progress,
@@ -435,16 +422,12 @@ impl SurfaceBuilder {
             field: &mask.field,
             roi,
         };
-        let pass = Pass::refined(&self, limit, seeds, &distance);
-        let workers = desired.min(capacity).min(pass.total().max(1));
-        let topology = match run_pass(&pass, workers, false, &mut inputs)? {
+        let pass = Pass::new(&self, limit, seeds, &distance);
+        let budget = Budget::new(FRAME_ARRAY_LIMIT);
+        let workers = desired.min(pass.total().max(1));
+        let topology = match run_pass(&pass, workers, &budget, &mut inputs)? {
             PassOutcome::Cancelled => return Ok(None),
             PassOutcome::Done(topology) => *topology,
-            PassOutcome::Saturated => {
-                return Err(format!(
-                    "the refined surface pass keeps a saturated distance of {limit} voxels"
-                ));
-            }
         };
         let topology = Geometry::paged(store, topology).map_err(|error| error.to_string())?;
         let loaded = topology.load().map_err(|error| error.to_string())?;
@@ -530,43 +513,25 @@ struct Pass<'a> {
     plan: &'a SurfaceBuilder,
     seeds: &'a [[i64; 3]],
     cap: u32,
-    pad: [u32; 3],
+    limit: u32,
     values: [u32; 3],
-    distance: Option<&'a Distance>,
+    distance: &'a Distance,
 }
 
 impl<'a> Pass<'a> {
-    fn new(plan: &'a SurfaceBuilder, limit: u32, seeds: &'a [[i64; 3]]) -> Self {
-        Self::with_distance(plan, limit, seeds, None)
-    }
-
-    fn refined(
+    fn new(
         plan: &'a SurfaceBuilder,
         limit: u32,
         seeds: &'a [[i64; 3]],
         distance: &'a Distance,
     ) -> Self {
-        Self::with_distance(plan, limit, seeds, Some(distance))
-    }
-
-    fn with_distance(
-        plan: &'a SurfaceBuilder,
-        limit: u32,
-        seeds: &'a [[i64; 3]],
-        distance: Option<&'a Distance>,
-    ) -> Self {
         let cap = limit * limit;
-        let radius = [0, 1, 2].map(|axis| (plan.kernels[axis].len() / 2) as u32);
-        let pad = [0, 1, 2].map(|axis| {
-            let needed = limit + radius[axis] + 1;
-            align(needed.max(crate::local::BLOCK as u32 * (crate::local::WINDOW as u32 + 1)))
-        });
-        let values = [0, 1, 2].map(|axis| align(radius[axis] + 3));
+        let values = [0, 1, 2].map(|axis| align(radius(plan, axis) + 3));
         Self {
             plan,
             seeds,
             cap,
-            pad,
+            limit,
             values,
             distance,
         }
@@ -576,32 +541,48 @@ impl<'a> Pass<'a> {
         self.plan.tile_count
     }
 
-    fn array_bytes(&self) -> u64 {
+    fn pad(&self, index: usize) -> [u32; 3] {
         let plan = self.plan;
-        let extent = |pad: [u32; 3]| {
-            let mut voxels = 1u64;
-            for (axis, pad) in pad.into_iter().enumerate() {
-                let size = (plan.region[axis].end - plan.region[axis].start) as u64;
-                let span = u64::from(TILE_SIDE + 2 * pad);
-                voxels *= size.min(span);
+        let bound = self.distance.bound(&plan.core_range(index)).min(self.limit);
+        let mut reach = bound;
+        loop {
+            let pad =
+                [0, 1, 2].map(|axis| align((reach + radius(plan, axis) + 1).max(BLOCK_FLOOR)));
+            if array_bytes(plan, pad, self.values) <= WORKER_ARRAY_LIMIT {
+                return pad;
             }
-            voxels
-        };
-        extent(self.pad) * ARRAY_BYTES_PER_VOXEL + extent(self.values) * VALUE_BYTES_PER_VOXEL
+            assert!(
+                reach > 0,
+                "a surface tile fits its array budget at the smallest pad"
+            );
+            reach = reach.saturating_sub(PAD_ALIGN);
+        }
     }
 
-    fn max_workers(&self) -> Option<usize> {
-        let bytes = self.array_bytes();
-        if bytes > WORKER_ARRAY_LIMIT {
-            return None;
-        }
-        Some((FRAME_ARRAY_LIMIT / bytes).clamp(1, crate::schedule::WORKER_LIMIT as u64) as usize)
+    fn array_bytes(&self, index: usize) -> u64 {
+        array_bytes(self.plan, self.pad(index), self.values)
     }
+}
+
+fn radius(plan: &SurfaceBuilder, axis: usize) -> u32 {
+    (plan.kernels[axis].len() / 2) as u32
+}
+
+fn array_bytes(plan: &SurfaceBuilder, pad: [u32; 3], values: [u32; 3]) -> u64 {
+    let extent = |pad: [u32; 3]| {
+        let mut voxels = 1u64;
+        for (axis, pad) in pad.into_iter().enumerate() {
+            let size = (plan.region[axis].end - plan.region[axis].start) as u64;
+            let span = u64::from(TILE_SIDE + 2 * pad);
+            voxels *= size.min(span);
+        }
+        voxels
+    };
+    extent(pad) * ARRAY_BYTES_PER_VOXEL + extent(values) * VALUE_BYTES_PER_VOXEL
 }
 
 enum PassOutcome {
     Done(Box<grana_object::SurfaceTopology>),
-    Saturated,
     Cancelled,
 }
 
@@ -618,7 +599,7 @@ struct Inputs<'a> {
 fn run_pass(
     pass: &Pass<'_>,
     workers: usize,
-    accept: bool,
+    budget: &Budget,
     inputs: &mut Inputs<'_>,
 ) -> Result<PassOutcome, String> {
     let total = pass.total();
@@ -647,7 +628,12 @@ fn run_pass(
                     if index >= total {
                         break;
                     }
+                    let bytes = pass.array_bytes(index);
+                    if !budget.acquire(bytes, || halted(cancel, stop)) {
+                        break;
+                    }
                     let result = tile.run(index, cancel, stop, read, measure);
+                    budget.release(bytes);
                     if sender.send((index, result)).is_err() {
                         break;
                     }
@@ -655,7 +641,7 @@ fn run_pass(
             });
         }
         drop(sender);
-        assemble(pass, receiver, cancel, stop, accept, &mut *inputs.progress)
+        assemble(pass, receiver, cancel, stop, &mut *inputs.progress)
     })
 }
 
@@ -664,7 +650,6 @@ fn assemble(
     receiver: mpsc::Receiver<(usize, TileResult)>,
     cancel: &AtomicBool,
     stop: &AtomicBool,
-    accept: bool,
     progress: &mut dyn FnMut(usize, usize),
 ) -> Result<PassOutcome, String> {
     let total = pass.total();
@@ -702,10 +687,6 @@ fn assemble(
                     return Err(detail);
                 }
                 TileResult::Finished(output) => {
-                    if !accept && output.saturated {
-                        stop.store(true, Ordering::Relaxed);
-                        return Ok(PassOutcome::Saturated);
-                    }
                     assembler.push(assembled, *output)?;
                     assembled += 1;
                     if (assembled - 1).is_multiple_of(4) || assembled == total {

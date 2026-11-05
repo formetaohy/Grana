@@ -1,3 +1,4 @@
+mod grid;
 mod scan;
 mod significance;
 

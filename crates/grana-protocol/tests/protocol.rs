@@ -200,16 +200,19 @@ fn reads_and_writes_a_protocol() {
 }
 
 #[test]
-fn a_captured_snapshot_follows_the_export_width() {
+fn a_captured_snapshot_follows_the_export() {
     assert_eq!(
         SnapshotSpec::of(Some(Export::new(2400, true))).size(),
         [2400, 1500]
     );
+    assert!(SnapshotSpec::of(Some(Export::new(2400, true))).transparent);
     assert_eq!(SnapshotSpec::of(Some(Export::NATIVE)).size(), [1600, 1000]);
+    assert!(!SnapshotSpec::of(Some(Export::NATIVE)).transparent);
     assert_eq!(
         SnapshotSpec::of(Some(Export::new(64, false))).size(),
         [64, 64]
     );
+    assert!(!SnapshotSpec::of(Some(Export::new(64, false))).transparent);
 }
 
 #[test]

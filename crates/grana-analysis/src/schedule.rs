@@ -1,7 +1,65 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::sync::{Condvar, Mutex};
+use std::time::Duration;
 
 pub(crate) const WORKER_LIMIT: usize = 16;
+
+const BUDGET_POLL: Duration = Duration::from_millis(20);
+
+pub(crate) struct Budget {
+    limit: u64,
+    used: Mutex<u64>,
+    released: Condvar,
+}
+
+impl Budget {
+    pub(crate) fn new(limit: u64) -> Self {
+        assert!(limit > 0, "a budget covers at least one byte");
+        Self {
+            limit,
+            used: Mutex::new(0),
+            released: Condvar::new(),
+        }
+    }
+
+    pub(crate) fn acquire(&self, bytes: u64, halted: impl Fn() -> bool) -> bool {
+        assert!(
+            bytes <= self.limit,
+            "a unit of work fits the shared array budget"
+        );
+        let mut used = self
+            .used
+            .lock()
+            .expect("the array budget is never poisoned");
+        while *used + bytes > self.limit {
+            if halted() {
+                return false;
+            }
+            let (guard, _) = self
+                .released
+                .wait_timeout(used, BUDGET_POLL)
+                .expect("the array budget is never poisoned");
+            used = guard;
+        }
+        *used += bytes;
+        true
+    }
+
+    pub(crate) fn release(&self, bytes: u64) {
+        let mut used = self
+            .used
+            .lock()
+            .expect("the array budget is never poisoned");
+        assert!(
+            *used >= bytes,
+            "a released reservation was acquired beforehand"
+        );
+        *used -= bytes;
+        drop(used);
+        self.released.notify_all();
+    }
+}
 
 pub(crate) fn workers(requested: usize) -> usize {
     match requested {
@@ -145,4 +203,48 @@ where
 
 fn halted(cancel: &AtomicBool, stop: &AtomicBool) -> bool {
     cancel.load(Ordering::Relaxed) || stop.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blocks_a_reservation_until_the_budget_is_released() {
+        let budget = Budget::new(8);
+        assert!(budget.acquire(8, || false));
+        assert!(
+            !budget.acquire(8, || true),
+            "a full budget refuses a halted reservation"
+        );
+        budget.release(8);
+        assert!(budget.acquire(8, || true));
+        budget.release(8);
+    }
+
+    #[test]
+    fn shares_one_budget_between_workers() {
+        let budget = Budget::new(16);
+        let live = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let budget = &budget;
+                let live = &live;
+                let peak = &peak;
+                scope.spawn(move || {
+                    assert!(budget.acquire(8, || false));
+                    let current = live.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(current, Ordering::SeqCst);
+                    std::thread::yield_now();
+                    live.fetch_sub(1, Ordering::SeqCst);
+                    budget.release(8);
+                });
+            }
+        });
+        assert!(
+            peak.load(Ordering::SeqCst) <= 2,
+            "the reservations stay within the shared budget"
+        );
+    }
 }

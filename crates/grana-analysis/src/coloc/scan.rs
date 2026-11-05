@@ -10,9 +10,9 @@ use grana_volume::{Intensity, Level, Region, VoxelData};
 use crate::schedule;
 use grana_object::Mask;
 
+use super::grid::Grid;
 use super::{ColocLevels, ColocRead, scale, unit};
 
-const TILE: [u32; 3] = [128, 128, 16];
 const WORKING_BINS: usize = COLOC_BINS_MAX;
 
 pub struct ColocScanConfig {
@@ -54,44 +54,10 @@ pub struct ColocScan {
     permutation_level: usize,
     permutation_stride: u32,
     mask: Option<u64>,
-    grid: TileGrid,
+    grid: Grid,
     scales: [[f32; 2]; 2],
     frames: Vec<ColocFrame>,
     joint: Vec<u64>,
-}
-
-struct TileGrid {
-    ranges: [Range<u32>; 3],
-    counts: [usize; 3],
-}
-
-impl TileGrid {
-    fn new(ranges: [Range<u32>; 3]) -> Self {
-        let counts = [0, 1, 2].map(|axis| {
-            let (start, end) = (ranges[axis].start, ranges[axis].end);
-            ((end - start).div_ceil(TILE[axis])) as usize
-        });
-        Self { ranges, counts }
-    }
-
-    fn count(&self) -> usize {
-        self.counts[0] * self.counts[1] * self.counts[2]
-    }
-
-    fn tile(&self, index: usize) -> [Range<u32>; 3] {
-        assert!(
-            index < self.count(),
-            "the tile index lies on the colocalization grid"
-        );
-        let x = index % self.counts[0];
-        let y = (index / self.counts[0]) % self.counts[1];
-        let z = index / (self.counts[0] * self.counts[1]);
-        [0, 1, 2].map(|axis| {
-            let offset = [x, y, z][axis] as u32 * TILE[axis];
-            let start = self.ranges[axis].start + offset;
-            start..(start + TILE[axis]).min(self.ranges[axis].end)
-        })
-    }
 }
 
 impl ColocScan {
@@ -111,7 +77,7 @@ impl ColocScan {
             permutation_level: levels.permutation(),
             permutation_stride: levels.stride(),
             mask,
-            grid: TileGrid::new(ranges),
+            grid: Grid::new(ranges),
             scales: intensities.map(scale),
             frames: (0..frames).map(|_| ColocFrame::new(WORKING_BINS)).collect(),
             joint: vec![0; WORKING_BINS * WORKING_BINS],
@@ -130,12 +96,13 @@ impl ColocScan {
     }
 
     pub fn tile_count(&self) -> usize {
-        self.grid.count()
+        self.grid.tile_count()
     }
 
     pub fn tile(&self, index: usize) -> [Range<u32>; 3] {
         self.grid.tile(index)
     }
+
     pub fn scan(
         &mut self,
         workers: usize,
@@ -144,7 +111,7 @@ impl ColocScan {
         mask: &(dyn Fn(u32) -> Result<Option<Mask>, String> + Sync),
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<bool, String> {
-        let tiles = self.grid.count();
+        let tiles = self.grid.tile_count();
         let total = self.frames.len() * tiles;
         let pair = self.pair;
         let scales = self.scales;

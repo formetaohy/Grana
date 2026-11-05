@@ -652,14 +652,14 @@ impl SnapshotSpec {
     pub const MAX: u32 = 16384;
 
     pub fn of(export: Option<Export>) -> Self {
-        let width = match export {
-            Some(export) if export.width >= Self::MIN => export.width,
-            _ => Self::WIDTH,
+        let (width, transparent) = match export {
+            Some(export) if export.width >= Self::MIN => (export.width, export.transparent),
+            _ => (Self::WIDTH, false),
         };
         Self {
             width,
             height: (width * 5 / 8).max(Self::MIN),
-            transparent: false,
+            transparent,
         }
     }
 

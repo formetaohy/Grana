@@ -71,6 +71,38 @@ impl Distance {
         self.margin
     }
 
+    pub(super) fn bound(&self, core: &[std::ops::Range<u32>; 3]) -> u32 {
+        let scale = i64::from(SCALE);
+        let mut low = [0usize; 3];
+        let mut high = [0usize; 3];
+        for axis in 0..3 {
+            assert!(
+                core[axis].start < core[axis].end,
+                "a bounded tile covers a non empty range"
+            );
+            let first = i64::from(core[axis].start) - self.origin[axis];
+            let last = i64::from(core[axis].end) - 1 - self.origin[axis];
+            let span = self.dims[axis] as i64 * scale;
+            if last < 0 || first >= span {
+                return 0;
+            }
+            low[axis] = (first.max(0) / scale) as usize;
+            high[axis] = (last.min(span - 1) / scale) as usize + 1;
+        }
+        let padded = [self.dims[0] + 2, self.dims[1] + 2, self.dims[2] + 2];
+        let mut peak = 0.0f32;
+        for z in low[2]..high[2] {
+            for y in low[1]..high[1] {
+                for x in low[0]..high[0] {
+                    let index = (x + 1) + padded[0] * ((y + 1) + padded[1] * (z + 1));
+                    peak = peak.max(self.values[index]);
+                }
+            }
+        }
+        let fine = f64::from(peak).sqrt() * f64::from(SCALE) + self.margin;
+        fine.ceil() as u32
+    }
+
     pub(super) fn at(&self, voxel: [i64; 3]) -> u32 {
         let mut cell = [0usize; 3];
         for axis in 0..3 {

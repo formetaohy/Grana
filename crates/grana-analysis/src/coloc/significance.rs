@@ -7,9 +7,9 @@ use grana_volume::{Intensity, Level, Pyramid, Region};
 use crate::schedule;
 use grana_object::Mask;
 
+use super::grid::Grid;
 use super::{ColocLevels, ColocRead, scale, unit};
 
-const TILE: [u32; 3] = [128, 128, 16];
 const SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 const EPSILON: f64 = 1.0e-12;
 const MINIMUM: u64 = 3;
@@ -21,34 +21,14 @@ struct Frame {
 }
 
 #[derive(Clone)]
-struct Grid {
-    ranges: [Range<u32>; 3],
-    tiles: [usize; 3],
+struct Sampling {
+    grid: Grid,
     dims: [u32; 3],
     block: [u32; 3],
     stride: u32,
 }
 
-impl Grid {
-    fn tile_count(&self) -> usize {
-        self.tiles[0] * self.tiles[1] * self.tiles[2]
-    }
-
-    fn tile(&self, index: usize) -> [Range<u32>; 3] {
-        assert!(
-            index < self.tile_count(),
-            "the tile index lies on the colocalization grid"
-        );
-        let x = index % self.tiles[0];
-        let y = (index / self.tiles[0]) % self.tiles[1];
-        let z = index / (self.tiles[0] * self.tiles[1]);
-        [0, 1, 2].map(|axis| {
-            let offset = [x, y, z][axis] as u32 * TILE[axis];
-            let start = self.ranges[axis].start + offset;
-            start..(start + TILE[axis]).min(self.ranges[axis].end)
-        })
-    }
-
+impl Sampling {
     fn voxels(&self) -> usize {
         self.dims.iter().map(|dim| *dim as usize).product()
     }
@@ -66,7 +46,7 @@ pub struct ColocPermutation {
     level: usize,
     stride: u32,
     settings: ColocSettings,
-    grid: Grid,
+    sampling: Sampling,
     scales: [[f32; 2]; 2],
     frames: Vec<Frame>,
     loaded: Vec<bool>,
@@ -89,7 +69,6 @@ impl ColocPermutation {
         let stride = levels.stride();
         let lengths = [0, 1, 2].map(|axis| ranges[axis].end - ranges[axis].start);
         let dims = lengths.map(|length| length.div_ceil(stride));
-        let tiles = [0, 1, 2].map(|axis| lengths[axis].div_ceil(TILE[axis]) as usize);
         let block = block_size(settings.block(), info, pyramid.level(0), stride, dims);
         let slots = levels.frames().len();
         Self {
@@ -97,9 +76,8 @@ impl ColocPermutation {
             level,
             stride,
             settings,
-            grid: Grid {
-                ranges,
-                tiles,
+            sampling: Sampling {
+                grid: Grid::new(ranges),
                 dims,
                 block,
                 stride,
@@ -117,11 +95,11 @@ impl ColocPermutation {
     }
 
     pub fn tile_count(&self) -> usize {
-        self.grid.tile_count()
+        self.sampling.grid.tile_count()
     }
 
     pub fn tile(&self, index: usize) -> [Range<u32>; 3] {
-        self.grid.tile(index)
+        self.sampling.grid.tile(index)
     }
 
     pub fn load(
@@ -138,7 +116,7 @@ impl ColocPermutation {
             self.frames.len(),
             "the permutation samples one frame per slot"
         );
-        let grid = &self.grid;
+        let sampling = &self.sampling;
         let pair = self.pair;
         let scales = self.scales;
         let (frames, loaded) = (&mut self.frames, &mut self.loaded);
@@ -153,12 +131,12 @@ impl ColocPermutation {
             |(), slot| {
                 let mask = mask(times[slot])?;
                 let mut frame = Frame {
-                    a: vec![0.0; grid.voxels()],
-                    b: vec![0.0; grid.voxels()],
-                    included: Vec::with_capacity(grid.voxels()),
+                    a: vec![0.0; sampling.voxels()],
+                    b: vec![0.0; sampling.voxels()],
+                    included: Vec::with_capacity(sampling.voxels()),
                 };
                 sample(
-                    grid,
+                    sampling,
                     pair,
                     scales,
                     mask.as_ref(),
@@ -181,7 +159,7 @@ impl ColocPermutation {
     }
 
     pub fn sampled_voxels(&self) -> u64 {
-        self.grid.voxels() as u64
+        self.sampling.voxels() as u64
     }
 
     pub fn sampled_frames(&self) -> u32 {
@@ -189,7 +167,7 @@ impl ColocPermutation {
     }
 
     pub fn blocks(&self) -> u64 {
-        self.grid.blocks() as u64 * self.frames.len() as u64
+        self.sampling.blocks() as u64 * self.frames.len() as u64
     }
 
     pub fn randomizations(&self) -> u32 {
@@ -209,8 +187,8 @@ impl ColocPermutation {
         let observed = observed_pearson(&self.frames)?;
         let randomizations = self.randomizations();
         let frames = &self.frames;
-        let dims = self.grid.dims;
-        let block = self.grid.block;
+        let dims = self.sampling.dims;
+        let block = self.sampling.block;
         let base = seed(self.pair, self.level, self.stride);
         let mut count = 0u64;
         let completed = schedule::ordered(
@@ -220,7 +198,7 @@ impl ColocPermutation {
                 cancel,
                 progress,
             },
-            || TestWorker::new(self.grid.blocks(), self.grid.voxels()),
+            || TestWorker::new(self.sampling.blocks(), self.sampling.voxels()),
             |worker, index| {
                 let randomization = u32::try_from(index)
                     .expect("a colocalization randomization fits the u32 range");
@@ -250,7 +228,7 @@ impl ColocPermutation {
 }
 
 fn sample(
-    grid: &Grid,
+    sampling: &Sampling,
     pair: ColocPair,
     scales: [[f32; 2]; 2],
     mask: Option<&Mask>,
@@ -258,9 +236,9 @@ fn sample(
     time: u32,
     frame: &mut Frame,
 ) -> Result<(), String> {
-    let stride = grid.stride as usize;
-    for index in 0..grid.tile_count() {
-        let tile = grid.tile(index);
+    let stride = sampling.stride as usize;
+    for index in 0..sampling.grid.tile_count() {
+        let tile = sampling.grid.tile(index);
         let a = read(time, pair.a(), &tile)?;
         let b = read(time, pair.b(), &tile)?;
         let tile_dims = [0, 1, 2].map(|axis| (tile[axis].end - tile[axis].start) as usize);
@@ -272,7 +250,7 @@ fn sample(
         let mut offsets = [0usize; 3];
         let mut starts = [0usize; 3];
         for axis in 0..3 {
-            let relative = (tile[axis].start - grid.ranges[axis].start) as usize;
+            let relative = (tile[axis].start - sampling.grid.ranges()[axis].start) as usize;
             offsets[axis] = (stride - relative % stride) % stride;
             starts[axis] = (relative + offsets[axis]) / stride;
         }
@@ -292,7 +270,8 @@ fn sample(
                     ];
                     let voxel = x + tile_dims[0] * (y + tile_dims[1] * z);
                     let compact = compact_x
-                        + grid.dims[0] as usize * (compact_y + grid.dims[1] as usize * compact_z);
+                        + sampling.dims[0] as usize
+                            * (compact_y + sampling.dims[1] as usize * compact_z);
                     frame.a[compact] = unit(scales[0], a.value(voxel));
                     frame.b[compact] = unit(scales[1], b.value(voxel));
                     if mask.is_none_or(|mask| mask.contains_cell(global)) {

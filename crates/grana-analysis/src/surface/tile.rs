@@ -28,7 +28,6 @@ pub(super) struct TileOutput {
     pub(super) contacts: Vec<Contact>,
     pub(super) join: [Option<Face>; 3],
     pub(super) cache: [Option<Face>; 3],
-    pub(super) saturated: bool,
 }
 
 pub(super) enum TileResult {
@@ -119,7 +118,7 @@ impl<'a> Tile<'a> {
     ) -> TileResult {
         let pass = self.pass;
         let core = pass.plan.core_range(index);
-        let array = pass.plan.array_range(index, pass.pad);
+        let array = pass.plan.array_range(index, pass.pad(index));
         self.array = array.clone();
         self.dims = dims_of(&array);
         self.start = [
@@ -143,7 +142,6 @@ impl<'a> Tile<'a> {
         self.indices.clear();
         self.triangles.clear();
         self.contacts.clear();
-        let mut saturated = false;
         if occupied {
             let values = pass.plan.array_range(index, pass.values);
             self.values = values.clone();
@@ -175,7 +173,7 @@ impl<'a> Tile<'a> {
             self.field.clear();
             self.field.resize(value_count, 0.0);
             self.field(&core);
-            saturated = self.watershed();
+            self.watershed();
             self.record_necks();
             if super::halted(cancel, stop) {
                 return TileResult::Cancelled;
@@ -232,7 +230,6 @@ impl<'a> Tile<'a> {
             contacts: std::mem::take(&mut self.contacts),
             join,
             cache,
-            saturated,
         };
         let bytes = output_bytes(&output);
         if bytes > super::TILE_FRAGMENT_LIMIT {

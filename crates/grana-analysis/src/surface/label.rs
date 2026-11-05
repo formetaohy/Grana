@@ -4,9 +4,9 @@ use std::ops::Range;
 use super::{EMPTY, Measure, Tile, find, strides_of};
 
 impl Tile<'_> {
-    pub(super) fn watershed(&mut self) -> bool {
+    pub(super) fn watershed(&mut self) {
         let (low, high) = self.space;
-        let saturated = self.fill_distance(low, high);
+        self.fill_distance(low, high);
         let dims = self.dims;
         let strides = strides_of(dims);
         self.order.clear();
@@ -58,7 +58,6 @@ impl Tile<'_> {
                 self.labels[index] = self.create_node(0);
             }
         }
-        saturated
     }
 
     fn order_descending(&mut self) {
@@ -103,7 +102,7 @@ impl Tile<'_> {
         );
     }
 
-    fn fill_distance(&mut self, low: [usize; 3], high: [usize; 3]) -> bool {
+    fn fill_distance(&mut self, low: [usize; 3], high: [usize; 3]) {
         let plan = self.pass.plan;
         let dims = self.dims;
         let strides = strides_of(dims);
@@ -142,36 +141,26 @@ impl Tile<'_> {
                 }
             }
         }
-        match self.pass.distance {
-            Some(distance) => {
-                for z in low[2]..high[2] {
-                    for y in low[1]..high[1] {
-                        let base = dims[0] * (y + dims[1] * z);
-                        for x in low[0]..high[0] {
-                            let index = base + x;
-                            if !self.mask[index] || self.chamfer[index] < cap {
-                                continue;
-                            }
-                            let voxel = [
-                                self.start[0] + x as i64,
-                                self.start[1] + y as i64,
-                                self.start[2] + z as i64,
-                            ];
-                            let value = distance.at(voxel);
-                            if value > self.chamfer[index] {
-                                self.chamfer[index] = value;
-                            }
-                        }
+        let distance = self.pass.distance;
+        for z in low[2]..high[2] {
+            for y in low[1]..high[1] {
+                let base = dims[0] * (y + dims[1] * z);
+                for x in low[0]..high[0] {
+                    let index = base + x;
+                    if !self.mask[index] || self.chamfer[index] < cap {
+                        continue;
+                    }
+                    let voxel = [
+                        self.start[0] + x as i64,
+                        self.start[1] + y as i64,
+                        self.start[2] + z as i64,
+                    ];
+                    let value = distance.at(voxel);
+                    if value > self.chamfer[index] {
+                        self.chamfer[index] = value;
                     }
                 }
-                false
             }
-            None => (low[2]..high[2]).any(|z| {
-                (low[1]..high[1]).any(|y| {
-                    let base = dims[0] * (y + dims[1] * z);
-                    (low[0]..high[0]).any(|x| self.mask[base + x] && self.chamfer[base + x] == cap)
-                })
-            }),
         }
     }
 

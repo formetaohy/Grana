@@ -279,7 +279,7 @@ impl Renderer {
         if target.samples < samples {
             target.samples += 1;
             info.samples = target.samples;
-            let offset = sample::offset(target.samples - 1, size);
+            let offset = sample::offset(target.samples - 1, [volume_width, volume_height]);
             frame_data.jitter = [offset.x, offset.y, (target.samples - 1) as f32, 0.0];
             let cut_offset = sample::offset(target.samples - 1, cut_size);
             section_data.jitter = [cut_offset.x, cut_offset.y, 0.0, 0.0];
