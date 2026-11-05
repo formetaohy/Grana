@@ -626,6 +626,32 @@ impl PackedMesh {
         );
         self.dequantize(group, vertex as u32)
     }
+
+    pub fn normal(&self, object: usize, vertex: usize) -> [f32; 3] {
+        let group = self
+            .groups
+            .get(object)
+            .expect("the normal names a packed object");
+        assert!(
+            vertex < group.vertex_count as usize,
+            "the normal lies inside its packed object"
+        );
+        let packed = self.vertices[group.first_vertex as usize + vertex].normal;
+        let [mut x, mut y] = packed.map(|value| f32::from(value) / UNIT * 2.0 - 1.0);
+        let z = 1.0 - x.abs() - y.abs();
+        if z < 0.0 {
+            let across = (1.0 - y.abs()) * sign(x);
+            let down = (1.0 - x.abs()) * sign(y);
+            x = across;
+            y = down;
+        }
+        let normal = Vec3::new(x, y, z).normalize_or_zero();
+        if normal == Vec3::ZERO {
+            [0.0, 0.0, 1.0]
+        } else {
+            normal.to_array()
+        }
+    }
 }
 
 fn quantize(value: f32, min: f32, scale: f32) -> u16 {

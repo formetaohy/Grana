@@ -318,6 +318,7 @@ fn object(
                 let open = ui.popup_open(menu_key);
                 let mut rename = false;
                 let mut duplicate = false;
+                let mut export = false;
                 let mut merge = None;
                 let mut remove = false;
                 let mut reorder = None;
@@ -340,6 +341,17 @@ fn object(
                         None,
                     ) {
                         duplicate = true;
+                    }
+                    if kind != ObjectKind::Spots
+                        && grana_ui::popover::action_row(
+                            ui,
+                            "export.mesh",
+                            Icon::Export,
+                            "Export mesh",
+                            None,
+                        )
+                    {
+                        export = true;
                     }
                     if !merges.is_empty() {
                         grana_ui::popover::separator(ui);
@@ -390,6 +402,10 @@ fn object(
                 if duplicate {
                     ui.close_popup();
                     commands.push(Command::DuplicateObject(id));
+                }
+                if export {
+                    ui.close_popup();
+                    commands.push(Command::ExportMesh(id));
                 }
                 if let Some(target) = merge {
                     ui.close_popup();

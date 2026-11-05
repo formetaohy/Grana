@@ -79,4 +79,63 @@ impl Session {
             }
         }
     }
+
+    pub(super) fn export_mesh(&mut self, set: ObjectSetId) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(object) = scene.objects.get(set) else {
+            return;
+        };
+        let time = scene.time();
+        let geometry = match object.frame(time).map(ObjectFrame::geometry) {
+            Some(Ok(Some(geometry))) => geometry,
+            Some(Ok(None)) => {
+                self.message = Some(Message::error(format!(
+                    "{} holds no mesh at frame {time}",
+                    object.name()
+                )));
+                return;
+            }
+            Some(Err(error)) => {
+                self.message = Some(Message::error(error.to_string()));
+                return;
+            }
+            None => return,
+        };
+        let file_name = format!(
+            "{}-{}-t{:04}.obj",
+            crate::slug(scene.dataset.name()),
+            object.key().as_str(),
+            time
+        );
+        let title = format!("Export {} mesh", object.name());
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(title)
+            .set_file_name(file_name)
+            .add_filter("Wavefront OBJ", &["obj"])
+            .save_file()
+        else {
+            return;
+        };
+        let written = std::fs::File::create(&path)
+            .map_err(grana_obj::Error::from)
+            .and_then(|file| {
+                grana_obj::write(
+                    std::io::BufWriter::new(file),
+                    &geometry,
+                    object.key().as_str(),
+                )
+            });
+        match written {
+            Ok(()) => self.message = None,
+            Err(error) => {
+                self.message = Some(Message::error(format!(
+                    "failed to export {} to {}: {error}",
+                    object.name(),
+                    path.display()
+                )));
+            }
+        }
+    }
 }

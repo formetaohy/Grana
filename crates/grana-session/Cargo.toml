@@ -18,6 +18,7 @@ grana-geometry = { workspace = true }
 grana-image = { workspace = true }
 grana-measure = { workspace = true }
 grana-object = { workspace = true }
+grana-obj = { workspace = true }
 grana-pipeline = { workspace = true }
 grana-project = { workspace = true }
 grana-protocol = { workspace = true }

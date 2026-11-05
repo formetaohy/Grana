@@ -217,6 +217,7 @@ pub enum Command {
     },
     ExportColoc,
     ExportMeasure,
+    ExportMesh(ObjectSetId),
     CaptureProtocol,
     ApplyProtocol,
     LoadProtocol,

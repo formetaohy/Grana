@@ -1031,6 +1031,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-obj"
+version = "0.1.1"
+dependencies = [
+ "grana-geometry",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "grana-object"
 version = "0.1.1"
 dependencies = [
@@ -1146,6 +1154,7 @@ dependencies = [
  "grana-geometry",
  "grana-image",
  "grana-measure",
+ "grana-obj",
  "grana-object",
  "grana-pipeline",
  "grana-project",

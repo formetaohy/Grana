@@ -406,6 +406,7 @@ impl Session {
             Command::SetDriftOffset { time, offset } => self.set_drift_offset(time, offset),
             Command::ExportColoc => self.export_coloc(),
             Command::ExportMeasure => self.export_measure(),
+            Command::ExportMesh(set) => self.export_mesh(set),
             Command::CaptureProtocol => self.capture_protocol(),
             Command::ApplyProtocol => self.apply_protocol(),
             Command::LoadProtocol => self.load_protocol(),

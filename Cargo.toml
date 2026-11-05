@@ -55,6 +55,7 @@ grana-tiff = { version = "0.1.1", path = "crates/grana-tiff" }
 grana-czi = { version = "0.1.1", path = "crates/grana-czi" }
 grana-image = { version = "0.1.1", path = "crates/grana-image" }
 grana-measure = { version = "0.1.1", path = "crates/grana-measure" }
+grana-obj = { version = "0.1.1", path = "crates/grana-obj" }
 grana-session = { version = "0.1.1", path = "crates/grana-session" }
 grana-video = { version = "0.1.1", path = "crates/grana-video" }
 
