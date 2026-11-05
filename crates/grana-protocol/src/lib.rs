@@ -12,10 +12,10 @@ use thiserror::Error;
 
 pub use spec::{
     AnchorSpec, AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec,
-    ColorSpec, CurationSpec, EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec,
-    MeasureSpec, MetricSpec, NodeSpec, PartSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec,
-    SectionSpec, SetSpec, ShadingSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec, TimelineSpec,
-    TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    ColorSpec, CurationSpec, DriftSpec, EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec,
+    LassoSpec, MeasureSpec, MetricSpec, NodeSpec, PartSpec, RegionSpec, RelationSpec, RemovalSpec,
+    RenderSpec, SectionSpec, SetSpec, ShadingSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec,
+    TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -29,6 +29,8 @@ pub struct Protocol {
     render: Option<RenderSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     channels: Vec<ChannelSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    drift: Option<DriftSpec>,
     sets: Vec<SetSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     relations: Vec<RelationSpec>,
@@ -63,6 +65,10 @@ impl Protocol {
 
     pub fn channels(&self) -> &[ChannelSpec] {
         &self.channels
+    }
+
+    pub fn drift(&self) -> Option<&DriftSpec> {
+        self.drift.as_ref()
     }
 
     pub fn sets(&self) -> &[SetSpec] {
@@ -198,6 +204,12 @@ impl Protocol {
             Some(region) => format!("{sets} · region {:.0}%", region.percent()),
             None => sets,
         };
+        if let Some(drift) = &self.drift {
+            summary.push_str(&format!(
+                " · aligned on {} to frame {}",
+                drift.channel, drift.reference
+            ));
+        }
         for relation in &self.relations {
             summary.push_str(&format!(
                 " · relates {} to {}",

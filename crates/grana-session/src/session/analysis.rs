@@ -8,7 +8,7 @@ impl Session {
             Tracks(TrackSet),
             Relation(u32, grana_object::RelationFrame),
             Coloc(Box<grana_measure::ColocSeries>, Region),
-            Drift(Vec<[i32; 3]>),
+            Drift(grana_scene::Drift),
             Done,
             Failed(String),
         }
@@ -33,8 +33,8 @@ impl Session {
                     Poll::Event(Event::Coloc { series, region }) => {
                         updates.push((index, job, Update::Coloc(series, region)));
                     }
-                    Poll::Event(Event::Drift(offsets)) => {
-                        updates.push((index, job, Update::Drift(offsets)));
+                    Poll::Event(Event::Drift(drift)) => {
+                        updates.push((index, job, Update::Drift(drift)));
                     }
                     Poll::Event(Event::Done) => {
                         updates.push((index, job, Update::Done));
@@ -106,9 +106,9 @@ impl Session {
                         }
                     }
                 }
-                Update::Drift(offsets) => {
+                Update::Drift(drift) => {
                     if let (Job::Drift, Some(scene)) = (job, self.scene.as_mut()) {
-                        scene.set_drift(grana_scene::Drift::new(offsets));
+                        scene.set_drift(drift);
                     }
                     self.realign();
                 }
@@ -760,6 +760,15 @@ impl Session {
     }
 
     pub(super) fn start_drift(&mut self) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let reference = scene.drift().reference();
+        let channel = scene.selected;
+        self.align_drift(channel, reference);
+    }
+
+    pub(super) fn align_drift(&mut self, channel: usize, reference: u32) {
         if self.loading.is_some()
             || self
                 .analysis
@@ -778,7 +787,18 @@ impl Session {
             self.message = Some(Message::error("the dataset holds one frame to align"));
             return;
         }
-        let channel = scene.selected;
+        if channel >= scene.dataset.channels().len() {
+            self.message = Some(Message::error(
+                "the protocol aligns a channel the dataset does not hold",
+            ));
+            return;
+        }
+        if reference >= scene.frame_count() {
+            self.message = Some(Message::error(
+                "the protocol aligns to a frame the dataset does not hold",
+            ));
+            return;
+        }
         if scene.dataset.channels()[channel].intensity().span() <= 0.0 {
             self.message = Some(Message::error(
                 "the selected channel has no intensity range to align",
@@ -790,8 +810,36 @@ impl Session {
         self.analysis.push(crate::drift(
             Job::Drift,
             source,
-            grana_pipeline::DriftRequest::new(channel),
+            grana_pipeline::DriftRequest::new(channel, reference),
         ));
+    }
+
+    pub(super) fn set_drift_reference(&mut self, reference: u32) {
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        let drift = scene.drift().clone();
+        if drift.is_empty() || reference >= drift.frames() || reference == drift.reference() {
+            return;
+        }
+        if scene.set_drift(drift.referenced_at(reference)) {
+            self.realign();
+        }
+    }
+
+    pub(super) fn set_drift_offset(&mut self, time: u32, offset: [i32; 3]) {
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        let drift = scene.drift().clone();
+        if drift.is_empty() || time >= drift.frames() || time == drift.reference() {
+            return;
+        }
+        let offset =
+            offset.map(|value| value.clamp(-grana_scene::Drift::LIMIT, grana_scene::Drift::LIMIT));
+        if scene.set_drift(drift.with_offset(time, offset)) {
+            self.realign();
+        }
     }
 
     pub(super) fn clear_drift(&mut self) {

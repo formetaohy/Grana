@@ -209,6 +209,11 @@ pub enum Command {
     ComputeDrift,
     CancelDrift,
     ClearDrift,
+    SetDriftReference(u32),
+    SetDriftOffset {
+        time: u32,
+        offset: [i32; 3],
+    },
     ExportColoc,
     ExportMeasure,
     CaptureProtocol,
@@ -530,7 +535,9 @@ impl Command {
             Self::SetColocSettings(_) => Edit::new(Action::ColocSettings),
             Self::RemoveColocResult(_) => Edit::new(Action::ColocResult),
             Self::ComputeColoc => Edit::new(Action::ComputeColoc),
-            Self::ClearDrift => Edit::new(Action::Drift),
+            Self::ClearDrift | Self::SetDriftReference(_) | Self::SetDriftOffset { .. } => {
+                Edit::new(Action::Drift)
+            }
             Self::ApplyProtocol => Edit::new(Action::ApplyProtocol),
             Self::ClearKeyframes | Self::DeleteKeyframe(_) => Edit::new(Action::Keyframe),
             Self::SetTimelineFps(_) => Edit::new(Action::TimelineFps),

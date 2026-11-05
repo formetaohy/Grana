@@ -186,6 +186,22 @@ fn drift(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
                         ),
                     );
                     widget::caption(ui, "Detect again to move the objects onto the frames");
+                    let frames = drift.frames();
+                    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
+                        widget::field_label(ui, "Reference");
+                        if let Some(value) = widget::drag_value(
+                            ui,
+                            "drift.reference",
+                            drift.reference() as f32,
+                            0.2,
+                            0,
+                        ) {
+                            commands.push(Command::SetDriftReference(
+                                value.round().clamp(0.0, (frames - 1) as f32) as u32,
+                            ));
+                        }
+                    });
+                    frame_table(ui, drift, state.scene.time(), commands);
                     if widget::button(ui, "drift.clear", "Clear", Role::Danger) {
                         commands.push(Command::ClearDrift);
                     }
@@ -194,6 +210,60 @@ fn drift(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         }
     });
     ui.store_open("drift", next);
+}
+
+fn frame_table(ui: &mut Ui, drift: &grana_scene::Drift, time: u32, commands: &mut Vec<Command>) {
+    ui.scroll_axis(
+        ui.id("drift.frames"),
+        grana_ui::Axis::Column,
+        grana_ui::Length::Fixed(132.0),
+        None,
+        |ui| {
+            for frame in 0..drift.frames() {
+                let offset = drift.offset(frame);
+                let mut label = format!("Frame {frame}");
+                if frame == time {
+                    label.push_str(" ·");
+                }
+                if frame == drift.reference() {
+                    label.push_str(" ref");
+                }
+                widget::labelled(
+                    ui,
+                    &label,
+                    &format!("{:+} {:+} {:+}", offset[0], offset[1], offset[2]),
+                );
+            }
+        },
+    );
+    if time == drift.reference() {
+        widget::weak(
+            ui,
+            "The reference frame holds still. Pick another reference to move it.",
+        );
+        return;
+    }
+    let mut offset = drift.offset(time);
+    let mut changed = false;
+    for (axis, name) in ["X", "Y", "Z"].into_iter().enumerate() {
+        ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
+            widget::field_label(ui, name);
+            if let Some(value) = widget::drag_value(
+                ui,
+                &format!("drift.offset.{axis}"),
+                offset[axis] as f32,
+                1.0,
+                0,
+            ) {
+                offset[axis] = value.round() as i32;
+                changed = true;
+            }
+            widget::caption(ui, "voxels");
+        });
+    }
+    if changed {
+        commands.push(Command::SetDriftOffset { time, offset });
+    }
 }
 
 fn channels(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {

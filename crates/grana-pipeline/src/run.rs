@@ -599,11 +599,12 @@ fn full_region(
 
 pub struct DriftRequest {
     channel: usize,
+    reference: u32,
 }
 
 impl DriftRequest {
-    pub fn new(channel: usize) -> Self {
-        Self { channel }
+    pub fn new(channel: usize, reference: u32) -> Self {
+        Self { channel, reference }
     }
 }
 
@@ -613,11 +614,16 @@ pub fn drift(
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
-    let DriftRequest { channel } = request;
+    let DriftRequest { channel, reference } = request;
     let pyramid = reader.pyramid();
     let frames = pyramid.frame_count();
     if frames < 2 {
         return Err("the dataset holds one frame to align".to_string());
+    }
+    if reference >= frames {
+        return Err(format!(
+            "the dataset holds {frames} frames but frame {reference} was requested as the reference"
+        ));
     }
     if channel >= pyramid.channel_count() {
         return Err(format!(
@@ -642,27 +648,30 @@ pub fn drift(
         done: 0,
         total,
     });
-    let reference = grana_analysis::drift_window(
+    let anchor = grana_analysis::drift_window(
         &reader
-            .read_region(0, level, channel, &ranges, [0; 3])
+            .read_region(reference, level, channel, &ranges, [0; 3])
             .map_err(String::from)?,
         &ranges,
     );
     let ratio = 2i32.pow(level as u32);
     let mut offsets = Vec::with_capacity(total);
-    offsets.push([0; 3]);
-    for time in 1..frames {
+    for time in 0..frames {
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let moving = grana_analysis::drift_window(
-            &reader
-                .read_region(time, level, channel, &ranges, [0; 3])
-                .map_err(String::from)?,
-            &ranges,
-        );
-        let shift = grana_analysis::drift_shift(&reference, &moving, dims);
-        offsets.push(shift.map(|value| value * ratio));
+        let offset = if time == reference {
+            [0; 3]
+        } else {
+            let moving = grana_analysis::drift_window(
+                &reader
+                    .read_region(time, level, channel, &ranges, [0; 3])
+                    .map_err(String::from)?,
+                &ranges,
+            );
+            grana_analysis::drift_shift(&anchor, &moving, dims).map(|value| value * ratio)
+        };
+        offsets.push(offset);
         sink(Event::Progress {
             time,
             done: time as usize + 1,
@@ -672,7 +681,7 @@ pub fn drift(
     if cancel.load(Ordering::Relaxed) {
         return Ok(());
     }
-    sink(Event::Drift(offsets));
+    sink(Event::Drift(Drift::new(channel, reference, offsets)));
     sink(Event::Done);
     Ok(())
 }

@@ -1058,3 +1058,56 @@ fn replays_a_filtered_set_that_reads_a_relation() {
         "the kept spot sits inside its nucleus: {inner}"
     );
 }
+
+const DRIFT_PROTOCOL: &str = r#"
+{
+  "drift": {"channel": "Cells"},
+  "sets": [
+    {
+      "name": "Puncta",
+
+      "color": [0.3, 0.8, 1.0],
+      "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05}
+    }
+  ],
+  "relations": [{"source": "Puncta", "target": "Puncta", "shift": 1}]
+}
+"#;
+
+#[test]
+fn aligns_the_frames_of_every_batch_dataset() {
+    let temp = TempDir::new("grana-batch-drift");
+    let root = temp.path().join("datasets");
+    write_dataset(&root.join("alpha.zarr"), "Cells", "Signal");
+    let output = temp.path().join("out");
+    let datasets = discover(&root).expect("the folder lists its datasets");
+    let protocol = Protocol::from_json(DRIFT_PROTOCOL).expect("the protocol is valid");
+    assert_eq!(
+        run(&protocol, &datasets, &output, 1, false),
+        [Status::Ok],
+        "the drift replays"
+    );
+    let objects = read(&output.join("alpha").join("Puncta-objects.csv"));
+    let mut lines = objects.lines();
+    let header = lines.next().expect("the statistics carry a header");
+    let column = |name: &str| {
+        header
+            .split(',')
+            .position(|key| key == name)
+            .unwrap_or_else(|| panic!("the statistics carry {name}: {header}"))
+    };
+    let across = column("x_um");
+    let distance = column("puncta_t1_distance_um");
+    let rows = lines
+        .map(|line| line.split(',').collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 2, "both frames report their spot: {objects}");
+    assert_eq!(
+        rows[0][across], rows[1][across],
+        "the aligned frames put their spot on one column: {objects}"
+    );
+    assert_eq!(
+        rows[0][distance], "0.000",
+        "the aligned neighbours touch in time: {objects}"
+    );
+}

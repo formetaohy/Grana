@@ -292,6 +292,10 @@ impl MaskWorker {
             for y in 0..core_dims[1] {
                 let base = dims[0] * (origin[1] + y + dims[1] * (origin[2] + z)) + origin[0];
                 let row = rows * (y + core_dims[1] * z);
+                let mut field_row = field.row(
+                    core[1].start as i64 + y as i64,
+                    core[2].start as i64 + z as i64,
+                );
                 for x in 0..core_dims[0] {
                     let voxel = [
                         core[0].start as i64 + x as i64,
@@ -304,7 +308,7 @@ impl MaskWorker {
                         }
                         admitted[row + x / 64] |= 1 << (x % 64);
                     }
-                    let contrast = field.contrast(voxel, raw[base + x]);
+                    let contrast = field_row.contrast(voxel[0], raw[base + x]);
                     if contrast >= threshold {
                         foreground[row + x / 64] |= 1 << (x % 64);
                         let block = [x / SIDE, y / SIDE, z / SIDE];

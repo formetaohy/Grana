@@ -96,7 +96,10 @@ impl SceneState {
         self.channels.len() == channel_count
             && self.selected < channel_count
             && self.time < frame_count
-            && (self.drift.is_empty() || self.drift.frames() == frame_count)
+            && (self.drift.is_empty()
+                || (self.drift.frames() == frame_count
+                    && self.drift.channel() < channel_count
+                    && self.drift.reference() < frame_count))
             && self
                 .sets
                 .iter()

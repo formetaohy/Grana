@@ -181,6 +181,24 @@ pub struct RegionSpec {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct DriftSpec {
+    pub channel: String,
+    #[serde(default, skip_serializing_if = "is_u32_zero")]
+    pub reference: u32,
+}
+
+impl DriftSpec {
+    pub fn channel(&self) -> &str {
+        &self.channel
+    }
+
+    pub fn reference(&self) -> u32 {
+        self.reference
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetricSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
@@ -1754,6 +1772,10 @@ fn is_false(value: &bool) -> bool {
 }
 
 fn is_zero(value: &i32) -> bool {
+    *value == 0
+}
+
+fn is_u32_zero(value: &u32) -> bool {
     *value == 0
 }
 

@@ -90,6 +90,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             return Err("cancelled".to_string());
         }
         match step {
+            Step::Drift { channel, reference } => run.drift(*channel, *reference)?,
             Step::Detect { set, mask } => run.detect(*set, *mask)?,
             Step::Filter { set, .. } => run.refilter(*set)?,
             Step::Copy { set, source } => run.copy(*set, *source)?,
@@ -261,6 +262,39 @@ struct Run<'a, 'b> {
 }
 
 impl Run<'_, '_> {
+    fn drift(&mut self, channel: usize, reference: u32) -> Result<(), String> {
+        let task = self.task;
+        let _ = task.events.send(Event::Step {
+            index: task.index,
+            label: format!("aligning the frames of {}", self.reader.name()),
+        });
+        let progress = &self.progress;
+        let mut drift = None;
+        let mut sink = |event: RunEvent| match event {
+            RunEvent::Drift(found) => drift = Some(found),
+            RunEvent::Progress { done, total, .. } if progress.hold() => {
+                let _ = progress.events.send(Event::Progress {
+                    index: progress.index,
+                    done,
+                    total,
+                });
+            }
+            _ => {}
+        };
+        run::drift(
+            self.reader,
+            run::DriftRequest::new(channel, reference),
+            task.cancel,
+            &mut sink,
+        )?;
+        if task.cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".to_string());
+        }
+        let drift = drift.ok_or_else(|| "the drift correction produced no offsets".to_string())?;
+        self.scene.set_drift(drift);
+        Ok(())
+    }
+
     fn detect(&mut self, id: ObjectSetId, mask: Option<ObjectSetId>) -> Result<(), String> {
         let task = self.task;
         self.scene.set_mask(mask);
@@ -311,6 +345,7 @@ impl Run<'_, '_> {
                 channel,
                 region: self.scene.region,
                 roi,
+                drift: self.scene.drift().clone(),
             },
             params,
             seeds,
@@ -520,7 +555,7 @@ impl Run<'_, '_> {
                 roi,
                 mask_id,
                 settings,
-                grana_scene::Drift::default(),
+                self.scene.drift().clone(),
                 task.workers,
             ),
             task.cancel,
@@ -619,6 +654,7 @@ struct Reading<'a> {
     channel: usize,
     region: Region,
     roi: Option<Roi>,
+    drift: grana_scene::Drift,
 }
 
 fn detect(
@@ -656,7 +692,7 @@ fn detect(
             params,
             reading.region,
             reading.roi,
-            grana_scene::Drift::default(),
+            reading.drift,
             task.workers,
             Arc::clone(store),
         )

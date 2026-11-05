@@ -397,6 +397,8 @@ impl Session {
             Command::ComputeDrift => self.start_drift(),
             Command::CancelDrift => self.cancel(Job::Drift),
             Command::ClearDrift => self.clear_drift(),
+            Command::SetDriftReference(reference) => self.set_drift_reference(reference),
+            Command::SetDriftOffset { time, offset } => self.set_drift_offset(time, offset),
             Command::ExportColoc => self.export_coloc(),
             Command::ExportMeasure => self.export_measure(),
             Command::CaptureProtocol => self.capture_protocol(),

@@ -221,3 +221,88 @@ fn corrects_the_drift_between_the_frames() {
         "the table clears"
     );
 }
+
+#[test]
+fn re_references_and_edits_the_alignment() {
+    let mut session = Session::new();
+    session.open_series("drifting cells", series());
+    session.execute(Command::ComputeDrift);
+    settle(&mut session);
+    session.execute(Command::SetDriftReference(1));
+    let drift = session.scene().expect("the series opens").drift().clone();
+    assert_eq!(drift.reference(), 1, "the chosen frame anchors the table");
+    assert_eq!(drift.offset(1), [0; 3], "the reference frame holds still");
+    assert_eq!(
+        drift.offset(0),
+        [-(OFFSET as i32), 0, 0],
+        "the other frames move against the new anchor"
+    );
+
+    let first = brick(&mut session, 0);
+    let reference = brick(&mut session, 1);
+    let side = PADDED_SIDE as usize;
+    for z in 0..EXTENT.z() as usize {
+        for y in 0..EXTENT.y() as usize {
+            for x in OFFSET as usize..EXTENT.x() as usize {
+                let slot = (x + 1) + side * ((y + 1) + side * (z + 1));
+                assert_eq!(
+                    first[slot], reference[slot],
+                    "the first frame aligns onto the reference at ({x}, {y}, {z})"
+                );
+            }
+        }
+    }
+
+    session.execute(Command::SetDriftOffset {
+        time: 0,
+        offset: [0; 3],
+    });
+    let drift = session.scene().expect("the series opens").drift();
+    assert_eq!(drift.offset(0), [0; 3], "a frame offset is editable");
+    let unaligned = brick(&mut session, 0);
+    assert!(
+        unaligned != first,
+        "the edited offset reads the frame where it is stored"
+    );
+}
+
+#[test]
+fn replays_the_drift_correction_of_a_protocol() {
+    let mut session = Session::new();
+    session.open_series("drifting cells", series());
+    let set = add_surfaces(&mut session);
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    session.execute(Command::ComputeDrift);
+    settle(&mut session);
+    session.execute(Command::CaptureProtocol);
+
+    session.execute(Command::ClearDrift);
+    assert!(
+        session
+            .scene()
+            .expect("the series opens")
+            .drift()
+            .is_empty(),
+        "the table clears before the replay"
+    );
+    session.execute(Command::ApplyProtocol);
+    settle(&mut session);
+
+    let drift = session.scene().expect("the series opens").drift();
+    assert_eq!(drift.frames(), 2, "the replay aligns every frame");
+    assert_eq!(
+        drift.offset(1),
+        [OFFSET as i32, 0, 0],
+        "the replay estimates the same motion"
+    );
+    assert!(
+        session
+            .scene()
+            .expect("the series opens")
+            .objects
+            .get(set)
+            .is_some_and(|set| set.detected() > 0),
+        "the detection runs after the alignment"
+    );
+}

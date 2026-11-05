@@ -5,8 +5,8 @@ use grana_scene::{
 };
 
 use crate::{
-    ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, FilterSpec,
-    LassoSpec, MeasureSpec, MetricSpec, PartSpec, Protocol, ProtocolError, RegionSpec,
+    ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DriftSpec,
+    FilterSpec, LassoSpec, MeasureSpec, MetricSpec, PartSpec, Protocol, ProtocolError, RegionSpec,
     RelationSpec, RenderSpec, SetSpec, SnapshotSpec, SortSpec, SourceSpec, TrackSpec, TransferSpec,
     ViewSpec, WindowSpec,
 };
@@ -132,6 +132,10 @@ impl Protocol {
             })
         };
         let snapshot = Some(SnapshotSpec::of(view.as_ref().and_then(ViewSpec::export)));
+        let drift = (!scene.drift().is_empty()).then(|| DriftSpec {
+            channel: channels[scene.drift().channel()].clone(),
+            reference: scene.drift().reference(),
+        });
         Protocol {
             region: RegionSpec::of(scene.region, scene.dataset.world_size()),
             render: Some(RenderSpec::of(
@@ -141,6 +145,7 @@ impl Protocol {
                 scene.clip,
             )),
             channels: specs,
+            drift,
             sets,
             relations,
             coloc,

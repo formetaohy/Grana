@@ -138,6 +138,8 @@ impl Encode for SceneState {
 
 impl Encode for Drift {
     fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.u32(self.channel() as u32);
+        writer.u32(self.reference());
         writer.count(self.offsets().len());
         for offset in self.offsets() {
             for value in offset {

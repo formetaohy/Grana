@@ -65,6 +65,15 @@ impl Protocol {
         for spec in &self.channels {
             channel(&names, &spec.name)?;
         }
+        if let Some(drift) = &self.drift {
+            channel(&names, drift.channel())?;
+            if drift.reference() >= scene.frame_count() {
+                return Err(ProtocolError::Invalid(format!(
+                    "the drift correction aligns to frame {}, which the dataset does not hold",
+                    drift.reference()
+                )));
+            }
+        }
         for spec in &self.sets {
             self.validate_source(&spec.source, &names, scene.frame_count())?;
             if let Some(mask) = &spec.mask
@@ -175,6 +184,13 @@ impl Protocol {
             ids: HashMap::new(),
             steps: Vec::new(),
         };
+        builder.scene.set_drift(grana_scene::Drift::default());
+        if let Some(drift) = &self.drift {
+            builder.steps.push(Step::Drift {
+                channel: channel(&names, drift.channel())?,
+                reference: drift.reference(),
+            });
+        }
         let mut sets = Vec::new();
         let mut masks = Vec::new();
         for spec in &self.sets {
@@ -621,6 +637,9 @@ fn track_coloring(spec: &ColorSpec, scene: &Scene) -> Result<Coloring<TrackColor
 
 fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolError> {
     let count = steps.len();
+    let drift = steps
+        .iter()
+        .position(|step| matches!(step, Step::Drift { .. }));
     let mut ready = HashMap::<ObjectSetId, usize>::new();
     let mut base = HashMap::<ObjectSetId, usize>::new();
     for (index, step) in steps.iter().enumerate() {
@@ -636,7 +655,9 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
     let mut merges = HashMap::<ObjectSetId, usize>::new();
     for (index, step) in steps.iter().enumerate() {
         match step {
+            Step::Drift { .. } => {}
             Step::Detect { set, mask } => {
+                dependencies[index].extend(drift);
                 if let Some(mask) = mask {
                     dependencies[index].push(settled(&ready, *mask)?);
                 }
@@ -688,6 +709,7 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
                 dependencies[index].push(settled(&ready, *target)?);
             }
             Step::Coloc { mask, .. } => {
+                dependencies[index].extend(drift);
                 if let Some(mask) = mask {
                     dependencies[index].push(settled(&ready, *mask)?);
                 }

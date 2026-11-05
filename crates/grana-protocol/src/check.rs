@@ -31,6 +31,15 @@ impl Protocol {
         }
         let mut names = Vec::new();
         let mut slugs = Vec::new();
+        if let Some(drift) = &self.drift {
+            validate(&drift.channel, "a channel name")?;
+            if !self.channels.is_empty() && !self.channels.iter().any(|c| c.name == drift.channel) {
+                return Err(ProtocolError::Invalid(format!(
+                    "the drift correction aligns the channel {}, which the protocol does not present",
+                    drift.channel
+                )));
+            }
+        }
         for set in &self.sets {
             validate(&set.name, "a set name")?;
             if names.contains(&set.name) {

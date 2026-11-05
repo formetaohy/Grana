@@ -140,6 +140,7 @@ impl Tile<'_> {
             for y in low[1]..high[1] {
                 let bitset_y = origin[1] + y + SHIFT;
                 let base = value_dims[0] * (y + value_dims[1] * z);
+                let mut field_row = grid.row(value_start[1] + y as i64, value_start[2] + z as i64);
                 for word in head..=tail {
                     let mut pending = band.needed_word(bitset_y, bitset_z, word);
                     if word == head {
@@ -162,7 +163,7 @@ impl Tile<'_> {
                             field[slot] = OUTSIDE;
                             continue;
                         }
-                        let contrast = grid.contrast(voxel, smoothed[slot]);
+                        let contrast = field_row.contrast(voxel[0], smoothed[slot]);
                         let inside = solid.get(voxel, anchor);
                         field[slot] = match (inside, contrast >= threshold) {
                             (true, true) => contrast,

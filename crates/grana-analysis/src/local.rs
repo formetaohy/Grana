@@ -25,34 +25,79 @@ pub(crate) struct Grid {
 }
 
 impl Grid {
-    pub(crate) fn contrast(&self, voxel: [i64; 3], value: f32) -> f32 {
-        let mut index = [[0usize; 2]; 3];
-        let mut weight = [[0.0f32; 2]; 3];
-        for axis in 0..3 {
-            let position = 2 * (voxel[axis] - self.anchor[axis]) + 1;
-            let first = (position - BLOCK).div_euclid(2 * BLOCK);
-            let fraction = (position - (first * 2 * BLOCK + BLOCK)) as f32 / (2 * BLOCK) as f32;
-            for slot in 0..2 {
-                let local = (first + slot as i64 - self.origin[axis])
-                    .clamp(0, self.blocks[axis] as i64 - 1);
-                index[axis][slot] = local as usize;
-                weight[axis][slot] = if slot == 0 { 1.0 - fraction } else { fraction };
-            }
+    fn axis(&self, coordinate: i64, axis: usize) -> (i64, f32) {
+        let position = 2 * (coordinate - self.anchor[axis]) + 1;
+        let first = (position - BLOCK).div_euclid(2 * BLOCK);
+        let fraction = (position - (first * 2 * BLOCK + BLOCK)) as f32 / (2 * BLOCK) as f32;
+        (first, fraction)
+    }
+
+    fn local(&self, first: i64, axis: usize) -> [usize; 2] {
+        [0, 1].map(|slot| {
+            (first + slot as i64 - self.origin[axis]).clamp(0, self.blocks[axis] as i64 - 1)
+                as usize
+        })
+    }
+
+    pub(crate) fn row(&self, y: i64, z: i64) -> Row<'_> {
+        let (first_y, weight_y) = self.axis(y, 1);
+        let (first_z, weight_z) = self.axis(z, 2);
+        Row {
+            grid: self,
+            y: self.local(first_y, 1),
+            z: self.local(first_z, 2),
+            y_weight: [1.0 - weight_y, weight_y],
+            z_weight: [1.0 - weight_z, weight_z],
+            span: None,
+            background: [0.0; 2],
+            signal: [0.0; 2],
         }
-        let mut background = 0.0f32;
-        let mut signal = 0.0f32;
-        for z in 0..2 {
-            for y in 0..2 {
-                for x in 0..2 {
-                    let share = weight[0][x] * weight[1][y] * weight[2][z];
-                    let slot =
-                        index[0][x] + self.blocks[0] * (index[1][y] + self.blocks[1] * index[2][z]);
-                    background += self.background[slot] * share;
-                    signal += self.signal[slot] * share;
-                }
-            }
+    }
+}
+
+pub(crate) struct Row<'a> {
+    grid: &'a Grid,
+    y: [usize; 2],
+    z: [usize; 2],
+    y_weight: [f32; 2],
+    z_weight: [f32; 2],
+    span: Option<i64>,
+    background: [f32; 2],
+    signal: [f32; 2],
+}
+
+impl Row<'_> {
+    fn fill(&mut self, first: i64) {
+        let grid: &Grid = self.grid;
+        let spans = grid.local(first, 0);
+        let blocks = grid.blocks;
+        let [y0, y1] = self.y;
+        let [z0, z1] = self.z;
+        let [wy0, wy1] = self.y_weight;
+        let [wz0, wz1] = self.z_weight;
+        let slot = |x: usize, y: usize, z: usize| x + blocks[0] * (y + blocks[1] * z);
+        for (index, x) in spans.into_iter().enumerate() {
+            let background = |y: usize, z: usize| grid.background[slot(x, y, z)];
+            let signal = |y: usize, z: usize| grid.signal[slot(x, y, z)];
+            self.background[index] = (background(y0, z0) * wy0 + background(y1, z0) * wy1) * wz0
+                + (background(y0, z1) * wy0 + background(y1, z1) * wy1) * wz1;
+            self.signal[index] = (signal(y0, z0) * wy0 + signal(y1, z0) * wy1) * wz0
+                + (signal(y0, z1) * wy0 + signal(y1, z1) * wy1) * wz1;
         }
-        (value - background) / (signal - background).max(self.floor)
+        self.span = Some(first);
+    }
+
+    pub(crate) fn contrast(&mut self, x: i64, value: f32) -> f32 {
+        let grid: &Grid = self.grid;
+        let (first, fraction) = grid.axis(x, 0);
+        if self.span != Some(first) {
+            self.fill(first);
+        }
+        let first_weight = 1.0 - fraction;
+        let other_weight = fraction;
+        let background = self.background[0] * first_weight + self.background[1] * other_weight;
+        let signal = self.signal[0] * first_weight + self.signal[1] * other_weight;
+        (value - background) / (signal - background).max(grid.floor)
     }
 }
 
@@ -232,8 +277,8 @@ impl LocalField {
         (self.0.background[local], self.0.signal[local])
     }
 
-    pub(crate) fn contrast(&self, voxel: [i64; 3], value: f32) -> f32 {
-        self.0.contrast(voxel, value)
+    pub(crate) fn row(&self, y: i64, z: i64) -> Row<'_> {
+        self.0.row(y, z)
     }
 }
 
@@ -266,8 +311,8 @@ impl BlockField {
         local[0] + self.0.blocks[0] * (local[1] + self.0.blocks[1] * local[2])
     }
 
-    pub(crate) fn contrast(&self, voxel: [i64; 3], value: f32) -> f32 {
-        self.0.contrast(voxel, value)
+    pub(crate) fn row(&self, y: i64, z: i64) -> Row<'_> {
+        self.0.row(y, z)
     }
 
     pub(crate) fn at(&self, block: [i64; 3]) -> (f32, f32) {

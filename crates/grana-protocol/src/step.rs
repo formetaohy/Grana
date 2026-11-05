@@ -2,6 +2,10 @@ use grana_scene::{Criteria, ObjectSetId};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
+    Drift {
+        channel: usize,
+        reference: u32,
+    },
     Detect {
         set: ObjectSetId,
         mask: Option<ObjectSetId>,
@@ -34,6 +38,7 @@ pub enum Step {
 impl Step {
     pub fn installs(&self) -> Option<ObjectSetId> {
         match self {
+            Self::Drift { .. } => None,
             Self::Detect { set, .. }
             | Self::Filter { set, .. }
             | Self::Copy { set, .. }

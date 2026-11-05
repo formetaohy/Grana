@@ -1,6 +1,6 @@
 use grana_measure::ColocSeries;
 use grana_object::{RelationFrame, TrackSet};
-use grana_scene::ObjectFrame;
+use grana_scene::{Drift, ObjectFrame};
 use grana_volume::Region;
 
 pub enum Event {
@@ -22,7 +22,7 @@ pub enum Event {
         series: Box<ColocSeries>,
         region: Region,
     },
-    Drift(Vec<[i32; 3]>),
+    Drift(Drift),
     Done,
     Failed(String),
 }

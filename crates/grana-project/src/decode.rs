@@ -1288,6 +1288,8 @@ impl<T: Decode> Decode for Vec<T> {
 
 impl Decode for Drift {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let channel = reader.u32()? as usize;
+        let reference = reader.u32()?;
         let frames = reader.count(1)?;
         let mut offsets = Vec::with_capacity(frames.min(1 << 16));
         for _ in 0..frames {
@@ -1300,7 +1302,16 @@ impl Decode for Drift {
             }
             offsets.push(offset);
         }
-        Ok(Drift::new(offsets))
+        if offsets.is_empty() {
+            if reference != 0 {
+                return Err(FAULT_VALUE);
+            }
+            return Ok(Drift::default());
+        }
+        if reference as usize >= offsets.len() || offsets[reference as usize] != [0; 3] {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Drift::new(channel, reference, offsets))
     }
 }
 

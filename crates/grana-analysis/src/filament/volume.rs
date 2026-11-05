@@ -89,11 +89,12 @@ fn fill<T: Sample>(
                     let base = width * (row * height);
                     for column in low_y..high_y {
                         let offset = base + width * column;
+                        let mut field_row = field.row(row as i64, column as i64);
                         for (index, value) in
                             values[offset + low_x..offset + high_x].iter().enumerate()
                         {
-                            let voxel = [(low_x + index) as i64, column as i64, row as i64];
-                            best = best.max(field.contrast(voxel, value.value()));
+                            best =
+                                best.max(field_row.contrast((low_x + index) as i64, value.value()));
                         }
                     }
                 }

@@ -65,6 +65,7 @@ impl Session {
         };
         let sets = staged.sets().to_vec();
         let steps = staged.steps().to_vec();
+        self.realign();
         let pairs = match protocol.coloc() {
             Some(coloc) => staged
                 .pairs()
@@ -99,6 +100,7 @@ impl Session {
                     self.present_recipe();
                     return;
                 }
+                Step::Drift { channel, reference } => self.align_drift(channel, reference),
                 Step::Detect { set, mask } => {
                     if let Some(scene) = self.scene.as_mut() {
                         scene.set_mask(mask);
