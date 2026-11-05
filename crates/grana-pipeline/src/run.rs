@@ -479,7 +479,7 @@ fn surfaces(
                 mask.as_ref(),
                 &mut |done, total| report(done, total),
                 Sources::new(
-                    &|_index, ranges| {
+                    &|ranges| {
                         reader
                             .read_region(time, level_index, channel, ranges, drift.offset(time))
                             .map_err(String::from)

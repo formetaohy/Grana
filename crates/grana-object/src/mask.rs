@@ -56,6 +56,10 @@ impl Mask {
             .sum()
     }
 
+    pub fn bounds(&self) -> [std::ops::Range<i64>; 3] {
+        [0, 1, 2].map(|axis| self.origin[axis]..self.origin[axis] + i64::from(self.extent[axis]))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.extent.contains(&0)
     }

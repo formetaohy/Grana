@@ -105,7 +105,7 @@ impl Tile<'_> {
         for (corner, offset) in CORNER.iter().enumerate() {
             let cell = [bx + offset[0], by + offset[1], bz + offset[2]];
             corners[corner] = cell;
-            values[corner] = match self.value_index(cell) {
+            values[corner] = match self.field_index(cell) {
                 Some(slot) => self.field[slot],
                 None => OUTSIDE,
             };
@@ -295,12 +295,18 @@ impl Tile<'_> {
                 }
             });
             let cell = [low[0] + offset[0], low[1] + offset[1], low[2] + offset[2]];
-            let value = match self.value_index(cell) {
-                Some(slot) => self.field[slot],
-                None => OUTSIDE,
-            };
-            total += value * share[0] * share[1] * share[2];
+            total += self.value(cell) * share[0] * share[1] * share[2];
         }
         total
+    }
+
+    fn value(&self, cell: [i64; 3]) -> f32 {
+        let dims = self.field_dims;
+        let mut local = [0usize; 3];
+        for axis in 0..3 {
+            local[axis] =
+                (cell[axis] - self.field_start[axis]).clamp(0, dims[axis] as i64 - 1) as usize;
+        }
+        self.field[local[0] + dims[0] * (local[1] + dims[1] * local[2])]
     }
 }

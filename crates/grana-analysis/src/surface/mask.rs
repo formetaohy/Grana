@@ -5,8 +5,9 @@ use crate::morphology;
 use grana_object::Mask;
 
 use super::bits::{Bits, BlockFill, Grid, MaskInputs, SIDE};
+use super::detection::Detection;
 use super::stats;
-use super::{Gate, Read, SurfaceBuilder, dims_of, smooth};
+use super::{Gate, SurfaceBuilder, band, dims_of};
 
 const RAISED_TOLERANCE: f32 = 0.5;
 
@@ -63,24 +64,23 @@ pub(super) fn build(
     cancel: &AtomicBool,
     roi: Option<&Mask>,
     progress: &mut dyn FnMut(usize, usize),
-    read: &Read<'_>,
+    step: usize,
+    detection: &Detection,
 ) -> Result<Option<SurfaceMask>, String> {
     let dims = plan.dims();
     let blocks = plan.blocks();
     let total = plan.tile_count();
-    let step = total * 2 + 1;
     let gate = plan.gate(roi);
-    let pad = plan.pad_mask();
-    let field = {
-        let mut report = |done: usize, slabs: usize| {
-            if let Some(share) = (done * total).checked_div(slabs) {
-                progress(share, step);
-            }
-        };
-        match stats::build(plan, workers, cancel, &gate, read, &mut report)? {
-            Some(field) => field,
-            None => return Ok(None),
-        }
+    let field = match stats::build(
+        plan,
+        workers,
+        cancel,
+        &gate,
+        detection,
+        &mut band(progress, step, 45, 50),
+    )? {
+        Some(field) => field,
+        None => return Ok(None),
     };
     let mut foreground = Bits::new(dims);
     let mut raised = Bits::new(dims);
@@ -91,10 +91,10 @@ pub(super) fn build(
             total,
             workers,
             cancel,
-            progress: &mut |done, _| progress(done, step),
+            progress: &mut band(progress, step, 50, 75),
         },
         || (),
-        |(), index| MaskWorker::run(plan, &gate, &field, index, pad, read),
+        |(), index| Ok(MaskWorker::run(plan, &gate, &field, detection, index)),
         |index, chunk| {
             let mut sink = MaskSink {
                 foreground: &mut foreground,
@@ -125,7 +125,7 @@ pub(super) fn build(
             plan,
             workers,
             cancel,
-            progress,
+            &mut band(progress, step, 75, 78),
             &foreground,
             admitted.as_ref(),
             &grid,
@@ -220,27 +220,11 @@ impl MaskWorker {
         plan: &SurfaceBuilder,
         gate: &Gate<'_>,
         field: &BlockField,
+        detection: &Detection,
         index: usize,
-        pad: [u32; 3],
-        read: &Read<'_>,
-    ) -> Result<MaskChunk, String> {
-        let array = plan.array_range(index, pad);
+    ) -> MaskChunk {
         let core = plan.core_range(index);
-        let dims = dims_of(&array);
         let core_dims = dims_of(&core);
-        let count = dims[0] * dims[1] * dims[2];
-        let data = read(index, &array)?;
-        if data.voxel_count() != count {
-            return Err("the detection tile does not cover the requested region".to_string());
-        }
-        let mut raw = vec![0.0f32; count];
-        data.write_values(&mut raw);
-        smooth(&mut raw, dims, &plan.kernels);
-        let origin = [
-            (core[0].start - array[0].start) as usize,
-            (core[1].start - array[1].start) as usize,
-            (core[2].start - array[2].start) as usize,
-        ];
         let rows = core_dims[0].div_ceil(64);
         let mut foreground = vec![0u64; rows * core_dims[1] * core_dims[2]];
         let mut raised = vec![0u64; rows * core_dims[1] * core_dims[2]];
@@ -268,26 +252,27 @@ impl MaskWorker {
         let mut occupied = vec![false; blocks[0] * blocks[1] * blocks[2]];
         let threshold = plan.threshold;
         for z in 0..core_dims[2] {
+            let voxel_z = core[2].start as i64 + z as i64;
             for y in 0..core_dims[1] {
-                let base = dims[0] * (origin[1] + y + dims[1] * (origin[2] + z)) + origin[0];
+                let voxel_y = core[1].start as i64 + y as i64;
+                let Some(line) = detection.row(voxel_y, voxel_z) else {
+                    continue;
+                };
+                let base = detection.offset(core[0].start as i64);
                 let row = rows * (y + core_dims[1] * z);
-                let mut field_row = field.row(
-                    core[1].start as i64 + y as i64,
-                    core[2].start as i64 + z as i64,
-                );
+                let mut field_row = field.row(voxel_y, voxel_z);
                 for x in 0..core_dims[0] {
-                    let voxel = [
-                        core[0].start as i64 + x as i64,
-                        core[1].start as i64 + y as i64,
-                        core[2].start as i64 + z as i64,
-                    ];
+                    let voxel_x = core[0].start as i64 + x as i64;
                     if let Some(admitted) = admitted.as_mut() {
-                        if !gate.admits(voxel) {
+                        if !gate.admits([voxel_x, voxel_y, voxel_z]) {
                             continue;
                         }
                         admitted[row + x / 64] |= 1 << (x % 64);
                     }
-                    let contrast = field_row.contrast(voxel[0], raw[base + x]);
+                    let Some(value) = line.get(base + x) else {
+                        continue;
+                    };
+                    let contrast = field_row.contrast(voxel_x, *value);
                     if contrast >= threshold {
                         foreground[row + x / 64] |= 1 << (x % 64);
                         let block = [x / SIDE, y / SIDE, z / SIDE];
@@ -299,7 +284,7 @@ impl MaskWorker {
                 }
             }
         }
-        Ok(MaskChunk {
+        MaskChunk {
             rows,
             foreground,
             raised,
@@ -307,7 +292,7 @@ impl MaskWorker {
             occupied,
             block_origin,
             block_dims,
-        })
+        }
     }
 }
 
@@ -322,7 +307,6 @@ fn morph(
 ) -> Result<Option<Bits>, String> {
     let dims = plan.dims();
     let total = plan.tile_count();
-    let step = total * 2 + 1;
     let pad = plan.pad_morph();
     let mut solid = Bits::new(dims);
     let completed = crate::schedule::ordered(
@@ -330,7 +314,7 @@ fn morph(
             total,
             workers,
             cancel,
-            progress: &mut |done, _| progress(done, step),
+            progress,
         },
         || (),
         |(), index| MorphWorker::run(plan, index, pad, foreground, admitted, grid),

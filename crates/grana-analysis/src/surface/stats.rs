@@ -1,6 +1,7 @@
 use std::sync::atomic::AtomicBool;
 
-use super::{Gate, Read, SurfaceBuilder, dims_of, smooth};
+use super::detection::Detection;
+use super::{Gate, SurfaceBuilder};
 use crate::local::{BLOCK, BlockField, block_levels};
 
 const SLAB_BLOCKS: usize = 8;
@@ -39,7 +40,7 @@ pub(super) fn build(
     workers: usize,
     cancel: &AtomicBool,
     gate: &Gate<'_>,
-    read: &Read<'_>,
+    detection: &Detection,
     progress: &mut dyn FnMut(usize, usize),
 ) -> Result<Option<BlockField>, String> {
     let blocks = plan.blocks();
@@ -56,8 +57,8 @@ pub(super) fn build(
             cancel,
             progress,
         },
-        Vec::new,
-        |buffer, index| collect(plan, gate, &slabs, index, read, buffer),
+        || Vec::with_capacity(SLAB_BLOCKS * SLAB_BLOCKS * SLAB_BLOCKS),
+        |buffer, index| Ok(collect(plan, gate, &slabs, index, detection, buffer)),
         |index, levels: Vec<(f32, f32)>| {
             let origin = slabs.origin(index);
             let dims = slabs.dims(index);
@@ -94,41 +95,18 @@ fn collect(
     gate: &Gate<'_>,
     slabs: &Slabs,
     index: usize,
-    read: &Read<'_>,
-    buffer: &mut Vec<f32>,
-) -> Result<Vec<(f32, f32)>, String> {
+    detection: &Detection,
+    bucket: &mut Vec<f32>,
+) -> Vec<(f32, f32)> {
     let origin = slabs.origin(index);
     let dims = slabs.dims(index);
-    let radius = [0, 1, 2].map(|axis| (plan.kernels[axis].len() / 2) as u32);
     let span = [0, 1, 2].map(|axis| {
         let first = plan.anchor[axis] + (origin[axis] * BLOCK as usize) as i64;
         let last =
             (first + (dims[axis] * BLOCK as usize) as i64).min(i64::from(plan.region[axis].end));
         first..last
     });
-    let ranges = [0, 1, 2].map(|axis| {
-        let low = (span[axis].start - i64::from(radius[axis])).max(0);
-        let high = (span[axis].end + i64::from(radius[axis])).min(i64::from(plan.extent[axis]));
-        low as u32..high as u32
-    });
-    let array = dims_of(&ranges);
-    let count = array[0] * array[1] * array[2];
-    let data = read(index, &ranges)?;
-    if data.voxel_count() != count {
-        return Err("the detection slab does not cover the requested region".to_string());
-    }
-    buffer.clear();
-    buffer.resize(count, 0.0);
-    data.write_values(buffer);
-    smooth(buffer, array, &plan.kernels);
-    let offset = [
-        (span[0].start - i64::from(ranges[0].start)) as usize,
-        (span[1].start - i64::from(ranges[1].start)) as usize,
-        (span[2].start - i64::from(ranges[2].start)) as usize,
-    ];
-    let lines = [1usize, array[0], array[0] * array[1]];
     let mut levels = vec![(f32::NAN, f32::NAN); dims[0] * dims[1] * dims[2]];
-    let mut bucket = Vec::with_capacity((BLOCK * BLOCK * BLOCK) as usize);
     for z in 0..dims[2] {
         for y in 0..dims[1] {
             for x in 0..dims[0] {
@@ -138,15 +116,15 @@ fn collect(
                     if voxel_z >= span[2].end {
                         break;
                     }
-                    let row_z = offset[2] + z * BLOCK as usize + local_z;
                     for local_y in 0..BLOCK as usize {
                         let voxel_y = span[1].start + ((y * BLOCK as usize) + local_y) as i64;
                         if voxel_y >= span[1].end {
                             break;
                         }
-                        let row_y = offset[1] + y * BLOCK as usize + local_y;
-                        let base =
-                            lines[1] * row_y + lines[2] * row_z + offset[0] + x * BLOCK as usize;
+                        let Some(line) = detection.row(voxel_y, voxel_z) else {
+                            continue;
+                        };
+                        let base = detection.offset(span[0].start) + x * BLOCK as usize;
                         for local_x in 0..BLOCK as usize {
                             let voxel_x = span[0].start + ((x * BLOCK as usize) + local_x) as i64;
                             if voxel_x >= span[0].end {
@@ -155,15 +133,15 @@ fn collect(
                             if !gate.admits([voxel_x, voxel_y, voxel_z]) {
                                 continue;
                             }
-                            bucket.push(buffer[base + local_x]);
+                            bucket.push(line[base + local_x]);
                         }
                     }
                 }
-                if let Some(level) = block_levels(&mut bucket) {
+                if let Some(level) = block_levels(bucket) {
                     levels[x + dims[0] * (y + dims[1] * z)] = level;
                 }
             }
         }
     }
-    Ok(levels)
+    levels
 }

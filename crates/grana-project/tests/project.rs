@@ -980,7 +980,7 @@ fn detect(volume: &Volume, params: SurfaceParams) -> SurfaceSet {
             None,
             &mut |_done, _total| {},
             Sources::new(
-                &|_index, ranges| {
+                &|ranges| {
                     Ok(volume.channels()[0].data().region(
                         volume.extent(),
                         ranges[0].clone(),

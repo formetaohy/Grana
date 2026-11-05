@@ -3,6 +3,7 @@ mod band;
 mod bits;
 mod cap;
 mod cut;
+mod detection;
 mod distance;
 mod emit;
 mod label;
@@ -26,6 +27,7 @@ use grana_object::SurfaceCut;
 use grana_object::SurfaceParams;
 
 use assemble::Assembler;
+use detection::Detection;
 use distance::Distance;
 use mask::SolidMask;
 use tile::{Tile, TileResult};
@@ -39,14 +41,17 @@ const GRAIN_LIMIT: f32 = 3.0;
 const GRAIN_SUPPORT: f32 = 3.0;
 const ANISOTROPY_LIMIT: u32 = 16;
 const PAD_ALIGN: u32 = 8;
-const ARRAY_BYTES_PER_VOXEL: u64 = 17;
-const VALUE_BYTES_PER_VOXEL: u64 = 12;
+const ARRAY_BYTES_PER_VOXEL: u64 = 9;
+const FIELD_BYTES_PER_VOXEL: u64 = 4;
+const FIELD_REACH: u32 = 2;
 const WORKER_ARRAY_LIMIT: u64 = 320 << 20;
 const FRAME_ARRAY_LIMIT: u64 = 1024 << 20;
 const TILE_FRAGMENT_LIMIT: u64 = 96 << 20;
 const SEED_SNAP: i64 = 2;
+const DETECTION_BYTES_PER_VOXEL: u64 = 4;
+const DETECTION_BUDGET: u64 = 1024 << 20;
 
-pub const SURFACE_VOXEL_LIMIT: u64 = 1 << 30;
+pub const SURFACE_VOXEL_LIMIT: u64 = DETECTION_BUDGET / DETECTION_BYTES_PER_VOXEL;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeedPolicy {
@@ -59,7 +64,7 @@ pub(crate) const EMPTY: u32 = u32::MAX;
 pub(crate) const OUTSIDE: f32 = -1.0;
 pub(crate) const REMOVED: f32 = 1.0e-3;
 
-pub(crate) type Read<'a> = dyn Fn(usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
+pub(crate) type Read<'a> = dyn Fn(&[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
 pub(crate) type Measure<'a> =
     dyn Fn(usize, &[Range<u32>; 3]) -> Result<VoxelData, String> + Sync + 'a;
 
@@ -293,12 +298,36 @@ impl SurfaceBuilder {
         })
     }
 
-    pub(super) fn pad_mask(&self) -> [u32; 3] {
-        [0, 1, 2].map(|axis| align(radius(self, axis) + 1))
-    }
-
     pub(super) fn pad_morph(&self) -> [u32; 3] {
         [0; 3].map(|_| align(self.morph_radius + 1))
+    }
+
+    pub(super) fn coverage(&self, roi: Option<&Mask>) -> [Range<u32>; 3] {
+        let bounds = roi.and_then(|roi| (!roi.is_empty()).then(|| roi.bounds()));
+        [0, 1, 2].map(|axis| {
+            let (mut start, mut end) = (self.region[axis].start, self.region[axis].end);
+            if let Some(bounds) = &bounds {
+                start = start.max(bounds[axis].start.clamp(0, i64::from(self.extent[axis])) as u32);
+                end = end.min(bounds[axis].end.clamp(0, i64::from(self.extent[axis])) as u32);
+            }
+            if end <= start {
+                start = self.region[axis].start;
+                end = self.region[axis].end;
+            }
+            let reach = radius(self, axis);
+            start.saturating_sub(reach)..end.saturating_add(reach).min(self.extent[axis])
+        })
+    }
+
+    pub(super) fn field_range(&self, core: &[Range<u32>; 3]) -> [Range<u32>; 3] {
+        [0, 1, 2].map(|axis| {
+            let start = core[axis].start.saturating_sub(FIELD_REACH);
+            let end = core[axis]
+                .end
+                .saturating_add(FIELD_REACH)
+                .min(self.extent[axis]);
+            start..end
+        })
     }
 
     pub(super) fn gate<'a>(&'a self, roi: Option<&'a Mask>) -> Gate<'a> {
@@ -390,7 +419,15 @@ impl SurfaceBuilder {
     ) -> Result<Option<SurfaceSet>, String> {
         let desired = crate::schedule::workers(workers);
         let store = sources.store;
-        let Some(mask) = mask::build(&self, desired, cancel, roi, progress, sources.read)? else {
+        let total = self.tile_count;
+        let step = total * 2 + 1;
+        let Some(detection) =
+            Detection::build(&self, desired, cancel, roi, sources.read, progress, step)?
+        else {
+            return Ok(None);
+        };
+        let Some(mask) = mask::build(&self, desired, cancel, roi, progress, step, &detection)?
+        else {
             return Ok(None);
         };
         let Some(seeds) = self.seeds(&mask.solid)? else {
@@ -410,21 +447,24 @@ impl SurfaceBuilder {
         let limit = (distance.reach().ceil() as u32)
             .saturating_add(margin)
             .clamp(base, ceiling);
-        let mut inputs = Inputs {
-            cancel,
-            progress,
-            read: sources.read,
-            measure: sources.measure,
-            solid: &mask.solid,
-            field: &mask.field,
-            roi,
-        };
         let pass = Pass::new(&self, limit, seeds, &distance);
         let budget = Budget::new(FRAME_ARRAY_LIMIT);
         let workers = desired.min(pass.total().max(1));
-        let topology = match run_pass(&pass, workers, &budget, &mut inputs)? {
-            PassOutcome::Cancelled => return Ok(None),
-            PassOutcome::Done(topology) => *topology,
+        let topology = {
+            let mut report = band(progress, step, 78, 100);
+            let mut inputs = Inputs {
+                cancel,
+                progress: &mut report,
+                measure: sources.measure,
+                solid: &mask.solid,
+                field: &mask.field,
+                detection: &detection,
+                roi,
+            };
+            match run_pass(&pass, workers, &budget, &mut inputs)? {
+                PassOutcome::Cancelled => return Ok(None),
+                PassOutcome::Done(topology) => *topology,
+            }
         };
         let topology = Geometry::paged(store, topology).map_err(|error| error.to_string())?;
         let loaded = topology.load().map_err(|error| error.to_string())?;
@@ -439,7 +479,7 @@ impl SurfaceBuilder {
         else {
             return Ok(None);
         };
-        progress(pass.total() * 2 + 1, pass.total() * 2 + 1);
+        progress(step, step);
         Ok(Some(
             set.with_topology(topology)
                 .map_err(|error| error.to_string())?,
@@ -471,47 +511,11 @@ pub fn recut(
     Ok(Some(cut))
 }
 
-pub(super) fn smooth(raw: &mut [f32], dims: [usize; 3], kernels: &[Vec<f32>; 3]) {
-    let strides = strides_of(dims);
-    for axis in 0..3 {
-        let kernel = &kernels[axis];
-        if kernel.len() <= 1 {
-            continue;
-        }
-        let radius = (kernel.len() / 2) as i64;
-        let (first, second) = ((axis + 1) % 3, (axis + 2) % 3);
-        let length = dims[axis];
-        let mut line = vec![0.0f32; length];
-        let mut blurred = vec![0.0f32; length];
-        for position in 0..dims[second] {
-            for row in 0..dims[first] {
-                let base = strides[first] * row + strides[second] * position;
-                for (step, slot) in line.iter_mut().enumerate() {
-                    *slot = raw[base + strides[axis] * step];
-                }
-                for (step, slot) in blurred.iter_mut().enumerate() {
-                    let mut sum = 0.0;
-                    for (tap, weight) in kernel.iter().enumerate() {
-                        let sample = (step as i64 + tap as i64 - radius).clamp(0, length as i64 - 1)
-                            as usize;
-                        sum += line[sample] * weight;
-                    }
-                    *slot = sum;
-                }
-                for (step, value) in blurred.iter().enumerate() {
-                    raw[base + strides[axis] * step] = *value;
-                }
-            }
-        }
-    }
-}
-
 struct Pass<'a> {
     plan: &'a SurfaceBuilder,
     seeds: &'a [[i64; 3]],
     cap: u32,
     limit: u32,
-    values: [u32; 3],
     distance: &'a Distance,
 }
 
@@ -523,13 +527,11 @@ impl<'a> Pass<'a> {
         distance: &'a Distance,
     ) -> Self {
         let cap = limit * limit;
-        let values = [0, 1, 2].map(|axis| align(radius(plan, axis) + 3));
         Self {
             plan,
             seeds,
             cap,
             limit,
-            values,
             distance,
         }
     }
@@ -544,7 +546,7 @@ impl<'a> Pass<'a> {
         let mut reach = bound;
         loop {
             let pad = [0, 1, 2].map(|axis| align(reach + radius(plan, axis) + 1));
-            if array_bytes(plan, pad, self.values) <= WORKER_ARRAY_LIMIT {
+            if array_bytes(plan, index, pad) <= WORKER_ARRAY_LIMIT {
                 return pad;
             }
             assert!(
@@ -556,7 +558,7 @@ impl<'a> Pass<'a> {
     }
 
     fn array_bytes(&self, index: usize) -> u64 {
-        array_bytes(self.plan, self.pad(index), self.values)
+        array_bytes(self.plan, index, self.pad(index))
     }
 }
 
@@ -564,17 +566,18 @@ fn radius(plan: &SurfaceBuilder, axis: usize) -> u32 {
     (plan.kernels[axis].len() / 2) as u32
 }
 
-fn array_bytes(plan: &SurfaceBuilder, pad: [u32; 3], values: [u32; 3]) -> u64 {
-    let extent = |pad: [u32; 3]| {
-        let mut voxels = 1u64;
-        for (axis, pad) in pad.into_iter().enumerate() {
-            let size = (plan.region[axis].end - plan.region[axis].start) as u64;
-            let span = u64::from(TILE_SIDE + 2 * pad);
-            voxels *= size.min(span);
-        }
-        voxels
-    };
-    extent(pad) * ARRAY_BYTES_PER_VOXEL + extent(values) * VALUE_BYTES_PER_VOXEL
+fn array_bytes(plan: &SurfaceBuilder, index: usize, pad: [u32; 3]) -> u64 {
+    let core = plan.core_range(index);
+    let array = [0, 1, 2].map(|axis| {
+        let size = (plan.region[axis].end - plan.region[axis].start) as u64;
+        let span = u64::from(TILE_SIDE + 2 * pad[axis]);
+        size.min(span)
+    });
+    let field = plan
+        .field_range(&core)
+        .map(|range| u64::from(range.end - range.start));
+    array.iter().product::<u64>() * ARRAY_BYTES_PER_VOXEL
+        + field.iter().product::<u64>() * FIELD_BYTES_PER_VOXEL
 }
 
 enum PassOutcome {
@@ -585,10 +588,10 @@ enum PassOutcome {
 struct Inputs<'a> {
     cancel: &'a AtomicBool,
     progress: &'a mut dyn FnMut(usize, usize),
-    read: &'a Read<'a>,
     measure: &'a Measure<'a>,
     solid: &'a SolidMask,
     field: &'a crate::local::BlockField,
+    detection: &'a Detection,
     roi: Option<&'a Mask>,
 }
 
@@ -603,10 +606,10 @@ fn run_pass(
     let stop = AtomicBool::new(false);
     let (sender, receiver) = mpsc::sync_channel::<(usize, TileResult)>(workers * 2);
     let cancel = inputs.cancel;
-    let read = inputs.read;
     let measure = inputs.measure;
     let solid = inputs.solid;
     let field = inputs.field;
+    let detection = inputs.detection;
     let gate = pass.plan.gate(inputs.roi);
     std::thread::scope(|scope| {
         let next = &next;
@@ -615,7 +618,7 @@ fn run_pass(
             let sender = sender.clone();
             let gate = &gate;
             scope.spawn(move || {
-                let mut tile = Tile::new(pass, solid, field, gate);
+                let mut tile = Tile::new(pass, solid, field, detection, gate);
                 loop {
                     if halted(cancel, stop) {
                         break;
@@ -628,7 +631,7 @@ fn run_pass(
                     if !budget.acquire(bytes, || halted(cancel, stop)) {
                         break;
                     }
-                    let result = tile.run(index, cancel, stop, read, measure);
+                    let result = tile.run(index, cancel, stop, measure);
                     budget.release(bytes);
                     if sender.send((index, result)).is_err() {
                         break;
@@ -731,11 +734,25 @@ fn gaussian(sigma: f32) -> Vec<f32> {
     kernel
 }
 
+pub(super) fn band<'a>(
+    report: &'a mut dyn FnMut(usize, usize),
+    step: usize,
+    from: usize,
+    to: usize,
+) -> impl FnMut(usize, usize) + 'a {
+    let first = step * from / 100;
+    let span = (step * to / 100).saturating_sub(first);
+    move |done, units| {
+        if let Some(share) = (done * span).checked_div(units.max(1)) {
+            report(first + share, step);
+        }
+    }
+}
+
 pub(crate) struct Envelope {
     locations: Vec<usize>,
     boundaries: Vec<f64>,
 }
-
 impl Envelope {
     pub(crate) fn new() -> Self {
         Self {

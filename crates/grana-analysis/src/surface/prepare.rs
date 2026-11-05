@@ -107,40 +107,34 @@ impl Tile<'_> {
         occupied
     }
 
-    pub(super) fn field(&mut self, core: &[std::ops::Range<u32>; 3]) {
+    pub(super) fn field(&mut self) {
         const WORD: usize = 64;
         const SHIFT: usize = 1;
         let pass = self.pass;
         let anchor = pass.plan.anchor;
-        let value_dims = self.value_dims;
-        let value_start = self.value_start;
-        let mut low = [0usize; 3];
-        let mut high = [0usize; 3];
-        for axis in 0..3 {
-            let first = (core[axis].start as i64 - 2).max(value_start[axis]);
-            let last = (core[axis].end as i64 + 2).min(value_start[axis] + value_dims[axis] as i64);
-            low[axis] = (first - value_start[axis]) as usize;
-            high[axis] = (last - value_start[axis]) as usize;
-        }
-        let origin = [0, 1, 2].map(|axis| (value_start[axis] - self.start[axis]) as usize);
+        let field_dims = self.field_dims;
+        let field_start = self.field_start;
+        let origin = [0, 1, 2].map(|axis| (field_start[axis] - self.start[axis]) as usize);
         let gate = self.gate;
         let solid = self.solid;
         let grid = self.grid;
-        let smoothed = &self.smoothed;
+        let detection = self.detection;
         let field = &mut self.field;
         let threshold = pass.plan.threshold;
         let band = self.band.as_ref().expect("a surface tile holds its band");
-        let first = origin[0] + low[0] + SHIFT;
-        let last = origin[0] + high[0] + SHIFT;
+        let first = origin[0] + SHIFT;
+        let last = first + field_dims[0];
         let head = first / WORD;
         let tail = (last - 1) / WORD;
         let keep = (1u64 << (last % WORD).max(1)) - 1;
-        for z in low[2]..high[2] {
+        for z in 0..field_dims[2] {
             let bitset_z = origin[2] + z + SHIFT;
-            for y in low[1]..high[1] {
+            let voxel_z = field_start[2] + z as i64;
+            for y in 0..field_dims[1] {
                 let bitset_y = origin[1] + y + SHIFT;
-                let base = value_dims[0] * (y + value_dims[1] * z);
-                let mut field_row = grid.row(value_start[1] + y as i64, value_start[2] + z as i64);
+                let voxel_y = field_start[1] + y as i64;
+                let base = field_dims[0] * (y + field_dims[1] * z);
+                let mut field_row = grid.row(voxel_y, voxel_z);
                 for word in head..=tail {
                     let mut pending = band.needed_word(bitset_y, bitset_z, word);
                     if word == head {
@@ -153,17 +147,18 @@ impl Tile<'_> {
                         let index = word * WORD + pending.trailing_zeros() as usize;
                         pending &= pending - 1;
                         let x = index - SHIFT - origin[0];
-                        let voxel = [
-                            value_start[0] + x as i64,
-                            value_start[1] + y as i64,
-                            value_start[2] + z as i64,
-                        ];
+                        let voxel = [field_start[0] + x as i64, voxel_y, voxel_z];
                         let slot = base + x;
+                        let value = detection.value(voxel);
+                        let Some(value) = value else {
+                            field[slot] = OUTSIDE;
+                            continue;
+                        };
                         if !gate.admits(voxel) {
                             field[slot] = OUTSIDE;
                             continue;
                         }
-                        let contrast = field_row.contrast(voxel[0], smoothed[slot]);
+                        let contrast = field_row.contrast(voxel[0], value);
                         let inside = solid.get(voxel, anchor);
                         field[slot] = match (inside, contrast >= threshold) {
                             (true, true) => contrast,

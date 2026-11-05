@@ -7,8 +7,9 @@ use grana_object::SampleAccumulator;
 use crate::hash::Map;
 
 use super::band::Band;
+use super::detection::Detection;
 use super::mask::SolidMask;
-use super::{EMPTY, Face, Gate, Measure, Node, Pass, Read, dims_of, strides_of};
+use super::{EMPTY, Face, Gate, Measure, Node, Pass, dims_of, strides_of};
 use crate::local::BlockField;
 
 pub(super) struct Contact {
@@ -42,17 +43,15 @@ pub(super) struct Tile<'a> {
     pub(super) pass: &'a Pass<'a>,
     pub(super) solid: &'a SolidMask,
     pub(super) grid: &'a BlockField,
+    pub(super) detection: &'a Detection,
     pub(super) gate: &'a Gate<'a>,
     pub(super) band: Option<Band>,
     pub(super) array: [Range<u32>; 3],
     pub(super) dims: [usize; 3],
     pub(super) start: [i64; 3],
-    pub(super) values: [Range<u32>; 3],
-    pub(super) value_dims: [usize; 3],
-    pub(super) value_start: [i64; 3],
-    pub(super) raw: Vec<f32>,
-    pub(super) smoothed: Vec<f32>,
     pub(super) field: Vec<f32>,
+    pub(super) field_start: [i64; 3],
+    pub(super) field_dims: [usize; 3],
     pub(super) mask: Vec<bool>,
     pub(super) chamfer: Vec<u32>,
     pub(super) labels: Vec<u32>,
@@ -76,23 +75,22 @@ impl<'a> Tile<'a> {
         pass: &'a Pass<'a>,
         solid: &'a SolidMask,
         grid: &'a BlockField,
+        detection: &'a Detection,
         gate: &'a Gate<'a>,
     ) -> Self {
         Self {
             pass,
             solid,
             grid,
+            detection,
             gate,
             band: None,
             array: [0..0, 0..0, 0..0],
             dims: [0; 3],
             start: [0; 3],
-            values: [0..0, 0..0, 0..0],
-            value_dims: [0; 3],
-            value_start: [0; 3],
-            raw: Vec::new(),
-            smoothed: Vec::new(),
             field: Vec::new(),
+            field_start: [0; 3],
+            field_dims: [0; 3],
             mask: Vec::new(),
             chamfer: Vec::new(),
             labels: Vec::new(),
@@ -117,14 +115,13 @@ impl<'a> Tile<'a> {
         index: usize,
         cancel: &AtomicBool,
         stop: &AtomicBool,
-        read: &Read<'_>,
         measure: &Measure<'_>,
     ) -> TileResult {
         let pass = self.pass;
         let core = pass.plan.core_range(index);
         let array = pass.plan.array_range(index, pass.pad(index));
         self.array = array.clone();
-        self.dims = dims_of(&array);
+        self.dims = super::dims_of(&array);
         self.start = [
             array[0].start as i64,
             array[1].start as i64,
@@ -155,36 +152,17 @@ impl<'a> Tile<'a> {
                 low..high
             });
             self.band = Some(Band::new(&self.mask, self.dims, &inside));
-            let values = pass.plan.array_range(index, pass.values);
-            self.values = values.clone();
-            self.value_dims = dims_of(&values);
-            self.value_start = [
-                values[0].start as i64,
-                values[1].start as i64,
-                values[2].start as i64,
+            let field = pass.plan.field_range(&core);
+            self.field_start = [
+                field[0].start as i64,
+                field[1].start as i64,
+                field[2].start as i64,
             ];
-            let value_count = self.value_dims[0] * self.value_dims[1] * self.value_dims[2];
-            let detection = match read(index, &values) {
-                Ok(data) => data,
-                Err(detail) => return TileResult::Failed(detail),
-            };
-            if detection.voxel_count() != value_count {
-                return TileResult::Failed(
-                    "the detection tile does not cover the requested region".to_string(),
-                );
-            }
-            self.raw.clear();
-            self.raw.resize(value_count, 0.0);
-            detection.write_values(&mut self.raw);
-            self.smoothed.clear();
-            self.smoothed.extend_from_slice(&self.raw);
-            super::smooth(&mut self.smoothed, self.value_dims, &pass.plan.kernels);
-            if super::halted(cancel, stop) {
-                return TileResult::Cancelled;
-            }
+            self.field_dims = dims_of(&field);
+            let field_count = self.field_dims[0] * self.field_dims[1] * self.field_dims[2];
             self.field.clear();
-            self.field.resize(value_count, 0.0);
-            self.field(&core);
+            self.field.resize(field_count, 0.0);
+            self.field();
             self.watershed();
             self.record_necks();
             if super::halted(cancel, stop) {
@@ -275,11 +253,11 @@ impl<'a> Tile<'a> {
         node
     }
 
-    pub(super) fn value_index(&self, voxel: [i64; 3]) -> Option<usize> {
-        let dims = self.value_dims;
+    pub(super) fn field_index(&self, voxel: [i64; 3]) -> Option<usize> {
+        let dims = self.field_dims;
         let mut local = [0usize; 3];
         for axis in 0..3 {
-            let value = voxel[axis] - self.value_start[axis];
+            let value = voxel[axis] - self.field_start[axis];
             if value < 0 || value >= dims[axis] as i64 {
                 return None;
             }

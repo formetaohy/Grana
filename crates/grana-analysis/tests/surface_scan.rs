@@ -974,7 +974,7 @@ fn counted_extract(
             roi,
             &mut |_done, _total| {},
             Sources::new(
-                &|_index, ranges| {
+                &|ranges| {
                     reads.fetch_add(
                         (ranges[0].end - ranges[0].start) as u64
                             * (ranges[1].end - ranges[1].start) as u64
@@ -1064,7 +1064,7 @@ fn extract_seeded_with(
         None,
         &mut |_done, _total| {},
         Sources::new(
-            &|_index, ranges| {
+            &|ranges| {
                 Ok(volume.channels()[0].data().region(
                     volume.extent(),
                     ranges[0].clone(),
@@ -1114,7 +1114,7 @@ fn extract_through(
             None,
             &mut |_done, _total| {},
             Sources::new(
-                &|_index, ranges| {
+                &|ranges| {
                     Ok(volume.channels()[0].data().region(
                         volume.extent(),
                         ranges[0].clone(),

@@ -220,19 +220,13 @@ impl Tile<'_> {
             (core[2].start - array[2].start) as usize,
         ];
         let channels = plan.channels;
-        let value_dims = self.value_dims;
-        let value_start = self.value_start;
         let mut measured = Vec::with_capacity(channels);
         for channel in 0..channels {
-            if channel == plan.detection {
-                measured.push(None);
-                continue;
-            }
             let data = measure(channel, core)?;
             if data.voxel_count() != core_count {
                 return Err("the measured tile does not cover the requested region".to_string());
             }
-            measured.push(Some(data));
+            measured.push(data);
         }
         for z in 0..core_dims[2] {
             for y in 0..core_dims[1] {
@@ -247,19 +241,9 @@ impl Tile<'_> {
                         node < self.nodes.len(),
                         "the accumulated voxel belongs to a tile node"
                     );
-                    let value_slot = (core[0].start as i64 + x as i64 - value_start[0]) as usize
-                        + value_dims[0]
-                            * ((core[1].start as i64 + y as i64 - value_start[1]) as usize
-                                + value_dims[1]
-                                    * ((core[2].start as i64 + z as i64 - value_start[2])
-                                        as usize));
                     let local = x + core_dims[0] * (y + core_dims[1] * z);
                     for (channel, data) in measured.iter().enumerate() {
-                        let value = match data {
-                            Some(data) => data.value(local),
-                            None => self.raw[value_slot],
-                        };
-                        self.accumulators[node * channels + channel].push(value);
+                        self.accumulators[node * channels + channel].push(data.value(local));
                     }
                     let voxel = [
                         core[0].start + x as u32,
