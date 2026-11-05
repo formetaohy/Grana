@@ -73,6 +73,18 @@ impl Protocol {
                     drift.reference()
                 )));
             }
+            if drift.offsets().len() != scene.frame_count() as usize {
+                return Err(ProtocolError::Invalid(format!(
+                    "the drift correction aligns {} frames and the dataset holds {}",
+                    drift.offsets().len(),
+                    scene.frame_count()
+                )));
+            }
+            if drift.offsets()[drift.reference() as usize] != [0.0; 3] {
+                return Err(ProtocolError::Invalid(
+                    "the drift reference frame holds still".to_string(),
+                ));
+            }
         }
         for spec in &self.sets {
             self.validate_source(&spec.source, &names, scene.frame_count())?;
@@ -189,6 +201,7 @@ impl Protocol {
             builder.steps.push(Step::Drift {
                 channel: channel(&names, drift.channel())?,
                 reference: drift.reference(),
+                offsets: drift.offsets().to_vec(),
             });
         }
         let mut sets = Vec::new();

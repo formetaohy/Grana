@@ -135,6 +135,7 @@ impl Protocol {
         let drift = (!scene.drift().is_empty()).then(|| DriftSpec {
             channel: channels[scene.drift().channel()].clone(),
             reference: scene.drift().reference(),
+            offsets: scene.drift().offsets().to_vec(),
         });
         Protocol {
             region: RegionSpec::of(scene.region, scene.dataset.world_size()),

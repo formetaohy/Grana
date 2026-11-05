@@ -180,7 +180,7 @@ fn drift(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
                     widget::caption(
                         ui,
                         &format!(
-                            "{} frames aligned · up to {} voxels",
+                            "{} frames aligned · up to {:.1} voxels",
                             drift.frames(),
                             drift.magnitude()
                         ),
@@ -231,7 +231,7 @@ fn frame_table(ui: &mut Ui, drift: &grana_scene::Drift, time: u32, commands: &mu
                 widget::labelled(
                     ui,
                     &label,
-                    &format!("{:+} {:+} {:+}", offset[0], offset[1], offset[2]),
+                    &format!("{:+0.2} {:+0.2} {:+0.2}", offset[0], offset[1], offset[2]),
                 );
             }
         },
@@ -248,14 +248,10 @@ fn frame_table(ui: &mut Ui, drift: &grana_scene::Drift, time: u32, commands: &mu
     for (axis, name) in ["X", "Y", "Z"].into_iter().enumerate() {
         ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
             widget::field_label(ui, name);
-            if let Some(value) = widget::drag_value(
-                ui,
-                &format!("drift.offset.{axis}"),
-                offset[axis] as f32,
-                1.0,
-                0,
-            ) {
-                offset[axis] = value.round() as i32;
+            if let Some(value) =
+                widget::drag_value(ui, &format!("drift.offset.{axis}"), offset[axis], 0.5, 2)
+            {
+                offset[axis] = (value * 100.0).round() / 100.0;
                 changed = true;
             }
             widget::caption(ui, "voxels");

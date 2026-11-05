@@ -277,7 +277,7 @@ impl Scene {
         hash = mix(hash, self.mask.map_or(0, ObjectSetId::raw));
         for offset in self.drift().offsets() {
             for value in offset {
-                hash = mix(hash, u64::from(*value as u32));
+                hash = mix(hash, u64::from(value.to_bits()));
             }
         }
         hash = mix(hash, self.coloc.document());

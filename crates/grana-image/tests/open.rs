@@ -16,7 +16,7 @@ fn opens_a_tiff_file_through_the_source_layer() {
     assert_eq!(image.name(), "plane");
     assert_eq!(image.pyramid().level(0).extent(), Extent::new(4, 3, 1));
     let data = image
-        .read_region(0, 0, 0, &[0..4, 0..3, 0..1], [0; 3])
+        .read_region(0, 0, 0, &[0..4, 0..3, 0..1], [0.0; 3])
         .expect("the plane reads");
     let VoxelData::U8(values) = data else {
         panic!("the fixture stores bytes");
@@ -53,24 +53,24 @@ fn shifts_a_read_within_the_level() {
     let ranges = [0..4, 0..1, 0..1];
     assert_eq!(
         image
-            .read_region(0, 0, 0, &ranges, [2, 0, 0])
+            .read_region(0, 0, 0, &ranges, [2.0, 0.0, 0.0])
             .expect("the shifted read"),
         VoxelData::U16(vec![2, 3, 4, 5])
     );
     assert_eq!(
         image
-            .read_region(0, 0, 0, &ranges, [-1, 0, 0])
+            .read_region(0, 0, 0, &ranges, [-1.0, 0.0, 0.0])
             .expect("the clipped read"),
         VoxelData::U16(vec![0, 0, 1, 2])
     );
     assert_eq!(
         image
-            .read_region(0, 0, 0, &ranges, [8, 0, 0])
+            .read_region(0, 0, 0, &ranges, [8.0, 0.0, 0.0])
             .expect("the empty read"),
         VoxelData::U16(vec![0, 0, 0, 0])
     );
     let brick = image
-        .read_brick(0, 0, BrickCoord::new(0, 0, 0), [1, 0, 0])
+        .read_brick(0, 0, BrickCoord::new(0, 0, 0), [1.0, 0.0, 0.0])
         .expect("the shifted brick reads");
     let side = PADDED_SIDE as usize;
     let VoxelData::U16(padded) = &brick.channels()[0] else {
@@ -106,7 +106,7 @@ fn resolves_coarser_levels_from_the_stored_level() {
     assert_eq!(image.pyramid().level_count(), 2);
     assert_eq!(image.pyramid().level(1).extent(), Extent::new(32, 32, 4));
     let resolved = image
-        .read_region(0, 1, 0, &[0..32, 0..32, 0..4], [0; 3])
+        .read_region(0, 1, 0, &[0..32, 0..32, 0..4], [0.0; 3])
         .expect("the resolved level reads");
     let VoxelData::U16(values) = resolved else {
         panic!("the resolved level keeps the voxel format");
@@ -120,7 +120,7 @@ fn resolves_coarser_levels_from_the_stored_level() {
         }
     }
     let brick = image
-        .read_brick(0, 1, BrickCoord::new(0, 0, 0), [0; 3])
+        .read_brick(0, 1, BrickCoord::new(0, 0, 0), [0.0; 3])
         .expect("the resolved brick reads");
     let VoxelData::U16(samples) = &brick.channels()[0] else {
         panic!("the resolved brick keeps the voxel format");
@@ -131,7 +131,7 @@ fn resolves_coarser_levels_from_the_stored_level() {
     assert_eq!(samples[side * side * side - 1], 854);
     assert!(
         image
-            .read_region(0, 2, 0, &[0..1, 0..1, 0..1], [0; 3])
+            .read_region(0, 2, 0, &[0..1, 0..1, 0..1], [0.0; 3])
             .is_err()
     );
 }
@@ -147,10 +147,10 @@ fn persists_resolved_tiles_across_sessions() {
     let first = Image::open_with_cache(&source, Some(cache.clone())).expect("the fixture opens");
     let region = [40..104, 10..60, 0..4];
     let resolved = first
-        .read_region(0, 1, 0, &region, [0; 3])
+        .read_region(0, 1, 0, &region, [0.0; 3])
         .expect("the resolved region reads");
     let brick = first
-        .read_brick(0, 1, BrickCoord::new(1, 1, 0), [0; 3])
+        .read_brick(0, 1, BrickCoord::new(1, 1, 0), [0.0; 3])
         .expect("the resolved brick reads");
     let VoxelData::U16(values) = &resolved else {
         panic!("the resolved level keeps the voxel format");
@@ -167,14 +167,14 @@ fn persists_resolved_tiles_across_sessions() {
     fs::remove_dir_all(&dataset).expect("the fixture is removed");
     assert_eq!(
         second
-            .read_region(0, 1, 0, &region, [0; 3])
+            .read_region(0, 1, 0, &region, [0.0; 3])
             .expect("the cached region reads"),
         resolved,
         "the second session reads the persisted tiles"
     );
     assert_eq!(
         second
-            .read_brick(0, 1, BrickCoord::new(1, 1, 0), [0; 3])
+            .read_brick(0, 1, BrickCoord::new(1, 1, 0), [0.0; 3])
             .expect("the cached brick reads"),
         brick,
         "the second session assembles the persisted bricks"
@@ -190,7 +190,7 @@ fn persists_resolved_tiles_across_sessions() {
     let uncached = temporary.path().join("uncached");
     let third = Image::open_with_cache(&source, Some(uncached)).expect("the fixture reopens");
     fs::remove_dir_all(&dataset).expect("the fixture is removed again");
-    let recovered = third.read_region(0, 1, 0, &region, [0; 3]).ok();
+    let recovered = third.read_region(0, 1, 0, &region, [0.0; 3]).ok();
     assert!(
         recovered.as_ref() != Some(&resolved),
         "an empty cache cannot recover the removed source"
@@ -207,7 +207,7 @@ fn composes_small_resolved_regions_without_caching_whole_tiles() {
         .expect("the fixture opens");
     let region = [4..6, 4..6, 0..1];
     let small = image
-        .read_region(0, 1, 0, &region, [0; 3])
+        .read_region(0, 1, 0, &region, [0.0; 3])
         .expect("the small region reads");
     assert_eq!(small, VoxelData::U16(vec![55, 59, 63, 67]));
     assert_eq!(
@@ -216,7 +216,7 @@ fn composes_small_resolved_regions_without_caching_whole_tiles() {
         "a small region is composed without caching whole tiles"
     );
     let whole = image
-        .read_region(0, 1, 0, &[0..128, 0..64, 0..4], [0; 3])
+        .read_region(0, 1, 0, &[0..128, 0..64, 0..4], [0.0; 3])
         .expect("the whole level reads");
     let VoxelData::U16(samples) = &whole else {
         panic!("the resolved level keeps the voxel format");

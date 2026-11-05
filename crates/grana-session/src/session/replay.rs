@@ -100,7 +100,18 @@ impl Session {
                     self.present_recipe();
                     return;
                 }
-                Step::Drift { channel, reference } => self.align_drift(channel, reference),
+                Step::Drift {
+                    channel,
+                    reference,
+                    offsets,
+                } => {
+                    if let Some(scene) = self.scene.as_mut() {
+                        scene.set_drift(grana_scene::Drift::new(channel, reference, offsets));
+                    }
+                    self.realign();
+                    self.advance_step();
+                    continue;
+                }
                 Step::Detect { set, mask } => {
                     if let Some(scene) = self.scene.as_mut() {
                         scene.set_mask(mask);

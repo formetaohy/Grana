@@ -438,7 +438,6 @@ fn is_closing(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grana_gpu::Headless;
 
     #[test]
     fn cjk_text_breaks_between_characters() {
@@ -449,8 +448,8 @@ mod tests {
 
     #[test]
     fn cjk_text_uses_a_fallback_face() {
-        let gpu = Headless::new().expect("the headless device is available");
-        let mut text = Text::new(&gpu.device);
+        let (device, _) = crate::test_gpu::gpu();
+        let mut text = Text::new(&device);
         text.begin(1.0);
         let style = TypeStyle::new(14.0, 400.0, 18.0);
         let layout = text.layout("中文测试", style, 0.0, false, false, Align::Start);

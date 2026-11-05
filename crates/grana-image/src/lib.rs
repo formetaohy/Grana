@@ -1,3 +1,4 @@
+mod align;
 mod cache;
 mod error;
 mod image;

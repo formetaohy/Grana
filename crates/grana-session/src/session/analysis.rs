@@ -827,12 +827,15 @@ impl Session {
         }
     }
 
-    pub(super) fn set_drift_offset(&mut self, time: u32, offset: [i32; 3]) {
+    pub(super) fn set_drift_offset(&mut self, time: u32, offset: [f32; 3]) {
         let Some(scene) = self.scene.as_mut() else {
             return;
         };
         let drift = scene.drift().clone();
         if drift.is_empty() || time >= drift.frames() || time == drift.reference() {
+            return;
+        }
+        if !offset.iter().all(|value| value.is_finite()) {
             return;
         }
         let offset =

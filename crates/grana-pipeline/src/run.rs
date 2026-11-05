@@ -583,7 +583,7 @@ fn full_region(
     time: u32,
     level: usize,
     channel: usize,
-    shift: [i32; 3],
+    shift: [f32; 3],
 ) -> Result<VoxelData, String> {
     let extent = pyramid.level(level).extent();
     reader
@@ -637,11 +637,7 @@ pub fn drift(
     let level = grana_analysis::drift_level(pyramid)
         .ok_or_else(|| "the dataset is too small to align".to_string())?;
     let ranges = grana_analysis::drift_spans(pyramid, level);
-    let dims = [
-        (ranges[0].end - ranges[0].start) as usize,
-        (ranges[1].end - ranges[1].start) as usize,
-        (ranges[2].end - ranges[2].start) as usize,
-    ];
+    let dims = window_dims(&ranges);
     let total = frames as usize;
     sink(Event::Progress {
         time: 0,
@@ -650,28 +646,56 @@ pub fn drift(
     });
     let anchor = grana_analysis::drift_window(
         &reader
-            .read_region(reference, level, channel, &ranges, [0; 3])
+            .read_region(reference, level, channel, &ranges, [0.0; 3])
             .map_err(String::from)?,
         &ranges,
     );
-    let ratio = 2i32.pow(level as u32);
+    let ratio = (1u64 << level) as f32;
+    let fine = if level > 0 {
+        let ranges = grana_analysis::drift_spans(pyramid, 0);
+        let dims = window_dims(&ranges);
+        let anchor = grana_analysis::drift_window(
+            &reader
+                .read_region(reference, 0, channel, &ranges, [0.0; 3])
+                .map_err(String::from)?,
+            &ranges,
+        );
+        Some((ranges, dims, anchor))
+    } else {
+        None
+    };
     let mut offsets = Vec::with_capacity(total);
     for time in 0..frames {
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
         let offset = if time == reference {
-            [0; 3]
+            [0.0; 3]
         } else {
             let moving = grana_analysis::drift_window(
                 &reader
-                    .read_region(time, level, channel, &ranges, [0; 3])
+                    .read_region(time, level, channel, &ranges, [0.0; 3])
                     .map_err(String::from)?,
                 &ranges,
             );
-            grana_analysis::drift_shift(&anchor, &moving, dims).map(|value| value * ratio)
+            let coarse =
+                grana_analysis::drift_shift(&anchor, &moving, dims).map(|value| value * ratio);
+            match &fine {
+                None => coarse,
+                Some((ranges, dims, fine_anchor)) => {
+                    let whole = coarse.map(f32::round);
+                    let moving = grana_analysis::drift_window(
+                        &reader
+                            .read_region(time, 0, channel, ranges, whole)
+                            .map_err(String::from)?,
+                        ranges,
+                    );
+                    let residual = grana_analysis::drift_shift(fine_anchor, &moving, *dims);
+                    [0, 1, 2].map(|axis| whole[axis] + residual[axis])
+                }
+            }
         };
-        offsets.push(offset);
+        offsets.push(offset.map(|value| value.clamp(-Drift::LIMIT, Drift::LIMIT)));
         sink(Event::Progress {
             time,
             done: time as usize + 1,
@@ -684,4 +708,8 @@ pub fn drift(
     sink(Event::Drift(Drift::new(channel, reference, offsets)));
     sink(Event::Done);
     Ok(())
+}
+
+fn window_dims(ranges: &[Range<u32>; 3]) -> [usize; 3] {
+    [0, 1, 2].map(|axis| (ranges[axis].end - ranges[axis].start) as usize)
 }

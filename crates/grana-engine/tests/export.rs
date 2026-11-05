@@ -540,12 +540,38 @@ fn scratch(name: &str) -> PathBuf {
     path
 }
 
-fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
-    match grana_gpu::Headless::new() {
-        Ok(headless) => Some((headless.device, headless.queue)),
-        Err(detail) => {
-            println!("{detail}, skipping");
-            None
-        }
+fn device() -> Option<(TestDevice, wgpu::Queue)> {
+    static SHARED: std::sync::OnceLock<Option<(wgpu::Device, wgpu::Queue)>> =
+        std::sync::OnceLock::new();
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let (device, queue) = SHARED
+        .get_or_init(|| match grana_gpu::Headless::new() {
+            Ok(headless) => Some((headless.device, headless.queue)),
+            Err(detail) => {
+                println!("{detail}, skipping");
+                None
+            }
+        })
+        .clone()?;
+    Some((
+        TestDevice {
+            device,
+            _serial: serial,
+        },
+        queue,
+    ))
+}
+
+struct TestDevice {
+    device: wgpu::Device,
+    _serial: std::sync::MutexGuard<'static, ()>,
+}
+
+impl std::ops::Deref for TestDevice {
+    type Target = wgpu::Device;
+
+    fn deref(&self) -> &wgpu::Device {
+        &self.device
     }
 }

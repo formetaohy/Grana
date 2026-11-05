@@ -34,21 +34,46 @@ fn blobs() -> Vec<f32> {
     values
 }
 
-fn moved(source: &[f32], offset: [i32; 3]) -> Vec<f32> {
+fn sample(source: &[f32], at: [f32; 3]) -> f32 {
+    let low = at.map(|value| value.floor() as i64);
+    let fraction = [0, 1, 2].map(|axis| at[axis] - low[axis] as f32);
+    let mut sum = 0.0;
+    for corner in 0..8 {
+        let offset = [0, 1, 2].map(|axis| (corner >> axis) & 1);
+        let weight = (0..3)
+            .map(|axis| {
+                if offset[axis] == 1 {
+                    fraction[axis]
+                } else {
+                    1.0 - fraction[axis]
+                }
+            })
+            .product::<f32>();
+        let at = [0, 1, 2].map(|axis| low[axis] + offset[axis]);
+        if at
+            .iter()
+            .enumerate()
+            .any(|(axis, value)| *value < 0 || *value >= DIMS[axis] as i64)
+        {
+            continue;
+        }
+        sum +=
+            weight * source[at[0] as usize + DIMS[0] * (at[1] as usize + DIMS[1] * at[2] as usize)];
+    }
+    sum
+}
+
+fn moved(source: &[f32], offset: [f32; 3]) -> Vec<f32> {
     let mut values = vec![0.0f32; source.len()];
-    for z in 0..DIMS[2] as i32 {
-        for y in 0..DIMS[1] as i32 {
-            for x in 0..DIMS[0] as i32 {
-                let source_at = [x - offset[0], y - offset[1], z - offset[2]];
-                if source_at.iter().any(|value| *value < 0) {
-                    continue;
-                }
-                let [sx, sy, sz] = source_at.map(|value| value as usize);
-                if sx >= DIMS[0] || sy >= DIMS[1] || sz >= DIMS[2] {
-                    continue;
-                }
-                values[x as usize + DIMS[0] * (y as usize + DIMS[1] * z as usize)] =
-                    source[sx + DIMS[0] * (sy + DIMS[1] * sz)];
+    for z in 0..DIMS[2] {
+        for y in 0..DIMS[1] {
+            for x in 0..DIMS[0] {
+                let at = [
+                    x as f32 - offset[0],
+                    y as f32 - offset[1],
+                    z as f32 - offset[2],
+                ];
+                values[x + DIMS[0] * (y + DIMS[1] * z)] = sample(source, at);
             }
         }
     }
@@ -56,20 +81,28 @@ fn moved(source: &[f32], offset: [i32; 3]) -> Vec<f32> {
 }
 
 #[test]
-fn recovers_an_integer_translation() {
+fn recovers_the_translation_of_a_moved_volume() {
     let reference = blobs();
-    for offset in [[3, -2, 1], [-4, 5, -2], [0, 0, 0], [6, 6, 3]] {
+    for offset in [
+        [3.0, -2.0, 1.0],
+        [-4.0, 5.0, -2.0],
+        [0.0, 0.0, 0.0],
+        [2.5, -1.25, 0.5],
+        [0.0, 3.75, -1.5],
+    ] {
         let moving = moved(&reference, offset);
-        assert_eq!(
-            drift_shift(&reference, &moving, DIMS),
-            offset,
-            "the estimator recovers the translation {offset:?}"
-        );
+        let found = drift_shift(&reference, &moving, DIMS);
+        for axis in 0..3 {
+            assert!(
+                (found[axis] - offset[axis]).abs() < 0.2,
+                "the estimator recovers {offset:?} but reported {found:?}"
+            );
+        }
     }
 }
 
 #[test]
 fn reports_no_motion_for_a_uniform_volume() {
     let values = vec![4.0f32; DIMS[0] * DIMS[1] * DIMS[2]];
-    assert_eq!(drift_shift(&values, &values, DIMS), [0; 3]);
+    assert_eq!(drift_shift(&values, &values, DIMS), [0.0; 3]);
 }

@@ -162,7 +162,7 @@ pub fn window(data: &VoxelData, ranges: &[Range<u32>; 3]) -> Vec<f32> {
     values
 }
 
-pub fn shift(reference: &[f32], moving: &[f32], dims: [usize; 3]) -> [i32; 3] {
+pub fn shift(reference: &[f32], moving: &[f32], dims: [usize; 3]) -> [f32; 3] {
     assert_eq!(
         reference.len(),
         dims[0] * dims[1] * dims[2],
@@ -174,7 +174,7 @@ pub fn shift(reference: &[f32], moving: &[f32], dims: [usize; 3]) -> [i32; 3] {
         "a moving window matches the reference window"
     );
     if reference.iter().all(|value| *value == reference[0]) {
-        return [0; 3];
+        return [0.0; 3];
     }
     let sizes = dims.map(|value| (2 * value.max(2)).next_power_of_two());
     let mut first = Cube::new(sizes);
@@ -239,7 +239,7 @@ fn taper(index: usize, length: usize) -> f32 {
     1.0
 }
 
-fn locate(cube: &Cube, dims: [usize; 3]) -> [i32; 3] {
+fn locate(cube: &Cube, dims: [usize; 3]) -> [f32; 3] {
     let sizes = cube.dims;
     let limits = [0, 1, 2].map(|axis| (dims[axis] / 2).max(1) as isize);
     let mut best = [0usize; 3];
@@ -273,8 +273,7 @@ fn locate(cube: &Cube, dims: [usize; 3]) -> [i32; 3] {
         } else {
             0.0
         };
-        let displacement = -(signed_index(best[axis], sizes[axis]) as f32 + offset);
-        displacement.round() as i32
+        -(signed_index(best[axis], sizes[axis]) as f32 + offset)
     })
 }
 

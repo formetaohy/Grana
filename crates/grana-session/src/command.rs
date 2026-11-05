@@ -212,7 +212,7 @@ pub enum Command {
     SetDriftReference(u32),
     SetDriftOffset {
         time: u32,
-        offset: [i32; 3],
+        offset: [f32; 3],
     },
     ExportColoc,
     ExportMeasure,

@@ -528,7 +528,7 @@ fn fixture() -> Scene {
 }
 
 fn stage(scene: &mut Scene) {
-    scene.set_drift(Drift::new(1, 0, vec![[0, 0, 0], [2, -1, 0]]));
+    scene.set_drift(Drift::new(1, 0, vec![[0.0, 0.0, 0.0], [2.5, -1.25, 0.0]]));
     let spots = scene.add_object(ObjectKind::Spots, 0);
     let surfaces = scene.add_object(ObjectKind::Surfaces, 1);
     let filaments = scene.add_object(ObjectKind::Filaments, 0);

@@ -1293,10 +1293,10 @@ impl Decode for Drift {
         let frames = reader.count(1)?;
         let mut offsets = Vec::with_capacity(frames.min(1 << 16));
         for _ in 0..frames {
-            let mut offset = [0i32; 3];
+            let mut offset = [0f32; 3];
             for value in &mut offset {
-                *value = reader.i32()?;
-                if value.unsigned_abs() > Drift::LIMIT as u32 {
+                *value = finite(reader.f32()?)?;
+                if value.abs() > Drift::LIMIT {
                     return Err(FAULT_VALUE);
                 }
             }
@@ -1308,7 +1308,7 @@ impl Decode for Drift {
             }
             return Ok(Drift::default());
         }
-        if reference as usize >= offsets.len() || offsets[reference as usize] != [0; 3] {
+        if reference as usize >= offsets.len() || offsets[reference as usize] != [0.0; 3] {
             return Err(FAULT_VALUE);
         }
         Ok(Drift::new(channel, reference, offsets))

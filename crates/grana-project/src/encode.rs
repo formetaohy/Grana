@@ -143,7 +143,7 @@ impl Encode for Drift {
         writer.count(self.offsets().len());
         for offset in self.offsets() {
             for value in offset {
-                writer.i32(*value);
+                writer.f32(*value);
             }
         }
     }

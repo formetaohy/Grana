@@ -9,6 +9,7 @@ use grana_volume::{
     pad_brick,
 };
 
+use crate::align;
 use crate::cache::{self, Key, Memory, Shape, Store};
 use crate::level::{self, Field, Scale};
 use crate::tile::{self, Grid};
@@ -119,13 +120,14 @@ impl Image {
         level: usize,
         channel: usize,
         ranges: &[Range<u32>; 3],
-        shift: [i32; 3],
+        shift: [f32; 3],
     ) -> Result<VoxelData, Error> {
         self.level_extent(level)?;
-        if shift == [0; 3] {
+        let shift = align::level_shift(shift, level);
+        if shift == [0.0; 3] {
             return self.region_at(time, level, channel, ranges);
         }
-        self.shifted_region(time, level, channel, ranges, shift)
+        self.aligned_region(time, level, channel, ranges, shift)
     }
 
     pub fn read_brick(
@@ -133,9 +135,9 @@ impl Image {
         time: u32,
         level: usize,
         coord: BrickCoord,
-        shift: [i32; 3],
+        shift: [f32; 3],
     ) -> Result<BrickData, Error> {
-        if shift == [0; 3] && level < self.pyramid.stored() {
+        if shift == [0.0; 3] && level < self.pyramid.stored() {
             return self.stored_brick(time, level, coord);
         }
         let extent = self.level_extent(level)?;
@@ -174,33 +176,23 @@ impl Image {
         self.resolved_region(time, level, channel, ranges)
     }
 
-    fn shifted_region(
+    fn aligned_region(
         &self,
         time: u32,
         level: usize,
         channel: usize,
         ranges: &[Range<u32>; 3],
-        shift: [i32; 3],
+        shift: [f32; 3],
     ) -> Result<VoxelData, Error> {
+        let format = self.channel_format(channel)?;
         let extent = self.level_extent(level)?;
         let limits = [extent.x(), extent.y(), extent.z()];
-        let shift = voxel_shift(shift, level);
-        let mut source: [Range<u32>; 3] = [0..0, 0..0, 0..0];
-        let mut placed: [Range<u32>; 3] = [0..0, 0..0, 0..0];
-        for axis in 0..3 {
-            let offset = i64::from(shift[axis]);
-            let limit = i64::from(limits[axis]);
-            let start = (i64::from(ranges[axis].start) + offset).clamp(0, limit);
-            let end = (i64::from(ranges[axis].end) + offset).clamp(0, limit);
-            source[axis] = start as u32..end as u32;
-            placed[axis] = (start - offset) as u32..(end - offset) as u32;
+        let plan = align::plan(ranges, shift, limits);
+        if plan.source.iter().any(|range| range.start >= range.end) {
+            return Ok(align::zeros(format, ranges));
         }
-        let mut out = tile::allocate(self.channel_format(channel)?, ranges);
-        if source.iter().all(|range| range.start < range.end) {
-            let data = self.region_at(time, level, channel, &source)?;
-            tile::copy_intersection(&mut out, ranges, &data, &placed);
-        }
-        Ok(out)
+        let data = self.region_at(time, level, channel, &plan.source)?;
+        Ok(align::resample(&data, &plan, ranges))
     }
 
     fn channel_format(&self, channel: usize) -> Result<VoxelFormat, Error> {
@@ -443,11 +435,6 @@ impl Image {
     fn tiles(&self) -> MutexGuard<'_, Memory> {
         self.tiles.lock().unwrap_or_else(|error| error.into_inner())
     }
-}
-
-fn voxel_shift(shift: [i32; 3], level: usize) -> [i32; 3] {
-    let ratio = (1i64 << level) as f64;
-    shift.map(|value| (f64::from(value) / ratio).round() as i32)
 }
 
 fn intersection(left: &[Range<u32>; 3], right: &[Range<u32>; 3]) -> [Range<u32>; 3] {

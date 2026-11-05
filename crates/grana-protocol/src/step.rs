@@ -5,6 +5,7 @@ pub enum Step {
     Drift {
         channel: usize,
         reference: u32,
+        offsets: Vec<[f32; 3]>,
     },
     Detect {
         set: ObjectSetId,

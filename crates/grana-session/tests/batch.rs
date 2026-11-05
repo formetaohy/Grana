@@ -1061,7 +1061,7 @@ fn replays_a_filtered_set_that_reads_a_relation() {
 
 const DRIFT_PROTOCOL: &str = r#"
 {
-  "drift": {"channel": "Cells"},
+  "drift": {"channel": "Cells", "reference": 0, "offsets": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]},
   "sets": [
     {
       "name": "Puncta",

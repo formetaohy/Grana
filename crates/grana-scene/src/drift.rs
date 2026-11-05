@@ -1,23 +1,23 @@
 use std::sync::Arc;
 
-const LIMIT: i32 = 1 << 20;
+const LIMIT: f32 = 1_048_576.0;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Drift {
     channel: usize,
     reference: u32,
-    offsets: Arc<[[i32; 3]]>,
+    offsets: Arc<[[f32; 3]]>,
 }
 
 impl Drift {
-    pub const LIMIT: i32 = LIMIT;
+    pub const LIMIT: f32 = LIMIT;
 
-    pub fn new(channel: usize, reference: u32, offsets: Vec<[i32; 3]>) -> Self {
+    pub fn new(channel: usize, reference: u32, offsets: Vec<[f32; 3]>) -> Self {
         assert!(
             offsets
                 .iter()
                 .flatten()
-                .all(|value| value.unsigned_abs() <= LIMIT as u32),
+                .all(|value| value.is_finite() && value.abs() <= LIMIT),
             "a drift offset stays inside the volume"
         );
         assert!(
@@ -25,7 +25,7 @@ impl Drift {
             "a drift reference is one of the aligned frames"
         );
         assert!(
-            offsets.is_empty() || offsets[reference as usize] == [0; 3],
+            offsets.is_empty() || offsets[reference as usize] == [0.0; 3],
             "the reference frame holds still"
         );
         Self {
@@ -43,7 +43,7 @@ impl Drift {
         self.reference
     }
 
-    pub fn offsets(&self) -> &[[i32; 3]] {
+    pub fn offsets(&self) -> &[[f32; 3]] {
         &self.offsets
     }
 
@@ -55,17 +55,16 @@ impl Drift {
         self.offsets.len() as u32
     }
 
-    pub fn offset(&self, time: u32) -> [i32; 3] {
-        self.offsets.get(time as usize).copied().unwrap_or([0; 3])
+    pub fn offset(&self, time: u32) -> [f32; 3] {
+        self.offsets.get(time as usize).copied().unwrap_or([0.0; 3])
     }
 
-    pub fn magnitude(&self) -> i32 {
+    pub fn magnitude(&self) -> f32 {
         self.offsets
             .iter()
             .flatten()
             .map(|value| value.abs())
-            .max()
-            .unwrap_or(0)
+            .fold(0.0, f32::max)
     }
 
     pub fn referenced_at(&self, reference: u32) -> Self {
@@ -82,7 +81,7 @@ impl Drift {
         Self::new(self.channel, reference, offsets)
     }
 
-    pub fn with_offset(&self, time: u32, offset: [i32; 3]) -> Self {
+    pub fn with_offset(&self, time: u32, offset: [f32; 3]) -> Self {
         assert!(
             (time as usize) < self.offsets.len(),
             "a drift offset belongs to an aligned frame"

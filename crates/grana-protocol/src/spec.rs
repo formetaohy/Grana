@@ -185,6 +185,7 @@ pub struct DriftSpec {
     pub channel: String,
     #[serde(default, skip_serializing_if = "is_u32_zero")]
     pub reference: u32,
+    pub offsets: Vec<[f32; 3]>,
 }
 
 impl DriftSpec {
@@ -194,6 +195,10 @@ impl DriftSpec {
 
     pub fn reference(&self) -> u32 {
         self.reference
+    }
+
+    pub fn offsets(&self) -> &[[f32; 3]] {
+        &self.offsets
     }
 }
 

@@ -11,6 +11,8 @@ pub mod popover;
 mod registry;
 mod render;
 mod style;
+#[cfg(test)]
+mod test_gpu;
 mod text;
 mod theme;
 mod ui;

@@ -150,11 +150,44 @@ fn brick(session: &mut Session, time: u32) -> Vec<u16> {
 }
 
 #[test]
+fn resamples_a_half_voxel_alignment() {
+    let mut session = Session::new();
+    session.open_series("drifting cells", series());
+    session.execute(Command::ComputeDrift);
+    settle(&mut session);
+    let reference = brick(&mut session, 0);
+    session.execute(Command::SetDriftOffset {
+        time: 1,
+        offset: [OFFSET as f32 + 0.5, 0.0, 0.0],
+    });
+    let aligned = brick(&mut session, 1);
+    let side = PADDED_SIDE as usize;
+    for z in 0..EXTENT.z() as usize {
+        for y in 0..EXTENT.y() as usize {
+            for x in 0..(EXTENT.x() - OFFSET - 2) as usize {
+                let slot = (x + 1) + side * ((y + 1) + side * (z + 1));
+                let left = u32::from(reference[slot]);
+                let right = u32::from(reference[slot + 1]);
+                assert_eq!(
+                    aligned[slot],
+                    (left + right).div_ceil(2) as u16,
+                    "the half voxel offset averages its neighbours at ({x}, {y}, {z})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn reads_bricks_through_the_drift() {
     let mut session = Session::new();
     session.open_series("drifting cells", series());
     session.execute(Command::ComputeDrift);
     settle(&mut session);
+    session.execute(Command::SetDriftOffset {
+        time: 1,
+        offset: [OFFSET as f32, 0.0, 0.0],
+    });
     let reference = brick(&mut session, 0);
     let aligned = brick(&mut session, 1);
     let side = PADDED_SIDE as usize;
@@ -196,11 +229,11 @@ fn corrects_the_drift_between_the_frames() {
     settle(&mut session);
     let drift = session.scene().expect("the series opens").drift();
     assert_eq!(drift.frames(), 2, "the table covers every frame");
-    assert_eq!(drift.offset(0), [0; 3], "the reference frame holds still");
-    assert_eq!(
-        drift.offset(1),
-        [OFFSET as i32, 0, 0],
-        "the estimator recovers the whole motion"
+    assert_eq!(drift.offset(0), [0.0; 3], "the reference frame holds still");
+    let found = drift.offset(1);
+    assert!(
+        (found[0] - OFFSET as f32).abs() < 0.2 && found[1].abs() < 0.2 && found[2].abs() < 0.2,
+        "the estimator recovers the whole motion: {found:?}"
     );
 
     session.execute(Command::Detect(set));
@@ -231,13 +264,17 @@ fn re_references_and_edits_the_alignment() {
     session.execute(Command::SetDriftReference(1));
     let drift = session.scene().expect("the series opens").drift().clone();
     assert_eq!(drift.reference(), 1, "the chosen frame anchors the table");
-    assert_eq!(drift.offset(1), [0; 3], "the reference frame holds still");
-    assert_eq!(
-        drift.offset(0),
-        [-(OFFSET as i32), 0, 0],
-        "the other frames move against the new anchor"
+    assert_eq!(drift.offset(1), [0.0; 3], "the reference frame holds still");
+    let found = drift.offset(0);
+    assert!(
+        (found[0] + OFFSET as f32).abs() < 0.2 && found[1].abs() < 0.2 && found[2].abs() < 0.2,
+        "the other frames move against the new anchor: {found:?}"
     );
 
+    session.execute(Command::SetDriftOffset {
+        time: 0,
+        offset: [-(OFFSET as f32), 0.0, 0.0],
+    });
     let first = brick(&mut session, 0);
     let reference = brick(&mut session, 1);
     let side = PADDED_SIDE as usize;
@@ -255,10 +292,10 @@ fn re_references_and_edits_the_alignment() {
 
     session.execute(Command::SetDriftOffset {
         time: 0,
-        offset: [0; 3],
+        offset: [0.0; 3],
     });
     let drift = session.scene().expect("the series opens").drift();
-    assert_eq!(drift.offset(0), [0; 3], "a frame offset is editable");
+    assert_eq!(drift.offset(0), [0.0; 3], "a frame offset is editable");
     let unaligned = brick(&mut session, 0);
     assert!(
         unaligned != first,
@@ -291,10 +328,10 @@ fn replays_the_drift_correction_of_a_protocol() {
 
     let drift = session.scene().expect("the series opens").drift();
     assert_eq!(drift.frames(), 2, "the replay aligns every frame");
-    assert_eq!(
-        drift.offset(1),
-        [OFFSET as i32, 0, 0],
-        "the replay estimates the same motion"
+    let found = drift.offset(1);
+    assert!(
+        (found[0] - OFFSET as f32).abs() < 0.2 && found[1].abs() < 0.2 && found[2].abs() < 0.2,
+        "the replay installs the captured alignment: {found:?}"
     );
     assert!(
         session

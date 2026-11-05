@@ -1849,7 +1849,6 @@ fn mix(left: u64, right: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grana_gpu::Headless;
 
     fn frame(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
         ui.resize([400, 300]);
@@ -1870,8 +1869,8 @@ mod tests {
 
     #[test]
     fn grid_centers_cells_and_advances_rows() {
-        let gpu = Headless::new().expect("the headless device is available");
-        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let (device, queue) = crate::test_gpu::gpu();
+        let mut ui = Ui::new(&device, &queue, crate::test_gpu::format());
         let mut keys = [0u64; 2];
         frame(&mut ui, |ui| {
             ui.grid(&[Length::Fixed(100.0), Length::Fill], 10.0, |grid| {
@@ -1903,8 +1902,8 @@ mod tests {
 
     #[test]
     fn auto_width_columns_measure_their_content() {
-        let gpu = Headless::new().expect("the headless device is available");
-        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let (device, queue) = crate::test_gpu::gpu();
+        let mut ui = Ui::new(&device, &queue, crate::test_gpu::format());
         let mut rect = Rect::ZERO;
         frame(&mut ui, |ui| {
             ui.column(Block::column().width(Length::Auto), |ui| {
@@ -1916,8 +1915,8 @@ mod tests {
 
     #[test]
     fn wrapping_rows_start_a_new_line() {
-        let gpu = Headless::new().expect("the headless device is available");
-        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let (device, queue) = crate::test_gpu::gpu();
+        let mut ui = Ui::new(&device, &queue, crate::test_gpu::format());
         let mut cells = [Rect::ZERO; 3];
         let mut row = Rect::ZERO;
         frame(&mut ui, |ui| {
@@ -1946,8 +1945,8 @@ mod tests {
 
     #[test]
     fn paints_instances_into_the_color_target() {
-        let gpu = Headless::new().expect("the headless device is available");
-        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let (device, queue) = crate::test_gpu::gpu();
+        let mut ui = Ui::new(&device, &queue, crate::test_gpu::format());
         frame(&mut ui, |ui| {
             ui.painter().rect(
                 Rect::from_min_size(Vec2::ZERO, Vec2::splat(64.0)),
@@ -1956,14 +1955,17 @@ mod tests {
             );
         });
         ui.resize([64, 64]);
-        let target = grana_gpu::Target::new(&gpu.device, "grana.ui.test", [64, 64], gpu.format());
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("grana.ui.test"),
-            });
+        let target = grana_gpu::Target::new(
+            &device,
+            "grana.ui.test",
+            [64, 64],
+            crate::test_gpu::format(),
+        );
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("grana.ui.test"),
+        });
         ui.paint(&mut encoder, &target.view);
-        gpu.queue.submit([encoder.finish()]);
+        queue.submit([encoder.finish()]);
         let (pixels, size, _) = ui.renderer_mut().read_color();
         assert_eq!(size, [64, 64]);
         assert!(
@@ -1974,8 +1976,8 @@ mod tests {
 
     #[test]
     fn combo_chooses_with_the_keyboard() {
-        let gpu = Headless::new().expect("the headless device is available");
-        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let (device, queue) = crate::test_gpu::gpu();
+        let mut ui = Ui::new(&device, &queue, crate::test_gpu::format());
         let items = [
             (0u8, "A".to_string()),
             (1, "B".to_string()),
@@ -2016,8 +2018,8 @@ mod tests {
 
     #[test]
     fn text_field_returns_the_committed_text() {
-        let gpu = Headless::new().expect("the headless device is available");
-        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let (device, queue) = crate::test_gpu::gpu();
+        let mut ui = Ui::new(&device, &queue, crate::test_gpu::format());
         let key = ui.id("field");
         let style = TextStyle::new(ui.theme().font(Level::Body), crate::color::Color::WHITE);
         let mut result = None;
@@ -2048,8 +2050,8 @@ mod tests {
 
     #[test]
     fn text_area_commits_multiline_text() {
-        let gpu = Headless::new().expect("the headless device is available");
-        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let (device, queue) = crate::test_gpu::gpu();
+        let mut ui = Ui::new(&device, &queue, crate::test_gpu::format());
         let key = ui.id("area");
         let style = TextStyle::new(ui.theme().font(Level::Body), crate::color::Color::WHITE);
         let mut result = None;
@@ -2080,8 +2082,8 @@ mod tests {
 
     #[test]
     fn baseline_alignment_uses_text_baselines() {
-        let gpu = Headless::new().expect("the headless device is available");
-        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let (device, queue) = crate::test_gpu::gpu();
+        let mut ui = Ui::new(&device, &queue, crate::test_gpu::format());
         let mut second = Rect::ZERO;
         frame(&mut ui, |ui| {
             ui.row(Block::row().align(Align::Baseline).gaps(20.0), |ui| {
@@ -2106,8 +2108,8 @@ mod tests {
 
     #[test]
     fn tab_focuses_and_enter_activates() {
-        let gpu = Headless::new().expect("the headless device is available");
-        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let (device, queue) = crate::test_gpu::gpu();
+        let mut ui = Ui::new(&device, &queue, crate::test_gpu::format());
         let first = ui.id("first");
         let mut clicked = false;
         let mut render = |ui: &mut Ui| {
