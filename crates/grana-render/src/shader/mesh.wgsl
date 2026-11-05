@@ -180,7 +180,7 @@ fn fs_oit(input: VertexOutput) -> TailFragment {
     var output: TailFragment;
     output.accumulate = vec4<f32>(0.0);
     output.reveal = vec4<f32>(0.0);
-    output.depth = vec2<f32>(0.0);
+    output.depth = vec2<f32>(1.0, 1.0);
     if (is_outside(input)) {
         discard;
     }
@@ -204,7 +204,7 @@ fn fs_oit(input: VertexOutput) -> TailFragment {
     let weight = oit_weight(input.clip_position.z, sample.a);
     output.accumulate = vec4<f32>(sample.rgb * alpha * weight, alpha * weight);
     output.reveal = vec4<f32>(alpha);
-    output.depth = vec2<f32>(input.clip_position.z * alpha, alpha);
+    output.depth = vec2<f32>(input.clip_position.z, 1.0);
     return output;
 }
 

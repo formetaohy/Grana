@@ -50,6 +50,19 @@ const REVEAL_BLEND: BlendState = BlendState {
     },
 };
 
+const NEAREST_BLEND: BlendState = BlendState {
+    color: BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::One,
+        operation: BlendOperation::Min,
+    },
+    alpha: BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::One,
+        operation: BlendOperation::Min,
+    },
+};
+
 pub(crate) fn tail_targets() -> [Option<ColorTargetState>; 3] {
     [
         Some(ColorTargetState {
@@ -64,7 +77,7 @@ pub(crate) fn tail_targets() -> [Option<ColorTargetState>; 3] {
         }),
         Some(ColorTargetState {
             format: TAIL_DEPTH_FORMAT,
-            blend: Some(ACCUMULATE_BLEND),
+            blend: Some(NEAREST_BLEND),
             write_mask: ColorWrites::ALL,
         }),
     ]

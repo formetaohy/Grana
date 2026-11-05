@@ -5,7 +5,7 @@ use grana_geometry::GeometryStore;
 use grana_object::{SurfaceFilter, SurfaceParams};
 use grana_pipeline::{DetectRequest, Event, SeedPolicy};
 use grana_scene::{Job, ObjectParams, ObjectSetId};
-use grana_session::{Poll, Source, detect};
+use grana_session::{Image, Poll, Source, detect};
 use grana_volume::{Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
 const HIGH: u16 = 65_535;
@@ -61,6 +61,7 @@ fn seeds() -> Vec<Vec<[f32; 3]>> {
 fn run(seeds: Vec<Vec<[f32; 3]>>) -> Result<Vec<usize>, String> {
     let series = series();
     let source = Source::Memory(Arc::new(series));
+    let reader = Arc::new(Image::open(&source).expect("the volume opens"));
     let policy = if seeds.iter().any(|frame| !frame.is_empty()) {
         SeedPolicy::Strict
     } else {
@@ -84,7 +85,7 @@ fn run(seeds: Vec<Vec<[f32; 3]>>) -> Result<Vec<usize>, String> {
     .with_seeds(seeds, policy);
     let analysis = detect(
         Job::Detect(ObjectSetId::from_raw(1).expect("a set id")),
-        source,
+        reader,
         request,
     );
     let deadline = Instant::now() + Duration::from_secs(120);

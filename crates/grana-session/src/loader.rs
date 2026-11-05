@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 
 use grana_image::{Format, Image, Series, Source};
 use grana_scene::Drift;
@@ -37,6 +37,7 @@ pub struct Loader {
     queue: Arc<Queue>,
     time: Arc<AtomicU32>,
     drift: Arc<RwLock<Drift>>,
+    reader: Arc<OnceLock<Arc<Image>>>,
     source: Source,
 }
 
@@ -195,13 +196,18 @@ impl Loader {
         let queue = Arc::new(Queue::new());
         let time = Arc::new(AtomicU32::new(0));
         let drift = Arc::new(RwLock::new(Drift::default()));
-        spawn(Arc::new(reader), &queue, &time, &drift, &sender);
+        let reader = Arc::new(reader);
+        let resident = Arc::new(OnceLock::new());
+        let installed = resident.set(Arc::clone(&reader));
+        assert!(installed.is_ok(), "a fresh loader holds no reader");
+        spawn(Arc::clone(&reader), &queue, &time, &drift, &sender);
         (
             Self {
                 events,
                 queue,
                 time,
                 drift,
+                reader: resident,
                 source,
             },
             pyramid,
@@ -221,11 +227,13 @@ impl Loader {
         let queue = Arc::new(Queue::new());
         let time = Arc::new(AtomicU32::new(0));
         let drift = Arc::new(RwLock::new(Drift::default()));
+        let resident = Arc::new(OnceLock::new());
         let opened = source.clone();
         let opening_sender = sender.clone();
         let opening_queue = Arc::clone(&queue);
         let opening_time = Arc::clone(&time);
         let opening_drift = Arc::clone(&drift);
+        let opening_reader = Arc::clone(&resident);
         std::thread::spawn(move || {
             let reader = match Image::open(&opened) {
                 Ok(reader) => reader,
@@ -251,11 +259,13 @@ impl Loader {
                 series: reader.series().to_vec(),
                 selected: reader.selected(),
             };
+            let reader = Arc::new(reader);
+            let _ = opening_reader.set(Arc::clone(&reader));
             if opening_sender.send(opened).is_err() {
                 return;
             }
             spawn(
-                Arc::new(reader),
+                Arc::clone(&reader),
                 &opening_queue,
                 &opening_time,
                 &opening_drift,
@@ -267,6 +277,7 @@ impl Loader {
             queue,
             time,
             drift,
+            reader: resident,
             source,
         }
     }
@@ -300,6 +311,10 @@ impl Loader {
 
     pub fn source(&self) -> Source {
         self.source.clone()
+    }
+
+    pub fn reader(&self) -> Option<Arc<Image>> {
+        self.reader.get().cloned()
     }
 }
 

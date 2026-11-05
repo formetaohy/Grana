@@ -454,7 +454,8 @@ impl Session {
         if let Some(scene) = self.scene.as_mut() {
             scene.clear_tracks(set);
         }
-        let Some(source) = self.source.as_ref().map(Loader::source) else {
+        let Some(reader) = self.source.as_ref().and_then(Loader::reader) else {
+            self.message = Some(Message::error("the dataset is still opening"));
             return;
         };
         let Some(scene) = self.scene.as_ref() else {
@@ -530,7 +531,7 @@ impl Session {
         };
         self.analysis.push(crate::detect(
             Job::Detect(set),
-            source,
+            reader,
             DetectRequest::new(channel, params, region, roi, drift, 0, self.store())
                 .with_seeds(seeds, policy),
         ));
@@ -691,7 +692,8 @@ impl Session {
         {
             return;
         }
-        let Some(source) = self.source.as_ref().map(Loader::source) else {
+        let Some(reader) = self.source.as_ref().and_then(Loader::reader) else {
+            self.message = Some(Message::error("the dataset is still opening"));
             return;
         };
         let Some(scene) = self.scene.as_ref() else {
@@ -746,7 +748,7 @@ impl Session {
         self.record_progress(Job::Coloc, 0, 0, 0);
         self.analysis.push(crate::coloc(
             Job::Coloc,
-            source,
+            reader,
             grana_pipeline::ColocRequest::new(
                 pair,
                 region,
@@ -777,7 +779,8 @@ impl Session {
         {
             return;
         }
-        let Some(source) = self.source.as_ref().map(Loader::source) else {
+        let Some(reader) = self.source.as_ref().and_then(Loader::reader) else {
+            self.message = Some(Message::error("the dataset is still opening"));
             return;
         };
         let Some(scene) = self.scene.as_ref() else {
@@ -809,7 +812,7 @@ impl Session {
         self.record_progress(Job::Drift, 0, 0, scene.frame_count() as usize);
         self.analysis.push(crate::drift(
             Job::Drift,
-            source,
+            reader,
             grana_pipeline::DriftRequest::new(channel, reference),
         ));
     }

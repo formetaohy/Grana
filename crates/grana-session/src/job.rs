@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_geometry::GeometryStore;
-use grana_image::{Image, Source};
+use grana_image::Image;
 use grana_object::{SurfaceCut, TrackParams};
 use grana_scene::{Job, ObjectFrame};
 
@@ -25,9 +25,8 @@ impl Analysis {
     }
 }
 
-pub fn detect(job: Job, source: Source, request: DetectRequest) -> Analysis {
+pub fn detect(job: Job, reader: Arc<Image>, request: DetectRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
-        let reader = Image::open(&source)?;
         run::detect(&reader, request, cancel, sink)
     })
 }
@@ -106,16 +105,14 @@ pub fn relation(
     })
 }
 
-pub fn coloc(job: Job, source: Source, request: ColocRequest) -> Analysis {
+pub fn coloc(job: Job, reader: Arc<Image>, request: ColocRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
-        let reader = Image::open(&source)?;
         run::coloc(&reader, request, cancel, sink)
     })
 }
 
-pub fn drift(job: Job, source: Source, request: DriftRequest) -> Analysis {
+pub fn drift(job: Job, reader: Arc<Image>, request: DriftRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
-        let reader = Image::open(&source)?;
         run::drift(&reader, request, cancel, sink)
     })
 }

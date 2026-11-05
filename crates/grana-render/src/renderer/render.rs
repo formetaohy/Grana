@@ -462,7 +462,12 @@ impl Renderer {
                                 depth_slice: None,
                                 resolve_target: None,
                                 ops: Operations {
-                                    load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    load: LoadOp::Clear(wgpu::Color {
+                                        r: 1.0,
+                                        g: 1.0,
+                                        b: 1.0,
+                                        a: 1.0,
+                                    }),
                                     store: StoreOp::Store,
                                 },
                             }),
