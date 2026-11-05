@@ -108,6 +108,8 @@ impl Tile<'_> {
     }
 
     pub(super) fn field(&mut self, core: &[std::ops::Range<u32>; 3]) {
+        const WORD: usize = 64;
+        const SHIFT: usize = 1;
         let pass = self.pass;
         let anchor = pass.plan.anchor;
         let value_dims = self.value_dims;
@@ -120,34 +122,55 @@ impl Tile<'_> {
             low[axis] = (first - value_start[axis]) as usize;
             high[axis] = (last - value_start[axis]) as usize;
         }
+        let origin = [0, 1, 2].map(|axis| (value_start[axis] - self.start[axis]) as usize);
         let gate = self.gate;
         let solid = self.solid;
         let grid = self.grid;
         let smoothed = &self.smoothed;
         let field = &mut self.field;
         let threshold = pass.plan.threshold;
+        let band = self.band.as_ref().expect("a surface tile holds its band");
+        let first = origin[0] + low[0] + SHIFT;
+        let last = origin[0] + high[0] + SHIFT;
+        let head = first / WORD;
+        let tail = (last - 1) / WORD;
+        let keep = (1u64 << (last % WORD).max(1)) - 1;
         for z in low[2]..high[2] {
+            let bitset_z = origin[2] + z + SHIFT;
             for y in low[1]..high[1] {
+                let bitset_y = origin[1] + y + SHIFT;
                 let base = value_dims[0] * (y + value_dims[1] * z);
-                for x in low[0]..high[0] {
-                    let voxel = [
-                        value_start[0] + x as i64,
-                        value_start[1] + y as i64,
-                        value_start[2] + z as i64,
-                    ];
-                    let slot = base + x;
-                    if !gate.admits(voxel) {
-                        field[slot] = OUTSIDE;
-                        continue;
+                for word in head..=tail {
+                    let mut pending = band.needed_word(bitset_y, bitset_z, word);
+                    if word == head {
+                        pending &= u64::MAX << (first % WORD);
                     }
-                    let contrast = grid.contrast(voxel, smoothed[slot]);
-                    let inside = solid.get(voxel, anchor);
-                    field[slot] = match (inside, contrast >= threshold) {
-                        (true, true) => contrast,
-                        (true, false) => threshold,
-                        (false, true) => threshold - REMOVED,
-                        (false, false) => contrast,
-                    };
+                    if word == tail && !last.is_multiple_of(WORD) {
+                        pending &= keep;
+                    }
+                    while pending != 0 {
+                        let index = word * WORD + pending.trailing_zeros() as usize;
+                        pending &= pending - 1;
+                        let x = index - SHIFT - origin[0];
+                        let voxel = [
+                            value_start[0] + x as i64,
+                            value_start[1] + y as i64,
+                            value_start[2] + z as i64,
+                        ];
+                        let slot = base + x;
+                        if !gate.admits(voxel) {
+                            field[slot] = OUTSIDE;
+                            continue;
+                        }
+                        let contrast = grid.contrast(voxel, smoothed[slot]);
+                        let inside = solid.get(voxel, anchor);
+                        field[slot] = match (inside, contrast >= threshold) {
+                            (true, true) => contrast,
+                            (true, false) => threshold,
+                            (false, true) => threshold - REMOVED,
+                            (false, false) => contrast,
+                        };
+                    }
                 }
             }
         }

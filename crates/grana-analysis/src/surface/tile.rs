@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicBool;
 use grana_geometry::MeshVertex;
 use grana_object::SampleAccumulator;
 
+use super::band::Band;
 use super::mask::SolidMask;
 use super::{EMPTY, Face, Gate, Measure, Node, Pass, Read, dims_of, strides_of};
 use crate::local::BlockField;
@@ -41,6 +42,7 @@ pub(super) struct Tile<'a> {
     pub(super) solid: &'a SolidMask,
     pub(super) grid: &'a BlockField,
     pub(super) gate: &'a Gate<'a>,
+    pub(super) band: Option<Band>,
     pub(super) array: [Range<u32>; 3],
     pub(super) dims: [usize; 3],
     pub(super) start: [i64; 3],
@@ -80,6 +82,7 @@ impl<'a> Tile<'a> {
             solid,
             grid,
             gate,
+            band: None,
             array: [0..0, 0..0, 0..0],
             dims: [0; 3],
             start: [0; 3],
@@ -143,6 +146,14 @@ impl<'a> Tile<'a> {
         self.triangles.clear();
         self.contacts.clear();
         if occupied {
+            let inside = [0, 1, 2].map(|axis| {
+                let first = pass.plan.region[axis].start as i64 - self.start[axis];
+                let last = pass.plan.region[axis].end as i64 - self.start[axis];
+                let low = first.clamp(0, self.dims[axis] as i64) as usize;
+                let high = last.clamp(0, self.dims[axis] as i64) as usize;
+                low..high
+            });
+            self.band = Some(Band::new(&self.mask, self.dims, &inside));
             let values = pass.plan.array_range(index, pass.values);
             self.values = values.clone();
             self.value_dims = dims_of(&values);

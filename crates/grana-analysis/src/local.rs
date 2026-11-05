@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use grana_volume::Intensity;
 
@@ -55,6 +56,60 @@ impl Grid {
     }
 }
 
+pub(crate) struct Stats {
+    origin: [i64; 3],
+    blocks: [usize; 3],
+    values: Vec<AtomicU64>,
+    ready: Vec<AtomicBool>,
+}
+
+impl Stats {
+    pub(crate) fn new(low: [i64; 3], high: [i64; 3]) -> Self {
+        let origin = low;
+        let blocks = [0, 1, 2].map(|axis| (high[axis] - low[axis] + 1).max(1) as usize);
+        let count = blocks[0] * blocks[1] * blocks[2];
+        Self {
+            origin,
+            blocks,
+            values: (0..count).map(|_| AtomicU64::new(0)).collect(),
+            ready: (0..count).map(|_| AtomicBool::new(false)).collect(),
+        }
+    }
+
+    fn slot(&self, block: [i64; 3]) -> Option<usize> {
+        let mut local = [0usize; 3];
+        for axis in 0..3 {
+            let offset = block[axis] - self.origin[axis];
+            if offset < 0 || offset >= self.blocks[axis] as i64 {
+                return None;
+            }
+            local[axis] = offset as usize;
+        }
+        Some(local[0] + self.blocks[0] * (local[1] + self.blocks[1] * local[2]))
+    }
+
+    fn fetch(&self, block: [i64; 3]) -> Option<(f32, f32)> {
+        let slot = self.slot(block)?;
+        if !self.ready[slot].load(Ordering::Acquire) {
+            return None;
+        }
+        let packed = self.values[slot].load(Ordering::Relaxed);
+        Some((
+            f32::from_bits((packed >> 32) as u32),
+            f32::from_bits(packed as u32),
+        ))
+    }
+
+    fn store(&self, block: [i64; 3], level: (f32, f32)) {
+        let Some(slot) = self.slot(block) else {
+            return;
+        };
+        let packed = (u64::from(level.0.to_bits()) << 32) | u64::from(level.1.to_bits());
+        self.values[slot].store(packed, Ordering::Relaxed);
+        self.ready[slot].store(true, Ordering::Release);
+    }
+}
+
 pub(crate) struct LocalField(Grid);
 
 impl LocalField {
@@ -65,6 +120,7 @@ impl LocalField {
         intensity: Intensity,
         value: impl Fn(usize) -> f32,
         admits: impl Fn([i64; 3]) -> bool,
+        stats: Option<&Stats>,
     ) -> Self {
         assert!(
             dims.iter().all(|axis| *axis > 0),
@@ -87,11 +143,27 @@ impl LocalField {
                 for block_x in 0..blocks[0] {
                     let mut low = [0usize; 3];
                     let mut high = [0usize; 3];
+                    let mut whole = true;
                     for axis in 0..3 {
                         let index = [block_x, block_y, block_z][axis] as i64 + origin[axis];
                         let first = index * BLOCK + anchor[axis] - start[axis];
+                        whole &= first >= 0 && first + BLOCK <= dims[axis] as i64;
                         low[axis] = first.max(0) as usize;
                         high[axis] = (first + BLOCK).min(dims[axis] as i64) as usize;
+                    }
+                    let block = [
+                        origin[0] + block_x as i64,
+                        origin[1] + block_y as i64,
+                        origin[2] + block_z as i64,
+                    ];
+                    let index = block_x + blocks[0] * (block_y + blocks[1] * block_z);
+                    if let Some(stats) = stats
+                        && whole
+                        && let Some(level) = stats.fetch(block)
+                    {
+                        background[index] = level.0;
+                        signal[index] = level.1;
+                        continue;
                     }
                     bucket.clear();
                     for z in low[2]..high[2] {
@@ -119,9 +191,13 @@ impl LocalField {
                             ((total as f64 * SIGNAL_QUANTILE) as usize).min(total - 1);
                         let signal_level =
                             *bucket.select_nth_unstable_by(signal_rank, f32::total_cmp).1;
-                        let index = block_x + blocks[0] * (block_y + blocks[1] * block_z);
                         background[index] = background_level;
                         signal[index] = signal_level;
+                        if let Some(stats) = stats
+                            && whole
+                        {
+                            stats.store(block, (background_level, signal_level));
+                        }
                     }
                 }
             }

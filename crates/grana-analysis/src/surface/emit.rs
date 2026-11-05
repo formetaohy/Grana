@@ -7,6 +7,9 @@ use super::tile::Contact;
 use super::{EMPTY, OUTSIDE, Tile, find};
 use crate::table::{EDGE_TABLE, TRIANGLE_TABLE};
 
+const WORD: usize = 64;
+const SHIFT: usize = 1;
+
 const CORNER: [[i64; 3]; 8] = [
     [0, 0, 0],
     [1, 0, 0],
@@ -56,56 +59,30 @@ impl Tile<'_> {
             };
             high[axis] = core[axis].end as i64;
         }
-        let threshold = plan.threshold;
         self.edges.clear();
-        let mut values = [0.0f32; 8];
-        let mut corners = [[0i64; 3]; 8];
-        let mut candidates = [EMPTY; 8];
+        let band = self.band.take().expect("a surface tile holds its band");
+        let start = self.start;
+        let first = (low[0] - start[0] + SHIFT as i64) as usize;
+        let last = (high[0] - start[0] + SHIFT as i64) as usize;
+        let head = first / WORD;
+        let tail = (last - 1) / WORD;
+        let keep = (1u64 << (last % WORD).max(1)) - 1;
         for bz in low[2]..high[2] {
+            let bitset_z = (bz - start[2] + SHIFT as i64) as usize;
             for by in low[1]..high[1] {
-                for bx in low[0]..high[0] {
-                    let mut index = 0u32;
-                    for (corner, offset) in CORNER.iter().enumerate() {
-                        let cell = [bx + offset[0], by + offset[1], bz + offset[2]];
-                        corners[corner] = cell;
-                        values[corner] = match self.value_index(cell) {
-                            Some(slot) => self.field[slot],
-                            None => OUTSIDE,
-                        };
-                        candidates[corner] = match self.mask_index(cell) {
-                            Some(slot) => self.labels[slot],
-                            None => EMPTY,
-                        };
-                        if values[corner] < threshold {
-                            index |= 1 << corner;
-                        }
+                let bitset_y = (by - start[1] + SHIFT as i64) as usize;
+                for word in head..=tail {
+                    let mut pending = band.active_word(bitset_y, bitset_z, word);
+                    if word == head {
+                        pending &= u64::MAX << (first % WORD);
                     }
-                    if EDGE_TABLE[index as usize] == 0 {
-                        continue;
+                    if word == tail && !last.is_multiple_of(WORD) {
+                        pending &= keep;
                     }
-                    let mut object = EMPTY;
-                    let mut deepest = threshold;
-                    for (corner, value) in values.iter().enumerate() {
-                        if *value < deepest || candidates[corner] == EMPTY {
-                            continue;
-                        }
-                        object = find(&mut self.nodes, candidates[corner]);
-                        deepest = *value;
-                    }
-                    if object == EMPTY {
-                        continue;
-                    }
-                    self.record_contact(object, &candidates, &values);
-                    let table = TRIANGLE_TABLE[index as usize];
-                    let mut corner = 0;
-                    while corner < 16 && table[corner] >= 0 {
-                        let mut triangle = [0u32; 3];
-                        for (offset, vertex) in triangle.iter_mut().enumerate() {
-                            let edge = EDGE_CORNER[table[corner + offset] as usize];
-                            *vertex = self.edge_vertex(edge[0], edge[1], &values, &corners, object);
-                        }
-                        self.push_triangle(triangle, object);
-                        corner += 3;
+                    while pending != 0 {
+                        let index = word * WORD + pending.trailing_zeros() as usize;
+                        pending &= pending - 1;
+                        self.cell(index as i64 - SHIFT as i64 + start[0], by, bz);
                     }
                 }
             }
@@ -117,6 +94,56 @@ impl Tile<'_> {
             }
         }
         Ok(())
+    }
+
+    fn cell(&mut self, bx: i64, by: i64, bz: i64) {
+        let threshold = self.pass.plan.threshold;
+        let mut index = 0u32;
+        let mut values = [0.0f32; 8];
+        let mut corners = [[0i64; 3]; 8];
+        let mut candidates = [EMPTY; 8];
+        for (corner, offset) in CORNER.iter().enumerate() {
+            let cell = [bx + offset[0], by + offset[1], bz + offset[2]];
+            corners[corner] = cell;
+            values[corner] = match self.value_index(cell) {
+                Some(slot) => self.field[slot],
+                None => OUTSIDE,
+            };
+            candidates[corner] = match self.mask_index(cell) {
+                Some(slot) => self.labels[slot],
+                None => EMPTY,
+            };
+            if values[corner] < threshold {
+                index |= 1 << corner;
+            }
+        }
+        if EDGE_TABLE[index as usize] == 0 {
+            return;
+        }
+        let mut object = EMPTY;
+        let mut deepest = threshold;
+        for (corner, value) in values.iter().enumerate() {
+            if *value < deepest || candidates[corner] == EMPTY {
+                continue;
+            }
+            object = find(&mut self.nodes, candidates[corner]);
+            deepest = *value;
+        }
+        if object == EMPTY {
+            return;
+        }
+        self.record_contact(object, &candidates, &values);
+        let table = TRIANGLE_TABLE[index as usize];
+        let mut corner = 0;
+        while corner < 16 && table[corner] >= 0 {
+            let mut triangle = [0u32; 3];
+            for (offset, vertex) in triangle.iter_mut().enumerate() {
+                let edge = EDGE_CORNER[table[corner + offset] as usize];
+                *vertex = self.edge_vertex(edge[0], edge[1], &values, &corners, object);
+            }
+            self.push_triangle(triangle, object);
+            corner += 3;
+        }
     }
 
     fn record_contact(&mut self, object: u32, candidates: &[u32; 8], values: &[f32; 8]) {

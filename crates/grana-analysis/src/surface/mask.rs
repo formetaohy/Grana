@@ -1,6 +1,6 @@
 use std::sync::atomic::AtomicBool;
 
-use crate::local::{BLOCK, BlockField, LocalField, floor};
+use crate::local::{BLOCK, BlockField, LocalField, Stats, floor};
 use crate::morphology;
 use grana_object::Mask;
 
@@ -75,6 +75,19 @@ pub(super) fn build(
     let mut occupied = vec![false; blocks[0] * blocks[1] * blocks[2]];
     let gate = plan.gate(roi);
     let pad = plan.pad_mask();
+    let stats = Stats::new(
+        [0, 1, 2].map(|axis| {
+            let start = plan.region[axis].start.saturating_sub(pad[axis]) as i64;
+            (start - plan.anchor[axis]).div_euclid(BLOCK)
+        }),
+        [0, 1, 2].map(|axis| {
+            let end = i64::from(plan.region[axis].end)
+                .saturating_add(i64::from(pad[axis]))
+                .min(i64::from(plan.extent[axis]))
+                - 1;
+            (end - plan.anchor[axis]).div_euclid(BLOCK)
+        }),
+    );
     let completed = crate::schedule::ordered(
         crate::schedule::Run {
             total,
@@ -83,7 +96,7 @@ pub(super) fn build(
             progress: &mut |done, _| progress(done, step),
         },
         || (),
-        |(), index| MaskWorker::run(plan, &gate, index, pad, read),
+        |(), index| MaskWorker::run(plan, &gate, &stats, index, pad, read),
         |index, chunk| {
             let mut sink = MaskSink {
                 foreground: &mut foreground,
@@ -213,6 +226,7 @@ impl MaskWorker {
     fn run(
         plan: &SurfaceBuilder,
         gate: &Gate<'_>,
+        _stats: &Stats,
         index: usize,
         pad: [u32; 3],
         read: &Read<'_>,
@@ -241,6 +255,7 @@ impl MaskWorker {
             plan.intensity,
             |slot| raw[slot],
             |voxel| gate.admits(voxel),
+            None,
         );
         let origin = [
             (core[0].start - array[0].start) as usize,

@@ -32,6 +32,37 @@ impl Bits {
         self.dims
     }
 
+    pub(super) fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub(super) fn word(&self, y: usize, z: usize, word: usize) -> u64 {
+        self.words[self.rows * (y + self.dims[1] * z) + word]
+    }
+
+    pub(super) fn set_word(&mut self, y: usize, z: usize, word: usize, value: u64) {
+        self.words[self.rows * (y + self.dims[1] * z) + word] = value;
+    }
+
+    pub(super) fn line(&self, y: usize, z: usize) -> &[u64] {
+        let base = self.rows * (y + self.dims[1] * z);
+        &self.words[base..base + self.rows]
+    }
+
+    pub(super) fn words(&self) -> &[u64] {
+        &self.words
+    }
+
+    pub(super) fn from_words(dims: [usize; 3], words: Vec<u64>) -> Self {
+        let rows = dims[0].div_ceil(WORD);
+        assert_eq!(
+            words.len(),
+            rows * dims[1] * dims[2],
+            "a bit grid holds the words of its dims"
+        );
+        Self { dims, rows, words }
+    }
+
     pub(super) fn get(&self, x: usize, y: usize, z: usize) -> bool {
         if x >= self.dims[0] || y >= self.dims[1] || z >= self.dims[2] {
             return false;
