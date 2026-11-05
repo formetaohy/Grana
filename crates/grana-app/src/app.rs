@@ -1232,6 +1232,9 @@ fn frame_stats(info: FrameInfo) -> FrameStats {
         fragments: info.fragments,
         indices: info.cut.indices,
         samples: info.samples,
+        msaa: info.msaa,
+        oit_layers: info.oit.layers,
+        oit_dropped: info.oit.dropped,
     }
 }
 

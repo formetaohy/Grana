@@ -69,6 +69,8 @@ impl Renderer {
             info,
             dummy_oit,
             budget,
+            oit_readback,
+            dropped,
             ..
         } = self;
         let (Some(pyramid), Some(atlas), Some(scene_table), Some(planner), Some(census)) = (
@@ -367,7 +369,7 @@ impl Renderer {
             meshes.cull_volume(&mut encoder, scene_group);
             markers.cull_volume(&mut encoder, scene_group);
             markers.cull_section(&mut encoder, scene_group);
-            present.clear(&mut encoder, target.scene.color());
+            present.clear(&mut encoder, target.scene.samples());
             clear_depth(&mut encoder, target.scene.depth());
             let shadow_group = shadow
                 .as_ref()
@@ -375,18 +377,22 @@ impl Renderer {
                 .expect("the shadow is ready");
             meshes.draw_volume(
                 &mut encoder,
-                target.scene.color(),
+                target.scene.samples(),
                 target.scene.depth(),
                 volume_region,
                 shadow_group,
             );
             markers.draw_volume(
                 &mut encoder,
-                target.scene.color(),
+                target.scene.samples(),
                 target.scene.depth(),
                 volume_region,
                 scene_group,
             );
+            target::resolve(&mut encoder, target.scene.samples(), target.scene.color());
+            target
+                .depth
+                .draw(&mut encoder, target.scene.resolved_depth());
             if let Some(oit) = target.oit.as_ref().filter(|_| translucent) {
                 oit.clear(&mut encoder);
                 {
@@ -394,7 +400,7 @@ impl Renderer {
                         label: Some("grana.oit.pass"),
                         color_attachments: &[],
                         depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                            view: target.scene.depth(),
+                            view: target.scene.resolved_depth(),
                             depth_ops: Some(Operations {
                                 load: LoadOp::Load,
                                 store: StoreOp::Store,
@@ -453,7 +459,7 @@ impl Renderer {
                             }),
                         ],
                         depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                            view: target.scene.depth(),
+                            view: target.scene.resolved_depth(),
                             depth_ops: Some(Operations {
                                 load: LoadOp::Load,
                                 store: StoreOp::Store,
@@ -478,6 +484,9 @@ impl Renderer {
                     );
                     meshes.draw_tail(&mut pass, shadow_group, oit.write_group());
                     markers.draw_tail(&mut pass, scene_group, oit.write_group());
+                }
+                if let Some(slot) = oit_readback.reserve() {
+                    oit_readback.stage(&mut encoder, slot, 0, oit.dropped(), 4);
                 }
             }
             volume.draw(
@@ -550,11 +559,15 @@ impl Renderer {
         if let Some(feedback) = feedback.as_mut() {
             feedback.register();
         }
+        oit_readback.register();
         info.volume.level = volume_level;
         info.section.level = section_level;
         info.bytes = atlas.bytes();
         info.geometry = meshes.bytes();
         info.fragments = target.oit.as_ref().map_or(0, Oit::bytes);
+        info.oit.layers = target.oit.as_ref().map_or(0, Oit::layers);
+        info.oit.dropped = *dropped;
+        info.msaa = crate::target::SCENE_SAMPLES;
         *info
     }
 }

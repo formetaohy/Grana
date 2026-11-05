@@ -25,6 +25,9 @@ pub struct FrameStats {
     pub fragments: u64,
     pub indices: u64,
     pub samples: u32,
+    pub msaa: u32,
+    pub oit_layers: u32,
+    pub oit_dropped: u32,
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -8,10 +8,17 @@ pub(super) fn bar(ui: &mut Ui, rect: Rect, state: &State<'_>) {
     let font = grana_ui::TypeStyle::new(10.5, 400.0, 13.0);
     let style = TextStyle::new(font, palette.text_tertiary);
     let right = format!(
-        "level {}/{} · {} samples · {:.0} MiB",
+        "level {}/{} · {} samples · {}× MSAA · {} layers{} · {:.0} MiB",
         state.frame.volume.level + 1,
         state.scene.dataset.level_count(),
         state.frame.samples,
+        state.frame.msaa,
+        state.frame.oit_layers,
+        if state.frame.oit_dropped > 0 {
+            format!(" ({} dropped)", state.frame.oit_dropped)
+        } else {
+            String::new()
+        },
         state.frame.bytes as f64 / (1024.0 * 1024.0)
     );
     let mut painter = ui.painter();

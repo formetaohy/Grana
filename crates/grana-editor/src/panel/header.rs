@@ -323,8 +323,10 @@ fn diagnostics(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, anch
             ui,
             "transparent",
             &format!(
-                "{:.0} MiB",
-                state.frame.fragments as f64 / (1024.0 * 1024.0)
+                "{:.0} MiB · {} layers · {} dropped",
+                state.frame.fragments as f64 / (1024.0 * 1024.0),
+                state.frame.oit_layers,
+                state.frame.oit_dropped
             ),
         );
         if state.io.pending > 0 {

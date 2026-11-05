@@ -1,6 +1,7 @@
 @group(4) @binding(0) var<storage, read_write> oit_keys: array<u32>;
 @group(4) @binding(1) var<storage, read_write> oit_colors: array<vec2<u32>>;
 @group(4) @binding(2) var<storage, read_write> oit_counts: array<atomic<u32>>;
+@group(4) @binding(3) var<storage, read_write> oit_dropped: atomic<u32>;
 
 const OIT_WEIGHT_FLOOR: f32 = 1.0e-2;
 const OIT_WEIGHT_CEIL: f32 = 3.0e3;
@@ -33,6 +34,7 @@ fn oit_push(
     let index = oit_pixel(origin, size, pixel);
     let slot = atomicAdd(&oit_counts[index], 1u);
     if (slot >= layers) {
+        atomicAdd(&oit_dropped, 1u);
         return;
     }
     let base = index * layers + slot;

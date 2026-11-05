@@ -211,7 +211,7 @@ impl MarkerPasses {
                 ..Default::default()
             },
             depth_stencil: Some(depth_state(true, CompareFunction::Less)),
-            multisample: MultisampleState::default(),
+            multisample: crate::target::scene_multisample(),
             fragment: Some(FragmentState {
                 module: &volume_module,
                 entry_point: Some("fs_main"),

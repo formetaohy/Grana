@@ -3763,3 +3763,76 @@ fn left_half_plane() -> Mesh {
         .collect::<Vec<_>>();
     Mesh::new(vertices, vec![0, 1, 2, 0, 2, 3])
 }
+
+#[test]
+fn antialiases_opaque_silhouettes() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = empty_volume();
+    let pyramid = volume.pyramid();
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let mesh = PackedMesh::new(view_plane(&camera, 0.0, 0.5));
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let render = |visible: bool| {
+        let style = Style::new([1.0, 1.0, 1.0], visible, false, 1.0);
+        let styles = [style];
+        let layers = [Layer {
+            key: LayerKey::at_frame(1, 0, 0, 1),
+            mesh: Arc::new(mesh.clone()),
+            style_start: 0,
+            style_count: 1,
+        }];
+        let scene = SceneFrame {
+            channels: &channels,
+            shading: Shading::default(),
+            step_scale: 1.0,
+            styles: &styles,
+            layers: &layers,
+            markers: &[],
+        };
+        let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+        renderer.set_dataset(&device, &pyramid);
+        let info = renderer.draw(
+            &device,
+            &queue,
+            Frame {
+                target: &view,
+                size: [SIDE, SIDE],
+                volume_region: WHOLE,
+                section_region: CORNER,
+                time: 0,
+                camera: &camera,
+                section: &section,
+                region: Region::none(),
+                clip: Clip::none(),
+                exposure: 1.0,
+                samples: 1,
+                scene: &scene,
+                prefetch: false,
+            },
+        );
+        (info, read_pixels(&device, &queue, &texture, SIDE))
+    };
+    let (info, shown) = render(true);
+    let (_, hidden) = render(false);
+    assert_eq!(info.msaa, 4, "the volume pane renders four samples a pixel");
+    let centre = pixel(&shown, SIDE / 2, SIDE / 2);
+    let partial = shown
+        .iter()
+        .zip(&hidden)
+        .filter(|(shown, hidden)| {
+            (0..3).any(|channel| shown[channel].abs_diff(centre[channel]) > 6)
+                && (0..3).any(|channel| shown[channel].abs_diff(hidden[channel]) > 6)
+        })
+        .count();
+    assert!(
+        partial > 20,
+        "the silhouette of an opaque object carries no partial pixels: {partial}"
+    );
+}

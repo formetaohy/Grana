@@ -11,6 +11,16 @@ impl Renderer {
                 latest = Some(requests);
             }
         }
+        let mut dropped = None;
+        while let Some((_, bytes)) = self.oit_readback.take(device) {
+            let (words, _) = bytes.as_chunks::<4>();
+            if let Some(word) = words.first() {
+                dropped = Some(u32::from_ne_bytes(*word));
+            }
+        }
+        if let Some(dropped) = dropped {
+            self.dropped = dropped;
+        }
         latest
     }
 

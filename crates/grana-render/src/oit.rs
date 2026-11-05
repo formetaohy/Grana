@@ -11,6 +11,8 @@ const COUNT_BYTES: u64 = 4;
 const KEY_BYTES: u64 = 4;
 const COLOR_BYTES: u64 = 8;
 const TAIL_BYTES: u64 = 20;
+const DROPPED_BYTES: u64 = 4;
+const BYTES_PER_PIXEL: u64 = 76;
 const MINIMUM_LAYERS: u64 = 2;
 const MAXIMUM_LAYERS: u64 = 8;
 const PANE_PIXELS_STEP: u64 = 1 << 17;
@@ -69,6 +71,7 @@ pub(crate) struct Oit {
     keys: Buffer,
     colors: Buffer,
     counts: Buffer,
+    dropped: Buffer,
     accumulate: TextureView,
     reveal: TextureView,
     tail_depth: TextureView,
@@ -93,8 +96,7 @@ impl Oit {
         );
         let pixels = u64::from(region[2]) * u64::from(region[3]);
         let capacity = pixels.div_ceil(PANE_PIXELS_STEP) * PANE_PIXELS_STEP;
-        let layers = ((budget / capacity).saturating_sub(TAIL_BYTES) / (KEY_BYTES + COLOR_BYTES))
-            .clamp(MINIMUM_LAYERS, MAXIMUM_LAYERS);
+        let (layers, _) = allocation(size, capacity, budget);
         let layers = layers as u32;
         let slots = capacity * u64::from(layers);
         let keys = device.create_buffer(&wgpu::BufferDescriptor {
@@ -115,6 +117,12 @@ impl Oit {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let dropped = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("grana.oit.dropped"),
+            size: DROPPED_BYTES,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
         let accumulate = tail(device, "grana.oit.accumulate", ACCUMULATE_FORMAT, size);
         let reveal = tail(device, "grana.oit.reveal", REVEAL_FORMAT, size);
         let tail_depth = tail(device, "grana.oit.tail.depth", TAIL_DEPTH_FORMAT, size);
@@ -133,6 +141,10 @@ impl Oit {
                 BindGroupEntry {
                     binding: 2,
                     resource: counts.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: dropped.as_entire_binding(),
                 },
             ],
         });
@@ -170,6 +182,7 @@ impl Oit {
             keys,
             colors,
             counts,
+            dropped,
             accumulate,
             reveal,
             tail_depth,
@@ -187,6 +200,10 @@ impl Oit {
 
     pub fn layers(&self) -> u32 {
         self.layers
+    }
+
+    pub fn dropped(&self) -> &Buffer {
+        &self.dropped
     }
 
     pub fn bytes(&self) -> u64 {
@@ -217,7 +234,18 @@ impl Oit {
 
     pub fn clear(&self, encoder: &mut CommandEncoder) {
         encoder.clear_buffer(&self.counts, 0, None);
+        encoder.clear_buffer(&self.dropped, 0, None);
     }
+}
+
+fn allocation(size: [u32; 2], capacity: u64, budget: u64) -> (u64, u64) {
+    let tail_bytes = u64::from(size[0]) * u64::from(size[1]) * TAIL_BYTES;
+    let fixed = tail_bytes + capacity * COUNT_BYTES;
+    let layer_bytes = capacity * (KEY_BYTES + COLOR_BYTES);
+    let floor = fixed + MINIMUM_LAYERS * layer_bytes;
+    let budget = budget.max(capacity * BYTES_PER_PIXEL).max(floor);
+    let layers = ((budget - fixed) / layer_bytes).clamp(MINIMUM_LAYERS, MAXIMUM_LAYERS);
+    (layers, fixed + layers * layer_bytes)
 }
 
 fn tail(
@@ -242,4 +270,34 @@ fn tail(
             view_formats: &[],
         })
         .create_view(&TextureViewDescriptor::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scales_the_fragment_store_to_the_surface() {
+        let full = [3840u32, 2160];
+        let capacity = u64::from(full[0]) * u64::from(full[1]);
+        let (layers, bytes) = allocation(full, capacity, 256 << 20);
+        assert!(layers >= 4, "a 4K pane keeps four layers: {layers}");
+        assert!(
+            bytes <= capacity * BYTES_PER_PIXEL,
+            "the fragment store exceeds its pixel budget: {bytes}"
+        );
+        let half = [3840u32, 1080];
+        let capacity = u64::from(half[0]) * u64::from(half[1]);
+        let (small, bytes) = allocation(full, capacity, 256 << 20);
+        assert!(small < layers, "a smaller pane keeps fewer layers");
+        assert!(
+            bytes <= capacity * BYTES_PER_PIXEL,
+            "the split fragment store exceeds its pixel budget: {bytes}"
+        );
+        let (most, _) = allocation([256, 256], 1 << 17, 256 << 20);
+        assert_eq!(
+            most, MAXIMUM_LAYERS,
+            "a small pane reaches the layer ceiling"
+        );
+    }
 }

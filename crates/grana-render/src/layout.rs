@@ -17,6 +17,7 @@ pub(crate) struct Layouts {
     pub plan_data: BindGroupLayout,
     pub atlas: BindGroupLayout,
     pub depth: BindGroupLayout,
+    pub depth_samples: BindGroupLayout,
     pub shadow: BindGroupLayout,
     pub shadow_write: BindGroupLayout,
     pub styles: BindGroupLayout,
@@ -176,6 +177,19 @@ impl Layouts {
                 count: None,
             }],
         });
+        let depth_samples = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.depth.samples.layout"),
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Texture {
+                    sample_type: TextureSampleType::Depth,
+                    view_dimension: TextureViewDimension::D2,
+                    multisampled: true,
+                },
+                count: None,
+            }],
+        });
         let styles = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.styles.layout"),
             entries: &[storage(
@@ -227,6 +241,7 @@ impl Layouts {
                 storage(0, ShaderStages::FRAGMENT, false),
                 storage(1, ShaderStages::FRAGMENT, false),
                 storage(2, ShaderStages::FRAGMENT, false),
+                storage(3, ShaderStages::FRAGMENT, false),
             ],
         });
         let oit_read = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -294,6 +309,7 @@ impl Layouts {
             plan_data,
             atlas,
             depth,
+            depth_samples,
             shadow,
             shadow_write,
             styles,

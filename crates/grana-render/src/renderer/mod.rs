@@ -26,6 +26,7 @@ use crate::atlas::{Atlas, ResidentBrick};
 use crate::brick::{BrickRecord, BrickTable};
 use crate::census::{CENSUS_LEVELS, Census};
 use crate::cut::CutLayer;
+use crate::depth::DepthResolve;
 use crate::frame::{FrameData, SectionData, VolumeView};
 use crate::layout::Layouts;
 use crate::marker::MarkerPasses;
@@ -81,14 +82,22 @@ pub struct CutInfo {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+pub struct OitInfo {
+    pub layers: u32,
+    pub dropped: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 pub struct FrameInfo {
     pub volume: ViewInfo,
     pub section: ViewInfo,
     pub cut: CutInfo,
+    pub oit: OitInfo,
     pub bytes: u64,
     pub geometry: u64,
     pub fragments: u64,
     pub samples: u32,
+    pub msaa: u32,
     pub settled: bool,
 }
 
@@ -157,6 +166,8 @@ pub struct Renderer {
     pick_target: Option<PickTarget>,
     pick_readback: Option<Readback>,
     pick_pending: bool,
+    oit_readback: Readback,
+    dropped: u32,
     info: FrameInfo,
 }
 
@@ -215,6 +226,8 @@ impl Renderer {
             pick_target: None,
             pick_readback: None,
             pick_pending: false,
+            oit_readback: Readback::new(device, "grana.oit.dropped", 4, FEEDBACK_SLOTS),
+            dropped: 0,
             info: FrameInfo::default(),
         }
     }
@@ -414,7 +427,7 @@ impl Renderer {
         {
             self.frame_target = Some(FrameTarget::new(
                 device,
-                &self.layouts.depth,
+                &self.layouts,
                 &self.present,
                 frame.size,
             ));
