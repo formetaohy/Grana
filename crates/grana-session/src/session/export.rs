@@ -101,7 +101,13 @@ impl Session {
                 self.message = Some(Message::error(error.to_string()));
                 return;
             }
-            None => return,
+            None => {
+                self.message = Some(Message::error(format!(
+                    "{} holds no frame {time}",
+                    object.name()
+                )));
+                return;
+            }
         };
         let file_name = format!(
             "{}-{}-t{:04}.obj",
