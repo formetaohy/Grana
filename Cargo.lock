@@ -1004,6 +1004,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-glass"
+version = "0.1.1"
+dependencies = [
+ "bytemuck",
+ "glam",
+ "slotmap",
+ "wgpu",
+]
+
+[[package]]
 name = "grana-gpu"
 version = "0.1.1"
 dependencies = [
@@ -1188,6 +1198,7 @@ version = "0.1.1"
 dependencies = [
  "bytemuck",
  "glam",
+ "grana-glass",
  "grana-gpu",
  "grana-text",
  "wgpu",

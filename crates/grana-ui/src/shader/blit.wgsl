@@ -26,20 +26,26 @@ fn fs_blit(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(color, 1.0);
 }
 
-fn srgb_to_linear(channel: f32) -> f32 {
-    if (channel <= 0.04045) {
-        return channel / 12.92;
+fn linear_to_srgb(channel: f32) -> f32 {
+    if (channel <= 0.0031308) {
+        return channel * 12.92;
     }
-    return pow((channel + 0.055) / 1.055, 2.4);
+    return 1.055 * pow(channel, 1.0 / 2.4) - 0.055;
 }
 
 @fragment
-fn fs_blit_linear(in: VertexOut) -> @location(0) vec4<f32> {
+fn fs_present_encoded(in: VertexOut) -> @location(0) vec4<f32> {
     let color = textureSampleLevel(source, source_sampler, in.uv, 0.0).rgb;
     return vec4<f32>(
-        srgb_to_linear(color.r),
-        srgb_to_linear(color.g),
-        srgb_to_linear(color.b),
+        linear_to_srgb(color.r),
+        linear_to_srgb(color.g),
+        linear_to_srgb(color.b),
         1.0,
     );
+}
+
+@fragment
+fn fs_present_linear(in: VertexOut) -> @location(0) vec4<f32> {
+    let color = textureSampleLevel(source, source_sampler, in.uv, 0.0).rgb;
+    return vec4<f32>(color, 1.0);
 }

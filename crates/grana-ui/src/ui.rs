@@ -1,21 +1,37 @@
+use std::collections::HashMap;
 use std::ops::Range;
 
 use glam::Vec2;
+use grana_glass::{Glass, GlassId, Rect as GlassRect, Scene as GlassScene};
 
 use crate::clipboard::{Clipboard, NullClipboard};
 use crate::edit::{Edit, Outcome as EditOutcome};
 use crate::geometry::{Corners, Edges, Rect};
+use crate::glass::{FLOATING, GlassStyle};
 use crate::input::{Button, Input};
 use crate::motion::Motion;
 use crate::paint::{Clip, Instance, Painter};
 use crate::registry::{Cursor, FrameInput, Registry};
 use crate::render::Renderer;
-use crate::style::{Border, Fill, Look, Shadow, State};
+use crate::style::{Border, Fill, Shadow, State, Surface};
 use crate::text::{Align, Text, TextLayout, TextStyle};
 use crate::theme::{Level, Role, Theme};
 
 const PROPERTY_SALT: u64 = 0x9e37_79b9_7f4a_7c15;
 const GRID_SALT: u64 = 0x517c_c1b7_2722_0a95;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Layer {
+    Content,
+    Chrome,
+    Popup,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GlassEntry {
+    id: GlassId,
+    style: GlassStyle,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Axis {
@@ -40,7 +56,7 @@ pub struct Block {
     height: Length,
     align: Align,
     justify: Align,
-    background: Option<Look>,
+    background: Option<Surface>,
     clip: bool,
     wrapping: bool,
 }
@@ -98,8 +114,8 @@ impl Block {
         self
     }
 
-    pub fn background(mut self, look: Look) -> Self {
-        self.background = Some(look);
+    pub fn background(mut self, surface: Surface) -> Self {
+        self.background = Some(surface);
         self
     }
 
@@ -136,6 +152,7 @@ struct Area {
 struct Span {
     instance: usize,
     overlay: usize,
+    popup: usize,
     hit: usize,
     wheel: usize,
     offset: f32,
@@ -210,6 +227,7 @@ pub struct Frame {
 struct Cell {
     instances: Range<usize>,
     overlay: Range<usize>,
+    popup: Range<usize>,
     hits: Range<usize>,
     wheels: Range<usize>,
     height: f32,
@@ -236,6 +254,7 @@ pub struct Ui {
     registry: Registry,
     instances: Vec<Instance>,
     overlay: Vec<Instance>,
+    popup: Vec<Instance>,
     areas: Vec<Area>,
     frames: Vec<SpanFrame>,
     span_pool: Vec<Vec<Span>>,
@@ -247,7 +266,13 @@ pub struct Ui {
     occluders: Vec<Rect>,
     focus_rings: Vec<(Rect, Corners, Clip)>,
     overlay_clip: Clip,
-    overlay_mode: u32,
+    popup_clip: Clip,
+    layer: Layer,
+    glass: GlassScene,
+    glass_entries: HashMap<u64, GlassEntry>,
+    glass_seen: Vec<u64>,
+    floating: bool,
+    floating_draining: bool,
     edit: Option<Edit>,
     edit_seen: bool,
     edit_caret: Option<Rect>,
@@ -265,6 +290,7 @@ impl Ui {
             registry: Registry::new(),
             instances: Vec::new(),
             overlay: Vec::new(),
+            popup: Vec::new(),
             areas: Vec::new(),
             frames: Vec::new(),
             span_pool: Vec::new(),
@@ -276,7 +302,13 @@ impl Ui {
             occluders: Vec::new(),
             focus_rings: Vec::new(),
             overlay_clip: Clip::new(Rect::ZERO, Corners::ZERO),
-            overlay_mode: 0,
+            popup_clip: Clip::new(Rect::ZERO, Corners::ZERO),
+            layer: Layer::Chrome,
+            glass: GlassScene::new(),
+            glass_entries: HashMap::new(),
+            glass_seen: Vec::new(),
+            floating: false,
+            floating_draining: false,
             edit: None,
             edit_seen: false,
             edit_caret: None,
@@ -440,14 +472,29 @@ impl Ui {
         });
         self.instances.clear();
         self.overlay.clear();
+        self.popup.clear();
         self.occluders.clear();
         self.focus_rings.clear();
         self.areas.clear();
-        self.recycle_frames();
+        self.frames.clear();
         self.ids.clear();
+        self.glass_seen.clear();
+        self.floating = false;
+        self.layer = Layer::Chrome;
         self.edit_seen = false;
         self.edit_caret = None;
         self.overlay_clip = Clip::new(Rect::from_min_size(Vec2::ZERO, size), Corners::ZERO);
+        self.popup_clip = self.overlay_clip;
+        self.glass.appearance.dark = self.theme.dark;
+        self.glass.appearance.transparency = 0.5;
+        let primary = self.input.button(Button::Primary);
+        if primary.pressed && self.input.inside() {
+            self.glass.pointer_down(pointer);
+        } else if primary.down {
+            self.glass.pointer_move(pointer);
+        } else if primary.released {
+            self.glass.pointer_up();
+        }
     }
 
     pub fn end(&mut self) -> Frame {
@@ -460,7 +507,7 @@ impl Ui {
             let color = self.theme.palette.focus;
             let rings = std::mem::take(&mut self.focus_rings);
             for (rect, corners, clip) in rings {
-                let mut painter = Painter::new(&mut self.overlay, &mut self.text, clip, dark);
+                let mut painter = Painter::new(&mut self.popup, &mut self.text, clip, dark);
                 painter.outlined(
                     rect.expand(2.0),
                     corners,
@@ -470,25 +517,101 @@ impl Ui {
                 );
             }
         }
+        self.retire_glass();
+        let animating_glass = self.glass.update(self.elapsed);
+        if !self.floating && !animating_glass {
+            self.floating_draining = false;
+        }
         self.text.flush(self.renderer.queue());
         self.renderer.write_uniforms(self.scale);
         self.areas.clear();
         self.recycle_frames();
         self.ids.clear();
         Frame {
-            animating: self.registry.animating(),
+            animating: self.registry.animating() || animating_glass,
             cursor: self.registry.cursor(),
         }
     }
 
     pub fn paint(&mut self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
-        self.renderer.paint(
+        let Self {
+            renderer,
+            text,
+            instances,
+            overlay,
+            popup,
+            glass,
+            floating,
+            floating_draining,
+            ..
+        } = self;
+        renderer.paint(
             encoder,
-            target,
-            self.text.atlas(),
-            &self.instances,
-            &self.overlay,
+            crate::render::PaintFrame {
+                target,
+                atlas: text.atlas(),
+                base: instances,
+                chrome: overlay,
+                popup,
+                glass,
+                floating: *floating || *floating_draining,
+            },
         );
+    }
+
+    pub fn glass(&mut self, key: u64, rect: Rect, style: GlassStyle) {
+        if rect.is_empty() {
+            return;
+        }
+        let frame = GlassRect::new(rect.min.x, rect.min.y, rect.width(), rect.height());
+        if style.layer >= FLOATING {
+            self.floating = true;
+            self.floating_draining = true;
+        }
+        self.glass_seen.push(key);
+        self.register_occluder(rect);
+        let entry = self.glass_entries.get(&key).copied();
+        match entry {
+            Some(entry) => {
+                if entry.style != style {
+                    self.glass.set_shape(entry.id, style.shape);
+                    self.glass.set_material(entry.id, style.material);
+                    self.glass_entries.insert(
+                        key,
+                        GlassEntry {
+                            id: entry.id,
+                            style,
+                        },
+                    );
+                }
+                self.glass.place(entry.id, frame);
+            }
+            None => {
+                let mut glass = Glass::new(frame)
+                    .shape(style.shape)
+                    .material(style.material)
+                    .z(style.layer);
+                if style.interactive {
+                    glass = glass.interactive();
+                }
+                let id = self.glass.add(glass);
+                self.glass_entries.insert(key, GlassEntry { id, style });
+            }
+        }
+    }
+
+    fn retire_glass(&mut self) {
+        let stale = self
+            .glass_entries
+            .keys()
+            .copied()
+            .filter(|key| !self.glass_seen.contains(key))
+            .collect::<Vec<_>>();
+        for key in stale {
+            if let Some(entry) = self.glass_entries.remove(&key) {
+                self.glass.remove(entry.id);
+            }
+        }
     }
 
     pub fn scene_view(&self) -> &wgpu::TextureView {
@@ -556,6 +679,7 @@ impl Ui {
         let span = Span {
             instance: self.instances.len(),
             overlay: self.overlay.len(),
+            popup: self.popup.len(),
             hit: self.registry.hit_count(),
             wheel: self.registry.wheel_count(),
             offset,
@@ -610,6 +734,7 @@ impl Ui {
         }
         let instance_end = self.instances.len();
         let overlay_end = self.overlay.len();
+        let popup_end = self.popup.len();
         let hit_end = self.registry.hit_count();
         let wheel_end = self.registry.wheel_count();
         let baseline = (axis == Axis::Row && align == Align::Baseline)
@@ -640,6 +765,7 @@ impl Ui {
             let next = spans.get(index + 1);
             let instance_stop = next.map_or(instance_end, |span| span.instance);
             let overlay_stop = next.map_or(overlay_end, |span| span.overlay);
+            let popup_stop = next.map_or(popup_end, |span| span.popup);
             let hit_stop = next.map_or(hit_end, |span| span.hit);
             let wheel_stop = next.map_or(wheel_end, |span| span.wheel);
             for instance in &mut self.instances[span.instance..instance_stop] {
@@ -648,11 +774,22 @@ impl Ui {
             for instance in &mut self.overlay[span.overlay..overlay_stop] {
                 instance.translate(delta);
             }
+            for instance in &mut self.popup[span.popup..popup_stop] {
+                instance.translate(delta);
+            }
             self.registry.shift_hits(span.hit..hit_stop, delta);
             self.registry.shift_wheels(span.wheel..wheel_stop, delta);
         }
         spans.clear();
         self.span_pool.push(spans);
+    }
+
+    fn layer_len(&self) -> usize {
+        match self.layer {
+            Layer::Content => self.instances.len(),
+            Layer::Chrome => self.overlay.len(),
+            Layer::Popup => self.popup.len(),
+        }
     }
 
     pub fn available(&self) -> Vec2 {
@@ -833,12 +970,14 @@ impl Ui {
         let clip = if block.clip {
             parent.clip.intersect(
                 outer,
-                block.background.map_or(Corners::ZERO, |look| look.corners),
+                block
+                    .background
+                    .map_or(Corners::ZERO, |surface| surface.corners),
             )
         } else {
             parent.clip
         };
-        let index = self.instances.len();
+        let index = self.layer_len();
         self.areas.push(Area {
             rect: inner,
             cursor: inner.min,
@@ -1052,10 +1191,10 @@ impl Ui {
     pub fn painter(&mut self) -> Painter<'_> {
         let clip = self.area().clip;
         let dark = self.theme.dark;
-        if self.overlay_mode > 0 {
-            Painter::new(&mut self.overlay, &mut self.text, clip, dark)
-        } else {
-            Painter::new(&mut self.instances, &mut self.text, clip, dark)
+        match self.layer {
+            Layer::Content => Painter::new(&mut self.instances, &mut self.text, clip, dark),
+            Layer::Chrome => Painter::new(&mut self.overlay, &mut self.text, clip, dark),
+            Layer::Popup => Painter::new(&mut self.popup, &mut self.text, clip, dark),
         }
     }
 
@@ -1064,31 +1203,50 @@ impl Ui {
         Painter::new(&mut self.instances, &mut self.text, clip, dark)
     }
 
+    pub fn content_painter(&mut self) -> Painter<'_> {
+        let clip = self.area().clip;
+        let dark = self.theme.dark;
+        Painter::new(&mut self.instances, &mut self.text, clip, dark)
+    }
+
+    pub fn content(&mut self, content: impl FnOnce(&mut Self)) {
+        let previous = std::mem::replace(&mut self.layer, Layer::Content);
+        content(self);
+        self.layer = previous;
+    }
+
     pub fn overlay_painter(&mut self) -> Painter<'_> {
         let clip = self.overlay_clip;
         let dark = self.theme.dark;
-        Painter::new(&mut self.overlay, &mut self.text, clip, dark)
+        Painter::new(&mut self.popup, &mut self.text, clip, dark)
     }
 
-    fn paint_background(&mut self, index: usize, rect: Rect, look: Look) {
+    fn paint_background(&mut self, index: usize, rect: Rect, surface: Surface) {
         if rect.is_empty() {
             return;
         }
         let clip = self.area().clip;
         let dark = self.theme.dark;
-        if self.overlay_mode > 0 {
-            let mut painter = Painter::new(&mut self.overlay, &mut self.text, clip, dark);
-            painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
-            return;
-        }
-        let start = self.instances.len();
+        let layer = self.layer;
+        let target = match layer {
+            Layer::Content => &mut self.instances,
+            Layer::Chrome => &mut self.overlay,
+            Layer::Popup => &mut self.popup,
+        };
+        let start = target.len();
         {
-            let mut painter = Painter::new(&mut self.instances, &mut self.text, clip, dark);
-            painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
+            let mut painter = Painter::new(target, &mut self.text, clip, dark);
+            painter.outlined(
+                rect,
+                surface.corners,
+                surface.fill,
+                surface.border,
+                surface.shadow,
+            );
         }
-        let added = self.instances.len() - start;
-        if added > 0 {
-            self.instances[index..].rotate_right(added);
+        let added = target.len() - start;
+        if added > 0 && index < start {
+            target[index..].rotate_right(added);
         }
     }
 
@@ -1126,8 +1284,24 @@ impl Ui {
     }
 
     pub fn overlay_scope(&mut self, rect: Rect, content: impl FnOnce(&mut Self)) -> f32 {
-        let clip = self.overlay_clip.intersect(rect, Corners::ZERO);
-        self.overlay_mode += 1;
+        let clip = self.overlay_clip;
+        self.scoped(rect, clip, Layer::Chrome, content)
+    }
+
+    pub fn popup_scope(&mut self, rect: Rect, content: impl FnOnce(&mut Self)) -> f32 {
+        let clip = self.popup_clip;
+        self.scoped(rect, clip, Layer::Popup, content)
+    }
+
+    fn scoped(
+        &mut self,
+        rect: Rect,
+        parent: Clip,
+        layer: Layer,
+        content: impl FnOnce(&mut Self),
+    ) -> f32 {
+        let clip = parent.intersect(rect, Corners::ZERO);
+        let previous = std::mem::replace(&mut self.layer, layer);
         self.areas.push(Area {
             rect,
             cursor: rect.min,
@@ -1148,7 +1322,7 @@ impl Ui {
         content(self);
         self.pop_frame();
         let area = self.areas.pop().expect("a layout area is active");
-        self.overlay_mode -= 1;
+        self.layer = previous;
         area.main
     }
 
@@ -1184,27 +1358,6 @@ impl Ui {
     pub fn spring_at(&self, key: u64, fallback: f32) -> f32 {
         self.registry
             .spring_value(mix(key, PROPERTY_SALT), fallback)
-    }
-
-    pub fn overlay_len(&self) -> usize {
-        self.overlay.len()
-    }
-
-    pub fn overlay_background_at(&mut self, index: usize, rect: Rect, look: Look) {
-        if rect.is_empty() {
-            return;
-        }
-        let clip = self.overlay_clip;
-        let dark = self.theme.dark;
-        let start = self.overlay.len();
-        {
-            let mut painter = Painter::new(&mut self.overlay, &mut self.text, clip, dark);
-            painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
-        }
-        let added = self.overlay.len() - start;
-        if added > 0 {
-            self.overlay[index..].rotate_right(added);
-        }
     }
 
     pub fn value_of(&self, key: u64) -> Option<f32> {
@@ -1374,7 +1527,7 @@ impl Ui {
             .spring(mix(key, PROPERTY_SALT), target, motion, self.elapsed)
     }
 
-    pub fn look(&mut self, key: u64, role: Role, response: &Response) -> Look {
+    pub fn surface(&mut self, key: u64, role: Role, response: &Response) -> Surface {
         let hover = self.animate(
             key,
             if response.hovered { 1.0 } else { 0.0 },
@@ -1385,14 +1538,14 @@ impl Ui {
             if response.active { 1.0 } else { 0.0 },
             Motion::quick(),
         );
-        let rest = self.theme.look(role, State::Rest);
-        let hovered = self.theme.look(role, State::Hover);
-        let pressed = self.theme.look(role, State::Pressed);
+        let rest = self.theme.surface(role, State::Rest);
+        let hovered = self.theme.surface(role, State::Hover);
+        let pressed = self.theme.surface(role, State::Pressed);
         rest.lerp(hovered, hover).lerp(pressed, press)
     }
 
-    pub fn look_disabled(&mut self, role: Role) -> Look {
-        self.theme.look(role, State::Disabled)
+    pub fn surface_disabled(&mut self, role: Role) -> Surface {
+        self.theme.surface(role, State::Disabled)
     }
 
     pub fn radius(&self) -> Corners {
@@ -1417,7 +1570,7 @@ impl Ui {
             Axis::Row => self.allocate(Vec2::new(resolve(length, available.x), available.y)),
         };
         self.registry
-            .register_wheel(key, outer, self.overlay_mode > 0);
+            .register_wheel(key, outer, self.layer == Layer::Popup);
         if self.registry.wheel_owner() == Some(key) {
             let wheel = match axis {
                 Axis::Column => -self.input.wheel().y,
@@ -1614,20 +1767,11 @@ impl Ui {
             origin.y = pointer.y - 14.0 - size.y;
         }
         let rect = Rect::from_min_size(origin, size);
-        let clip = self.overlay_clip;
+        self.glass(u64::MAX, rect.expand(2.0), GlassStyle::tooltip());
+        let clip = self.popup_clip;
         let dark = self.theme.dark;
         {
-            let mut painter = Painter::new(&mut self.overlay, &mut self.text, clip, dark);
-            painter.outlined(
-                rect,
-                Corners::all(5.0),
-                crate::style::Fill::Solid(self.theme.palette.raised),
-                crate::style::Border {
-                    width: 1.0,
-                    color: self.theme.palette.border,
-                },
-                crate::style::Shadow::NONE,
-            );
+            let mut painter = Painter::new(&mut self.popup, &mut self.text, clip, dark);
             painter.text(
                 &layout,
                 rect.min + Vec2::new(7.0, 5.0),
@@ -1703,6 +1847,7 @@ impl<'a> Grid<'a> {
         let clip = ui.clip();
         let instances = ui.instances.len();
         let overlay = ui.overlay.len();
+        let popup = ui.popup.len();
         let hits = ui.registry.hit_count();
         let wheels = ui.registry.wheel_count();
         ui.ids
@@ -1731,6 +1876,7 @@ impl<'a> Grid<'a> {
         self.cells.push(Cell {
             instances: instances..ui.instances.len(),
             overlay: overlay..ui.overlay.len(),
+            popup: popup..ui.popup.len(),
             hits: hits..ui.registry.hit_count(),
             wheels: wheels..ui.registry.wheel_count(),
             height: area.main,
@@ -1766,6 +1912,9 @@ impl<'a> Grid<'a> {
                 instance.translate(delta);
             }
             for instance in &mut self.ui.overlay[cell.overlay] {
+                instance.translate(delta);
+            }
+            for instance in &mut self.ui.popup[cell.popup] {
                 instance.translate(delta);
             }
             self.ui.registry.shift_hits(cell.hits, delta);

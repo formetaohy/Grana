@@ -517,8 +517,8 @@ fn filters(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     }
 }
 
-fn card_look(ui: &Ui) -> grana_ui::Look {
-    let mut look = ui.theme().look(Role::Card, grana_ui::State::Rest);
+fn card_look(ui: &Ui) -> grana_ui::Surface {
+    let mut look = ui.theme().surface(Role::Card, grana_ui::State::Rest);
     look.corners = Corners::all(ui.theme().metrics.card_radius);
     look
 }
@@ -684,7 +684,11 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                 let font = ui.theme().font(grana_ui::Level::Monospace);
                 let mut painter = ui.painter();
                 if selected {
-                    painter.rect(row_rect, Corners::ZERO, palette.raised);
+                    painter.rect(
+                        row_rect,
+                        Corners::ZERO,
+                        palette.material_fill.with_alpha(0.6),
+                    );
                     painter.rect(
                         Rect::from_min_size(row_rect.min, Vec2::new(2.0, row_rect.height())),
                         Corners::ZERO,
@@ -694,7 +698,7 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                     painter.rect(
                         row_rect,
                         Corners::ZERO,
-                        palette.raised.with_alpha(0.7 * hover),
+                        palette.material_hover.with_alpha(0.7 * hover),
                     );
                 }
                 painter.rect(
@@ -787,7 +791,11 @@ fn header_cell(ui: &mut Ui, key: u64, text: &str, sorted: Option<bool>, rect: Re
     let icon_color = palette.text_tertiary;
     let mut painter = ui.painter();
     if hover > 0.01 {
-        painter.rect(rect, Corners::ZERO, palette.raised.with_alpha(0.6 * hover));
+        painter.rect(
+            rect,
+            Corners::ZERO,
+            palette.material_hover.with_alpha(0.6 * hover),
+        );
     }
     painter.text_in(
         Rect::from_min_max(

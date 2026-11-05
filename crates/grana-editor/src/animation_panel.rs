@@ -433,9 +433,9 @@ fn keyframe_list(
                 {
                     let mut painter = ui.painter();
                     if active {
-                        painter.rect(row, Corners::all(6.0), accent.with_alpha(0.16));
+                        painter.rect(row, Corners::all(10.0), accent.with_alpha(0.16));
                     } else if hover > 0.01 {
-                        painter.rect(row, Corners::all(6.0), Color::white_alpha(0.04 * hover));
+                        painter.rect(row, Corners::all(10.0), Color::white_alpha(0.05 * hover));
                     }
                     painter.text_in(
                         Rect::from_min_max(

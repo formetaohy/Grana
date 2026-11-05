@@ -69,6 +69,7 @@ pub(crate) struct PlotDrag {
 #[derive(Default)]
 pub struct Workspace {
     pub panel: Option<Panel>,
+    pub sidebar_hidden: bool,
     pub playback: Playback,
     pub movie_size: [u32; 2],
     pub track_set: Option<ObjectSetId>,

@@ -1,0 +1,16 @@
+[package]
+name = "grana-glass"
+version.workspace = true
+edition.workspace = true
+description = "Apple-style liquid glass materials for wgpu"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytemuck = { workspace = true }
+glam = { workspace = true }
+slotmap = { workspace = true }
+wgpu = { workspace = true }
+
+[lints]
+workspace = true

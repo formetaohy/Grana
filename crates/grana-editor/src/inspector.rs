@@ -8,10 +8,10 @@ use crate::state::State;
 use crate::widget;
 use grana_session::Command;
 
-const CHANNEL_ROW: f32 = 30.0;
+const CHANNEL_ROW: f32 = 34.0;
 
 pub fn dataset_height(state: &State<'_>) -> f32 {
-    let mut height = 60.0;
+    let mut height = 78.0;
     if state.series.entries.len() > 1 {
         height += 32.0;
     }
@@ -278,7 +278,7 @@ fn channels(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
         let control = Rect::from_min_max(row.min, Vec2::new(row.max.x - 30.0, row.max.y));
         let pick = ui.id("pick");
         let mut response = ui.interact(pick, control);
-        if ui.focusable(pick, control, Corners::all(4.0)) && ui.activated(pick) {
+        if ui.focusable(pick, control, Corners::all(10.0)) && ui.activated(pick) {
             response.clicked = true;
         }
         if response.clicked {
@@ -301,12 +301,12 @@ fn channels(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
         {
             let mut painter = ui.painter();
             if active {
-                painter.rect(row, Corners::all(4.0), palette.selected);
+                painter.rect(row, Corners::all(10.0), palette.accent.with_alpha(0.22));
             } else if hover > 0.01 {
                 painter.rect(
                     row,
-                    Corners::all(4.0),
-                    palette.raised.with_alpha(0.8 * hover),
+                    Corners::all(10.0),
+                    palette.material_hover.with_alpha(0.7 * hover),
                 );
             }
             let dot = Rect::from_center_size(

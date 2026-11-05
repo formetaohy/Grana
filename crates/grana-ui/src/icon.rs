@@ -50,6 +50,7 @@ pub enum Icon {
     Channel,
     Filter,
     Columns,
+    Sidebar,
     Undo,
     Redo,
     Pencil,
@@ -419,6 +420,17 @@ pub fn paint(
             );
             line(painter, (8.4, 4.0), (8.4, 16.0));
             line(painter, (12.6, 4.0), (12.6, 16.0));
+        }
+        Icon::Sidebar => {
+            rounded(
+                painter,
+                Rect::from_min_max(point(3.0, 4.0), point(17.0, 16.0)),
+                2.4,
+            );
+            line(painter, (8.2, 4.0), (8.2, 16.0));
+            for y in [7.4, 10.0, 12.6] {
+                line(painter, (5.0, y), (6.4, y));
+            }
         }
         Icon::Undo => {
             painter.triangle(point(2.9, 8.0), point(7.2, 4.5), point(7.2, 11.5), color);

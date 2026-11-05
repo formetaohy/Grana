@@ -24,6 +24,7 @@ rfd = "0.17"
 flate2 = "1"
 fs4 = "1"
 quick-xml = "0.41"
+slotmap = "1"
 zarrs = { version = "0.23", default-features = false, features = ["filesystem", "blosc", "zstd", "gzip", "sharding", "crc32c"] }
 ome_zarr_metadata = "0.3"
 openh264 = "0.9"
@@ -35,6 +36,7 @@ grana-volume = { version = "0.1.1", path = "crates/grana-volume" }
 grana-object = { version = "0.1.1", path = "crates/grana-object" }
 grana-gpu = { version = "0.1.1", path = "crates/grana-gpu" }
 grana-figure = { version = "0.1.1", path = "crates/grana-figure" }
+grana-glass = { version = "0.1.1", path = "crates/grana-glass" }
 grana-engine = { version = "0.1.1", path = "crates/grana-engine" }
 grana-app = { version = "0.1.1", path = "crates/grana-app" }
 grana-codec = { version = "0.1.1", path = "crates/grana-codec" }

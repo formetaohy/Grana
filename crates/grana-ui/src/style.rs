@@ -117,7 +117,7 @@ impl Shadow {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Look {
+pub struct Surface {
     pub fill: Fill,
     pub corners: Corners,
     pub border: Border,
@@ -125,7 +125,15 @@ pub struct Look {
     pub text: Color,
 }
 
-impl Look {
+impl Surface {
+    pub const NONE: Self = Self {
+        fill: Fill::None,
+        corners: Corners::ZERO,
+        border: Border::NONE,
+        shadow: Shadow::NONE,
+        text: Color::WHITE,
+    };
+
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self {
             fill: self.fill.lerp(other.fill, t),

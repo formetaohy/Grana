@@ -1,11 +1,12 @@
 use glam::Vec2;
 use grana_figure::{self as overlay, Overlay};
+use grana_ui::glass::{GlassStyle, HUD};
 use grana_ui::{Corners, Cursor, Icon, Level, Rect, Role, TextStyle, Ui, icon};
 
 use crate::state::State;
 use grana_session::Command;
 
-use super::{Layout, SPLITTER, scene_uv};
+use super::{Layout, scene_uv};
 
 pub(super) fn paint(
     ui: &mut Ui,
@@ -15,8 +16,8 @@ pub(super) fn paint(
 ) {
     let size = ui.size();
     let palette = ui.theme().palette;
-    {
-        let mut painter = ui.painter();
+    ui.content(|ui| {
+        let mut painter = ui.content_painter();
         painter.rect(layout.stage, Corners::ZERO, palette.scene_backdrop);
         painter.scene(layout.volume, Corners::ZERO, scene_uv(layout.volume, size));
         painter.scene(
@@ -24,19 +25,12 @@ pub(super) fn paint(
             Corners::ZERO,
             scene_uv(layout.section, size),
         );
-        painter.rect(
-            Rect::from_min_size(
-                Vec2::new(layout.volume.max.x, layout.stage.min.y),
-                Vec2::new(SPLITTER, layout.stage.height()),
-            ),
-            Corners::ZERO,
-            palette.border,
-        );
-    }
+    });
     paint_overlay(ui, layout, state, commands);
     pane_fit(
         ui,
         layout.volume,
+        layout.toolbar.max.y,
         "volume.fit",
         "Fit volume",
         crate::view::fit_volume,
@@ -45,6 +39,7 @@ pub(super) fn paint(
     pane_fit(
         ui,
         layout.section,
+        layout.toolbar.max.y,
         "section.fit",
         "Fit section",
         crate::view::fit_section,
@@ -56,17 +51,15 @@ pub(super) fn paint(
 fn pane_fit(
     ui: &mut Ui,
     pane: Rect,
+    top: f32,
     id: &str,
     tooltip: &str,
     action: fn(&mut State<'_>),
     state: &mut State<'_>,
 ) {
-    let rect = Rect::from_min_size(
-        Vec2::new(pane.max.x - 12.0 - 28.0, pane.min.y + 12.0),
-        Vec2::splat(28.0),
-    );
+    let rect = Rect::from_min_size(Vec2::new(pane.max.x - 44.0, top + 12.0), Vec2::splat(30.0));
     ui.place(rect, |ui| {
-        if grana_ui::widget::icon_button(ui, id, Icon::Fit, 28.0, Role::Hud, tooltip) {
+        if grana_ui::widget::icon_button(ui, id, Icon::Fit, 30.0, Role::Hud, tooltip) {
             action(state);
         }
     });
@@ -90,11 +83,25 @@ fn paint_overlay(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: 
     let clip = state.scene.clip;
     let legends = overlay::legends(state.scene);
     let labels = overlay::labels(state.scene, state.scene.time());
+    let safe_left = if layout.sidebar_visible {
+        layout.sidebar.max.x + 18.0
+    } else {
+        layout.stage.min.x + 18.0
+    };
+    let safe_top = if layout.sidebar_visible {
+        layout.toolbar.max.y + 18.0
+    } else {
+        layout.toolbar.max.y + 74.0
+    };
+    let safe = Rect::from_min_max(
+        Vec2::new(safe_left, safe_top),
+        Vec2::new(layout.volume.max.x - 18.0, layout.stage.max.y - 18.0),
+    );
     let mut overlay = Overlay {
         camera: state.viewport.camera(),
         section: state.viewport.section(),
         world,
-        volume_safe: layout.volume,
+        volume_safe: safe,
         section_stage: stage,
         volume_rect: layout.volume,
         section_rect: layout.section,
@@ -111,10 +118,10 @@ fn paint_overlay(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: 
 }
 
 fn split_handle(ui: &mut Ui, volume: Rect, section: Rect, viewport: &mut grana_display::Viewport) {
-    let x = volume.max.x + SPLITTER * 0.5;
+    let x = volume.max.x;
     let rect = Rect::from_center_size(
         Vec2::new(x, volume.center().y),
-        Vec2::new(7.0, volume.height()),
+        Vec2::new(14.0, volume.height()),
     );
     let response = ui.interact(ui.id("split.handle"), rect);
     ui.register_occluder(rect);
@@ -123,62 +130,73 @@ fn split_handle(ui: &mut Ui, volume: Rect, section: Rect, viewport: &mut grana_d
     }
     if response.dragging {
         let pointer = ui.input().position().x;
-        let total = (volume.width() + section.width() + SPLITTER).max(1.0);
+        let total = (volume.width() + section.width()).max(1.0);
         viewport.set_split(((pointer - volume.min.x) / total).clamp(0.3, 0.75));
     }
-    if response.hovered || response.dragging {
-        let palette = ui.theme().palette;
-        let mut painter = ui.painter();
+    let palette = ui.theme().palette;
+    let active = response.hovered || response.dragging;
+    ui.content(|ui| {
+        let mut painter = ui.content_painter();
         painter.rect(
-            Rect::from_min_size(
-                Vec2::new(x - 0.5, volume.min.y),
-                Vec2::new(1.0, volume.height()),
+            Rect::from_center_size(
+                Vec2::new(x, volume.center().y),
+                Vec2::new(if active { 2.0 } else { 1.0 }, volume.height()),
             ),
             Corners::ZERO,
+            if active {
+                palette.separator.with_alpha(0.45)
+            } else {
+                palette.separator.with_alpha(0.12)
+            },
+        );
+    });
+    if active {
+        let mut painter = ui.painter();
+        painter.rect(
+            Rect::from_center_size(Vec2::new(x, volume.center().y), Vec2::new(5.0, 34.0)),
+            Corners::capsule(),
             palette.text_quaternary,
         );
     }
 }
 
-pub(super) fn toast(ui: &mut Ui, stage: Rect, state: &State<'_>) {
+pub(super) fn toast(ui: &mut Ui, layout: &Layout, state: &State<'_>) {
     let Some(message) = state.io.message else {
         return;
     };
     let palette = ui.theme().palette;
-    let width = (stage.width() - 28.0).min(360.0);
-    let style = TextStyle::new(ui.theme().font(Level::Caption), palette.text_primary).wrapping();
-    let layout = ui.layout_text(message.text(), style, width - 44.0);
-    let height = (layout.size.y + 20.0).max(38.0);
+    let stage = layout.stage;
+    let ceiling = layout
+        .dock
+        .or(layout.transport)
+        .map_or(stage.max.y - 28.0, |rect| rect.min.y - 16.0);
+    let width = (stage.width() - 28.0).min(440.0);
+    let style = TextStyle::new(ui.theme().font(Level::Callout), palette.text_primary).wrapping();
+    let layout_text = ui.layout_text(message.text(), style, width - 56.0);
+    let height = (layout_text.size.y + 24.0).max(46.0);
     let rect = Rect::from_min_size(
-        Vec2::new(stage.max.x - 14.0 - width, stage.max.y - 14.0 - height),
+        Vec2::new(stage.center().x - width * 0.5, ceiling - height),
         Vec2::new(width, height),
     );
-    let look = ui.theme().look(Role::Hud, grana_ui::State::Rest);
     let (mark, tint) = match message.kind() {
         grana_session::Kind::Error => (Icon::Warning, palette.warning),
         grana_session::Kind::Info => (Icon::Info, palette.text_secondary),
     };
-    let mut painter = ui.painter();
-    painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
-    icon::paint(
-        mark,
-        &mut painter,
-        Vec2::new(rect.min.x + 16.0, rect.center().y),
-        15.0,
-        tint,
-        1.5,
-    );
-    painter.rect(
-        Rect::from_min_size(
-            Vec2::new(rect.min.x, rect.min.y + 8.0),
-            Vec2::new(2.0, rect.height() - 16.0),
-        ),
-        Corners::capsule(),
-        tint.with_alpha(0.6),
-    );
-    painter.text(
-        &layout,
-        Vec2::new(rect.min.x + 32.0, rect.min.y + 10.0),
-        palette.text_primary,
-    );
+    ui.glass(ui.id("toast.glass"), rect, GlassStyle::hud().layer(HUD));
+    ui.popup_scope(rect, |ui| {
+        let mut painter = ui.painter();
+        icon::paint(
+            mark,
+            &mut painter,
+            Vec2::new(rect.min.x + 20.0, rect.center().y),
+            16.0,
+            tint,
+            1.6,
+        );
+        painter.text(
+            &layout_text,
+            Vec2::new(rect.min.x + 38.0, rect.min.y + 12.0),
+            palette.text_primary,
+        );
+    });
 }

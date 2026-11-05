@@ -108,6 +108,7 @@ impl App {
         );
         let size = window.inner_size();
         window.set_ime_allowed(false);
+        window.set_theme(Some(winit::window::Theme::Dark));
         let gpu = Gpu::new(window.clone(), [size.width, size.height]);
         let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
         ui.set_clipboard(Box::new(SystemClipboard::new()));

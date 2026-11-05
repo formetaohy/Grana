@@ -462,7 +462,7 @@ fn scatter(ui: &mut Ui, state: &State<'_>) {
         let x = ui.cursor_position().x + (full.x - side) * 0.5;
         let plot = Rect::from_min_size(Vec2::new(x, ui.cursor_position().y), Vec2::splat(side));
         ui.allocate(Vec2::new(full.x, side));
-        let background = ui.theme().look(Role::Field, grana_ui::State::Rest);
+        let background = ui.theme().surface(Role::Field, grana_ui::State::Rest);
         let grid = Color::white_alpha(0.05);
         let line = Color::rgba(0.95, 0.96, 1.0, 0.55);
         let mut painter = ui.painter();

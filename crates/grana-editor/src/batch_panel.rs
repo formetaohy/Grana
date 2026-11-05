@@ -64,7 +64,7 @@ fn protocol(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         });
         match state.batch_protocol() {
             Some(text) => {
-                let look = ui.theme().look(Role::Field, grana_ui::State::Rest);
+                let look = ui.theme().surface(Role::Field, grana_ui::State::Rest);
                 let style = TextStyle::new(
                     ui.theme().font(grana_ui::Level::Monospace),
                     ui.theme().palette.text_secondary,
@@ -179,7 +179,7 @@ fn output(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         card_title(ui, Icon::Export, "Output", None);
         match state.batch_output() {
             Some(path) => {
-                let look = ui.theme().look(Role::Field, grana_ui::State::Rest);
+                let look = ui.theme().surface(Role::Field, grana_ui::State::Rest);
                 let style = TextStyle::new(
                     ui.theme().font(grana_ui::Level::Monospace),
                     ui.theme().palette.text_secondary,

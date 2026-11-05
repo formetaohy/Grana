@@ -73,7 +73,7 @@ fn header(ui: &mut Ui, count: usize) -> Rect {
     {
         let mut painter = ui.painter();
         if hover > 0.01 {
-            painter.rect(add, Corners::all(4.0), palette.raised);
+            painter.rect(add, Corners::all(8.0), palette.material_fill);
         }
         grana_ui::icon::paint(
             Icon::Plus,
@@ -163,7 +163,7 @@ fn object(
     let expanded = ui.disclosure_open(&open_id, false);
     let palette = ui.theme().palette;
     let tint = Color::from_rgb_f32(color);
-    let look = ui.theme().look(Role::Card, grana_ui::State::Rest);
+    let look = ui.theme().surface(Role::Card, grana_ui::State::Rest);
     ui.push_id(&format!("object.{}", id.raw()));
     ui.column(
         Block::column()
@@ -192,7 +192,7 @@ fn object(
                 Rect::from_min_max(text_area.min, Vec2::new(eye_rect.min.x - 8.0, header.max.y));
             let key = ui.id("header");
             let mut response = ui.interact(key, hit);
-            if ui.focusable(key, hit, Corners::all(6.0)) && ui.activated(key) {
+            if ui.focusable(key, hit, Corners::all(10.0)) && ui.activated(key) {
                 response.clicked = true;
             }
             if response.clicked {
@@ -239,7 +239,7 @@ fn object(
             );
             {
                 let mut painter = ui.painter();
-                painter.rect(icon_rect, Corners::all(6.0), tint.with_alpha(0.12));
+                painter.rect(icon_rect, Corners::all(12.0), tint.with_alpha(0.12));
                 painter.outlined(
                     icon_rect,
                     Corners::all(6.0),

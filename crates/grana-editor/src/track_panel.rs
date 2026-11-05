@@ -792,7 +792,7 @@ fn button(ui: &mut Ui, id: &str, label: &str, role: Role, enabled: bool) -> bool
         measured.x + 24.0,
         ui.theme().metrics.control_height,
     ));
-    let look = ui.look_disabled(role);
+    let look = ui.surface_disabled(role);
     let mut painter = ui.painter();
     painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
     painter.text_in(

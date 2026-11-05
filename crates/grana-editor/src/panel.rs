@@ -1,7 +1,8 @@
 use glam::Vec2;
+use grana_ui::glass::GlassStyle;
 use grana_ui::{
-    Align, Block, Border, Color, Corners, Cursor, Edges, Fill, Icon, Length, Level, Rect, Role,
-    Shadow, TextStyle, TypeStyle, Ui, icon,
+    Align, Block, Border, Corners, Cursor, Edges, Fill, Icon, Length, Level, Rect, Role, TextStyle,
+    TypeStyle, Ui, icon,
 };
 
 use crate::state::State;
@@ -13,16 +14,16 @@ mod stage;
 mod status;
 mod timeline;
 
-const HEADER_HEIGHT: f32 = 52.0;
-const SIDEBAR_WIDTH: f32 = 288.0;
-const STATUS_HEIGHT: f32 = 26.0;
-const TRANSPORT_HEIGHT: f32 = 46.0;
-const DOCK_HEADER: f32 = 38.0;
-const DOCK_DEFAULT: f32 = 300.0;
-const DOCK_MINIMUM: f32 = 168.0;
-const STAGE_MINIMUM: f32 = 200.0;
-const SPLITTER: f32 = 1.0;
-const SIDEBAR_PAD: f32 = 14.0;
+const MARGIN: f32 = 14.0;
+const GAP: f32 = 12.0;
+const TOOLBAR_HEIGHT: f32 = 54.0;
+const SIDEBAR_WIDTH: f32 = 304.0;
+const STATUS_HEIGHT: f32 = 52.0;
+const TRANSPORT_HEIGHT: f32 = 54.0;
+const DOCK_HEADER: f32 = 42.0;
+const DOCK_DEFAULT: f32 = 384.0;
+const DOCK_MINIMUM: f32 = 220.0;
+const SIDEBAR_PAD: f32 = 16.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
@@ -54,67 +55,82 @@ impl Panel {
 }
 
 struct Layout {
-    header: Rect,
+    toolbar: Rect,
     sidebar: Rect,
+    status: Rect,
     stage: Rect,
     volume: Rect,
     section: Rect,
     transport: Option<Rect>,
     dock: Option<Rect>,
-    status: Rect,
+    sidebar_visible: bool,
 }
 
 impl Layout {
     fn new(ui: &mut Ui, state: &State<'_>, full: Rect) -> Self {
-        let header = Rect::from_min_size(Vec2::ZERO, Vec2::new(full.width(), HEADER_HEIGHT));
-        let status = Rect::from_min_size(
-            Vec2::new(full.min.x, full.max.y - STATUS_HEIGHT),
-            Vec2::new(full.width(), STATUS_HEIGHT),
+        let toolbar = Rect::from_min_size(
+            Vec2::new(full.min.x + MARGIN, full.min.y + MARGIN),
+            Vec2::new(full.width() - MARGIN * 2.0, TOOLBAR_HEIGHT),
         );
-        let top = header.max.y;
-        let bottom = status.min.y;
-        let sidebar =
-            Rect::from_min_max(Vec2::new(full.min.x, top), Vec2::new(SIDEBAR_WIDTH, bottom));
-        let main = Rect::from_min_max(Vec2::new(SIDEBAR_WIDTH, top), Vec2::new(full.max.x, bottom));
+        let sidebar_visible = !state.workspace.sidebar_hidden;
+        let sidebar = if sidebar_visible {
+            Rect::from_min_max(
+                Vec2::new(full.min.x + MARGIN, toolbar.max.y + GAP),
+                Vec2::new(full.min.x + MARGIN + SIDEBAR_WIDTH, full.max.y - MARGIN),
+            )
+        } else {
+            Rect::ZERO
+        };
+        let status = if sidebar_visible {
+            Rect::from_min_max(
+                Vec2::new(sidebar.min.x, sidebar.max.y - STATUS_HEIGHT),
+                sidebar.max,
+            )
+        } else {
+            Rect::ZERO
+        };
+        let left = if sidebar_visible {
+            sidebar.max.x + GAP
+        } else {
+            full.min.x + MARGIN
+        };
+        let right = full.max.x - MARGIN;
         let transport_height = if state.scene.frame_count() > 1 {
             TRANSPORT_HEIGHT
         } else {
             0.0
         };
-        let dock = state.workspace.panel.map(|_| {
-            let available = (main.height() - transport_height - STAGE_MINIMUM).max(DOCK_MINIMUM);
-            let stored = ui.value_of(ui.id("dock.height")).unwrap_or(DOCK_DEFAULT);
-            let height = stored.clamp(DOCK_MINIMUM, available);
-            Rect::from_min_max(Vec2::new(main.min.x, main.max.y - height), main.max)
-        });
-        let dock_top = dock.map_or(main.max.y, |rect| rect.min.y);
         let transport = (transport_height > 0.0).then(|| {
-            Rect::from_min_max(
-                Vec2::new(main.min.x, dock_top - transport_height),
-                Vec2::new(main.max.x, dock_top),
+            Rect::from_min_size(
+                Vec2::new(left, full.max.y - MARGIN - transport_height),
+                Vec2::new(right - left, transport_height),
             )
         });
-        let stage_bottom = transport.map_or(dock_top, |rect| rect.min.y);
-        let stage = Rect::from_min_max(main.min, Vec2::new(main.max.x, stage_bottom));
+        let dock_bottom = transport.map_or(full.max.y - MARGIN, |rect| rect.min.y - GAP);
+        let dock = state.workspace.panel.map(|_| {
+            let top = toolbar.max.y + GAP + 140.0;
+            let available = (dock_bottom - top).max(DOCK_MINIMUM);
+            let stored = ui.value_of(ui.id("dock.height")).unwrap_or(DOCK_DEFAULT);
+            let height = stored.clamp(DOCK_MINIMUM, available);
+            Rect::from_min_max(
+                Vec2::new(left, dock_bottom - height),
+                Vec2::new(right, dock_bottom),
+            )
+        });
         let split = state.viewport.split();
-        let width = (stage.width() - SPLITTER).max(0.0) * split;
-        let volume = Rect::from_min_max(
-            stage.min,
-            Vec2::new((stage.min.x + width).min(stage.max.x), stage.max.y),
-        );
-        let section = Rect::from_min_max(
-            Vec2::new((volume.max.x + SPLITTER).min(stage.max.x), stage.min.y),
-            stage.max,
-        );
+        let width = (full.width() * split).clamp(120.0, full.width() - 120.0);
+        let volume = Rect::from_min_max(full.min, Vec2::new(full.min.x + width, full.max.y));
+        let section = Rect::from_min_max(Vec2::new(full.min.x + width, full.min.y), full.max);
         Self {
-            header,
+            toolbar,
             sidebar,
-            stage,
+            status,
+            stage: full,
             volume,
             section,
             transport,
             dock,
-            status,
+            sidebar_visible,
         }
     }
 }
@@ -146,81 +162,43 @@ pub fn build(
     let full = Rect::from_min_size(Vec2::ZERO, size);
     let layout = Layout::new(ui, &state, full);
     ui.root(|ui| {
-        paint_shell(ui, &layout);
-        header::bar(ui, layout.header, &mut state, &mut commands);
-        sidebar_panel(ui, layout.sidebar, &mut state, &mut commands);
         state.stage.set_rects(layout.volume, layout.section);
         stage::paint(ui, &layout, &mut state, &mut commands);
+        header::bar(ui, layout.toolbar, &mut state, &mut commands);
+        if layout.sidebar_visible {
+            sidebar_panel(ui, &layout, &mut state, &mut commands);
+        } else {
+            status::pill(ui, layout.toolbar, &state);
+        }
         if let Some(rect) = layout.transport {
             timeline::transport(ui, rect, &mut state, &mut commands);
         }
         if let Some(rect) = layout.dock {
             dock_panel(ui, rect, &mut state, &mut commands);
         }
-        status::bar(ui, layout.status, &state);
-        stage::toast(ui, layout.stage, &state);
+        stage::toast(ui, &layout, &state);
         ui.paint_tooltip();
     });
     commands
 }
 
-fn paint_shell(ui: &mut Ui, layout: &Layout) {
-    let palette = ui.theme().palette;
-    let full = Rect::from_min_size(Vec2::ZERO, ui.size());
-    let mut painter = ui.painter();
-    painter.rect(full, Corners::ZERO, palette.scene_backdrop);
-    painter.rect(layout.header, Corners::ZERO, palette.card);
-    painter.rect(layout.sidebar, Corners::ZERO, palette.card);
-    painter.rect(
-        Rect::from_min_size(
-            Vec2::new(layout.sidebar.max.x - 1.0, layout.sidebar.min.y),
-            Vec2::new(1.0, layout.sidebar.height()),
-        ),
-        Corners::ZERO,
-        palette.border,
-    );
-    if let Some(rect) = layout.transport {
-        painter.rect(rect, Corners::ZERO, palette.card);
-        painter.rect(
-            Rect::from_min_size(rect.min, Vec2::new(rect.width(), 1.0)),
-            Corners::ZERO,
-            palette.border,
-        );
-    }
-    if let Some(rect) = layout.dock {
-        painter.rect(rect, Corners::ZERO, palette.card);
-    }
-    painter.rect(layout.status, Corners::ZERO, palette.card);
-    painter.rect(
-        Rect::from_min_size(
-            Vec2::new(layout.header.min.x, layout.header.max.y - 1.0),
-            Vec2::new(layout.header.width(), 1.0),
-        ),
-        Corners::ZERO,
-        palette.border,
-    );
-    painter.rect(
-        Rect::from_min_size(
-            Vec2::new(layout.status.min.x, layout.status.min.y),
-            Vec2::new(layout.status.width(), 1.0),
-        ),
-        Corners::ZERO,
-        palette.border,
-    );
-}
-
-fn sidebar_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec<Command>) {
+fn sidebar_panel(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: &mut Vec<Command>) {
+    let rect = layout.sidebar;
+    ui.glass(ui.id("sidebar.glass"), rect, GlassStyle::panel());
     let header_height = crate::inspector::dataset_height(state);
     let header = Rect::from_min_max(
-        Vec2::new(rect.min.x + SIDEBAR_PAD, rect.min.y + 14.0),
-        Vec2::new(rect.max.x - SIDEBAR_PAD, rect.min.y + 14.0 + header_height),
+        Vec2::new(rect.min.x + SIDEBAR_PAD, rect.min.y + SIDEBAR_PAD),
+        Vec2::new(
+            rect.max.x - SIDEBAR_PAD,
+            rect.min.y + SIDEBAR_PAD + header_height,
+        ),
     );
     ui.place(header, |ui| {
         crate::inspector::dataset(ui, state, commands);
     });
     let tabs = Rect::from_min_size(
-        Vec2::new(rect.min.x + SIDEBAR_PAD, header.max.y + 10.0),
-        Vec2::new(rect.width() - SIDEBAR_PAD * 2.0, 34.0),
+        Vec2::new(rect.min.x + SIDEBAR_PAD, header.max.y + 12.0),
+        Vec2::new(rect.width() - SIDEBAR_PAD * 2.0, 30.0),
     );
     let labels = ["View", "Objects"];
     let key = ui.id("sidebar.tab");
@@ -228,13 +206,13 @@ fn sidebar_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut 
         .value_of(key)
         .map_or(0, |value| value.round().clamp(0.0, 1.0) as usize);
     ui.place(tabs, |ui| {
-        if let Some(index) = widget::tab_bar(ui, "sidebar.tabs", &labels, active, true) {
+        if let Some(index) = widget::segmented_fill(ui, "sidebar.tabs", &labels, active) {
             ui.store_value(key, index as f32);
         }
     });
     let body = Rect::from_min_max(
-        Vec2::new(rect.min.x, tabs.max.y + 1.0),
-        Vec2::new(rect.max.x, rect.max.y),
+        Vec2::new(rect.min.x, tabs.max.y + 8.0),
+        Vec2::new(rect.max.x, layout.status.min.y),
     );
     ui.stacked(body, true, |ui| {
         ui.scroll(
@@ -243,8 +221,13 @@ fn sidebar_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut 
             |ui| {
                 ui.column(
                     Block::column()
-                        .padding(Edges::symmetric(SIDEBAR_PAD, 12.0))
-                        .gaps(6.0),
+                        .padding(Edges {
+                            left: SIDEBAR_PAD,
+                            top: 10.0,
+                            right: SIDEBAR_PAD,
+                            bottom: 20.0,
+                        })
+                        .gaps(8.0),
                     |ui| match active {
                         0 => crate::inspector::view_body(ui, state, commands),
                         _ => crate::inspector::objects_body(ui, state, commands),
@@ -253,19 +236,17 @@ fn sidebar_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut 
             },
         );
     });
+    status::bar(ui, layout.status, state);
 }
 
 fn dock_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let palette = ui.theme().palette;
-    {
-        let mut painter = ui.painter();
-        painter.rect(
-            Rect::from_min_size(rect.min, Vec2::new(rect.width(), 1.0)),
-            Corners::ZERO,
-            palette.border,
-        );
-    }
-    let grip = Rect::from_min_max(rect.min, Vec2::new(rect.max.x, rect.min.y + 5.0));
+    ui.glass(
+        ui.id("dock.glass"),
+        rect,
+        GlassStyle::sheet().layer(grana_ui::glass::CHROME),
+    );
+    let grip = Rect::from_min_max(rect.min, Vec2::new(rect.max.x, rect.min.y + 8.0));
     let response = ui.interact(ui.id("dock.resize"), grip);
     if response.hovered || response.dragging {
         ui.set_cursor(Cursor::ResizeVertical);
@@ -276,12 +257,26 @@ fn dock_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec
         let stored = ui.value_of(key).unwrap_or(DOCK_DEFAULT);
         ui.store_value(key, stored - delta);
     }
-    if response.hovered {
+    {
         let mut painter = ui.painter();
         painter.rect(
-            Rect::from_min_size(rect.min, Vec2::new(rect.width(), 1.0)),
-            Corners::ZERO,
-            Color::white_alpha(0.18),
+            Rect::from_center_size(
+                Vec2::new(grip.center().x, grip.min.y + 5.0),
+                Vec2::new(
+                    if response.hovered || response.dragging {
+                        52.0
+                    } else {
+                        40.0
+                    },
+                    4.0,
+                ),
+            ),
+            Corners::capsule(),
+            if response.hovered || response.dragging {
+                palette.text_tertiary
+            } else {
+                palette.text_quaternary
+            },
         );
     }
     let header = Rect::from_min_size(
@@ -289,15 +284,15 @@ fn dock_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec
         Vec2::new(rect.width() - SIDEBAR_PAD * 2.0, DOCK_HEADER),
     );
     let close = Rect::from_center_size(
-        Vec2::new(header.max.x - 10.0, header.center().y),
-        Vec2::splat(26.0),
+        Vec2::new(header.max.x - 12.0, header.center().y),
+        Vec2::splat(28.0),
     );
     let tabs = Rect::from_min_max(header.min, Vec2::new(close.min.x - 12.0, header.max.y));
     let labels = Panel::ALL.map(Panel::name);
     let active = panel_index(state);
     ui.store_value(ui.id("dock.last"), active as f32);
     ui.place(tabs, |ui| {
-        if let Some(index) = widget::tab_bar(ui, "dock.tabs", &labels, active, false) {
+        if let Some(index) = widget::tabs(ui, "dock.tabs", &labels, active) {
             state.workspace.panel = Some(Panel::ALL[index]);
         }
     });
@@ -305,8 +300,8 @@ fn dock_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec
         let mut painter = ui.painter();
         painter.rect(
             Rect::from_min_size(
-                Vec2::new(rect.min.x, header.max.y - 1.0),
-                Vec2::new(rect.width(), 1.0),
+                Vec2::new(rect.min.x + SIDEBAR_PAD, header.max.y - 1.0),
+                Vec2::new(rect.width() - SIDEBAR_PAD * 2.0, 1.0),
             ),
             Corners::ZERO,
             palette.separator,
@@ -317,7 +312,7 @@ fn dock_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec
             ui,
             "dock.close",
             Icon::Close,
-            26.0,
+            28.0,
             Role::Quiet,
             "Close panel",
         ) {
@@ -325,8 +320,8 @@ fn dock_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec
         }
     });
     let content = Rect::from_min_max(
-        Vec2::new(rect.min.x + SIDEBAR_PAD, header.max.y),
-        Vec2::new(rect.max.x - SIDEBAR_PAD, rect.max.y - 12.0),
+        Vec2::new(rect.min.x + SIDEBAR_PAD, header.max.y + 8.0),
+        Vec2::new(rect.max.x - SIDEBAR_PAD, rect.max.y - 18.0),
     );
     let panel = state.workspace.panel.unwrap_or(Panel::Statistics);
     ui.place(content, |ui| match panel {
@@ -410,7 +405,7 @@ pub fn progress_caption(
 }
 
 pub fn divider(ui: &mut Ui) {
-    let rect = ui.allocate_full(13.0);
+    let rect = ui.allocate_full(17.0);
     let palette = ui.theme().palette;
     let mut painter = ui.painter();
     painter.rect(
@@ -424,13 +419,19 @@ pub fn divider(ui: &mut Ui) {
 }
 
 pub fn section_header(ui: &mut Ui, title: &str, detail: Option<&str>) {
-    let rect = ui.allocate_full(24.0);
+    let rect = ui.allocate_full(26.0);
     let palette = ui.theme().palette;
-    let style = TextStyle::new(ui.theme().label_font(), palette.text_tertiary);
+    let font = TypeStyle {
+        size: 10.5,
+        weight: 600.0,
+        tracking: 0.7,
+        leading: 14.0,
+    };
+    let style = TextStyle::new(font, palette.text_tertiary);
     let detail_style =
         TextStyle::new(ui.theme().font(Level::Caption), palette.text_tertiary).aligned(Align::End);
     let mut painter = ui.painter();
-    painter.text_in(rect, title, style, Align::Center);
+    painter.text_in(rect, &title.to_uppercase(), style, Align::Center);
     if let Some(detail) = detail {
         painter.text_in(
             Rect::from_min_max(Vec2::new(rect.min.x + 64.0, rect.min.y), rect.max),
@@ -442,29 +443,25 @@ pub fn section_header(ui: &mut Ui, title: &str, detail: Option<&str>) {
 }
 
 pub fn card(ui: &mut Ui, gap: f32, content: impl FnOnce(&mut Ui)) -> Rect {
-    let look = ui.theme().look(Role::Card, grana_ui::State::Rest);
+    let surface = ui.theme().surface(Role::Card, grana_ui::State::Rest);
     ui.column(
         Block::column()
-            .padding(Edges::symmetric(12.0, 12.0))
+            .padding(Edges::all(14.0))
             .gaps(gap)
-            .background(look),
+            .background(surface),
         content,
     )
 }
 
 pub fn card_surface(ui: &mut Ui, rect: Rect) {
-    let palette = ui.theme().palette;
-    let corners = Corners::all(ui.theme().metrics.card_radius);
+    let surface = ui.theme().surface(Role::Card, grana_ui::State::Rest);
     let mut painter = ui.painter();
     painter.outlined(
         rect,
-        corners,
-        Fill::Solid(palette.card),
-        Border {
-            width: 1.0,
-            color: palette.border,
-        },
-        Shadow::NONE,
+        surface.corners,
+        surface.fill,
+        surface.border,
+        surface.shadow,
     );
 }
 
@@ -478,9 +475,9 @@ pub fn column_label(column: &grana_measure::Column) -> String {
 }
 
 pub fn card_title(ui: &mut Ui, symbol: Icon, title: &str, detail: Option<&str>) {
-    let rect = ui.allocate_full(20.0);
+    let rect = ui.allocate_full(22.0);
     let palette = ui.theme().palette;
-    let title_style = TextStyle::new(TypeStyle::new(12.0, 500.0, 16.0), palette.text_primary);
+    let title_style = TextStyle::new(TypeStyle::new(13.0, 600.0, 18.0), palette.text_primary);
     let detail_style =
         TextStyle::new(ui.theme().font(Level::Caption), palette.text_tertiary).aligned(Align::End);
     {
@@ -488,13 +485,13 @@ pub fn card_title(ui: &mut Ui, symbol: Icon, title: &str, detail: Option<&str>) 
         icon::paint(
             symbol,
             &mut painter,
-            Vec2::new(rect.min.x + 7.0, rect.center().y),
-            13.0,
+            Vec2::new(rect.min.x + 8.0, rect.center().y),
+            14.0,
             palette.text_tertiary,
             1.5,
         );
         painter.text_in(
-            Rect::from_min_max(Vec2::new(rect.min.x + 18.0, rect.min.y), rect.max),
+            Rect::from_min_max(Vec2::new(rect.min.x + 21.0, rect.min.y), rect.max),
             title,
             title_style,
             Align::Center,
@@ -514,7 +511,7 @@ pub fn empty_state(ui: &mut Ui, symbol: Icon, title: &str, detail: &str) {
         .wrapping()
         .aligned(Align::Center);
     let detail_layout = ui.layout_text(detail, detail_style, (width - 48.0).max(80.0));
-    let height = 22.0 + 40.0 + 8.0 + 20.0 + 6.0 + detail_layout.size.y + 22.0;
+    let height = 22.0 + 44.0 + 10.0 + 22.0 + 6.0 + detail_layout.size.y + 22.0;
     let outer = ui.allocate(Vec2::new(available, height));
     let rect = Rect::from_min_size(
         Vec2::new(outer.min.x + (available - width) * 0.5, outer.min.y),
@@ -528,37 +525,34 @@ pub fn empty_state(ui: &mut Ui, symbol: Icon, title: &str, detail: &str) {
             Fill::None,
             Border {
                 width: 1.0,
-                color: palette.border,
+                color: palette.material_border,
             },
-            Shadow::NONE,
+            grana_ui::Shadow::NONE,
         );
         let art = Rect::from_center_size(
-            Vec2::new(rect.center().x, rect.min.y + 22.0 + 20.0),
-            Vec2::splat(40.0),
+            Vec2::new(rect.center().x, rect.min.y + 22.0 + 22.0),
+            Vec2::splat(44.0),
         );
         painter.outlined(
             art,
-            Corners::all(8.0),
-            Fill::Solid(palette.raised),
-            Border {
-                width: 1.0,
-                color: palette.border,
-            },
-            Shadow::NONE,
+            Corners::all(14.0),
+            Fill::Solid(palette.material_fill),
+            Border::NONE,
+            grana_ui::Shadow::NONE,
         );
         icon::paint(
             symbol,
             &mut painter,
             art.center(),
-            18.0,
+            20.0,
             palette.text_tertiary,
             1.5,
         );
     }
     ui.text_in(
         Rect::from_min_size(
-            Vec2::new(rect.min.x + 24.0, rect.min.y + 22.0 + 42.0),
-            Vec2::new(rect.width() - 48.0, 20.0),
+            Vec2::new(rect.min.x + 24.0, rect.min.y + 22.0 + 46.0),
+            Vec2::new(rect.width() - 48.0, 22.0),
         ),
         title,
         TextStyle::new(ui.theme().font(Level::Headline), palette.text_primary)
@@ -567,7 +561,7 @@ pub fn empty_state(ui: &mut Ui, symbol: Icon, title: &str, detail: &str) {
     );
     ui.text_in(
         Rect::from_min_size(
-            Vec2::new(rect.min.x + 24.0, rect.min.y + 22.0 + 42.0 + 26.0),
+            Vec2::new(rect.min.x + 24.0, rect.min.y + 22.0 + 46.0 + 28.0),
             Vec2::new(rect.width() - 48.0, detail_layout.size.y),
         ),
         detail,

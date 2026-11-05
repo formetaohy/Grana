@@ -597,9 +597,15 @@ fn chip(ui: &mut Ui, pane: Rect, origin: Vec2, symbol: Icon, title: &str, tint: 
     let width = (title_layout.size.x + 42.0).min(maximum + 24.0);
     let height = 26.0;
     let rect = Rect::from_min_size(origin, Vec2::new(width, height));
-    let look = ui.theme().look(Role::Chip, grana_ui::State::Rest);
+    let surface = ui.theme().surface(Role::Chip, grana_ui::State::Rest);
     let mut painter = ui.painter_in(clip);
-    painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
+    painter.outlined(
+        rect,
+        surface.corners,
+        surface.fill,
+        surface.border,
+        surface.shadow,
+    );
     icon::paint(
         symbol,
         &mut painter,

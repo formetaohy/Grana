@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 bytemuck = { workspace = true }
 glam = { workspace = true }
+grana-glass = { workspace = true }
 grana-gpu = { workspace = true }
 grana-text = { workspace = true }
 wgpu = { workspace = true }

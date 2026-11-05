@@ -16,15 +16,15 @@ use crate::theme::{Level, Role, TypeStyle};
 use crate::ui::{Block, Length, Response, Ui};
 
 fn knob_shadow() -> Shadow {
-    Shadow::new(Color::rgba(0.0, 0.0, 0.0, 0.35), 10.0, 2.0)
+    Shadow::new(Color::black_alpha(0.35), 10.0, 2.0)
 }
 
 fn button_font(ui: &Ui) -> TypeStyle {
     ui.theme().button_font()
 }
 
-fn inset(ui: &Ui) -> f32 {
-    ui.theme().metrics.radius + 2.0
+fn padding(ui: &Ui) -> f32 {
+    (ui.theme().metrics.control_height * 0.5).round() - 2.0
 }
 
 pub fn button(ui: &mut Ui, id: &str, label: &str, role: Role) -> bool {
@@ -36,16 +36,18 @@ pub fn button_with(ui: &mut Ui, id: &str, label: &str, role: Role, width: Length
     let metrics = ui.theme().metrics;
     let font = button_font(ui);
     let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE));
+    let inset = padding(ui);
+    let natural = measured.x + inset * 2.0;
     let width = match width {
-        Length::Auto => measured.x + 20.0,
+        Length::Auto => natural,
         Length::Fill => ui.available().x,
         Length::Fixed(value) => value,
-        Length::Minimum(minimum) => (measured.x + 20.0).max(minimum),
-        Length::Maximum(maximum) => (measured.x + 20.0).min(maximum),
+        Length::Minimum(minimum) => natural.max(minimum),
+        Length::Maximum(maximum) => natural.min(maximum),
     };
     let rect = ui.allocate(Vec2::new(width, metrics.control_height));
     let mut response = ui.interact(key, rect);
-    let corners = ui.radius();
+    let corners = Corners::capsule();
     if ui.focusable(key, rect, corners) && ui.activated(key) {
         response.clicked = true;
     }
@@ -54,11 +56,17 @@ pub fn button_with(ui: &mut Ui, id: &str, label: &str, role: Role, width: Length
         if response.active { 1.0 } else { 0.0 },
         Motion::quick(),
     );
-    let look = ui.look(key, role, &response);
-    let body = rect.shrink(0.5 * press);
-    let style = TextStyle::new(font, look.text).aligned(Align::Center);
+    let surface = ui.surface(key, role, &response);
+    let body = rect.shrink(1.0 * press);
+    let style = TextStyle::new(font, surface.text).aligned(Align::Center);
     let mut painter = ui.painter();
-    painter.outlined(body, look.corners, look.fill, look.border, look.shadow);
+    painter.outlined(
+        body,
+        surface.corners,
+        surface.fill,
+        surface.border,
+        surface.shadow,
+    );
     painter.text_in(body, label, style, Align::Center);
     response
 }
@@ -68,10 +76,10 @@ pub fn action_button(ui: &mut Ui, id: &str, symbol: Icon, label: &str, role: Rol
     let metrics = ui.theme().metrics;
     let font = button_font(ui);
     let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE));
-    let width = measured.x + 44.0;
+    let width = measured.x + 46.0;
     let rect = ui.allocate(Vec2::new(width, metrics.control_height));
     let mut response = ui.interact(key, rect);
-    let corners = ui.radius();
+    let corners = Corners::capsule();
     if ui.focusable(key, rect, corners) && ui.activated(key) {
         response.clicked = true;
     }
@@ -80,23 +88,37 @@ pub fn action_button(ui: &mut Ui, id: &str, symbol: Icon, label: &str, role: Rol
         if response.active { 1.0 } else { 0.0 },
         Motion::quick(),
     );
-    let look = ui.look(key, role, &response);
-    let body = rect.shrink(0.5 * press);
-    let leading = inset(ui);
+    let surface = ui.surface(key, role, &response);
+    let body = rect.shrink(1.0 * press);
+    let leading = padding(ui) + 1.0;
+    let trailing = padding(ui) * 0.5;
     let glyph = Rect::from_center_size(
         Vec2::new(body.min.x + leading, body.center().y),
         Vec2::splat(14.0),
     );
     let mut painter = ui.painter();
-    painter.outlined(body, look.corners, look.fill, look.border, look.shadow);
-    icon::paint(symbol, &mut painter, glyph.center(), 14.0, look.text, 1.5);
+    painter.outlined(
+        body,
+        surface.corners,
+        surface.fill,
+        surface.border,
+        surface.shadow,
+    );
+    icon::paint(
+        symbol,
+        &mut painter,
+        glyph.center(),
+        14.0,
+        surface.text,
+        1.5,
+    );
     painter.text_in(
         Rect::from_min_max(
             Vec2::new(body.min.x + leading + 11.0, body.min.y),
-            Vec2::new(body.max.x - 3.0, body.max.y),
+            Vec2::new(body.max.x - trailing, body.max.y),
         ),
         label,
-        TextStyle::new(font, look.text).aligned(Align::Start),
+        TextStyle::new(font, surface.text).aligned(Align::Start),
         Align::Center,
     );
     response
@@ -128,7 +150,7 @@ pub fn icon_button_response(
     let key = ui.id(id);
     let rect = ui.allocate(Vec2::splat(size));
     let mut response = ui.interact(key, rect);
-    let corners = ui.radius();
+    let corners = Corners::capsule();
     if ui.focusable(key, rect, corners) && ui.activated(key) {
         response.clicked = true;
     }
@@ -140,16 +162,22 @@ pub fn icon_button_response(
         if response.active { 1.0 } else { 0.0 },
         Motion::quick(),
     );
-    let look = ui.look(key, role, &response);
-    let body = rect.shrink(0.5 * press);
+    let surface = ui.surface(key, role, &response);
+    let body = rect.shrink(1.0 * press);
     let mut painter = ui.painter();
-    painter.outlined(body, look.corners, look.fill, look.border, look.shadow);
+    painter.outlined(
+        body,
+        surface.corners,
+        surface.fill,
+        surface.border,
+        surface.shadow,
+    );
     icon::paint(
         symbol,
         &mut painter,
         body.center(),
-        (size * 0.5).clamp(11.0, 16.0),
-        look.text,
+        (size * 0.52).clamp(11.0, 17.0),
+        surface.text,
         1.6,
     );
     response
@@ -166,15 +194,21 @@ pub fn icon_button_enabled(
 ) -> bool {
     if !enabled {
         let rect = ui.allocate(Vec2::splat(size));
-        let look = ui.look_disabled(role);
+        let surface = ui.surface_disabled(role);
         let mut painter = ui.painter();
-        painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
+        painter.outlined(
+            rect,
+            surface.corners,
+            surface.fill,
+            surface.border,
+            surface.shadow,
+        );
         icon::paint(
             symbol,
             &mut painter,
             rect.center(),
-            (size * 0.5).clamp(11.0, 16.0),
-            look.text,
+            (size * 0.52).clamp(11.0, 17.0),
+            surface.text,
             1.6,
         );
         return false;
@@ -184,18 +218,18 @@ pub fn icon_button_enabled(
 
 pub fn badge(ui: &mut Ui, label: &str, tint: Color) -> Rect {
     let font = ui.theme().font(Level::Micro);
-    let style = TextStyle::new(font, tint);
+    let style = TextStyle::new(font, tint.with_alpha(0.92));
     let measured = ui.measure_text(label, style);
-    let rect = ui.allocate(Vec2::new(measured.x + 10.0, 18.0));
-    let hairline = ui.theme().metrics.hairline;
+    let rect = ui.allocate(Vec2::new(measured.x + 14.0, 19.0));
+    let palette = ui.theme().palette;
     let mut painter = ui.painter();
     painter.outlined(
         rect,
-        Corners::all(4.0),
-        Fill::Solid(tint.with_alpha(0.09)),
+        Corners::capsule(),
+        Fill::Solid(palette.material_fill),
         Border {
-            width: hairline,
-            color: tint.with_alpha(0.18),
+            width: 1.0,
+            color: palette.material_border,
         },
         Shadow::NONE,
     );
@@ -205,90 +239,88 @@ pub fn badge(ui: &mut Ui, label: &str, tint: Color) -> Rect {
 
 pub fn toggle(ui: &mut Ui, id: &str, value: bool) -> Option<bool> {
     let key = ui.id(id);
-    let rect = ui.allocate(Vec2::new(32.0, 18.0));
-    let mut response = ui.interact(key, rect);
-    if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
-        response.clicked = true;
-    }
+    let metrics = ui.theme().metrics;
+    let rect = ui.allocate(Vec2::new(metrics.switch_width, metrics.switch_height));
+    let activated = ui.focusable(key, rect, Corners::capsule()) && ui.activated(key);
+    switch(ui, key, rect, value).or(activated.then_some(!value))
+}
+
+fn switch(ui: &mut Ui, key: u64, rect: Rect, value: bool) -> Option<bool> {
+    let metrics = ui.theme().metrics;
+    let response = ui.interact(key, rect);
     let changed = response.clicked.then_some(!value);
     let on = ui.animate(key, if value { 1.0 } else { 0.0 }, Motion::snappy());
     let palette = ui.theme().palette;
     let track = rect.shrink(1.0);
-    let track_color = palette.border.lerp(palette.accent, on);
-    let knob_position = track.min.x + 8.0 + (track.width() - 16.0) * on;
+    let off = if palette.text_primary.luminance() > 0.5 {
+        Color::black_alpha(0.16)
+    } else {
+        Color::white_alpha(0.20)
+    };
+    let track_color = off.lerp(palette.success, on);
+    let knob_size = metrics.switch_height - 4.0;
+    let travel = (track.width() - knob_size - 4.0).max(0.0);
+    let knob_position = track.min.x + 2.0 + travel * on;
     let knob = Rect::from_center_size(
-        Vec2::new(knob_position, track.center().y),
-        Vec2::splat(14.0),
+        Vec2::new(knob_position + knob_size * 0.5, track.center().y),
+        Vec2::splat(knob_size),
     );
     let mut painter = ui.painter();
     painter.rect(track, Corners::capsule(), track_color);
     painter.shadow(knob, Corners::capsule(), knob_shadow());
-    painter.rect(
-        knob,
-        Corners::capsule(),
-        palette
-            .scene_backdrop
-            .lerp(palette.text_quaternary, 1.0 - on),
-    );
+    painter.rect(knob, Corners::capsule(), Color::bytes(255, 255, 255));
     changed
 }
 
 pub fn toggle_row(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool> {
     let key = ui.id(id);
-    let height = 28.0;
+    let metrics = ui.theme().metrics;
+    let height = metrics.row_height;
     let rect = ui.allocate(Vec2::new(ui.available().x, height));
-    let control = Rect::from_center_size(
-        Vec2::new(rect.max.x - 16.0, rect.center().y),
-        Vec2::new(32.0, 18.0),
-    );
-    let mut response = ui.interact(key, rect);
-    let corners = Corners::all(ui.theme().metrics.radius - 2.0);
-    if ui.focusable(key, rect, corners) && ui.activated(key) {
-        response.clicked = true;
-    }
-    let changed = response.clicked.then_some(!value);
-    let on = ui.animate(key, if value { 1.0 } else { 0.0 }, Motion::snappy());
+    let response = ui.interact(key, rect);
+    let corners = Corners::all(8.0);
+    let activated = ui.focusable(key, rect, corners) && ui.activated(key);
+    let changed = (response.clicked || activated).then_some(!value);
     let hover = ui.animate(
         key ^ 0x33,
         if response.hovered { 1.0 } else { 0.0 },
         Motion::quick(),
     );
     let palette = ui.theme().palette;
-    let track = control.shrink(1.0);
-    let track_color = palette.border.lerp(palette.accent, on);
-    let knob_position = track.min.x + 8.0 + (track.width() - 16.0) * on;
-    let knob = Rect::from_center_size(
-        Vec2::new(knob_position, track.center().y),
-        Vec2::splat(14.0),
-    );
     let font = ui.theme().font(Level::Callout);
-    let color = palette.text_secondary.lerp(palette.text_primary, hover);
-    let mut painter = ui.painter();
-    painter.text_in(
-        Rect::from_min_max(rect.min, Vec2::new(control.min.x - 8.0, rect.max.y)),
-        label,
-        TextStyle::new(font, color),
-        Align::Center,
+    let switch_rect = Rect::from_center_size(
+        Vec2::new(
+            rect.max.x - metrics.switch_width * 0.5 - 2.0,
+            rect.center().y,
+        ),
+        Vec2::new(metrics.switch_width, metrics.switch_height),
     );
-    painter.rect(track, Corners::capsule(), track_color);
-    painter.shadow(knob, Corners::capsule(), knob_shadow());
-    painter.rect(
-        knob,
-        Corners::capsule(),
-        palette
-            .scene_backdrop
-            .lerp(palette.text_quaternary, 1.0 - on),
-    );
-    changed
+    {
+        let mut painter = ui.painter();
+        if hover > 0.01 {
+            painter.rect(
+                rect.shrink2(Vec2::new(2.0, 1.0)),
+                corners,
+                palette.material_hover.with_alpha(0.8 * hover),
+            );
+        }
+        painter.text_in(
+            Rect::from_min_max(rect.min, Vec2::new(switch_rect.min.x - 8.0, rect.max.y)),
+            label,
+            TextStyle::new(font, palette.text_primary),
+            Align::Center,
+        );
+    }
+    switch(ui, key ^ 0x2f, switch_rect, value).or(changed)
 }
 
 pub fn checkbox(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool> {
     let key = ui.id(id);
     let font = ui.theme().font(Level::Callout);
     let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE));
-    let rect = ui.allocate(Vec2::new(measured.x + 22.0, 22.0));
+    let rect = ui.allocate(Vec2::new(measured.x + 26.0, 24.0));
     let mut response = ui.interact(key, rect);
-    let corners = Corners::all(ui.theme().metrics.radius - 2.0);
+    let corners = Corners::capsule();
     if ui.focusable(key, rect, corners) && ui.activated(key) {
         response.clicked = true;
     }
@@ -300,8 +332,8 @@ pub fn checkbox(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool>
         Motion::quick(),
     );
     let box_rect = Rect::from_center_size(
-        Vec2::new(rect.min.x + 7.5, rect.center().y),
-        Vec2::splat(14.0),
+        Vec2::new(rect.min.x + 9.0, rect.center().y),
+        Vec2::splat(16.0),
     );
     let palette = ui.theme().palette;
     let outline = palette.text_tertiary.lerp(palette.text_secondary, hover);
@@ -310,10 +342,10 @@ pub fn checkbox(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool>
     let mut painter = ui.painter();
     painter.outlined(
         box_rect,
-        Corners::all(3.0),
+        Corners::all(5.0),
         Fill::Solid(fill),
         Border {
-            width: 1.0,
+            width: 1.2,
             color: outline.lerp(palette.accent, mark),
         },
         Shadow::NONE,
@@ -321,20 +353,20 @@ pub fn checkbox(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool>
     if mark > 0.02 {
         let color = palette.text_on_accent.with_alpha(mark);
         painter.segment(
-            Vec2::new(box_rect.min.x + 3.4, box_rect.min.y + 7.2),
-            Vec2::new(box_rect.min.x + 5.9, box_rect.max.y - 3.8),
-            1.6,
+            Vec2::new(box_rect.min.x + 4.0, box_rect.min.y + 8.2),
+            Vec2::new(box_rect.min.x + 6.8, box_rect.max.y - 4.2),
+            1.8,
             color,
         );
         painter.segment(
-            Vec2::new(box_rect.min.x + 5.9, box_rect.max.y - 3.8),
-            Vec2::new(box_rect.max.x - 3.0, box_rect.min.y + 3.8),
-            1.6,
+            Vec2::new(box_rect.min.x + 6.8, box_rect.max.y - 4.2),
+            Vec2::new(box_rect.max.x - 3.4, box_rect.min.y + 4.4),
+            1.8,
             color,
         );
     }
     painter.text_in(
-        Rect::from_min_max(Vec2::new(rect.min.x + 19.0, rect.min.y), rect.max),
+        Rect::from_min_max(Vec2::new(rect.min.x + 23.0, rect.min.y), rect.max),
         label,
         TextStyle::new(font, text_color),
         Align::Center,
@@ -506,10 +538,10 @@ fn slider_core(
     );
     let bar = Rect::from_center_size(
         Vec2::new(track.center().x, rect.center().y),
-        Vec2::new(track.width(), 4.0),
+        Vec2::new(track.width(), metrics.track),
     );
     let knob_center = Vec2::new(bar.min.x + bar.width() * position, bar.center().y);
-    let knob = Rect::from_center_size(knob_center, Vec2::splat(12.0 + engaged));
+    let knob = Rect::from_center_size(knob_center, Vec2::splat(metrics.thumb + engaged * 2.0));
     let filled = Rect::from_min_max(
         bar.min,
         Vec2::new((knob_center.x - 2.0).max(bar.min.x), bar.max.y),
@@ -528,21 +560,16 @@ fn slider_core(
             Align::Center,
         );
     }
-    painter.rect(bar, Corners::capsule(), palette.border);
+    painter.rect(
+        bar,
+        Corners::capsule(),
+        palette.material_fill.with_alpha(0.24),
+    );
     if filled.width() > 0.0 {
         painter.rect(filled, Corners::capsule(), palette.accent);
     }
-    painter.rect(knob, Corners::capsule(), palette.scene_backdrop);
-    painter.outlined(
-        knob,
-        Corners::capsule(),
-        Fill::None,
-        Border {
-            width: 1.5,
-            color: palette.accent.with_alpha(0.85),
-        },
-        Shadow::NONE,
-    );
+    painter.shadow(knob, Corners::capsule(), knob_shadow());
+    painter.rect(knob, Corners::capsule(), Color::bytes(255, 255, 255));
     if let Some(text) = readout {
         painter.text_in(
             Rect::from_min_max(
@@ -566,7 +593,6 @@ pub fn range_slider(
     gradient: &[Color],
 ) -> Option<(f32, f32)> {
     let key = ui.id(id);
-    let palette = ui.theme().palette;
     let rect = ui.allocate_full(30.0);
     let (minimum, maximum) = (*range.start(), *range.end());
     let span = (maximum - minimum).max(1.0e-6);
@@ -603,6 +629,10 @@ pub fn range_slider(
     let grow = ui.animate(key, if engaged { 1.0 } else { 0.0 }, Motion::quick());
     if gradient.len() > 1 {
         gradient_in(ui, bar, gradient);
+    } else {
+        let track_color = ui.theme().palette.material_fill.with_alpha(0.24);
+        let mut painter = ui.painter();
+        painter.rect(bar, Corners::capsule(), track_color);
     }
     let low_x = bar.min.x + bar.width() * normalize(next_start);
     let high_x = bar.min.x + bar.width() * normalize(next_end);
@@ -611,42 +641,9 @@ pub fn range_slider(
         Rect::from_center_size(Vec2::new(high_x, bar.center().y), Vec2::splat(12.0 + grow));
     {
         let mut painter = ui.painter();
-        painter.outlined(
-            bar,
-            Corners::capsule(),
-            Fill::None,
-            Border {
-                width: 1.0,
-                color: Color::white_alpha(0.12),
-            },
-            Shadow::NONE,
-        );
-        if low_x > bar.min.x {
-            painter.rect(
-                Rect::from_min_max(bar.min, Vec2::new(low_x, bar.max.y)),
-                Corners::capsule(),
-                Color::black_alpha(0.55),
-            );
-        }
-        if high_x < bar.max.x {
-            painter.rect(
-                Rect::from_min_max(Vec2::new(high_x, bar.min.y), bar.max),
-                Corners::capsule(),
-                Color::black_alpha(0.55),
-            );
-        }
         for knob in [low_knob, high_knob] {
-            painter.rect(knob, Corners::capsule(), palette.scene_backdrop);
-            painter.outlined(
-                knob,
-                Corners::capsule(),
-                Fill::None,
-                Border {
-                    width: 1.5,
-                    color: palette.accent.with_alpha(0.9),
-                },
-                Shadow::NONE,
-            );
+            painter.shadow(knob, Corners::capsule(), knob_shadow());
+            painter.rect(knob, Corners::capsule(), Color::bytes(255, 255, 255));
         }
     }
     let changed = (next_start - start).abs() > 1.0e-6 || (next_end - end).abs() > 1.0e-6;
@@ -686,7 +683,7 @@ pub fn drag_value(ui: &mut Ui, id: &str, value: f32, speed: f32, decimals: usize
     if response.hovered && ui.input().wheel().y.abs() > 0.0 {
         changed = Some(value + ui.input().wheel().y * speed * 8.0);
     }
-    let look = ui.look(key, Role::Field, &response);
+    let look = ui.surface(key, Role::Field, &response);
     let font = ui.theme().font(Level::Monospace);
     let style = TextStyle::new(font, look.text).aligned(Align::End);
     let text = format!("{:.*}", decimals, changed.unwrap_or(value));
@@ -702,30 +699,53 @@ pub fn drag_value(ui: &mut Ui, id: &str, value: f32, speed: f32, decimals: usize
 }
 
 pub fn segmented(ui: &mut Ui, id: &str, options: &[&str], selected: usize) -> Option<usize> {
+    segmented_core(ui, id, options, selected, false)
+}
+
+pub fn segmented_fill(ui: &mut Ui, id: &str, options: &[&str], selected: usize) -> Option<usize> {
+    segmented_core(ui, id, options, selected, true)
+}
+
+fn segmented_core(
+    ui: &mut Ui,
+    id: &str,
+    options: &[&str],
+    selected: usize,
+    fill: bool,
+) -> Option<usize> {
     let key = ui.id(id);
     let metrics = ui.theme().metrics;
     let palette = ui.theme().palette;
-    let font = ui.theme().font(Level::Callout);
+    let font = ui.theme().font(Level::Callout).medium();
     let style = TextStyle::new(font, Color::WHITE);
-    let widths = options
+    let measured = options
         .iter()
-        .map(|option| ui.measure_text(option, style).x + 18.0)
+        .map(|option| ui.measure_text(option, style).x + 22.0)
         .collect::<Vec<_>>();
-    let total = widths.iter().sum::<f32>() + 4.0;
+    let total = if fill {
+        ui.available().x
+    } else {
+        measured.iter().sum::<f32>() + 6.0
+    };
+    let widths = if fill && !options.is_empty() {
+        vec![(total - 6.0) / options.len() as f32; options.len()]
+    } else {
+        measured
+    };
     let rect = ui.allocate(Vec2::new(total, metrics.control_height));
     let response = ui.interact(key, rect);
     let mut changed = None;
-    let mut left = rect.min.x + 2.0;
+    let mut left = rect.min.x + 3.0;
     let mut cells = Vec::new();
     for (index, width) in widths.iter().enumerate() {
         let cell = Rect::from_min_size(
-            Vec2::new(left, rect.min.y + 2.0),
-            Vec2::new(*width, rect.height() - 4.0),
+            Vec2::new(left, rect.min.y + 3.0),
+            Vec2::new(*width, rect.height() - 6.0),
         );
         cells.push(cell);
         let cell_key = key ^ (index as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
         let response = ui.interact(cell_key, cell);
-        let corners = Corners::all(metrics.radius - 2.0);
+        let corners = Corners::capsule();
         if ui.focusable(cell_key, cell, corners) && ui.activated(cell_key) {
             changed = Some(index);
         }
@@ -739,52 +759,38 @@ pub fn segmented(ui: &mut Ui, id: &str, options: &[&str], selected: usize) -> Op
     let animated = ui.spring_to(key, target_x, Motion::snappy());
     let width = cells.get(target).map_or(0.0, |cell| cell.width());
     let pill = Rect::from_min_size(
-        Vec2::new(animated, rect.min.y + 2.0),
-        Vec2::new(width.max(0.0), rect.height() - 4.0),
+        Vec2::new(animated, rect.min.y + 3.0),
+        Vec2::new(width.max(0.0), rect.height() - 6.0),
     );
     let pointer = ui.input().position();
-    let track_fill = if ui.theme().dark {
-        palette.card
-    } else {
-        Color::bytes(244, 244, 245)
-    };
     let mut painter = ui.painter();
-    painter.outlined(
+    painter.rect(
         rect,
-        Corners::all(metrics.radius),
-        Fill::Solid(track_fill),
-        Border {
-            width: metrics.hairline,
-            color: palette.border,
-        },
-        Shadow::NONE,
+        Corners::capsule(),
+        palette.material_fill.with_alpha(0.45),
     );
     if !response.active {
         for (index, cell) in cells.iter().enumerate() {
             if cell.contains(pointer) && index != target {
                 painter.rect(
                     *cell,
-                    Corners::all(metrics.radius - 2.0),
-                    palette.raised.with_alpha(0.8),
+                    Corners::capsule(),
+                    palette.material_hover.with_alpha(0.5),
                 );
             }
         }
     }
-    painter.outlined(
+    painter.shadow(
         pill,
-        Corners::all(metrics.radius - 2.0),
-        Fill::Solid(palette.selected),
-        Border {
-            width: metrics.hairline,
-            color: Color::bytes(63, 63, 70),
-        },
-        Shadow::NONE,
+        Corners::capsule(),
+        Shadow::new(Color::black_alpha(0.22), 8.0, 2.0),
     );
+    painter.rect(pill, Corners::capsule(), palette.selected);
     for (index, cell) in cells.iter().enumerate() {
         let color = if index == target {
             palette.text_primary
         } else {
-            palette.text_tertiary
+            palette.text_secondary
         };
         let style = TextStyle::new(font, color).aligned(Align::Center);
         painter.text_in(*cell, options[index], style, Align::Center);
@@ -807,11 +813,11 @@ pub fn tab_bar(
     let metrics = ui.theme().metrics;
     let font = ui.theme().font(Level::Callout).medium();
     let style = TextStyle::new(font, Color::WHITE);
-    let height = 34.0;
+    let height = 32.0;
     let available = ui.available().x;
     let widths = options
         .iter()
-        .map(|option| ui.measure_text(option, style).x + 24.0)
+        .map(|option| ui.measure_text(option, style).x + 26.0)
         .collect::<Vec<_>>();
     let rect = ui.allocate(Vec2::new(available, height));
     if bordered {
@@ -828,10 +834,13 @@ pub fn tab_bar(
     let mut changed = None;
     let mut left = rect.min.x;
     for (index, width) in widths.iter().enumerate() {
-        let cell = Rect::from_min_size(Vec2::new(left, rect.min.y), Vec2::new(*width, height));
+        let cell = Rect::from_min_size(
+            Vec2::new(left, rect.min.y + 2.0),
+            Vec2::new(*width, height - 4.0),
+        );
         let key = ui.id(&format!("{id}.tab.{index}"));
         let response = ui.interact(key, cell);
-        let corners = Corners::all(ui.theme().metrics.radius - 2.0);
+        let corners = Corners::capsule();
         if ui.focusable(key, cell, corners) && ui.activated(key) {
             changed = Some(index);
         }
@@ -839,33 +848,38 @@ pub fn tab_bar(
             changed = Some(index);
         }
         let hover = ui.animate(
-            ui.id(&format!("{id}.tab.{index}.hover")),
+            key,
             if response.hovered { 1.0 } else { 0.0 },
             Motion::quick(),
         );
         let active = index == selected;
+        let mut painter = ui.painter();
+        let pill = Rect::from_center_size(
+            cell.center(),
+            Vec2::new((cell.width() - 4.0).max(0.0), height - 8.0),
+        );
+        if active || hover > 0.01 {
+            painter.rect(
+                pill,
+                Corners::capsule(),
+                if active {
+                    palette.material_hover
+                } else {
+                    palette.material_hover.with_alpha(0.5 * hover)
+                },
+            );
+        }
         let color = if active {
             palette.text_primary
         } else {
-            palette.text_tertiary.lerp(palette.text_secondary, hover)
+            palette.text_secondary.lerp(palette.text_primary, hover)
         };
-        let mut painter = ui.painter();
         painter.text_in(
             cell,
             options[index],
             TextStyle::new(font, color).aligned(Align::Center),
             Align::Center,
         );
-        if active {
-            painter.rect(
-                Rect::from_min_size(
-                    Vec2::new(cell.min.x + 8.0, cell.max.y - 2.0),
-                    Vec2::new((cell.width() - 16.0).max(0.0), 2.0),
-                ),
-                Corners::all(1.0),
-                palette.accent,
-            );
-        }
         left += width;
     }
     changed
@@ -880,9 +894,9 @@ pub fn disclosure(
 ) -> bool {
     let key = ui.id(id);
     let palette = ui.theme().palette;
-    let header = ui.allocate_full(28.0);
+    let header = ui.allocate_full(32.0);
     let mut response = ui.interact(key, header);
-    let corners = Corners::all(ui.theme().metrics.radius - 2.0);
+    let corners = Corners::all(10.0);
     if ui.focusable(key, header, corners) && ui.activated(key) {
         response.clicked = true;
     }
@@ -896,30 +910,29 @@ pub fn disclosure(
     );
     let color = palette.text_secondary.lerp(palette.text_primary, hover);
     let style = TextStyle::new(font, color);
-    let radius = ui.theme().metrics.radius - 2.0;
     {
         let mut painter = ui.painter();
         if hover > 0.01 {
             painter.rect(
-                header.shrink(1.0),
-                Corners::all(radius),
-                palette.raised.with_alpha(0.7 * hover),
+                header.shrink2(Vec2::new(2.0, 1.0)),
+                corners,
+                palette.material_hover.with_alpha(0.8 * hover),
             );
         }
         painter.text_in(
-            Rect::from_min_max(Vec2::new(header.min.x + 20.0, header.min.y), header.max),
+            Rect::from_min_max(Vec2::new(header.min.x + 24.0, header.min.y), header.max),
             title,
             style,
             Align::Center,
         );
-        let centre = Vec2::new(header.min.x + 7.0, header.center().y);
+        let centre = Vec2::new(header.min.x + 10.0, header.center().y);
         let angle = std::f32::consts::FRAC_PI_2 * (0.5 + 0.5 * arrow);
-        let tip = centre + Vec2::new(angle.cos(), angle.sin()) * 2.2;
-        painter.segment(tip + Vec2::new(-2.0, -1.3), tip, 1.4, palette.text_tertiary);
-        painter.segment(tip, tip + Vec2::new(2.0, -1.3), 1.4, palette.text_tertiary);
+        let tip = centre + Vec2::new(angle.cos(), angle.sin()) * 2.4;
+        painter.segment(tip + Vec2::new(-2.2, -1.4), tip, 1.5, palette.text_tertiary);
+        painter.segment(tip, tip + Vec2::new(2.2, -1.4), 1.5, palette.text_tertiary);
     }
     if next {
-        ui.column(Block::column().gaps(4.0), content);
+        ui.column(Block::column().gaps(6.0), content);
     }
     next
 }
@@ -945,7 +958,11 @@ pub fn progress(ui: &mut Ui, fraction: f32, width: f32) {
     let palette = ui.theme().palette;
     let rect = ui.allocate(Vec2::new(width, 4.0));
     let mut painter = ui.painter();
-    painter.rect(rect, Corners::capsule(), palette.border);
+    painter.rect(
+        rect,
+        Corners::capsule(),
+        palette.material_fill.with_alpha(0.24),
+    );
     let width = rect.width() * fraction.clamp(0.0, 1.0);
     if width > 1.0 {
         painter.rect(
@@ -1010,8 +1027,8 @@ pub fn labelled(ui: &mut Ui, label: &str, value: &str) {
     let name = TextStyle::new(ui.theme().label_font(), palette.text_tertiary);
     let content = TextStyle::new(ui.theme().font(Level::Monospace), palette.text_secondary);
     let width = ui.available().x;
-    let label_width = (width * 0.38).clamp(64.0, 124.0);
-    let rect = ui.allocate(Vec2::new(width, 22.0));
+    let label_width = (width * 0.36).clamp(64.0, 120.0);
+    let rect = ui.allocate(Vec2::new(width, 24.0));
     let mut painter = ui.painter();
     painter.text_in(
         Rect::from_min_size(rect.min, Vec2::new(label_width, rect.height())),
@@ -1031,10 +1048,16 @@ pub fn labelled(ui: &mut Ui, label: &str, value: &str) {
 }
 
 pub fn section_title(ui: &mut Ui, title: &str) {
-    let style = TextStyle::new(ui.theme().label_font(), ui.theme().palette.text_tertiary);
-    let rect = ui.allocate_full(24.0);
+    let font = TypeStyle {
+        size: 10.5,
+        weight: 600.0,
+        tracking: 0.7,
+        leading: 14.0,
+    };
+    let style = TextStyle::new(font, ui.theme().palette.text_tertiary);
+    let rect = ui.allocate_full(26.0);
     let mut painter = ui.painter();
-    painter.text_in(rect, title, style, Align::Center);
+    painter.text_in(rect, &title.to_uppercase(), style, Align::Center);
 }
 
 pub fn caption(ui: &mut Ui, text: &str) {
@@ -1102,7 +1125,7 @@ pub fn text_field(
     }
     ui.touch_edit();
     let response = ui.interact(key, rect);
-    ui.focusable(key, rect, Corners::all(ui.theme().metrics.radius));
+    ui.focusable(key, rect, Corners::all(10.0));
     if response.hovered {
         ui.set_cursor(Cursor::Text);
     }
@@ -1207,9 +1230,9 @@ fn paint_field(
         blinking,
         preedit,
     } = field;
-    let look = ui.look(key, Role::Field, response);
+    let look = ui.surface(key, Role::Field, response);
     let palette = ui.theme().palette;
-    let radius = ui.theme().metrics.radius - 1.0;
+    let radius = 10.0;
     let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0));
     let offset_of = |index: usize| prefix(text, index).len();
     let display = if preedit.is_empty() {
@@ -1297,7 +1320,7 @@ pub fn text_area(ui: &mut Ui, id: &str, rect: Rect, style: TextStyle) -> Option<
     }
     ui.touch_edit();
     let response = ui.interact(key, rect);
-    let radius = ui.theme().metrics.radius;
+    let radius = 10.0;
     ui.focusable(key, rect, Corners::all(radius));
     if response.hovered {
         ui.set_cursor(Cursor::Text);
