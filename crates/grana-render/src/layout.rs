@@ -28,6 +28,7 @@ pub(crate) struct Layouts {
     pub marker_render: BindGroupLayout,
     pub census_level: BindGroupLayout,
     pub oit_write: BindGroupLayout,
+    pub oit_coverage: BindGroupLayout,
     pub oit_read: BindGroupLayout,
     pub volume: PipelineLayout,
     pub section: PipelineLayout,
@@ -243,17 +244,20 @@ impl Layouts {
                 storage(1, ShaderStages::FRAGMENT, false),
                 storage(2, ShaderStages::FRAGMENT, false),
                 storage(3, ShaderStages::FRAGMENT, false),
-                BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Uint,
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: true,
-                    },
-                    count: None,
-                },
             ],
+        });
+        let oit_coverage = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.oit.coverage.layout"),
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Texture {
+                    sample_type: TextureSampleType::Uint,
+                    view_dimension: TextureViewDimension::D2,
+                    multisampled: true,
+                },
+                count: None,
+            }],
         });
         let oit_read = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.oit.read.layout"),
@@ -304,7 +308,8 @@ impl Layouts {
                 None,
                 None,
                 Some(&oit_write),
-                Some(&depth),
+                None,
+                Some(&oit_coverage),
             ],
             immediate_size: 0,
         });
@@ -343,6 +348,7 @@ impl Layouts {
             marker_render,
             census_level,
             oit_write,
+            oit_coverage,
             oit_read,
             volume,
             section,

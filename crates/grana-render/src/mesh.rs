@@ -110,7 +110,6 @@ pub(crate) struct MeshPasses {
     volume_pipeline: RenderPipeline,
     oit_pipeline: RenderPipeline,
     tail_pipeline: RenderPipeline,
-    coverage_pipeline: RenderPipeline,
     pick_pipeline: RenderPipeline,
     shadow_pipeline: RenderPipeline,
     uniforms: Buffer,
@@ -170,7 +169,8 @@ impl MeshPasses {
                 Some(&layouts.styles),
                 Some(&layouts.shadow),
                 Some(&layouts.oit_write),
-                Some(&layouts.depth),
+                None,
+                Some(&layouts.oit_coverage),
             ],
             immediate_size: 0,
         });
@@ -250,12 +250,20 @@ impl MeshPasses {
             },
             primitive: PrimitiveState::default(),
             depth_stencil: Some(depth_state(false, CompareFunction::Less)),
-            multisample: MultisampleState::default(),
+            multisample: MultisampleState {
+                count: SCENE_SAMPLES,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
             fragment: Some(FragmentState {
                 module: &volume_module,
-                entry_point: Some("fs_oit"),
+                entry_point: Some("fs_oit_key"),
                 compilation_options: Default::default(),
-                targets: &[],
+                targets: &[Some(ColorTargetState {
+                    format: crate::oit::COVERAGE_FORMAT,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
             }),
             multiview_mask: None,
             cache: None,
@@ -274,38 +282,9 @@ impl MeshPasses {
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &volume_module,
-                entry_point: Some("fs_tail"),
+                entry_point: Some("fs_oit"),
                 compilation_options: Default::default(),
                 targets: &crate::oit::tail_targets(),
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        let coverage_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.mesh.coverage"),
-            layout: Some(&volume_layout),
-            vertex: VertexState {
-                module: &volume_module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(vertex_layout())],
-            },
-            primitive: PrimitiveState::default(),
-            depth_stencil: Some(depth_state(false, CompareFunction::Less)),
-            multisample: MultisampleState {
-                count: SCENE_SAMPLES,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            fragment: Some(FragmentState {
-                module: &volume_module,
-                entry_point: Some("fs_coverage"),
-                compilation_options: Default::default(),
-                targets: &[Some(ColorTargetState {
-                    format: crate::oit::COVERAGE_FORMAT,
-                    blend: None,
-                    write_mask: ColorWrites::ALL,
-                })],
             }),
             multiview_mask: None,
             cache: None,
@@ -372,7 +351,6 @@ impl MeshPasses {
             volume_pipeline,
             oit_pipeline,
             tail_pipeline,
-            coverage_pipeline,
             pick_pipeline,
             shadow_pipeline,
             uniforms,
@@ -600,24 +578,12 @@ impl MeshPasses {
         }
     }
 
-    pub fn draw_coverage<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, shadow: &'a BindGroup) {
-        if self.active.is_empty() {
-            return;
-        }
-        pass.set_pipeline(&self.coverage_pipeline);
-        pass.set_bind_group(0, &self.uniform_group, &[]);
-        pass.set_bind_group(3, shadow, &[]);
-        for key in &self.active {
-            self.slots[key].draw(pass, LAYER_NARROW, LAYER_WIDE);
-        }
-    }
-
     pub fn draw_tail<'a>(
         &'a self,
         pass: &mut RenderPass<'a>,
         shadow: &'a BindGroup,
         oit: &'a BindGroup,
-        depth: &'a BindGroup,
+        coverage: &'a BindGroup,
     ) {
         if self.active.is_empty() {
             return;
@@ -626,7 +592,7 @@ impl MeshPasses {
         pass.set_bind_group(0, &self.uniform_group, &[]);
         pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(4, oit, &[]);
-        pass.set_bind_group(5, depth, &[]);
+        pass.set_bind_group(6, coverage, &[]);
         for key in &self.active {
             self.slots[key].draw(pass, LAYER_NARROW, LAYER_WIDE);
         }

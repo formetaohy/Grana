@@ -122,7 +122,6 @@ pub(crate) struct MarkerPasses {
     volume_pipeline: RenderPipeline,
     oit_pipeline: RenderPipeline,
     tail_pipeline: RenderPipeline,
-    coverage_pipeline: RenderPipeline,
     section_pipeline: RenderPipeline,
     section_pick_pipeline: RenderPipeline,
     volume_pick_pipeline: RenderPipeline,
@@ -240,12 +239,20 @@ impl MarkerPasses {
                 ..Default::default()
             },
             depth_stencil: Some(depth_state(false, CompareFunction::Less)),
-            multisample: MultisampleState::default(),
+            multisample: MultisampleState {
+                count: SCENE_SAMPLES,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
             fragment: Some(FragmentState {
                 module: &volume_module,
-                entry_point: Some("fs_oit"),
+                entry_point: Some("fs_oit_key"),
                 compilation_options: Default::default(),
-                targets: &[],
+                targets: &[Some(ColorTargetState {
+                    format: crate::oit::COVERAGE_FORMAT,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
             }),
             multiview_mask: None,
             cache: None,
@@ -267,41 +274,9 @@ impl MarkerPasses {
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &volume_module,
-                entry_point: Some("fs_tail"),
+                entry_point: Some("fs_oit"),
                 compilation_options: Default::default(),
                 targets: &crate::oit::tail_targets(),
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        let coverage_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("grana.marker.coverage"),
-            layout: Some(&layouts.marker_volume),
-            vertex: VertexState {
-                module: &volume_module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: PrimitiveState {
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(depth_state(false, CompareFunction::Less)),
-            multisample: MultisampleState {
-                count: SCENE_SAMPLES,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            fragment: Some(FragmentState {
-                module: &volume_module,
-                entry_point: Some("fs_coverage"),
-                compilation_options: Default::default(),
-                targets: &[Some(ColorTargetState {
-                    format: crate::oit::COVERAGE_FORMAT,
-                    blend: None,
-                    write_mask: ColorWrites::ALL,
-                })],
             }),
             multiview_mask: None,
             cache: None,
@@ -440,7 +415,6 @@ impl MarkerPasses {
             volume_pipeline,
             oit_pipeline,
             tail_pipeline,
-            coverage_pipeline,
             section_pipeline,
             section_pick_pipeline,
             volume_pick_pipeline,
@@ -610,22 +584,12 @@ impl MarkerPasses {
         pass.draw_indirect(self.layer_args.buffer(), 0);
     }
 
-    pub fn draw_coverage<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
-        if self.count == 0 {
-            return;
-        }
-        pass.set_pipeline(&self.coverage_pipeline);
-        pass.set_bind_group(0, scene, &[]);
-        pass.set_bind_group(1, &self.layer_group, &[]);
-        pass.draw_indirect(self.layer_args.buffer(), 0);
-    }
-
     pub fn draw_tail<'a>(
         &'a self,
         pass: &mut RenderPass<'a>,
         scene: &'a BindGroup,
         oit: &'a BindGroup,
-        depth: &'a BindGroup,
+        coverage: &'a BindGroup,
     ) {
         if self.count == 0 {
             return;
@@ -634,7 +598,7 @@ impl MarkerPasses {
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.layer_group, &[]);
         pass.set_bind_group(4, oit, &[]);
-        pass.set_bind_group(5, depth, &[]);
+        pass.set_bind_group(6, coverage, &[]);
         pass.draw_indirect(self.layer_args.buffer(), 0);
     }
 

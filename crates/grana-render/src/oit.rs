@@ -80,6 +80,7 @@ pub(crate) struct Oit {
     tail_depth: TextureView,
     coverage: TextureView,
     write_group: BindGroup,
+    coverage_group: BindGroup,
     read_group: BindGroup,
     layers: u32,
     size: [u32; 2],
@@ -113,7 +114,7 @@ impl Oit {
         let colors = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.oit.colors"),
             size: (slots * COLOR_BYTES).max(8),
-            usage: BufferUsages::STORAGE,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let counts = device.create_buffer(&wgpu::BufferDescriptor {
@@ -152,11 +153,15 @@ impl Oit {
                     binding: 3,
                     resource: dropped.as_entire_binding(),
                 },
-                BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&coverage),
-                },
             ],
+        });
+        let coverage_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.oit.coverage.group"),
+            layout: &layouts.oit_coverage,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&coverage),
+            }],
         });
         let read_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.oit.read.group"),
@@ -198,6 +203,7 @@ impl Oit {
             tail_depth,
             coverage,
             write_group,
+            coverage_group,
             read_group,
             layers,
             size,
@@ -231,6 +237,10 @@ impl Oit {
         &self.write_group
     }
 
+    pub fn coverage_group(&self) -> &BindGroup {
+        &self.coverage_group
+    }
+
     pub fn read_group(&self) -> &BindGroup {
         &self.read_group
     }
@@ -252,6 +262,8 @@ impl Oit {
     }
 
     pub fn clear(&self, encoder: &mut CommandEncoder) {
+        encoder.clear_buffer(&self.keys, 0, None);
+        encoder.clear_buffer(&self.colors, 0, None);
         encoder.clear_buffer(&self.counts, 0, None);
         encoder.clear_buffer(&self.dropped, 0, None);
     }

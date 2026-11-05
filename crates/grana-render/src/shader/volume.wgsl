@@ -236,18 +236,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             let stored = min(oit_counts[index], frame.oit.y);
             for (var slot = 0u; slot < stored; slot += 1u) {
                 let key = oit_keys[base + slot];
-                let depth = bitcast<f32>(~key);
-                var position = layers;
-                loop {
-                    if (position == 0u || layer_depth[position - 1u] <= depth) {
-                        break;
-                    }
-                    layer_depth[position] = layer_depth[position - 1u];
-                    layer_color[position] = layer_color[position - 1u];
-                    position -= 1u;
+                if (key == 0u) {
+                    break;
                 }
-                layer_depth[position] = depth;
-                layer_color[position] = oit_colors[base + slot];
+                layer_depth[layers] = bitcast<f32>(~key);
+                layer_color[layers] = oit_colors[base + slot];
                 layers += 1u;
             }
             let accumulation = textureLoad(oit_accumulate, local, 0);
@@ -265,18 +258,13 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
     if (tail.a > 0.0) {
-        var position = layers;
-        loop {
-            if (position == 0u || layer_depth[position - 1u] <= tail_depth) {
-                break;
-            }
-            layer_depth[position] = layer_depth[position - 1u];
-            layer_color[position] = layer_color[position - 1u];
-            position -= 1u;
+        var position = tail_depth;
+        if (layers > 0u) {
+            position = max(position, layer_depth[layers - 1u]);
         }
         let premultiplied = vec4<f32>(tail.rgb * tail.a, tail.a);
-        layer_depth[position] = tail_depth;
-        layer_color[position] = vec2<u32>(
+        layer_depth[layers] = position;
+        layer_color[layers] = vec2<u32>(
             pack2x16float(premultiplied.rg),
             pack2x16float(premultiplied.ba),
         );

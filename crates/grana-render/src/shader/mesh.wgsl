@@ -151,30 +151,19 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 @fragment
-fn fs_coverage(input: VertexOutput) -> @location(0) u32 {
+fn fs_oit_key(input: VertexOutput) -> @location(0) u32 {
     if (is_outside(input)) {
         discard;
     }
-    return 1u;
-}
-
-@fragment
-fn fs_oit(input: VertexOutput) {
-    if (is_outside(input)) {
-        discard;
-    }
-    let sample = shade(input);
     let origin = vec2<i32>(mesh.viewport.xy);
     let size = vec2<i32>(mesh.viewport.zw);
-    oit_push(
-        origin,
-        size,
-        mesh.oit.y,
-        mesh.oit.z,
-        vec2<i32>(input.clip_position.xy),
-        input.clip_position.z,
-        vec4<f32>(sample.rgb * sample.a, sample.a),
-    );
+    let pixel = vec2<i32>(input.clip_position.xy);
+    let index = oit_index(origin, size, pixel);
+    if (index < 0) {
+        discard;
+    }
+    oit_offer(u32(index), mesh.oit.y, oit_key(input.clip_position.z));
+    return 1u;
 }
 
 struct TailFragment {
@@ -184,23 +173,35 @@ struct TailFragment {
 }
 
 @fragment
-fn fs_tail(input: VertexOutput) -> TailFragment {
+fn fs_oit(input: VertexOutput) -> TailFragment {
     let origin = vec2<i32>(mesh.viewport.xy);
     let size = vec2<i32>(mesh.viewport.zw);
     let pixel = vec2<i32>(input.clip_position.xy) + origin;
-    if (is_outside(input)
-        || !oit_visible(pixel, input.clip_position.z)
-        || !oit_tail(origin, size, mesh.oit.y, pixel, input.clip_position.z)) {
+    var output: TailFragment;
+    output.accumulate = vec4<f32>(0.0);
+    output.reveal = vec4<f32>(0.0);
+    output.depth = vec2<f32>(0.0);
+    if (is_outside(input)) {
         discard;
     }
-    let covered = oit_covered(origin, size, mesh.oit.z, pixel);
+    let index = oit_index(origin, size, pixel);
+    if (index < 0) {
+        discard;
+    }
+    let covered = oit_covered(pixel, mesh.oit.z);
     if (covered <= 0.0) {
         discard;
+    }
+    let slot = oit_slot(u32(index), mesh.oit.y, oit_key(input.clip_position.z));
+    if (slot >= 0) {
+        let sample = shade(input);
+        let premultiplied = vec4<f32>(sample.rgb * sample.a, sample.a) * covered;
+        oit_write(u32(index), mesh.oit.y, u32(slot), premultiplied);
+        return output;
     }
     let sample = shade(input);
     let alpha = sample.a * covered;
     let weight = oit_weight(input.clip_position.z, sample.a);
-    var output: TailFragment;
     output.accumulate = vec4<f32>(sample.rgb * alpha * weight, alpha * weight);
     output.reveal = vec4<f32>(alpha);
     output.depth = vec2<f32>(input.clip_position.z * alpha, alpha);
