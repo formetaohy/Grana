@@ -178,7 +178,10 @@ struct TailFragment {
 fn fs_tail(input: VertexOutput) -> TailFragment {
     let origin = vec2<i32>(mesh.viewport.xy);
     let size = vec2<i32>(mesh.viewport.zw);
-    if (is_outside(input) || !oit_tail(origin, size, mesh.oit.y, vec2<i32>(input.clip_position.xy), input.clip_position.z)) {
+    let pixel = vec2<i32>(input.clip_position.xy) + origin;
+    if (is_outside(input)
+        || !oit_visible(pixel, input.clip_position.z)
+        || !oit_tail(origin, size, mesh.oit.y, pixel, input.clip_position.z)) {
         discard;
     }
     let sample = shade(input);

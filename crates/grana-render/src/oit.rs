@@ -79,7 +79,7 @@ pub(crate) struct Oit {
     read_group: BindGroup,
     layers: u32,
     size: [u32; 2],
-    capacity: u64,
+    region: [u32; 4],
 }
 
 impl Oit {
@@ -94,9 +94,10 @@ impl Oit {
             region[2] > 0 && region[3] > 0 && size[0] > 0 && size[1] > 0,
             "a fragment store covers a non empty pane of a non empty surface"
         );
-        let pixels = u64::from(region[2]) * u64::from(region[3]);
+        let pane = [region[2], region[3]];
+        let pixels = u64::from(pane[0]) * u64::from(pane[1]);
         let capacity = pixels.div_ceil(PANE_PIXELS_STEP) * PANE_PIXELS_STEP;
-        let (layers, _) = allocation(size, capacity, budget);
+        let (layers, _) = allocation(pane, capacity, budget);
         let layers = layers as u32;
         let slots = capacity * u64::from(layers);
         let keys = device.create_buffer(&wgpu::BufferDescriptor {
@@ -123,9 +124,9 @@ impl Oit {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let accumulate = tail(device, "grana.oit.accumulate", ACCUMULATE_FORMAT, size);
-        let reveal = tail(device, "grana.oit.reveal", REVEAL_FORMAT, size);
-        let tail_depth = tail(device, "grana.oit.tail.depth", TAIL_DEPTH_FORMAT, size);
+        let accumulate = tail(device, "grana.oit.accumulate", ACCUMULATE_FORMAT, pane);
+        let reveal = tail(device, "grana.oit.reveal", REVEAL_FORMAT, pane);
+        let tail_depth = tail(device, "grana.oit.tail.depth", TAIL_DEPTH_FORMAT, pane);
         let write_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.oit.write.group"),
             layout: &layouts.oit_write,
@@ -190,12 +191,12 @@ impl Oit {
             read_group,
             layers,
             size,
-            capacity,
+            region,
         }
     }
 
     pub fn matches(&self, size: [u32; 2], region: [u32; 4]) -> bool {
-        self.size == size && u64::from(region[2]) * u64::from(region[3]) <= self.capacity
+        self.size == size && self.region == region
     }
 
     pub fn layers(&self) -> u32 {
@@ -208,7 +209,7 @@ impl Oit {
 
     pub fn bytes(&self) -> u64 {
         let store = self.keys.size() + self.colors.size() + self.counts.size();
-        let tail = u64::from(self.size[0]) * u64::from(self.size[1]) * TAIL_BYTES;
+        let tail = u64::from(self.region[2]) * u64::from(self.region[3]) * TAIL_BYTES;
         store + tail
     }
 
@@ -277,7 +278,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scales_the_fragment_store_to_the_surface() {
+    fn scales_the_fragment_store_to_the_pane() {
         let full = [3840u32, 2160];
         let capacity = u64::from(full[0]) * u64::from(full[1]);
         let (layers, bytes) = allocation(full, capacity, 256 << 20);
@@ -288,8 +289,11 @@ mod tests {
         );
         let half = [3840u32, 1080];
         let capacity = u64::from(half[0]) * u64::from(half[1]);
-        let (small, bytes) = allocation(full, capacity, 256 << 20);
-        assert!(small < layers, "a smaller pane keeps fewer layers");
+        let (split, bytes) = allocation(half, capacity, 256 << 20);
+        assert_eq!(
+            split, layers,
+            "a split 4K pane keeps the layers of the full pane"
+        );
         assert!(
             bytes <= capacity * BYTES_PER_PIXEL,
             "the split fragment store exceeds its pixel budget: {bytes}"

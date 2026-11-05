@@ -244,6 +244,8 @@ impl Scene {
             self.shading.specular,
             self.shading.shininess,
             self.shading.shadows,
+            self.shading.azimuth,
+            self.shading.elevation,
         ] {
             hash = mix(hash, u64::from(value.to_bits()));
         }

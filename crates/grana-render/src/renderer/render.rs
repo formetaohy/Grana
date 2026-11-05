@@ -193,7 +193,7 @@ impl Renderer {
         let spacing = finest.spacing();
         let (shadow_low, shadow_high) = shadow_bounds(scene, world);
         let space = ShadowSpace::new(
-            camera.light_direction(),
+            scene.shading.light(),
             shadow_low,
             shadow_high,
             Vec3::new(spacing.x(), spacing.y(), spacing.z()),
@@ -458,32 +458,30 @@ impl Renderer {
                                 },
                             }),
                         ],
-                        depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                            view: target.scene.resolved_depth(),
-                            depth_ops: Some(Operations {
-                                load: LoadOp::Load,
-                                store: StoreOp::Store,
-                            }),
-                            stencil_ops: None,
-                        }),
+                        depth_stencil_attachment: None,
                         ..Default::default()
                     });
                     pass.set_viewport(
-                        volume_region[0] as f32,
-                        volume_region[1] as f32,
+                        0.0,
+                        0.0,
                         volume_width as f32,
                         volume_height as f32,
                         0.0,
                         1.0,
                     );
-                    pass.set_scissor_rect(
-                        volume_region[0],
-                        volume_region[1],
-                        volume_width,
-                        volume_height,
+                    pass.set_scissor_rect(0, 0, volume_width, volume_height);
+                    meshes.draw_tail(
+                        &mut pass,
+                        shadow_group,
+                        oit.write_group(),
+                        target.scene.depth_group(),
                     );
-                    meshes.draw_tail(&mut pass, shadow_group, oit.write_group());
-                    markers.draw_tail(&mut pass, scene_group, oit.write_group());
+                    markers.draw_tail(
+                        &mut pass,
+                        scene_group,
+                        oit.write_group(),
+                        target.scene.depth_group(),
+                    );
                 }
                 if let Some(slot) = oit_readback.reserve() {
                     oit_readback.stage(&mut encoder, slot, 0, oit.dropped(), 4);

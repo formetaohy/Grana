@@ -760,6 +760,42 @@ fn rendering(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
         });
         let open = ui.disclosure_open("lighting", false);
         let next = widget::disclosure(ui, "lighting", "Lighting", open, |ui| {
+            let mut azimuth = scene.shading.azimuth;
+            if let Some(value) = widget::slider_readout(
+                ui,
+                "azimuth",
+                Some("Azimuth"),
+                azimuth,
+                -grana_display::AZIMUTH_LIMIT..=grana_display::AZIMUTH_LIMIT,
+                false,
+                &format!("{azimuth:.0}°"),
+            ) {
+                azimuth = value;
+            }
+            if azimuth != scene.shading.azimuth {
+                commands.push(Command::SetShading(grana_display::Shading {
+                    azimuth,
+                    ..scene.shading
+                }));
+            }
+            let mut elevation = scene.shading.elevation;
+            if let Some(value) = widget::slider_readout(
+                ui,
+                "elevation",
+                Some("Elevation"),
+                elevation,
+                -grana_display::ELEVATION_LIMIT..=grana_display::ELEVATION_LIMIT,
+                false,
+                &format!("{elevation:.0}°"),
+            ) {
+                elevation = value;
+            }
+            if elevation != scene.shading.elevation {
+                commands.push(Command::SetShading(grana_display::Shading {
+                    elevation,
+                    ..scene.shading
+                }));
+            }
             let mut ambient = scene.shading.ambient;
             if let Some(value) = widget::slider_readout(
                 ui,

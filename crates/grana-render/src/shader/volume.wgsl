@@ -250,10 +250,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 layer_color[position] = oit_colors[base + slot];
                 layers += 1u;
             }
-            let accumulation = textureLoad(oit_accumulate, pixel, 0);
+            let accumulation = textureLoad(oit_accumulate, local, 0);
             if (accumulation.a > 0.0) {
-                let reveal = textureLoad(oit_reveal, pixel, 0).r;
-                let weighted = textureLoad(oit_tail_depth, pixel, 0).xy;
+                let reveal = textureLoad(oit_reveal, local, 0).r;
+                let weighted = textureLoad(oit_tail_depth, local, 0).xy;
                 tail = vec4<f32>(accumulation.rgb / accumulation.a, 1.0 - reveal);
                 if (weighted.y > 0.0) {
                     tail_depth = weighted.x / weighted.y;

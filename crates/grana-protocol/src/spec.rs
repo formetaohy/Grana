@@ -68,6 +68,18 @@ pub struct ShadingSpec {
     pub specular: f32,
     pub shininess: f32,
     pub shadows: f32,
+    #[serde(default = "default_azimuth")]
+    pub azimuth: f32,
+    #[serde(default = "default_elevation")]
+    pub elevation: f32,
+}
+
+fn default_azimuth() -> f32 {
+    grana_display::DEFAULT_AZIMUTH
+}
+
+fn default_elevation() -> f32 {
+    grana_display::DEFAULT_ELEVATION
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1032,6 +1044,8 @@ impl RenderSpec {
                 specular: shading.specular,
                 shininess: shading.shininess,
                 shadows: shading.shadows,
+                azimuth: shading.azimuth,
+                elevation: shading.elevation,
             },
             clip: ClipSpec::of(clip),
         }
@@ -1050,6 +1064,8 @@ impl RenderSpec {
             specular: self.shading.specular,
             shininess: self.shading.shininess,
             shadows: self.shading.shadows,
+            azimuth: self.shading.azimuth,
+            elevation: self.shading.elevation,
         }
     }
 
@@ -1073,6 +1089,14 @@ impl RenderSpec {
         }
         if !shading.shadows.is_finite() || !(0.0..=1.0).contains(&shading.shadows) {
             return invalid("carries a unit shadow strength".to_string());
+        }
+        if !shading.azimuth.is_finite() || shading.azimuth.abs() > grana_display::AZIMUTH_LIMIT {
+            return invalid("stands its key light at a finite azimuth".to_string());
+        }
+        if !shading.elevation.is_finite()
+            || shading.elevation.abs() > grana_display::ELEVATION_LIMIT
+        {
+            return invalid("stands its key light between the poles".to_string());
         }
         if let Some(clip) = self.clip
             && clip.clip().is_none()

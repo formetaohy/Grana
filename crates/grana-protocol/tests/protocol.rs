@@ -558,6 +558,8 @@ fn stages_the_presentation_of_a_captured_protocol() {
         specular: 0.4,
         shininess: 40.0,
         shadows: 0.3,
+        azimuth: 30.0,
+        elevation: 20.0,
     };
     scene.set_transfer(
         1,

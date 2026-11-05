@@ -1064,6 +1064,75 @@ fn composites_transparent_surfaces_beyond_the_stored_layers() {
 }
 
 #[test]
+fn composites_the_tail_inside_a_split_pane() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = empty_volume();
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let mesh = PackedMesh::new(view_row(&camera, 20, 0.25));
+    let red = [1.0, 0.12, 0.12];
+    let blue = [0.12, 0.2, 1.0];
+    let styles = |far: bool| {
+        (0..20)
+            .map(|index| {
+                if index < 16 {
+                    Style::new(red, true, false, 0.05)
+                } else {
+                    Style::new(blue, far, false, 0.9)
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let shown_styles = styles(true);
+    let hidden_styles = styles(false);
+    let pane = [0, 0, SIDE / 2, SIDE / 2];
+    let shown = framing_scene(
+        &device,
+        &queue,
+        Job {
+            texture: &texture,
+            volume: &volume,
+            volume_region: pane,
+            section_region: CORNER,
+            focus_z: 0.0,
+            mesh: Some((&mesh, &shown_styles)),
+        },
+        &camera,
+        None,
+    );
+    let hidden = framing_scene(
+        &device,
+        &queue,
+        Job {
+            texture: &texture,
+            volume: &volume,
+            volume_region: pane,
+            section_region: CORNER,
+            focus_z: 0.0,
+            mesh: Some((&mesh, &hidden_styles)),
+        },
+        &camera,
+        None,
+    );
+    let centre = (SIDE / 4, SIDE / 4);
+    let inside = pixel(&shown, centre.0, centre.1).map(u32::from);
+    let inside_hidden = pixel(&hidden, centre.0, centre.1).map(u32::from);
+    assert!(
+        inside[2] > inside_hidden[2] + 30,
+        "the pane drops the surfaces beyond the stored layers: {inside:?} {inside_hidden:?}"
+    );
+    let outside = pixel(&shown, SIDE * 3 / 4, SIDE / 4).map(u32::from);
+    let outside_hidden = pixel(&hidden, SIDE * 3 / 4, SIDE / 4).map(u32::from);
+    assert!(
+        outside[2] <= outside_hidden[2] + 10,
+        "the tail of a pane spills outside its region: {outside:?} {outside_hidden:?}"
+    );
+}
+
+#[test]
 fn keeps_near_transparent_surfaces_drawn_after_far_ones() {
     let Some((device, queue)) = device() else {
         return;
@@ -2892,6 +2961,7 @@ fn lights_cut_faces_with_the_surface_shading_model() {
             specular: 0.0,
             shininess: 28.0,
             shadows: 0.0,
+            ..Shading::default()
         },
         Shading {
             ambient: 0.8,
@@ -2899,6 +2969,7 @@ fn lights_cut_faces_with_the_surface_shading_model() {
             specular: 0.0,
             shininess: 28.0,
             shadows: 0.0,
+            ..Shading::default()
         },
         Shading {
             ambient: 0.35,
@@ -2906,6 +2977,7 @@ fn lights_cut_faces_with_the_surface_shading_model() {
             specular: 0.0,
             shininess: 28.0,
             shadows: 0.0,
+            ..Shading::default()
         },
     ];
     let job = Job {
@@ -2927,7 +2999,7 @@ fn lights_cut_faces_with_the_surface_shading_model() {
             });
         }
         let pixels = framing_scene(&device, &queue, job, &camera, Some(shading));
-        let light = camera.light_direction();
+        let light = shading.light();
         let energy = shading.ambient + shading.diffuse * light.z.max(0.0);
         let ndc = [
             (2.0 * 75.0 + 1.0) / SIDE as f32 - 1.0,
@@ -2992,6 +3064,7 @@ fn outlines_cut_faces_in_screen_space() {
         specular: 0.0,
         shininess: 28.0,
         shadows: 0.0,
+        ..Shading::default()
     };
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);

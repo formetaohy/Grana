@@ -251,7 +251,7 @@ impl MarkerPasses {
         });
         let tail_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.marker.tail"),
-            layout: Some(&layouts.marker_oit),
+            layout: Some(&layouts.marker_tail),
             vertex: VertexState {
                 module: &volume_module,
                 entry_point: Some("vs_main"),
@@ -262,7 +262,7 @@ impl MarkerPasses {
                 cull_mode: None,
                 ..Default::default()
             },
-            depth_stencil: Some(depth_state(false, CompareFunction::Less)),
+            depth_stencil: None,
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &volume_module,
@@ -581,6 +581,7 @@ impl MarkerPasses {
         pass: &mut RenderPass<'a>,
         scene: &'a BindGroup,
         oit: &'a BindGroup,
+        depth: &'a BindGroup,
     ) {
         if self.count == 0 {
             return;
@@ -589,6 +590,7 @@ impl MarkerPasses {
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.layer_group, &[]);
         pass.set_bind_group(4, oit, &[]);
+        pass.set_bind_group(5, depth, &[]);
         pass.draw_indirect(self.layer_args.buffer(), 0);
     }
 

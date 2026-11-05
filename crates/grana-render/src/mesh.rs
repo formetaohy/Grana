@@ -161,6 +161,18 @@ impl MeshPasses {
             ],
             immediate_size: 0,
         });
+        let tail_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.mesh.tail.pipeline_layout"),
+            bind_group_layouts: &[
+                Some(&uniform_layout),
+                Some(&layouts.objects),
+                Some(&layouts.styles),
+                Some(&layouts.shadow),
+                Some(&layouts.oit_write),
+                Some(&layouts.depth),
+            ],
+            immediate_size: 0,
+        });
         let cull_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.mesh.cull"),
             source: ShaderSource::Wgsl(CULL_SHADER.into()),
@@ -249,7 +261,7 @@ impl MeshPasses {
         });
         let tail_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.mesh.tail"),
-            layout: Some(&oit_layout),
+            layout: Some(&tail_layout),
             vertex: VertexState {
                 module: &volume_module,
                 entry_point: Some("vs_main"),
@@ -257,7 +269,7 @@ impl MeshPasses {
                 buffers: &[Some(vertex_layout())],
             },
             primitive: PrimitiveState::default(),
-            depth_stencil: Some(depth_state(false, CompareFunction::Less)),
+            depth_stencil: None,
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &volume_module,
@@ -562,6 +574,7 @@ impl MeshPasses {
         pass: &mut RenderPass<'a>,
         shadow: &'a BindGroup,
         oit: &'a BindGroup,
+        depth: &'a BindGroup,
     ) {
         if self.active.is_empty() {
             return;
@@ -570,6 +583,7 @@ impl MeshPasses {
         pass.set_bind_group(0, &self.uniform_group, &[]);
         pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(4, oit, &[]);
+        pass.set_bind_group(5, depth, &[]);
         for key in &self.active {
             self.slots[key].draw(pass, LAYER_NARROW, LAYER_WIDE);
         }

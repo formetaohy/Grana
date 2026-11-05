@@ -181,6 +181,8 @@ impl Encode for Shading {
         writer.f32(self.specular);
         writer.f32(self.shininess);
         writer.f32(self.shadows);
+        writer.f32(self.azimuth);
+        writer.f32(self.elevation);
     }
 }
 

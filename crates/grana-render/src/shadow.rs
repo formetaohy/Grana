@@ -8,10 +8,9 @@ use wgpu::{
 
 use crate::layout::Layouts;
 
-const OCCLUSION_SIDE: u32 = 96;
+const OCCLUSION_SIDE: u32 = 128;
 const OBJECT_SIDE: u32 = 2048;
-const TRANSVERSE: [u32; 2] = [96, 160];
-const DEPTH: [u32; 2] = [96, 320];
+const SIDE: [u32; 2] = [112, 256];
 const WORKGROUP: u32 = 4;
 const DEPTH_BIAS: f32 = 2.0 / OBJECT_SIDE as f32;
 const NORMAL_OFFSET: f32 = 2.0;
@@ -142,9 +141,8 @@ pub(crate) struct ShadowGroups<'a> {
 
 pub fn resolution(world: Vec3, voxel: Vec3) -> [u32; 3] {
     let reach = (world.length() / voxel.min_element()).round();
-    let side = reach.clamp(TRANSVERSE[0] as f32, TRANSVERSE[1] as f32) as u32;
-    let layers = reach.clamp(DEPTH[0] as f32, DEPTH[1] as f32) as u32;
-    [side, side, layers]
+    let side = reach.clamp(SIDE[0] as f32, SIDE[1] as f32) as u32;
+    [side, side, side]
 }
 
 pub(crate) struct Shadow {

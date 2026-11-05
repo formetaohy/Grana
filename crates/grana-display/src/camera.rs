@@ -79,10 +79,6 @@ impl Camera {
         self.right().cross(self.forward())
     }
 
-    pub fn light_direction(&self) -> Vec3 {
-        (-self.right() * 0.45 + self.up() * 0.55 - self.forward() * 0.7).normalize()
-    }
-
     pub fn view_projection(&self, aspect: f32, scene_radius: f32) -> Mat4 {
         assert!(aspect > 0.0, "aspect ratio must be positive");
         assert!(scene_radius > 0.0, "scene radius must be positive");

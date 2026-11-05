@@ -36,6 +36,7 @@ pub(crate) struct Layouts {
     pub mesh_cull: PipelineLayout,
     pub marker_volume: PipelineLayout,
     pub marker_oit: PipelineLayout,
+    pub marker_tail: PipelineLayout,
     pub marker_section: PipelineLayout,
     pub marker_cull_pipeline: PipelineLayout,
     pub census: PipelineLayout,
@@ -285,6 +286,18 @@ impl Layouts {
             ],
             immediate_size: 0,
         });
+        let marker_tail = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.marker.tail.layout"),
+            bind_group_layouts: &[
+                Some(&scene),
+                Some(&marker_render),
+                None,
+                None,
+                Some(&oit_write),
+                Some(&depth),
+            ],
+            immediate_size: 0,
+        });
         let marker_section = pipeline_layout(
             device,
             "grana.marker.section.layout",
@@ -328,6 +341,7 @@ impl Layouts {
             mesh_cull,
             marker_volume,
             marker_oit,
+            marker_tail,
             marker_section,
             marker_cull_pipeline,
             census,

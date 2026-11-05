@@ -121,8 +121,9 @@ struct TailFragment {
 fn fs_tail(input: MarkerOutput) -> TailFragment {
     let origin = vec2<i32>(frame.viewport.xy);
     let size = vec2<i32>(frame.viewport.zw);
+    let pixel = vec2<i32>(input.clip_position.xy) + origin;
     let shaded = shade(input);
-    if (!oit_tail(origin, size, frame.oit.y, vec2<i32>(input.clip_position.xy), shaded.depth)) {
+    if (!oit_visible(pixel, shaded.depth) || !oit_tail(origin, size, frame.oit.y, pixel, shaded.depth)) {
         discard;
     }
     let weight = oit_weight(shaded.depth, shaded.color.a);

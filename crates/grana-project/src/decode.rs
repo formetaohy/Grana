@@ -281,6 +281,8 @@ impl Decode for Shading {
             specular: unit(reader.f32()?)?,
             shininess: positive(reader.f32()?)?,
             shadows: unit(reader.f32()?)?,
+            azimuth: degrees(reader.f32()?, grana_display::AZIMUTH_LIMIT)?,
+            elevation: degrees(reader.f32()?, grana_display::ELEVATION_LIMIT)?,
         })
     }
 }
@@ -1656,6 +1658,14 @@ fn positive(value: f32) -> Result<f32, &'static str> {
 
 fn unit(value: f32) -> Result<f32, &'static str> {
     if (0.0..=1.0).contains(&value) {
+        Ok(value)
+    } else {
+        Err(FAULT_VALUE)
+    }
+}
+
+fn degrees(value: f32, limit: f32) -> Result<f32, &'static str> {
+    if value.is_finite() && value.abs() <= limit {
         Ok(value)
     } else {
         Err(FAULT_VALUE)

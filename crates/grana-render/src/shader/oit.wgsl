@@ -2,12 +2,17 @@
 @group(4) @binding(1) var<storage, read_write> oit_colors: array<vec2<u32>>;
 @group(4) @binding(2) var<storage, read_write> oit_counts: array<atomic<u32>>;
 @group(4) @binding(3) var<storage, read_write> oit_dropped: atomic<u32>;
+@group(5) @binding(0) var oit_scene_depth: texture_depth_2d;
 
 const OIT_WEIGHT_FLOOR: f32 = 1.0e-2;
 const OIT_WEIGHT_CEIL: f32 = 3.0e3;
 
 fn oit_key(depth: f32) -> u32 {
     return ~bitcast<u32>(clamp(depth, 0.0, 1.0));
+}
+
+fn oit_visible(pixel: vec2<i32>, depth: f32) -> bool {
+    return depth < textureLoad(oit_scene_depth, pixel, 0);
 }
 
 fn oit_inside(origin: vec2<i32>, size: vec2<i32>, pixel: vec2<i32>) -> bool {

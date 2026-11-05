@@ -104,7 +104,7 @@ impl FrameData {
         let step = step_length(camera, table, step_scale, height as f32);
         let pixel_scale = 0.5 * height as f32 / (0.5 * camera.fov_y()).tan();
         let eye = camera.eye();
-        let light = camera.light_direction();
+        let light = shading.light();
         Self {
             view_projection: view_projection.to_cols_array_2d(),
             inv_view_projection: view_projection.inverse().to_cols_array_2d(),
