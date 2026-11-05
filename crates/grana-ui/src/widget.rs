@@ -6,6 +6,7 @@ use glam::Vec2;
 use crate::color::Color;
 use crate::edit::Outcome;
 use crate::geometry::{Corners, Rect};
+use crate::glass::GlassStyle;
 use crate::icon::{self, Icon};
 use crate::input::{Button, Key};
 use crate::motion::Motion;
@@ -214,6 +215,50 @@ pub fn icon_button_enabled(
         return false;
     }
     icon_button_response(ui, id, symbol, size, role, tooltip).clicked
+}
+
+pub fn glass_icon_button(
+    ui: &mut Ui,
+    id: &str,
+    symbol: Icon,
+    size: f32,
+    style: GlassStyle,
+    tooltip: &str,
+) -> bool {
+    glass_icon_button_response(ui, id, symbol, size, style, tooltip).clicked
+}
+
+pub fn glass_icon_button_response(
+    ui: &mut Ui,
+    id: &str,
+    symbol: Icon,
+    size: f32,
+    style: GlassStyle,
+    tooltip: &str,
+) -> Response {
+    let key = ui.id(id);
+    let rect = ui.allocate(Vec2::splat(size));
+    let mut response = ui.interact(key, rect);
+    let corners = Corners::capsule();
+    if ui.focusable(key, rect, corners) && ui.activated(key) {
+        response.clicked = true;
+    }
+    if response.hovered {
+        ui.tooltip(tooltip);
+    }
+    ui.glass(key, rect, style);
+    let frame = ui.glass_frame(key).unwrap_or(rect);
+    let color = ui.theme().palette.text_primary;
+    let mut painter = ui.painter();
+    icon::paint(
+        symbol,
+        &mut painter,
+        frame.center(),
+        (size * 0.52).clamp(11.0, 17.0),
+        color,
+        1.6,
+    );
+    response
 }
 
 pub fn badge(ui: &mut Ui, label: &str, tint: Color) -> Rect {

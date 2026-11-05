@@ -600,6 +600,15 @@ impl Ui {
         }
     }
 
+    pub fn glass_frame(&self, key: u64) -> Option<Rect> {
+        let entry = self.glass_entries.get(&key)?;
+        let frame = self.glass.current_frame(entry.id)?;
+        Some(Rect::from_min_size(
+            Vec2::new(frame.x, frame.y),
+            Vec2::new(frame.width, frame.height),
+        ))
+    }
+
     fn retire_glass(&mut self) {
         let stale = self
             .glass_entries

@@ -1,7 +1,7 @@
 use glam::Vec2;
 use grana_figure::{self as overlay, Overlay};
 use grana_ui::glass::{GlassStyle, HUD};
-use grana_ui::{Corners, Cursor, Icon, Level, Rect, Role, TextStyle, Ui, icon};
+use grana_ui::{Corners, Cursor, Icon, Level, Rect, TextStyle, Ui, icon};
 
 use crate::state::State;
 use grana_session::Command;
@@ -59,11 +59,17 @@ fn pane_fit(
 ) {
     let rect = Rect::from_min_size(Vec2::new(pane.max.x - 44.0, top + 12.0), Vec2::splat(30.0));
     ui.place(rect, |ui| {
-        if grana_ui::widget::icon_button(ui, id, Icon::Fit, 30.0, Role::Hud, tooltip) {
+        if grana_ui::widget::glass_icon_button(
+            ui,
+            id,
+            Icon::Fit,
+            30.0,
+            GlassStyle::hud().interactive(),
+            tooltip,
+        ) {
             action(state);
         }
     });
-    ui.register_occluder(rect);
 }
 
 fn paint_overlay(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: &mut Vec<Command>) {

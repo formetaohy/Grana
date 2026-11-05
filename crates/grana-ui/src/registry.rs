@@ -3,8 +3,10 @@ use std::ops::Range;
 
 use glam::Vec2;
 
+use grana_glass::Animated;
+
 use crate::geometry::Rect;
-use crate::motion::{Motion, Spring};
+use crate::motion::Motion;
 
 const CLICK_SLOP: f32 = 3.0;
 
@@ -63,22 +65,22 @@ impl Scroll {
 
     pub fn update(&mut self, elapsed: f32, motion: Motion) {
         self.target = self.target.clamp(0.0, self.limit());
-        let mut spring = Spring {
-            value: self.offset,
-            velocity: self.velocity,
-            target: self.target,
-        };
-        spring.step(motion, elapsed);
+        let mut spring = Animated::new(self.offset, motion.spring());
+        spring.velocity = self.velocity;
+        spring.animate_to(self.target, motion.spring());
+        if motion.is_instant() {
+            spring.snap(self.target);
+        } else {
+            spring.step(elapsed);
+        }
         self.offset = spring.value;
         self.velocity = spring.velocity;
-        self.moving = !spring.is_settled();
+        self.moving = !spring.is_at_rest();
         let goal = if self.moving { 1.0 } else { 0.0 };
-        let mut bar = Spring {
-            value: self.bar,
-            velocity: 0.0,
-            target: goal,
-        };
-        bar.step(Motion::smooth(), elapsed);
+        let smooth = Motion::smooth();
+        let mut bar = Animated::new(self.bar, smooth.spring());
+        bar.animate_to(goal, smooth.spring());
+        bar.step(elapsed);
         self.bar = bar.value;
     }
 
@@ -113,7 +115,7 @@ pub struct Registry {
     drag: Option<u64>,
     click: Option<u64>,
     press_position: Vec2,
-    springs: HashMap<u64, Spring>,
+    springs: HashMap<u64, Animated>,
     heights: HashMap<u64, f32>,
     values: HashMap<u64, f32>,
     open: HashMap<u64, bool>,
@@ -370,10 +372,18 @@ impl Registry {
         let spring = self
             .springs
             .entry(key)
-            .or_insert_with(|| Spring::new(target));
-        spring.target = target;
-        if !spring.is_settled() {
-            spring.step(motion, elapsed);
+            .or_insert_with(|| Animated::new(target, motion.spring()));
+        if motion.is_instant() {
+            spring.snap(target);
+            return target;
+        }
+        if spring.target != target {
+            spring.animate_to(target, motion.spring());
+        } else {
+            spring.spring = motion.spring();
+        }
+        if !spring.is_at_rest() {
+            spring.step(elapsed);
             self.animating = true;
         }
         spring.value
