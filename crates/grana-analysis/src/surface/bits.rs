@@ -306,23 +306,29 @@ impl Grid {
 
     fn grow(&mut self, mask: &MaskInputs<'_>) {
         let dims = self.dims;
+        let rows = mask.foreground.rows();
         let mut queue = std::collections::VecDeque::new();
         for z in 0..dims[2] {
             for y in 0..dims[1] {
-                for x in 0..dims[0] {
-                    if !mask.foreground.get(x, y, z) {
-                        continue;
-                    }
-                    let reference = mask.field.at(block_of([x, y, z])).1;
-                    for axis in 0..3 {
-                        for step in [-1i64, 1] {
-                            let reached = [x, y, z][axis] as i64 + step;
-                            if reached < 0 || reached >= dims[axis] as i64 {
-                                continue;
+                for word in 0..rows {
+                    let mut bits = mask.foreground.word(y, z, word);
+                    while bits != 0 {
+                        let x = word * WORD + bits.trailing_zeros() as usize;
+                        bits &= bits - 1;
+                        if x >= dims[0] {
+                            continue;
+                        }
+                        let reference = mask.field.at(block_of([x, y, z])).1;
+                        for axis in 0..3 {
+                            for step in [-1i64, 1] {
+                                let reached = [x, y, z][axis] as i64 + step;
+                                if reached < 0 || reached >= dims[axis] as i64 {
+                                    continue;
+                                }
+                                let mut neighbour = [x, y, z];
+                                neighbour[axis] = reached as usize;
+                                self.enter(&mut queue, mask, neighbour, reference);
                             }
-                            let mut neighbour = [x, y, z];
-                            neighbour[axis] = reached as usize;
-                            self.enter(&mut queue, mask, neighbour, reference);
                         }
                     }
                 }
@@ -405,30 +411,32 @@ impl Grid {
 
     fn flood(&mut self, foreground: &Bits, admitted: Option<&Bits>) {
         let dims = self.dims;
+        let mut seeds = Vec::with_capacity(SIDE * SIDE);
+        let mut stack = Vec::new();
         for z in 0..dims[2] {
             for y in 0..dims[1] {
                 for x in [0, dims[0] - 1] {
-                    if self.free(foreground, admitted, x, y, z) {
-                        self.fill(foreground, admitted, vec![[x, y, z]]);
-                    }
+                    seeds.clear();
+                    seeds.push([x, y, z]);
+                    self.fill(foreground, admitted, &seeds, &mut stack);
                 }
             }
         }
         for z in 0..dims[2] {
             for x in 0..dims[0] {
                 for y in [0, dims[1] - 1] {
-                    if self.free(foreground, admitted, x, y, z) {
-                        self.fill(foreground, admitted, vec![[x, y, z]]);
-                    }
+                    seeds.clear();
+                    seeds.push([x, y, z]);
+                    self.fill(foreground, admitted, &seeds, &mut stack);
                 }
             }
         }
         for y in 0..dims[1] {
             for x in 0..dims[0] {
                 for z in [0, dims[2] - 1] {
-                    if self.free(foreground, admitted, x, y, z) {
-                        self.fill(foreground, admitted, vec![[x, y, z]]);
-                    }
+                    seeds.clear();
+                    seeds.push([x, y, z]);
+                    self.fill(foreground, admitted, &seeds, &mut stack);
                 }
             }
         }
@@ -444,8 +452,8 @@ impl Grid {
                             if !self.neighbour_outside(block, axis, offset) {
                                 continue;
                             }
-                            let seeds = self.face_seeds(block, axis, side);
-                            self.fill(foreground, admitted, seeds);
+                            self.face_seeds(block, axis, side, &mut seeds);
+                            self.fill(foreground, admitted, &seeds, &mut stack);
                         }
                     }
                 }
@@ -453,9 +461,9 @@ impl Grid {
         }
     }
 
-    fn face_seeds(&self, block: [usize; 3], axis: usize, side: usize) -> Vec<[usize; 3]> {
+    fn face_seeds(&self, block: [usize; 3], axis: usize, side: usize, seeds: &mut Vec<[usize; 3]>) {
         let (first, second) = ((axis + 1) % 3, (axis + 2) % 3);
-        let mut seeds = Vec::with_capacity(SIDE * SIDE);
+        seeds.clear();
         for second_position in 0..SIDE {
             for first_position in 0..SIDE {
                 let mut voxel = [0usize; 3];
@@ -468,12 +476,18 @@ impl Grid {
                 seeds.push(voxel);
             }
         }
-        seeds
     }
 
-    fn fill(&mut self, foreground: &Bits, admitted: Option<&Bits>, seeds: Vec<[usize; 3]>) {
+    fn fill(
+        &mut self,
+        foreground: &Bits,
+        admitted: Option<&Bits>,
+        seeds: &[[usize; 3]],
+        stack: &mut Vec<[usize; 3]>,
+    ) {
         let dims = self.dims;
-        let mut stack = seeds;
+        stack.clear();
+        stack.extend_from_slice(seeds);
         while let Some(seed) = stack.pop() {
             let [x, y, z] = seed;
             if !self.free(foreground, admitted, x, y, z) {

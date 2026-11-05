@@ -142,6 +142,9 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
     let coloc = read(&folder.join("coloc-Cells-Signal.csv"));
     assert!(coloc.starts_with("scope,frame"), "{coloc}");
     assert_eq!(coloc.lines().count(), 4, "{coloc}");
+    let plot = grana_raster::read(&folder.join("coloc-Cells-Signal.png"))
+        .expect("the colocalization plot composes");
+    assert_eq!(plot.size(), [720, 450], "the plot fills a sheet tile");
 
     let quality = read(&output.join("quality.csv"));
     let mut rows = quality.lines();
@@ -649,6 +652,7 @@ const SNAPSHOT: &str = r#"
       "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05}
     }
   ],
+  "coloc": {"settings": {"permutations": 8, "block": 3}, "pairs": [{"a": "Cells", "b": "Signal", "thresholds": [0.5, 0.5]}], "mask": null},
   "snapshot": {"width": 320, "height": 200}
 }
 "#;
@@ -697,7 +701,11 @@ fn renders_a_snapshot_at_the_end_of_every_dataset() {
     );
 
     let sheet = grana_raster::read(&output.join("sheet.png")).expect("the quality sheet composes");
-    assert_eq!(sheet.size(), [768, 798], "the sheet tiles its snapshots");
+    assert_eq!(
+        sheet.size(),
+        [1500, 1364],
+        "the sheet tiles its snapshots and its plots"
+    );
     let corner = sheet.pixel(4, 4);
     assert_eq!(
         [corner[0], corner[1], corner[2]],
@@ -727,7 +735,7 @@ fn renders_a_snapshot_at_the_end_of_every_dataset() {
     );
     assert_eq!(recorder.calls.load(Ordering::Relaxed), 2);
     let rebuilt = grana_raster::read(&output.join("sheet.png")).expect("the sheet is rewritten");
-    assert_eq!(rebuilt.size(), [768, 798]);
+    assert_eq!(rebuilt.size(), [1500, 1364]);
 
     let orphaned = run(&protocol, &datasets, &output, 1, false);
     assert_eq!(

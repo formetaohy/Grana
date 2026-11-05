@@ -43,7 +43,7 @@ pub struct Table {
 }
 
 pub struct Group<'a> {
-    pub name: &'a str,
+    pub name: String,
     pub table: Option<&'a Table>,
     pub cells: Vec<Cell<'a>>,
 }
@@ -107,7 +107,7 @@ impl Sheet {
         for group in groups {
             sheet.text(
                 fonts,
-                group.name,
+                &group.name,
                 [MARGIN, y + 10],
                 HEADING_SIZE,
                 WEIGHT,

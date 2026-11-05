@@ -1,9 +1,10 @@
-use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::atomic::AtomicBool;
 
 use grana_geometry::MeshVertex;
 use grana_object::SampleAccumulator;
+
+use crate::hash::Map;
 
 use super::band::Band;
 use super::mask::SolidMask;
@@ -66,7 +67,7 @@ pub(super) struct Tile<'a> {
     pub(super) indices: Vec<u32>,
     pub(super) triangles: Vec<u32>,
     pub(super) contacts: Vec<Contact>,
-    pub(super) edges: HashMap<u64, u32>,
+    pub(super) edges: Map<u64, u32>,
     pub(super) space: ([usize; 3], [usize; 3]),
 }
 
@@ -106,7 +107,7 @@ impl<'a> Tile<'a> {
             indices: Vec::new(),
             triangles: Vec::new(),
             contacts: Vec::new(),
-            edges: HashMap::new(),
+            edges: Map::default(),
             space: ([0; 3], [0; 3]),
         }
     }

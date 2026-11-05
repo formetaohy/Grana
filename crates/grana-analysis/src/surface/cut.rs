@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -10,6 +9,7 @@ use grana_object::{
 };
 
 use super::cap;
+use crate::hash::Map;
 use crate::schedule;
 use grana_object::SurfaceCut;
 
@@ -190,7 +190,7 @@ impl<'a> Merged<'a> {
     fn close(&mut self, split: f32, cancel: Option<&AtomicBool>) {
         let seeded = self.topology.info().seeds() > 0;
         let merge_all = split == 0.0 && !seeded;
-        let mut seams = HashMap::<(u32, u32), u32>::new();
+        let mut seams = Map::<(u32, u32), u32>::default();
         for seam in self.topology.seams() {
             let slot = seams.entry((seam.left(), seam.right())).or_insert(0);
             *slot = (*slot).max(seam.saddle());
@@ -358,7 +358,8 @@ impl Meshed<'_> {
         if info.span() > 0.0 && mean / info.span() < self.spec.min_mean_intensity() {
             return None;
         }
-        let mut local: HashMap<[u32; 3], u32> = HashMap::with_capacity(triangles.len());
+        let mut local: Map<[u32; 3], u32> =
+            Map::with_capacity_and_hasher(triangles.len(), Default::default());
         let mut positions = Vec::with_capacity(triangles.len());
         let mut summed: Vec<[f32; 3]> = Vec::with_capacity(triangles.len());
         let mut mesh = Vec::with_capacity(triangles.len());
@@ -427,22 +428,23 @@ impl Meshed<'_> {
             .collect();
         let mut vertices = Vec::with_capacity(positions.len());
         let mut indices = Vec::with_capacity(mesh.len() * 3 + cut.triangles.len());
-        let mut welded: HashMap<u32, u32> = HashMap::with_capacity(positions.len());
+        let mut welded: Vec<u32> = vec![EMPTY; positions.len()];
         for triangle in &mesh {
             let fallback = triangle_normal(&positions, triangle);
             let mut mapped = [0u32; 3];
             for (corner, vertex) in triangle.iter().enumerate() {
-                mapped[corner] = *welded.entry(*vertex).or_insert_with(|| {
-                    let slot = vertices.len() as u32;
+                let slot = &mut welded[*vertex as usize];
+                if *slot == EMPTY {
                     let normal = Vec3::from(summed[*vertex as usize]).normalize_or_zero();
                     let normal = if normal == Vec3::ZERO {
                         fallback
                     } else {
                         normal
                     };
+                    *slot = vertices.len() as u32;
                     vertices.push((positions[*vertex as usize], normal.to_array()));
-                    slot
-                });
+                }
+                mapped[corner] = *slot;
             }
             indices.extend_from_slice(&mapped);
         }
@@ -473,32 +475,44 @@ impl Components {
             component(&mut parent, triangle[0], triangle[1]);
             component(&mut parent, triangle[1], triangle[2]);
         }
-        let mut slots: HashMap<u32, usize> = HashMap::new();
+        let mut roots = vec![EMPTY; vertices];
         let mut slot = Vec::with_capacity(triangles.len());
+        let mut count = 0u32;
         for triangle in triangles {
             let root = component_root(&mut parent, triangle[0]);
-            let count = slots.len();
-            slot.push(*slots.entry(root).or_insert(count));
+            let entry = &mut roots[root as usize];
+            if *entry == EMPTY {
+                *entry = count;
+                count += 1;
+            }
+            slot.push(*entry as usize);
         }
-        let mut edges: Vec<HashMap<(u32, u32), u32>> =
-            (0..slots.len()).map(|_| HashMap::new()).collect();
-        for (index, triangle) in triangles.iter().enumerate() {
-            let counts = &mut edges[slot[index]];
+        let mut edges: Map<u64, u16> =
+            Map::with_capacity_and_hasher(triangles.len() * 3, Default::default());
+        for triangle in triangles {
             for pair in [[0usize, 1usize], [1, 2], [2, 0]] {
-                *counts
-                    .entry((triangle[pair[0]], triangle[pair[1]]))
-                    .or_insert(0) += 1;
+                let from = triangle[pair[0]];
+                let to = triangle[pair[1]];
+                let (key, forward) = if from < to {
+                    ((u64::from(from) << 32) | u64::from(to), true)
+                } else {
+                    ((u64::from(to) << 32) | u64::from(from), false)
+                };
+                let entry = edges.entry(key).or_insert(0);
+                *entry += if forward { 1 } else { 1 << 8 };
             }
         }
-        let closed = edges
-            .iter()
-            .map(|counts| {
-                !counts.is_empty()
-                    && counts.iter().all(|((from, to), count)| {
-                        *count == 1 && counts.get(&(*to, *from)) == Some(&1)
-                    })
-            })
-            .collect();
+        let mut open = vec![false; count as usize];
+        for (key, counts) in &edges {
+            if *counts == 0x0101 {
+                continue;
+            }
+            for vertex in [(key >> 32) as u32, (key & 0xffff_ffff) as u32] {
+                let root = component_root(&mut parent, vertex);
+                open[roots[root as usize] as usize] = true;
+            }
+        }
+        let closed = open.into_iter().map(|open| !open).collect();
         Self { slot, closed }
     }
 }

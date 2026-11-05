@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-
 use grana_object::{Basin, SampleAccumulator, Seam, SurfacePatches, SurfaceTopology, TopologyInfo};
+
+use crate::hash::Map;
 
 use super::tile::TileOutput;
 use super::{EMPTY, Face, Node, Pass, SurfaceBuilder, find};
@@ -152,7 +152,7 @@ impl<'a> Assembler<'a> {
         let vertices = self.vertices;
         let keys = self.keys;
         let indices = self.indices;
-        let mut weld: HashMap<u64, u32> = HashMap::new();
+        let mut weld: Map<u64, u32> = Map::default();
         let mut positions = Vec::with_capacity(vertices.len());
         let mut normals: Vec<[f32; 3]> = Vec::with_capacity(vertices.len());
         let mut welded = Vec::with_capacity(vertices.len());

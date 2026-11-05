@@ -2,6 +2,7 @@ mod assignment;
 mod coloc;
 mod drift;
 mod filament;
+mod hash;
 mod local;
 mod morphology;
 mod relation;

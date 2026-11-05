@@ -20,6 +20,9 @@ use grana_protocol::{Protocol, ProtocolError, Step};
 use super::quality::{self, Quality};
 use super::resume::{Record, build};
 use super::{DatasetEntry, Event, PARTIAL, Progress, RESULT, SNAPSHOT, Task};
+
+const COLOC_PLOT: [u32; 2] = [720, 450];
+
 pub(super) struct Report {
     pub(super) objects: usize,
     pub(super) detail: String,
@@ -175,6 +178,13 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             .iter()
             .map(|channel| channel.name().to_string())
             .collect::<Vec<_>>();
+        let tints = scene
+            .dataset
+            .channels()
+            .iter()
+            .map(|channel| channel.tint())
+            .collect::<Vec<_>>();
+        let mut fonts = grana_text::Fonts::system();
         for result in scene.coloc.results() {
             let pair = result.pair();
             let file = format!(
@@ -186,6 +196,21 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 &folder.join(&file),
                 &result.series().csv(result.thresholds()),
             )?;
+            let plot = format!(
+                "coloc-{}-{}.png",
+                slug(&channels[pair.a()]),
+                slug(&channels[pair.b()])
+            );
+            let raster = colocalization(
+                &mut fonts,
+                result,
+                &channels[pair.a()],
+                &channels[pair.b()],
+                tints[pair.a()],
+                tints[pair.b()],
+            );
+            grana_raster::write(&folder.join(&plot), &raster)
+                .map_err(|error| format!("failed to write {plot}: {error}"))?;
         }
     }
     let report = Report {
@@ -584,12 +609,11 @@ pub(super) fn artifacts(protocol: &Protocol, name: &str, project: bool) -> Vec<S
         .map(|set| format!("{}-{}.csv", slug(&set.name), set.group().key()))
         .collect::<Vec<_>>();
     if let Some(coloc) = protocol.coloc() {
-        artifacts.extend(
-            coloc
-                .pairs
-                .iter()
-                .map(|pair| format!("coloc-{}-{}.csv", slug(&pair.a), slug(&pair.b))),
-        );
+        for pair in &coloc.pairs {
+            let stem = format!("coloc-{}-{}", slug(&pair.a), slug(&pair.b));
+            artifacts.push(format!("{stem}.csv"));
+            artifacts.push(format!("{stem}.png"));
+        }
     }
     if protocol.snapshot().is_some() {
         artifacts.push(SNAPSHOT.to_string());
@@ -699,6 +723,57 @@ fn clear(path: &Path) -> Result<(), String> {
     }
     std::fs::remove_dir_all(path)
         .map_err(|error| format!("failed to clear {}: {error}", path.display()))
+}
+
+fn colocalization(
+    fonts: &mut grana_text::Fonts,
+    result: &grana_scene::ColocResult,
+    x: &str,
+    y: &str,
+    x_tint: [f32; 3],
+    y_tint: [f32; 3],
+) -> grana_raster::Raster {
+    let series = result.series();
+    let thresholds = result.thresholds();
+    let statistics = result.statistics();
+    let manders = statistics.manders();
+    let costes = series.costes().map(|range| {
+        let low = range.low();
+        let high = range.high();
+        [[low.a(), low.b()], [high.a(), high.b()]]
+    });
+    let caption = format!(
+        "Pearson {} · Overlap {} · M1 {} · M2 {} · p {}",
+        number(statistics.pearson()),
+        number(statistics.overlap()),
+        number(manders[0]),
+        number(manders[1]),
+        statistics.significance().map_or_else(
+            || "\u{2014}".to_string(),
+            |significance| format!("{:.4}", significance.p())
+        ),
+    );
+    let subtitle = format!(
+        "all frames · {} bins · level {}",
+        series.bins(),
+        series.level()
+    );
+    let plot = grana_raster::Joint {
+        x: grana_raster::Axis::new(x, x_tint),
+        y: grana_raster::Axis::new(y, y_tint),
+        bins: series.bins(),
+        joint: series.joint(),
+        threshold: [thresholds.a(), thresholds.b()],
+        costes,
+        title: "Colocalization",
+        subtitle: &subtitle,
+        caption: &caption,
+    };
+    grana_raster::joint_plot(fonts, &plot, COLOC_PLOT)
+}
+
+fn number(value: Option<f64>) -> String {
+    value.map_or_else(|| "\u{2014}".to_string(), |value| format!("{value:.3}"))
 }
 
 fn write(path: &Path, text: &str) -> Result<(), String> {

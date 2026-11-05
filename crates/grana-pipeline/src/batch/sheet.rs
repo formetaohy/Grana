@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use grana_raster::{Cell, Group, Raster, Row, Sheet, Table};
 use grana_text::Fonts;
 
@@ -28,6 +30,7 @@ struct Entry {
     detail: String,
     accent: [u8; 4],
     image: Raster,
+    plots: Vec<Raster>,
 }
 
 pub(super) fn write(
@@ -42,7 +45,8 @@ pub(super) fn write(
             continue;
         };
         let dataset = &plan.datasets[index];
-        let path = plan.output.join(dataset.folder()).join(SNAPSHOT);
+        let folder = plan.output.join(dataset.folder());
+        let path = folder.join(SNAPSHOT);
         let Ok(image) = grana_raster::read(&path) else {
             continue;
         };
@@ -53,6 +57,7 @@ pub(super) fn write(
             detail: format!("{} · {}", dataset.scene_label(), row.status),
             accent: status_color(row.status),
             image,
+            plots: colocalizations(&folder),
         });
     }
     if entries.is_empty() {
@@ -63,8 +68,22 @@ pub(super) fn write(
             .cmp(&right.group)
             .then(left.dataset.cmp(&right.dataset))
     });
-    for (ordinal, entry) in entries.iter().enumerate() {
-        cells[entry.dataset] = Some(ordinal + 1);
+    let mut ordinal = 1;
+    let mut start = 0usize;
+    while start < entries.len() {
+        let end = entries[start..]
+            .iter()
+            .position(|entry| entry.group != entries[start].group)
+            .map_or(entries.len(), |offset| start + offset);
+        for entry in &entries[start..end] {
+            cells[entry.dataset] = Some(ordinal);
+            ordinal += 1;
+        }
+        ordinal += entries[start..end]
+            .iter()
+            .map(|entry| entry.plots.len())
+            .sum::<usize>();
+        start = end;
     }
     let tables = tables(comparison);
     let groups = groups(&entries, &tables);
@@ -157,15 +176,61 @@ fn groups<'a>(entries: &'a [Entry], tables: &'a [(String, Table)]) -> Vec<Group<
                 detail: &entry.detail,
                 accent: Some(entry.accent),
             })
-            .collect();
+            .collect::<Vec<_>>();
         let table = tables
             .iter()
             .find(|(group, _)| group == name)
             .map(|(_, table)| table);
-        groups.push(Group { name, table, cells });
+        groups.push(Group {
+            name: name.to_string(),
+            table,
+            cells,
+        });
+        if entries[start..end]
+            .iter()
+            .any(|entry| !entry.plots.is_empty())
+        {
+            let cells = entries[start..end]
+                .iter()
+                .flat_map(|entry| {
+                    entry.plots.iter().map(|plot| Cell {
+                        image: plot,
+                        title: &entry.title,
+                        detail: "colocalization",
+                        accent: Some(entry.accent),
+                    })
+                })
+                .collect();
+            groups.push(Group {
+                name: format!("{name} · colocalization"),
+                table: None,
+                cells,
+            });
+        }
         start = end;
     }
     groups
+}
+
+fn colocalizations(folder: &Path) -> Vec<Raster> {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    let mut paths = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name().is_some_and(|name| {
+                let name = name.to_string_lossy();
+                name.starts_with("coloc-") && name.ends_with(".png")
+            })
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+        .iter()
+        .filter_map(|path| grana_raster::read(path).ok())
+        .collect()
 }
 
 fn status_color(status: &str) -> [u8; 4] {

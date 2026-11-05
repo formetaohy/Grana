@@ -41,7 +41,7 @@ fn round_trips_decodes_and_labels_rasters() {
     let blue = Raster::solid(8, 8, [0, 0, 255, 255]);
     let mut fonts = Fonts::system();
     let group = Group {
-        name: "group",
+        name: "group".to_string(),
         table: None,
         cells: vec![
             Cell {
@@ -100,7 +100,7 @@ fn lays_out_the_summary_band_of_a_group() {
         ],
     };
     let plain = Group {
-        name: "control",
+        name: "control".to_string(),
         table: None,
         cells: vec![Cell {
             image: &image,
@@ -110,7 +110,7 @@ fn lays_out_the_summary_band_of_a_group() {
         }],
     };
     let banded = Group {
-        name: "control",
+        name: "control".to_string(),
         table: Some(&table),
         cells: vec![Cell {
             image: &image,
