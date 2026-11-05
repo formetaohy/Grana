@@ -1,6 +1,6 @@
 use glam::Vec2;
 use grana_figure::{self as overlay, Overlay};
-use grana_ui::glass::{GlassStyle, HUD};
+use grana_ui::glass::GlassStyle;
 use grana_ui::{Corners, Cursor, Icon, Level, Rect, TextStyle, Ui, icon};
 
 use crate::state::State;
@@ -64,7 +64,7 @@ fn pane_fit(
             id,
             Icon::Fit,
             30.0,
-            GlassStyle::hud().interactive(),
+            GlassStyle::media_control().interactive(),
             tooltip,
         ) {
             action(state);
@@ -188,7 +188,7 @@ pub(super) fn toast(ui: &mut Ui, layout: &Layout, state: &State<'_>) {
         grana_session::Kind::Error => (Icon::Warning, palette.warning),
         grana_session::Kind::Info => (Icon::Info, palette.text_secondary),
     };
-    ui.glass(ui.id("toast.glass"), rect, GlassStyle::hud().layer(HUD));
+    ui.glass(ui.id("toast.glass"), rect, GlassStyle::toast());
     ui.popup_scope(rect, |ui| {
         let mut painter = ui.painter();
         icon::paint(

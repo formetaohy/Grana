@@ -1,8 +1,6 @@
 use glam::Vec2;
 use grana_ui::glass::GlassStyle;
-use grana_ui::{
-    Align, Color, Corners, Icon, Motion, Rect, Role, TextStyle, TypeStyle, Ui, glass::CHROME,
-};
+use grana_ui::{Align, Color, Corners, Icon, Motion, Rect, Role, TextStyle, TypeStyle, Ui};
 
 use crate::state::State;
 use crate::widget;
@@ -14,13 +12,7 @@ pub(super) fn transport(
     state: &mut State<'_>,
     commands: &mut Vec<Command>,
 ) {
-    ui.glass(
-        ui.id("transport.glass"),
-        rect,
-        GlassStyle::bar()
-            .layer(CHROME)
-            .with_shape(grana_ui::glass::GlassShape::Rounded(27.0)),
-    );
+    ui.glass(ui.id("transport.glass"), rect, GlassStyle::transport());
     let palette = ui.theme().palette;
     let center = rect.center().y;
     let left = rect.min.x + 12.0;

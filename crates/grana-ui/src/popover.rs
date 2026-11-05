@@ -1,5 +1,4 @@
 use glam::Vec2;
-use grana_glass::Shape;
 
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
@@ -19,17 +18,20 @@ pub fn popover(
     width: f32,
     content: impl FnOnce(&mut Ui),
 ) -> bool {
+    let key = ui.id(id);
     if !open {
+        ui.glass_collapse(key);
+        ui.replay_popup(key);
         return false;
     }
-    let gap = 8.0;
+    let gap = 14.0;
     let window = ui.size();
     let margin = 12.0;
     let x = anchor.min.x.min(window.x - width - margin).max(margin);
     let room = (window.y - anchor.max.y - gap - margin).max(160.0);
     let padding = 6.0;
     let area = Rect::from_min_size(Vec2::new(x, anchor.max.y + gap), Vec2::new(width, room));
-    let key = ui.id(id);
+    let start = ui.popup_len();
     ui.push_id(id);
     let height = ui.popup_scope(area.shrink(padding), content);
     ui.pop_id();
@@ -37,11 +39,9 @@ pub fn popover(
         area.min,
         Vec2::new(width, (height + padding * 2.0).min(room + padding * 2.0)),
     );
-    ui.glass(
-        key ^ 0x51ed_2701_9e37_79b9,
-        body,
-        GlassStyle::popover().with_shape(Shape::Rounded(20.0)),
-    );
+    let alpha = ui.glass_expand(key, anchor, body, GlassStyle::popover());
+    ui.record_popup(key, start);
+    ui.fade_popup(start, alpha);
     let pointer = ui.input().position();
     let pressed = ui.input().button(crate::input::Button::Primary).pressed;
     if pressed && !body.contains(pointer) && !anchor.contains(pointer) {
@@ -367,7 +367,10 @@ pub fn color_picker(
     anchor: Rect,
     color: [f32; 3],
 ) -> Option<[f32; 3]> {
+    let size = 176.0;
+    let inner = 8.0;
     if !open {
+        popover(ui, id, false, anchor, size + inner * 2.0, |_| {});
         return None;
     }
     let key = ui.id(id);
@@ -377,9 +380,7 @@ pub fn color_picker(
         hue = stored_hue;
     }
     let mut changed = None;
-    let size = 176.0;
     let square = Rect::from_min_size(Vec2::ZERO, Vec2::splat(size));
-    let inner = 8.0;
     let visible = popover(ui, id, open, anchor, size + inner * 2.0, |ui| {
         let origin = ui.cursor_position();
         let square = square.translate(origin);

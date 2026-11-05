@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use glam::Vec2;
-use grana_glass::{Glass, GlassId, Rect as GlassRect, Scene as GlassScene};
+use grana_glass::{
+    ContainerId, Glass, GlassId, Material, Rect as GlassRect, Scene as GlassScene,
+    Spring as GlassSpring,
+};
 
 use crate::clipboard::{Clipboard, NullClipboard};
 use crate::edit::{Edit, Outcome as EditOutcome};
@@ -31,6 +34,16 @@ enum Layer {
 struct GlassEntry {
     id: GlassId,
     style: GlassStyle,
+}
+
+struct GlassTransition {
+    anchor: GlassId,
+    popover: Option<GlassId>,
+    closing: Option<GlassId>,
+    body: Rect,
+    snapshot: Vec<Instance>,
+    touched: f32,
+    closing_at: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -271,6 +284,8 @@ pub struct Ui {
     glass: GlassScene,
     glass_entries: HashMap<u64, GlassEntry>,
     glass_seen: Vec<u64>,
+    transitions: HashMap<u64, GlassTransition>,
+    floating_container: Option<ContainerId>,
     floating: bool,
     floating_draining: bool,
     edit: Option<Edit>,
@@ -307,6 +322,8 @@ impl Ui {
             glass: GlassScene::new(),
             glass_entries: HashMap::new(),
             glass_seen: Vec::new(),
+            transitions: HashMap::new(),
+            floating_container: None,
             floating: false,
             floating_draining: false,
             edit: None,
@@ -518,8 +535,9 @@ impl Ui {
             }
         }
         self.retire_glass();
+        self.settle_transitions();
         let animating_glass = self.glass.update(self.elapsed);
-        if !self.floating && !animating_glass {
+        if !self.floating && !animating_glass && self.transitions.is_empty() {
             self.floating_draining = false;
         }
         self.text.flush(self.renderer.queue());
@@ -607,6 +625,166 @@ impl Ui {
             Vec2::new(frame.x, frame.y),
             Vec2::new(frame.width, frame.height),
         ))
+    }
+
+    pub fn glass_expand(&mut self, key: u64, anchor: Rect, body: Rect, style: GlassStyle) -> f32 {
+        if body.is_empty() {
+            return 1.0;
+        }
+        let time = self.time;
+        if self
+            .transitions
+            .get(&key)
+            .is_some_and(|transition| transition.popover.is_none())
+            && let Some(transition) = self.transitions.remove(&key)
+        {
+            self.glass.remove(transition.anchor);
+        }
+        if let Some(transition) = self.transitions.get_mut(&key) {
+            transition.touched = time;
+            self.glass.place(transition.anchor, glass_rect(anchor));
+            if let Some(id) = transition.popover {
+                if transition.body != body {
+                    transition.body = body;
+                    self.glass
+                        .set_frame_with(id, glass_rect(body), GlassSpring::new(0.3, 0.0));
+                }
+                return expand_alpha(&self.glass, id, body);
+            }
+        }
+        let container = match self.floating_container {
+            Some(container) => container,
+            None => {
+                let container = self.glass.add_container(6.0, FLOATING);
+                self.floating_container = Some(container);
+                container
+            }
+        };
+        let anchor_id = self.glass.add(
+            Glass::new(glass_rect(anchor))
+                .material(Material::identity())
+                .container(container),
+        );
+        let popover = Glass::new(glass_rect(body))
+            .shape(style.shape)
+            .material(style.material)
+            .container(container);
+        let id = self
+            .glass
+            .expand_from(anchor_id, popover, GlassSpring::new(0.44, 0.16));
+        self.transitions.insert(
+            key,
+            GlassTransition {
+                anchor: anchor_id,
+                popover: Some(id),
+                closing: None,
+                body,
+                snapshot: Vec::new(),
+                touched: time,
+                closing_at: None,
+            },
+        );
+        self.floating = true;
+        self.floating_draining = true;
+        expand_alpha(&self.glass, id, body)
+    }
+
+    pub fn glass_collapse(&mut self, key: u64) -> bool {
+        let time = self.time;
+        let Some(transition) = self.transitions.get_mut(&key) else {
+            return false;
+        };
+        transition.touched = time;
+        if transition.closing.is_some() {
+            return true;
+        }
+        let Some(id) = transition.popover.take() else {
+            return false;
+        };
+        let anchor = transition.anchor;
+        transition.closing = Some(id);
+        transition.closing_at = Some(time);
+        self.glass
+            .collapse_into(id, anchor, GlassSpring::new(0.32, 0.0));
+        self.floating_draining = true;
+        true
+    }
+
+    pub fn popup_len(&self) -> usize {
+        self.popup.len()
+    }
+
+    pub fn record_popup(&mut self, key: u64, start: usize) {
+        if !self.transitions.contains_key(&key) {
+            return;
+        }
+        let snapshot = self
+            .popup
+            .get(start..)
+            .map(<[Instance]>::to_vec)
+            .unwrap_or_default();
+        if let Some(transition) = self.transitions.get_mut(&key) {
+            transition.snapshot = snapshot;
+        }
+    }
+
+    pub fn fade_popup(&mut self, start: usize, factor: f32) {
+        if factor >= 1.0 || start >= self.popup.len() {
+            return;
+        }
+        for instance in &mut self.popup[start..] {
+            scale_alpha(instance, factor);
+        }
+    }
+
+    pub fn replay_popup(&mut self, key: u64) -> bool {
+        let Some(transition) = self.transitions.get(&key) else {
+            return false;
+        };
+        let Some(id) = transition.closing else {
+            return false;
+        };
+        let Some(frame) = self.glass.current_frame(id) else {
+            return false;
+        };
+        let factor = closing_alpha(frame, transition.body);
+        let snapshot = transition.snapshot.clone();
+        for mut instance in snapshot {
+            scale_alpha(&mut instance, factor);
+            self.popup.push(instance);
+        }
+        true
+    }
+
+    fn settle_transitions(&mut self) {
+        let now = self.time;
+        let mut collapsing = Vec::new();
+        for transition in self.transitions.values_mut() {
+            if transition.popover.is_some() && transition.touched < now - 0.05 {
+                let id = transition.popover.take().expect("the transition is open");
+                transition.closing = Some(id);
+                transition.closing_at = Some(now);
+                collapsing.push((id, transition.anchor));
+            }
+        }
+        if !collapsing.is_empty() {
+            self.floating_draining = true;
+        }
+        for (id, anchor) in collapsing {
+            self.glass
+                .collapse_into(id, anchor, GlassSpring::new(0.32, 0.0));
+        }
+        let expired = self
+            .transitions
+            .iter()
+            .filter(|(_, transition)| transition.closing_at.is_some_and(|at| now - at > 0.8))
+            .map(|(key, _)| *key)
+            .collect::<Vec<_>>();
+        for key in expired {
+            if let Some(transition) = self.transitions.remove(&key) {
+                self.glass.remove(transition.anchor);
+            }
+        }
     }
 
     fn retire_glass(&mut self) {
@@ -1985,6 +2163,37 @@ fn cross_factor(align: Align) -> f32 {
         Align::Center => 0.5,
         Align::End => 1.0,
     }
+}
+
+fn glass_rect(rect: Rect) -> GlassRect {
+    GlassRect::new(rect.min.x, rect.min.y, rect.width(), rect.height())
+}
+
+fn expand_alpha(scene: &GlassScene, id: GlassId, body: Rect) -> f32 {
+    let Some(frame) = scene.current_frame(id) else {
+        return 1.0;
+    };
+    smoothstep(0.28, 1.0, glass_ratio(frame, body))
+}
+
+fn closing_alpha(frame: GlassRect, body: Rect) -> f32 {
+    smoothstep(0.0, 0.65, glass_ratio(frame, body))
+}
+
+fn glass_ratio(frame: GlassRect, body: Rect) -> f32 {
+    let width = frame.width / body.width().max(1.0);
+    let height = frame.height / body.height().max(1.0);
+    width.min(height).clamp(0.0, 1.0)
+}
+
+fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
+    let t = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn scale_alpha(instance: &mut Instance, factor: f32) {
+    instance.color[3] *= factor;
+    instance.color2[3] *= factor;
 }
 
 fn hash_string(value: &str) -> u64 {

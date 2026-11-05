@@ -241,11 +241,7 @@ fn sidebar_panel(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: 
 
 fn dock_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let palette = ui.theme().palette;
-    ui.glass(
-        ui.id("dock.glass"),
-        rect,
-        GlassStyle::sheet().layer(grana_ui::glass::CHROME),
-    );
+    ui.glass(ui.id("dock.glass"), rect, GlassStyle::sheet());
     let grip = Rect::from_min_max(rect.min, Vec2::new(rect.max.x, rect.min.y + 8.0));
     let response = ui.interact(ui.id("dock.resize"), grip);
     if response.hovered || response.dragging {

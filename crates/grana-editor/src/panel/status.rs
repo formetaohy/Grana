@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_ui::glass::{CHROME, GlassStyle};
+use grana_ui::glass::GlassStyle;
 use grana_ui::{Align, Corners, Rect, TextStyle, Ui};
 
 use crate::state::State;
@@ -55,13 +55,7 @@ pub(super) fn pill(ui: &mut Ui, anchor: Rect, state: &State<'_>) {
         Vec2::new(anchor.min.x, anchor.max.y + 12.0),
         Vec2::new(320.0, 44.0),
     );
-    ui.glass(
-        ui.id("status.pill"),
-        rect,
-        GlassStyle::bar()
-            .layer(CHROME)
-            .with_shape(grana_ui::glass::GlassShape::Capsule),
-    );
+    ui.glass(ui.id("status.pill"), rect, GlassStyle::status_pill());
     let font = grana_ui::TypeStyle::new(10.5, 400.0, 14.0);
     let inner = Rect::from_min_max(
         Vec2::new(rect.min.x + 16.0, rect.min.y + 6.0),
