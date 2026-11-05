@@ -1,10 +1,11 @@
 use std::sync::atomic::AtomicBool;
 
-use crate::local::{BLOCK, BlockField, LocalField, Stats, floor};
+use crate::local::{BLOCK, BlockField};
 use crate::morphology;
 use grana_object::Mask;
 
 use super::bits::{Bits, BlockFill, Grid, MaskInputs, SIDE};
+use super::stats;
 use super::{Gate, Read, SurfaceBuilder, dims_of, smooth};
 
 const RAISED_TOLERANCE: f32 = 0.5;
@@ -68,26 +69,23 @@ pub(super) fn build(
     let blocks = plan.blocks();
     let total = plan.tile_count();
     let step = total * 2 + 1;
+    let gate = plan.gate(roi);
+    let pad = plan.pad_mask();
+    let field = {
+        let mut report = |done: usize, slabs: usize| {
+            if let Some(share) = (done * total).checked_div(slabs) {
+                progress(share, step);
+            }
+        };
+        match stats::build(plan, workers, cancel, &gate, read, &mut report)? {
+            Some(field) => field,
+            None => return Ok(None),
+        }
+    };
     let mut foreground = Bits::new(dims);
     let mut raised = Bits::new(dims);
     let mut admitted = roi.map(|_| Bits::new(dims));
-    let mut field = BlockField::new(plan.anchor, blocks, floor(plan.intensity));
     let mut occupied = vec![false; blocks[0] * blocks[1] * blocks[2]];
-    let gate = plan.gate(roi);
-    let pad = plan.pad_mask();
-    let stats = Stats::new(
-        [0, 1, 2].map(|axis| {
-            let start = plan.region[axis].start.saturating_sub(pad[axis]) as i64;
-            (start - plan.anchor[axis]).div_euclid(BLOCK)
-        }),
-        [0, 1, 2].map(|axis| {
-            let end = i64::from(plan.region[axis].end)
-                .saturating_add(i64::from(pad[axis]))
-                .min(i64::from(plan.extent[axis]))
-                - 1;
-            (end - plan.anchor[axis]).div_euclid(BLOCK)
-        }),
-    );
     let completed = crate::schedule::ordered(
         crate::schedule::Run {
             total,
@@ -96,13 +94,12 @@ pub(super) fn build(
             progress: &mut |done, _| progress(done, step),
         },
         || (),
-        |(), index| MaskWorker::run(plan, &gate, &stats, index, pad, read),
+        |(), index| MaskWorker::run(plan, &gate, &field, index, pad, read),
         |index, chunk| {
             let mut sink = MaskSink {
                 foreground: &mut foreground,
                 raised: &mut raised,
                 admitted: admitted.as_mut(),
-                field: &mut field,
                 occupied: &mut occupied,
             };
             write_chunk(plan, index, chunk, &mut sink)
@@ -112,7 +109,6 @@ pub(super) fn build(
     if !completed {
         return Ok(None);
     }
-    field.extrapolate();
     let grid = Grid::new(
         &MaskInputs {
             foreground: &foreground,
@@ -151,7 +147,6 @@ struct MaskSink<'a> {
     foreground: &'a mut Bits,
     raised: &'a mut Bits,
     admitted: Option<&'a mut Bits>,
-    field: &'a mut BlockField,
     occupied: &'a mut [bool],
 }
 
@@ -199,7 +194,6 @@ fn write_chunk(
                     chunk.block_origin[1] + y as i64,
                     chunk.block_origin[2] + z as i64,
                 ];
-                sink.field.set(block, chunk.blocks[slot]);
                 sink.occupied[block[0] as usize
                     + global[0] * (block[1] as usize + global[1] * block[2] as usize)] =
                     chunk.occupied[slot];
@@ -214,7 +208,6 @@ struct MaskChunk {
     foreground: Vec<u64>,
     raised: Vec<u64>,
     admitted: Option<Vec<u64>>,
-    blocks: Vec<(f32, f32)>,
     occupied: Vec<bool>,
     block_origin: [i64; 3],
     block_dims: [usize; 3],
@@ -226,7 +219,7 @@ impl MaskWorker {
     fn run(
         plan: &SurfaceBuilder,
         gate: &Gate<'_>,
-        _stats: &Stats,
+        field: &BlockField,
         index: usize,
         pad: [u32; 3],
         read: &Read<'_>,
@@ -243,20 +236,6 @@ impl MaskWorker {
         let mut raw = vec![0.0f32; count];
         data.write_values(&mut raw);
         smooth(&mut raw, dims, &plan.kernels);
-        let start = [
-            array[0].start as i64,
-            array[1].start as i64,
-            array[2].start as i64,
-        ];
-        let field = LocalField::new(
-            dims,
-            start,
-            plan.anchor,
-            plan.intensity,
-            |slot| raw[slot],
-            |voxel| gate.admits(voxel),
-            None,
-        );
         let origin = [
             (core[0].start - array[0].start) as usize,
             (core[1].start - array[1].start) as usize,
@@ -320,35 +299,11 @@ impl MaskWorker {
                 }
             }
         }
-        let (field_origin, field_blocks) = field.blocks();
-        let mut values = vec![(0.0f32, 0.0f32); occupied.len()];
-        for z in 0..blocks[2] {
-            for y in 0..blocks[1] {
-                for x in 0..blocks[0] {
-                    let slot = x + blocks[0] * (y + blocks[1] * z);
-                    let local = [
-                        (block_origin[0] + x as i64 - field_origin[0]) as usize,
-                        (block_origin[1] + y as i64 - field_origin[1]) as usize,
-                        (block_origin[2] + z as i64 - field_origin[2]) as usize,
-                    ];
-                    assert!(
-                        local[0] < field_blocks[0]
-                            && local[1] < field_blocks[1]
-                            && local[2] < field_blocks[2],
-                        "a core block lies inside the analysis window"
-                    );
-                    values[slot] = field.block(
-                        local[0] + field_blocks[0] * (local[1] + field_blocks[1] * local[2]),
-                    );
-                }
-            }
-        }
         Ok(MaskChunk {
             rows,
             foreground,
             raised,
             admitted,
-            blocks: values,
             occupied,
             block_origin,
             block_dims,

@@ -6,8 +6,9 @@ use grana_volume::{Extent, Pyramid, VoxelData};
 const WINDOW: u32 = 64;
 
 const MINIMUM_WINDOW: u32 = 32;
-const PEAK_LIMIT: f32 = 0.5;
 const TAPER: f32 = 0.5;
+const UPSAMPLE: usize = 6;
+const UPSAMPLED: usize = 9;
 const EPSILON: f32 = 1.0e-12;
 
 #[derive(Clone, Copy, Default)]
@@ -177,19 +178,19 @@ pub fn shift(reference: &[f32], moving: &[f32], dims: [usize; 3]) -> [f32; 3] {
         return [0.0; 3];
     }
     let sizes = dims.map(|value| (2 * value.max(2)).next_power_of_two());
-    let mut first = Cube::new(sizes);
-    let mut second = Cube::new(sizes);
-    fill(&mut first, reference, dims);
-    fill(&mut second, moving, dims);
-    first.transform(false);
-    second.transform(false);
-    let dc = first.index([0; 3]);
-    first.values[dc] = Complex::default();
-    second.values[dc] = Complex::default();
-    for index in 0..first.values.len() {
-        let product = first.values[index].multiply(second.values[index].conjugate());
+    let mut reference_spectrum = Cube::new(sizes);
+    let mut spectrum = Cube::new(sizes);
+    fill(&mut reference_spectrum, reference, dims);
+    fill(&mut spectrum, moving, dims);
+    reference_spectrum.transform(false);
+    spectrum.transform(false);
+    let dc = reference_spectrum.index([0; 3]);
+    reference_spectrum.values[dc] = Complex::default();
+    spectrum.values[dc] = Complex::default();
+    for index in 0..spectrum.values.len() {
+        let product = reference_spectrum.values[index].multiply(spectrum.values[index].conjugate());
         let length = (product.re * product.re + product.im * product.im).sqrt();
-        first.values[index] = if length > EPSILON {
+        spectrum.values[index] = if length > EPSILON {
             Complex {
                 re: product.re / length,
                 im: product.im / length,
@@ -198,8 +199,160 @@ pub fn shift(reference: &[f32], moving: &[f32], dims: [usize; 3]) -> [f32; 3] {
             Complex::default()
         };
     }
-    first.transform(true);
-    locate(&first, dims)
+    let mut correlation = Cube::new(sizes);
+    correlation.values.copy_from_slice(&spectrum.values);
+    correlation.transform(true);
+    let peak = locate(&correlation, dims);
+    refine(&spectrum, peak)
+}
+
+fn locate(cube: &Cube, dims: [usize; 3]) -> [usize; 3] {
+    let sizes = cube.dims;
+    let limits = [0, 1, 2].map(|axis| (dims[axis] / 2).max(1) as isize);
+    let mut best = [0usize; 3];
+    let mut peak = f32::NEG_INFINITY;
+    for z in 0..sizes[2] {
+        for y in 0..sizes[1] {
+            for x in 0..sizes[0] {
+                let value = cube.values[cube.index([x, y, z])].re;
+                if value <= peak {
+                    continue;
+                }
+                let signed = [
+                    signed_index(x, sizes[0]),
+                    signed_index(y, sizes[1]),
+                    signed_index(z, sizes[2]),
+                ];
+                if (0..3).any(|axis| signed[axis].abs() > limits[axis]) {
+                    continue;
+                }
+                peak = value;
+                best = [x, y, z];
+            }
+        }
+    }
+    best
+}
+
+fn refine(spectrum: &Cube, peak: [usize; 3]) -> [f32; 3] {
+    let sizes = spectrum.dims;
+    let target = [0, 1, 2].map(|axis| signed_index(peak[axis], sizes[axis]) as f32);
+    let kernels = [0, 1, 2].map(|axis| kernel(sizes[axis], target[axis]));
+    let grid = upsample(spectrum, &kernels);
+    let center = ((UPSAMPLED - 1) / 2) as isize;
+    let mut best = [0usize; 3];
+    let mut peak_power = f32::NEG_INFINITY;
+    for z in 0..UPSAMPLED {
+        for y in 0..UPSAMPLED {
+            for x in 0..UPSAMPLED {
+                let value = grid[x + UPSAMPLED * (y + UPSAMPLED * z)];
+                let power = value.re * value.re + value.im * value.im;
+                if power > peak_power {
+                    peak_power = power;
+                    best = [x, y, z];
+                }
+            }
+        }
+    }
+    [0, 1, 2].map(|axis| {
+        let index = (best[axis] as isize).clamp(1, UPSAMPLED as isize - 2);
+        let power = |step: isize| {
+            let mut at = best;
+            at[axis] = (index + step) as usize;
+            let value = grid[at[0] + UPSAMPLED * (at[1] + UPSAMPLED * at[2])];
+            value.re * value.re + value.im * value.im
+        };
+        let before = power(-1);
+        let after = power(1);
+        let curvature = before - 2.0 * power(0) + after;
+        let offset = if curvature.abs() > EPSILON {
+            (0.5 * (before - after) / curvature).clamp(-0.5, 0.5)
+        } else {
+            0.0
+        };
+        let position =
+            target[axis] + (index - center) as f32 / UPSAMPLE as f32 + offset / UPSAMPLE as f32;
+        -position
+    })
+}
+
+fn kernel(size: usize, target: f32) -> Vec<Complex> {
+    let center = (UPSAMPLED as f32 - 1.0) * 0.5;
+    let mut weights = vec![Complex::default(); UPSAMPLED * size];
+    for step in 0..UPSAMPLED {
+        let position = target + (step as f32 - center) / UPSAMPLE as f32;
+        for bin in 0..size {
+            let frequency = if bin * 2 <= size {
+                bin as f32
+            } else {
+                bin as f32 - size as f32
+            };
+            let angle = TAU * frequency * position / size as f32;
+            weights[step * size + bin] = Complex {
+                re: angle.cos(),
+                im: angle.sin(),
+            };
+        }
+    }
+    weights
+}
+
+fn upsample(spectrum: &Cube, kernels: &[Vec<Complex>; 3]) -> Vec<Complex> {
+    let [nx, ny, nz] = spectrum.dims;
+    let mut stage = vec![Complex::default(); UPSAMPLED * ny * nz];
+    for z in 0..nz {
+        for y in 0..ny {
+            let base = nx * (y + ny * z);
+            for step in 0..UPSAMPLED {
+                let mut sum = Complex::default();
+                let weights = &kernels[0][step * nx..step * nx + nx];
+                for (bin, weight) in weights.iter().enumerate() {
+                    add(&mut sum, spectrum.values[base + bin], *weight);
+                }
+                stage[step + UPSAMPLED * (y + ny * z)] = sum;
+            }
+        }
+    }
+    let mut lines = vec![Complex::default(); UPSAMPLED * UPSAMPLED * nz];
+    for z in 0..nz {
+        for x in 0..UPSAMPLED {
+            for step in 0..UPSAMPLED {
+                let mut sum = Complex::default();
+                let weights = &kernels[1][step * ny..step * ny + ny];
+                for bin in 0..ny {
+                    add(
+                        &mut sum,
+                        stage[x + UPSAMPLED * (bin + ny * z)],
+                        weights[bin],
+                    );
+                }
+                lines[x + UPSAMPLED * (step + UPSAMPLED * z)] = sum;
+            }
+        }
+    }
+    let mut grid = vec![Complex::default(); UPSAMPLED * UPSAMPLED * UPSAMPLED];
+    for y in 0..UPSAMPLED {
+        for x in 0..UPSAMPLED {
+            for step in 0..UPSAMPLED {
+                let mut sum = Complex::default();
+                let weights = &kernels[2][step * nz..step * nz + nz];
+                for bin in 0..nz {
+                    add(
+                        &mut sum,
+                        lines[x + UPSAMPLED * (y + UPSAMPLED * bin)],
+                        weights[bin],
+                    );
+                }
+                grid[x + UPSAMPLED * (y + UPSAMPLED * step)] = sum;
+            }
+        }
+    }
+    grid
+}
+
+fn add(sum: &mut Complex, value: Complex, weight: Complex) {
+    sum.re += value.re * weight.re - value.im * weight.im;
+    sum.im += value.re * weight.im + value.im * weight.re;
 }
 
 fn fill(cube: &mut Cube, source: &[f32], dims: [usize; 3]) {
@@ -239,44 +392,6 @@ fn taper(index: usize, length: usize) -> f32 {
     1.0
 }
 
-fn locate(cube: &Cube, dims: [usize; 3]) -> [f32; 3] {
-    let sizes = cube.dims;
-    let limits = [0, 1, 2].map(|axis| (dims[axis] / 2).max(1) as isize);
-    let mut best = [0usize; 3];
-    let mut peak = f32::NEG_INFINITY;
-    for z in 0..sizes[2] {
-        for y in 0..sizes[1] {
-            for x in 0..sizes[0] {
-                let value = cube.values[cube.index([x, y, z])].re;
-                if value <= peak {
-                    continue;
-                }
-                let signed = [
-                    signed_index(x, sizes[0]),
-                    signed_index(y, sizes[1]),
-                    signed_index(z, sizes[2]),
-                ];
-                if (0..3).any(|axis| signed[axis].abs() > limits[axis]) {
-                    continue;
-                }
-                peak = value;
-                best = [x, y, z];
-            }
-        }
-    }
-    [0, 1, 2].map(|axis| {
-        let before = sample(cube, best, axis, -1);
-        let after = sample(cube, best, axis, 1);
-        let curvature = before - 2.0 * peak + after;
-        let offset = if curvature.abs() > EPSILON {
-            (0.5 * (before - after) / curvature).clamp(-PEAK_LIMIT, PEAK_LIMIT)
-        } else {
-            0.0
-        };
-        -(signed_index(best[axis], sizes[axis]) as f32 + offset)
-    })
-}
-
 fn signed_index(index: usize, length: usize) -> isize {
     let index = index as isize;
     if index > length as isize / 2 {
@@ -286,8 +401,57 @@ fn signed_index(index: usize, length: usize) -> isize {
     }
 }
 
-fn sample(cube: &Cube, at: [usize; 3], axis: usize, step: isize) -> f32 {
-    let mut coordinate = at;
-    coordinate[axis] = (at[axis] as isize + step).rem_euclid(cube.dims[axis] as isize) as usize;
-    cube.values[cube.index(coordinate)].re
+#[cfg(test)]
+mod refinement {
+    use super::*;
+
+    fn gaussian_peak(sizes: usize, width: f32, at: [f32; 3]) -> Cube {
+        let mut cube = Cube::new([sizes; 3]);
+        for z in 0..sizes {
+            for y in 0..sizes {
+                for x in 0..sizes {
+                    let frequency = [
+                        signed_index(x, sizes) as f32,
+                        signed_index(y, sizes) as f32,
+                        signed_index(z, sizes) as f32,
+                    ];
+                    let squared = frequency.iter().map(|value| value * value).sum::<f32>();
+                    let amplitude = (-squared / (2.0 * width * width)).exp();
+                    let phase = -TAU
+                        * (frequency[0] * at[0] + frequency[1] * at[1] + frequency[2] * at[2])
+                        / sizes as f32;
+                    let slot = cube.index([x, y, z]);
+                    cube.values[slot] = Complex {
+                        re: amplitude * phase.cos(),
+                        im: amplitude * phase.sin(),
+                    };
+                }
+            }
+        }
+        cube
+    }
+
+    #[test]
+    fn recovers_a_subvoxel_peak() {
+        for at in [
+            [0.37f32, -0.21, 0.55],
+            [0.5, 0.5, -0.5],
+            [-0.12, 0.03, 0.44],
+            [2.3, -1.7, 0.9],
+        ] {
+            let sizes = 64;
+            let spectrum = gaussian_peak(sizes, 5.0, at);
+            let mut correlation = Cube::new([sizes; 3]);
+            correlation.values.copy_from_slice(&spectrum.values);
+            correlation.transform(true);
+            let peak = locate(&correlation, [32, 32, 32]);
+            let found = refine(&spectrum, peak);
+            for axis in 0..3 {
+                assert!(
+                    (found[axis] + at[axis]).abs() < 0.01,
+                    "the refinement recovers {at:?} but reported {found:?}"
+                );
+            }
+        }
+    }
 }

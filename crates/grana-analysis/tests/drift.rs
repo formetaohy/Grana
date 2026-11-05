@@ -89,6 +89,9 @@ fn recovers_the_translation_of_a_moved_volume() {
         [0.0, 0.0, 0.0],
         [2.5, -1.25, 0.5],
         [0.0, 3.75, -1.5],
+        [0.3, -0.45, 0.7],
+        [-0.2, 0.15, -0.35],
+        [1.05, 0.95, -1.1],
     ] {
         let moving = moved(&reference, offset);
         let found = drift_shift(&reference, &moving, DIMS);

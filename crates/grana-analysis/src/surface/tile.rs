@@ -133,9 +133,6 @@ impl<'a> Tile<'a> {
         self.mask.clear();
         self.mask.resize(count, false);
         let occupied = self.mark();
-        self.labels.clear();
-        self.labels.resize(count, EMPTY);
-        self.chamfer.clear();
         self.nodes.clear();
         self.accumulators.clear();
         self.necks.clear();
@@ -145,7 +142,10 @@ impl<'a> Tile<'a> {
         self.indices.clear();
         self.triangles.clear();
         self.contacts.clear();
+        self.labels.clear();
+        self.chamfer.clear();
         if occupied {
+            self.labels.resize(count, EMPTY);
             let inside = [0, 1, 2].map(|axis| {
                 let first = pass.plan.region[axis].start as i64 - self.start[axis];
                 let last = pass.plan.region[axis].end as i64 - self.start[axis];
@@ -336,7 +336,11 @@ impl<'a> Tile<'a> {
                 let slot = strides[axis] * plane
                     + strides[first] * first_position
                     + strides[second] * second_position;
-                labels.push(self.labels[slot]);
+                labels.push(if self.labels.is_empty() {
+                    EMPTY
+                } else {
+                    self.labels[slot]
+                });
                 reach.push(if self.chamfer.is_empty() {
                     0
                 } else {

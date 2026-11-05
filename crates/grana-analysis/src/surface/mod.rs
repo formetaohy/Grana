@@ -8,6 +8,7 @@ mod emit;
 mod label;
 mod mask;
 mod prepare;
+mod stats;
 mod tile;
 
 use std::ops::Range;
@@ -38,7 +39,6 @@ const GRAIN_LIMIT: f32 = 3.0;
 const GRAIN_SUPPORT: f32 = 3.0;
 const ANISOTROPY_LIMIT: u32 = 16;
 const PAD_ALIGN: u32 = 8;
-const BLOCK_FLOOR: u32 = crate::local::BLOCK as u32 * (crate::local::WINDOW as u32 + 1);
 const ARRAY_BYTES_PER_VOXEL: u64 = 17;
 const VALUE_BYTES_PER_VOXEL: u64 = 12;
 const WORKER_ARRAY_LIMIT: u64 = 320 << 20;
@@ -294,11 +294,7 @@ impl SurfaceBuilder {
     }
 
     pub(super) fn pad_mask(&self) -> [u32; 3] {
-        let window = crate::local::BLOCK as u32 * crate::local::WINDOW as u32;
-        [0, 1, 2].map(|axis| {
-            let kernel = (self.kernels[axis].len() / 2) as u32;
-            align(window + kernel + 1)
-        })
+        [0, 1, 2].map(|axis| align(radius(self, axis) + 1))
     }
 
     pub(super) fn pad_morph(&self) -> [u32; 3] {
@@ -547,8 +543,7 @@ impl<'a> Pass<'a> {
         let bound = self.distance.bound(&plan.core_range(index)).min(self.limit);
         let mut reach = bound;
         loop {
-            let pad =
-                [0, 1, 2].map(|axis| align((reach + radius(plan, axis) + 1).max(BLOCK_FLOOR)));
+            let pad = [0, 1, 2].map(|axis| align(reach + radius(plan, axis) + 1));
             if array_bytes(plan, pad, self.values) <= WORKER_ARRAY_LIMIT {
                 return pad;
             }
