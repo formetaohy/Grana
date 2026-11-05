@@ -13,6 +13,8 @@ pub enum RelationField {
 impl RelationField {
     pub const ALL: [Self; 4] = [Self::Distance, Self::Inside, Self::Partner, Self::Contact];
 
+    pub const CONTINUOUS: [Self; 3] = [Self::Distance, Self::Inside, Self::Contact];
+
     pub fn index(self) -> u8 {
         match self {
             Self::Distance => 0,
@@ -80,6 +82,10 @@ impl RelationField {
         let Some(frame) = row.frame() else {
             return self.missing();
         };
+        self.measure(frame, object)
+    }
+
+    pub fn measure(self, frame: &RelationFrame, object: usize) -> f32 {
         assert!(
             object < frame.objects(),
             "the relation measures the object it is read from"

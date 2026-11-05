@@ -1,4 +1,3 @@
-use std::io::BufReader;
 use std::path::PathBuf;
 
 use glam::Vec2;
@@ -179,7 +178,7 @@ fn writes_a_transparent_viewport() {
 }
 
 #[test]
-fn writes_a_transparent_animation() {
+fn writes_a_transparent_movie() {
     let Some((device, queue)) = device() else {
         return;
     };
@@ -188,8 +187,8 @@ fn writes_a_transparent_animation() {
     let Some((camera, section)) = view(&volume) else {
         return;
     };
-    let root = scratch("animation");
-    let path = root.join("cells.png");
+    let root = scratch("transparent-movie");
+    let path = root.join("cells.mov");
     let mut engine = Engine::new(&device, &queue, FORMAT);
     engine.set_dataset(&device, scene.dataset.pyramid());
     let mut ui = grana_ui::Ui::new(&device, &queue, FORMAT);
@@ -208,7 +207,7 @@ fn writes_a_transparent_animation() {
         &device,
         &queue,
         Plan {
-            destination: Destination::Animation { path: path.clone() },
+            destination: Destination::Movie { path: path.clone() },
             panels: panels(),
             width: WIDTH,
             transparent: true,
@@ -217,41 +216,52 @@ fn writes_a_transparent_animation() {
         },
     );
     assert!(matches!(outcome, Outcome::Complete { .. }));
-    let file = std::fs::File::open(&path).expect("the animation reads");
-    let mut reader = png::Decoder::new(BufReader::new(file))
-        .read_info()
-        .expect("the animation header reads");
-    assert_eq!(
-        reader
-            .info()
-            .animation_control()
-            .expect("the animation carries its control")
-            .num_frames,
-        2
-    );
-    assert_eq!(
-        reader
-            .info()
-            .frame_control()
-            .expect("the first frame carries its delay")
-            .delay_den,
-        12
-    );
-    let mut buffer = vec![0; reader.output_buffer_size().expect("the frames are sized")];
-    let first = reader
-        .next_frame(&mut buffer)
-        .expect("the first frame reads");
-    assert_eq!(first.color_type, png::ColorType::Rgba);
-    assert_eq!(buffer[3], 0, "the animation keeps a transparent background");
-    let centre = ((first.height / 2 * first.width + first.width / 4) * 4) as usize;
+    let bytes = std::fs::read(&path).expect("the movie reads");
+    assert_eq!(&bytes[4..8], b"ftyp");
+    assert_eq!(&bytes[8..12], b"qt  ", "a transparent movie is quicktime");
+    let frames = samples(&bytes);
+    assert_eq!(frames.len(), 2, "the movie holds its frames");
+    let (first, info) = decode_png(frames[0]);
+    assert_eq!(info.0, WIDTH);
+    assert_eq!(first[3], 0, "the movie keeps a transparent background");
+    let centre = ((info.1 / 2 * info.0 + info.0 / 4) * 4) as usize;
     assert!(
-        buffer[centre + 3] > 0,
-        "the animation keeps the volume of its frames"
+        first[centre + 3] > 0,
+        "the movie keeps the volume of its frames"
     );
-    reader
-        .next_frame(&mut buffer)
-        .expect("the second frame reads");
     std::fs::remove_dir_all(&root).ok();
+}
+
+fn samples(bytes: &[u8]) -> Vec<&[u8]> {
+    let stsz = find(bytes, b"stsz").expect("the movie carries sample sizes");
+    let count = be32(&bytes[stsz + 12..stsz + 16]) as usize;
+    let mut offset = find(bytes, b"mdat").expect("the movie carries media data") + 4;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let start = stsz + 16 + 4 * index;
+        let size = be32(&bytes[start..start + 4]) as usize;
+        samples.push(&bytes[offset..offset + size]);
+        offset += size;
+    }
+    samples
+}
+
+fn decode_png(sample: &[u8]) -> (Vec<u8>, (u32, u32)) {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(sample))
+        .read_info()
+        .expect("the frame header reads");
+    assert_eq!(reader.info().color_type, png::ColorType::Rgba);
+    let mut buffer = vec![0; reader.output_buffer_size().expect("the frame is sized")];
+    let frame = reader.next_frame(&mut buffer).expect("the frame reads");
+    (buffer, (frame.width, frame.height))
+}
+
+fn find(bytes: &[u8], kind: &[u8; 4]) -> Option<usize> {
+    bytes.windows(4).position(|window| window == kind)
+}
+
+fn be32(bytes: &[u8]) -> u32 {
+    u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
 #[test]

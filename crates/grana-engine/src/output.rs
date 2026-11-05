@@ -5,7 +5,7 @@ use grana_raster::Raster;
 use grana_render::Renderer;
 use grana_scene::Scene;
 use grana_ui::Ui;
-use grana_video::{Animation, Recorder, Sequence};
+use grana_video::{Recorder, Sequence};
 use wgpu::{
     CommandEncoder, CommandEncoderDescriptor, Device, Extent3d, LoadOp, Operations, Queue,
     RenderPassColorAttachment, RenderPassDescriptor, StoreOp, Texture, TextureDescriptor,
@@ -31,7 +31,6 @@ pub struct Pose {
 pub enum Destination {
     Image { path: PathBuf },
     Movie { path: PathBuf },
-    Animation { path: PathBuf },
     Sequence { directory: PathBuf, stem: String },
 }
 
@@ -53,7 +52,6 @@ pub enum Outcome {
 enum Sink {
     Image { path: PathBuf },
     Movie { path: PathBuf, recorder: Recorder },
-    Animation { path: PathBuf, animation: Animation },
     Sequence { sequence: Sequence },
 }
 
@@ -64,9 +62,6 @@ impl Sink {
             Self::Image { path } => grana_raster::write(path, &raster()).map_err(String::from),
             Self::Movie { recorder, .. } => {
                 recorder.push(pixels).map_err(|error| error.to_string())
-            }
-            Self::Animation { animation, .. } => {
-                animation.push(pixels).map_err(|error| error.to_string())
             }
             Self::Sequence { sequence } => {
                 let png = grana_raster::encode(&raster()).map_err(String::from)?;
@@ -80,10 +75,6 @@ impl Sink {
             Self::Image { path } => Ok(path),
             Self::Movie { path, recorder } => {
                 recorder.finish().map_err(|error| error.to_string())?;
-                Ok(path)
-            }
-            Self::Animation { path, animation } => {
-                animation.finish().map_err(|error| error.to_string())?;
                 Ok(path)
             }
             Self::Sequence { sequence } => sequence.finish().map_err(|error| error.to_string()),
@@ -126,14 +117,8 @@ impl Export {
             return Err("an export reads back an eight bit colour target".to_string());
         }
         let movie = matches!(destination, Destination::Movie { .. });
-        if transparent && movie {
-            return Err("the movie encoder carries no alpha channel".to_string());
-        }
-        let animation = matches!(destination, Destination::Animation { .. });
-        if animation {
-            assert!(fps > 0, "an animation holds a positive frame rate");
-        }
-        let panes = panels.export(width, movie || animation);
+        assert!(!movie || fps > 0, "a movie holds a positive frame rate");
+        let panes = panels.export(width, movie);
         let limit = device.limits().max_texture_dimension_2d;
         if panes.size[0] > limit || panes.size[1] > limit {
             return Err(format!(
@@ -151,12 +136,7 @@ impl Export {
         let sink = match destination {
             Destination::Image { path } => Sink::Image { path },
             Destination::Movie { path } => Sink::Movie {
-                recorder: Recorder::start(&path, panes.size, fps)
-                    .map_err(|error| error.to_string())?,
-                path,
-            },
-            Destination::Animation { path } => Sink::Animation {
-                animation: Animation::start(&path, panes.size, poses.len() as u32, fps)
+                recorder: Recorder::start(&path, panes.size, fps, transparent)
                     .map_err(|error| error.to_string())?,
                 path,
             },
@@ -240,7 +220,7 @@ impl Export {
 
     fn attempts_limit(&self) -> u32 {
         match self.sink {
-            Some(Sink::Movie { .. } | Sink::Animation { .. }) => MOVIE_ATTEMPTS,
+            Some(Sink::Movie { .. }) => MOVIE_ATTEMPTS,
             _ => IMAGE_ATTEMPTS,
         }
     }

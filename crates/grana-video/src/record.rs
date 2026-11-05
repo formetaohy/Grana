@@ -4,27 +4,47 @@ use std::thread::{self, JoinHandle};
 
 use crate::encoder::Encoder;
 use crate::error::Error;
-use crate::mp4::Mp4;
+use crate::movie::{Codec, Movie};
 
 enum Message {
     Frame(Vec<u8>),
     Finish,
 }
 
+enum Compressor {
+    Lossy(Box<Encoder>),
+    Lossless,
+}
+
 struct Clip {
-    encoder: Encoder,
-    mp4: Mp4,
+    movie: Movie,
+    compressor: Compressor,
 }
 
 impl Clip {
     fn push(&mut self, rgba: &[u8]) -> Result<(), Error> {
-        let sample = self.encoder.encode(rgba)?;
-        self.mp4.sample(&sample.bytes, sample.key)
+        match &mut self.compressor {
+            Compressor::Lossy(encoder) => {
+                let sample = encoder.encode(rgba)?;
+                self.movie.sample(&sample.bytes, sample.key)
+            }
+            Compressor::Lossless => self
+                .movie
+                .sample(&png_frame(self.movie.size(), rgba)?, true),
+        }
     }
 
     fn finish(self) -> Result<(), Error> {
-        let (sps, pps) = self.encoder.parameter_sets()?;
-        self.mp4.finish(sps, pps)
+        match self.compressor {
+            Compressor::Lossy(encoder) => {
+                let (sps, pps) = encoder.parameter_sets()?;
+                self.movie.finish(Codec::H264 {
+                    sps: sps.to_vec(),
+                    pps: pps.to_vec(),
+                })
+            }
+            Compressor::Lossless => self.movie.finish(Codec::Png),
+        }
     }
 }
 
@@ -35,10 +55,18 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    pub fn start(path: &Path, size: [u32; 2], fps: u32) -> Result<Self, Error> {
+    pub fn start(path: &Path, size: [u32; 2], fps: u32, alpha: bool) -> Result<Self, Error> {
+        let compressor = if alpha {
+            if size[0] == 0 || size[1] == 0 {
+                return Err(Error::Size { size });
+            }
+            Compressor::Lossless
+        } else {
+            Compressor::Lossy(Box::new(Encoder::new(size, fps)?))
+        };
         let clip = Clip {
-            encoder: Encoder::new(size, fps)?,
-            mp4: Mp4::create(path, size, fps)?,
+            movie: Movie::create(path, size, fps, alpha)?,
+            compressor,
         };
         let (sender, receiver) = mpsc::channel();
         let worker = thread::Builder::new()
@@ -109,4 +137,22 @@ fn encode(mut clip: Clip, receiver: Receiver<Message>) -> Result<(), Error> {
             Err(_) => return Ok(()),
         }
     }
+}
+
+fn png_frame(size: [u32; 2], rgba: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, size[0], size[1]);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    let mut writer = encoder
+        .write_header()
+        .map_err(|error| Error::Encode(error.to_string()))?;
+    writer
+        .write_image_data(rgba)
+        .map_err(|error| Error::Encode(error.to_string()))?;
+    writer
+        .finish()
+        .map_err(|error| Error::Encode(error.to_string()))?;
+    Ok(bytes)
 }

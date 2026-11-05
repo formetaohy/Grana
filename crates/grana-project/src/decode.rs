@@ -21,9 +21,8 @@ use grana_object::{
 use grana_scene::{
     ChannelState, ColocResult, ColocState, ColorState, Criteria, Curation, Drift, FilterRange,
     ItemState, LassoPath, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind,
-    ObjectParams, ObjectSetId, ObjectSetKey, Provenance, RELATION_FIELDS, Recipe, RelationState,
-    SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
-    Visibility,
+    ObjectParams, ObjectSetId, ObjectSetKey, Provenance, Recipe, RelationState, SceneState, Seeds,
+    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Clip, Intensity, Region};
 
@@ -960,7 +959,7 @@ impl Decode for ObjectColor {
             1 => {
                 let target = ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?;
                 let field = RelationField::from_index(reader.u8()?).ok_or(FAULT_SHAPE)?;
-                if !RELATION_FIELDS.contains(&field) {
+                if !RelationField::CONTINUOUS.contains(&field) {
                     return Err(FAULT_VALUE);
                 }
                 let shift = reader.i32()?;
@@ -982,7 +981,7 @@ impl Decode for TrackColor {
             1 => {
                 let target = ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?;
                 let field = RelationField::from_index(reader.u8()?).ok_or(FAULT_SHAPE)?;
-                if !RELATION_FIELDS.contains(&field) {
+                if !RelationField::CONTINUOUS.contains(&field) {
                     return Err(FAULT_VALUE);
                 }
                 let aggregate = Aggregate::from_index(reader.u8()?).ok_or(FAULT_SHAPE)?;
@@ -1588,7 +1587,7 @@ fn color_applies(set: &SetState, channels: usize, metric: ObjectColor) -> bool {
             field,
             shift,
         } => {
-            RELATION_FIELDS.contains(&field)
+            RelationField::CONTINUOUS.contains(&field)
                 && set
                     .relations
                     .iter()
@@ -1606,7 +1605,7 @@ fn track_color_applies(set: &SetState, metric: TrackColor) -> bool {
             shift,
             ..
         } => {
-            RELATION_FIELDS.contains(&field)
+            RelationField::CONTINUOUS.contains(&field)
                 && set
                     .relations
                     .iter()

@@ -670,14 +670,9 @@ fn aggregated_measurements(objects: Objects<'_>, channels: usize) -> Vec<Measure
 }
 
 fn aggregated_relations(relations: &[RelationRow<'_>]) -> Vec<(usize, RelationField)> {
-    const FIELDS: [RelationField; 3] = [
-        RelationField::Distance,
-        RelationField::Inside,
-        RelationField::Contact,
-    ];
-    let mut fields = Vec::with_capacity(relations.len() * FIELDS.len());
+    let mut fields = Vec::with_capacity(relations.len() * RelationField::CONTINUOUS.len());
     for index in 0..relations.len() {
-        for field in FIELDS {
+        for field in RelationField::CONTINUOUS {
             fields.push((index, field));
         }
     }

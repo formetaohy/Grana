@@ -2,7 +2,7 @@ use glam::Vec2;
 use grana_measure::Aggregate;
 use grana_object::TrackParams;
 use grana_object::TrackSet;
-use grana_scene::{Job, ObjectSet, ObjectSetId, TrackColor};
+use grana_scene::{Job, ObjectSet, ObjectSetId, RelationField, TrackColor};
 use grana_ui::{Align, Block, Color, Corners, Icon, Length, Rect, Role, TextStyle, TypeStyle, Ui};
 
 use crate::panel::{Panel, empty_state, progress};
@@ -344,7 +344,7 @@ fn appearance(
             0 => String::new(),
             shift => format!(" t{shift:+}"),
         };
-        for field in grana_scene::RELATION_FIELDS {
+        for field in RelationField::CONTINUOUS {
             for aggregate in Aggregate::ALL {
                 metrics.push((
                     TrackColor::Relation {

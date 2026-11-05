@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use grana_measure::{Measurement, TrackMeasurement};
+use grana_measure::{Measurement, RelationField, TrackMeasurement};
 use grana_object::TrackParams;
 use grana_object::{RelationFrame, TrackSet};
 
@@ -311,7 +311,7 @@ impl ObjectSet {
                     "the relation colors the objects of this set"
                 );
                 assert!(
-                    crate::color::RELATION_FIELDS.contains(&field),
+                    RelationField::CONTINUOUS.contains(&field),
                     "a relation field colors the objects of this set"
                 );
             }
@@ -383,7 +383,7 @@ impl ObjectSet {
                     "the relation colors the tracks of this set"
                 );
                 assert!(
-                    crate::color::RELATION_FIELDS.contains(&field),
+                    RelationField::CONTINUOUS.contains(&field),
                     "a relation field colors the tracks of this set"
                 );
             }
@@ -1049,7 +1049,7 @@ impl ObjectSet {
                         "a restored track color names a relation of its set"
                     );
                     assert!(
-                        crate::color::RELATION_FIELDS.contains(&field),
+                        RelationField::CONTINUOUS.contains(&field),
                         "a restored track color names a relation field"
                     );
                 }

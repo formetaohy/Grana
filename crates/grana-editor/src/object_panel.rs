@@ -1,7 +1,7 @@
 use glam::Vec2;
 use grana_scene::{
     Item, Job, ObjectColor, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, ParamField,
-    ParamScale, Provenance, RELATION_FIELDS, Scene,
+    ParamScale, Provenance, RelationField, Scene,
 };
 use grana_ui::{
     Align, Block, Color, Corners, Edges, Icon, Length, Level, Rect, Role, TextStyle, Ui,
@@ -526,7 +526,7 @@ fn label_metrics(scene: &Scene, set: &ObjectSet) -> Vec<(Option<ObjectColor>, St
         let Some(target) = scene.objects.get(relation.target()) else {
             continue;
         };
-        for field in RELATION_FIELDS {
+        for field in RelationField::CONTINUOUS {
             let mut label = format!("{} {}", target.name(), field.label());
             if relation.shift() != 0 {
                 label.push_str(&format!(" · t{:+}", relation.shift()));
@@ -1070,7 +1070,7 @@ fn appearance(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, i
             0 => String::new(),
             shift => format!(" · t{shift:+}"),
         };
-        for field in grana_scene::RELATION_FIELDS {
+        for field in RelationField::CONTINUOUS {
             let metric = grana_scene::ObjectColor::Relation {
                 target: relation.target(),
                 field,

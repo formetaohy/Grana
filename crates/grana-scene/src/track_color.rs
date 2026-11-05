@@ -74,16 +74,8 @@ pub(crate) fn relation_value(
     frame: Option<&RelationFrame>,
     object: usize,
 ) -> f32 {
-    let Some(frame) = frame else {
-        return f32::NAN;
-    };
-    if object >= frame.objects() {
-        return f32::NAN;
-    }
-    match field {
-        RelationField::Distance => frame.distance(object),
-        RelationField::Inside => 100.0 * frame.inside(object),
-        RelationField::Partner => frame.partner(object) as f32,
-        RelationField::Contact => frame.contact(object),
+    match frame {
+        Some(frame) if object < frame.objects() => field.measure(frame, object),
+        _ => f32::NAN,
     }
 }

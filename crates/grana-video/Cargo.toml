@@ -11,5 +11,8 @@ openh264 = { workspace = true }
 png = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+png = { workspace = true }
+
 [lints]
 workspace = true

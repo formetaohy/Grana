@@ -176,19 +176,19 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                                 .clicked
                                 && enabled
                             {
-                                commands.push(Command::ExportMovie { width });
+                                commands.push(Command::ExportMovie(Export::new(width, false)));
                             }
                             if widget::button_with(
                                 ui,
-                                "export.animation",
-                                "Transparent animation",
+                                "export.alpha",
+                                "Transparent movie",
                                 if enabled { Role::Control } else { Role::Quiet },
                                 Length::Fill,
                             )
                             .clicked
                                 && enabled
                             {
-                                commands.push(Command::ExportAnimation { width });
+                                commands.push(Command::ExportMovie(Export::new(width, true)));
                             }
                         }
                     }
@@ -196,7 +196,10 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                         ui,
                         "Exports the full viewport: volume, section and figure overlay.",
                     );
-                    widget::weak(ui, "An animation keeps the alpha channel (APNG).");
+                    widget::weak(
+                        ui,
+                        "A transparent movie is quicktime with lossless RGBA frames.",
+                    );
                 });
                 card(ui, 8.0, |ui| {
                     card_title(ui, Icon::Camera, "Image", None);

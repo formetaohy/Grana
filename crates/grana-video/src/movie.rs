@@ -6,12 +6,19 @@ use crate::error::Error;
 
 const MOVIE_TIMESCALE: u32 = 1000;
 const MATRIX: [u32; 9] = [0x0001_0000, 0, 0, 0, 0x0001_0000, 0, 0, 0, 0x4000_0000];
-const SAMPLE_DEPTH: u16 = 0x0018;
 const RESOLUTION: u32 = 0x0048_0000;
 const UNKNOWN_LANGUAGE: u16 = 0x55c4;
 const HIGH_PROFILES: [u8; 4] = [100, 110, 122, 144];
+const AVC_DEPTH: u16 = 0x0018;
+const PNG_DEPTH: u16 = 0x0020;
+const QUICKTIME: [u8; 4] = *b"qt  ";
 
-pub(crate) struct Mp4 {
+pub(crate) enum Codec {
+    H264 { sps: Vec<u8>, pps: Vec<u8> },
+    Png,
+}
+
+pub(crate) struct Movie {
     path: PathBuf,
     temporary: PathBuf,
     sink: BufWriter<File>,
@@ -21,17 +28,18 @@ pub(crate) struct Mp4 {
     keys: Vec<u32>,
     media: u64,
     start: u64,
+    alpha: bool,
 }
 
-impl Mp4 {
-    pub fn create(path: &Path, size: [u32; 2], fps: u32) -> Result<Self, Error> {
+impl Movie {
+    pub fn create(path: &Path, size: [u32; 2], fps: u32, alpha: bool) -> Result<Self, Error> {
         let temporary = temporary_path(path);
         let file = File::create(&temporary).map_err(|error| Error::Write {
             path: temporary.clone(),
             detail: error.to_string(),
         })?;
         let mut sink = BufWriter::new(file);
-        let header = ftyp();
+        let header = ftyp(alpha);
         write(&mut sink, &temporary, &header)?;
         write(&mut sink, &temporary, &[0; 8])?;
         let start = (header.len() + 8) as u64;
@@ -45,7 +53,12 @@ impl Mp4 {
             keys: Vec::new(),
             media: 0,
             start,
+            alpha,
         })
+    }
+
+    pub fn size(&self) -> [u32; 2] {
+        self.size
     }
 
     pub fn sample(&mut self, bytes: &[u8], key: bool) -> Result<(), Error> {
@@ -61,7 +74,7 @@ impl Mp4 {
         Ok(())
     }
 
-    pub fn finish(mut self, sps: &[u8], pps: &[u8]) -> Result<(), Error> {
+    pub fn finish(mut self, codec: Codec) -> Result<(), Error> {
         let mdat = u32::try_from(self.media + 8)
             .map_err(|_| Error::Encode("the movie outgrew a four gigabyte file".to_string()))?;
         let temporary = self.temporary.clone();
@@ -75,7 +88,7 @@ impl Mp4 {
         self.sink.write_all(&mdat.to_be_bytes()).map_err(fault)?;
         self.sink.write_all(b"mdat").map_err(fault)?;
         self.sink.seek(SeekFrom::End(0)).map_err(fault)?;
-        let moov = self.moov(sps, pps);
+        let moov = self.moov(&codec);
         self.sink.write_all(&moov).map_err(fault)?;
         self.sink.flush().map_err(fault)?;
         std::fs::rename(&self.temporary, &self.path).map_err(|error| Error::Write {
@@ -84,7 +97,7 @@ impl Mp4 {
         })
     }
 
-    fn moov(&self, sps: &[u8], pps: &[u8]) -> Vec<u8> {
+    fn moov(&self, codec: &Codec) -> Vec<u8> {
         let frames = self.samples.len() as u32;
         let duration = ((u64::from(frames) * u64::from(MOVIE_TIMESCALE) + u64::from(self.fps) / 2)
             / u64::from(self.fps)) as u32;
@@ -94,15 +107,24 @@ impl Mp4 {
         let hdlr = hdlr();
         let vmhd = vmhd();
         let dinf = dinf();
-        let stbl = self.stbl(sps, pps);
+        let stbl = self.stbl(codec);
         let minf = boxed(*b"minf", [vmhd, dinf, stbl].concat());
         let mdia = boxed(*b"mdia", [mdhd, hdlr, minf].concat());
         let trak = boxed(*b"trak", [tkhd, mdia].concat());
         boxed(*b"moov", [mvhd, trak].concat())
     }
 
-    fn stbl(&self, sps: &[u8], pps: &[u8]) -> Vec<u8> {
-        let entry = avc1(sps, pps, self.size);
+    fn stbl(&self, codec: &Codec) -> Vec<u8> {
+        let entry = match codec {
+            Codec::H264 { sps, pps } => {
+                assert!(!self.alpha, "an h264 movie carries no alpha channel");
+                video_entry(*b"avc1", AVC_DEPTH, self.size, avcc(sps, pps))
+            }
+            Codec::Png => {
+                assert!(self.alpha, "a png movie carries its alpha channel");
+                video_entry(*b"png ", PNG_DEPTH, self.size, Vec::new())
+            }
+        };
         let mut stsd = Vec::new();
         push_u32(&mut stsd, 1);
         stsd.extend_from_slice(&entry);
@@ -150,7 +172,7 @@ impl Mp4 {
     }
 }
 
-impl Drop for Mp4 {
+impl Drop for Movie {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.temporary);
     }
@@ -236,7 +258,7 @@ fn dinf() -> Vec<u8> {
     boxed(*b"dinf", full_box(*b"dref", 0, 0, dref))
 }
 
-fn avc1(sps: &[u8], pps: &[u8], size: [u32; 2]) -> Vec<u8> {
+fn video_entry(kind: [u8; 4], depth: u16, size: [u32; 2], children: Vec<u8>) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&[0; 6]);
     push_u16(&mut payload, 1);
@@ -252,10 +274,10 @@ fn avc1(sps: &[u8], pps: &[u8], size: [u32; 2]) -> Vec<u8> {
     push_u32(&mut payload, 0);
     push_u16(&mut payload, 1);
     payload.extend_from_slice(&[0; 32]);
-    push_u16(&mut payload, SAMPLE_DEPTH);
+    push_u16(&mut payload, depth);
     push_u16(&mut payload, 0xffff);
-    payload.extend_from_slice(&avcc(sps, pps));
-    boxed(*b"avc1", payload)
+    payload.extend_from_slice(&children);
+    boxed(kind, payload)
 }
 
 fn avcc(sps: &[u8], pps: &[u8]) -> Vec<u8> {
@@ -282,8 +304,14 @@ fn avcc(sps: &[u8], pps: &[u8]) -> Vec<u8> {
     boxed(*b"avcC", payload)
 }
 
-fn ftyp() -> Vec<u8> {
+fn ftyp(alpha: bool) -> Vec<u8> {
     let mut payload = Vec::new();
+    if alpha {
+        payload.extend_from_slice(&QUICKTIME);
+        push_u32(&mut payload, 512);
+        payload.extend_from_slice(&QUICKTIME);
+        return boxed(*b"ftyp", payload);
+    }
     payload.extend_from_slice(b"isom");
     push_u32(&mut payload, 512);
     for brand in [b"isom", b"iso2", b"avc1", b"mp41"] {

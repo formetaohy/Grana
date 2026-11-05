@@ -21,11 +21,12 @@ mod track_layer;
 
 pub use channel::Channel;
 pub use coloc::{Coloc, ColocResult, ColocState, MaskKey};
-pub use color::{ObjectColor, RELATION_FIELDS};
+pub use color::ObjectColor;
 pub use curation::{Curation, ObjectAnchor, TrackAnchor, TrackEdit};
 pub use dataset::{Dataset, Origin};
 pub use drift::Drift;
 pub use grana_display::{ColorState, Coloring, Extent};
+pub use grana_measure::RelationField;
 pub use job::{Job, Progress};
 pub use key::ObjectSetKey;
 pub use measure::{Measure, MeasureState};
