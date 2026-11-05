@@ -87,6 +87,17 @@ impl Protocol {
                     )));
                 }
             }
+            if let Some(label) = &set.label {
+                label.checked(&set.name)?;
+                if let Some(target) = &label.target
+                    && !names.contains(target)
+                {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{} labels its objects by a relation to {target}, which is not an object set of the protocol",
+                        set.name
+                    )));
+                }
+            }
             if let Some(color) = &set.track_by {
                 color.checked(&format!("the tracks of {}", set.name))?;
                 if set.track.is_none() {
@@ -174,6 +185,20 @@ impl Protocol {
                         set.name, color.shift
                     )));
                 }
+            }
+        }
+        for set in &self.sets {
+            let Some(label) = &set.label else {
+                continue;
+            };
+            let Some(target) = &label.target else {
+                continue;
+            };
+            if !relations.contains(&(&set.name, target, label.shift)) {
+                return Err(ProtocolError::Invalid(format!(
+                    "{} labels its objects by a relation to {target} at the offset {} that the protocol does not measure",
+                    set.name, label.shift
+                )));
             }
         }
         if let Some(coloc) = &self.coloc {

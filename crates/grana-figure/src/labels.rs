@@ -44,6 +44,7 @@ pub fn labels(scene: &Scene, time: u32) -> Vec<Label> {
         let Some(frame) = set.frame(time) else {
             continue;
         };
+        let metric = set.label_metric();
         let anchors = frame.anchors();
         for (index, anchor) in anchors.into_iter().enumerate() {
             if !set.visible_object(time, index) {
@@ -58,13 +59,35 @@ pub fn labels(scene: &Scene, time: u32) -> Vec<Label> {
                 position,
                 low: bounds.min(),
                 high: bounds.max(),
-                text: (index + 1).to_string(),
+                text: text(set, frame, metric, time, index),
                 color: set.color(),
                 selected: scene.object_selected(set.id(), index),
             });
         }
     }
     labels
+}
+
+fn text(
+    set: &grana_scene::ObjectSet,
+    frame: &grana_scene::ObjectFrame,
+    metric: Option<grana_scene::ObjectColor>,
+    time: u32,
+    index: usize,
+) -> String {
+    let Some(metric) = metric else {
+        return (index + 1).to_string();
+    };
+    let relation = metric
+        .relation()
+        .and_then(|(target, shift)| set.relation(target, shift))
+        .and_then(|relation| relation.frame(time));
+    let value = metric.value(frame.objects(), relation, index);
+    if value.is_finite() {
+        crate::value(value, metric.unit(), metric.decimals())
+    } else {
+        "–".to_string()
+    }
 }
 
 pub fn volume_labels(

@@ -206,6 +206,26 @@ impl Session {
                     target.set_labels(labels);
                 }
             }
+            Command::SetLabelMetric { set, metric } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_label_metric(set, metric);
+                }
+            }
+            Command::SetObjectHidden {
+                set,
+                time,
+                objects,
+                hidden,
+            } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_object_hidden(set, time, &objects, hidden);
+                }
+            }
+            Command::ClearHidden(set) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.clear_hidden(set);
+                }
+            }
             Command::SetObjectColor { set, color } => {
                 if let Some(target) = self.object_mut(set) {
                     target.set_color(color);

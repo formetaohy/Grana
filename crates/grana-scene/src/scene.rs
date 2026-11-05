@@ -10,6 +10,7 @@ use grana_volume::{ChannelInfo, Clip, Intensity, Region};
 
 use crate::channel::Channel;
 use crate::coloc::{Coloc, MaskKey};
+use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::dataset::Dataset;
 use crate::object::{ObjectFrame, ObjectKind};
@@ -367,6 +368,34 @@ impl Scene {
         }
         self.mask = source;
         self.sync_coloc_inputs();
+    }
+
+    pub fn set_object_hidden(
+        &mut self,
+        id: ObjectSetId,
+        time: u32,
+        objects: &[usize],
+        hidden: bool,
+    ) -> bool {
+        self.objects
+            .get_mut(id)
+            .is_some_and(|set| set.set_hidden(time, objects, hidden))
+    }
+
+    pub fn clear_hidden(&mut self, id: ObjectSetId) -> bool {
+        self.objects
+            .get_mut(id)
+            .is_some_and(ObjectSet::clear_hidden)
+    }
+
+    pub fn hidden_count(&self, id: ObjectSetId) -> usize {
+        self.objects.get(id).map_or(0, ObjectSet::hidden_count)
+    }
+
+    pub fn set_label_metric(&mut self, id: ObjectSetId, metric: Option<ObjectColor>) -> bool {
+        self.objects
+            .get_mut(id)
+            .is_some_and(|set| set.set_label_metric(metric))
     }
 
     pub fn set_region(&mut self, region: Region) {

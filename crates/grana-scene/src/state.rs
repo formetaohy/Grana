@@ -70,6 +70,8 @@ pub struct SetState {
     pub color: [f32; 3],
     pub visible: bool,
     pub labels: bool,
+    pub label: Option<ObjectColor>,
+    pub hidden: Vec<Vec<bool>>,
     pub opacity: f32,
     pub params: ObjectParams,
     pub track_style: Option<TrackStyle>,
@@ -99,6 +101,13 @@ impl SceneState {
             && self.sets.iter().all(|set| match &set.seeds {
                 Seeds::Points(frames) => frames.len() == frame_count as usize,
                 Seeds::Source(source) => source.raw() > 0 && source.raw() != set.id,
+            })
+            && self.sets.iter().all(|set| {
+                set.hidden.is_empty()
+                    || (set.hidden.len() == set.frames.len()
+                        && set.hidden.iter().zip(&set.frames).all(|(mask, frame)| {
+                            mask.len() == frame.as_ref().map_or(0, |frame| frame.object_count())
+                        }))
             })
             && self
                 .coloc

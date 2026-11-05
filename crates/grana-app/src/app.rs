@@ -1166,6 +1166,9 @@ impl App {
                     engine.set_output_message(None);
                 }
             }
+            Key::Character(ref text) if text.as_str().eq_ignore_ascii_case("h") => {
+                self.session.hide_selected();
+            }
             _ => return,
         }
         self.request_redraw();

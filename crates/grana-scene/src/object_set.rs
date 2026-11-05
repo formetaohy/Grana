@@ -67,6 +67,8 @@ pub struct ObjectSet {
     color: [f32; 3],
     visible: bool,
     labels: bool,
+    label: Option<ObjectColor>,
+    hidden: Vec<Vec<bool>>,
     opacity: f32,
     voxel: f32,
     params: ObjectParams,
@@ -110,6 +112,8 @@ impl ObjectSet {
             color,
             visible: true,
             labels: false,
+            label: None,
+            hidden: Vec::new(),
             opacity: 1.0,
             voxel,
             params,
@@ -260,7 +264,7 @@ impl ObjectSet {
     }
 
     pub fn set_object_coloring(&mut self, coloring: Coloring<ObjectColor>) -> bool {
-        self.check_coloring(coloring.metric());
+        self.check_metric(coloring.metric());
         if self.object_coloring == coloring {
             return false;
         }
@@ -273,7 +277,7 @@ impl ObjectSet {
         true
     }
 
-    fn check_coloring(&self, metric: Option<ObjectColor>) {
+    fn check_metric(&self, metric: Option<ObjectColor>) {
         match metric {
             None => {}
             Some(ObjectColor::Measurement(measurement)) => assert!(
@@ -417,12 +421,104 @@ impl ObjectSet {
         self.labels
     }
 
+    pub fn label_metric(&self) -> Option<ObjectColor> {
+        self.label
+    }
+
     pub fn set_labels(&mut self, labels: bool) {
         if self.labels == labels {
             return;
         }
         self.labels = labels;
         self.document += 1;
+    }
+
+    pub fn set_label_metric(&mut self, metric: Option<ObjectColor>) -> bool {
+        self.check_metric(metric);
+        if self.label == metric {
+            return false;
+        }
+        self.label = metric;
+        self.document += 1;
+        true
+    }
+
+    pub fn hidden_object(&self, time: u32, object: usize) -> bool {
+        self.hidden
+            .get(time as usize)
+            .and_then(|mask| mask.get(object))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    pub fn hidden_count(&self) -> usize {
+        self.hidden
+            .iter()
+            .map(|mask| mask.iter().filter(|hidden| **hidden).count())
+            .sum()
+    }
+
+    pub(crate) fn set_hidden(&mut self, time: u32, objects: &[usize], hidden: bool) -> bool {
+        let Some(count) = self
+            .frames
+            .get(time as usize)
+            .and_then(|slot| slot.data.as_deref())
+            .map(ObjectFrame::object_count)
+        else {
+            return false;
+        };
+        if self.hidden.is_empty() {
+            if !hidden {
+                return false;
+            }
+            self.hidden = self
+                .frames
+                .iter()
+                .map(|slot| vec![false; slot.data.as_deref().map_or(0, ObjectFrame::object_count)])
+                .collect();
+        }
+        let mask = &mut self.hidden[time as usize];
+        let mut changed = false;
+        for object in objects {
+            if *object >= count || mask[*object] == hidden {
+                continue;
+            }
+            mask[*object] = hidden;
+            changed = true;
+        }
+        if changed {
+            self.document += 1;
+        }
+        changed
+    }
+
+    pub(crate) fn clear_hidden(&mut self) -> bool {
+        if self.hidden.is_empty() {
+            return false;
+        }
+        self.hidden.clear();
+        self.document += 1;
+        true
+    }
+
+    pub(crate) fn restore_hidden(&mut self, hidden: Vec<Vec<bool>>) {
+        if hidden.is_empty() {
+            self.hidden = hidden;
+            return;
+        }
+        assert_eq!(
+            hidden.len(),
+            self.frames.len(),
+            "the hidden objects cover every frame of the set"
+        );
+        for (mask, slot) in hidden.iter().zip(&self.frames) {
+            assert_eq!(
+                mask.len(),
+                slot.data.as_deref().map_or(0, ObjectFrame::object_count),
+                "the hidden objects cover every object of a frame"
+            );
+        }
+        self.hidden = hidden;
     }
 
     pub fn set_visible(&mut self, visible: bool) {
@@ -680,6 +776,8 @@ impl ObjectSet {
             color: self.color,
             visible: self.visible,
             labels: self.labels,
+            label: self.label,
+            hidden: self.hidden.clone(),
             opacity: self.opacity,
             params: self.params,
             track_style: self.track_style,
@@ -715,6 +813,8 @@ impl ObjectSet {
             color,
             visible,
             labels,
+            label,
+            hidden,
             opacity,
             params,
             track_style,
@@ -757,6 +857,8 @@ impl ObjectSet {
             color,
             visible,
             labels,
+            label,
+            hidden: Vec::new(),
             opacity,
             voxel: dataset.voxel_size().min_element(),
             params,
@@ -817,6 +919,7 @@ impl ObjectSet {
                 set.install_shared(time as u32, frame, take_stamp(stamp));
             }
         }
+        set.restore_hidden(hidden);
         if applied {
             set.curation.set_applied();
         }
@@ -852,7 +955,7 @@ impl ObjectSet {
 
     fn restore_coloring(&mut self, object: ColorState<ObjectColor>, track: ColorState<TrackColor>) {
         let object = Coloring::restore(object);
-        self.check_coloring(object.metric());
+        self.check_metric(object.metric());
         self.object_coloring = object;
         self.rebuild_frame_bounds();
         let track = Coloring::restore(track);
@@ -922,7 +1025,7 @@ impl ObjectSet {
     }
 
     pub fn visible_object(&self, time: u32, object: usize) -> bool {
-        match &self.visibility {
+        let scoped = match &self.visibility {
             Visibility::All => true,
             Visibility::Object(frames) => frames
                 .get(time as usize)
@@ -932,7 +1035,8 @@ impl ObjectSet {
             Visibility::Track(tracks) => self
                 .track_at(time, object)
                 .is_some_and(|track| tracks.get(track).copied().unwrap_or(false)),
-        }
+        };
+        scoped && !self.hidden_object(time, object)
     }
 
     pub fn visible_track(&self, track: usize) -> bool {
@@ -1247,6 +1351,9 @@ impl ObjectSet {
             .expect("the pruned object lies inside the time series");
         slot.stamp = stamp;
         slot.data = if empty { None } else { pruned.map(Arc::new) };
+        if let Some(mask) = self.hidden.get_mut(time as usize) {
+            *mask = retained(mask, objects);
+        }
         self.frame_bounds[time as usize] = self.frame_extent(time);
         if let Some((thickness, visible, pruned)) = pruned_tracks
             && let Some(set) = pruned
@@ -1307,6 +1414,8 @@ impl ObjectSet {
             color,
             visible: self.visible,
             labels: self.labels,
+            label: self.label,
+            hidden: self.hidden.clone(),
             opacity: self.opacity,
             voxel: self.voxel,
             params: self.params,
@@ -1426,6 +1535,7 @@ impl ObjectSet {
             ));
         }
         let seeds = self.seeds.clone();
+        let hidden = self.combined_hidden(other, &offsets, &frames);
         let mut merged = Self {
             id: self.id,
             kind: self.kind,
@@ -1435,6 +1545,8 @@ impl ObjectSet {
             color: self.color,
             visible: self.visible,
             labels: self.labels,
+            label: self.label,
+            hidden,
             opacity: self.opacity,
             voxel: self.voxel,
             params: self.params,
@@ -1456,6 +1568,38 @@ impl ObjectSet {
         merged.rebuild_frame_bounds();
         merged.rebuild_track_bounds();
         Ok(merged)
+    }
+
+    fn combined_hidden(
+        &self,
+        other: &Self,
+        offsets: &[usize],
+        frames: &[FrameSlot],
+    ) -> Vec<Vec<bool>> {
+        if self.hidden.is_empty() && other.hidden.is_empty() {
+            return Vec::new();
+        }
+        let mut hidden = Vec::with_capacity(frames.len());
+        for (time, slot) in frames.iter().enumerate() {
+            let mut mask = vec![false; slot.data.as_deref().map_or(0, ObjectFrame::object_count)];
+            if let Some(source) = self.hidden.get(time) {
+                for (index, flag) in source.iter().enumerate() {
+                    if *flag && let Some(slot) = mask.get_mut(index) {
+                        *slot = true;
+                    }
+                }
+            }
+            if let Some(source) = other.hidden.get(time) {
+                let offset = offsets[time];
+                for (index, flag) in source.iter().enumerate() {
+                    if *flag && let Some(slot) = mask.get_mut(offset + index) {
+                        *slot = true;
+                    }
+                }
+            }
+            hidden.push(mask);
+        }
+        hidden
     }
 
     pub(crate) fn invalidate_relation(
@@ -1530,6 +1674,7 @@ impl ObjectSet {
         self.revision = stamp;
         self.document += 1;
         self.visibility = Visibility::All;
+        self.hidden.clear();
         slot.stamp = stamp;
         slot.data = Some(frame);
         self.frame_bounds[time as usize] = self.frame_extent(time);
@@ -1556,6 +1701,7 @@ impl ObjectSet {
         self.revision = stamp;
         self.document += 1;
         self.visibility = Visibility::All;
+        self.hidden.clear();
         slot.stamp = stamp;
         slot.data = frame;
         self.frame_bounds[time as usize] = self.frame_extent(time);
@@ -1567,6 +1713,7 @@ impl ObjectSet {
             slot.data = None;
         }
         self.frame_bounds.fill(None);
+        self.hidden.clear();
         self.track_bounds = None;
         self.revision = stamp;
         self.document += 1;

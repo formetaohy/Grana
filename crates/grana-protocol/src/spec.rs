@@ -4,7 +4,7 @@ use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferF
 use grana_measure::{Aggregate, Filter, Group, MeasureView, RelationField, Scope, Table};
 use grana_object::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
 use grana_project::{Export, ViewState};
-use grana_scene::{ObjectKind, ObjectParams};
+use grana_scene::{ObjectColor, ObjectKind, ObjectParams, ObjectSet, Scene};
 use grana_volume::{Axis, Clip};
 use serde::{Deserialize, Serialize};
 
@@ -181,6 +181,19 @@ pub struct RegionSpec {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct MetricSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub shift: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SetSpec {
     pub name: String,
     pub color: [f32; 3],
@@ -188,6 +201,8 @@ pub struct SetSpec {
     pub visible: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub labels: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<MetricSpec>,
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub opacity: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -568,6 +583,107 @@ impl ColorSpec {
             if low > high {
                 return invalid("names a range that is not ordered".to_string());
             }
+        }
+        Ok(())
+    }
+}
+
+impl MetricSpec {
+    pub fn of(metric: ObjectColor, scene: &Scene, keys: &[String]) -> Option<Self> {
+        Some(match metric {
+            ObjectColor::Measurement(measurement) => Self {
+                key: Some(measurement.key(keys)),
+                target: None,
+                field: None,
+                shift: 0,
+            },
+            ObjectColor::Relation {
+                target,
+                field,
+                shift,
+            } => Self {
+                key: None,
+                target: Some(scene.objects.get(target)?.name().to_string()),
+                field: Some(field.key().to_string()),
+                shift,
+            },
+        })
+    }
+
+    pub fn metric(
+        &self,
+        set: &ObjectSet,
+        scene: &Scene,
+        keys: &[String],
+    ) -> Result<ObjectColor, ProtocolError> {
+        match (&self.key, &self.target) {
+            (Some(key), None) => {
+                let measurement = set
+                    .colorable_measurements()
+                    .into_iter()
+                    .find(|measurement| measurement.key(keys) == *key)
+                    .ok_or_else(|| {
+                        ProtocolError::Invalid(format!(
+                            "the set {} labels an object without a colorable measurement {key}",
+                            set.name()
+                        ))
+                    })?;
+                Ok(ObjectColor::Measurement(measurement))
+            }
+            (None, Some(target)) => {
+                let target = scene
+                    .objects
+                    .iter()
+                    .find(|set| set.name() == target)
+                    .map(ObjectSet::id)
+                    .ok_or_else(|| {
+                        ProtocolError::Invalid(format!(
+                            "the label names the relation target {target}, which is not an object set of the scene"
+                        ))
+                    })?;
+                Ok(ObjectColor::Relation {
+                    target,
+                    field: self
+                        .field()
+                        .expect("a checked label names a relation field"),
+                    shift: self.shift,
+                })
+            }
+            _ => unreachable!("a checked label names one measurement or relation"),
+        }
+    }
+
+    pub fn field(&self) -> Option<RelationField> {
+        let field = self.field.as_deref()?;
+        RelationField::ALL
+            .into_iter()
+            .find(|candidate| candidate.key() == field)
+    }
+
+    pub(super) fn checked(&self, what: &str) -> Result<(), ProtocolError> {
+        let invalid = |detail: String| {
+            Err(ProtocolError::Invalid(format!(
+                "the label of {what} {detail}"
+            )))
+        };
+        match (&self.key, &self.target) {
+            (Some(key), None) => {
+                if key.trim().is_empty() {
+                    return invalid("names an empty measurement".to_string());
+                }
+                if self.field.is_some() || self.shift != 0 {
+                    return invalid("shifts a measurement that names no relation".to_string());
+                }
+            }
+            (None, Some(target)) => {
+                if target.trim().is_empty() {
+                    return invalid("names an empty relation target".to_string());
+                }
+                if self.field().is_none() {
+                    return invalid("names an unknown relation field".to_string());
+                }
+            }
+            _ => return invalid("names exactly one measurement or relation".to_string()),
         }
         Ok(())
     }

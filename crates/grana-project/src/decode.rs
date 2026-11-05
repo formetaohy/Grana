@@ -189,6 +189,9 @@ impl Decode for SceneState {
                     .metric
                     .is_some_and(|metric| !color_applies(set, channels, metric))
                 || set
+                    .label
+                    .is_some_and(|metric| !color_applies(set, channels, metric))
+                || set
                     .track_color
                     .metric
                     .is_some_and(|metric| !track_color_applies(set, metric))
@@ -368,6 +371,20 @@ impl Decode for SetState {
         }
         let visible = reader.bool()?;
         let labels = reader.bool()?;
+        let label = Option::<ObjectColor>::decode(reader)?;
+        let hidden = {
+            let frames = reader.count(1)?;
+            let mut hidden = Vec::with_capacity(frames.min(4096));
+            for _ in 0..frames {
+                let count = reader.count(1)?;
+                let mut mask = Vec::with_capacity(count.min(1 << 20));
+                for _ in 0..count {
+                    mask.push(reader.bool()?);
+                }
+                hidden.push(mask);
+            }
+            hidden
+        };
         let opacity = unit(reader.f32()?)?;
         let params = ObjectParams::decode(reader)?;
         if params.kind() != kind {
@@ -405,6 +422,8 @@ impl Decode for SetState {
             color,
             visible,
             labels,
+            label,
+            hidden,
             opacity,
             params,
             track_style,
@@ -425,6 +444,14 @@ impl Decode for SetState {
             return Err(FAULT_VALUE);
         }
         if !state.curation.is_empty() && state.curation.expected().len() != state.frames.len() {
+            return Err(FAULT_SHAPE);
+        }
+        if !state.hidden.is_empty()
+            && (state.hidden.len() != state.frames.len()
+                || state.hidden.iter().zip(&state.frames).any(|(mask, frame)| {
+                    mask.len() != frame.as_deref().map_or(0, ObjectFrame::object_count)
+                }))
+        {
             return Err(FAULT_SHAPE);
         }
         if kind.trackable() != state.track_style.is_some()

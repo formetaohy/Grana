@@ -232,6 +232,14 @@ impl Encode for SetState {
         }
         writer.bool(self.visible);
         writer.bool(self.labels);
+        self.label.encode(writer);
+        writer.count(self.hidden.len());
+        for mask in &self.hidden {
+            writer.count(mask.len());
+            for hidden in mask {
+                writer.bool(*hidden);
+            }
+        }
         writer.f32(self.opacity);
         self.params.encode(writer);
         self.track_style.encode(writer);

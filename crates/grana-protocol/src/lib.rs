@@ -13,8 +13,8 @@ use thiserror::Error;
 pub use spec::{
     AnchorSpec, AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec,
     ColorSpec, CurationSpec, EditSpec, ExportSpec, FilterSpec, KeySpec, LassoSpec, MeasureSpec,
-    NodeSpec, PartSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, SectionSpec, SetSpec,
-    ShadingSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec, TimelineSpec, TrackSpec,
+    MetricSpec, NodeSpec, PartSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, SectionSpec,
+    SetSpec, ShadingSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec, TimelineSpec, TrackSpec,
     TransferSpec, ViewSpec, WindowSpec,
 };
 pub use stage::Staged;

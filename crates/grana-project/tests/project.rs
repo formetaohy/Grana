@@ -63,6 +63,12 @@ fn round_trips_a_project() {
         .get_mut(spots)
         .expect("the spots exist")
         .set_labels(true);
+    scene
+        .objects
+        .get_mut(spots)
+        .expect("the spots exist")
+        .set_label_metric(Some(ObjectColor::Measurement(Measurement::Diameter)));
+    assert!(scene.set_object_hidden(spots, 0, &[1], true));
     scene.set_time(1);
     assert!(scene.add_seed(surfaces, [0.25, -0.5, 0.75]));
     assert!(scene.add_seed(surfaces, [-0.25, 0.5, -0.75]));
@@ -168,6 +174,23 @@ fn round_trips_a_project() {
             .expect("the spots exist")
             .labels(),
         "the restored set keeps its object labels"
+    );
+    assert_eq!(
+        restored
+            .objects
+            .get(spots)
+            .expect("the spots exist")
+            .label_metric(),
+        Some(ObjectColor::Measurement(Measurement::Diameter)),
+        "the restored set keeps its label metric"
+    );
+    assert!(
+        restored
+            .objects
+            .get(spots)
+            .expect("the spots exist")
+            .hidden_object(0, 1),
+        "the restored set keeps its hidden object"
     );
     restored.set_time(1);
     assert_eq!(restored.seed_count(surfaces), 2);

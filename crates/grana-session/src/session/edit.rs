@@ -22,6 +22,32 @@ impl Session {
         true
     }
 
+    pub fn hide_selected(&mut self) -> bool {
+        let Some(scene) = self.scene.as_ref() else {
+            return false;
+        };
+        let Some(selection) = scene.selection() else {
+            return false;
+        };
+        let Item::Object(object) = selection.item else {
+            return false;
+        };
+        let time = scene.time();
+        let Some(set) = scene.objects.get(selection.set) else {
+            return false;
+        };
+        if !set.visible_object(time, object) {
+            return false;
+        }
+        self.execute(Command::SetObjectHidden {
+            set: selection.set,
+            time,
+            objects: vec![object],
+            hidden: true,
+        });
+        true
+    }
+
     pub(super) fn delete_filtered(&mut self) -> bool {
         let (set, deletions) = match self.filtered_deletions() {
             Ok(plan) => plan,

@@ -104,6 +104,17 @@ pub enum Command {
         set: ObjectSetId,
         labels: bool,
     },
+    SetLabelMetric {
+        set: ObjectSetId,
+        metric: Option<ObjectColor>,
+    },
+    SetObjectHidden {
+        set: ObjectSetId,
+        time: u32,
+        objects: Vec<usize>,
+        hidden: bool,
+    },
+    ClearHidden(ObjectSetId),
     SetObjectColor {
         set: ObjectSetId,
         color: [f32; 3],
@@ -255,6 +266,7 @@ pub enum Action {
     Transfer,
     ObjectVisible,
     ObjectLabels,
+    ObjectHidden,
     ObjectColor,
     ObjectOpacity,
     ObjectParameters,
@@ -322,6 +334,7 @@ impl Action {
             Self::Transfer => "transfer function",
             Self::ObjectVisible => "object visibility",
             Self::ObjectLabels => "object labels",
+            Self::ObjectHidden => "hidden objects",
             Self::ObjectColor => "object color",
             Self::ObjectOpacity => "object opacity",
             Self::ObjectParameters => "object parameters",
@@ -463,6 +476,10 @@ impl Command {
             Self::SetTransfer { channel, .. } => Edit::targeted(Action::Transfer, *channel as u64),
             Self::SetObjectVisible { set, .. } => Edit::targeted(Action::ObjectVisible, set.raw()),
             Self::SetObjectLabels { set, .. } => Edit::targeted(Action::ObjectLabels, set.raw()),
+            Self::SetLabelMetric { set, .. } => Edit::targeted(Action::ObjectLabels, set.raw()),
+            Self::SetObjectHidden { set, .. } | Self::ClearHidden(set) => {
+                Edit::targeted(Action::ObjectHidden, set.raw())
+            }
             Self::SetObjectColor { set, .. } => Edit::targeted(Action::ObjectColor, set.raw()),
             Self::SetObjectOpacity { set, .. } => Edit::targeted(Action::ObjectOpacity, set.raw()),
             Self::SetObjectParams { set, .. } => {

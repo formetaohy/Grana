@@ -6,9 +6,9 @@ use grana_scene::{
 
 use crate::{
     ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, FilterSpec,
-    LassoSpec, MeasureSpec, PartSpec, Protocol, ProtocolError, RegionSpec, RelationSpec,
-    RenderSpec, SetSpec, SnapshotSpec, SortSpec, SourceSpec, TrackSpec, TransferSpec, ViewSpec,
-    WindowSpec,
+    LassoSpec, MeasureSpec, MetricSpec, PartSpec, Protocol, ProtocolError, RegionSpec,
+    RelationSpec, RenderSpec, SetSpec, SnapshotSpec, SortSpec, SourceSpec, TrackSpec, TransferSpec,
+    ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -52,6 +52,9 @@ impl Protocol {
                     color: set.color(),
                     visible: set.visible(),
                     labels: set.labels(),
+                    label: set
+                        .label_metric()
+                        .and_then(|metric| MetricSpec::of(metric, scene, &keys)),
                     opacity: set.opacity(),
                     color_by: object_color(set.object_coloring(), scene, &keys),
                     track_by: track_color(set.track_coloring(), scene),

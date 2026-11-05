@@ -236,6 +236,20 @@ impl Protocol {
                     .expect("the staged object set exists")
                     .set_track_coloring(coloring);
             }
+            if let Some(label) = &spec.label {
+                let set = builder
+                    .scene
+                    .objects
+                    .get(id)
+                    .expect("the staged object set exists");
+                let metric = label.metric(set, builder.scene, &keys)?;
+                builder
+                    .scene
+                    .objects
+                    .get_mut(id)
+                    .expect("the staged object set exists")
+                    .set_label_metric(Some(metric));
+            }
         }
         let mask = masks.iter().rev().flatten().next().copied();
         builder.scene.set_mask(mask);

@@ -1,6 +1,7 @@
 use glam::Vec2;
 use grana_scene::{
-    Item, Job, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, ParamField, ParamScale, Provenance,
+    Item, Job, ObjectColor, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, ParamField,
+    ParamScale, Provenance, RELATION_FIELDS, Scene,
 };
 use grana_ui::{
     Align, Block, Color, Corners, Edges, Icon, Length, Level, Rect, Role, TextStyle, Ui,
@@ -146,6 +147,18 @@ fn object(
         .frame(time)
         .and_then(ObjectFrame::spots)
         .and_then(|spots| spots.mean_quality());
+    let mut label_metric = set.label_metric();
+    let label_options = label_metrics(state.scene, set);
+    let hidden = set.hidden_count();
+    let selected = state
+        .scene
+        .selection()
+        .and_then(|selection| match selection.item {
+            Item::Object(object) if selection.set == id && set.visible_object(time, object) => {
+                Some(object)
+            }
+            _ => None,
+        });
     let open_id = format!("object.{}.open", id.raw());
     let expanded = ui.disclosure_open(&open_id, false);
     let palette = ui.theme().palette;
@@ -204,6 +217,11 @@ fn object(
                     format!("{channel_name} · none on frame {}", time + 1)
                 }
                 None => format!("{channel_name} · not detected"),
+            };
+            let subtitle = if hidden > 0 {
+                format!("{subtitle} · {hidden} hidden")
+            } else {
+                subtitle
             };
             let name_style =
                 TextStyle::new(ui.theme().font(Level::Body).medium(), palette.text_primary)
@@ -399,8 +417,47 @@ fn object(
                 ) {
                     opacity = value;
                 }
-                if let Some(value) = widget::toggle_row(ui, "labels", "Object numbers", labels) {
+                if let Some(value) = widget::toggle_row(ui, "labels", "Object labels", labels) {
                     labels = value;
+                }
+                if labels {
+                    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
+                        widget::field_label(ui, "label by");
+                        if let Some(chosen) = grana_ui::popover::combo(
+                            ui,
+                            "label.metric",
+                            168.0,
+                            &label_options,
+                            Some(label_metric),
+                        ) {
+                            label_metric = chosen;
+                        }
+                    });
+                }
+                if hidden > 0 || selected.is_some() {
+                    ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
+                        if hidden > 0 {
+                            widget::caption(ui, &format!("{hidden} hidden"));
+                            if widget::button(ui, "show.all", "Show all", grana_ui::Role::Quiet) {
+                                commands.push(Command::ClearHidden(id));
+                            }
+                        }
+                        if let Some(object) = selected
+                            && widget::button(
+                                ui,
+                                "hide.selected",
+                                "Hide selected",
+                                grana_ui::Role::Quiet,
+                            )
+                        {
+                            commands.push(Command::SetObjectHidden {
+                                set: id,
+                                time,
+                                objects: vec![object],
+                                hidden: true,
+                            });
+                        }
+                    });
                 }
                 origin(ui, state, id);
                 curated(ui, state, id);
@@ -436,6 +493,12 @@ fn object(
         if set.labels() != labels {
             commands.push(Command::SetObjectLabels { set: id, labels });
         }
+        if set.label_metric() != label_metric {
+            commands.push(Command::SetLabelMetric {
+                set: id,
+                metric: label_metric,
+            });
+        }
         if set.opacity() != opacity {
             commands.push(Command::SetObjectOpacity {
                 set: id,
@@ -443,6 +506,42 @@ fn object(
             });
         }
     }
+}
+
+fn label_metrics(scene: &Scene, set: &ObjectSet) -> Vec<(Option<ObjectColor>, String)> {
+    let channels = scene
+        .dataset
+        .channels()
+        .iter()
+        .map(|channel| channel.name().to_string())
+        .collect::<Vec<_>>();
+    let mut options = vec![(None, "Number".to_string())];
+    options.extend(set.colorable_measurements().into_iter().map(|measurement| {
+        (
+            Some(ObjectColor::Measurement(measurement)),
+            measurement.label(&channels),
+        )
+    }));
+    for relation in set.relations() {
+        let Some(target) = scene.objects.get(relation.target()) else {
+            continue;
+        };
+        for field in RELATION_FIELDS {
+            let mut label = format!("{} {}", target.name(), field.label());
+            if relation.shift() != 0 {
+                label.push_str(&format!(" · t{:+}", relation.shift()));
+            }
+            options.push((
+                Some(ObjectColor::Relation {
+                    target: relation.target(),
+                    field,
+                    shift: relation.shift(),
+                }),
+                label,
+            ));
+        }
+    }
+    options
 }
 
 fn relations(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: ObjectSetId) {

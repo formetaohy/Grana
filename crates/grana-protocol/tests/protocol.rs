@@ -1102,3 +1102,63 @@ fn stages_a_relation_before_the_filtered_set_that_reads_it() {
     );
     assert_eq!(steps.last(), Some(&Step::Present));
 }
+
+#[test]
+fn round_trips_object_labels() {
+    let extent = Extent::new(4, 4, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "DAPI",
+            [0.3, 0.4, 1.0],
+            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+        )],
+    );
+    let series = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let id = scene.add_object(ObjectKind::Spots, 0);
+    let mut accumulator = SampleAccumulator::new();
+    accumulator.push(0.5);
+    let statistics = accumulator.statistics();
+    scene.install(
+        id,
+        0,
+        ObjectFrame::Spots(SpotSet::new(
+            0,
+            vec![Spot::new([0.0, 0.0, 0.0], 1.0, 0.5)],
+            IntensityTable::new(1, vec![statistics]),
+        )),
+    );
+    assert!(
+        scene.set_label_metric(id, Some(ObjectColor::Measurement(Measurement::Diameter))),
+        "the object set labels its objects by diameter"
+    );
+    scene
+        .objects
+        .get_mut(id)
+        .expect("the spots exist")
+        .set_labels(true);
+    let protocol = Protocol::capture(&scene, &Measure::new(), None).expect("the analysis captures");
+    let label = protocol.sets()[0]
+        .label
+        .as_ref()
+        .expect("the protocol keeps the label metric");
+    assert_eq!(label.key.as_deref(), Some("diameter_um"));
+    let text = protocol.to_json().expect("the protocol serializes");
+    assert!(text.contains("\"label\""), "{text}");
+
+    let mut staged_scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let staged = protocol
+        .stage(&mut staged_scene)
+        .expect("the protocol stages");
+    let set = staged_scene
+        .objects
+        .get(staged.set(0))
+        .expect("the staged set exists");
+    assert_eq!(
+        set.label_metric(),
+        Some(ObjectColor::Measurement(Measurement::Diameter))
+    );
+    assert!(set.labels(), "the staged set labels its objects");
+}
