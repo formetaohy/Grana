@@ -3,9 +3,9 @@ mod cache;
 mod error;
 mod image;
 mod level;
+mod region;
 mod series;
 mod source;
-mod tile;
 
 pub use cache::default_root as cache_root;
 pub use error::Error;

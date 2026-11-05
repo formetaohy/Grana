@@ -137,7 +137,7 @@ fn resolves_coarser_levels_from_the_stored_level() {
 }
 
 #[test]
-fn persists_resolved_tiles_across_sessions() {
+fn persists_resolved_bricks_across_sessions() {
     let temporary = Temporary::new("grana-image-pyramid");
     let dataset = temporary.path().join("fixture.zarr");
     write_zarr(&dataset);
@@ -145,7 +145,7 @@ fn persists_resolved_tiles_across_sessions() {
     let cache = temporary.path().join("cache");
 
     let first = Image::open_with_cache(&source, Some(cache.clone())).expect("the fixture opens");
-    let region = [40..104, 10..60, 0..4];
+    let region = [32..96, 32..64, 0..4];
     let resolved = first
         .read_region(0, 1, 0, &region, [0.0; 3])
         .expect("the resolved region reads");
@@ -155,7 +155,7 @@ fn persists_resolved_tiles_across_sessions() {
     let VoxelData::U16(values) = &resolved else {
         panic!("the resolved level keeps the voxel format");
     };
-    assert_eq!(values[0], 4 * 40 + 8 * 10 + 7);
+    assert_eq!(values[0], 4 * 32 + 8 * 32 + 7);
     let side = PADDED_SIDE as usize;
     let VoxelData::U16(samples) = &brick.channels()[0] else {
         panic!("the resolved brick keeps the voxel format");
@@ -170,18 +170,18 @@ fn persists_resolved_tiles_across_sessions() {
             .read_region(0, 1, 0, &region, [0.0; 3])
             .expect("the cached region reads"),
         resolved,
-        "the second session reads the persisted tiles"
+        "the second session reads the persisted bricks"
     );
     assert_eq!(
         second
             .read_brick(0, 1, BrickCoord::new(1, 1, 0), [0.0; 3])
             .expect("the cached brick reads"),
         brick,
-        "the second session assembles the persisted bricks"
+        "the second session composes the persisted brick"
     );
     assert!(
         entries(&cache) > 0,
-        "the resolved tiles are written to the cache directory"
+        "the resolved bricks are written to the cache directory"
     );
     drop(second);
 
@@ -194,6 +194,46 @@ fn persists_resolved_tiles_across_sessions() {
     assert!(
         recovered.as_ref() != Some(&resolved),
         "an empty cache cannot recover the removed source"
+    );
+}
+
+#[test]
+fn composes_a_resolved_brick_at_brick_granularity() {
+    let temporary = Temporary::new("grana-image-brick");
+    let dataset = temporary.path().join("fixture.zarr");
+    write_zarr(&dataset);
+    let cache = temporary.path().join("cache");
+    let image = Image::open_with_cache(&Source::file(dataset), Some(cache.clone()))
+        .expect("the fixture opens");
+    let brick = image
+        .read_brick(0, 1, BrickCoord::new(2, 1, 0), [0.0; 3])
+        .expect("the resolved brick reads");
+    assert_eq!(
+        entries(&cache),
+        1,
+        "a brick request caches one brick instead of its neighbourhood"
+    );
+    let side = PADDED_SIDE as usize;
+    let VoxelData::U16(samples) = &brick.channels()[0] else {
+        panic!("the resolved brick keeps the voxel format");
+    };
+    assert_eq!(samples[1 + side * (1 + side)], 4 * 64 + 8 * 32 + 7);
+    let region = [70..74, 40..44, 1..3];
+    image
+        .read_region(0, 1, 0, &region, [0.0; 3])
+        .expect("the region inside the cached brick reads");
+    assert_eq!(
+        entries(&cache),
+        1,
+        "a read inside a cached brick composes nothing"
+    );
+    image
+        .read_region(0, 1, 0, &[0..8, 0..8, 0..2], [0.0; 3])
+        .expect("a small region reads");
+    assert_eq!(
+        entries(&cache),
+        1,
+        "a small region composes its overlap without caching a brick"
     );
 }
 

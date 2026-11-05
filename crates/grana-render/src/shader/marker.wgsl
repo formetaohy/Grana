@@ -57,6 +57,18 @@ fn vs_main(@builtin(vertex_index) index: u32, @builtin(instance_index) instance:
     return output;
 }
 
+fn kept(input: MarkerOutput) -> bool {
+    let squared = dot(input.local, input.local);
+    if (squared > 1.0) {
+        return false;
+    }
+    let depth = sqrt(max(0.0, 1.0 - squared));
+    let radius = input.center_radius.w;
+    let surface = input.center_radius.xyz
+        + (frame.right.xyz * input.local.x + frame.up.xyz * input.local.y - frame.forward.xyz * depth) * radius;
+    return !outside_region(surface) && !outside_clip(surface);
+}
+
 fn shade(input: MarkerOutput) -> Shaded {
     let local = input.local;
     let squared = dot(local, local);
@@ -99,12 +111,21 @@ fn fs_main(input: MarkerOutput) -> MarkerFragment {
 }
 
 @fragment
+fn fs_coverage(input: MarkerOutput) -> @location(0) u32 {
+    if (!kept(input)) {
+        discard;
+    }
+    return 1u;
+}
+
+@fragment
 fn fs_oit(input: MarkerOutput) {
     let shaded = shade(input);
     oit_push(
         vec2<i32>(frame.viewport.xy),
         vec2<i32>(frame.viewport.zw),
         frame.oit.y,
+        frame.oit.z,
         vec2<i32>(input.clip_position.xy),
         shaded.depth,
         vec4<f32>(shaded.color.rgb * shaded.color.a, shaded.color.a),
@@ -126,11 +147,16 @@ fn fs_tail(input: MarkerOutput) -> TailFragment {
     if (!oit_visible(pixel, shaded.depth) || !oit_tail(origin, size, frame.oit.y, pixel, shaded.depth)) {
         discard;
     }
+    let covered = oit_covered(origin, size, frame.oit.z, pixel);
+    if (covered <= 0.0) {
+        discard;
+    }
+    let alpha = shaded.color.a * covered;
     let weight = oit_weight(shaded.depth, shaded.color.a);
     var output: TailFragment;
-    output.accumulate = vec4<f32>(shaded.color.rgb * shaded.color.a * weight, shaded.color.a * weight);
-    output.reveal = vec4<f32>(shaded.color.a);
-    output.depth = vec2<f32>(shaded.depth * shaded.color.a, shaded.color.a);
+    output.accumulate = vec4<f32>(shaded.color.rgb * alpha * weight, alpha * weight);
+    output.reveal = vec4<f32>(alpha);
+    output.depth = vec2<f32>(shaded.depth * alpha, alpha);
     return output;
 }
 

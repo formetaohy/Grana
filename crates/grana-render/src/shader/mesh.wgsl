@@ -151,6 +151,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 @fragment
+fn fs_coverage(input: VertexOutput) -> @location(0) u32 {
+    if (is_outside(input)) {
+        discard;
+    }
+    return 1u;
+}
+
+@fragment
 fn fs_oit(input: VertexOutput) {
     if (is_outside(input)) {
         discard;
@@ -162,6 +170,7 @@ fn fs_oit(input: VertexOutput) {
         origin,
         size,
         mesh.oit.y,
+        mesh.oit.z,
         vec2<i32>(input.clip_position.xy),
         input.clip_position.z,
         vec4<f32>(sample.rgb * sample.a, sample.a),
@@ -184,12 +193,17 @@ fn fs_tail(input: VertexOutput) -> TailFragment {
         || !oit_tail(origin, size, mesh.oit.y, pixel, input.clip_position.z)) {
         discard;
     }
+    let covered = oit_covered(origin, size, mesh.oit.z, pixel);
+    if (covered <= 0.0) {
+        discard;
+    }
     let sample = shade(input);
+    let alpha = sample.a * covered;
     let weight = oit_weight(input.clip_position.z, sample.a);
     var output: TailFragment;
-    output.accumulate = vec4<f32>(sample.rgb * sample.a * weight, sample.a * weight);
-    output.reveal = vec4<f32>(sample.a);
-    output.depth = vec2<f32>(input.clip_position.z * sample.a, sample.a);
+    output.accumulate = vec4<f32>(sample.rgb * alpha * weight, alpha * weight);
+    output.reveal = vec4<f32>(alpha);
+    output.depth = vec2<f32>(input.clip_position.z * alpha, alpha);
     return output;
 }
 

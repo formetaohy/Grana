@@ -243,6 +243,16 @@ impl Layouts {
                 storage(1, ShaderStages::FRAGMENT, false),
                 storage(2, ShaderStages::FRAGMENT, false),
                 storage(3, ShaderStages::FRAGMENT, false),
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Uint,
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: true,
+                    },
+                    count: None,
+                },
             ],
         });
         let oit_read = device.create_bind_group_layout(&BindGroupLayoutDescriptor {

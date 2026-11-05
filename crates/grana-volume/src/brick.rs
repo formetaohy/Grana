@@ -121,6 +121,19 @@ impl BrickGrid {
         }
         range
     }
+
+    pub fn cover(self, ranges: &[Range<u32>; 3]) -> ([u32; 3], [u32; 3]) {
+        let limits = [self.extent.x(), self.extent.y(), self.extent.z()];
+        assert!(
+            (0..3).all(|axis| {
+                ranges[axis].start < ranges[axis].end && ranges[axis].end <= limits[axis]
+            }),
+            "a covered range holds voxels inside the brick grid"
+        );
+        let first = [0, 1, 2].map(|axis| ranges[axis].start / BRICK_SIDE);
+        let last = [0, 1, 2].map(|axis| (ranges[axis].end - 1) / BRICK_SIDE);
+        (first, last)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -13,7 +13,7 @@ use wgpu::{
 
 use crate::cut;
 use crate::layout::Layouts;
-use crate::target::{PICK_FORMAT, SCENE_FORMAT};
+use crate::target::{PICK_FORMAT, SCENE_FORMAT, SCENE_SAMPLES};
 use crate::volume::depth_state;
 use grana_display::srgb_to_linear;
 
@@ -122,6 +122,7 @@ pub(crate) struct MarkerPasses {
     volume_pipeline: RenderPipeline,
     oit_pipeline: RenderPipeline,
     tail_pipeline: RenderPipeline,
+    coverage_pipeline: RenderPipeline,
     section_pipeline: RenderPipeline,
     section_pick_pipeline: RenderPipeline,
     volume_pick_pipeline: RenderPipeline,
@@ -273,6 +274,38 @@ impl MarkerPasses {
             multiview_mask: None,
             cache: None,
         });
+        let coverage_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.marker.coverage"),
+            layout: Some(&layouts.marker_volume),
+            vertex: VertexState {
+                module: &volume_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(depth_state(false, CompareFunction::Less)),
+            multisample: MultisampleState {
+                count: SCENE_SAMPLES,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            fragment: Some(FragmentState {
+                module: &volume_module,
+                entry_point: Some("fs_coverage"),
+                compilation_options: Default::default(),
+                targets: &[Some(ColorTargetState {
+                    format: crate::oit::COVERAGE_FORMAT,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let section_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.marker.section"),
             layout: Some(&layouts.marker_section),
@@ -407,6 +440,7 @@ impl MarkerPasses {
             volume_pipeline,
             oit_pipeline,
             tail_pipeline,
+            coverage_pipeline,
             section_pipeline,
             section_pick_pipeline,
             volume_pick_pipeline,
@@ -573,6 +607,16 @@ impl MarkerPasses {
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.layer_group, &[]);
         pass.set_bind_group(4, oit, &[]);
+        pass.draw_indirect(self.layer_args.buffer(), 0);
+    }
+
+    pub fn draw_coverage<'a>(&'a self, pass: &mut RenderPass<'a>, scene: &'a BindGroup) {
+        if self.count == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.coverage_pipeline);
+        pass.set_bind_group(0, scene, &[]);
+        pass.set_bind_group(1, &self.layer_group, &[]);
         pass.draw_indirect(self.layer_args.buffer(), 0);
     }
 

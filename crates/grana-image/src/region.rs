@@ -1,49 +1,6 @@
 use std::ops::Range;
 
-use grana_volume::{Extent, VoxelData, VoxelFormat};
-
-pub(crate) const SIDE: u32 = 64;
-
-pub(crate) struct Grid {
-    dims: [u32; 3],
-    counts: [u32; 3],
-}
-
-impl Grid {
-    pub(crate) fn of(extent: Extent) -> Self {
-        let dims = [extent.x(), extent.y(), extent.z()];
-        Self {
-            dims,
-            counts: dims.map(|dimension| dimension.div_ceil(SIDE)),
-        }
-    }
-
-    pub(crate) fn range(&self, coord: [u32; 3]) -> [Range<u32>; 3] {
-        [0, 1, 2].map(|axis| {
-            assert!(
-                coord[axis] < self.counts[axis],
-                "the tile lies inside the resolution level"
-            );
-            let start = coord[axis] * SIDE;
-            start..(start + SIDE).min(self.dims[axis])
-        })
-    }
-
-    pub(crate) fn extent_of(&self, coord: [u32; 3]) -> Extent {
-        let ranges = self.range(coord);
-        Extent::new(
-            ranges[0].end - ranges[0].start,
-            ranges[1].end - ranges[1].start,
-            ranges[2].end - ranges[2].start,
-        )
-    }
-
-    pub(crate) fn cover(&self, ranges: &[Range<u32>; 3]) -> ([u32; 3], [u32; 3]) {
-        let first = [0, 1, 2].map(|axis| ranges[axis].start / SIDE);
-        let last = [0, 1, 2].map(|axis| (ranges[axis].end - 1) / SIDE);
-        (first, last)
-    }
-}
+use grana_volume::{VoxelData, VoxelFormat};
 
 pub(crate) fn allocate(format: VoxelFormat, ranges: &[Range<u32>; 3]) -> VoxelData {
     let count = ranges
@@ -102,7 +59,7 @@ pub(crate) fn copy_intersection(
             source_origin,
             &overlap,
         ),
-        _ => panic!("a tile carries the voxel format of its resolution level"),
+        _ => panic!("a resolved brick carries the voxel format of its level"),
     }
 }
 

@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use grana_volume::{Extent, VoxelData, VoxelFormat};
 
 const MAGIC: [u8; 8] = *b"GRANATIL";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const HEADER: usize = 72;
 const TRAILER: usize = 4;
 const SUFFIX: &str = "tile";
@@ -18,11 +18,13 @@ const STAGING: &str = "staging";
 const BUDGET: u64 = 4 << 30;
 const RETAIN: u64 = 3 << 30;
 const MEMORY_BUDGET: u64 = 256 << 20;
+const SHARDS: u64 = 16;
 const OVERRIDE: &str = "GRANA_PYRAMID_CACHE";
 const FNV_BASE: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 const CRC_SEED: u32 = 0xffff_ffff;
 const CRC_POLYNOMIAL: u32 = 0xedb8_8320;
+const NONE: u32 = u32::MAX;
 
 static NONCE: AtomicU64 = AtomicU64::new(0);
 
@@ -47,59 +49,175 @@ pub(crate) struct Shape {
     pub(crate) format: VoxelFormat,
 }
 
-struct Slot {
+struct Node {
+    key: Key,
     data: Arc<VoxelData>,
-    stamp: u64,
-}
-
-pub(crate) struct Memory {
-    slots: HashMap<Key, Slot>,
     bytes: u64,
-    stamp: u64,
+    newer: u32,
+    older: u32,
 }
 
-impl Memory {
-    pub(crate) fn new() -> Self {
+struct Shard {
+    slots: HashMap<Key, u32>,
+    nodes: Vec<Node>,
+    free: Vec<u32>,
+    newest: u32,
+    oldest: u32,
+    bytes: u64,
+    budget: u64,
+}
+
+impl Shard {
+    fn new(budget: u64) -> Self {
         Self {
             slots: HashMap::new(),
+            nodes: Vec::new(),
+            free: Vec::new(),
+            newest: NONE,
+            oldest: NONE,
             bytes: 0,
-            stamp: 0,
+            budget,
         }
     }
 
-    pub(crate) fn fetch(&mut self, key: Key) -> Option<Arc<VoxelData>> {
-        self.stamp += 1;
-        let stamp = self.stamp;
-        let slot = self.slots.get_mut(&key)?;
-        slot.stamp = stamp;
-        Some(Arc::clone(&slot.data))
+    fn fetch(&mut self, key: Key) -> Option<Arc<VoxelData>> {
+        let slot = *self.slots.get(&key)?;
+        self.promote(slot);
+        Some(Arc::clone(&self.nodes[slot as usize].data))
     }
 
-    pub(crate) fn insert(&mut self, key: Key, data: Arc<VoxelData>) {
-        self.stamp += 1;
+    fn insert(&mut self, key: Key, data: Arc<VoxelData>) {
         let bytes = size(&data);
-        let previous = self.slots.insert(
-            key,
-            Slot {
-                data,
-                stamp: self.stamp,
-            },
-        );
-        if let Some(previous) = previous {
-            self.bytes -= size(&previous.data);
+        if let Some(slot) = self.slots.get(&key).copied() {
+            let node = &mut self.nodes[slot as usize];
+            self.bytes = self.bytes - node.bytes + bytes;
+            node.data = data;
+            node.bytes = bytes;
+            self.promote(slot);
+            self.evict();
+            return;
         }
-        self.bytes += bytes;
-        while self.bytes > MEMORY_BUDGET && self.slots.len() > 1 {
-            let oldest = self
-                .slots
-                .iter()
-                .min_by_key(|(_, slot)| slot.stamp)
-                .map(|(key, _)| *key)
-                .expect("the memory cache holds a tile to evict");
-            if let Some(removed) = self.slots.remove(&oldest) {
-                self.bytes -= size(&removed.data);
+        let slot = match self.free.pop() {
+            Some(slot) => {
+                self.nodes[slot as usize] = Node {
+                    key,
+                    data,
+                    bytes,
+                    newer: NONE,
+                    older: self.newest,
+                };
+                slot
             }
+            None => {
+                let slot =
+                    u32::try_from(self.nodes.len()).expect("a shard holds fewer than 4G bricks");
+                self.nodes.push(Node {
+                    key,
+                    data,
+                    bytes,
+                    newer: NONE,
+                    older: self.newest,
+                });
+                slot
+            }
+        };
+        if self.newest == NONE {
+            self.oldest = slot;
+        } else {
+            self.nodes[self.newest as usize].newer = slot;
         }
+        self.newest = slot;
+        self.slots.insert(key, slot);
+        self.bytes += bytes;
+        self.evict();
+    }
+
+    fn promote(&mut self, slot: u32) {
+        if slot == self.newest {
+            return;
+        }
+        let node = &self.nodes[slot as usize];
+        let (newer, older) = (node.newer, node.older);
+        if older != NONE {
+            self.nodes[older as usize].newer = newer;
+        } else {
+            self.oldest = newer;
+        }
+        if newer != NONE {
+            self.nodes[newer as usize].older = older;
+        }
+        let previous = self.newest;
+        self.nodes[slot as usize].newer = NONE;
+        self.nodes[slot as usize].older = previous;
+        if previous != NONE {
+            self.nodes[previous as usize].newer = slot;
+        }
+        self.newest = slot;
+    }
+
+    fn evict(&mut self) {
+        while self.bytes > self.budget && self.slots.len() > 1 {
+            let slot = self.oldest;
+            if slot == NONE {
+                return;
+            }
+            let node = &self.nodes[slot as usize];
+            let key = node.key;
+            let bytes = node.bytes;
+            self.oldest = node.newer;
+            if self.oldest == NONE {
+                self.newest = NONE;
+            } else {
+                self.nodes[self.oldest as usize].older = NONE;
+            }
+            self.slots.remove(&key);
+            self.nodes[slot as usize].older = NONE;
+            self.nodes[slot as usize].newer = NONE;
+            self.free.push(slot);
+            self.bytes = self.bytes.saturating_sub(bytes);
+        }
+    }
+}
+
+pub(crate) struct Cache {
+    shards: Box<[Mutex<Shard>]>,
+}
+
+impl Cache {
+    pub(crate) fn new() -> Self {
+        let budget = (MEMORY_BUDGET / SHARDS).max(1);
+        let shards = (0..SHARDS)
+            .map(|_| Mutex::new(Shard::new(budget)))
+            .collect::<Vec<_>>();
+        Self {
+            shards: shards.into_boxed_slice(),
+        }
+    }
+
+    pub(crate) fn fetch(&self, key: Key) -> Option<Arc<VoxelData>> {
+        self.shard(key)
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .fetch(key)
+    }
+
+    pub(crate) fn insert(&self, key: Key, data: Arc<VoxelData>) {
+        self.shard(key)
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(key, data);
+    }
+
+    fn shard(&self, key: Key) -> &Mutex<Shard> {
+        let mut hash = mix(FNV_BASE, &key.identity.to_le_bytes());
+        hash = mix(hash, &key.level.to_le_bytes());
+        hash = mix(hash, &key.time.to_le_bytes());
+        hash = mix(hash, &key.channel.to_le_bytes());
+        for value in key.coord {
+            hash = mix(hash, &value.to_le_bytes());
+        }
+        let index = hash % self.shards.len() as u64;
+        &self.shards[index as usize]
     }
 }
 
@@ -595,7 +713,7 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_a_tile_and_rejects_a_corrupted_entry() {
+    fn round_trips_a_brick_and_rejects_a_corrupted_entry() {
         let directory = directory();
         let store = Store::open(&directory).expect("the store opens");
         let extent = Extent::new(4, 3, 2);
@@ -606,6 +724,11 @@ mod tests {
             Some(data.clone())
         );
         assert_eq!(store.load(key([6, 0, 1]), shape(extent)), None);
+        assert_eq!(
+            store.load(key([5, 0, 1]), shape(Extent::new(4, 3, 3))),
+            None,
+            "a brick of another extent is not the stored one"
+        );
 
         let entry = store.entry(key([5, 0, 1]));
         let mut bytes = std::fs::read(&entry).expect("the entry reads");
@@ -626,9 +749,47 @@ mod tests {
         store.save(key([0, 0, 0]), shape(extent), &data);
         assert!(
             store.entries().is_empty(),
-            "the store evicts its oldest tile"
+            "the store evicts its oldest brick"
         );
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn keeps_the_most_recent_bricks_within_the_budget() {
+        let mut cache = Shard::new(24);
+        let brick = |value: u16| Arc::new(VoxelData::U16(vec![value, value]));
+        for index in 0..8u32 {
+            cache.insert(key([index, 0, 0]), brick(index as u16));
+        }
+        assert_eq!(cache.bytes, 24);
+        assert_eq!(cache.slots.len(), 6, "the shard holds its byte budget");
+        assert!(cache.fetch(key([7, 0, 0])).is_some());
+        assert!(cache.fetch(key([0, 0, 0])).is_none());
+        cache.fetch(key([2, 0, 0]));
+        cache.insert(key([99, 0, 0]), brick(99));
+        assert!(
+            cache.fetch(key([3, 0, 0])).is_none(),
+            "the touched brick outlives the least recently used one"
+        );
+        assert_eq!(cache.nodes.len(), cache.free.len() + cache.slots.len());
+    }
+
+    #[test]
+    fn splits_the_memory_cache_across_shards() {
+        let cache = Cache::new();
+        let mut keys = Vec::new();
+        for index in 0..64u32 {
+            let key = key([index, 0, 0]);
+            cache.insert(key, Arc::new(VoxelData::U16(vec![index as u16])));
+            keys.push(key);
+        }
+        assert!(keys.iter().all(|key| cache.fetch(*key).is_some()));
+        let shards = cache
+            .shards
+            .iter()
+            .filter(|shard| !shard.lock().expect("the shard lock").slots.is_empty())
+            .count();
+        assert!(shards > 1, "the cache spreads its bricks over the shards");
     }
 
     #[test]
@@ -675,7 +836,7 @@ mod tests {
         assert_eq!(
             store.entries().len(),
             1,
-            "the store writes tiles after its root was cleared"
+            "the store writes bricks after its root was cleared"
         );
         let _ = std::fs::remove_dir_all(&directory);
     }

@@ -1117,12 +1117,20 @@ fn composites_the_tail_inside_a_split_pane() {
         &camera,
         None,
     );
-    let centre = (SIDE / 4, SIDE / 4);
-    let inside = pixel(&shown, centre.0, centre.1).map(u32::from);
-    let inside_hidden = pixel(&hidden, centre.0, centre.1).map(u32::from);
+    let blue_fraction = |pixels: &[[u8; 4]]| {
+        let mut total = 0u64;
+        for y in pane[1]..pane[1] + pane[3] {
+            for x in pane[0]..pane[0] + pane[2] {
+                total += u64::from(pixel(pixels, x, y)[2]);
+            }
+        }
+        total as f64 / (f64::from(pane[2]) * f64::from(pane[3]))
+    };
+    let shown_blue = blue_fraction(&shown);
+    let hidden_blue = blue_fraction(&hidden);
     assert!(
-        inside[2] > inside_hidden[2] + 30,
-        "the pane drops the surfaces beyond the stored layers: {inside:?} {inside_hidden:?}"
+        shown_blue > hidden_blue + 8.0,
+        "the pane drops the surfaces beyond the stored layers: {shown_blue} {hidden_blue}"
     );
     let outside = pixel(&shown, SIDE * 3 / 4, SIDE / 4).map(u32::from);
     let outside_hidden = pixel(&hidden, SIDE * 3 / 4, SIDE / 4).map(u32::from);
@@ -1226,6 +1234,27 @@ fn receding_planes(camera: &Camera, count: usize, first: f32, step: f32) -> Mesh
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
     Mesh::new(vertices, indices)
+}
+
+fn rotated_plane(camera: &Camera, angle: f32, half: f32) -> Mesh {
+    let centre = camera.focus();
+    let right = camera.right();
+    let up = camera.up();
+    let (sine, cosine) = angle.sin_cos();
+    let mut vertices = Vec::new();
+    for corner in [[-1.0f32, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]] {
+        let local = [
+            corner[0] * cosine - corner[1] * sine,
+            corner[0] * sine + corner[1] * cosine,
+        ];
+        let position = centre + (right * local[0] + up * local[1]) * half;
+        vertices.push(MeshVertex::new(
+            position.to_array(),
+            (-camera.forward()).to_array(),
+            0,
+        ));
+    }
+    Mesh::new(vertices, vec![0, 1, 2, 0, 2, 3])
 }
 
 fn view_plane(camera: &Camera, offset: f32, half: f32) -> Mesh {
@@ -3835,6 +3864,83 @@ fn left_half_plane() -> Mesh {
         .map(|corner| MeshVertex::new(corner, [0.0, 0.0, 1.0], 0))
         .collect::<Vec<_>>();
     Mesh::new(vertices, vec![0, 1, 2, 0, 2, 3])
+}
+
+#[test]
+fn antialiases_transparent_silhouettes() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = empty_volume();
+    let pyramid = volume.pyramid();
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let mesh = PackedMesh::new(rotated_plane(&camera, 0.25, 0.5));
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let render = |visible: bool| {
+        let style = Style::new([1.0, 1.0, 1.0], visible, false, 0.35);
+        let styles = [style];
+        let layers = [Layer {
+            key: LayerKey::at_frame(1, 0, 0, 1),
+            mesh: Arc::new(mesh.clone()),
+            style_start: 0,
+            style_count: 1,
+        }];
+        let scene = SceneFrame {
+            channels: &channels,
+            shading: Shading::default(),
+            step_scale: 1.0,
+            styles: &styles,
+            layers: &layers,
+            markers: &[],
+        };
+        let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+        renderer.set_dataset(&device, &pyramid);
+        let info = renderer.draw(
+            &device,
+            &queue,
+            Frame {
+                target: &view,
+                size: [SIDE, SIDE],
+                volume_region: WHOLE,
+                section_region: CORNER,
+                time: 0,
+                camera: &camera,
+                section: &section,
+                region: Region::none(),
+                clip: Clip::none(),
+                exposure: 1.0,
+                samples: 1,
+                scene: &scene,
+                prefetch: false,
+            },
+        );
+        (info, read_pixels(&device, &queue, &texture, SIDE))
+    };
+    let (info, shown) = render(true);
+    let (_, hidden) = render(false);
+    assert!(info.oit.layers >= 1, "the transparent surface keeps layers");
+    let centre = pixel(&shown, SIDE / 2, SIDE / 2);
+    assert!(
+        centre.map(u32::from).iter().sum::<u32>() > 40,
+        "the transparent plane is missing: {centre:?}"
+    );
+    let partial = shown
+        .iter()
+        .zip(&hidden)
+        .filter(|(shown, hidden)| {
+            (0..3).any(|channel| shown[channel].abs_diff(centre[channel]) > 6)
+                && (0..3).any(|channel| shown[channel].abs_diff(hidden[channel]) > 6)
+        })
+        .count();
+    assert!(
+        partial > 20,
+        "the silhouette of a transparent object carries no partial pixels: {partial}"
+    );
 }
 
 #[test]

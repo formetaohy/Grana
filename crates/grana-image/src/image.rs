@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::Read;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use grana_volume::{
     BrickCoord, BrickData, BrickGrid, Extent, Pyramid, VolumeSeries, VoxelData, VoxelFormat,
@@ -10,9 +10,9 @@ use grana_volume::{
 };
 
 use crate::align;
-use crate::cache::{self, Key, Memory, Shape, Store};
+use crate::cache::{self, Cache, Key, Shape, Store};
 use crate::level::{self, Field, Scale};
-use crate::tile::{self, Grid};
+use crate::region;
 use crate::{Error, Series, Source};
 
 const RESOLVED_VERSION: u32 = 1;
@@ -38,7 +38,7 @@ pub struct Image {
     series: Vec<Series>,
     selected: usize,
     identity: u64,
-    tiles: Mutex<Memory>,
+    bricks: Cache,
     store: Option<Store>,
 }
 
@@ -79,7 +79,7 @@ impl Image {
             series,
             selected: source.series(),
             identity,
-            tiles: Mutex::new(Memory::new()),
+            bricks: Cache::new(),
             store,
         })
     }
@@ -149,18 +149,77 @@ impl Image {
             });
         }
         let spatial = grid.padded_range(coord);
-        let region = Extent::new(
-            spatial[0].end - spatial[0].start,
-            spatial[1].end - spatial[1].start,
-            spatial[2].end - spatial[2].start,
-        );
+        let covered = covered_extent(&spatial);
         let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
         let mut bricks = Vec::with_capacity(self.pyramid.channel_count());
         for channel in 0..self.pyramid.channel_count() {
-            let data = self.read_region(time, level, channel, &spatial, shift)?;
-            bricks.push(pad_brick(&data, origin, region, grid.origin(coord), extent));
+            let data = self.brick_region(time, level, channel, coord, shift)?;
+            bricks.push(pad_brick(
+                &data,
+                origin,
+                covered,
+                grid.origin(coord),
+                extent,
+            ));
         }
         Ok(BrickData::new(bricks))
+    }
+
+    fn brick_region(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        coord: BrickCoord,
+        shift: [f32; 3],
+    ) -> Result<Arc<VoxelData>, Error> {
+        let extent = self.level_extent(level)?;
+        let grid = BrickGrid::new(extent);
+        let spatial = grid.padded_range(coord);
+        let shift = align::level_shift(shift, level);
+        if shift != [0.0; 3] {
+            return Ok(Arc::new(
+                self.aligned_region(time, level, channel, &spatial, shift)?,
+            ));
+        }
+        if level < self.pyramid.stored() {
+            return Ok(Arc::new(
+                self.stored_region(time, level, channel, &spatial)?,
+            ));
+        }
+        let format = self.channel_format(channel)?;
+        self.resolved_brick(time, level, channel, coord, format)
+    }
+
+    fn resolved_brick(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        coord: BrickCoord,
+        format: VoxelFormat,
+    ) -> Result<Arc<VoxelData>, Error> {
+        let extent = self.level_extent(level)?;
+        let grid = BrickGrid::new(extent);
+        let spatial = grid.padded_range(coord);
+        let covered = covered_extent(&spatial);
+        let key = self.key(time, level, channel, [coord.x(), coord.y(), coord.z()]);
+        if let Some(data) = self.held(key, covered, format) {
+            return Ok(data);
+        }
+        let data = Arc::new(self.compose(time, level, channel, &spatial, format)?);
+        if let Some(store) = self.store.as_ref() {
+            store.save(
+                key,
+                Shape {
+                    extent: covered,
+                    format,
+                },
+                &data,
+            );
+        }
+        self.bricks.insert(key, Arc::clone(&data));
+        Ok(data)
     }
 
     fn region_at(
@@ -282,60 +341,61 @@ impl Image {
                 detail: "the region lies outside the resolved level".to_string(),
             });
         }
-        let grid = Grid::of(scale.extent());
-        let mut data = tile::allocate(info.format(), ranges);
+        let grid = BrickGrid::new(scale.extent());
+        let mut output = region::allocate(info.format(), ranges);
         let (first, last) = grid.cover(ranges);
         for z in first[2]..=last[2] {
             for y in first[1]..=last[1] {
                 for x in first[0]..=last[0] {
                     let coord = [x, y, z];
-                    let covered = grid.range(coord);
-                    if let Some(tile) =
-                        self.cached(time, level, channel, coord, &grid, info.format())
+                    let covered = grid.padded_range(BrickCoord::new(x, y, z));
+                    let overlap = intersection(ranges, &covered);
+                    if overlap[0].start >= overlap[0].end
+                        || overlap[1].start >= overlap[1].end
+                        || overlap[2].start >= overlap[2].end
                     {
-                        tile::copy_intersection(&mut data, ranges, &tile, &covered);
                         continue;
                     }
-                    let overlap = intersection(ranges, &covered);
+                    let key = self.key(time, level, channel, coord);
+                    if let Some(brick) = self.held(key, covered_extent(&covered), info.format()) {
+                        region::copy_intersection(&mut output, ranges, &brick, &covered);
+                        continue;
+                    }
                     let partial = volume(&overlap) * PARTIAL_DIVISOR <= volume(&covered);
                     if partial {
                         let composed =
                             self.compose(time, level, channel, &overlap, info.format())?;
-                        tile::copy_intersection(&mut data, ranges, &composed, &overlap);
+                        region::copy_intersection(&mut output, ranges, &composed, &overlap);
                     } else {
-                        let tile = self.tile(time, level, channel, coord, &grid, info.format())?;
-                        tile::copy_intersection(&mut data, ranges, &tile, &covered);
+                        let brick = self.compose(time, level, channel, &covered, info.format())?;
+                        region::copy_intersection(&mut output, ranges, &brick, &covered);
+                        self.hold(key, covered_extent(&covered), info.format(), brick);
                     }
                 }
             }
         }
-        Ok(data)
+        Ok(output)
     }
 
-    fn cached(
-        &self,
-        time: u32,
-        level: usize,
-        channel: usize,
-        coord: [u32; 3],
-        grid: &Grid,
-        format: VoxelFormat,
-    ) -> Option<Arc<VoxelData>> {
-        let key = self.key(time, level, channel, coord);
-        if let Some(data) = self.tiles().fetch(key) {
+    fn held(&self, key: Key, extent: Extent, format: VoxelFormat) -> Option<Arc<VoxelData>> {
+        if let Some(data) = self.bricks.fetch(key) {
             return Some(data);
         }
-        let shape = Shape {
-            extent: grid.extent_of(coord),
-            format,
-        };
         let data = self
             .store
             .as_ref()
-            .and_then(|store| store.load(key, shape))?;
+            .and_then(|store| store.load(key, Shape { extent, format }))?;
         let data = Arc::new(data);
-        self.tiles().insert(key, Arc::clone(&data));
+        self.bricks.insert(key, Arc::clone(&data));
         Some(data)
+    }
+
+    fn hold(&self, key: Key, extent: Extent, format: VoxelFormat, data: VoxelData) {
+        let data = Arc::new(data);
+        if let Some(store) = self.store.as_ref() {
+            store.save(key, Shape { extent, format }, &data);
+        }
+        self.bricks.insert(key, data);
     }
 
     fn key(&self, time: u32, level: usize, channel: usize, coord: [u32; 3]) -> Key {
@@ -346,43 +406,6 @@ impl Image {
             channel: u32::try_from(channel).expect("a pyramid holds fewer than 4G channels"),
             coord,
         }
-    }
-
-    fn tile(
-        &self,
-        time: u32,
-        level: usize,
-        channel: usize,
-        coord: [u32; 3],
-        grid: &Grid,
-        format: VoxelFormat,
-    ) -> Result<Arc<VoxelData>, Error> {
-        if let Some(data) = self.cached(time, level, channel, coord, grid, format) {
-            return Ok(data);
-        }
-        let key = self.key(time, level, channel, coord);
-        let shape = Shape {
-            extent: grid.extent_of(coord),
-            format,
-        };
-        let data = Arc::new(self.synthesize(time, level, channel, coord, grid, format)?);
-        if let Some(store) = self.store.as_ref() {
-            store.save(key, shape, &data);
-        }
-        self.tiles().insert(key, Arc::clone(&data));
-        Ok(data)
-    }
-
-    fn synthesize(
-        &self,
-        time: u32,
-        level: usize,
-        channel: usize,
-        coord: [u32; 3],
-        grid: &Grid,
-        format: VoxelFormat,
-    ) -> Result<VoxelData, Error> {
-        self.compose(time, level, channel, &grid.range(coord), format)
     }
 
     fn compose(
@@ -431,10 +454,14 @@ impl Image {
         }
         Ok(self.pyramid.level(level).extent())
     }
+}
 
-    fn tiles(&self) -> MutexGuard<'_, Memory> {
-        self.tiles.lock().unwrap_or_else(|error| error.into_inner())
-    }
+fn covered_extent(ranges: &[Range<u32>; 3]) -> Extent {
+    Extent::new(
+        ranges[0].end - ranges[0].start,
+        ranges[1].end - ranges[1].start,
+        ranges[2].end - ranges[2].start,
+    )
 }
 
 fn intersection(left: &[Range<u32>; 3], right: &[Range<u32>; 3]) -> [Range<u32>; 3] {

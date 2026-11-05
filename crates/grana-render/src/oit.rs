@@ -6,11 +6,13 @@ use wgpu::{
 };
 
 use crate::layout::Layouts;
+use crate::target::SCENE_SAMPLES;
 
 const COUNT_BYTES: u64 = 4;
 const KEY_BYTES: u64 = 4;
 const COLOR_BYTES: u64 = 8;
 const TAIL_BYTES: u64 = 20;
+const COVERAGE_BYTES: u64 = 4;
 const DROPPED_BYTES: u64 = 4;
 const BYTES_PER_PIXEL: u64 = 76;
 const MINIMUM_LAYERS: u64 = 2;
@@ -20,6 +22,7 @@ const PANE_PIXELS_STEP: u64 = 1 << 17;
 pub(crate) const ACCUMULATE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const REVEAL_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const TAIL_DEPTH_FORMAT: TextureFormat = TextureFormat::Rg16Float;
+pub(crate) const COVERAGE_FORMAT: TextureFormat = TextureFormat::R8Uint;
 
 const ACCUMULATE_BLEND: BlendState = BlendState {
     color: BlendComponent {
@@ -75,6 +78,7 @@ pub(crate) struct Oit {
     accumulate: TextureView,
     reveal: TextureView,
     tail_depth: TextureView,
+    coverage: TextureView,
     write_group: BindGroup,
     read_group: BindGroup,
     layers: u32,
@@ -127,6 +131,7 @@ impl Oit {
         let accumulate = tail(device, "grana.oit.accumulate", ACCUMULATE_FORMAT, pane);
         let reveal = tail(device, "grana.oit.reveal", REVEAL_FORMAT, pane);
         let tail_depth = tail(device, "grana.oit.tail.depth", TAIL_DEPTH_FORMAT, pane);
+        let coverage = coverage(device, size);
         let write_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.oit.write.group"),
             layout: &layouts.oit_write,
@@ -146,6 +151,10 @@ impl Oit {
                 BindGroupEntry {
                     binding: 3,
                     resource: dropped.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&coverage),
                 },
             ],
         });
@@ -187,6 +196,7 @@ impl Oit {
             accumulate,
             reveal,
             tail_depth,
+            coverage,
             write_group,
             read_group,
             layers,
@@ -210,7 +220,11 @@ impl Oit {
     pub fn bytes(&self) -> u64 {
         let store = self.keys.size() + self.colors.size() + self.counts.size();
         let tail = u64::from(self.region[2]) * u64::from(self.region[3]) * TAIL_BYTES;
-        store + tail
+        let coverage = u64::from(self.size[0])
+            * u64::from(self.size[1])
+            * COVERAGE_BYTES
+            * u64::from(SCENE_SAMPLES);
+        store + tail + coverage
     }
 
     pub fn write_group(&self) -> &BindGroup {
@@ -231,6 +245,10 @@ impl Oit {
 
     pub fn tail_depth(&self) -> &TextureView {
         &self.tail_depth
+    }
+
+    pub fn coverage(&self) -> &TextureView {
+        &self.coverage
     }
 
     pub fn clear(&self, encoder: &mut CommandEncoder) {
@@ -267,6 +285,25 @@ fn tail(
             sample_count: 1,
             dimension: TextureDimension::D2,
             format,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&TextureViewDescriptor::default())
+}
+
+fn coverage(device: &Device, size: [u32; 2]) -> TextureView {
+    device
+        .create_texture(&TextureDescriptor {
+            label: Some("grana.oit.coverage"),
+            size: Extent3d {
+                width: size[0].max(1),
+                height: size[1].max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: SCENE_SAMPLES,
+            dimension: TextureDimension::D2,
+            format: COVERAGE_FORMAT,
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         })

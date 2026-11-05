@@ -241,6 +241,7 @@ impl Renderer {
         if let Some(oit) = target.oit.as_ref().filter(|_| translucent) {
             frame_data.oit[1] = oit.layers();
         }
+        frame_data.oit[2] = crate::target::SCENE_SAMPLES;
         let oit_group = match target.oit.as_ref() {
             Some(oit) if translucent => oit.read_group(),
             _ => dummy_oit.read_group(),
@@ -395,6 +396,45 @@ impl Renderer {
                 .draw(&mut encoder, target.scene.resolved_depth());
             if let Some(oit) = target.oit.as_ref().filter(|_| translucent) {
                 oit.clear(&mut encoder);
+                {
+                    let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                        label: Some("grana.oit.coverage.pass"),
+                        color_attachments: &[Some(RenderPassColorAttachment {
+                            view: oit.coverage(),
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: Operations {
+                                load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                            view: target.scene.depth(),
+                            depth_ops: Some(Operations {
+                                load: LoadOp::Load,
+                                store: StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        ..Default::default()
+                    });
+                    pass.set_viewport(
+                        volume_region[0] as f32,
+                        volume_region[1] as f32,
+                        volume_width as f32,
+                        volume_height as f32,
+                        0.0,
+                        1.0,
+                    );
+                    pass.set_scissor_rect(
+                        volume_region[0],
+                        volume_region[1],
+                        volume_width,
+                        volume_height,
+                    );
+                    meshes.draw_coverage(&mut pass, shadow_group);
+                    markers.draw_coverage(&mut pass, scene_group);
+                }
                 {
                     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                         label: Some("grana.oit.pass"),

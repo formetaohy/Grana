@@ -36,8 +36,11 @@ pub fn settle_clipped(
 ) -> Requests {
     let mut latest = Requests::default();
     for _ in 0..96 {
-        renderer.draw(session.device, session.queue, clipped(&session, clip));
+        let mut info = renderer.draw(session.device, session.queue, clipped(&session, clip));
         if !renderer.requests_pending() {
+            while info.samples < SAMPLES {
+                info = renderer.draw(session.device, session.queue, clipped(&session, clip));
+            }
             return latest;
         }
         if let Some(requests) = next_demand(renderer, &session) {
