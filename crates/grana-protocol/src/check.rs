@@ -176,9 +176,21 @@ impl Protocol {
             ));
         }
         let mut relations = Vec::new();
+        let mut keys: Vec<(String, String)> = Vec::new();
         for relation in &self.relations {
             validate(&relation.source, "a relation source")?;
             validate(&relation.target, "a relation target")?;
+            validate(&relation.key, "a relation key")?;
+            if keys
+                .iter()
+                .any(|(source, key)| *source == relation.source && *key == relation.key)
+            {
+                return Err(ProtocolError::Invalid(format!(
+                    "the relation key {} appears twice under {}",
+                    relation.key, relation.source
+                )));
+            }
+            keys.push((relation.source.clone(), relation.key.clone()));
             if !names.contains(&relation.source) {
                 return Err(ProtocolError::Invalid(format!(
                     "the relation source {} is not an object set of the protocol",

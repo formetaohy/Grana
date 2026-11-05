@@ -233,7 +233,12 @@ impl Protocol {
         for relation in &self.relations {
             let source = builder.ids[&relation.source];
             let target = builder.ids[&relation.target];
-            if !builder.scene.add_relation(source, target, relation.shift) {
+            if !builder.scene.add_relation_with_key(
+                source,
+                target,
+                relation.shift,
+                relation.key.clone(),
+            ) {
                 return Err(ProtocolError::Invalid(format!(
                     "{} cannot relate to {} at the offset {}",
                     relation.source, relation.target, relation.shift
@@ -243,6 +248,7 @@ impl Protocol {
                 source,
                 target,
                 shift: relation.shift,
+                key: relation.key.clone(),
             });
         }
         for spec in &self.sets {
@@ -686,8 +692,8 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
                 for (relation, step) in steps.iter().enumerate() {
                     let Step::Relation {
                         source: related,
-                        target,
-                        shift,
+                        key,
+                        ..
                     } = step
                     else {
                         continue;
@@ -695,13 +701,9 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
                     if related != source {
                         continue;
                     }
-                    let name = scene
-                        .objects
-                        .get(*target)
-                        .map_or(String::new(), |set| set.name().to_string());
-                    if relation_keys(&name, *shift)
+                    if relation_keys(key)
                         .iter()
-                        .any(|key| keys.contains(key))
+                        .any(|candidate| keys.contains(candidate))
                     {
                         dependencies[index].push(relation);
                     }

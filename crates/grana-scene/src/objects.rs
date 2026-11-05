@@ -284,6 +284,18 @@ impl Objects {
             .is_some_and(|set| set.add_relation(target, shift, stamp))
     }
 
+    pub fn add_relation_with_key(
+        &mut self,
+        id: ObjectSetId,
+        target: ObjectSetId,
+        shift: i32,
+        key: String,
+    ) -> bool {
+        let stamp = take_stamp(&mut self.stamp);
+        self.get_mut(id)
+            .is_some_and(|set| set.add_relation_with_key(target, shift, key, stamp))
+    }
+
     pub fn move_relation(
         &mut self,
         id: ObjectSetId,

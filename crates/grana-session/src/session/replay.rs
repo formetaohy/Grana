@@ -122,6 +122,7 @@ impl Session {
                     source,
                     target,
                     shift,
+                    ..
                 } => self.start_relation(source, target, shift),
                 Step::Coloc { pair, mask } => {
                     let Some(recipe) = self.recipe.as_ref() else {

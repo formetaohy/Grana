@@ -60,6 +60,7 @@ pub enum ItemState {
 pub struct RelationState {
     pub target: u64,
     pub shift: i32,
+    pub key: String,
     pub frames: Vec<Option<Arc<RelationFrame>>>,
 }
 

@@ -1,14 +1,7 @@
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
 
-use grana_object::Mask;
-
-use super::{Read, SurfaceBuilder, band, dims_of, strides_of};
-
-const READ_VOXELS: u64 = 8 << 20;
-const SCRATCH_BUDGET: u64 = 256 << 20;
-const SAMPLE_BYTES: u64 = 4;
+use super::{Read, SurfaceBuilder};
 
 pub(super) struct Detection {
     values: Vec<f32>,
@@ -17,116 +10,178 @@ pub(super) struct Detection {
     strides: [usize; 3],
 }
 
+pub(super) struct DetectionSource<'a> {
+    plan: &'a SurfaceBuilder,
+    cover: &'a [Range<u32>; 3],
+    workers: usize,
+    cancel: &'a AtomicBool,
+    read: &'a Read<'a>,
+    resident: Option<&'a Detection>,
+}
+
+pub(super) enum DetectionSlab<'a> {
+    Resident(&'a Detection),
+    Owned(Detection),
+}
+
+impl DetectionSlab<'_> {
+    pub(super) fn as_ref(&self) -> &Detection {
+        match self {
+            Self::Resident(detection) => detection,
+            Self::Owned(detection) => detection,
+        }
+    }
+}
+
+impl<'a> DetectionSource<'a> {
+    pub(super) fn new(
+        plan: &'a SurfaceBuilder,
+        cover: &'a [Range<u32>; 3],
+        workers: usize,
+        cancel: &'a AtomicBool,
+        read: &'a Read<'a>,
+        resident: Option<&'a Detection>,
+    ) -> Self {
+        Self {
+            plan,
+            cover,
+            workers,
+            cancel,
+            read,
+            resident,
+        }
+    }
+
+    pub(super) fn plan(&self) -> &'a SurfaceBuilder {
+        self.plan
+    }
+
+    pub(super) fn cover(&self) -> &'a [Range<u32>; 3] {
+        self.cover
+    }
+
+    pub(super) fn resident(&self) -> Option<&'a Detection> {
+        self.resident
+    }
+
+    pub(super) fn workers(&self) -> usize {
+        self.workers
+    }
+
+    pub(super) fn cancel(&self) -> &'a AtomicBool {
+        self.cancel
+    }
+
+    pub(super) fn slab(&self, z: Range<u32>) -> Result<Option<DetectionSlab<'a>>, String> {
+        if let Some(detection) = self.resident {
+            return Ok(Some(DetectionSlab::Resident(detection)));
+        }
+        Ok(Detection::build(
+            self.plan,
+            self.cover,
+            z,
+            self.workers,
+            self.cancel,
+            self.read,
+        )?
+        .map(DetectionSlab::Owned))
+    }
+}
+
 impl Detection {
+    pub(super) fn bytes(cover: &[Range<u32>; 3]) -> u64 {
+        let dims = super::dims_of(cover);
+        dims[0] as u64 * dims[1] as u64 * dims[2] as u64 * 4
+    }
+
     pub(super) fn build(
         plan: &SurfaceBuilder,
+        cover: &[Range<u32>; 3],
+        z: Range<u32>,
         workers: usize,
         cancel: &AtomicBool,
-        roi: Option<&Mask>,
         read: &Read<'_>,
-        progress: &mut dyn FnMut(usize, usize),
-        step: usize,
     ) -> Result<Option<Self>, String> {
-        let cover = plan.coverage(roi);
-        let dims = dims_of(&cover);
-        let strides = strides_of(dims);
+        let dims = super::dims_of(cover);
         let plane = dims[0] * dims[1];
-        let mut values = vec![0.0f32; plane * dims[2]];
-        let minimum = ((plane * dims[2]) as u64).div_ceil(READ_VOXELS);
-        let slabs = bands(dims[2], workers, minimum as usize);
-        run(
-            &mut values,
-            plane,
-            &slabs,
-            &mut band(progress, step, 0, 20),
-            |_, part, slab| {
-                if cancel.load(Ordering::Relaxed) {
-                    return Ok(());
-                }
-                let ranges = [0, 1, 2].map(|axis| {
-                    let (first, last) = if axis == 2 {
-                        (slab.start, slab.end)
-                    } else {
-                        (0, dims[axis])
-                    };
-                    (cover[axis].start + first as u32)..(cover[axis].start + last as u32)
-                });
-                let data = read(&ranges)?;
-                if data.voxel_count() != part.len() {
-                    return Err(
-                        "the detection slab does not cover the requested region".to_string()
-                    );
-                }
-                data.write_values(part);
-                Ok(())
-            },
-        )?;
+        if plane == 0 || z.is_empty() {
+            return Ok(None);
+        }
+        let radius = plan.kernels[2].len() / 2;
+        let raw_start = z.start.saturating_sub(radius as u32).max(cover[2].start);
+        let raw_end = z.end.saturating_add(radius as u32).min(cover[2].end);
+        assert!(
+            raw_start <= z.start && z.end <= raw_end,
+            "a detection slab holds the smoothing support of its output"
+        );
+        let raw_dims = [dims[0], dims[1], (raw_end - raw_start) as usize];
+        let mut raw = vec![0.0f32; raw_dims[0] * raw_dims[1] * raw_dims[2]];
+        let ranges = [cover[0].clone(), cover[1].clone(), raw_start..raw_end];
+        let data = read(&ranges)?;
+        if data.voxel_count() != raw.len() {
+            return Err("the detection slab does not cover the requested region".to_string());
+        }
+        data.write_values(&mut raw);
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
-        for (axis, from) in [(0, 20), (1, 25)] {
-            let kernel = &plan.kernels[axis];
+        for (axis, kernel) in plan.kernels.iter().enumerate().take(2) {
             if kernel.len() <= 1 {
                 continue;
             }
-            let slabs = bands(dims[2], workers, 1);
-            run(
-                &mut values,
-                plane,
-                &slabs,
-                &mut band(progress, step, from, from + 5),
-                |_, part, slab| {
-                    if cancel.load(Ordering::Relaxed) {
-                        return Ok(());
-                    }
-                    horizontal(part, dims, slab.end - slab.start, kernel, axis);
-                    Ok(())
-                },
-            )?;
+            planes(&mut raw, plane, workers.max(1), |part, _| {
+                if axis == 0 {
+                    horizontal(part, dims, part.len() / plane, kernel);
+                } else {
+                    vertical(part, dims, part.len() / plane, kernel);
+                }
+            });
             if cancel.load(Ordering::Relaxed) {
                 return Ok(None);
             }
         }
+        let output = z.end - z.start;
+        let mut values = vec![0.0f32; plane * output as usize];
         let kernel = &plan.kernels[2];
-        if kernel.len() > 1 {
-            let radius = kernel.len() / 2;
-            let workers = depth_workers(plane, radius, workers);
-            let slabs = bands(dims[2], workers, 1);
-            let halos = halos(&values, plane, dims[2], &slabs, radius);
-            run(
-                &mut values,
+        if kernel.len() <= 1 {
+            let offset = (z.start - raw_start) as usize * plane;
+            let length = values.len();
+            values.copy_from_slice(&raw[offset..offset + length]);
+            return Ok(Some(Self {
+                values,
+                start: [
+                    i64::from(cover[0].start),
+                    i64::from(cover[1].start),
+                    i64::from(z.start),
+                ],
+                dims: [dims[0], dims[1], output as usize],
+                strides: super::strides_of([dims[0], dims[1], output as usize]),
+            }));
+        }
+        let radius = kernel.len() / 2;
+        planes(&mut values, plane, workers.max(1), |part, first| {
+            depth(
+                part,
+                &raw,
                 plane,
-                &slabs,
-                &mut band(progress, step, 30, 45),
-                |index, part, slab| {
-                    if cancel.load(Ordering::Relaxed) {
-                        return Ok(());
-                    }
-                    depth(
-                        part,
-                        &halos[index],
-                        plane,
-                        slab.start..slab.end,
-                        dims[2],
-                        radius,
-                        kernel,
-                    );
-                    Ok(())
-                },
-            )?;
-            if cancel.load(Ordering::Relaxed) {
-                return Ok(None);
-            }
+                first + z.start as usize - raw_start as usize,
+                raw_dims[2],
+                radius,
+                kernel,
+            );
+        });
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(None);
         }
         Ok(Some(Self {
             values,
             start: [
                 i64::from(cover[0].start),
                 i64::from(cover[1].start),
-                i64::from(cover[2].start),
+                i64::from(z.start),
             ],
-            dims,
-            strides,
+            dims: [dims[0], dims[1], output as usize],
+            strides: super::strides_of([dims[0], dims[1], output as usize]),
         }))
     }
 
@@ -159,176 +214,125 @@ impl Detection {
     }
 }
 
-fn bands(length: usize, workers: usize, minimum: usize) -> Vec<Range<usize>> {
-    let count = length
-        .clamp(1, workers.max(1))
-        .max(minimum.clamp(1, length.max(1)));
-    (0..count)
-        .map(|index| (index * length / count)..((index + 1) * length / count))
-        .filter(|range| range.end > range.start)
-        .collect()
-}
-
-fn depth_workers(plane: usize, radius: usize, workers: usize) -> usize {
-    let per_worker = SAMPLE_BYTES * (radius.max(1) + 1) as u64 * plane.max(1) as u64;
-    ((SCRATCH_BUDGET / per_worker.max(1)) as usize).clamp(1, workers.max(1))
-}
-
-fn run(
+fn planes(
     values: &mut [f32],
     plane: usize,
-    slabs: &[Range<usize>],
-    progress: &mut dyn FnMut(usize, usize),
-    work: impl Fn(usize, &mut [f32], &Range<usize>) -> Result<(), String> + Sync,
-) -> Result<(), String> {
-    let total = slabs.len();
-    let mut parts = Vec::with_capacity(total);
-    let mut rest = values;
-    for slab in slabs {
-        let length = (slab.end - slab.start) * plane;
-        let (part, tail) = rest.split_at_mut(length);
-        parts.push(part);
-        rest = tail;
+    workers: usize,
+    body: impl Fn(&mut [f32], usize) + Sync,
+) {
+    if plane == 0 || values.is_empty() {
+        return;
     }
-    let (sender, receiver) = mpsc::sync_channel::<Option<String>>(total.max(1));
-    let failure = std::thread::scope(|scope| {
-        let work = &work;
-        for (index, (part, slab)) in parts.into_iter().zip(slabs).enumerate() {
-            let sender = sender.clone();
-            scope.spawn(move || {
-                let _ = sender.send(work(index, part, slab).err());
-            });
+    let available = values.len().div_ceil(plane);
+    let workers = workers.clamp(1, available.max(1));
+    let each = available.div_ceil(workers).max(1);
+    if workers == 1 {
+        body(values, 0);
+        return;
+    }
+    let body = &body;
+    std::thread::scope(|scope| {
+        for (index, chunk) in values.chunks_mut(each * plane).enumerate() {
+            let first = index * each;
+            scope.spawn(move || body(chunk, first));
         }
-        drop(sender);
-        let mut failure: Option<String> = None;
-        let mut done = 0usize;
-        while let Ok(detail) = receiver.recv() {
-            done += 1;
-            progress(done, total);
-            if let Some(detail) = detail {
-                failure.get_or_insert(detail);
-            }
-        }
-        failure
     });
-    match failure {
-        Some(detail) => Err(detail),
-        None => Ok(()),
-    }
 }
 
-fn horizontal(part: &mut [f32], dims: [usize; 3], depth: usize, kernel: &[f32], axis: usize) {
+fn horizontal(part: &mut [f32], dims: [usize; 3], depth: usize, kernel: &[f32]) {
     let plane = dims[0] * dims[1];
-    let radius = (kernel.len() / 2) as i64;
-    let last = dims[axis] as i64 - 1;
-    let mut line = vec![0.0f32; dims[axis]];
-    let mut blurred = vec![0.0f32; dims[axis]];
+    let radius = kernel.len() / 2;
+    let last = dims[0] - 1;
+    let mut line = vec![0.0f32; dims[0]];
+    let mut blurred = vec![0.0f32; dims[0]];
+    let mut padded = vec![0.0f32; dims[0] + 2 * radius];
     for z in 0..depth {
         let base = plane * z;
-        if axis == 0 {
+        for y in 0..dims[1] {
+            let start = base + dims[0] * y;
+            line.copy_from_slice(&part[start..start + dims[0]]);
+            padded[..radius].fill(line[0]);
+            padded[radius..radius + dims[0]].copy_from_slice(&line);
+            padded[radius + dims[0]..].fill(line[last]);
+            blur(&padded, &mut blurred, kernel, radius);
+            part[start..start + dims[0]].copy_from_slice(&blurred);
+        }
+    }
+}
+
+const BLOCK: usize = 32;
+
+fn vertical(part: &mut [f32], dims: [usize; 3], depth: usize, kernel: &[f32]) {
+    let plane = dims[0] * dims[1];
+    let radius = (kernel.len() / 2) as i64;
+    let last = dims[1] as i64 - 1;
+    let mut block = vec![0.0f32; dims[1] * BLOCK];
+    let mut blurred = vec![0.0f32; dims[1] * BLOCK];
+    for z in 0..depth {
+        let base = plane * z;
+        let mut x0 = 0;
+        while x0 < dims[0] {
+            let width = (dims[0] - x0).min(BLOCK);
             for y in 0..dims[1] {
-                let start = base + dims[0] * y;
-                line.copy_from_slice(&part[start..start + dims[0]]);
-                blur(&line, &mut blurred, kernel, radius, last);
-                part[start..start + dims[0]].copy_from_slice(&blurred);
+                let start = base + y * dims[0] + x0;
+                block[y * width..(y + 1) * width].copy_from_slice(&part[start..start + width]);
             }
-        } else {
-            for x in 0..dims[0] {
-                let start = base + x;
-                for (step, slot) in line.iter_mut().enumerate() {
-                    *slot = part[start + dims[0] * step];
-                }
-                blur(&line, &mut blurred, kernel, radius, last);
-                for (step, value) in blurred.iter().enumerate() {
-                    part[start + dims[0] * step] = *value;
+            for y in 0..dims[1] {
+                let target = &mut blurred[y * width..(y + 1) * width];
+                target.fill(0.0);
+                for (tap, weight) in kernel.iter().enumerate() {
+                    let sample = (y as i64 + tap as i64 - radius).clamp(0, last) as usize;
+                    let source = &block[sample * width..(sample + 1) * width];
+                    for (slot, value) in target.iter_mut().zip(source) {
+                        *slot += weight * value;
+                    }
                 }
             }
+            for y in 0..dims[1] {
+                let start = base + y * dims[0] + x0;
+                part[start..start + width].copy_from_slice(&blurred[y * width..(y + 1) * width]);
+            }
+            x0 += width;
         }
     }
-}
-
-fn blur(line: &[f32], blurred: &mut [f32], kernel: &[f32], radius: i64, last: i64) {
-    for (step, slot) in blurred.iter_mut().enumerate() {
-        let mut sum = 0.0f32;
-        for (tap, weight) in kernel.iter().enumerate() {
-            let sample = (step as i64 + tap as i64 - radius).clamp(0, last) as usize;
-            sum += line[sample] * weight;
-        }
-        *slot = sum;
-    }
-}
-
-fn halos(
-    values: &[f32],
-    plane: usize,
-    length: usize,
-    slabs: &[Range<usize>],
-    radius: usize,
-) -> Vec<Vec<f32>> {
-    let mut buffers: Vec<Vec<f32>> = slabs
-        .iter()
-        .map(|slab| vec![0.0f32; halo_planes(slab, length, radius) * plane])
-        .collect();
-    std::thread::scope(|scope| {
-        for (slab, buffer) in slabs.iter().zip(buffers.iter_mut()) {
-            let buffer = &mut buffer[..];
-            scope.spawn(move || {
-                let low = radius.min(slab.start);
-                let high = radius.min(length - slab.end);
-                let lower = (slab.start - low) * plane..slab.start * plane;
-                let upper = slab.end * plane..(slab.end + high) * plane;
-                let split = lower.len();
-                buffer[..split].copy_from_slice(&values[lower]);
-                buffer[split..].copy_from_slice(&values[upper]);
-            });
-        }
-    });
-    buffers
-}
-
-fn halo_planes(slab: &Range<usize>, length: usize, radius: usize) -> usize {
-    radius.min(slab.start) + radius.min(length - slab.end)
 }
 
 fn depth(
     part: &mut [f32],
-    halo: &[f32],
+    raw: &[f32],
     plane: usize,
-    range: Range<usize>,
+    start: usize,
     length: usize,
     radius: usize,
     kernel: &[f32],
 ) {
-    let start = range.start;
-    let depth = range.end - range.start;
-    let low = radius.min(start);
-    let stride = radius.max(1);
-    let mut window = vec![0.0f32; stride * plane];
-    let mut out = vec![0.0f32; plane];
-    for z in 0..depth {
-        out.fill(0.0);
+    for z in 0..part.len() / plane {
+        let output = &mut part[z * plane..(z + 1) * plane];
+        output.fill(0.0);
+        let centre = start + z;
         for (tap, weight) in kernel.iter().enumerate() {
-            let reached = (start as i64 + z as i64 + tap as i64 - radius as i64)
-                .clamp(0, length as i64 - 1) as usize;
-            let source = if reached < start {
-                let slot = reached - (start - low);
-                &halo[slot * plane..(slot + 1) * plane]
-            } else if reached >= start + depth {
-                let slot = low + (reached - (start + depth));
-                &halo[slot * plane..(slot + 1) * plane]
-            } else if reached < start + z {
-                let slot = (reached - start) % stride;
-                &window[slot * plane..(slot + 1) * plane]
-            } else {
-                let slot = reached - start;
-                &part[slot * plane..(slot + 1) * plane]
-            };
-            for (slot, value) in out.iter_mut().zip(source) {
+            let reached =
+                (centre as i64 + tap as i64 - radius as i64).clamp(0, length as i64 - 1) as usize;
+            let source = &raw[reached * plane..(reached + 1) * plane];
+            for (slot, value) in output.iter_mut().zip(source) {
                 *slot += weight * value;
             }
         }
-        let slot = z % stride;
-        window[slot * plane..(slot + 1) * plane].copy_from_slice(&part[z * plane..(z + 1) * plane]);
-        part[z * plane..(z + 1) * plane].copy_from_slice(&out);
     }
+}
+
+fn blur(padded: &[f32], blurred: &mut [f32], kernel: &[f32], radius: usize) {
+    let length = blurred.len();
+    for (x, slot) in blurred.iter_mut().enumerate() {
+        let source = &padded[x..x + 2 * radius + 1];
+        let mut sum = 0.0f32;
+        for (value, weight) in source.iter().zip(kernel) {
+            sum += value * weight;
+        }
+        *slot = sum;
+    }
+    assert!(
+        padded.len() >= length + 2 * radius,
+        "a padded line holds its halo"
+    );
 }

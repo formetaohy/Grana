@@ -190,20 +190,57 @@ impl<'a> Merged<'a> {
     fn close(&mut self, split: f32, cancel: Option<&AtomicBool>) {
         let seeded = self.topology.info().seeds() > 0;
         let merge_all = split == 0.0 && !seeded;
-        let mut seams = Map::<(u32, u32), u32>::default();
+        let mut seams = Vec::with_capacity(self.topology.seams().len());
         for seam in self.topology.seams() {
-            let slot = seams.entry((seam.left(), seam.right())).or_insert(0);
-            *slot = (*slot).max(seam.saddle());
+            let key = (u64::from(seam.left()) << 32) | u64::from(seam.right());
+            seams.push((key, seam.saddle()));
         }
-        let mut seams = seams.into_iter().collect::<Vec<_>>();
-        seams.sort_unstable_by(|(left_key, left_saddle), (right_key, right_saddle)| {
-            right_saddle.cmp(left_saddle).then(left_key.cmp(right_key))
-        });
-        for (index, ((left, right), saddle)) in seams.into_iter().enumerate() {
+        seams.sort_unstable_by_key(|(key, _)| *key);
+        let mut merged: Vec<(u64, u32)> = Vec::with_capacity(seams.len());
+        for (key, saddle) in seams {
+            match merged.last_mut() {
+                Some((current, value)) if *current == key => *value = (*value).max(saddle),
+                _ => merged.push((key, saddle)),
+            }
+        }
+        let mut seams = merged;
+        let mut ordered = Vec::with_capacity(seams.len());
+        let peak = seams.iter().map(|(_, saddle)| *saddle).max().unwrap_or(0);
+        if peak < (1 << 20) {
+            let mut counts = vec![0usize; peak as usize + 1];
+            for (_, saddle) in &seams {
+                counts[*saddle as usize] += 1;
+            }
+            let mut cursor = vec![0usize; peak as usize + 1];
+            let mut total = 0usize;
+            for saddle in (0..=peak as usize).rev() {
+                cursor[saddle] = total;
+                total += counts[saddle];
+            }
+            for (key, saddle) in seams.drain(..) {
+                ordered.push((key, saddle, cursor[saddle as usize]));
+                cursor[saddle as usize] += 1;
+            }
+            let mut slots = vec![(0u64, 0u32); ordered.len()];
+            for (key, saddle, slot) in ordered {
+                slots[slot] = (key, saddle);
+            }
+            seams = slots;
+        } else {
+            seams.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+        }
+        for (index, (key, saddle)) in seams.into_iter().enumerate() {
             if index.is_multiple_of(4096) && cancelled(cancel) {
                 return;
             }
-            self.join(left, right, saddle, split, merge_all, seeded);
+            self.join(
+                (key >> 32) as u32,
+                (key & 0xffff_ffff) as u32,
+                saddle,
+                split,
+                merge_all,
+                seeded,
+            );
         }
     }
 

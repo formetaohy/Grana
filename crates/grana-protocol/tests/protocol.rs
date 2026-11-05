@@ -1092,21 +1092,42 @@ fn stages_a_relation_before_the_filtered_set_that_reads_it() {
     assert!(scene.rename_object(puncta, "Puncta"));
     assert!(scene.rename_object(nuclei, "Nuclei"));
     assert!(scene.add_relation(puncta, nuclei, 0));
+    let relation_key = scene
+        .objects
+        .get(puncta)
+        .and_then(|set| set.relation(nuclei, 0))
+        .map(|relation| relation.key().to_string())
+        .expect("the scene measures the relation");
     let criteria = Criteria::new(
         Group::Object,
-        vec![FilterRange::new("nuclei_distance_um", 0.0, 1.0)],
+        vec![FilterRange::new(
+            &format!("{relation_key}_distance_um"),
+            0.0,
+            1.0,
+        )],
         None,
     );
     assert!(
         scene.filter_object(puncta, "filtered", criteria).is_some(),
         "the filtered set derives from the puncta"
     );
+    assert!(scene.rename_object(nuclei, "Renamed Nuclei"));
     let protocol =
         Protocol::capture(&scene, &Measure::new(), None).expect("the relation filter captures");
+    assert_eq!(
+        protocol.relations()[0].key,
+        relation_key,
+        "renaming the target keeps the relation key"
+    );
     let mut staged_scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
     let staged = protocol
         .stage(&mut staged_scene)
         .expect("the relation filter stages");
+    let text = protocol.to_json().expect("the renamed protocol serializes");
+    assert!(
+        text.contains(&format!("{relation_key}_distance_um")),
+        "the captured filter keeps the stable relation column"
+    );
     let steps = staged.steps();
     let relation = steps
         .iter()

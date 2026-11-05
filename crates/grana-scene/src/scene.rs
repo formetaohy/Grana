@@ -427,9 +427,19 @@ impl Scene {
 
     pub fn mask_frames(&self) -> Option<grana_object::Roi> {
         let set = self.objects.get(self.mask?)?;
+        let filtered = set.filtered();
         let frames = Arc::new(
             (0..self.frame_count())
-                .map(|time| set.frame_shared(time))
+                .map(|time| {
+                    let frame = set.frame_shared(time)?;
+                    if !filtered {
+                        return Some(frame);
+                    }
+                    let keep = (0..frame.object_count())
+                        .map(|object| set.filtered_object(time, object))
+                        .collect::<Vec<_>>();
+                    frame.retain(&keep).ok().flatten().map(Arc::new)
+                })
                 .collect::<Vec<_>>(),
         );
         Some(grana_object::Roi::paged(frames.len(), move |time| {
@@ -452,6 +462,21 @@ impl Scene {
     }
 
     pub fn add_relation(&mut self, source: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {
+        self.add_relation_with_key(
+            source,
+            target,
+            shift,
+            crate::relation::key_of(target, shift),
+        )
+    }
+
+    pub fn add_relation_with_key(
+        &mut self,
+        source: ObjectSetId,
+        target: ObjectSetId,
+        shift: i32,
+        key: String,
+    ) -> bool {
         if source == target && shift == 0 {
             return false;
         }
@@ -463,7 +488,8 @@ impl Scene {
         if (i64::from(shift).unsigned_abs() as usize) >= frame_count as usize {
             return false;
         }
-        self.objects.add_relation(source, target, shift)
+        self.objects
+            .add_relation_with_key(source, target, shift, key)
     }
 
     pub fn move_relation(
@@ -527,7 +553,12 @@ impl Scene {
                     .objects
                     .get(relation.target())
                     .map_or("target", ObjectSet::name);
-                RelationRow::new(target, relation.shift(), relation.frame(time))
+                RelationRow::new(
+                    relation.key(),
+                    target,
+                    relation.shift(),
+                    relation.frame(time),
+                )
             })
             .collect()
     }

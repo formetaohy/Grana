@@ -611,12 +611,25 @@ impl ObjectSet {
     }
 
     pub(crate) fn add_relation(&mut self, target: ObjectSetId, shift: i32, stamp: u64) -> bool {
-        if self.relation(target, shift).is_some() {
+        self.add_relation_with_key(target, shift, crate::relation::key_of(target, shift), stamp)
+    }
+
+    pub(crate) fn add_relation_with_key(
+        &mut self,
+        target: ObjectSetId,
+        shift: i32,
+        key: String,
+        stamp: u64,
+    ) -> bool {
+        if self.relation(target, shift).is_some()
+            || self.relations.iter().any(|relation| relation.key() == key)
+        {
             return false;
         }
         self.relations.push(Relation::new(
             target,
             shift,
+            key,
             vec![None; self.frame_count() as usize],
         ));
         self.revision = stamp;
@@ -824,6 +837,7 @@ impl ObjectSet {
                 .map(|relation| RelationState {
                     target: relation.target().raw(),
                     shift: relation.shift(),
+                    key: relation.key().to_string(),
                     frames: relation.shared_frames().to_vec(),
                 })
                 .collect(),
@@ -963,8 +977,12 @@ impl ObjectSet {
                 set.relation(target, relation.shift).is_none(),
                 "a restored relation measures one offset of its target"
             );
-            set.relations
-                .push(Relation::new(target, relation.shift, relation.frames));
+            set.relations.push(Relation::new(
+                target,
+                relation.shift,
+                relation.key,
+                relation.frames,
+            ));
         }
         if let Some(tracks) = tracks {
             let thickness = track_thickness.expect("a restored track layer carries a thickness");
@@ -1053,8 +1071,12 @@ impl ObjectSet {
         self.document += 1;
     }
 
-    pub fn visible_object(&self, time: u32, object: usize) -> bool {
-        let scoped = match &self.visibility {
+    pub fn filtered(&self) -> bool {
+        !matches!(self.visibility, Visibility::All)
+    }
+
+    pub fn filtered_object(&self, time: u32, object: usize) -> bool {
+        match &self.visibility {
             Visibility::All => true,
             Visibility::Object(frames) => frames
                 .get(time as usize)
@@ -1064,8 +1086,11 @@ impl ObjectSet {
             Visibility::Track(tracks) => self
                 .track_at(time, object)
                 .is_some_and(|track| tracks.get(track).copied().unwrap_or(false)),
-        };
-        scoped && !self.hidden_object(time, object)
+        }
+    }
+
+    pub fn visible_object(&self, time: u32, object: usize) -> bool {
+        self.filtered_object(time, object) && !self.hidden_object(time, object)
     }
 
     pub fn visible_track(&self, track: usize) -> bool {
@@ -1449,6 +1474,7 @@ impl ObjectSet {
                 Relation::new(
                     relation.target(),
                     relation.shift(),
+                    relation.key().to_string(),
                     vec![None; self.frames.len()],
                 )
             })
@@ -1573,6 +1599,7 @@ impl ObjectSet {
                 Relation::new(
                     relation.target(),
                     relation.shift(),
+                    relation.key().to_string(),
                     vec![None; self.frames.len()],
                 )
             })
@@ -1585,9 +1612,17 @@ impl ObjectSet {
             {
                 continue;
             }
+            let mut key = relation.key().to_string();
+            let base = key.clone();
+            let mut ordinal = 2;
+            while relations.iter().any(|existing| existing.key() == key) {
+                key = format!("{base}_{ordinal}");
+                ordinal += 1;
+            }
             relations.push(Relation::new(
                 relation.target(),
                 relation.shift(),
+                key,
                 vec![None; self.frames.len()],
             ));
         }

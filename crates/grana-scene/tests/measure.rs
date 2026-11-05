@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use grana_measure::{Lasso, MeasureView, Plot, PlotAxis, Scope};
 use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
-use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, Scene};
+use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, Scene, Visibility};
 use grana_volume::{Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
 fn scene() -> Scene {
@@ -22,6 +24,55 @@ fn scene() -> Scene {
         "fixture",
         VolumeSeries::new(frames, 1.0).pyramid().clone(),
     ))
+}
+
+#[test]
+fn detects_inside_the_filtered_objects_of_the_mask_set() {
+    let mut scene = scene();
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    let centered = || {
+        let statistics = [0.1f32, 0.9].map(|value| {
+            let mut accumulator = SampleAccumulator::new();
+            accumulator.push(value);
+            accumulator.statistics()
+        });
+        ObjectFrame::Spots(SpotSet::new(
+            0,
+            vec![
+                Spot::new([-0.4, 0.0, 0.0], 0.6, 0.5),
+                Spot::new([0.4, 0.0, 0.0], 0.6, 0.5),
+            ],
+            IntensityTable::new(1, statistics.to_vec()),
+        ))
+    };
+    for time in 0..2 {
+        scene.install(set, time, centered());
+    }
+    scene.set_mask(Some(set));
+    let level = scene.dataset.pyramid().level(0);
+    let whole = scene
+        .mask_frames()
+        .expect("the mask set builds")
+        .mask(level, 0)
+        .expect("the whole mask rasterizes");
+    assert!(whole.count() > 0, "the mask rasterizes the spot set");
+    scene
+        .objects
+        .get_mut(set)
+        .expect("the mask set exists")
+        .set_visibility(Visibility::Object(Arc::new(vec![
+            vec![false, true],
+            vec![false, true],
+        ])));
+    let filtered = scene
+        .mask_frames()
+        .expect("the filtered mask set builds")
+        .mask(level, 0)
+        .expect("the filtered mask rasterizes");
+    assert!(
+        filtered.count() > 0 && filtered.count() < whole.count(),
+        "the analysis mask follows the filter visibility"
+    );
 }
 
 fn frame() -> ObjectFrame {

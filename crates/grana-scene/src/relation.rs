@@ -8,13 +8,19 @@ use crate::object_set::ObjectSetId;
 pub struct Relation {
     target: ObjectSetId,
     shift: i32,
+    key: String,
     frames: Vec<Option<Arc<RelationFrame>>>,
+}
+
+pub(crate) fn key_of(target: ObjectSetId, shift: i32) -> String {
+    format!("r{}_{}", target.raw(), shift)
 }
 
 impl Relation {
     pub(crate) fn new(
         target: ObjectSetId,
         shift: i32,
+        key: String,
         frames: Vec<Option<Arc<RelationFrame>>>,
     ) -> Self {
         assert!(
@@ -25,9 +31,11 @@ impl Relation {
             (i64::from(shift).unsigned_abs() as usize) < frames.len(),
             "a relation shifts within the frames of its dataset"
         );
+        assert!(!key.trim().is_empty(), "a relation carries a stable key");
         Self {
             target,
             shift,
+            key,
             frames,
         }
     }
@@ -38,6 +46,10 @@ impl Relation {
 
     pub fn shift(&self) -> i32 {
         self.shift
+    }
+
+    pub fn key(&self) -> &str {
+        &self.key
     }
 
     pub fn frame(&self, time: u32) -> Option<&RelationFrame> {
@@ -79,6 +91,11 @@ impl Relation {
     }
 
     pub(crate) fn moved(&self, shift: i32) -> Self {
-        Self::new(self.target, shift, vec![None; self.frames.len()])
+        Self::new(
+            self.target,
+            shift,
+            key_of(self.target, shift),
+            vec![None; self.frames.len()],
+        )
     }
 }

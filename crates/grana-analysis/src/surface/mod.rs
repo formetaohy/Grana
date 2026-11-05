@@ -27,7 +27,7 @@ use grana_object::SurfaceCut;
 use grana_object::SurfaceParams;
 
 use assemble::Assembler;
-use detection::Detection;
+use detection::{Detection, DetectionSource};
 use distance::Distance;
 use mask::SolidMask;
 use tile::{Tile, TileResult};
@@ -35,6 +35,9 @@ use tile::{Tile, TileResult};
 use crate::schedule::Budget;
 
 const TILE_SIDE: u32 = 96;
+const TILE_Z_FLOOR: u32 = 8;
+const SLAB_BUDGET: u64 = 256 << 20;
+const DETECTION_CACHE: u64 = 768 << 20;
 const DISTANCE_LIMIT: u32 = 12;
 const DISTANCE_LIMIT_MAX: u32 = 48;
 const GRAIN_LIMIT: f32 = 3.0;
@@ -48,10 +51,9 @@ const WORKER_ARRAY_LIMIT: u64 = 320 << 20;
 const FRAME_ARRAY_LIMIT: u64 = 1024 << 20;
 const TILE_FRAGMENT_LIMIT: u64 = 96 << 20;
 const SEED_SNAP: i64 = 2;
-const DETECTION_BYTES_PER_VOXEL: u64 = 4;
-const DETECTION_BUDGET: u64 = 1024 << 20;
+const SURFACE_BUDGET: u64 = 1 << 30;
 
-pub const SURFACE_VOXEL_LIMIT: u64 = DETECTION_BUDGET / DETECTION_BYTES_PER_VOXEL;
+pub const SURFACE_VOXEL_LIMIT: u64 = SURFACE_BUDGET;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeedPolicy {
@@ -171,6 +173,7 @@ pub struct SurfaceBuilder {
     threshold: f32,
     region: [Range<u32>; 3],
     anchor: [i64; 3],
+    tile: [u32; 3],
     tiles: [u32; 3],
     tile_count: usize,
     anisotropy: [u32; 3],
@@ -221,9 +224,13 @@ impl SurfaceBuilder {
             region[1].start as i64,
             region[2].start as i64,
         ];
+        let plane = u64::from(extent[0]) * u64::from(extent[1]);
+        let slab = (SLAB_BUDGET / (8 * plane.max(1))).max(1) as u32;
+        let tile_z = slab.clamp(TILE_Z_FLOOR, TILE_SIDE).div_ceil(TILE_Z_FLOOR) * TILE_Z_FLOOR;
+        let tile = [TILE_SIDE, TILE_SIDE, tile_z];
         let tiles = [0, 1, 2].map(|axis| {
             let count = region[axis].end.saturating_sub(region[axis].start);
-            count.div_ceil(TILE_SIDE)
+            count.div_ceil(tile[axis])
         });
         let tile_count = tiles[0] as usize * tiles[1] as usize * tiles[2] as usize;
         Self {
@@ -240,6 +247,7 @@ impl SurfaceBuilder {
             threshold: params.threshold(),
             region,
             anchor,
+            tile,
             tiles,
             tile_count,
             anisotropy,
@@ -285,8 +293,8 @@ impl SurfaceBuilder {
         assert!(index < self.tile_count, "the tile index is in bounds");
         let position = self.tile_position(index);
         [0, 1, 2].map(|axis| {
-            let start = self.region[axis].start + position[axis] * TILE_SIDE;
-            start..(start + TILE_SIDE).min(self.region[axis].end)
+            let start = self.region[axis].start + position[axis] * self.tile[axis];
+            start..(start + self.tile[axis]).min(self.region[axis].end)
         })
     }
 
@@ -421,13 +429,31 @@ impl SurfaceBuilder {
         let store = sources.store;
         let total = self.tile_count;
         let step = total * 2 + 1;
-        let Some(detection) =
-            Detection::build(&self, desired, cancel, roi, sources.read, progress, step)?
-        else {
+        let cover = self.coverage(roi);
+        let resident = if Detection::bytes(&cover) <= DETECTION_CACHE {
+            Detection::build(
+                &self,
+                &cover,
+                cover[2].clone(),
+                desired,
+                cancel,
+                sources.read,
+            )?
+        } else {
+            None
+        };
+        let source = DetectionSource::new(
+            &self,
+            &cover,
+            desired,
+            cancel,
+            sources.read,
+            resident.as_ref(),
+        );
+        let Some(field) = stats::build(&source, roi, &mut band(progress, step, 0, 30))? else {
             return Ok(None);
         };
-        let Some(mask) = mask::build(&self, desired, cancel, roi, progress, step, &detection)?
-        else {
+        let Some(mask) = mask::build(&source, roi, progress, step, &field)? else {
             return Ok(None);
         };
         let Some(seeds) = self.seeds(&mask.solid)? else {
@@ -456,9 +482,9 @@ impl SurfaceBuilder {
                 cancel,
                 progress: &mut report,
                 measure: sources.measure,
+                source: &source,
                 solid: &mask.solid,
-                field: &mask.field,
-                detection: &detection,
+                field: mask.field,
                 roi,
             };
             match run_pass(&pass, workers, &budget, &mut inputs)? {
@@ -570,7 +596,7 @@ fn array_bytes(plan: &SurfaceBuilder, index: usize, pad: [u32; 3]) -> u64 {
     let core = plan.core_range(index);
     let array = [0, 1, 2].map(|axis| {
         let size = (plan.region[axis].end - plan.region[axis].start) as u64;
-        let span = u64::from(TILE_SIDE + 2 * pad[axis]);
+        let span = u64::from(plan.tile[axis] + 2 * pad[axis]);
         size.min(span)
     });
     let field = plan
@@ -589,9 +615,9 @@ struct Inputs<'a> {
     cancel: &'a AtomicBool,
     progress: &'a mut dyn FnMut(usize, usize),
     measure: &'a Measure<'a>,
+    source: &'a DetectionSource<'a>,
     solid: &'a SolidMask,
     field: &'a crate::local::BlockField,
-    detection: &'a Detection,
     roi: Option<&'a Mask>,
 }
 
@@ -601,24 +627,147 @@ fn run_pass(
     budget: &Budget,
     inputs: &mut Inputs<'_>,
 ) -> Result<PassOutcome, String> {
+    if let Some(resident) = inputs.source.resident() {
+        return run_resident(pass, workers, budget, resident, inputs);
+    }
     let total = pass.total();
-    let next = AtomicUsize::new(0);
+    let per_row = pass.plan.tiles[0] as usize * pass.plan.tiles[1] as usize;
     let stop = AtomicBool::new(false);
-    let (sender, receiver) = mpsc::sync_channel::<(usize, TileResult)>(workers * 2);
     let cancel = inputs.cancel;
     let measure = inputs.measure;
     let solid = inputs.solid;
     let field = inputs.field;
-    let detection = inputs.detection;
     let gate = pass.plan.gate(inputs.roi);
-    std::thread::scope(|scope| {
+    let mut assembler = Assembler::new(pass);
+    let mut assembled = 0usize;
+    for row in 0..pass.plan.tiles[2] as usize {
+        let row_start = row * per_row;
+        let row_end = (row_start + per_row).min(total);
+        let core = pass.plan.core_range(row_start)[2].clone();
+        let cover = inputs.source.cover();
+        let z = [
+            core.start.saturating_sub(FIELD_REACH).max(cover[2].start),
+            core.end.saturating_add(FIELD_REACH).min(cover[2].end),
+        ];
+        let Some(detection) = inputs.source.slab(z[0]..z[1])? else {
+            stop.store(true, Ordering::Relaxed);
+            return Ok(PassOutcome::Cancelled);
+        };
+        let detection = detection.as_ref();
+        if halted(cancel, &stop) {
+            return Ok(PassOutcome::Cancelled);
+        }
+        let count = row_end - row_start;
+        let (sender, receiver) = mpsc::sync_channel::<(usize, TileResult)>(workers * 2);
+        let next = AtomicUsize::new(0);
+        let outcome = std::thread::scope(|scope| {
+            let next = &next;
+            let stop = &stop;
+            let gate = &gate;
+            for _ in 0..workers.min(count.max(1)) {
+                let sender = sender.clone();
+                scope.spawn(move || {
+                    let mut tile = Tile::new(pass, solid, field, detection, gate);
+                    loop {
+                        if halted(cancel, stop) {
+                            break;
+                        }
+                        let local = next.fetch_add(1, Ordering::Relaxed);
+                        if local >= count {
+                            break;
+                        }
+                        let index = row_start + local;
+                        let bytes = pass.array_bytes(index);
+                        if !budget.acquire(bytes, || halted(cancel, stop)) {
+                            break;
+                        }
+                        let result = tile.run(index, cancel, stop, measure);
+                        budget.release(bytes);
+                        if sender.send((index, result)).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            drop(sender);
+            let mut pending: Vec<Option<TileResult>> = (0..count).map(|_| None).collect();
+            let mut next_row = row_start;
+            while next_row < row_end {
+                if cancel.load(Ordering::Relaxed) {
+                    stop.store(true, Ordering::Relaxed);
+                    return Ok::<bool, String>(false);
+                }
+                let (index, result) = match receiver.recv() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        if cancel.load(Ordering::Relaxed) {
+                            return Ok(false);
+                        }
+                        return Err(
+                            "the surface workers stopped before every tile was assembled"
+                                .to_string(),
+                        );
+                    }
+                };
+                pending[index - row_start] = Some(result);
+                while next_row < row_end {
+                    let Some(result) = pending[next_row - row_start].take() else {
+                        break;
+                    };
+                    match result {
+                        TileResult::Cancelled => {
+                            stop.store(true, Ordering::Relaxed);
+                            return Ok(false);
+                        }
+                        TileResult::Failed(detail) => {
+                            stop.store(true, Ordering::Relaxed);
+                            return Err(detail);
+                        }
+                        TileResult::Finished(output) => {
+                            assembler.push(next_row, *output)?;
+                            next_row += 1;
+                            assembled += 1;
+                            if (assembled - 1).is_multiple_of(4) || assembled == total {
+                                (inputs.progress)(total + assembled, total * 2 + 1);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(true)
+        })?;
+        if !outcome {
+            return Ok(PassOutcome::Cancelled);
+        }
+    }
+    Ok(PassOutcome::Done(Box::new(assembler.topology())))
+}
+
+fn run_resident(
+    pass: &Pass<'_>,
+    workers: usize,
+    budget: &Budget,
+    resident: &Detection,
+    inputs: &mut Inputs<'_>,
+) -> Result<PassOutcome, String> {
+    let total = pass.total();
+    let workers = workers.min(total.max(1));
+    let next = AtomicUsize::new(0);
+    let stop = AtomicBool::new(false);
+    let cancel = inputs.cancel;
+    let measure = inputs.measure;
+    let solid = inputs.solid;
+    let field = inputs.field;
+    let gate = pass.plan.gate(inputs.roi);
+    let (sender, receiver) = mpsc::sync_channel::<(usize, TileResult)>(workers * 2);
+    let outcome = std::thread::scope(|scope| {
         let next = &next;
         let stop = &stop;
+        let gate = &gate;
         for _ in 0..workers {
             let sender = sender.clone();
-            let gate = &gate;
             scope.spawn(move || {
-                let mut tile = Tile::new(pass, solid, field, detection, gate);
+                let mut tile = Tile::new(pass, solid, field, resident, gate);
                 loop {
                     if halted(cancel, stop) {
                         break;
@@ -640,62 +789,55 @@ fn run_pass(
             });
         }
         drop(sender);
-        assemble(pass, receiver, cancel, stop, &mut *inputs.progress)
-    })
-}
-
-fn assemble(
-    pass: &Pass<'_>,
-    receiver: mpsc::Receiver<(usize, TileResult)>,
-    cancel: &AtomicBool,
-    stop: &AtomicBool,
-    progress: &mut dyn FnMut(usize, usize),
-) -> Result<PassOutcome, String> {
-    let total = pass.total();
-    let mut assembler = Assembler::new(pass);
-    let mut pending: Vec<Option<TileResult>> = (0..total).map(|_| None).collect();
-    let mut assembled = 0usize;
-    while assembled < total {
-        if cancel.load(Ordering::Relaxed) {
-            stop.store(true, Ordering::Relaxed);
-            return Ok(PassOutcome::Cancelled);
-        }
-        let (index, result) = match receiver.recv() {
-            Ok(value) => value,
-            Err(_) => {
-                if cancel.load(Ordering::Relaxed) {
-                    return Ok(PassOutcome::Cancelled);
-                }
-                return Err(
-                    "the surface workers stopped before every tile was assembled".to_string(),
-                );
-            }
-        };
-        pending[index] = Some(result);
+        let mut assembler = Assembler::new(pass);
+        let mut pending: Vec<Option<TileResult>> = (0..total).map(|_| None).collect();
+        let mut assembled = 0usize;
         while assembled < total {
-            let Some(result) = pending[assembled].take() else {
-                break;
+            if cancel.load(Ordering::Relaxed) {
+                stop.store(true, Ordering::Relaxed);
+                return Ok(None);
+            }
+            let (index, result) = match receiver.recv() {
+                Ok(value) => value,
+                Err(_) => {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Ok(None);
+                    }
+                    return Err(
+                        "the surface workers stopped before every tile was assembled".to_string(),
+                    );
+                }
             };
-            match result {
-                TileResult::Cancelled => {
-                    stop.store(true, Ordering::Relaxed);
-                    return Ok(PassOutcome::Cancelled);
-                }
-                TileResult::Failed(detail) => {
-                    stop.store(true, Ordering::Relaxed);
-                    return Err(detail);
-                }
-                TileResult::Finished(output) => {
-                    assembler.push(assembled, *output)?;
-                    assembled += 1;
-                    if (assembled - 1).is_multiple_of(4) || assembled == total {
-                        progress(pass.total() + assembled, pass.total() * 2 + 1);
+            pending[index] = Some(result);
+            while assembled < total {
+                let Some(result) = pending[assembled].take() else {
+                    break;
+                };
+                match result {
+                    TileResult::Cancelled => {
+                        stop.store(true, Ordering::Relaxed);
+                        return Ok(None);
+                    }
+                    TileResult::Failed(detail) => {
+                        stop.store(true, Ordering::Relaxed);
+                        return Err(detail);
+                    }
+                    TileResult::Finished(output) => {
+                        assembler.push(assembled, *output)?;
+                        assembled += 1;
+                        if (assembled - 1).is_multiple_of(4) || assembled == total {
+                            (inputs.progress)(total + assembled, total * 2 + 1);
+                        }
                     }
                 }
             }
         }
-    }
-    Ok(PassOutcome::Done(Box::new(assembler.topology())))
+        Ok(Some(Box::new(assembler.topology())))
+    })?;
+    Ok(match outcome {
+        Some(topology) => PassOutcome::Done(topology),
+        None => PassOutcome::Cancelled,
+    })
 }
 
 fn halted(cancel: &AtomicBool, stop: &AtomicBool) -> bool {

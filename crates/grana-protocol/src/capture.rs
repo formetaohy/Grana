@@ -96,6 +96,7 @@ impl Protocol {
                     Some(RelationSpec {
                         source: set.name().to_string(),
                         target: target.name().to_string(),
+                        key: relation.key().to_string(),
                         shift: relation.shift(),
                     })
                 })

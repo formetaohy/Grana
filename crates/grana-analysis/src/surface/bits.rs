@@ -139,6 +139,19 @@ impl Bits {
             }
         }
     }
+
+    pub(super) fn or_word(&mut self, x: usize, y: usize, z: usize, value: u64, length: usize) {
+        if value == 0 {
+            return;
+        }
+        let row = self.rows * (y + self.dims[1] * z);
+        let word = x / WORD;
+        let offset = x % WORD;
+        self.words[row + word] |= value << offset;
+        if offset + length > WORD && word + 1 < self.rows {
+            self.words[row + word + 1] |= value >> (WORD - offset);
+        }
+    }
 }
 pub(super) struct Grid {
     dims: [usize; 3],
@@ -163,6 +176,8 @@ impl Grid {
         occupied: &[bool],
         blocks: [usize; 3],
         dims: [usize; 3],
+        workers: usize,
+        cancel: &std::sync::atomic::AtomicBool,
     ) -> Self {
         let foreground = mask.foreground;
         let admitted = mask.admitted;
@@ -232,7 +247,7 @@ impl Grid {
             voxel: Bits::new(dims),
             growth: Bits::new(dims),
         };
-        grid.flood(foreground, admitted);
+        grid.flood(foreground, admitted, workers, cancel);
         grid.grow(mask);
         grid
     }
@@ -391,160 +406,262 @@ impl Grid {
         self.outside[index[0] + self.shell[0] * (index[1] + self.shell[1] * index[2])]
     }
 
-    fn free(
-        &self,
-        foreground: &Bits,
-        admitted: Option<&Bits>,
-        x: usize,
-        y: usize,
-        z: usize,
-    ) -> bool {
-        if foreground.get(x, y, z) || self.voxel.get(x, y, z) {
-            return false;
-        }
-        let block = [x / SIDE, y / SIDE, z / SIDE];
-        if !self.barrier(block) || self.block_outside(block) {
-            return false;
-        }
-        admitted.is_none_or(|admitted| admitted.get(x, y, z))
-    }
-
-    fn flood(&mut self, foreground: &Bits, admitted: Option<&Bits>) {
-        let dims = self.dims;
-        let mut seeds = Vec::with_capacity(SIDE * SIDE);
-        let mut stack = Vec::new();
-        for z in 0..dims[2] {
-            for y in 0..dims[1] {
-                for x in [0, dims[0] - 1] {
-                    seeds.clear();
-                    seeds.push([x, y, z]);
-                    self.fill(foreground, admitted, &seeds, &mut stack);
-                }
-            }
-        }
-        for z in 0..dims[2] {
-            for x in 0..dims[0] {
-                for y in [0, dims[1] - 1] {
-                    seeds.clear();
-                    seeds.push([x, y, z]);
-                    self.fill(foreground, admitted, &seeds, &mut stack);
-                }
-            }
-        }
-        for y in 0..dims[1] {
-            for x in 0..dims[0] {
-                for z in [0, dims[2] - 1] {
-                    seeds.clear();
-                    seeds.push([x, y, z]);
-                    self.fill(foreground, admitted, &seeds, &mut stack);
-                }
-            }
-        }
-        for z in 0..self.blocks[2] {
-            for y in 0..self.blocks[1] {
-                for x in 0..self.blocks[0] {
-                    let block = [x, y, z];
-                    if !self.barrier(block) || self.block_outside(block) {
-                        continue;
-                    }
-                    for axis in 0..3 {
-                        for (offset, side) in [(-1i64, 0usize), (1, SIDE - 1)] {
-                            if !self.neighbour_outside(block, axis, offset) {
-                                continue;
-                            }
-                            self.face_seeds(block, axis, side, &mut seeds);
-                            self.fill(foreground, admitted, &seeds, &mut stack);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn face_seeds(&self, block: [usize; 3], axis: usize, side: usize, seeds: &mut Vec<[usize; 3]>) {
-        let (first, second) = ((axis + 1) % 3, (axis + 2) % 3);
-        seeds.clear();
-        for second_position in 0..SIDE {
-            for first_position in 0..SIDE {
-                let mut voxel = [0usize; 3];
-                voxel[axis] = block[axis] * SIDE + side;
-                voxel[first] = block[first] * SIDE + first_position;
-                voxel[second] = block[second] * SIDE + second_position;
-                if (0..3).any(|slot| voxel[slot] >= self.dims[slot]) {
-                    continue;
-                }
-                seeds.push(voxel);
-            }
-        }
-    }
-
-    fn fill(
+    fn flood(
         &mut self,
         foreground: &Bits,
         admitted: Option<&Bits>,
-        seeds: &[[usize; 3]],
-        stack: &mut Vec<[usize; 3]>,
+        workers: usize,
+        cancel: &std::sync::atomic::AtomicBool,
     ) {
-        let dims = self.dims;
-        stack.clear();
-        stack.extend_from_slice(seeds);
-        while let Some(seed) = stack.pop() {
-            let [x, y, z] = seed;
-            if !self.free(foreground, admitted, x, y, z) {
+        let blocks = self.blocks;
+        let count = blocks[0] * blocks[1] * blocks[2];
+        let mut free = vec![[0u64; 8]; count];
+        let workers = workers.clamp(1, count.max(1));
+        let each = count.div_ceil(workers).max(1);
+        std::thread::scope(|scope| {
+            for (chunk, slot) in free.chunks_mut(each).zip(0..) {
+                let first = slot * each;
+                let grid = &*self;
+                scope.spawn(move || {
+                    for (offset, board) in chunk.iter_mut().enumerate() {
+                        let index = first + offset;
+                        let block = [
+                            index % blocks[0],
+                            (index / blocks[0]) % blocks[1],
+                            index / (blocks[0] * blocks[1]),
+                        ];
+                        if !grid.barrier(block) || grid.block_outside(block) {
+                            continue;
+                        }
+                        *board = free_board(grid.dims, foreground, admitted, block);
+                    }
+                });
+            }
+        });
+        let mut entries = vec![[0u64; 8]; count];
+        let mut done = vec![[0u64; 8]; count];
+        let mut queued = vec![false; count];
+        let mut queue = std::collections::VecDeque::new();
+        for index in 0..count {
+            let block = [
+                index % blocks[0],
+                (index / blocks[0]) % blocks[1],
+                index / (blocks[0] * blocks[1]),
+            ];
+            if !self.barrier(block) || self.block_outside(block) {
                 continue;
             }
-            let mut left = x;
-            while left > 0 && self.free(foreground, admitted, left - 1, y, z) {
-                left -= 1;
+            let board = &free[index];
+            if board.iter().all(|word| *word == 0) {
+                continue;
             }
-            let mut right = x;
-            while right + 1 < dims[0] && self.free(foreground, admitted, right + 1, y, z) {
-                right += 1;
-            }
-            for position in left..=right {
-                self.voxel.set(position, y, z);
-            }
-            for axis in [1usize, 2] {
-                for offset in [-1i64, 1] {
-                    let value = [x, y, z][axis] as i64 + offset;
-                    if value < 0 || value >= dims[axis] as i64 {
-                        continue;
-                    }
-                    let mut neighbour = [x, y, z];
-                    neighbour[axis] = value as usize;
-                    let mut position = left;
-                    while position <= right {
-                        if self.free(foreground, admitted, position, neighbour[1], neighbour[2]) {
-                            let mut start = position;
-                            while start > 0
-                                && self.free(
-                                    foreground,
-                                    admitted,
-                                    start - 1,
-                                    neighbour[1],
-                                    neighbour[2],
-                                )
-                            {
-                                start -= 1;
-                            }
-                            stack.push([start, neighbour[1], neighbour[2]]);
-                            while position <= right
-                                && self.free(
-                                    foreground,
-                                    admitted,
-                                    position,
-                                    neighbour[1],
-                                    neighbour[2],
-                                )
-                            {
-                                position += 1;
-                            }
-                        } else {
-                            position += 1;
-                        }
+            let mut seed = [0u64; 8];
+            for axis in 0..3 {
+                for (offset, high) in [(-1i64, false), (1, true)] {
+                    if self.neighbour_outside(block, axis, offset) {
+                        or_face(&mut seed, board, axis, high);
                     }
                 }
             }
+            if seed.iter().all(|word| *word == 0) {
+                continue;
+            }
+            entries[index] = seed;
+            queued[index] = true;
+            queue.push_back(index);
+        }
+        while let Some(index) = queue.pop_front() {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            queued[index] = false;
+            let block = [
+                index % blocks[0],
+                (index / blocks[0]) % blocks[1],
+                index / (blocks[0] * blocks[1]),
+            ];
+            let reach = closure(&free[index], &entries[index]);
+            let mut new = [0u64; 8];
+            for z in 0..8 {
+                new[z] = reach[z] & !done[index][z];
+            }
+            if new.iter().all(|word| *word == 0) {
+                continue;
+            }
+            for z in 0..8 {
+                done[index][z] |= reach[z];
+            }
+            mark(&mut self.voxel, self.dims, block, &new);
+            for axis in 0..3 {
+                for (offset, high) in [(-1i64, false), (1, true)] {
+                    let mut neighbour = block;
+                    let value = neighbour[axis] as i64 + offset;
+                    if value < 0 || value >= blocks[axis] as i64 {
+                        continue;
+                    }
+                    neighbour[axis] = value as usize;
+                    if !self.barrier(neighbour) || self.block_outside(neighbour) {
+                        continue;
+                    }
+                    let mut translated = [0u64; 8];
+                    translate(&mut translated, &new, axis, high);
+                    if translated.iter().all(|word| *word == 0) {
+                        continue;
+                    }
+                    let target =
+                        neighbour[0] + blocks[0] * (neighbour[1] + blocks[1] * neighbour[2]);
+                    let mut changed = false;
+                    for z in 0..8 {
+                        if translated[z] & !entries[target][z] != 0 {
+                            entries[target][z] |= translated[z];
+                            changed = true;
+                        }
+                    }
+                    if changed && !queued[target] {
+                        queued[target] = true;
+                        queue.push_back(target);
+                    }
+                }
+            }
+        }
+    }
+}
+
+const X_LOW: u64 = 0x0101_0101_0101_0101;
+const X_HIGH: u64 = 0x8080_8080_8080_8080;
+const Y_LOW: u64 = 0x0000_0000_0000_00ff;
+const Y_HIGH: u64 = 0xff00_0000_0000_0000;
+const LEFT_MASK: u64 = 0xfefe_fefe_fefe_fefe;
+const RIGHT_MASK: u64 = 0x7f7f_7f7f_7f7f_7f7f;
+
+fn free_board(
+    dims: [usize; 3],
+    foreground: &Bits,
+    admitted: Option<&Bits>,
+    block: [usize; 3],
+) -> [u64; 8] {
+    let origin = [block[0] * SIDE, block[1] * SIDE, block[2] * SIDE];
+    let limit = [0, 1, 2].map(|axis| (dims[axis] - origin[axis]).min(SIDE));
+    let mut board = [0u64; 8];
+    for (z, slot) in board.iter_mut().enumerate().take(limit[2]) {
+        let mut word = 0u64;
+        for y in 0..limit[1] {
+            let line = foreground.line(origin[1] + y, origin[2] + z);
+            let mut bits = !byte(line, origin[0]) & 0xff;
+            if let Some(admitted) = admitted {
+                bits &= byte(admitted.line(origin[1] + y, origin[2] + z), origin[0]);
+            }
+            word |= bits << (8 * y);
+        }
+        *slot = word;
+    }
+    board
+}
+
+fn byte(line: &[u64], x: usize) -> u64 {
+    let word = x / 64;
+    let shift = x % 64;
+    let mut value = line[word] >> shift;
+    if shift + 8 > 64 && word + 1 < line.len() {
+        value |= line[word + 1] << (64 - shift);
+    }
+    value & 0xff
+}
+
+fn or_face(seed: &mut [u64; 8], board: &[u64; 8], axis: usize, high: bool) {
+    match axis {
+        0 => {
+            let mask = if high { X_HIGH } else { X_LOW };
+            for z in 0..8 {
+                seed[z] |= board[z] & mask;
+            }
+        }
+        1 => {
+            let mask = if high { Y_HIGH } else { Y_LOW };
+            for z in 0..8 {
+                seed[z] |= board[z] & mask;
+            }
+        }
+        _ => {
+            let z = if high { 7 } else { 0 };
+            seed[z] |= board[z];
+        }
+    }
+}
+
+fn translate(target: &mut [u64; 8], board: &[u64; 8], axis: usize, high: bool) {
+    match axis {
+        0 if high => {
+            for z in 0..8 {
+                target[z] = (board[z] & X_HIGH) >> 7;
+            }
+        }
+        0 => {
+            for z in 0..8 {
+                target[z] = (board[z] & X_LOW) << 7;
+            }
+        }
+        1 if high => {
+            for z in 0..8 {
+                target[z] = (board[z] & Y_HIGH) >> 56;
+            }
+        }
+        1 => {
+            for z in 0..8 {
+                target[z] = (board[z] & Y_LOW) << 56;
+            }
+        }
+        _ if high => target[0] = board[7],
+        _ => target[7] = board[0],
+    }
+}
+
+fn closure(free: &[u64; 8], entry: &[u64; 8]) -> [u64; 8] {
+    let mut reach = [0u64; 8];
+    for z in 0..8 {
+        reach[z] = entry[z] & free[z];
+    }
+    loop {
+        let mut next = reach;
+        for z in 0..8 {
+            let word = reach[z];
+            next[z] |=
+                ((word << 1) & LEFT_MASK) | ((word >> 1) & RIGHT_MASK) | (word << 8) | (word >> 8);
+            if z > 0 {
+                next[z] |= reach[z - 1];
+            }
+            if z + 1 < 8 {
+                next[z] |= reach[z + 1];
+            }
+            next[z] &= free[z];
+        }
+        if next == reach {
+            return reach;
+        }
+        reach = next;
+    }
+}
+
+fn mark(voxel: &mut Bits, dims: [usize; 3], block: [usize; 3], new: &[u64; 8]) {
+    let origin = [block[0] * SIDE, block[1] * SIDE, block[2] * SIDE];
+    if origin
+        .iter()
+        .zip(dims)
+        .any(|(value, limit)| *value >= limit)
+    {
+        return;
+    }
+    let length = (dims[0] - origin[0]).min(SIDE);
+    for (z, word) in new.iter().enumerate() {
+        if origin[2] + z >= dims[2] {
+            break;
+        }
+        for y in 0..8 {
+            if origin[1] + y >= dims[1] {
+                break;
+            }
+            let bits = (word >> (8 * y)) & 0xff;
+            voxel.or_word(origin[0], origin[1] + y, origin[2] + z, bits, length);
         }
     }
 }

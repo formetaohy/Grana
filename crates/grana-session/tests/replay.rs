@@ -31,7 +31,7 @@ const PROTOCOL: &str = r#"
       "measure": {"group": "objects", "aggregate": "mean", "sort": {"column": "diameter_um", "descending": true}}
     }
   ],
-  "relations": [{"source": "Beads", "target": "Nuclei"}],
+  "relations": [{"source": "Beads", "target": "Nuclei", "key": "beads-nuclei"}],
   "coloc": {"settings": {"permutations": 8, "block": 3}, "pairs": [{"a": "Cells", "b": "Signal", "thresholds": [0.5, 0.5]}], "mask": "Nuclei"},
   "view": {"camera": {"pivot": [0.0, 0.0, 0.0], "yaw": 0.5, "pitch": 0.3, "distance": 90.0, "fov_y": 0.61}, "section": {"axis": "z", "span": 8.0}, "split": 0.5, "time": 1, "timeline": {"fps": 24, "duration": 4.0}}
 }

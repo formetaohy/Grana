@@ -6,14 +6,13 @@ use grana_object::Mask;
 
 use super::bits::{Bits, BlockFill, Grid, MaskInputs, SIDE};
 use super::detection::Detection;
-use super::stats;
 use super::{Gate, SurfaceBuilder, band, dims_of};
 
 const RAISED_TOLERANCE: f32 = 0.5;
 
-pub(super) struct SurfaceMask {
+pub(super) struct SurfaceMask<'a> {
     pub(super) solid: SolidMask,
-    pub(super) field: BlockField,
+    pub(super) field: &'a BlockField,
 }
 
 pub(super) enum SolidMask {
@@ -58,73 +57,81 @@ impl SolidMask {
     }
 }
 
-pub(super) fn build(
-    plan: &SurfaceBuilder,
-    workers: usize,
-    cancel: &AtomicBool,
+pub(super) fn build<'a>(
+    source: &super::detection::DetectionSource<'_>,
     roi: Option<&Mask>,
     progress: &mut dyn FnMut(usize, usize),
     step: usize,
-    detection: &Detection,
-) -> Result<Option<SurfaceMask>, String> {
+    field: &'a BlockField,
+) -> Result<Option<SurfaceMask<'a>>, String> {
+    let plan = source.plan();
     let dims = plan.dims();
     let blocks = plan.blocks();
-    let total = plan.tile_count();
     let gate = plan.gate(roi);
-    let field = match stats::build(
-        plan,
-        workers,
-        cancel,
-        &gate,
-        detection,
-        &mut band(progress, step, 45, 50),
-    )? {
-        Some(field) => field,
-        None => return Ok(None),
-    };
     let mut foreground = Bits::new(dims);
     let mut raised = Bits::new(dims);
     let mut admitted = roi.map(|_| Bits::new(dims));
     let mut occupied = vec![false; blocks[0] * blocks[1] * blocks[2]];
-    let completed = crate::schedule::ordered(
-        crate::schedule::Run {
-            total,
-            workers,
-            cancel,
-            progress: &mut band(progress, step, 50, 75),
-        },
-        || (),
-        |(), index| Ok(MaskWorker::run(plan, &gate, &field, detection, index)),
-        |index, chunk| {
-            let mut sink = MaskSink {
-                foreground: &mut foreground,
-                raised: &mut raised,
-                admitted: admitted.as_mut(),
-                occupied: &mut occupied,
-            };
-            write_chunk(plan, index, chunk, &mut sink)
-        },
-        |()| {},
-    )?;
-    if !completed {
-        return Ok(None);
+    let per_row = plan.tiles[0] as usize * plan.tiles[1] as usize;
+    let rows = plan.tiles[2] as usize;
+    for row in 0..rows {
+        let start = row * per_row;
+        let core = plan.core_range(start)[2].clone();
+        let Some(detection) = source.slab(core)? else {
+            return Ok(None);
+        };
+        let count = per_row.min(plan.tile_count - start);
+        let mut report = band(progress, step, 50, 75);
+        let completed = crate::schedule::ordered(
+            crate::schedule::Run {
+                total: count,
+                workers: source.workers(),
+                cancel: source.cancel(),
+                progress: &mut report,
+            },
+            || (),
+            |(), local| {
+                Ok(MaskWorker::run(
+                    plan,
+                    &gate,
+                    field,
+                    detection.as_ref(),
+                    start + local,
+                ))
+            },
+            |local, chunk| {
+                let mut sink = MaskSink {
+                    foreground: &mut foreground,
+                    raised: &mut raised,
+                    admitted: admitted.as_mut(),
+                    occupied: &mut occupied,
+                };
+                write_chunk(plan, start + local, chunk, &mut sink)
+            },
+            |()| {},
+        )?;
+        if !completed {
+            return Ok(None);
+        }
     }
     let grid = Grid::new(
         &MaskInputs {
             foreground: &foreground,
             admitted: admitted.as_ref(),
             raised: &raised,
-            field: &field,
+            field,
         },
         &occupied,
         blocks,
         dims,
+        source.workers(),
+        source.cancel(),
     );
     let solid = if plan.opening.is_some() || plan.closing.is_some() {
         let Some(bits) = morph(
             plan,
-            workers,
-            cancel,
+            source.workers(),
+            source.cancel(),
             &mut band(progress, step, 75, 78),
             &foreground,
             admitted.as_ref(),

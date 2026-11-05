@@ -77,6 +77,7 @@ impl Recipe {
                 source,
                 target,
                 shift,
+                ..
             } => Some(Job::Relation {
                 source: *source,
                 target: *target,

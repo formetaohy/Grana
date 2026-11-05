@@ -106,6 +106,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 source,
                 target,
                 shift,
+                ..
             } => run.relate(*source, *target, *shift)?,
             Step::Coloc { pair, mask } => run.colocalize(*pair, *mask)?,
             Step::Present => {

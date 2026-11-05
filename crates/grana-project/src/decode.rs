@@ -469,8 +469,10 @@ impl Decode for SetState {
             return Err(FAULT_SHAPE);
         }
         let mut seen = std::collections::BTreeSet::new();
+        let mut keys = std::collections::BTreeSet::new();
         for relation in &state.relations {
             if !seen.insert((relation.target, relation.shift))
+                || !keys.insert(relation.key.as_str())
                 || (relation.target == id && relation.shift == 0)
                 || relation.frames.len() != state.frames.len()
                 || (relation.shift.unsigned_abs() as usize) >= state.frames.len()
@@ -714,9 +716,14 @@ impl Decode for RelationState {
             return Err(FAULT_VALUE);
         }
         let shift = reader.i32()?;
+        let key = reader.string()?;
+        if key.trim().is_empty() {
+            return Err(FAULT_VALUE);
+        }
         Ok(Self {
             target,
             shift,
+            key,
             frames: Vec::<Option<Arc<RelationFrame>>>::decode(reader)?,
         })
     }

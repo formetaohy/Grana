@@ -484,11 +484,11 @@ fn measures_one_relation_at_several_offsets() {
         .table(source, Group::Object, Aggregate::Mean)
         .expect("the source set measures its frames");
     assert!(
-        table.column("spots_2_distance_um").is_some(),
+        table.column("r2_0_distance_um").is_some(),
         "the same frame offset keeps the plain column"
     );
     assert!(
-        table.column("spots_2_t-1_distance_um").is_some(),
+        table.column("r2_-1_distance_um").is_some(),
         "a shifted offset names its own column"
     );
     assert!(scene.remove_relation(source, target, 0));

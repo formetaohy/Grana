@@ -180,6 +180,7 @@ pub enum AxisSpec {
 pub struct RelationSpec {
     pub source: String,
     pub target: String,
+    pub key: String,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub shift: i32,
 }

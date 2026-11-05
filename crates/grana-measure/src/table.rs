@@ -206,8 +206,8 @@ impl ObjectCell {
             Self::Track => Column::new("track", "track", Unit::Count, 0),
             Self::Measure(measurement) => measurement.column(channels, keys),
             Self::Relation { index, field } => {
-                let target = relations[*index].target();
-                field.column(target, &sanitize(target), relations[*index].shift())
+                let row = relations[*index];
+                field.column(row.key(), row.target(), row.shift())
             }
         }
     }
@@ -689,8 +689,7 @@ fn aggregate_relation_column(
     field: RelationField,
     aggregate: Aggregate,
 ) -> Column {
-    let target = row.target();
-    let base = field.column(target, &sanitize(target), row.shift());
+    let base = field.column(row.key(), row.target(), row.shift());
     Column::new(
         base.label().to_string(),
         format!("{}_{}", base.key(), aggregate.key()),

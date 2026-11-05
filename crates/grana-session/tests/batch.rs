@@ -43,7 +43,7 @@ const PROTOCOL: &str = r#"
       "source": {"kind": "surfaces", "channel": "Cells", "threshold": 0.3, "grain": 0.1, "split": 0.6, "min_volume": 1.0, "opening": 0.0, "closing": 0.0, "min_sphericity": 0.0, "min_mean_intensity": 0.0}
     }
   ],
-  "relations": [{"source": "Puncta", "target": "Nuclei"}],
+  "relations": [{"source": "Puncta", "target": "Nuclei", "key": "puncta-nuclei"}],
   "coloc": {"settings": {"permutations": 8, "block": 3}, "pairs": [{"a": "Cells", "b": "Signal", "thresholds": [0.5, 0.5]}], "mask": null}
 }
 "#;
@@ -132,8 +132,8 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
         lines[1].starts_with("1,0.000,1,1,"),
         "the spot belongs to one track: {objects}"
     );
-    assert!(lines[0].contains("nuclei_distance_um"), "{objects}");
-    assert!(lines[0].contains("nuclei_contact_um2"), "{objects}");
+    assert!(lines[0].contains("puncta-nuclei_distance_um"), "{objects}");
+    assert!(lines[0].contains("puncta-nuclei_contact_um2"), "{objects}");
     assert!(
         lines[1].ends_with(",0.000,100.00,1,0.000"),
         "the spot sits inside its nucleus: {objects}"
@@ -528,7 +528,7 @@ const PROJECT: &str = r#"
       "measure": {"group": "objects", "aggregate": "mean", "columns": ["volume_um3"]}
     }
   ],
-  "relations": [{"source": "Puncta", "target": "Nuclei"}],
+  "relations": [{"source": "Puncta", "target": "Nuclei", "key": "puncta-nuclei"}],
   "view": {"camera": {"pivot": [0.0, 0.0, 0.0], "yaw": 0.3, "pitch": 0.2, "distance": 120.0, "fov_y": 0.61}, "section": {"axis": "z", "span": 9.0}, "split": 0.4}
 }
 "#;
@@ -1031,10 +1031,10 @@ const RELATION_FILTER: &str = r#"
       "name": "Inner",
 
       "color": [0.4, 0.9, 0.6],
-      "source": {"kind": "filtered", "source": "Puncta", "filters": [{"column": "nuclei_distance_um", "minimum": 0.0, "maximum": 0.5}]}
+      "source": {"kind": "filtered", "source": "Puncta", "filters": [{"column": "puncta-nuclei_distance_um", "minimum": 0.0, "maximum": 0.5}]}
     }
   ],
-  "relations": [{"source": "Puncta", "target": "Nuclei"}, {"source": "Inner", "target": "Nuclei"}]
+  "relations": [{"source": "Puncta", "target": "Nuclei", "key": "puncta-nuclei"}, {"source": "Inner", "target": "Nuclei", "key": "inner-nuclei"}]
 }
 "#;
 
@@ -1059,8 +1059,8 @@ fn replays_a_filtered_set_that_reads_a_relation() {
     let inner = read(&output.join("alpha").join("Inner-objects.csv"));
     let lines = inner.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 3, "both frames keep their spot: {inner}");
-    assert!(lines[0].contains("nuclei_distance_um"), "{inner}");
-    assert!(lines[0].contains("nuclei_inside"), "{inner}");
+    assert!(lines[0].contains("inner-nuclei_distance_um"), "{inner}");
+    assert!(lines[0].contains("inner-nuclei_inside"), "{inner}");
     assert!(
         lines[1].ends_with(",0.000,100.00,1,0.000"),
         "the kept spot sits inside its nucleus: {inner}"
@@ -1078,7 +1078,7 @@ const DRIFT_PROTOCOL: &str = r#"
       "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05}
     }
   ],
-  "relations": [{"source": "Puncta", "target": "Puncta", "shift": 1}]
+  "relations": [{"source": "Puncta", "target": "Puncta", "shift": 1, "key": "puncta-self"}]
 }
 "#;
 
@@ -1105,7 +1105,7 @@ fn aligns_the_frames_of_every_batch_dataset() {
             .unwrap_or_else(|| panic!("the statistics carry {name}: {header}"))
     };
     let across = column("x_um");
-    let distance = column("puncta_t1_distance_um");
+    let distance = column("puncta-self_distance_um");
     let rows = lines
         .map(|line| line.split(',').collect::<Vec<_>>())
         .collect::<Vec<_>>();

@@ -1,7 +1,6 @@
 use grana_object::RelationFrame;
 
 use crate::column::{Column, Unit};
-use crate::table::sanitize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RelationField {
@@ -63,18 +62,18 @@ impl RelationField {
         }
     }
 
-    pub fn column(self, target: &str, key: &str, shift: i32) -> Column {
+    pub fn column(self, key: &str, target: &str, shift: i32) -> Column {
         let label = if shift == 0 {
             format!("{target} {}", self.label())
         } else {
             format!("{target} {} · t{shift:+}", self.label())
         };
-        let key = if shift == 0 {
-            format!("{key}_{}", self.key())
-        } else {
-            format!("{key}_t{shift}_{}", self.key())
-        };
-        Column::new(label, key, self.unit(), self.decimals())
+        Column::new(
+            label,
+            format!("{key}_{}", self.key()),
+            self.unit(),
+            self.decimals(),
+        )
     }
 
     pub fn value(self, row: RelationRow<'_>, object: usize) -> f32 {
@@ -103,18 +102,33 @@ impl RelationField {
 
 #[derive(Clone, Copy, Debug)]
 pub struct RelationRow<'a> {
+    key: &'a str,
     target: &'a str,
     shift: i32,
     frame: Option<&'a RelationFrame>,
 }
 
 impl<'a> RelationRow<'a> {
-    pub fn new(target: &'a str, shift: i32, frame: Option<&'a RelationFrame>) -> Self {
+    pub fn new(
+        key: &'a str,
+        target: &'a str,
+        shift: i32,
+        frame: Option<&'a RelationFrame>,
+    ) -> Self {
+        assert!(
+            !key.trim().is_empty(),
+            "a relation row carries a stable key"
+        );
         Self {
+            key,
             target,
             shift,
             frame,
         }
+    }
+
+    pub fn key(self) -> &'a str {
+        self.key
     }
 
     pub fn target(self) -> &'a str {
@@ -130,11 +144,10 @@ impl<'a> RelationRow<'a> {
     }
 }
 
-pub fn relation_keys(target: &str, shift: i32) -> Vec<String> {
-    let key = sanitize(target);
+pub fn relation_keys(key: &str) -> Vec<String> {
     let mut keys = Vec::new();
     for field in RelationField::ALL {
-        let base = field.column(target, &key, shift).key().to_string();
+        let base = format!("{key}_{}", field.key());
         keys.push(base.clone());
         for aggregate in crate::table::Aggregate::ALL {
             keys.push(format!("{base}_{}", aggregate.key()));

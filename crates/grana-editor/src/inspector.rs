@@ -588,20 +588,27 @@ fn mask(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         .scene
         .objects
         .iter()
-        .map(|set| (set.id(), set.name().to_string()))
+        .map(|set| (set.id(), set.name().to_string(), set.filtered()))
         .collect::<Vec<_>>();
     let current = state.scene.mask;
     section_header(ui, "Analysis mask", None);
     let mut options = vec![(None, "Whole dataset".to_string())];
-    options.extend(sources.iter().map(|(id, name)| (Some(*id), name.clone())));
+    options.extend(
+        sources
+            .iter()
+            .map(|(id, name, _)| (Some(*id), name.clone())),
+    );
     let width = ui.available().x;
     if let Some(chosen) = grana_ui::popover::combo(ui, "mask", width, &options, Some(current))
         && chosen != current
     {
         commands.push(Command::SetMask(chosen));
     }
-    match current.and_then(|id| sources.iter().find(|(set, _)| *set == id)) {
-        Some((_, name)) => widget::caption(ui, &format!("Detect inside {name} only")),
+    match current.and_then(|id| sources.iter().find(|(set, _, _)| *set == id)) {
+        Some((_, name, true)) => {
+            widget::caption(ui, &format!("Detect inside the filtered objects of {name}"))
+        }
+        Some((_, name, false)) => widget::caption(ui, &format!("Detect inside {name} only")),
         None => widget::caption(ui, "Detect across the whole dataset"),
     }
 }

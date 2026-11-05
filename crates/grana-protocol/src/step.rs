@@ -28,6 +28,7 @@ pub enum Step {
         source: ObjectSetId,
         target: ObjectSetId,
         shift: i32,
+        key: String,
     },
     Coloc {
         pair: usize,

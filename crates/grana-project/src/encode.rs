@@ -427,6 +427,7 @@ impl Encode for RelationState {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u64(self.target);
         writer.i32(self.shift);
+        writer.string(&self.key);
         self.frames.encode(writer);
     }
 }
