@@ -17,22 +17,24 @@ const PROTOCOL: &str = r#"
   ],
   "sets": [
     {
+      "key": "nuclei",
       "name": "Nuclei",
       "color": [1.0, 0.7, 0.2],
       "opacity": 0.5,
       "source": {"kind": "surfaces", "channel": "Cells", "threshold": 0.5, "grain": 0.0, "split": 0.0, "min_volume": 0.0, "opening": 0.0, "closing": 0.0, "min_sphericity": 0.0, "min_mean_intensity": 0.0}
     },
     {
+      "key": "beads",
       "name": "Beads",
       "color": [0.3, 0.8, 1.0],
       "color_by": {"key": "diameter_um", "palette": "inferno"},
       "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05},
-      "mask": "Nuclei",
+      "mask": "nuclei",
       "measure": {"group": "objects", "aggregate": "mean", "sort": {"column": "diameter_um", "descending": true}}
     }
   ],
-  "relations": [{"source": "Beads", "target": "Nuclei", "key": "beads-nuclei"}],
-  "coloc": {"settings": {"permutations": 8, "block": 3}, "pairs": [{"a": "Cells", "b": "Signal", "thresholds": [0.5, 0.5]}], "mask": "Nuclei"},
+  "relations": [{"source": "beads", "target": "nuclei", "key": "beads-nuclei"}],
+  "coloc": {"settings": {"permutations": 8, "block": 3}, "pairs": [{"a": "Cells", "b": "Signal", "thresholds": [0.5, 0.5]}], "mask": "nuclei"},
   "view": {"camera": {"pivot": [0.0, 0.0, 0.0], "yaw": 0.5, "pitch": 0.3, "distance": 90.0, "fov_y": 0.61}, "section": {"axis": "z", "span": 8.0}, "split": 0.5, "time": 1, "timeline": {"fps": 24, "duration": 4.0}}
 }
 "#;

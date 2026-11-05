@@ -4,6 +4,7 @@ use grana_object::{RelationFrame, TrackSet};
 
 use crate::curation::Curation;
 use crate::dataset::Dataset;
+use crate::key::ObjectSetKey;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId, take_stamp};
 use crate::provenance::{Criteria, Provenance};
@@ -58,9 +59,56 @@ impl Objects {
         self.ordinals[kind.index()] = ordinal;
         let color = PALETTE[(id.raw() as usize - 1) % PALETTE.len()];
         let name = format!("{} {ordinal}", kind.name());
+        let key = self.key_for(&name, None);
         self.sets
-            .push(ObjectSet::new(id, kind, name, channel, color, dataset));
+            .push(ObjectSet::new(id, key, kind, name, channel, color, dataset));
         id
+    }
+
+    fn key_for(&self, name: &str, except: Option<ObjectSetId>) -> ObjectSetKey {
+        let slug = slug(name).to_ascii_lowercase();
+        let trimmed = slug.trim_matches(|character| character == '-' || character == '_');
+        let base = trimmed
+            .chars()
+            .take(80)
+            .collect::<String>()
+            .trim_end_matches(['-', '_'])
+            .to_string();
+        let base = if base.is_empty() {
+            "set".to_string()
+        } else {
+            base
+        };
+        let mut key = base.clone();
+        let mut ordinal = 2;
+        while self
+            .sets
+            .iter()
+            .any(|set| Some(set.id()) != except && set.key().as_str() == key.as_str())
+        {
+            key = format!("{base}-{ordinal}");
+            ordinal += 1;
+        }
+        ObjectSetKey::new(key)
+    }
+
+    pub fn set_key(&mut self, id: ObjectSetId, key: ObjectSetKey) -> bool {
+        if self
+            .sets
+            .iter()
+            .any(|set| set.id() != id && set.key() == &key)
+        {
+            return false;
+        }
+        self.get_mut(id).is_some_and(|set| set.set_key(key))
+    }
+
+    pub fn rekey(&mut self, id: ObjectSetId) -> bool {
+        if self.get(id).is_none() {
+            return false;
+        }
+        let key = self.key_for(&format!("part {}", id.raw()), Some(id));
+        self.get_mut(id).is_some_and(|set| set.set_key(key))
     }
 
     pub fn remove(&mut self, id: ObjectSetId) {
@@ -181,7 +229,8 @@ impl Objects {
             ordinal += 1;
         }
         let color = source.color();
-        let copy = source.duplicate(derived, name, color, provenance());
+        let key = self.key_for(&name, None);
+        let copy = source.duplicate(derived, key, name, color, provenance());
         let position = self
             .sets
             .iter()
@@ -498,6 +547,10 @@ impl Objects {
             assert!(
                 !self.sets.iter().any(|set| set.id().raw() == state.id),
                 "object set ids are unique"
+            );
+            assert!(
+                !self.sets.iter().any(|set| set.key() == &state.key),
+                "object set keys are unique"
             );
             self.next_id = self.next_id.max(state.id + 1);
             self.ordinals[state.kind.index()] += 1;

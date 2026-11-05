@@ -123,3 +123,27 @@ fn an_empty_roi_covers_nothing() {
     assert!(mask.is_empty());
     assert!(!mask.contains([0.0, 0.0, 0.0]));
 }
+
+#[test]
+fn grows_an_analysis_mask_by_a_radius() {
+    let spot = Spot::new([0.5, 0.5, 0.5], 2.0, 1.0);
+    let tight = Roi::new(vec![Some(Shape::spots(Arc::from([spot])))])
+        .mask(level(), 0)
+        .expect("the mask rasterizes");
+    let grown = Roi::new(vec![Some(Shape::spots(Arc::from([spot])))])
+        .with_radius(4.0)
+        .mask(level(), 0)
+        .expect("the grown mask rasterizes");
+    assert!(
+        !tight.contains([6.0, 0.5, 0.5]),
+        "the spot mask stops at its radius"
+    );
+    assert!(
+        grown.contains([6.0, 0.5, 0.5]),
+        "the radius grows the mask into the surrounding voxels"
+    );
+    assert!(
+        grown.count() > tight.count(),
+        "a grown mask covers more voxels"
+    );
+}

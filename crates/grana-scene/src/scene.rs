@@ -14,6 +14,7 @@ use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::dataset::Dataset;
 use crate::drift::Drift;
+use crate::key::ObjectSetKey;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
@@ -48,6 +49,7 @@ pub struct Scene {
     pub region: Region,
     pub clip: Clip,
     pub mask: Option<ObjectSetId>,
+    pub mask_radius: f32,
     drift: Drift,
     pub objects: Objects,
     pub coloc: Coloc,
@@ -81,6 +83,7 @@ impl Scene {
             region,
             clip: Clip::none(),
             mask: None,
+            mask_radius: 0.0,
             drift: Drift::default(),
             objects: Objects::new(),
             coloc: Coloc::new(channel_count, region),
@@ -167,6 +170,14 @@ impl Scene {
 
     pub fn rename_object(&mut self, id: ObjectSetId, name: &str) -> bool {
         self.objects.rename(id, name)
+    }
+
+    pub fn set_object_key(&mut self, id: ObjectSetId, key: ObjectSetKey) -> bool {
+        self.objects.set_key(id, key)
+    }
+
+    pub fn rekey_object(&mut self, id: ObjectSetId) -> bool {
+        self.objects.rekey(id)
     }
 
     pub fn clear_objects(&mut self) {
@@ -373,6 +384,19 @@ impl Scene {
         self.sync_coloc_inputs();
     }
 
+    pub fn set_mask_radius(&mut self, radius: f32) -> bool {
+        assert!(
+            radius.is_finite() && radius >= 0.0,
+            "an analysis mask grows by a finite radius"
+        );
+        if self.mask_radius == radius {
+            return false;
+        }
+        self.mask_radius = radius;
+        self.sync_coloc_inputs();
+        true
+    }
+
     pub fn set_object_hidden(
         &mut self,
         id: ObjectSetId,
@@ -442,9 +466,10 @@ impl Scene {
                 })
                 .collect::<Vec<_>>(),
         );
-        Some(grana_object::Roi::paged(frames.len(), move |time| {
-            shape_at(&frames, time)
-        }))
+        Some(
+            grana_object::Roi::paged(frames.len(), move |time| shape_at(&frames, time))
+                .with_radius(self.mask_radius),
+        )
     }
 
     pub fn relation_gate(&self, source: ObjectSetId, target: ObjectSetId) -> f32 {
@@ -879,7 +904,7 @@ impl Scene {
 
     fn mask_key(&self) -> Option<MaskKey> {
         let set = self.objects.get(self.mask?)?;
-        Some(MaskKey::new(set.id(), set.document()))
+        Some(MaskKey::new(set.id(), set.document(), self.mask_radius))
     }
 
     fn sync_coloc_inputs(&mut self) {

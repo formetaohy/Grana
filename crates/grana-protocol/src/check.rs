@@ -1,5 +1,5 @@
 use grana_measure::{COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX};
-use grana_scene::slug;
+use grana_scene::ObjectSetKey;
 
 use crate::spec::{SourceSpec, validate};
 use crate::{Protocol, ProtocolError};
@@ -13,6 +13,11 @@ impl Protocol {
         }
         if let Some(region) = &self.region {
             region.checked()?;
+        }
+        if !(self.mask_radius.is_finite() && self.mask_radius >= 0.0) {
+            return Err(ProtocolError::Invalid(
+                "an analysis mask grows by a finite radius".to_string(),
+            ));
         }
         if let Some(render) = self.render {
             render.checked()?;
@@ -30,7 +35,7 @@ impl Protocol {
             }
         }
         let mut names = Vec::new();
-        let mut slugs = Vec::new();
+        let mut set_keys = Vec::new();
         if let Some(drift) = &self.drift {
             validate(&drift.channel, "a channel name")?;
             if !self.channels.is_empty() && !self.channels.iter().any(|c| c.name == drift.channel) {
@@ -68,23 +73,28 @@ impl Protocol {
         }
         for set in &self.sets {
             validate(&set.name, "a set name")?;
+            if ObjectSetKey::parse(&set.key).is_none() {
+                return Err(ProtocolError::Invalid(format!(
+                    "the set {} carries an invalid key {}",
+                    set.name, set.key
+                )));
+            }
+            if set_keys.contains(&set.key) {
+                return Err(ProtocolError::Invalid(format!(
+                    "the set key {} appears twice",
+                    set.key
+                )));
+            }
             if names.contains(&set.name) {
                 return Err(ProtocolError::Invalid(format!(
                     "the set name {} appears twice",
                     set.name
                 )));
             }
-            let key = slug(&set.name).to_ascii_lowercase();
-            if slugs.contains(&key) {
-                return Err(ProtocolError::Invalid(format!(
-                    "the set name {} collides with another output name",
-                    set.name
-                )));
-            }
             set.source.checked(&set.name)?;
             self.check_parts(&set.source)?;
-            self.dependencies(&set.source, &names, &set.name)?;
-            if !self.source_kind_consistent(&set.name) {
+            self.dependencies(&set.source, &set_keys, &set.name)?;
+            if !self.source_kind_consistent(&set.key) {
                 return Err(ProtocolError::Invalid(format!(
                     "{} merges object sets of another kind",
                     set.name
@@ -92,7 +102,7 @@ impl Protocol {
             }
             if let Some(mask) = &set.mask {
                 validate(mask, "an analysis mask")?;
-                if !names.contains(mask) {
+                if !set_keys.contains(mask) {
                     return Err(ProtocolError::Invalid(format!(
                         "{} is masked by an object set that does not run before it",
                         set.name
@@ -114,7 +124,7 @@ impl Protocol {
             if let Some(color) = &set.color_by {
                 color.checked(&set.name)?;
                 if let Some(target) = &color.target
-                    && !names.contains(target)
+                    && !set_keys.contains(target)
                 {
                     return Err(ProtocolError::Invalid(format!(
                         "{} is colored by a relation to {target}, which is not an object set of the protocol",
@@ -125,7 +135,7 @@ impl Protocol {
             if let Some(label) = &set.label {
                 label.checked(&set.name)?;
                 if let Some(target) = &label.target
-                    && !names.contains(target)
+                    && !set_keys.contains(target)
                 {
                     return Err(ProtocolError::Invalid(format!(
                         "{} labels its objects by a relation to {target}, which is not an object set of the protocol",
@@ -142,7 +152,7 @@ impl Protocol {
                     )));
                 }
             }
-            match (self.kind_of(&set.name), &set.track) {
+            match (self.kind_of(&set.key), &set.track) {
                 (Some(kind), Some(track)) => {
                     if !kind.trackable() {
                         return Err(ProtocolError::Invalid(format!(
@@ -167,7 +177,7 @@ impl Protocol {
                 curation.checked(&set.name, set.track.is_some())?;
             }
             names.push(set.name.clone());
-            slugs.push(key);
+            set_keys.push(set.key.clone());
         }
         let measured = self.sets.iter().filter(|set| set.measure.is_some()).count();
         if measured > 1 {
@@ -191,13 +201,13 @@ impl Protocol {
                 )));
             }
             keys.push((relation.source.clone(), relation.key.clone()));
-            if !names.contains(&relation.source) {
+            if !set_keys.contains(&relation.source) {
                 return Err(ProtocolError::Invalid(format!(
                     "the relation source {} is not an object set of the protocol",
                     relation.source
                 )));
             }
-            if !names.contains(&relation.target) {
+            if !set_keys.contains(&relation.target) {
                 return Err(ProtocolError::Invalid(format!(
                     "the relation target {} is not an object set of the protocol",
                     relation.target
@@ -226,7 +236,7 @@ impl Protocol {
                 let Some(target) = &color.target else {
                     continue;
                 };
-                if !relations.contains(&(&set.name, target, color.shift)) {
+                if !relations.contains(&(&set.key, target, color.shift)) {
                     return Err(ProtocolError::Invalid(format!(
                         "{} is colored by a relation to {target} at the offset {} that the protocol does not measure",
                         set.name, color.shift
@@ -241,7 +251,7 @@ impl Protocol {
             let Some(target) = &label.target else {
                 continue;
             };
-            if !relations.contains(&(&set.name, target, label.shift)) {
+            if !relations.contains(&(&set.key, target, label.shift)) {
                 return Err(ProtocolError::Invalid(format!(
                     "{} labels its objects by a relation to {target} at the offset {} that the protocol does not measure",
                     set.name, label.shift
@@ -295,7 +305,7 @@ impl Protocol {
             }
             if let Some(mask) = &coloc.mask {
                 validate(mask, "a colocalization mask")?;
-                if !names.contains(mask) {
+                if !set_keys.contains(mask) {
                     return Err(ProtocolError::Invalid(format!(
                         "the colocalization mask {mask} is not an object set of the protocol"
                     )));

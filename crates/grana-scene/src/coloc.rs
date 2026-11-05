@@ -10,11 +10,20 @@ use crate::object_set::ObjectSetId;
 pub struct MaskKey {
     set: ObjectSetId,
     document: u64,
+    radius: u32,
 }
 
 impl MaskKey {
-    pub fn new(set: ObjectSetId, document: u64) -> Self {
-        Self { set, document }
+    pub fn new(set: ObjectSetId, document: u64, radius: f32) -> Self {
+        assert!(
+            radius.is_finite() && radius >= 0.0,
+            "an analysis mask grows by a finite radius"
+        );
+        Self {
+            set,
+            document,
+            radius: radius.to_bits(),
+        }
     }
 
     pub fn set(self) -> ObjectSetId {

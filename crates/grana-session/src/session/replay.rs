@@ -112,9 +112,14 @@ impl Session {
                     self.advance_step();
                     continue;
                 }
-                Step::Detect { set, mask } => {
+                Step::Detect {
+                    set,
+                    mask,
+                    mask_radius,
+                } => {
                     if let Some(scene) = self.scene.as_mut() {
                         scene.set_mask(mask);
+                        scene.set_mask_radius(mask_radius);
                     }
                     self.start_detect(set);
                 }
@@ -124,7 +129,11 @@ impl Session {
                     shift,
                     ..
                 } => self.start_relation(source, target, shift),
-                Step::Coloc { pair, mask } => {
+                Step::Coloc {
+                    pair,
+                    mask,
+                    mask_radius,
+                } => {
                     let Some(recipe) = self.recipe.as_ref() else {
                         return;
                     };
@@ -134,6 +143,7 @@ impl Session {
                         scene.coloc.set_settings(settings);
                         scene.coloc.set_pair(pair);
                         scene.set_mask(mask);
+                        scene.set_mask_radius(mask_radius);
                     }
                     self.start_coloc();
                 }

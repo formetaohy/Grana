@@ -81,7 +81,7 @@ pub(super) fn build<'a>(
             return Ok(None);
         };
         let count = per_row.min(plan.tile_count - start);
-        let mut report = band(progress, step, 50, 75);
+        let mut report = band(progress, step, 35, 78);
         let completed = crate::schedule::ordered(
             crate::schedule::Run {
                 total: count,
@@ -95,7 +95,7 @@ pub(super) fn build<'a>(
                     plan,
                     &gate,
                     field,
-                    detection.as_ref(),
+                    &detection,
                     start + local,
                 ))
             },

@@ -40,7 +40,7 @@ pub(super) fn build(
                 }
             }
         }
-        let Some(levels) = levels(source, &gate, detection.as_ref(), &coords)? else {
+        let Some(levels) = levels(source, &gate, &detection, &coords)? else {
             return Ok(None);
         };
         for (coord, level) in coords.iter().zip(levels) {

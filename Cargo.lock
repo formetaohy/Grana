@@ -868,6 +868,7 @@ dependencies = [
 name = "grana-analysis"
 version = "0.1.1"
 dependencies = [
+ "bytemuck",
  "glam",
  "grana-geometry",
  "grana-measure",

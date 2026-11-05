@@ -6,9 +6,12 @@ use crate::Shape;
 const NUDGE: [f32; 2] = [1.0e-4, 3.7e-4];
 const WORD: usize = 64;
 const PARALLEL: f32 = 1.0e-12;
+const DILATE_LIMIT: u64 = 1 << 28;
+const FAR: f32 = 1.0e18;
 
 type Triangle = [[f32; 3]; 3];
 
+#[derive(Clone)]
 pub struct Mask {
     origin: [i64; 3],
     extent: [u32; 3],
@@ -64,6 +67,59 @@ impl Mask {
         self.extent.contains(&0)
     }
 
+    pub fn dilated(&self, radius: f32) -> Result<Mask, String> {
+        assert!(
+            radius.is_finite() && radius >= 0.0,
+            "an analysis mask grows by a finite radius"
+        );
+        if radius == 0.0 {
+            return Ok(self.clone());
+        }
+        if self.is_empty() {
+            return Ok(self.clone());
+        }
+        let voxels = self
+            .extent
+            .iter()
+            .map(|value| u64::from(*value))
+            .product::<u64>();
+        if voxels > DILATE_LIMIT {
+            return Err(format!(
+                "the analysis mask holds {voxels} voxels and cannot grow by {radius} µm"
+            ));
+        }
+        let mut field = vec![FAR; voxels as usize];
+        for (index, word) in self.bits.iter().enumerate() {
+            let mut bits = *word;
+            while bits != 0 {
+                let slot = index * WORD + bits.trailing_zeros() as usize;
+                if let Some(value) = field.get_mut(slot) {
+                    *value = 0.0;
+                }
+                bits &= bits - 1;
+            }
+        }
+        let dims = self.extent.map(|value| value as usize);
+        for axis in 0..3 {
+            let weight = self.spacing[axis] * self.spacing[axis];
+            transform(&mut field, dims, axis, weight);
+        }
+        let reach = radius * radius;
+        let mut bits = vec![0u64; self.bits.len()];
+        for (index, value) in field.iter().enumerate() {
+            if *value <= reach {
+                bits[index / WORD] |= 1 << (index % WORD);
+            }
+        }
+        Ok(Mask {
+            origin: self.origin,
+            extent: self.extent,
+            bits,
+            spacing: self.spacing,
+            world: self.world,
+        })
+    }
+
     fn inside(&self, cell: &[i64; 3]) -> bool {
         (0..3).all(|axis| {
             let low = self.origin[axis];
@@ -79,6 +135,7 @@ impl Mask {
 
 pub struct Roi {
     frames: usize,
+    radius: f32,
     shape: Box<dyn Fn(u32) -> Result<Option<Shape>, String> + Send + Sync>,
 }
 
@@ -87,6 +144,7 @@ impl Roi {
         let count = frames.len();
         Self {
             frames: count,
+            radius: 0.0,
             shape: Box::new(move |time| Ok(frames.get(time as usize).cloned().unwrap_or_default())),
         }
     }
@@ -97,8 +155,18 @@ impl Roi {
     ) -> Self {
         Self {
             frames,
+            radius: 0.0,
             shape: Box::new(shape),
         }
+    }
+
+    pub fn with_radius(mut self, radius: f32) -> Self {
+        assert!(
+            radius.is_finite() && radius >= 0.0,
+            "an analysis mask grows by a finite radius"
+        );
+        self.radius = radius;
+        self
     }
 
     pub fn frames(&self) -> usize {
@@ -121,9 +189,17 @@ impl Roi {
             |point: [f32; 3], axis: usize| (point[axis] + 0.5 * world[axis]) / spacing[axis];
         let mut origin = [0i64; 3];
         let mut limit = [0i64; 3];
+        let margin = [0, 1, 2].map(|axis| {
+            if self.radius > 0.0 {
+                (self.radius / spacing[axis]).ceil() as i64 + 1
+            } else {
+                0
+            }
+        });
         for (axis, slot) in extent.iter().enumerate() {
-            origin[axis] = (continuous(low, axis).floor() as i64 - 1).max(0);
-            limit[axis] = (continuous(high, axis).ceil() as i64 + 1).min(i64::from(*slot));
+            origin[axis] = (continuous(low, axis).floor() as i64 - 1 - margin[axis]).max(0);
+            limit[axis] =
+                (continuous(high, axis).ceil() as i64 + 1 + margin[axis]).min(i64::from(*slot));
         }
         if (0..3).any(|axis| limit[axis] <= origin[axis]) {
             return Ok(Mask::empty(level));
@@ -137,7 +213,12 @@ impl Roi {
             }
             Shape::Mesh(mesh) => rasterize(&mesh, &mut area),
         }
-        Ok(area.finish())
+        let mask = area.finish();
+        if self.radius > 0.0 {
+            mask.dilated(self.radius)
+        } else {
+            Ok(mask)
+        }
     }
 }
 
@@ -380,4 +461,87 @@ fn dominant(triangles: &[Triangle]) -> (usize, usize, usize) {
         .max_by(|left, right| left.1.total_cmp(right.1))
         .map_or(0, |pair| pair.0);
     (plane, (plane + 1) % 3, (plane + 2) % 3)
+}
+
+fn transform(field: &mut [f32], dims: [usize; 3], axis: usize, weight: f32) {
+    let [width, height, depth] = dims;
+    let plane = width * height;
+    let mut line = vec![0.0f32; dims[axis]];
+    match axis {
+        0 => {
+            for z in 0..depth {
+                for y in 0..height {
+                    let start = z * plane + y * width;
+                    line.copy_from_slice(&field[start..start + width]);
+                    transform_line(&mut line, weight);
+                    field[start..start + width].copy_from_slice(&line);
+                }
+            }
+        }
+        1 => {
+            for z in 0..depth {
+                for x in 0..width {
+                    for y in 0..height {
+                        line[y] = field[z * plane + y * width + x];
+                    }
+                    transform_line(&mut line, weight);
+                    for y in 0..height {
+                        field[z * plane + y * width + x] = line[y];
+                    }
+                }
+            }
+        }
+        2 => {
+            for y in 0..height {
+                for x in 0..width {
+                    for z in 0..depth {
+                        line[z] = field[z * plane + y * width + x];
+                    }
+                    transform_line(&mut line, weight);
+                    for z in 0..depth {
+                        field[z * plane + y * width + x] = line[z];
+                    }
+                }
+            }
+        }
+        _ => unreachable!("a mask has three axes"),
+    }
+}
+
+fn transform_line(line: &mut [f32], weight: f32) {
+    let length = line.len();
+    if length < 2 {
+        return;
+    }
+    let mut locations = vec![0usize; length];
+    let mut boundaries = vec![0.0f32; length + 1];
+    let mut last = 0usize;
+    boundaries[0] = f32::NEG_INFINITY;
+    boundaries[1] = f32::INFINITY;
+    for position in 1..length {
+        let mut boundary = crossing(line, &locations, last, position, weight);
+        while last > 0 && boundary <= boundaries[last] {
+            last -= 1;
+            boundary = crossing(line, &locations, last, position, weight);
+        }
+        last += 1;
+        locations[last] = position;
+        boundaries[last] = boundary;
+        boundaries[last + 1] = f32::INFINITY;
+    }
+    let mut slot = 0usize;
+    for position in 0..length {
+        while boundaries[slot + 1] < position as f32 {
+            slot += 1;
+        }
+        let distance = position as f32 - locations[slot] as f32;
+        line[position] = distance * distance * weight + line[locations[slot]];
+    }
+}
+
+fn crossing(line: &[f32], locations: &[usize], slot: usize, position: usize, weight: f32) -> f32 {
+    let anchor = locations[slot];
+    ((line[position] + weight * (position * position) as f32)
+        - (line[anchor] + weight * (anchor * anchor) as f32))
+        / (2.0 * weight * (position as f32 - anchor as f32))
 }

@@ -27,7 +27,7 @@ use grana_object::SurfaceCut;
 use grana_object::SurfaceParams;
 
 use assemble::Assembler;
-use detection::{Detection, DetectionSource};
+use detection::{Detection, DetectionSource, DetectionStore};
 use distance::Distance;
 use mask::SolidMask;
 use tile::{Tile, TileResult};
@@ -430,27 +430,23 @@ impl SurfaceBuilder {
         let total = self.tile_count;
         let step = total * 2 + 1;
         let cover = self.coverage(roi);
-        let resident = if Detection::bytes(&cover) <= DETECTION_CACHE {
-            Detection::build(
+        let detection = {
+            let mut report = band(progress, step, 0, 20);
+            DetectionStore::build(
                 &self,
                 &cover,
-                cover[2].clone(),
                 desired,
                 cancel,
                 sources.read,
+                DETECTION_CACHE,
+                &mut report,
             )?
-        } else {
-            None
         };
-        let source = DetectionSource::new(
-            &self,
-            &cover,
-            desired,
-            cancel,
-            sources.read,
-            resident.as_ref(),
-        );
-        let Some(field) = stats::build(&source, roi, &mut band(progress, step, 0, 30))? else {
+        let Some(detection) = detection else {
+            return Ok(None);
+        };
+        let source = DetectionSource::new(&self, &cover, desired, cancel, &detection);
+        let Some(field) = stats::build(&source, roi, &mut band(progress, step, 20, 35))? else {
             return Ok(None);
         };
         let Some(mask) = mask::build(&source, roi, progress, step, &field)? else {
@@ -627,8 +623,8 @@ fn run_pass(
     budget: &Budget,
     inputs: &mut Inputs<'_>,
 ) -> Result<PassOutcome, String> {
-    if let Some(resident) = inputs.source.resident() {
-        return run_resident(pass, workers, budget, resident, inputs);
+    if let Some(detection) = inputs.source.whole() {
+        return run_whole(pass, workers, budget, &detection, inputs);
     }
     let total = pass.total();
     let per_row = pass.plan.tiles[0] as usize * pass.plan.tiles[1] as usize;
@@ -653,10 +649,10 @@ fn run_pass(
             stop.store(true, Ordering::Relaxed);
             return Ok(PassOutcome::Cancelled);
         };
-        let detection = detection.as_ref();
         if halted(cancel, &stop) {
             return Ok(PassOutcome::Cancelled);
         }
+        let detection = &detection;
         let count = row_end - row_start;
         let (sender, receiver) = mpsc::sync_channel::<(usize, TileResult)>(workers * 2);
         let next = AtomicUsize::new(0);
@@ -743,11 +739,11 @@ fn run_pass(
     Ok(PassOutcome::Done(Box::new(assembler.topology())))
 }
 
-fn run_resident(
+fn run_whole(
     pass: &Pass<'_>,
     workers: usize,
     budget: &Budget,
-    resident: &Detection,
+    detection: &Detection,
     inputs: &mut Inputs<'_>,
 ) -> Result<PassOutcome, String> {
     let total = pass.total();
@@ -767,7 +763,7 @@ fn run_resident(
         for _ in 0..workers {
             let sender = sender.clone();
             scope.spawn(move || {
-                let mut tile = Tile::new(pass, solid, field, resident, gate);
+                let mut tile = Tile::new(pass, solid, field, detection, gate);
                 loop {
                     if halted(cancel, stop) {
                         break;

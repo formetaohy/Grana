@@ -128,6 +128,7 @@ impl Encode for SceneState {
         self.region.encode(writer);
         self.clip.encode(writer);
         writer.u64(self.mask.unwrap_or(0));
+        writer.f32(self.mask_radius);
         writer.u32(self.time);
         self.selection.encode(writer);
         self.sets.encode(writer);
@@ -241,6 +242,7 @@ impl Encode for SetState {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u64(self.id);
         writer.u8(self.kind.index() as u8);
+        writer.string(self.key.as_str());
         writer.string(&self.name);
         writer.count(self.channel);
         for value in self.color {

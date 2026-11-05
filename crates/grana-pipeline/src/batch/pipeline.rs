@@ -98,7 +98,11 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 reference,
                 offsets,
             } => run.align(*channel, *reference, offsets)?,
-            Step::Detect { set, mask } => run.detect(*set, *mask)?,
+            Step::Detect {
+                set,
+                mask,
+                mask_radius,
+            } => run.detect(*set, *mask, *mask_radius)?,
             Step::Filter { set, .. } => run.refilter(*set)?,
             Step::Copy { set, source } => run.copy(*set, *source)?,
             Step::Merge { set, part } => run.merge(*set, *part)?,
@@ -108,7 +112,11 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 shift,
                 ..
             } => run.relate(*source, *target, *shift)?,
-            Step::Coloc { pair, mask } => run.colocalize(*pair, *mask)?,
+            Step::Coloc {
+                pair,
+                mask,
+                mask_radius,
+            } => run.colocalize(*pair, *mask, *mask_radius)?,
             Step::Present => {
                 task.protocol
                     .present_measure(&run.sets, &mut measure, &run.scene);
@@ -148,7 +156,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             })?;
             table.sort(&mut rows, column, sort.descending);
         }
-        let file = format!("{}-{}.csv", slug(&spec.name), spec.group().key());
+        let file = format!("{}-{}.csv", spec.key(), spec.group().key());
         write(&folder.join(&file), &table.csv(&rows))?;
         objects += rows.len();
         let curation = scene
@@ -311,9 +319,15 @@ impl Run<'_, '_> {
         Ok(())
     }
 
-    fn detect(&mut self, id: ObjectSetId, mask: Option<ObjectSetId>) -> Result<(), String> {
+    fn detect(
+        &mut self,
+        id: ObjectSetId,
+        mask: Option<ObjectSetId>,
+        mask_radius: f32,
+    ) -> Result<(), String> {
         let task = self.task;
         self.scene.set_mask(mask);
+        self.scene.set_mask_radius(mask_radius);
         let roi = match mask {
             None => None,
             Some(mask) => {
@@ -521,7 +535,12 @@ impl Run<'_, '_> {
         Ok(())
     }
 
-    fn colocalize(&mut self, pair: usize, mask: Option<ObjectSetId>) -> Result<(), String> {
+    fn colocalize(
+        &mut self,
+        pair: usize,
+        mask: Option<ObjectSetId>,
+        mask_radius: f32,
+    ) -> Result<(), String> {
         let task = self.task;
         let coloc = task
             .protocol
@@ -531,6 +550,7 @@ impl Run<'_, '_> {
         let settings = coloc.settings();
         let pair = self.pairs[pair];
         self.scene.set_mask(mask);
+        self.scene.set_mask_radius(mask_radius);
         self.scene.coloc.set_settings(settings);
         self.scene.coloc.set_pair(pair);
         let roi = match self.scene.mask {
@@ -607,7 +627,7 @@ pub(super) fn artifacts(protocol: &Protocol, name: &str, project: bool) -> Vec<S
     let mut artifacts = protocol
         .sets()
         .iter()
-        .map(|set| format!("{}-{}.csv", slug(&set.name), set.group().key()))
+        .map(|set| format!("{}-{}.csv", set.key(), set.group().key()))
         .collect::<Vec<_>>();
     if let Some(coloc) = protocol.coloc() {
         for pair in &coloc.pairs {

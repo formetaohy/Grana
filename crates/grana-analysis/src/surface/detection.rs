@@ -1,13 +1,29 @@
+use std::borrow::Cow;
+use std::collections::VecDeque;
+use std::fs::{File, OpenOptions};
+use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+use std::mem::size_of;
 use std::ops::Range;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::{Read, SurfaceBuilder};
 
-pub(super) struct Detection {
-    values: Vec<f32>,
+const BAND: u32 = 32;
+
+static NEXT: AtomicU64 = AtomicU64::new(0);
+
+pub(super) struct DetectionStore {
+    storage: Storage,
     start: [i64; 3],
     dims: [usize; 3],
-    strides: [usize; 3],
+    plane: usize,
+}
+
+enum Storage {
+    Memory(Vec<f32>),
+    Spill { file: Mutex<File>, path: PathBuf },
 }
 
 pub(super) struct DetectionSource<'a> {
@@ -15,21 +31,211 @@ pub(super) struct DetectionSource<'a> {
     cover: &'a [Range<u32>; 3],
     workers: usize,
     cancel: &'a AtomicBool,
-    read: &'a Read<'a>,
-    resident: Option<&'a Detection>,
+    store: &'a DetectionStore,
 }
 
-pub(super) enum DetectionSlab<'a> {
-    Resident(&'a Detection),
-    Owned(Detection),
+pub(super) struct Detection<'a> {
+    values: Cow<'a, [f32]>,
+    start: [i64; 3],
+    dims: [usize; 3],
+    strides: [usize; 3],
 }
 
-impl DetectionSlab<'_> {
-    pub(super) fn as_ref(&self) -> &Detection {
-        match self {
-            Self::Resident(detection) => detection,
-            Self::Owned(detection) => detection,
+impl Drop for DetectionStore {
+    fn drop(&mut self) {
+        let storage = std::mem::replace(&mut self.storage, Storage::Memory(Vec::new()));
+        if let Storage::Spill { file, path } = storage {
+            drop(file);
+            let _ = std::fs::remove_file(path);
         }
+    }
+}
+
+impl DetectionStore {
+    pub(super) fn build(
+        plan: &SurfaceBuilder,
+        cover: &[Range<u32>; 3],
+        workers: usize,
+        cancel: &AtomicBool,
+        read: &Read<'_>,
+        budget: u64,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Option<Self>, String> {
+        let dims = super::dims_of(cover);
+        if dims.contains(&0) || cover[2].is_empty() {
+            return Ok(None);
+        }
+        let plane = dims[0] * dims[1];
+        let total = plane * dims[2];
+        let bytes = total as u64 * size_of::<f32>() as u64;
+        let storage = if bytes <= budget {
+            Storage::Memory(vec![0.0; total])
+        } else {
+            let path = spill_path();
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|error| format!("failed to open the detection spill file: {error}"))?;
+            file.set_len(bytes).map_err(|error| {
+                let _ = std::fs::remove_file(&path);
+                format!("failed to size the detection spill file: {error}")
+            })?;
+            Storage::Spill {
+                file: Mutex::new(file),
+                path,
+            }
+        };
+        let mut store = Self {
+            storage,
+            start: [
+                i64::from(cover[0].start),
+                i64::from(cover[1].start),
+                i64::from(cover[2].start),
+            ],
+            dims,
+            plane,
+        };
+        let radius = plan.kernels[2].len() / 2;
+        let mut ring: VecDeque<Vec<f32>> = VecDeque::with_capacity(2 * radius + 1);
+        let mut smoothed = vec![0.0f32; plane];
+        let mut output = cover[2].start;
+        let mut z = cover[2].start;
+        let bands = (cover[2].end - cover[2].start).div_ceil(BAND) as usize;
+        let mut done = 0usize;
+        let mut first = true;
+        let mut last = Vec::new();
+        while z < cover[2].end {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+            let end = cover[2].end.min(z.saturating_add(BAND));
+            let mut raw = vec![0.0f32; plane * (end - z) as usize];
+            let ranges = [cover[0].clone(), cover[1].clone(), z..end];
+            let data = read(&ranges)?;
+            if data.voxel_count() != raw.len() {
+                return Err("the detection band does not cover the requested region".to_string());
+            }
+            data.write_values(&mut raw);
+            for (axis, kernel) in plan.kernels.iter().enumerate().take(2) {
+                if kernel.len() <= 1 {
+                    continue;
+                }
+                planes(&mut raw, plane, workers.max(1), |part, _| {
+                    if axis == 0 {
+                        horizontal(part, dims, part.len() / plane, kernel);
+                    } else {
+                        vertical(part, dims, part.len() / plane, kernel);
+                    }
+                });
+            }
+            for local in 0..(end - z) as usize {
+                let start = local * plane;
+                let source = &raw[start..start + plane];
+                if first {
+                    first = false;
+                    for _ in 0..radius {
+                        ring.push_back(source.to_vec());
+                    }
+                }
+                ring.push_back(source.to_vec());
+                last.clear();
+                last.extend_from_slice(source);
+                while ring.len() > 2 * radius {
+                    depth(&ring, &plan.kernels[2], radius, &mut smoothed);
+                    store.write_plane(output, &smoothed)?;
+                    output += 1;
+                    ring.pop_front();
+                }
+            }
+            done += 1;
+            progress(done, bands);
+            z = end;
+        }
+        let full = 2 * radius + 1;
+        while output < cover[2].end {
+            if ring.len() < full {
+                ring.push_back(last.clone());
+                continue;
+            }
+            if output > cover[2].start {
+                ring.pop_front();
+                ring.push_back(last.clone());
+            }
+            depth(&ring, &plan.kernels[2], radius, &mut smoothed);
+            store.write_plane(output, &smoothed)?;
+            output += 1;
+        }
+        assert_eq!(
+            output, cover[2].end,
+            "the detection store covers every plane"
+        );
+        Ok(Some(store))
+    }
+
+    fn write_plane(&mut self, z: u32, values: &[f32]) -> Result<(), String> {
+        let offset = (z - self.start[2] as u32) as usize * self.plane;
+        match &mut self.storage {
+            Storage::Memory(store) => {
+                store[offset..offset + values.len()].copy_from_slice(values);
+            }
+            Storage::Spill { file, .. } => {
+                let file = file
+                    .get_mut()
+                    .map_err(|_| "the detection spill file is poisoned".to_string())?;
+                file.seek(SeekFrom::Start(offset as u64 * 4))
+                    .map_err(|error| format!("failed to seek the detection spill: {error}"))?;
+                file.write_all(bytemuck::cast_slice(values))
+                    .map_err(|error| format!("failed to write the detection spill: {error}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn whole(&self) -> Option<Detection<'_>> {
+        let Storage::Memory(values) = &self.storage else {
+            return None;
+        };
+        Some(Detection {
+            values: Cow::Borrowed(&values[..]),
+            start: self.start,
+            dims: self.dims,
+            strides: super::strides_of(self.dims),
+        })
+    }
+
+    pub(super) fn slab(&self, z: Range<u32>) -> Result<Option<Detection<'_>>, String> {
+        let low = self.start[2] as u32;
+        let high = low + self.dims[2] as u32;
+        if z.is_empty() || z.start < low || z.end > high {
+            return Ok(None);
+        }
+        let offset = (z.start - low) as usize * self.plane;
+        let length = (z.end - z.start) as usize * self.plane;
+        let dims = [self.dims[0], self.dims[1], (z.end - z.start) as usize];
+        let values = match &self.storage {
+            Storage::Memory(store) => Cow::Borrowed(&store[offset..offset + length]),
+            Storage::Spill { file, .. } => {
+                let mut values = vec![0.0f32; length];
+                let bytes = bytemuck::cast_slice_mut(&mut values);
+                let mut file = file
+                    .lock()
+                    .map_err(|_| "the detection spill file is poisoned".to_string())?;
+                file.seek(SeekFrom::Start(offset as u64 * 4))
+                    .map_err(|error| format!("failed to seek the detection spill: {error}"))?;
+                file.read_exact(bytes)
+                    .map_err(|error| format!("failed to read the detection spill: {error}"))?;
+                drop(file);
+                Cow::Owned(values)
+            }
+        };
+        Ok(Some(Detection {
+            values,
+            start: [self.start[0], self.start[1], i64::from(z.start)],
+            dims,
+            strides: super::strides_of(dims),
+        }))
     }
 }
 
@@ -39,16 +245,14 @@ impl<'a> DetectionSource<'a> {
         cover: &'a [Range<u32>; 3],
         workers: usize,
         cancel: &'a AtomicBool,
-        read: &'a Read<'a>,
-        resident: Option<&'a Detection>,
+        store: &'a DetectionStore,
     ) -> Self {
         Self {
             plan,
             cover,
             workers,
             cancel,
-            read,
-            resident,
+            store,
         }
     }
 
@@ -60,8 +264,8 @@ impl<'a> DetectionSource<'a> {
         self.cover
     }
 
-    pub(super) fn resident(&self) -> Option<&'a Detection> {
-        self.resident
+    pub(super) fn whole(&self) -> Option<Detection<'a>> {
+        self.store.whole()
     }
 
     pub(super) fn workers(&self) -> usize {
@@ -72,119 +276,12 @@ impl<'a> DetectionSource<'a> {
         self.cancel
     }
 
-    pub(super) fn slab(&self, z: Range<u32>) -> Result<Option<DetectionSlab<'a>>, String> {
-        if let Some(detection) = self.resident {
-            return Ok(Some(DetectionSlab::Resident(detection)));
-        }
-        Ok(Detection::build(
-            self.plan,
-            self.cover,
-            z,
-            self.workers,
-            self.cancel,
-            self.read,
-        )?
-        .map(DetectionSlab::Owned))
+    pub(super) fn slab(&self, z: Range<u32>) -> Result<Option<Detection<'_>>, String> {
+        self.store.slab(z)
     }
 }
 
-impl Detection {
-    pub(super) fn bytes(cover: &[Range<u32>; 3]) -> u64 {
-        let dims = super::dims_of(cover);
-        dims[0] as u64 * dims[1] as u64 * dims[2] as u64 * 4
-    }
-
-    pub(super) fn build(
-        plan: &SurfaceBuilder,
-        cover: &[Range<u32>; 3],
-        z: Range<u32>,
-        workers: usize,
-        cancel: &AtomicBool,
-        read: &Read<'_>,
-    ) -> Result<Option<Self>, String> {
-        let dims = super::dims_of(cover);
-        let plane = dims[0] * dims[1];
-        if plane == 0 || z.is_empty() {
-            return Ok(None);
-        }
-        let radius = plan.kernels[2].len() / 2;
-        let raw_start = z.start.saturating_sub(radius as u32).max(cover[2].start);
-        let raw_end = z.end.saturating_add(radius as u32).min(cover[2].end);
-        assert!(
-            raw_start <= z.start && z.end <= raw_end,
-            "a detection slab holds the smoothing support of its output"
-        );
-        let raw_dims = [dims[0], dims[1], (raw_end - raw_start) as usize];
-        let mut raw = vec![0.0f32; raw_dims[0] * raw_dims[1] * raw_dims[2]];
-        let ranges = [cover[0].clone(), cover[1].clone(), raw_start..raw_end];
-        let data = read(&ranges)?;
-        if data.voxel_count() != raw.len() {
-            return Err("the detection slab does not cover the requested region".to_string());
-        }
-        data.write_values(&mut raw);
-        if cancel.load(Ordering::Relaxed) {
-            return Ok(None);
-        }
-        for (axis, kernel) in plan.kernels.iter().enumerate().take(2) {
-            if kernel.len() <= 1 {
-                continue;
-            }
-            planes(&mut raw, plane, workers.max(1), |part, _| {
-                if axis == 0 {
-                    horizontal(part, dims, part.len() / plane, kernel);
-                } else {
-                    vertical(part, dims, part.len() / plane, kernel);
-                }
-            });
-            if cancel.load(Ordering::Relaxed) {
-                return Ok(None);
-            }
-        }
-        let output = z.end - z.start;
-        let mut values = vec![0.0f32; plane * output as usize];
-        let kernel = &plan.kernels[2];
-        if kernel.len() <= 1 {
-            let offset = (z.start - raw_start) as usize * plane;
-            let length = values.len();
-            values.copy_from_slice(&raw[offset..offset + length]);
-            return Ok(Some(Self {
-                values,
-                start: [
-                    i64::from(cover[0].start),
-                    i64::from(cover[1].start),
-                    i64::from(z.start),
-                ],
-                dims: [dims[0], dims[1], output as usize],
-                strides: super::strides_of([dims[0], dims[1], output as usize]),
-            }));
-        }
-        let radius = kernel.len() / 2;
-        planes(&mut values, plane, workers.max(1), |part, first| {
-            depth(
-                part,
-                &raw,
-                plane,
-                first + z.start as usize - raw_start as usize,
-                raw_dims[2],
-                radius,
-                kernel,
-            );
-        });
-        if cancel.load(Ordering::Relaxed) {
-            return Ok(None);
-        }
-        Ok(Some(Self {
-            values,
-            start: [
-                i64::from(cover[0].start),
-                i64::from(cover[1].start),
-                i64::from(z.start),
-            ],
-            dims: [dims[0], dims[1], output as usize],
-            strides: super::strides_of([dims[0], dims[1], output as usize]),
-        }))
-    }
-
+impl Detection<'_> {
     pub(super) fn offset(&self, x: i64) -> usize {
         (x - self.start[0]) as usize
     }
@@ -212,6 +309,25 @@ impl Detection {
         let base = self.strides[1] * y as usize + self.strides[2] * z as usize;
         Some(&self.values[base..base + self.dims[0]])
     }
+}
+
+fn depth(ring: &VecDeque<Vec<f32>>, kernel: &[f32], radius: usize, values: &mut [f32]) {
+    if radius == 0 {
+        values.copy_from_slice(&ring[0]);
+        return;
+    }
+    values.fill(0.0);
+    for (tap, weight) in kernel.iter().enumerate() {
+        let source = &ring[tap];
+        for (slot, value) in values.iter_mut().zip(source) {
+            *slot += weight * value;
+        }
+    }
+}
+
+fn spill_path() -> PathBuf {
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("grana-detection-{}-{id}.spill", std::process::id()))
 }
 
 fn planes(
@@ -297,30 +413,6 @@ fn vertical(part: &mut [f32], dims: [usize; 3], depth: usize, kernel: &[f32]) {
     }
 }
 
-fn depth(
-    part: &mut [f32],
-    raw: &[f32],
-    plane: usize,
-    start: usize,
-    length: usize,
-    radius: usize,
-    kernel: &[f32],
-) {
-    for z in 0..part.len() / plane {
-        let output = &mut part[z * plane..(z + 1) * plane];
-        output.fill(0.0);
-        let centre = start + z;
-        for (tap, weight) in kernel.iter().enumerate() {
-            let reached =
-                (centre as i64 + tap as i64 - radius as i64).clamp(0, length as i64 - 1) as usize;
-            let source = &raw[reached * plane..(reached + 1) * plane];
-            for (slot, value) in output.iter_mut().zip(source) {
-                *slot += weight * value;
-            }
-        }
-    }
-}
-
 fn blur(padded: &[f32], blurred: &mut [f32], kernel: &[f32], radius: usize) {
     let length = blurred.len();
     for (x, slot) in blurred.iter_mut().enumerate() {
@@ -335,4 +427,62 @@ fn blur(padded: &[f32], blurred: &mut [f32], kernel: &[f32], radius: usize) {
         padded.len() >= length + 2 * radius,
         "a padded line holds its halo"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grana_object::{SurfaceFilter, SurfaceParams};
+    use grana_volume::{Extent, Intensity, Level, Region, Spacing, VoxelData};
+
+    #[test]
+    fn reads_and_smooths_a_spilled_detection_once() {
+        let level = Level::new(Extent::new(32, 24, 6), Spacing::new(1.0, 1.0, 1.0));
+        let params = SurfaceParams::new(0.5, 1.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0));
+        let plan = SurfaceBuilder::new(
+            0,
+            level,
+            params,
+            1,
+            0,
+            Region::none(),
+            Intensity::new(0.0, 1.0),
+        );
+        let cover = plan.coverage(None);
+        let volume = (cover[0].end - cover[0].start) as u64
+            * (cover[1].end - cover[1].start) as u64
+            * (cover[2].end - cover[2].start) as u64;
+        let reads = std::sync::atomic::AtomicU64::new(0);
+        let read = |ranges: &[Range<u32>; 3]| {
+            let count = (ranges[0].end - ranges[0].start) as usize
+                * (ranges[1].end - ranges[1].start) as usize
+                * (ranges[2].end - ranges[2].start) as usize;
+            reads.fetch_add(count as u64, Ordering::Relaxed);
+            Ok(VoxelData::F32(vec![0.25; count]))
+        };
+        let cancel = AtomicBool::new(false);
+        let mut progress = |_, _| {};
+        let memory =
+            DetectionStore::build(&plan, &cover, 2, &cancel, &read, u64::MAX, &mut progress)
+                .expect("the memory detection builds")
+                .expect("the memory detection covers voxels");
+        assert_eq!(reads.load(Ordering::Relaxed), volume);
+        reads.store(0, Ordering::Relaxed);
+        let spill = DetectionStore::build(&plan, &cover, 2, &cancel, &read, 0, &mut progress)
+            .expect("the spilled detection builds")
+            .expect("the spilled detection covers voxels");
+        assert_eq!(
+            reads.load(Ordering::Relaxed),
+            volume,
+            "a spilled detection reads its channel once"
+        );
+        assert!(matches!(spill.storage, Storage::Spill { .. }));
+        let slab = cover[2].clone();
+        let memory = memory.slab(slab.clone()).expect("the memory slab").unwrap();
+        let spilled = spill.slab(slab).expect("the spilled slab").unwrap();
+        assert_eq!(
+            memory.values, spilled.values,
+            "the spilled detection smooths like the resident one"
+        );
+    }
 }

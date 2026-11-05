@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use grana_display::Coloring;
 use grana_measure::{ColocPair, Group, TrackMeasurement, channel_keys, relation_keys};
-use grana_scene::{Criteria, FilterRange, LassoPath, ObjectColor, ObjectSetId, Scene, TrackColor};
+use grana_scene::{
+    Criteria, FilterRange, LassoPath, ObjectColor, ObjectSetId, ObjectSetKey, Scene, TrackColor,
+};
 use grana_volume::Region;
 
 use crate::step::Step;
@@ -45,6 +47,7 @@ struct Builder<'a> {
     names: &'a [String],
     ids: HashMap<String, ObjectSetId>,
     steps: Vec<Step>,
+    mask_radius: f32,
 }
 
 impl Protocol {
@@ -89,7 +92,7 @@ impl Protocol {
         for spec in &self.sets {
             self.validate_source(&spec.source, &names, scene.frame_count())?;
             if let Some(mask) = &spec.mask
-                && !self.sets.iter().any(|other| other.name == *mask)
+                && !self.sets.iter().any(|other| other.key == *mask)
             {
                 return Err(ProtocolError::Invalid(format!(
                     "the set {} is masked by {mask}, which is not an object set of the protocol",
@@ -111,7 +114,7 @@ impl Protocol {
                 channel(&names, &pair.b)?;
             }
             if let Some(mask) = &coloc.mask
-                && !self.sets.iter().any(|set| set.name == *mask)
+                && !self.sets.iter().any(|set| set.key == *mask)
             {
                 return Err(ProtocolError::Invalid(format!(
                     "the colocalization mask {mask} is not an object set of the protocol"
@@ -145,7 +148,7 @@ impl Protocol {
                     ));
                 }
                 if let Some(source) = seed_source
-                    && !self.sets.iter().any(|set| set.name == *source)
+                    && !self.sets.iter().any(|set| set.key == *source)
                 {
                     return Err(ProtocolError::Invalid(format!(
                         "the seed source {source} is not an object set of the protocol"
@@ -153,7 +156,7 @@ impl Protocol {
                 }
             }
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
-                if !self.sets.iter().any(|set| set.name == *source) {
+                if !self.sets.iter().any(|set| set.key == *source) {
                     return Err(ProtocolError::Invalid(format!(
                         "{source} is not an object set of the protocol"
                     )));
@@ -190,11 +193,13 @@ impl Protocol {
             Some(region) => region.region(world),
             None => Region::none(),
         });
+        scene.set_mask_radius(self.mask_radius);
         let mut builder = Builder {
             scene,
             names: &names,
             ids: HashMap::new(),
             steps: Vec::new(),
+            mask_radius: self.mask_radius,
         };
         builder.scene.set_drift(grana_scene::Drift::default());
         if let Some(drift) = &self.drift {
@@ -210,8 +215,9 @@ impl Protocol {
             let mask = spec
                 .mask
                 .as_deref()
-                .and_then(|name| builder.ids.get(name).copied());
+                .and_then(|key| builder.ids.get(key).copied());
             let id = builder.build(&spec.source, &spec.name, true, spec.track, mask)?;
+            builder.assign_key(id, &spec.key, &spec.name)?;
             {
                 let set = builder
                     .scene
@@ -226,7 +232,7 @@ impl Protocol {
             if let Some(curation) = &spec.curation {
                 builder.apply_curation(id, Some(curation), &spec.name)?;
             }
-            builder.ids.insert(spec.name.clone(), id);
+            builder.ids.insert(spec.key.clone(), id);
             masks.push(mask);
             sets.push(id);
         }
@@ -252,7 +258,7 @@ impl Protocol {
             });
         }
         for spec in &self.sets {
-            let id = builder.ids[&spec.name];
+            let id = builder.ids[&spec.key];
             if let Some(color) = &spec.color_by {
                 let coloring = object_coloring(color, builder.scene, id, &keys)?;
                 builder
@@ -305,9 +311,13 @@ impl Protocol {
             let mask = coloc
                 .mask
                 .as_deref()
-                .and_then(|name| builder.ids.get(name).copied());
+                .and_then(|key| builder.ids.get(key).copied());
             for pair in 0..coloc.pairs.len() {
-                builder.steps.push(Step::Coloc { pair, mask });
+                builder.steps.push(Step::Coloc {
+                    pair,
+                    mask,
+                    mask_radius: builder.mask_radius,
+                });
             }
         }
         builder.steps.push(Step::Present);
@@ -443,16 +453,48 @@ impl Builder<'_> {
             }
         }
         self.apply_track(id, track);
-        self.steps.push(Step::Detect { set: id, mask });
+        self.steps.push(Step::Detect {
+            set: id,
+            mask,
+            mask_radius: self.mask_radius,
+        });
         Ok(id)
     }
 
-    fn reference(&self, name: &str) -> Result<ObjectSetId, ProtocolError> {
-        self.ids.get(name).copied().ok_or_else(|| {
-            ProtocolError::Invalid(format!(
-                "{name} is referenced before the protocol stages it"
-            ))
+    fn reference(&self, key: &str) -> Result<ObjectSetId, ProtocolError> {
+        self.ids.get(key).copied().ok_or_else(|| {
+            ProtocolError::Invalid(format!("{key} is referenced before the protocol stages it"))
         })
+    }
+
+    fn assign_key(&mut self, id: ObjectSetId, key: &str, name: &str) -> Result<(), ProtocolError> {
+        let key =
+            ObjectSetKey::parse(key).expect("a checked protocol carries a valid object set key");
+        let conflict = self
+            .scene
+            .objects
+            .iter()
+            .find(|set| set.id() != id && set.key() == &key)
+            .map(|set| set.id());
+        if let Some(other) = conflict {
+            if self.ids.values().any(|top| *top == other) {
+                return Err(ProtocolError::Invalid(format!(
+                    "the object set {name} collides with another object set key"
+                )));
+            }
+            if !self.scene.rekey_object(other) {
+                return Err(ProtocolError::Invalid(format!(
+                    "the object set {name} cannot release a staged part key"
+                )));
+            }
+        }
+        let current = self.scene.objects.get(id).map(|set| set.key().clone());
+        if current.as_ref() == Some(&key) || self.scene.set_object_key(id, key) {
+            return Ok(());
+        }
+        Err(ProtocolError::Invalid(format!(
+            "the object set {name} collides with another object set key"
+        )))
     }
 
     fn rename(&mut self, id: ObjectSetId, name: &str, named: bool) -> Result<(), ProtocolError> {
@@ -632,7 +674,7 @@ fn track_coloring(spec: &ColorSpec, scene: &Scene) -> Result<Coloring<TrackColor
             let target = scene
                 .objects
                 .iter()
-                .find(|set| set.name() == target)
+                .find(|set| set.key().as_str() == target)
                 .map(|set| set.id())
                 .ok_or_else(|| {
                     ProtocolError::Invalid(format!(
@@ -675,7 +717,7 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
     for (index, step) in steps.iter().enumerate() {
         match step {
             Step::Drift { .. } => {}
-            Step::Detect { set, mask } => {
+            Step::Detect { set, mask, .. } => {
                 dependencies[index].extend(drift);
                 if let Some(mask) = mask {
                     dependencies[index].push(settled(&ready, *mask)?);

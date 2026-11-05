@@ -257,6 +257,11 @@ impl Session {
                     scene.set_mask(source);
                 }
             }
+            Command::SetMaskRadius(radius) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_mask_radius(radius);
+                }
+            }
             Command::SetTrackParams { set, params } => {
                 if let Some(target) = self.object_mut(set) {
                     target.set_track_params(params);

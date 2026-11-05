@@ -31,6 +31,7 @@ const EXTENT: Extent = Extent::new(8, 8, 4);
 #[test]
 fn round_trips_a_project() {
     let mut scene = fixture();
+    scene.set_mask_radius(1.5);
     stage(&mut scene);
     let mut measure = Measure::new();
     let spots = scene

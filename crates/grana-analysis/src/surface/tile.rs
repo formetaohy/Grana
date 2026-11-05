@@ -43,7 +43,7 @@ pub(super) struct Tile<'a> {
     pub(super) pass: &'a Pass<'a>,
     pub(super) solid: &'a SolidMask,
     pub(super) grid: &'a BlockField,
-    pub(super) detection: &'a Detection,
+    pub(super) detection: &'a Detection<'a>,
     pub(super) gate: &'a Gate<'a>,
     pub(super) band: Option<Band>,
     pub(super) array: [Range<u32>; 3],
@@ -75,7 +75,7 @@ impl<'a> Tile<'a> {
         pass: &'a Pass<'a>,
         solid: &'a SolidMask,
         grid: &'a BlockField,
-        detection: &'a Detection,
+        detection: &'a Detection<'a>,
         gate: &'a Gate<'a>,
     ) -> Self {
         Self {

@@ -9,6 +9,7 @@ use super::Plan;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Quality {
+    pub(super) key: String,
     pub(super) name: String,
     pub(super) kind: String,
     pub(super) objects: usize,
@@ -64,6 +65,7 @@ pub(super) fn of(
     }
     .key(keys);
     Quality {
+        key: object.key().as_str().to_string(),
         name: object.name().to_string(),
         kind: object.kind().name().to_string(),
         objects: rows.len(),
@@ -80,6 +82,7 @@ pub(super) fn table(plan: &Plan, rows: &[Option<Row>]) -> String {
         "dataset",
         "scene",
         "status",
+        "set_key",
         "set",
         "kind",
         "objects",
@@ -109,6 +112,7 @@ pub(super) fn table(plan: &Plan, rows: &[Option<Row>]) -> String {
 #[derive(Clone, Debug)]
 pub struct Comparison {
     pub group: String,
+    pub key: String,
     pub name: String,
     pub kind: String,
     pub datasets: usize,
@@ -135,24 +139,21 @@ pub(super) fn comparison(plan: &Plan, rows: &[Option<Row>]) -> (Vec<Comparison>,
         let group = plan.datasets[index].group();
         for quality in &row.quality {
             groups
-                .entry((
-                    group.to_string(),
-                    quality.name.clone(),
-                    quality.kind.clone(),
-                ))
+                .entry((group.to_string(), quality.key.clone(), quality.kind.clone()))
                 .or_default()
                 .push(quality);
         }
     }
     let mut compared = Vec::with_capacity(groups.len());
-    for ((group, name, kind), summary) in groups {
+    for ((group, key, kind), summary) in groups {
         let (volume, volume_deviation) = summary.mean_deviation(&summary.volume);
         let (area, area_deviation) = summary.mean_deviation(&summary.area);
         let (size, size_deviation) = summary.mean_deviation(&summary.size);
         let (intensity, intensity_deviation) = summary.mean_deviation(&summary.intensity);
         compared.push(Comparison {
             group,
-            name,
+            key,
+            name: summary.name,
             kind,
             datasets: summary.datasets,
             objects: mean(&summary.objects),
@@ -168,6 +169,7 @@ pub(super) fn comparison(plan: &Plan, rows: &[Option<Row>]) -> (Vec<Comparison>,
     }
     let mut lines = vec![grana_measure::csv::line(&[
         "group",
+        "set_key",
         "set",
         "kind",
         "datasets",
@@ -184,6 +186,7 @@ pub(super) fn comparison(plan: &Plan, rows: &[Option<Row>]) -> (Vec<Comparison>,
     for comparison in &compared {
         lines.push(grana_measure::csv::line(&[
             &comparison.group,
+            &comparison.key,
             &comparison.name,
             &comparison.kind,
             &comparison.datasets.to_string(),
@@ -203,6 +206,7 @@ pub(super) fn comparison(plan: &Plan, rows: &[Option<Row>]) -> (Vec<Comparison>,
 
 #[derive(Default)]
 struct Summary {
+    name: String,
     datasets: usize,
     objects: Vec<f64>,
     volume: Vec<f64>,
@@ -214,6 +218,7 @@ struct Summary {
 impl Summary {
     fn push(&mut self, quality: &Quality) {
         self.datasets += 1;
+        self.name.clone_from(&quality.name);
         self.objects.push(quality.objects as f64);
         for (values, value) in [
             (&mut self.volume, quality.volume),
@@ -258,6 +263,7 @@ fn line(group: &str, dataset: &str, scene: &str, status: &str, quality: &Quality
         dataset,
         scene,
         status,
+        &quality.key,
         &quality.name,
         &quality.kind,
         &quality.objects.to_string(),

@@ -132,6 +132,7 @@ pub enum Command {
         coloring: Coloring<ObjectColor>,
     },
     SetMask(Option<ObjectSetId>),
+    SetMaskRadius(f32),
     SetTrackParams {
         set: ObjectSetId,
         params: TrackParams,
@@ -498,7 +499,7 @@ impl Command {
             Self::SetObjectColoring { set, .. } => {
                 Edit::targeted(Action::ObjectColoring, set.raw())
             }
-            Self::SetMask(_) => Edit::new(Action::Mask),
+            Self::SetMask(_) | Self::SetMaskRadius(_) => Edit::new(Action::Mask),
             Self::SetTrackVisible { set, .. } => Edit::targeted(Action::TrackVisible, set.raw()),
             Self::SetTrackThickness { set, .. } => {
                 Edit::targeted(Action::TrackThickness, set.raw())

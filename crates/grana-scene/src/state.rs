@@ -8,6 +8,7 @@ use crate::coloc::{ColocState, MaskKey};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::drift::Drift;
+use crate::key::ObjectSetKey;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::provenance::Provenance;
@@ -30,6 +31,7 @@ pub struct SceneState {
     pub clip: Clip,
     pub drift: Drift,
     pub mask: Option<u64>,
+    pub mask_radius: f32,
     pub time: u32,
     pub selection: Option<SelectionState>,
     pub sets: Vec<SetState>,
@@ -67,6 +69,7 @@ pub struct RelationState {
 #[derive(Debug, PartialEq)]
 pub struct SetState {
     pub id: u64,
+    pub key: ObjectSetKey,
     pub kind: ObjectKind,
     pub name: String,
     pub channel: usize,
@@ -101,6 +104,8 @@ impl SceneState {
                 || (self.drift.frames() == frame_count
                     && self.drift.channel() < channel_count
                     && self.drift.reference() < frame_count))
+            && self.mask_radius.is_finite()
+            && self.mask_radius >= 0.0
             && self
                 .sets
                 .iter()
@@ -163,6 +168,7 @@ impl Scene {
             clip: self.clip,
             drift: self.drift().clone(),
             mask: self.mask.map(|set| set.raw()),
+            mask_radius: self.mask_radius,
             time: self.time(),
             selection: self.selection().map(|selection| SelectionState {
                 set: selection.set.raw(),
@@ -199,10 +205,11 @@ impl Scene {
             .mask
             .and_then(ObjectSetId::from_raw)
             .filter(|set| self.objects.get(*set).is_some());
+        self.mask_radius = state.mask_radius;
         let mask = self
             .mask
             .and_then(|set| self.objects.get(set))
-            .map(|set| MaskKey::new(set.id(), set.document()));
+            .map(|set| MaskKey::new(set.id(), set.document(), state.mask_radius));
         self.coloc.restore(
             state.coloc,
             self.channels.len(),
@@ -278,6 +285,7 @@ impl Scene {
             }
         }
         hash = mix(hash, self.mask.map_or(0, ObjectSetId::raw));
+        hash = mix(hash, u64::from(self.mask_radius.to_bits()));
         for offset in self.drift().offsets() {
             for value in offset {
                 hash = mix(hash, u64::from(value.to_bits()));

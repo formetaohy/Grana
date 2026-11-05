@@ -611,6 +611,19 @@ fn mask(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         Some((_, name, false)) => widget::caption(ui, &format!("Detect inside {name} only")),
         None => widget::caption(ui, "Detect across the whole dataset"),
     }
+    let limit = state.scene.dataset.world_size().min_element().max(1.0);
+    if let Some(radius) = widget::slider_readout(
+        ui,
+        "mask.radius",
+        Some("Grow by"),
+        state.scene.mask_radius,
+        0.0..=limit,
+        false,
+        &format!("{:.2} µm", state.scene.mask_radius),
+    ) && radius != state.scene.mask_radius
+    {
+        commands.push(Command::SetMaskRadius(radius));
+    }
 }
 
 fn clip(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {

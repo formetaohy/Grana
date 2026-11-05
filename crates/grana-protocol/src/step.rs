@@ -10,6 +10,7 @@ pub enum Step {
     Detect {
         set: ObjectSetId,
         mask: Option<ObjectSetId>,
+        mask_radius: f32,
     },
     Filter {
         set: ObjectSetId,
@@ -33,6 +34,7 @@ pub enum Step {
     Coloc {
         pair: usize,
         mask: Option<ObjectSetId>,
+        mask_radius: f32,
     },
     Present,
 }

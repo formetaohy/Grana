@@ -21,8 +21,9 @@ use grana_object::{
 use grana_scene::{
     ChannelState, ColocResult, ColocState, ColorState, Criteria, Curation, Drift, FilterRange,
     ItemState, LassoPath, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind,
-    ObjectParams, ObjectSetId, Provenance, RELATION_FIELDS, Recipe, RelationState, SceneState,
-    Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
+    ObjectParams, ObjectSetId, ObjectSetKey, Provenance, RELATION_FIELDS, Recipe, RelationState,
+    SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
+    Visibility,
 };
 use grana_volume::{Axis, Clip, Intensity, Region};
 
@@ -170,6 +171,7 @@ impl Decode for SceneState {
                 0 => None,
                 set => Some(set),
             },
+            mask_radius: non_negative(reader.f32()?)?,
             time: reader.u32()?,
             selection: Option::<SelectionState>::decode(reader)?,
             sets: Vec::<SetState>::decode(reader)?,
@@ -179,6 +181,15 @@ impl Decode for SceneState {
         let mut ids = state.sets.iter().map(|set| set.id).collect::<Vec<_>>();
         ids.sort_unstable();
         if ids.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(FAULT_SHAPE);
+        }
+        let mut keys = state
+            .sets
+            .iter()
+            .map(|set| set.key.as_str())
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        if keys.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err(FAULT_SHAPE);
         }
         let channels = state.channels.len();
@@ -363,6 +374,7 @@ impl Decode for SetState {
             2 => ObjectKind::Filaments,
             _ => return Err(FAULT_SHAPE),
         };
+        let key = ObjectSetKey::parse(&reader.string()?).ok_or(FAULT_VALUE)?;
         let name = reader.string()?;
         if name.is_empty() {
             return Err(FAULT_VALUE);
@@ -419,6 +431,7 @@ impl Decode for SetState {
         }
         let state = Self {
             id,
+            key,
             kind,
             name,
             channel,
@@ -1657,6 +1670,14 @@ fn finite(value: f32) -> Result<f32, &'static str> {
 
 fn positive(value: f32) -> Result<f32, &'static str> {
     if value.is_finite() && value > 0.0 {
+        Ok(value)
+    } else {
+        Err(FAULT_VALUE)
+    }
+}
+
+fn non_negative(value: f32) -> Result<f32, &'static str> {
+    if value.is_finite() && value >= 0.0 {
         Ok(value)
     } else {
         Err(FAULT_VALUE)

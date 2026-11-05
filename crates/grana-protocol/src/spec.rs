@@ -231,6 +231,7 @@ pub struct MetricSpec {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetSpec {
+    pub key: String,
     pub name: String,
     pub color: [f32; 3],
     #[serde(default = "truth", skip_serializing_if = "is_true")]
@@ -673,7 +674,7 @@ impl MetricSpec {
                 shift,
             } => Self {
                 key: None,
-                target: Some(scene.objects.get(target)?.name().to_string()),
+                target: Some(scene.objects.get(target)?.key().as_str().to_string()),
                 field: Some(field.key().to_string()),
                 shift,
             },
@@ -704,7 +705,7 @@ impl MetricSpec {
                 let target = scene
                     .objects
                     .iter()
-                    .find(|set| set.name() == target)
+                    .find(|set| set.key().as_str() == target)
                     .map(ObjectSet::id)
                     .ok_or_else(|| {
                         ProtocolError::Invalid(format!(
@@ -1179,6 +1180,10 @@ impl SetSpec {
         self.mask.as_deref()
     }
 
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
     pub fn track_params(&self) -> Option<TrackParams> {
         self.track.map(|track| {
             TrackParams::new(
@@ -1567,23 +1572,23 @@ impl LassoSpec {
 impl Protocol {
     const MAX_NESTING: usize = 16;
 
-    pub fn kind_of(&self, name: &str) -> Option<ObjectKind> {
-        self.kind_of_name(name, 0)
+    pub fn kind_of(&self, key: &str) -> Option<ObjectKind> {
+        self.kind_of_key(key, 0)
     }
 
-    pub fn channel_of<'a>(&'a self, name: &str) -> Option<&'a str> {
-        self.channel_of_name(name, 0)
+    pub fn channel_of<'a>(&'a self, key: &str) -> Option<&'a str> {
+        self.channel_of_key(key, 0)
     }
 
     pub fn kind_of_source(&self, source: &SourceSpec) -> Option<ObjectKind> {
         self.kind_of_source_at(source, 0)
     }
 
-    fn kind_of_name(&self, name: &str, depth: usize) -> Option<ObjectKind> {
+    fn kind_of_key(&self, key: &str, depth: usize) -> Option<ObjectKind> {
         if depth >= Self::MAX_NESTING {
             return None;
         }
-        let spec = self.sets.iter().find(|set| set.name == name)?;
+        let spec = self.sets.iter().find(|set| set.key == key)?;
         self.kind_of_source_at(&spec.source, depth + 1)
     }
 
@@ -1596,7 +1601,7 @@ impl Protocol {
             | SourceSpec::Surfaces { .. }
             | SourceSpec::Filaments { .. } => source.kind(),
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
-                self.kind_of_name(source, depth + 1)
+                self.kind_of_key(source, depth + 1)
             }
             SourceSpec::Merged { parts } => {
                 self.kind_of_source_at(&parts.first()?.source, depth + 1)
@@ -1604,11 +1609,11 @@ impl Protocol {
         }
     }
 
-    fn channel_of_name<'a>(&'a self, name: &str, depth: usize) -> Option<&'a str> {
+    fn channel_of_key<'a>(&'a self, key: &str, depth: usize) -> Option<&'a str> {
         if depth >= Self::MAX_NESTING {
             return None;
         }
-        let spec = self.sets.iter().find(|set| set.name == name)?;
+        let spec = self.sets.iter().find(|set| set.key == key)?;
         self.channel_of_source_at(&spec.source, depth + 1)
     }
 
@@ -1621,7 +1626,7 @@ impl Protocol {
             | SourceSpec::Surfaces { .. }
             | SourceSpec::Filaments { .. } => source.channel(),
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
-                self.channel_of_name(source, depth + 1)
+                self.channel_of_key(source, depth + 1)
             }
             SourceSpec::Merged { parts } => {
                 self.channel_of_source_at(&parts.first()?.source, depth + 1)
@@ -1629,13 +1634,13 @@ impl Protocol {
         }
     }
 
-    pub(super) fn source_kind_consistent(&self, set: &str) -> bool {
-        let Some(kind) = self.kind_of(set) else {
+    pub(super) fn source_kind_consistent(&self, key: &str) -> bool {
+        let Some(kind) = self.kind_of(key) else {
             return false;
         };
         self.sets
             .iter()
-            .find(|spec| spec.name == set)
+            .find(|spec| spec.key == key)
             .is_some_and(|spec| match &spec.source {
                 SourceSpec::Merged { parts } => parts
                     .iter()
@@ -1799,6 +1804,10 @@ pub(super) fn palette(name: &str) -> Option<Palette> {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+pub(crate) fn is_f32_zero(value: &f32) -> bool {
+    *value == 0.0
 }
 
 fn is_zero(value: &i32) -> bool {

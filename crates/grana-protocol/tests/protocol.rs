@@ -23,6 +23,7 @@ const PROTOCOL: &str = r#"
   "snapshot": {"width": 1200, "height": 750},
   "sets": [
     {
+      "key": "nuclei",
       "name": "Nuclei",
       "color": [1.0, 0.7, 0.2],
       "source": {"kind": "surfaces", "channel": "DAPI", "threshold": 0.25, "grain": 0.1, "split": 0.6, "min_volume": 2.0, "opening": 0.2, "closing": 0.3, "min_sphericity": 0.4, "min_mean_intensity": 0.05},
@@ -40,11 +41,13 @@ const PROTOCOL: &str = r#"
       }
     },
     {
+      "key": "puncta",
       "name": "Puncta",
       "color": [0.3, 0.8, 1.0],
       "source": {"kind": "spots", "channel": "GFP", "diameter": 0.45, "contrast": 0.1}
     },
     {
+      "key": "vessels",
       "name": "Vessels",
       "color": [0.4, 0.9, 0.6],
       "source": {"kind": "filaments", "channel": "RFP", "threshold": 0.6, "min_length": 3.0}
@@ -153,9 +156,9 @@ fn captures_the_manual_edits_of_a_merged_part() {
 fn reads_and_writes_a_protocol() {
     let protocol = Protocol::from_json(PROTOCOL).expect("the protocol is valid");
     assert_eq!(protocol.sets().len(), 3);
-    assert_eq!(protocol.kind_of("Nuclei"), Some(ObjectKind::Surfaces));
-    assert_eq!(protocol.kind_of("Puncta"), Some(ObjectKind::Spots));
-    assert_eq!(protocol.kind_of("Vessels"), Some(ObjectKind::Filaments));
+    assert_eq!(protocol.kind_of("nuclei"), Some(ObjectKind::Surfaces));
+    assert_eq!(protocol.kind_of("puncta"), Some(ObjectKind::Spots));
+    assert_eq!(protocol.kind_of("vessels"), Some(ObjectKind::Filaments));
     let region = protocol
         .region()
         .expect("the protocol restricts its region");
@@ -253,6 +256,10 @@ fn rejects_an_invalid_protocol() {
         "a snapshot covers a usable number of pixels"
     );
     assert!(
+        invalid(&PROTOCOL.replace("  \"region\":", "  \"mask_radius\": -1.0,\n  \"region\":")),
+        "an analysis mask grows by a finite radius"
+    );
+    assert!(
         invalid(&PROTOCOL.replace(
             "\"source\": {\"kind\": \"spots\", \"channel\": \"GFP\", \"diameter\": 0.45, \"contrast\": 0.1}",
             "\"source\": {\"kind\": \"spots\", \"channel\": \"GFP\", \"diameter\": 0.45, \"contrast\": 0.1}, \"extra\": 1"
@@ -260,8 +267,12 @@ fn rejects_an_invalid_protocol() {
         "an unknown field is rejected"
     );
     assert!(
-        invalid(&PROTOCOL.replace("\"name\": \"Nuclei\"", "\"name\": \"puncta\"")),
-        "two sets cannot write to one output name"
+        invalid(&PROTOCOL.replace("\"key\": \"nuclei\"", "\"key\": \"puncta\"")),
+        "two sets cannot share one key"
+    );
+    assert!(
+        invalid(&PROTOCOL.replace("\"name\": \"Nuclei\"", "\"name\": \"Puncta\"")),
+        "two sets cannot share one display name"
     );
     assert!(
         invalid(&PROTOCOL.replace(
@@ -322,14 +333,14 @@ fn rejects_an_invalid_protocol() {
     assert!(
         invalid(&PROTOCOL.replace(
             "\"color\": [1.0, 0.7, 0.2],",
-            "\"color\": [1.0, 0.7, 0.2], \"mask\": \"Puncta\","
+            "\"color\": [1.0, 0.7, 0.2], \"mask\": \"puncta\","
         )),
         "an analysis mask names a set that runs before it"
     );
     assert!(
         invalid(&PROTOCOL.replace(
             "\"color\": [1.0, 0.7, 0.2],",
-            "\"color\": [1.0, 0.7, 0.2], \"mask\": \"Nuclei\","
+            "\"color\": [1.0, 0.7, 0.2], \"mask\": \"nuclei\","
         )),
         "a set cannot be masked by itself"
     );
@@ -389,8 +400,9 @@ fn captures_the_analysis_of_a_scene() {
     assert_eq!(protocol.sets().len(), 1);
     let spec = &protocol.sets()[0];
     assert_eq!(spec.name, "Spots 1");
-    assert_eq!(protocol.channel_of("Spots 1"), Some("DAPI"));
-    assert_eq!(protocol.kind_of("Spots 1"), Some(ObjectKind::Spots));
+    assert_eq!(spec.key, "spots-1");
+    assert_eq!(protocol.channel_of("spots-1"), Some("DAPI"));
+    assert_eq!(protocol.kind_of("spots-1"), Some(ObjectKind::Spots));
     assert_eq!(spec.color, [0.2, 0.7, 0.9]);
     assert!(spec.track_params().is_some());
     assert!(spec.measure().is_none(), "no statistics set is selected");
@@ -409,6 +421,18 @@ fn captures_the_analysis_of_a_scene() {
         .snapshot()
         .expect("a captured protocol renders a snapshot");
     assert_eq!(snapshot.size(), [1600, 1000]);
+
+    let key = spec.key.clone();
+    let digest = protocol.digest();
+    assert!(scene.rename_object(set, "Renamed puncta"));
+    let renamed = Protocol::capture(&scene, &measure, None).expect("the renamed analysis captures");
+    assert_eq!(renamed.sets()[0].name, "Renamed puncta");
+    assert_eq!(renamed.sets()[0].key, key, "a rename keeps the object key");
+    assert_eq!(
+        renamed.digest(),
+        digest,
+        "a rename leaves the protocol digest alone"
+    );
 }
 
 #[test]
@@ -428,9 +452,11 @@ fn captures_an_analysis_mask() {
     let first = scene.add_object(ObjectKind::Surfaces, 0);
     scene.add_object(ObjectKind::Spots, 0);
     scene.set_mask(Some(first));
+    scene.set_mask_radius(2.5);
     assert!(scene.add_seed(first, [0.25, -0.5, 0.75]));
     let protocol =
         Protocol::capture(&scene, &Measure::new(), None).expect("the masked analysis captures");
+    assert_eq!(protocol.mask_radius(), 2.5);
     assert_eq!(protocol.sets().len(), 2);
     assert_eq!(protocol.sets()[0].name, "Surfaces 1");
     assert_eq!(protocol.sets()[0].mask(), None);
@@ -439,11 +465,29 @@ fn captures_an_analysis_mask() {
         vec![vec![[0.25, -0.5, 0.75]]]
     );
     assert_eq!(protocol.sets()[1].name, "Spots 1");
-    assert_eq!(protocol.sets()[1].mask(), Some("Surfaces 1"));
+    assert_eq!(
+        protocol.sets()[1].mask(),
+        Some(protocol.sets()[0].key.as_str())
+    );
     assert!(protocol.sets()[1].source.seeds().is_empty());
     let text = protocol.to_json().expect("the protocol serializes");
     let restored = Protocol::from_json(&text).expect("the protocol round trips");
     assert_eq!(protocol, restored);
+    assert_eq!(restored.mask_radius(), 2.5);
+
+    let mut staged_scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let staged = restored
+        .stage(&mut staged_scene)
+        .expect("the grown mask stages");
+    assert_eq!(staged_scene.mask_radius, 2.5);
+    assert!(staged.steps().iter().any(|step| matches!(
+        step,
+        Step::Detect {
+            mask: Some(_),
+            mask_radius,
+            ..
+        } if *mask_radius == 2.5
+    )));
 }
 
 #[test]
@@ -483,7 +527,7 @@ fn captures_and_stages_a_surface_seeded_from_another_set() {
     assert_eq!(protocol.sets()[1].name, "Surfaces 1");
     assert_eq!(
         protocol.sets()[1].source.seed_source(),
-        Some("Surfaces 2"),
+        Some(protocol.sets()[0].key.as_str()),
         "the seeded set names its source"
     );
     assert!(protocol.sets()[1].source.seeds().is_empty());
@@ -644,9 +688,13 @@ fn stages_the_presentation_of_a_captured_protocol() {
     let text = protocol.to_json().expect("the protocol serializes");
     let protocol = Protocol::from_json(&text).expect("the protocol round trips");
     assert_eq!(protocol.sets()[0].name, "Nuclei");
+    assert_eq!(protocol.sets()[0].key, "surfaces-1");
     assert_eq!(protocol.sets()[0].mask(), None);
     assert!(protocol.sets()[0].labels, "the object labels capture");
-    assert_eq!(protocol.sets()[1].mask(), Some("Nuclei"));
+    assert_eq!(
+        protocol.sets()[1].mask(),
+        Some(protocol.sets()[0].key.as_str())
+    );
     assert_eq!(protocol.channels().len(), 2);
     assert!(!protocol.channels()[0].enabled);
     assert_eq!(protocol.channels()[1].opacity, 0.4);
@@ -895,38 +943,42 @@ fn stages_a_derived_object_set_graph() {
 {
   "sets": [
     {
+      "key": "spots-1",
       "name": "Spots 1",
       "color": [0.3, 0.8, 1.0],
       "source": {"kind": "spots", "channel": "GFP", "diameter": 0.45, "contrast": 0.1}
     },
     {
+      "key": "big-spots",
       "name": "Big spots",
       "color": [1.0, 0.7, 0.2],
-      "source": {"kind": "filtered", "source": "Spots 1", "filters": [{"column": "diameter_um", "minimum": 0.5, "maximum": 1.0}]}
+      "source": {"kind": "filtered", "source": "spots-1", "filters": [{"column": "diameter_um", "minimum": 0.5, "maximum": 1.0}]}
     },
     {
+      "key": "all-spots",
       "name": "All spots",
       "color": [0.4, 0.9, 0.6],
-      "source": {"kind": "copy", "source": "Spots 1"}
+      "source": {"kind": "copy", "source": "spots-1"}
     },
     {
+      "key": "union",
       "name": "Union",
       "color": [0.9, 0.5, 0.2],
       "source": {"kind": "merged", "parts": [
         {"name": "Spots 1", "source": {"kind": "spots", "channel": "GFP", "diameter": 0.45, "contrast": 0.1}},
-        {"name": "All spots", "source": {"kind": "copy", "source": "Spots 1"}}
+        {"name": "All spots", "source": {"kind": "copy", "source": "spots-1"}}
       ]}
     }
   ]
 }
 "#;
     let protocol = Protocol::from_json(DERIVED).expect("the derived protocol is valid");
-    assert_eq!(protocol.kind_of("Big spots"), Some(ObjectKind::Spots));
-    assert_eq!(protocol.channel_of("Union"), Some("GFP"));
+    assert_eq!(protocol.kind_of("big-spots"), Some(ObjectKind::Spots));
+    assert_eq!(protocol.channel_of("union"), Some("GFP"));
     assert_eq!(
         protocol.sets()[1].source,
         SourceSpec::Filtered {
-            source: "Spots 1".to_string(),
+            source: "spots-1".to_string(),
             group: "objects".to_string(),
             filters: vec![grana_protocol::FilterSpec {
                 column: "diameter_um".to_string(),
@@ -1017,6 +1069,64 @@ fn stages_a_derived_object_set_graph() {
             .count(),
         2
     );
+}
+
+#[test]
+fn stages_a_key_that_collides_with_a_merged_part() {
+    const COLLISION: &str = r#"
+{
+  "sets": [
+    {
+      "key": "union",
+      "name": "Union",
+      "color": [0.9, 0.5, 0.2],
+      "source": {"kind": "merged", "parts": [
+        {"name": "Spots 1", "source": {"kind": "spots", "channel": "GFP", "diameter": 1.0, "contrast": 0.1}},
+        {"name": "Spots 2", "source": {"kind": "spots", "channel": "GFP", "diameter": 1.0, "contrast": 0.1}}
+      ]}
+    },
+    {
+      "key": "spots-2",
+      "name": "Second spots",
+      "color": [0.3, 0.8, 1.0],
+      "source": {"kind": "spots", "channel": "GFP", "diameter": 1.0, "contrast": 0.1}
+    }
+  ]
+}
+"#;
+    let protocol = Protocol::from_json(COLLISION).expect("the colliding key is valid");
+    let extent = Extent::new(4, 4, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "GFP",
+            [0.3, 1.0, 0.4],
+            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+        )],
+    );
+    let series = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let staged = protocol
+        .stage(&mut scene)
+        .expect("a part releases a key for its later set");
+    let top = scene
+        .objects
+        .get(staged.set(0))
+        .expect("the merged set is staged");
+    assert_eq!(top.key().as_str(), "union");
+    let later = scene
+        .objects
+        .get(staged.set(1))
+        .expect("the later set is staged");
+    assert_eq!(later.key().as_str(), "spots-2");
+    let keys = scene
+        .objects
+        .iter()
+        .map(|set| set.key().as_str())
+        .collect::<Vec<_>>();
+    let unique = keys.iter().collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), keys.len(), "the staged keys stay unique");
 }
 
 #[test]

@@ -31,6 +31,8 @@ pub struct Protocol {
     channels: Vec<ChannelSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     drift: Option<DriftSpec>,
+    #[serde(default, skip_serializing_if = "spec::is_f32_zero")]
+    mask_radius: f32,
     sets: Vec<SetSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     relations: Vec<RelationSpec>,
@@ -71,8 +73,19 @@ impl Protocol {
         self.drift.as_ref()
     }
 
+    pub fn mask_radius(&self) -> f32 {
+        self.mask_radius
+    }
+
     pub fn sets(&self) -> &[SetSpec] {
         &self.sets
+    }
+
+    pub fn name_of(&self, key: &str) -> Option<&str> {
+        self.sets
+            .iter()
+            .find(|set| set.key == key)
+            .map(|set| set.name.as_str())
     }
 
     pub fn relations(&self) -> &[RelationSpec] {
@@ -117,7 +130,11 @@ impl Protocol {
     }
 
     pub fn digest(&self) -> u64 {
-        let text = serde_json::to_vec(self).expect("a protocol always serializes");
+        let mut canonical = self.clone();
+        for set in &mut canonical.sets {
+            set.name = set.key.clone();
+        }
+        let text = serde_json::to_vec(&canonical).expect("a protocol always serializes");
         text.into_iter()
             .fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
                 (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
@@ -132,7 +149,7 @@ impl Protocol {
                 let mut text = format!(
                     "{} on {}",
                     set.name,
-                    self.channel_of(&set.name).unwrap_or("an unknown channel")
+                    self.channel_of(&set.key).unwrap_or("an unknown channel")
                 );
                 match &set.source {
                     SourceSpec::Filtered { source, .. } => {
@@ -173,7 +190,7 @@ impl Protocol {
                     }
                 }
                 if let Some(mask) = &set.mask {
-                    text = format!("{text} within {mask}");
+                    text = format!("{text} within {}", self.name_of(mask).unwrap_or(mask));
                 }
                 if let Some(curation) = &set.curation {
                     let removed = curation
@@ -210,13 +227,22 @@ impl Protocol {
                 drift.channel, drift.reference
             ));
         }
+        if self.mask_radius > 0.0 {
+            summary.push_str(&format!(" · mask grows {:.2} µm", self.mask_radius));
+        }
         for relation in &self.relations {
             summary.push_str(&format!(
                 " · relates {} to {}",
-                relation.source,
+                self.name_of(&relation.source).unwrap_or(&relation.source),
                 match relation.shift {
-                    0 => relation.target.clone(),
-                    shift => format!("{} (t{shift:+})", relation.target),
+                    0 => self
+                        .name_of(&relation.target)
+                        .unwrap_or(&relation.target)
+                        .to_string(),
+                    shift => format!(
+                        "{} (t{shift:+})",
+                        self.name_of(&relation.target).unwrap_or(&relation.target)
+                    ),
                 }
             ));
         }
@@ -227,10 +253,9 @@ impl Protocol {
                 .map(|pair| format!("{} with {}", pair.a, pair.b))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let mask = coloc
-                .mask
-                .as_ref()
-                .map_or_else(String::new, |mask| format!(" within {mask}"));
+            let mask = coloc.mask.as_ref().map_or_else(String::new, |mask| {
+                format!(" within {}", self.name_of(mask).unwrap_or(mask))
+            });
             summary.push_str(&format!(
                 " · colocalizes {pairs}{mask} ({} permutations)",
                 coloc.settings.permutations

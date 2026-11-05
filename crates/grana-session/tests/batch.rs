@@ -24,6 +24,7 @@ const PROTOCOL: &str = r#"
 {
   "sets": [
     {
+      "key": "puncta",
       "name": "Puncta",
 
       "color": [0.3, 0.8, 1.0],
@@ -37,13 +38,14 @@ const PROTOCOL: &str = r#"
       }
     },
     {
+      "key": "nuclei",
       "name": "Nuclei",
 
       "color": [1.0, 0.7, 0.2],
       "source": {"kind": "surfaces", "channel": "Cells", "threshold": 0.3, "grain": 0.1, "split": 0.6, "min_volume": 1.0, "opening": 0.0, "closing": 0.0, "min_sphericity": 0.0, "min_mean_intensity": 0.0}
     }
   ],
-  "relations": [{"source": "Puncta", "target": "Nuclei", "key": "puncta-nuclei"}],
+  "relations": [{"source": "puncta", "target": "nuclei", "key": "puncta-nuclei"}],
   "coloc": {"settings": {"permutations": 8, "block": 3}, "pairs": [{"a": "Cells", "b": "Signal", "thresholds": [0.5, 0.5]}], "mask": null}
 }
 "#;
@@ -53,6 +55,7 @@ const LIMITED: &str = r#"
   "region": {"low": [0.9, 0.9, 0.9], "high": [1.0, 1.0, 1.0]},
   "sets": [
     {
+      "key": "puncta",
       "name": "Puncta",
 
       "color": [0.3, 0.8, 1.0],
@@ -123,7 +126,7 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
     );
 
     let folder = output.join("control").join("alpha");
-    let objects = read(&folder.join("Puncta-objects.csv"));
+    let objects = read(&folder.join("puncta-objects.csv"));
     let lines = objects.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 3, "both frames report their spot: {objects}");
     assert!(lines[0].contains("diameter_um"), "{objects}");
@@ -150,34 +153,43 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
     let mut rows = quality.lines();
     assert_eq!(
         rows.next(),
-        Some("group,dataset,scene,status,set,kind,objects,volume_um3,area_um2,size_um,intensity"),
+        Some(
+            "group,dataset,scene,status,set_key,set,kind,objects,volume_um3,area_um2,size_um,intensity"
+        ),
         "{quality}"
     );
     let rows = rows.collect::<Vec<_>>();
     assert_eq!(rows.len(), 6, "{quality}");
     let puncta = rows[0].split(',').collect::<Vec<_>>();
     assert_eq!(
-        &puncta[..7],
-        ["control", "alpha", "", "ok", "Puncta", "Spots", "2"],
+        &puncta[..8],
+        [
+            "control", "alpha", "", "ok", "puncta", "Puncta", "Spots", "2"
+        ],
         "{quality}"
     );
-    assert!(puncta[7].is_empty() && puncta[8].is_empty(), "{quality}");
-    assert!(!puncta[9].is_empty() && !puncta[10].is_empty(), "{quality}");
+    assert!(puncta[8].is_empty() && puncta[9].is_empty(), "{quality}");
+    assert!(
+        !puncta[10].is_empty() && !puncta[11].is_empty(),
+        "{quality}"
+    );
     let nuclei = rows[1].split(',').collect::<Vec<_>>();
     assert_eq!(
-        &nuclei[..7],
-        ["control", "alpha", "", "ok", "Nuclei", "Surfaces", "2"],
+        &nuclei[..8],
+        [
+            "control", "alpha", "", "ok", "nuclei", "Nuclei", "Surfaces", "2"
+        ],
         "{quality}"
     );
-    assert!(!nuclei[7].is_empty() && !nuclei[8].is_empty(), "{quality}");
-    assert!(nuclei[9].is_empty(), "{quality}");
+    assert!(!nuclei[8].is_empty() && !nuclei[9].is_empty(), "{quality}");
+    assert!(nuclei[10].is_empty(), "{quality}");
 
     let comparison = read(&output.join("comparison.csv"));
     let mut rows = comparison.lines();
     assert_eq!(
         rows.next(),
         Some(
-            "group,set,kind,datasets,objects,volume_um3_mean,volume_um3_std,area_um2_mean,area_um2_std,size_um_mean,size_um_std,intensity_mean,intensity_std"
+            "group,set_key,set,kind,datasets,objects,volume_um3_mean,volume_um3_std,area_um2_mean,area_um2_std,size_um_mean,size_um_std,intensity_mean,intensity_std"
         ),
         "{comparison}"
     );
@@ -185,24 +197,24 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
     assert_eq!(rows.len(), 4, "{comparison}");
     let nuclei = rows[0].split(',').collect::<Vec<_>>();
     assert_eq!(
-        &nuclei[..4],
-        ["control", "Nuclei", "Surfaces", "2"],
+        &nuclei[..5],
+        ["control", "nuclei", "Nuclei", "Surfaces", "2"],
         "the group compares its two datasets: {comparison}"
     );
     let control = rows[1].split(',').collect::<Vec<_>>();
     assert_eq!(
-        &control[..5],
-        ["control", "Puncta", "Spots", "2", "2.0"],
+        &control[..6],
+        ["control", "puncta", "Puncta", "Spots", "2", "2.0"],
         "{comparison}"
     );
     assert!(
-        !control[9].is_empty() && !control[10].is_empty(),
+        !control[10].is_empty() && !control[11].is_empty(),
         "a group of two datasets reports its deviation: {comparison}"
     );
     let treatment = rows[2].split(',').collect::<Vec<_>>();
     assert_eq!(
-        &treatment[..4],
-        ["treatment", "Nuclei", "Surfaces", "1"],
+        &treatment[..5],
+        ["treatment", "nuclei", "Nuclei", "Surfaces", "1"],
         "{comparison}"
     );
 
@@ -233,6 +245,22 @@ fn runs_a_protocol_over_a_folder_of_datasets() {
         summary.contains("alpha,,resumed,4,Puncta=2; Nuclei=2"),
         "{summary}"
     );
+
+    let renamed = Protocol::from_json(
+        &PROTOCOL.replace("\"name\": \"Puncta\"", "\"name\": \"Renamed puncta\""),
+    )
+    .expect("the renamed protocol is valid");
+    let renamed_run = run(&renamed, &datasets, &output, 2, false);
+    assert_eq!(
+        renamed_run,
+        [
+            Status::Resumed,
+            Status::Failed,
+            Status::Resumed,
+            Status::Resumed
+        ],
+        "renaming a set keeps the protocol digest and the artifact names"
+    );
 }
 
 #[test]
@@ -247,14 +275,14 @@ fn applies_the_region_and_the_statistics_filters() {
     assert_eq!(completed, [Status::Ok], "the batch finishes");
     let summary = read(&output.join("summary.csv"));
     assert!(summary.contains("alpha,,ok,0,Puncta=0"), "{summary}");
-    let objects = read(&output.join("alpha").join("Puncta-objects.csv"));
+    let objects = read(&output.join("alpha").join("puncta-objects.csv"));
     assert_eq!(
         objects.lines().count(),
         1,
         "the region excludes every spot: {objects}"
     );
     assert!(
-        !output.join("alpha").join("Puncta-tracks.csv").exists(),
+        !output.join("alpha").join("puncta-tracks.csv").exists(),
         "the protocol exports only its grouping"
     );
 }
@@ -265,16 +293,19 @@ fn replays_derived_and_merged_object_sets() {
 {
   "sets": [
     {
+      "key": "puncta",
       "name": "Puncta",
       "color": [0.3, 0.8, 1.0],
       "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05}
     },
     {
+      "key": "signal",
       "name": "Signal",
       "color": [1.0, 0.7, 0.2],
       "source": {"kind": "spots", "channel": "Signal", "diameter": 5.0, "contrast": 0.05}
     },
     {
+      "key": "union",
       "name": "Union",
       "color": [0.4, 0.9, 0.6],
       "source": {"kind": "merged", "parts": [
@@ -283,9 +314,10 @@ fn replays_derived_and_merged_object_sets() {
       ]}
     },
     {
+      "key": "big",
       "name": "Big",
       "color": [0.9, 0.5, 0.2],
-      "source": {"kind": "filtered", "source": "Puncta", "filters": [{"column": "diameter_um", "minimum": 0.0, "maximum": 1000.0}]},
+      "source": {"kind": "filtered", "source": "puncta", "filters": [{"column": "diameter_um", "minimum": 0.0, "maximum": 1000.0}]},
       "curation": {"expected": [1, 1], "removed": [{"frame": 0, "anchors": [{"position": [0.25, 0.25, 0.5], "low": [-2.25, -2.25, -2.0], "high": [2.75, 2.75, 3.0]}]}]}
     }
   ]
@@ -506,6 +538,7 @@ const PROJECT: &str = r#"
   ],
   "sets": [
     {
+      "key": "puncta",
       "name": "Puncta",
 
       "color": [0.3, 0.8, 1.0],
@@ -520,6 +553,7 @@ const PROJECT: &str = r#"
       }
     },
     {
+      "key": "nuclei",
       "name": "Nuclei",
 
       "color": [1.0, 0.7, 0.2],
@@ -528,7 +562,7 @@ const PROJECT: &str = r#"
       "measure": {"group": "objects", "aggregate": "mean", "columns": ["volume_um3"]}
     }
   ],
-  "relations": [{"source": "Puncta", "target": "Nuclei", "key": "puncta-nuclei"}],
+  "relations": [{"source": "puncta", "target": "nuclei", "key": "puncta-nuclei"}],
   "view": {"camera": {"pivot": [0.0, 0.0, 0.0], "yaw": 0.3, "pitch": 0.2, "distance": 120.0, "fov_y": 0.61}, "section": {"axis": "z", "span": 9.0}, "split": 0.4}
 }
 "#;
@@ -646,6 +680,7 @@ const SNAPSHOT: &str = r#"
 {
   "sets": [
     {
+      "key": "puncta",
       "name": "Puncta",
 
       "color": [0.3, 0.8, 1.0],
@@ -749,6 +784,7 @@ const SCENES: &str = r#"
 {
   "sets": [
     {
+      "key": "puncta",
       "name": "Puncta",
 
       "color": [0.3, 0.8, 1.0],
@@ -781,8 +817,8 @@ fn runs_every_scene_of_a_multi_scene_image() {
         summary.contains("plate,Fluorescence,ok,1,Puncta=1"),
         "{summary}"
     );
-    let first = read(&output.join("plate-brightfield").join("Puncta-objects.csv"));
-    let second = read(&output.join("plate-fluorescence").join("Puncta-objects.csv"));
+    let first = read(&output.join("plate-brightfield").join("puncta-objects.csv"));
+    let second = read(&output.join("plate-fluorescence").join("puncta-objects.csv"));
     assert_eq!(
         first.lines().count(),
         2,
@@ -791,9 +827,12 @@ fn runs_every_scene_of_a_multi_scene_image() {
     assert_eq!(second.lines().count(), 2, "{second}");
     assert_ne!(first, second, "each scene reads its own voxels");
     let quality = read(&output.join("quality.csv"));
-    assert!(quality.contains("plate,Brightfield,ok,Puncta"), "{quality}");
     assert!(
-        quality.contains("plate,Fluorescence,ok,Puncta"),
+        quality.contains("plate,Brightfield,ok,puncta,Puncta"),
+        "{quality}"
+    );
+    assert!(
+        quality.contains("plate,Fluorescence,ok,puncta,Puncta"),
         "{quality}"
     );
 
@@ -1016,25 +1055,28 @@ const RELATION_FILTER: &str = r#"
 {
   "sets": [
     {
+      "key": "puncta",
       "name": "Puncta",
 
       "color": [0.3, 0.8, 1.0],
       "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05}
     },
     {
+      "key": "nuclei",
       "name": "Nuclei",
 
       "color": [1.0, 0.7, 0.2],
       "source": {"kind": "surfaces", "channel": "Cells", "threshold": 0.3, "grain": 0.1, "split": 0.6, "min_volume": 1.0, "opening": 0.0, "closing": 0.0, "min_sphericity": 0.0, "min_mean_intensity": 0.0}
     },
     {
+      "key": "inner",
       "name": "Inner",
 
       "color": [0.4, 0.9, 0.6],
-      "source": {"kind": "filtered", "source": "Puncta", "filters": [{"column": "puncta-nuclei_distance_um", "minimum": 0.0, "maximum": 0.5}]}
+      "source": {"kind": "filtered", "source": "puncta", "filters": [{"column": "puncta-nuclei_distance_um", "minimum": 0.0, "maximum": 0.5}]}
     }
   ],
-  "relations": [{"source": "Puncta", "target": "Nuclei", "key": "puncta-nuclei"}, {"source": "Inner", "target": "Nuclei", "key": "inner-nuclei"}]
+  "relations": [{"source": "puncta", "target": "nuclei", "key": "puncta-nuclei"}, {"source": "inner", "target": "nuclei", "key": "inner-nuclei"}]
 }
 "#;
 
@@ -1056,7 +1098,7 @@ fn replays_a_filtered_set_that_reads_a_relation() {
         summary.contains("alpha,,ok,6,Puncta=2; Nuclei=2; Inner=2"),
         "{summary}"
     );
-    let inner = read(&output.join("alpha").join("Inner-objects.csv"));
+    let inner = read(&output.join("alpha").join("inner-objects.csv"));
     let lines = inner.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 3, "both frames keep their spot: {inner}");
     assert!(lines[0].contains("inner-nuclei_distance_um"), "{inner}");
@@ -1072,13 +1114,14 @@ const DRIFT_PROTOCOL: &str = r#"
   "drift": {"channel": "Cells", "reference": 0, "offsets": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]},
   "sets": [
     {
+      "key": "puncta",
       "name": "Puncta",
 
       "color": [0.3, 0.8, 1.0],
       "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05}
     }
   ],
-  "relations": [{"source": "Puncta", "target": "Puncta", "shift": 1, "key": "puncta-self"}]
+  "relations": [{"source": "puncta", "target": "puncta", "shift": 1, "key": "puncta-self"}]
 }
 "#;
 
@@ -1095,7 +1138,7 @@ fn aligns_the_frames_of_every_batch_dataset() {
         [Status::Ok],
         "the drift replays"
     );
-    let objects = read(&output.join("alpha").join("Puncta-objects.csv"));
+    let objects = read(&output.join("alpha").join("puncta-objects.csv"));
     let mut lines = objects.lines();
     let header = lines.next().expect("the statistics carry a header");
     let column = |name: &str| {

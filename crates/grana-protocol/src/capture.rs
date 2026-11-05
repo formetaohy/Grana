@@ -48,6 +48,7 @@ impl Protocol {
             .iter()
             .map(|set| {
                 Ok(SetSpec {
+                    key: set.key().as_str().to_string(),
                     name: set.name().to_string(),
                     color: set.color(),
                     visible: set.visible(),
@@ -74,15 +75,16 @@ impl Protocol {
             })
             .collect::<Result<Vec<_>, ProtocolError>>()?;
         if let Some(mask) = mask {
-            let name = scene
+            let key = scene
                 .objects
                 .get(mask)
                 .expect("the analysis mask names a set of the scene")
-                .name()
+                .key()
+                .as_str()
                 .to_string();
             for set in &mut sets {
-                if set.name != name {
-                    set.mask = Some(name.clone());
+                if set.key != key {
+                    set.mask = Some(key.clone());
                 }
             }
         }
@@ -94,8 +96,8 @@ impl Protocol {
                 set.relations().iter().filter_map(|relation| {
                     let target = scene.objects.get(relation.target())?;
                     Some(RelationSpec {
-                        source: set.name().to_string(),
-                        target: target.name().to_string(),
+                        source: set.key().as_str().to_string(),
+                        target: target.key().as_str().to_string(),
                         key: relation.key().to_string(),
                         shift: relation.shift(),
                     })
@@ -121,7 +123,7 @@ impl Protocol {
             let mask = scene
                 .mask
                 .and_then(|id| scene.objects.get(id))
-                .map(|set| set.name().to_string());
+                .map(|set| set.key().as_str().to_string());
             let settings = scene.coloc.settings();
             Some(ColocSpec {
                 settings: ColocSettingsSpec {
@@ -148,6 +150,7 @@ impl Protocol {
             )),
             channels: specs,
             drift,
+            mask_radius: scene.mask_radius,
             sets,
             relations,
             coloc,
@@ -178,7 +181,7 @@ fn source(
                 ))
             })?;
             Ok(SourceSpec::Filtered {
-                source: reference.name().to_string(),
+                source: reference.key().as_str().to_string(),
                 group: criteria.group().key().to_string(),
                 filters: criteria
                     .filters()
@@ -198,7 +201,7 @@ fn source(
         }
         Provenance::Copied { source } => match scene.objects.get(*source) {
             Some(reference) => Ok(SourceSpec::Copy {
-                source: reference.name().to_string(),
+                source: reference.key().as_str().to_string(),
             }),
             None => detection(
                 scene,
@@ -232,7 +235,7 @@ fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSp
                 ))
             })?;
             SourceSpec::Filtered {
-                source: reference.name().to_string(),
+                source: reference.key().as_str().to_string(),
                 group: criteria.group().key().to_string(),
                 filters: criteria
                     .filters()
@@ -252,7 +255,7 @@ fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSp
         }
         Provenance::Copied { source } => match scene.objects.get(*source) {
             Some(reference) => SourceSpec::Copy {
-                source: reference.name().to_string(),
+                source: reference.key().as_str().to_string(),
             },
             None => detection(
                 scene,
@@ -296,7 +299,7 @@ fn detection(
                             "a surface seeds from an object set that left the scene".to_string(),
                         )
                     })?;
-                    (Vec::new(), Some(source.name().to_string()))
+                    (Vec::new(), Some(source.key().as_str().to_string()))
                 }
             };
             Ok(SourceSpec::Surfaces {
@@ -329,7 +332,7 @@ fn ordered(mut sets: Vec<SetSpec>) -> Result<Vec<SetSpec>, ProtocolError> {
             .position(|set| {
                 dependencies(set)
                     .iter()
-                    .all(|name| ordered.iter().any(|placed| placed.name == *name))
+                    .all(|key| ordered.iter().any(|placed| placed.key == *key))
             })
             .ok_or_else(|| {
                 ProtocolError::Invalid(
@@ -388,7 +391,7 @@ fn object_color(
             field,
             shift,
         } => ColorSpec {
-            target: Some(scene.objects.get(target)?.name().to_string()),
+            target: Some(scene.objects.get(target)?.key().as_str().to_string()),
             field: Some(field.key().to_string()),
             shift,
             ..color
@@ -419,7 +422,7 @@ fn track_color(coloring: &Coloring<TrackColor>, scene: &Scene) -> Option<ColorSp
             aggregate,
             shift,
         } => ColorSpec {
-            target: Some(scene.objects.get(target)?.name().to_string()),
+            target: Some(scene.objects.get(target)?.key().as_str().to_string()),
             field: Some(field.key().to_string()),
             aggregate: Some(aggregate.key().to_string()),
             shift,

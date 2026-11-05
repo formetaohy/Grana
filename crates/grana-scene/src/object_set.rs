@@ -7,6 +7,7 @@ use grana_object::{RelationFrame, TrackSet};
 use crate::color::ObjectColor;
 use crate::curation::{Curation, TrackAnchor, TrackEdit};
 use crate::dataset::Dataset;
+use crate::key::ObjectSetKey;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::provenance::{Provenance, Recipe};
 use crate::relation::Relation;
@@ -60,6 +61,7 @@ impl FrameSlot {
 
 pub struct ObjectSet {
     id: ObjectSetId,
+    key: ObjectSetKey,
     kind: ObjectKind,
     name: String,
     channel: usize,
@@ -91,6 +93,7 @@ pub struct ObjectSet {
 impl ObjectSet {
     pub(crate) fn new(
         id: ObjectSetId,
+        key: ObjectSetKey,
         kind: ObjectKind,
         name: String,
         channel: usize,
@@ -105,6 +108,7 @@ impl ObjectSet {
             .collect::<Vec<_>>();
         Self {
             id,
+            key,
             kind,
             name,
             channel,
@@ -136,6 +140,19 @@ impl ObjectSet {
 
     pub fn id(&self) -> ObjectSetId {
         self.id
+    }
+
+    pub fn key(&self) -> &ObjectSetKey {
+        &self.key
+    }
+
+    pub(crate) fn set_key(&mut self, key: ObjectSetKey) -> bool {
+        if self.key == key {
+            return false;
+        }
+        self.key = key;
+        self.document += 1;
+        true
     }
 
     pub fn kind(&self) -> ObjectKind {
@@ -812,6 +829,7 @@ impl ObjectSet {
     pub(crate) fn state(&self) -> SetState {
         SetState {
             id: self.id.raw(),
+            key: self.key.clone(),
             kind: self.kind,
             name: self.name.clone(),
             channel: self.channel,
@@ -850,6 +868,7 @@ impl ObjectSet {
     pub(crate) fn restore(state: SetState, dataset: &Dataset, stamp: &mut u64) -> Self {
         let SetState {
             id,
+            key,
             kind,
             name,
             channel,
@@ -893,6 +912,7 @@ impl ObjectSet {
         let applied = curation.applied();
         let mut set = Self {
             id: ObjectSetId::new(id),
+            key,
             kind,
             name,
             channel,
@@ -1463,6 +1483,7 @@ impl ObjectSet {
     pub(crate) fn duplicate(
         &self,
         id: ObjectSetId,
+        key: ObjectSetKey,
         name: String,
         color: [f32; 3],
         provenance: Provenance,
@@ -1481,6 +1502,7 @@ impl ObjectSet {
             .collect::<Vec<_>>();
         let mut duplicate = Self {
             id,
+            key,
             kind: self.kind,
             name,
             channel: self.channel,
@@ -1630,6 +1652,7 @@ impl ObjectSet {
         let hidden = self.combined_hidden(other, &offsets, &frames);
         let mut merged = Self {
             id: self.id,
+            key: self.key.clone(),
             kind: self.kind,
             name: self.name.clone(),
             channel: self.channel,
