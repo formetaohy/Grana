@@ -506,6 +506,16 @@ impl Scene {
         }
     }
 
+    pub fn set_behavior(&mut self, id: GlassId, interactive: bool, lens: bool) {
+        if let Some(node) = self.nodes.get_mut(id)
+            && (node.glass.interactive != interactive || node.glass.lens != lens)
+        {
+            node.glass.interactive = interactive;
+            node.glass.lens = lens;
+            self.dirty = true;
+        }
+    }
+
     pub fn set_light_angle(&mut self, degrees: f32) {
         if self.light_angle.target != degrees {
             self.dirty = true;

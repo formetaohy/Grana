@@ -34,4 +34,4 @@ pub use registry::Cursor;
 pub use style::{Border, Fill, Shadow, State, Surface};
 pub use text::{Align, TextLayout, TextStyle};
 pub use theme::{Level, Metrics, Palette, Role, Theme, TypeStyle, Typography};
-pub use ui::{Axis, Block, Frame, Grid, Length, Response, ScrollInfo, Ui};
+pub use ui::{Axis, Block, Frame, GlassGroup, Grid, Length, Response, ScrollInfo, Ui};

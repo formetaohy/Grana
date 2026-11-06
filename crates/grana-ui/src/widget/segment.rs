@@ -4,7 +4,6 @@ use crate::color::Color;
 use crate::geometry::{Corners, Rect};
 use crate::glass::GlassStyle;
 use crate::motion::Motion;
-use crate::style::Shadow;
 use crate::text::{Align, TextStyle};
 use crate::theme::Level;
 use crate::ui::Ui;
@@ -85,33 +84,26 @@ fn segmented_core(
             Motion::quick(),
         ));
     }
-    let mut painter = ui.painter();
-    painter.rect(
-        rect,
-        Corners::capsule(),
-        palette.material_fill.amplify(0.75),
-    );
-    for (index, cell) in cells.iter().enumerate() {
-        let hover = hovered[index];
-        if hover > 0.01 {
-            painter.rect(
-                *cell,
-                Corners::capsule(),
-                palette.material_hover.amplify(0.5 * hover),
-            );
+    {
+        let mut painter = ui.painter();
+        painter.rect(
+            rect,
+            Corners::capsule(),
+            palette.material_fill.amplify(0.75),
+        );
+        for (index, cell) in cells.iter().enumerate() {
+            let hover = hovered[index];
+            if hover > 0.01 {
+                painter.rect(
+                    *cell,
+                    Corners::capsule(),
+                    palette.material_hover.amplify(0.5 * hover),
+                );
+            }
         }
     }
-    painter.shadow(
-        pill,
-        Corners::capsule(),
-        Shadow::new(Color::black_alpha(0.28), 8.0, 2.0),
-    );
-    painter.gradient(
-        pill,
-        Corners::capsule(),
-        palette.selected.amplify(1.0),
-        palette.selected.amplify(0.72),
-    );
+    ui.glass(key ^ 0x2f, pill, GlassStyle::tab_lens().interactive());
+    let mut painter = ui.labels_painter();
     for (index, cell) in cells.iter().enumerate() {
         let active = index == target;
         let color = if active {

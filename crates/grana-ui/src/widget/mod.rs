@@ -8,8 +8,8 @@ mod toggle;
 
 pub use button::{
     action_button, button, button_with, button_with_enabled, glass_action_button, glass_button,
-    glass_icon_button, glass_icon_button_response, icon_button, icon_button_enabled,
-    icon_button_response, text_button,
+    glass_icon_button, glass_icon_button_disabled, glass_icon_button_response, glass_menu_button,
+    icon_button, icon_button_enabled, icon_button_response, text_button,
 };
 pub use disclosure::disclosure;
 pub use field::{text_area, text_field};

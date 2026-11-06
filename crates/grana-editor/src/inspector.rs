@@ -10,80 +10,23 @@ use grana_session::Command;
 
 const CHANNEL_ROW: f32 = 38.0;
 
-pub fn dataset_height(state: &State<'_>) -> f32 {
-    let mut height = 68.0;
-    if state.series.entries.len() > 1 {
-        height += 34.0;
-    }
-    if state.io.loading.is_some() {
-        height += 20.0;
-    }
-    if state.io.document.is_some() {
-        height += 20.0;
-    }
-    height
-}
-
-pub fn dataset(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
-    let dataset = &state.scene.dataset;
-    let palette = ui.theme().palette;
-    let extent = dataset.extent();
-    let spacing = dataset.spacing();
-    let channels = dataset.channels().len();
-    let frames = dataset.frame_count();
-    ui.column(Block::column().gaps(5.0), |ui| {
-        ui.text_style(
-            dataset.name(),
-            TextStyle::new(ui.theme().font(Level::Title), palette.text_primary).truncating(),
-        );
-        widget::caption(
-            ui,
-            &format!(
-                "{} × {} × {} px · {:.3} µm/px",
-                extent.x(),
-                extent.y(),
-                extent.z(),
-                spacing.x()
-            ),
-        );
-        ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-            let source = match dataset.origin() {
-                grana_scene::Origin::Synthetic => "Synthetic",
-                grana_scene::Origin::Zarr => "OME-Zarr",
-                grana_scene::Origin::Tiff => "OME-TIFF",
-                grana_scene::Origin::Czi => "CZI",
-            };
-            widget::badge(ui, source, palette.text_secondary);
-            widget::caption(
-                ui,
-                &format!(
-                    "{} channel{} · {} frame{}",
-                    channels,
-                    plural(channels),
-                    frames,
-                    plural(frames as usize)
-                ),
-            );
-        });
+pub fn source(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
+    if state.series.entries.len() >= 2 {
         series(ui, state, commands);
-        if let Some(name) = state.io.loading {
-            progress_row(ui, name);
-        }
-        if let Some((label, done, total)) = state.io.document {
-            let text = done
-                .checked_mul(100)
-                .and_then(|percent| percent.checked_div(total))
-                .map_or_else(
-                    || label.to_string(),
-                    |percent| format!("{label} · {percent}%"),
-                );
-            progress_row(ui, &text);
-        }
-    });
-}
-
-fn plural(count: usize) -> &'static str {
-    if count == 1 { "" } else { "s" }
+    }
+    if let Some(name) = state.io.loading {
+        progress_row(ui, name);
+    }
+    if let Some((label, done, total)) = state.io.document {
+        let text = done
+            .checked_mul(100)
+            .and_then(|percent| percent.checked_div(total))
+            .map_or_else(
+                || label.to_string(),
+                |percent| format!("{label} · {percent}%"),
+            );
+        progress_row(ui, &text);
+    }
 }
 
 fn progress_row(ui: &mut Ui, text: &str) {
@@ -267,7 +210,7 @@ fn frame_table(ui: &mut Ui, drift: &grana_scene::Drift, time: u32, commands: &mu
 fn channels(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
     let palette = ui.theme().palette;
     let metrics = ui.theme().metrics;
-    section_header(ui, "Channels", Some(&scene.channels.len().to_string()));
+    section_header(ui, "Channels", None);
     let selected = scene.selected;
     let count = scene.channels.len();
     let mut chosen = None;
@@ -376,9 +319,8 @@ fn channels(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
 fn display(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
     let palette = ui.theme().palette;
     let index = scene.selected;
-    let name = scene.channel(index).name().to_string();
     let tint = scene.channel(index).tint();
-    section_header(ui, "Display", Some(&name));
+    section_header(ui, "Display", None);
     let data = scene.channel(index).intensity();
     let current = scene.channels[index].window;
     let mut start = current.min();
@@ -386,10 +328,6 @@ fn display(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
     let available = data.min()..=data.max();
     let transfer = scene.channels[index].transfer().clone();
     let gradient = transfer_colors(&transfer);
-    ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
-        widget::field_label(ui, "Range");
-        widget::caption(ui, &format!("{:.0} – {:.0}", data.min(), data.max()));
-    });
     if let Some((low, high)) =
         widget::range_slider(ui, "window", start, end, available.clone(), &gradient)
     {

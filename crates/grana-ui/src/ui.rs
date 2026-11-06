@@ -38,6 +38,9 @@ struct GlassEntry {
     style: GlassStyle,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlassGroup(pub(crate) ContainerId);
+
 struct GlassTransition {
     anchor: GlassId,
     popover: Option<GlassId>,
@@ -285,6 +288,7 @@ pub struct Ui {
     layer: Layer,
     glass: GlassScene,
     glass_entries: HashMap<u64, GlassEntry>,
+    glass_groups: HashMap<u64, ContainerId>,
     glass_seen: Vec<u64>,
     transitions: HashMap<u64, GlassTransition>,
     floating_container: Option<ContainerId>,
@@ -334,6 +338,7 @@ impl Ui {
             layer: Layer::Chrome,
             glass: GlassScene::new(),
             glass_entries: HashMap::new(),
+            glass_groups: HashMap::new(),
             glass_seen: Vec::new(),
             transitions: HashMap::new(),
             floating_container: None,
@@ -664,6 +669,23 @@ impl Ui {
     }
 
     pub fn glass(&mut self, key: u64, rect: Rect, style: GlassStyle) {
+        self.glass_in(None, key, rect, style);
+    }
+
+    pub fn glass_group(&mut self, key: u64, spacing: f32, layer: i32) -> GlassGroup {
+        if let Some(id) = self.glass_groups.get(&key).copied() {
+            return GlassGroup(id);
+        }
+        let id = self.glass.add_container(spacing, layer);
+        self.glass_groups.insert(key, id);
+        GlassGroup(id)
+    }
+
+    pub fn set_glass_group_spacing(&mut self, group: GlassGroup, spacing: f32) {
+        self.glass.set_container_spacing(group.0, spacing);
+    }
+
+    pub fn glass_in(&mut self, group: Option<GlassGroup>, key: u64, rect: Rect, style: GlassStyle) {
         if rect.is_empty() {
             return;
         }
@@ -682,6 +704,8 @@ impl Ui {
                     let fade = self.motion(Motion::response(0.4, 0.0)).spring();
                     self.glass.set_shape(entry.id, style.shape);
                     self.glass.set_material_with(entry.id, style.material, fade);
+                    self.glass
+                        .set_behavior(entry.id, style.interactive, style.lens);
                     self.glass_entries.insert(
                         key,
                         GlassEntry {
@@ -699,6 +723,9 @@ impl Ui {
                     .material(style.material)
                     .z(style.layer)
                     .clip(glass_rect(clip));
+                if let Some(group) = group {
+                    glass = glass.container(group.0);
+                }
                 if style.interactive {
                     glass = glass.interactive();
                 }

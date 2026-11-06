@@ -39,6 +39,16 @@ impl GlassStyle {
         Self::regular(Shape::Rounded(24.0), CHROME)
     }
 
+    pub fn button() -> Self {
+        Self::regular(Shape::Rounded(12.0), CHROME)
+    }
+
+    pub fn button_disabled() -> Self {
+        let mut style = Self::button();
+        style.material.dim = 0.45;
+        style
+    }
+
     pub fn panel() -> Self {
         Self::regular(Shape::Rounded(26.0), CHROME)
     }

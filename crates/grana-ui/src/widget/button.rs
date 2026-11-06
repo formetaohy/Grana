@@ -8,7 +8,7 @@ use crate::motion::Motion;
 use crate::style::Border;
 use crate::text::{Align, TextStyle};
 use crate::theme::Role;
-use crate::ui::{Length, Response, Ui};
+use crate::ui::{GlassGroup, Length, Response, Ui};
 
 use super::{button_font, padding, pressed_inset};
 
@@ -248,17 +248,19 @@ pub fn icon_button_enabled(
 
 pub fn glass_icon_button(
     ui: &mut Ui,
+    group: Option<GlassGroup>,
     id: &str,
     symbol: Icon,
     size: f32,
     style: GlassStyle,
     tooltip: &str,
 ) -> bool {
-    glass_icon_button_response(ui, id, symbol, size, style, tooltip).clicked
+    glass_icon_button_response(ui, group, id, symbol, size, style, tooltip).clicked
 }
 
 pub fn glass_icon_button_response(
     ui: &mut Ui,
+    group: Option<GlassGroup>,
     id: &str,
     symbol: Icon,
     size: f32,
@@ -274,7 +276,7 @@ pub fn glass_icon_button_response(
     if response.hovered {
         ui.tooltip(tooltip);
     }
-    ui.glass(key, rect, style.interactive());
+    ui.glass_in(group, key, rect, style.interactive());
     glass_ring(ui, key, rect, &response);
     let frame = ui.glass_frame(key).unwrap_or(rect);
     let color = ui.theme().palette.text_primary;
@@ -288,6 +290,104 @@ pub fn glass_icon_button_response(
         1.6,
     );
     response
+}
+
+pub fn glass_icon_button_disabled(
+    ui: &mut Ui,
+    group: Option<GlassGroup>,
+    id: &str,
+    symbol: Icon,
+    size: f32,
+    style: GlassStyle,
+) -> Response {
+    let key = ui.id(id);
+    let rect = ui.allocate(Vec2::splat(size));
+    ui.glass_in(group, key, rect, style);
+    let frame = ui.glass_frame(key).unwrap_or(rect);
+    let color = ui.theme().palette.text_quaternary;
+    let mut painter = ui.painter();
+    icon::paint(
+        symbol,
+        &mut painter,
+        frame.center(),
+        (size * 0.50).clamp(11.0, 17.0),
+        color,
+        1.6,
+    );
+    Response {
+        rect,
+        hovered: false,
+        pressed: false,
+        active: false,
+        clicked: false,
+        dragging: false,
+    }
+}
+
+pub fn glass_menu_button(
+    ui: &mut Ui,
+    group: Option<GlassGroup>,
+    id: &str,
+    label: &str,
+    dirty: bool,
+    maximum: f32,
+) -> Rect {
+    let key = ui.id(id);
+    let palette = ui.theme().palette;
+    let font = ui.theme().font(crate::theme::Level::Callout).medium();
+    let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE)).x;
+    let label_width = measured.min(maximum);
+    let width = label_width + if dirty { 30.0 } else { 26.0 };
+    let rect = ui.allocate(Vec2::new(width, 30.0));
+    let mut response = ui.interact(key, rect);
+    if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
+        response.clicked = true;
+    }
+    if response.clicked {
+        ui.toggle_popup(key);
+    }
+    let active = ui.popup_open(key);
+    let hover = ui.animate(
+        key,
+        if response.hovered || active { 1.0 } else { 0.0 },
+        Motion::quick(),
+    );
+    ui.glass_in(group, key, rect, GlassStyle::button().interactive());
+    glass_ring(ui, key, rect, &response);
+    let frame = ui.glass_frame(key).unwrap_or(rect);
+    let mut painter = ui.painter();
+    painter.text_in(
+        Rect::from_min_max(
+            Vec2::new(frame.min.x + 11.0, frame.min.y),
+            Vec2::new(frame.min.x + 11.0 + label_width, frame.max.y),
+        ),
+        label,
+        TextStyle::new(
+            font,
+            palette.text_secondary.lerp(palette.text_primary, hover),
+        )
+        .truncating(),
+        Align::Center,
+    );
+    if dirty {
+        painter.rect(
+            Rect::from_center_size(
+                Vec2::new(frame.min.x + 16.0 + label_width, frame.center().y),
+                Vec2::splat(5.0),
+            ),
+            Corners::capsule(),
+            palette.warning,
+        );
+    }
+    icon::paint(
+        Icon::ChevronDown,
+        &mut painter,
+        Vec2::new(frame.max.x - 10.0, frame.center().y),
+        9.0,
+        palette.text_tertiary,
+        1.5,
+    );
+    rect
 }
 
 pub fn glass_button(ui: &mut Ui, id: &str, label: &str, style: GlassStyle) -> Response {

@@ -63,6 +63,7 @@ fn pane_fit(
     ui.place(rect, |ui| {
         if grana_ui::widget::glass_icon_button(
             ui,
+            None,
             id,
             Icon::Fit,
             PANE_CONTROL,

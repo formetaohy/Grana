@@ -1,7 +1,8 @@
 use glam::Vec2;
-use grana_ui::glass::GlassStyle;
+use grana_ui::glass::{CHROME, GlassStyle};
 use grana_ui::{
-    Align, Block, Color, Corners, Icon, Length, Level, Motion, Rect, Role, TextStyle, Ui, icon,
+    Align, Block, Color, Corners, GlassGroup, Icon, Length, Level, Motion, Rect, Role, TextStyle,
+    Ui, icon,
 };
 
 use crate::panel::Layout;
@@ -21,52 +22,117 @@ pub(super) fn bar(
     state: &mut State<'_>,
     commands: &mut Vec<Command>,
 ) {
-    navigation(ui, layout.toolbar_left, state, commands);
-    actions(ui, layout.toolbar_right, state, commands);
+    let left = ui.glass_group(ui.id("header.navigation.group"), 10.0, CHROME);
+    let right = ui.glass_group(ui.id("header.actions.group"), 10.0, CHROME);
+    let mut left_hover = Vec::new();
+    let mut right_hover = Vec::new();
+    navigation(
+        ui,
+        layout.toolbar_left,
+        state,
+        commands,
+        left,
+        &mut left_hover,
+    );
+    actions(
+        ui,
+        layout.toolbar_right,
+        state,
+        commands,
+        right,
+        &mut right_hover,
+    );
     analysis(ui, layout.analysis, state);
+    let pointer = ui.input().position();
+    let left_spacing = ui.spring_to(
+        ui.id("header.navigation.spacing"),
+        if left_hover.iter().any(|rect| rect.contains(pointer)) {
+            14.0
+        } else {
+            10.0
+        },
+        Motion::quick(),
+    );
+    ui.set_glass_group_spacing(left, left_spacing);
+    let right_spacing = ui.spring_to(
+        ui.id("header.actions.spacing"),
+        if right_hover.iter().any(|rect| rect.contains(pointer)) {
+            14.0
+        } else {
+            10.0
+        },
+        Motion::quick(),
+    );
+    ui.set_glass_group_spacing(right, right_spacing);
 }
 
-fn navigation(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec<Command>) {
-    ui.glass(ui.id("toolbar.navigation"), rect, GlassStyle::bar());
+fn navigation(
+    ui: &mut Ui,
+    rect: Rect,
+    state: &mut State<'_>,
+    commands: &mut Vec<Command>,
+    group: GlassGroup,
+    hover: &mut Vec<Rect>,
+) {
     let inner = rect.shrink2(Vec2::new(8.0, 0.0));
     ui.place(inner, |ui| {
         ui.row(
             Block::row()
-                .gaps(4.0)
+                .gaps(6.0)
                 .align(Align::Center)
                 .height(Length::Fill),
             |ui| {
                 let hidden = state.workspace.sidebar_hidden;
-                if widget::icon_button(
+                let response = widget::glass_icon_button_response(
                     ui,
+                    Some(group),
                     "sidebar.toggle",
                     Icon::Sidebar,
                     34.0,
-                    Role::Quiet,
+                    GlassStyle::button(),
                     if hidden {
                         "Show sidebar"
                     } else {
                         "Hide sidebar"
                     },
-                ) {
+                );
+                hover.push(response.rect);
+                if response.clicked {
                     state.workspace.sidebar_hidden = !hidden;
                 }
-                brand(ui);
-                vertical_rule(ui, 20.0);
-                open_menu(ui, state, commands);
-                project_menu(ui, state, commands);
+                brand(ui, group);
+                let open =
+                    widget::glass_menu_button(ui, Some(group), "open.menu", "Open", false, 80.0);
+                hover.push(open);
+                open_menu(ui, state, commands, open);
+                let project = widget::glass_menu_button(
+                    ui,
+                    Some(group),
+                    "project.menu",
+                    state.io.project.as_deref().unwrap_or("Untitled"),
+                    state.io.dirty,
+                    148.0,
+                );
+                hover.push(project);
+                project_menu(ui, state, commands, project);
             },
         );
     });
 }
 
-fn actions(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec<Command>) {
-    ui.glass(ui.id("toolbar.actions"), rect, GlassStyle::bar());
+fn actions(
+    ui: &mut Ui,
+    rect: Rect,
+    state: &mut State<'_>,
+    commands: &mut Vec<Command>,
+    group: GlassGroup,
+    hover: &mut Vec<Rect>,
+) {
     let inner = rect.shrink2(Vec2::new(8.0, 0.0));
     ui.place(inner, |ui| {
         ui.row(
             Block::row()
-                .gaps(2.0)
+                .gaps(6.0)
                 .align(Align::Center)
                 .justify(Align::End)
                 .width(Length::Fill)
@@ -82,48 +148,78 @@ fn actions(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec<Co
                     || "Nothing to redo".to_string(),
                     |action| format!("Redo {}", action.label()),
                 );
-                if widget::icon_button_enabled(
-                    ui,
-                    "undo",
-                    Icon::Undo,
-                    32.0,
-                    Role::Quiet,
-                    &undo_tip,
-                    undo.is_some(),
-                ) {
+                let response = if undo.is_some() {
+                    widget::glass_icon_button_response(
+                        ui,
+                        Some(group),
+                        "undo",
+                        Icon::Undo,
+                        32.0,
+                        GlassStyle::button(),
+                        &undo_tip,
+                    )
+                } else {
+                    widget::glass_icon_button_disabled(
+                        ui,
+                        Some(group),
+                        "undo",
+                        Icon::Undo,
+                        32.0,
+                        GlassStyle::button_disabled(),
+                    )
+                };
+                hover.push(response.rect);
+                if response.clicked {
                     commands.push(Command::Undo);
                 }
-                if widget::icon_button_enabled(
-                    ui,
-                    "redo",
-                    Icon::Redo,
-                    32.0,
-                    Role::Quiet,
-                    &redo_tip,
-                    redo.is_some(),
-                ) {
+                let response = if redo.is_some() {
+                    widget::glass_icon_button_response(
+                        ui,
+                        Some(group),
+                        "redo",
+                        Icon::Redo,
+                        32.0,
+                        GlassStyle::button(),
+                        &redo_tip,
+                    )
+                } else {
+                    widget::glass_icon_button_disabled(
+                        ui,
+                        Some(group),
+                        "redo",
+                        Icon::Redo,
+                        32.0,
+                        GlassStyle::button_disabled(),
+                    )
+                };
+                hover.push(response.rect);
+                if response.clicked {
                     commands.push(Command::Redo);
                 }
-                vertical_rule(ui, 20.0);
-                if widget::icon_button(
+                let response = widget::glass_icon_button_response(
                     ui,
+                    Some(group),
                     "fit",
                     Icon::Fit,
                     32.0,
-                    Role::Quiet,
+                    GlassStyle::button(),
                     "Fit volume to view",
-                ) {
+                );
+                hover.push(response.rect);
+                if response.clicked {
                     crate::view::fit_volume(state);
                 }
                 let key = ui.id("header.diagnostics");
-                let response = widget::icon_button_response(
+                let response = widget::glass_icon_button_response(
                     ui,
+                    Some(group),
                     "header.diagnostics",
                     Icon::Info,
                     32.0,
-                    Role::Quiet,
+                    GlassStyle::button(),
                     "Streaming diagnostics",
                 );
+                hover.push(response.rect);
                 if response.clicked {
                     ui.toggle_popup(key);
                 }
@@ -212,8 +308,14 @@ fn analysis(ui: &mut Ui, rect: Rect, state: &mut State<'_>) {
     }
 }
 
-fn brand(ui: &mut Ui) {
+fn brand(ui: &mut Ui, group: GlassGroup) {
     let rect = ui.allocate(Vec2::new(88.0, 34.0));
+    ui.glass_in(
+        Some(group),
+        ui.id("header.brand"),
+        rect,
+        GlassStyle::button(),
+    );
     let brand = ui.theme().palette.brand;
     let palette = ui.theme().palette;
     let font = ui.theme().font(Level::Title);
@@ -239,82 +341,7 @@ fn brand(ui: &mut Ui) {
     );
 }
 
-fn vertical_rule(ui: &mut Ui, height: f32) {
-    let rect = ui.allocate(Vec2::new(13.0, height));
-    let palette = ui.theme().palette;
-    let mut painter = ui.painter();
-    painter.rect(
-        Rect::from_center_size(rect.center(), Vec2::new(1.0, height - 8.0)),
-        Corners::ZERO,
-        palette.separator,
-    );
-}
-
-fn menu_button(ui: &mut Ui, id: &str, label: &str, dot: bool, maximum: f32) -> Rect {
-    let key = ui.id(id);
-    let palette = ui.theme().palette;
-    let font = ui.theme().font(Level::Callout).medium();
-    let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE)).x;
-    let label_width = measured.min(maximum);
-    let width = label_width + if dot { 30.0 } else { 26.0 };
-    let height = 30.0;
-    let rect = ui.allocate(Vec2::new(width, height));
-    let mut response = ui.interact(key, rect);
-    let corners = Corners::capsule();
-    if ui.focusable(key, rect, corners) && ui.activated(key) {
-        response.clicked = true;
-    }
-    if response.clicked {
-        ui.toggle_popup(key);
-    }
-    let active = ui.popup_open(key);
-    let hover = ui.animate(
-        key,
-        if response.hovered || active { 1.0 } else { 0.0 },
-        Motion::quick(),
-    );
-    {
-        let mut painter = ui.painter();
-        if hover > 0.01 {
-            painter.rect(rect, corners, palette.material_hover.amplify(0.8 * hover));
-        }
-        painter.text_in(
-            Rect::from_min_max(
-                Vec2::new(rect.min.x + 11.0, rect.min.y),
-                Vec2::new(rect.min.x + 11.0 + label_width, rect.max.y),
-            ),
-            label,
-            TextStyle::new(
-                font,
-                palette.text_secondary.lerp(palette.text_primary, hover),
-            )
-            .truncating(),
-            Align::Center,
-        );
-        if dot {
-            painter.rect(
-                Rect::from_center_size(
-                    Vec2::new(rect.min.x + 16.0 + label_width, rect.center().y),
-                    Vec2::splat(5.0),
-                ),
-                Corners::capsule(),
-                palette.warning,
-            );
-        }
-        icon::paint(
-            Icon::ChevronDown,
-            &mut painter,
-            Vec2::new(rect.max.x - 10.0, rect.center().y),
-            9.0,
-            palette.text_tertiary,
-            1.5,
-        );
-    }
-    rect
-}
-
-fn open_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
-    let rect = menu_button(ui, "open.menu", "Open", false, 80.0);
+fn open_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, rect: Rect) {
     let open = ui.popup_open(ui.id("open.menu"));
     let mut chosen = None;
     let busy = state.io.loading.is_some();
@@ -350,9 +377,7 @@ fn open_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
     }
 }
 
-fn project_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
-    let name = state.io.project.as_deref().unwrap_or("Untitled");
-    let rect = menu_button(ui, "project.menu", name, state.io.dirty, 148.0);
+fn project_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, rect: Rect) {
     let open = ui.popup_open(ui.id("project.menu"));
     let mut chosen = None;
     let busy = state.io.loading.is_some();

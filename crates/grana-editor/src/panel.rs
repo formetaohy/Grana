@@ -11,14 +11,12 @@ use grana_session::Command;
 
 mod header;
 mod stage;
-mod status;
 mod timeline;
 
 const MARGIN: f32 = 16.0;
 const GAP: f32 = 12.0;
 const TOOLBAR_HEIGHT: f32 = 52.0;
 const SIDEBAR_WIDTH: f32 = 312.0;
-const STATUS_HEIGHT: f32 = 54.0;
 const TRANSPORT_HEIGHT: f32 = 46.0;
 const DOCK_HEADER: f32 = 46.0;
 const DOCK_DEFAULT: f32 = 360.0;
@@ -62,7 +60,6 @@ struct Layout {
     toolbar_right: Rect,
     analysis: Rect,
     sidebar: Rect,
-    status: Rect,
     stage: Rect,
     volume: Rect,
     section: Rect,
@@ -91,14 +88,6 @@ impl Layout {
             Rect::from_min_max(
                 Vec2::new(full.min.x + MARGIN, toolbar_left.max.y + GAP),
                 Vec2::new(full.min.x + MARGIN + SIDEBAR_WIDTH, full.max.y - MARGIN),
-            )
-        } else {
-            Rect::ZERO
-        };
-        let status = if sidebar_visible {
-            Rect::from_min_max(
-                Vec2::new(sidebar.min.x, sidebar.max.y - STATUS_HEIGHT),
-                sidebar.max,
             )
         } else {
             Rect::ZERO
@@ -140,7 +129,6 @@ impl Layout {
             toolbar_right,
             analysis,
             sidebar,
-            status,
             stage: full,
             volume,
             section,
@@ -183,8 +171,6 @@ pub fn build(
         header::bar(ui, &layout, &mut state, &mut commands);
         if layout.sidebar_visible {
             sidebar_panel(ui, &layout, &mut state, &mut commands);
-        } else {
-            status::pill(ui, layout.toolbar_left, &state);
         }
         if let Some(rect) = layout.transport {
             timeline::transport(ui, rect, &mut state, &mut commands);
@@ -201,19 +187,8 @@ pub fn build(
 fn sidebar_panel(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let rect = layout.sidebar;
     ui.glass(ui.id("sidebar.glass"), rect, GlassStyle::panel());
-    let header_height = crate::inspector::dataset_height(state);
-    let header = Rect::from_min_max(
-        Vec2::new(rect.min.x + SIDEBAR_PAD, rect.min.y + SIDEBAR_PAD),
-        Vec2::new(
-            rect.max.x - SIDEBAR_PAD,
-            rect.min.y + SIDEBAR_PAD + header_height,
-        ),
-    );
-    ui.place(header, |ui| {
-        crate::inspector::dataset(ui, state, commands);
-    });
     let tabs = Rect::from_min_size(
-        Vec2::new(rect.min.x + SIDEBAR_PAD, header.max.y + 14.0),
+        Vec2::new(rect.min.x + SIDEBAR_PAD, rect.min.y + SIDEBAR_PAD),
         Vec2::new(rect.width() - SIDEBAR_PAD * 2.0, 28.0),
     );
     let labels = ["View", "Objects"];
@@ -228,7 +203,7 @@ fn sidebar_panel(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: 
     });
     let body = Rect::from_min_max(
         Vec2::new(rect.min.x, tabs.max.y + 10.0),
-        Vec2::new(rect.max.x, layout.status.min.y),
+        Vec2::new(rect.max.x, rect.max.y),
     );
     ui.stacked(body, true, |ui| {
         ui.scroll(
@@ -244,15 +219,17 @@ fn sidebar_panel(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: 
                             bottom: 20.0,
                         })
                         .gaps(10.0),
-                    |ui| match active {
-                        0 => crate::inspector::view_body(ui, state, commands),
-                        _ => crate::inspector::objects_body(ui, state, commands),
+                    |ui| {
+                        crate::inspector::source(ui, state, commands);
+                        match active {
+                            0 => crate::inspector::view_body(ui, state, commands),
+                            _ => crate::inspector::objects_body(ui, state, commands),
+                        }
                     },
                 );
             },
         );
     });
-    status::bar(ui, layout.status, state);
 }
 
 fn dock_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec<Command>) {
