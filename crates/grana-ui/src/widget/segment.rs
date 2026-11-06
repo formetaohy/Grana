@@ -77,8 +77,15 @@ fn segmented_core(
         .unwrap_or(selected)
         .min(options.len().saturating_sub(1));
     let target_cell = cells.get(target).copied().unwrap_or(rect);
-    let x = ui.spring_to(key, target_cell.min.x, Motion::response(0.4, 0.16));
-    let width = ui.spring_to(key ^ 0x1f, target_cell.width(), Motion::response(0.4, 0.16));
+    let dragging = dragging && ui.input().button(Button::Primary).down && rect.contains(pointer);
+    let width_target = target_cell.width();
+    let x_target = if dragging {
+        (pointer.x - width_target * 0.5).clamp(rect.min.x + 3.0, rect.max.x - 3.0 - width_target)
+    } else {
+        target_cell.min.x
+    };
+    let x = ui.spring_to(key, x_target, Motion::response(0.4, 0.16));
+    let width = ui.spring_to(key ^ 0x1f, width_target, Motion::response(0.4, 0.16));
     let pill = Rect::from_min_size(
         Vec2::new(x, rect.min.y + 3.0),
         Vec2::new(width, rect.height() - 6.0),
