@@ -78,21 +78,16 @@ fn header<'a>(ctx: &mut BuildContext<'_, Message>, count: usize) -> Element<'a, 
     let detail_style =
         TextStyle::new(theme.font(Level::Caption), palette.text_tertiary).aligned(Align::End);
     let detail = count.to_string();
-    let canvas = grana_ui::canvas(
-        Length::Fixed(total - 24.0),
-        26.0,
-        0,
-        move |painter, info| {
-            let rect = info.rect;
-            painter.text_in(rect, "OBJECT SETS", label_style, Align::Center);
-            painter.text_in(
-                Rect::from_min_max(rect.min, Vec2::new(rect.max.x - 8.0, rect.max.y)),
-                &detail,
-                detail_style,
-                Align::Center,
-            );
-        },
-    );
+    let canvas = grana_ui::canvas(Length::Fixed(total - 24.0), 26.0, move |painter, info| {
+        let rect = info.rect;
+        painter.text_in(rect, "OBJECT SETS", label_style, Align::Center);
+        painter.text_in(
+            Rect::from_min_max(rect.min, Vec2::new(rect.max.x - 8.0, rect.max.y)),
+            &detail,
+            detail_style,
+            Align::Center,
+        );
+    });
     let add = view::icon_button(
         ctx,
         "objects.add",
@@ -270,7 +265,7 @@ fn appearance_fields<'a>(
     children.push(
         grana_ui::widget::toggle_row(&theme, "Object Labels", labels)
             .named(&format!("object.{raw}.labels"))
-            .on_toggle(labels, move |value| {
+            .on_toggle(move |value| {
                 Message::Command(Command::SetObjectLabels {
                     set: id,
                     labels: value,
@@ -388,7 +383,7 @@ fn header_row<'a>(
         set: id,
         open: !expanded,
     };
-    let body = grana_ui::canvas(Length::Fixed(40.0), HEADER, 0, move |painter, info| {
+    let body = grana_ui::canvas(Length::Fixed(40.0), HEADER, move |painter, info| {
         let rect = info.rect;
         let tile = Rect::from_center_size(
             Vec2::new(rect.min.x + 15.0, rect.center().y),
@@ -412,7 +407,7 @@ fn header_row<'a>(
     let text_width = width - 114.0;
     let text = if editing {
         let current_name = name.clone();
-        grana_ui::widget::text_field(&theme, &name, name_style, text_width, false)
+        grana_ui::widget::text_field(&name, name_style, text_width, false)
             .key(name_key)
             .editing(true)
             .on_commit(move |text: &str| {
@@ -429,29 +424,24 @@ fn header_row<'a>(
             .on_cancel(|| Message::EndRename)
     } else {
         let title = name.clone();
-        grana_ui::canvas(
-            Length::Fixed(text_width),
-            HEADER,
-            0,
-            move |painter, info| {
-                let rect = info.rect;
-                painter.text_in(
-                    Rect::from_min_max(
-                        Vec2::new(rect.min.x, rect.min.y + 1.0),
-                        Vec2::new(rect.max.x, rect.center().y + 1.0),
-                    ),
-                    &title,
-                    name_style,
-                    Align::Center,
-                );
-                painter.text_in(
-                    Rect::from_min_max(Vec2::new(rect.min.x, rect.center().y + 2.0), rect.max),
-                    &subtitle,
-                    subtitle_style,
-                    Align::Center,
-                );
-            },
-        )
+        grana_ui::canvas(Length::Fixed(text_width), HEADER, move |painter, info| {
+            let rect = info.rect;
+            painter.text_in(
+                Rect::from_min_max(
+                    Vec2::new(rect.min.x, rect.min.y + 1.0),
+                    Vec2::new(rect.max.x, rect.center().y + 1.0),
+                ),
+                &title,
+                name_style,
+                Align::Center,
+            );
+            painter.text_in(
+                Rect::from_min_max(Vec2::new(rect.min.x, rect.center().y + 2.0), rect.max),
+                &subtitle,
+                subtitle_style,
+                Align::Center,
+            );
+        })
         .key(Key::new(format!("object.{raw}.header.text")))
         .press(toggle())
     };
@@ -480,7 +470,7 @@ fn header_row<'a>(
         "Object commands",
         Message::Noop,
     );
-    let chevron = grana_ui::canvas(Length::Fixed(16.0), 24.0, 0, move |painter, info| {
+    let chevron = grana_ui::canvas(Length::Fixed(16.0), 24.0, move |painter, info| {
         icon::chevron(
             painter,
             info.rect.center(),
@@ -491,12 +481,14 @@ fn header_row<'a>(
         );
     })
     .key(Key::new(format!("object.{raw}.arrow.anchor")))
-    .press(toggle());
+    .press(toggle())
+    .focus_ring(Corners::all(8.0))
+    .cursor(grana_ui::Cursor::Pointing);
     let rows = object_menu(ctx, state, id, position, sets);
     let menu = view::menu(ctx, Key::new(format!("object.{raw}.menu")), 188.0, rows);
-    let gap = grana_ui::canvas(Length::Fixed(6.0), 0.0, 0, |_painter, _info| {});
-    let thin = grana_ui::canvas(Length::Fixed(2.0), 0.0, 0, |_painter, _info| {});
-    let thin_two = grana_ui::canvas(Length::Fixed(2.0), 0.0, 0, |_painter, _info| {});
+    let gap = grana_ui::canvas(Length::Fixed(6.0), 0.0, |_painter, _info| {});
+    let thin = grana_ui::canvas(Length::Fixed(2.0), 0.0, |_painter, _info| {});
+    let thin_two = grana_ui::canvas(Length::Fixed(2.0), 0.0, |_painter, _info| {});
     let row = grana_ui::row()
         .width(Length::Fixed(width))
         .height(Length::Fixed(HEADER))
@@ -992,7 +984,7 @@ fn appearance<'a>(
     let coloring = set.object_coloring().clone();
     let salt = format!("object.{}.coloring", id.raw());
     let key = Key::new(&salt);
-    let open = state.workspace.interface.open(key);
+    let open = state.workspace.sections.is_open(key);
     let mut children = Vec::new();
     if open {
         children.extend(crate::coloring::edit(
@@ -1035,7 +1027,7 @@ fn relations<'a>(
         .collect::<Vec<_>>();
     let salt = format!("object.{}.relations", id.raw());
     let key = Key::new(&salt);
-    let open = state.workspace.interface.open(key);
+    let open = state.workspace.sections.is_open(key);
     let mut children = Vec::new();
     if open {
         for entry in relations.iter().copied() {

@@ -1,15 +1,16 @@
 use glam::Vec2;
-use grana_glass::{Animated, Spring};
+use grana_glass::{Animated, GlassId, Spring};
 use slotmap::DefaultKey;
 
 use crate::edit::Edit;
-use crate::element::{Content, Glass, Interaction, Key, Layer, Layout, Popup, Scroll};
+use crate::element::{
+    Axis, Content, ContentKind, Glass, Interaction, Key, Layer, Layout, Popup, Scroll,
+};
 use crate::geometry::{Corners, Rect};
 use crate::glass::GlassStyle;
 use crate::input::Cursor;
-use crate::paint::LayerInstances;
+use crate::paint::{LayerInstances, SubGlass};
 use crate::style::Surface;
-use grana_glass::GlassId;
 
 pub type NodeId = DefaultKey;
 
@@ -21,20 +22,17 @@ pub(crate) struct Runtime {
     pub value: Animated,
     pub extent: Animated,
     pub engaged: Animated,
-    pub dragging: bool,
+    pub drag_value: f32,
+    pub drag_extent: f32,
     pub open: bool,
-    pub open_prop: bool,
     pub edit: Option<Edit>,
+    pub edit_prop: bool,
     pub thumb: u8,
     pub seeded: bool,
 }
 
 impl Runtime {
     pub fn new(content: &Content) -> Self {
-        let open = match content {
-            Content::Disclosure(disclosure) => disclosure.open,
-            _ => false,
-        };
         let (value, extent) = match content {
             Content::Toggle(toggle) => (if toggle.value { 1.0 } else { 0.0 }, 0.0),
             Content::Checkbox(checkbox) => (if checkbox.value { 1.0 } else { 0.0 }, 0.0),
@@ -55,7 +53,6 @@ impl Runtime {
                     ((range.end - minimum) / span).clamp(0.0, 1.0),
                 )
             }
-            Content::Disclosure(disclosure) => (if disclosure.open { 1.0 } else { 0.0 }, 0.0),
             Content::ColorPicker(picker) => {
                 let (hue, _, _) = crate::widget::color::rgb_to_hsv(picker.color);
                 (hue, 0.0)
@@ -68,7 +65,6 @@ impl Runtime {
                 | Content::Checkbox(_)
                 | Content::Slider(_)
                 | Content::RangeSlider(_)
-                | Content::Disclosure(_)
                 | Content::ColorPicker(_)
         );
         Self {
@@ -77,10 +73,11 @@ impl Runtime {
             value: Animated::new(value, SPRING),
             extent: Animated::new(extent, SPRING),
             engaged: Animated::new(0.0, SPRING),
-            dragging: false,
-            open,
-            open_prop: open,
+            drag_value: 0.0,
+            drag_extent: 0.0,
+            open: false,
             edit: None,
+            edit_prop: false,
             thumb: 0,
             seeded,
         }
@@ -91,15 +88,15 @@ pub(crate) struct Node<A> {
     pub parent: Option<NodeId>,
     pub children: Vec<NodeId>,
     pub key: Key,
-    pub kind: u8,
+    pub kind: ContentKind,
     pub layout: Layout,
     pub content: Content,
     pub interaction: Interaction<A>,
-    pub revision: u64,
     pub background: Option<Surface>,
     pub glass_spec: Option<Glass>,
     pub glass_id: Option<GlassId>,
     pub glass_style: Option<GlassStyle>,
+    pub glass_rect: Option<Rect>,
     pub layer: Layer,
     pub layer_explicit: bool,
     pub position: Option<Rect>,
@@ -107,7 +104,6 @@ pub(crate) struct Node<A> {
     pub popup_spec: Option<Popup>,
     pub tooltip: Option<String>,
     pub cursor: Option<Cursor>,
-    pub occluder: bool,
     pub enabled: bool,
     pub focus_ring: Option<Corners>,
     pub runtime: Runtime,
@@ -125,16 +121,15 @@ pub(crate) struct Node<A> {
     pub clip: Rect,
     pub clip_corners: Corners,
     pub paint: LayerInstances,
+    pub sub_glass: Vec<SubGlass>,
     pub paint_dirty: bool,
-    pub layout_dirty: bool,
     pub visible: bool,
-    pub has_canvas: bool,
 }
 
 impl<A> Node<A> {
     pub fn new(
         key: Key,
-        kind: u8,
+        kind: ContentKind,
         layout: Layout,
         content: Content,
         interaction: Interaction<A>,
@@ -148,11 +143,11 @@ impl<A> Node<A> {
             layout,
             content,
             interaction,
-            revision: 0,
             background: None,
             glass_spec: None,
             glass_id: None,
             glass_style: None,
+            glass_rect: None,
             layer: Layer::Chrome,
             layer_explicit: false,
             position: None,
@@ -160,7 +155,6 @@ impl<A> Node<A> {
             popup_spec: None,
             tooltip: None,
             cursor: None,
-            occluder: false,
             enabled: true,
             focus_ring: None,
             runtime,
@@ -178,10 +172,17 @@ impl<A> Node<A> {
             clip: Rect::ZERO,
             clip_corners: Corners::ZERO,
             paint: LayerInstances::default(),
+            sub_glass: Vec::new(),
             paint_dirty: true,
-            layout_dirty: true,
             visible: true,
-            has_canvas: false,
         }
+    }
+
+    pub fn interactive(&self) -> bool {
+        self.interaction.is_interactive()
+    }
+
+    pub fn scroll_axis(&self) -> Axis {
+        self.scroll_spec.map_or(Axis::Column, |spec| spec.axis)
     }
 }

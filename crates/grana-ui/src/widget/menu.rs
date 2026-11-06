@@ -1,8 +1,7 @@
 use glam::Vec2;
 
-use crate::element::{
-    ActionRowContent, Content, Element, Interaction, Layout, Length, MenuRowContent, Size,
-};
+use crate::content::{ActionRowContent, Content, MenuRowContent};
+use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
 use crate::icon::{self, Icon};
 use crate::node::Runtime;
@@ -13,6 +12,7 @@ use crate::theme::{Level, Theme};
 use super::PaintInfo;
 
 pub const MENU_ROW: f32 = 32.0;
+pub const SEPARATOR: f32 = 9.0;
 
 pub fn menu_row<'a, A>(theme: &Theme, label: &str, checked: bool) -> Element<'a, A> {
     Element::new(Layout {
@@ -24,8 +24,6 @@ pub fn menu_row<'a, A>(theme: &Theme, label: &str, checked: bool) -> Element<'a,
         checked,
         font: theme.font(Level::Callout),
     }))
-    .cursor(crate::input::Cursor::Pointing)
-    .focus_ring(Corners::all(10.0))
 }
 
 pub fn action_row<'a, A>(
@@ -44,37 +42,14 @@ pub fn action_row<'a, A>(
         shortcut: shortcut.map(str::to_string),
         font: theme.font(Level::Callout),
     }))
-    .cursor(crate::input::Cursor::Pointing)
-    .focus_ring(Corners::all(10.0))
 }
 
-pub fn separator<'a, A>(_theme: &Theme) -> Element<'a, A> {
+pub fn separator<'a, A>() -> Element<'a, A> {
     Element::new(Layout {
-        size: Size::new(Length::Fill, Length::Fixed(9.0)),
+        size: Size::new(Length::Fill, Length::Fixed(SEPARATOR)),
         ..Layout::row()
     })
     .with_content(Content::Separator)
-    .interaction_none()
-}
-
-trait InteractionNone<'a, A> {
-    fn interaction_none(self) -> Self;
-}
-
-impl<'a, A> InteractionNone<'a, A> for Element<'a, A> {
-    fn interaction_none(mut self) -> Self {
-        self.interaction = Interaction::None;
-        self
-    }
-}
-
-pub(super) fn measure_action(
-    row: &ActionRowContent,
-    available: Vec2,
-    text: &mut crate::text::Text,
-) -> Vec2 {
-    let _ = (row, text);
-    Vec2::new(available.x, MENU_ROW)
 }
 
 pub(super) fn paint_menu_row(

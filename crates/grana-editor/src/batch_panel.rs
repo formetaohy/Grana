@@ -123,7 +123,7 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
             let name = dataset.name.clone();
             let label = state_label(&dataset.state).to_string();
             let detail = dataset.detail.clone();
-            let row = grana_ui::canvas(Length::Fill, 30.0, 0, move |painter, info| {
+            let row = grana_ui::canvas(Length::Fill, 30.0, move |painter, info| {
                 if info.hover > 0.01 {
                     painter.rect(
                         info.rect,
@@ -210,7 +210,6 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         children.push(grana_ui::canvas(
             Length::Fill,
             28.0,
-            0,
             move |painter, info| {
                 painter.outlined(info.rect, look.corners, look.fill, look.border, look.shadow);
                 painter.text_in(
@@ -237,7 +236,7 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         let jobs = state.batch_jobs();
         let workers = grana_ui::widget::drag_value(&theme, jobs as f32, 0)
             .named("batch.jobs")
-            .on_drag_value(jobs as f32, 0.15, move |value| {
+            .on_drag_value(0.15, move |value| {
                 let next = (value.round() as i64).clamp(1, 16) as u32;
                 if next as usize != jobs {
                     Message::Command(Command::SetBatchJobs(next))
@@ -353,7 +352,7 @@ fn comparison<'a>(
     let caption = theme.font(Level::Caption);
     let mut entries = Vec::new();
     for (index, row) in rows.iter().enumerate() {
-        let head = grana_ui::canvas(Length::Fill, 18.0, 0, {
+        let head = grana_ui::canvas(Length::Fill, 18.0, {
             let group = row.group.clone();
             let name = row.name.clone();
             let kind = row.kind.clone();

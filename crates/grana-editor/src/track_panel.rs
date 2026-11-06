@@ -162,7 +162,7 @@ fn lineage_button<'a>(
     let style = TextStyle::new(theme.button_font(), palette.text_primary);
     let rest = theme.surface(Role::Control, State::Rest);
     let hover = theme.surface(Role::Control, State::Hover);
-    grana_ui::canvas(Length::Fixed(74.0), 28.0, 0, move |painter, info| {
+    grana_ui::canvas(Length::Fixed(74.0), 28.0, move |painter, info| {
         let surface = if info.hover > 0.5 { hover } else { rest };
         painter.outlined(
             info.rect,
@@ -442,7 +442,7 @@ fn lineage<'a>(
     let colors = (0..set.len())
         .map(|index| object.track_color(index))
         .collect::<Vec<_>>();
-    let background = grana_ui::canvas(Length::Fill, rect.height(), 0, {
+    let background = grana_ui::canvas(Length::Fill, rect.height(), {
         let order = order.clone();
         move |painter, info| {
             let rect = info.rect;
@@ -579,7 +579,7 @@ fn lineage<'a>(
         }
         (Some(_), None) | (None, None) => (None, None),
     };
-    let tracks = grana_ui::canvas(Length::Fill, content.max(1.0), 0, {
+    let tracks = grana_ui::canvas(Length::Fill, content.max(1.0), {
         let order = order.clone();
         let lane_of = lane_of.clone();
         move |painter, info| {
@@ -1042,7 +1042,7 @@ fn appearance<'a>(
                 ),
                 grana_ui::widget::checkbox(ctx.theme(), "Rev", coloring.reversed())
                     .key(Key::new(format!("tracks.{}.reverse", id.raw())))
-                    .on_toggle(coloring.reversed(), move |value| {
+                    .on_toggle(move |value| {
                         let mut next = coloring_for_reverse.clone();
                         if next.set_reversed(value) {
                             Message::Command(Command::SetTrackColoring {
@@ -1079,7 +1079,7 @@ fn appearance<'a>(
                         field_label(ctx, "Range"),
                         grana_ui::widget::drag_value(ctx.theme(), minimum, decimals as usize)
                             .key(Key::new(format!("tracks.{}.low", id.raw())))
-                            .on_drag_value(minimum, speed, move |value| {
+                            .on_drag_value(speed, move |value| {
                                 let mut next = coloring_low.clone();
                                 if next.set_manual(Some((value, maximum))) {
                                     Message::Command(Command::SetTrackColoring {
@@ -1092,7 +1092,7 @@ fn appearance<'a>(
                             }),
                         grana_ui::widget::drag_value(ctx.theme(), maximum, decimals as usize)
                             .key(Key::new(format!("tracks.{}.high", id.raw())))
-                            .on_drag_value(maximum, speed, move |value| {
+                            .on_drag_value(speed, move |value| {
                                 let mut next = coloring_high.clone();
                                 if next.set_manual(Some((minimum, value))) {
                                     Message::Command(Command::SetTrackColoring {
@@ -1186,7 +1186,7 @@ fn combo<'a>(
         TextStyle::new(theme.font(Level::Callout).medium(), palette.text_primary).truncating();
     let rest = theme.surface(Role::Control, State::Rest);
     let hover = theme.surface(Role::Control, State::Hover);
-    let anchor = grana_ui::canvas(Length::Fixed(width), 28.0, 0, move |painter, info| {
+    let anchor = grana_ui::canvas(Length::Fixed(width), 28.0, move |painter, info| {
         let surface = if info.hover > 0.5 { hover } else { rest };
         painter.outlined(
             info.rect,

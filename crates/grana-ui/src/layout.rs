@@ -27,22 +27,20 @@ pub struct LayoutEngine<'a> {
 impl<'a> LayoutEngine<'a> {
     pub fn run<A>(&mut self, tree: &mut Tree<A>) {
         let root = tree.root;
-        let children = tree.nodes[root].children.clone();
-        for child in children.iter().copied() {
+        for index in 0..tree.nodes[root].children.len() {
+            let child = tree.nodes[root].children[index];
             self.measure(tree, child, self.screen, Loose::TIGHT);
         }
         let screen = Rect::from_min_size(Vec2::ZERO, self.screen);
         let clip = Clip::new(screen, Corners::ZERO);
         tree.nodes[root].rect = screen;
         tree.nodes[root].measured = self.screen;
-        for child in children.iter().copied() {
+        for index in 0..tree.nodes[root].children.len() {
+            let child = tree.nodes[root].children[index];
             let size = tree.nodes[child].measured;
             self.arrange(tree, child, Rect::from_min_size(Vec2::ZERO, size), clip);
         }
         tree.layout_dirty = false;
-        for node in tree.nodes.values_mut() {
-            node.layout_dirty = false;
-        }
     }
 
     fn measure<A>(&mut self, tree: &mut Tree<A>, id: NodeId, available: Vec2, loose: Loose) {
@@ -55,9 +53,9 @@ impl<'a> LayoutEngine<'a> {
                 .width;
             tree.nodes[id].measured = Vec2::ZERO;
             tree.nodes[id].provisional = Vec2::ZERO;
-            let children = tree.nodes[id].children.clone();
             let mut height = 0.0f32;
-            for child in children {
+            for index in 0..tree.nodes[id].children.len() {
+                let child = tree.nodes[id].children[index];
                 let remaining = Vec2::new((width - 16.0).max(0.0), self.screen.y);
                 self.measure(tree, child, remaining, Loose::LOOSE);
                 height += tree.nodes[child].measured.y;
@@ -71,10 +69,6 @@ impl<'a> LayoutEngine<'a> {
             self.measure_scroll(tree, id, available, loose);
             return;
         }
-        if matches!(tree.nodes[id].content, Content::Disclosure(_)) {
-            self.measure_disclosure(tree, id, available, loose);
-            return;
-        }
         if matches!(tree.nodes[id].content, Content::Empty) {
             self.measure_group(tree, id, available, loose, forced);
             return;
@@ -84,7 +78,7 @@ impl<'a> LayoutEngine<'a> {
         let (mut size, baseline) = if let Some(size) = forced {
             (size, None)
         } else {
-            measure_leaf(content, layout, available, loose, self.text, self.theme)
+            measure_leaf(content, layout, available, self.text, self.theme)
         };
         if !loose.x && forced.is_none() {
             size.x = size.x.min(available.x.max(0.0));
@@ -97,7 +91,6 @@ impl<'a> LayoutEngine<'a> {
         node.baseline = baseline;
         node.auto_cross = false;
         node.auto_main = false;
-        node.layout_dirty = false;
     }
     fn measure_scroll<A>(&mut self, tree: &mut Tree<A>, id: NodeId, available: Vec2, loose: Loose) {
         let spec = tree.nodes[id].scroll_spec.expect("the scroll is present");
@@ -121,10 +114,10 @@ impl<'a> LayoutEngine<'a> {
         if !loose.x {
             size.x = size.x.min(available.x.max(0.0));
         }
-        let children = tree.nodes[id].children.clone();
         let mut cross = 0.0f32;
         let mut main = 0.0f32;
-        for child in children.iter().copied() {
+        for index in 0..tree.nodes[id].children.len() {
+            let child = tree.nodes[id].children[index];
             let remaining = Vec2::new(size.x, self.screen.y.max(size.y));
             self.measure(tree, child, remaining, Loose::TIGHT);
             match spec.axis {
@@ -146,45 +139,6 @@ impl<'a> LayoutEngine<'a> {
         node.content_cross = cross;
         node.auto_cross = false;
         node.auto_main = false;
-        node.layout_dirty = false;
-    }
-
-    fn measure_disclosure<A>(
-        &mut self,
-        tree: &mut Tree<A>,
-        id: NodeId,
-        available: Vec2,
-        loose: Loose,
-    ) {
-        let layout = tree.nodes[id].layout;
-        let mut width = layout.size.width.resolve(available.x);
-        if !loose.x {
-            width = width.min(available.x.max(0.0));
-        }
-        let open = tree.nodes[id].runtime.open;
-        let gap = layout.gap;
-        let children = tree.nodes[id].children.clone();
-        let mut content = 0.0f32;
-        if open {
-            for (index, child) in children.iter().enumerate() {
-                let remaining = Vec2::new(width, (self.screen.y - 26.0 - content).max(0.0));
-                self.measure(tree, *child, remaining, Loose::LOOSE);
-                content += tree.nodes[*child].measured.y;
-                if index + 1 < children.len() {
-                    content += gap;
-                }
-            }
-        }
-        let size = Vec2::new(width.max(0.0), 26.0 + content);
-        let node = &mut tree.nodes[id];
-        node.measured = size;
-        node.provisional = size;
-        node.inner_provisional = size;
-        node.content_main = content;
-        node.content_cross = width;
-        node.auto_main = true;
-        node.auto_cross = false;
-        node.layout_dirty = false;
     }
 
     fn measure_group<A>(
@@ -224,13 +178,13 @@ impl<'a> LayoutEngine<'a> {
             x: loose_width,
             y: loose_height,
         };
-        let children = tree.nodes[id].children.clone();
         let mut cursor = inner.min;
         let mut cross = 0.0f32;
         let mut main = 0.0f32;
         let mut line = 0.0f32;
         let mut line_height = 0.0f32;
-        for child in children.iter().copied() {
+        for index in 0..tree.nodes[id].children.len() {
+            let child = tree.nodes[id].children[index];
             if tree.nodes[child].position.is_some() || tree.nodes[child].popup_spec.is_some() {
                 self.measure(tree, child, available, Loose::TIGHT);
                 continue;
@@ -340,7 +294,6 @@ impl<'a> LayoutEngine<'a> {
         node.content_cross = cross;
         node.auto_cross = auto_cross;
         node.auto_main = auto_main;
-        node.layout_dirty = false;
     }
 
     fn arrange<A>(&mut self, tree: &mut Tree<A>, id: NodeId, rect: Rect, parent_clip: Clip) {
@@ -377,15 +330,11 @@ impl<'a> LayoutEngine<'a> {
             node.visible = true;
         }
         if popup_spec.is_some() {
-            self.arrange_popup(tree, id, parent_clip);
+            self.arrange_popup(tree, id);
             return;
         }
         if scroll_spec.is_some() {
             self.arrange_scroll(tree, id, rect, clip);
-            return;
-        }
-        if matches!(tree.nodes[id].content, Content::Disclosure(_)) {
-            self.arrange_disclosure(tree, id, rect, clip);
             return;
         }
         if matches!(tree.nodes[id].content, Content::Empty) {
@@ -394,15 +343,7 @@ impl<'a> LayoutEngine<'a> {
     }
 
     fn arrange_group<A>(&mut self, tree: &mut Tree<A>, id: NodeId, rect: Rect, clip: Clip) {
-        let (
-            layout,
-            inner_provisional,
-            content_main,
-            content_cross,
-            auto_cross,
-            auto_main,
-            children,
-        ) = {
+        let (layout, inner_provisional, content_main, content_cross, auto_cross, auto_main) = {
             let node = &tree.nodes[id];
             (
                 node.layout,
@@ -411,7 +352,6 @@ impl<'a> LayoutEngine<'a> {
                 node.content_cross,
                 node.auto_cross,
                 node.auto_main,
-                node.children.clone(),
             )
         };
         let inner_min = rect.min + Vec2::new(layout.padding.left, layout.padding.top);
@@ -435,10 +375,10 @@ impl<'a> LayoutEngine<'a> {
         let justify = align_factor(layout.justify);
         let align = align_factor(layout.align);
         let baseline = if layout.flow == Flow::Row && layout.align == Align::Baseline {
-            children
-                .iter()
-                .filter(|child| tree.nodes[**child].position.is_none())
-                .filter_map(|child| tree.nodes[*child].baseline)
+            (0..tree.nodes[id].children.len())
+                .map(|index| tree.nodes[id].children[index])
+                .filter(|child| tree.nodes[*child].position.is_none())
+                .filter_map(|child| tree.nodes[child].baseline)
                 .fold(f32::MIN, f32::max)
         } else {
             f32::MIN
@@ -446,7 +386,8 @@ impl<'a> LayoutEngine<'a> {
         let mut cursor = Vec2::ZERO;
         let mut line = 0.0f32;
         let mut line_height = 0.0f32;
-        for child in children.iter().copied() {
+        for index in 0..tree.nodes[id].children.len() {
+            let child = tree.nodes[id].children[index];
             if tree.nodes[child].position.is_some() || tree.nodes[child].popup_spec.is_some() {
                 let size = tree.nodes[child].measured;
                 let overlay = tree.nodes[child]
@@ -505,9 +446,9 @@ impl<'a> LayoutEngine<'a> {
             Axis::Column => Vec2::new(rect.min.x, rect.min.y - offset),
             Axis::Row => Vec2::new(rect.min.x - offset, rect.min.y),
         };
-        let children = tree.nodes[id].children.clone();
         let mut cursor = origin;
-        for child in children.iter().copied() {
+        for index in 0..tree.nodes[id].children.len() {
+            let child = tree.nodes[id].children[index];
             let size = tree.nodes[child].measured;
             self.arrange(tree, child, Rect::from_min_size(cursor, size), clip);
             match spec.axis {
@@ -517,34 +458,7 @@ impl<'a> LayoutEngine<'a> {
         }
     }
 
-    fn arrange_disclosure<A>(&mut self, tree: &mut Tree<A>, id: NodeId, rect: Rect, clip: Clip) {
-        let (open, gap, children) = {
-            let node = &tree.nodes[id];
-            (node.runtime.open, node.layout.gap, node.children.clone())
-        };
-        if !open {
-            for child in children.iter().copied() {
-                hide(tree, child);
-            }
-            return;
-        }
-        let mut cursor = rect.min.y + 26.0;
-        for (index, child) in children.iter().enumerate() {
-            let size = tree.nodes[*child].measured;
-            self.arrange(
-                tree,
-                *child,
-                Rect::from_min_size(Vec2::new(rect.min.x, cursor), size),
-                clip,
-            );
-            cursor += size.y;
-            if index + 1 < children.len() {
-                cursor += gap;
-            }
-        }
-    }
-
-    fn arrange_popup<A>(&mut self, tree: &mut Tree<A>, id: NodeId, parent_clip: Clip) {
+    fn arrange_popup<A>(&mut self, tree: &mut Tree<A>, id: NodeId) {
         let spec = tree.nodes[id].popup_spec.expect("the popup is present");
         let open = tree.nodes[id].runtime.open;
         if !open {
@@ -573,7 +487,6 @@ impl<'a> LayoutEngine<'a> {
         );
         let screen = Rect::from_min_size(Vec2::ZERO, self.screen);
         let clip = Clip::new(screen, Corners::ZERO).intersect(rect, Corners::all(24.0));
-        let _ = parent_clip;
         {
             let node = &mut tree.nodes[id];
             if node.rect != rect {
@@ -585,9 +498,9 @@ impl<'a> LayoutEngine<'a> {
             node.visible = true;
             node.measured = rect.size();
         }
-        let children = tree.nodes[id].children.clone();
         let mut cursor = rect.min + Vec2::splat(8.0);
-        for child in children.iter().copied() {
+        for index in 0..tree.nodes[id].children.len() {
+            let child = tree.nodes[id].children[index];
             let size = tree.nodes[child].measured;
             self.arrange(tree, child, Rect::from_min_size(cursor, size), clip);
             cursor.y += size.y;
@@ -608,8 +521,8 @@ fn measure_and_layout<A>(
 
 fn hide<A>(tree: &mut Tree<A>, id: NodeId) {
     tree.nodes[id].visible = false;
-    let children = tree.nodes[id].children.clone();
-    for child in children.iter().copied() {
+    for index in 0..tree.nodes[id].children.len() {
+        let child = tree.nodes[id].children[index];
         hide(tree, child);
     }
 }
@@ -618,7 +531,6 @@ pub fn measure_leaf(
     content: &Content,
     layout: crate::element::Layout,
     available: Vec2,
-    loose: Loose,
     text: &mut Text,
     theme: &crate::theme::Theme,
 ) -> (Vec2, Option<f32>) {
@@ -641,7 +553,6 @@ pub fn measure_leaf(
                 } else {
                     available.x
                 };
-            let _ = loose;
             let size = Vec2::new(width, text_layout.size.y);
             (size, Some(text_layout.baseline))
         }

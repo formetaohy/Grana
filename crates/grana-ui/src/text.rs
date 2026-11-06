@@ -117,15 +117,6 @@ impl Text {
         }
     }
 
-    pub fn description(&self) -> String {
-        format!(
-            "{} · {} faces · atlas {}²",
-            self.fonts.description(),
-            self.fonts.face_count(),
-            self.atlas.size()
-        )
-    }
-
     pub fn atlas(&self) -> &Atlas {
         &self.atlas
     }

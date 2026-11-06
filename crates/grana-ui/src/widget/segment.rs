@@ -1,15 +1,20 @@
 use glam::Vec2;
 
 use crate::color::Color;
-use crate::element::{Content, Element, Layout, Length, SegmentContent, Size, TabsContent};
+use crate::content::{Content, SegmentContent, TabsContent};
+use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
 use crate::glass::GlassStyle;
-use crate::node::Runtime;
+use crate::motion::Motion;
+use crate::node::{Node, Runtime};
 use crate::paint::Painter;
 use crate::text::{Align, TextStyle};
 use crate::theme::{Level, Theme};
 
 use super::{PaintInfo, SubGlass};
+
+const TABS_HEIGHT: f32 = 32.0;
+const CELL_PAD: f32 = 24.0;
 
 pub fn segmented<'a, A>(theme: &Theme, options: &[String], selected: usize) -> Element<'a, A> {
     segmented_core(theme, options, selected, false)
@@ -33,37 +38,21 @@ fn segmented_core<'a, A>(
         options: options.to_vec(),
         selected,
         fill,
-        tabs: false,
-        bordered: false,
         font: theme.font(Level::Callout).medium(),
         width: Length::Fill,
     }))
-    .focus_ring(Corners::capsule())
-    .cursor(crate::input::Cursor::Pointing)
 }
 
 pub fn tabs<'a, A>(theme: &Theme, options: &[String], selected: usize) -> Element<'a, A> {
-    tab_bar(theme, options, selected, false)
-}
-
-pub fn tab_bar<'a, A>(
-    theme: &Theme,
-    options: &[String],
-    selected: usize,
-    bordered: bool,
-) -> Element<'a, A> {
     Element::new(Layout {
-        size: Size::new(Length::Fill, Length::Fixed(32.0)),
+        size: Size::new(Length::Fill, Length::Fixed(TABS_HEIGHT)),
         ..Layout::row()
     })
     .with_content(Content::Tabs(TabsContent {
         options: options.to_vec(),
         selected,
-        bordered,
         font: theme.font(Level::Callout).medium(),
     }))
-    .focus_ring(Corners::capsule())
-    .cursor(crate::input::Cursor::Pointing)
 }
 
 pub(super) fn measure_segment(
@@ -72,57 +61,53 @@ pub(super) fn measure_segment(
     text: &mut crate::text::Text,
     theme: &Theme,
 ) -> Vec2 {
-    let style = TextStyle::new(segment.font, Color::WHITE);
-    let measured = text_widths(&segment.options, text, style);
     let total = if segment.fill {
         available.x
     } else {
-        measured.iter().sum::<f32>() + 6.0
+        widths(&segment.options, segment.font, text)
+            .iter()
+            .sum::<f32>()
+            + 6.0
     };
+    let _ = &segment.width;
     Vec2::new(total, theme.metrics.control_height)
 }
 
-pub(super) fn measure_tabs(
-    tabs: &TabsContent,
-    available: Vec2,
-    _text: &mut crate::text::Text,
-    _theme: &Theme,
-) -> Vec2 {
+pub(super) fn measure_tabs(tabs: &TabsContent, available: Vec2) -> Vec2 {
     let _ = tabs;
-    Vec2::new(available.x, 32.0)
+    Vec2::new(available.x, TABS_HEIGHT)
 }
 
-fn text_widths(options: &[String], text: &mut crate::text::Text, style: TextStyle) -> Vec<f32> {
+fn widths(
+    options: &[String],
+    font: crate::theme::TypeStyle,
+    text: &mut crate::text::Text,
+) -> Vec<f32> {
+    let style = TextStyle::new(font, Color::WHITE);
     options
         .iter()
         .map(|option| {
             text.layout(option, style.font, 0.0, false, false, Align::Start)
                 .size
                 .x
-                + 24.0
+                + CELL_PAD
         })
         .collect()
 }
 
-fn cell_widths(content: &Content, rect: Rect, widths: &[f32], tabs: bool) -> Vec<Rect> {
+fn cells(rect: Rect, widths: &[f32], fill: bool, tabs: bool) -> Vec<Rect> {
     let mut left = if tabs { rect.min.x } else { rect.min.x + 3.0 };
     let top = rect.min.y + 3.0;
-    let height = rect.height() - 6.0;
-    let measured = match content {
-        Content::Segment(segment) => {
-            if segment.fill && !widths.is_empty() {
-                widths
-                    .iter()
-                    .map(|_| (rect.width() - 6.0) / widths.len() as f32)
-                    .collect::<Vec<_>>()
-            } else {
-                widths.to_vec()
-            }
-        }
-        Content::Tabs(_) => widths.to_vec(),
-        _ => Vec::new(),
+    let height = if tabs { 26.0 } else { rect.height() - 6.0 };
+    let widths = if fill && !widths.is_empty() {
+        widths
+            .iter()
+            .map(|_| (rect.width() - 6.0) / widths.len() as f32)
+            .collect::<Vec<_>>()
+    } else {
+        widths.to_vec()
     };
-    measured
+    widths
         .iter()
         .map(|width| {
             let cell = Rect::from_min_size(Vec2::new(left, top), Vec2::new(*width, height));
@@ -132,60 +117,125 @@ fn cell_widths(content: &Content, rect: Rect, widths: &[f32], tabs: bool) -> Vec
         .collect()
 }
 
-fn measure_widths(content: &Content, _rect: Rect, text: &mut crate::text::Text) -> Vec<f32> {
+fn cell_widths(content: &Content, rect: Rect, widths: &[f32]) -> Vec<Rect> {
     match content {
-        Content::Segment(segment) => {
-            let style = TextStyle::new(segment.font, Color::WHITE);
-            text_widths(&segment.options, text, style)
-        }
-        Content::Tabs(tabs) => {
-            let style = TextStyle::new(tabs.font, Color::WHITE);
-            text_widths(&tabs.options, text, style)
-        }
+        Content::Segment(segment) => cells(rect, widths, segment.fill, false),
+        Content::Tabs(_) => cells(rect, widths, false, true),
         _ => Vec::new(),
     }
 }
 
-pub(crate) fn pill_target(
-    segment: &SegmentContent,
-    rect: Rect,
-    text: &mut crate::text::Text,
-    _theme: &Theme,
-) -> (f32, f32) {
-    let widths = measure_widths(&Content::Segment(segment.clone()), rect, text);
-    let cells = cell_widths(&Content::Segment(segment.clone()), rect, &widths, false);
-    let target = segment
-        .selected
-        .min(segment.options.len().saturating_sub(1));
-    let cell = cells.get(target).copied().unwrap_or(rect);
-    (cell.min.x, cell.width())
+fn measure_widths(content: &Content, text: &mut crate::text::Text) -> Vec<f32> {
+    match content {
+        Content::Segment(segment) => widths(&segment.options, segment.font, text),
+        Content::Tabs(tabs) => widths(&tabs.options, tabs.font, text),
+        _ => Vec::new(),
+    }
 }
 
-pub(crate) fn tabs_pill_target(
-    tabs: &TabsContent,
-    rect: Rect,
-    text: &mut crate::text::Text,
-    _theme: &Theme,
-) -> (f32, f32) {
-    let widths = measure_widths(&Content::Tabs(tabs.clone()), rect, text);
-    let cells = cell_widths(&Content::Tabs(tabs.clone()), rect, &widths, true);
-    let target = tabs.selected.min(tabs.options.len().saturating_sub(1));
-    let cell = cells.get(target).copied().unwrap_or(rect);
-    (cell.min.x, cell.width())
+pub(crate) fn selected(content: &Content) -> usize {
+    match content {
+        Content::Segment(segment) => segment
+            .selected
+            .min(segment.options.len().saturating_sub(1)),
+        Content::Tabs(tabs) => tabs.selected.min(tabs.options.len().saturating_sub(1)),
+        _ => 0,
+    }
 }
 
-pub(crate) fn hover_cell(
+pub(crate) fn options_len(content: &Content) -> usize {
+    match content {
+        Content::Segment(segment) => segment.options.len(),
+        Content::Tabs(tabs) => tabs.options.len(),
+        _ => 0,
+    }
+}
+
+pub(crate) fn step_index(content: &Content, direction: isize) -> usize {
+    let count = options_len(content);
+    if count == 0 {
+        return 0;
+    }
+    (selected(content) as isize + direction).clamp(0, count as isize - 1) as usize
+}
+
+pub(crate) fn cell_at(
     content: &Content,
     rect: Rect,
     pointer: Vec2,
     text: &mut crate::text::Text,
-) -> usize {
-    let tabs = matches!(content, Content::Tabs(_));
-    let widths = measure_widths(content, rect, text);
-    cell_widths(content, rect, &widths, tabs)
+) -> Option<usize> {
+    let widths = measure_widths(content, text);
+    cell_widths(content, rect, &widths)
         .iter()
         .position(|cell| cell.contains(pointer))
-        .unwrap_or(usize::MAX)
+}
+
+pub(crate) fn pill_target(
+    content: &Content,
+    rect: Rect,
+    text: &mut crate::text::Text,
+) -> (f32, f32) {
+    let widths = measure_widths(content, text);
+    let cells = cell_widths(content, rect, &widths);
+    let cell = cells.get(selected(content)).copied().unwrap_or(rect);
+    (cell.min.x, cell.width())
+}
+
+pub(crate) fn cell_target(
+    content: &Content,
+    rect: Rect,
+    text: &mut crate::text::Text,
+    index: usize,
+) -> (f32, f32) {
+    let widths = measure_widths(content, text);
+    let cells = cell_widths(content, rect, &widths);
+    let cell = cells.get(index).copied().unwrap_or(rect);
+    (cell.min.x, cell.width())
+}
+
+pub(crate) fn value_segment<A>(
+    node: &Node<A>,
+    dragging: bool,
+    text: &mut crate::text::Text,
+    _theme: &Theme,
+) -> Option<(Motion, (f32, f32))> {
+    let Content::Segment(_) = &node.content else {
+        return None;
+    };
+    let motion = if dragging {
+        Motion::response(0.16, 0.12)
+    } else {
+        Motion::response(0.42, 0.22)
+    };
+    let target = if dragging {
+        cell_target(&node.content, node.rect, text, node.runtime.thumb as usize)
+    } else {
+        pill_target(&node.content, node.rect, text)
+    };
+    Some((motion, target))
+}
+
+pub(crate) fn value_tabs<A>(
+    node: &Node<A>,
+    dragging: bool,
+    text: &mut crate::text::Text,
+    _theme: &Theme,
+) -> Option<(Motion, (f32, f32))> {
+    let Content::Tabs(_) = &node.content else {
+        return None;
+    };
+    let motion = if dragging {
+        Motion::response(0.16, 0.12)
+    } else {
+        Motion::response(0.42, 0.20)
+    };
+    let target = if dragging {
+        cell_target(&node.content, node.rect, text, node.runtime.thumb as usize)
+    } else {
+        pill_target(&node.content, node.rect, text)
+    };
+    Some((motion, target))
 }
 
 pub(super) fn paint_segment(
@@ -201,9 +251,9 @@ pub(super) fn paint_segment(
     let widths = segment
         .options
         .iter()
-        .map(|option| painter.measure(option, style).x + 24.0)
+        .map(|option| painter.measure(option, style).x + CELL_PAD)
         .collect::<Vec<_>>();
-    let cells = cell_widths(&Content::Segment(segment.clone()), rect, &widths, false);
+    let cells = cells(rect, &widths, segment.fill, false);
     painter.rect(
         rect,
         Corners::capsule(),
@@ -225,12 +275,14 @@ pub(super) fn paint_segment(
         } else {
             palette.text_secondary
         };
-        painter.text_in(
-            *cell,
-            &segment.options[index],
-            TextStyle::new(style.font, color).aligned(Align::Center),
-            Align::Center,
-        );
+        if let Some(option) = segment.options.get(index) {
+            painter.text_in(
+                *cell,
+                option,
+                TextStyle::new(style.font, color).aligned(Align::Center),
+                Align::Center,
+            );
+        }
     }
     let pill = Rect::from_min_size(
         Vec2::new(runtime.value.value, rect.min.y + 3.0),
@@ -252,24 +304,13 @@ pub(super) fn paint_tabs(
 ) {
     let rect = info.rect;
     let palette = info.theme.palette;
-    let metrics = info.theme.metrics;
     let style = TextStyle::new(tabs.font, Color::WHITE);
-    if tabs.bordered {
-        painter.rect(
-            Rect::from_min_size(
-                Vec2::new(rect.min.x, rect.max.y - metrics.hairline),
-                Vec2::new(rect.width(), metrics.hairline),
-            ),
-            Corners::ZERO,
-            palette.separator,
-        );
-    }
     let widths = tabs
         .options
         .iter()
-        .map(|option| painter.measure(option, style).x + 24.0)
+        .map(|option| painter.measure(option, style).x + CELL_PAD)
         .collect::<Vec<_>>();
-    let cells = cell_widths(&Content::Tabs(tabs.clone()), rect, &widths, true);
+    let cells = cells(rect, &widths, false, true);
     for (index, cell) in cells.iter().enumerate() {
         if index == runtime.thumb as usize && info.hover > 0.01 {
             painter.rect(
@@ -286,12 +327,14 @@ pub(super) fn paint_tabs(
         } else {
             palette.text_secondary
         };
-        painter.text_in(
-            *cell,
-            &tabs.options[index],
-            TextStyle::new(style.font, color).aligned(Align::Center),
-            Align::Center,
-        );
+        if let Some(option) = tabs.options.get(index) {
+            painter.text_in(
+                *cell,
+                option,
+                TextStyle::new(style.font, color).aligned(Align::Center),
+                Align::Center,
+            );
+        }
     }
     let pill = Rect::from_min_size(
         Vec2::new(runtime.value.value, rect.min.y + 3.0),

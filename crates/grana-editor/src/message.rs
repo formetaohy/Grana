@@ -5,16 +5,9 @@ use grana_ui::Key;
 
 use crate::panel::Panel;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PlotPhase {
-    Down,
-    Move,
-    Up,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct PlotEvent {
-    pub phase: PlotPhase,
+    pub phase: grana_ui::Phase,
     pub position: Vec2,
     pub shift: bool,
 }
@@ -26,11 +19,13 @@ pub enum Message {
     Command(Command),
     SetPanel(Option<Panel>),
     SetSidebarTab(usize),
-    SetDockLast(usize),
     ToggleSidebar,
     SetDockHeight(f32),
     SetSplit(f32),
-    SetValue(Key, f32),
+    SetColumnWidth {
+        index: usize,
+        width: f32,
+    },
     ToggleOpen(Key),
     ExpandObject {
         set: ObjectSetId,

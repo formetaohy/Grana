@@ -104,14 +104,17 @@ pub(crate) struct LayerInstances {
     pub ink: Vec<Instance>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct SubGlass {
+    pub rect: Rect,
+    pub style: crate::glass::GlassStyle,
+    pub engaged: bool,
+}
+
 impl LayerInstances {
     pub fn clear(&mut self) {
         self.material.clear();
         self.ink.clear();
-    }
-
-    pub fn len(&self) -> usize {
-        self.material.len() + self.ink.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -165,10 +168,6 @@ impl<'a> Painter<'a> {
             &mut self.instances.material
         };
         target.push(clipped(instance, clip));
-    }
-
-    pub fn count(&self) -> usize {
-        self.instances.len()
     }
 
     pub fn rect(&mut self, rect: Rect, corners: Corners, color: Color) {

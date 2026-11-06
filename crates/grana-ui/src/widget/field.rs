@@ -1,25 +1,24 @@
 use glam::Vec2;
 
-use crate::element::{Content, Element, FieldContent, Layout, Length, Size};
+use crate::content::{Content, FieldContent};
+use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
 use crate::node::Runtime;
 use crate::paint::Painter;
 use crate::style::{Shadow, State};
 use crate::text::TextStyle;
-use crate::theme::{Role, Theme};
+use crate::theme::Role;
 
 use super::PaintInfo;
 
 const FIELD_PAD: f32 = 8.0;
 
 pub fn text_field<'a, A>(
-    theme: &Theme,
     value: &str,
     style: TextStyle,
     width: f32,
     multiline: bool,
 ) -> Element<'a, A> {
-    let _ = theme;
     Element::new(Layout {
         size: Size::new(
             Length::Fixed(width),
@@ -34,31 +33,6 @@ pub fn text_field<'a, A>(
         radius: 10.0,
         editing: false,
     }))
-    .focus_ring(Corners::all(10.0))
-    .cursor(crate::input::Cursor::Text)
-    .field_height(multiline)
-}
-
-pub fn text_area<'a, A>(
-    theme: &Theme,
-    value: &str,
-    style: TextStyle,
-    width: f32,
-    height: f32,
-) -> Element<'a, A> {
-    let mut element = text_field(theme, value, style, width, true);
-    element.layout.size.height = Length::Fixed(height);
-    element
-}
-
-trait FieldHeight<'a, A> {
-    fn field_height(self, multiline: bool) -> Self;
-}
-
-impl<'a, A> FieldHeight<'a, A> for Element<'a, A> {
-    fn field_height(self, _multiline: bool) -> Self {
-        self
-    }
 }
 
 pub(super) fn measure_field(field: &FieldContent, layout: Layout, available: Vec2) -> Vec2 {
@@ -76,6 +50,66 @@ pub(super) fn measure_field(field: &FieldContent, layout: Layout, available: Vec
     Vec2::new(width, height)
 }
 
+pub(crate) fn caret_at(
+    field: &FieldContent,
+    rect: Rect,
+    pointer: Vec2,
+    text: &mut crate::text::Text,
+) -> usize {
+    let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0));
+    let style = field.style;
+    let x = pointer.x - inner.min.x;
+    if !field.multiline {
+        return column(field.value.as_str(), x, style, text);
+    }
+    let line_height = style.font.leading.max(style.font.size * 1.28);
+    let row = ((pointer.y - inner.min.y) / line_height).floor().max(0.0) as usize;
+    let mut offset = 0usize;
+    for (index, line) in field.value.split('\n').enumerate() {
+        if index == row {
+            return offset + column(line, x, style, text);
+        }
+        offset += line.chars().count() + 1;
+    }
+    field.value.chars().count()
+}
+
+fn column(line: &str, x: f32, style: TextStyle, text: &mut crate::text::Text) -> usize {
+    let mut best = 0usize;
+    let mut distance = f32::INFINITY;
+    for index in 0..=line.chars().count() {
+        let prefix = prefix(line, index);
+        let width = if prefix.is_empty() {
+            0.0
+        } else {
+            text.layout(
+                prefix,
+                style.font,
+                0.0,
+                false,
+                false,
+                crate::text::Align::Start,
+            )
+            .size
+            .x
+        };
+        let candidate = (width - x).abs();
+        if candidate < distance {
+            distance = candidate;
+            best = index;
+        }
+    }
+    best
+}
+
+fn prefix(text: &str, index: usize) -> &str {
+    let offset = text
+        .char_indices()
+        .nth(index)
+        .map_or(text.len(), |(offset, _)| offset);
+    &text[..offset]
+}
+
 pub(super) fn paint_field(
     field: &FieldContent,
     runtime: &Runtime,
@@ -84,15 +118,11 @@ pub(super) fn paint_field(
 ) -> Option<Rect> {
     let rect = info.rect;
     let radius = field.radius;
-    let hovered = RuntimeHover {
-        hover: info.hover,
-        press: info.press,
-    };
     let state = if !info.enabled {
         State::Disabled
-    } else if hovered.press > 0.5 {
+    } else if info.press > 0.5 {
         State::Pressed
-    } else if hovered.hover > 0.5 {
+    } else if info.hover > 0.5 {
         State::Hover
     } else {
         State::Rest
@@ -223,11 +253,6 @@ pub(super) fn paint_field(
     }
 }
 
-struct RuntimeHover {
-    hover: f32,
-    press: f32,
-}
-
 fn line_spans(chars: &[char]) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
     let mut start = 0;
@@ -289,12 +314,4 @@ fn text_width(painter: &mut Painter, style: TextStyle, text: &str) -> f32 {
     } else {
         painter.measure(text, style).x
     }
-}
-
-fn prefix(text: &str, index: usize) -> &str {
-    let offset = text
-        .char_indices()
-        .nth(index)
-        .map_or(text.len(), |(offset, _)| offset);
-    &text[..offset]
 }

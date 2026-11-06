@@ -1,9 +1,11 @@
 use glam::Vec2;
 
-use crate::element::{CheckboxContent, Content, Element, Layout, Length, Size, ToggleContent};
+use crate::content::{CheckboxContent, Content, ToggleContent};
+use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
 use crate::glass::GlassStyle;
-use crate::node::Runtime;
+use crate::motion::Motion;
+use crate::node::{Node, Runtime};
 use crate::paint::Painter;
 use crate::style::{Border, Fill, Shadow};
 use crate::text::{Align, TextStyle};
@@ -25,8 +27,6 @@ pub fn toggle<'a, A>(theme: &Theme, value: bool) -> Element<'a, A> {
         font: theme.font(crate::theme::Level::Callout).medium(),
         row: false,
     }))
-    .focus_ring(Corners::capsule())
-    .cursor(crate::input::Cursor::Pointing)
 }
 
 pub fn toggle_row<'a, A>(theme: &Theme, label: &str, value: bool) -> Element<'a, A> {
@@ -40,8 +40,6 @@ pub fn toggle_row<'a, A>(theme: &Theme, label: &str, value: bool) -> Element<'a,
         font: theme.font(crate::theme::Level::Callout).medium(),
         row: true,
     }))
-    .focus_ring(Corners::all(9.0))
-    .cursor(crate::input::Cursor::Pointing)
 }
 
 pub fn checkbox<'a, A>(theme: &Theme, label: &str, value: bool) -> Element<'a, A> {
@@ -54,8 +52,6 @@ pub fn checkbox<'a, A>(theme: &Theme, label: &str, value: bool) -> Element<'a, A
         label: label.to_string(),
         font: theme.font(crate::theme::Level::Callout),
     }))
-    .focus_ring(Corners::capsule())
-    .cursor(crate::input::Cursor::Pointing)
 }
 
 pub(super) fn measure_toggle(toggle: &ToggleContent, available: Vec2, theme: &Theme) -> Vec2 {
@@ -66,12 +62,7 @@ pub(super) fn measure_toggle(toggle: &ToggleContent, available: Vec2, theme: &Th
     }
 }
 
-pub(super) fn measure_checkbox(
-    checkbox: &CheckboxContent,
-    available: Vec2,
-    text: &mut crate::text::Text,
-) -> Vec2 {
-    let _ = available;
+pub(super) fn measure_checkbox(checkbox: &CheckboxContent, text: &mut crate::text::Text) -> Vec2 {
     let measured = text
         .layout(
             &checkbox.label,
@@ -84,6 +75,41 @@ pub(super) fn measure_checkbox(
         .size
         .x;
     Vec2::new(measured + 28.0, 26.0)
+}
+
+pub(crate) fn drag_value(rect: Rect, pointer: Vec2) -> f32 {
+    let knob = rect.height();
+    let travel = (rect.width() - knob).max(1.0);
+    ((pointer.x - rect.min.x - knob * 0.5) / travel).clamp(0.0, 1.0)
+}
+
+pub(crate) fn normalized(toggle: &ToggleContent) -> f32 {
+    if toggle.value { 1.0 } else { 0.0 }
+}
+
+pub(crate) fn value_toggle<A>(node: &Node<A>, dragging: bool) -> Option<(Motion, (f32, f32))> {
+    let Content::Toggle(toggle) = &node.content else {
+        return None;
+    };
+    let motion = if dragging {
+        Motion::response(0.14, 0.0)
+    } else {
+        Motion::response(0.42, 0.30)
+    };
+    let target = if dragging {
+        node.runtime.drag_value
+    } else {
+        normalized(toggle)
+    };
+    Some((motion, (target, 0.0)))
+}
+
+pub(crate) fn value_checkbox<A>(node: &Node<A>) -> Option<(Motion, (f32, f32))> {
+    let Content::Checkbox(checkbox) = &node.content else {
+        return None;
+    };
+    let target = if checkbox.value { 1.0 } else { 0.0 };
+    Some((Motion::response(0.28, 0.28), (target, 0.0)))
 }
 
 pub(super) fn paint_toggle(

@@ -76,7 +76,7 @@ pub fn objects_body<'a>(
 }
 
 pub(crate) fn hidden<'a>() -> Element<'a, Message> {
-    grana_ui::canvas(Length::Fixed(0.0), 0.0, 0, |_painter, _info| {}).at(Rect::ZERO)
+    grana_ui::canvas(Length::Fixed(0.0), 0.0, |_painter, _info| {}).at(Rect::ZERO)
 }
 
 pub(crate) fn centered<'a>(height: f32, child: Element<'a, Message>) -> Element<'a, Message> {
@@ -169,91 +169,86 @@ fn channel_row<'a>(
     let mono = theme.font(Level::Monospace);
     let switch_left = metrics.switch_width + 10.0;
     let width = card_width() - switch_left;
-    let canvas = grana_ui::canvas(
-        Length::Fixed(width),
-        CHANNEL_ROW,
-        0,
-        move |painter, info| {
-            let rect = info.rect;
-            let full = Rect::from_min_max(
-                rect.min,
-                Vec2::new(rect.max.x + switch_left + SWITCH_TRAIL, rect.max.y),
+    let canvas = grana_ui::canvas(Length::Fixed(width), CHANNEL_ROW, move |painter, info| {
+        let rect = info.rect;
+        let full = Rect::from_min_max(
+            rect.min,
+            Vec2::new(rect.max.x + switch_left + SWITCH_TRAIL, rect.max.y),
+        );
+        if active {
+            painter.outlined(
+                full,
+                Corners::all(9.0),
+                Fill::Solid(palette.accent.with_alpha(0.16)),
+                Border {
+                    width: 1.0,
+                    color: palette.accent.with_alpha(0.34),
+                },
+                Shadow::NONE,
             );
-            if active {
-                painter.outlined(
-                    full,
-                    Corners::all(9.0),
-                    Fill::Solid(palette.accent.with_alpha(0.16)),
-                    Border {
-                        width: 1.0,
-                        color: palette.accent.with_alpha(0.34),
-                    },
-                    Shadow::NONE,
-                );
-            } else if info.hover > 0.01 {
-                painter.rect(
-                    full,
-                    Corners::all(9.0),
-                    palette.material_hover.amplify(0.50 * info.hover),
-                );
-            }
-            let dot = Rect::from_center_size(
-                Vec2::new(rect.min.x + 12.0, rect.center().y),
-                Vec2::splat(8.5),
-            );
-            if active {
-                painter.ring(
-                    dot.center(),
-                    6.8,
-                    1.2,
-                    0.0,
-                    std::f32::consts::TAU,
-                    tint.with_alpha(if enabled { 0.48 } else { 0.20 }),
-                );
-            }
+        } else if info.hover > 0.01 {
             painter.rect(
-                dot,
-                Corners::capsule(),
-                tint.with_alpha(if enabled { 1.0 } else { 0.28 }),
+                full,
+                Corners::all(9.0),
+                palette.material_hover.amplify(0.50 * info.hover),
             );
-            let label_right = if enabled && opacity < 0.995 {
-                let badge = Rect::from_min_max(
-                    Vec2::new(rect.max.x + switch_left - 42.0, rect.min.y),
-                    Vec2::new(rect.max.x + switch_left - 8.0, rect.max.y),
-                );
-                painter.text_in(
-                    badge,
-                    &format!("{:.0}%", opacity * 100.0),
-                    TextStyle::new(mono, palette.text_tertiary).aligned(Align::End),
-                    Align::Center,
-                );
-                badge.min.x - 4.0
-            } else {
-                rect.max.x + switch_left - 8.0
-            };
-            let color = if !enabled {
-                palette.text_quaternary
-            } else if active {
-                palette.text_primary
-            } else {
-                palette.text_secondary
-            };
+        }
+        let dot = Rect::from_center_size(
+            Vec2::new(rect.min.x + 12.0, rect.center().y),
+            Vec2::splat(8.5),
+        );
+        if active {
+            painter.ring(
+                dot.center(),
+                6.8,
+                1.2,
+                0.0,
+                std::f32::consts::TAU,
+                tint.with_alpha(if enabled { 0.48 } else { 0.20 }),
+            );
+        }
+        painter.rect(
+            dot,
+            Corners::capsule(),
+            tint.with_alpha(if enabled { 1.0 } else { 0.28 }),
+        );
+        let label_right = if enabled && opacity < 0.995 {
+            let badge = Rect::from_min_max(
+                Vec2::new(rect.max.x + switch_left - 42.0, rect.min.y),
+                Vec2::new(rect.max.x + switch_left - 8.0, rect.max.y),
+            );
             painter.text_in(
-                Rect::from_min_max(
-                    Vec2::new(rect.min.x + 25.0, rect.min.y),
-                    Vec2::new(label_right, rect.max.y),
-                ),
-                &name,
-                TextStyle::new(font, color).truncating(),
+                badge,
+                &format!("{:.0}%", opacity * 100.0),
+                TextStyle::new(mono, palette.text_tertiary).aligned(Align::End),
                 Align::Center,
             );
-        },
-    )
+            badge.min.x - 4.0
+        } else {
+            rect.max.x + switch_left - 8.0
+        };
+        let color = if !enabled {
+            palette.text_quaternary
+        } else if active {
+            palette.text_primary
+        } else {
+            palette.text_secondary
+        };
+        painter.text_in(
+            Rect::from_min_max(
+                Vec2::new(rect.min.x + 25.0, rect.min.y),
+                Vec2::new(label_right, rect.max.y),
+            ),
+            &name,
+            TextStyle::new(font, color).truncating(),
+            Align::Center,
+        );
+    })
     .key(Key::index("channel.pick", index))
     .press(Message::Command(Command::SelectChannel(index)));
     let switch = grana_ui::widget::toggle(&theme, enabled)
         .key(Key::index("channel.enabled", index))
-        .on_toggle(enabled, move |value| {
+        .on_toggle(move |value| {
             Message::Command(Command::SetChannelEnabled {
                 channel: index,
                 enabled: value,
@@ -262,7 +257,6 @@ fn channel_row<'a>(
     let gap = grana_ui::canvas(
         Length::Fixed(switch_left - metrics.switch_width - SWITCH_TRAIL),
         0.0,
-        0,
         |_painter, _info| {},
     );
     grana_ui::row()
@@ -299,11 +293,10 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
         "Display",
         Some(&channel_name),
     ));
-    let range = available.clone();
     children.push(
-        grana_ui::widget::range_slider(&theme, start, end, available, &gradient)
+        grana_ui::widget::range_slider(start, end, available, &gradient)
             .key(Key::new("display.window"))
-            .on_range(range, move |low, high| {
+            .on_range(move |low, high| {
                 Message::Command(Command::SetWindow {
                     channel: index,
                     window: Intensity::new(low.min(high), low.max(high)),
@@ -316,7 +309,6 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
     children.push(grana_ui::canvas(
         Length::Fill,
         14.0,
-        0,
         move |painter, info| {
             let rect = info.rect;
             let style = TextStyle::new(mono, palette.text_tertiary);
@@ -371,7 +363,7 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
     );
     children.push(view::divider(ctx));
     let key = Key::new("display.transfer");
-    let open = state.workspace.interface.open(key);
+    let open = state.workspace.sections.is_open(key);
     let mut curve = Vec::new();
     if open {
         curve.extend(crate::transfer::edit(
@@ -434,7 +426,7 @@ fn section<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
             &readout,
         )
         .named("section.depth")
-        .on_slide(0.0..=extent, false, Message::SetSectionDepth),
+        .on_slide(Message::SetSectionDepth),
     );
     view::card(ctx, 8.0, children)
 }
@@ -449,7 +441,7 @@ fn region<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         "Whole volume".to_string()
     };
     let key = Key::new("region");
-    let open = state.workspace.interface.open(key);
+    let open = state.workspace.sections.is_open(key);
     let mut children = Vec::new();
     if open {
         let world = state.scene.dataset.world_size();
@@ -457,7 +449,7 @@ fn region<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         children.push(
             grana_ui::widget::toggle_row(&theme, "Limit Analysis", current.enabled())
                 .named("region.enabled")
-                .on_toggle(current.enabled(), move |value| {
+                .on_toggle(move |value| {
                     let mut region = current;
                     region.set_enabled(value);
                     Message::Command(Command::SetRegion(region))
@@ -477,12 +469,12 @@ fn region<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
             let decimals = 2;
             let low = grana_ui::widget::drag_value(&theme, start, decimals)
                 .named(&format!("region.{index}.low"))
-                .on_drag_value(start, speed, move |value| {
+                .on_drag_value(speed, move |value| {
                     region_bounds(current, index, Some(value), Some(end), limit, minimum)
                 });
             let high = grana_ui::widget::drag_value(&theme, end, decimals)
                 .named(&format!("region.{index}.high"))
-                .on_drag_value(end, speed, move |value| {
+                .on_drag_value(speed, move |value| {
                     region_bounds(current, index, Some(start), Some(value), limit, minimum)
                 });
             let dash = view::caption(ctx, "–");
@@ -493,14 +485,13 @@ fn region<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
             children.push(view::form_row(ctx, name, bounds));
             children.push(
                 grana_ui::widget::range_slider(
-                    &theme,
                     start,
                     end,
                     -limit..=limit,
                     &[Color::white_alpha(0.16), Color::white_alpha(0.16)],
                 )
                 .named(&format!("region.{index}.bounds"))
-                .on_range(-limit..=limit, move |low, high| {
+                .on_range(move |low, high| {
                     region_bounds(current, index, Some(low), Some(high), limit, minimum)
                 }),
             );
@@ -557,7 +548,7 @@ fn drift<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         format!("{} frames", drift.frames())
     };
     let key = Key::new("drift");
-    let open = state.workspace.interface.open(key);
+    let open = state.workspace.sections.is_open(key);
     let mut children = Vec::new();
     if open {
         match running {
@@ -606,7 +597,7 @@ fn drift<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
                     ));
                     let reference_field = grana_ui::widget::drag_value(&theme, reference as f32, 0)
                         .named("drift.reference")
-                        .on_drag_value(reference as f32, 0.2, move |value| {
+                        .on_drag_value(0.2, move |value| {
                             Message::Command(Command::SetDriftReference(
                                 value.round().clamp(0.0, (frames - 1) as f32) as u32,
                             ))
@@ -676,7 +667,7 @@ fn frame_table<'a>(
         for (axis, name) in ["Offset X", "Offset Y", "Offset Z"].into_iter().enumerate() {
             let field = grana_ui::widget::drag_value(&theme, offset[axis], 2)
                 .named(&format!("drift.offset.{axis}"))
-                .on_drag_value(offset[axis], 0.5, move |value| {
+                .on_drag_value(0.5, move |value| {
                     let mut next = offset;
                     next[axis] = (value * 100.0).round() / 100.0;
                     Message::Command(Command::SetDriftOffset { time, offset: next })
@@ -704,7 +695,7 @@ fn mask<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element
         .and_then(|id| sources.iter().find(|(set, _, _)| *set == id))
         .map_or_else(|| "Whole volume".to_string(), |(_, name, _)| name.clone());
     let key = Key::new("mask.card");
-    let open = state.workspace.interface.open(key);
+    let open = state.workspace.sections.is_open(key);
     let mut children = Vec::new();
     if open {
         let mut options = vec![(None, "Whole Volume".to_string())];
@@ -769,7 +760,7 @@ fn clip<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element
     let current = state.scene.clip;
     let status = if current.enabled() { "Active" } else { "Off" };
     let key = Key::new("clip");
-    let open = state.workspace.interface.open(key);
+    let open = state.workspace.sections.is_open(key);
     let mut children = Vec::new();
     if open {
         let world = state.scene.dataset.world_size();
@@ -790,9 +781,7 @@ fn clip<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element
         children.push(
             grana_ui::widget::toggle_row(&theme, "Cut Volume", enabled)
                 .named("clip.enabled")
-                .on_toggle(enabled, move |value| {
-                    apply(azimuth, elevation, offset, value)
-                }),
+                .on_toggle(move |value| apply(azimuth, elevation, offset, value)),
         );
         let azimuth_text = format!("{azimuth:.0}°");
         children.push(
@@ -805,9 +794,7 @@ fn clip<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element
                 &azimuth_text,
             )
             .named("clip.azimuth")
-            .on_slide(-180.0..=180.0, false, move |value| {
-                apply(value, elevation, offset, true)
-            }),
+            .on_slide(move |value| apply(value, elevation, offset, true)),
         );
         let elevation_text = format!("{elevation:.0}°");
         children.push(
@@ -820,9 +807,7 @@ fn clip<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element
                 &elevation_text,
             )
             .named("clip.elevation")
-            .on_slide(-90.0..=90.0, false, move |value| {
-                apply(azimuth, value, offset, true)
-            }),
+            .on_slide(move |value| apply(azimuth, value, offset, true)),
         );
         let offset_text = format!("{offset:.2} µm");
         children.push(
@@ -835,9 +820,7 @@ fn clip<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element
                 &offset_text,
             )
             .named("clip.offset")
-            .on_slide(-reach..=reach, false, move |value| {
-                apply(azimuth, elevation, value, true)
-            }),
+            .on_slide(move |value| apply(azimuth, elevation, value, true)),
         );
         let half = (width - 6.0) * 0.5;
         let flip = view::button_with(ctx, "Flip Plane", Role::Control, Length::Fixed(half))
@@ -876,7 +859,7 @@ fn rendering<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
     let scene = state.scene;
     let shading = scene.shading;
     let key = Key::new("rendering");
-    let open = state.workspace.interface.open(key);
+    let open = state.workspace.sections.is_open(key);
     let mut children = Vec::new();
     if open {
         let exposure = format!("{:.2}", scene.exposure);
@@ -919,7 +902,7 @@ fn rendering<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
         ));
         children.push(view::divider(ctx));
         let lighting = Key::new("rendering.lighting");
-        let lighting_open = state.workspace.interface.open(lighting);
+        let lighting_open = state.workspace.sections.is_open(lighting);
         let mut light = Vec::new();
         if lighting_open {
             let azimuth = format!("{:.0}°", shading.azimuth);
@@ -1046,27 +1029,27 @@ fn rendering<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
 fn interface<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let key = Key::new("interface");
-    let open = state.workspace.interface.open(key);
+    let open = state.workspace.sections.is_open(key);
     let mut children = Vec::new();
     if open {
-        let spring = state.physics;
-        let motion = state.reduce_motion;
-        let on_glass = state.glass_on_glass;
-        let angle = state.light_angle;
+        let spring = ctx.physics();
+        let motion = ctx.reduce_motion();
+        let on_glass = theme.glass_on_glass;
+        let angle = theme.light_angle;
         children.push(
             grana_ui::widget::toggle_row(&theme, "Spring Physics", spring)
                 .named("interface.physics")
-                .on_toggle(spring, Message::SetPhysics),
+                .on_toggle(Message::SetPhysics),
         );
         children.push(
             grana_ui::widget::toggle_row(&theme, "Reduce Motion", motion)
                 .named("interface.reduce")
-                .on_toggle(motion, Message::SetReduceMotion),
+                .on_toggle(Message::SetReduceMotion),
         );
         children.push(
             grana_ui::widget::toggle_row(&theme, "Glass on Glass", on_glass)
                 .named("interface.glass")
-                .on_toggle(on_glass, Message::SetGlassOnGlass),
+                .on_toggle(Message::SetGlassOnGlass),
         );
         let readout = format!("{angle:.0}°");
         children.push(
@@ -1079,7 +1062,7 @@ fn interface<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
                 &readout,
             )
             .named("interface.light")
-            .on_slide(-180.0..=180.0, false, Message::SetLightAngle),
+            .on_slide(Message::SetLightAngle),
         );
     }
     view::disclosure_card(
@@ -1110,7 +1093,7 @@ pub(crate) fn disclosure<'a>(
         Motion::response(0.32, 0.18),
     );
     let label = title.to_string();
-    let header = grana_ui::canvas(Length::Fill, 26.0, 0, move |painter, info| {
+    let header = grana_ui::canvas(Length::Fill, 26.0, move |painter, info| {
         let rect = info.rect;
         if info.hover > 0.01 {
             painter.rect(
@@ -1187,7 +1170,7 @@ fn combo_anchor<'a>(
     let palette = theme.palette;
     let font = theme.font(Level::Callout);
     let height = theme.metrics.control_height;
-    grana_ui::canvas(width, height, 0, move |painter, info| {
+    grana_ui::canvas(width, height, move |painter, info| {
         let rect = info.rect;
         let look = theme
             .surface(Role::Field, State::Rest)

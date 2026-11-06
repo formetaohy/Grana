@@ -72,7 +72,7 @@ pub fn edit<'a>(
     );
     let reverse = grana_ui::widget::checkbox(&theme, "Rev", coloring.reversed())
         .named(&format!("{salt}.reverse"))
-        .on_toggle(coloring.reversed(), {
+        .on_toggle({
             let base = base.clone();
             move |value| {
                 let mut next = base.clone();
@@ -123,7 +123,7 @@ fn range<'a>(
             let speed = ((maximum - minimum).abs() / 100.0).max(1.0e-6);
             let low = grana_ui::widget::drag_value(&theme, minimum, decimals as usize)
                 .named(&format!("{salt}.range.low"))
-                .on_drag_value(minimum, speed, {
+                .on_drag_value(speed, {
                     let base = base.clone();
                     move |value| {
                         let mut next = base.clone();
@@ -133,7 +133,7 @@ fn range<'a>(
                 });
             let high = grana_ui::widget::drag_value(&theme, maximum, decimals as usize)
                 .named(&format!("{salt}.range.high"))
-                .on_drag_value(maximum, speed, {
+                .on_drag_value(speed, {
                     let base = base.clone();
                     move |value| {
                         let mut next = base.clone();
@@ -167,7 +167,7 @@ fn range<'a>(
                 )
                 .x + inset * 2.0;
             let caption = (width - crate::panel::FORM_LABEL - 6.0 - button - 2.0).max(40.0);
-            let label = grana_ui::canvas(Length::Fixed(caption), 18.0, 0, move |painter, info| {
+            let label = grana_ui::canvas(Length::Fixed(caption), 18.0, move |painter, info| {
                 painter.text_in(info.rect, &text, style, Align::Center);
             });
             let fix = crate::view::button(ctx, "Fix Range", Role::Quiet).press({

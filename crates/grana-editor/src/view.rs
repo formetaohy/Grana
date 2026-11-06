@@ -39,7 +39,7 @@ pub fn card_title<'a>(
         .truncating();
     let title = title.to_string();
     let detail = detail.map(str::to_string);
-    grana_ui::canvas(Length::Fill, 22.0, 0, move |painter, info| {
+    grana_ui::canvas(Length::Fill, 22.0, move |painter, info| {
         let rect = info.rect;
         icon::paint(
             symbol,
@@ -71,7 +71,7 @@ pub fn divider<'a>(ctx: &mut BuildContext<'_, Message>) -> View<'a> {
     let metrics = ctx.theme().metrics;
     let thickness = metrics.hairline;
     let height = thickness + metrics.gap;
-    grana_ui::canvas(Length::Fill, height, 0, move |painter, info| {
+    grana_ui::canvas(Length::Fill, height, move |painter, info| {
         painter.rect(
             Rect::from_min_size(
                 Vec2::new(info.rect.min.x, info.rect.center().y),
@@ -100,7 +100,7 @@ pub fn section_header<'a>(
         TextStyle::new(ctx.theme().font(Level::Caption), palette.text_tertiary).aligned(Align::End);
     let title = title.to_uppercase();
     let detail = detail.map(str::to_string);
-    grana_ui::canvas(Length::Fill, 22.0, 0, move |painter, info| {
+    grana_ui::canvas(Length::Fill, 22.0, move |painter, info| {
         painter.text_in(info.rect, &title, style, Align::Center);
         if let Some(detail) = &detail {
             painter.text_in(
@@ -156,7 +156,7 @@ fn disclosure_header<'a>(
         .aligned(Align::End)
         .truncating();
     let _ = ctx;
-    grana_ui::canvas(Length::Fill, 22.0, 0, move |painter, info| {
+    grana_ui::canvas(Length::Fill, 22.0, move |painter, info| {
         let rect = info.rect;
         icon::paint(
             symbol,
@@ -216,7 +216,6 @@ pub fn form_row<'a>(
     let label_element = grana_ui::canvas(
         Length::Fixed(crate::panel::FORM_LABEL),
         height,
-        0,
         move |painter, info| {
             painter.text_in(
                 Rect::from_min_max(
@@ -275,9 +274,8 @@ pub fn menu_row<'a>(
     }
 }
 
-pub fn menu_separator<'a>(ctx: &mut BuildContext<'_, Message>) -> View<'a> {
-    let theme = *ctx.theme();
-    separator_widget(&theme)
+pub fn menu_separator<'a>(_ctx: &mut BuildContext<'_, Message>) -> View<'a> {
+    separator_widget()
 }
 
 pub fn popup_rows<'a>(
@@ -334,7 +332,7 @@ pub fn button_with<'a>(
 }
 
 pub fn icon_button<'a>(
-    ctx: &mut BuildContext<'_, Message>,
+    _ctx: &mut BuildContext<'_, Message>,
     key: &str,
     symbol: Icon,
     size: f32,
@@ -342,14 +340,13 @@ pub fn icon_button<'a>(
     tooltip: &str,
     message: Message,
 ) -> View<'a> {
-    let theme = *ctx.theme();
-    grana_ui::widget::icon_button(&theme, symbol, size, role, tooltip)
+    grana_ui::widget::icon_button(symbol, size, role, tooltip)
         .named(key)
         .press(message)
 }
 
 pub fn glass_icon_button<'a>(
-    ctx: &mut BuildContext<'_, Message>,
+    _ctx: &mut BuildContext<'_, Message>,
     key: &str,
     symbol: Icon,
     size: f32,
@@ -357,21 +354,19 @@ pub fn glass_icon_button<'a>(
     tooltip: &str,
     message: Message,
 ) -> View<'a> {
-    let theme = *ctx.theme();
-    grana_ui::widget::glass_icon_button(&theme, None, symbol, size, style, tooltip)
+    grana_ui::widget::glass_icon_button(None, symbol, size, style, tooltip)
         .named(key)
         .press(message)
 }
 
 pub fn glass_icon_button_disabled<'a>(
-    ctx: &mut BuildContext<'_, Message>,
+    _ctx: &mut BuildContext<'_, Message>,
     key: &str,
     symbol: Icon,
     size: f32,
     style: GlassStyle,
 ) -> View<'a> {
-    let theme = *ctx.theme();
-    grana_ui::widget::glass_icon_button_disabled(&theme, None, symbol, size, style).named(key)
+    grana_ui::widget::glass_icon_button_disabled(None, symbol, size, style).named(key)
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -388,9 +383,7 @@ pub fn slider_readout<'a>(
     let theme = *ctx.theme();
     grana_ui::widget::slider_readout(&theme, label, value, range.clone(), logarithmic, readout)
         .named(key)
-        .on_slide(range, logarithmic, move |value| {
-            Message::Command(command(value))
-        })
+        .on_slide(move |value| Message::Command(command(value)))
 }
 
 pub fn toggle_row<'a>(
@@ -403,7 +396,7 @@ pub fn toggle_row<'a>(
     let theme = *ctx.theme();
     grana_ui::widget::toggle_row(&theme, label, value)
         .named(key)
-        .on_toggle(value, move |value| Message::Command(command(value)))
+        .on_toggle(move |value| Message::Command(command(value)))
 }
 
 pub fn segmented<'a>(
@@ -476,7 +469,7 @@ pub fn empty_state<'a>(
     let detail = detail.to_string();
     let detail_height = detail_layout.size.y;
     let corners = Corners::all(theme.metrics.card_radius);
-    grana_ui::canvas(Length::Fill, height, 0, move |painter, info| {
+    grana_ui::canvas(Length::Fill, height, move |painter, info| {
         let outer = info.rect;
         let rect = Rect::from_min_size(
             Vec2::new(outer.min.x + (outer.width() - width) * 0.5, outer.min.y),

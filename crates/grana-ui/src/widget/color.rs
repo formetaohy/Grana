@@ -1,9 +1,11 @@
 use glam::Vec2;
 
 use crate::color::Color;
-use crate::element::{ColorPickerContent, Content, Element, Layout, Length, Size};
+use crate::content::{ColorPickerContent, Content};
+use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
-use crate::node::Runtime;
+use crate::motion::Motion;
+use crate::node::{Node, Runtime};
 
 use super::PaintInfo;
 
@@ -22,12 +24,17 @@ pub fn color_picker<'a, A>(color: [f32; 3]) -> Element<'a, A> {
         ..Layout::row()
     })
     .with_content(Content::ColorPicker(ColorPickerContent { color }))
-    .focus_ring(Corners::all(8.0))
-    .cursor(crate::input::Cursor::Crosshair)
 }
 
 pub(super) fn measure() -> Vec2 {
     Vec2::new(SQUARE, SQUARE + GAP + HUE_HEIGHT + TRAIL)
+}
+
+pub(crate) fn value<A>(node: &Node<A>) -> Option<(Motion, (f32, f32))> {
+    let Content::ColorPicker(_) = &node.content else {
+        return None;
+    };
+    Some((Motion::INSTANT, (node.runtime.value.value, 0.0)))
 }
 
 pub(super) fn paint(

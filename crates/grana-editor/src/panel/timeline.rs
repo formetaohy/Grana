@@ -73,7 +73,6 @@ pub(super) fn transport<'a>(
     let readout_element = grana_ui::canvas(
         Length::Fixed(readout_rect.width()),
         readout_rect.height(),
-        0,
         move |painter, info| {
             painter.text_in(
                 info.rect,
@@ -127,7 +126,6 @@ fn scrub_track<'a>(
     let track = grana_ui::canvas(
         Length::Fixed(rect.width()),
         rect.height(),
-        0,
         move |painter, _info| {
             painter.rect(bar, Corners::capsule(), palette.material_fill.amplify(0.9));
             if fill_end > bar.min.x {
@@ -160,7 +158,7 @@ fn scrub_track<'a>(
     )
     .at(rect)
     .on_pointer(seek(bar, frames, frame));
-    let knob_element = grana_ui::canvas(Length::Fixed(knob.width()), knob.height(), 0, |_, _| {})
+    let knob_element = grana_ui::canvas(Length::Fixed(knob.width()), knob.height(), |_, _| {})
         .named("timeline.knob")
         .at(knob)
         .glass(GlassStyle::knob())

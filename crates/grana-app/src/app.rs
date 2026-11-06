@@ -502,7 +502,7 @@ impl App {
         surface.ui.resize(size);
         let actions = surface
             .ui
-            .begin(points, scale, self.start.elapsed().as_secs_f64());
+            .update(points, scale, self.start.elapsed().as_secs_f64());
         let adapter = surface.gpu.adapter.clone();
         let export = engine.progress();
         let export_message = engine.output_message();
@@ -526,8 +526,8 @@ impl App {
             workspace,
             frame,
         );
-        let frame = surface.ui.end();
-        (commands, frame.animating)
+        let animating = surface.ui.finish();
+        (commands, animating)
     }
 
     fn sync_ime(&mut self) {
@@ -612,7 +612,7 @@ impl App {
                     label: Some("grana.ui.paint"),
                 });
         surface.ui.set_scene_changed(std::mem::take(scene_changed));
-        surface.ui.paint(&mut encoder, &view);
+        surface.ui.render(&mut encoder, &view);
         surface.gpu.queue.submit([encoder.finish()]);
         surface.gpu.queue.present(frame);
         self.info = info;
@@ -876,7 +876,7 @@ impl App {
                 });
         let changed = std::mem::take(&mut self.scene_changed);
         surface.ui.set_scene_changed(changed);
-        surface.ui.paint(&mut encoder, &view);
+        surface.ui.render(&mut encoder, &view);
         surface.gpu.queue.submit([encoder.finish()]);
         surface.gpu.queue.present(frame);
     }

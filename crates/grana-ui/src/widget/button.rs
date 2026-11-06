@@ -1,12 +1,12 @@
 use glam::Vec2;
 
-use crate::element::{ButtonContent, Content, Element, IconButtonContent, Layout, Length, Size};
+use crate::content::{ButtonContent, Content, IconButtonContent};
+use crate::element::{Element, Key, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
 use crate::glass::GlassStyle;
 use crate::icon::{self, Icon};
-use crate::node::Runtime;
 use crate::paint::Painter;
-use crate::style::State;
+use crate::style::{State, Surface};
 use crate::text::{Align, TextStyle};
 use crate::theme::{Role, Theme};
 
@@ -36,8 +36,6 @@ pub fn button_width<'a, A>(
         width,
         height: theme.metrics.control_height,
     }))
-    .focus_ring(Corners::capsule())
-    .cursor(crate::input::Cursor::Pointing)
 }
 
 pub fn button_enabled<'a, A>(
@@ -47,12 +45,7 @@ pub fn button_enabled<'a, A>(
     width: Length,
     enabled: bool,
 ) -> Element<'a, A> {
-    let element = button_width(theme, label, role, width);
-    if enabled {
-        element
-    } else {
-        element.enabled(false).press_disabled()
-    }
+    button_width(theme, label, role, width).enabled(enabled)
 }
 
 pub fn action_button<'a, A>(
@@ -69,56 +62,7 @@ pub fn action_button<'a, A>(
     element
 }
 
-pub fn glass_button<'a, A>(theme: &Theme, label: &str, style: GlassStyle) -> Element<'a, A> {
-    let mut element = glass_button_core(theme, label, style);
-    if let Content::Button(button) = &mut element.content {
-        button.symbol = None;
-    }
-    element
-}
-
-pub fn glass_action_button<'a, A>(
-    theme: &Theme,
-    symbol: Icon,
-    label: &str,
-    style: GlassStyle,
-) -> Element<'a, A> {
-    let mut element = glass_button_core(theme, label, style);
-    if let Content::Button(button) = &mut element.content {
-        button.symbol = Some(symbol);
-    }
-    element
-}
-
-fn glass_button_core<'a, A>(theme: &Theme, label: &str, style: GlassStyle) -> Element<'a, A> {
-    let height = theme.metrics.control_height + 8.0;
-    Element::new(Layout {
-        size: Size::new(Length::Auto, Length::Fixed(height)),
-        ..Layout::row()
-    })
-    .with_content(Content::Button(ButtonContent {
-        label: label.to_string(),
-        role: Role::Control,
-        font: theme.button_font(),
-        symbol: None,
-        style: Some(style.interactive()),
-        inset: padding(theme) + 2.0,
-        width: Length::Auto,
-        height,
-    }))
-    .glass(style.interactive())
-    .focus_ring(Corners::capsule())
-    .cursor(crate::input::Cursor::Pointing)
-}
-
-pub fn icon_button<'a, A>(
-    theme: &Theme,
-    symbol: Icon,
-    size: f32,
-    role: Role,
-    tooltip: &str,
-) -> Element<'a, A> {
-    let _ = theme;
+pub fn icon_button<'a, A>(symbol: Icon, size: f32, role: Role, tooltip: &str) -> Element<'a, A> {
     Element::new(Layout {
         size: Size::new(Length::Fixed(size), Length::Fixed(size)),
         ..Layout::row()
@@ -130,64 +74,61 @@ pub fn icon_button<'a, A>(
         style: None,
     }))
     .tooltip(tooltip)
-    .focus_ring(Corners::capsule())
-    .cursor(crate::input::Cursor::Pointing)
-}
-
-pub fn icon_button_disabled<'a, A>(
-    theme: &Theme,
-    symbol: Icon,
-    size: f32,
-    role: Role,
-) -> Element<'a, A> {
-    icon_button(theme, symbol, size, role, "")
-        .enabled(false)
-        .press_disabled()
 }
 
 pub fn glass_icon_button<'a, A>(
-    theme: &Theme,
-    group: Option<crate::element::Key>,
+    group: Option<Key>,
     symbol: Icon,
     size: f32,
     style: GlassStyle,
     tooltip: &str,
 ) -> Element<'a, A> {
-    let mut element = icon_button(theme, symbol, size, Role::Control, tooltip);
-    if let Content::IconButton(icon) = &mut element.content {
-        icon.style = Some(style.interactive());
+    glass_icon_button_core(Some(style), group, symbol, size, tooltip, true)
+}
+
+pub fn glass_icon_button_disabled<'a, A>(
+    group: Option<Key>,
+    symbol: Icon,
+    size: f32,
+    style: GlassStyle,
+) -> Element<'a, A> {
+    glass_icon_button_core(Some(style), group, symbol, size, "", false)
+}
+
+fn glass_icon_button_core<'a, A>(
+    style: Option<GlassStyle>,
+    group: Option<Key>,
+    symbol: Icon,
+    size: f32,
+    tooltip: &str,
+    enabled: bool,
+) -> Element<'a, A> {
+    let mut element = Element::new(Layout {
+        size: Size::new(Length::Fixed(size), Length::Fixed(size)),
+        ..Layout::row()
+    })
+    .with_content(Content::IconButton(IconButtonContent {
+        symbol,
+        size,
+        role: Role::Control,
+        style,
+    }))
+    .tooltip(tooltip)
+    .enabled(enabled);
+    if let Some(style) = style {
+        element = element.glass(if enabled { style.interactive() } else { style });
     }
-    let element = element.glass(style.interactive());
     match group {
         Some(group) => element.glass_group(group),
         None => element,
     }
 }
 
-pub fn glass_icon_button_disabled<'a, A>(
-    theme: &Theme,
-    group: Option<crate::element::Key>,
-    symbol: Icon,
-    size: f32,
-    style: GlassStyle,
-) -> Element<'a, A> {
-    let mut element = icon_button_disabled(theme, symbol, size, Role::Control);
-    if let Content::IconButton(icon) = &mut element.content {
-        icon.style = Some(style);
-    }
-    let element = element.glass(style);
-    match group {
-        Some(group) => element.glass_group(group),
-        None => element,
-    }
-}
-pub(super) fn measure_button(
+pub(super) fn measure(
     button: &ButtonContent,
     available: Vec2,
     text: &mut crate::text::Text,
-    theme: &Theme,
 ) -> Vec2 {
-    let _ = theme;
     let measured = text
         .layout(&button.label, button.font, 0.0, false, false, Align::Start)
         .size
@@ -204,17 +145,12 @@ pub(super) fn measure_button(
     Vec2::new(width, button.height)
 }
 
-pub(super) fn paint_button(
-    button: &ButtonContent,
-    runtime: &Runtime,
-    painter: &mut Painter,
-    info: &PaintInfo<'_>,
-) {
-    let surface = surface(button.role, runtime, info);
+pub(super) fn paint(button: &ButtonContent, painter: &mut Painter, info: &PaintInfo<'_>) {
+    let surface = surface(button.role, info);
     let body = if button.style.is_some() {
         info.glass.unwrap_or(info.rect)
     } else {
-        info.rect.expand(press_grow(runtime.press.value))
+        info.rect.expand(press_grow(info.press))
     };
     painter.outlined(
         body,
@@ -249,19 +185,14 @@ pub(super) fn paint_button(
     }
 }
 
-pub(super) fn paint_icon_button(
-    icon_content: &IconButtonContent,
-    runtime: &Runtime,
-    painter: &mut Painter,
-    info: &PaintInfo<'_>,
-) {
-    let surface = surface(icon_content.role, runtime, info);
-    let body = if icon_content.style.is_some() {
+pub(super) fn paint_icon(content: &IconButtonContent, painter: &mut Painter, info: &PaintInfo<'_>) {
+    let surface = surface(content.role, info);
+    let body = if content.style.is_some() {
         info.glass.unwrap_or(info.rect)
     } else {
-        info.rect.expand(press_grow(runtime.press.value))
+        info.rect.expand(press_grow(info.press))
     };
-    if icon_content.style.is_none() {
+    if content.style.is_none() {
         painter.outlined(
             body,
             Corners::capsule(),
@@ -271,22 +202,21 @@ pub(super) fn paint_icon_button(
         );
     }
     icon::paint(
-        icon_content.symbol,
+        content.symbol,
         painter,
         body.center(),
-        (icon_content.size * 0.50).clamp(11.0, 17.0),
+        (content.size * 0.50).clamp(11.0, 17.0),
         surface.text,
         1.6,
     );
 }
 
-fn surface(role: Role, runtime: &Runtime, info: &PaintInfo<'_>) -> crate::style::Surface {
+fn surface(role: Role, info: &PaintInfo<'_>) -> Surface {
     if !info.enabled {
         return info.theme.surface(role, State::Disabled);
     }
     let rest = info.theme.surface(role, State::Rest);
     let hovered = info.theme.surface(role, State::Hover);
     let pressed = info.theme.surface(role, State::Pressed);
-    let _ = runtime;
     rest.lerp(hovered, info.hover).lerp(pressed, info.press)
 }

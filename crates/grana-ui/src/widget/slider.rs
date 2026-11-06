@@ -3,13 +3,15 @@ use std::ops::RangeInclusive;
 use glam::Vec2;
 
 use crate::color::Color;
-use crate::element::{
-    Content, DragValueContent, Element, GradientBarContent, Layout, Length, ProgressContent,
-    RangeSliderContent, Size, SliderContent,
+use crate::content::{
+    Content, DragValueContent, GradientBarContent, ProgressContent, RangeSliderContent,
+    SliderContent,
 };
+use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
 use crate::glass::GlassStyle;
-use crate::node::Runtime;
+use crate::motion::Motion;
+use crate::node::{Node, Runtime};
 use crate::paint::Painter;
 use crate::style::{Border, Fill, Shadow};
 use crate::text::{Align, TextStyle};
@@ -17,15 +19,8 @@ use crate::theme::{Level, Role, Theme};
 
 use super::{PaintInfo, SubGlass};
 
-pub fn slider<'a, A>(
-    theme: &Theme,
-    label: Option<&str>,
-    value: f32,
-    range: RangeInclusive<f32>,
-    logarithmic: bool,
-) -> Element<'a, A> {
-    slider_sized(theme, label, value, range, logarithmic, Length::Fill)
-}
+const ARROW_STEP: f32 = 0.01;
+const PAGE_STEP: f32 = 0.1;
 
 pub fn slider_sized<'a, A>(
     theme: &Theme,
@@ -47,8 +42,6 @@ pub fn slider_sized<'a, A>(
         logarithmic,
         width,
     }))
-    .focus_ring(Corners::all(theme.metrics.radius))
-    .cursor(crate::input::Cursor::ResizeHorizontal)
 }
 
 pub fn slider_readout<'a, A>(
@@ -67,13 +60,11 @@ pub fn slider_readout<'a, A>(
 }
 
 pub fn range_slider<'a, A>(
-    theme: &Theme,
     start: f32,
     end: f32,
     range: RangeInclusive<f32>,
     gradient: &[Color],
 ) -> Element<'a, A> {
-    let _ = theme;
     Element::new(Layout {
         size: Size::new(Length::Fill, Length::Fixed(32.0)),
         ..Layout::row()
@@ -85,8 +76,6 @@ pub fn range_slider<'a, A>(
         gradient: gradient.to_vec(),
         width: Length::Fill,
     }))
-    .cursor(crate::input::Cursor::ResizeHorizontal)
-    .focus_ring(Corners::capsule())
 }
 
 pub fn drag_value<'a, A>(theme: &Theme, value: f32, decimals: usize) -> Element<'a, A> {
@@ -103,8 +92,6 @@ pub fn drag_value<'a, A>(theme: &Theme, value: f32, decimals: usize) -> Element<
         font: theme.font(Level::Monospace),
         width: 66.0,
     }))
-    .cursor(crate::input::Cursor::ResizeHorizontal)
-    .focus_ring(Corners::all(10.0))
 }
 
 pub fn progress<'a, A>(fraction: f32, width: f32) -> Element<'a, A> {
@@ -127,19 +114,13 @@ pub fn gradient_bar<'a, A>(colors: &[Color], height: f32) -> Element<'a, A> {
     }))
 }
 
-pub(super) fn measure_slider(
-    slider: &SliderContent,
-    available: Vec2,
-    text: &mut crate::text::Text,
-    theme: &Theme,
-) -> Vec2 {
+pub(super) fn measure_slider(slider: &SliderContent, available: Vec2, theme: &Theme) -> Vec2 {
     let width = match slider.width {
         Length::Auto | Length::Fill => available.x,
         Length::Fixed(value) => value,
         Length::Minimum(minimum) => minimum.max(available.x),
         Length::Maximum(maximum) => maximum.min(available.x),
     };
-    let _ = (text, theme);
     Vec2::new(width, theme.metrics.control_height)
 }
 
@@ -157,7 +138,7 @@ pub(super) fn measure_drag(drag: &DragValueContent, theme: &Theme) -> Vec2 {
     Vec2::new(drag.width, theme.metrics.control_height)
 }
 
-pub(crate) fn track_rect(
+pub(crate) fn track(
     slider: &SliderContent,
     rect: Rect,
     text: &mut crate::text::Text,
@@ -176,6 +157,135 @@ pub(crate) fn track_rect(
         Vec2::new(rect.min.x + label_width, rect.center().y - 13.0),
         Vec2::new(rect.max.x - readout_width, rect.center().y + 13.0),
     )
+}
+
+pub(crate) fn normalized_value(slider: &SliderContent, value: f32) -> f32 {
+    let (minimum, maximum) = (*slider.range.start(), *slider.range.end());
+    let value = value.clamp(minimum, maximum);
+    if slider.logarithmic && minimum > 0.0 {
+        ((value.max(minimum).ln() - minimum.ln()) / (maximum.ln() - minimum.ln())).clamp(0.0, 1.0)
+    } else {
+        ((value - minimum) / (maximum - minimum)).clamp(0.0, 1.0)
+    }
+}
+
+pub(crate) fn normalized(slider: &SliderContent) -> f32 {
+    normalized_value(slider, slider.value)
+}
+
+pub(crate) fn range_normalized(range: &RangeSliderContent) -> (f32, f32) {
+    let (minimum, maximum) = (*range.range.start(), *range.range.end());
+    let span = (maximum - minimum).max(1.0e-6);
+    (
+        ((range.start - minimum) / span).clamp(0.0, 1.0),
+        ((range.end - minimum) / span).clamp(0.0, 1.0),
+    )
+}
+
+fn absolute(t: f32, range: &RangeInclusive<f32>, logarithmic: bool) -> f32 {
+    let (minimum, maximum) = (*range.start(), *range.end());
+    let t = t.clamp(0.0, 1.0);
+    if logarithmic && minimum > 0.0 {
+        (minimum.ln() + t * (maximum.ln() - minimum.ln())).exp()
+    } else {
+        minimum + t * (maximum - minimum)
+    }
+}
+
+pub(crate) fn value_at(
+    slider: &SliderContent,
+    rect: Rect,
+    pointer: Vec2,
+    text: &mut crate::text::Text,
+    theme: &Theme,
+) -> f32 {
+    let track = track(slider, rect, text, theme);
+    let t = (pointer.x - track.min.x) / track.width().max(1.0);
+    absolute(t, &slider.range, slider.logarithmic)
+}
+
+pub(crate) fn range_at(range: &RangeSliderContent, rect: Rect, pointer: Vec2) -> (f32, f32) {
+    let (minimum, maximum) = (*range.range.start(), *range.range.end());
+    let span = (maximum - minimum).max(1.0e-6);
+    let track = Rect::from_min_max(
+        Vec2::new(rect.min.x + 8.0, rect.min.y),
+        Vec2::new(rect.max.x - 8.0, rect.max.y),
+    );
+    let value =
+        minimum + ((pointer.x - track.min.x) / track.width().max(1.0)).clamp(0.0, 1.0) * span;
+    if (value - range.start).abs() <= (value - range.end).abs() {
+        (value.min(range.end - 1.0e-4), range.end)
+    } else {
+        (range.start, value.max(range.start + 1.0e-4))
+    }
+}
+
+pub(crate) fn step(slider: &SliderContent, direction: f32, page: bool) -> f32 {
+    let step = if page { PAGE_STEP } else { ARROW_STEP };
+    let t = (normalized(slider) + direction * step).clamp(0.0, 1.0);
+    absolute(t, &slider.range, slider.logarithmic)
+}
+
+pub(crate) fn range_step(range: &RangeSliderContent, direction: f32, page: bool) -> (f32, f32) {
+    let (minimum, maximum) = (*range.range.start(), *range.range.end());
+    let span = (maximum - minimum).max(1.0e-6);
+    let step = span * if page { PAGE_STEP } else { ARROW_STEP };
+    let epsilon = 1.0e-4 * span.max(1.0);
+    if direction < 0.0 {
+        let start = (range.start - step).max(minimum);
+        if start < range.start {
+            (start, range.end)
+        } else {
+            (range.start, (range.end - step).max(range.start + epsilon))
+        }
+    } else {
+        let end = (range.end + step).min(maximum);
+        if end > range.end {
+            (range.start, end)
+        } else {
+            ((range.start + step).min(range.end - epsilon), range.end)
+        }
+    }
+}
+
+pub(crate) fn drag_step(drag: &DragValueContent, direction: f32, page: bool) -> f32 {
+    let scale = 10f32.powi(-(drag.decimals as i32));
+    let multiplier = if page { 10.0 } else { 1.0 };
+    drag.value + direction * scale * multiplier
+}
+
+pub(crate) fn value_slider<A>(node: &Node<A>, pressed: bool) -> Option<(Motion, (f32, f32))> {
+    let Content::Slider(slider) = &node.content else {
+        return None;
+    };
+    let motion = if pressed {
+        Motion::response(0.18, 0.18)
+    } else {
+        Motion::response(0.32, 0.2)
+    };
+    let target = if pressed {
+        node.runtime.drag_value
+    } else {
+        normalized(slider)
+    };
+    Some((motion, (target, 0.0)))
+}
+
+pub(crate) fn value_range<A>(node: &Node<A>, pressed: bool) -> Option<(Motion, (f32, f32))> {
+    let Content::RangeSlider(range) = &node.content else {
+        return None;
+    };
+    let motion = if pressed {
+        Motion::response(0.16, 0.12)
+    } else {
+        Motion::response(0.32, 0.2)
+    };
+    let target = if pressed {
+        (node.runtime.drag_value, node.runtime.drag_extent)
+    } else {
+        range_normalized(range)
+    };
+    Some((motion, target))
 }
 
 pub(super) fn paint_slider(

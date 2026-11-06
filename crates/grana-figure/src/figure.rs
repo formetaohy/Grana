@@ -26,7 +26,7 @@ pub fn instances<A: Clone>(
     let placed = contents
         .caption
         .map(|caption| Placed::new(ui.text(), caption, rect));
-    ui.render_figure(points, pixels_per_point, |painter| {
+    ui.figure_instances(points, pixels_per_point, |painter| {
         overlay::figure(
             painter,
             rect,

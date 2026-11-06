@@ -158,7 +158,7 @@ fn header<'a>(
                 grana_ui::widget::action_button(&theme, Icon::Target, "Compute", Role::Prominent)
                     .named("coloc.compute");
             items.push(if busy {
-                compute.enabled(false).press_disabled()
+                compute.enabled(false)
             } else {
                 compute.press(Message::Command(Command::ComputeColoc))
             });
@@ -231,7 +231,7 @@ fn thresholds<'a>(
         let theme = *ctx.theme();
         let style = TextStyle::new(theme.font(Level::Monospace), theme.palette.text_primary)
             .aligned(Align::End);
-        let readout = grana_ui::canvas(Length::Fixed(54.0), 28.0, 0, move |painter, info| {
+        let readout = grana_ui::canvas(Length::Fixed(54.0), 28.0, move |painter, info| {
             painter.text_in(info.rect, &format!("{value:.3}"), style, Align::Center);
         });
         let slider = grana_ui::widget::slider_sized(
@@ -247,7 +247,7 @@ fn thresholds<'a>(
         } else {
             "coloc.threshold.1"
         })
-        .on_slide(0.0..=1.0, false, move |next| {
+        .on_slide(move |next| {
             let thresholds = if index == 0 {
                 ColocThresholds::new(next, current)
             } else {
@@ -336,7 +336,7 @@ fn diagnostics<'a>(
         let series_values = metrics_values(series);
         let current_values = current.map(metrics_values);
         let time = state.scene.time();
-        let canvas = grana_ui::canvas(Length::Fill, height, 0, move |painter, info| {
+        let canvas = grana_ui::canvas(Length::Fill, height, move |painter, info| {
             let widths = statistic_widths(info.rect.width());
             let headers = ["Scope", "Pearson", "Overlap", "M1", "M2", "Voxels", "p"];
             let mut left = info.rect.min.x;
@@ -473,7 +473,7 @@ fn method<'a>(
     );
     let permutations_value = grana_ui::widget::drag_value(&theme, permutations, 0)
         .named("coloc.permutations")
-        .on_drag_value(permutations, 0.5, move |value| {
+        .on_drag_value(0.5, move |value| {
             let next = value.round().clamp(1.0, max_permutations) as u32;
             if next != settings.permutations() {
                 Message::Command(Command::SetColocSettings(ColocSettings::new(
@@ -486,7 +486,7 @@ fn method<'a>(
         });
     let block_value = grana_ui::widget::drag_value(&theme, block, 0)
         .named("coloc.block")
-        .on_drag_value(block, 0.1, move |value| {
+        .on_drag_value(0.1, move |value| {
             let next = value.round().clamp(1.0, max_block) as u32;
             if next != settings.block() {
                 Message::Command(Command::SetColocSettings(ColocSettings::new(
@@ -533,7 +533,7 @@ fn scatter<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
     let x_label = format!("X: {}", names[0]);
     let y_tint = Color::from_rgb_f32(tints[1]);
     let x_tint = Color::from_rgb_f32(tints[0]);
-    let canvas = grana_ui::canvas(Length::Fill, PLOT_SIDE + 18.0, 0, move |painter, info| {
+    let canvas = grana_ui::canvas(Length::Fill, PLOT_SIDE + 18.0, move |painter, info| {
         let full = info.rect;
         let side = PLOT_SIDE.min(full.width() - 4.0).max(120.0);
         let x = full.min.x + (full.width() - side) * 0.5;
@@ -690,7 +690,7 @@ fn combo<'a>(
         TextStyle::new(theme.font(Level::Callout).medium(), palette.text_primary).truncating();
     let rest = theme.surface(Role::Control, State::Rest);
     let hover = theme.surface(Role::Control, State::Hover);
-    let anchor = grana_ui::canvas(Length::Fixed(width), 28.0, 0, move |painter, info| {
+    let anchor = grana_ui::canvas(Length::Fixed(width), 28.0, move |painter, info| {
         let surface = if info.hover > 0.5 { hover } else { rest };
         painter.outlined(
             info.rect,

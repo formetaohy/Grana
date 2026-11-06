@@ -74,16 +74,14 @@ pub fn edit<'a>(
                 set(next)
             }
         };
-        let swatch = grana_ui::widget::color_swatch(stop.color(), 16.0)
-            .key(anchor)
-            .press_disabled();
-        let picker = grana_ui::widget::color_picker(stop.color()).on_color(stop.color(), recolor);
+        let swatch = grana_ui::widget::color_swatch(stop.color(), 16.0).key(anchor);
+        let picker = grana_ui::widget::color_picker(stop.color()).on_color(recolor);
         let popup = grana_ui::popover::popup(anchor, 192.0, [picker]);
         children.push(
             grana_ui::row().gap(6.0).align(Align::Center).children([
                 crate::inspector::centered(
                     control,
-                    grana_ui::canvas(Length::Fixed(caption), 18.0, 0, move |painter, info| {
+                    grana_ui::canvas(Length::Fixed(caption), 18.0, move |painter, info| {
                         painter.text_in(info.rect, &text, caption_style, Align::Center);
                     }),
                 ),
@@ -98,7 +96,7 @@ pub fn edit<'a>(
                     Length::Fixed(position_width),
                 )
                 .named(&format!("{salt}.stop.{index}.position"))
-                .on_slide(0.0..=1.0, false, moved),
+                .on_slide(moved),
                 grana_ui::widget::slider_sized(
                     &theme,
                     None,
@@ -108,18 +106,12 @@ pub fn edit<'a>(
                     Length::Fixed(52.0),
                 )
                 .named(&format!("{salt}.stop.{index}.opacity"))
-                .on_slide(0.0..=1.0, false, faded),
+                .on_slide(faded),
                 crate::inspector::centered(
                     control,
-                    grana_ui::widget::icon_button(
-                        &theme,
-                        Icon::Minus,
-                        18.0,
-                        Role::Quiet,
-                        "Remove stop",
-                    )
-                    .named(&format!("{salt}.stop.{index}.remove"))
-                    .press(removed),
+                    grana_ui::widget::icon_button(Icon::Minus, 18.0, Role::Quiet, "Remove stop")
+                        .named(&format!("{salt}.stop.{index}.remove"))
+                        .press(removed),
                 ),
             ]),
         );

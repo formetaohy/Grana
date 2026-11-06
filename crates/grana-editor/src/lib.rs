@@ -16,7 +16,7 @@ mod transfer;
 mod view;
 pub use grana_ui::widget;
 
-pub use message::{Message, PlotEvent, PlotPhase};
+pub use message::{Message, PlotEvent};
 pub use panel::{Panel, build};
 pub use stage::{Interaction, Pane, Stage};
-pub use state::{FrameStats, Interface, Playback, View, ViewStats, Workspace};
+pub use state::{FrameStats, Playback, Sections, View, ViewStats, Workspace};

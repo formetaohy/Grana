@@ -5,7 +5,7 @@ use grana_animation::Timeline;
 use grana_display::Viewport;
 use grana_measure::MeasureView;
 use grana_scene::{Measure, ObjectSetId, Progress, Scene};
-use grana_session::{BatchView, HistoryView, IoView, SeriesView};
+use grana_session::{BatchView, Export, HistoryView, IoView, SeriesView};
 use grana_ui::Key;
 
 use crate::panel::Panel;
@@ -70,30 +70,13 @@ pub(crate) struct PlotDrag {
 }
 
 #[derive(Default)]
-pub struct Interface {
-    values: HashMap<Key, f32>,
+pub struct Sections {
     open: HashSet<Key>,
 }
 
-impl Interface {
-    pub fn value(&self, key: Key, fallback: f32) -> f32 {
-        self.values.get(&key).copied().unwrap_or(fallback)
-    }
-
-    pub fn set(&mut self, key: Key, value: f32) {
-        self.values.insert(key, value);
-    }
-
-    pub fn open(&self, key: Key) -> bool {
+impl Sections {
+    pub fn is_open(&self, key: Key) -> bool {
         self.open.contains(&key)
-    }
-
-    pub fn set_open(&mut self, key: Key, open: bool) {
-        if open {
-            self.open.insert(key);
-        } else {
-            self.open.remove(&key);
-        }
     }
 
     pub fn toggle(&mut self, key: Key) {
@@ -105,17 +88,19 @@ impl Interface {
 
 pub struct Workspace {
     pub panel: Option<Panel>,
+    pub last_panel: Panel,
     pub sidebar_hidden: bool,
     pub sidebar_tab: usize,
     pub dock_height: f32,
-    pub dock_last: usize,
     pub playback: Playback,
+    pub export: Export,
+    pub column_widths: HashMap<usize, f32>,
     pub track_set: Option<ObjectSetId>,
     pub join: Option<(u32, usize)>,
     pub seed: Option<ObjectSetId>,
     pub renaming: Option<ObjectSetId>,
     pub expanded: HashSet<ObjectSetId>,
-    pub interface: Interface,
+    pub sections: Sections,
     pub(crate) drag: PlotDrag,
 }
 
@@ -123,17 +108,19 @@ impl Default for Workspace {
     fn default() -> Self {
         Self {
             panel: None,
+            last_panel: Panel::Statistics,
             sidebar_hidden: false,
             sidebar_tab: 0,
             dock_height: Self::default_height(),
-            dock_last: 0,
             playback: Playback::default(),
+            export: Export::NATIVE,
+            column_widths: HashMap::new(),
             track_set: None,
             join: None,
             seed: None,
             renaming: None,
             expanded: HashSet::new(),
-            interface: Interface::default(),
+            sections: Sections::default(),
             drag: PlotDrag::default(),
         }
     }
@@ -162,10 +149,6 @@ pub struct View<'a> {
     pub stage: &'a Stage,
     pub workspace: &'a Workspace,
     pub frame: FrameStats,
-    pub physics: bool,
-    pub reduce_motion: bool,
-    pub glass_on_glass: bool,
-    pub light_angle: f32,
 }
 
 impl View<'_> {

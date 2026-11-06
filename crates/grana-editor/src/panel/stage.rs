@@ -41,7 +41,7 @@ pub(super) fn view<'a>(
     let volume = layout.volume;
     let section = layout.section;
     let stage_backdrop = palette.scene_backdrop;
-    let content = grana_ui::canvas(Length::Fill, full.height(), 0, move |painter, info| {
+    let content = grana_ui::canvas(Length::Fill, full.height(), move |painter, info| {
         painter.rect(info.rect, Corners::ZERO, stage_backdrop);
         painter.scene(volume, Corners::ZERO, scene_uv(volume, size));
         painter.scene(section, Corners::ZERO, scene_uv(section, size));
@@ -172,7 +172,7 @@ fn overlay_of<'a>(
 fn overlay_view<'a>(state: &'a View<'a>, geometry: Geometry, full: Rect) -> Element<'a, Message> {
     let legends = overlay::legends(state.scene);
     let labels = overlay::labels(state.scene, state.scene.time());
-    grana_ui::canvas(Length::Fill, full.height(), 0, move |painter, info| {
+    grana_ui::canvas(Length::Fill, full.height(), move |painter, info| {
         let _ = info;
         let overlay = overlay_of(state, geometry, &legends, &labels);
         overlay::paint(painter, &overlay);
@@ -202,7 +202,6 @@ fn region_handle<'a>(handle: Handle) -> Element<'a, Message> {
     grana_ui::canvas(
         Length::Fixed(rect.width()),
         rect.height(),
-        0,
         move |painter, info| {
             let active = info.hover.max(info.press);
             painter.rect(
@@ -262,7 +261,7 @@ fn split_handle<'a>(
     let total = (volume.width() + section.width()).max(1.0);
     let origin = volume.min.x;
     let palette = ctx.theme().palette;
-    let line = grana_ui::canvas(Length::Fill, grab.height(), 0, move |painter, info| {
+    let line = grana_ui::canvas(Length::Fill, grab.height(), move |painter, info| {
         let rect = info.rect;
         painter.rect(
             Rect::from_center_size(rect.center(), Vec2::new(1.0, rect.height())),
@@ -272,14 +271,14 @@ fn split_handle<'a>(
     })
     .at(grab)
     .named("split.line");
-    let lens = grana_ui::canvas(Length::Fill, 36.0, 0, |_painter, _info| {})
+    let lens = grana_ui::canvas(Length::Fill, 36.0, |_painter, _info| {})
         .at(Rect::from_center_size(
             Vec2::new(x, volume.center().y),
             Vec2::new(8.0, 36.0),
         ))
         .named("split.lens")
         .glass(GlassStyle::lens());
-    let bar = grana_ui::canvas(Length::Fill, grab.height(), 0, move |painter, info| {
+    let bar = grana_ui::canvas(Length::Fill, grab.height(), move |painter, info| {
         let rect = info.rect;
         let engaged = info.hover.max(info.press);
         let size = Vec2::new(8.0 + engaged * 4.0, 36.0 + engaged * 18.0);
@@ -321,7 +320,7 @@ fn chip<'a>(
     let maximum = (pane.width() - 64.0).max(96.0);
     let layout = ctx.layout_text(title, style, maximum);
     let width = (layout.size.x + 42.0).min(maximum + 24.0);
-    grana_ui::canvas(Length::Fixed(width), 26.0, 0, move |painter, info| {
+    grana_ui::canvas(Length::Fixed(width), 26.0, move |painter, info| {
         let rect = info.rect;
         icon::paint(
             symbol,
@@ -386,7 +385,7 @@ pub(super) fn toast<'a>(
         grana_ui::Motion::response(0.25, 0.0),
     );
     vec![
-        grana_ui::canvas(Length::Fill, height, 0, move |painter, info| {
+        grana_ui::canvas(Length::Fill, height, move |painter, info| {
             let rect = info.rect;
             icon::paint(
                 mark,

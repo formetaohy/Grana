@@ -124,7 +124,7 @@ fn keyframe_track<'a>(
         .collect::<Vec<_>>();
     let key_selected = selected;
     let hover = ctx.pointer();
-    grana_ui::canvas(Length::Fill, TRACK_HEIGHT, 0, move |painter, info| {
+    grana_ui::canvas(Length::Fill, TRACK_HEIGHT, move |painter, info| {
         let rect = info.rect;
         let bar = Rect::from_min_max(
             Vec2::new(rect.min.x + 8.0, rect.center().y - 1.0),
@@ -253,7 +253,7 @@ fn keyframe_list<'a>(
             key.camera.yaw,
             key.camera.distance
         );
-        let body = grana_ui::canvas(Length::Fixed(424.0), 24.0, 0, move |painter, info| {
+        let body = grana_ui::canvas(Length::Fixed(424.0), 24.0, move |painter, info| {
             if active {
                 painter.rect(info.rect, Corners::all(8.0), accent.with_alpha(0.16));
             } else if info.hover > 0.01 {
@@ -329,7 +329,7 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     );
     let fps_value = grana_ui::widget::drag_value(&theme, fps as f32, 0)
         .named("animation.fps")
-        .on_drag_value(fps as f32, 0.5, move |value| {
+        .on_drag_value(0.5, move |value| {
             Message::Command(Command::SetTimelineFps(
                 (value.round() as u32).clamp(1, grana_animation::Timeline::MAX_FPS),
             ))
@@ -340,7 +340,7 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     ]);
     let duration_value = grana_ui::widget::drag_value(&theme, duration, 2)
         .named("animation.duration")
-        .on_drag_value(duration, 0.1, |value| {
+        .on_drag_value(0.1, |value| {
             Message::Command(Command::SetTimelineDuration(value.clamp(0.5, 600.0)))
         });
     let duration_row = grana_ui::row().gap(6.0).align(Align::Center).children([
@@ -410,10 +410,8 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
 
 fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let theme = *ctx.theme();
-    let width_key = Key::new("export.width");
-    let transparent_key = Key::new("export.transparent");
-    let image_width = state.workspace.interface.value(width_key, 0.0).round() as u32;
-    let transparent = state.workspace.interface.value(transparent_key, 0.0) > 0.5;
+    let image_width = state.workspace.export.width;
+    let transparent = state.workspace.export.transparent;
     let export = state.io.export;
     let frames = state.io.frames;
     let message = state.io.export_message.clone();
@@ -445,9 +443,7 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     let transparent_row =
         grana_ui::widget::toggle_row(&theme, "Transparent Background", transparent)
             .named("animation.transparent")
-            .on_toggle(transparent, move |value| {
-                Message::SetExport(Export::new(image_width, value))
-            });
+            .on_toggle(move |value| Message::SetExport(Export::new(image_width, value)));
     let mut children = vec![
         view::card_title(
             ctx,
@@ -523,7 +519,7 @@ fn combo<'a>(
         TextStyle::new(theme.font(Level::Callout).medium(), palette.text_primary).truncating();
     let rest = theme.surface(Role::Control, State::Rest);
     let hover = theme.surface(Role::Control, State::Hover);
-    let anchor = grana_ui::canvas(Length::Fixed(width), 28.0, 0, move |painter, info| {
+    let anchor = grana_ui::canvas(Length::Fixed(width), 28.0, move |painter, info| {
         let surface = if info.hover > 0.5 { hover } else { rest };
         painter.outlined(
             info.rect,

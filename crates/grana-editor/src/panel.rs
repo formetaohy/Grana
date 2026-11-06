@@ -70,8 +70,8 @@ pub fn build(
 ) -> Vec<Command> {
     let mut commands = Vec::new();
     apply(ui, actions, view, viewport, stage, workspace, &mut commands);
-    if workspace.panel.is_some() {
-        workspace.dock_last = panel_index(workspace.panel);
+    if let Some(panel) = workspace.panel {
+        workspace.last_panel = panel;
     }
     if workspace.panel == Some(Panel::Statistics)
         && view.measure.set().is_none()
@@ -93,10 +93,6 @@ pub fn build(
         stage: &*stage,
         workspace: &*workspace,
         frame,
-        physics: ui.physics(),
-        reduce_motion: ui.reduce_motion(),
-        glass_on_glass: ui.theme().glass_on_glass,
-        light_angle: ui.theme().light_angle,
     };
     let (volume, section, elements) = {
         let mut ctx = ui.build();
@@ -104,7 +100,7 @@ pub fn build(
         let elements = view_elements(&mut ctx, &layout, &state, full);
         (layout.volume, layout.section, elements)
     };
-    ui.show(grana_ui::place(full, elements));
+    ui.present(grana_ui::place(full, elements));
     stage.set_rects(volume, section);
     commands
 }
@@ -272,7 +268,7 @@ fn sidebar<'a>(
         Vec2::new(rect.min.x + SIDEBAR_PAD, tabs_rect.max.y + 8.0),
         Vec2::new(rect.width() - SIDEBAR_PAD * 2.0, 1.0),
     );
-    let separator = grana_ui::canvas(Length::Fill, 1.0, 0, move |painter, info| {
+    let separator = grana_ui::canvas(Length::Fill, 1.0, move |painter, info| {
         painter.rect(info.rect, Corners::ZERO, palette.separator);
     })
     .at(separator_rect);
@@ -314,7 +310,7 @@ fn dock<'a>(
 ) -> Element<'a, Message> {
     let palette = ctx.theme().palette;
     let grip = Rect::from_min_max(rect.min, Vec2::new(rect.max.x, rect.min.y + 10.0));
-    let grip_element = grana_ui::canvas(Length::Fill, 10.0, 0, move |painter, info| {
+    let grip_element = grana_ui::canvas(Length::Fill, 10.0, move |painter, info| {
         let engaged = info.hover.max(info.press);
         painter.rect(
             Rect::from_center_size(
@@ -340,7 +336,11 @@ fn dock<'a>(
     );
     let tabs_rect = Rect::from_min_max(header.min, Vec2::new(close.min.x - 12.0, header.max.y));
     let labels = Panel::ALL.map(Panel::name);
-    let active = state.workspace.dock_last.min(4);
+    let panel = state.workspace.panel.unwrap_or(state.workspace.last_panel);
+    let active = Panel::ALL
+        .iter()
+        .position(|candidate| *candidate == panel)
+        .unwrap_or(0);
     let tabs = crate::view::tabs(ctx, "dock.tabs", &labels, active, |index| {
         Message::SetPanel(Some(Panel::ALL[index]))
     })
@@ -362,7 +362,7 @@ fn dock<'a>(
         Vec2::new(rect.min.x + 16.0, header.max.y + 2.0),
         Vec2::new(rect.width() - 32.0, 1.0),
     );
-    let separator = grana_ui::canvas(Length::Fill, 1.0, 0, move |painter, info| {
+    let separator = grana_ui::canvas(Length::Fill, 1.0, move |painter, info| {
         painter.rect(info.rect, Corners::ZERO, palette.separator);
     })
     .at(separator_rect);
@@ -370,7 +370,6 @@ fn dock<'a>(
         Vec2::new(rect.min.x + 16.0, header.max.y + 11.0),
         Vec2::new(rect.max.x - 16.0, rect.max.y - 14.0),
     );
-    let panel = state.workspace.panel.unwrap_or(Panel::ALL[active]);
     let mut children = vec![grip_element, tabs, close_element, separator];
     match panel {
         Panel::Statistics => children.push(clipped(
@@ -448,11 +447,10 @@ pub fn apply(
             Message::SetPanel(panel) => {
                 workspace.panel = panel;
                 if let Some(panel) = panel {
-                    workspace.dock_last = panel_index(Some(panel));
+                    workspace.last_panel = panel;
                 }
             }
             Message::SetSidebarTab(index) => workspace.sidebar_tab = index,
-            Message::SetDockLast(index) => workspace.dock_last = index,
             Message::ToggleSidebar => workspace.sidebar_hidden = !workspace.sidebar_hidden,
             Message::SetDockHeight(value) => {
                 let height = if workspace.dock_height > 0.0 {
@@ -463,8 +461,10 @@ pub fn apply(
                 workspace.dock_height = (height + value).max(DOCK_MINIMUM);
             }
             Message::SetSplit(value) => viewport.set_split(value.clamp(0.3, 0.75)),
-            Message::SetValue(key, value) => workspace.interface.set(key, value),
-            Message::ToggleOpen(key) => workspace.interface.toggle(key),
+            Message::SetColumnWidth { index, width } => {
+                workspace.column_widths.insert(index, width);
+            }
+            Message::ToggleOpen(key) => workspace.sections.toggle(key),
             Message::ExpandObject { set, open } => {
                 if open {
                     workspace.expanded.insert(set);
@@ -522,13 +522,7 @@ pub fn apply(
                 } else {
                     export.width
                 };
-                workspace
-                    .interface
-                    .set(Key::new("export.width"), export.width as f32);
-                workspace.interface.set(
-                    Key::new("export.transparent"),
-                    if export.transparent { 1.0 } else { 0.0 },
-                );
+                workspace.export = export;
                 commands.push(Command::SetExport(export));
             }
             Message::FitVolume => crate::fitting::fit_volume(view.scene, viewport, stage),
@@ -555,11 +549,4 @@ pub fn apply(
             }
         }
     }
-}
-
-pub fn panel_index(panel: Option<Panel>) -> usize {
-    Panel::ALL
-        .iter()
-        .position(|candidate| Some(*candidate) == panel)
-        .unwrap_or(0)
 }

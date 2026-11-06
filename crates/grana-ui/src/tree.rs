@@ -1,17 +1,17 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use slotmap::SlotMap;
 
-use crate::element::{CanvasPaint, Content, Element, Interaction, Key, Layer};
+use crate::element::{CanvasPaint, ContentKind, Element, Key, Layer};
 use crate::node::{Node, NodeId};
 use grana_glass::GlassId;
 
 pub struct Tree<A> {
     pub nodes: SlotMap<NodeId, Node<A>>,
+    pub ids: Vec<NodeId>,
     pub root: NodeId,
     pub layout_dirty: bool,
     pub anchors: HashMap<Key, NodeId>,
-    pub changed: bool,
 }
 
 impl<A> Tree<A> {
@@ -19,29 +19,29 @@ impl<A> Tree<A> {
         let mut nodes = SlotMap::with_key();
         let root = nodes.insert(Node::new(
             Key::new("root"),
-            0,
+            ContentKind::Empty,
             crate::element::Layout::column(),
-            Content::Empty,
-            Interaction::None,
+            crate::element::Content::Empty,
+            crate::element::Interaction::None,
         ));
         Self {
             nodes,
+            ids: vec![root],
             root,
             layout_dirty: true,
             anchors: HashMap::new(),
-            changed: true,
         }
     }
 
     pub fn apply<'a>(
         &mut self,
         element: Element<'a, A>,
-        canvases: &mut Vec<(NodeId, CanvasPaint<'a>)>,
+        canvases: &mut HashMap<NodeId, CanvasPaint<'a>>,
     ) -> Vec<(NodeId, Option<GlassId>)> {
         let mut removed = Vec::new();
-        self.reconcile_list(self.root, vec![element], canvases, &mut removed);
         self.anchors.clear();
-        self.collect_anchors(self.root);
+        self.reconcile_list(self.root, vec![element], canvases, &mut removed);
+        self.ids.retain(|id| self.nodes.contains_key(*id));
         removed
     }
 
@@ -49,45 +49,43 @@ impl<A> Tree<A> {
         &mut self,
         parent: NodeId,
         elements: Vec<Element<'a, A>>,
-        canvases: &mut Vec<(NodeId, CanvasPaint<'a>)>,
+        canvases: &mut HashMap<NodeId, CanvasPaint<'a>>,
         removed: &mut Vec<(NodeId, Option<GlassId>)>,
     ) {
-        let old = self.nodes[parent].children.clone();
-        let mut used: Vec<NodeId> = Vec::new();
-        let mut next = Vec::with_capacity(elements.len());
+        let old = std::mem::take(&mut self.nodes[parent].children);
         let parent_layer = self.nodes[parent].layer;
-        for (index, element) in elements.into_iter().enumerate() {
-            let key = if element.id == Key::NONE {
-                Key::structural(index)
-            } else {
+        let mut keyed: HashMap<Key, NodeId> = HashMap::with_capacity(old.len());
+        for id in &old {
+            keyed.entry(self.nodes[*id].key).or_insert(*id);
+        }
+        let mut used: HashSet<NodeId> = HashSet::with_capacity(old.len());
+        let mut next = Vec::with_capacity(elements.len());
+        for (index, mut element) in elements.into_iter().enumerate() {
+            let named = element.id != Key::NONE;
+            let key = if named {
                 element.id
+            } else {
+                Key::structural(index)
             };
             let kind = element.content.kind();
-            let mut candidate = old.iter().copied().find(|id| {
-                !used.contains(id) && self.nodes[*id].key == key && self.nodes[*id].kind == kind
-            });
-            if candidate.is_none() && element.id == Key::NONE {
-                candidate = old.iter().copied().find(|id| {
-                    !used.contains(id) && self.nodes[*id].kind == kind && !next.contains(id)
-                });
-            }
-            let mut element = element;
             let children = std::mem::take(&mut element.children);
             let canvas = element.canvas.take();
-            let node_id = match candidate {
+            let reuse = keyed
+                .get(&key)
+                .copied()
+                .filter(|id| !used.contains(id) && self.nodes[*id].kind == kind);
+            let id = match reuse {
                 Some(id) => {
-                    used.push(id);
+                    used.insert(id);
                     let previous_layer = self.nodes[id].layer;
-                    let layout_changed = element.patch(&mut self.nodes[id]);
-                    if layout_changed {
+                    if element.patch(&mut self.nodes[id]) {
                         self.layout_dirty = true;
                     }
-                    if let Some(paint) = canvas {
-                        canvases.push((id, paint));
-                        self.nodes[id].has_canvas = true;
+                    if canvas.is_some() {
                         self.nodes[id].paint_dirty = true;
-                    } else {
-                        self.nodes[id].has_canvas = false;
+                    }
+                    if let Some(paint) = canvas {
+                        canvases.insert(id, paint);
                     }
                     let layer = self.nodes[id].layer;
                     if layer != previous_layer {
@@ -98,37 +96,44 @@ impl<A> Tree<A> {
                 None => {
                     let mut node = element.into_node(key, parent_layer);
                     node.parent = Some(parent);
-                    node.has_canvas = canvas.is_some();
                     let id = self.nodes.insert(node);
+                    self.ids.push(id);
                     if let Some(paint) = canvas {
-                        canvases.push((id, paint));
+                        canvases.insert(id, paint);
                     }
                     self.layout_dirty = true;
-                    self.changed = true;
-                    self.nodes[parent].layout_dirty = true;
                     id
                 }
             };
-            next.push(node_id);
-            self.reconcile_list(node_id, children, canvases, removed);
+            if named {
+                self.bind(key, id);
+            }
+            next.push(id);
+            self.reconcile_list(id, children, canvases, removed);
         }
-        for old in old {
-            if !next.contains(&old) {
-                self.remove(old, removed);
+        for id in old {
+            if !next.contains(&id) {
+                self.remove(id, removed);
                 self.layout_dirty = true;
-                self.changed = true;
             }
         }
         self.nodes[parent].children = next;
     }
 
+    fn bind(&mut self, key: Key, id: NodeId) {
+        if let Some(existing) = self.anchors.insert(key, id)
+            && existing != id
+        {
+            panic!("duplicate retained key {:#x}", key.id());
+        }
+    }
+
     fn remove(&mut self, id: NodeId, removed: &mut Vec<(NodeId, Option<GlassId>)>) {
-        let children = self.nodes[id].children.clone();
-        for child in children {
+        for index in 0..self.nodes[id].children.len() {
+            let child = self.nodes[id].children[index];
             self.remove(child, removed);
         }
-        let glass = self.nodes[id].glass_id;
-        removed.push((id, glass));
+        removed.push((id, self.nodes[id].glass_id));
         self.nodes.remove(id);
     }
 
@@ -137,22 +142,9 @@ impl<A> Tree<A> {
             self.nodes[id].layer = layer;
             self.nodes[id].paint_dirty = true;
         }
-        let children = self.nodes[id].children.clone();
-        for child in children {
+        for index in 0..self.nodes[id].children.len() {
+            let child = self.nodes[id].children[index];
             self.rebase(child, layer);
-        }
-    }
-
-    fn collect_anchors(&mut self, id: NodeId) {
-        let (key, children) = {
-            let node = &self.nodes[id];
-            (node.key, node.children.clone())
-        };
-        if key != Key::NONE {
-            self.anchors.insert(key, id);
-        }
-        for child in children {
-            self.collect_anchors(child);
         }
     }
 

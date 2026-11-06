@@ -9,7 +9,7 @@ use grana_ui::{
     Rect, Role, Shadow, State, TextStyle, TypeStyle,
 };
 
-use crate::message::{Message, PlotEvent, PlotPhase};
+use crate::message::{Message, PlotEvent};
 use crate::state::{PlotDrag, PlotGate, View, Workspace};
 
 const LEFT: f32 = 44.0;
@@ -98,7 +98,7 @@ pub fn view<'a>(
         moved: drag.moved,
     };
     let node_key = Key::new("plot.surface");
-    let canvas = grana_ui::canvas(Length::Fill, rect.height(), 0, move |painter, info| {
+    let canvas = grana_ui::canvas(Length::Fill, rect.height(), move |painter, info| {
         let card = info.rect;
         let inner = inner_rect(card);
         let surface = chart.theme.surface(Role::Card, State::Rest);
@@ -124,11 +124,7 @@ pub fn view<'a>(
             return None;
         }
         Some(Message::Plot(PlotEvent {
-            phase: match pointer.phase {
-                Phase::Down => PlotPhase::Down,
-                Phase::Move => PlotPhase::Move,
-                Phase::Up => PlotPhase::Up,
-            },
+            phase: pointer.phase,
             position: normalize(inner, pointer.position),
             shift: pointer.modifiers.shift,
         }))
@@ -943,21 +939,21 @@ fn histogram_apply(
     let raw = event.position;
     let position = raw.clamp(Vec2::ZERO, Vec2::ONE);
     match event.phase {
-        PlotPhase::Down => {
+        Phase::Down => {
             workspace.drag.view = Some(MeasureView::Histogram);
             workspace.drag.gate = Some(PlotGate::Rectangle);
             workspace.drag.origin = Some(position);
             workspace.drag.moved = false;
             workspace.drag.vertices.clear();
         }
-        PlotPhase::Move => {
+        Phase::Move => {
             if let Some(origin) = workspace.drag.origin
                 && origin.distance(position) > BRUSH_SLOP
             {
                 workspace.drag.moved = true;
             }
         }
-        PlotPhase::Up => {
+        Phase::Up => {
             let Some(origin) = workspace.drag.origin else {
                 return;
             };
@@ -1008,7 +1004,7 @@ fn scatter_apply(
     let raw = event.position;
     let position = raw.clamp(Vec2::ZERO, Vec2::ONE);
     match event.phase {
-        PlotPhase::Down => {
+        Phase::Down => {
             workspace.drag.view = Some(MeasureView::Scatter);
             workspace.drag.gate = Some(if event.shift {
                 PlotGate::Rectangle
@@ -1019,7 +1015,7 @@ fn scatter_apply(
             workspace.drag.moved = false;
             workspace.drag.vertices.clear();
         }
-        PlotPhase::Move => {
+        Phase::Move => {
             let Some(origin) = workspace.drag.origin else {
                 return;
             };
@@ -1030,7 +1026,7 @@ fn scatter_apply(
                 push_vertex(&mut workspace.drag.vertices, position);
             }
         }
-        PlotPhase::Up => {
+        Phase::Up => {
             let Some(origin) = workspace.drag.origin else {
                 return;
             };

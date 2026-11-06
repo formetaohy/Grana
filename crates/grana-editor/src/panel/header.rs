@@ -86,7 +86,7 @@ fn project_pill<'a>(
     let key = Key::new("project.menu");
     let open = ctx.popup_open(key);
     let title = project.clone();
-    grana_ui::canvas(Length::Fixed(width), 36.0, 0, move |painter, info| {
+    grana_ui::canvas(Length::Fixed(width), 36.0, move |painter, info| {
         let frame = info.glass.unwrap_or(info.rect);
         let engaged = info.hover.max(if open { 1.0 } else { 0.0 });
         if engaged > 0.01 {
@@ -168,7 +168,7 @@ fn open_pill<'a>(ctx: &mut BuildContext<'_, Message>, group: Key) -> Element<'a,
     let font = ctx.theme().font(Level::Callout).medium();
     let key = Key::new("open.menu");
     let open = ctx.popup_open(key);
-    grana_ui::canvas(Length::Fixed(84.0), 36.0, 0, move |painter, info| {
+    grana_ui::canvas(Length::Fixed(84.0), 36.0, move |painter, info| {
         let frame = info.glass.unwrap_or(info.rect);
         let engaged = info.hover.max(if open { 1.0 } else { 0.0 });
         if engaged > 0.01 {
@@ -298,7 +298,7 @@ fn actions<'a>(
             Vec2::splat(5.0),
         );
         children.push(
-            grana_ui::canvas(Length::Fixed(5.0), 5.0, 0, move |painter, info| {
+            grana_ui::canvas(Length::Fixed(5.0), 5.0, move |painter, info| {
                 painter.rect(info.rect, Corners::capsule(), palette.accent);
             })
             .named("header.pending")
@@ -332,11 +332,9 @@ fn analysis<'a>(
     let message = if open {
         Message::SetPanel(None)
     } else {
-        Message::SetPanel(Some(
-            crate::panel::Panel::ALL[state.workspace.dock_last.min(4)],
-        ))
+        Message::SetPanel(Some(state.workspace.last_panel))
     };
-    grana_ui::canvas(Length::Fill, 36.0, 0, move |painter, info| {
+    grana_ui::canvas(Length::Fill, 36.0, move |painter, info| {
         let frame = info.glass.unwrap_or(info.rect);
         let mark = Rect::from_center_size(
             Vec2::new(frame.min.x + 22.0, frame.center().y),

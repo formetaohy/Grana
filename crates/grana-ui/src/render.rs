@@ -444,10 +444,10 @@ impl Renderer {
         }
     }
 
-    pub fn resize(&mut self, size: [u32; 2]) {
+    pub fn resize(&mut self, size: [u32; 2]) -> bool {
         let size = [size[0].max(1), size[1].max(1)];
         if size == self.size {
-            return;
+            return false;
         }
         self.size = size;
         let device = self.device.clone();
@@ -456,6 +456,7 @@ impl Renderer {
         self.front = Some(Surface::new(&device, "grana.ui.front", size, self.encoded));
         self.back = Some(Surface::new(&device, "grana.ui.back", size, self.encoded));
         self.presented = None;
+        true
     }
 
     pub fn scene_view(&self) -> &TextureView {
