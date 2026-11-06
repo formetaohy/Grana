@@ -1,4 +1,5 @@
 mod animation_panel;
+mod annotation_panel;
 mod batch_panel;
 mod coloc_panel;
 mod coloring;
@@ -19,4 +20,4 @@ pub use grana_ui::widget;
 pub use message::{Message, PlotEvent};
 pub use panel::{Panel, build};
 pub use stage::{Interaction, Pane, Stage};
-pub use state::{FrameStats, Playback, Sections, View, ViewStats, Workspace};
+pub use state::{AnnotationTool, FrameStats, Playback, Sections, View, ViewStats, Workspace};

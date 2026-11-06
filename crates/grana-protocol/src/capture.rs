@@ -5,10 +5,10 @@ use grana_scene::{
 };
 
 use crate::{
-    ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec,
-    CurationSpec, DriftSpec, FilterSpec, LassoSpec, MaskFilterSpec, MeasureSpec, MetricSpec,
-    PartSpec, Protocol, ProtocolError, RegionSpec, RelationSpec, RenderSpec, SetSpec, SnapshotSpec,
-    SortSpec, SourceSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    AnnotationSpec, ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec,
+    ColorSpec, CurationSpec, DriftSpec, FilterSpec, LassoSpec, MaskFilterSpec, MeasureSpec,
+    MetricSpec, PartSpec, Protocol, ProtocolError, RegionSpec, RelationSpec, RenderSpec, SetSpec,
+    SnapshotSpec, SortSpec, SourceSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -159,6 +159,16 @@ impl Protocol {
                 maximum: filter.range()[1],
             })
         });
+        let annotations = scene
+            .annotations
+            .iter()
+            .map(AnnotationSpec::of)
+            .collect::<Vec<_>>();
+        let annotation_roi = scene
+            .annotations
+            .roi()
+            .and_then(|index| scene.annotations.get(index))
+            .map(|annotation| annotation.name().to_string());
         Protocol {
             region: RegionSpec::of(scene.region, scene.dataset.world_size()),
             render: Some(RenderSpec::of(
@@ -171,6 +181,8 @@ impl Protocol {
             drift,
             mask_radius: scene.mask_radius,
             mask_filter,
+            annotations,
+            annotation_roi,
             sets,
             relations,
             coloc,

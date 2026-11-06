@@ -140,6 +140,29 @@ pub enum Command {
     SetMask(Option<ObjectSetId>),
     SetMaskRadius(f32),
     SetMaskFilter(Option<MaskFilter>),
+    AddPoint {
+        at: [f32; 3],
+    },
+    AddDistance {
+        from: [f32; 3],
+        to: [f32; 3],
+    },
+    AddRoi {
+        center: [f32; 3],
+        radius: f32,
+    },
+    SelectAnnotation(Option<usize>),
+    SetAnnotationVisible {
+        index: usize,
+        visible: bool,
+    },
+    SetAnnotationRadius {
+        index: usize,
+        radius: f32,
+    },
+    SetAnnotationRoi(Option<usize>),
+    RemoveAnnotation(usize),
+    ClearAnnotations,
     SetTrackParams {
         set: ObjectSetId,
         params: TrackParams,
@@ -290,6 +313,7 @@ pub enum Action {
     ObjectParameters,
     ObjectColoring,
     Mask,
+    Annotation,
     TrackVisible,
     TrackThickness,
     TrackColoring,
@@ -360,6 +384,7 @@ impl Action {
             Self::ObjectParameters => "object parameters",
             Self::ObjectColoring => "object colors",
             Self::Mask => "analysis mask",
+            Self::Annotation => "annotation",
             Self::TrackVisible => "track visibility",
             Self::TrackThickness => "track width",
             Self::TrackColoring => "track colors",
@@ -407,6 +432,7 @@ impl Action {
                 | Self::ObjectOpacity
                 | Self::ObjectParameters
                 | Self::ObjectColoring
+                | Self::Annotation
                 | Self::TrackThickness
                 | Self::TrackColoring
                 | Self::TrackParameters
@@ -513,6 +539,16 @@ impl Command {
             }
             Self::SetMask(_) | Self::SetMaskRadius(_) | Self::SetMaskFilter(_) => {
                 Edit::new(Action::Mask)
+            }
+            Self::AddPoint { .. }
+            | Self::AddDistance { .. }
+            | Self::AddRoi { .. }
+            | Self::SetAnnotationVisible { .. }
+            | Self::SetAnnotationRoi(_)
+            | Self::RemoveAnnotation(_)
+            | Self::ClearAnnotations => Edit::new(Action::Annotation),
+            Self::SetAnnotationRadius { index, .. } => {
+                Edit::targeted(Action::Annotation, *index as u64)
             }
             Self::SetTrackVisible { set, .. } => Edit::targeted(Action::TrackVisible, set.raw()),
             Self::SetTrackThickness { set, .. } => {

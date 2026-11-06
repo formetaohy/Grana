@@ -405,6 +405,11 @@ impl Table {
         self.observations[row]
     }
 
+    pub fn position(&self, row: usize) -> Option<[f32; 3]> {
+        let axis = |key: &str| self.column(key).map(|column| self.value(row, column));
+        Some([axis("x_um")?, axis("y_um")?, axis("z_um")?])
+    }
+
     pub fn matching(
         &self,
         filters: &[Filter],

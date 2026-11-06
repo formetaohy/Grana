@@ -153,6 +153,62 @@ fn captures_the_manual_edits_of_a_merged_part() {
 }
 
 #[test]
+fn round_trips_annotations() {
+    let extent = Extent::new(4, 4, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "DAPI",
+            [0.3, 0.4, 1.0],
+            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+        )],
+    );
+    let series = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    let mut accumulator = SampleAccumulator::new();
+    accumulator.push(0.5);
+    scene.install(
+        set,
+        0,
+        ObjectFrame::Spots(SpotSet::new(
+            0,
+            vec![Spot::new([0.0, 0.0, 0.0], 1.0, 0.5)],
+            IntensityTable::new(1, vec![accumulator.statistics()]),
+        )),
+    );
+    scene.annotations.add_point([0.0, 0.0, 0.0]);
+    scene
+        .annotations
+        .add_distance([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    let roi = scene.annotations.add_roi([0.0, 0.0, 0.0], 2.0);
+    scene.annotations.set_roi(Some(roi));
+    let protocol =
+        Protocol::capture(&scene, &Measure::new(), None).expect("the annotations capture");
+    assert_eq!(protocol.annotations().len(), 3);
+    assert_eq!(protocol.annotation_roi(), Some("ROI 1"));
+    let text = protocol.to_json().expect("the protocol serializes");
+    assert!(text.contains("annotations"), "{text}");
+    let mut staged = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    protocol.stage(&mut staged).expect("the annotations stage");
+    assert_eq!(staged.annotations.len(), 3);
+    assert_eq!(
+        staged.annotations.roi_geometry().map(|roi| roi.radius()),
+        Some(2.0)
+    );
+    assert_eq!(
+        staged
+            .annotations
+            .get(1)
+            .expect("the distance stages")
+            .kind()
+            .length(),
+        Some(1.0)
+    );
+}
+
+#[test]
 fn reads_and_writes_a_protocol() {
     let protocol = Protocol::from_json(PROTOCOL).expect("the protocol is valid");
     assert_eq!(protocol.sets().len(), 3);

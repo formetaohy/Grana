@@ -286,6 +286,61 @@ impl Session {
                     scene.set_mask_filter(filter);
                 }
             }
+            Command::AddPoint { at } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    let index = scene.annotations.add_point(at);
+                    scene.annotations.select(Some(index));
+                }
+                self.sync_annotation_roi();
+            }
+            Command::AddDistance { from, to } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    let index = scene.annotations.add_distance(from, to);
+                    scene.annotations.select(Some(index));
+                }
+                self.sync_annotation_roi();
+            }
+            Command::AddRoi { center, radius } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    let index = scene.annotations.add_roi(center, radius);
+                    scene.annotations.select(Some(index));
+                }
+                self.sync_annotation_roi();
+            }
+            Command::SelectAnnotation(index) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.annotations.select(index);
+                }
+            }
+            Command::SetAnnotationVisible { index, visible } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.annotations.set_visible(index, visible);
+                }
+            }
+            Command::SetAnnotationRadius { index, radius } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.annotations.set_radius(index, radius);
+                }
+                self.sync_annotation_roi();
+            }
+            Command::SetAnnotationRoi(index) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.annotations.set_roi(index);
+                }
+                self.sync_annotation_roi();
+            }
+            Command::RemoveAnnotation(index) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.annotations.remove(index);
+                }
+                self.sync_annotation_roi();
+            }
+            Command::ClearAnnotations => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.annotations.clear();
+                }
+                self.sync_annotation_roi();
+            }
             Command::SetTrackParams { set, params } => {
                 if let Some(target) = self.object_mut(set) {
                     target.set_track_params(params);
@@ -592,6 +647,7 @@ impl Session {
         };
         scene.restore(state);
         self.measure.restore(measure, scene);
+        self.measure.set_roi(scene.annotations.roi_geometry());
         self.timeline = timeline;
         if let Some(source) = &self.source {
             source.set_time(scene.time());
@@ -602,5 +658,11 @@ impl Session {
 
     pub(super) fn object_mut(&mut self, set: ObjectSetId) -> Option<&mut grana_scene::ObjectSet> {
         self.scene.as_mut()?.objects.get_mut(set)
+    }
+
+    pub(super) fn sync_annotation_roi(&mut self) {
+        if let Some(scene) = self.scene.as_ref() {
+            self.measure.set_roi(scene.annotations.roi_geometry());
+        }
     }
 }

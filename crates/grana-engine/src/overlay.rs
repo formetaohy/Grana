@@ -1,6 +1,6 @@
 use glam::{Mat4, Vec3};
 use grana_display::{CameraState, SectionState};
-use grana_figure::{Caption, Label, Legend};
+use grana_figure::{AnnotationItem, Caption, Label, Legend};
 use grana_ui::{Instance, Rect, Ui, Vec2};
 
 use crate::panels::Panes;
@@ -17,6 +17,8 @@ pub(crate) struct Figure<'a> {
     pub camera: &'a CameraState,
     pub section: &'a SectionState,
     pub labels: &'a LabelView<'a>,
+    pub annotations: &'a [AnnotationItem],
+    pub voxel: Vec3,
     pub legends: &'a [Legend],
     pub caption: Option<&'a Caption>,
     pub backdrop: bool,
@@ -42,6 +44,12 @@ pub(crate) fn instances<A: Clone>(ui: &mut Ui<A>, figure: Figure<'_>) -> Vec<Ins
         figure.labels.eye,
         volume_rect,
     );
+    let volume_annotations = grana_figure::volume_annotations(
+        figure.annotations,
+        figure.labels.view_projection,
+        volume_world_per_point,
+        volume_rect,
+    );
     let mut instances = grana_figure::instances(
         ui,
         [panes.volume[2], panes.volume[3]],
@@ -51,6 +59,7 @@ pub(crate) fn instances<A: Clone>(ui: &mut Ui<A>, figure: Figure<'_>) -> Vec<Ins
             legends: figure.legends,
             caption: figure.caption,
             labels: &volume_labels,
+            annotations: &volume_annotations,
         },
         figure.backdrop,
     );
@@ -62,6 +71,14 @@ pub(crate) fn instances<A: Clone>(ui: &mut Ui<A>, figure: Figure<'_>) -> Vec<Ins
         figure.section.span,
         section_rect,
     );
+    let section_annotations = grana_figure::section_annotations(
+        figure.annotations,
+        figure.labels.focus,
+        figure.section.axis,
+        figure.section.span,
+        section_rect,
+        1.5 * figure.voxel[figure.section.axis.index()],
+    );
     let mut scale_bars = grana_figure::instances(
         ui,
         [panes.section[2], panes.section[3]],
@@ -71,6 +88,7 @@ pub(crate) fn instances<A: Clone>(ui: &mut Ui<A>, figure: Figure<'_>) -> Vec<Ins
             legends: &[],
             caption: None,
             labels: &section_labels,
+            annotations: &section_annotations,
         },
         figure.backdrop,
     );

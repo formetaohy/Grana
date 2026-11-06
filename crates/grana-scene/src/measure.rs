@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use grana_measure::{Aggregate, Filter, Group, Lasso, MeasureView, Plot, PlotAxis, Scope, Table};
 
+use crate::annotation::Roi;
 use crate::object::ObjectFrame;
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::scene::Scene;
@@ -29,6 +30,7 @@ pub struct Measure {
     scope: Scope,
     filters: Vec<Filter>,
     lasso: Option<Lasso>,
+    roi: Option<Roi>,
     sort: Option<(usize, bool)>,
     table: Option<Table>,
     rows: Vec<usize>,
@@ -58,6 +60,7 @@ impl Measure {
             scope: Scope::All,
             filters: Vec::new(),
             lasso: None,
+            roi: None,
             sort: None,
             table: None,
             rows: Vec::new(),
@@ -138,6 +141,19 @@ impl Measure {
 
     pub fn lasso(&self) -> Option<&Lasso> {
         self.lasso.as_ref()
+    }
+
+    pub fn roi(&self) -> Option<Roi> {
+        self.roi
+    }
+
+    pub fn set_roi(&mut self, roi: Option<Roi>) {
+        if self.roi == roi {
+            return;
+        }
+        self.roi = roi;
+        self.dirty = true;
+        self.refresh();
     }
 
     pub fn set_lasso(&mut self, lasso: Option<Lasso>) {
@@ -370,6 +386,7 @@ impl Measure {
         self.scope = Scope::All;
         self.filters.clear();
         self.lasso = None;
+        self.roi = None;
         self.sort = None;
         self.view = MeasureView::Table;
         self.axes = [0; 2];
@@ -414,7 +431,8 @@ impl Measure {
         let Some(object) = scene.objects.get_mut(id) else {
             return;
         };
-        if !self.visibility || (self.filters.is_empty() && self.lasso.is_none()) {
+        let roi = self.roi.filter(|_| self.group == Group::Object);
+        if !self.visibility || (self.filters.is_empty() && self.lasso.is_none() && roi.is_none()) {
             object.set_visibility(Visibility::All);
             return;
         }
@@ -426,6 +444,10 @@ impl Measure {
             return;
         }
         let rows = table.matching(&self.filters, self.lasso.as_ref(), None);
+        let mut rows = rows;
+        if let Some(roi) = roi {
+            rows.retain(|row| roi.holds_row(table, *row));
+        }
         let visibility = match self.group {
             Group::Object => {
                 let mut frames = (0..object.frame_count())
@@ -649,8 +671,20 @@ impl Measure {
             return;
         };
         let frame = self.scope_frame();
-        self.total = table.count(frame);
+        let roi = self.roi.filter(|_| self.group == Group::Object);
+        self.total = match roi {
+            None => table.count(frame),
+            Some(roi) => (0..table.rows())
+                .filter(|row| {
+                    frame.is_none_or(|time| table.observation(*row).time() == Some(time))
+                        && roi.holds_row(table, *row)
+                })
+                .count(),
+        };
         let mut rows = table.matching(&self.filters, self.lasso.as_ref(), frame);
+        if let Some(roi) = roi {
+            rows.retain(|row| roi.holds_row(table, *row));
+        }
         if let Some((column, descending)) = self.sort
             && column < table.columns().len()
         {

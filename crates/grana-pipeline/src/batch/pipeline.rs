@@ -6,7 +6,7 @@ use grana_animation::Timeline;
 use grana_display::{Camera, SectionCamera};
 use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
 use grana_image::{Format, Image, Source};
-use grana_measure::{ColocPair, ColocSeries, Lasso};
+use grana_measure::{ColocPair, ColocSeries, Group, Lasso};
 use grana_object::Roi;
 use grana_project::{Export, Project, Source as ProjectSource, ViewState};
 use grana_scene::{
@@ -150,6 +150,13 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 Lasso::new(x, y, lasso.points.clone())
             });
         let mut rows = table.matching(&filters, lasso.as_ref(), None);
+        if let Some(roi) = scene
+            .annotations
+            .roi_geometry()
+            .filter(|_| spec.group() == Group::Object)
+        {
+            rows.retain(|row| roi.holds_row(&table, *row));
+        }
         if let Some(measure) = spec.measure()
             && let Some(sort) = &measure.sort
         {

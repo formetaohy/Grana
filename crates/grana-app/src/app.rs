@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use glam::{Vec2, Vec3};
 use grana_animation::Keyframe;
 use grana_display::Viewport;
-use grana_editor::{FrameStats, Pane, Stage, ViewStats, Workspace};
+use grana_editor::{AnnotationTool, FrameStats, Pane, Stage, ViewStats, Workspace};
 use grana_engine::{Destination, Engine, Outcome, Panels, Picked, Plan, Pose, SAMPLE_LIMIT};
 use grana_gpu::Gpu;
 use grana_project::ViewState;
@@ -348,11 +348,16 @@ impl App {
         let seeding = workspace
             .seed
             .filter(|_| stage.hovered() == Some(Pane::Volume));
-        surface.window.set_cursor(if seeding.is_some() {
-            CursorIcon::Crosshair
-        } else {
-            interface_cursor(surface.ui.cursor())
-        });
+        let measuring = workspace
+            .annotation_tool
+            .filter(|_| seeding.is_none() && stage.hovered().is_some());
+        surface
+            .window
+            .set_cursor(if seeding.is_some() || measuring.is_some() {
+                CursorIcon::Crosshair
+            } else {
+                interface_cursor(surface.ui.cursor())
+            });
         if interaction.camera {
             if let Some(scene) = session.scene() {
                 viewport.clamp_focus(0.5 * scene.dataset.world_size());
@@ -366,7 +371,10 @@ impl App {
         if let Some((pane, point)) = pick {
             match seeding.filter(|_| pane == Pane::Volume) {
                 Some(set) => self.place_seed(set, point, modifiers.alt),
-                None => self.pick(pane, point),
+                None => match measuring {
+                    Some(tool) => self.place_annotation(tool, pane, point),
+                    None => self.pick(pane, point),
+                },
             }
             self.request_redraw();
         }
@@ -434,6 +442,99 @@ impl App {
             set,
             position: hit.to_array(),
         }]);
+    }
+
+    fn volume_ray(&self, point: Vec2) -> Option<(Vec3, Vec3)> {
+        let surface = self.surface.as_ref()?;
+        let region = self.stage.volume_region();
+        if region[2] == 0 || region[3] == 0 {
+            return None;
+        }
+        let scale = surface.window.scale_factor() as f32;
+        let x = point.x * scale;
+        let y = point.y * scale;
+        let ndc = Vec2::new(
+            2.0 * (x - region[0] as f32) / region[2] as f32 - 1.0,
+            1.0 - 2.0 * (y - region[1] as f32) / region[3] as f32,
+        );
+        let aspect = region[2] as f32 / region[3] as f32;
+        let ray = self.viewport.camera().ray(ndc, aspect);
+        Some((ray.origin, ray.direction))
+    }
+
+    fn annotation_point(&self, pane: Pane, point: Vec2) -> Option<[f32; 3]> {
+        let scene = self.session.scene()?;
+        match pane {
+            Pane::Volume => {
+                let (origin, direction) = self.volume_ray(point)?;
+                if let Ok(Some(hit)) = scene.surface_hit(origin, direction) {
+                    return Some(hit.to_array());
+                }
+                let axis = self.viewport.section().axis();
+                let component = direction[axis.index()];
+                if component.abs() <= 1.0e-6 {
+                    return None;
+                }
+                let plane = self.viewport.camera().focus()[axis.index()];
+                let distance = (plane - origin[axis.index()]) / component;
+                if distance <= 0.0 {
+                    return None;
+                }
+                let position = origin + direction * distance;
+                let half = 0.5 * scene.dataset.world_size();
+                Some([0, 1, 2].map(|axis| position[axis].clamp(-half[axis], half[axis])))
+            }
+            Pane::Section => {
+                let rect = self.stage.section_rect();
+                if rect.height() <= 0.0 {
+                    return None;
+                }
+                let axis = self.viewport.section().axis();
+                let (u, v) = axis.in_plane();
+                let focus = self.viewport.camera().focus();
+                let points_per_micron = rect.height() / self.viewport.section().span();
+                let mut position = [0.0f32; 3];
+                position[u.index()] =
+                    focus[u.index()] + (point.x - rect.center().x) / points_per_micron;
+                position[v.index()] =
+                    focus[v.index()] - (point.y - rect.center().y) / points_per_micron;
+                position[axis.index()] = focus[axis.index()];
+                let half = 0.5 * scene.dataset.world_size();
+                for axis in 0..3 {
+                    position[axis] = position[axis].clamp(-half[axis], half[axis]);
+                }
+                Some(position)
+            }
+        }
+    }
+
+    fn place_annotation(&mut self, tool: AnnotationTool, pane: Pane, point: Vec2) {
+        let Some(position) = self.annotation_point(pane, point) else {
+            return;
+        };
+        match tool {
+            AnnotationTool::Point => {
+                self.apply(vec![Command::AddPoint { at: position }]);
+            }
+            AnnotationTool::Distance => match self.workspace.annotation_pending.take() {
+                Some(from) if from != position => {
+                    self.apply(vec![Command::AddDistance { from, to: position }]);
+                }
+                Some(from) => self.workspace.annotation_pending = Some(from),
+                None => self.workspace.annotation_pending = Some(position),
+            },
+            AnnotationTool::Roi => {
+                let Some(scene) = self.session.scene() else {
+                    return;
+                };
+                let radius = (0.06 * scene.dataset.world_size().min_element())
+                    .max(2.0 * scene.dataset.voxel_size().min_element());
+                self.apply(vec![Command::AddRoi {
+                    center: position,
+                    radius,
+                }]);
+            }
+        }
     }
 
     fn apply(&mut self, commands: Vec<Command>) -> bool {
@@ -1210,8 +1311,22 @@ impl App {
             Key::Named(NamedKey::Space) => self.toggle_play(),
             Key::Named(NamedKey::ArrowRight) => self.step_time(1),
             Key::Named(NamedKey::ArrowLeft) => self.step_time(-1),
+            Key::Named(NamedKey::Escape) => {
+                if self.workspace.annotation_pending.take().is_none()
+                    && self.workspace.annotation_tool.take().is_none()
+                    && self.workspace.seed.take().is_none()
+                {
+                    return;
+                }
+            }
             Key::Named(NamedKey::Delete) => {
-                if self.session.delete_selected()
+                let annotation = self
+                    .session
+                    .scene()
+                    .and_then(|scene| scene.annotations.selected());
+                if let Some(index) = annotation {
+                    self.apply(vec![Command::RemoveAnnotation(index)]);
+                } else if self.session.delete_selected()
                     && let Some(engine) = self.engine.as_mut()
                 {
                     engine.set_output_message(None);

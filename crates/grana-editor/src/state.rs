@@ -1,4 +1,4 @@
-﻿use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use glam::Vec2;
 use grana_animation::Timeline;
@@ -86,6 +86,33 @@ impl Sections {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnnotationTool {
+    Point,
+    Distance,
+    Roi,
+}
+
+impl AnnotationTool {
+    pub const ALL: [Self; 3] = [Self::Point, Self::Distance, Self::Roi];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Point => "Point",
+            Self::Distance => "Distance",
+            Self::Roi => "Region",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Point => 0,
+            Self::Distance => 1,
+            Self::Roi => 2,
+        }
+    }
+}
+
 pub struct Workspace {
     pub panel: Option<Panel>,
     pub last_panel: Panel,
@@ -98,6 +125,8 @@ pub struct Workspace {
     pub track_set: Option<ObjectSetId>,
     pub join: Option<(u32, usize)>,
     pub seed: Option<ObjectSetId>,
+    pub annotation_tool: Option<AnnotationTool>,
+    pub annotation_pending: Option<[f32; 3]>,
     pub renaming: Option<ObjectSetId>,
     pub expanded: HashSet<ObjectSetId>,
     pub sections: Sections,
@@ -119,6 +148,8 @@ impl Default for Workspace {
             track_set: None,
             join: None,
             seed: None,
+            annotation_tool: None,
+            annotation_pending: None,
             renaming: None,
             expanded: HashSet::new(),
             sections: Sections::default(),

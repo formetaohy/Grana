@@ -240,6 +240,7 @@ impl Export {
         let world = scene.dataset.world_size();
         let aspect = self.panes.volume_points[2] / self.panes.volume_points[3].max(1.0e-3);
         let labels = grana_figure::labels(scene, pose.time);
+        let annotations = grana_figure::annotations(scene);
         let label = overlay::LabelView {
             labels: &labels,
             view_projection: camera.view_projection(aspect, 0.5 * world.length()),
@@ -253,6 +254,8 @@ impl Export {
                 camera: &pose.camera,
                 section: &pose.section,
                 labels: &label,
+                annotations: &annotations,
+                voxel: scene.dataset.voxel_size(),
                 legends: &legends,
                 caption: Some(&caption),
                 backdrop: !self.transparent,

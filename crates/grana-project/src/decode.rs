@@ -19,11 +19,11 @@ use grana_object::{
     TrackNode, TrackSet,
 };
 use grana_scene::{
-    ChannelState, ColocResult, ColocState, ColorState, Criteria, Curation, Drift, FilterRange,
-    ItemState, LassoPath, MaskFilter, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame,
-    ObjectKind, ObjectParams, ObjectSetId, ObjectSetKey, Provenance, Recipe, RelationState,
-    SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
-    Visibility,
+    Annotation, AnnotationKind, AnnotationState, AnnotationTag, ChannelState, ColocResult,
+    ColocState, ColorState, Criteria, Curation, Drift, FilterRange, ItemState, LassoPath,
+    MaskFilter, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind, ObjectParams,
+    ObjectSetId, ObjectSetKey, Provenance, Recipe, RelationState, SceneState, Seeds,
+    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Clip, Intensity, Region};
 
@@ -178,6 +178,7 @@ impl Decode for SceneState {
             sets: Vec::<SetState>::decode(reader)?,
             coloc: ColocState::decode(reader)?,
             drift: Drift::decode(reader)?,
+            annotations: AnnotationState::decode(reader)?,
         };
         let mut ids = state.sets.iter().map(|set| set.id).collect::<Vec<_>>();
         ids.sort_unstable();
@@ -270,6 +271,83 @@ impl Decode for SceneState {
         }
         Ok(state)
     }
+}
+
+impl Decode for AnnotationState {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let entries = Vec::<Annotation>::decode(reader)?;
+        let selected = decode_index(reader)?;
+        let roi = decode_index(reader)?;
+        if selected.is_some_and(|index| index >= entries.len()) {
+            return Err(FAULT_SHAPE);
+        }
+        if roi.is_some_and(|index| {
+            entries
+                .get(index)
+                .is_none_or(|entry| entry.kind().tag() != AnnotationTag::Roi)
+        }) {
+            return Err(FAULT_SHAPE);
+        }
+        let mut counts = [0u32; 3];
+        for count in &mut counts {
+            *count = reader.u32()?;
+        }
+        Ok(Self {
+            entries,
+            selected,
+            roi,
+            counts,
+        })
+    }
+}
+
+fn decode_index(reader: &mut Reader<'_>) -> Result<Option<usize>, &'static str> {
+    match reader.u8()? {
+        0 => Ok(None),
+        1 => Ok(Some(reader.count(0)?)),
+        _ => Err(FAULT_TAG),
+    }
+}
+
+impl Decode for Annotation {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let name = reader.string()?;
+        if name.trim().is_empty() {
+            return Err(FAULT_VALUE);
+        }
+        let visible = reader.bool()?;
+        Ok(Self::new(name, AnnotationKind::decode(reader)?).with_visible(visible))
+    }
+}
+
+impl Decode for AnnotationKind {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        match reader.u8()? {
+            0 => Ok(AnnotationKind::point(decode_point(reader)?)),
+            1 => {
+                let from = decode_point(reader)?;
+                let to = decode_point(reader)?;
+                if from == to {
+                    return Err(FAULT_VALUE);
+                }
+                Ok(AnnotationKind::distance(from, to))
+            }
+            2 => {
+                let center = decode_point(reader)?;
+                let radius = positive(reader.f32()?)?;
+                Ok(AnnotationKind::roi(center, radius))
+            }
+            _ => Err(FAULT_TAG),
+        }
+    }
+}
+
+fn decode_point(reader: &mut Reader<'_>) -> Result<[f32; 3], &'static str> {
+    let mut at = [0.0; 3];
+    for value in &mut at {
+        *value = finite(reader.f32()?)?;
+    }
+    Ok(at)
 }
 
 impl Decode for ChannelState {

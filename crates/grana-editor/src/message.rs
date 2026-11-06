@@ -4,6 +4,7 @@ use grana_session::Command;
 use grana_ui::Key;
 
 use crate::panel::Panel;
+use crate::state::AnnotationTool;
 
 #[derive(Clone, Copy, Debug)]
 pub struct PlotEvent {
@@ -45,6 +46,7 @@ pub enum Message {
     SetTrackSet(Option<ObjectSetId>),
     SetJoin(Option<(u32, usize)>),
     SetSeed(Option<ObjectSetId>),
+    SetAnnotationTool(Option<AnnotationTool>),
     SetClassifierFeatures {
         set: ObjectSetId,
         features: Vec<grana_measure::Measurement>,

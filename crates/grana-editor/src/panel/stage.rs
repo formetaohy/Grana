@@ -151,11 +151,13 @@ fn overlay_of<'a>(
     geometry: Geometry,
     legends: &'a [Legend],
     labels: &'a [Label],
+    annotations: &'a [grana_figure::AnnotationItem],
 ) -> Overlay<'a> {
     Overlay {
         camera: state.viewport.camera(),
         section: state.viewport.section(),
         world: geometry.world,
+        voxel: state.scene.dataset.voxel_size(),
         volume_safe: geometry.volume_safe,
         section_safe: geometry.section_safe,
         section_stage: geometry.section_stage,
@@ -165,6 +167,8 @@ fn overlay_of<'a>(
         clip: state.scene.clip,
         legends,
         labels,
+        annotations,
+        pending: state.workspace.annotation_pending,
         recording: geometry.recording,
     }
 }
@@ -172,9 +176,10 @@ fn overlay_of<'a>(
 fn overlay_view<'a>(state: &'a View<'a>, geometry: Geometry, full: Rect) -> Element<'a, Message> {
     let legends = overlay::legends(state.scene);
     let labels = overlay::labels(state.scene, state.scene.time());
+    let annotations = overlay::annotations(state.scene);
     grana_ui::canvas(Length::Fill, full.height(), move |painter, info| {
         let _ = info;
-        let overlay = overlay_of(state, geometry, &legends, &labels);
+        let overlay = overlay_of(state, geometry, &legends, &labels, &annotations);
         overlay::paint(painter, &overlay);
     })
     .named("stage.overlay")
@@ -183,7 +188,7 @@ fn overlay_view<'a>(state: &'a View<'a>, geometry: Geometry, full: Rect) -> Elem
 }
 
 fn region_handles<'a>(state: &'a View<'a>, geometry: Geometry) -> Vec<Element<'a, Message>> {
-    let overlay = overlay_of(state, geometry, &[], &[]);
+    let overlay = overlay_of(state, geometry, &[], &[], &[]);
     overlay::handles(&overlay)
         .into_iter()
         .map(region_handle)

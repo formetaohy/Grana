@@ -35,15 +35,17 @@ pub enum Panel {
     Statistics,
     Tracks,
     Colocalization,
+    Annotations,
     Batch,
     Animation,
 }
 
 impl Panel {
-    pub const ALL: [Panel; 5] = [
+    pub const ALL: [Panel; 6] = [
         Panel::Statistics,
         Panel::Tracks,
         Panel::Colocalization,
+        Panel::Annotations,
         Panel::Batch,
         Panel::Animation,
     ];
@@ -53,6 +55,7 @@ impl Panel {
             Self::Statistics => "Statistics",
             Self::Tracks => "Tracks",
             Self::Colocalization => "Colocalization",
+            Self::Annotations => "Annotations",
             Self::Batch => "Batch",
             Self::Animation => "Animation",
         }
@@ -384,6 +387,7 @@ fn dock<'a>(
         panel => {
             let body = match panel {
                 Panel::Colocalization => crate::coloc_panel::view(ctx, state),
+                Panel::Annotations => crate::annotation_panel::view(ctx, state),
                 Panel::Batch => crate::batch_panel::view(ctx, state),
                 Panel::Animation => crate::animation_panel::view(ctx, state),
                 Panel::Statistics | Panel::Tracks => {
@@ -499,7 +503,22 @@ pub fn apply(
                 workspace.join = None;
             }
             Message::SetJoin(join) => workspace.join = join,
-            Message::SetSeed(seed) => workspace.seed = seed,
+            Message::SetSeed(seed) => {
+                workspace.seed = seed;
+                if seed.is_some() {
+                    workspace.annotation_tool = None;
+                    workspace.annotation_pending = None;
+                }
+            }
+            Message::SetAnnotationTool(tool) => {
+                if workspace.annotation_tool != tool {
+                    workspace.annotation_tool = tool;
+                    workspace.annotation_pending = None;
+                    if tool.is_some() {
+                        workspace.seed = None;
+                    }
+                }
+            }
             Message::SetClassifierFeatures { set, features } => {
                 workspace.classifier.insert(set, features);
             }

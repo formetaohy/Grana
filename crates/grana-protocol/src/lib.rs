@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use spec::{
-    AnchorSpec, AxisSpec, CameraSpec, ChannelSpec, ClassifierSpec, ColocPairSpec,
+    AnchorSpec, AnnotationSpec, AxisSpec, CameraSpec, ChannelSpec, ClassifierSpec, ColocPairSpec,
     ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DriftSpec, EditSpec, ExportSpec,
     FilterSpec, HiddenSpec, KeySpec, LassoSpec, MaskFilterSpec, MeasureSpec, MetricSpec, NodeSpec,
     PartSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, SectionSpec, SetSpec, ShadingSpec,
@@ -36,6 +36,10 @@ pub struct Protocol {
     mask_radius: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mask_filter: Option<MaskFilterSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    annotations: Vec<AnnotationSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    annotation_roi: Option<String>,
     sets: Vec<SetSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     relations: Vec<RelationSpec>,
@@ -82,6 +86,14 @@ impl Protocol {
 
     pub fn mask_filter(&self) -> Option<&MaskFilterSpec> {
         self.mask_filter.as_ref()
+    }
+
+    pub fn annotations(&self) -> &[AnnotationSpec] {
+        &self.annotations
+    }
+
+    pub fn annotation_roi(&self) -> Option<&str> {
+        self.annotation_roi.as_deref()
     }
 
     pub fn sets(&self) -> &[SetSpec] {
@@ -254,6 +266,12 @@ impl Protocol {
                 filter.maximum,
                 self.name_of(&filter.target).unwrap_or(&filter.target)
             ));
+        }
+        if !self.annotations.is_empty() {
+            summary.push_str(&format!(" · {} annotations", self.annotations.len()));
+        }
+        if let Some(roi) = &self.annotation_roi {
+            summary.push_str(&format!(" · statistics within {roi}"));
         }
         for relation in &self.relations {
             summary.push_str(&format!(

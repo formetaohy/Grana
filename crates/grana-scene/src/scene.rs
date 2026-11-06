@@ -8,6 +8,7 @@ use grana_object::{RelationFrame, TrackSet};
 use grana_object::{Shape, TrackParams};
 use grana_volume::{ChannelInfo, Clip, Intensity, Region};
 
+use crate::annotation::Annotations;
 use crate::channel::Channel;
 use crate::coloc::{Coloc, MaskKey};
 use crate::color::ObjectColor;
@@ -99,6 +100,7 @@ pub struct Scene {
     pub mask: Option<ObjectSetId>,
     pub mask_radius: f32,
     pub mask_filter: Option<MaskFilter>,
+    pub annotations: Annotations,
     drift: Drift,
     pub objects: Objects,
     pub coloc: Coloc,
@@ -134,6 +136,7 @@ impl Scene {
             mask: None,
             mask_radius: 0.0,
             mask_filter: None,
+            annotations: Annotations::new(),
             drift: Drift::default(),
             objects: Objects::new(),
             coloc: Coloc::new(channel_count, region),
@@ -1118,6 +1121,25 @@ impl Scene {
         };
         let mesh = frame.geometry().map_err(|error| error.to_string())?;
         Ok(mesh.and_then(|mesh| ray_hit(&mesh, origin, direction)))
+    }
+
+    pub fn surface_hit(&self, origin: Vec3, direction: Vec3) -> Result<Option<Vec3>, String> {
+        let mut nearest: Option<Vec3> = None;
+        for set in self.pickable() {
+            let Some(frame) = set.frame(self.time) else {
+                continue;
+            };
+            let mesh = frame.geometry().map_err(|error| error.to_string())?;
+            let Some(hit) = mesh.and_then(|mesh| ray_hit(&mesh, origin, direction)) else {
+                continue;
+            };
+            if nearest.is_none_or(|current| {
+                (hit - origin).length_squared() < (current - origin).length_squared()
+            }) {
+                nearest = Some(hit);
+            }
+        }
+        Ok(nearest)
     }
 
     fn drop_track_selection(&mut self, id: ObjectSetId) {

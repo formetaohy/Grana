@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use grana_display::Coloring;
 use grana_measure::{ChildField, ColocPair, Group, TrackMeasurement, channel_keys, relation_keys};
 use grana_scene::{
-    Criteria, FilterRange, LassoPath, MaskFilter, ObjectColor, ObjectSetId, ObjectSetKey, Scene,
-    TrackColor,
+    Annotation, AnnotationState, Criteria, FilterRange, LassoPath, MaskFilter, ObjectColor,
+    ObjectSetId, ObjectSetKey, Scene, TrackColor,
 };
 use grana_volume::Region;
 
@@ -179,6 +179,28 @@ impl Protocol {
         Ok(())
     }
 
+    fn stage_annotations(&self, scene: &mut Scene) {
+        let mut entries = Vec::with_capacity(self.annotations.len());
+        let mut counts = [0u32; 3];
+        for spec in &self.annotations {
+            let kind = spec.kind();
+            counts[kind.tag().index()] += 1;
+            entries.push(Annotation::new(spec.name(), kind).with_visible(spec.visible()));
+        }
+        let roi = self.annotation_roi.as_deref().map(|name| {
+            entries
+                .iter()
+                .position(|entry| entry.name() == name)
+                .expect("a checked protocol names a region annotation")
+        });
+        scene.annotations.restore(AnnotationState {
+            entries,
+            selected: None,
+            roi,
+            counts,
+        });
+    }
+
     pub fn stage(&self, scene: &mut Scene) -> Result<Staged, ProtocolError> {
         assert!(scene.objects.is_empty(), "a protocol stages an empty scene");
         self.validate(scene)?;
@@ -190,6 +212,7 @@ impl Protocol {
             .collect::<Vec<_>>();
         let keys = channel_keys(&names);
         self.stage_channels(scene, &names)?;
+        self.stage_annotations(scene);
         if let Some(render) = self.render {
             scene.exposure = render.exposure;
             scene.step_scale = render.step_scale;

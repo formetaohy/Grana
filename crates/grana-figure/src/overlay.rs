@@ -9,6 +9,7 @@ use grana_ui::{
 };
 use grana_volume::{Axis, Clip, Region};
 
+use crate::annotation::{self, Item as AnnotationItem};
 use crate::labels::{self, Label};
 use crate::value;
 
@@ -144,6 +145,9 @@ pub struct Overlay<'a> {
     pub clip: Clip,
     pub legends: &'a [Legend],
     pub labels: &'a [Label],
+    pub annotations: &'a [AnnotationItem],
+    pub pending: Option<[f32; 3]>,
+    pub voxel: Vec3,
     pub recording: Option<(u32, u32)>,
 }
 
@@ -195,6 +199,11 @@ fn paint_volume(painter: &mut Painter, overlay: &Overlay<'_>) {
         let placed =
             labels::volume_labels(overlay.labels, view_projection, overlay.camera.eye(), rect);
         labels::paint(painter, rect, &placed);
+    }
+    let placed = annotation::volume(overlay.annotations, view_projection, world_per_point, rect);
+    annotation::paint(painter, rect, &placed);
+    if let Some(pending) = overlay.pending {
+        annotation::pending(painter, rect, view_projection, rect, pending);
     }
     painter.pop_clip(clip);
 }
@@ -270,6 +279,16 @@ fn paint_section(painter: &mut Painter, overlay: &Overlay<'_>) {
         );
         labels::paint(painter, rect, &placed);
     }
+    let tolerance = 1.5 * overlay.voxel[overlay.section.axis().index()];
+    let placed = annotation::section(
+        overlay.annotations,
+        focus,
+        overlay.section.axis(),
+        overlay.section.span(),
+        rect,
+        tolerance,
+    );
+    annotation::paint(painter, rect, &placed);
     painter.pop_clip(clip);
 }
 pub(crate) fn figure(

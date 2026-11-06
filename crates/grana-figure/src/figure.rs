@@ -1,6 +1,7 @@
 use glam::Vec2;
 use grana_ui::{Instance, Rect, Ui};
 
+use crate::annotation::{self, Placed as PlacedAnnotation};
 use crate::labels::{self, Placed as PlacedLabel};
 use crate::overlay::{self, Caption, Legend, Placed};
 
@@ -8,6 +9,7 @@ pub struct Contents<'a> {
     pub legends: &'a [Legend],
     pub caption: Option<&'a Caption>,
     pub labels: &'a [PlacedLabel],
+    pub annotations: &'a [PlacedAnnotation],
 }
 
 pub fn instances<A: Clone>(
@@ -36,5 +38,6 @@ pub fn instances<A: Clone>(
             backdrop,
         );
         labels::paint(painter, rect, contents.labels);
+        annotation::paint(painter, rect, contents.annotations);
     })
 }

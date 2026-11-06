@@ -54,6 +54,8 @@ pub enum Icon {
     Undo,
     Redo,
     Pencil,
+    Ruler,
+    Sphere,
 }
 
 pub fn chevron(
@@ -475,6 +477,20 @@ pub fn paint(
                 ],
             );
             line(painter, (11.6, 5.4), (14.6, 8.4));
+        }
+        Icon::Ruler => {
+            line(painter, (3.2, 12.2), (16.8, 12.2));
+            line(painter, (3.2, 10.0), (3.2, 14.4));
+            line(painter, (16.8, 10.0), (16.8, 14.4));
+            for x in [6.6, 10.0, 13.4] {
+                line(painter, (x, 12.2), (x, 15.0));
+            }
+            line(painter, (10.0, 9.0), (10.0, 12.2));
+        }
+        Icon::Sphere => {
+            arc(painter, 10.0, 10.0, 6.6, 0.0, TAU);
+            line(painter, (3.4, 10.0), (16.6, 10.0));
+            arc(painter, 10.0, 10.0, 3.1, 0.0, TAU);
         }
     }
 }

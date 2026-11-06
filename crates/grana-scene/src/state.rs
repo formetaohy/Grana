@@ -4,6 +4,7 @@ use grana_display::{Shading, TransferFunction};
 use grana_object::{RelationFrame, TrackSet};
 use grana_volume::{Clip, Intensity, Region};
 
+use crate::annotation::{AnnotationState, AnnotationTag};
 use crate::coloc::{ColocState, MaskKey};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
@@ -34,6 +35,7 @@ pub struct SceneState {
     pub mask: Option<u64>,
     pub mask_filter: Option<MaskFilter>,
     pub mask_radius: f32,
+    pub annotations: AnnotationState,
     pub time: u32,
     pub selection: Option<SelectionState>,
     pub sets: Vec<SetState>,
@@ -109,6 +111,16 @@ impl SceneState {
                     && self.drift.reference() < frame_count))
             && self.mask_radius.is_finite()
             && self.mask_radius >= 0.0
+            && self
+                .annotations
+                .selected
+                .is_none_or(|index| index < self.annotations.entries.len())
+            && self.annotations.roi.is_none_or(|index| {
+                self.annotations
+                    .entries
+                    .get(index)
+                    .is_some_and(|entry| entry.kind().tag() == AnnotationTag::Roi)
+            })
             && self.mask_filter.is_none_or(|filter| {
                 self.mask.is_some_and(|mask| {
                     self.sets.iter().any(|set| {
@@ -197,6 +209,7 @@ impl Scene {
             mask: self.mask.map(|set| set.raw()),
             mask_filter: self.mask_filter,
             mask_radius: self.mask_radius,
+            annotations: self.annotations.state(),
             time: self.time(),
             selection: self.selection().map(|selection| SelectionState {
                 set: selection.set.raw(),
@@ -242,6 +255,7 @@ impl Scene {
                 })
         });
         self.mask_radius = state.mask_radius;
+        self.annotations.restore(state.annotations);
         let mask = self.mask.and_then(|set| self.objects.get(set)).map(|set| {
             MaskKey::new(
                 set.id(),
@@ -326,6 +340,7 @@ impl Scene {
         }
         hash = mix(hash, self.mask.map_or(0, ObjectSetId::raw));
         hash = mix(hash, u64::from(self.mask_radius.to_bits()));
+        hash = mix(hash, self.annotations.document());
         if let Some(filter) = self.mask_filter {
             hash = mix(hash, 1);
             hash = mix(hash, filter.target().raw());

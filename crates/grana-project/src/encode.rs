@@ -13,10 +13,10 @@ use grana_object::{
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
 };
 use grana_scene::{
-    ChannelState, ColocResult, ColocState, ColorState, Criteria, Curation, Drift, FilterRange,
-    ItemState, LassoPath, MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe,
-    RelationState, SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit,
-    TrackStyle, Visibility,
+    Annotation, AnnotationKind, AnnotationState, ChannelState, ColocResult, ColocState, ColorState,
+    Criteria, Curation, Drift, FilterRange, ItemState, LassoPath, MeasureState, ObjectColor,
+    ObjectFrame, ObjectParams, Provenance, Recipe, RelationState, SceneState, Seeds,
+    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
 };
 use grana_volume::{Clip, Intensity, Region};
 
@@ -148,6 +148,55 @@ impl Encode for SceneState {
         self.sets.encode(writer);
         self.coloc.encode(writer);
         self.drift.encode(writer);
+        self.annotations.encode(writer);
+    }
+}
+
+impl Encode for AnnotationState {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        self.entries.encode(writer);
+        match self.selected {
+            Some(index) => {
+                writer.u8(1);
+                writer.count(index);
+            }
+            None => writer.u8(0),
+        }
+        match self.roi {
+            Some(index) => {
+                writer.u8(1);
+                writer.count(index);
+            }
+            None => writer.u8(0),
+        }
+        for count in self.counts {
+            writer.u32(count);
+        }
+    }
+}
+
+impl Encode for Annotation {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.string(self.name());
+        writer.bool(self.visible());
+        self.kind().encode(writer);
+    }
+}
+
+impl Encode for AnnotationKind {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.u8(self.tag().index() as u8);
+        for value in self.anchor() {
+            writer.f32(value);
+        }
+        if let Some(end) = self.end() {
+            for value in end {
+                writer.f32(value);
+            }
+        }
+        if let Some(radius) = self.radius() {
+            writer.f32(radius);
+        }
     }
 }
 

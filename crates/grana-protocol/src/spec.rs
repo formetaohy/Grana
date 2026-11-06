@@ -6,7 +6,7 @@ use grana_measure::{
 };
 use grana_object::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
 use grana_project::{Export, ViewState};
-use grana_scene::{ObjectColor, ObjectKind, ObjectParams, ObjectSet, Scene};
+use grana_scene::{Annotation, ObjectColor, ObjectKind, ObjectParams, ObjectSet, Scene};
 use grana_volume::{Axis, Clip};
 use serde::{Deserialize, Serialize};
 
@@ -226,6 +226,111 @@ impl MaskFilterSpec {
                 "the analysis mask filter on {} keeps a finite range of relation values",
                 field.label()
             )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum AnnotationSpec {
+    Point {
+        name: String,
+        #[serde(default = "truth", skip_serializing_if = "is_true")]
+        visible: bool,
+        at: [f32; 3],
+    },
+    Distance {
+        name: String,
+        #[serde(default = "truth", skip_serializing_if = "is_true")]
+        visible: bool,
+        from: [f32; 3],
+        to: [f32; 3],
+    },
+    Roi {
+        name: String,
+        #[serde(default = "truth", skip_serializing_if = "is_true")]
+        visible: bool,
+        center: [f32; 3],
+        radius: f32,
+    },
+}
+
+impl AnnotationSpec {
+    pub fn of(annotation: &Annotation) -> Self {
+        let name = annotation.name().to_string();
+        let visible = annotation.visible();
+        match annotation.kind().as_point() {
+            Some(at) => Self::Point { name, visible, at },
+            None => match (annotation.kind().end(), annotation.kind().radius()) {
+                (Some(to), _) => Self::Distance {
+                    name,
+                    visible,
+                    from: annotation.kind().anchor(),
+                    to,
+                },
+                (None, Some(radius)) => Self::Roi {
+                    name,
+                    visible,
+                    center: annotation.kind().anchor(),
+                    radius,
+                },
+                (None, None) => unreachable!("an annotation names a point, a distance or a region"),
+            },
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Point { name, .. } | Self::Distance { name, .. } | Self::Roi { name, .. } => name,
+        }
+    }
+
+    pub fn visible(&self) -> bool {
+        match self {
+            Self::Point { visible, .. }
+            | Self::Distance { visible, .. }
+            | Self::Roi { visible, .. } => *visible,
+        }
+    }
+
+    pub fn kind(&self) -> grana_scene::AnnotationKind {
+        match *self {
+            Self::Point { at, .. } => grana_scene::AnnotationKind::point(at),
+            Self::Distance { from, to, .. } => grana_scene::AnnotationKind::distance(from, to),
+            Self::Roi { center, radius, .. } => grana_scene::AnnotationKind::roi(center, radius),
+        }
+    }
+
+    pub(super) fn checked(&self) -> Result<(), ProtocolError> {
+        if self.name().trim().is_empty() {
+            return Err(ProtocolError::Invalid(
+                "an annotation names itself".to_string(),
+            ));
+        }
+        let finite = |point: [f32; 3]| point.iter().all(|value| value.is_finite());
+        match *self {
+            Self::Point { at, .. } => {
+                if !finite(at) {
+                    return Err(ProtocolError::Invalid(
+                        "an annotation point lies in the volume".to_string(),
+                    ));
+                }
+            }
+            Self::Distance { from, to, .. } => {
+                if !finite(from) || !finite(to) || from == to {
+                    return Err(ProtocolError::Invalid(
+                        "an annotation distance spans two distinct points".to_string(),
+                    ));
+                }
+            }
+            Self::Roi { center, radius, .. } => {
+                if !finite(center) || !radius.is_finite() || radius <= 0.0 {
+                    return Err(ProtocolError::Invalid(
+                        "an annotation region grows by a positive radius".to_string(),
+                    ));
+                }
+            }
         }
         Ok(())
     }
