@@ -9,7 +9,7 @@ use grana_editor::{FrameStats, Pane, Stage, ViewStats, Workspace};
 use grana_engine::{Destination, Engine, Outcome, Panels, Picked, Plan, Pose, SAMPLE_LIMIT};
 use grana_gpu::Gpu;
 use grana_project::ViewState;
-use grana_render::{FrameInfo, PickPane};
+use grana_render::{FrameInfo, PickPane, Quality};
 use grana_scene::ObjectSetId;
 use grana_session::{Command, Effects, Export, Session, SessionView};
 use grana_ui::{
@@ -28,14 +28,6 @@ const STREAM_POLL: Duration = Duration::from_millis(16);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
 const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
-const INTERACTIVE_SCALE: f32 = 0.45;
-const INTERACTIVE_SCALE_MIN: f32 = 0.35;
-const INTERACTIVE_SCALE_MAX: f32 = 0.7;
-const INTERACTIVE_STEP: f32 = 0.1;
-const SLOW_FRAME_MS: f64 = 22.0;
-const FAST_FRAME_MS: f64 = 18.0;
-const MOTION_WARMUP: u32 = 2;
-const MOTION_SAMPLES: u32 = 3;
 const SETTLE_DELAY: Duration = Duration::from_millis(120);
 const REFINE_INTERVAL: Duration = Duration::from_millis(80);
 
@@ -72,11 +64,6 @@ pub struct App {
     ime_area: Option<(i32, i32, u32, u32)>,
     scene_changed: bool,
     moving: bool,
-    interactive_scale: f32,
-    interactive_ceiling: f32,
-    motion_active: bool,
-    motion_frames: u32,
-    motion_total: Duration,
     last_motion: Option<Instant>,
 }
 
@@ -111,11 +98,6 @@ impl App {
             ime_area: None,
             scene_changed: true,
             moving: false,
-            interactive_scale: INTERACTIVE_SCALE,
-            interactive_ceiling: INTERACTIVE_SCALE_MAX,
-            motion_active: false,
-            motion_frames: 0,
-            motion_total: Duration::ZERO,
             last_motion: None,
         }
     }
@@ -149,7 +131,6 @@ impl App {
     }
 
     fn redraw(&mut self) {
-        let frame_started = Instant::now();
         if self.session.poll() {
             self.scene_changed = true;
         }
@@ -180,7 +161,6 @@ impl App {
             self.last_motion = Some(Instant::now());
         }
         self.fit_views();
-        self.begin_motion();
         let exporting = self.engine.as_ref().is_some_and(Engine::exporting);
         let mut delay = if exporting {
             self.export_tick().unwrap_or(Duration::MAX)
@@ -208,48 +188,6 @@ impl App {
             delay = delay.min(SETTLE_DELAY.saturating_sub(at.elapsed()));
         }
         self.schedule(delay);
-        self.finish_motion(frame_started);
-    }
-
-    fn begin_motion(&mut self) {
-        if !self.moving {
-            self.motion_active = false;
-            return;
-        }
-        if self.motion_active {
-            return;
-        }
-        self.motion_active = true;
-        self.tune_interactive_scale();
-        self.motion_frames = 0;
-        self.motion_total = Duration::ZERO;
-    }
-
-    fn finish_motion(&mut self, started: Instant) {
-        if !self.motion_active {
-            return;
-        }
-        self.motion_frames += 1;
-        if self.motion_frames > MOTION_WARMUP {
-            self.motion_total += started.elapsed();
-        }
-    }
-
-    fn tune_interactive_scale(&mut self) {
-        let measured = self.motion_frames.saturating_sub(MOTION_WARMUP);
-        if measured < MOTION_SAMPLES {
-            return;
-        }
-        let average = self.motion_total.as_secs_f64() * 1000.0 / f64::from(measured);
-        if average > SLOW_FRAME_MS {
-            self.interactive_scale = (self.interactive_scale - INTERACTIVE_STEP)
-                .max(INTERACTIVE_SCALE_MIN)
-                .min(self.interactive_ceiling);
-            self.interactive_ceiling = self.interactive_scale;
-        } else if average < FAST_FRAME_MS && self.interactive_scale < self.interactive_ceiling {
-            self.interactive_scale =
-                (self.interactive_scale + INTERACTIVE_STEP).min(self.interactive_ceiling);
-        }
     }
 
     fn exchange_bricks(&mut self) {
@@ -287,7 +225,6 @@ impl App {
         if session.generation() != self.generation {
             self.generation = session.generation();
             *scene_changed = true;
-            self.interactive_ceiling = INTERACTIVE_SCALE_MAX;
             if let Some(scene) = session.scene() {
                 engine.set_dataset(&surface.gpu.device, scene.dataset.pyramid());
             }
@@ -304,7 +241,6 @@ impl App {
         if reload != self.reload {
             self.reload = reload;
             *scene_changed = true;
-            self.interactive_ceiling = INTERACTIVE_SCALE_MAX;
             if let Some(scene) = session.scene() {
                 engine.set_dataset(&surface.gpu.device, scene.dataset.pyramid());
             }
@@ -656,9 +592,9 @@ impl App {
             .last_motion
             .is_some_and(|at| at.elapsed() < SETTLE_DELAY);
         let quality = if self.moving || settling {
-            self.interactive_scale
+            Quality::Interactive
         } else {
-            1.0
+            Quality::Full
         };
         let App {
             surface,
@@ -686,7 +622,7 @@ impl App {
                 volume_region: panes.volume,
                 section_region: panes.section,
                 prefetch: playing,
-                scale: quality,
+                quality,
             },
         ) {
             Ok(info) => info,
@@ -1490,7 +1426,6 @@ impl ApplicationHandler for App {
                     surface.gpu.resize([size.width, size.height]);
                     surface.window.request_redraw();
                 }
-                self.interactive_ceiling = INTERACTIVE_SCALE_MAX;
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 if let Some(surface) = &self.surface {

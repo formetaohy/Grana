@@ -67,6 +67,20 @@ fn channel_sample(index: u32, unit: f32) -> vec4<f32> {
     );
 }
 
+const PACK: u32 = 4u;
+
+fn pack_active(pack: u32, count: u32) -> bool {
+    var occupied = false;
+    for (var component = 0u; component < PACK; component += 1u) {
+        let channel = pack * PACK + component;
+        if (channel >= count) {
+            break;
+        }
+        occupied = occupied || channel_opacity(channel) > 0.0;
+    }
+    return occupied;
+}
+
 fn region_active() -> bool {
     return frame.region_min.w > 0.5;
 }

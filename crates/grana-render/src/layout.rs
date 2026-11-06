@@ -7,7 +7,7 @@ use wgpu::{
     StorageTextureAccess, TextureFormat, TextureSampleType, TextureViewDimension,
 };
 
-use grana_volume::CHANNEL_LIMIT;
+use crate::atlas::PACK_LIMIT;
 
 pub(crate) struct Layouts {
     pub scene: BindGroupLayout,
@@ -106,7 +106,7 @@ impl Layouts {
                         view_dimension: TextureViewDimension::D3,
                         multisampled: false,
                     },
-                    count: NonZeroU32::new(CHANNEL_LIMIT as u32),
+                    count: NonZeroU32::new(PACK_LIMIT as u32),
                 },
                 sampler(1, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
             ],

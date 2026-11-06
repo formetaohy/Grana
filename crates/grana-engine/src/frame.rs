@@ -1,5 +1,5 @@
 use grana_display::{Camera, CameraState, SectionCamera, SectionState};
-use grana_render::{Frame, FrameInfo, Renderer};
+use grana_render::{Frame, FrameInfo, Quality, Renderer};
 use grana_scene::Scene;
 use wgpu::{Device, Queue, TextureView};
 
@@ -16,7 +16,7 @@ pub(crate) struct View<'a> {
     pub samples: u32,
     pub prefetch: bool,
     pub transparent: bool,
-    pub scale: f32,
+    pub quality: Quality,
 }
 
 pub(crate) fn draw(
@@ -43,7 +43,7 @@ pub(crate) fn draw(
             clip: frame.scene.clip,
             exposure: frame.scene.exposure,
             samples: frame.samples,
-            scale: frame.scale,
+            quality: frame.quality,
             scene: &scene,
             prefetch: frame.prefetch,
         },

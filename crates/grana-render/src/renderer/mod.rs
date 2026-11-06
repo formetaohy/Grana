@@ -22,7 +22,7 @@ use wgpu::{
     TextureViewDescriptor,
 };
 
-use crate::atlas::{Atlas, ResidentBrick};
+use crate::atlas::{Atlas, PACK, ResidentBrick};
 use crate::brick::{BrickRecord, BrickTable};
 use crate::census::{CENSUS_LEVELS, Census};
 use crate::cut::CutLayer;
@@ -49,7 +49,7 @@ use crate::volume::VolumePass;
 use grana_display::{Camera, SectionCamera};
 use grana_volume::CHANNEL_LIMIT;
 
-const DUMMY_VOXEL: [u16; 1] = [0];
+const DUMMY_VOXEL: [u16; PACK] = [0; PACK];
 
 const FEEDBACK_SLOTS: usize = 4;
 
@@ -64,6 +64,8 @@ const PREFETCH_SHARE: usize = 4;
 const CENSUS_BYTES: u64 = (CENSUS_LEVELS * size_of::<u32>()) as u64;
 
 const UNIT: f32 = 65535.0;
+
+const INTERACTIVE_SCALE: f32 = 0.5;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ViewInfo {
@@ -111,6 +113,31 @@ pub struct Requests {
     pub section_view: ViewInfo,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Quality {
+    #[default]
+    Full,
+    Interactive,
+    Export,
+}
+
+impl Quality {
+    pub fn scale(self) -> f32 {
+        match self {
+            Self::Full | Self::Export => 1.0,
+            Self::Interactive => INTERACTIVE_SCALE,
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::Full => 0,
+            Self::Interactive => 1,
+            Self::Export => 2,
+        }
+    }
+}
+
 pub struct Frame<'a, 'b> {
     pub target: &'a TextureView,
     pub size: [u32; 2],
@@ -123,7 +150,7 @@ pub struct Frame<'a, 'b> {
     pub clip: Clip,
     pub exposure: f32,
     pub samples: u32,
-    pub scale: f32,
+    pub quality: Quality,
     pub scene: &'a SceneFrame<'b>,
     pub prefetch: bool,
 }
@@ -131,7 +158,7 @@ pub struct Frame<'a, 'b> {
 pub struct Renderer {
     layouts: Layouts,
     present: Present,
-    frame_target: Option<FrameTarget>,
+    targets: [Option<FrameTarget>; 3],
     scene: Option<crate::table::SceneTable>,
     atlas: Option<Atlas>,
     bricks: Vec<Option<BrickTable>>,
@@ -163,6 +190,7 @@ pub struct Renderer {
     transparent: bool,
     object_key: Option<u64>,
     settled: Option<Residency>,
+    planned: Option<Residency>,
     regions: Option<Regions>,
     render_scale: f32,
     pick_target: Option<PickTarget>,
@@ -191,7 +219,7 @@ impl Renderer {
         });
         Self {
             present: Present::new(device, format),
-            frame_target: None,
+            targets: [None, None, None],
             scene: None,
             atlas: None,
             bricks: Vec::new(),
@@ -224,6 +252,7 @@ impl Renderer {
             transparent: false,
             object_key: None,
             settled: None,
+            planned: None,
             regions: None,
             render_scale: 1.0,
             pick_target: None,
@@ -244,7 +273,7 @@ impl Renderer {
     }
 
     pub fn begin_export(&mut self) {
-        self.frame_target = None;
+        self.targets[Quality::Export.index()] = None;
         self.settled = None;
     }
 
@@ -259,7 +288,9 @@ impl Renderer {
             "a pyramid holds at least one level"
         );
         let finest = BrickGrid::new(pyramid.level(0).extent()).count() as u64;
-        let slot_bytes = (PADDED_SIDE as u64).pow(3) * size_of::<u16>() as u64 * channels as u64;
+        let packs = channels.div_ceil(PACK);
+        let slot_bytes =
+            (PADDED_SIDE as u64).pow(3) * size_of::<[u16; PACK]>() as u64 * packs as u64;
         let requested = (self.budget / slot_bytes).max(1).min(finest);
         let atlas = Atlas::new(
             device,
@@ -304,13 +335,14 @@ impl Renderer {
         self.time = 0;
         self.counts.fill(0);
         self.meshes.clear();
-        self.frame_target = None;
+        self.targets = [None, None, None];
         self.regions = None;
         self.pick_readback = None;
         self.pick_pending = false;
         self.epoch += 1;
         self.pin = 0;
         self.settled = None;
+        self.planned = None;
         self.info = FrameInfo::default();
     }
 
@@ -387,12 +419,20 @@ impl Renderer {
         {
             other.set_record(queue, brick.index, BrickRecord::MISSING);
         }
-        for channel in 0..*channels {
-            let intensity = pyramid.channels()[channel].intensity();
-            let source = &data.channels()[channel];
-            let mut units = vec![0u16; source.voxel_count()];
-            source.write_units(intensity, &mut units);
-            atlas.write(queue, channel, slot, &units);
+        let voxels = data.channels()[0].voxel_count();
+        let mut units = vec![0u16; voxels * PACK];
+        for pack in 0..(*channels).div_ceil(PACK) {
+            units.fill(0);
+            for component in 0..PACK {
+                let channel = pack * PACK + component;
+                if channel >= *channels {
+                    break;
+                }
+                let intensity = pyramid.channels()[channel].intensity();
+                data.channels()[channel]
+                    .write_units_strided(intensity, &mut units, PACK, component);
+            }
+            atlas.write(queue, pack, slot, &units);
         }
         atlas.assign(
             slot,
@@ -423,19 +463,23 @@ impl Renderer {
             "an exposure scales radiance by a positive factor"
         );
         assert!(frame.samples > 0, "a target resolves at least one sample");
-        let size = crate::scale::size(frame.size, frame.scale);
-        if self
-            .frame_target
+        let quality = frame.quality;
+        let size = crate::scale::size(frame.size, quality.scale());
+        let index = quality.index();
+        if self.targets[index]
             .as_ref()
             .is_none_or(|target| target.size != size)
         {
-            self.frame_target = Some(FrameTarget::new(device, &self.layouts, &self.present, size));
+            self.targets[index] =
+                Some(FrameTarget::new(device, &self.layouts, &self.present, size));
             self.settled = None;
         }
-        self.render_scale = frame.scale;
-        let mut target = self.frame_target.take().expect("the frame target is ready");
+        self.render_scale = quality.scale();
+        let mut target = self.targets[index]
+            .take()
+            .expect("the frame target is ready");
         let info = self.render(device, queue, &mut target, frame);
-        self.frame_target = Some(target);
+        self.targets[index] = Some(target);
         info
     }
 
@@ -452,9 +496,6 @@ impl Renderer {
         let Some(regions) = self.regions else {
             return false;
         };
-        if self.frame_target.is_none() {
-            return false;
-        }
         let point = crate::scale::point(point, self.render_scale);
         let region = match pane {
             PickPane::Volume => regions.volume,
@@ -581,7 +622,7 @@ pub(super) fn dummy_texture(device: &Device, queue: &Queue) -> TextureView {
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D3,
-        format: TextureFormat::R16Unorm,
+        format: TextureFormat::Rgba16Unorm,
         usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
         view_formats: &[],
     });
@@ -595,7 +636,7 @@ pub(super) fn dummy_texture(device: &Device, queue: &Queue) -> TextureView {
         cast_slice(&DUMMY_VOXEL),
         TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(2),
+            bytes_per_row: Some(size_of::<[u16; PACK]>() as u32),
             rows_per_image: Some(1),
         },
         wgpu::Extent3d {

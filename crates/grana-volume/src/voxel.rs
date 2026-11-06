@@ -63,11 +63,19 @@ impl VoxelData {
         max
     }
 
-    pub fn write_units(&self, intensity: Intensity, out: &mut [u16]) {
+    pub fn write_units_strided(
+        &self,
+        intensity: Intensity,
+        out: &mut [u16],
+        stride: usize,
+        offset: usize,
+    ) {
+        assert!(stride > 0, "a unit stride visits at least one slot");
+        assert!(offset < stride, "a unit offset lies inside the stride");
         assert_eq!(
             out.len(),
-            self.voxel_count(),
-            "the destination must hold every voxel"
+            self.voxel_count() * stride,
+            "the destination must hold every voxel at the stride"
         );
         let span = intensity.span();
         let scale = if span > 0.0 {
@@ -82,7 +90,7 @@ impl VoxelData {
             } else {
                 0.0
             };
-            out[index] = unit.round() as u16;
+            out[offset + index * stride] = unit.round() as u16;
             index += 1;
         });
     }

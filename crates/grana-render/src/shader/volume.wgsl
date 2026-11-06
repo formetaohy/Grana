@@ -99,14 +99,12 @@ fn lit(color: vec3<f32>, normal: vec3<f32>, direction: vec3<f32>, light: vec2<f3
     return color * (ambient + frame.shading.y * diffuse) + vec3<f32>(frame.shading.z * specular);
 }
 
-fn shade_volume(
-    channel: u32,
+fn shade_channel(
+    gradient: vec3<f32>,
     color: vec3<f32>,
     uvw: vec3<f32>,
-    step: vec3<f32>,
     direction: vec3<f32>,
 ) -> vec3<f32> {
-    let gradient = density_gradient(channel, uvw, step);
     let magnitude = length(gradient);
     if (magnitude < GRADIENT_EPSILON) {
         return color;
@@ -130,6 +128,7 @@ fn march(begin: f32, finish: f32, direction: vec3<f32>) -> vec4<f32> {
         let step_length = frame.march.x;
         let max_steps = 4096u;
         let channel_count = u32(frame.march.z);
+        let pack_count = (channel_count + PACK - 1u) / PACK;
         let voxel_world = frame.box_size.xyz / frame.dims.xyz;
         let gradient_step = vec3<f32>(1.0) / frame.dims.xyz;
         let direction_uvw = direction / frame.box_size.xyz;
@@ -155,22 +154,59 @@ fn march(begin: f32, finish: f32, direction: vec3<f32>) -> vec4<f32> {
                 var optical_depth = 0.0;
                 var emission = vec3<f32>(0.0);
 
-                for (var channel = 0u; channel < channel_count; channel += 1u) {
-                    let opacity = channel_opacity(channel);
-                    if (opacity <= 0.0) {
+                for (var pack = 0u; pack < pack_count; pack += 1u) {
+                    if (!pack_active(pack, channel_count)) {
                         continue;
                     }
-                    let unit = sample_volume(channel, position);
-                    let sample = channel_sample(channel, unit);
-                    let per_voxel = clamp(sample.a, 0.0, 0.999);
-                    if (per_voxel > MINIMUM_VOXEL_ALPHA) {
-                        let tau = -log(1.0 - per_voxel) * segment * voxels_per_world * opacity;
-                        var color = sample.rgb;
-                        if (per_voxel > SHADING_THRESHOLD) {
-                            color = shade_volume(channel, color, position, gradient_step, direction);
+                    let values = sample_pack(pack, position);
+                    var alpha: array<f32, 4>;
+                    var color: array<vec3<f32>, 4>;
+                    var shade = false;
+                    for (var component = 0u; component < PACK; component += 1u) {
+                        let channel = pack * PACK + component;
+                        if (channel >= channel_count) {
+                            break;
                         }
+                        if (channel_opacity(channel) <= 0.0) {
+                            continue;
+                        }
+                        let sample = channel_sample(channel, values[component]);
+                        alpha[component] = clamp(sample.a, 0.0, 0.999);
+                        color[component] = sample.rgb;
+                        shade = shade || alpha[component] > SHADING_THRESHOLD;
+                    }
+                    if (shade) {
+                        let gradient = pack_gradient(pack, position, gradient_step);
+                        for (var component = 0u; component < PACK; component += 1u) {
+                            let channel = pack * PACK + component;
+                            if (channel >= channel_count) {
+                                break;
+                            }
+                            if (alpha[component] <= SHADING_THRESHOLD
+                                || channel_opacity(channel) <= 0.0) {
+                                continue;
+                            }
+                            color[component] = shade_channel(
+                                gradient[component],
+                                color[component],
+                                position,
+                                direction,
+                            );
+                        }
+                    }
+                    for (var component = 0u; component < PACK; component += 1u) {
+                        let channel = pack * PACK + component;
+                        if (channel >= channel_count) {
+                            break;
+                        }
+                        let opacity = channel_opacity(channel);
+                        if (opacity <= 0.0 || alpha[component] <= MINIMUM_VOXEL_ALPHA) {
+                            continue;
+                        }
+                        let tau =
+                            -log(1.0 - alpha[component]) * segment * voxels_per_world * opacity;
                         optical_depth += tau;
-                        emission += tau * color;
+                        emission += tau * color[component];
                     }
                 }
 

@@ -15,14 +15,15 @@ use grana_display::{
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::{Track, TrackNode, TrackSet};
 use grana_render::{
-    CutInfo, Frame, Layer, LayerKey, Marker, PickId, PickPane, Renderer, SceneFrame, Style,
+    CutInfo, Frame, Layer, LayerKey, Marker, PickId, PickPane, Quality, Renderer, SceneFrame, Style,
 };
 use grana_volume::{
-    Axis, BrickGrid, Channel, Clip, Extent, Level, Pyramid, Region, Spacing, Volume, VolumeSeries,
-    VoxelData,
+    Axis, BrickGrid, Channel, Clip, Extent, Level, PADDED_SIDE, Pyramid, Region, Spacing, Volume,
+    VolumeSeries, VoxelData,
 };
 
 const BUDGET: u64 = 512 << 20;
+const SLOT_BYTES: u64 = (PADDED_SIDE as u64).pow(3) * size_of::<[u16; 4]>() as u64;
 const WHOLE: [u32; 4] = [0, 0, SIDE, SIDE];
 const CORNER: [u32; 4] = [0, 0, 1, 1];
 const SECTION_AREA: [u32; 4] = [1, 1, SIDE - 1, SIDE - 1];
@@ -100,6 +101,125 @@ fn streams_two_channels() {
 }
 
 #[test]
+fn samples_a_channel_beyond_the_first_pack() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = five_channel_volume();
+    let pyramid = volume.pyramid();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    settle(
+        &mut renderer,
+        Session {
+            device: &device,
+            queue: &queue,
+            target: &view,
+            camera: &camera,
+            section: &section,
+            scene: &scene,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            region: Region::none(),
+            time: 0,
+        },
+        |request| {
+            let grid = BrickGrid::new(volume.extent());
+            volume.brick(&grid, request.coord)
+        },
+    );
+    let pixels = read_pixels(&device, &queue, &texture, SIDE);
+    assert!(
+        red_pixels(&pixels) > 200,
+        "the fifth channel lives in the second pack"
+    );
+}
+
+#[test]
+fn keeps_a_settled_frame_across_quality_switches() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let volume = sphere(Extent::new(128, 128, 96), Spacing::new(0.1, 0.1, 0.13));
+    let pyramid = volume.pyramid();
+    let transfers = vec![TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    let session = Session {
+        device: &device,
+        queue: &queue,
+        target: &view,
+        camera: &camera,
+        section: &section,
+        scene: &scene,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        region: Region::none(),
+        time: 0,
+    };
+    settle(&mut renderer, session, |request| {
+        let grid = BrickGrid::new(volume.extent());
+        volume.brick(&grid, request.coord)
+    });
+    let settled = read_pixels(&device, &queue, &texture, SIDE);
+    let interactive = renderer.draw(
+        &device,
+        &queue,
+        Frame {
+            quality: Quality::Interactive,
+            ..common::frame(&session)
+        },
+    );
+    assert!(
+        interactive.samples < SAMPLES,
+        "the interactive target resolves its own frame"
+    );
+    let restored = renderer.draw(&device, &queue, common::frame(&session));
+    assert_eq!(
+        restored.samples, SAMPLES,
+        "the settled target keeps its samples across a quality switch"
+    );
+    let again = read_pixels(&device, &queue, &texture, SIDE);
+    assert_eq!(
+        settled, again,
+        "the retained frame is presented without resampling"
+    );
+}
+
+#[test]
 fn bounds_the_demand_to_the_cache() {
     let Some((device, queue)) = device() else {
         return;
@@ -125,7 +245,7 @@ fn bounds_the_demand_to_the_cache() {
         &device,
         &queue,
         wgpu::TextureFormat::Rgba8Unorm,
-        100 * 78_608,
+        100 * SLOT_BYTES,
     );
     renderer.set_dataset(&device, &pyramid);
     let session = Session {
@@ -1680,7 +1800,12 @@ fn keeps_hollow_bricks_out_of_the_cache() {
         layers: &[],
         markers: &[],
     };
-    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 8 * 78_608);
+    let mut renderer = Renderer::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        8 * SLOT_BYTES,
+    );
     renderer.set_dataset(&device, &pyramid);
     let session = Session {
         device: &device,
@@ -1781,7 +1906,7 @@ fn switches_levels() {
         &device,
         &queue,
         wgpu::TextureFormat::Rgba8Unorm,
-        100 * 78_608,
+        100 * SLOT_BYTES,
     );
     renderer.set_dataset(&device, &pyramid);
     let source = |request: grana_volume::BrickRequest| {
@@ -2097,6 +2222,32 @@ fn two_channel_volume() -> Volume {
     )
 }
 
+fn five_channel_volume() -> Volume {
+    let extent = Extent::new(128, 128, 96);
+    let count = extent.voxel_count() as usize;
+    let mut red = vec![0u16; count];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let index = extent.index(x, y, z) as usize;
+                red[index] = density(x, y, z, 40.0);
+            }
+        }
+    }
+    let empty = || VoxelData::U16(vec![0; count]);
+    Volume::new(
+        extent,
+        Spacing::new(0.1, 0.1, 0.13),
+        vec![
+            Channel::new("one", [0.2, 0.4, 1.0], empty()),
+            Channel::new("two", [0.2, 1.0, 0.3], empty()),
+            Channel::new("three", [0.9, 0.9, 0.3], empty()),
+            Channel::new("four", [0.6, 0.4, 1.0], empty()),
+            Channel::new("five", [1.0, 0.2, 0.2], VoxelData::U16(red)),
+        ],
+    )
+}
+
 fn density(x: u32, y: u32, z: u32, centre_x: f32) -> u16 {
     let radius =
         ((x as f32 - centre_x).powi(2) + (y as f32 - 64.0).powi(2) + (z as f32 - 48.0).powi(2))
@@ -2334,7 +2485,7 @@ impl Resident<'_> {
                     clip: Clip::none(),
                     exposure: 1.0,
                     samples: SAMPLES,
-                    scale: 1.0,
+                    quality: Quality::Full,
                     scene: &scene,
                     prefetch: false,
                 },
@@ -3999,7 +4150,7 @@ fn antialiases_transparent_silhouettes() {
                 clip: Clip::none(),
                 exposure: 1.0,
                 samples: 1,
-                scale: 1.0,
+                quality: Quality::Full,
                 scene: &scene,
                 prefetch: false,
             },
@@ -4077,7 +4228,7 @@ fn antialiases_opaque_silhouettes() {
                 clip: Clip::none(),
                 exposure: 1.0,
                 samples: 1,
-                scale: 1.0,
+                quality: Quality::Full,
                 scene: &scene,
                 prefetch: false,
             },

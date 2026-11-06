@@ -1,5 +1,5 @@
 @group(1) @binding(0) var<storage, read> bricks: array<BrickRecord>;
-@group(2) @binding(0) var atlases: binding_array<texture_3d<f32>, 16>;
+@group(2) @binding(0) var atlases: binding_array<texture_3d<f32>, 4>;
 @group(2) @binding(1) var atlas_sampler: sampler;
 
 struct VertexOutput {
@@ -20,11 +20,11 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
     return output;
 }
 
-fn sample_section(channel: u32, uvw: vec3<f32>) -> f32 {
+fn sample_section_pack(pack: u32, uvw: vec3<f32>) -> vec4<f32> {
     let cell = brick_cell(section.grid.xyz, section.dims.xyz, uvw);
     let record = bricks[brick_index(section.grid.xyz, cell)];
     if (record.slot == 0u || record.flags == 0u) {
-        return 0.0;
+        return vec4<f32>(0.0);
     }
     let texel = atlas_texel(
         section.grid.xyz,
@@ -33,7 +33,7 @@ fn sample_section(channel: u32, uvw: vec3<f32>) -> f32 {
         record.slot - 1u,
         uvw,
     );
-    return textureSampleLevel(atlases[channel], atlas_sampler, texel, 0.0).r;
+    return textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);
 }
 
 @fragment
@@ -54,10 +54,22 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     var color = vec4<f32>(0.0);
     let count = section.axes.x;
-    for (var channel = 0u; channel < count; channel += 1u) {
-        let opacity = channel_opacity(channel);
-        if (opacity > 0.0) {
-            let sample = channel_sample(channel, sample_section(channel, uvw));
+    let packs = (count + PACK - 1u) / PACK;
+    for (var pack = 0u; pack < packs; pack += 1u) {
+        if (!pack_active(pack, count)) {
+            continue;
+        }
+        let values = sample_section_pack(pack, uvw);
+        for (var component = 0u; component < PACK; component += 1u) {
+            let channel = pack * PACK + component;
+            if (channel >= count) {
+                break;
+            }
+            let opacity = channel_opacity(channel);
+            if (opacity <= 0.0) {
+                continue;
+            }
+            let sample = channel_sample(channel, values[component]);
             let alpha = sample.a * opacity;
             if (alpha > 0.0) {
                 color = vec4<f32>(

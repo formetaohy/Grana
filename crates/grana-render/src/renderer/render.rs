@@ -22,10 +22,11 @@ impl Renderer {
             clip,
             exposure,
             samples,
-            scale,
+            quality,
             scene,
             prefetch,
         } = frame;
+        let scale = quality.scale();
         let render_size = crate::scale::size(size, scale);
         let volume_region = crate::scale::region(window_volume, scale, render_size);
         let section_region = crate::scale::region(window_section, scale, render_size);
@@ -67,6 +68,7 @@ impl Renderer {
             epoch,
             content,
             settled,
+            planned,
             shadow,
             transparent,
             object_key,
@@ -143,8 +145,8 @@ impl Renderer {
             },
             levels,
         );
-        let unsettled = *settled != Some(residency);
-        info.settled = !unsettled;
+        let replan = *settled != Some(residency) || planned.as_ref() != Some(&residency);
+        info.settled = !replan;
         let slot_grid = atlas.slot_grid();
         ensure_brick(
             device,
@@ -284,65 +286,65 @@ impl Renderer {
                 },
             );
         }
+        let sample_index = target.samples.min(samples - 1);
+        let offset = sample::offset(sample_index, [volume_width, volume_height]);
+        frame_data.jitter = [offset.x, offset.y, sample_index as f32, 0.0];
+        let cut_offset = sample::offset(sample_index, cut_size);
+        section_data.jitter = [cut_offset.x, cut_offset.y, 0.0, 0.0];
+        let range = section_range(
+            pyramid,
+            section_level,
+            camera,
+            section,
+            section_aspect,
+            region,
+        );
+        scene_table.write(
+            device,
+            queue,
+            pyramid,
+            scene.channels,
+            frame_data,
+            section_data,
+        );
+        let scene_group = scene_table.group();
+        if replan {
+            census.prepare(queue);
+            planner.volume.prepare(
+                queue,
+                Schedule {
+                    time,
+                    level: volume_level,
+                    capacity: volume_capacity as u32,
+                    layer: 0,
+                    range: SectionRange::default(),
+                    dispatch: volume_dispatch(volume_table),
+                    bucket_scale: bucket_scale(camera, volume_table.world.to_array()),
+                },
+            );
+            planner.section.prepare(
+                queue,
+                Schedule {
+                    time,
+                    level: section_level,
+                    capacity: section_capacity as u32,
+                    layer: range.layer,
+                    range,
+                    dispatch: range.dispatch(),
+                    bucket_scale: 0.0,
+                },
+            );
+            planner.volume.bind_level(device, layouts, volume_table);
+            planner.section.bind_level(device, layouts, section_table);
+            census.encode(&mut encoder, scene_group);
+            planner.encode(&mut encoder, scene_group, &planner.volume, &planner.section);
+            *planned = Some(residency);
+        }
         if target.samples < samples {
             target.samples += 1;
             info.samples = target.samples;
-            let offset = sample::offset(target.samples - 1, [volume_width, volume_height]);
-            frame_data.jitter = [offset.x, offset.y, (target.samples - 1) as f32, 0.0];
-            let cut_offset = sample::offset(target.samples - 1, cut_size);
-            section_data.jitter = [cut_offset.x, cut_offset.y, 0.0, 0.0];
-            let range = section_range(
-                pyramid,
-                section_level,
-                camera,
-                section,
-                section_aspect,
-                region,
-            );
-            scene_table.write(
-                device,
-                queue,
-                pyramid,
-                scene.channels,
-                frame_data,
-                section_data,
-            );
-            if unsettled {
-                census.prepare(queue);
-                planner.volume.prepare(
-                    queue,
-                    Schedule {
-                        time,
-                        level: volume_level,
-                        capacity: volume_capacity as u32,
-                        layer: 0,
-                        range: SectionRange::default(),
-                        dispatch: volume_dispatch(volume_table),
-                        bucket_scale: bucket_scale(camera, volume_table.world.to_array()),
-                    },
-                );
-                planner.section.prepare(
-                    queue,
-                    Schedule {
-                        time,
-                        level: section_level,
-                        capacity: section_capacity as u32,
-                        layer: range.layer,
-                        range,
-                        dispatch: range.dispatch(),
-                        bucket_scale: 0.0,
-                    },
-                );
-                planner.volume.bind_level(device, layouts, volume_table);
-                planner.section.bind_level(device, layouts, section_table);
-            }
             meshes.write_uniforms(queue, &frame_data, scene.shading);
             markers.prepare(device, queue, layouts, scene.markers);
-            let scene_group = scene_table.group();
-            if unsettled {
-                census.encode(&mut encoder, scene_group);
-                planner.encode(&mut encoder, scene_group, &planner.volume, &planner.section);
-            }
             let styles = scene_styles(scene);
             if scene.shading.shadows > 0.0 {
                 meshes.cull_shadow(&mut encoder, scene_group);
@@ -586,7 +588,7 @@ impl Renderer {
         }
         present.write(queue, exposure, target.samples, *transparent);
         present.present(&mut encoder, surface, &target.present_group);
-        if unsettled
+        if replan
             && let Some(feedback) = feedback.as_mut()
             && let Some(slot) = feedback.reserve()
         {

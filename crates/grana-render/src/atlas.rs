@@ -11,7 +11,15 @@ use wgpu::{
 
 use grana_volume::CHANNEL_LIMIT;
 
-const BYTES_PER_VOXEL: u64 = size_of::<u16>() as u64;
+pub(crate) const PACK: usize = 4;
+pub(crate) const PACK_LIMIT: usize = CHANNEL_LIMIT / PACK;
+
+const BYTES_PER_VOXEL: u64 = size_of::<[u16; PACK]>() as u64;
+
+const _: () = assert!(
+    PACK_LIMIT == 4,
+    "the volume shaders bind four channel packs"
+);
 
 #[derive(Clone, Copy)]
 pub(crate) struct ResidentBrick {
@@ -78,7 +86,8 @@ impl Atlas {
         let slot_grid = [slots_per_axis; 3];
         let capacity = (slots_per_axis as usize).pow(3);
         let dims = slot_grid.map(|count| count * slot_side);
-        let textures = (0..channel_count)
+        let packs = channel_count.div_ceil(PACK);
+        let textures = (0..packs)
             .map(|_| {
                 device.create_texture(&TextureDescriptor {
                     label: Some("grana.atlas"),
@@ -90,7 +99,7 @@ impl Atlas {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: TextureDimension::D3,
-                    format: TextureFormat::R16Unorm,
+                    format: TextureFormat::Rgba16Unorm,
                     usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
                     view_formats: &[],
                 })
@@ -107,7 +116,7 @@ impl Atlas {
             })
             .collect::<Vec<_>>();
         let mut bindings = views.iter().collect::<Vec<&TextureView>>();
-        bindings.resize(CHANNEL_LIMIT, dummy);
+        bindings.resize(PACK_LIMIT, dummy);
         let group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.atlas.group"),
             layout,
@@ -122,8 +131,7 @@ impl Atlas {
                 },
             ],
         });
-        let bytes =
-            capacity as u64 * (slot_side as u64).pow(3) * BYTES_PER_VOXEL * channel_count as u64;
+        let bytes = capacity as u64 * (slot_side as u64).pow(3) * BYTES_PER_VOXEL * packs as u64;
         Self {
             textures,
             group,
@@ -264,16 +272,16 @@ impl Atlas {
         };
     }
 
-    pub fn write(&self, queue: &Queue, channel: usize, slot: u32, units: &[u16]) {
+    pub fn write(&self, queue: &Queue, pack: usize, slot: u32, units: &[u16]) {
         assert_eq!(
             units.len() as u64,
-            (PADDED_SIDE as u64).pow(3),
-            "a padded brick fills one slot"
+            (PADDED_SIDE as u64).pow(3) * PACK as u64,
+            "a packed brick fills one slot"
         );
         let origin = slot_origin(slot, self.slot_grid);
         queue.write_texture(
             TexelCopyTextureInfo {
-                texture: &self.textures[channel],
+                texture: &self.textures[pack],
                 mip_level: 0,
                 origin: wgpu::Origin3d {
                     x: origin[0],
@@ -285,7 +293,7 @@ impl Atlas {
             cast_slice(units),
             TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(PADDED_SIDE * size_of::<u16>() as u32),
+                bytes_per_row: Some(PADDED_SIDE * BYTES_PER_VOXEL as u32),
                 rows_per_image: Some(PADDED_SIDE),
             },
             wgpu::Extent3d {
