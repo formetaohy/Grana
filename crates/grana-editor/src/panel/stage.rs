@@ -8,7 +8,7 @@ use grana_session::Command;
 
 use super::{Layout, scene_uv};
 
-const PANE_CONTROL: f32 = 32.0;
+const PANE_CONTROL: f32 = 26.0;
 
 pub(super) fn paint(
     ui: &mut Ui,

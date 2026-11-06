@@ -516,6 +516,26 @@ impl Scene {
         }
     }
 
+    pub fn translate(&mut self, id: GlassId, delta: Vec2) {
+        if delta == Vec2::ZERO {
+            return;
+        }
+        if let Some(node) = self.nodes.get_mut(id) {
+            let frame = node.glass.frame;
+            node.glass.frame = Rect::new(
+                frame.x + delta.x,
+                frame.y + delta.y,
+                frame.width,
+                frame.height,
+            );
+            node.x.value += delta.x;
+            node.x.target += delta.x;
+            node.y.value += delta.y;
+            node.y.target += delta.y;
+            self.dirty = true;
+        }
+    }
+
     pub fn set_light_angle(&mut self, degrees: f32) {
         if self.light_angle.target != degrees {
             self.dirty = true;

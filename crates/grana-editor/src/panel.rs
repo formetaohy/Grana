@@ -76,8 +76,8 @@ impl Layout {
             Vec2::new(TOOLBAR_LEFT, TOOLBAR_HEIGHT),
         );
         let analysis = Rect::from_min_size(
-            Vec2::new(full.max.x - MARGIN - ANALYSIS_WIDTH, top + 6.0),
-            Vec2::new(ANALYSIS_WIDTH, TOOLBAR_HEIGHT - 12.0),
+            Vec2::new(full.max.x - MARGIN - ANALYSIS_WIDTH, top + 9.0),
+            Vec2::new(ANALYSIS_WIDTH, 34.0),
         );
         let toolbar_right = Rect::from_min_size(
             Vec2::new(analysis.min.x - GAP - TOOLBAR_RIGHT, top),

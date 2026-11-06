@@ -338,7 +338,7 @@ pub fn glass_menu_button(
     let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE)).x;
     let label_width = measured.min(maximum);
     let width = label_width + if dirty { 30.0 } else { 26.0 };
-    let rect = ui.allocate(Vec2::new(width, 30.0));
+    let rect = ui.allocate(Vec2::new(width, 34.0));
     let mut response = ui.interact(key, rect);
     if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
         response.clicked = true;

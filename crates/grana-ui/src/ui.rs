@@ -171,6 +171,7 @@ const LIST_COUNT: usize = 9;
 #[derive(Clone, Copy, Debug)]
 struct Span {
     lists: [usize; LIST_COUNT],
+    glass: usize,
     hit: usize,
     wheel: usize,
     offset: f32,
@@ -243,7 +244,8 @@ pub struct Frame {
 }
 
 struct Cell {
-    lists: [usize; LIST_COUNT],
+    lists: [Range<usize>; LIST_COUNT],
+    glass: Range<usize>,
     hits: Range<usize>,
     wheels: Range<usize>,
     height: f32,
@@ -289,6 +291,7 @@ pub struct Ui {
     glass: GlassScene,
     glass_entries: HashMap<u64, GlassEntry>,
     glass_groups: HashMap<u64, ContainerId>,
+    glass_placed: Vec<GlassId>,
     glass_seen: Vec<u64>,
     transitions: HashMap<u64, GlassTransition>,
     floating_container: Option<ContainerId>,
@@ -339,6 +342,7 @@ impl Ui {
             glass: GlassScene::new(),
             glass_entries: HashMap::new(),
             glass_groups: HashMap::new(),
+            glass_placed: Vec::new(),
             glass_seen: Vec::new(),
             transitions: HashMap::new(),
             floating_container: None,
@@ -546,6 +550,7 @@ impl Ui {
         self.labels.clear();
         self.popup.clear();
         self.hud.clear();
+        self.glass_placed.clear();
         self.occluders.clear();
         self.focus_rings.clear();
         self.areas.clear();
@@ -716,6 +721,7 @@ impl Ui {
                 }
                 self.glass.place(entry.id, frame);
                 self.glass.set_clip(entry.id, Some(glass_rect(clip)));
+                self.glass_placed.push(entry.id);
             }
             None => {
                 let mut glass = Glass::new(frame)
@@ -733,6 +739,7 @@ impl Ui {
                     glass = glass.lens();
                 }
                 let id = self.glass.add(glass);
+                self.glass_placed.push(id);
                 self.glass_entries.insert(key, GlassEntry { id, style });
             }
         }
@@ -1000,6 +1007,7 @@ impl Ui {
     fn begin_span(&mut self, offset: f32, size: f32, direct: bool) {
         let span = Span {
             lists: self.instance_lengths(),
+            glass: self.glass_placed.len(),
             hit: self.registry.hit_count(),
             wheel: self.registry.wheel_count(),
             offset,
@@ -1053,6 +1061,7 @@ impl Ui {
             spans.push(open);
         }
         let ends = self.instance_lengths();
+        let glass_end = self.glass_placed.len();
         let hit_end = self.registry.hit_count();
         let wheel_end = self.registry.wheel_count();
         let baseline = (axis == Axis::Row && align == Align::Baseline)
@@ -1082,9 +1091,14 @@ impl Ui {
             }
             let next = spans.get(index + 1);
             let stops = next.map_or(ends, |span| span.lists);
+            let glass_stop = next.map_or(glass_end, |span| span.glass);
             let hit_stop = next.map_or(hit_end, |span| span.hit);
             let wheel_stop = next.map_or(wheel_end, |span| span.wheel);
             self.translate_lists(span.lists, stops, delta);
+            for entry in span.glass..glass_stop {
+                let id = self.glass_placed[entry];
+                self.glass.translate(id, delta);
+            }
             self.registry.shift_hits(span.hit..hit_stop, delta);
             self.registry.shift_wheels(span.wheel..wheel_stop, delta);
         }
@@ -1116,6 +1130,43 @@ impl Ui {
         translate_range(&mut self.popup.ink, from[6], to[6], delta);
         translate_range(&mut self.hud.material, from[7], to[7], delta);
         translate_range(&mut self.hud.ink, from[8], to[8], delta);
+    }
+
+    fn translate_ranges(&mut self, ranges: &[Range<usize>; LIST_COUNT], delta: Vec2) {
+        translate_range(
+            &mut self.content.material,
+            ranges[0].start,
+            ranges[0].end,
+            delta,
+        );
+        translate_range(
+            &mut self.chrome.material,
+            ranges[1].start,
+            ranges[1].end,
+            delta,
+        );
+        translate_range(&mut self.chrome.ink, ranges[2].start, ranges[2].end, delta);
+        translate_range(
+            &mut self.labels.material,
+            ranges[3].start,
+            ranges[3].end,
+            delta,
+        );
+        translate_range(&mut self.labels.ink, ranges[4].start, ranges[4].end, delta);
+        translate_range(
+            &mut self.popup.material,
+            ranges[5].start,
+            ranges[5].end,
+            delta,
+        );
+        translate_range(&mut self.popup.ink, ranges[6].start, ranges[6].end, delta);
+        translate_range(
+            &mut self.hud.material,
+            ranges[7].start,
+            ranges[7].end,
+            delta,
+        );
+        translate_range(&mut self.hud.ink, ranges[8].start, ranges[8].end, delta);
     }
 
     fn layer_len(&self) -> usize {
@@ -2202,6 +2253,7 @@ impl<'a> Grid<'a> {
         let ui = &mut *self.ui;
         let clip = ui.clip();
         let lists = ui.instance_lengths();
+        let glass = ui.glass_placed.len();
         let hits = ui.registry.hit_count();
         let wheels = ui.registry.wheel_count();
         ui.ids
@@ -2227,8 +2279,10 @@ impl<'a> Grid<'a> {
         ui.pop_frame();
         let area = ui.areas.pop().expect("a layout area is active");
         ui.ids.pop();
+        let ends = ui.instance_lengths();
         self.cells.push(Cell {
-            lists,
+            lists: std::array::from_fn(|index| lists[index]..ends[index]),
+            glass: glass..ui.glass_placed.len(),
             hits: hits..ui.registry.hit_count(),
             wheels: wheels..ui.registry.wheel_count(),
             height: area.main,
@@ -2260,8 +2314,11 @@ impl<'a> Grid<'a> {
             if delta.y == 0.0 {
                 continue;
             }
-            let ends = self.ui.instance_lengths();
-            self.ui.translate_lists(cell.lists, ends, delta);
+            self.ui.translate_ranges(&cell.lists, delta);
+            for entry in cell.glass.clone() {
+                let id = self.ui.glass_placed[entry];
+                self.ui.glass.translate(id, delta);
+            }
             self.ui.registry.shift_hits(cell.hits, delta);
             self.ui.registry.shift_wheels(cell.wheels, delta);
         }
@@ -2400,6 +2457,7 @@ fn mix(left: u64, right: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::Event;
 
     fn frame(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
         ui.resize([400, 300]);
@@ -2436,6 +2494,162 @@ mod tests {
         let center = (min + max) * 0.5;
         assert!((center.x - rect.center().x).abs() <= 1.0);
         assert!((center.y - rect.center().y).abs() <= 1.0);
+    }
+
+    fn step(ui: &mut Ui, time: f64, events: &[Event], content: impl FnOnce(&mut Ui)) {
+        for event in events {
+            ui.input_mut().push(event.clone());
+        }
+        ui.begin(Vec2::new(400.0, 300.0), 1.0, time);
+        ui.root(content);
+        let _ = ui.end();
+    }
+
+    #[test]
+    fn toggle_drag_changes_the_value() {
+        let (device, queue) = crate::test_gpu::gpu();
+        let mut ui = Ui::new(&device, &queue, crate::test_gpu::format());
+        let rect = Rect::from_min_size(Vec2::new(20.0, 20.0), Vec2::new(42.0, 26.0));
+        let mut value = false;
+        let mut changed = None;
+        step(&mut ui, 0.0, &[], |ui| {
+            ui.place(rect, |ui| {
+                changed = crate::widget::toggle(ui, "toggle", value);
+            });
+        });
+        step(
+            &mut ui,
+            1.0 / 60.0,
+            &[crate::input::Event::Moved(Vec2::new(30.0, 33.0))],
+            |ui| {
+                ui.place(rect, |ui| {
+                    changed = crate::widget::toggle(ui, "toggle", value);
+                });
+            },
+        );
+        step(
+            &mut ui,
+            2.0 / 60.0,
+            &[crate::input::Event::Down(crate::input::Button::Primary)],
+            |ui| {
+                ui.place(rect, |ui| {
+                    changed = crate::widget::toggle(ui, "toggle", value);
+                });
+            },
+        );
+        step(
+            &mut ui,
+            3.0 / 60.0,
+            &[crate::input::Event::Moved(Vec2::new(56.0, 33.0))],
+            |ui| {
+                ui.place(rect, |ui| {
+                    changed = crate::widget::toggle(ui, "toggle", value);
+                });
+            },
+        );
+        if let Some(next) = changed.take() {
+            value = next;
+        }
+        step(
+            &mut ui,
+            4.0 / 60.0,
+            &[crate::input::Event::Up(crate::input::Button::Primary)],
+            |ui| {
+                ui.place(rect, |ui| {
+                    changed = crate::widget::toggle(ui, "toggle", value);
+                });
+            },
+        );
+        if let Some(next) = changed.take() {
+            value = next;
+        }
+        assert!(value, "dragging the knob to the right turns it on");
+    }
+
+    #[test]
+    fn segmented_drag_selects_the_cell_under_the_pointer() {
+        let (device, queue) = crate::test_gpu::gpu();
+        let mut ui = Ui::new(&device, &queue, crate::test_gpu::format());
+        let rect = Rect::from_min_size(Vec2::new(20.0, 80.0), Vec2::new(300.0, 28.0));
+        let mut selected = 0;
+        let mut changed = None;
+        step(&mut ui, 0.0, &[], |ui| {
+            ui.place(rect, |ui| {
+                changed = crate::widget::segmented_fill(
+                    ui,
+                    "segmented",
+                    &["One", "Two", "Three"],
+                    selected,
+                );
+            });
+        });
+        step(
+            &mut ui,
+            1.0 / 60.0,
+            &[crate::input::Event::Moved(Vec2::new(72.0, 94.0))],
+            |ui| {
+                ui.place(rect, |ui| {
+                    changed = crate::widget::segmented_fill(
+                        ui,
+                        "segmented",
+                        &["One", "Two", "Three"],
+                        selected,
+                    );
+                });
+            },
+        );
+        step(
+            &mut ui,
+            2.0 / 60.0,
+            &[crate::input::Event::Down(crate::input::Button::Primary)],
+            |ui| {
+                ui.place(rect, |ui| {
+                    changed = crate::widget::segmented_fill(
+                        ui,
+                        "segmented",
+                        &["One", "Two", "Three"],
+                        selected,
+                    );
+                });
+            },
+        );
+        step(
+            &mut ui,
+            3.0 / 60.0,
+            &[crate::input::Event::Moved(Vec2::new(268.0, 94.0))],
+            |ui| {
+                ui.place(rect, |ui| {
+                    changed = crate::widget::segmented_fill(
+                        ui,
+                        "segmented",
+                        &["One", "Two", "Three"],
+                        selected,
+                    );
+                });
+            },
+        );
+        if let Some(next) = changed.take() {
+            selected = next;
+        }
+        assert_eq!(
+            selected, 2,
+            "dragging across the segments selects the target"
+        );
+        step(
+            &mut ui,
+            4.0 / 60.0,
+            &[crate::input::Event::Up(crate::input::Button::Primary)],
+            |ui| {
+                ui.place(rect, |ui| {
+                    changed = crate::widget::segmented_fill(
+                        ui,
+                        "segmented",
+                        &["One", "Two", "Three"],
+                        selected,
+                    );
+                });
+            },
+        );
     }
 
     #[test]

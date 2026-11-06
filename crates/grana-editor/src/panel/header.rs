@@ -22,8 +22,8 @@ pub(super) fn bar(
     state: &mut State<'_>,
     commands: &mut Vec<Command>,
 ) {
-    let left = ui.glass_group(ui.id("header.navigation.group"), 10.0, CHROME);
-    let right = ui.glass_group(ui.id("header.actions.group"), 10.0, CHROME);
+    let left = ui.glass_group(ui.id("header.navigation.group"), 6.0, CHROME);
+    let right = ui.glass_group(ui.id("header.actions.group"), 6.0, CHROME);
     let mut left_hover = Vec::new();
     let mut right_hover = Vec::new();
     navigation(
@@ -46,20 +46,26 @@ pub(super) fn bar(
     let pointer = ui.input().position();
     let left_spacing = ui.spring_to(
         ui.id("header.navigation.spacing"),
-        if left_hover.iter().any(|rect| rect.contains(pointer)) {
+        if left_hover.iter().any(|key| {
+            ui.glass_frame(*key)
+                .is_some_and(|rect| rect.contains(pointer))
+        }) {
             14.0
         } else {
-            10.0
+            6.0
         },
         Motion::quick(),
     );
     ui.set_glass_group_spacing(left, left_spacing);
     let right_spacing = ui.spring_to(
         ui.id("header.actions.spacing"),
-        if right_hover.iter().any(|rect| rect.contains(pointer)) {
+        if right_hover.iter().any(|key| {
+            ui.glass_frame(*key)
+                .is_some_and(|rect| rect.contains(pointer))
+        }) {
             14.0
         } else {
-            10.0
+            6.0
         },
         Motion::quick(),
     );
@@ -72,7 +78,7 @@ fn navigation(
     state: &mut State<'_>,
     commands: &mut Vec<Command>,
     group: GlassGroup,
-    hover: &mut Vec<Rect>,
+    hover: &mut Vec<u64>,
 ) {
     let inner = rect.shrink2(Vec2::new(8.0, 0.0));
     ui.place(inner, |ui| {
@@ -96,14 +102,14 @@ fn navigation(
                         "Hide sidebar"
                     },
                 );
-                hover.push(response.rect);
+                hover.push(ui.id("sidebar.toggle"));
                 if response.clicked {
                     state.workspace.sidebar_hidden = !hidden;
                 }
                 brand(ui, group);
                 let open =
                     widget::glass_menu_button(ui, Some(group), "open.menu", "Open", false, 80.0);
-                hover.push(open);
+                hover.push(ui.id("open.menu"));
                 open_menu(ui, state, commands, open);
                 let project = widget::glass_menu_button(
                     ui,
@@ -113,7 +119,7 @@ fn navigation(
                     state.io.dirty,
                     148.0,
                 );
-                hover.push(project);
+                hover.push(ui.id("project.menu"));
                 project_menu(ui, state, commands, project);
             },
         );
@@ -126,7 +132,7 @@ fn actions(
     state: &mut State<'_>,
     commands: &mut Vec<Command>,
     group: GlassGroup,
-    hover: &mut Vec<Rect>,
+    hover: &mut Vec<u64>,
 ) {
     let inner = rect.shrink2(Vec2::new(8.0, 0.0));
     ui.place(inner, |ui| {
@@ -154,7 +160,7 @@ fn actions(
                         Some(group),
                         "undo",
                         Icon::Undo,
-                        32.0,
+                        34.0,
                         GlassStyle::button(),
                         &undo_tip,
                     )
@@ -164,11 +170,11 @@ fn actions(
                         Some(group),
                         "undo",
                         Icon::Undo,
-                        32.0,
+                        34.0,
                         GlassStyle::button_disabled(),
                     )
                 };
-                hover.push(response.rect);
+                hover.push(ui.id("undo"));
                 if response.clicked {
                     commands.push(Command::Undo);
                 }
@@ -178,7 +184,7 @@ fn actions(
                         Some(group),
                         "redo",
                         Icon::Redo,
-                        32.0,
+                        34.0,
                         GlassStyle::button(),
                         &redo_tip,
                     )
@@ -188,11 +194,11 @@ fn actions(
                         Some(group),
                         "redo",
                         Icon::Redo,
-                        32.0,
+                        34.0,
                         GlassStyle::button_disabled(),
                     )
                 };
-                hover.push(response.rect);
+                hover.push(ui.id("redo"));
                 if response.clicked {
                     commands.push(Command::Redo);
                 }
@@ -201,11 +207,11 @@ fn actions(
                     Some(group),
                     "fit",
                     Icon::Fit,
-                    32.0,
+                    34.0,
                     GlassStyle::button(),
                     "Fit volume to view",
                 );
-                hover.push(response.rect);
+                hover.push(ui.id("fit"));
                 if response.clicked {
                     crate::view::fit_volume(state);
                 }
@@ -215,11 +221,11 @@ fn actions(
                     Some(group),
                     "header.diagnostics",
                     Icon::Info,
-                    32.0,
+                    34.0,
                     GlassStyle::button(),
                     "Streaming diagnostics",
                 );
-                hover.push(response.rect);
+                hover.push(key);
                 if response.clicked {
                     ui.toggle_popup(key);
                 }

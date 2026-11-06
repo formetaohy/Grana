@@ -3,6 +3,7 @@ use glam::Vec2;
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
 use crate::glass::GlassStyle;
+use crate::input::Button;
 use crate::motion::Motion;
 use crate::text::{Align, TextStyle};
 use crate::theme::Level;
@@ -44,6 +45,7 @@ fn segmented_core(
     };
     let rect = ui.allocate(Vec2::new(total, metrics.control_height));
     let mut changed = None;
+    let mut dragging = false;
     let mut left = rect.min.x + 3.0;
     let mut cells = Vec::new();
     for (index, width) in widths.iter().enumerate() {
@@ -54,6 +56,7 @@ fn segmented_core(
         cells.push(cell);
         let cell_key = key ^ (index as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
         let response = ui.interact(cell_key, cell);
+        dragging |= response.dragging;
         let corners = Corners::capsule();
         if ui.focusable(cell_key, cell, corners) && ui.activated(cell_key) {
             changed = Some(index);
@@ -63,7 +66,16 @@ fn segmented_core(
         }
         left += width;
     }
-    let target = selected.min(options.len().saturating_sub(1));
+    let pointer = ui.input().position();
+    if dragging
+        && ui.input().button(Button::Primary).down
+        && let Some(index) = cells.iter().position(|cell| cell.contains(pointer))
+    {
+        changed = Some(index);
+    }
+    let target = changed
+        .unwrap_or(selected)
+        .min(options.len().saturating_sub(1));
     let target_cell = cells.get(target).copied().unwrap_or(rect);
     let x = ui.spring_to(key, target_cell.min.x, Motion::response(0.4, 0.16));
     let width = ui.spring_to(key ^ 0x1f, target_cell.width(), Motion::response(0.4, 0.16));
@@ -71,7 +83,6 @@ fn segmented_core(
         Vec2::new(x, rect.min.y + 3.0),
         Vec2::new(width, rect.height() - 6.0),
     );
-    let pointer = ui.input().position();
     let mut hovered = Vec::with_capacity(cells.len());
     for (index, cell) in cells.iter().enumerate() {
         hovered.push(ui.animate(

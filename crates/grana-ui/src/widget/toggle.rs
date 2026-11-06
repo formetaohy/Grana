@@ -3,6 +3,7 @@ use glam::Vec2;
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
 use crate::glass::GlassStyle;
+use crate::input::Button;
 use crate::motion::Motion;
 use crate::style::{Border, Fill, Shadow};
 use crate::text::{Align, TextStyle};
@@ -20,9 +21,24 @@ pub fn toggle(ui: &mut Ui, id: &str, value: bool) -> Option<bool> {
 fn switch(ui: &mut Ui, key: u64, rect: Rect, value: bool) -> Option<bool> {
     let palette = ui.theme().palette;
     let response = ui.interact(key, rect);
-    let changed = response.clicked.then_some(!value);
-    let target = if value { 1.0 } else { 0.0 };
-    let progress = ui.spring_to(key, target, Motion::response(0.36, 0.22));
+    let pointer = ui.input().position();
+    let primary = ui.input().button(Button::Primary);
+    let drag_key = key ^ 0x71;
+    let drag_knob = rect.height();
+    let drag_travel = (rect.width() - drag_knob).max(1.0);
+    let drag = ((pointer.x - rect.min.x - drag_knob * 0.5) / drag_travel).clamp(0.0, 1.0);
+    let active = primary.down && response.active;
+    let mut changed = response.clicked.then_some(!value);
+    if active && response.dragging {
+        ui.store_value(drag_key, drag);
+    }
+    if primary.released
+        && let Some(dragged) = ui.value_of(drag_key)
+        && dragged >= 0.0
+    {
+        changed = Some(dragged > 0.5);
+        ui.store_value(drag_key, -1.0);
+    }
     let engaged = ui.animate(
         key ^ 0x11,
         if response.hovered || response.active {
@@ -38,6 +54,21 @@ fn switch(ui: &mut Ui, key: u64, rect: Rect, value: bool) -> Option<bool> {
     );
     let knob = rect.height() + engaged * 0.9;
     let travel = (rect.width() - knob).max(0.0);
+    let current_value = if value { 1.0 } else { 0.0 };
+    let target = if active {
+        drag
+    } else {
+        changed.map_or(current_value, |next| if next { 1.0 } else { 0.0 })
+    };
+    let progress = ui.spring_to(
+        key,
+        target,
+        if active {
+            Motion::response(0.14, 0.0)
+        } else {
+            Motion::response(0.36, 0.22)
+        },
+    );
     let position = progress.clamp(-0.04, 1.04);
     let current = rect.min.x + travel * position;
     let target_x = rect.min.x + travel * target;
