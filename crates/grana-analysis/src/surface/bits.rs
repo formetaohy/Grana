@@ -418,11 +418,11 @@ impl Grid {
         let mut free = vec![[0u64; 8]; count];
         let workers = workers.clamp(1, count.max(1));
         let each = count.div_ceil(workers).max(1);
-        std::thread::scope(|scope| {
+        crate::schedule::parallel(|scope| {
             for (chunk, slot) in free.chunks_mut(each).zip(0..) {
                 let first = slot * each;
                 let grid = &*self;
-                scope.spawn(move || {
+                scope.spawn(move |_| {
                     for (offset, board) in chunk.iter_mut().enumerate() {
                         let index = first + offset;
                         let block = [

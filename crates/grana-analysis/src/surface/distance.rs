@@ -224,11 +224,11 @@ fn planes(
         body(values, 0);
         return;
     }
-    std::thread::scope(|scope| {
+    crate::schedule::parallel(|scope| {
         let body = &body;
         for (index, chunk) in values.chunks_mut(each * plane).enumerate() {
             let first = index * each;
-            scope.spawn(move || body(chunk, first));
+            scope.spawn(move |_| body(chunk, first));
         }
     });
 }

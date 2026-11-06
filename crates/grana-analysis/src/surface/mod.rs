@@ -27,7 +27,7 @@ use grana_object::SurfaceCut;
 use grana_object::SurfaceParams;
 
 use assemble::Assembler;
-use detection::{Detection, DetectionSource, DetectionStore};
+use detection::{Detection, DetectionBuild, DetectionInput, DetectionSource, DetectionStore};
 use distance::Distance;
 use mask::SolidMask;
 use tile::{Tile, TileResult};
@@ -430,25 +430,29 @@ impl SurfaceBuilder {
         let total = self.tile_count;
         let step = total * 2 + 1;
         let cover = self.coverage(roi);
-        let detection = {
-            let mut report = band(progress, step, 0, 20);
+        let build = {
+            let mut report = band(progress, step, 0, 35);
             DetectionStore::build(
-                &self,
-                &cover,
-                desired,
+                DetectionInput {
+                    plan: &self,
+                    cover: &cover,
+                    roi,
+                    workers: desired,
+                },
                 cancel,
                 sources.read,
                 DETECTION_CACHE,
                 &mut report,
             )?
         };
-        let Some(detection) = detection else {
+        let Some(DetectionBuild {
+            store: detection,
+            field,
+        }) = build
+        else {
             return Ok(None);
         };
         let source = DetectionSource::new(&self, &cover, desired, cancel, &detection);
-        let Some(field) = stats::build(&source, roi, &mut band(progress, step, 20, 35))? else {
-            return Ok(None);
-        };
         let Some(mask) = mask::build(&source, roi, progress, step, &field)? else {
             return Ok(None);
         };
@@ -654,15 +658,15 @@ fn run_pass(
         }
         let detection = &detection;
         let count = row_end - row_start;
-        let (sender, receiver) = mpsc::sync_channel::<(usize, TileResult)>(workers * 2);
+        let (sender, receiver) = mpsc::channel::<(usize, TileResult)>();
         let next = AtomicUsize::new(0);
-        let outcome = std::thread::scope(|scope| {
+        let outcome = crate::schedule::parallel(|scope| {
             let next = &next;
             let stop = &stop;
             let gate = &gate;
             for _ in 0..workers.min(count.max(1)) {
                 let sender = sender.clone();
-                scope.spawn(move || {
+                scope.spawn(move |_| {
                     let mut tile = Tile::new(pass, solid, field, detection, gate);
                     loop {
                         if halted(cancel, stop) {
@@ -693,9 +697,9 @@ fn run_pass(
                     stop.store(true, Ordering::Relaxed);
                     return Ok::<bool, String>(false);
                 }
-                let (index, result) = match receiver.recv() {
-                    Ok(value) => value,
-                    Err(_) => {
+                let (index, result) = match crate::schedule::receive(&receiver) {
+                    Some(value) => value,
+                    None => {
                         if cancel.load(Ordering::Relaxed) {
                             return Ok(false);
                         }
@@ -755,14 +759,14 @@ fn run_whole(
     let solid = inputs.solid;
     let field = inputs.field;
     let gate = pass.plan.gate(inputs.roi);
-    let (sender, receiver) = mpsc::sync_channel::<(usize, TileResult)>(workers * 2);
-    let outcome = std::thread::scope(|scope| {
+    let (sender, receiver) = mpsc::channel::<(usize, TileResult)>();
+    let outcome = crate::schedule::parallel(|scope| {
         let next = &next;
         let stop = &stop;
         let gate = &gate;
         for _ in 0..workers {
             let sender = sender.clone();
-            scope.spawn(move || {
+            scope.spawn(move |_| {
                 let mut tile = Tile::new(pass, solid, field, detection, gate);
                 loop {
                     if halted(cancel, stop) {
@@ -793,9 +797,9 @@ fn run_whole(
                 stop.store(true, Ordering::Relaxed);
                 return Ok(None);
             }
-            let (index, result) = match receiver.recv() {
-                Ok(value) => value,
-                Err(_) => {
+            let (index, result) = match crate::schedule::receive(&receiver) {
+                Some(value) => value,
+                None => {
                     if cancel.load(Ordering::Relaxed) {
                         return Ok(None);
                     }

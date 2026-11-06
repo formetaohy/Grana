@@ -122,6 +122,7 @@ pub(crate) struct MarkerPasses {
     volume_pipeline: RenderPipeline,
     oit_pipeline: RenderPipeline,
     tail_pipeline: RenderPipeline,
+    color_pipeline: RenderPipeline,
     section_pipeline: RenderPipeline,
     section_pick_pipeline: RenderPipeline,
     volume_pick_pipeline: RenderPipeline,
@@ -274,9 +275,33 @@ impl MarkerPasses {
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &volume_module,
-                entry_point: Some("fs_oit"),
+                entry_point: Some("fs_oit_tail"),
                 compilation_options: Default::default(),
                 targets: &crate::oit::tail_targets(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let color_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.marker.oit.color"),
+            layout: Some(&layouts.marker_tail),
+            vertex: VertexState {
+                module: &volume_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(depth_state(false, CompareFunction::Always)),
+            multisample: crate::target::scene_multisample(),
+            fragment: Some(FragmentState {
+                module: &volume_module,
+                entry_point: Some("fs_oit_color"),
+                compilation_options: Default::default(),
+                targets: &[],
             }),
             multiview_mask: None,
             cache: None,
@@ -415,6 +440,7 @@ impl MarkerPasses {
             volume_pipeline,
             oit_pipeline,
             tail_pipeline,
+            color_pipeline,
             section_pipeline,
             section_pick_pipeline,
             volume_pick_pipeline,
@@ -581,6 +607,24 @@ impl MarkerPasses {
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.layer_group, &[]);
         pass.set_bind_group(4, oit, &[]);
+        pass.draw_indirect(self.layer_args.buffer(), 0);
+    }
+
+    pub fn draw_color<'a>(
+        &'a self,
+        pass: &mut RenderPass<'a>,
+        scene: &'a BindGroup,
+        oit: &'a BindGroup,
+        coverage: &'a BindGroup,
+    ) {
+        if self.count == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.color_pipeline);
+        pass.set_bind_group(0, scene, &[]);
+        pass.set_bind_group(1, &self.layer_group, &[]);
+        pass.set_bind_group(4, oit, &[]);
+        pass.set_bind_group(6, coverage, &[]);
         pass.draw_indirect(self.layer_args.buffer(), 0);
     }
 

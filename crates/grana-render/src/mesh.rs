@@ -110,6 +110,7 @@ pub(crate) struct MeshPasses {
     volume_pipeline: RenderPipeline,
     oit_pipeline: RenderPipeline,
     tail_pipeline: RenderPipeline,
+    color_pipeline: RenderPipeline,
     pick_pipeline: RenderPipeline,
     shadow_pipeline: RenderPipeline,
     uniforms: Buffer,
@@ -282,9 +283,30 @@ impl MeshPasses {
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &volume_module,
-                entry_point: Some("fs_oit"),
+                entry_point: Some("fs_oit_tail"),
                 compilation_options: Default::default(),
                 targets: &crate::oit::tail_targets(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let color_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.mesh.oit.color"),
+            layout: Some(&tail_layout),
+            vertex: VertexState {
+                module: &volume_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(vertex_layout())],
+            },
+            primitive: PrimitiveState::default(),
+            depth_stencil: Some(depth_state(false, CompareFunction::Always)),
+            multisample: crate::target::scene_multisample(),
+            fragment: Some(FragmentState {
+                module: &volume_module,
+                entry_point: Some("fs_oit_color"),
+                compilation_options: Default::default(),
+                targets: &[],
             }),
             multiview_mask: None,
             cache: None,
@@ -351,6 +373,7 @@ impl MeshPasses {
             volume_pipeline,
             oit_pipeline,
             tail_pipeline,
+            color_pipeline,
             pick_pipeline,
             shadow_pipeline,
             uniforms,
@@ -573,6 +596,26 @@ impl MeshPasses {
         pass.set_bind_group(0, &self.uniform_group, &[]);
         pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(4, oit, &[]);
+        for key in &self.active {
+            self.slots[key].draw(pass, LAYER_NARROW, LAYER_WIDE);
+        }
+    }
+
+    pub fn draw_color<'a>(
+        &'a self,
+        pass: &mut RenderPass<'a>,
+        shadow: &'a BindGroup,
+        oit: &'a BindGroup,
+        coverage: &'a BindGroup,
+    ) {
+        if self.active.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.color_pipeline);
+        pass.set_bind_group(0, &self.uniform_group, &[]);
+        pass.set_bind_group(3, shadow, &[]);
+        pass.set_bind_group(4, oit, &[]);
+        pass.set_bind_group(6, coverage, &[]);
         for key in &self.active {
             self.slots[key].draw(pass, LAYER_NARROW, LAYER_WIDE);
         }

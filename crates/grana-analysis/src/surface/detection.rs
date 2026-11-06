@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, Once, mpsc};
 use std::time::{Duration, SystemTime};
 
-use super::{Read, SurfaceBuilder};
+use super::stats::Levels;
+use super::{Gate, Read, SurfaceBuilder};
 
 const BAND: u32 = 32;
 const BAND_BYTES: u64 = 64 << 20;
@@ -30,6 +31,11 @@ pub(super) struct DetectionStore {
     start: [i64; 3],
     dims: [usize; 3],
     plane: usize,
+}
+
+pub(super) struct DetectionBuild {
+    pub(super) store: DetectionStore,
+    pub(super) field: crate::local::BlockField,
 }
 
 enum Storage {
@@ -67,16 +73,35 @@ impl Drop for DetectionStore {
     }
 }
 
+pub(super) struct DetectionInput<'a> {
+    pub(super) plan: &'a SurfaceBuilder,
+    pub(super) cover: &'a [Range<u32>; 3],
+    pub(super) roi: Option<&'a grana_object::Mask>,
+    pub(super) workers: usize,
+}
+
+struct Production<'a> {
+    gate: Gate<'a>,
+    levels: Levels,
+    kernel: &'a [f32],
+    radius: usize,
+    workers: usize,
+}
+
 impl DetectionStore {
     pub(super) fn build(
-        plan: &SurfaceBuilder,
-        cover: &[Range<u32>; 3],
-        workers: usize,
+        input: DetectionInput<'_>,
         cancel: &AtomicBool,
         read: &Read<'_>,
         budget: u64,
         progress: &mut dyn FnMut(usize, usize),
-    ) -> Result<Option<Self>, String> {
+    ) -> Result<Option<DetectionBuild>, String> {
+        let DetectionInput {
+            plan,
+            cover,
+            roi,
+            workers,
+        } = input;
         let dims = super::dims_of(cover);
         if dims.contains(&0) || cover[2].is_empty() {
             return Ok(None);
@@ -99,14 +124,19 @@ impl DetectionStore {
             dims,
             plane,
         };
-        let workers = workers.max(1);
-        let kernel = &plan.kernels[2];
-        let radius = kernel.len() / 2;
         let first = cover[2].start;
         let last = cover[2].end - 1;
         let band = band_planes(plane);
         let bands = (cover[2].end - cover[2].start).div_ceil(band) as usize;
         let mut done = 0usize;
+        let mut production = Production {
+            gate: plan.gate(roi),
+            levels: Levels::new(plan, cover, workers.max(1)),
+            kernel: &plan.kernels[2],
+            radius: 0,
+            workers: workers.max(1),
+        };
+        production.radius = production.kernel.len() / 2;
         let (sender, receiver) = mpsc::sync_channel::<Result<Band, String>>(1);
         let (recycle_tx, recycle_rx) = mpsc::channel::<Vec<f32>>();
         let mut window = Window::new(plane);
@@ -146,16 +176,17 @@ impl DetectionStore {
             while let Ok(message) = receiver.recv() {
                 let (z, mut raw) = message?;
                 let planes = (raw.len() / plane) as u32;
-                blur(&mut raw, plan, dims, plane, workers);
+                blur(&mut raw, plan, dims, plane, production.workers);
                 window.push(z, raw);
                 available = z + planes;
+                let radius = production.radius;
                 let ready = if available > last {
                     cover[2].end
                 } else {
                     available.saturating_sub(radius as u32).max(output)
                 };
                 if ready > output {
-                    store.write_block(&window, output, ready, radius, kernel, workers)?;
+                    store.write_block(&window, output, ready, &mut production)?;
                     output = ready;
                 }
                 for retired in window.trim(output.saturating_sub(radius as u32)) {
@@ -171,14 +202,17 @@ impl DetectionStore {
                 return Ok(false);
             }
             if !window.is_empty() && output < cover[2].end {
-                store.write_block(&window, output, cover[2].end, radius, kernel, workers)?;
+                store.write_block(&window, output, cover[2].end, &mut production)?;
             }
             Ok(true)
         })?;
         if !completed {
             return Ok(None);
         }
-        Ok(Some(store))
+        Ok(Some(DetectionBuild {
+            store,
+            field: production.levels.finish(),
+        }))
     }
 
     fn write_block(
@@ -186,20 +220,25 @@ impl DetectionStore {
         window: &Window,
         start: u32,
         end: u32,
-        radius: usize,
-        kernel: &[f32],
-        workers: usize,
+        production: &mut Production<'_>,
     ) -> Result<(), String> {
         let plane = self.plane;
         let low = self.start[2] as u32;
         let planes = (end - start) as usize;
+        let radius = production.radius;
+        let kernel = production.kernel;
+        let workers = production.workers;
+        let gate = &production.gate;
+        let levels = &mut production.levels;
         let target = |values: &mut [f32]| {
             depth(window, start, radius, kernel, workers, plane, values);
         };
         match &mut self.storage {
             Storage::Memory(store) => {
                 let offset = (start - low) as usize * plane;
-                target(&mut store[offset..offset + planes * plane]);
+                let values = &mut store[offset..offset + planes * plane];
+                target(values);
+                levels.push(gate, start, values, planes);
             }
             Storage::Spill { file, .. } => {
                 let mut values = vec![0.0f32; planes * plane];
@@ -212,6 +251,7 @@ impl DetectionStore {
                     .map_err(|error| format!("failed to seek the detection spill: {error}"))?;
                 file.write_all(bytemuck::cast_slice(&values))
                     .map_err(|error| format!("failed to write the detection spill: {error}"))?;
+                levels.push(gate, start, &values, planes);
             }
         }
         Ok(())
@@ -378,10 +418,10 @@ fn depth(
         return;
     }
     let each = planes.div_ceil(workers);
-    std::thread::scope(|scope| {
+    crate::schedule::parallel(|scope| {
         for (block, values) in target.chunks_mut(each * plane).enumerate() {
             let first = start + (block * each) as u32;
-            scope.spawn(move || {
+            scope.spawn(move |_| {
                 for (index, plane) in values.chunks_mut(plane).enumerate() {
                     depth_plane(window, first + index as u32, radius, kernel, plane);
                 }
@@ -598,10 +638,10 @@ fn planes(
         return;
     }
     let body = &body;
-    std::thread::scope(|scope| {
+    crate::schedule::parallel(|scope| {
         for (index, chunk) in values.chunks_mut(each * plane).enumerate() {
             let first = index * each;
-            scope.spawn(move || body(chunk, first));
+            scope.spawn(move |_| body(chunk, first));
         }
     });
 }
@@ -722,29 +762,69 @@ mod tests {
         };
         let cancel = AtomicBool::new(false);
         let mut progress = |_, _| {};
-        let single =
-            DetectionStore::build(&plan, &cover, 1, &cancel, &read, u64::MAX, &mut progress)
-                .expect("the single detection builds")
-                .expect("the single detection covers voxels");
+        let single = DetectionStore::build(
+            DetectionInput {
+                plan: &plan,
+                cover: &cover,
+                roi: None,
+                workers: 1,
+            },
+            &cancel,
+            &read,
+            u64::MAX,
+            &mut progress,
+        )
+        .expect("the single detection builds")
+        .expect("the single detection covers voxels");
         assert_eq!(reads.load(Ordering::Relaxed), volume);
         reads.store(0, Ordering::Relaxed);
-        let many = DetectionStore::build(&plan, &cover, 4, &cancel, &read, u64::MAX, &mut progress)
-            .expect("the parallel detection builds")
-            .expect("the parallel detection covers voxels");
+        let many = DetectionStore::build(
+            DetectionInput {
+                plan: &plan,
+                cover: &cover,
+                roi: None,
+                workers: 4,
+            },
+            &cancel,
+            &read,
+            u64::MAX,
+            &mut progress,
+        )
+        .expect("the parallel detection builds")
+        .expect("the parallel detection covers voxels");
         assert_eq!(reads.load(Ordering::Relaxed), volume);
-        let spill = DetectionStore::build(&plan, &cover, 4, &cancel, &read, 0, &mut progress)
-            .expect("the spilled detection builds")
-            .expect("the spilled detection covers voxels");
+        let spill = DetectionStore::build(
+            DetectionInput {
+                plan: &plan,
+                cover: &cover,
+                roi: None,
+                workers: 4,
+            },
+            &cancel,
+            &read,
+            0,
+            &mut progress,
+        )
+        .expect("the spilled detection builds")
+        .expect("the spilled detection covers voxels");
         assert_eq!(
             reads.load(Ordering::Relaxed),
             volume * 2,
             "a spilled detection reads its channel once"
         );
-        assert!(matches!(spill.storage, Storage::Spill { .. }));
+        assert!(matches!(spill.store.storage, Storage::Spill { .. }));
         let slab = cover[2].clone();
-        let single = single.slab(slab.clone()).expect("the slab reads").unwrap();
-        let many = many.slab(slab.clone()).expect("the slab reads").unwrap();
-        let spilled = spill.slab(slab).expect("the slab reads").unwrap();
+        let single = single
+            .store
+            .slab(slab.clone())
+            .expect("the slab reads")
+            .unwrap();
+        let many = many
+            .store
+            .slab(slab.clone())
+            .expect("the slab reads")
+            .unwrap();
+        let spilled = spill.store.slab(slab).expect("the slab reads").unwrap();
         assert_eq!(
             single.values, many.values,
             "the detection does not depend on the worker count"
@@ -753,5 +833,69 @@ mod tests {
             single.values, spilled.values,
             "the spilled detection smooths like the resident one"
         );
+    }
+
+    #[test]
+    fn measures_the_block_levels_while_the_detection_builds() {
+        let level = Level::new(Extent::new(40, 32, 24), Spacing::new(1.0, 1.0, 1.0));
+        let params = SurfaceParams::new(0.5, 1.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0));
+        let plan = SurfaceBuilder::new(
+            0,
+            level,
+            params,
+            1,
+            0,
+            Region::none(),
+            Intensity::new(0.0, 1.0),
+        );
+        let cover = plan.coverage(None);
+        let read = |ranges: &[Range<u32>; 3]| {
+            let mut values = Vec::with_capacity(
+                ((ranges[0].end - ranges[0].start)
+                    * (ranges[1].end - ranges[1].start)
+                    * (ranges[2].end - ranges[2].start)) as usize,
+            );
+            for z in ranges[2].clone() {
+                for y in ranges[1].clone() {
+                    for x in ranges[0].clone() {
+                        values.push((x + 2 * y + 3 * z) as f32 * 0.001);
+                    }
+                }
+            }
+            Ok(VoxelData::F32(values))
+        };
+        let cancel = AtomicBool::new(false);
+        let mut progress = |_, _| {};
+        let mut build = |workers| {
+            DetectionStore::build(
+                DetectionInput {
+                    plan: &plan,
+                    cover: &cover,
+                    roi: None,
+                    workers,
+                },
+                &cancel,
+                &read,
+                u64::MAX,
+                &mut progress,
+            )
+            .expect("the detection builds")
+            .expect("the detection covers voxels")
+        };
+        let single = build(1);
+        let many = build(4);
+        let blocks = plan.blocks();
+        for bz in 0..blocks[2] as i64 {
+            for by in 0..blocks[1] as i64 {
+                for bx in 0..blocks[0] as i64 {
+                    assert_eq!(
+                        single.field.at([bx, by, bz]),
+                        many.field.at([bx, by, bz]),
+                        "the block levels do not depend on the worker count"
+                    );
+                }
+            }
+        }
+        assert_eq!(plan.tile_count(), 1);
     }
 }

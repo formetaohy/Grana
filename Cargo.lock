@@ -885,6 +885,7 @@ dependencies = [
  "grana-measure",
  "grana-object",
  "grana-volume",
+ "rayon",
 ]
 
 [[package]]

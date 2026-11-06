@@ -243,10 +243,52 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 layer_color[layers] = oit_colors[base + slot];
                 layers += 1u;
             }
-            let accumulation = textureLoad(oit_accumulate, local, 0);
+            let scale = max(frame.oit.w, 1u);
+            let tail_coord = (vec2<f32>(local) + 0.5) / f32(scale) - 0.5;
+            let tail_base = vec2<i32>(floor(tail_coord));
+            let tail_fraction = tail_coord - floor(tail_coord);
+            let tail_extent = vec2<i32>(textureDimensions(oit_accumulate)) - vec2<i32>(1);
+            let low = clamp(tail_base, vec2<i32>(0), tail_extent);
+            let high = clamp(tail_base + vec2<i32>(1), vec2<i32>(0), tail_extent);
+            let across = vec2<i32>(high.x, low.y);
+            let down = vec2<i32>(low.x, high.y);
+            let accumulation = mix(
+                mix(
+                    textureLoad(oit_accumulate, low, 0),
+                    textureLoad(oit_accumulate, across, 0),
+                    tail_fraction.x,
+                ),
+                mix(
+                    textureLoad(oit_accumulate, down, 0),
+                    textureLoad(oit_accumulate, high, 0),
+                    tail_fraction.x,
+                ),
+                tail_fraction.y,
+            );
             if (accumulation.a > 0.0) {
-                let reveal = textureLoad(oit_reveal, local, 0).r;
-                let nearest = textureLoad(oit_tail_depth, local, 0).x;
+                let reveal = mix(
+                    mix(
+                        textureLoad(oit_reveal, low, 0).r,
+                        textureLoad(oit_reveal, across, 0).r,
+                        tail_fraction.x,
+                    ),
+                    mix(
+                        textureLoad(oit_reveal, down, 0).r,
+                        textureLoad(oit_reveal, high, 0).r,
+                        tail_fraction.x,
+                    ),
+                    tail_fraction.y,
+                );
+                let nearest = min(
+                    min(
+                        textureLoad(oit_tail_depth, low, 0).x,
+                        textureLoad(oit_tail_depth, across, 0).x,
+                    ),
+                    min(
+                        textureLoad(oit_tail_depth, down, 0).x,
+                        textureLoad(oit_tail_depth, high, 0).x,
+                    ),
+                );
                 tail = vec4<f32>(accumulation.rgb / accumulation.a, 1.0 - reveal);
                 if (nearest < 1.0) {
                     tail_depth = nearest;

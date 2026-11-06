@@ -173,10 +173,36 @@ struct TailFragment {
 }
 
 @fragment
-fn fs_oit(input: VertexOutput) -> TailFragment {
+fn fs_oit_color(input: VertexOutput) {
+    if (is_outside(input)) {
+        return;
+    }
     let origin = vec2<i32>(mesh.viewport.xy);
     let size = vec2<i32>(mesh.viewport.zw);
-    let pixel = vec2<i32>(input.clip_position.xy) + origin;
+    let pixel = vec2<i32>(input.clip_position.xy);
+    let index = oit_index(origin, size, pixel);
+    if (index < 0) {
+        return;
+    }
+    let covered = oit_covered(pixel, mesh.oit.z);
+    if (covered <= 0.0) {
+        return;
+    }
+    let slot = oit_slot(u32(index), mesh.oit.y, oit_key(input.clip_position.z));
+    if (slot < 0) {
+        return;
+    }
+    let sample = shade(input);
+    let premultiplied = vec4<f32>(sample.rgb * sample.a, sample.a) * covered;
+    oit_write(u32(index), mesh.oit.y, u32(slot), premultiplied);
+}
+
+@fragment
+fn fs_oit_tail(input: VertexOutput) -> TailFragment {
+    let scale = max(mesh.oit.w, 1u);
+    let origin = vec2<i32>(mesh.viewport.xy);
+    let size = vec2<i32>(mesh.viewport.zw);
+    let pixel = vec2<i32>(floor(input.clip_position.xy * f32(scale))) + origin;
     var output: TailFragment;
     output.accumulate = vec4<f32>(0.0);
     output.reveal = vec4<f32>(0.0);
@@ -192,12 +218,9 @@ fn fs_oit(input: VertexOutput) -> TailFragment {
     if (covered <= 0.0) {
         discard;
     }
-    let slot = oit_slot(u32(index), mesh.oit.y, oit_key(input.clip_position.z));
-    if (slot >= 0) {
-        let sample = shade(input);
-        let premultiplied = vec4<f32>(sample.rgb * sample.a, sample.a) * covered;
-        oit_write(u32(index), mesh.oit.y, u32(slot), premultiplied);
-        return output;
+    let key = oit_key(input.clip_position.z);
+    if (!oit_beyond(u32(index), mesh.oit.y, key)) {
+        discard;
     }
     let sample = shade(input);
     let alpha = sample.a * covered;

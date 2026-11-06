@@ -1,11 +1,44 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
+
+use rayon::{ThreadPool, ThreadPoolBuilder, Yield};
 
 pub(crate) const WORKER_LIMIT: usize = 16;
 
 const BUDGET_POLL: Duration = Duration::from_millis(20);
+
+fn pool() -> &'static ThreadPool {
+    static POOL: OnceLock<ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        ThreadPoolBuilder::new()
+            .num_threads(workers(0))
+            .thread_name(|index| format!("grana-worker-{index}"))
+            .build()
+            .expect("the analysis worker pool starts")
+    })
+}
+
+pub fn parallel<'scope, R>(body: impl FnOnce(&rayon::Scope<'scope>) -> R) -> R {
+    pool().in_place_scope(body)
+}
+
+pub fn receive<T>(receiver: &mpsc::Receiver<T>) -> Option<T> {
+    if rayon::current_thread_index().is_none() {
+        return receiver.recv().ok();
+    }
+    loop {
+        match receiver.try_recv() {
+            Ok(value) => return Some(value),
+            Err(mpsc::TryRecvError::Empty) => match rayon::yield_now() {
+                Some(Yield::Executed) => {}
+                Some(Yield::Idle) | None => std::thread::yield_now(),
+            },
+            Err(mpsc::TryRecvError::Disconnected) => return None,
+        }
+    }
+}
 
 pub(crate) struct Budget {
     limit: u64,
@@ -98,9 +131,9 @@ where
     }
     let next = AtomicUsize::new(0);
     let stop = AtomicBool::new(false);
-    let (sender, receiver) = mpsc::sync_channel::<Result<(usize, T), String>>(workers.max(1) * 2);
+    let (sender, receiver) = mpsc::channel::<Result<(usize, T), String>>();
     let (retired, retired_receiver) = mpsc::channel::<Option<L>>();
-    let completed = std::thread::scope(|scope| {
+    let completed = parallel(|scope| {
         for _ in 0..workers.max(1) {
             let sender = sender.clone();
             let retired = retired.clone();
@@ -108,7 +141,7 @@ where
             let stop = &stop;
             let local = &local;
             let work = &work;
-            scope.spawn(move || {
+            scope.spawn(move |_| {
                 let mut state = None;
                 loop {
                     if halted(cancel, stop) {
@@ -137,7 +170,7 @@ where
         let mut pending: Vec<Option<T>> = (0..total).map(|_| None).collect();
         let mut assembled = 0usize;
         let mut done = 0usize;
-        while let Ok(message) = receiver.recv() {
+        while let Some(message) = receive(&receiver) {
             match message {
                 Ok((index, value)) => {
                     done += 1;
@@ -185,10 +218,10 @@ where
     }
     let chunk = items.len().div_ceil(workers);
     let mut slots = (0..items.len()).map(|_| None).collect::<Vec<_>>();
-    std::thread::scope(|scope| {
+    parallel(|scope| {
         let work = &work;
         for (slot, group) in slots.chunks_mut(chunk).zip(items.chunks(chunk)) {
-            scope.spawn(move || {
+            scope.spawn(move |_| {
                 for (target, item) in slot.iter_mut().zip(group) {
                     *target = Some(work(item));
                 }

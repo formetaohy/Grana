@@ -18,6 +18,8 @@ const BYTES_PER_PIXEL: u64 = 76;
 const MINIMUM_LAYERS: u64 = 2;
 const MAXIMUM_LAYERS: u64 = 8;
 const PANE_PIXELS_STEP: u64 = 1 << 17;
+const TAIL_PIXELS: u64 = 1 << 20;
+const TAIL_PIXELS_COARSE: u64 = 1 << 22;
 
 pub(crate) const ACCUMULATE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const REVEAL_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
@@ -98,6 +100,8 @@ pub(crate) struct Oit {
     layers: u32,
     size: [u32; 2],
     region: [u32; 4],
+    tail_scale: u32,
+    tail_size: [u32; 2],
 }
 
 impl Oit {
@@ -114,6 +118,8 @@ impl Oit {
         );
         let pane = [region[2], region[3]];
         let pixels = u64::from(pane[0]) * u64::from(pane[1]);
+        let tail_scale = tail_scale(pane);
+        let tail_size = [pane[0].div_ceil(tail_scale), pane[1].div_ceil(tail_scale)];
         let capacity = pixels.div_ceil(PANE_PIXELS_STEP) * PANE_PIXELS_STEP;
         let (layers, _) = allocation(pane, capacity, budget);
         let layers = layers as u32;
@@ -142,9 +148,9 @@ impl Oit {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let accumulate = tail(device, "grana.oit.accumulate", ACCUMULATE_FORMAT, pane);
-        let reveal = tail(device, "grana.oit.reveal", REVEAL_FORMAT, pane);
-        let tail_depth = tail(device, "grana.oit.tail.depth", TAIL_DEPTH_FORMAT, pane);
+        let accumulate = tail(device, "grana.oit.accumulate", ACCUMULATE_FORMAT, tail_size);
+        let reveal = tail(device, "grana.oit.reveal", REVEAL_FORMAT, tail_size);
+        let tail_depth = tail(device, "grana.oit.tail.depth", TAIL_DEPTH_FORMAT, tail_size);
         let coverage = coverage(device, size);
         let write_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.oit.write.group"),
@@ -221,6 +227,8 @@ impl Oit {
             layers,
             size,
             region,
+            tail_scale,
+            tail_size,
         }
     }
 
@@ -232,13 +240,21 @@ impl Oit {
         self.layers
     }
 
+    pub fn tail_scale(&self) -> u32 {
+        self.tail_scale
+    }
+
+    pub fn tail_size(&self) -> [u32; 2] {
+        self.tail_size
+    }
+
     pub fn dropped(&self) -> &Buffer {
         &self.dropped
     }
 
     pub fn bytes(&self) -> u64 {
         let store = self.keys.size() + self.colors.size() + self.counts.size();
-        let tail = u64::from(self.region[2]) * u64::from(self.region[3]) * TAIL_BYTES;
+        let tail = u64::from(self.tail_size[0]) * u64::from(self.tail_size[1]) * TAIL_BYTES;
         let coverage = u64::from(self.size[0])
             * u64::from(self.size[1])
             * COVERAGE_BYTES
@@ -290,6 +306,17 @@ fn allocation(size: [u32; 2], capacity: u64, budget: u64) -> (u64, u64) {
     let budget = budget.max(capacity * BYTES_PER_PIXEL).max(floor);
     let layers = ((budget - fixed) / layer_bytes).clamp(MINIMUM_LAYERS, MAXIMUM_LAYERS);
     (layers, fixed + layers * layer_bytes)
+}
+
+fn tail_scale(pane: [u32; 2]) -> u32 {
+    let pixels = u64::from(pane[0]) * u64::from(pane[1]);
+    if pixels <= TAIL_PIXELS {
+        1
+    } else if pixels <= TAIL_PIXELS_COARSE {
+        2
+    } else {
+        4
+    }
 }
 
 fn tail(
@@ -364,6 +391,22 @@ mod tests {
         assert_eq!(
             most, MAXIMUM_LAYERS,
             "a small pane reaches the layer ceiling"
+        );
+    }
+
+    #[test]
+    fn downsamples_the_tail_by_area_only_for_large_panes() {
+        assert_eq!(tail_scale([800, 600]), 1);
+        assert_eq!(tail_scale([1024, 1024]), 1);
+        assert_eq!(tail_scale([1920, 1080]), 2);
+        assert_eq!(tail_scale([2560, 1440]), 2);
+        assert_eq!(tail_scale([3840, 2160]), 4);
+        assert_eq!(tail_scale([4096, 4096]), 4);
+        let coarse = tail_scale([3840, 2160]);
+        assert_eq!(
+            [3840u32.div_ceil(coarse), 2160u32.div_ceil(coarse)],
+            [960, 540],
+            "a 4K pane keeps a quarter sized tail"
         );
     }
 }

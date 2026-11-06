@@ -1141,6 +1141,73 @@ fn composites_the_tail_inside_a_split_pane() {
 }
 
 #[test]
+fn downsamples_the_transparent_tail_of_a_large_pane() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let size = [1024u32, 1026];
+    let texture = common::target_rect(&device, size);
+    let volume = empty_volume();
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let mesh = PackedMesh::new(view_row(&camera, 20, 0.25));
+    let red = [1.0, 0.12, 0.12];
+    let blue = [0.12, 0.2, 1.0];
+    let styles = |far: bool| {
+        (0..20)
+            .map(|index| {
+                if index < 16 {
+                    Style::new(red, true, false, 0.05)
+                } else {
+                    Style::new(blue, far, false, 0.9)
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let shown_styles = styles(true);
+    let hidden_styles = styles(false);
+    let pane = [0, 0, size[0], size[1]];
+    let render = |styles: &[Style]| {
+        render_rect(
+            Setup {
+                device: &device,
+                queue: &queue,
+                job: Job {
+                    texture: &texture,
+                    volume: &volume,
+                    volume_region: pane,
+                    section_region: CORNER,
+                    focus_z: 0.0,
+                    mesh: Some((&mesh, styles)),
+                },
+                camera: Some(&camera),
+                section: None,
+                markers: &[],
+                shading: None,
+            },
+            size,
+        )
+    };
+    let shown = render(&shown_styles);
+    let hidden = render(&hidden_styles);
+    let blue_fraction = |pixels: &[[u8; 4]]| {
+        let mut total = 0u64;
+        for y in pane[1]..pane[1] + pane[3] {
+            for x in pane[0]..pane[0] + pane[2] {
+                total += u64::from(pixels[(y * size[0] + x) as usize][2]);
+            }
+        }
+        total as f64 / (f64::from(pane[2]) * f64::from(pane[3]))
+    };
+    let shown_blue = blue_fraction(&shown);
+    let hidden_blue = blue_fraction(&hidden);
+    assert!(
+        shown_blue > hidden_blue + 8.0,
+        "the downsampled tail drops the surfaces beyond the stored layers: {shown_blue} {hidden_blue}"
+    );
+}
+
+#[test]
 fn keeps_near_transparent_surfaces_drawn_after_far_ones() {
     let Some((device, queue)) = device() else {
         return;
@@ -1900,6 +1967,10 @@ fn marker_scene(
 }
 
 fn render(setup: Setup<'_>) -> Vec<[u8; 4]> {
+    render_rect(setup, [SIDE, SIDE])
+}
+
+fn render_rect(setup: Setup<'_>, size: [u32; 2]) -> Vec<[u8; 4]> {
     let Setup {
         device,
         queue,
@@ -1968,7 +2039,7 @@ fn render(setup: Setup<'_>) -> Vec<[u8; 4]> {
     };
     let mut renderer = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
     renderer.set_dataset(device, &pyramid);
-    settle(
+    common::settle_sized(
         &mut renderer,
         Session {
             device,
@@ -1982,12 +2053,13 @@ fn render(setup: Setup<'_>) -> Vec<[u8; 4]> {
             region: Region::none(),
             time: 0,
         },
+        size,
         |request| {
             let grid = BrickGrid::new(volume.extent());
             volume.brick(&grid, request.coord)
         },
     );
-    read_pixels(device, queue, job.texture, SIDE)
+    common::read_pixels_rect(device, queue, job.texture, size)
 }
 
 fn two_channel_volume() -> Volume {

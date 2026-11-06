@@ -57,6 +57,22 @@ fn oit_slot(index: u32, layers: u32, key: u32) -> i32 {
     return -1;
 }
 
+fn oit_beyond(index: u32, layers: u32, key: u32) -> bool {
+    let base = index * layers;
+    let stored = min(atomicLoad(&oit_counts[index]), layers);
+    if (stored == 0u) {
+        return true;
+    }
+    var farthest = 0xffffffffu;
+    for (var slot = 0u; slot < stored; slot += 1u) {
+        let loaded = atomicLoad(&oit_keys[base + slot]);
+        if (loaded != 0u) {
+            farthest = min(farthest, loaded);
+        }
+    }
+    return key < farthest;
+}
+
 fn oit_write(index: u32, layers: u32, slot: u32, premultiplied: vec4<f32>) {
     let base = index * layers;
     oit_colors[base + slot] = vec2<u32>(

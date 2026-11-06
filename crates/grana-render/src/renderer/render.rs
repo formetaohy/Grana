@@ -240,6 +240,7 @@ impl Renderer {
         }
         if let Some(oit) = target.oit.as_ref().filter(|_| translucent) {
             frame_data.oit[1] = oit.layers();
+            frame_data.oit[3] = oit.tail_scale();
         }
         frame_data.oit[2] = crate::target::SCENE_SAMPLES;
         let oit_group = match target.oit.as_ref() {
@@ -437,6 +438,48 @@ impl Renderer {
                 }
                 {
                     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                        label: Some("grana.oit.color.pass"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                            view: target.scene.depth(),
+                            depth_ops: Some(Operations {
+                                load: LoadOp::Load,
+                                store: StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        ..Default::default()
+                    });
+                    pass.set_viewport(
+                        volume_region[0] as f32,
+                        volume_region[1] as f32,
+                        volume_width as f32,
+                        volume_height as f32,
+                        0.0,
+                        1.0,
+                    );
+                    pass.set_scissor_rect(
+                        volume_region[0],
+                        volume_region[1],
+                        volume_width,
+                        volume_height,
+                    );
+                    meshes.draw_color(
+                        &mut pass,
+                        shadow_group,
+                        oit.write_group(),
+                        oit.coverage_group(),
+                    );
+                    markers.draw_color(
+                        &mut pass,
+                        scene_group,
+                        oit.write_group(),
+                        oit.coverage_group(),
+                    );
+                }
+                {
+                    let tail = oit.tail_size();
+                    let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                         label: Some("grana.oit.pass"),
                         color_attachments: &[
                             Some(RenderPassColorAttachment {
@@ -475,15 +518,8 @@ impl Renderer {
                         depth_stencil_attachment: None,
                         ..Default::default()
                     });
-                    pass.set_viewport(
-                        0.0,
-                        0.0,
-                        volume_width as f32,
-                        volume_height as f32,
-                        0.0,
-                        1.0,
-                    );
-                    pass.set_scissor_rect(0, 0, volume_width, volume_height);
+                    pass.set_viewport(0.0, 0.0, tail[0] as f32, tail[1] as f32, 0.0, 1.0);
+                    pass.set_scissor_rect(0, 0, tail[0], tail[1]);
                     meshes.draw_tail(
                         &mut pass,
                         shadow_group,

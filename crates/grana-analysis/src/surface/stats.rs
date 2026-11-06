@@ -1,134 +1,216 @@
-use super::Gate;
-use super::detection::{Detection, DetectionSource};
+use std::ops::Range;
+
+use grana_volume::Intensity;
+
+use super::{Gate, SurfaceBuilder};
 use crate::local::{BLOCK, BlockField, block_levels};
 
-type Levels = Vec<Option<(f32, f32)>>;
+const BUCKET: usize = (BLOCK * BLOCK * BLOCK) as usize;
 
-const LEVEL_CHUNK: usize = 64;
-
-pub(super) fn build(
-    source: &DetectionSource<'_>,
-    roi: Option<&grana_object::Mask>,
-    progress: &mut dyn FnMut(usize, usize),
-) -> Result<Option<BlockField>, String> {
-    let plan = source.plan();
-    let blocks = plan.blocks();
-    let count = blocks[0] * blocks[1] * blocks[2];
-    let mut background = vec![f32::NAN; count];
-    let mut signal = vec![f32::NAN; count];
-    let stride = [1, blocks[0], blocks[0] * blocks[1]];
-    let gate = plan.gate(roi);
-    let total = plan.dims()[2].div_ceil(BLOCK as usize);
-    let mut done = 0usize;
-    let chunk = (plan.tile[2] as usize).max(BLOCK as usize);
-    let mut z = plan.region[2].start;
-    while z < plan.region[2].end {
-        if source.cancel().load(std::sync::atomic::Ordering::Relaxed) {
-            return Ok(None);
-        }
-        let end = plan.region[2].end.min(z.saturating_add(chunk as u32));
-        let Some(detection) = source.slab(z..end)? else {
-            return Ok(None);
-        };
-        let first = ((z as i64 - plan.anchor[2]) / BLOCK) as usize;
-        let last = first + (end - z).div_ceil(BLOCK as u32) as usize;
-        let mut coords = Vec::with_capacity(blocks[0] * blocks[1] * (last - first));
-        for bz in first..last {
-            for by in 0..blocks[1] {
-                for bx in 0..blocks[0] {
-                    coords.push([bx, by, bz]);
-                }
-            }
-        }
-        let Some(levels) = levels(source, &gate, &detection, &coords)? else {
-            return Ok(None);
-        };
-        for (coord, level) in coords.iter().zip(levels) {
-            let Some((background_level, signal_level)) = level else {
-                continue;
-            };
-            let slot = stride[0] * coord[0] + stride[1] * coord[1] + stride[2] * coord[2];
-            background[slot] = background_level;
-            signal[slot] = signal_level;
-        }
-        done += last - first;
-        progress(done, total);
-        z = end;
-    }
-    Ok(Some(BlockField::from_blocks(
-        plan.anchor,
-        blocks,
-        plan.intensity,
-        background,
-        signal,
-        source.workers(),
-    )))
+pub(super) struct Levels {
+    anchor: [i64; 3],
+    region: [Range<u32>; 3],
+    cover: [Range<u32>; 3],
+    width: usize,
+    height: usize,
+    blocks: [usize; 3],
+    intensity: Intensity,
+    workers: usize,
+    background: Vec<f32>,
+    signal: Vec<f32>,
+    buckets: Vec<f32>,
+    counts: Vec<u32>,
+    levels: Vec<Option<(f32, f32)>>,
+    row: i64,
 }
 
-fn levels(
-    source: &DetectionSource<'_>,
-    gate: &Gate<'_>,
-    detection: &Detection,
-    coords: &[[usize; 3]],
-) -> Result<Option<Levels>, String> {
-    let plan = source.plan();
-    let mut output: Levels = (0..coords.len()).map(|_| None).collect();
-    let chunks = coords.len().div_ceil(LEVEL_CHUNK);
-    let completed = crate::schedule::ordered(
-        crate::schedule::Run {
-            total: chunks,
-            workers: source.workers(),
-            cancel: source.cancel(),
-            progress: &mut |_, _| {},
-        },
-        || Vec::with_capacity((BLOCK * BLOCK * BLOCK) as usize),
-        |bucket, chunk| {
-            let first = chunk * LEVEL_CHUNK;
-            let last = (first + LEVEL_CHUNK).min(coords.len());
-            let mut levels = Vec::with_capacity(last - first);
-            for coord in &coords[first..last] {
-                levels.push(collect(plan, gate, detection, *coord, bucket));
-            }
-            Ok(levels)
-        },
-        |chunk, levels| {
-            let first = chunk * LEVEL_CHUNK;
-            for (offset, level) in levels.into_iter().enumerate() {
-                output[first + offset] = level;
-            }
-            Ok(())
-        },
-        |_| {},
-    )?;
-    Ok(completed.then_some(output))
-}
-
-fn collect(
-    plan: &super::SurfaceBuilder,
-    gate: &Gate<'_>,
-    detection: &Detection,
-    block: [usize; 3],
-    bucket: &mut Vec<f32>,
-) -> Option<(f32, f32)> {
-    bucket.clear();
-    let span = [0, 1, 2].map(|axis| {
-        let first = plan.anchor[axis] + (block[axis] * BLOCK as usize) as i64;
-        let last = (first + BLOCK).min(i64::from(plan.region[axis].end));
-        first..last
-    });
-    let base = detection.offset(span[0].start);
-    for z in span[2].clone() {
-        for y in span[1].clone() {
-            let Some(line) = detection.row(y, z) else {
-                continue;
-            };
-            for x in span[0].clone() {
-                let slot = base + (x - span[0].start) as usize;
-                if gate.admits([x, y, z]) {
-                    bucket.push(line[slot]);
-                }
-            }
+impl Levels {
+    pub(super) fn new(plan: &SurfaceBuilder, cover: &[Range<u32>; 3], workers: usize) -> Self {
+        let blocks = plan.blocks();
+        let columns = blocks[0] * blocks[1];
+        assert!(
+            plan.region.iter().all(|range| !range.is_empty()),
+            "a block field covers a non empty region"
+        );
+        Self {
+            anchor: plan.anchor,
+            region: plan.region.clone(),
+            cover: cover.clone(),
+            width: (cover[0].end - cover[0].start) as usize,
+            height: (cover[1].end - cover[1].start) as usize,
+            blocks,
+            intensity: plan.intensity,
+            workers: workers.max(1),
+            background: vec![f32::NAN; columns * blocks[2]],
+            signal: vec![f32::NAN; columns * blocks[2]],
+            buckets: vec![0.0; columns * BUCKET],
+            counts: vec![0; columns],
+            levels: vec![None; columns],
+            row: i64::MIN,
         }
     }
-    block_levels(bucket)
+
+    pub(super) fn push(&mut self, gate: &Gate<'_>, start: u32, values: &[f32], planes: usize) {
+        let plane = self.width * self.height;
+        assert!(
+            !values.is_empty() && values.len() == plane * planes,
+            "a detection band holds whole planes"
+        );
+        let end = start.saturating_add(planes as u32);
+        let low = start.max(self.region[2].start);
+        let high = end.min(self.region[2].end);
+        let mut z = low;
+        while z < high {
+            let offset = i64::from(z) - self.anchor[2];
+            let row = offset.div_euclid(BLOCK);
+            let row_end = ((i64::from(z) + BLOCK - offset.rem_euclid(BLOCK)) as u32).min(high);
+            if row != self.row {
+                self.flush();
+                self.row = row;
+            }
+            self.push_rows(gate, start, z, row_end, values);
+            z = row_end;
+        }
+    }
+
+    fn push_rows(&mut self, gate: &Gate<'_>, start: u32, low: u32, high: u32, values: &[f32]) {
+        let blocks = self.blocks;
+        let region = &self.region;
+        let cover = &self.cover;
+        let width = self.width;
+        let plane = self.width * self.height;
+        let anchor = self.anchor;
+        let chunk = blocks[1].div_ceil(self.workers).max(1);
+        let gated = gate.roi.is_some();
+        let counts = &mut self.counts[..];
+        let buckets = &mut self.buckets[..];
+        crate::schedule::parallel(|scope| {
+            for (group, (counts, buckets)) in counts
+                .chunks_mut(blocks[0] * chunk)
+                .zip(buckets.chunks_mut(blocks[0] * chunk * BUCKET))
+                .enumerate()
+            {
+                let first = group * chunk;
+                scope.spawn(move |_| {
+                    for (offset, (counts, buckets)) in counts
+                        .chunks_mut(blocks[0])
+                        .zip(buckets.chunks_mut(blocks[0] * BUCKET))
+                        .enumerate()
+                    {
+                        let by = first + offset;
+                        if by >= blocks[1] {
+                            break;
+                        }
+                        let first_y = anchor[1] + (by * BLOCK as usize) as i64;
+                        let y0 = first_y
+                            .max(i64::from(region[1].start))
+                            .max(i64::from(cover[1].start));
+                        let y1 = (first_y + BLOCK)
+                            .min(i64::from(region[1].end))
+                            .min(i64::from(cover[1].end));
+                        if y1 <= y0 {
+                            continue;
+                        }
+                        let mut spans = Vec::with_capacity(blocks[0]);
+                        for bx in 0..blocks[0] {
+                            let first_x = anchor[0] + (bx * BLOCK as usize) as i64;
+                            let x0 = first_x
+                                .max(i64::from(region[0].start))
+                                .max(i64::from(cover[0].start));
+                            let x1 = (first_x + BLOCK)
+                                .min(i64::from(region[0].end))
+                                .min(i64::from(cover[0].end));
+                            spans.push((x0, x1));
+                        }
+                        for z in low..high {
+                            let base = (z - start) as usize * plane;
+                            for (bx, (count, bucket)) in counts
+                                .iter_mut()
+                                .zip(buckets.chunks_mut(BUCKET))
+                                .enumerate()
+                            {
+                                let (x0, x1) = spans[bx];
+                                if x1 <= x0 {
+                                    continue;
+                                }
+                                let mut stored = *count as usize;
+                                for y in y0..y1 {
+                                    let origin = (y - i64::from(cover[1].start)) as usize * width;
+                                    for x in x0..x1 {
+                                        if gated && !gate.admits([x, y, i64::from(z)]) {
+                                            continue;
+                                        }
+                                        let slot =
+                                            origin + (x - i64::from(cover[0].start)) as usize;
+                                        bucket[stored] = values[base + slot];
+                                        stored += 1;
+                                    }
+                                }
+                                assert!(
+                                    stored <= BUCKET,
+                                    "an eight voxel block fills its bucket once"
+                                );
+                                *count = stored as u32;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    pub(super) fn finish(mut self) -> BlockField {
+        self.flush();
+        BlockField::from_blocks(
+            self.anchor,
+            self.blocks,
+            self.intensity,
+            self.background,
+            self.signal,
+            self.workers,
+        )
+    }
+
+    fn flush(&mut self) {
+        if self.row == i64::MIN {
+            return;
+        }
+        let blocks = self.blocks;
+        let columns = blocks[0] * blocks[1];
+        let chunk = columns.div_ceil(self.workers).max(1);
+        {
+            let buckets = &mut self.buckets[..];
+            let counts = &self.counts[..];
+            let levels = &mut self.levels[..];
+            crate::schedule::parallel(|scope| {
+                for ((bucket, counts), levels) in buckets
+                    .chunks_mut(chunk * BUCKET)
+                    .zip(counts.chunks(chunk))
+                    .zip(levels.chunks_mut(chunk))
+                {
+                    scope.spawn(move |_| {
+                        for (bucket, (count, level)) in bucket
+                            .chunks_mut(BUCKET)
+                            .zip(counts.iter().zip(levels.iter_mut()))
+                        {
+                            *level = block_levels(&mut bucket[..*count as usize]);
+                        }
+                    });
+                }
+            });
+        }
+        let z = self.row as usize;
+        for (cell, level) in self.levels.iter().enumerate() {
+            let Some((background, signal)) = level else {
+                continue;
+            };
+            let bx = cell % blocks[0];
+            let by = cell / blocks[0];
+            let slot = bx + blocks[0] * (by + blocks[1] * z);
+            self.background[slot] = *background;
+            self.signal[slot] = *signal;
+        }
+        self.levels.fill(None);
+        self.counts.fill(0);
+    }
 }

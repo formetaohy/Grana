@@ -28,18 +28,45 @@ pub fn settle(
     settle_clipped(renderer, session, Clip::none(), source)
 }
 
+pub fn settle_sized(
+    renderer: &mut Renderer,
+    session: Session<'_>,
+    size: [u32; 2],
+    source: impl Fn(BrickRequest) -> BrickData,
+) -> Requests {
+    settle_clipped_sized(renderer, session, Clip::none(), size, source)
+}
+
 pub fn settle_clipped(
     renderer: &mut Renderer,
     session: Session<'_>,
     clip: Clip,
     source: impl Fn(BrickRequest) -> BrickData,
 ) -> Requests {
+    settle_clipped_sized(renderer, session, clip, [SIDE, SIDE], source)
+}
+
+pub fn settle_clipped_sized(
+    renderer: &mut Renderer,
+    session: Session<'_>,
+    clip: Clip,
+    size: [u32; 2],
+    source: impl Fn(BrickRequest) -> BrickData,
+) -> Requests {
     let mut latest = Requests::default();
     for _ in 0..96 {
-        let mut info = renderer.draw(session.device, session.queue, clipped(&session, clip));
+        let mut info = renderer.draw(
+            session.device,
+            session.queue,
+            clipped_sized(&session, clip, size),
+        );
         if !renderer.requests_pending() {
             while info.samples < SAMPLES {
-                info = renderer.draw(session.device, session.queue, clipped(&session, clip));
+                info = renderer.draw(
+                    session.device,
+                    session.queue,
+                    clipped_sized(&session, clip, size),
+                );
             }
             return latest;
         }
@@ -70,9 +97,13 @@ pub fn next_demand(renderer: &mut Renderer, session: &Session<'_>) -> Option<Req
 }
 
 pub fn frame<'a>(session: &Session<'a>) -> Frame<'a, 'a> {
+    frame_sized(session, [SIDE, SIDE])
+}
+
+pub fn frame_sized<'a>(session: &Session<'a>, size: [u32; 2]) -> Frame<'a, 'a> {
     Frame {
         target: session.target,
-        size: [SIDE, SIDE],
+        size,
         volume_region: session.volume_region,
         section_region: session.section_region,
         time: session.time,
@@ -87,10 +118,10 @@ pub fn frame<'a>(session: &Session<'a>) -> Frame<'a, 'a> {
     }
 }
 
-pub fn clipped<'a>(session: &Session<'a>, clip: Clip) -> Frame<'a, 'a> {
+pub fn clipped_sized<'a>(session: &Session<'a>, clip: Clip, size: [u32; 2]) -> Frame<'a, 'a> {
     Frame {
         clip,
-        ..frame(session)
+        ..frame_sized(session, size)
     }
 }
 
@@ -138,11 +169,15 @@ pub fn device() -> Option<(TestDevice, wgpu::Queue)> {
 }
 
 pub fn target(device: &wgpu::Device, side: u32) -> wgpu::Texture {
+    target_rect(device, [side, side])
+}
+
+pub fn target_rect(device: &wgpu::Device, size: [u32; 2]) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("grana.test.target"),
         size: wgpu::Extent3d {
-            width: side,
-            height: side,
+            width: size[0],
+            height: size[1],
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -178,10 +213,20 @@ pub fn read_pixels(
     target: &wgpu::Texture,
     side: u32,
 ) -> Vec<[u8; 4]> {
-    let row_bytes = side * 4;
+    read_pixels_rect(device, queue, target, [side, side])
+}
+
+pub fn read_pixels_rect(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    target: &wgpu::Texture,
+    size: [u32; 2],
+) -> Vec<[u8; 4]> {
+    let row_bytes = (size[0] * 4) as usize;
+    let stride = row_bytes.div_ceil(256) * 256;
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("grana.test.readback"),
-        size: (row_bytes * side) as u64,
+        size: (stride * size[1] as usize) as u64,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -197,13 +242,13 @@ pub fn read_pixels(
             buffer: &readback,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(row_bytes),
-                rows_per_image: Some(side),
+                bytes_per_row: Some(stride as u32),
+                rows_per_image: Some(size[1]),
             },
         },
         wgpu::Extent3d {
-            width: side,
-            height: side,
+            width: size[0],
+            height: size[1],
             depth_or_array_layers: 1,
         },
     );
@@ -218,7 +263,11 @@ pub fn read_pixels(
         .expect("failed to wait for the gpu");
     receiver.recv().expect("map callback").expect("map failed");
     let mapped = slice.get_mapped_range().expect("mapped range");
-    let pixels = mapped.as_chunks::<4>().0.to_vec();
+    let mut pixels = Vec::with_capacity(size[0] as usize * size[1] as usize);
+    for row in mapped.chunks_exact(stride).take(size[1] as usize) {
+        let (chunk, _) = row[..row_bytes].as_chunks::<4>();
+        pixels.extend_from_slice(chunk);
+    }
     drop(mapped);
     readback.unmap();
     pixels

@@ -1,36 +1,16 @@
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, SyncSender};
-use std::sync::{Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::mpsc;
+
+struct Progress {
+    frame: u32,
+    done: usize,
+    total: usize,
+}
 
 enum Message<T> {
-    Progress {
-        frame: u32,
-        done: usize,
-        total: usize,
-    },
-    Frame {
-        index: u32,
-        value: Option<T>,
-    },
+    Frame { index: u32, value: Option<T> },
     Failed(String),
-}
-
-struct Gate {
-    next: u32,
-    installed: u32,
-    stop: bool,
-}
-
-impl Gate {
-    fn ready<T>(&mut self, pending: &mut BTreeMap<u32, Option<T>>) -> Vec<(u32, Option<T>)> {
-        let mut ready = Vec::new();
-        while let Some(value) = pending.remove(&self.installed) {
-            ready.push((self.installed, value));
-            self.installed += 1;
-        }
-        ready
-    }
 }
 
 pub(crate) enum Notice<T> {
@@ -61,47 +41,36 @@ where
         return Ok(true);
     }
     let window = window.clamp(1, total as usize);
-    let gate = Mutex::new(Gate {
-        next: 0,
-        installed: 0,
-        stop: false,
-    });
-    let signal = Condvar::new();
+    let next = AtomicU32::new(0);
+    let (reports, progress) = mpsc::channel::<Progress>();
     let (sender, receiver) = mpsc::sync_channel::<Message<T>>(window * 2 + 2);
-    std::thread::scope(|scope| -> Result<bool, String> {
+    grana_analysis::parallel(|scope| -> Result<bool, String> {
         for _ in 0..window {
-            let sender: SyncSender<Message<T>> = sender.clone();
-            let gate = &gate;
-            let signal = &signal;
+            let sender = sender.clone();
+            let reports = reports.clone();
+            let next = &next;
             let local = &local;
             let work = &work;
-            scope.spawn(move || {
-                let mut state = local();
+            scope.spawn(move |_| {
+                let mut state: Option<L> = None;
                 loop {
-                    let index = {
-                        let mut lock = gate.lock().expect("the frame window is not poisoned");
-                        while lock.next >= lock.installed + window as u32 {
-                            if lock.stop || cancel.load(Ordering::Relaxed) {
-                                return;
-                            }
-                            lock = signal.wait(lock).expect("the frame window is not poisoned");
-                        }
-                        if lock.stop || cancel.load(Ordering::Relaxed) || lock.next >= total {
-                            return;
-                        }
-                        let index = lock.next;
-                        lock.next += 1;
-                        index
-                    };
+                    if cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    if index >= total {
+                        return;
+                    }
+                    let state = state.get_or_insert_with(local);
                     let outcome = {
-                        let mut report = |done: usize, blocks: usize| {
-                            let _ = sender.send(Message::Progress {
+                        let mut notify = |done: usize, blocks: usize| {
+                            let _ = reports.send(Progress {
                                 frame: index,
                                 done,
                                 total: blocks,
                             });
                         };
-                        work(&mut state, index, &mut report)
+                        work(state, index, &mut notify)
                     };
                     let failed = outcome.is_err();
                     let message = match outcome {
@@ -115,54 +84,55 @@ where
             });
         }
         drop(sender);
+        drop(reports);
         let mut pending: BTreeMap<u32, Option<T>> = BTreeMap::new();
-        let mut completed = 0u32;
+        let mut installed = 0u32;
         let mut failure = None;
-        while completed < total {
-            let Ok(message) = receiver.recv() else {
+        while installed < total {
+            drain(&progress, emit);
+            let Some(message) = grana_analysis::receive(&receiver) else {
                 break;
             };
             match message {
-                Message::Progress { frame, done, total } => {
-                    emit(Notice::Progress { frame, done, total })
-                }
                 Message::Frame { index, value } => {
-                    completed += 1;
                     pending.insert(index, value);
-                    let ready = {
-                        let mut lock = gate.lock().expect("the frame window is not poisoned");
-                        let ready = lock.ready(&mut pending);
-                        if !ready.is_empty() {
-                            signal.notify_all();
-                        }
-                        ready
-                    };
-                    for (frame, value) in ready {
+                    while let Some(value) = pending.remove(&installed) {
                         if let Some(value) = value {
-                            emit(Notice::Frame { frame, value });
+                            emit(Notice::Frame {
+                                frame: installed,
+                                value,
+                            });
                         }
+                        installed += 1;
                     }
                 }
                 Message::Failed(detail) => {
-                    let mut lock = gate.lock().expect("the frame window is not poisoned");
-                    lock.stop = true;
-                    drop(lock);
-                    signal.notify_all();
                     failure = Some(detail);
                     break;
                 }
             }
         }
-        while receiver.recv().is_ok() {}
+        while grana_analysis::receive(&receiver).is_some() {}
+        drain(&progress, emit);
         match failure {
             Some(detail) => Err(detail),
             None if cancel.load(Ordering::Relaxed) => Ok(false),
-            None if completed < total => {
+            None if installed < total => {
                 Err("a worker stopped before its frame was completed".to_string())
             }
             None => Ok(true),
         }
     })
+}
+
+fn drain<T>(progress: &mpsc::Receiver<Progress>, emit: &mut dyn FnMut(Notice<T>)) {
+    while let Ok(report) = progress.try_recv() {
+        emit(Notice::Progress {
+            frame: report.frame,
+            done: report.done,
+            total: report.total,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -205,5 +175,34 @@ mod tests {
                     && *value as usize == position)
         );
         assert!(peak.load(Ordering::Relaxed) <= 4);
+    }
+
+    #[test]
+    fn keeps_reporting_progress_without_blocking_the_window() {
+        let cancel = AtomicBool::new(false);
+        let mut reported = 0usize;
+        let completed = frames::<(), u32>(
+            8,
+            2,
+            &cancel,
+            || (),
+            |(), index, report| {
+                for done in 0..64 {
+                    report(done, 64);
+                }
+                Ok(Some(index))
+            },
+            &mut |notice| {
+                if matches!(notice, Notice::Progress { .. }) {
+                    reported += 1;
+                }
+            },
+        )
+        .expect("the progress frames complete");
+        assert!(completed);
+        assert!(
+            reported >= 8,
+            "every frame reports at least one progress notice: {reported}"
+        );
     }
 }

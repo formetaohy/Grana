@@ -143,10 +143,37 @@ struct TailFragment {
 }
 
 @fragment
-fn fs_oit(input: MarkerOutput) -> TailFragment {
+fn fs_oit_color(input: MarkerOutput) {
+    if (!kept(input)) {
+        return;
+    }
     let origin = vec2<i32>(frame.viewport.xy);
     let size = vec2<i32>(frame.viewport.zw);
-    let pixel = vec2<i32>(input.clip_position.xy) + origin;
+    let pixel = vec2<i32>(input.clip_position.xy);
+    let index = oit_index(origin, size, pixel);
+    if (index < 0) {
+        return;
+    }
+    let covered = oit_covered(pixel, frame.oit.z);
+    if (covered <= 0.0) {
+        return;
+    }
+    let depth = surface_depth(input);
+    let slot = oit_slot(u32(index), frame.oit.y, oit_key(depth));
+    if (slot < 0) {
+        return;
+    }
+    let shaded = shade(input);
+    let premultiplied = vec4<f32>(shaded.color.rgb * shaded.color.a, shaded.color.a) * covered;
+    oit_write(u32(index), frame.oit.y, u32(slot), premultiplied);
+}
+
+@fragment
+fn fs_oit_tail(input: MarkerOutput) -> TailFragment {
+    let scale = max(frame.oit.w, 1u);
+    let origin = vec2<i32>(frame.viewport.xy);
+    let size = vec2<i32>(frame.viewport.zw);
+    let pixel = vec2<i32>(floor(input.clip_position.xy * f32(scale))) + origin;
     var output: TailFragment;
     output.accumulate = vec4<f32>(0.0);
     output.reveal = vec4<f32>(0.0);
@@ -163,12 +190,8 @@ fn fs_oit(input: MarkerOutput) -> TailFragment {
         discard;
     }
     let depth = surface_depth(input);
-    let slot = oit_slot(u32(index), frame.oit.y, oit_key(depth));
-    if (slot >= 0) {
-        let shaded = shade(input);
-        let premultiplied = vec4<f32>(shaded.color.rgb * shaded.color.a, shaded.color.a) * covered;
-        oit_write(u32(index), frame.oit.y, u32(slot), premultiplied);
-        return output;
+    if (!oit_beyond(u32(index), frame.oit.y, oit_key(depth))) {
+        discard;
     }
     let shaded = shade(input);
     let alpha = shaded.color.a * covered;
