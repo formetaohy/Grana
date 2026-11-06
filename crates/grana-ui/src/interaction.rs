@@ -159,6 +159,139 @@ fn drags_a_slider_and_adjusts_it_from_the_keyboard() {
 }
 
 #[test]
+fn drags_a_switch_knob_one_to_one() {
+    let build = |theme: &Theme| {
+        body(vec![
+            widget::toggle_row(theme, "Switch", false)
+                .named("row.switch")
+                .at(at(40.0, 40.0, 300.0, 30.0))
+                .on_toggle(|value| if value { 1 } else { 0 }),
+        ])
+    };
+    let (_device, mut ui) = ready(&build);
+    let node = ui
+        .tree
+        .node_at(Key::new("row.switch"))
+        .expect("the row switch exists");
+    let mut time = 0.0;
+    step(
+        &mut ui,
+        &build,
+        vec![
+            Event::Moved(Vec2::new(312.0, 55.0)),
+            Event::Down(Button::Primary),
+        ],
+        &mut time,
+    );
+    step(
+        &mut ui,
+        &build,
+        vec![Event::Moved(Vec2::new(318.0, 55.0))],
+        &mut time,
+    );
+    let drag = ui.tree.nodes[node].runtime.drag_value;
+    assert!(
+        (drag - 0.56).abs() < 0.02,
+        "the knob follows its own track, not the row: {drag}"
+    );
+    let actions = step(
+        &mut ui,
+        &build,
+        vec![
+            Event::Moved(Vec2::new(314.0, 55.0)),
+            Event::Up(Button::Primary),
+        ],
+        &mut time,
+    );
+    assert!(actions.is_empty(), "the release stays on the knob's side");
+    assert!(
+        ui.tree.nodes[node].runtime.value.target < 0.01,
+        "the knob settles where the pointer left it"
+    );
+    step(
+        &mut ui,
+        &build,
+        vec![
+            Event::Moved(Vec2::new(312.0, 55.0)),
+            Event::Down(Button::Primary),
+        ],
+        &mut time,
+    );
+    step(
+        &mut ui,
+        &build,
+        vec![Event::Moved(Vec2::new(330.0, 55.0))],
+        &mut time,
+    );
+    let actions = step(&mut ui, &build, vec![Event::Up(Button::Primary)], &mut time);
+    assert_eq!(actions, [1], "dragging across commits the far side");
+    assert!(
+        ui.tree.nodes[node].runtime.value.target > 0.99,
+        "the committed side is not replayed from the old state"
+    );
+}
+
+#[test]
+fn drags_the_segment_lens_with_the_pointer() {
+    let selected = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let state = selected.clone();
+    let build = move |theme: &Theme| {
+        let state = state.clone();
+        let options = ["View".to_string(), "Objects".to_string()];
+        body(vec![
+            widget::segmented_fill(theme, &options, selected.get())
+                .named("segment.drag")
+                .at(at(10.0, 10.0, 300.0, 28.0))
+                .on_segment(move |index| {
+                    state.set(index);
+                    index as u32
+                }),
+        ])
+    };
+    let (_device, mut ui) = ready(&build);
+    let node = ui
+        .tree
+        .node_at(Key::new("segment.drag"))
+        .expect("the segment exists");
+    let mut time = 0.0;
+    step(
+        &mut ui,
+        &build,
+        vec![
+            Event::Moved(Vec2::new(80.0, 24.0)),
+            Event::Down(Button::Primary),
+        ],
+        &mut time,
+    );
+    assert_eq!(
+        step(
+            &mut ui,
+            &build,
+            vec![Event::Moved(Vec2::new(200.0, 24.0))],
+            &mut time
+        ),
+        [1]
+    );
+    let runtime = &ui.tree.nodes[node].runtime;
+    let center = runtime.value.value + runtime.extent.value * 0.5;
+    assert!(
+        (center - 200.0).abs() < 1.0,
+        "the lens stays under the pointer: {center}"
+    );
+    step(&mut ui, &build, vec![Event::Up(Button::Primary)], &mut time);
+    assert!(
+        (ui.tree.nodes[node].runtime.value.target - 160.0).abs() < 1.0,
+        "the lens settles into the selected cell"
+    );
+    for _ in 0..40 {
+        step(&mut ui, &build, Vec::new(), &mut time);
+    }
+    let runtime = &ui.tree.nodes[node].runtime;
+    assert!((runtime.value.value - 160.0).abs() < 1.0);
+    assert!((runtime.extent.value - 147.0).abs() < 1.0);
+}
+
+#[test]
 fn edits_and_cancels_a_field() {
     let build = |theme: &Theme| {
         body(vec![

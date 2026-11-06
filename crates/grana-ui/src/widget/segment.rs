@@ -197,6 +197,7 @@ pub(crate) fn cell_target(
 pub(crate) fn value_segment<A>(
     node: &Node<A>,
     dragging: bool,
+    pointer: Vec2,
     text: &mut crate::text::Text,
     _theme: &Theme,
 ) -> Option<(Motion, (f32, f32))> {
@@ -204,12 +205,14 @@ pub(crate) fn value_segment<A>(
         return None;
     };
     let motion = if dragging {
-        Motion::response(0.16, 0.12)
+        Motion::INSTANT
     } else {
         Motion::response(0.42, 0.22)
     };
     let target = if dragging {
-        cell_target(&node.content, node.rect, text, node.runtime.thumb as usize)
+        drag_pill(&node.content, node.rect, pointer, text)
+    } else if let Some(commit) = node.runtime.commit {
+        cell_target(&node.content, node.rect, text, commit.round() as usize)
     } else {
         pill_target(&node.content, node.rect, text)
     };
@@ -219,6 +222,7 @@ pub(crate) fn value_segment<A>(
 pub(crate) fn value_tabs<A>(
     node: &Node<A>,
     dragging: bool,
+    pointer: Vec2,
     text: &mut crate::text::Text,
     _theme: &Theme,
 ) -> Option<(Motion, (f32, f32))> {
@@ -226,16 +230,53 @@ pub(crate) fn value_tabs<A>(
         return None;
     };
     let motion = if dragging {
-        Motion::response(0.16, 0.12)
+        Motion::INSTANT
     } else {
         Motion::response(0.42, 0.20)
     };
     let target = if dragging {
-        cell_target(&node.content, node.rect, text, node.runtime.thumb as usize)
+        drag_pill(&node.content, node.rect, pointer, text)
+    } else if let Some(commit) = node.runtime.commit {
+        cell_target(&node.content, node.rect, text, commit.round() as usize)
     } else {
         pill_target(&node.content, node.rect, text)
     };
     Some((motion, target))
+}
+
+fn drag_pill(
+    content: &Content,
+    rect: Rect,
+    pointer: Vec2,
+    text: &mut crate::text::Text,
+) -> (f32, f32) {
+    let widths = measure_widths(content, text);
+    let cells = cell_widths(content, rect, &widths);
+    let Some(first) = cells.first().copied() else {
+        return (rect.min.x, 0.0);
+    };
+    let last = cells.last().copied().unwrap_or(first);
+    let width = drag_width(&cells, pointer.x);
+    let left = (pointer.x - width * 0.5).clamp(first.min.x, (last.max.x - width).max(first.min.x));
+    (left, width)
+}
+
+fn drag_width(cells: &[Rect], x: f32) -> f32 {
+    let Some(first) = cells.first() else {
+        return 0.0;
+    };
+    if x <= first.center().x {
+        return first.width();
+    }
+    for pair in cells.windows(2) {
+        let (left, right) = (pair[0], pair[1]);
+        if x <= right.center().x {
+            let span = (right.center().x - left.center().x).max(1.0);
+            let t = ((x - left.center().x) / span).clamp(0.0, 1.0);
+            return left.width() + (right.width() - left.width()) * t;
+        }
+    }
+    cells.last().map_or(first.width(), |cell| cell.width())
 }
 
 pub(super) fn paint_segment(
@@ -260,7 +301,7 @@ pub(super) fn paint_segment(
         palette.material_fill.amplify(0.75),
     );
     for (index, cell) in cells.iter().enumerate() {
-        if index == runtime.thumb as usize && info.hover > 0.01 {
+        if index == runtime.thumb as usize && info.hover > 0.01 && info.press < 0.5 {
             painter.rect(
                 *cell,
                 Corners::capsule(),
@@ -312,7 +353,7 @@ pub(super) fn paint_tabs(
         .collect::<Vec<_>>();
     let cells = cells(rect, &widths, false, true);
     for (index, cell) in cells.iter().enumerate() {
-        if index == runtime.thumb as usize && info.hover > 0.01 {
+        if index == runtime.thumb as usize && info.hover > 0.01 && info.press < 0.5 {
             painter.rect(
                 cell.shrink2(Vec2::new(2.0, 0.0)),
                 Corners::capsule(),

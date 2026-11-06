@@ -9,7 +9,7 @@ use crate::node::{Node, Runtime};
 use crate::paint::Painter;
 use crate::style::{Border, Fill, Shadow};
 use crate::text::{Align, TextStyle};
-use crate::theme::Theme;
+use crate::theme::{Metrics, Theme};
 
 use super::{PaintInfo, SubGlass};
 
@@ -77,10 +77,48 @@ pub(super) fn measure_checkbox(checkbox: &CheckboxContent, text: &mut crate::tex
     Vec2::new(measured + 28.0, 26.0)
 }
 
+pub(crate) fn switch_rect(toggle: &ToggleContent, rect: Rect, metrics: &Metrics) -> Rect {
+    if toggle.row {
+        Rect::from_center_size(
+            Vec2::new(rect.max.x - metrics.switch_width * 0.5, rect.center().y),
+            Vec2::new(metrics.switch_width, metrics.switch_height),
+        )
+    } else {
+        rect
+    }
+}
+
+struct Switch {
+    track: Rect,
+    knob: Vec2,
+    travel: f32,
+}
+
+impl Switch {
+    fn new(rect: Rect) -> Self {
+        let knob_height = (rect.height() - 2.0).max(1.0);
+        let knob_width = knob_height * 1.25;
+        let track_height = knob_height * 0.76;
+        let overhang = (knob_height - track_height) * 0.5;
+        let track = Rect::from_center_size(
+            rect.center(),
+            Vec2::new((rect.width() - overhang * 2.0).max(1.0), track_height),
+        );
+        Self {
+            track,
+            knob: Vec2::new(knob_width, knob_height),
+            travel: (rect.width() - knob_width).max(0.0),
+        }
+    }
+
+    fn center(&self, rect: Rect, progress: f32) -> f32 {
+        rect.min.x + self.knob.x * 0.5 + self.travel * progress
+    }
+}
+
 pub(crate) fn drag_value(rect: Rect, pointer: Vec2) -> f32 {
-    let knob = rect.height();
-    let travel = (rect.width() - knob).max(1.0);
-    ((pointer.x - rect.min.x - knob * 0.5) / travel).clamp(0.0, 1.0)
+    let switch = Switch::new(rect);
+    ((pointer.x - rect.min.x - switch.knob.x * 0.5) / switch.travel.max(1.0)).clamp(0.0, 1.0)
 }
 
 pub(crate) fn normalized(toggle: &ToggleContent) -> f32 {
@@ -92,14 +130,14 @@ pub(crate) fn value_toggle<A>(node: &Node<A>, dragging: bool) -> Option<(Motion,
         return None;
     };
     let motion = if dragging {
-        Motion::response(0.14, 0.0)
+        Motion::INSTANT
     } else {
         Motion::response(0.42, 0.30)
     };
     let target = if dragging {
         node.runtime.drag_value
     } else {
-        normalized(toggle)
+        node.runtime.commit.unwrap_or_else(|| normalized(toggle))
     };
     Some((motion, (target, 0.0)))
 }
@@ -120,13 +158,8 @@ pub(super) fn paint_toggle(
     glass: &mut Vec<SubGlass>,
 ) {
     let rect = info.rect;
-    let mut switch_rect = rect;
+    let switch = switch_rect(toggle, rect, &info.theme.metrics);
     if toggle.row {
-        let metrics = info.theme.metrics;
-        switch_rect = Rect::from_center_size(
-            Vec2::new(rect.max.x - metrics.switch_width * 0.5, rect.center().y),
-            Vec2::new(metrics.switch_width, metrics.switch_height),
-        );
         if info.hover > 0.01 {
             painter.rect(
                 rect.shrink2(Vec2::new(1.0, 0.5)),
@@ -136,7 +169,7 @@ pub(super) fn paint_toggle(
         }
         if let Some(label) = &toggle.label {
             painter.text_in(
-                Rect::from_min_max(rect.min, Vec2::new(switch_rect.min.x - 10.0, rect.max.y)),
+                Rect::from_min_max(rect.min, Vec2::new(switch.min.x - 10.0, rect.max.y)),
                 label,
                 TextStyle::new(
                     toggle.font,
@@ -150,7 +183,7 @@ pub(super) fn paint_toggle(
             );
         }
     }
-    paint_switch(runtime, painter, info, switch_rect, glass);
+    paint_switch(runtime, painter, info, switch, glass);
 }
 
 fn paint_switch(
@@ -161,50 +194,14 @@ fn paint_switch(
     glass: &mut Vec<SubGlass>,
 ) {
     let palette = info.theme.palette;
-    let engaged = info.engaged;
     let progress = runtime.value.value.clamp(-0.06, 1.06);
-    let track = Rect::from_min_max(
-        Vec2::new(rect.min.x, rect.center().y - rect.height() * 0.5 + 1.0),
-        Vec2::new(rect.max.x, rect.center().y + rect.height() * 0.5 - 1.0),
-    );
-    let knob = rect.height() - 1.0 + engaged * 1.2;
-    let travel = (rect.width() - knob).max(0.0);
-    let current = rect.min.x + travel * progress;
-    let target = rect.min.x + travel * runtime.value.target.clamp(0.0, 1.0);
-    let lag = target - current;
-    let reach = (lag.abs() * 0.65).min(knob * 0.55);
-    let (left, right) = if lag >= 0.0 {
-        (current, current + knob + reach)
-    } else {
-        (current - reach, current + knob)
-    };
-    let knob_rect = Rect::from_min_max(
-        Vec2::new(left, rect.center().y - knob * 0.5),
-        Vec2::new(right, rect.center().y + knob * 0.5),
-    );
+    let switch = Switch::new(rect);
+    let center = switch.center(rect, progress);
+    let knob_rect = Rect::from_center_size(Vec2::new(center, rect.center().y), switch.knob);
     let fill = palette
         .track
         .lerp(palette.success, progress.clamp(0.0, 1.0));
-    painter.outlined(
-        track,
-        Corners::capsule(),
-        Fill::Solid(fill),
-        Border {
-            width: 1.0,
-            color: palette.shade.amplify(0.55),
-        },
-        Shadow::NONE,
-    );
-    let inner = track.shrink(1.0);
-    let clip = painter.clip();
-    painter.push_clip(inner, Corners::capsule());
-    painter.gradient(
-        Rect::from_min_size(inner.min, Vec2::new(inner.width(), inner.height() * 0.5)),
-        Corners::ZERO,
-        palette.shade.amplify(0.35),
-        crate::color::Color::TRANSPARENT,
-    );
-    painter.pop_clip(clip);
+    painter.rect(switch.track, Corners::capsule(), fill);
     glass.push(SubGlass {
         rect: knob_rect,
         style: GlassStyle::knob(),

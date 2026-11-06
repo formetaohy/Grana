@@ -65,15 +65,33 @@ impl<A: Clone> Ui<A> {
         }
         if primary.released {
             if let Some(press) = self.press {
-                let dragged_toggle = self.drag == Some(press)
+                let dragged = self.drag == Some(press);
+                let toggle = matches!(
+                    self.tree.nodes[press].interaction,
+                    Interaction::Toggle { .. }
+                );
+                let switch = toggle
+                    && match &self.tree.nodes[press].content {
+                        Content::Toggle(content) => {
+                            let rect = self.tree.nodes[press].rect;
+                            crate::widget::toggle::switch_rect(content, rect, &self.theme.metrics)
+                                .contains(self.press_at)
+                        }
+                        _ => false,
+                    };
+                let segment = dragged
                     && matches!(
-                        self.tree.nodes[press].interaction,
-                        Interaction::Toggle { .. }
+                        self.tree.nodes[press].content,
+                        Content::Segment(_) | Content::Tabs(_)
                     );
                 let clicked = self.drag.is_none()
                     && self.hover.is_none_or(|hover| hover == press)
                     && !self.edit_drag;
-                if clicked || dragged_toggle {
+                if dragged && switch {
+                    self.commit_toggle(press);
+                } else if segment {
+                    self.commit_segment(press);
+                } else if clicked || (dragged && toggle) {
                     self.activate(press);
                 }
                 self.pointer_events(press, Phase::Up);
@@ -173,7 +191,14 @@ impl<A: Clone> Ui<A> {
                 }
             }
             Interaction::Toggle { .. } if dragging => {
-                runtime.drag_value = crate::widget::toggle::drag_value(rect, pointer);
+                if let Content::Toggle(toggle) = content {
+                    let switch = crate::widget::toggle::switch_rect(toggle, rect, &theme.metrics);
+                    runtime.drag_value = if switch.contains(self.press_at) {
+                        crate::widget::toggle::drag_value(switch, pointer)
+                    } else {
+                        crate::widget::toggle::normalized(toggle)
+                    };
+                }
             }
             Interaction::Color { action: callback } if pressed => {
                 if let Content::ColorPicker(picker) = content {
@@ -307,6 +332,43 @@ impl<A: Clone> Ui<A> {
             self.actions.push(action);
         }
         self.focus = Some(node);
+    }
+
+    fn commit_toggle(&mut self, node: NodeId) {
+        if !self.tree.nodes[node].enabled {
+            return;
+        }
+        let current = match &self.tree.nodes[node].content {
+            Content::Toggle(toggle) => toggle.value,
+            _ => return,
+        };
+        let value = self.tree.nodes[node].runtime.drag_value >= 0.5;
+        self.tree.nodes[node].runtime.commit = Some(if value { 1.0 } else { 0.0 });
+        let action = if value != current {
+            if let Interaction::Toggle { action } = &self.tree.nodes[node].interaction {
+                Some(action(value))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(action) = action {
+            self.close_ancestor_popup(node);
+            self.actions.push(action);
+        }
+        self.focus = Some(node);
+    }
+
+    fn commit_segment(&mut self, node: NodeId) {
+        let rect = self.tree.nodes[node].rect;
+        let index = {
+            let content = &self.tree.nodes[node].content;
+            crate::widget::segment::cell_at(content, rect, self.pointer, &mut self.text)
+        };
+        if let Some(index) = index {
+            self.tree.nodes[node].runtime.commit = Some(index as f32);
+        }
     }
 
     fn close_ancestor_popup(&mut self, node: NodeId) {

@@ -183,7 +183,7 @@ impl Metrics {
             hairline: 1.0,
             track: 4.0,
             thumb: 20.0,
-            switch_width: 42.0,
+            switch_width: 46.0,
             switch_height: 26.0,
         }
     }

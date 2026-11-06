@@ -48,6 +48,7 @@ pub(crate) struct FrameAnimation {
     pub hovered: bool,
     pub pressed: bool,
     pub dragging: bool,
+    pub pointer: Vec2,
     pub elapsed: f32,
     pub physics: bool,
     pub reduce_motion: bool,
@@ -222,8 +223,16 @@ pub(crate) fn animate<A>(
         );
         let motion = adjust(frame, motion);
         if node.runtime.seeded {
-            node.runtime.value.animate_to(target.0, motion.spring());
-            node.runtime.extent.animate_to(target.1, motion.spring());
+            if motion.is_instant() {
+                let changed =
+                    node.runtime.value.value != target.0 || node.runtime.extent.value != target.1;
+                node.runtime.value.snap(target.0);
+                node.runtime.extent.snap(target.1);
+                node.paint_dirty |= changed;
+            } else {
+                node.runtime.value.animate_to(target.0, motion.spring());
+                node.runtime.extent.animate_to(target.1, motion.spring());
+            }
         } else {
             node.runtime.value = grana_glass::Animated::new(target.0, motion.spring());
             node.runtime.extent = grana_glass::Animated::new(target.1, motion.spring());
@@ -231,6 +240,7 @@ pub(crate) fn animate<A>(
             node.paint_dirty = true;
         }
     }
+    node.runtime.commit = None;
     let mut animating = false;
     for animation in [
         &mut node.runtime.hover,
@@ -275,8 +285,10 @@ fn value_target<A>(
         Content::Checkbox(_) => toggle::value_checkbox(node),
         Content::Slider(_) => slider::value_slider(node, frame.pressed),
         Content::RangeSlider(_) => slider::value_range(node, frame.pressed),
-        Content::Segment(_) => segment::value_segment(node, frame.dragging, text, theme),
-        Content::Tabs(_) => segment::value_tabs(node, frame.dragging, text, theme),
+        Content::Segment(_) => {
+            segment::value_segment(node, frame.dragging, frame.pointer, text, theme)
+        }
+        Content::Tabs(_) => segment::value_tabs(node, frame.dragging, frame.pointer, text, theme),
         Content::ColorPicker(_) => color::value(node),
         _ => None,
     }

@@ -13,12 +13,14 @@ impl<A: Clone> Ui<A> {
         for index in 0..self.tree.ids.len() {
             let id = self.tree.ids[index];
             if !self.tree.nodes[id].visible {
+                self.tree.nodes[id].runtime.commit = None;
                 continue;
             }
             let frame = FrameAnimation {
                 hovered: self.hover == Some(id),
                 pressed: self.press == Some(id) || self.drag == Some(id),
                 dragging: self.drag == Some(id),
+                pointer: self.pointer,
                 elapsed,
                 physics,
                 reduce_motion,
