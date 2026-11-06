@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_glass::{Animated, GlassId, Spring};
+use grana_glass::{Animated, Spring};
 use slotmap::DefaultKey;
 
 use crate::edit::Edit;
@@ -94,7 +94,6 @@ pub(crate) struct Node<A> {
     pub interaction: Interaction<A>,
     pub background: Option<Surface>,
     pub glass_spec: Option<Glass>,
-    pub glass_id: Option<GlassId>,
     pub glass_style: Option<GlassStyle>,
     pub glass_rect: Option<Rect>,
     pub layer: Layer,
@@ -145,7 +144,6 @@ impl<A> Node<A> {
             interaction,
             background: None,
             glass_spec: None,
-            glass_id: None,
             glass_style: None,
             glass_rect: None,
             layer: Layer::Chrome,

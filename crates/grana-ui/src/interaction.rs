@@ -291,3 +291,78 @@ fn blocks_clicks_beneath_opaque_chrome() {
         "opaque chrome swallows the click"
     );
 }
+
+#[test]
+fn keeps_one_glass_item_per_widget() {
+    let selected = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let state = selected.clone();
+    let build = move |theme: &Theme| {
+        let state = state.clone();
+        let options = ["One".to_string(), "Two".to_string(), "Three".to_string()];
+        body(vec![
+            widget::segmented_fill(theme, &options, selected.get())
+                .named("segment.test")
+                .on_segment(move |index| {
+                    state.set(index);
+                    index as u32
+                }),
+        ])
+    };
+    let (_device, mut ui) = ready(&build);
+    let mut time = 0.0;
+    click(&mut ui, &build, Vec2::new(160.0, 24.0), &mut time);
+    let node = ui
+        .tree
+        .node_at(Key::new("segment.test"))
+        .expect("the segment exists");
+    for _ in 0..20 {
+        step(&mut ui, &build, Vec::new(), &mut time);
+        assert_eq!(
+            ui.tree.nodes[node].sub_glass.len(),
+            1,
+            "a widget owns exactly one lens glass"
+        );
+    }
+}
+
+#[test]
+fn grows_a_popup_from_its_anchor() {
+    let anchor = Key::new("grow.anchor");
+    let build = move |theme: &Theme| {
+        body(vec![
+            widget::button(theme, "Open", crate::theme::Role::Control)
+                .at(at(10.0, 10.0, 80.0, 28.0))
+                .key(anchor)
+                .press(0),
+            crate::popover::popup(
+                anchor,
+                200.0,
+                vec![crate::popover::menu_row(theme, "Row", false).press(5)],
+            ),
+        ])
+    };
+    let (_device, mut ui) = ready(&build);
+    let mut time = 0.0;
+    click(&mut ui, &build, Vec2::new(50.0, 24.0), &mut time);
+    let popup = *ui
+        .popup_anchors
+        .get(&anchor)
+        .expect("the popup is anchored");
+    let body = ui.tree.nodes[popup].rect;
+    let (window, _) = ui.popup_windows[&popup];
+    assert!(
+        window.height() < body.height() - 4.0,
+        "the window starts at the anchor: {window:?} vs {body:?}"
+    );
+    for _ in 0..40 {
+        step(&mut ui, &build, Vec::new(), &mut time);
+    }
+    let (window, _) = ui.popup_windows[&popup];
+    assert!(
+        (window.height() - body.height()).abs() < 1.0,
+        "the window reaches the popover body: {window:?} vs {body:?}"
+    );
+    click(&mut ui, &build, Vec2::new(700.0, 500.0), &mut time);
+    assert!(!ui.popup_glass.contains_key(&popup));
+    assert!(!ui.popup_retire.is_empty());
+}

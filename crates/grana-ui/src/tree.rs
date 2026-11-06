@@ -4,7 +4,6 @@ use slotmap::SlotMap;
 
 use crate::element::{CanvasPaint, ContentKind, Element, Key, Layer};
 use crate::node::{Node, NodeId};
-use grana_glass::GlassId;
 
 pub struct Tree<A> {
     pub nodes: SlotMap<NodeId, Node<A>>,
@@ -37,7 +36,7 @@ impl<A> Tree<A> {
         &mut self,
         element: Element<'a, A>,
         canvases: &mut HashMap<NodeId, CanvasPaint<'a>>,
-    ) -> Vec<(NodeId, Option<GlassId>)> {
+    ) -> Vec<NodeId> {
         let mut removed = Vec::new();
         self.anchors.clear();
         self.reconcile_list(self.root, vec![element], canvases, &mut removed);
@@ -50,7 +49,7 @@ impl<A> Tree<A> {
         parent: NodeId,
         elements: Vec<Element<'a, A>>,
         canvases: &mut HashMap<NodeId, CanvasPaint<'a>>,
-        removed: &mut Vec<(NodeId, Option<GlassId>)>,
+        removed: &mut Vec<NodeId>,
     ) {
         let old = std::mem::take(&mut self.nodes[parent].children);
         let parent_layer = self.nodes[parent].layer;
@@ -128,12 +127,12 @@ impl<A> Tree<A> {
         }
     }
 
-    fn remove(&mut self, id: NodeId, removed: &mut Vec<(NodeId, Option<GlassId>)>) {
+    fn remove(&mut self, id: NodeId, removed: &mut Vec<NodeId>) {
         for index in 0..self.nodes[id].children.len() {
             let child = self.nodes[id].children[index];
             self.remove(child, removed);
         }
-        removed.push((id, self.nodes[id].glass_id));
+        removed.push(id);
         self.nodes.remove(id);
     }
 

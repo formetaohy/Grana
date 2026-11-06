@@ -94,11 +94,11 @@ impl<A: Clone> Ui<A> {
         }
     }
 
-    pub(crate) fn prune(&mut self, removed: &[(NodeId, Option<grana_glass::GlassId>)]) {
+    pub(crate) fn prune(&mut self, removed: &[NodeId]) {
         if removed.is_empty() {
             return;
         }
-        let gone = removed.iter().map(|(id, _)| *id).collect::<HashSet<_>>();
+        let gone = removed.iter().copied().collect::<HashSet<_>>();
         let cleared = |value: &mut Option<NodeId>| {
             if value.is_some_and(|id| gone.contains(&id)) {
                 *value = None;
@@ -113,11 +113,15 @@ impl<A: Clone> Ui<A> {
             self.hovered_since = None;
             self.tooltip = None;
         }
-        for (node, glass) in removed {
-            if let Some(glass) = glass {
-                self.scene.remove(*glass);
+        for node in removed {
+            if let Some(transition) = self.popup_glass.remove(node) {
+                self.scene.remove(transition.glass);
+                self.popup_retire
+                    .push((transition.anchor, transition.glass));
             }
-            self.glass_nodes.remove(node);
+            if let Some(glass) = self.glass_nodes.remove(node) {
+                self.scene.remove(glass);
+            }
             if let Some(ids) = self.sub_glass.remove(node) {
                 for glass in ids {
                     self.scene.remove(glass);

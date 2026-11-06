@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use glam::Vec2;
 
 use crate::element::{Axis, Content, Flow, Length, align_factor};
@@ -21,6 +23,7 @@ use crate::tree::Tree;
 pub struct LayoutEngine<'a> {
     pub text: &'a mut Text,
     pub theme: &'a crate::theme::Theme,
+    pub windows: &'a HashMap<NodeId, (Rect, Corners)>,
     pub screen: Vec2,
 }
 
@@ -486,7 +489,10 @@ impl<'a> LayoutEngine<'a> {
             Vec2::new(width, height),
         );
         let screen = Rect::from_min_size(Vec2::ZERO, self.screen);
-        let clip = Clip::new(screen, Corners::ZERO).intersect(rect, Corners::all(24.0));
+        let mut clip = Clip::new(screen, Corners::ZERO).intersect(rect, Corners::all(24.0));
+        if let Some((window, corners)) = self.windows.get(&id) {
+            clip = clip.intersect(*window, *corners);
+        }
         {
             let node = &mut tree.nodes[id];
             if node.rect != rect {

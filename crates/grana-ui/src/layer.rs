@@ -83,6 +83,7 @@ impl<A: Clone> Ui<A> {
                 enabled,
             };
             let node = &mut self.tree.nodes[id];
+            node.sub_glass.clear();
             let caret = crate::widget::paint(
                 &node.content,
                 &node.runtime,

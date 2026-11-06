@@ -5,7 +5,7 @@ use grana_glass::{Animated, ContainerId, GlassId, Scene as GlassScene};
 
 use crate::clipboard::{Clipboard, NullClipboard};
 use crate::element::{CanvasPaint, Element, Key, Layer};
-use crate::geometry::Rect;
+use crate::geometry::{Corners, Rect};
 use crate::input::{Cursor, Input};
 use crate::layout::LayoutEngine;
 use crate::motion::Motion;
@@ -18,6 +18,13 @@ use crate::tree::Tree;
 
 pub(crate) const CLICK_SLOP: f32 = 3.0;
 pub(crate) const TOOLTIP_DELAY: f32 = 0.55;
+
+#[derive(Clone, Copy)]
+pub(crate) struct PopupTransition {
+    pub glass: GlassId,
+    pub anchor: GlassId,
+    pub body: Rect,
+}
 
 #[derive(Default)]
 pub(crate) struct LayerChange {
@@ -40,6 +47,10 @@ pub struct Ui<A = ()> {
     pub(crate) glass_groups: HashMap<Key, ContainerId>,
     pub(crate) tooltip_glass: Option<GlassId>,
     pub(crate) sub_glass: HashMap<NodeId, Vec<GlassId>>,
+    pub(crate) popup_glass: HashMap<NodeId, PopupTransition>,
+    pub(crate) popup_windows: HashMap<NodeId, (Rect, Corners)>,
+    pub(crate) popup_retire: Vec<(GlassId, GlassId)>,
+    pub(crate) floating: Option<ContainerId>,
     pub(crate) layers: [LayerInstances; Layer::ALL.len()],
     pub(crate) change: LayerChange,
     pub(crate) scale: f32,
@@ -86,6 +97,10 @@ impl<A: Clone> Ui<A> {
             glass_groups: HashMap::new(),
             tooltip_glass: None,
             sub_glass: HashMap::new(),
+            popup_glass: HashMap::new(),
+            popup_windows: HashMap::new(),
+            popup_retire: Vec::new(),
+            floating: None,
             layers: std::array::from_fn(|_| LayerInstances::default()),
             change: LayerChange::default(),
             scale: 1.0,
@@ -284,15 +299,13 @@ impl<A: Clone> Ui<A> {
         self.prune(&removed);
         self.sync_fields();
         self.rebuild_popup_anchors();
+        self.collect_popup_windows();
         if self.tree.layout_dirty {
-            let mut engine = LayoutEngine {
-                text: &mut self.text,
-                theme: &self.theme,
-                screen: self.size,
-            };
-            engine.run(&mut self.tree);
-            self.update_scroll_metrics();
-            self.rebuild_hits();
+            self.run_layout();
+        }
+        if self.ensure_popups() {
+            self.collect_popup_windows();
+            self.run_layout();
         }
         self.paint_layers(&canvases);
         self.sync_glass();
@@ -300,13 +313,26 @@ impl<A: Clone> Ui<A> {
         self.paint_overlays();
     }
 
+    fn run_layout(&mut self) {
+        let mut engine = LayoutEngine {
+            text: &mut self.text,
+            theme: &self.theme,
+            windows: &self.popup_windows,
+            screen: self.size,
+        };
+        engine.run(&mut self.tree);
+        self.update_scroll_metrics();
+        self.rebuild_hits();
+    }
+
     pub fn finish(&mut self) -> bool {
         let animating_glass = self.scene.update(self.elapsed);
         let glass_changed = self.scene.take_dirty();
+        self.retire_popup_anchors();
         self.text.flush(self.renderer.queue());
         self.renderer.write_uniforms(self.scale);
         self.measure_layers(glass_changed);
-        self.animating || animating_glass
+        self.animating || animating_glass || !self.popup_retire.is_empty()
     }
 
     pub fn render(&mut self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
