@@ -792,7 +792,7 @@ impl Renderer {
         rebuild.resize(layers.len(), false);
         let mut below = layers[0].bounds;
         for (i, layer) in layers.iter().enumerate().skip(1) {
-            rebuild[i] = scene.glass_on_glass && intersects(expand(layer.bounds, reach), below);
+            rebuild[i] = intersects(expand(layer.bounds, reach), below);
             below = union(below, layer.bounds);
         }
         if rebuild.contains(&true) && self.layer_textures.is_empty() {
@@ -896,7 +896,6 @@ impl Renderer {
         scene: &Scene,
     ) {
         let (w, h) = (frame.size.0 as f32, frame.size.1 as f32);
-        let angle = scene.light_angle.value.to_radians();
         let touch = &scene.touch;
         let globals = Globals {
             viewport: [w, h, 1.0 / w, 1.0 / h],
@@ -906,7 +905,7 @@ impl Renderer {
                 if scene.appearance.dark { 0.0 } else { 1.0 },
                 0.0,
             ],
-            light: [angle.sin(), -angle.cos(), 0.0, 0.0],
+            light: [0.0, -1.0, 0.0, 0.0],
             touch: [
                 touch.pos.x * frame.scale,
                 touch.pos.y * frame.scale,

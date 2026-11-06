@@ -199,6 +199,7 @@ impl Export {
                 samples: self.samples,
                 prefetch: false,
                 transparent: self.transparent,
+                scale: 1.0,
             },
             &rendered,
         );

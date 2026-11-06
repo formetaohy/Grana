@@ -42,7 +42,10 @@ fn cut_normal() -> vec3<f32> {
 }
 
 fn lit(color: vec3<f32>) -> vec3<f32> {
-    let normal = cut_normal();
+    var normal = cut_normal();
+    if (dot(normal, frame.light.xyz) < 0.0) {
+        normal = -normal;
+    }
     let diffuse = max(dot(normal, frame.light.xyz), 0.0);
     let half_vector = normalize(frame.light.xyz + normal);
     let specular = pow(max(dot(normal, half_vector), 0.0), frame.shading.w);

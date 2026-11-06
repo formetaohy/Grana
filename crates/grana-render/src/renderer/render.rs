@@ -13,8 +13,8 @@ impl Renderer {
         let Frame {
             target: surface,
             size,
-            volume_region,
-            section_region,
+            volume_region: window_volume,
+            section_region: window_section,
             time,
             camera,
             section,
@@ -22,11 +22,15 @@ impl Renderer {
             clip,
             exposure,
             samples,
+            scale,
             scene,
             prefetch,
         } = frame;
+        let render_size = crate::scale::size(size, scale);
+        let volume_region = crate::scale::region(window_volume, scale, render_size);
+        let section_region = crate::scale::region(window_section, scale, render_size);
         assert!(
-            inside(volume_region, size) && inside(section_region, size),
+            inside(volume_region, render_size) && inside(section_region, render_size),
             "the panes lie on the surface"
         );
         self.time = time;
@@ -103,7 +107,7 @@ impl Renderer {
         let cut_size = [section_width, section_height];
         let slots = atlas.slots();
         let level_count = pyramid.level_count();
-        let section_target_level = select_section_level(pyramid, section, section_height as f32);
+        let section_target_level = select_section_level(pyramid, section, window_section[3] as f32);
         let (section_level, section_count) = resolve_section_level(
             pyramid,
             camera,
@@ -113,7 +117,7 @@ impl Renderer {
             (slots / SECTION_BUDGET_DIVISOR).max(1),
             region,
         );
-        let volume_target_level = select_volume_level(pyramid, camera, volume_height as f32);
+        let volume_target_level = select_volume_level(pyramid, camera, window_volume[3] as f32);
         let section_capacity = section_count.clamp(1, slots.saturating_sub(1).max(1));
         let volume_capacity = slots.saturating_sub(section_capacity).max(1);
         let volume_level =
@@ -133,8 +137,8 @@ impl Renderer {
             ResidencyView {
                 camera,
                 section,
-                volume_region,
-                section_region,
+                volume_region: window_volume,
+                section_region: window_section,
                 region,
             },
             levels,
@@ -228,12 +232,12 @@ impl Renderer {
             && target
                 .oit
                 .as_ref()
-                .is_none_or(|oit| !oit.matches(size, volume_region))
+                .is_none_or(|oit| !oit.matches(render_size, volume_region))
         {
             target.oit = Some(Oit::new(
                 device,
                 layouts,
-                size,
+                render_size,
                 volume_region,
                 *budget / FRAGMENT_BUDGET_DIVISOR,
             ));

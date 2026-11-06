@@ -80,11 +80,7 @@ impl Default for ScrollState {
 impl<A: Clone> Ui<A> {
     pub(crate) fn advance_scroll(&mut self) {
         let elapsed = self.elapsed;
-        let motion = if self.physics {
-            Motion::quick()
-        } else {
-            Motion::INSTANT
-        };
+        let motion = Motion::quick();
         for index in 0..self.tree.ids.len() {
             let id = self.tree.ids[index];
             let Some(scroll) = self.tree.nodes[id].scroll.as_mut() else {

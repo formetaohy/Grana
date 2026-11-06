@@ -78,14 +78,14 @@ fn density_gradient(channel: u32, uvw: vec3<f32>, step: vec3<f32>) -> vec3<f32> 
     return vec3<f32>(dx, dy, dz);
 }
 
-fn shaded_normal(gradient: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+fn shaded_normal(gradient: vec3<f32>) -> vec3<f32> {
     let voxel = frame.box_size.xyz / frame.dims.xyz;
     var normal = -gradient / voxel;
     if (length(normal) < GRADIENT_EPSILON) {
         return vec3<f32>(0.0);
     }
     normal = normalize(normal);
-    if (dot(normal, direction) > 0.0) {
+    if (dot(normal, frame.light.xyz) < 0.0) {
         normal = -normal;
     }
     return normal;

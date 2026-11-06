@@ -510,12 +510,6 @@ pub fn apply(
                     .camera_mut()
                     .set_focus_along(axis, position.clamp(0.0, extent) - 0.5 * extent);
             }
-            Message::SetPhysics(value) => ui.set_physics(value),
-            Message::SetReduceMotion(value) => ui.set_reduce_motion(value),
-            Message::SetGlassOnGlass(value) => ui.theme_mut().glass_on_glass = value,
-            Message::SetLightAngle(value) => {
-                ui.theme_mut().light_angle = value.clamp(-180.0, 180.0)
-            }
             Message::SetExport(export) => {
                 workspace.playback.width = if export.width == 0 {
                     workspace.playback.width

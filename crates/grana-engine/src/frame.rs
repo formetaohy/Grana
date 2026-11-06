@@ -16,6 +16,7 @@ pub(crate) struct View<'a> {
     pub samples: u32,
     pub prefetch: bool,
     pub transparent: bool,
+    pub scale: f32,
 }
 
 pub(crate) fn draw(
@@ -42,6 +43,7 @@ pub(crate) fn draw(
             clip: frame.scene.clip,
             exposure: frame.scene.exposure,
             samples: frame.samples,
+            scale: frame.scale,
             scene: &scene,
             prefetch: frame.prefetch,
         },

@@ -123,6 +123,7 @@ pub struct Frame<'a, 'b> {
     pub clip: Clip,
     pub exposure: f32,
     pub samples: u32,
+    pub scale: f32,
     pub scene: &'a SceneFrame<'b>,
     pub prefetch: bool,
 }
@@ -163,6 +164,7 @@ pub struct Renderer {
     object_key: Option<u64>,
     settled: Option<Residency>,
     regions: Option<Regions>,
+    render_scale: f32,
     pick_target: Option<PickTarget>,
     pick_readback: Option<Readback>,
     pick_pending: bool,
@@ -223,6 +225,7 @@ impl Renderer {
             object_key: None,
             settled: None,
             regions: None,
+            render_scale: 1.0,
             pick_target: None,
             pick_readback: None,
             pick_pending: false,
@@ -420,19 +423,16 @@ impl Renderer {
             "an exposure scales radiance by a positive factor"
         );
         assert!(frame.samples > 0, "a target resolves at least one sample");
+        let size = crate::scale::size(frame.size, frame.scale);
         if self
             .frame_target
             .as_ref()
-            .is_none_or(|target| target.size != frame.size)
+            .is_none_or(|target| target.size != size)
         {
-            self.frame_target = Some(FrameTarget::new(
-                device,
-                &self.layouts,
-                &self.present,
-                frame.size,
-            ));
+            self.frame_target = Some(FrameTarget::new(device, &self.layouts, &self.present, size));
             self.settled = None;
         }
+        self.render_scale = frame.scale;
         let mut target = self.frame_target.take().expect("the frame target is ready");
         let info = self.render(device, queue, &mut target, frame);
         self.frame_target = Some(target);
@@ -455,6 +455,7 @@ impl Renderer {
         if self.frame_target.is_none() {
             return false;
         }
+        let point = crate::scale::point(point, self.render_scale);
         let region = match pane {
             PickPane::Volume => regions.volume,
             PickPane::Section => regions.section,

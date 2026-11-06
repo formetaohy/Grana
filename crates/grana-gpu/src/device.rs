@@ -1,12 +1,30 @@
 use wgpu::{
-    Adapter, CurrentSurfaceTexture, Device, DeviceDescriptor, ExperimentalFeatures, Instance,
-    InstanceDescriptor, MemoryHints, PowerPreference, PresentMode, Queue, RequestAdapterOptions,
-    Surface, SurfaceColorSpace, SurfaceConfiguration, TextureFormat, TextureUsages, Trace,
+    Adapter, Backends, CurrentSurfaceTexture, Device, DeviceDescriptor, ExperimentalFeatures,
+    Instance, InstanceDescriptor, MemoryHints, PowerPreference, PresentMode, Queue,
+    RequestAdapterOptions, Surface, SurfaceColorSpace, SurfaceConfiguration, SurfaceTarget,
+    TextureFormat, TextureUsages, Trace,
 };
 
 use crate::REQUIRED_FEATURES;
 
 pub const HEADLESS_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+
+const BACKEND_ORDER: &[Backends] = backend_order();
+
+const fn backend_order() -> &'static [Backends] {
+    #[cfg(target_os = "windows")]
+    {
+        &[Backends::DX12, Backends::VULKAN]
+    }
+    #[cfg(target_os = "macos")]
+    {
+        &[Backends::METAL]
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        &[Backends::VULKAN]
+    }
+}
 
 pub struct Gpu {
     pub surface: Surface<'static>,
@@ -23,9 +41,20 @@ pub struct Headless {
 
 impl Headless {
     pub fn new() -> Result<Self, String> {
-        let instance = Instance::new(InstanceDescriptor::new_without_display_handle());
-        let (_, device, queue) = acquire(&instance, None)?;
-        Ok(Self { device, queue })
+        let mut failures = Vec::new();
+        for fallback in [false, true] {
+            for backends in BACKEND_ORDER {
+                let instance = instance(*backends);
+                match acquire(&instance, None, fallback) {
+                    Ok((_, device, queue)) => return Ok(Self { device, queue }),
+                    Err(detail) => failures.push(format!("{backends:?}: {detail}")),
+                }
+            }
+        }
+        Err(format!(
+            "no graphics adapter can render grana ({})",
+            failures.join("; ")
+        ))
     }
 
     pub fn format(&self) -> TextureFormat {
@@ -34,13 +63,38 @@ impl Headless {
 }
 
 impl Gpu {
-    pub fn new(window: impl Into<wgpu::SurfaceTarget<'static>>, size: [u32; 2]) -> Self {
-        let instance = Instance::new(InstanceDescriptor::new_without_display_handle());
-        let surface = instance
-            .create_surface(window)
-            .expect("failed to create a window surface");
-        let (adapter, device, queue) =
-            acquire(&instance, Some(&surface)).unwrap_or_else(|detail| panic!("{detail}"));
+    pub fn new<W>(window: W, size: [u32; 2]) -> Self
+    where
+        W: Into<SurfaceTarget<'static>> + Clone,
+    {
+        let mut failures = Vec::new();
+        for fallback in [false, true] {
+            for backends in BACKEND_ORDER {
+                let instance = instance(*backends);
+                let surface = instance
+                    .create_surface(window.clone())
+                    .expect("failed to create a window surface");
+                match acquire(&instance, Some(&surface), fallback) {
+                    Ok((adapter, device, queue)) => {
+                        return Self::configure(adapter, device, queue, surface, size);
+                    }
+                    Err(detail) => failures.push(format!("{backends:?}: {detail}")),
+                }
+            }
+        }
+        panic!(
+            "no graphics adapter can render grana ({})",
+            failures.join("; ")
+        );
+    }
+
+    fn configure(
+        adapter: Adapter,
+        device: Device,
+        queue: Queue,
+        surface: Surface<'static>,
+        size: [u32; 2],
+    ) -> Self {
         let info = adapter.get_info();
         let description = format!("{} · {:?}", info.name, info.backend);
         println!("grana: using {description}");
@@ -104,18 +158,25 @@ impl Gpu {
     }
 }
 
+fn instance(backends: Backends) -> Instance {
+    Instance::new(InstanceDescriptor {
+        backends,
+        ..InstanceDescriptor::new_without_display_handle()
+    })
+}
+
 fn acquire(
     instance: &Instance,
     surface: Option<&Surface<'static>>,
+    fallback: bool,
 ) -> Result<(Adapter, Device, Queue), String> {
-    let options = |fallback: bool| RequestAdapterOptions {
+    let options = RequestAdapterOptions {
         power_preference: PowerPreference::HighPerformance,
         force_fallback_adapter: fallback,
         compatible_surface: surface,
         apply_limit_buckets: false,
     };
-    let adapter = pollster::block_on(instance.request_adapter(&options(false)))
-        .or_else(|_| pollster::block_on(instance.request_adapter(&options(true))))
+    let adapter = pollster::block_on(instance.request_adapter(&options))
         .map_err(|_| "no graphics adapter is available".to_string())?;
     if !adapter.features().contains(REQUIRED_FEATURES) {
         return Err("the graphics adapter cannot stream packed volume bricks".to_string());

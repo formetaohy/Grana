@@ -9,7 +9,7 @@ use crate::frame::{self, View};
 use crate::output::{Export, Outcome, Plan, Pose};
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
-pub const SAMPLE_LIMIT: u32 = 32;
+pub const SAMPLE_LIMIT: u32 = 8;
 
 pub struct ViewportFrame<'a> {
     pub target: &'a TextureView,
@@ -19,6 +19,7 @@ pub struct ViewportFrame<'a> {
     pub volume_region: [u32; 4],
     pub section_region: [u32; 4],
     pub prefetch: bool,
+    pub scale: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,6 +100,7 @@ impl Engine {
                 samples: SAMPLE_LIMIT,
                 prefetch: frame.prefetch,
                 transparent: false,
+                scale: frame.scale,
             },
             &rendered,
         );

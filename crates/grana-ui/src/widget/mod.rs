@@ -50,8 +50,6 @@ pub(crate) struct FrameAnimation {
     pub dragging: bool,
     pub pointer: Vec2,
     pub elapsed: f32,
-    pub physics: bool,
-    pub reduce_motion: bool,
 }
 
 pub(crate) fn measure(
@@ -208,20 +206,17 @@ pub(crate) fn animate<A>(
     } else {
         Motion::bouncy()
     };
-    node.runtime.hover.animate_to(
-        if hovered { 1.0 } else { 0.0 },
-        adjust(frame, Motion::quick()).spring(),
-    );
-    node.runtime.press.animate_to(
-        if active { 1.0 } else { 0.0 },
-        adjust(frame, press).spring(),
-    );
+    node.runtime
+        .hover
+        .animate_to(if hovered { 1.0 } else { 0.0 }, Motion::quick().spring());
+    node.runtime
+        .press
+        .animate_to(if active { 1.0 } else { 0.0 }, press.spring());
     if let Some((motion, target)) = value_target(node, frame, text, theme) {
         node.runtime.engaged.animate_to(
             if hovered || active { 1.0 } else { 0.0 },
-            adjust(frame, Motion::quick()).spring(),
+            Motion::quick().spring(),
         );
-        let motion = adjust(frame, motion);
         if node.runtime.seeded {
             if motion.is_instant() {
                 let changed =
@@ -262,16 +257,6 @@ pub(crate) fn animate<A>(
         node.paint_dirty = true;
     }
     animating
-}
-
-fn adjust(frame: &FrameAnimation, motion: Motion) -> Motion {
-    if !frame.physics {
-        Motion::INSTANT
-    } else if frame.reduce_motion {
-        motion.reduced()
-    } else {
-        motion
-    }
 }
 
 fn value_target<A>(

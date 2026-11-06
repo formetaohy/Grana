@@ -91,9 +91,10 @@ fn lit(color: vec3<f32>, normal: vec3<f32>, direction: vec3<f32>, light: vec2<f3
     if (length(normal) < 0.5) {
         return color;
     }
+    let facing = select(normal, -normal, dot(normal, direction) > 0.0);
     let half_vector = normalize(frame.light.xyz - direction);
     let diffuse = max(dot(normal, frame.light.xyz), 0.0) * light.x;
-    let specular = pow(max(dot(normal, half_vector), 0.0), frame.shading.w) * light.x;
+    let specular = pow(max(dot(facing, half_vector), 0.0), frame.shading.w) * light.x;
     let ambient = frame.shading.x * (1.0 - AMBIENT_OCCLUSION * light.y);
     return color * (ambient + frame.shading.y * diffuse) + vec3<f32>(frame.shading.z * specular);
 }
@@ -118,7 +119,7 @@ fn shade_volume(
     if (weight <= 0.0) {
         return color;
     }
-    let normal = shaded_normal(gradient, direction);
+    let normal = shaded_normal(gradient);
     return mix(color, lit(color, normal, direction, lighting(uvw, normal)), weight);
 }
 

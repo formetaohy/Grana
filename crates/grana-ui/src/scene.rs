@@ -174,7 +174,7 @@ impl<A: Clone> Ui<A> {
             match self.glass_nodes.get(&id).copied() {
                 Some(glass) => {
                     if previous != Some(spec.style) {
-                        let fade = self.motion(Motion::response(0.4, 0.0)).spring();
+                        let fade = Motion::response(0.4, 0.0).spring();
                         self.scene.set_shape(glass, spec.style.shape);
                         self.scene
                             .set_material_with(glass, spec.style.material, fade);
@@ -255,7 +255,7 @@ impl<A: Clone> Ui<A> {
             }
             seen.push(id);
             if previous != Some(spec.style) {
-                let fade = self.motion(Motion::response(0.4, 0.0)).spring();
+                let fade = Motion::response(0.4, 0.0).spring();
                 self.scene.set_shape(glass, spec.style.shape);
                 self.scene
                     .set_material_with(glass, spec.style.material, fade);

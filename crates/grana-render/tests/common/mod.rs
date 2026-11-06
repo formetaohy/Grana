@@ -113,6 +113,7 @@ pub fn frame_sized<'a>(session: &Session<'a>, size: [u32; 2]) -> Frame<'a, 'a> {
         clip: Clip::none(),
         exposure: 1.0,
         samples: SAMPLES,
+        scale: 1.0,
         scene: session.scene,
         prefetch: false,
     }

@@ -53,10 +53,6 @@ pub enum Message {
     SetExport(grana_session::Export),
     SetSectionAxis(grana_volume::Axis),
     SetSectionDepth(f32),
-    SetPhysics(bool),
-    SetReduceMotion(bool),
-    SetGlassOnGlass(bool),
-    SetLightAngle(f32),
     Region {
         axis: usize,
         side: usize,

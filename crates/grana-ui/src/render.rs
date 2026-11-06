@@ -143,7 +143,6 @@ pub(crate) struct PaintFrame<'a> {
     pub popup: &'a LayerInstances,
     pub hud: &'a LayerInstances,
     pub glass: &'a GlassScene,
-    pub glass_on_glass: bool,
     pub base_changed: bool,
     pub interface_changed: bool,
     pub ink: Ink,
@@ -254,7 +253,6 @@ pub struct Renderer {
     base: Option<Surface>,
     front: Option<Surface>,
     back: Option<Surface>,
-    blit: RenderPipeline,
     present_encoded: RenderPipeline,
     present_linear: RenderPipeline,
     ui: RenderPipeline,
@@ -330,14 +328,6 @@ impl Renderer {
             label: Some("grana.ui"),
             source: ShaderSource::Wgsl(UI_SHADER.into()),
         });
-        let blit = fullscreen_pipeline(
-            device,
-            "grana.ui.blit",
-            &blit_pipeline_layout,
-            &blit_shader,
-            "fs_blit",
-            raw(encoded),
-        );
         let present_encoded = fullscreen_pipeline(
             device,
             "grana.ui.present.encoded",
@@ -412,7 +402,6 @@ impl Renderer {
             base: None,
             front: None,
             back: None,
-            blit,
             present_encoded,
             present_linear,
             ui,
@@ -548,7 +537,6 @@ impl Renderer {
             popup,
             hud,
             glass,
-            glass_on_glass,
             base_changed,
             interface_changed,
             ink,
@@ -599,14 +587,7 @@ impl Renderer {
         let scale = self.scale;
         let size = (self.size[0], self.size[1]);
 
-        let scene_group = self.blit_group(&scene);
-        fullscreen(
-            encoder,
-            &self.blit,
-            &scene_group,
-            &base_view,
-            LoadOp::Clear(wgpu::Color::BLACK),
-        );
+        clear(encoder, &base_view);
         self.paint_material(
             encoder,
             atlas,
@@ -696,16 +677,8 @@ impl Renderer {
         }
 
         if glass.has_layers(MENU..HUD) {
-            let target_slot = if glass_on_glass {
-                current.other()
-            } else {
-                current
-            };
-            let content = if glass_on_glass {
-                slot_view(current, &front_encoded, &back_encoded)
-            } else {
-                &base_encoded
-            };
+            let target_slot = current.other();
+            let content = slot_view(current, &front_encoded, &back_encoded);
             let target = slot_view(target_slot, &front_encoded, &back_encoded);
             self.menu_glass.render_layers(
                 &self.device,
@@ -716,12 +689,8 @@ impl Renderer {
                     target,
                     size,
                     scale,
-                    content_changed: if glass_on_glass {
-                        interface_changed
-                    } else {
-                        base_changed
-                    },
-                    copy: glass_on_glass,
+                    content_changed: interface_changed,
+                    copy: true,
                 },
                 glass,
                 MENU..HUD,
@@ -757,16 +726,8 @@ impl Renderer {
         }
 
         if glass.has_layers(HUD..) {
-            let target_slot = if glass_on_glass {
-                current.other()
-            } else {
-                current
-            };
-            let content = if glass_on_glass {
-                slot_view(current, &front_encoded, &back_encoded)
-            } else {
-                &base_encoded
-            };
+            let target_slot = current.other();
+            let content = slot_view(current, &front_encoded, &back_encoded);
             let target = slot_view(target_slot, &front_encoded, &back_encoded);
             self.hud_glass.render_layers(
                 &self.device,
@@ -777,12 +738,8 @@ impl Renderer {
                     target,
                     size,
                     scale,
-                    content_changed: if glass_on_glass {
-                        interface_changed
-                    } else {
-                        base_changed
-                    },
-                    copy: glass_on_glass,
+                    content_changed: interface_changed,
+                    copy: true,
                 },
                 glass,
                 HUD..,
@@ -1061,6 +1018,22 @@ fn sampler_entry(binding: u32) -> BindGroupLayoutEntry {
 
 fn instance_buffer(device: &Device, label: &str, capacity: usize) -> Buffer {
     grana_gpu::storage_buffer::<Instance>(device, label, capacity)
+}
+
+fn clear(encoder: &mut CommandEncoder, target: &TextureView) {
+    let _ = encoder.begin_render_pass(&RenderPassDescriptor {
+        label: Some("grana.ui.clear.pass"),
+        color_attachments: &[Some(RenderPassColorAttachment {
+            view: target,
+            depth_slice: None,
+            resolve_target: None,
+            ops: PassOperations {
+                load: LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: StoreOp::Store,
+            },
+        })],
+        ..Default::default()
+    });
 }
 
 fn fullscreen(

@@ -32,7 +32,6 @@ pub(crate) struct LayerChange {
     pub base: bool,
     pub interface: bool,
     pub reset: bool,
-    pub policy: Option<bool>,
 }
 
 pub struct Ui<A = ()> {
@@ -78,8 +77,6 @@ pub struct Ui<A = ()> {
     pub(crate) hovered_since: Option<(NodeId, f32)>,
     pub(crate) tooltip: Option<(NodeId, String)>,
     pub(crate) clipboard: Box<dyn Clipboard>,
-    pub(crate) physics: bool,
-    pub(crate) reduce_motion: bool,
     pub(crate) theme_stamp: Appearance,
 }
 
@@ -128,8 +125,6 @@ impl<A: Clone> Ui<A> {
             hovered_since: None,
             tooltip: None,
             clipboard: Box::new(NullClipboard),
-            physics: true,
-            reduce_motion: false,
             theme_stamp: appearance(Theme::dark()),
         }
     }
@@ -156,22 +151,6 @@ impl<A: Clone> Ui<A> {
 
     pub fn scale(&self) -> f32 {
         self.scale
-    }
-
-    pub fn physics(&self) -> bool {
-        self.physics
-    }
-
-    pub fn set_physics(&mut self, on: bool) {
-        self.physics = on;
-    }
-
-    pub fn reduce_motion(&self) -> bool {
-        self.reduce_motion
-    }
-
-    pub fn set_reduce_motion(&mut self, on: bool) {
-        self.reduce_motion = on;
     }
 
     pub fn text(&mut self) -> &mut Text {
@@ -271,10 +250,6 @@ impl<A: Clone> Ui<A> {
         self.pointer = self.input.position();
         self.scene.appearance.dark = self.theme.dark;
         self.scene.appearance.transparency = 0.5;
-        self.scene.appearance.reduce_motion = self.reduce_motion || !self.physics;
-        self.scene.physics = self.physics;
-        self.scene.glass_on_glass = self.theme.glass_on_glass;
-        self.scene.set_light_angle(self.theme.light_angle);
         if resized || rescaled {
             self.tree.mark_dirty();
             self.change.reset = true;
@@ -336,9 +311,7 @@ impl<A: Clone> Ui<A> {
     }
 
     pub fn render(&mut self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
-        let policy = self.theme.glass_on_glass;
-        let policy_changed = self.policy_changed(policy);
-        let base_changed = self.change.base || self.change.reset || policy_changed;
+        let base_changed = self.change.base || self.change.reset;
         let interface_changed = self.change.interface || base_changed;
         {
             let Self {
@@ -360,7 +333,6 @@ impl<A: Clone> Ui<A> {
                     popup: &layers[Layer::Popup.index()],
                     hud: &layers[Layer::Hud.index()],
                     glass: scene,
-                    glass_on_glass: policy,
                     base_changed,
                     interface_changed,
                     ink: if theme.dark { Ink::Light } else { Ink::Dark },
@@ -403,26 +375,8 @@ impl<A: Clone> Ui<A> {
             size: self.size,
             scale: self.scale,
             elapsed: self.elapsed,
-            physics: self.physics,
-            reduce_motion: self.reduce_motion,
             stepped: std::collections::HashSet::new(),
             pointer: self.pointer,
-        }
-    }
-
-    fn policy_changed(&mut self, policy: bool) -> bool {
-        let changed = self.change.policy != Some(policy);
-        self.change.policy = Some(policy);
-        changed
-    }
-
-    pub(crate) fn motion(&self, motion: Motion) -> Motion {
-        if !self.physics {
-            Motion::INSTANT
-        } else if self.reduce_motion {
-            motion.reduced()
-        } else {
-            motion
         }
     }
 
@@ -462,8 +416,6 @@ pub struct BuildContext<'a, A> {
     scale: f32,
     elapsed: f32,
     pointer: Vec2,
-    physics: bool,
-    reduce_motion: bool,
     stepped: std::collections::HashSet<u64>,
 }
 
@@ -478,14 +430,6 @@ impl<A> BuildContext<'_, A> {
 
     pub fn scale(&self) -> f32 {
         self.scale
-    }
-
-    pub fn physics(&self) -> bool {
-        self.physics
-    }
-
-    pub fn reduce_motion(&self) -> bool {
-        self.reduce_motion
     }
 
     pub fn measure(&mut self, text: &str, style: TextStyle) -> Vec2 {
@@ -511,13 +455,6 @@ impl<A> BuildContext<'_, A> {
     }
 
     pub fn animate(&mut self, key: u64, target: f32, motion: Motion) -> f32 {
-        let motion = if !self.physics {
-            Motion::INSTANT
-        } else if self.reduce_motion {
-            motion.reduced()
-        } else {
-            motion
-        };
         let spring = self
             .animations
             .entry(key)

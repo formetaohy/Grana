@@ -4,6 +4,7 @@ struct ScreenUniforms {
 
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> screen: ScreenUniforms;
+@group(0) @binding(2) var source_sampler: sampler;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -30,7 +31,8 @@ fn fs_accumulate(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_present(input: VertexOutput) -> @location(0) vec4<f32> {
-    let accumulated = textureLoad(source, vec2<i32>(input.clip_position.xy), 0) * screen.flags.z;
+    let uv = input.ndc * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+    let accumulated = textureSampleLevel(source, source_sampler, uv, 0.0) * screen.flags.z;
     let coverage = clamp(accumulated.a, 0.0, 1.0);
     let noise = (dither(input.clip_position.xy) - 0.5) / 255.0;
     if screen.flags.w > 0.5 {

@@ -39,6 +39,7 @@ pub(crate) struct Present {
     present: RenderPipeline,
     layout: BindGroupLayout,
     uniforms: Buffer,
+    sampler: wgpu::Sampler,
     encode: bool,
     format: TextureFormat,
 }
@@ -52,7 +53,7 @@ impl Present {
                     binding: 0,
                     visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: false },
+                        sample_type: TextureSampleType::Float { filterable: true },
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -66,6 +67,12 @@ impl Present {
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
@@ -103,11 +110,20 @@ impl Present {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("grana.present.sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
         Self {
             accumulate,
             present,
             layout,
             uniforms,
+            sampler,
             encode: !format.is_srgb(),
             format,
         }
@@ -129,6 +145,10 @@ impl Present {
                 BindGroupEntry {
                     binding: 1,
                     resource: self.uniforms.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
         })

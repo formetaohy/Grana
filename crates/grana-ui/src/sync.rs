@@ -8,8 +8,6 @@ use crate::widget::FrameAnimation;
 impl<A: Clone> Ui<A> {
     pub(crate) fn animate_nodes(&mut self) {
         let elapsed = self.elapsed;
-        let physics = self.physics;
-        let reduce_motion = self.reduce_motion;
         for index in 0..self.tree.ids.len() {
             let id = self.tree.ids[index];
             if !self.tree.nodes[id].visible {
@@ -22,8 +20,6 @@ impl<A: Clone> Ui<A> {
                 dragging: self.drag == Some(id),
                 pointer: self.pointer,
                 elapsed,
-                physics,
-                reduce_motion,
             };
             let animating = crate::widget::animate(
                 &mut self.tree.nodes[id],

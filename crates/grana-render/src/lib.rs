@@ -14,6 +14,7 @@ mod planner;
 mod present;
 mod renderer;
 mod sample;
+mod scale;
 mod schema;
 mod section;
 mod shadow;

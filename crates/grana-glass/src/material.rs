@@ -290,7 +290,6 @@ pub struct Appearance {
     pub transparency: f32,
     pub reduce_transparency: bool,
     pub increase_contrast: bool,
-    pub reduce_motion: bool,
     pub adapt_to_content: bool,
 }
 
@@ -301,7 +300,6 @@ impl Default for Appearance {
             transparency: 0.5,
             reduce_transparency: false,
             increase_contrast: false,
-            reduce_motion: false,
             adapt_to_content: true,
         }
     }

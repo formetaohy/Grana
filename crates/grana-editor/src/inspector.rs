@@ -62,7 +62,6 @@ pub fn view_body<'a>(
         section(ctx, state),
         clip(ctx, state),
         rendering(ctx, state),
-        interface(ctx, state),
     ]
 }
 
@@ -1021,56 +1020,6 @@ fn rendering<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
         Icon::Sparkles,
         "Rendering",
         Some(&summary),
-        children,
-        open,
-    )
-}
-
-fn interface<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
-    let theme = *ctx.theme();
-    let key = Key::new("interface");
-    let open = state.workspace.sections.is_open(key);
-    let mut children = Vec::new();
-    if open {
-        let spring = ctx.physics();
-        let motion = ctx.reduce_motion();
-        let on_glass = theme.glass_on_glass;
-        let angle = theme.light_angle;
-        children.push(
-            grana_ui::widget::toggle_row(&theme, "Spring Physics", spring)
-                .named("interface.physics")
-                .on_toggle(Message::SetPhysics),
-        );
-        children.push(
-            grana_ui::widget::toggle_row(&theme, "Reduce Motion", motion)
-                .named("interface.reduce")
-                .on_toggle(Message::SetReduceMotion),
-        );
-        children.push(
-            grana_ui::widget::toggle_row(&theme, "Glass on Glass", on_glass)
-                .named("interface.glass")
-                .on_toggle(Message::SetGlassOnGlass),
-        );
-        let readout = format!("{angle:.0}°");
-        children.push(
-            grana_ui::widget::slider_readout(
-                &theme,
-                Some("Light"),
-                angle,
-                -180.0..=180.0,
-                false,
-                &readout,
-            )
-            .named("interface.light")
-            .on_slide(Message::SetLightAngle),
-        );
-    }
-    view::disclosure_card(
-        ctx,
-        key,
-        Icon::Info,
-        "Interface",
-        Some("Liquid Glass"),
         children,
         open,
     )

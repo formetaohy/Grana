@@ -120,20 +120,19 @@ fn is_outside(input: VertexOutput) -> bool {
 
 fn shade(input: VertexOutput) -> vec4<f32> {
     let style = styles[input.object];
-    var normal = normalize(input.normal);
+    let normal = normalize(input.normal);
     let view = normalize(mesh.eye.xyz - input.position);
-    if (dot(normal, view) < 0.0) {
-        normal = -normal;
-    }
+    let lit_normal = select(normal, -normal, dot(normal, mesh.light.xyz) < 0.0);
+    let facing_normal = select(normal, -normal, dot(normal, view) < 0.0);
     let sun = sun_transmittance(
-        shadow_coordinate(mesh.light_view, input.position + normal * mesh.light_reach.z),
-        shadow_bias(mesh.light_reach, normal, mesh.light.xyz),
+        shadow_coordinate(mesh.light_view, input.position + lit_normal * mesh.light_reach.z),
+        shadow_bias(mesh.light_reach, lit_normal, mesh.light.xyz),
     );
     let strength = clamp(mesh.shadow.x, 0.0, 1.0);
     let direct = mix(1.0, sun, strength);
     let half_vector = normalize(mesh.light.xyz + view);
-    let diffuse = max(dot(normal, mesh.light.xyz), 0.0) * direct;
-    let specular = pow(max(dot(normal, half_vector), 0.0), mesh.shading.w) * direct;
+    let diffuse = max(dot(lit_normal, mesh.light.xyz), 0.0) * direct;
+    let specular = pow(max(dot(facing_normal, half_vector), 0.0), mesh.shading.w) * direct;
     var color = style.color.rgb * (mesh.shading.x + mesh.shading.y * diffuse)
         + vec3<f32>(mesh.shading.z * specular);
     if (style.flags.y > 0.5) {

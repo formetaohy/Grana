@@ -907,14 +907,25 @@ fn blends_transparent_surfaces() {
         red_count(&blended, WHOLE) > 100,
         "the transparent surfaces are missing"
     );
-    let brightness = |pixels: &[[u8; 4]]| {
-        pixels
+    let red_objects = |pixels: &[[u8; 4]]| {
+        let (sum, count) = pixels
             .iter()
-            .map(|pixel| u32::from(pixel[0]) + u32::from(pixel[1]) + u32::from(pixel[2]))
-            .sum::<u32>()
+            .filter(|pixel| {
+                u32::from(pixel[0]) > 120 && u32::from(pixel[1]) + 40 < u32::from(pixel[0])
+            })
+            .fold((0u64, 0u64), |(sum, count), pixel| {
+                (sum + u64::from(pixel[0]), count + 1)
+            });
+        (sum, count)
     };
+    let (opaque_sum, opaque_count) = red_objects(&opaque);
+    let (blended_sum, blended_count) = red_objects(&blended);
     assert!(
-        brightness(&blended) < brightness(&opaque),
+        opaque_count > 100 && blended_count > 100,
+        "the red surfaces are missing"
+    );
+    assert!(
+        blended_sum * opaque_count < opaque_sum * blended_count,
         "the transparent surfaces are drawn opaque"
     );
 }
@@ -2323,6 +2334,7 @@ impl Resident<'_> {
                     clip: Clip::none(),
                     exposure: 1.0,
                     samples: SAMPLES,
+                    scale: 1.0,
                     scene: &scene,
                     prefetch: false,
                 },
@@ -3987,6 +3999,7 @@ fn antialiases_transparent_silhouettes() {
                 clip: Clip::none(),
                 exposure: 1.0,
                 samples: 1,
+                scale: 1.0,
                 scene: &scene,
                 prefetch: false,
             },
@@ -4064,6 +4077,7 @@ fn antialiases_opaque_silhouettes() {
                 clip: Clip::none(),
                 exposure: 1.0,
                 samples: 1,
+                scale: 1.0,
                 scene: &scene,
                 prefetch: false,
             },

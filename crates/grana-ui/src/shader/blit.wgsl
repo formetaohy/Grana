@@ -20,12 +20,6 @@ fn vs_fullscreen(@builtin(vertex_index) index: u32) -> VertexOut {
     return out;
 }
 
-@fragment
-fn fs_blit(in: VertexOut) -> @location(0) vec4<f32> {
-    let color = textureSampleLevel(source, source_sampler, in.uv, 0.0).rgb;
-    return vec4<f32>(color, 1.0);
-}
-
 fn linear_to_srgb(channel: f32) -> f32 {
     if (channel <= 0.0031308) {
         return channel * 12.92;
