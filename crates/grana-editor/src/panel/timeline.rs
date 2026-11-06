@@ -6,7 +6,7 @@ use crate::state::State;
 use crate::widget;
 use grana_session::Command;
 
-const KNOB: f32 = 22.0;
+const KNOB: f32 = 20.0;
 
 pub(super) fn transport(
     ui: &mut Ui,
@@ -18,12 +18,12 @@ pub(super) fn transport(
     let palette = ui.theme().palette;
     let center = rect.center().y;
     let left = rect.min.x + 12.0;
-    let back = Rect::from_center_size(Vec2::new(left + 14.0, center), Vec2::splat(30.0));
-    let play = Rect::from_center_size(Vec2::new(left + 50.0, center), Vec2::splat(30.0));
-    let forward = Rect::from_center_size(Vec2::new(left + 84.0, center), Vec2::splat(30.0));
-    let track_start = forward.max.x + 20.0;
-    let readout_width = 160.0;
-    let track_end = (rect.max.x - 18.0 - readout_width).max(track_start + 80.0);
+    let back = Rect::from_center_size(Vec2::new(left + 14.0, center), Vec2::splat(28.0));
+    let play = Rect::from_center_size(Vec2::new(left + 48.0, center), Vec2::splat(30.0));
+    let forward = Rect::from_center_size(Vec2::new(left + 82.0, center), Vec2::splat(28.0));
+    let track_start = forward.max.x + 18.0;
+    let readout_width = 148.0;
+    let track_end = (rect.max.x - 16.0 - readout_width).max(track_start + 80.0);
     let track = Rect::from_min_max(
         Vec2::new(track_start, center - 14.0),
         Vec2::new(track_end, center + 14.0),
@@ -33,7 +33,7 @@ pub(super) fn transport(
             ui,
             "timeline.back",
             Icon::StepBack,
-            30.0,
+            28.0,
             Role::Quiet,
             "Previous frame",
         ) {
@@ -51,7 +51,7 @@ pub(super) fn transport(
         } else {
             "Play"
         };
-        if widget::icon_button(ui, "timeline.play", symbol, 32.0, Role::Prominent, tooltip) {
+        if widget::icon_button(ui, "timeline.play", symbol, 30.0, Role::Prominent, tooltip) {
             state.workspace.playback.playing = !state.workspace.playback.playing;
             state.workspace.playback.previewing = false;
         }
@@ -61,7 +61,7 @@ pub(super) fn transport(
             ui,
             "timeline.forward",
             Icon::StepForward,
-            30.0,
+            28.0,
             Role::Quiet,
             "Next frame",
         ) {
@@ -78,10 +78,10 @@ pub(super) fn transport(
     let frames = state.scene.frame_count();
     let time = state.scene.time();
     let seconds = time as f32 * state.scene.dataset.frame_interval();
-    let readout = format!("{:02} / {:02}   {seconds:.2} s", time + 1, frames);
+    let readout = format!("{:02} / {:02}  ·  {seconds:.2} s", time + 1, frames);
     let readout_rect = Rect::from_min_max(
-        Vec2::new(track_end + 18.0, rect.min.y),
-        Vec2::new(rect.max.x - 20.0, rect.max.y),
+        Vec2::new(track_end + 12.0, rect.min.y),
+        Vec2::new(rect.max.x - 16.0, rect.max.y),
     );
     let font = ui.theme().font(Level::Monospace);
     let mut painter = ui.painter();
@@ -151,7 +151,7 @@ fn scrub(ui: &mut Ui, rect: Rect, frame: u32, frames: u32) -> Option<u32> {
                 painter.rect(
                     Rect::from_center_size(
                         Vec2::new(x, rect.center().y + 10.0),
-                        Vec2::new(1.0, 2.0),
+                        Vec2::new(1.0, 2.5),
                     ),
                     Corners::capsule(),
                     if index == frame {

@@ -133,7 +133,7 @@ pub fn paint(ui: &mut Ui, overlay: &mut Overlay<'_>) {
             ui,
             "figure.recording",
             overlay.volume_rect,
-            overlay.volume_safe.min + Vec2::new(12.0, 46.0),
+            overlay.volume_safe.min + Vec2::new(0.0, 34.0),
             Icon::Record,
             &format!("REC · frame {frame} of {frames}"),
             Color::rgba(1.0, 0.52, 0.44, 1.0),
@@ -194,7 +194,7 @@ fn paint_volume(ui: &mut Ui, overlay: &mut Overlay<'_>) {
         ui,
         "figure.volume",
         overlay.volume_safe,
-        overlay.volume_safe.min + Vec2::new(12.0, 12.0),
+        overlay.volume_safe.min,
         Icon::Cube,
         "3D",
         LABEL,
@@ -211,7 +211,6 @@ fn paint_section(ui: &mut Ui, overlay: &Overlay<'_>) {
     let clip = ui.clip().intersect(rect, Corners::ZERO);
     {
         let mut painter = ui.painter_in(clip);
-        scale_bar(&mut painter, stage, world_per_point, true);
         painter.outlined(
             stage,
             Corners::all(2.0),
@@ -222,6 +221,7 @@ fn paint_section(ui: &mut Ui, overlay: &Overlay<'_>) {
             },
             grana_ui::Shadow::NONE,
         );
+        scale_bar(&mut painter, overlay.section_safe, world_per_point, true);
     }
     chip(
         ui,
@@ -620,17 +620,17 @@ fn scale_bar(painter: &mut Painter, rect: Rect, world_per_point: f32, backdrop: 
     let bottom = rect.max.y - 18.0;
     let color = BAR;
     let pill = Rect::from_min_size(
-        Vec2::new(left - 7.0, bottom - 9.0),
-        Vec2::new(points + 54.0, 20.0),
+        Vec2::new(left - 10.0, bottom - 11.0),
+        Vec2::new(points + 60.0, 22.0),
     );
     if backdrop {
         painter.outlined(
             pill,
-            Corners::all(4.0),
-            Fill::Solid(Color::black_alpha(0.45)),
+            Corners::capsule(),
+            Fill::Solid(Color::black_alpha(0.42)),
             grana_ui::Border {
                 width: 1.0,
-                color: Color::white_alpha(0.10),
+                color: Color::white_alpha(0.12),
             },
             grana_ui::Shadow::NONE,
         );
@@ -673,17 +673,17 @@ fn paint_legends(painter: &mut Painter, rect: Rect, legends: &[Legend], backdrop
             break;
         }
         let card = Rect::from_min_max(
-            Vec2::new(left - 8.0, title_top - 8.0),
+            Vec2::new(left - 10.0, title_top - 8.0),
             Vec2::new(left + LEGEND_WIDTH, bar_bottom + 8.0),
         );
         if backdrop {
             painter.outlined(
                 card,
-                Corners::all(4.0),
-                Fill::Solid(Color::black_alpha(0.45)),
+                Corners::all(10.0),
+                Fill::Solid(Color::black_alpha(0.42)),
                 grana_ui::Border {
                     width: 1.0,
-                    color: Color::white_alpha(0.10),
+                    color: Color::white_alpha(0.12),
                 },
                 grana_ui::Shadow::NONE,
             );

@@ -1,7 +1,8 @@
 use glam::Vec2;
 use grana_ui::glass::{CHROME, GlassStyle};
 use grana_ui::{
-    Align, Block, Color, Corners, GlassGroup, Icon, Length, Level, Rect, Role, TextStyle, Ui, icon,
+    Align, Block, Color, Corners, GlassGroup, Icon, Length, Level, Motion, Rect, Role, TextStyle,
+    Ui, icon,
 };
 
 use crate::panel::Layout;
@@ -21,8 +22,8 @@ pub(super) fn bar(
     state: &mut State<'_>,
     commands: &mut Vec<Command>,
 ) {
-    let left = ui.glass_group(ui.id("header.navigation.group"), 14.0, CHROME);
-    let right = ui.glass_group(ui.id("header.actions.group"), 14.0, CHROME);
+    let left = ui.glass_group(ui.id("header.navigation.group"), 0.0, CHROME);
+    let right = ui.glass_group(ui.id("header.actions.group"), 0.0, CHROME);
     navigation(ui, layout.toolbar_left, state, commands, left);
     actions(ui, layout.toolbar_right, state, commands, right);
     analysis(ui, layout.analysis, state);
@@ -35,8 +36,7 @@ fn navigation(
     commands: &mut Vec<Command>,
     group: GlassGroup,
 ) {
-    let inner = rect.shrink2(Vec2::new(8.0, 0.0));
-    ui.place(inner, |ui| {
+    ui.place(rect, |ui| {
         ui.row(
             Block::row()
                 .gaps(8.0)
@@ -49,7 +49,7 @@ fn navigation(
                     Some(group),
                     "sidebar.toggle",
                     Icon::Sidebar,
-                    34.0,
+                    36.0,
                     GlassStyle::button(),
                     if hidden {
                         "Show sidebar"
@@ -60,22 +60,167 @@ fn navigation(
                 if response.clicked {
                     state.workspace.sidebar_hidden = !hidden;
                 }
-                brand(ui);
-                let open =
-                    widget::glass_menu_button(ui, Some(group), "open.menu", "Open", false, 80.0);
-                open_menu(ui, state, commands, open);
-                let project = widget::glass_menu_button(
+                let project = project_pill(
                     ui,
                     Some(group),
-                    "project.menu",
                     state.io.project.as_deref().unwrap_or("Untitled"),
                     state.io.dirty,
-                    148.0,
                 );
                 project_menu(ui, state, commands, project);
+                let open = open_pill(ui, Some(group));
+                open_menu(ui, state, commands, open);
             },
         );
     });
+}
+
+fn project_pill(ui: &mut Ui, group: Option<GlassGroup>, project: &str, dirty: bool) -> Rect {
+    let key = ui.id("project.menu");
+    let palette = ui.theme().palette;
+    let brand_font = ui.theme().font(Level::Callout).semibold();
+    let project_font = ui.theme().font(Level::Callout).medium();
+    let measured = ui
+        .measure_text(project, TextStyle::new(project_font, Color::WHITE))
+        .x
+        .min(136.0);
+    let width = 80.0 + 10.0 + measured + if dirty { 30.0 } else { 22.0 };
+    let rect = ui.allocate(Vec2::new(width, 36.0));
+    let mut response = ui.interact(key, rect);
+    if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
+        response.clicked = true;
+    }
+    if response.clicked {
+        ui.toggle_popup(key);
+    }
+    let active = ui.popup_open(key);
+    let hover = ui.animate(
+        key,
+        if response.hovered || active { 1.0 } else { 0.0 },
+        Motion::quick(),
+    );
+    let mut style = GlassStyle::button().interactive();
+    if response.hovered || response.active || active {
+        style.material.specular = (style.material.specular + 0.14).min(1.0);
+        style.material.rim += 0.05;
+    }
+    ui.glass_in(group, key, rect, style);
+    let frame = ui.glass_frame(key).unwrap_or(rect);
+    let mut painter = ui.painter();
+    let widths = [6.5, 7.6, 8.7, 9.8, 10.9];
+    let mut y = frame.center().y - 7.4;
+    for bar_w in widths {
+        painter.rect(
+            Rect::from_min_size(Vec2::new(frame.min.x + 12.0, y), Vec2::new(bar_w, 2.0)),
+            Corners::capsule(),
+            palette.brand,
+        );
+        y += 3.2;
+    }
+    painter.text_in(
+        Rect::from_min_size(
+            Vec2::new(frame.min.x + 27.0, frame.min.y),
+            Vec2::new(46.0, frame.height()),
+        ),
+        "grana",
+        TextStyle::new(brand_font, palette.text_primary),
+        Align::Center,
+    );
+    painter.rect(
+        Rect::from_center_size(
+            Vec2::new(frame.min.x + 78.0, frame.center().y),
+            Vec2::new(1.0, 14.0),
+        ),
+        Corners::ZERO,
+        palette.separator,
+    );
+    let title_left = frame.min.x + 87.0;
+    painter.text_in(
+        Rect::from_min_max(
+            Vec2::new(title_left, frame.min.y),
+            Vec2::new(title_left + measured + 2.0, frame.max.y),
+        ),
+        project,
+        TextStyle::new(
+            project_font,
+            palette.text_secondary.lerp(palette.text_primary, hover),
+        )
+        .truncating(),
+        Align::Center,
+    );
+    if dirty {
+        painter.rect(
+            Rect::from_center_size(
+                Vec2::new(title_left + measured + 8.0, frame.center().y),
+                Vec2::splat(5.0),
+            ),
+            Corners::capsule(),
+            palette.warning,
+        );
+    }
+    icon::paint(
+        Icon::ChevronDown,
+        &mut painter,
+        Vec2::new(frame.max.x - 11.0, frame.center().y),
+        9.0,
+        palette.text_tertiary,
+        1.5,
+    );
+    rect
+}
+
+fn open_pill(ui: &mut Ui, group: Option<GlassGroup>) -> Rect {
+    let key = ui.id("open.menu");
+    let palette = ui.theme().palette;
+    let font = ui.theme().font(Level::Callout).medium();
+    let rect = ui.allocate(Vec2::new(84.0, 36.0));
+    let mut response = ui.interact(key, rect);
+    if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
+        response.clicked = true;
+    }
+    if response.clicked {
+        ui.toggle_popup(key);
+    }
+    let active = ui.popup_open(key);
+    let hover = ui.animate(
+        key,
+        if response.hovered || active { 1.0 } else { 0.0 },
+        Motion::quick(),
+    );
+    let mut style = GlassStyle::button().interactive();
+    if response.hovered || response.active || active {
+        style.material.specular = (style.material.specular + 0.14).min(1.0);
+        style.material.rim += 0.05;
+    }
+    ui.glass_in(group, key, rect, style);
+    let frame = ui.glass_frame(key).unwrap_or(rect);
+    let color = palette.text_secondary.lerp(palette.text_primary, hover);
+    let mut painter = ui.painter();
+    icon::paint(
+        Icon::Folder,
+        &mut painter,
+        Vec2::new(frame.min.x + 15.0, frame.center().y),
+        13.0,
+        color,
+        1.5,
+    );
+    painter.text_in(
+        Rect::from_min_max(
+            Vec2::new(frame.min.x + 26.0, frame.min.y),
+            Vec2::new(frame.max.x - 18.0, frame.max.y),
+        ),
+        "Open",
+        TextStyle::new(font, color),
+        Align::Center,
+    );
+    icon::paint(
+        Icon::ChevronDown,
+        &mut painter,
+        Vec2::new(frame.max.x - 11.0, frame.center().y),
+        9.0,
+        palette.text_tertiary,
+        1.5,
+    );
+    rect
 }
 
 fn actions(
@@ -85,8 +230,7 @@ fn actions(
     commands: &mut Vec<Command>,
     group: GlassGroup,
 ) {
-    let inner = rect.shrink2(Vec2::new(8.0, 0.0));
-    ui.place(inner, |ui| {
+    ui.place(rect, |ui| {
         ui.row(
             Block::row()
                 .gaps(8.0)
@@ -111,7 +255,7 @@ fn actions(
                         Some(group),
                         "undo",
                         Icon::Undo,
-                        34.0,
+                        36.0,
                         GlassStyle::button(),
                         &undo_tip,
                     )
@@ -121,7 +265,7 @@ fn actions(
                         Some(group),
                         "undo",
                         Icon::Undo,
-                        34.0,
+                        36.0,
                         GlassStyle::button_disabled(),
                     )
                 };
@@ -134,7 +278,7 @@ fn actions(
                         Some(group),
                         "redo",
                         Icon::Redo,
-                        34.0,
+                        36.0,
                         GlassStyle::button(),
                         &redo_tip,
                     )
@@ -144,24 +288,12 @@ fn actions(
                         Some(group),
                         "redo",
                         Icon::Redo,
-                        34.0,
+                        36.0,
                         GlassStyle::button_disabled(),
                     )
                 };
                 if response.clicked {
                     commands.push(Command::Redo);
-                }
-                let response = widget::glass_icon_button_response(
-                    ui,
-                    Some(group),
-                    "fit",
-                    Icon::Fit,
-                    34.0,
-                    GlassStyle::button(),
-                    "Fit volume to view",
-                );
-                if response.clicked {
-                    crate::view::fit_volume(state);
                 }
                 let key = ui.id("header.diagnostics");
                 let response = widget::glass_icon_button_response(
@@ -169,10 +301,22 @@ fn actions(
                     Some(group),
                     "header.diagnostics",
                     Icon::Info,
-                    34.0,
+                    36.0,
                     GlassStyle::button(),
                     "Streaming diagnostics",
                 );
+                if state.io.pending > 0 || !state.jobs.is_empty() {
+                    let accent = ui.theme().palette.accent;
+                    let mut painter = ui.painter();
+                    painter.rect(
+                        Rect::from_center_size(
+                            Vec2::new(response.rect.max.x - 7.0, response.rect.min.y + 7.0),
+                            Vec2::splat(5.0),
+                        ),
+                        Corners::capsule(),
+                        accent,
+                    );
+                }
                 if response.clicked {
                     ui.toggle_popup(key);
                 }
@@ -206,7 +350,7 @@ fn analysis(ui: &mut Ui, rect: Rect, state: &mut State<'_>) {
     {
         let mut painter = ui.painter();
         let mark = Rect::from_center_size(
-            Vec2::new(frame.min.x + 24.0, frame.center().y),
+            Vec2::new(frame.min.x + 22.0, frame.center().y),
             Vec2::splat(13.0),
         );
         icon::paint(
@@ -230,10 +374,10 @@ fn analysis(ui: &mut Ui, rect: Rect, state: &mut State<'_>) {
             painter.rect(
                 Rect::from_center_size(
                     Vec2::new(frame.max.x - 12.0, frame.center().y),
-                    Vec2::splat(4.0),
+                    Vec2::splat(4.5),
                 ),
                 Corners::capsule(),
-                palette.text_on_accent.with_alpha(0.75),
+                palette.text_on_accent.with_alpha(0.85),
             );
         }
     }
@@ -249,47 +393,19 @@ fn analysis(ui: &mut Ui, rect: Rect, state: &mut State<'_>) {
     }
 }
 
-fn brand(ui: &mut Ui) {
-    let rect = ui.allocate(Vec2::new(96.0, 34.0));
-    ui.glass(ui.id("header.brand"), rect, GlassStyle::button());
-    let brand = ui.theme().palette.brand;
-    let palette = ui.theme().palette;
-    let font = ui.theme().font(Level::Title);
-    let mut painter = ui.painter();
-    let widths = [7.0, 8.2, 9.4, 10.6, 11.8];
-    let mut y = rect.center().y - 8.0;
-    for width in widths {
-        painter.rect(
-            Rect::from_min_size(Vec2::new(rect.min.x + 11.0, y), Vec2::new(width, 2.2)),
-            Corners::capsule(),
-            brand,
-        );
-        y += 3.4;
-    }
-    painter.text_in(
-        Rect::from_min_size(
-            Vec2::new(rect.min.x + 28.0, rect.min.y),
-            Vec2::new(rect.width() - 36.0, rect.height()),
-        ),
-        "grana",
-        TextStyle::new(font, palette.text_primary),
-        Align::Center,
-    );
-}
-
 fn open_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, rect: Rect) {
     let open = ui.popup_open(ui.id("open.menu"));
     let mut chosen = None;
     let busy = state.io.loading.is_some();
     grana_ui::popover::popover(ui, "open.menu", open, rect, 236.0, |ui| {
-        if grana_ui::popover::action_row(ui, "open.image", Icon::Cube, "Open image…", None) {
+        if grana_ui::popover::action_row(ui, "open.image", Icon::Cube, "Open Image…", None) {
             chosen = Some(Command::OpenImage);
         }
         if grana_ui::popover::action_row(
             ui,
             "open.folder",
             Icon::Folder,
-            "Open OME-Zarr folder…",
+            "Open OME-Zarr Folder…",
             None,
         ) {
             chosen = Some(Command::OpenDataset);
@@ -299,7 +415,7 @@ fn open_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, rect: 
             ui,
             "open.project",
             Icon::Folder,
-            "Open project…",
+            "Open Project…",
             Some(&format!("{COMMAND}O")),
         ) {
             chosen = Some(Command::OpenProject);
@@ -322,16 +438,16 @@ fn project_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, rec
             ui,
             "save.project",
             Icon::Save,
-            "Save project",
+            "Save Project",
             Some(&format!("{COMMAND}S")),
         ) {
             chosen = Some(Command::SaveProject);
         }
-        if grana_ui::popover::action_row(ui, "save.as", Icon::Save, "Save as…", None) {
+        if grana_ui::popover::action_row(ui, "save.as", Icon::Save, "Save Project As…", None) {
             chosen = Some(Command::SaveProjectAs);
         }
         grana_ui::popover::separator(ui);
-        if grana_ui::popover::action_row(ui, "snapshot", Icon::Camera, "Save snapshot…", None) {
+        if grana_ui::popover::action_row(ui, "snapshot", Icon::Camera, "Save Snapshot…", None) {
             chosen = Some(Command::SaveSnapshot);
         }
     });
@@ -346,8 +462,8 @@ fn project_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, rec
 fn diagnostics(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, anchor: Rect) {
     let open = ui.popup_open(ui.id("header.diagnostics"));
     let mut clear = false;
-    grana_ui::popover::popover(ui, "header.diagnostics", open, anchor, 300.0, |ui| {
-        crate::panel::section_header(ui, "Streaming", None);
+    grana_ui::popover::popover(ui, "header.diagnostics", open, anchor, 304.0, |ui| {
+        crate::panel::section_header(ui, "Streaming", Some(state.io.adapter));
         widget::labelled(ui, "Volume", &bricks(state.frame.volume));
         widget::labelled(ui, "Section", &bricks(state.frame.section));
         widget::labelled(
@@ -393,7 +509,7 @@ fn diagnostics(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, anch
         if widget::button_with(
             ui,
             "cache.clear",
-            "Clear derived cache",
+            "Clear Derived Cache",
             Role::Danger,
             Length::Fill,
         )
@@ -410,15 +526,10 @@ fn diagnostics(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, anch
 
 fn bricks(view: ViewStats) -> String {
     if view.demand == view.visible {
-        format!(
-            "level {} · {}/{}",
-            view.level + 1,
-            view.resident,
-            view.demand
-        )
+        format!("L{} · {}/{}", view.level + 1, view.resident, view.demand)
     } else {
         format!(
-            "level {} · {}/{} of {}",
+            "L{} · {}/{} of {}",
             view.level + 1,
             view.resident,
             view.demand,

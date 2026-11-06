@@ -7,7 +7,7 @@ use grana_ui::{
     Align, Block, Color, Corners, Edges, Icon, Length, Level, Rect, Role, TextStyle, Ui,
 };
 
-use crate::panel::{divider, progress, section_header};
+use crate::panel::{divider, form_combo, form_row, progress, section_header};
 use crate::state::State;
 use crate::widget;
 use grana_session::Command;
@@ -22,7 +22,7 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         crate::panel::empty_state(
             ui,
             Icon::Layers,
-            "No object sets",
+            "No Object Sets",
             &format!(
                 "Detect spots, surfaces or filaments in {channel_name} to measure structures."
             ),
@@ -52,7 +52,7 @@ fn header(ui: &mut Ui, count: usize) -> Rect {
         grana_ui::TypeStyle {
             size: 10.0,
             weight: 600.0,
-            tracking: 0.8,
+            tracking: 0.7,
             leading: 14.0,
         },
         palette.text_tertiary,
@@ -63,7 +63,7 @@ fn header(ui: &mut Ui, count: usize) -> Rect {
         let mut painter = ui.painter();
         painter.text_in(row, "OBJECT SETS", label, Align::Center);
         painter.text_in(
-            Rect::from_min_max(row.min, Vec2::new(add.min.x - 10.0, row.max.y)),
+            Rect::from_min_max(row.min, Vec2::new(add.min.x - 8.0, row.max.y)),
             &count.to_string(),
             detail,
             Align::Center,
@@ -164,46 +164,50 @@ fn object(
     ui.push_id(&format!("object.{}", id.raw()));
     ui.column(
         Block::column()
-            .padding(Edges::all(10.0))
-            .gaps(6.0)
+            .padding(Edges::all(11.0))
+            .gaps(7.0)
             .background(look),
         |ui| {
-            let header = ui.allocate_full(38.0);
+            let header = ui.allocate_full(36.0);
             let icon_rect = Rect::from_center_size(
                 Vec2::new(header.min.x + 15.0, header.center().y),
                 Vec2::splat(30.0),
             );
+            let chevron_rect = Rect::from_center_size(
+                Vec2::new(header.max.x - 8.0, header.center().y),
+                Vec2::new(16.0, 24.0),
+            );
             let menu_rect = Rect::from_center_size(
-                Vec2::new(header.max.x - 12.0, header.center().y),
+                Vec2::new(chevron_rect.min.x - 14.0, header.center().y),
                 Vec2::splat(24.0),
             );
             let eye_rect = Rect::from_center_size(
-                Vec2::new(menu_rect.min.x - 24.0, header.center().y),
+                Vec2::new(menu_rect.min.x - 14.0, header.center().y),
                 Vec2::splat(24.0),
             );
             let text_area = Rect::from_min_max(
                 Vec2::new(icon_rect.max.x + 10.0, header.min.y),
-                Vec2::new(eye_rect.min.x - 24.0, header.max.y),
+                Vec2::new(eye_rect.min.x - 6.0, header.max.y),
             );
-            let hit =
-                Rect::from_min_max(text_area.min, Vec2::new(eye_rect.min.x - 8.0, header.max.y));
+            let hit = Rect::from_min_max(header.min, Vec2::new(eye_rect.min.x - 2.0, header.max.y));
             let key = ui.id("header");
             let mut response = ui.interact(key, hit);
-            if ui.focusable(key, hit, Corners::all(10.0)) && ui.activated(key) {
+            let chev_response = ui.interact(ui.id("header.chevron"), chevron_rect);
+            if ui.focusable(key, hit, Corners::all(9.0)) && ui.activated(key) {
                 response.clicked = true;
             }
-            if response.clicked {
+            if response.clicked || chev_response.clicked {
                 ui.store_open(&open_id, !expanded);
             }
             let name_rect = Rect::from_min_max(
-                Vec2::new(text_area.min.x, text_area.min.y + 2.0),
+                Vec2::new(text_area.min.x, text_area.min.y + 1.0),
                 Vec2::new(text_area.max.x, text_area.center().y + 1.0),
             );
             let subtitle = match current {
                 Some((count, _level)) => {
                     if frames > 1 {
                         format!(
-                            "{channel_name} · {count} {} · {detected} frames",
+                            "{channel_name} · {count} {} · {detected}f",
                             kind.count_noun()
                         )
                     } else {
@@ -211,9 +215,9 @@ fn object(
                     }
                 }
                 None if detected > 0 => {
-                    format!("{channel_name} · none on frame {}", time + 1)
+                    format!("{channel_name} · 0 on frame {}", time + 1)
                 }
-                None => format!("{channel_name} · not detected"),
+                None => format!("{channel_name} · Ready to detect"),
             };
             let subtitle = if hidden > 0 {
                 format!("{subtitle} · {hidden} hidden")
@@ -236,14 +240,14 @@ fn object(
             );
             {
                 let mut painter = ui.painter();
-                painter.rect(icon_rect, Corners::all(10.0), tint.with_alpha(0.14));
+                painter.rect(icon_rect, Corners::all(9.0), tint.with_alpha(0.15));
                 painter.outlined(
                     icon_rect,
-                    Corners::all(10.0),
+                    Corners::all(9.0),
                     grana_ui::Fill::None,
                     grana_ui::Border {
                         width: 1.0,
-                        color: tint.with_alpha(0.30),
+                        color: tint.with_alpha(0.32),
                     },
                     grana_ui::Shadow::NONE,
                 );
@@ -260,21 +264,20 @@ fn object(
                 }
                 painter.text_in(
                     Rect::from_min_max(
-                        Vec2::new(text_area.min.x, text_area.center().y + 3.0),
+                        Vec2::new(text_area.min.x, text_area.center().y + 2.0),
                         Vec2::new(text_area.max.x, text_area.max.y),
                     ),
                     &subtitle,
                     subtitle_style,
                     Align::Center,
                 );
-                let centre = Vec2::new(text_area.max.x + 10.0, header.center().y);
                 grana_ui::icon::chevron(
                     &mut painter,
-                    centre,
+                    chevron_rect.center(),
                     8.0,
                     std::f32::consts::FRAC_PI_2 * arrow,
                     palette.text_tertiary,
-                    1.4,
+                    1.5,
                 );
             }
             if editing
@@ -330,7 +333,7 @@ fn object(
                     .filter(|candidate| candidate.id() != id && candidate.kind() == kind)
                     .map(|candidate| (candidate.id(), candidate.name().to_string()))
                     .collect::<Vec<_>>();
-                grana_ui::popover::popover(ui, "object.menu", open, menu_rect, 184.0, |ui| {
+                grana_ui::popover::popover(ui, "object.menu", open, menu_rect, 188.0, |ui| {
                     if grana_ui::popover::action_row(ui, "rename", Icon::Pencil, "Rename", None) {
                         rename = true;
                     }
@@ -348,7 +351,7 @@ fn object(
                             ui,
                             "export.mesh",
                             Icon::Export,
-                            "Export mesh",
+                            "Export Mesh…",
                             None,
                         )
                     {
@@ -356,7 +359,7 @@ fn object(
                     }
                     if !merges.is_empty() {
                         grana_ui::popover::separator(ui);
-                        widget::caption(ui, "Merge into");
+                        widget::caption(ui, "Merge Into");
                         for (index, (candidate, label)) in merges.iter().enumerate() {
                             if grana_ui::popover::menu_row(ui, index, label, false) {
                                 merge = Some(*candidate);
@@ -369,7 +372,7 @@ fn object(
                             ui,
                             "move.up",
                             Icon::ChevronUp,
-                            "Move up",
+                            "Move Up",
                             None,
                         )
                     {
@@ -380,7 +383,7 @@ fn object(
                             ui,
                             "move.down",
                             Icon::ChevronDown,
-                            "Move down",
+                            "Move Down",
                             None,
                         )
                     {
@@ -390,7 +393,7 @@ fn object(
                         ui,
                         "remove",
                         Icon::Trash,
-                        "Remove object set",
+                        "Delete Object Set",
                         None,
                     ) {
                         remove = true;
@@ -434,38 +437,30 @@ fn object(
                 ) {
                     opacity = value;
                 }
-                if let Some(value) = widget::toggle_row(ui, "labels", "Object labels", labels) {
+                if let Some(value) = widget::toggle_row(ui, "labels", "Object Labels", labels) {
                     labels = value;
                 }
-                if labels {
-                    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-                        widget::field_label(ui, "label by");
-                        if let Some(chosen) = grana_ui::popover::combo(
-                            ui,
-                            "label.metric",
-                            168.0,
-                            &label_options,
-                            Some(label_metric),
-                        ) {
-                            label_metric = chosen;
-                        }
-                    });
+                if labels
+                    && let Some(chosen) = form_combo(
+                        ui,
+                        "label.metric",
+                        "Label by",
+                        &label_options,
+                        Some(label_metric),
+                    )
+                {
+                    label_metric = chosen;
                 }
                 if hidden > 0 || selected.is_some() {
                     ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
                         if hidden > 0 {
                             widget::caption(ui, &format!("{hidden} hidden"));
-                            if widget::button(ui, "show.all", "Show all", grana_ui::Role::Quiet) {
+                            if widget::button(ui, "show.all", "Show All", Role::Quiet) {
                                 commands.push(Command::ClearHidden(id));
                             }
                         }
                         if let Some(object) = selected
-                            && widget::button(
-                                ui,
-                                "hide.selected",
-                                "Hide selected",
-                                grana_ui::Role::Quiet,
-                            )
+                            && widget::button(ui, "hide.selected", "Hide Selected", Role::Quiet)
                         {
                             commands.push(Command::SetObjectHidden {
                                 set: id,
@@ -486,18 +481,19 @@ fn object(
                     detect(ui, state, commands, id, kind, frames);
                 }
                 summary(ui, kind, current, mean, detected, frames, time);
-                measure(ui, state, commands, id, time);
                 appearance(ui, state, commands, id);
                 relations(ui, state, commands, id);
                 if kind.trackable() {
                     crate::track_panel::entry(ui, state, id);
                 }
+                measure(ui, state, commands, id, time);
                 if detected > 0 {
-                    ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
-                        if widget::button(ui, "clear", "Clear objects", Role::Danger) {
-                            commands.push(Command::ClearObject(id));
-                        }
-                    });
+                    divider(ui);
+                    if widget::button_with(ui, "clear", "Clear Objects", Role::Danger, Length::Fill)
+                        .clicked
+                    {
+                        commands.push(Command::ClearObject(id));
+                    }
                 }
             }
         },
@@ -594,7 +590,7 @@ fn relations(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: Ob
             let name = targets
                 .iter()
                 .find(|(candidate, _)| *candidate == target)
-                .map_or("another set", |(_, name)| name.as_str());
+                .map_or("Object Set", |(_, name)| name.as_str());
             let running = progress(
                 state.jobs,
                 Job::Relation {
@@ -626,7 +622,7 @@ fn relations(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: Ob
                     Icon::Close,
                     22.0,
                     Role::Quiet,
-                    "Remove the relation",
+                    "Remove relation",
                 ) {
                     commands.push(Command::RemoveRelation {
                         source: id,
@@ -638,71 +634,78 @@ fn relations(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: Ob
             if frames > 1 {
                 let limit = frames as i32 - 1;
                 let mut next_shift = None;
-                ui.row(Block::row().gaps(4.0).align(Align::Center), |ui| {
-                    widget::field_label(ui, "shift");
-                    if widget::icon_button(
-                        ui,
-                        &format!("relation.{}.{}.back", target.raw(), shift),
-                        Icon::ChevronLeft,
-                        20.0,
-                        Role::Quiet,
-                        "Relate to the target one frame earlier",
-                    ) && shift > -limit
-                        && !taken.contains(&(shift - 1))
-                    {
-                        next_shift = Some(shift - 1);
-                    }
-                    widget::caption(ui, &shift_label(shift));
-                    if widget::icon_button(
-                        ui,
-                        &format!("relation.{}.{}.forward", target.raw(), shift),
-                        Icon::ChevronRight,
-                        20.0,
-                        Role::Quiet,
-                        "Relate to the target one frame later",
-                    ) && shift < limit
-                        && !taken.contains(&(shift + 1))
-                    {
-                        next_shift = Some(shift + 1);
-                    }
-                    ui.space(1.0);
-                    let free = free_offsets(target, id, limit, &taken);
-                    if !free.is_empty() {
-                        let key = format!("relation.{}.{}.offset", target.raw(), shift);
-                        let response = widget::icon_button_response(
+                form_row(ui, "Shift", |ui| {
+                    ui.row(Block::row().gaps(4.0).align(Align::Center), |ui| {
+                        if widget::icon_button(
                             ui,
-                            &key,
-                            Icon::Plus,
+                            &format!("relation.{}.{}.back", target.raw(), shift),
+                            Icon::ChevronLeft,
                             20.0,
                             Role::Quiet,
-                            "Relate to the target at another offset",
-                        );
-                        if response.clicked {
-                            ui.toggle_popup(ui.id(&key));
+                            "Earlier frame",
+                        ) && shift > -limit
+                            && !taken.contains(&(shift - 1))
+                        {
+                            next_shift = Some(shift - 1);
                         }
-                        let open = ui.popup_open(ui.id(&key));
-                        let mut chosen = None;
-                        grana_ui::popover::popover(ui, &key, open, response.rect, 176.0, |ui| {
-                            for (index, offset) in free.iter().enumerate() {
-                                if grana_ui::popover::menu_row(
-                                    ui,
-                                    index,
-                                    &shift_label(*offset),
-                                    false,
-                                ) {
-                                    chosen = Some(*offset);
-                                }
+                        widget::caption(ui, &shift_label(shift));
+                        if widget::icon_button(
+                            ui,
+                            &format!("relation.{}.{}.forward", target.raw(), shift),
+                            Icon::ChevronRight,
+                            20.0,
+                            Role::Quiet,
+                            "Later frame",
+                        ) && shift < limit
+                            && !taken.contains(&(shift + 1))
+                        {
+                            next_shift = Some(shift + 1);
+                        }
+                        let free = free_offsets(target, id, limit, &taken);
+                        if !free.is_empty() {
+                            let key = format!("relation.{}.{}.offset", target.raw(), shift);
+                            let response = widget::icon_button_response(
+                                ui,
+                                &key,
+                                Icon::Plus,
+                                20.0,
+                                Role::Quiet,
+                                "Add offset relation",
+                            );
+                            if response.clicked {
+                                ui.toggle_popup(ui.id(&key));
                             }
-                        });
-                        if let Some(offset) = chosen {
-                            ui.close_popup();
-                            commands.push(Command::AddRelation {
-                                source: id,
-                                target,
-                                shift: offset,
-                            });
+                            let open = ui.popup_open(ui.id(&key));
+                            let mut chosen = None;
+                            grana_ui::popover::popover(
+                                ui,
+                                &key,
+                                open,
+                                response.rect,
+                                176.0,
+                                |ui| {
+                                    for (index, offset) in free.iter().enumerate() {
+                                        if grana_ui::popover::menu_row(
+                                            ui,
+                                            index,
+                                            &shift_label(*offset),
+                                            false,
+                                        ) {
+                                            chosen = Some(*offset);
+                                        }
+                                    }
+                                },
+                            );
+                            if let Some(offset) = chosen {
+                                ui.close_popup();
+                                commands.push(Command::AddRelation {
+                                    source: id,
+                                    target,
+                                    shift: offset,
+                                });
+                            }
                         }
-                    }
+                    });
                 });
                 if let Some(next_shift) = next_shift {
                     commands.push(Command::MoveRelation {
@@ -724,7 +727,7 @@ fn relations(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: Ob
             })
             .map(|(target, name)| {
                 let label = if *target == id {
-                    format!("{name} · earlier frames")
+                    format!("{name} · Earlier frames")
                 } else {
                     name.clone()
                 };
@@ -735,7 +738,7 @@ fn relations(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, id: Ob
             let response = widget::button_with(
                 ui,
                 "relation.add",
-                "Relate to an object set",
+                "Relate to Object Set…",
                 Role::Control,
                 Length::Fill,
             );
@@ -775,11 +778,11 @@ fn free_offsets(target: ObjectSetId, source: ObjectSetId, limit: i32, taken: &[i
 
 fn shift_label(shift: i32) -> String {
     match shift {
-        0 => "same frame".to_string(),
-        1 => "target +1 frame".to_string(),
-        -1 => "target −1 frame".to_string(),
-        value if value > 0 => format!("target +{value} frames"),
-        value => format!("target {value} frames"),
+        0 => "Same frame".to_string(),
+        1 => "Target +1f".to_string(),
+        -1 => "Target −1f".to_string(),
+        value if value > 0 => format!("Target +{value}f"),
+        value => format!("Target {value}f"),
     }
 }
 
@@ -792,7 +795,7 @@ fn origin(ui: &mut Ui, state: &State<'_>, id: ObjectSetId) {
             .scene
             .objects
             .get(id)
-            .map_or("an object set".to_string(), |set| set.name().to_string())
+            .map_or("Object Set".to_string(), |set| set.name().to_string())
     };
     let text = match set.provenance() {
         Provenance::Detection => return,
@@ -821,10 +824,7 @@ fn curated(ui: &mut Ui, state: &State<'_>, id: ObjectSetId) {
     let mut parts = Vec::new();
     let removed = curation.removal_count();
     if removed > 0 {
-        parts.push(format!(
-            "{removed} object{} removed by hand",
-            if removed == 1 { "" } else { "s" }
-        ));
+        parts.push(format!("{removed} removed",));
     }
     let edits = curation.edit_count();
     if edits > 0 {
@@ -835,11 +835,11 @@ fn curated(ui: &mut Ui, state: &State<'_>, id: ObjectSetId) {
     }
     let pending = curation.pending();
     if pending > 0 {
-        parts.push(format!("{pending} awaiting a matching object"));
+        parts.push(format!("{pending} pending"));
     }
     let dropped = curation.dropped();
     if dropped > 0 {
-        parts.push(format!("{dropped} dropped after a rebuild"));
+        parts.push(format!("{dropped} dropped"));
     }
     widget::labelled(ui, "Curated", &parts.join(" · "));
 }
@@ -933,7 +933,7 @@ fn detect(
                 0.0
             };
             widget::progress(ui, fraction, ui.available().x);
-            if widget::button(ui, "cancel", "Cancel", Role::Control) {
+            if widget::button_with(ui, "cancel", "Cancel", Role::Control, Length::Fill).clicked {
                 commands.push(Command::CancelDetect(id));
             }
         }
@@ -961,7 +961,7 @@ fn seeds(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: Ob
         .filter(|set| !state.scene.depends_on(set.id(), id))
         .map(|set| (set.id(), set.name().to_string()))
         .collect::<Vec<_>>();
-    let mut options = vec![(0usize, "Manual seeds".to_string())];
+    let mut options = vec![(0usize, "Manual Seeds".to_string())];
     options.extend(
         candidates
             .iter()
@@ -974,10 +974,7 @@ fn seeds(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: Ob
             .position(|(candidate, _)| *candidate == source)
             .map(|position| position + 1)
     });
-    let width = ui.available().x;
-    if let Some(index) =
-        grana_ui::popover::combo(ui, "seed.source", width, &options, selected.or(Some(0)))
-    {
+    if let Some(index) = form_combo(ui, "seed.source", "Seeds", &options, selected.or(Some(0))) {
         let chosen = (index > 0).then(|| candidates[index - 1].0);
         if chosen != source {
             commands.push(Command::SetSeedSource {
@@ -991,39 +988,35 @@ fn seeds(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, id: Ob
         let name = candidates
             .iter()
             .find(|(candidate, _)| *candidate == source)
-            .map_or("the seed source", |(_, name)| name.as_str());
-        ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
-            widget::field_label(ui, "Seeds");
-            widget::caption(ui, &format!("{count} from {name}"));
-        });
-        widget::weak(ui, "One surface object per seeded object.");
+            .map_or("seed source", |(_, name)| name.as_str());
+        widget::labelled(ui, "Active seeds", &format!("{count} from {name}"));
         return;
     }
     let armed = state.workspace.seed == Some(id);
-    ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
-        widget::field_label(ui, "Seeds");
-        widget::caption(ui, &format!("{count}"));
-        ui.space(1.0);
-        let label = if armed { "Stop placing" } else { "Place seeds" };
-        let role = if armed { Role::Tinted } else { Role::Control };
-        if widget::button(ui, "seed.arm", label, role) {
-            state.workspace.seed = (!armed).then_some(id);
-        }
-        if count > 0
-            && widget::icon_button(
-                ui,
-                "seed.clear",
-                Icon::Trash,
-                22.0,
-                Role::Quiet,
-                "Clear seeds",
-            )
-        {
-            commands.push(Command::ClearSeeds(id));
-        }
+    form_row(ui, "Manual", |ui| {
+        ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
+            widget::caption(ui, &format!("{count} placed"));
+            let label = if armed { "Stop Placing" } else { "Place Seeds" };
+            let role = if armed { Role::Tinted } else { Role::Control };
+            if widget::button(ui, "seed.arm", label, role) {
+                state.workspace.seed = (!armed).then_some(id);
+            }
+            if count > 0
+                && widget::icon_button(
+                    ui,
+                    "seed.clear",
+                    Icon::Trash,
+                    22.0,
+                    Role::Quiet,
+                    "Clear seeds",
+                )
+            {
+                commands.push(Command::ClearSeeds(id));
+            }
+        });
     });
     if armed {
-        widget::caption(ui, "Click a surface to seed it · option-click removes");
+        widget::weak(ui, "Click a surface to place a seed · Alt-click to remove.");
     }
 }
 
@@ -1038,14 +1031,14 @@ fn summary(
 ) {
     match current {
         Some((count, level)) => {
-            let mut text = format!("{count} {} · level {}", kind.count_noun(), level + 1);
+            let mut text = format!("{count} {} · Level {}", kind.count_noun(), level + 1);
             if let Some(mean) = mean {
-                text.push_str(&format!(" · contrast {mean:.2}"));
+                text.push_str(&format!(" · Contrast {mean:.2}"));
             }
             widget::caption(ui, &text);
         }
         None if detected == 0 => {
-            widget::weak(ui, &format!("{} {}", kind.description(), "in every frame."));
+            widget::weak(ui, &format!("{} across all frames.", kind.description()));
         }
         None => {
             widget::weak(
@@ -1082,7 +1075,7 @@ fn appearance(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, i
             .scene
             .objects
             .get(relation.target())
-            .map_or_else(|| "target".to_string(), |target| target.name().to_string());
+            .map_or_else(|| "Target".to_string(), |target| target.name().to_string());
         let shift = match relation.shift() {
             0 => String::new(),
             shift => format!(" · t{shift:+}"),
@@ -1121,14 +1114,16 @@ fn measure(
     id: ObjectSetId,
     time: u32,
 ) {
-    let selected = state.scene.selection().and_then(|selection| {
+    let Some(index) = state.scene.selection().and_then(|selection| {
         (selection.set == id)
             .then_some(selection.item)
             .and_then(|item| match item {
                 Item::Object(index) => Some(index),
                 Item::Track(_) => None,
             })
-    });
+    }) else {
+        return;
+    };
     let Some(frame) = state
         .scene
         .objects
@@ -1143,13 +1138,10 @@ fn measure(
         .objects
         .get(id)
         .map_or(0, |object| object.channel());
-    section_header(ui, "Measurements", None);
+    divider(ui);
+    section_header(ui, "Selected Object", None);
     match &frame {
         ObjectFrame::Spots(spots) => {
-            let Some(index) = selected else {
-                widget::weak(ui, "Click a spot to measure it.");
-                return;
-            };
             let Some(spot) = spots.spots().get(index).copied() else {
                 return;
             };
@@ -1159,7 +1151,7 @@ fn measure(
             widget::labelled(
                 ui,
                 "Position",
-                &format!("{:.2} · {:.2} · {:.2} µm", centre[0], centre[1], centre[2]),
+                &format!("{:.2}, {:.2}, {:.2} µm", centre[0], centre[1], centre[2]),
             );
             widget::labelled(ui, "Diameter", &format!("{:.3} µm", spot.radius() * 2.0));
             widget::labelled(ui, "Contrast", &format!("{:.3}", spot.quality()));
@@ -1167,19 +1159,15 @@ fn measure(
                 ui,
                 "Intensity",
                 &format!(
-                    "{:.0} mean · {:.0}–{:.0} · σ {:.0}",
+                    "{:.0} ± {:.0} ({:.0}–{:.0})",
                     intensity.mean(),
+                    intensity.deviation(),
                     intensity.minimum(),
                     intensity.maximum(),
-                    intensity.deviation()
                 ),
             );
         }
         ObjectFrame::Surfaces(surfaces) => {
-            let Some(index) = selected else {
-                widget::weak(ui, "Click an object to measure it.");
-                return;
-            };
             let Some(object) = surfaces.objects().get(index).copied() else {
                 return;
             };
@@ -1193,7 +1181,7 @@ fn measure(
                 ui,
                 "Centroid",
                 &format!(
-                    "{:.2} · {:.2} · {:.2} µm",
+                    "{:.2}, {:.2}, {:.2} µm",
                     centroid[0], centroid[1], centroid[2]
                 ),
             );
@@ -1208,19 +1196,15 @@ fn measure(
                 ui,
                 "Intensity",
                 &format!(
-                    "{:.0} mean · {:.0}–{:.0} · σ {:.0}",
+                    "{:.0} ± {:.0} ({:.0}–{:.0})",
                     intensity.mean(),
+                    intensity.deviation(),
                     intensity.minimum(),
                     intensity.maximum(),
-                    intensity.deviation()
                 ),
             );
         }
         ObjectFrame::Filaments(filaments) => {
-            let Some(index) = selected else {
-                widget::weak(ui, "Click a filament to measure it.");
-                return;
-            };
             let Some(object) = filaments.object(index) else {
                 return;
             };
@@ -1238,7 +1222,7 @@ fn measure(
                 ui,
                 "Centroid",
                 &format!(
-                    "{:.2} · {:.2} · {:.2} µm",
+                    "{:.2}, {:.2}, {:.2} µm",
                     centroid[0], centroid[1], centroid[2]
                 ),
             );
@@ -1252,22 +1236,20 @@ fn measure(
                 ui,
                 "Intensity",
                 &format!(
-                    "{:.0} mean · {:.0}–{:.0} · σ {:.0}",
+                    "{:.0} ± {:.0} ({:.0}–{:.0})",
                     intensity.mean(),
+                    intensity.deviation(),
                     intensity.minimum(),
                     intensity.maximum(),
-                    intensity.deviation()
                 ),
             );
         }
     }
-    if let Some(object) = selected
-        && widget::button_with(ui, "delete", "Delete object", Role::Danger, Length::Fill).clicked
-    {
+    if widget::button_with(ui, "delete", "Delete Object", Role::Danger, Length::Fill).clicked {
         commands.push(Command::DeleteObject {
             set: id,
             time,
-            object,
+            object: index,
         });
     }
 }

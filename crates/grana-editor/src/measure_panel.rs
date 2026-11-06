@@ -2,7 +2,8 @@ use glam::Vec2;
 use grana_measure::{Aggregate, Column, Filter, Group, MeasureView, Observation, PlotAxis, Scope};
 use grana_scene::{Item, ObjectSetId, Selection};
 use grana_ui::{
-    Align, Axis, Block, Corners, Cursor, Icon, Length, Rect, Role, TextStyle, Ui, icon,
+    Align, Axis, Block, Color, Corners, Cursor, Icon, Length, Level, Rect, Role, TextStyle, Ui,
+    icon,
 };
 
 use crate::panel::empty_state;
@@ -11,7 +12,7 @@ use crate::state::State;
 use crate::widget;
 use grana_session::Command;
 
-const ROW_HEIGHT: f32 = 28.0;
+const ROW_HEIGHT: f32 = 26.0;
 const HEADER_HEIGHT: f32 = 30.0;
 const MIN_COLUMN_WIDTH: f32 = 58.0;
 
@@ -20,17 +21,18 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         empty_state(
             ui,
             Icon::Table,
-            "No measurements yet",
+            "No Measurements Yet",
             "Add and detect an object set to build a measurement table, then filter, sort and export it.",
         );
         return;
     }
-    header(ui, state, commands);
+    toolbar(ui, state, commands);
     let measured = state.measure.table().is_some();
-    if measured {
-        view_row(ui, state, commands);
+    if measured && state.measure.view() != MeasureView::Table {
+        plot_bar(ui, state, commands);
     }
     filters(ui, state, commands);
+    ui.space(6.0);
     if measured && state.measure.view() != MeasureView::Table {
         plot::view(ui, state, commands);
     } else {
@@ -38,159 +40,7 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     }
 }
 
-fn view_row(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
-    let Some(table) = state.measure.table() else {
-        return;
-    };
-    let view = state.measure.view();
-    let axes = state.measure.axes();
-    let row = ui.allocate_full(30.0);
-    let clear = Rect::from_center_size(
-        Vec2::new(row.max.x - 12.0, row.center().y),
-        Vec2::splat(24.0),
-    );
-    let actions = Rect::from_min_max(row.min, Vec2::new(clear.min.x - 8.0, row.max.y));
-    let scope = state.measure.scope();
-    let ranged = state.measure.group() != Group::Track;
-    let scope_width = if ranged { 176.0 } else { 0.0 };
-    let scope_rect = Rect::from_min_size(actions.min, Vec2::new(scope_width, row.height()));
-    if ranged {
-        ui.place(scope_rect, |ui| {
-            ui.row(
-                Block::row()
-                    .gaps(6.0)
-                    .align(Align::Center)
-                    .height(Length::Fill),
-                |ui| {
-                    widget::field_label(ui, "Range");
-                    let labels = Scope::ALL.map(Scope::label);
-                    let index = Scope::ALL
-                        .iter()
-                        .position(|current| *current == scope)
-                        .unwrap_or(0);
-                    if let Some(chosen) = widget::segmented(ui, "measure.scope", &labels, index) {
-                        let next = Scope::ALL[chosen];
-                        if next != scope {
-                            commands.push(Command::SetMeasureScope(next));
-                        }
-                    }
-                },
-            );
-        });
-    }
-    let view_rect = Rect::from_min_size(
-        Vec2::new(
-            scope_rect.max.x + if ranged { 10.0 } else { 0.0 },
-            row.min.y,
-        ),
-        Vec2::new(240.0, row.height()),
-    );
-    ui.place(view_rect, |ui| {
-        let index = match view {
-            MeasureView::Table => 0,
-            MeasureView::Histogram => 1,
-            MeasureView::Scatter => 2,
-        };
-        if let Some(chosen) = widget::segmented(
-            ui,
-            "measure.view",
-            &["Table", "Histogram", "Scatter"],
-            index,
-        ) && MeasureView::ALL[chosen] != view
-        {
-            commands.push(Command::SetMeasureView(MeasureView::ALL[chosen]));
-        }
-    });
-    let lasso = state.measure.lasso().is_some();
-    let gated = lasso
-        || state.measure.filters().iter().any(|filter| {
-            filter.column() == axes[0]
-                || (view == MeasureView::Scatter && filter.column() == axes[1])
-        });
-    ui.place(clear, |ui| {
-        if widget::icon_button_enabled(
-            ui,
-            "measure.gate.clear",
-            Icon::Close,
-            24.0,
-            Role::Quiet,
-            "Clear the gate and the lasso",
-            gated,
-        ) {
-            let mut indices = state
-                .measure
-                .filters()
-                .iter()
-                .enumerate()
-                .filter(|(_, filter)| {
-                    filter.column() == axes[0]
-                        || (view == MeasureView::Scatter && filter.column() == axes[1])
-                })
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>();
-            indices.sort_unstable_by(|left, right| right.cmp(left));
-            for index in indices {
-                commands.push(Command::RemoveFilter(index));
-            }
-            if lasso {
-                commands.push(Command::SetLasso(None));
-            }
-        }
-    });
-    if view == MeasureView::Table {
-        return;
-    }
-    let options = table
-        .columns()
-        .iter()
-        .enumerate()
-        .map(|(index, column)| (index, crate::panel::column_label(column)))
-        .collect::<Vec<_>>();
-    let area = Rect::from_min_max(Vec2::new(view_rect.max.x + 14.0, row.min.y), actions.max);
-    ui.place(area, |ui| {
-        ui.row(
-            Block::row()
-                .gaps(6.0)
-                .align(Align::Center)
-                .height(Length::Fill),
-            |ui| {
-                widget::field_label(ui, "X");
-                let width = if view == MeasureView::Scatter {
-                    104.0
-                } else {
-                    176.0
-                };
-                if let Some(column) =
-                    grana_ui::popover::combo(ui, "measure.plot.x", width, &options, Some(axes[0]))
-                    && column != axes[0]
-                {
-                    commands.push(Command::SetPlotAxis {
-                        axis: PlotAxis::X,
-                        column,
-                    });
-                }
-                if view == MeasureView::Scatter {
-                    widget::field_label(ui, "Y");
-                    if let Some(column) = grana_ui::popover::combo(
-                        ui,
-                        "measure.plot.y",
-                        width,
-                        &options,
-                        Some(axes[1]),
-                    ) && column != axes[1]
-                    {
-                        commands.push(Command::SetPlotAxis {
-                            axis: PlotAxis::Y,
-                            column,
-                        });
-                    }
-                }
-            },
-        );
-    });
-}
-
-fn header(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
+fn toolbar(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let sets = state
         .scene
         .objects
@@ -201,26 +51,21 @@ fn header(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let mut chosen = current.or_else(|| sets.first().map(|(id, _)| *id));
     let mut group = state.measure.group();
     let mut aggregate = state.measure.aggregate();
-    let row = ui.allocate_full(32.0);
-    let right_width = 250.0;
-    let left = Rect::from_min_size(
-        row.min,
-        Vec2::new((row.width() - right_width - 12.0).max(340.0), row.height()),
-    );
-    let right = Rect::from_min_size(
-        Vec2::new(row.max.x - right_width, row.min.y),
-        Vec2::new(right_width, row.height()),
-    );
-    ui.place(left, |ui| {
+    let scope = state.measure.scope();
+    let view = state.measure.view();
+    let measured = state.measure.table().is_some();
+    let row = ui.allocate_full(30.0);
+    ui.place(row, |ui| {
         ui.row(
             Block::row()
                 .gaps(8.0)
                 .align(Align::Center)
+                .width(Length::Fill)
                 .height(Length::Fill),
             |ui| {
                 widget::field_label(ui, "Set");
                 if let Some(value) =
-                    grana_ui::popover::combo(ui, "measure.set", 148.0, &sets, chosen)
+                    grana_ui::popover::combo(ui, "measure.set", 140.0, &sets, chosen)
                 {
                     chosen = Some(value);
                 }
@@ -252,7 +97,6 @@ fn header(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                     let next = match index {
                         0 => Group::Object,
                         1 if trackable => Group::Track,
-                        1 => Group::Timepoint,
                         _ => Group::Timepoint,
                     };
                     if next != group {
@@ -262,16 +106,16 @@ fn header(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                 }
                 if group != Group::Object {
                     let options = [
-                        (Aggregate::Mean, "mean".to_string()),
-                        (Aggregate::Sum, "sum".to_string()),
-                        (Aggregate::Minimum, "min".to_string()),
-                        (Aggregate::Maximum, "max".to_string()),
-                        (Aggregate::Deviation, "σ".to_string()),
+                        (Aggregate::Mean, "Mean".to_string()),
+                        (Aggregate::Sum, "Sum".to_string()),
+                        (Aggregate::Minimum, "Min".to_string()),
+                        (Aggregate::Maximum, "Max".to_string()),
+                        (Aggregate::Deviation, "SD (σ)".to_string()),
                     ];
                     if let Some(value) = grana_ui::popover::combo(
                         ui,
                         "measure.aggregate",
-                        88.0,
+                        86.0,
                         &options,
                         Some(aggregate),
                     ) && value != aggregate
@@ -280,32 +124,75 @@ fn header(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                         commands.push(Command::SetMeasureAggregate(aggregate));
                     }
                 }
-            },
-        );
-    });
-    let total = state.measure.total();
-    let shown = state.measure.rows().len();
-    ui.place(right, |ui| {
-        ui.row(
-            Block::row()
-                .gaps(6.0)
-                .align(Align::Center)
-                .width(Length::Fill)
-                .height(Length::Fill),
-            |ui| {
-                let label = format!("{shown} of {total} rows");
+                if measured && group != Group::Track {
+                    let labels = ["All", "Current"];
+                    let scope_idx = Scope::ALL
+                        .iter()
+                        .position(|current| *current == scope)
+                        .unwrap_or(0);
+                    if let Some(chosen) = widget::segmented(ui, "measure.scope", &labels, scope_idx)
+                    {
+                        let next = Scope::ALL[chosen];
+                        if next != scope {
+                            commands.push(Command::SetMeasureScope(next));
+                        }
+                    }
+                }
+                let total = state.measure.total();
+                let shown = state.measure.rows().len();
+                let label = format!("{shown}/{total} rows");
                 let caption_width = ui
                     .measure_text(
                         &label,
                         TextStyle::new(
-                            ui.theme().font(grana_ui::Level::Caption),
+                            ui.theme().font(Level::Caption),
                             ui.theme().palette.text_tertiary,
                         ),
                     )
                     .x;
-                let content = caption_width + 3.0 * 28.0 + 3.0 * 6.0;
-                ui.space((ui.available().x - content).max(0.0));
+                let view_w = if measured { 222.0 } else { 0.0 };
+                let right_content = view_w + caption_width + 3.0 * 28.0 + 4.0 * 8.0;
+                ui.space((ui.available().x - right_content).max(4.0));
+                if measured {
+                    let view_idx = match view {
+                        MeasureView::Table => 0,
+                        MeasureView::Histogram => 1,
+                        MeasureView::Scatter => 2,
+                    };
+                    if let Some(chosen) = widget::segmented(
+                        ui,
+                        "measure.view",
+                        &["Table", "Histogram", "Scatter"],
+                        view_idx,
+                    ) && MeasureView::ALL[chosen] != view
+                    {
+                        commands.push(Command::SetMeasureView(MeasureView::ALL[chosen]));
+                    }
+                }
                 widget::caption(ui, &label);
+                if widget::icon_button(
+                    ui,
+                    "measure.filter",
+                    Icon::Filter,
+                    28.0,
+                    Role::Quiet,
+                    "Add filter",
+                ) {
+                    commands.push(Command::AddFilter);
+                }
+                let key = ui.id("measure.columns");
+                let response = widget::icon_button_response(
+                    ui,
+                    "measure.columns",
+                    Icon::Columns,
+                    28.0,
+                    Role::Quiet,
+                    "Choose columns",
+                );
+                if response.clicked {
+                    ui.toggle_popup(key);
+                }
+                columns_menu(ui, state, commands, response.rect);
                 if widget::icon_button(
                     ui,
                     "measure.export",
@@ -316,28 +203,83 @@ fn header(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                 ) {
                     commands.push(Command::ExportMeasure);
                 }
-                let key = ui.id("measure.columns");
-                let response = widget::icon_button_response(
-                    ui,
-                    "measure.columns",
-                    Icon::Columns,
-                    28.0,
-                    Role::Quiet,
-                    "Columns",
-                );
-                if response.clicked {
-                    ui.toggle_popup(key);
+            },
+        );
+    });
+}
+
+fn plot_bar(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
+    let Some(table) = state.measure.table() else {
+        return;
+    };
+    let view = state.measure.view();
+    let axes = state.measure.axes();
+    let options = table
+        .columns()
+        .iter()
+        .enumerate()
+        .map(|(index, column)| (index, crate::panel::column_label(column)))
+        .collect::<Vec<_>>();
+    let lasso = state.measure.lasso().is_some();
+    let gated = lasso
+        || state.measure.filters().iter().any(|filter| {
+            filter.column() == axes[0]
+                || (view == MeasureView::Scatter && filter.column() == axes[1])
+        });
+    ui.space(4.0);
+    let row = ui.allocate_full(28.0);
+    ui.place(row, |ui| {
+        ui.row(
+            Block::row()
+                .gaps(8.0)
+                .align(Align::Center)
+                .height(Length::Fill),
+            |ui| {
+                widget::field_label(ui, "X Axis");
+                if let Some(column) =
+                    grana_ui::popover::combo(ui, "measure.plot.x", 180.0, &options, Some(axes[0]))
+                    && column != axes[0]
+                {
+                    commands.push(Command::SetPlotAxis {
+                        axis: PlotAxis::X,
+                        column,
+                    });
                 }
-                columns_menu(ui, state, commands, response.rect);
-                if widget::icon_button(
-                    ui,
-                    "measure.filter",
-                    Icon::Filter,
-                    28.0,
-                    Role::Quiet,
-                    "Add filter",
-                ) {
-                    commands.push(Command::AddFilter);
+                if view == MeasureView::Scatter {
+                    widget::field_label(ui, "Y Axis");
+                    if let Some(column) = grana_ui::popover::combo(
+                        ui,
+                        "measure.plot.y",
+                        180.0,
+                        &options,
+                        Some(axes[1]),
+                    ) && column != axes[1]
+                    {
+                        commands.push(Command::SetPlotAxis {
+                            axis: PlotAxis::Y,
+                            column,
+                        });
+                    }
+                }
+                if gated && widget::button(ui, "measure.gate.clear", "Clear Gate", Role::Quiet) {
+                    let mut indices = state
+                        .measure
+                        .filters()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, filter)| {
+                            filter.column() == axes[0]
+                                || (view == MeasureView::Scatter && filter.column() == axes[1])
+                        })
+                        .map(|(index, _)| index)
+                        .collect::<Vec<_>>();
+                    indices.sort_unstable_by(|left, right| right.cmp(left));
+                    for index in indices {
+                        commands.push(Command::RemoveFilter(index));
+                    }
+                    if lasso {
+                        commands.push(Command::SetLasso(None));
+                    }
                 }
             },
         );
@@ -354,7 +296,7 @@ fn columns_menu(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>,
     let mut toggles: Vec<(usize, bool)> = Vec::new();
     let visible = state.measure.visible().to_vec();
     grana_ui::popover::popover(ui, "measure.columns", open, anchor, 240.0, |ui| {
-        if widget::button(ui, "show.all", "Show all columns", Role::Quiet) {
+        if widget::button(ui, "show.all", "Show All Columns", Role::Quiet) {
             commands.push(Command::ShowAllColumns);
         }
         grana_ui::popover::separator(ui);
@@ -408,20 +350,18 @@ fn filters(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let visibility = state.measure.visibility();
     let filtered = !state.measure.filters().is_empty();
     if filtered || state.measure.lasso().is_some() {
-        if filtered {
-            ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-                if let Some(value) =
-                    widget::checkbox(ui, "hide.filtered", "Hide filtered rows", visibility)
-                {
-                    commands.push(Command::SetMeasureVisibility(value));
-                }
-            });
-        }
-        ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
-            if widget::button(ui, "extract.filtered", "Extract filtered", Role::Tinted) {
+        ui.space(4.0);
+        ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
+            if filtered
+                && let Some(value) =
+                    widget::checkbox(ui, "hide.filtered", "Hide Filtered Rows", visibility)
+            {
+                commands.push(Command::SetMeasureVisibility(value));
+            }
+            if widget::button(ui, "extract.filtered", "Extract Filtered", Role::Tinted) {
                 commands.push(Command::ExtractFiltered);
             }
-            if widget::button(ui, "delete.excluded", "Delete excluded", Role::Danger) {
+            if widget::button(ui, "delete.excluded", "Delete Excluded", Role::Danger) {
                 commands.push(Command::DeleteFiltered);
             }
         });
@@ -431,13 +371,14 @@ fn filters(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let mut retargeted = None;
     let mut applied = None;
     for (index, filter) in filters.iter().enumerate() {
+        ui.space(4.0);
         ui.push_id(&format!("filter.{index}"));
         let mut column = filter.column();
         let mut minimum = filter.minimum();
         let mut maximum = filter.maximum();
         ui.column(
             Block::column()
-                .padding(grana_ui::Edges::symmetric(10.0, 6.0))
+                .padding(grana_ui::Edges::symmetric(10.0, 4.0))
                 .gaps(4.0)
                 .background(card_look(ui)),
             |ui| {
@@ -459,7 +400,7 @@ fn filters(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                             if let Some(value) = grana_ui::popover::combo(
                                 ui,
                                 "column",
-                                170.0,
+                                180.0,
                                 &options,
                                 Some(column),
                             ) {
@@ -471,7 +412,7 @@ fn filters(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                             {
                                 minimum = value;
                             }
-                            widget::caption(ui, "to");
+                            widget::caption(ui, "–");
                             if let Some(value) =
                                 widget::drag_value(ui, "maximum", maximum, speed, 4)
                             {
@@ -528,7 +469,7 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         empty_state(
             ui,
             Icon::Table,
-            "No object set selected",
+            "No Object Set Selected",
             "Choose an object set to inspect its measurements.",
         );
         return;
@@ -537,7 +478,7 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         empty_state(
             ui,
             Icon::Table,
-            "No detection yet",
+            "No Detection Yet",
             "Detect this object set to build its measurement table.",
         );
         return;
@@ -546,7 +487,7 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         empty_state(
             ui,
             Icon::Table,
-            "No rows",
+            "No Rows",
             match state.measure.group() {
                 Group::Track => "Track the objects to summarise their trajectories.",
                 Group::Object | Group::Timepoint => {
@@ -568,7 +509,7 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         empty_state(
             ui,
             Icon::Columns,
-            "No columns",
+            "No Visible Columns",
             "Choose at least one column from the columns menu.",
         );
         return;
@@ -582,6 +523,7 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let palette = ui.theme().palette;
     {
         let mut painter = ui.painter();
+        painter.rect(band, Corners::top(16.0), Color::white_alpha(0.025));
         painter.rect(
             Rect::from_min_size(
                 Vec2::new(band.min.x, band.max.y - 1.0),
@@ -681,16 +623,12 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                 } else {
                     palette.text_secondary
                 };
-                let font = ui.theme().font(grana_ui::Level::Monospace);
+                let font = ui.theme().font(Level::Monospace);
                 let mut painter = ui.painter();
                 if selected {
+                    painter.rect(row_rect, Corners::ZERO, accent.with_alpha(0.16));
                     painter.rect(
-                        row_rect,
-                        Corners::ZERO,
-                        palette.material_fill.with_alpha(0.6),
-                    );
-                    painter.rect(
-                        Rect::from_min_size(row_rect.min, Vec2::new(2.0, row_rect.height())),
+                        Rect::from_min_size(row_rect.min, Vec2::new(2.5, row_rect.height())),
                         Corners::ZERO,
                         accent,
                     );
@@ -698,8 +636,10 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                     painter.rect(
                         row_rect,
                         Corners::ZERO,
-                        palette.material_hover.with_alpha(0.7 * hover),
+                        palette.material_hover.with_alpha(0.65 * hover),
                     );
+                } else if row % 2 == 1 {
+                    painter.rect(row_rect, Corners::ZERO, Color::white_alpha(0.015));
                 }
                 painter.rect(
                     Rect::from_min_size(
@@ -777,24 +717,25 @@ fn header_cell(ui: &mut Ui, key: u64, text: &str, sorted: Option<bool>, rect: Re
     let style = TextStyle::new(
         ui.theme().label_font(),
         if sorted.is_some() {
-            palette.text_secondary
+            palette.text_primary
         } else {
             palette.text_tertiary
         },
     )
-    .aligned(Align::End);
+    .aligned(Align::End)
+    .truncating();
     let arrow = match sorted {
         Some(true) => Some(Icon::ChevronDown),
         Some(false) => Some(Icon::ChevronUp),
         None => None,
     };
-    let icon_color = palette.text_tertiary;
+    let icon_color = palette.text_secondary;
     let mut painter = ui.painter();
     if hover > 0.01 {
         painter.rect(
             rect,
             Corners::ZERO,
-            palette.material_hover.with_alpha(0.6 * hover),
+            palette.material_hover.with_alpha(0.55 * hover),
         );
     }
     painter.text_in(

@@ -15,9 +15,9 @@ pub fn disclosure(
 ) -> bool {
     let key = ui.id(id);
     let palette = ui.theme().palette;
-    let header = ui.allocate_full(30.0);
+    let header = ui.allocate_full(26.0);
     let mut response = ui.interact(key, header);
-    let corners = Corners::all(9.0);
+    let corners = Corners::all(8.0);
     if ui.focusable(key, header, corners) && ui.activated(key) {
         response.clicked = true;
     }
@@ -25,7 +25,7 @@ pub fn disclosure(
     let arrow = ui.animate(
         key,
         if open { 1.0 } else { 0.0 },
-        Motion::response(0.34, 0.2),
+        Motion::response(0.32, 0.18),
     );
     let font = ui.theme().font(Level::Callout).medium();
     let hover = ui.animate(
@@ -39,18 +39,18 @@ pub fn disclosure(
         let mut painter = ui.painter();
         if hover > 0.01 {
             painter.rect(
-                header.shrink2(Vec2::new(1.0, 0.5)),
+                header.expand(2.0),
                 corners,
-                palette.material_hover.amplify(0.5 * hover),
+                palette.material_hover.amplify(0.45 * hover),
             );
         }
         painter.text_in(
-            Rect::from_min_max(Vec2::new(header.min.x + 24.0, header.min.y), header.max),
+            Rect::from_min_max(header.min, Vec2::new(header.max.x - 18.0, header.max.y)),
             title,
             style,
             Align::Center,
         );
-        let centre = Vec2::new(header.min.x + 10.0, header.center().y);
+        let centre = Vec2::new(header.max.x - 6.0, header.center().y);
         let tint = palette.text_tertiary.lerp(palette.text_secondary, hover);
         crate::icon::chevron(
             &mut painter,
@@ -58,7 +58,7 @@ pub fn disclosure(
             8.0,
             std::f32::consts::FRAC_PI_2 * arrow,
             tint,
-            1.6,
+            1.5,
         );
     }
     if next {

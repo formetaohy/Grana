@@ -39,12 +39,12 @@ pub fn labelled(ui: &mut Ui, label: &str, value: &str) {
     let content = TextStyle::new(ui.theme().font(Level::Monospace), palette.text_secondary);
     let width = ui.available().x;
     let label_width = (width * 0.38).clamp(64.0, 128.0);
-    let rect = ui.allocate(Vec2::new(width, 24.0));
+    let rect = ui.allocate(Vec2::new(width, 22.0));
     let mut painter = ui.painter();
     painter.text_in(
         Rect::from_min_size(rect.min, Vec2::new(label_width, rect.height())),
         label,
-        name,
+        name.truncating(),
         Align::Center,
     );
     painter.text_in(
@@ -53,7 +53,9 @@ pub fn labelled(ui: &mut Ui, label: &str, value: &str) {
             Vec2::new(rect.width() - label_width, rect.height()),
         ),
         value,
-        TextStyle::new(content.font, content.color).aligned(Align::End),
+        TextStyle::new(content.font, content.color)
+            .aligned(Align::End)
+            .truncating(),
         Align::Center,
     );
 }

@@ -1,5 +1,5 @@
 use grana_display::{Stop, TransferFunction, linear_to_srgb};
-use grana_ui::{Block, Color, Length, Role, Ui};
+use grana_ui::{Align, Block, Color, Icon, Length, Role, Ui};
 use grana_volume::Intensity;
 
 use crate::widget;
@@ -26,58 +26,47 @@ pub fn edit(
             )
         })
         .collect::<Vec<_>>();
-    widget::gradient(ui, &colors, 18.0);
+    widget::gradient(ui, &colors, 14.0);
     let mut removed = None;
     for (index, stop) in stops.iter_mut().enumerate() {
         ui.push_id(&format!("stop.{index}"));
         let mut position = stop.position();
-        ui.row(
-            Block::row().gaps(6.0).align(grana_ui::Align::Center),
-            |ui| {
-                let text = format!("{:>6.0}", intensity.value(stop.position()));
-                widget::caption(ui, &text);
-                if let Some(color) = grana_ui::popover::color_field(ui, "color", stop.color(), 16.0)
-                {
-                    stop.set_color(color);
-                    changed = true;
-                }
-                if let Some(value) = widget::slider_sized(
-                    ui,
-                    "position",
-                    None,
-                    position,
-                    0.0..=1.0,
-                    false,
-                    Length::Fill,
-                ) {
-                    position = value;
-                    stop.set_position(value);
-                    changed = true;
-                }
-                if let Some(value) = widget::slider_sized(
-                    ui,
-                    "opacity",
-                    None,
-                    stop.opacity(),
-                    0.0..=1.0,
-                    false,
-                    Length::Fixed(54.0),
-                ) {
-                    stop.set_opacity(value);
-                    changed = true;
-                }
-                if widget::icon_button(
-                    ui,
-                    "remove",
-                    grana_ui::Icon::Minus,
-                    18.0,
-                    Role::Quiet,
-                    "Remove stop",
-                ) {
-                    removed = Some(index);
-                }
-            },
-        );
+        ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
+            let text = format!("{:>6.0}", intensity.value(stop.position()));
+            widget::caption(ui, &text);
+            if let Some(color) = grana_ui::popover::color_field(ui, "color", stop.color(), 16.0) {
+                stop.set_color(color);
+                changed = true;
+            }
+            if let Some(value) = widget::slider_sized(
+                ui,
+                "position",
+                None,
+                position,
+                0.0..=1.0,
+                false,
+                Length::Fill,
+            ) {
+                position = value;
+                stop.set_position(value);
+                changed = true;
+            }
+            if let Some(value) = widget::slider_sized(
+                ui,
+                "opacity",
+                None,
+                stop.opacity(),
+                0.0..=1.0,
+                false,
+                Length::Fixed(52.0),
+            ) {
+                stop.set_opacity(value);
+                changed = true;
+            }
+            if widget::icon_button(ui, "remove", Icon::Minus, 18.0, Role::Quiet, "Remove stop") {
+                removed = Some(index);
+            }
+        });
         ui.pop_id();
     }
     if let Some(index) = removed
@@ -86,7 +75,7 @@ pub fn edit(
         stops.remove(index);
         changed = true;
     }
-    if widget::button(ui, "add", "Add stop", Role::Control) {
+    if widget::button_with(ui, "add", "Add Stop", Role::Control, Length::Fill).clicked {
         stops.push(Stop::new(midpoint(&stops), tint, 0.5));
         changed = true;
     }

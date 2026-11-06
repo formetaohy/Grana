@@ -1,19 +1,18 @@
 use glam::Vec2;
 use grana_measure::Aggregate;
-use grana_object::TrackParams;
-use grana_object::TrackSet;
+use grana_object::{TrackParams, TrackSet};
 use grana_scene::{Job, ObjectSet, ObjectSetId, RelationField, TrackColor};
 use grana_ui::{Align, Block, Color, Corners, Icon, Length, Rect, Role, TextStyle, TypeStyle, Ui};
 
-use crate::panel::{Panel, empty_state, progress};
+use crate::panel::{Panel, card, card_title, empty_state, progress};
 use crate::state::{State, Workspace};
 use crate::widget;
 use grana_session::Command;
 
 const ROW: f32 = 13.0;
-const AXIS: f32 = 16.0;
-const SIDE: f32 = 8.0;
-const MIN_TREE: f32 = 120.0;
+const AXIS: f32 = 18.0;
+const SIDE: f32 = 10.0;
+const INSPECTOR_WIDTH: f32 = 316.0;
 
 pub fn entry(ui: &mut Ui, state: &mut State<'_>, id: ObjectSetId) {
     let scene = state.scene;
@@ -31,9 +30,9 @@ pub fn entry(ui: &mut Ui, state: &mut State<'_>, id: ObjectSetId) {
             Some((tracks, divisions)) => {
                 widget::caption(ui, &format!("{tracks} tracks · {divisions} divisions"))
             }
-            None => widget::caption(ui, "not tracked yet"),
+            None => widget::caption(ui, "Not tracked yet"),
         }
-        ui.space(1.0);
+        ui.space((ui.available().x - 86.0).max(0.0));
         if widget::button(ui, "tracks.open", "Lineage", Role::Control) {
             state.workspace.panel = Some(Panel::Tracks);
             state.workspace.track_set = Some(id);
@@ -53,8 +52,8 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         empty_state(
             ui,
             Icon::Channel,
-            "No trackable objects",
-            "Add spots or surfaces, detect them, then follow them through time here.",
+            "No Trackable Objects",
+            "Add spots or surfaces, detect them, then follow their trajectories through time.",
         );
         return;
     }
@@ -62,8 +61,8 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         empty_state(
             ui,
             Icon::Clock,
-            "A single frame",
-            "Tracking follows objects across the frames of a time series.",
+            "Single Time Frame",
+            "Tracking follows objects across the frames of a time-series dataset.",
         );
         return;
     }
@@ -72,61 +71,56 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let Some(object) = scene.objects.get(id) else {
         return;
     };
-    header(ui, state, commands, &sets, id, object);
-    parameters(ui, state, commands, id, object);
-    appearance(ui, state, commands, id, object);
-    let Some(set) = object.tracks().map(|layer| layer.set()) else {
-        widget::weak(
-            ui,
-            "detect objects first, then press Track to follow them through time",
-        );
-        return;
-    };
     let selected = scene.selected_track(id);
-    let full = ui.allocate(Vec2::new(ui.available().x, ui.available().y));
-    let stats = 268.0;
-    let height = (full.height() - 38.0).max(MIN_TREE);
-    let tree = Rect::from_min_size(
-        full.min,
-        Vec2::new((full.width() - stats - 16.0).max(240.0), height),
+    header(ui, state, commands, &sets, id, object, selected);
+    ui.space(8.0);
+    let full = ui.allocate(ui.available());
+    let gap = 12.0;
+    let left_width = (full.width() - INSPECTOR_WIDTH - gap).max(260.0);
+    let left_rect = Rect::from_min_size(full.min, Vec2::new(left_width, full.height()));
+    let right_rect = Rect::from_min_size(
+        Vec2::new(left_rect.max.x + gap, full.min.y),
+        Vec2::new(INSPECTOR_WIDTH, full.height()),
     );
-    let colors = (0..set.len())
-        .map(|index| object.track_color(index))
-        .collect::<Vec<_>>();
-    ui.place(tree, |ui| {
-        lineage(
-            ui,
-            state.workspace,
-            Tree {
-                set,
-                id,
-                colors: &colors,
-                selected,
-                time: scene.time(),
-                frames: scene.frame_count(),
-            },
-            tree.height(),
-            commands,
-        );
+    ui.place(left_rect, |ui| {
+        if let Some(set) = object.tracks().map(|layer| layer.set()) {
+            let colors = (0..set.len())
+                .map(|index| object.track_color(index))
+                .collect::<Vec<_>>();
+            lineage(
+                ui,
+                state.workspace,
+                Tree {
+                    set,
+                    id,
+                    colors: &colors,
+                    selected,
+                    time: scene.time(),
+                    frames: scene.frame_count(),
+                },
+                left_rect.height(),
+                commands,
+            );
+        } else {
+            empty_state(
+                ui,
+                Icon::Channel,
+                "No Trajectories Yet",
+                "Detect objects in this set first, then press Track to link their lineage across frames.",
+            );
+        }
     });
-    ui.place(
-        Rect::from_min_size(
-            Vec2::new(tree.min.x, tree.max.y + 8.0),
-            Vec2::new(tree.width(), 30.0),
-        ),
-        |ui| {
-            edits(ui, state, commands, id, set, selected);
-        },
-    );
-    ui.place(
-        Rect::from_min_size(
-            Vec2::new(full.max.x - stats, full.min.y),
-            Vec2::new(stats, full.height()),
-        ),
-        |ui| {
-            summary(ui, set, selected);
-        },
-    );
+    ui.stacked(right_rect, true, |ui| {
+        ui.scroll(ui.id("tracks.inspector.scroll"), Length::Fill, |ui| {
+            ui.column(Block::column().gaps(8.0), |ui| {
+                if let Some(set) = object.tracks().map(|layer| layer.set()) {
+                    summary(ui, set, selected);
+                }
+                parameters(ui, state, commands, id, object);
+                appearance(ui, state, commands, id, object);
+            });
+        });
+    });
 }
 
 fn select(state: &State<'_>, sets: &[ObjectSetId]) -> ObjectSetId {
@@ -151,6 +145,7 @@ fn header(
     sets: &[ObjectSetId],
     id: ObjectSetId,
     object: &ObjectSet,
+    selected: Option<usize>,
 ) {
     let scene = state.scene;
     let names = sets
@@ -169,42 +164,104 @@ fn header(
     let busy = state.io.loading.is_some();
     let divisions = object.tracks().map_or(0, |layer| layer.set().divisions());
     let tracks = object.tracks().map_or(0, |layer| layer.set().len());
-    ui.row(
-        Block::row()
-            .gaps(10.0)
-            .align(Align::Center)
-            .height(Length::Fixed(30.0)),
-        |ui| {
-            widget::field_label(ui, "Set");
-            if let Some(index) =
-                grana_ui::popover::combo(ui, "tracks.set", 176.0, &options, Some(chosen))
-                && index != chosen
-            {
-                state.workspace.join = None;
-                state.workspace.track_set = Some(sets[index]);
-            }
-            widget::caption(
-                ui,
-                &format!("{tracks} tracks · {divisions} divisions · {detected} frames"),
-            );
-            ui.space(1.0);
-            if let Some(tracking) = tracking {
-                let fraction = if tracking.total > 0 {
-                    tracking.done as f32 / tracking.total as f32
-                } else {
-                    0.0
-                };
-                widget::progress(ui, fraction, 120.0);
-                widget::spinner(ui, 14.0);
-                if widget::button(ui, "track.cancel", "Cancel", Role::Quiet) {
-                    commands.push(Command::CancelTrack(id));
+    let time = scene.time();
+    let cuts = object.tracks().map(|layer| layer.set()).and_then(|set| {
+        let index = selected?;
+        let track = set.track(index)?;
+        let last = track.nodes().last()?;
+        let node = track.nodes().iter().find(|node| node.time() == time)?;
+        let division = set.children(index).next().is_some();
+        (node.time() != last.time() || division).then_some((node.time(), node.object()))
+    });
+    let joins = object.tracks().map(|layer| layer.set()).and_then(|set| {
+        let index = selected?;
+        let track = set.track(index)?;
+        let last = track.nodes().last()?;
+        (set.children(index).next().is_none() && last.time() + 1 < scene.frame_count())
+            .then_some((last.time(), last.object()))
+    });
+    let joining = state.workspace.join.is_some();
+    let row = ui.allocate_full(30.0);
+    let right_w = 340.0;
+    let left_rect = Rect::from_min_max(row.min, Vec2::new(row.max.x - right_w - 8.0, row.max.y));
+    let right_rect = Rect::from_min_max(Vec2::new(row.max.x - right_w, row.min.y), row.max);
+    ui.place(left_rect, |ui| {
+        ui.row(
+            Block::row()
+                .gaps(8.0)
+                .align(Align::Center)
+                .height(Length::Fill),
+            |ui| {
+                widget::field_label(ui, "Set");
+                if let Some(index) =
+                    grana_ui::popover::combo(ui, "tracks.set", 160.0, &options, Some(chosen))
+                    && index != chosen
+                {
+                    state.workspace.join = None;
+                    state.workspace.track_set = Some(sets[index]);
                 }
-            } else if button(ui, "track", "Track", Role::Prominent, detected > 0 && !busy) {
-                state.workspace.join = None;
-                commands.push(Command::Track(id));
-            }
-        },
-    );
+                widget::caption(
+                    ui,
+                    &format!("{tracks} tracks · {divisions} divisions · {detected} frames"),
+                );
+                if joining {
+                    widget::badge(ui, "Select target track to join", ui.theme().palette.accent);
+                }
+            },
+        );
+    });
+    ui.place(right_rect, |ui| {
+        ui.row(
+            Block::row()
+                .gaps(6.0)
+                .align(Align::Center)
+                .justify(Align::End)
+                .width(Length::Fill)
+                .height(Length::Fill),
+            |ui| {
+                if object.tracks().is_some() {
+                    if button(ui, "cut", "Cut", Role::Control, cuts.is_some()) {
+                        state.workspace.join = None;
+                        if let Some((time, object)) = cuts {
+                            commands.push(Command::CutTrack {
+                                set: id,
+                                time,
+                                object,
+                            });
+                        }
+                    }
+                    if button(
+                        ui,
+                        "join",
+                        if joining { "Cancel Join" } else { "Join" },
+                        if joining { Role::Tinted } else { Role::Control },
+                        joining || joins.is_some(),
+                    ) {
+                        state.workspace.join = if joining { None } else { joins };
+                    }
+                    if button(ui, "recompute", "Recompute", Role::Quiet, !busy) {
+                        state.workspace.join = None;
+                        commands.push(Command::Track(id));
+                    }
+                }
+                if let Some(tracking) = tracking {
+                    let fraction = if tracking.total > 0 {
+                        tracking.done as f32 / tracking.total as f32
+                    } else {
+                        0.0
+                    };
+                    widget::progress(ui, fraction, 110.0);
+                    widget::spinner(ui, 14.0);
+                    if widget::button(ui, "track.cancel", "Cancel", Role::Quiet) {
+                        commands.push(Command::CancelTrack(id));
+                    }
+                } else if button(ui, "track", "Track", Role::Prominent, detected > 0 && !busy) {
+                    state.workspace.join = None;
+                    commands.push(Command::Track(id));
+                }
+            },
+        );
+    });
 }
 
 fn parameters(
@@ -226,19 +283,19 @@ fn parameters(
         .map_or_else(|| style.thickness(), |layer| layer.thickness());
     let min_thickness = object.min_thickness();
     let max_thickness = object.max_thickness();
-    let open = ui.disclosure_open("tracks.params", false);
     let mut step = params.max_step();
     let mut gap = params.max_gap() as f32;
     let mut division = params.division();
     let mut range = params.division_range();
     let mut width = thickness;
     let mut shown = visible;
-    let next = widget::disclosure(ui, "tracks.params", "Parameters", open, |ui| {
+    card(ui, 6.0, |ui| {
+        card_title(ui, Icon::Sliders, "Parameters", None);
         let step_max = (0.25 * world).max(step * 4.0).max(16.0 * voxel);
         if let Some(value) = widget::slider_readout(
             ui,
             "step",
-            Some("Step"),
+            Some("Max step"),
             step,
             voxel..=step_max,
             true,
@@ -249,15 +306,15 @@ fn parameters(
         if let Some(value) = widget::slider_readout(
             ui,
             "gap",
-            Some("Gap"),
+            Some("Max gap"),
             gap,
             0.0..=10.0,
             false,
-            &format!("{gap:.0}"),
+            &format!("{gap:.0} f"),
         ) {
             gap = value;
         }
-        if let Some(value) = widget::toggle_row(ui, "division", "Division", division) {
+        if let Some(value) = widget::toggle_row(ui, "division", "Allow Division", division) {
             division = value;
         }
         let minimum = step;
@@ -267,7 +324,7 @@ fn parameters(
             if let Some(value) = widget::slider_readout(
                 ui,
                 "division.range",
-                Some("Division range"),
+                Some("Div. range"),
                 range,
                 minimum..=maximum,
                 false,
@@ -283,8 +340,8 @@ fn parameters(
                 params: updated,
             });
         }
-        ui.separator();
-        if let Some(value) = widget::toggle_row(ui, "visible", "Visible", shown) {
+        crate::panel::divider(ui);
+        if let Some(value) = widget::toggle_row(ui, "visible", "Show Tubes", shown) {
             shown = value;
         }
         if let Some(value) = widget::slider_readout(
@@ -299,7 +356,6 @@ fn parameters(
             width = value;
         }
     });
-    ui.store_open("tracks.params", next);
     if shown != visible {
         commands.push(Command::SetTrackVisible {
             set: id,
@@ -339,7 +395,7 @@ fn appearance(
             .scene
             .objects
             .get(relation.target())
-            .map_or_else(|| "target".to_string(), |target| target.name().to_string());
+            .map_or_else(|| "Target".to_string(), |target| target.name().to_string());
         let shift = match relation.shift() {
             0 => String::new(),
             shift => format!(" t{shift:+}"),
@@ -361,20 +417,21 @@ fn appearance(
     if metrics.is_empty() {
         return;
     }
-    ui.separator();
-    widget::section_title(ui, "Tubes");
-    let extent = object.track_extent();
-    let mut coloring = object.track_coloring().clone();
-    if crate::coloring::edit(
-        ui,
-        &format!("tracks.{}.coloring", id.raw()),
-        &mut coloring,
-        &metrics,
-        extent,
-        |metric| (metric.unit(), metric.decimals()),
-    ) {
-        commands.push(Command::SetTrackColoring { set: id, coloring });
-    }
+    card(ui, 6.0, |ui| {
+        card_title(ui, Icon::Sparkles, "Tube Coloring", None);
+        let extent = object.track_extent();
+        let mut coloring = object.track_coloring().clone();
+        if crate::coloring::edit(
+            ui,
+            &format!("tracks.{}.coloring", id.raw()),
+            &mut coloring,
+            &metrics,
+            extent,
+            |metric| (metric.unit(), metric.decimals()),
+        ) {
+            commands.push(Command::SetTrackColoring { set: id, coloring });
+        }
+    });
 }
 
 struct Tree<'a> {
@@ -406,8 +463,8 @@ fn lineage(
     let tertiary = ui.theme().palette.text_tertiary;
     let rect = ui.allocate(Vec2::new(ui.available().x, height));
     let inner = Rect::from_min_max(
-        rect.min + Vec2::new(SIDE, AXIS),
-        rect.max - Vec2::new(SIDE + 4.0, 4.0),
+        rect.min + Vec2::new(SIDE, AXIS + 4.0),
+        rect.max - Vec2::new(SIDE + 6.0, 6.0),
     );
     let order = lanes(set);
     let mut lane_of = vec![0usize; set.len()];
@@ -446,7 +503,7 @@ fn lineage(
             grana_ui::Fill::Solid(palette.card),
             grana_ui::Border {
                 width: 1.0,
-                color: palette.border,
+                color: palette.material_border,
             },
             grana_ui::Shadow::NONE,
         );
@@ -464,8 +521,8 @@ fn lineage(
         painter.segment(
             Vec2::new(x(time), inner.min.y),
             Vec2::new(x(time), inner.max.y),
-            0.8,
-            accent.with_alpha(0.45),
+            1.0,
+            accent.with_alpha(0.50),
         );
         if let Some(lane) = hovered {
             painter.rect(
@@ -473,7 +530,7 @@ fn lineage(
                     Vec2::new(inner.min.x, lane_y(lane) - ROW * 0.5),
                     Vec2::new(inner.width(), ROW),
                 ),
-                Corners::ZERO,
+                Corners::all(3.0),
                 Color::white_alpha(0.05),
             );
         }
@@ -507,7 +564,7 @@ fn lineage(
             painter.segment(
                 Vec2::new(start, y),
                 Vec2::new(end.max(start + 1.0), y),
-                if chosen { 2.2 } else { 1.4 },
+                if chosen { 2.4 } else { 1.5 },
                 tint,
             );
             let nodes = track.nodes();
@@ -519,15 +576,15 @@ fn lineage(
             if spacing >= 2.6 {
                 for node in nodes {
                     painter.rect(
-                        Rect::from_center_size(Vec2::new(x(node.time()), y), Vec2::splat(2.2)),
+                        Rect::from_center_size(Vec2::new(x(node.time()), y), Vec2::splat(2.4)),
                         Corners::capsule(),
-                        tint.with_alpha(0.85),
+                        tint.with_alpha(0.88),
                     );
                 }
             } else if let (Some(first), Some(last)) = (nodes.first(), nodes.last()) {
                 for node in [first, last] {
                     painter.rect(
-                        Rect::from_center_size(Vec2::new(x(node.time()), y), Vec2::splat(2.6)),
+                        Rect::from_center_size(Vec2::new(x(node.time()), y), Vec2::splat(2.8)),
                         Corners::capsule(),
                         tint,
                     );
@@ -568,8 +625,8 @@ fn lineage(
         painter.pop_clip(clip);
         if limit > 0.0 {
             let bar = Rect::from_min_size(
-                Vec2::new(rect.max.x - 4.0, inner.min.y),
-                Vec2::new(2.0, inner.height()),
+                Vec2::new(rect.max.x - 5.0, inner.min.y),
+                Vec2::new(2.5, inner.height()),
             );
             let thumb = (inner.height() * inner.height() / content).max(24.0);
             let travel = (bar.height() - thumb).max(0.0);
@@ -577,10 +634,10 @@ fn lineage(
             painter.rect(
                 Rect::from_min_size(
                     Vec2::new(bar.min.x, bar.min.y + travel * offset / limit),
-                    Vec2::new(2.0, thumb),
+                    Vec2::new(2.5, thumb),
                 ),
                 Corners::capsule(),
-                Color::white_alpha(0.22),
+                Color::white_alpha(0.24),
             );
         }
         let label = TextStyle::new(TypeStyle::new(9.5, 400.0, 12.0), tertiary);
@@ -597,7 +654,7 @@ fn lineage(
             };
             painter.text_in(
                 rect,
-                &format!("{}", tick + 1),
+                &format!("F{}", tick + 1),
                 if part == 3 {
                     label.aligned(Align::End)
                 } else {
@@ -660,64 +717,12 @@ fn lineage(
     }
 }
 
-fn edits(
-    ui: &mut Ui,
-    state: &mut State<'_>,
-    commands: &mut Vec<Command>,
-    id: ObjectSetId,
-    set: &TrackSet,
-    selected: Option<usize>,
-) {
-    let time = state.scene.time();
-    let cuts = selected.and_then(|index| {
-        let track = set.track(index)?;
-        let last = track.nodes().last()?;
-        let node = track.nodes().iter().find(|node| node.time() == time)?;
-        let division = set.children(index).next().is_some();
-        (node.time() != last.time() || division).then_some((node.time(), node.object()))
-    });
-    let joins = selected.and_then(|index| {
-        let track = set.track(index)?;
-        let last = track.nodes().last()?;
-        (set.children(index).next().is_none() && last.time() + 1 < state.scene.frame_count())
-            .then_some((last.time(), last.object()))
-    });
-    let joining = state.workspace.join.is_some();
-    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-        if button(ui, "cut", "Cut", Role::Quiet, cuts.is_some()) {
-            state.workspace.join = None;
-            if let Some((time, object)) = cuts {
-                commands.push(Command::CutTrack {
-                    set: id,
-                    time,
-                    object,
-                });
-            }
-        }
-        if button(
-            ui,
-            "join",
-            if joining { "Cancel" } else { "Join" },
-            Role::Quiet,
-            joining || joins.is_some(),
-        ) {
-            state.workspace.join = if joining { None } else { joins };
-        }
-        if button(ui, "recompute", "Recompute", Role::Quiet, true) {
-            state.workspace.join = None;
-            commands.push(Command::Track(id));
-        }
-        if joining {
-            widget::caption(ui, "select the track that continues this one");
-        } else if cuts.is_none() && joins.is_none() {
-            widget::caption(ui, "select a track in the lineage to edit it");
-        }
-    });
-}
-
 fn summary(ui: &mut Ui, set: &TrackSet, selected: Option<usize>) {
     let Some(index) = selected else {
-        widget::weak(ui, "select a track to inspect its statistics");
+        card(ui, 4.0, |ui| {
+            card_title(ui, Icon::Target, "Selected Track", Some("None"));
+            widget::caption(ui, "Click a track in the lineage to inspect metrics.");
+        });
         return;
     };
     let Some(track) = set.track(index) else {
@@ -726,10 +731,10 @@ fn summary(ui: &mut Ui, set: &TrackSet, selected: Option<usize>) {
     let statistics = track.statistics(set.frame_interval());
     let parent = track
         .parent()
-        .map_or_else(|| "root".to_string(), |parent| format!("#{}", parent + 1));
+        .map_or_else(|| "Root".to_string(), |parent| format!("#{}", parent + 1));
     let children = set.children(index).collect::<Vec<_>>();
     let daughters = if children.is_empty() {
-        "none".to_string()
+        "None".to_string()
     } else {
         children
             .iter()
@@ -737,26 +742,26 @@ fn summary(ui: &mut Ui, set: &TrackSet, selected: Option<usize>) {
             .collect::<Vec<_>>()
             .join(" · ")
     };
-    crate::panel::card(ui, 2.0, |ui| {
-        crate::panel::card_title(
+    card(ui, 3.0, |ui| {
+        card_title(
             ui,
-            Icon::Table,
+            Icon::Target,
             &format!("Track #{}", index + 1),
             Some(&format!("{} frames", statistics.frames())),
         );
-        widget::labelled(ui, "parent", &parent);
-        widget::labelled(ui, "daughters", &daughters);
-        widget::labelled(ui, "duration", &format!("{:.2} s", statistics.duration()));
-        widget::labelled(ui, "length", &format!("{:.2} µm", statistics.length()));
+        widget::labelled(ui, "Parent", &parent);
+        widget::labelled(ui, "Daughters", &daughters);
+        widget::labelled(ui, "Duration", &format!("{:.2} s", statistics.duration()));
+        widget::labelled(ui, "Length", &format!("{:.2} µm", statistics.length()));
         widget::labelled(
             ui,
-            "displacement",
+            "Displacement",
             &format!("{:.2} µm", statistics.displacement()),
         );
-        widget::labelled(ui, "speed", &format!("{:.3} µm/s", statistics.speed()));
+        widget::labelled(ui, "Speed", &format!("{:.3} µm/s", statistics.speed()));
         widget::labelled(
             ui,
-            "straightness",
+            "Straightness",
             &format!("{:.3}", statistics.straightness()),
         );
     });
@@ -789,7 +794,7 @@ fn button(ui: &mut Ui, id: &str, label: &str, role: Role, enabled: bool) -> bool
     let font = ui.theme().font(grana_ui::Level::Body);
     let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE));
     let rect = ui.allocate(Vec2::new(
-        measured.x + 24.0,
+        measured.x + 22.0,
         ui.theme().metrics.control_height,
     ));
     let look = ui.surface_disabled(role);

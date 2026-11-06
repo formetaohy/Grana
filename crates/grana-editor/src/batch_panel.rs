@@ -1,24 +1,30 @@
 use grana_ui::{Align, Axis, Block, Color, Icon, Length, Rect, Role, TextStyle, Ui, Vec2};
 
-use crate::panel::{card, card_title};
+use crate::panel::{card, card_title, divider, form_row};
 use crate::state::State;
 use crate::widget;
 use grana_session::Command;
 
 pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let width = ui.available().x;
-    let gap = 14.0;
-    let left = ((width - gap) * 0.58).max(420.0);
+    let gap = 12.0;
+    let col_a = ((width - gap * 2.0) * 0.40).max(360.0);
+    let col_b = ((width - gap * 2.0) * 0.32).max(280.0);
     ui.row(Block::row().gaps(gap).align(Align::Start), |ui| {
         ui.column(
-            Block::column().gaps(12.0).width(Length::Fixed(left)),
+            Block::column().gaps(8.0).width(Length::Fixed(col_a)),
             |ui| {
                 protocol(ui, state, commands);
                 datasets(ui, state, commands);
             },
         );
-        ui.column(Block::column().gaps(12.0).width(Length::Fill), |ui| {
-            output(ui, state, commands);
+        ui.column(
+            Block::column().gaps(8.0).width(Length::Fixed(col_b)),
+            |ui| {
+                output(ui, state, commands);
+            },
+        );
+        ui.column(Block::column().gaps(8.0).width(Length::Fill), |ui| {
             comparison(ui, state);
         });
     });
@@ -26,40 +32,35 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
 
 fn protocol(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
     let running = state.batch_running();
-    card(ui, 8.0, |ui| {
-        card_title(ui, Icon::Sliders, "Protocol", None);
-        ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
+    let has_protocol = state.batch_protocol().is_some();
+    card(ui, 6.0, |ui| {
+        card_title(
+            ui,
+            Icon::Sliders,
+            "Protocol",
+            if has_protocol { Some("Ready") } else { None },
+        );
+        ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
             if !running
                 && widget::action_button(ui, "capture", Icon::Camera, "Capture", Role::Control)
                     .clicked
             {
                 commands.push(Command::CaptureProtocol);
             }
-            if !running
-                && widget::action_button(ui, "load", Icon::Folder, "Load", Role::Quiet).clicked
-            {
+            if !running && widget::button(ui, "load", "Load", Role::Quiet) {
                 commands.push(Command::LoadProtocol);
             }
-            if !running
-                && widget::action_button(ui, "save", Icon::Save, "Save", Role::Quiet).clicked
-            {
+            if !running && widget::button(ui, "save", "Save", Role::Quiet) {
                 commands.push(Command::SaveProtocol);
             }
-            if !running
-                && state.batch_protocol().is_some()
-                && widget::action_button(ui, "apply", Icon::Play, "Apply", Role::Quiet).clicked
-            {
+            if !running && has_protocol && widget::button(ui, "apply", "Apply", Role::Quiet) {
                 commands.push(Command::ApplyProtocol);
             }
             if !running
                 && let Some(text) = state.batch_protocol()
-                && widget::action_button(ui, "copy", Icon::Copy, "Copy", Role::Quiet).clicked
+                && widget::button(ui, "copy", "Copy", Role::Quiet)
             {
                 ui.copy(text);
-            }
-            if state.batch_protocol().is_some() {
-                ui.space(2.0);
-                widget::badge(ui, "Ready", ui.theme().palette.success);
             }
         });
         match state.batch_protocol() {
@@ -68,10 +69,11 @@ fn protocol(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
                 let style = TextStyle::new(
                     ui.theme().font(grana_ui::Level::Monospace),
                     ui.theme().palette.text_secondary,
-                );
+                )
+                .wrapping();
                 ui.column(
                     Block::column()
-                        .padding(grana_ui::Edges::symmetric(10.0, 8.0))
+                        .padding(grana_ui::Edges::symmetric(10.0, 6.0))
                         .gaps(4.0)
                         .background(look),
                     |ui| {
@@ -91,20 +93,24 @@ fn protocol(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
 
 fn datasets(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
     let running = state.batch_running();
-    card(ui, 8.0, |ui| {
+    let count = state.batch_datasets().len();
+    card(ui, 6.0, |ui| {
         card_title(
             ui,
             Icon::Folder,
             "Datasets",
-            Some(&state.batch_datasets().len().to_string()),
+            Some(&format!(
+                "{count} item{}",
+                if count == 1 { "" } else { "s" }
+            )),
         );
         if state.batch_datasets().is_empty() {
             widget::weak(ui, "Choose a folder of datasets that share this protocol.");
         } else {
             let key = ui.id("batch.datasets");
-            ui.scroll_axis(key, Axis::Column, Length::Fixed(136.0), None, |ui| {
+            ui.scroll_axis(key, Axis::Column, Length::Fixed(96.0), None, |ui| {
                 for (index, dataset) in state.batch_datasets().iter().enumerate() {
-                    let row = ui.allocate_full(34.0);
+                    let row = ui.allocate_full(30.0);
                     let key = ui.id(&format!("dataset.{index}"));
                     let response = ui.interact(key, row);
                     let hover = ui.animate(
@@ -160,7 +166,8 @@ fn datasets(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         }
         ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
             if !running
-                && widget::action_button(ui, "add", Icon::Plus, "Add folder", Role::Control).clicked
+                && widget::action_button(ui, "add", Icon::Plus, "Add Folder…", Role::Control)
+                    .clicked
             {
                 commands.push(Command::AddBatchDatasets);
             }
@@ -175,58 +182,56 @@ fn datasets(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
 }
 
 fn output(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
-    card(ui, 10.0, |ui| {
-        card_title(ui, Icon::Export, "Output", None);
-        match state.batch_output() {
-            Some(path) => {
-                let look = ui.theme().surface(Role::Field, grana_ui::State::Rest);
-                let style = TextStyle::new(
-                    ui.theme().font(grana_ui::Level::Monospace),
-                    ui.theme().palette.text_secondary,
-                )
-                .truncating();
-                let rect = ui.allocate_full(30.0);
-                {
-                    let mut painter = ui.painter();
-                    painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
-                    painter.text_in(
-                        rect.shrink2(grana_ui::Vec2::new(9.0, 0.0)),
-                        path,
-                        style,
-                        Align::Center,
-                    );
-                }
-            }
-            None => widget::weak(ui, "Choose a folder for the exported tables."),
-        }
-        if !state.batch_running()
-            && widget::action_button(ui, "output", Icon::Folder, "Choose folder", Role::Control)
-                .clicked
-        {
-            commands.push(Command::ChooseBatchOutput);
+    card(ui, 7.0, |ui| {
+        card_title(ui, Icon::Export, "Output & Execution", None);
+        if let Some(path) = state.batch_output() {
+            let look = ui.theme().surface(Role::Field, grana_ui::State::Rest);
+            let style = TextStyle::new(
+                ui.theme().font(grana_ui::Level::Monospace),
+                ui.theme().palette.text_secondary,
+            )
+            .truncating();
+            let rect = ui.allocate_full(28.0);
+            let mut painter = ui.painter();
+            painter.outlined(rect, look.corners, look.fill, look.border, look.shadow);
+            painter.text_in(
+                rect.shrink2(Vec2::new(10.0, 0.0)),
+                path,
+                style,
+                Align::Center,
+            );
+        } else {
+            widget::weak(ui, "Choose a destination folder for the exported tables.");
         }
         if !state.batch_running() {
+            if widget::action_button(ui, "output", Icon::Folder, "Choose Folder…", Role::Control)
+                .clicked
+            {
+                commands.push(Command::ChooseBatchOutput);
+            }
             let jobs = state.batch_jobs();
-            ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-                widget::field_label(ui, "Workers");
-                if let Some(value) = widget::drag_value(ui, "batch.jobs", jobs as f32, 0.15, 0) {
-                    let next = (value.round() as i64).clamp(1, 16) as u32;
-                    if next as usize != jobs {
-                        commands.push(Command::SetBatchJobs(next));
+            form_row(ui, "Workers", |ui| {
+                ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
+                    if let Some(value) = widget::drag_value(ui, "batch.jobs", jobs as f32, 0.15, 0)
+                    {
+                        let next = (value.round() as i64).clamp(1, 16) as u32;
+                        if next as usize != jobs {
+                            commands.push(Command::SetBatchJobs(next));
+                        }
                     }
-                }
-                widget::caption(ui, &format!("{jobs} at a time"));
+                    widget::caption(ui, &format!("{jobs} concurrent"));
+                });
             });
             if let Some(value) = widget::toggle_row(
                 ui,
                 "batch.project",
-                "Write a project per dataset",
+                "Save Project per Dataset",
                 state.batch_project(),
             ) {
                 commands.push(Command::SetBatchProject(value));
             }
         }
-        ui.separator();
+        divider(ui);
         let running = state.batch_running();
         if running {
             let paused = state.batch_paused();
@@ -237,7 +242,7 @@ fn output(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
                     if paused {
                         "Paused between analysis steps"
                     } else {
-                        "Running the protocol over every dataset"
+                        "Running protocol across datasets…"
                     },
                 );
                 ui.space(1.0);
@@ -263,7 +268,7 @@ fn output(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
             if widget::button_with_enabled(
                 ui,
                 "run",
-                "Run batch",
+                "Run Batch",
                 Role::Prominent,
                 Length::Fill,
                 ready,
@@ -293,18 +298,18 @@ fn comparison(ui: &mut Ui, state: &State<'_>) {
             Icon::Table,
             "Comparison",
             (!rows.is_empty())
-                .then(|| rows.len().to_string())
+                .then(|| format!("{} groups", rows.len()))
                 .as_deref(),
         );
         if rows.is_empty() {
             widget::weak(
                 ui,
-                "Run the batch to compare the groups it reports into comparison.csv.",
+                "Run the batch to compare reported groups in comparison.csv.",
             );
             return;
         }
         let key = ui.id("batch.comparison");
-        ui.scroll_axis(key, Axis::Column, Length::Fixed(196.0), None, |ui| {
+        ui.scroll_axis(key, Axis::Column, Length::Fixed(180.0), None, |ui| {
             for (index, row) in rows.iter().enumerate() {
                 entry(ui, index, rows.len(), row);
             }
@@ -341,19 +346,19 @@ fn entry(ui: &mut Ui, index: usize, rows: usize, row: &grana_session::BatchCompa
         }
         if let Some(volume) = row.volume {
             parts.push(format!(
-                "volume {} µm³",
+                "Volume {} µm³",
                 spread(volume, row.volume_deviation)
             ));
         }
         if let Some(area) = row.area {
-            parts.push(format!("area {} µm²", spread(area, row.area_deviation)));
+            parts.push(format!("Area {} µm²", spread(area, row.area_deviation)));
         }
         if let Some(size) = row.size {
-            parts.push(format!("size {} µm", spread(size, row.size_deviation)));
+            parts.push(format!("Size {} µm", spread(size, row.size_deviation)));
         }
         if let Some(intensity) = row.intensity {
             parts.push(format!(
-                "intensity {}",
+                "Intensity {}",
                 spread(intensity, row.intensity_deviation)
             ));
         }
@@ -361,7 +366,7 @@ fn entry(ui: &mut Ui, index: usize, rows: usize, row: &grana_session::BatchCompa
         ui.text_style_wrapped(&parts.join(" · "), detail, ui.available().x);
     });
     if index + 1 < rows {
-        ui.separator();
+        divider(ui);
     }
 }
 

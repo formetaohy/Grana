@@ -6,50 +6,61 @@ use grana_measure::{
 use grana_scene::{Job, ObjectSetId, Progress};
 use grana_ui::{Align, Block, Color, Corners, Icon, Length, Rect, Role, TextStyle, TypeStyle, Ui};
 
-use crate::panel::{card, card_title, empty_state};
+use crate::panel::{card, card_title, empty_state, form_row};
 use crate::state::State;
 use crate::widget;
 use grana_session::Command;
 
 const PLOT_CELLS: usize = 160;
-const PLOT_SIDE: f32 = 200.0;
-const LEFT_WIDTH: f32 = 372.0;
+const PLOT_SIDE: f32 = 186.0;
 
 pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let Some(pair) = state.scene.coloc.pair() else {
         empty_state(
             ui,
             Icon::Grid,
-            "Two channels required",
-            "Compares two channels across every frame in the region and mask.",
+            "Two Channels Required",
+            "Colocalization compares two channels across every frame in the region and analysis mask.",
         );
         return;
     };
     let running = crate::panel::progress(state.jobs, Job::Coloc);
     header(ui, state, commands, pair, running);
+    ui.space(8.0);
     if state.scene.coloc.result().is_none() {
         empty_state(
             ui,
             Icon::Grid,
-            "No colocalization yet",
+            "No Colocalization Yet",
             if running.is_some() {
                 "Streaming both channels over every frame of the current region and analysis mask."
             } else {
-                "Choose a channel pair, then compute overlap, Manders coefficients and Costes."
+                "Choose a channel pair, then compute Pearson overlap, Manders coefficients and Costes p-value."
             },
         );
         return;
     }
-    ui.row(Block::row().gaps(14.0).align(Align::Start), |ui| {
+    let available = ui.available().x;
+    let gap = 12.0;
+    let col_a = ((available - gap * 2.0) * 0.34).max(276.0);
+    let col_b = ((available - gap * 2.0) * 0.39).max(320.0);
+    ui.row(Block::row().gaps(gap).align(Align::Start), |ui| {
         ui.column(
-            Block::column().gaps(10.0).width(Length::Fixed(LEFT_WIDTH)),
+            Block::column().gaps(8.0).width(Length::Fixed(col_a)),
             |ui| {
                 thresholds(ui, state, commands);
+            },
+        );
+        ui.column(
+            Block::column().gaps(8.0).width(Length::Fixed(col_b)),
+            |ui| {
                 statistics(ui, state);
                 method(ui, state, commands);
             },
         );
-        scatter(ui, state);
+        ui.column(Block::column().gaps(8.0).width(Length::Fill), |ui| {
+            scatter(ui, state);
+        });
     });
 }
 
@@ -71,112 +82,128 @@ fn header(
     let b = pair.b();
     let mut chosen_a = a;
     let mut chosen_b = b;
-    ui.row(
-        Block::row()
-            .gaps(8.0)
-            .align(Align::Center)
-            .height(Length::Fixed(32.0)),
-        |ui| {
-            widget::field_label(ui, "Pair");
-            let options = names
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| *index != b)
-                .map(|(index, name)| (index, name.clone()))
-                .collect::<Vec<_>>();
-            if let Some(value) = grana_ui::popover::combo(ui, "coloc.a", 118.0, &options, Some(a)) {
-                chosen_a = value;
-            }
-            widget::caption(ui, "×");
-            let options = names
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| *index != a)
-                .map(|(index, name)| (index, name.clone()))
-                .collect::<Vec<_>>();
-            if let Some(value) = grana_ui::popover::combo(ui, "coloc.b", 118.0, &options, Some(b)) {
-                chosen_b = value;
-            }
-            if chosen_a != a || chosen_b != b {
-                commands.push(Command::SetColocPair(ColocPair::new(chosen_a, chosen_b)));
-            }
-            let busy = running.is_some() || state.io.loading.is_some();
-            match running {
-                Some(running) => {
-                    widget::caption(ui, &format!("{}/{} samples", running.done, running.total));
-                    if widget::icon_button(ui, "cancel", Icon::Close, 28.0, Role::Quiet, "Cancel") {
-                        commands.push(Command::CancelColoc);
+    let row = ui.allocate_full(30.0);
+    let left_rect = Rect::from_min_max(row.min, Vec2::new(row.min.x + 520.0, row.max.y));
+    let right_rect = Rect::from_min_max(Vec2::new(left_rect.max.x + 8.0, row.min.y), row.max);
+    ui.place(left_rect, |ui| {
+        ui.row(
+            Block::row()
+                .gaps(8.0)
+                .align(Align::Center)
+                .height(Length::Fill),
+            |ui| {
+                widget::field_label(ui, "Pair");
+                let options = names
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != b)
+                    .map(|(index, name)| (index, name.clone()))
+                    .collect::<Vec<_>>();
+                if let Some(value) =
+                    grana_ui::popover::combo(ui, "coloc.a", 124.0, &options, Some(a))
+                {
+                    chosen_a = value;
+                }
+                widget::caption(ui, "×");
+                let options = names
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != a)
+                    .map(|(index, name)| (index, name.clone()))
+                    .collect::<Vec<_>>();
+                if let Some(value) =
+                    grana_ui::popover::combo(ui, "coloc.b", 124.0, &options, Some(b))
+                {
+                    chosen_b = value;
+                }
+                if chosen_a != a || chosen_b != b {
+                    commands.push(Command::SetColocPair(ColocPair::new(chosen_a, chosen_b)));
+                }
+                let busy = running.is_some() || state.io.loading.is_some();
+                match running {
+                    Some(running) => {
+                        widget::spinner(ui, 13.0);
+                        widget::caption(ui, &format!("{}/{} samples", running.done, running.total));
+                        if widget::icon_button(
+                            ui,
+                            "cancel",
+                            Icon::Close,
+                            28.0,
+                            Role::Quiet,
+                            "Cancel",
+                        ) {
+                            commands.push(Command::CancelColoc);
+                        }
+                    }
+                    None => {
+                        if widget::action_button(
+                            ui,
+                            "compute",
+                            Icon::Target,
+                            "Compute",
+                            Role::Prominent,
+                        )
+                        .clicked
+                            && !busy
+                        {
+                            commands.push(Command::ComputeColoc);
+                        }
                     }
                 }
-                None => {
-                    if widget::action_button(
+                if state.scene.coloc.result().is_some()
+                    && widget::icon_button(
                         ui,
-                        "compute",
-                        Icon::Target,
-                        "Compute",
-                        Role::Prominent,
+                        "export",
+                        Icon::Export,
+                        28.0,
+                        Role::Quiet,
+                        "Export CSV",
                     )
-                    .clicked
-                        && !busy
-                    {
-                        commands.push(Command::ComputeColoc);
-                    }
+                {
+                    commands.push(Command::ExportColoc);
                 }
-            }
-            if state.scene.coloc.result().is_some()
-                && widget::icon_button(ui, "export", Icon::Export, 28.0, Role::Quiet, "Export CSV")
-            {
-                commands.push(Command::ExportColoc);
-            }
-        },
-    );
-    results_row(ui, state, commands, pair);
-}
-
-fn results_row(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, pair: ColocPair) {
+            },
+        );
+    });
     let results = state.scene.coloc.results();
-    if results.is_empty() {
-        return;
+    if !results.is_empty() {
+        ui.place(right_rect, |ui| {
+            ui.row(
+                Block::row()
+                    .gaps(6.0)
+                    .align(Align::Center)
+                    .justify(Align::End)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+                |ui| {
+                    for (index, result) in results.iter().enumerate() {
+                        let stored = result.pair();
+                        let label = format!("{} × {}", names[stored.a()], names[stored.b()]);
+                        let role = if stored == pair {
+                            Role::Tinted
+                        } else {
+                            Role::Quiet
+                        };
+                        if widget::button(ui, &format!("coloc.saved.{index}"), &label, role) {
+                            commands.push(Command::SetColocPair(stored));
+                        }
+                    }
+                    if state.scene.coloc.result().is_some()
+                        && widget::icon_button(
+                            ui,
+                            "coloc.remove",
+                            Icon::Trash,
+                            28.0,
+                            Role::Quiet,
+                            "Remove this result",
+                        )
+                    {
+                        commands.push(Command::RemoveColocResult(pair));
+                    }
+                },
+            );
+        });
     }
-    let names = state
-        .scene
-        .dataset
-        .channels()
-        .iter()
-        .map(|channel| channel.name().to_string())
-        .collect::<Vec<_>>();
-    ui.row(
-        Block::row()
-            .gaps(6.0)
-            .align(Align::Center)
-            .height(Length::Fixed(28.0)),
-        |ui| {
-            for (index, result) in results.iter().enumerate() {
-                let stored = result.pair();
-                let label = format!("{} × {}", names[stored.a()], names[stored.b()]);
-                let role = if stored == pair {
-                    Role::Tinted
-                } else {
-                    Role::Quiet
-                };
-                if widget::button(ui, &format!("coloc.saved.{index}"), &label, role) {
-                    commands.push(Command::SetColocPair(stored));
-                }
-            }
-            if state.scene.coloc.result().is_some()
-                && widget::icon_button(
-                    ui,
-                    "coloc.remove",
-                    Icon::Trash,
-                    28.0,
-                    Role::Quiet,
-                    "Remove this result",
-                )
-            {
-                commands.push(Command::RemoveColocResult(pair));
-            }
-        },
-    );
 }
 
 fn thresholds(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
@@ -193,19 +220,19 @@ fn thresholds(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let mut a = thresholds.a();
     let mut b = thresholds.b();
     let mut changed = false;
-    card(ui, 6.0, |ui| {
+    card(ui, 7.0, |ui| {
         card_title(ui, Icon::Sliders, "Thresholds", None);
         for (index, tint) in tints.iter().enumerate() {
             let value = if index == 0 { a } else { b };
             let label = if index == 0 { "M1" } else { "M2" };
-            let font = ui.theme().font(grana_ui::Level::Caption);
+            let font = ui.theme().font(grana_ui::Level::Caption).medium();
             let secondary = ui.theme().palette.text_secondary;
             let primary = ui.theme().palette.text_primary;
             let dot_tint = Color::from_rgb_f32(*tint);
-            let row = ui.allocate_full(30.0);
+            let row = ui.allocate_full(28.0);
             let swatch = Rect::from_center_size(
                 Vec2::new(row.min.x + 5.0, row.center().y),
-                Vec2::splat(9.0),
+                Vec2::splat(8.5),
             );
             {
                 let mut painter = ui.painter();
@@ -223,7 +250,7 @@ fn thresholds(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
             ui.place(
                 Rect::from_min_max(
                     Vec2::new(row.min.x + 44.0, row.min.y),
-                    Vec2::new(row.max.x - 64.0, row.max.y),
+                    Vec2::new(row.max.x - 56.0, row.max.y),
                 ),
                 |ui| {
                     if let Some(next) = widget::slider(
@@ -244,7 +271,7 @@ fn thresholds(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                 },
             );
             ui.place(
-                Rect::from_min_max(Vec2::new(row.max.x - 62.0, row.min.y), row.max),
+                Rect::from_min_max(Vec2::new(row.max.x - 54.0, row.min.y), row.max),
                 |ui| {
                     let style =
                         TextStyle::new(ui.theme().font(grana_ui::Level::Monospace), primary)
@@ -267,19 +294,19 @@ fn thresholds(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         let otsu = series.otsu();
         let costes = series.costes();
         let channels = state.scene.dataset.channels();
-        ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-            if widget::button(ui, "otsu", "Otsu", Role::Quiet) {
+        ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
+            if widget::button(ui, "otsu", "Otsu", Role::Control) {
                 commands.push(Command::SetColocThresholds(otsu));
             }
             if let Some(range) = costes
-                && widget::button(ui, "costes", "Costes", Role::Quiet)
+                && widget::button(ui, "costes", "Costes", Role::Control)
             {
                 commands.push(Command::SetColocThresholds(range.high()));
             }
             widget::caption(
                 ui,
                 &format!(
-                    "raw {:.0} · {:.0}",
+                    "Raw {:.0} · {:.0}",
                     channels[pair.a()].intensity().value(thresholds.a()),
                     channels[pair.b()].intensity().value(thresholds.b())
                 ),
@@ -291,7 +318,7 @@ fn thresholds(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
             widget::caption(
                 ui,
                 &format!(
-                    "costes M1 {:.3}–{:.3} · M2 {:.3}–{:.3}",
+                    "Costes M1 {:.3}–{:.3} · M2 {:.3}–{:.3}",
                     low.a(),
                     high.a(),
                     low.b(),
@@ -307,24 +334,28 @@ fn statistics(ui: &mut Ui, state: &State<'_>) {
         return;
     };
     let current = state.scene.coloc.statistics(state.scene.time());
-    card(ui, 6.0, |ui| {
+    card(ui, 4.0, |ui| {
         card_title(ui, Icon::Table, "Statistics", None);
-        let headers = ["", "Pearson", "Overlap", "M1", "M2", "voxels", "p"];
-        let widths = [46.0f32, 54.0, 52.0, 40.0, 40.0, 48.0, 46.0];
+        let headers = ["Scope", "Pearson", "Overlap", "M1", "M2", "Voxels", "p"];
+        let available = ui.available().x;
+        let base: [f32; 7] = [48.0, 50.0, 50.0, 38.0, 38.0, 46.0, 44.0];
+        let base_sum: f32 = base.iter().sum();
+        let scale = (available / base_sum).max(0.85);
+        let widths = base.map(|w| w * scale);
         let head = ui.allocate(Vec2::new(widths.iter().sum(), 18.0));
         {
             let font = ui.theme().font(grana_ui::Level::Micro);
             let color = ui.theme().palette.text_tertiary;
             let mut painter = ui.painter();
             let mut left = head.min.x;
-            for (label, width) in headers.iter().zip(widths.iter()) {
+            for (index, (label, width)) in headers.iter().zip(widths.iter()).enumerate() {
                 painter.text_in(
                     Rect::from_min_size(
                         Vec2::new(left, head.min.y),
                         Vec2::new(*width, head.height()),
                     ),
                     label,
-                    TextStyle::new(font, color).aligned(if label.is_empty() {
+                    TextStyle::new(font, color).aligned(if index == 0 {
                         Align::Start
                     } else {
                         Align::End
@@ -334,6 +365,7 @@ fn statistics(ui: &mut Ui, state: &State<'_>) {
                 left += width;
             }
         }
+        crate::panel::divider(ui);
         metrics(ui, "Series", series, &widths);
         if let Some(current) = current {
             metrics(
@@ -359,40 +391,41 @@ fn method(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
         .mask()
         .and_then(ObjectSetId::from_raw)
         .and_then(|id| state.scene.objects.get(id))
-        .map_or_else(|| "whole volume".to_string(), |set| set.name().to_string());
+        .map_or_else(|| "Whole volume".to_string(), |set| set.name().to_string());
     let mut permutations = settings.permutations() as f32;
     let mut block = settings.block() as f32;
     let max_permutations = COLOC_PERMUTATIONS_MAX as f32;
     let max_block = COLOC_BLOCK_MAX as f32;
-    card(ui, 5.0, |ui| {
-        card_title(ui, Icon::Sparkles, "Method", None);
-        widget::labelled(
+    card(ui, 4.0, |ui| {
+        card_title(
             ui,
-            "Resolution",
-            &format!("level {level} · permutation {permutation_level} · stride {stride}"),
+            Icon::Sparkles,
+            "Method",
+            Some(&format!("L{level} · perm L{permutation_level} · {mask}")),
         );
-        widget::labelled(ui, "Scan", &format!("{} voxels", cost.scan_voxels()));
         widget::labelled(
             ui,
-            "Samples",
+            "Sampling",
             &format!(
-                "{} × {} frames · {} blocks",
+                "{} vx · {}×{}f ({} blocks, s{stride})",
+                cost.scan_voxels(),
                 cost.permutation_voxels(),
                 cost.permutation_frames(),
                 cost.blocks()
             ),
         );
-        widget::labelled(ui, "Mask", &mask);
-        ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-            widget::field_label(ui, "Shuffles");
-            if let Some(value) = widget::drag_value(ui, "coloc.permutations", permutations, 0.5, 0)
-            {
-                permutations = value.round().clamp(1.0, max_permutations);
-            }
-            widget::field_label(ui, "PSF");
-            if let Some(value) = widget::drag_value(ui, "coloc.block", block, 0.1, 0) {
-                block = value.round().clamp(1.0, max_block);
-            }
+        form_row(ui, "Shuffles", |ui| {
+            ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
+                if let Some(value) =
+                    widget::drag_value(ui, "coloc.permutations", permutations, 0.5, 0)
+                {
+                    permutations = value.round().clamp(1.0, max_permutations);
+                }
+                widget::field_label(ui, "PSF");
+                if let Some(value) = widget::drag_value(ui, "coloc.block", block, 0.1, 0) {
+                    block = value.round().clamp(1.0, max_block);
+                }
+            });
         });
         if permutations as u32 != settings.permutations() || block as u32 != settings.block() {
             commands.push(Command::SetColocSettings(ColocSettings::new(
@@ -453,15 +486,15 @@ fn scatter(ui: &mut Ui, state: &State<'_>) {
     let tints = [channels[pair.a()].tint(), channels[pair.b()].tint()];
     let names = [channels[pair.a()].name(), channels[pair.b()].name()];
     let bins = series.bins();
-    let subtitle = format!("all frames · {bins} bins");
-    card(ui, 8.0, |ui| {
-        card_title(ui, Icon::Grid, "Scatter", Some(&subtitle));
+    let subtitle = format!("All frames · {bins} bins");
+    card(ui, 6.0, |ui| {
+        card_title(ui, Icon::Grid, "Joint Histogram", Some(&subtitle));
         let full = ui.available();
-        let side = PLOT_SIDE.min(full.x - 4.0);
+        let side = PLOT_SIDE.min(full.x - 4.0).max(120.0);
         let positions = scatter_positions(series, tints, side);
         let x = ui.cursor_position().x + (full.x - side) * 0.5;
         let plot = Rect::from_min_size(Vec2::new(x, ui.cursor_position().y), Vec2::splat(side));
-        ui.allocate(Vec2::new(full.x, side));
+        ui.allocate(Vec2::new(full.x, side + 18.0));
         let background = ui.theme().surface(Role::Field, grana_ui::State::Rest);
         let grid = Color::white_alpha(0.05);
         let line = Color::rgba(0.95, 0.96, 1.0, 0.55);
@@ -523,16 +556,22 @@ fn scatter(ui: &mut Ui, state: &State<'_>) {
                 Color::rgba(1.0, 0.85, 0.45, 0.85),
             );
         }
-        let font = TypeStyle::new(10.0, 400.0, 13.0);
-        painter.text_at(
-            Vec2::new(plot.min.x + 6.0, plot.min.y + 5.0),
-            &format!("{} (y)", names[1]),
-            TextStyle::new(font, Color::from_rgb_f32(tints[1])),
+        let font = TypeStyle::new(10.0, 500.0, 13.0);
+        let footer = Rect::from_min_size(
+            Vec2::new(plot.min.x, plot.max.y + 4.0),
+            Vec2::new(plot.width(), 14.0),
         );
-        painter.text_at(
-            Vec2::new(plot.max.x - 62.0, plot.max.y + 5.0),
-            &format!("{} (x)", names[0]),
+        painter.text_in(
+            footer,
+            &format!("Y: {}", names[1]),
+            TextStyle::new(font, Color::from_rgb_f32(tints[1])),
+            Align::Center,
+        );
+        painter.text_in(
+            footer,
+            &format!("X: {}", names[0]),
             TextStyle::new(font, Color::from_rgb_f32(tints[0])).aligned(Align::End),
+            Align::Center,
         );
     });
 }

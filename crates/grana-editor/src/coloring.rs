@@ -1,8 +1,9 @@
 use grana_display::Palette;
 use grana_measure::Unit;
 use grana_scene::Coloring;
-use grana_ui::{Align, Block, Color, Ui};
+use grana_ui::{Align, Block, Color, Role, Ui};
 
+use crate::panel::{form_combo, form_row};
 use crate::widget;
 use grana_figure::value;
 
@@ -16,47 +17,50 @@ pub fn edit<M: Copy + PartialEq>(
 ) -> bool {
     let mut changed = false;
     ui.push_id(salt);
-    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-        widget::field_label(ui, "color by");
-        let mut options = vec![(None, "uniform".to_string())];
-        options.extend(
-            measurements
-                .iter()
-                .map(|(metric, label)| (Some(*metric), label.clone())),
-        );
-        let current = coloring.metric();
-        if let Some(chosen) = grana_ui::popover::combo(ui, "metric", 180.0, &options, Some(current))
-        {
-            let target = chosen;
-            if target != current && coloring.set_metric(target) {
-                if target.is_some() {
-                    coloring.set_manual(None);
-                }
-                changed = true;
-            }
+    let mut options = vec![(None, "Uniform".to_string())];
+    options.extend(
+        measurements
+            .iter()
+            .map(|(metric, label)| (Some(*metric), label.clone())),
+    );
+    let current = coloring.metric();
+    if let Some(chosen) = form_combo(ui, "metric", "Color by", &options, Some(current))
+        && chosen != current
+        && coloring.set_metric(chosen)
+    {
+        if chosen.is_some() {
+            coloring.set_manual(None);
         }
-    });
+        changed = true;
+    }
     let Some(metric) = coloring.metric() else {
         ui.pop_id();
         return changed;
     };
     let (unit, decimals) = describe(metric);
-    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-        let palettes = Palette::ALL
-            .iter()
-            .map(|palette| (*palette, palette.name().to_string()))
-            .collect::<Vec<_>>();
-        if let Some(chosen) =
-            grana_ui::popover::combo(ui, "palette", 132.0, &palettes, Some(coloring.palette()))
-            && chosen != coloring.palette()
-        {
-            coloring.set_palette(chosen);
-            changed = true;
-        }
-        if let Some(reversed) = widget::checkbox(ui, "reverse", "reverse", coloring.reversed()) {
-            coloring.set_reversed(reversed);
-            changed = true;
-        }
+    form_row(ui, "Palette", |ui| {
+        ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
+            let palettes = Palette::ALL
+                .iter()
+                .map(|palette| (*palette, palette.name().to_string()))
+                .collect::<Vec<_>>();
+            let combo_w = (ui.available().x - 64.0).max(88.0);
+            if let Some(chosen) = grana_ui::popover::combo(
+                ui,
+                "palette",
+                combo_w,
+                &palettes,
+                Some(coloring.palette()),
+            ) && chosen != coloring.palette()
+            {
+                coloring.set_palette(chosen);
+                changed = true;
+            }
+            if let Some(reversed) = widget::checkbox(ui, "reverse", "Rev", coloring.reversed()) {
+                coloring.set_reversed(reversed);
+                changed = true;
+            }
+        });
     });
     let samples = 64;
     let colors = (0..samples)
@@ -90,19 +94,23 @@ fn range<M: Copy + PartialEq>(
             let speed = ((maximum - minimum).abs() / 100.0).max(1.0e-6);
             let mut low = minimum;
             let mut high = maximum;
-            ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
-                if let Some(value) = widget::drag_value(ui, "low", low, speed, decimals as usize) {
-                    low = value;
-                }
-                if let Some(value) = widget::drag_value(ui, "high", high, speed, decimals as usize)
-                {
-                    high = value;
-                }
-                widget::field_label(ui, unit.suffix());
-                if widget::button(ui, "auto", "Auto", grana_ui::Role::Quiet) {
-                    coloring.set_manual(None);
-                    changed = true;
-                }
+            form_row(ui, "Range", |ui| {
+                ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
+                    if let Some(value) =
+                        widget::drag_value(ui, "low", low, speed, decimals as usize)
+                    {
+                        low = value;
+                    }
+                    if let Some(value) =
+                        widget::drag_value(ui, "high", high, speed, decimals as usize)
+                    {
+                        high = value;
+                    }
+                    if widget::button(ui, "auto", "Auto", Role::Quiet) {
+                        coloring.set_manual(None);
+                        changed = true;
+                    }
+                });
             });
             if low != minimum || high != maximum {
                 coloring.set_manual(Some((low, high)));
@@ -111,19 +119,20 @@ fn range<M: Copy + PartialEq>(
         }
         (None, Some((minimum, maximum))) => {
             let text = format!(
-                "auto {} – {}",
+                "Auto: {} – {}",
                 value(minimum, unit, decimals),
                 value(maximum, unit, decimals)
             );
             ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
                 widget::caption(ui, &text);
-                if widget::button(ui, "fix", "Fix range", grana_ui::Role::Quiet) {
+                ui.space((ui.available().x - 76.0).max(0.0));
+                if widget::button(ui, "fix", "Fix Range", Role::Quiet) {
                     coloring.set_manual(Some((minimum, maximum)));
                     changed = true;
                 }
             });
         }
-        (None, None) => widget::weak(ui, "no measured values to map yet"),
+        (None, None) => widget::weak(ui, "No measured values to map yet."),
     }
     changed
 }

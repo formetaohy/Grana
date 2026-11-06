@@ -109,10 +109,10 @@ fn slider_core(
     let palette = ui.theme().palette;
     let caption = TextStyle::new(ui.theme().label_font(), palette.text_tertiary);
     let label_width = text.label.map_or(0.0, |label| {
-        ui.measure_text(label, caption).x.min(96.0) + 12.0
+        ui.measure_text(label, caption).x.clamp(62.0, 96.0) + 10.0
     });
     let rect = ui.allocate_sized(width, metrics.control_height);
-    let readout_width = if text.readout.is_some() { 56.0 } else { 0.0 };
+    let readout_width = if text.readout.is_some() { 58.0 } else { 0.0 };
     let hit = Rect::from_min_max(
         Vec2::new(rect.min.x + label_width, rect.center().y - 13.0),
         Vec2::new(rect.max.x - readout_width, rect.center().y + 13.0),

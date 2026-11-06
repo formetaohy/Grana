@@ -12,17 +12,17 @@ use grana_ui::{
 use crate::measure_panel;
 use crate::state::{PlotDrag, PlotGate, State};
 
-const LEFT: f32 = 40.0;
-const RIGHT: f32 = 10.0;
+const LEFT: f32 = 44.0;
+const RIGHT: f32 = 14.0;
 const TOP: f32 = 28.0;
 const TICK: f32 = 18.0;
-const SUMMARY: f32 = 20.0;
+const SUMMARY: f32 = 22.0;
 const POINT_LIMIT: u64 = 4096;
 const BRUSH_SLOP: f32 = 4.0;
 const LASSO_STEP: f32 = 1.5;
 const HOVER_REACH: f32 = 11.0;
-const SCATTER_HINT: &str = "drag: lasso · shift drag: box · click: locate";
-const HISTOGRAM_HINT: &str = "drag: gate · click: locate";
+const SCATTER_HINT: &str = "Drag: Lasso · Shift-Drag: Box · Click: Locate";
+const HISTOGRAM_HINT: &str = "Drag: Gate · Click: Locate";
 
 enum Readout {
     None,
@@ -75,21 +75,24 @@ fn titles(ui: &mut Ui, plot: &Plot, table: &Table, card: Rect) {
     let columns = table.columns();
     let (y, x) = match plot {
         Plot::Histogram(histogram) => (
-            "objects".to_string(),
-            crate::panel::column_label(&columns[histogram.column()]),
+            "Y: Objects".to_string(),
+            format!(
+                "X: {}",
+                crate::panel::column_label(&columns[histogram.column()])
+            ),
         ),
         Plot::Scatter(scatter) => (
-            crate::panel::column_label(&columns[scatter.y()]),
-            crate::panel::column_label(&columns[scatter.x()]),
+            format!("Y: {}", crate::panel::column_label(&columns[scatter.y()])),
+            format!("X: {}", crate::panel::column_label(&columns[scatter.x()])),
         ),
     };
     let style = TextStyle::new(
-        TypeStyle::new(10.0, 500.0, 13.0),
+        TypeStyle::new(10.5, 500.0, 14.0),
         ui.theme().palette.text_tertiary,
     );
     let strip = Rect::from_min_max(
-        card.min + Vec2::new(8.0, 4.0),
-        Vec2::new(card.max.x - 8.0, card.min.y + TOP),
+        card.min + Vec2::new(12.0, 4.0),
+        Vec2::new(card.max.x - 12.0, card.min.y + TOP),
     );
     let mut painter = ui.painter();
     painter.text_in(strip, &y, style, Align::Center);
@@ -136,10 +139,10 @@ fn summary(ui: &mut Ui, plot: &Plot, table: &Table, readout: Readout, card: Rect
             let places = column.decimals() as usize;
             let unit = column.unit().suffix();
             if statistics.count() == 0 {
-                format!("{total} objects · nothing gated · {HISTOGRAM_HINT}")
+                format!("{total} objects · Ungated · {HISTOGRAM_HINT}")
             } else {
                 format!(
-                    "{} of {total} gated · mean {:.places$} {unit} · σ {:.places$} · {HISTOGRAM_HINT}",
+                    "{} of {total} gated · Mean {:.places$} {unit} · σ {:.places$} · {HISTOGRAM_HINT}",
                     statistics.count(),
                     statistics.mean(),
                     statistics.deviation()
@@ -149,9 +152,9 @@ fn summary(ui: &mut Ui, plot: &Plot, table: &Table, readout: Readout, card: Rect
         (Plot::Scatter(scatter), _) => {
             let correlation = scatter
                 .correlation()
-                .map_or_else(|| "r —".to_string(), |value| format!("r {value:.2}"));
+                .map_or_else(|| "r —".to_string(), |value| format!("r = {value:.2}"));
             if scatter.x_summary().count() == 0 {
-                format!("{total} objects · nothing gated · {SCATTER_HINT}")
+                format!("{total} objects · Ungated · {SCATTER_HINT}")
             } else {
                 format!(
                     "{} of {total} gated · {correlation} · {SCATTER_HINT}",
@@ -166,8 +169,8 @@ fn summary(ui: &mut Ui, plot: &Plot, table: &Table, readout: Readout, card: Rect
     )
     .truncating();
     let rect = Rect::from_min_max(
-        Vec2::new(card.min.x + 8.0, card.max.y - SUMMARY),
-        card.max - Vec2::new(8.0, 0.0),
+        Vec2::new(card.min.x + 12.0, card.max.y - SUMMARY),
+        card.max - Vec2::new(12.0, 2.0),
     );
     let mut painter = ui.painter();
     painter.text_in(rect, &text, style, Align::Center);
@@ -179,9 +182,9 @@ fn located(observation: Observation) -> String {
         observation.object(),
         observation.track(),
     ) {
-        (Some(time), Some(object), _) => format!(" · frame {} · object {}", time + 1, object + 1),
-        (_, _, Some(track)) => format!(" · track {}", track + 1),
-        (Some(time), _, _) => format!(" · frame {}", time + 1),
+        (Some(time), Some(object), _) => format!(" · Frame {} · Object {}", time + 1, object + 1),
+        (_, _, Some(track)) => format!(" · Track {}", track + 1),
+        (Some(time), _, _) => format!(" · Frame {}", time + 1),
         _ => String::new(),
     }
 }
@@ -313,7 +316,7 @@ fn histogram_view(
                 Vec2::new(x, inner.max.y - height),
                 Vec2::new(x + bar, inner.max.y),
             ),
-            Corners::top(1.0),
+            Corners::top(1.5),
             Color::white_alpha(0.14),
         );
         let gated = histogram.gated(bin);
@@ -324,7 +327,7 @@ fn histogram_view(
                     Vec2::new(x, inner.max.y - height),
                     Vec2::new(x + bar, inner.max.y),
                 ),
-                Corners::top(1.0),
+                Corners::top(1.5),
                 accent.with_alpha(0.85),
             );
         }
@@ -376,7 +379,7 @@ fn histogram_view(
         };
     }
     if histogram.peak() == 0 {
-        painter.text_in(inner, "no objects to plot", empty, Align::Center);
+        painter.text_in(inner, "No objects to plot", empty, Align::Center);
     }
     readout
 }
@@ -749,7 +752,7 @@ fn scatter_view(
         readout = Readout::Cell { x, y, observation };
     }
     if scatter.peak() == 0 {
-        painter.text_in(inner, "no objects to plot", empty, Align::Center);
+        painter.text_in(inner, "No objects to plot", empty, Align::Center);
     }
     readout
 }
@@ -892,7 +895,7 @@ fn axis_grid(
         painter.text_in(
             Rect::from_min_max(
                 Vec2::new(inner.min.x - LEFT + 4.0, pixel - TICK * 0.5),
-                Vec2::new(inner.min.x - 5.0, pixel + TICK * 0.5),
+                Vec2::new(inner.min.x - 6.0, pixel + TICK * 0.5),
             ),
             &number(value, decimals(y_step)),
             style.aligned(Align::End),

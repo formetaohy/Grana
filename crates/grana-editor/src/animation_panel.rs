@@ -3,14 +3,14 @@ use grana_ui::{
     Align, Axis, Block, Color, Corners, Icon, Length, Motion, Rect, Role, TextStyle, TypeStyle, Ui,
 };
 
-use crate::panel::{card, card_title};
+use crate::panel::{card, card_title, divider, form_combo, form_row};
 use crate::state::State;
 use crate::widget;
 use grana_session::{Command, Export};
 
 const WIDTHS: [u32; 4] = [1280, 1920, 2560, 3840];
 const IMAGE_WIDTHS: [u32; 5] = [0, 1280, 1920, 2560, 3840];
-const TRACK_HEIGHT: f32 = 62.0;
+const TRACK_HEIGHT: f32 = 58.0;
 
 pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
     let duration = state.timeline.duration();
@@ -30,9 +30,10 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         .timeline
         .sample(position)
         .map_or(1, |sample| sample.time + 1);
-    let gap = 14.0;
+    let gap = 12.0;
     let sheet_width = ui.available().x;
-    let card_width = 306.0;
+    let export_card_w = ((sheet_width - gap * 2.0) * 0.27).clamp(240.0, 296.0);
+    let timeline_card_w = (sheet_width - gap * 2.0 - export_card_w * 2.0).max(340.0);
     let width_key = ui.id("export.width");
     let transparent_key = ui.id("export.transparent");
     let image_width = ui
@@ -57,19 +58,19 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         even((width as f32 * stage_height / stage_width).round() as u32),
     ];
     state.workspace.movie_size = movie_size;
+    let key_subtitle = format!(
+        "{} keyframe{}",
+        keys.len(),
+        if keys.len() == 1 { "" } else { "s" }
+    );
     ui.row(Block::row().gaps(gap).align(Align::Start), |ui| {
         ui.column(
             Block::column()
-                .width(Length::Fixed((sheet_width - gap - card_width).max(420.0)))
-                .gaps(10.0),
+                .width(Length::Fixed(timeline_card_w))
+                .gaps(8.0),
             |ui| {
                 card(ui, 8.0, |ui| {
-                    card_title(
-                        ui,
-                        Icon::Film,
-                        "Timeline",
-                        Some(&format!("{} keyframes", keys.len())),
-                    );
+                    card_title(ui, Icon::Film, "Timeline", Some(&key_subtitle));
                     ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
                         let (symbol, label) = if previewing {
                             (Icon::Pause, "Pause")
@@ -90,13 +91,13 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                         if !empty && widget::button(ui, "clear", "Clear", Role::Quiet) {
                             commands.push(Command::ClearKeyframes);
                         }
-                        ui.space(2.0);
+                        ui.space(4.0);
                         let style = TextStyle::new(
                             ui.theme().font(grana_ui::Level::Monospace),
                             ui.theme().palette.text_tertiary,
                         );
                         ui.text_style(
-                            &format!("{position:.2} / {duration:.2} s · frame {current_frame}"),
+                            &format!("{position:.2} / {duration:.2} s · F{current_frame}"),
                             style,
                         );
                     });
@@ -112,54 +113,57 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
             },
         );
         ui.column(
-            Block::column().width(Length::Fixed(card_width)).gaps(10.0),
+            Block::column()
+                .width(Length::Fixed(export_card_w))
+                .gaps(8.0),
             |ui| {
-                card(ui, 8.0, |ui| {
-                    card_title(ui, Icon::Film, "Movie", None);
-                    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-                        widget::field_label(ui, "FPS");
-                        if let Some(value) = widget::drag_value(ui, "fps", fps as f32, 0.5, 0) {
-                            commands.push(Command::SetTimelineFps(
-                                (value.round() as u32).clamp(1, grana_animation::Timeline::MAX_FPS),
-                            ));
-                        }
-                        widget::field_label(ui, "Length");
-                        if let Some(value) = widget::drag_value(ui, "length", duration, 0.1, 2) {
-                            commands.push(Command::SetTimelineDuration(value.clamp(0.5, 600.0)));
-                        }
-                        widget::caption(ui, "s");
-                    });
-                    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-                        widget::field_label(ui, "Width");
-                        let options = WIDTHS
-                            .iter()
-                            .map(|width| (*width, width.to_string()))
-                            .collect::<Vec<_>>();
-                        if let Some(value) =
-                            grana_ui::popover::combo(ui, "movie.width", 96.0, &options, Some(width))
-                        {
-                            state.workspace.playback.width = value;
-                        }
-                        let style = TextStyle::new(
-                            ui.theme().font(grana_ui::Level::Monospace),
-                            ui.theme().palette.text_secondary,
-                        );
-                        ui.text_style(&format!("{} × {}", movie_size[0], movie_size[1]), style);
-                    });
-                    widget::caption(
+                card(ui, 6.0, |ui| {
+                    card_title(
                         ui,
-                        &format!(
-                            "{timeline_frames} frames · {:.1} s of data",
-                            frames as f32 * interval
-                        ),
+                        Icon::Film,
+                        "Movie",
+                        Some(&format!("{} × {}", movie_size[0], movie_size[1])),
                     );
-                    ui.separator();
+                    let options = WIDTHS
+                        .iter()
+                        .map(|width| (*width, format!("{width} px")))
+                        .collect::<Vec<_>>();
+                    if let Some(value) =
+                        form_combo(ui, "movie.width", "Width", &options, Some(width))
+                    {
+                        state.workspace.playback.width = value;
+                    }
+                    form_row(ui, "Frame rate", |ui| {
+                        ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
+                            if let Some(value) = widget::drag_value(ui, "fps", fps as f32, 0.5, 0) {
+                                commands.push(Command::SetTimelineFps(
+                                    (value.round() as u32)
+                                        .clamp(1, grana_animation::Timeline::MAX_FPS),
+                                ));
+                            }
+                            widget::caption(ui, &format!("fps · {timeline_frames} frames"));
+                        });
+                    });
+                    form_row(ui, "Duration", |ui| {
+                        ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
+                            if let Some(value) = widget::drag_value(ui, "length", duration, 0.1, 2)
+                            {
+                                commands
+                                    .push(Command::SetTimelineDuration(value.clamp(0.5, 600.0)));
+                            }
+                            widget::caption(
+                                ui,
+                                &format!("s ({:.1} s data)", frames as f32 * interval),
+                            );
+                        });
+                    });
+                    divider(ui);
                     match export {
                         Some((frame, total)) => {
                             let fraction = frame as f32 / total.max(1) as f32;
                             widget::progress(ui, fraction, ui.available().x);
                             ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-                                widget::caption(ui, &format!("Exporting {frame} / {total}"));
+                                widget::caption(ui, &format!("Exporting {frame}/{total}"));
                                 if widget::button(ui, "cancel", "Cancel", Role::Quiet) {
                                     commands.push(Command::CancelExport);
                                 }
@@ -170,7 +174,7 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                             if widget::button_with_enabled(
                                 ui,
                                 "export",
-                                "Export movie",
+                                "Export Movie (MP4)",
                                 Role::Prominent,
                                 Length::Fill,
                                 enabled,
@@ -182,7 +186,7 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                             if widget::button_with_enabled(
                                 ui,
                                 "export.alpha",
-                                "Transparent movie",
+                                "Transparent Movie (MOV)",
                                 Role::Control,
                                 Length::Fill,
                                 enabled,
@@ -193,88 +197,79 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                             }
                         }
                     }
-                    widget::weak(
-                        ui,
-                        "Exports the full viewport: volume, section and figure overlay.",
-                    );
-                    widget::weak(
-                        ui,
-                        "A transparent movie is quicktime with lossless RGBA frames.",
-                    );
                 });
-                card(ui, 8.0, |ui| {
-                    card_title(ui, Icon::Camera, "Image", None);
-                    ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-                        widget::field_label(ui, "Width");
-                        if let Some(value) = grana_ui::popover::combo(
-                            ui,
-                            "export.width",
-                            96.0,
-                            &image_options,
-                            Some(image_width),
-                        ) {
-                            ui.store_value(width_key, value as f32);
-                            commands.push(Command::SetExport(Export::new(value, transparent)));
-                        }
-                        let style = TextStyle::new(
-                            ui.theme().font(grana_ui::Level::Monospace),
-                            ui.theme().palette.text_secondary,
-                        );
-                        ui.text_style(&format!("{resolved_width} px"), style);
-                    });
-                    if let Some(value) = widget::toggle_row(
-                        ui,
-                        "export.transparent",
-                        "Transparent background",
+            },
+        );
+        ui.column(Block::column().width(Length::Fill).gaps(8.0), |ui| {
+            card(ui, 6.0, |ui| {
+                card_title(
+                    ui,
+                    Icon::Camera,
+                    "Still & Sequence",
+                    Some(&format!("{resolved_width} px")),
+                );
+                if let Some(value) = form_combo(
+                    ui,
+                    "export.width",
+                    "Width",
+                    &image_options,
+                    Some(image_width),
+                ) {
+                    ui.store_value(width_key, value as f32);
+                    commands.push(Command::SetExport(Export::new(value, transparent)));
+                }
+                if let Some(value) = widget::toggle_row(
+                    ui,
+                    "export.transparent",
+                    "Transparent Background",
+                    transparent,
+                ) {
+                    ui.store_value(transparent_key, if value { 1.0 } else { 0.0 });
+                    commands.push(Command::SetExport(Export::new(image_width, value)));
+                }
+                widget::labelled(ui, "Sequence", &format!("{frames} PNG frames"));
+                divider(ui);
+                let idle = export.is_none();
+                if widget::button_with_enabled(
+                    ui,
+                    "save.image",
+                    "Save Image (PNG)",
+                    Role::Prominent,
+                    Length::Fill,
+                    idle,
+                )
+                .clicked
+                {
+                    commands.push(Command::SaveSnapshot);
+                }
+                if widget::button_with_enabled(
+                    ui,
+                    "export.sequence",
+                    "Export Frame Sequence",
+                    Role::Control,
+                    Length::Fill,
+                    idle && frames > 0,
+                )
+                .clicked
+                {
+                    commands.push(Command::ExportSequence(Export::new(
+                        image_width,
                         transparent,
-                    ) {
-                        ui.store_value(transparent_key, if value { 1.0 } else { 0.0 });
-                        commands.push(Command::SetExport(Export::new(image_width, value)));
-                    }
-                    ui.separator();
-                    let idle = export.is_none();
-                    if widget::button_with_enabled(
-                        ui,
-                        "save.image",
-                        "Save image",
-                        Role::Prominent,
-                        Length::Fill,
-                        idle,
-                    )
-                    .clicked
-                    {
-                        commands.push(Command::SaveSnapshot);
-                    }
-                    if widget::button_with_enabled(
-                        ui,
-                        "export.sequence",
-                        "Export sequence",
-                        Role::Control,
-                        Length::Fill,
-                        idle && frames > 0,
-                    )
-                    .clicked
-                    {
-                        commands.push(Command::ExportSequence(Export::new(
-                            image_width,
-                            transparent,
-                        )));
-                    }
-                    widget::caption(ui, &format!("One PNG per time point · {frames} files"));
-                });
+                    )));
+                }
                 if let Some(message) = message {
                     widget::weak(ui, &message);
                 }
-            },
-        );
+            });
+        });
     });
 }
 
 fn width_label(width: u32) -> String {
     if width == 0 {
-        "Screen".to_string()
+        "Native Screen".to_string()
     } else {
-        width.to_string()
+        format!("{width} px")
     }
 }
 
@@ -335,7 +330,21 @@ fn keyframe_track(
                 tick_color,
             );
             let label = format!("{:.1}s", duration * index as f32 / ticks as f32);
-            painter.text_at(Vec2::new(x + 2.0, bar.max.y + 8.0), &label, label_style);
+            let tick_rect = if index == 0 {
+                Rect::from_min_size(Vec2::new(x, bar.max.y + 6.0), Vec2::new(40.0, 14.0))
+            } else if index == ticks {
+                Rect::from_min_size(Vec2::new(x - 40.0, bar.max.y + 6.0), Vec2::new(40.0, 14.0))
+            } else {
+                Rect::from_center_size(Vec2::new(x, bar.max.y + 13.0), Vec2::new(40.0, 14.0))
+            };
+            let align = if index == 0 {
+                Align::Start
+            } else if index == ticks {
+                Align::End
+            } else {
+                Align::Center
+            };
+            painter.text_in(tick_rect, &label, label_style.aligned(align), Align::Center);
         }
         painter.segment(
             Vec2::new(playhead_x, rect.min.y + 8.0),
@@ -395,7 +404,7 @@ fn keyframe_track(
                 Vec2::new(rect.min.x, rect.min.y),
                 Vec2::new(rect.max.x, rect.max.y - 12.0),
             ),
-            "Set a keyframe to begin",
+            "Add a keyframe to animate the camera and section",
             empty,
             Align::Center,
         );
@@ -419,7 +428,7 @@ fn keyframe_list(
     ui.scroll_axis(
         ui.id("keyframes"),
         Axis::Column,
-        Length::Fixed(92.0),
+        Length::Fixed(88.0),
         None,
         |ui| {
             for (index, key) in keys.iter().enumerate() {
@@ -437,9 +446,9 @@ fn keyframe_list(
                 {
                     let mut painter = ui.painter();
                     if active {
-                        painter.rect(row, Corners::all(10.0), accent.with_alpha(0.16));
+                        painter.rect(row, Corners::all(8.0), accent.with_alpha(0.16));
                     } else if hover > 0.01 {
-                        painter.rect(row, Corners::all(10.0), Color::white_alpha(0.05 * hover));
+                        painter.rect(row, Corners::all(8.0), Color::white_alpha(0.05 * hover));
                     }
                     painter.text_in(
                         Rect::from_min_max(
@@ -447,7 +456,7 @@ fn keyframe_list(
                             Vec2::new(row.max.x - 28.0, row.max.y),
                         ),
                         &format!(
-                            "{:>6.2}s · frame {:>3} · yaw {:>5.2} · dist {:>6.1}",
+                            "{:>6.2}s · F{:>2} · Yaw {:>5.2} · Dist {:>6.1}",
                             key.at,
                             key.time + 1,
                             key.camera.yaw,
