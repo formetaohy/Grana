@@ -9,7 +9,9 @@ use grana_image::{Format, Image, Source};
 use grana_measure::{ColocPair, ColocSeries, Lasso};
 use grana_object::Roi;
 use grana_project::{Export, Project, Source as ProjectSource, ViewState};
-use grana_scene::{Dataset, Measure, ObjectFrame, ObjectParams, ObjectSetId, Scene, slug};
+use grana_scene::{
+    Dataset, MaskFilter, Measure, ObjectFrame, ObjectParams, ObjectSetId, Scene, slug,
+};
 use grana_volume::{Axis, Pyramid, Region};
 
 use crate::event::Event as RunEvent;
@@ -102,7 +104,8 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 set,
                 mask,
                 mask_radius,
-            } => run.detect(*set, *mask, *mask_radius)?,
+                filter,
+            } => run.detect(*set, *mask, *mask_radius, *filter)?,
             Step::Filter { set, .. } => run.refilter(*set)?,
             Step::Copy { set, source } => run.copy(*set, *source)?,
             Step::Merge { set, part } => run.merge(*set, *part)?,
@@ -116,7 +119,8 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 pair,
                 mask,
                 mask_radius,
-            } => run.colocalize(*pair, *mask, *mask_radius)?,
+                filter,
+            } => run.colocalize(*pair, *mask, *mask_radius, *filter)?,
             Step::Present => {
                 task.protocol
                     .present_measure(&run.sets, &mut measure, &run.scene);
@@ -324,10 +328,12 @@ impl Run<'_, '_> {
         id: ObjectSetId,
         mask: Option<ObjectSetId>,
         mask_radius: f32,
+        filter: Option<MaskFilter>,
     ) -> Result<(), String> {
         let task = self.task;
         self.scene.set_mask(mask);
         self.scene.set_mask_radius(mask_radius);
+        self.scene.set_mask_filter(filter);
         let roi = match mask {
             None => None,
             Some(mask) => {
@@ -347,7 +353,7 @@ impl Run<'_, '_> {
                         "the set {set} is masked by {name}, which detected no objects"
                     ));
                 }
-                self.scene.mask_frames()
+                self.scene.mask_frames()?
             }
         };
         let object = self
@@ -540,6 +546,7 @@ impl Run<'_, '_> {
         pair: usize,
         mask: Option<ObjectSetId>,
         mask_radius: f32,
+        filter: Option<MaskFilter>,
     ) -> Result<(), String> {
         let task = self.task;
         let coloc = task
@@ -551,6 +558,7 @@ impl Run<'_, '_> {
         let pair = self.pairs[pair];
         self.scene.set_mask(mask);
         self.scene.set_mask_radius(mask_radius);
+        self.scene.set_mask_filter(filter);
         self.scene.coloc.set_settings(settings);
         self.scene.coloc.set_pair(pair);
         let roi = match self.scene.mask {
@@ -561,7 +569,7 @@ impl Run<'_, '_> {
                     let name = object.map_or("the colocalization mask", |set| set.name());
                     return Err(format!("{name} detected no objects"));
                 }
-                self.scene.mask_frames()
+                self.scene.mask_frames()?
             }
         };
         let region = self.scene.region;

@@ -6,9 +6,9 @@ use grana_scene::{
 
 use crate::{
     ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DriftSpec,
-    FilterSpec, LassoSpec, MeasureSpec, MetricSpec, PartSpec, Protocol, ProtocolError, RegionSpec,
-    RelationSpec, RenderSpec, SetSpec, SnapshotSpec, SortSpec, SourceSpec, TrackSpec, TransferSpec,
-    ViewSpec, WindowSpec,
+    FilterSpec, LassoSpec, MaskFilterSpec, MeasureSpec, MetricSpec, PartSpec, Protocol,
+    ProtocolError, RegionSpec, RelationSpec, RenderSpec, SetSpec, SnapshotSpec, SortSpec,
+    SourceSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -82,8 +82,12 @@ impl Protocol {
                 .key()
                 .as_str()
                 .to_string();
+            let target = scene
+                .mask_filter
+                .and_then(|filter| scene.objects.get(filter.target()))
+                .map(|set| set.key().as_str().to_string());
             for set in &mut sets {
-                if set.key != key {
+                if set.key != key && target.as_deref() != Some(set.key.as_str()) {
                     set.mask = Some(key.clone());
                 }
             }
@@ -140,6 +144,18 @@ impl Protocol {
             reference: scene.drift().reference(),
             offsets: scene.drift().offsets().to_vec(),
         });
+        let mask_filter = scene.mask_filter.and_then(|filter| {
+            let source = scene.mask.and_then(|mask| scene.objects.get(mask))?;
+            let target = scene.objects.get(filter.target())?;
+            Some(MaskFilterSpec {
+                source: source.key().as_str().to_string(),
+                target: target.key().as_str().to_string(),
+                shift: filter.shift(),
+                field: filter.field().key().to_string(),
+                minimum: filter.range()[0],
+                maximum: filter.range()[1],
+            })
+        });
         Protocol {
             region: RegionSpec::of(scene.region, scene.dataset.world_size()),
             render: Some(RenderSpec::of(
@@ -151,6 +167,7 @@ impl Protocol {
             channels: specs,
             drift,
             mask_radius: scene.mask_radius,
+            mask_filter,
             sets,
             relations,
             coloc,

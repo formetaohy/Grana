@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use grana_measure::{Lasso, MeasureView, Plot, PlotAxis, Scope};
-use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
-use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, Scene, Visibility};
+use grana_object::{IntensityTable, RelationFrame, SampleAccumulator, Spot, SpotSet};
+use grana_scene::{
+    Dataset, MaskFilter, Measure, ObjectFrame, ObjectKind, RelationField, Scene, Visibility,
+};
 use grana_volume::{Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
 fn scene() -> Scene {
@@ -53,6 +55,7 @@ fn detects_inside_the_filtered_objects_of_the_mask_set() {
     let whole = scene
         .mask_frames()
         .expect("the mask set builds")
+        .expect("the mask names a set")
         .mask(level, 0)
         .expect("the whole mask rasterizes");
     assert!(whole.count() > 0, "the mask rasterizes the spot set");
@@ -67,11 +70,86 @@ fn detects_inside_the_filtered_objects_of_the_mask_set() {
     let filtered = scene
         .mask_frames()
         .expect("the filtered mask set builds")
+        .expect("the mask names a set")
         .mask(level, 0)
         .expect("the filtered mask rasterizes");
     assert!(
         filtered.count() > 0 && filtered.count() < whole.count(),
         "the analysis mask follows the filter visibility"
+    );
+}
+
+#[test]
+fn limits_the_analysis_mask_to_a_relation_range() {
+    let mut scene = scene();
+    let source = scene.add_object(ObjectKind::Spots, 0);
+    let target = scene.add_object(ObjectKind::Spots, 0);
+    let statistics = |count: usize| {
+        (0..count)
+            .map(|_| {
+                let mut accumulator = SampleAccumulator::new();
+                accumulator.push(0.5);
+                accumulator.statistics()
+            })
+            .collect::<Vec<_>>()
+    };
+    for time in 0..2 {
+        scene.install(
+            source,
+            time,
+            ObjectFrame::Spots(SpotSet::new(
+                0,
+                vec![
+                    Spot::new([-0.4, 0.0, 0.0], 0.6, 0.5),
+                    Spot::new([0.4, 0.0, 0.0], 0.6, 0.5),
+                ],
+                IntensityTable::new(1, statistics(2)),
+            )),
+        );
+        scene.install(
+            target,
+            time,
+            ObjectFrame::Spots(SpotSet::new(
+                0,
+                vec![Spot::new([0.0, 0.0, 0.0], 0.3, 0.5)],
+                IntensityTable::new(1, statistics(1)),
+            )),
+        );
+    }
+    scene.set_mask(Some(source));
+    let level = scene.dataset.pyramid().level(0);
+    let whole = scene
+        .mask_frames()
+        .expect("the mask set builds")
+        .expect("the mask names a set")
+        .mask(level, 0)
+        .expect("the whole mask rasterizes");
+    assert!(scene.add_relation(source, target, 0));
+    let filter = MaskFilter::new(target, 0, RelationField::Distance, 0.0, 1.0);
+    assert!(scene.set_mask_filter(Some(filter)));
+    let missing = match scene.mask_frames() {
+        Err(detail) => detail,
+        Ok(_) => panic!("the relation is not measured yet"),
+    };
+    assert!(missing.contains("needs the relation"));
+    for time in 0..2 {
+        scene.install_relation(
+            source,
+            target,
+            0,
+            time,
+            RelationFrame::new(vec![0.2, 20.0], vec![0.0, 0.0], vec![0.0, 0.0], vec![1, 1]),
+        );
+    }
+    let limited = scene
+        .mask_frames()
+        .expect("the filtered mask set builds")
+        .expect("the mask names a set")
+        .mask(level, 0)
+        .expect("the filtered mask rasterizes");
+    assert!(
+        limited.count() > 0 && limited.count() < whole.count(),
+        "the analysis mask keeps the objects inside the relation range"
     );
 }
 

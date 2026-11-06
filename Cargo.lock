@@ -1173,6 +1173,7 @@ dependencies = [
  "grana-raster",
  "grana-scene",
  "grana-volume",
+ "grana-zarr",
  "rfd",
 ]
 

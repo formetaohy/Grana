@@ -20,9 +20,10 @@ use grana_object::{
 };
 use grana_scene::{
     ChannelState, ColocResult, ColocState, ColorState, Criteria, Curation, Drift, FilterRange,
-    ItemState, LassoPath, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind,
-    ObjectParams, ObjectSetId, ObjectSetKey, Provenance, Recipe, RelationState, SceneState, Seeds,
-    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
+    ItemState, LassoPath, MaskFilter, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame,
+    ObjectKind, ObjectParams, ObjectSetId, ObjectSetKey, Provenance, Recipe, RelationState,
+    SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
+    Visibility,
 };
 use grana_volume::{Axis, Clip, Intensity, Region};
 
@@ -171,6 +172,7 @@ impl Decode for SceneState {
                 set => Some(set),
             },
             mask_radius: non_negative(reader.f32()?)?,
+            mask_filter: decode_mask_filter(reader)?,
             time: reader.u32()?,
             selection: Option::<SelectionState>::decode(reader)?,
             sets: Vec::<SetState>::decode(reader)?,
@@ -246,6 +248,25 @@ impl Decode for SceneState {
             })
         {
             return Err(FAULT_SHAPE);
+        }
+        if let Some(filter) = state.mask_filter {
+            let Some(mask) = state.mask else {
+                return Err(FAULT_SHAPE);
+            };
+            let Some(set) = state.sets.iter().find(|set| set.id == mask) else {
+                return Err(FAULT_SHAPE);
+            };
+            let related = set.relations.iter().any(|relation| {
+                relation.target == filter.target().raw() && relation.shift == filter.shift()
+            });
+            if !related
+                || !state
+                    .sets
+                    .iter()
+                    .any(|candidate| candidate.id == filter.target().raw())
+            {
+                return Err(FAULT_SHAPE);
+            }
         }
         Ok(state)
     }
@@ -1653,6 +1674,30 @@ fn aggregate(tag: u8) -> Result<Aggregate, &'static str> {
         .into_iter()
         .find(|aggregate| aggregate.index() == tag)
         .ok_or(FAULT_SHAPE)
+}
+
+fn decode_mask_filter(reader: &mut Reader<'_>) -> Result<Option<MaskFilter>, &'static str> {
+    if !reader.bool()? {
+        return Ok(None);
+    }
+    let target = reader.u64()?;
+    let shift = reader.i32()?;
+    let field = RelationField::from_index(reader.u8()?).ok_or(FAULT_VALUE)?;
+    let minimum = reader.f32()?;
+    let maximum = reader.f32()?;
+    if !RelationField::CONTINUOUS.contains(&field)
+        || !minimum.is_finite()
+        || !maximum.is_finite()
+        || minimum > maximum
+    {
+        return Err(FAULT_VALUE);
+    }
+    let Some(target) = ObjectSetId::from_raw(target) else {
+        return Err(FAULT_VALUE);
+    };
+    Ok(Some(MaskFilter::new(
+        target, shift, field, minimum, maximum,
+    )))
 }
 
 fn axis(tag: u8) -> Result<Axis, &'static str> {

@@ -4,6 +4,7 @@ mod cache;
 mod edit;
 mod execute;
 mod export;
+mod label;
 mod open;
 mod replay;
 use std::collections::HashSet;
@@ -101,6 +102,7 @@ pub struct Session {
     view: Option<ViewState>,
     history: History,
     export: Export,
+    labels: Option<label::Labels>,
     resume: Vec<(ObjectSetId, ObjectSetId, i32)>,
     recut: Option<(ObjectSetId, SurfaceCut)>,
     snapshotter: Option<SnapshotFactory>,
@@ -154,6 +156,7 @@ impl Session {
             view: None,
             history: History::default(),
             export: Export::NATIVE,
+            labels: None,
             resume: Vec::new(),
             recut: None,
             snapshotter: None,
@@ -272,6 +275,7 @@ impl Session {
             frame_interval: interval,
             export,
             export_message,
+            label: self.label_progress(),
             store: StoreView {
                 resident: stats.resident(),
                 spilled: stats.spilled(),
@@ -313,6 +317,7 @@ impl Session {
         repaint |= self.poll_document();
         repaint |= self.poll_analysis();
         repaint |= self.poll_batch();
+        repaint |= self.poll_labels();
         repaint
     }
     pub fn request(&mut self, time: u32, bricks: &[BrickRequest]) {

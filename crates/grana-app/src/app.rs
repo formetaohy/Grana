@@ -916,6 +916,7 @@ impl App {
             || self.workspace.playback.playing
             || self.session.loading().is_some()
             || self.session.transferring()
+            || self.session.writing()
             || !self.session.progress().is_empty()
             || self.session.pending() > 0
             || engine.requests_pending()

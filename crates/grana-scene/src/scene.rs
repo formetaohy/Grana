@@ -15,6 +15,7 @@ use crate::curation::Curation;
 use crate::dataset::Dataset;
 use crate::drift::Drift;
 use crate::key::ObjectSetKey;
+use crate::mask::MaskFilter;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
@@ -50,6 +51,7 @@ pub struct Scene {
     pub clip: Clip,
     pub mask: Option<ObjectSetId>,
     pub mask_radius: f32,
+    pub mask_filter: Option<MaskFilter>,
     drift: Drift,
     pub objects: Objects,
     pub coloc: Coloc,
@@ -84,6 +86,7 @@ impl Scene {
             clip: Clip::none(),
             mask: None,
             mask_radius: 0.0,
+            mask_filter: None,
             drift: Drift::default(),
             objects: Objects::new(),
             coloc: Coloc::new(channel_count, region),
@@ -165,6 +168,7 @@ impl Scene {
         {
             self.mask = None;
         }
+        self.prune_mask_filter();
         self.sync_coloc_inputs();
     }
 
@@ -183,6 +187,7 @@ impl Scene {
     pub fn clear_objects(&mut self) {
         self.objects = Objects::new();
         self.mask = None;
+        self.mask_filter = None;
         self.selection = None;
         self.coloc.clear();
         self.sync_coloc_inputs();
@@ -365,6 +370,7 @@ impl Scene {
         {
             self.selection = None;
         }
+        self.prune_mask_filter();
         self.sync_coloc_inputs();
         Ok(())
     }
@@ -380,8 +386,53 @@ impl Scene {
                 "an analysis mask names an object set of the scene"
             );
         }
+        if self.mask != source {
+            self.mask_filter = None;
+        }
         self.mask = source;
         self.sync_coloc_inputs();
+    }
+
+    pub fn set_mask_filter(&mut self, filter: Option<MaskFilter>) -> bool {
+        match filter {
+            Some(filter) => {
+                let Some(mask) = self.mask else {
+                    return false;
+                };
+                let Some(set) = self.objects.get(mask) else {
+                    return false;
+                };
+                if self.objects.get(filter.target()).is_none()
+                    || set.relation(filter.target(), filter.shift()).is_none()
+                {
+                    return false;
+                }
+                if self.mask_filter == Some(filter) {
+                    return false;
+                }
+                self.mask_filter = Some(filter);
+            }
+            None => {
+                if self.mask_filter.is_none() {
+                    return false;
+                }
+                self.mask_filter = None;
+            }
+        }
+        self.sync_coloc_inputs();
+        true
+    }
+
+    fn prune_mask_filter(&mut self) {
+        let Some(filter) = self.mask_filter else {
+            return;
+        };
+        let valid = self.mask.is_some_and(|mask| {
+            self.objects.get(mask).is_some() && self.objects.get(filter.target()).is_some()
+        });
+        if !valid {
+            self.mask_filter = None;
+        }
     }
 
     pub fn set_mask_radius(&mut self, radius: f32) -> bool {
@@ -449,27 +500,71 @@ impl Scene {
         true
     }
 
-    pub fn mask_frames(&self) -> Option<grana_object::Roi> {
-        let set = self.objects.get(self.mask?)?;
+    pub fn mask_frames(&self) -> Result<Option<grana_object::Roi>, String> {
+        let Some(set) = self.mask.and_then(|mask| self.objects.get(mask)) else {
+            return Ok(None);
+        };
         let filtered = set.filtered();
-        let frames = Arc::new(
-            (0..self.frame_count())
-                .map(|time| {
-                    let frame = set.frame_shared(time)?;
-                    if !filtered {
-                        return Some(frame);
-                    }
-                    let keep = (0..frame.object_count())
-                        .map(|object| set.filtered_object(time, object))
-                        .collect::<Vec<_>>();
-                    frame.retain(&keep).ok().flatten().map(Arc::new)
-                })
-                .collect::<Vec<_>>(),
-        );
-        Some(
+        let filter = self.mask_filter;
+        if let Some(filter) = filter
+            && set.relation(filter.target(), filter.shift()).is_none()
+        {
+            return Err(format!(
+                "the analysis mask relates {} to an object set that left the scene",
+                set.name()
+            ));
+        }
+        let mut frames = Vec::with_capacity(self.frame_count() as usize);
+        for time in 0..self.frame_count() {
+            let Some(frame) = set.frame_shared(time) else {
+                frames.push(None);
+                continue;
+            };
+            let mut keep = (0..frame.object_count())
+                .map(|object| !filtered || set.filtered_object(time, object))
+                .collect::<Vec<_>>();
+            if let Some(filter) = filter
+                && keep.iter().any(|kept| *kept)
+            {
+                let relation = set
+                    .relation(filter.target(), filter.shift())
+                    .expect("the checked relation is present");
+                let target = self
+                    .objects
+                    .get(filter.target())
+                    .map_or("the related set", ObjectSet::name);
+                let measured = relation.frame(time).ok_or_else(|| {
+                    format!(
+                        "the analysis mask needs the relation of {} to {target} at frame {time}",
+                        set.name()
+                    )
+                })?;
+                if measured.objects() != frame.object_count() {
+                    return Err(format!(
+                        "the relation of {} to {target} measures {} objects at frame {time} and the frame holds {}",
+                        set.name(),
+                        measured.objects(),
+                        frame.object_count()
+                    ));
+                }
+                for (object, kept) in keep.iter_mut().enumerate() {
+                    *kept &= filter.holds(measured, object);
+                }
+            }
+            frames.push(if keep.iter().all(|kept| *kept) {
+                Some(frame)
+            } else {
+                frame
+                    .retain(&keep)
+                    .map_err(|error| error.to_string())?
+                    .map(Arc::new)
+            });
+        }
+        let frames = Arc::new(frames);
+        Ok(Some(
             grana_object::Roi::paged(frames.len(), move |time| shape_at(&frames, time))
                 .with_radius(self.mask_radius),
-        )
+        ))
     }
 
     pub fn relation_gate(&self, source: ObjectSetId, target: ObjectSetId) -> f32 {
@@ -548,7 +643,19 @@ impl Scene {
         target: ObjectSetId,
         shift: i32,
     ) -> bool {
-        self.objects.remove_relation(source, target, shift)
+        let removed = self.objects.remove_relation(source, target, shift);
+        if removed {
+            if self.mask == Some(source)
+                && self
+                    .mask_filter
+                    .is_some_and(|filter| filter.target() == target && filter.shift() == shift)
+            {
+                self.mask_filter = None;
+            }
+            self.prune_mask_filter();
+            self.sync_coloc_inputs();
+        }
+        removed
     }
 
     pub fn install_relation(
@@ -565,6 +672,8 @@ impl Scene {
 
     pub fn clear_relations(&mut self, id: ObjectSetId) {
         self.objects.clear_relations(id);
+        self.prune_mask_filter();
+        self.sync_coloc_inputs();
     }
 
     pub fn relation_rows(&self, id: ObjectSetId, time: u32) -> Vec<RelationRow<'_>> {
@@ -904,7 +1013,12 @@ impl Scene {
 
     fn mask_key(&self) -> Option<MaskKey> {
         let set = self.objects.get(self.mask?)?;
-        Some(MaskKey::new(set.id(), set.document(), self.mask_radius))
+        Some(MaskKey::new(
+            set.id(),
+            set.document(),
+            self.mask_radius,
+            self.mask_filter,
+        ))
     }
 
     fn sync_coloc_inputs(&mut self) {

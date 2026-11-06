@@ -129,6 +129,18 @@ impl Encode for SceneState {
         self.clip.encode(writer);
         writer.u64(self.mask.unwrap_or(0));
         writer.f32(self.mask_radius);
+        match self.mask_filter {
+            Some(filter) => {
+                writer.bool(true);
+                writer.u64(filter.target().raw());
+                writer.i32(filter.shift());
+                writer.u8(filter.field().index());
+                for value in filter.range() {
+                    writer.f32(value);
+                }
+            }
+            None => writer.bool(false),
+        }
         writer.u32(self.time);
         self.selection.encode(writer);
         self.sets.encode(writer);

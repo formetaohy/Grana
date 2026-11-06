@@ -21,8 +21,8 @@ use grana_object::{
 use grana_object::{SpotParams, SurfaceFilter, SurfaceParams};
 use grana_project::{Export, Project, Source, ViewState};
 use grana_scene::{
-    Criteria, Dataset, Drift, FilterRange, Item, Measure, ObjectColor, ObjectFrame, ObjectKind,
-    ObjectParams, Scene, Selection, TrackColor, Visibility,
+    Criteria, Dataset, Drift, FilterRange, Item, MaskFilter, Measure, ObjectColor, ObjectFrame,
+    ObjectKind, ObjectParams, Scene, Selection, TrackColor, Visibility,
 };
 use grana_volume::{Axis, Channel, Clip, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -209,6 +209,69 @@ fn round_trips_a_project() {
     assert_eq!(restored_result.level(), 0);
     assert_eq!(restored_result.permutation_level(), 1);
     assert_eq!(restored_result.permutation_stride(), 1);
+}
+
+#[test]
+fn round_trips_an_analysis_mask_filter() {
+    let mut scene = fixture();
+    stage(&mut scene);
+    let spots = scene
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Spots)
+        .expect("the fixture stages spots")
+        .id();
+    let surfaces = scene
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Surfaces)
+        .expect("the fixture stages surfaces")
+        .id();
+    scene.set_mask(Some(spots));
+    let filter = MaskFilter::new(surfaces, -1, RelationField::Distance, 0.25, 1.75);
+    assert!(scene.set_mask_filter(Some(filter)));
+    let view = ViewState {
+        camera: CameraState {
+            pivot: [0.0, 0.0, 0.0],
+            yaw: 0.0,
+            pitch: 0.0,
+            distance: 10.0,
+            fov_y: 0.6,
+        },
+        section: SectionState {
+            axis: Axis::Z,
+            span: 20.0,
+        },
+        split: 0.5,
+        timeline: timeline(),
+        export: Export::NATIVE,
+    };
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "fixture".to_string(),
+        },
+        view,
+    );
+    assert_eq!(project.scene.mask_filter, Some(filter));
+    let path = std::env::temp_dir().join(format!("grana-mask-{}.grana", std::process::id()));
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::temporary(1).expect("the store opens a spill file"),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the project reads");
+    fs::remove_file(&path).ok();
+    assert_eq!(loaded, project);
+    assert_eq!(loaded.scene.mask_filter, Some(filter));
+    let mut restored = fixture();
+    restored.restore(loaded.scene);
+    assert_eq!(restored.mask_filter, Some(filter));
 }
 
 #[test]

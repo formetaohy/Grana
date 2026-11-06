@@ -262,6 +262,11 @@ impl Session {
                     scene.set_mask_radius(radius);
                 }
             }
+            Command::SetMaskFilter(filter) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_mask_filter(filter);
+                }
+            }
             Command::SetTrackParams { set, params } => {
                 if let Some(target) = self.object_mut(set) {
                     target.set_track_params(params);
@@ -407,6 +412,7 @@ impl Session {
             Command::ExportColoc => self.export_coloc(),
             Command::ExportMeasure => self.export_measure(),
             Command::ExportMesh(set) => self.export_mesh(set),
+            Command::ExportLabels(set) => self.export_labels(set),
             Command::CaptureProtocol => self.capture_protocol(),
             Command::ApplyProtocol => self.apply_protocol(),
             Command::LoadProtocol => self.load_protocol(),

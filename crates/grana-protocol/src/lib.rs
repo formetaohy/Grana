@@ -13,9 +13,9 @@ use thiserror::Error;
 pub use spec::{
     AnchorSpec, AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec,
     ColorSpec, CurationSpec, DriftSpec, EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec,
-    LassoSpec, MeasureSpec, MetricSpec, NodeSpec, PartSpec, RegionSpec, RelationSpec, RemovalSpec,
-    RenderSpec, SectionSpec, SetSpec, ShadingSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec,
-    TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    LassoSpec, MaskFilterSpec, MeasureSpec, MetricSpec, NodeSpec, PartSpec, RegionSpec,
+    RelationSpec, RemovalSpec, RenderSpec, SectionSpec, SetSpec, ShadingSpec, SnapshotSpec,
+    SortSpec, SourceSpec, StopSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -33,6 +33,8 @@ pub struct Protocol {
     drift: Option<DriftSpec>,
     #[serde(default, skip_serializing_if = "spec::is_f32_zero")]
     mask_radius: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mask_filter: Option<MaskFilterSpec>,
     sets: Vec<SetSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     relations: Vec<RelationSpec>,
@@ -75,6 +77,10 @@ impl Protocol {
 
     pub fn mask_radius(&self) -> f32 {
         self.mask_radius
+    }
+
+    pub fn mask_filter(&self) -> Option<&MaskFilterSpec> {
+        self.mask_filter.as_ref()
     }
 
     pub fn sets(&self) -> &[SetSpec] {
@@ -229,6 +235,15 @@ impl Protocol {
         }
         if self.mask_radius > 0.0 {
             summary.push_str(&format!(" · mask grows {:.2} µm", self.mask_radius));
+        }
+        if let Some(filter) = &self.mask_filter {
+            summary.push_str(&format!(
+                " · mask keeps {} {}–{} of {}",
+                filter.field,
+                filter.minimum,
+                filter.maximum,
+                self.name_of(&filter.target).unwrap_or(&filter.target)
+            ));
         }
         for relation in &self.relations {
             summary.push_str(&format!(

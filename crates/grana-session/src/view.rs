@@ -77,6 +77,7 @@ pub struct IoView<'a> {
     pub frame_interval: f32,
     pub export: Option<(u32, u32)>,
     pub export_message: Option<String>,
+    pub label: Option<(&'a str, usize, usize)>,
     pub store: StoreView,
 }
 

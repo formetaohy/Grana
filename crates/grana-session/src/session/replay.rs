@@ -116,10 +116,12 @@ impl Session {
                     set,
                     mask,
                     mask_radius,
+                    filter,
                 } => {
                     if let Some(scene) = self.scene.as_mut() {
                         scene.set_mask(mask);
                         scene.set_mask_radius(mask_radius);
+                        scene.set_mask_filter(filter);
                     }
                     self.start_detect(set);
                 }
@@ -133,6 +135,7 @@ impl Session {
                     pair,
                     mask,
                     mask_radius,
+                    filter,
                 } => {
                     let Some(recipe) = self.recipe.as_ref() else {
                         return;
@@ -144,6 +147,7 @@ impl Session {
                         scene.coloc.set_pair(pair);
                         scene.set_mask(mask);
                         scene.set_mask_radius(mask_radius);
+                        scene.set_mask_filter(filter);
                     }
                     self.start_coloc();
                 }

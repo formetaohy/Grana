@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use grana_display::Coloring;
 use grana_measure::{ColocPair, Group, TrackMeasurement, channel_keys, relation_keys};
 use grana_scene::{
-    Criteria, FilterRange, LassoPath, ObjectColor, ObjectSetId, ObjectSetKey, Scene, TrackColor,
+    Criteria, FilterRange, LassoPath, MaskFilter, ObjectColor, ObjectSetId, ObjectSetKey, Scene,
+    TrackColor,
 };
 use grana_volume::Region;
 
@@ -257,6 +258,32 @@ impl Protocol {
                 key: relation.key.clone(),
             });
         }
+        let mask_filter = self.mask_filter.as_ref().map(|spec| {
+            let source = builder.ids[&spec.source];
+            let target = builder.ids[&spec.target];
+            let field = spec
+                .field()
+                .expect("a checked mask filter names a continuous relation field");
+            (
+                source,
+                MaskFilter::new(target, spec.shift, field, spec.minimum, spec.maximum),
+            )
+        });
+        if let Some((source, filter)) = mask_filter {
+            for step in &mut builder.steps {
+                match step {
+                    Step::Detect {
+                        mask, filter: slot, ..
+                    }
+                    | Step::Coloc {
+                        mask, filter: slot, ..
+                    } if *mask == Some(source) => {
+                        *slot = Some(filter);
+                    }
+                    _ => {}
+                }
+            }
+        }
         for spec in &self.sets {
             let id = builder.ids[&spec.key];
             if let Some(color) = &spec.color_by {
@@ -294,6 +321,11 @@ impl Protocol {
         }
         let mask = masks.iter().rev().flatten().next().copied();
         builder.scene.set_mask(mask);
+        if let Some((source, filter)) = mask_filter
+            && mask == Some(source)
+        {
+            builder.scene.set_mask_filter(Some(filter));
+        }
         let pairs = match &self.coloc {
             Some(coloc) => coloc
                 .pairs
@@ -317,6 +349,7 @@ impl Protocol {
                     pair,
                     mask,
                     mask_radius: builder.mask_radius,
+                    filter: None,
                 });
             }
         }
@@ -457,6 +490,7 @@ impl Builder<'_> {
             set: id,
             mask,
             mask_radius: self.mask_radius,
+            filter: None,
         });
         Ok(id)
     }
@@ -717,10 +751,15 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
     for (index, step) in steps.iter().enumerate() {
         match step {
             Step::Drift { .. } => {}
-            Step::Detect { set, mask, .. } => {
+            Step::Detect {
+                set, mask, filter, ..
+            } => {
                 dependencies[index].extend(drift);
                 if let Some(mask) = mask {
                     dependencies[index].push(settled(&ready, *mask)?);
+                }
+                if let (Some(mask), Some(filter)) = (mask, filter) {
+                    dependencies[index].push(filter_relation(&steps, *mask, *filter)?);
                 }
                 if let Some(seed) = scene.seed_source(*set) {
                     dependencies[index].push(settled(&ready, seed)?);
@@ -765,10 +804,13 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
                 dependencies[index].push(settled(&ready, *source)?);
                 dependencies[index].push(settled(&ready, *target)?);
             }
-            Step::Coloc { mask, .. } => {
+            Step::Coloc { mask, filter, .. } => {
                 dependencies[index].extend(drift);
                 if let Some(mask) = mask {
                     dependencies[index].push(settled(&ready, *mask)?);
+                }
+                if let (Some(mask), Some(filter)) = (mask, filter) {
+                    dependencies[index].push(filter_relation(&steps, *mask, *filter)?);
                 }
             }
             Step::Present => dependencies[index].extend(0..index),
@@ -808,6 +850,28 @@ fn criteria_keys(criteria: &Criteria) -> Vec<String> {
 
 fn settled(ready: &HashMap<ObjectSetId, usize>, set: ObjectSetId) -> Result<usize, ProtocolError> {
     ready.get(&set).copied().ok_or_else(|| unproduced(set))
+}
+
+fn filter_relation(
+    steps: &[Step],
+    mask: ObjectSetId,
+    filter: MaskFilter,
+) -> Result<usize, ProtocolError> {
+    steps
+        .iter()
+        .position(|step| {
+            matches!(
+                step,
+                Step::Relation { source, target, shift, .. }
+                    if *source == mask && *target == filter.target() && *shift == filter.shift()
+            )
+        })
+        .ok_or_else(|| {
+            ProtocolError::Invalid(
+                "the analysis mask filters its objects by a relation the protocol does not measure"
+                    .to_string(),
+            )
+        })
 }
 
 fn unproduced(set: ObjectSetId) -> ProtocolError {

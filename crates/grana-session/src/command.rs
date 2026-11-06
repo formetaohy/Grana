@@ -4,7 +4,9 @@ use grana_measure::{
     PlotAxis, Scope,
 };
 use grana_object::TrackParams;
-use grana_scene::{ObjectColor, ObjectKind, ObjectParams, ObjectSetId, Selection, TrackColor};
+use grana_scene::{
+    MaskFilter, ObjectColor, ObjectKind, ObjectParams, ObjectSetId, Selection, TrackColor,
+};
 use grana_volume::{Clip, Intensity, Region};
 
 pub use grana_project::Export;
@@ -134,6 +136,7 @@ pub enum Command {
     },
     SetMask(Option<ObjectSetId>),
     SetMaskRadius(f32),
+    SetMaskFilter(Option<MaskFilter>),
     SetTrackParams {
         set: ObjectSetId,
         params: TrackParams,
@@ -219,6 +222,7 @@ pub enum Command {
     ExportColoc,
     ExportMeasure,
     ExportMesh(ObjectSetId),
+    ExportLabels(ObjectSetId),
     CaptureProtocol,
     ApplyProtocol,
     LoadProtocol,
@@ -496,7 +500,9 @@ impl Command {
             Self::SetObjectColoring { set, .. } => {
                 Edit::targeted(Action::ObjectColoring, set.raw())
             }
-            Self::SetMask(_) | Self::SetMaskRadius(_) => Edit::new(Action::Mask),
+            Self::SetMask(_) | Self::SetMaskRadius(_) | Self::SetMaskFilter(_) => {
+                Edit::new(Action::Mask)
+            }
             Self::SetTrackVisible { set, .. } => Edit::targeted(Action::TrackVisible, set.raw()),
             Self::SetTrackThickness { set, .. } => {
                 Edit::targeted(Action::TrackThickness, set.raw())

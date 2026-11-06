@@ -24,6 +24,7 @@ grana-project = { workspace = true }
 grana-protocol = { workspace = true }
 grana-scene = { workspace = true }
 grana-volume = { workspace = true }
+grana-zarr = { workspace = true }
 rfd = { workspace = true }
 
 [lints]

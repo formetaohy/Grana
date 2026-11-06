@@ -4,17 +4,19 @@ use grana_measure::{
 };
 use grana_volume::Region;
 
+use crate::mask::MaskFilter;
 use crate::object_set::ObjectSetId;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MaskKey {
     set: ObjectSetId,
     document: u64,
     radius: u32,
+    filter: Option<MaskFilter>,
 }
 
 impl MaskKey {
-    pub fn new(set: ObjectSetId, document: u64, radius: f32) -> Self {
+    pub fn new(set: ObjectSetId, document: u64, radius: f32, filter: Option<MaskFilter>) -> Self {
         assert!(
             radius.is_finite() && radius >= 0.0,
             "an analysis mask grows by a finite radius"
@@ -23,6 +25,7 @@ impl MaskKey {
             set,
             document,
             radius: radius.to_bits(),
+            filter,
         }
     }
 
@@ -32,6 +35,10 @@ impl MaskKey {
 
     pub fn document(self) -> u64 {
         self.document
+    }
+
+    pub fn filter(self) -> Option<MaskFilter> {
+        self.filter
     }
 }
 

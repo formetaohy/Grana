@@ -185,6 +185,48 @@ pub struct RelationSpec {
     pub shift: i32,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaskFilterSpec {
+    pub source: String,
+    pub target: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub shift: i32,
+    pub field: String,
+    pub minimum: f32,
+    pub maximum: f32,
+}
+
+impl MaskFilterSpec {
+    pub fn field(&self) -> Option<grana_measure::RelationField> {
+        grana_measure::RelationField::CONTINUOUS
+            .into_iter()
+            .find(|field| field.key() == self.field)
+    }
+
+    pub(super) fn checked(&self) -> Result<(), ProtocolError> {
+        for (name, value) in [("source", &self.source), ("target", &self.target)] {
+            if value.trim().is_empty() {
+                return Err(ProtocolError::Invalid(format!(
+                    "an analysis mask filter names a {name}"
+                )));
+            }
+        }
+        let Some(field) = self.field() else {
+            return Err(ProtocolError::Invalid(
+                "an analysis mask filter keeps a continuous relation field".to_string(),
+            ));
+        };
+        if !self.minimum.is_finite() || !self.maximum.is_finite() || self.minimum > self.maximum {
+            return Err(ProtocolError::Invalid(format!(
+                "the analysis mask filter on {} keeps a finite range of relation values",
+                field.label()
+            )));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegionSpec {

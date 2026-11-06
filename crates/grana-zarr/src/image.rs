@@ -6,6 +6,7 @@ use grana_volume::{
     BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid, VoxelData,
     VoxelFormat, pad_brick,
 };
+use ome_zarr_metadata::v0_4::Axis;
 use zarrs::array::chunk_cache::{ChunkCache, ChunkCacheLruSizeLimit, ChunkCacheTypeDecoded};
 use zarrs::array::data_type::{float32, uint8, uint16};
 use zarrs::array::{Array, ArraySubset, CodecOptions};
@@ -47,6 +48,8 @@ pub struct Image {
     name: String,
     levels: Vec<LevelArray>,
     pyramid: Pyramid,
+    axes: Vec<Axis>,
+    datasets: Vec<metadata::Dataset>,
 }
 
 impl Image {
@@ -149,6 +152,7 @@ impl Image {
         )?;
         let name = metadata
             .name
+            .clone()
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| dataset_name(path));
         let level_metadata = levels
@@ -161,7 +165,17 @@ impl Image {
             name,
             levels,
             pyramid: Pyramid::new(level_metadata, stored, channels, frames, interval),
+            axes: metadata.axes,
+            datasets: metadata.datasets,
         })
+    }
+
+    pub(crate) fn axes(&self) -> &[Axis] {
+        &self.axes
+    }
+
+    pub(crate) fn datasets(&self) -> &[metadata::Dataset] {
+        &self.datasets
     }
 
     pub fn name(&self) -> &str {

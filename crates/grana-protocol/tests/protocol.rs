@@ -8,12 +8,12 @@ use grana_measure::{
     ColocThresholds, Group, Lasso, MeasureView, Measurement, RelationField, Scope,
     TrackMeasurement,
 };
-use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
+use grana_object::{IntensityTable, RelationFrame, SampleAccumulator, Spot, SpotSet};
 use grana_project::{Export, ViewState};
 use grana_protocol::{Protocol, SnapshotSpec, SourceSpec, Step, ViewSpec};
 use grana_scene::{
-    Criteria, Dataset, FilterRange, Measure, ObjectColor, ObjectFrame, ObjectKind, Scene,
-    TrackColor,
+    Criteria, Dataset, FilterRange, MaskFilter, Measure, ObjectColor, ObjectFrame, ObjectKind,
+    Scene, TrackColor,
 };
 use grana_volume::{Axis, Channel, Clip, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -488,6 +488,148 @@ fn captures_an_analysis_mask() {
             ..
         } if *mask_radius == 2.5
     )));
+}
+
+#[test]
+fn captures_an_analysis_mask_limited_by_a_relation() {
+    let extent = Extent::new(4, 4, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "DAPI",
+            [0.3, 0.4, 1.0],
+            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+        )],
+    );
+    let series = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let statistics = {
+        let mut accumulator = SampleAccumulator::new();
+        accumulator.push(0.5);
+        accumulator.statistics()
+    };
+    let frame = |centres: &[[f32; 3]]| {
+        ObjectFrame::Spots(SpotSet::new(
+            0,
+            centres
+                .iter()
+                .map(|centre| Spot::new(*centre, 1.0, 0.5))
+                .collect(),
+            IntensityTable::new(1, vec![statistics; centres.len()]),
+        ))
+    };
+    let source = scene.add_object(ObjectKind::Spots, 0);
+    let target = scene.add_object(ObjectKind::Spots, 0);
+    let masked = scene.add_object(ObjectKind::Spots, 0);
+    scene.install(source, 0, frame(&[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]));
+    scene.install(target, 0, frame(&[[0.0, 0.0, 0.0]]));
+    scene.install(masked, 0, frame(&[[1.0, 0.0, 0.0]]));
+    assert!(scene.add_relation(source, target, 0));
+    scene.install_relation(
+        source,
+        target,
+        0,
+        0,
+        RelationFrame::new(vec![0.5, 5.0], vec![0.0, 0.0], vec![0.0, 0.0], vec![1, 1]),
+    );
+    scene.set_mask(Some(source));
+    scene.set_mask_radius(1.5);
+    assert!(scene.set_mask_filter(Some(MaskFilter::new(
+        target,
+        0,
+        RelationField::Distance,
+        0.0,
+        1.0
+    ))));
+    let protocol = Protocol::capture(&scene, &Measure::new(), None)
+        .expect("the relation-limited mask captures");
+    let filter = protocol
+        .mask_filter()
+        .expect("the protocol keeps the mask filter");
+    assert_eq!(filter.field, RelationField::Distance.key());
+    assert_eq!(filter.minimum, 0.0);
+    assert_eq!(filter.maximum, 1.0);
+    assert_eq!(filter.shift, 0);
+    let target_key = protocol
+        .sets()
+        .iter()
+        .find(|set| set.name == "Spots 2")
+        .expect("the relation target captures")
+        .key
+        .clone();
+    assert_eq!(filter.target, target_key);
+    assert_eq!(
+        protocol
+            .sets()
+            .iter()
+            .find(|set| set.key == target_key)
+            .expect("the relation target captures")
+            .mask(),
+        None,
+        "the relation target is detected without the mask it limits"
+    );
+    let masked_key = protocol
+        .sets()
+        .iter()
+        .find(|set| set.name == "Spots 3")
+        .expect("the masked set captures")
+        .key
+        .clone();
+    assert_eq!(
+        protocol
+            .sets()
+            .iter()
+            .find(|set| set.key == masked_key)
+            .expect("the masked set captures")
+            .mask(),
+        Some(protocol.sets()[0].key.as_str())
+    );
+    let text = protocol.to_json().expect("the protocol serializes");
+    let restored = Protocol::from_json(&text).expect("the protocol round trips");
+    assert_eq!(restored, protocol);
+    let mut staged_scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let staged = restored
+        .stage(&mut staged_scene)
+        .expect("the relation-limited mask stages");
+    let staged_target = staged_scene
+        .objects
+        .iter()
+        .find(|set| set.name() == "Spots 2")
+        .expect("the relation target stages")
+        .id();
+    assert_eq!(
+        staged_scene.mask_filter,
+        Some(MaskFilter::new(
+            staged_target,
+            0,
+            RelationField::Distance,
+            0.0,
+            1.0
+        ))
+    );
+    let relation = staged
+        .steps()
+        .iter()
+        .position(|step| matches!(step, Step::Relation { .. }))
+        .expect("the relation stages");
+    let filtered = staged
+        .steps()
+        .iter()
+        .position(|step| {
+            matches!(
+                step,
+                Step::Detect {
+                    filter: Some(_),
+                    ..
+                }
+            )
+        })
+        .expect("a detection keeps the mask filter");
+    assert!(
+        relation < filtered,
+        "the relation runs before the detection it limits"
+    );
 }
 
 #[test]

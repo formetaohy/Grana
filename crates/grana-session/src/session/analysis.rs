@@ -482,26 +482,43 @@ impl Session {
             )));
             return;
         }
-        let roi = match scene.mask {
-            None => None,
-            Some(source) => {
-                if source == set {
-                    self.message = Some(Message::error(
-                        "an object set cannot be limited to its own objects",
-                    ));
-                    return;
-                }
-                let detected = scene
-                    .objects
-                    .get(source)
-                    .is_some_and(|set| set.detected() > 0);
-                match scene.mask_frames() {
-                    Some(frames) if detected => Some(frames),
-                    _ => {
+        let filter_target = scene
+            .mask_filter
+            .is_some_and(|filter| filter.target() == set);
+        let roi = if filter_target {
+            None
+        } else {
+            match scene.mask {
+                None => None,
+                Some(source) => {
+                    if source == set {
+                        self.message = Some(Message::error(
+                            "an object set cannot be limited to its own objects",
+                        ));
+                        return;
+                    }
+                    let detected = scene
+                        .objects
+                        .get(source)
+                        .is_some_and(|set| set.detected() > 0);
+                    if !detected {
                         self.message = Some(Message::error(
                             "the analysis mask holds no detected objects",
                         ));
                         return;
+                    }
+                    match scene.mask_frames() {
+                        Ok(Some(frames)) => Some(frames),
+                        Ok(None) => {
+                            self.message = Some(Message::error(
+                                "the analysis mask holds no detected objects",
+                            ));
+                            return;
+                        }
+                        Err(detail) => {
+                            self.message = Some(Message::error(detail));
+                            return;
+                        }
                     }
                 }
             }
@@ -733,12 +750,22 @@ impl Session {
                     .objects
                     .get(mask)
                     .is_some_and(|set| set.detected() > 0);
+                if !detected {
+                    self.message = Some(Message::error(
+                        "the analysis mask holds no detected objects",
+                    ));
+                    return;
+                }
                 match scene.mask_frames() {
-                    Some(frames) if detected => Some(frames),
-                    _ => {
+                    Ok(Some(frames)) => Some(frames),
+                    Ok(None) => {
                         self.message = Some(Message::error(
                             "the analysis mask holds no detected objects",
                         ));
+                        return;
+                    }
+                    Err(detail) => {
+                        self.message = Some(Message::error(detail));
                         return;
                     }
                 }

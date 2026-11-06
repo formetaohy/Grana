@@ -9,6 +9,7 @@ use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::drift::Drift;
 use crate::key::ObjectSetKey;
+use crate::mask::MaskFilter;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::provenance::Provenance;
@@ -31,6 +32,7 @@ pub struct SceneState {
     pub clip: Clip,
     pub drift: Drift,
     pub mask: Option<u64>,
+    pub mask_filter: Option<MaskFilter>,
     pub mask_radius: f32,
     pub time: u32,
     pub selection: Option<SelectionState>,
@@ -106,6 +108,17 @@ impl SceneState {
                     && self.drift.reference() < frame_count))
             && self.mask_radius.is_finite()
             && self.mask_radius >= 0.0
+            && self.mask_filter.is_none_or(|filter| {
+                self.mask.is_some_and(|mask| {
+                    self.sets.iter().any(|set| {
+                        set.id == mask
+                            && set.relations.iter().any(|relation| {
+                                relation.target == filter.target().raw()
+                                    && relation.shift == filter.shift()
+                            })
+                    })
+                }) && self.sets.iter().any(|set| set.id == filter.target().raw())
+            })
             && self
                 .sets
                 .iter()
@@ -168,6 +181,7 @@ impl Scene {
             clip: self.clip,
             drift: self.drift().clone(),
             mask: self.mask.map(|set| set.raw()),
+            mask_filter: self.mask_filter,
             mask_radius: self.mask_radius,
             time: self.time(),
             selection: self.selection().map(|selection| SelectionState {
@@ -205,11 +219,23 @@ impl Scene {
             .mask
             .and_then(ObjectSetId::from_raw)
             .filter(|set| self.objects.get(*set).is_some());
+        self.mask_filter = state.mask_filter.filter(|filter| {
+            self.objects.get(filter.target()).is_some()
+                && self.mask.is_some_and(|mask| {
+                    self.objects
+                        .get(mask)
+                        .is_some_and(|set| set.relation(filter.target(), filter.shift()).is_some())
+                })
+        });
         self.mask_radius = state.mask_radius;
-        let mask = self
-            .mask
-            .and_then(|set| self.objects.get(set))
-            .map(|set| MaskKey::new(set.id(), set.document(), state.mask_radius));
+        let mask = self.mask.and_then(|set| self.objects.get(set)).map(|set| {
+            MaskKey::new(
+                set.id(),
+                set.document(),
+                state.mask_radius,
+                self.mask_filter,
+            )
+        });
         self.coloc.restore(
             state.coloc,
             self.channels.len(),
@@ -286,6 +312,17 @@ impl Scene {
         }
         hash = mix(hash, self.mask.map_or(0, ObjectSetId::raw));
         hash = mix(hash, u64::from(self.mask_radius.to_bits()));
+        if let Some(filter) = self.mask_filter {
+            hash = mix(hash, 1);
+            hash = mix(hash, filter.target().raw());
+            hash = mix(hash, u64::from(filter.shift() as u32));
+            hash = mix(hash, u64::from(filter.field().index()));
+            for value in filter.range() {
+                hash = mix(hash, u64::from(value.to_bits()));
+            }
+        } else {
+            hash = mix(hash, 0);
+        }
         for offset in self.drift().offsets() {
             for value in offset {
                 hash = mix(hash, u64::from(value.to_bits()));

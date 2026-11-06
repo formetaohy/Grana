@@ -228,6 +228,28 @@ impl Protocol {
             }
             relations.push(key);
         }
+        if let Some(filter) = &self.mask_filter {
+            filter.checked()?;
+            if !set_keys.contains(&filter.source) || !set_keys.contains(&filter.target) {
+                return Err(ProtocolError::Invalid(
+                    "an analysis mask filter names object sets of the protocol".to_string(),
+                ));
+            }
+            if !relations.contains(&(&filter.source, &filter.target, filter.shift)) {
+                return Err(ProtocolError::Invalid(format!(
+                    "the analysis mask filters {} by a relation to {} at the offset {} that the protocol does not measure",
+                    filter.source, filter.target, filter.shift
+                )));
+            }
+            if self.sets.iter().any(|set| {
+                set.key == filter.target && set.mask.as_deref() == Some(filter.source.as_str())
+            }) {
+                return Err(ProtocolError::Invalid(format!(
+                    "the relation target {} cannot be detected inside the mask that its relation limits",
+                    filter.target
+                )));
+            }
+        }
         for set in &self.sets {
             for color in [set.color_by.as_ref(), set.track_by.as_ref()]
                 .into_iter()

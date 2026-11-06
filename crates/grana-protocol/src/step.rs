@@ -1,4 +1,4 @@
-use grana_scene::{Criteria, ObjectSetId};
+use grana_scene::{Criteria, MaskFilter, ObjectSetId};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
@@ -11,6 +11,7 @@ pub enum Step {
         set: ObjectSetId,
         mask: Option<ObjectSetId>,
         mask_radius: f32,
+        filter: Option<MaskFilter>,
     },
     Filter {
         set: ObjectSetId,
@@ -35,6 +36,7 @@ pub enum Step {
         pair: usize,
         mask: Option<ObjectSetId>,
         mask_radius: f32,
+        filter: Option<MaskFilter>,
     },
     Present,
 }

@@ -548,6 +548,13 @@ fn object_menu<'a>(
             Message::Command(Command::ExportMesh(id)),
         ));
     }
+    rows.push(action_row(
+        ctx,
+        &format!("object.{}.menu.labels", id.raw()),
+        Icon::Export,
+        "Export Labels…",
+        Message::Command(Command::ExportLabels(id)),
+    ));
     if !merges.is_empty() {
         rows.push(view::menu_separator(ctx));
         rows.push(view::caption(ctx, "Merge Into"));

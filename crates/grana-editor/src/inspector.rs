@@ -1,5 +1,6 @@
 use glam::{Vec2, Vec3};
 use grana_display::TransferFunction;
+use grana_scene::{MaskFilter, RelationField};
 use grana_session::Command;
 use grana_ui::{
     Align, Border, BuildContext, Color, Corners, Edges, Element, Fill, Icon, Key, Length, Level,
@@ -29,7 +30,8 @@ pub fn source<'a>(
     let has_series = state.series.entries.len() >= 2;
     let loading = state.io.loading;
     let document = state.io.document;
-    if !has_series && loading.is_none() && document.is_none() {
+    let labels = state.io.label;
+    if !has_series && loading.is_none() && document.is_none() && labels.is_none() {
         return hidden();
     }
     let mut children = Vec::new();
@@ -40,6 +42,16 @@ pub fn source<'a>(
         children.push(progress_row(ctx, name));
     }
     if let Some((label, done, total)) = document {
+        let text = done
+            .checked_mul(100)
+            .and_then(|percent| percent.checked_div(total))
+            .map_or_else(
+                || label.to_string(),
+                |percent| format!("{label} · {percent}%"),
+            );
+        children.push(progress_row(ctx, &text));
+    }
+    if let Some((label, done, total)) = labels {
         let text = done
             .checked_mul(100)
             .and_then(|percent| percent.checked_div(total))
@@ -731,6 +743,139 @@ fn mask<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element
             &readout,
             Command::SetMaskRadius,
         ));
+        if let Some(source) = current {
+            let relations = state
+                .scene
+                .objects
+                .get(source)
+                .map(|set| {
+                    set.relations()
+                        .iter()
+                        .filter_map(|relation| {
+                            let target = state.scene.objects.get(relation.target())?;
+                            let label = if relation.shift() == 0 {
+                                target.name().to_string()
+                            } else {
+                                format!("{} · t{:+}", target.name(), relation.shift())
+                            };
+                            Some((Some((relation.target(), relation.shift())), label))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if !relations.is_empty() {
+                let mut options = vec![(None, "Any Relation".to_string())];
+                options.extend(relations);
+                let selected = state
+                    .scene
+                    .mask_filter
+                    .map(|filter| (filter.target(), filter.shift()));
+                let current_filter = state.scene.mask_filter;
+                let world = state.scene.dataset.world_size();
+                let width = card_width() - crate::panel::FORM_LABEL;
+                children.push(form_combo(
+                    ctx,
+                    "mask.relation",
+                    "Relation",
+                    &options,
+                    Some(selected),
+                    width,
+                    move |chosen| {
+                        let Some((target, shift)) = chosen else {
+                            return Message::Command(Command::SetMaskFilter(None));
+                        };
+                        let (field, range) = match current_filter {
+                            Some(filter) => (filter.field(), filter.range()),
+                            None => (
+                                RelationField::Distance,
+                                default_filter_range(RelationField::Distance, world),
+                            ),
+                        };
+                        Message::Command(Command::SetMaskFilter(Some(MaskFilter::new(
+                            target, shift, field, range[0], range[1],
+                        ))))
+                    },
+                ));
+                if let Some(filter) = current_filter {
+                    let theme = *ctx.theme();
+                    let field = filter.field();
+                    let target = filter.target();
+                    let shift = filter.shift();
+                    let range = filter.range();
+                    let fields = RelationField::CONTINUOUS
+                        .into_iter()
+                        .map(|field| (field, field.label().to_string()))
+                        .collect::<Vec<_>>();
+                    children.push(form_combo(
+                        ctx,
+                        "mask.field",
+                        "Field",
+                        &fields,
+                        Some(field),
+                        width,
+                        move |chosen| {
+                            let range = if chosen == field {
+                                range
+                            } else {
+                                default_filter_range(chosen, world)
+                            };
+                            Message::Command(Command::SetMaskFilter(Some(MaskFilter::new(
+                                target, shift, chosen, range[0], range[1],
+                            ))))
+                        },
+                    ));
+                    let suffix = field.unit().suffix();
+                    for (index, (label, value)) in [("Minimum", range[0]), ("Maximum", range[1])]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let other = match index {
+                            0 => range[1],
+                            _ => range[0],
+                        };
+                        let action = move |value: f32| {
+                            let (minimum, maximum) = if index == 0 {
+                                (value.min(other), other)
+                            } else {
+                                (other, value.max(other))
+                            };
+                            Message::Command(Command::SetMaskFilter(Some(MaskFilter::new(
+                                target, shift, field, minimum, maximum,
+                            ))))
+                        };
+                        let widget =
+                            grana_ui::widget::drag_value(&theme, value, field.decimals() as usize)
+                                .named(&format!("mask.filter.{index}"))
+                                .on_drag_value(unit_step(field), action);
+                        let unit = view::caption(ctx, suffix);
+                        let row = grana_ui::row()
+                            .gap(6.0)
+                            .align(Align::Center)
+                            .children([widget, unit]);
+                        children.push(view::form_row(ctx, label, row));
+                    }
+                    children.push(view::weak(
+                        ctx,
+                        &format!(
+                            "Detects only where the mask relation keeps objects whose {} lies in {:.2}{suffix} to {:.2}{suffix}.",
+                            field.label(),
+                            range[0],
+                            range[1]
+                        ),
+                    ));
+                    let target_name = state.scene.objects.get(target).map_or_else(
+                        || "the relation target".to_string(),
+                        |set| set.name().to_string(),
+                    );
+                    children.push(view::weak(
+                        ctx,
+                        &format!(
+                            "{target_name} is detected without the mask so its relation can limit the mask."
+                        ),
+                    ));
+                }
+            }
+        }
         children.push(
             match current.and_then(|id| sources.iter().find(|(set, _, _)| *set == id)) {
                 Some((_, name, true)) => {
@@ -752,6 +897,23 @@ fn mask<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element
         children,
         open,
     )
+}
+
+fn default_filter_range(field: RelationField, world: Vec3) -> [f32; 2] {
+    let reach = (0.5 * world.length()).max(1.0);
+    match field {
+        RelationField::Distance => [0.0, reach],
+        RelationField::Inside => [0.0, 100.0],
+        RelationField::Contact => [0.0, reach * reach],
+        RelationField::Partner => [0.0, 0.0],
+    }
+}
+
+fn unit_step(field: RelationField) -> f32 {
+    match field {
+        RelationField::Distance => 0.1,
+        RelationField::Inside | RelationField::Contact | RelationField::Partner => 1.0,
+    }
 }
 
 fn clip<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
