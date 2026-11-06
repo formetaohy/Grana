@@ -224,10 +224,14 @@ impl Session {
         let name = scene.dataset.name().to_string();
         match scene.dataset.origin() {
             Origin::Synthetic => Some(ProjectSource::Synthetic { name }),
-            Origin::Zarr | Origin::Tiff | Origin::Czi => match self.source.as_ref()?.source() {
-                Source::File { path, series } => Some(ProjectSource::File { name, path, series }),
-                Source::Memory(_) => None,
-            },
+            Origin::Zarr | Origin::Tiff | Origin::Czi | Origin::Nikon | Origin::Leica => {
+                match self.source.as_ref()?.source() {
+                    Source::File { path, series } => {
+                        Some(ProjectSource::File { name, path, series })
+                    }
+                    Source::Memory(_) => None,
+                }
+            }
         }
     }
 
@@ -338,6 +342,8 @@ impl Session {
                         Format::Zarr => Dataset::zarr(name, pyramid),
                         Format::Tiff => Dataset::tiff(name, pyramid),
                         Format::Czi => Dataset::czi(name, pyramid),
+                        Format::Nikon => Dataset::nikon(name, pyramid),
+                        Format::Leica => Dataset::leica(name, pyramid),
                     };
                     self.open_dataset(dataset);
                 }

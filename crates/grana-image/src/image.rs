@@ -24,6 +24,8 @@ pub enum Format {
     Zarr,
     Tiff,
     Czi,
+    Nikon,
+    Leica,
 }
 
 enum Inner {
@@ -31,6 +33,7 @@ enum Inner {
     Zarr(grana_zarr::Image),
     Tiff(grana_tiff::Image),
     Czi(grana_czi::Image),
+    Readout(grana_readout::Image),
 }
 
 pub struct Image {
@@ -62,6 +65,7 @@ impl Image {
             Inner::Zarr(image) => image.pyramid(),
             Inner::Tiff(image) => image.pyramid(),
             Inner::Czi(image) => image.pyramid(),
+            Inner::Readout(image) => image.pyramid(),
         };
         let pyramid = level::extended(
             declared.levels(),
@@ -99,6 +103,7 @@ impl Image {
             Inner::Zarr(image) => image.name(),
             Inner::Tiff(image) => image.name(),
             Inner::Czi(image) => image.name(),
+            Inner::Readout(image) => image.name(),
         }
     }
 
@@ -109,7 +114,9 @@ impl Image {
     pub fn labels(&self) -> Result<Labels, Error> {
         match &self.inner {
             Inner::Zarr(image) => Ok(image.labels()?),
-            Inner::Memory(_) | Inner::Tiff(_) | Inner::Czi(_) => Ok(Labels::empty()),
+            Inner::Memory(_) | Inner::Tiff(_) | Inner::Czi(_) | Inner::Readout(_) => {
+                Ok(Labels::empty())
+            }
         }
     }
 
@@ -119,6 +126,10 @@ impl Image {
             Inner::Zarr(_) => Some(Format::Zarr),
             Inner::Tiff(_) => Some(Format::Tiff),
             Inner::Czi(_) => Some(Format::Czi),
+            Inner::Readout(image) => Some(match image.family() {
+                grana_readout::Family::Nikon => Format::Nikon,
+                grana_readout::Family::Leica => Format::Leica,
+            }),
         }
     }
 
@@ -311,6 +322,14 @@ impl Image {
                 ranges[1].clone(),
                 ranges[2].clone(),
             )?),
+            Inner::Readout(image) => Ok(image.read_region(
+                time,
+                level,
+                channel,
+                ranges[0].clone(),
+                ranges[1].clone(),
+                ranges[2].clone(),
+            )?),
         }
     }
 
@@ -323,6 +342,7 @@ impl Image {
             Inner::Zarr(image) => Ok(image.read_brick(time, level, coord)?),
             Inner::Tiff(image) => Ok(image.read_brick(time, level, coord)?),
             Inner::Czi(image) => Ok(image.read_brick(time, level, coord)?),
+            Inner::Readout(image) => Ok(image.read_brick(time, level, coord)?),
         }
     }
 
@@ -544,25 +564,42 @@ pub fn is_image(path: &Path) -> bool {
     if path.is_dir() {
         is_zarr(path)
     } else {
-        is_czi(path).unwrap_or(false) || is_tiff(path).unwrap_or(false)
+        is_czi(path).unwrap_or(false)
+            || is_tiff(path).unwrap_or(false)
+            || grana_readout::is_supported(path)
     }
 }
 
 pub fn series_count(path: &Path) -> Result<usize, Error> {
-    if path.is_dir() || !is_czi(path)? {
+    if path.is_dir() {
         return Ok(1);
     }
-    Ok(grana_czi::scene_count(path)?)
+    if is_czi(path)? {
+        return Ok(grana_czi::scene_count(path)?);
+    }
+    if grana_readout::is_supported(path) {
+        return Ok(grana_readout::scene_count(path)?);
+    }
+    Ok(1)
 }
 
 pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
-    if path.is_dir() || !is_czi(path)? {
+    if path.is_dir() {
         return Ok(Vec::new());
     }
-    Ok(grana_czi::scenes(path)?
-        .into_iter()
-        .map(|scene| scene.name().map(str::to_string))
-        .collect())
+    if is_czi(path)? {
+        return Ok(grana_czi::scenes(path)?
+            .into_iter()
+            .map(|scene| scene.name().map(str::to_string))
+            .collect());
+    }
+    if grana_readout::is_supported(path) {
+        return Ok(grana_readout::scenes(path)?
+            .into_iter()
+            .map(|scene| scene.name().map(str::to_string))
+            .collect());
+    }
+    Ok(Vec::new())
 }
 
 pub fn dataset_name(path: &Path) -> String {
@@ -574,6 +611,9 @@ pub fn dataset_name(path: &Path) -> String {
     }
     if name.to_ascii_lowercase().ends_with(".czi") {
         return grana_czi::dataset_name(Path::new(name));
+    }
+    if grana_readout::has_extension(Path::new(name)) {
+        return grana_readout::dataset_name(Path::new(name));
     }
     grana_tiff::dataset_name(Path::new(name))
 }
@@ -601,10 +641,26 @@ impl Inner {
                 .collect();
             return Ok((Self::Czi(image), scenes));
         }
+        if grana_readout::is_supported(path) {
+            let image = grana_readout::Image::open(path, series)?;
+            let scenes = image
+                .scenes()
+                .iter()
+                .map(|scene| {
+                    Series::new(
+                        scene.extent(),
+                        scene.channels(),
+                        scene.frames(),
+                        scene.name().map(str::to_string),
+                    )
+                })
+                .collect();
+            return Ok((Self::Readout(image), scenes));
+        }
         if !is_tiff(path)? {
             return Err(Error::Unsupported {
                 path: path.to_path_buf(),
-                detail: "the file is neither an OME-TIFF nor a CZI image".to_string(),
+                detail: "the file is not an OME-TIFF, a CZI, an ND2 or a LIF image".to_string(),
             });
         }
         let image = grana_tiff::Image::open(path)?;

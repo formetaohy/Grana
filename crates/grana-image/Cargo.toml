@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 grana-czi = { workspace = true }
+grana-readout = { workspace = true }
 grana-tiff = { workspace = true }
 grana-volume = { workspace = true }
 grana-zarr = { workspace = true }

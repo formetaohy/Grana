@@ -7,6 +7,8 @@ pub enum Origin {
     Zarr,
     Tiff,
     Czi,
+    Nikon,
+    Leica,
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +48,22 @@ impl Dataset {
             name: name.into(),
             pyramid,
             origin: Origin::Czi,
+        }
+    }
+
+    pub fn nikon(name: impl Into<String>, pyramid: Pyramid) -> Self {
+        Self {
+            name: name.into(),
+            pyramid,
+            origin: Origin::Nikon,
+        }
+    }
+
+    pub fn leica(name: impl Into<String>, pyramid: Pyramid) -> Self {
+        Self {
+            name: name.into(),
+            pyramid,
+            origin: Origin::Leica,
         }
     }
 

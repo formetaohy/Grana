@@ -10,6 +10,8 @@ pub enum Error {
     Tiff(#[from] grana_tiff::Error),
     #[error(transparent)]
     Czi(#[from] grana_czi::Error),
+    #[error(transparent)]
+    Readout(#[from] grana_readout::Error),
     #[error("failed to open the image `{path}`: {detail}")]
     Open { path: PathBuf, detail: String },
     #[error("the image `{path}` is not supported: {detail}")]
