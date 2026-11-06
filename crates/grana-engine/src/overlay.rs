@@ -22,7 +22,7 @@ pub(crate) struct Figure<'a> {
     pub backdrop: bool,
 }
 
-pub(crate) fn instances(ui: &mut Ui, figure: Figure<'_>) -> Vec<Instance> {
+pub(crate) fn instances<A: Clone>(ui: &mut Ui<A>, figure: Figure<'_>) -> Vec<Instance> {
     let panes = figure.panes;
     let scale = panes.pixels_per_point;
     let volume_world_per_point = 2.0 * figure.camera.distance * (0.5 * figure.camera.fov_y).tan()

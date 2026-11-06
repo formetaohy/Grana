@@ -1,78 +1,151 @@
 use glam::Vec2;
 
-use crate::color::Color;
+use crate::element::{CheckboxContent, Content, Element, Layout, Length, Size, ToggleContent};
 use crate::geometry::{Corners, Rect};
 use crate::glass::GlassStyle;
-use crate::input::Button;
-use crate::motion::Motion;
+use crate::node::Runtime;
+use crate::paint::Painter;
 use crate::style::{Border, Fill, Shadow};
 use crate::text::{Align, TextStyle};
-use crate::theme::Level;
-use crate::ui::Ui;
+use crate::theme::Theme;
 
-pub fn toggle(ui: &mut Ui, id: &str, value: bool) -> Option<bool> {
-    let key = ui.id(id);
-    let metrics = ui.theme().metrics;
-    let rect = ui.allocate(Vec2::new(metrics.switch_width, metrics.switch_height));
-    let activated = ui.focusable(key, rect, Corners::capsule()) && ui.activated(key);
-    switch(ui, key, rect, value).or(activated.then_some(!value))
+use super::{PaintInfo, SubGlass};
+
+pub fn toggle<'a, A>(theme: &Theme, value: bool) -> Element<'a, A> {
+    Element::new(Layout {
+        size: Size::new(
+            Length::Fixed(theme.metrics.switch_width),
+            Length::Fixed(theme.metrics.switch_height),
+        ),
+        ..Layout::row()
+    })
+    .with_content(Content::Toggle(ToggleContent {
+        value,
+        label: None,
+        font: theme.font(crate::theme::Level::Callout).medium(),
+        row: false,
+    }))
+    .focus_ring(Corners::capsule())
+    .cursor(crate::input::Cursor::Pointing)
 }
 
-fn switch(ui: &mut Ui, key: u64, rect: Rect, value: bool) -> Option<bool> {
-    let palette = ui.theme().palette;
-    let response = ui.interact(key, rect);
-    let pointer = ui.input().position();
-    let primary = ui.input().button(Button::Primary);
-    let drag_key = key ^ 0x71;
-    let drag_knob = rect.height();
-    let drag_travel = (rect.width() - drag_knob).max(1.0);
-    let drag = ((pointer.x - rect.min.x - drag_knob * 0.5) / drag_travel).clamp(0.0, 1.0);
-    let active = primary.down && response.active;
-    let mut changed = response.clicked.then_some(!value);
-    if active && response.dragging {
-        ui.store_value(drag_key, drag);
+pub fn toggle_row<'a, A>(theme: &Theme, label: &str, value: bool) -> Element<'a, A> {
+    Element::new(Layout {
+        size: Size::new(Length::Fill, Length::Fixed(theme.metrics.row_height)),
+        ..Layout::row()
+    })
+    .with_content(Content::Toggle(ToggleContent {
+        value,
+        label: Some(label.to_string()),
+        font: theme.font(crate::theme::Level::Callout).medium(),
+        row: true,
+    }))
+    .focus_ring(Corners::all(9.0))
+    .cursor(crate::input::Cursor::Pointing)
+}
+
+pub fn checkbox<'a, A>(theme: &Theme, label: &str, value: bool) -> Element<'a, A> {
+    Element::new(Layout {
+        size: Size::new(Length::Auto, Length::Fixed(26.0)),
+        ..Layout::row()
+    })
+    .with_content(Content::Checkbox(CheckboxContent {
+        value,
+        label: label.to_string(),
+        font: theme.font(crate::theme::Level::Callout),
+    }))
+    .focus_ring(Corners::capsule())
+    .cursor(crate::input::Cursor::Pointing)
+}
+
+pub(super) fn measure_toggle(toggle: &ToggleContent, available: Vec2, theme: &Theme) -> Vec2 {
+    if toggle.row {
+        Vec2::new(available.x, theme.metrics.row_height)
+    } else {
+        Vec2::new(theme.metrics.switch_width, theme.metrics.switch_height)
     }
-    if primary.released
-        && let Some(dragged) = ui.value_of(drag_key)
-        && dragged >= 0.0
-    {
-        changed = Some(dragged > 0.5);
-        ui.store_value(drag_key, -1.0);
+}
+
+pub(super) fn measure_checkbox(
+    checkbox: &CheckboxContent,
+    available: Vec2,
+    text: &mut crate::text::Text,
+) -> Vec2 {
+    let _ = available;
+    let measured = text
+        .layout(
+            &checkbox.label,
+            checkbox.font,
+            0.0,
+            false,
+            false,
+            Align::Start,
+        )
+        .size
+        .x;
+    Vec2::new(measured + 28.0, 26.0)
+}
+
+pub(super) fn paint_toggle(
+    toggle: &ToggleContent,
+    runtime: &Runtime,
+    painter: &mut Painter,
+    info: &PaintInfo<'_>,
+    glass: &mut Vec<SubGlass>,
+) {
+    let rect = info.rect;
+    let mut switch_rect = rect;
+    if toggle.row {
+        let metrics = info.theme.metrics;
+        switch_rect = Rect::from_center_size(
+            Vec2::new(rect.max.x - metrics.switch_width * 0.5, rect.center().y),
+            Vec2::new(metrics.switch_width, metrics.switch_height),
+        );
+        if info.hover > 0.01 {
+            painter.rect(
+                rect.shrink2(Vec2::new(1.0, 0.5)),
+                Corners::all(9.0),
+                info.theme.palette.material_hover.amplify(0.55 * info.hover),
+            );
+        }
+        if let Some(label) = &toggle.label {
+            painter.text_in(
+                Rect::from_min_max(rect.min, Vec2::new(switch_rect.min.x - 10.0, rect.max.y)),
+                label,
+                TextStyle::new(
+                    toggle.font,
+                    info.theme.palette.text_secondary.lerp(
+                        info.theme.palette.text_primary,
+                        info.hover.max(if toggle.value { 1.0 } else { 0.0 }),
+                    ),
+                )
+                .truncating(),
+                Align::Center,
+            );
+        }
     }
-    let engaged = ui.animate(
-        key ^ 0x11,
-        if response.hovered || response.active {
-            1.0
-        } else {
-            0.0
-        },
-        Motion::quick(),
-    );
+    paint_switch(runtime, painter, info, switch_rect, glass);
+}
+
+fn paint_switch(
+    runtime: &Runtime,
+    painter: &mut Painter,
+    info: &PaintInfo<'_>,
+    rect: Rect,
+    glass: &mut Vec<SubGlass>,
+) {
+    let palette = info.theme.palette;
+    let engaged = info.engaged;
+    let progress = runtime.value.value.clamp(-0.06, 1.06);
     let track = Rect::from_min_max(
         Vec2::new(rect.min.x, rect.center().y - rect.height() * 0.5 + 1.0),
         Vec2::new(rect.max.x, rect.center().y + rect.height() * 0.5 - 1.0),
     );
     let knob = rect.height() - 1.0 + engaged * 1.2;
     let travel = (rect.width() - knob).max(0.0);
-    let current_value = if value { 1.0 } else { 0.0 };
-    let target = if active {
-        drag
-    } else {
-        changed.map_or(current_value, |next| if next { 1.0 } else { 0.0 })
-    };
-    let progress = ui.spring_to(
-        key,
-        target,
-        if active {
-            Motion::response(0.14, 0.0)
-        } else {
-            Motion::response(0.42, 0.30)
-        },
-    );
-    let position = progress.clamp(-0.06, 1.06);
-    let current = rect.min.x + travel * position;
-    let target_x = rect.min.x + travel * target;
-    let lag = target_x - current;
+    let current = rect.min.x + travel * progress;
+    let target = rect.min.x + travel * runtime.value.target.clamp(0.0, 1.0);
+    let lag = target - current;
     let reach = (lag.abs() * 0.65).min(knob * 0.55);
     let (left, right) = if lag >= 0.0 {
         (current, current + knob + reach)
@@ -86,112 +159,53 @@ fn switch(ui: &mut Ui, key: u64, rect: Rect, value: bool) -> Option<bool> {
     let fill = palette
         .track
         .lerp(palette.success, progress.clamp(0.0, 1.0));
-    {
-        let mut painter = ui.painter();
-        painter.outlined(
-            track,
-            Corners::capsule(),
-            Fill::Solid(fill),
-            Border {
-                width: 1.0,
-                color: palette.shade.amplify(0.55),
-            },
-            Shadow::NONE,
-        );
-        let inner = track.shrink(1.0);
-        let clip = painter.clip();
-        painter.push_clip(inner, Corners::capsule());
-        painter.gradient(
-            Rect::from_min_size(inner.min, Vec2::new(inner.width(), inner.height() * 0.5)),
-            Corners::ZERO,
-            palette.shade.amplify(0.35),
-            Color::TRANSPARENT,
-        );
-        painter.pop_clip(clip);
-    }
-    let knob_key = key ^ 0x5b;
-    ui.glass(knob_key, knob_rect, GlassStyle::knob());
-    ui.engage_glass(knob_key, response.active);
-    changed
+    painter.outlined(
+        track,
+        Corners::capsule(),
+        Fill::Solid(fill),
+        Border {
+            width: 1.0,
+            color: palette.shade.amplify(0.55),
+        },
+        Shadow::NONE,
+    );
+    let inner = track.shrink(1.0);
+    let clip = painter.clip();
+    painter.push_clip(inner, Corners::capsule());
+    painter.gradient(
+        Rect::from_min_size(inner.min, Vec2::new(inner.width(), inner.height() * 0.5)),
+        Corners::ZERO,
+        palette.shade.amplify(0.35),
+        crate::color::Color::TRANSPARENT,
+    );
+    painter.pop_clip(clip);
+    glass.push(SubGlass {
+        rect: knob_rect,
+        style: GlassStyle::knob(),
+        engaged: info.press > 0.5,
+    });
 }
 
-pub fn toggle_row(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool> {
-    let key = ui.id(id);
-    let metrics = ui.theme().metrics;
-    let palette = ui.theme().palette;
-    let rect = ui.allocate(Vec2::new(ui.available().x, metrics.row_height));
-    let mut response = ui.interact(key, rect);
-    if ui.focusable(key, rect, Corners::all(9.0)) && ui.activated(key) {
-        response.clicked = true;
-    }
-    let changed = response.clicked.then_some(!value);
-    let hover = ui.animate(
-        key ^ 0x21,
-        if response.hovered { 1.0 } else { 0.0 },
-        Motion::quick(),
-    );
-    let font = ui.theme().font(Level::Callout).medium();
-    let switch_rect = Rect::from_center_size(
-        Vec2::new(rect.max.x - metrics.switch_width * 0.5, rect.center().y),
-        Vec2::new(metrics.switch_width, metrics.switch_height),
-    );
-    {
-        let mut painter = ui.painter();
-        if hover > 0.01 {
-            painter.rect(
-                rect.shrink2(Vec2::new(1.0, 0.5)),
-                Corners::all(9.0),
-                palette.material_hover.amplify(0.55 * hover),
-            );
-        }
-        painter.text_in(
-            Rect::from_min_max(rect.min, Vec2::new(switch_rect.min.x - 10.0, rect.max.y)),
-            label,
-            TextStyle::new(
-                font,
-                palette.text_secondary.lerp(
-                    palette.text_primary,
-                    hover.max(if value { 1.0 } else { 0.0 }),
-                ),
-            )
-            .truncating(),
-            Align::Center,
-        );
-    }
-    switch(ui, key ^ 0x2f, switch_rect, value).or(changed)
-}
-
-pub fn checkbox(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool> {
-    let key = ui.id(id);
-    let palette = ui.theme().palette;
-    let font = ui.theme().font(Level::Callout);
-    let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE));
-    let rect = ui.allocate(Vec2::new(measured.x + 28.0, 26.0));
-    let mut response = ui.interact(key, rect);
-    if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
-        response.clicked = true;
-    }
-    let changed = response.clicked.then_some(!value);
-    let mark = ui.animate(
-        key ^ 0x31,
-        if value { 1.0 } else { 0.0 },
-        Motion::response(0.28, 0.28),
-    );
-    let hover = ui.animate(
-        key ^ 0x32,
-        if response.hovered { 1.0 } else { 0.0 },
-        Motion::quick(),
-    );
+pub(super) fn paint_checkbox(
+    checkbox: &CheckboxContent,
+    runtime: &Runtime,
+    painter: &mut Painter,
+    info: &PaintInfo<'_>,
+) {
+    let palette = info.theme.palette;
+    let rect = info.rect;
+    let mark = runtime.value.value;
     let box_rect = Rect::from_center_size(
         Vec2::new(rect.min.x + 9.0, rect.center().y),
         Vec2::splat(17.0),
     );
-    let outline = palette.text_tertiary.lerp(palette.text_secondary, hover);
+    let outline = palette
+        .text_tertiary
+        .lerp(palette.text_secondary, info.hover);
     let fill = palette.accent.with_alpha(mark);
     let text_color = palette
         .text_secondary
-        .lerp(palette.text_primary, hover.max(mark));
-    let mut painter = ui.painter();
+        .lerp(palette.text_primary, info.hover.max(mark));
     painter.outlined(
         box_rect,
         Corners::all(5.0),
@@ -212,9 +226,8 @@ pub fn checkbox(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool>
     }
     painter.text_in(
         Rect::from_min_max(Vec2::new(rect.min.x + 24.0, rect.min.y), rect.max),
-        label,
-        TextStyle::new(font, text_color),
+        &checkbox.label,
+        TextStyle::new(checkbox.font, text_color),
         Align::Center,
     );
-    changed
 }

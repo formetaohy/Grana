@@ -10,8 +10,8 @@ pub struct Contents<'a> {
     pub labels: &'a [PlacedLabel],
 }
 
-pub fn instances(
-    ui: &mut Ui,
+pub fn instances<A: Clone>(
+    ui: &mut Ui<A>,
     size: [u32; 2],
     pixels_per_point: f32,
     world_per_point: f32,
@@ -25,7 +25,7 @@ pub fn instances(
     let rect = Rect::from_min_size(Vec2::ZERO, points);
     let placed = contents
         .caption
-        .map(|caption| Placed::new(ui, caption, rect));
+        .map(|caption| Placed::new(ui.text(), caption, rect));
     ui.render_figure(points, pixels_per_point, |painter| {
         overlay::figure(
             painter,

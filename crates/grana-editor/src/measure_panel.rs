@@ -1,46 +1,69 @@
 use glam::Vec2;
-use grana_measure::{Aggregate, Column, Filter, Group, MeasureView, Observation, PlotAxis, Scope};
+use grana_measure::{Aggregate, Column, Filter, Group, MeasureView, PlotAxis, Scope};
 use grana_scene::{Item, ObjectSetId, Selection};
+use grana_session::Command;
 use grana_ui::{
-    Align, Axis, Block, Color, Corners, Cursor, Icon, Length, Level, Rect, Role, TextStyle, Ui,
-    icon,
+    Align, Axis, BuildContext, Color, Corners, Cursor, Element, Icon, Key, Length, Level, Rect,
+    Role, State, TextStyle, icon,
 };
 
-use crate::panel::empty_state;
-use crate::plot;
-use crate::state::State;
-use crate::widget;
-use grana_session::Command;
+use crate::message::Message;
+use crate::state::View;
+use crate::view;
 
 const ROW_HEIGHT: f32 = 26.0;
 const HEADER_HEIGHT: f32 = 30.0;
 const MIN_COLUMN_WIDTH: f32 = 58.0;
+const TOOLBAR_HEIGHT: f32 = 30.0;
 
-pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
+pub fn view<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+    rect: Rect,
+) -> Vec<Element<'a, Message>> {
     if state.scene.objects.is_empty() {
-        empty_state(
-            ui,
+        return vec![view::empty_state(
+            ctx,
             Icon::Table,
             "No Measurements Yet",
             "Add and detect an object set to build a measurement table, then filter, sort and export it.",
-        );
-        return;
+        )
+        .at(rect)];
     }
-    toolbar(ui, state, commands);
+    let mut elements = Vec::new();
+    let mut top = rect.min.y;
+    elements.extend(toolbar(
+        ctx,
+        state,
+        Rect::from_min_size(rect.min, Vec2::new(rect.width(), TOOLBAR_HEIGHT)),
+    ));
+    top += TOOLBAR_HEIGHT;
     let measured = state.measure.table().is_some();
-    if measured && state.measure.view() != MeasureView::Table {
-        plot_bar(ui, state, commands);
+    let mode = state.measure.view();
+    if measured && mode != MeasureView::Table {
+        let bar = Rect::from_min_size(
+            Vec2::new(rect.min.x, top + 4.0),
+            Vec2::new(rect.width(), 28.0),
+        );
+        elements.extend(plot_bar(ctx, state, bar));
+        top += 32.0;
     }
-    filters(ui, state, commands);
-    ui.space(6.0);
-    if measured && state.measure.view() != MeasureView::Table {
-        plot::view(ui, state, commands);
+    elements.extend(filters(ctx, state, rect, &mut top));
+    top += 6.0;
+    let body = Rect::from_min_max(Vec2::new(rect.min.x, top), rect.max);
+    if measured && mode != MeasureView::Table {
+        elements.extend(crate::plot::view(ctx, state, body));
     } else {
-        table(ui, state, commands);
+        elements.extend(table(ctx, state, body));
     }
+    elements
 }
 
-fn toolbar(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
+fn toolbar<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+    row: Rect,
+) -> Vec<Element<'a, Message>> {
     let sets = state
         .scene
         .objects
@@ -48,169 +71,241 @@ fn toolbar(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         .map(|set| (set.id(), set.name().to_string()))
         .collect::<Vec<_>>();
     let current = state.measure.set();
-    let mut chosen = current.or_else(|| sets.first().map(|(id, _)| *id));
-    let mut group = state.measure.group();
-    let mut aggregate = state.measure.aggregate();
-    let scope = state.measure.scope();
-    let view = state.measure.view();
-    let measured = state.measure.table().is_some();
-    let row = ui.allocate_full(30.0);
-    ui.place(row, |ui| {
-        ui.row(
-            Block::row()
-                .gaps(8.0)
-                .align(Align::Center)
-                .width(Length::Fill)
-                .height(Length::Fill),
-            |ui| {
-                widget::field_label(ui, "Set");
-                if let Some(value) =
-                    grana_ui::popover::combo(ui, "measure.set", 140.0, &sets, chosen)
-                {
-                    chosen = Some(value);
-                }
-                if let Some(id) = chosen
-                    && chosen != current
-                {
-                    commands.push(Command::SetMeasureSet(Some(id)));
-                }
-                let trackable = chosen
-                    .and_then(|id| state.scene.objects.get(id))
-                    .is_some_and(|object| object.kind().trackable());
-                let mut options = vec!["Objects"];
-                if trackable {
-                    options.push("Tracks");
-                }
-                options.push("Frames");
-                let index = match group {
-                    Group::Object => 0,
-                    Group::Track => 1,
-                    Group::Timepoint => {
-                        if trackable {
-                            2
-                        } else {
-                            1
-                        }
+    let chosen = current
+        .or_else(|| sets.first().map(|(id, _)| *id))
+        .unwrap_or_else(|| sets[0].0);
+    let selected = sets.iter().position(|(id, _)| *id == chosen).unwrap_or(0);
+    let trackable = state
+        .scene
+        .objects
+        .get(chosen)
+        .is_some_and(|object| object.kind().trackable());
+    let group = state.measure.group();
+    let mut options = vec!["Objects".to_string()];
+    if trackable {
+        options.push("Tracks".to_string());
+    }
+    options.push("Frames".to_string());
+    let group_index = match group {
+        Group::Object => 0,
+        Group::Track => 1,
+        Group::Timepoint => {
+            if trackable {
+                2
+            } else {
+                1
+            }
+        }
+    };
+    let mut items = vec![
+        field_label(ctx, "Set"),
+        combo(
+            ctx,
+            "measure.set",
+            140.0,
+            selected,
+            &sets
+                .iter()
+                .map(|(_, name)| name.clone())
+                .collect::<Vec<_>>(),
+            move |index| {
+                let id = sets.get(index).map(|(id, _)| *id);
+                match id {
+                    Some(id) if current != Some(id) => {
+                        Message::Command(Command::SetMeasureSet(Some(id)))
                     }
-                };
-                if let Some(index) = widget::segmented(ui, "measure.group", &options, index) {
-                    let next = match index {
-                        0 => Group::Object,
-                        1 if trackable => Group::Track,
-                        _ => Group::Timepoint,
-                    };
-                    if next != group {
-                        group = next;
-                        commands.push(Command::SetMeasureGroup(group));
-                    }
-                }
-                if group != Group::Object {
-                    let options = [
-                        (Aggregate::Mean, "Mean".to_string()),
-                        (Aggregate::Sum, "Sum".to_string()),
-                        (Aggregate::Minimum, "Min".to_string()),
-                        (Aggregate::Maximum, "Max".to_string()),
-                        (Aggregate::Deviation, "SD (σ)".to_string()),
-                    ];
-                    if let Some(value) = grana_ui::popover::combo(
-                        ui,
-                        "measure.aggregate",
-                        86.0,
-                        &options,
-                        Some(aggregate),
-                    ) && value != aggregate
-                    {
-                        aggregate = value;
-                        commands.push(Command::SetMeasureAggregate(aggregate));
-                    }
-                }
-                if measured && group != Group::Track {
-                    let labels = ["All", "Current"];
-                    let scope_idx = Scope::ALL
-                        .iter()
-                        .position(|current| *current == scope)
-                        .unwrap_or(0);
-                    if let Some(chosen) = widget::segmented(ui, "measure.scope", &labels, scope_idx)
-                    {
-                        let next = Scope::ALL[chosen];
-                        if next != scope {
-                            commands.push(Command::SetMeasureScope(next));
-                        }
-                    }
-                }
-                let total = state.measure.total();
-                let shown = state.measure.rows().len();
-                let label = format!("{shown}/{total} rows");
-                let caption_width = ui
-                    .measure_text(
-                        &label,
-                        TextStyle::new(
-                            ui.theme().font(Level::Caption),
-                            ui.theme().palette.text_tertiary,
-                        ),
-                    )
-                    .x;
-                let view_w = if measured { 222.0 } else { 0.0 };
-                let right_content = view_w + caption_width + 3.0 * 28.0 + 4.0 * 8.0;
-                ui.space((ui.available().x - right_content).max(4.0));
-                if measured {
-                    let view_idx = match view {
-                        MeasureView::Table => 0,
-                        MeasureView::Histogram => 1,
-                        MeasureView::Scatter => 2,
-                    };
-                    if let Some(chosen) = widget::segmented(
-                        ui,
-                        "measure.view",
-                        &["Table", "Histogram", "Scatter"],
-                        view_idx,
-                    ) && MeasureView::ALL[chosen] != view
-                    {
-                        commands.push(Command::SetMeasureView(MeasureView::ALL[chosen]));
-                    }
-                }
-                widget::caption(ui, &label);
-                if widget::icon_button(
-                    ui,
-                    "measure.filter",
-                    Icon::Filter,
-                    28.0,
-                    Role::Quiet,
-                    "Add filter",
-                ) {
-                    commands.push(Command::AddFilter);
-                }
-                let key = ui.id("measure.columns");
-                let response = widget::icon_button_response(
-                    ui,
-                    "measure.columns",
-                    Icon::Columns,
-                    28.0,
-                    Role::Quiet,
-                    "Choose columns",
-                );
-                if response.clicked {
-                    ui.toggle_popup(key);
-                }
-                columns_menu(ui, state, commands, response.rect);
-                if widget::icon_button(
-                    ui,
-                    "measure.export",
-                    Icon::Export,
-                    28.0,
-                    Role::Quiet,
-                    "Export CSV",
-                ) {
-                    commands.push(Command::ExportMeasure);
+                    _ => Message::Noop,
                 }
             },
-        );
-    });
+        ),
+    ];
+    let group_options = options.iter().map(String::as_str).collect::<Vec<_>>();
+    items.push(view::segmented(
+        ctx,
+        "measure.group",
+        &group_options,
+        group_index,
+        move |index| {
+            let next = match index {
+                0 => Group::Object,
+                1 if trackable => Group::Track,
+                _ => Group::Timepoint,
+            };
+            if next != group {
+                Message::Command(Command::SetMeasureGroup(next))
+            } else {
+                Message::Noop
+            }
+        },
+    ));
+    if group != Group::Object {
+        let aggregate = state.measure.aggregate();
+        let aggregate_index = Aggregate::ALL
+            .iter()
+            .position(|value| *value == aggregate)
+            .unwrap_or(0);
+        items.push(combo(
+            ctx,
+            "measure.aggregate",
+            86.0,
+            aggregate_index,
+            &Aggregate::ALL
+                .iter()
+                .map(|value| match value {
+                    Aggregate::Mean => "Mean".to_string(),
+                    Aggregate::Sum => "Sum".to_string(),
+                    Aggregate::Minimum => "Min".to_string(),
+                    Aggregate::Maximum => "Max".to_string(),
+                    Aggregate::Deviation => "SD (σ)".to_string(),
+                })
+                .collect::<Vec<_>>(),
+            move |index| match Aggregate::ALL.get(index) {
+                Some(value) if *value != aggregate => {
+                    Message::Command(Command::SetMeasureAggregate(*value))
+                }
+                _ => Message::Noop,
+            },
+        ));
+    }
+    if state.measure.table().is_some() && group != Group::Track {
+        let scope = state.measure.scope();
+        let scope_index = Scope::ALL
+            .iter()
+            .position(|value| *value == scope)
+            .unwrap_or(0);
+        items.push(view::segmented(
+            ctx,
+            "measure.scope",
+            &["All", "Current"],
+            scope_index,
+            move |index| match Scope::ALL.get(index) {
+                Some(value) if *value != scope => {
+                    Message::Command(Command::SetMeasureScope(*value))
+                }
+                _ => Message::Noop,
+            },
+        ));
+    }
+    let left = grana_ui::row()
+        .gap(8.0)
+        .align(Align::Center)
+        .at(Rect::from_min_size(
+            row.min,
+            Vec2::new(row.width(), TOOLBAR_HEIGHT),
+        ))
+        .children(items);
+    let labels = ["Table", "Histogram", "Scatter"];
+    let mode = state.measure.view();
+    let total = state.measure.total();
+    let shown = state.measure.rows().len();
+    let caption = format!("{shown}/{total} rows");
+    let caption_style = TextStyle::new(
+        ctx.theme().font(Level::Caption),
+        ctx.theme().palette.text_tertiary,
+    );
+    let caption_width = ctx.measure(&caption, caption_style).x;
+    let segmented_width = if state.measure.table().is_some() {
+        segmented_width(ctx, &labels)
+    } else {
+        0.0
+    };
+    let right_width = segmented_width + caption_width + 3.0 * 28.0 + 4.0 * 8.0 + 4.0;
+    let right = Rect::from_min_size(
+        Vec2::new((row.max.x - right_width).max(row.min.x), row.min.y),
+        Vec2::new(right_width.min(row.width()), TOOLBAR_HEIGHT),
+    );
+    let mut right_items = Vec::new();
+    if state.measure.table().is_some() {
+        let index = match mode {
+            MeasureView::Table => 0,
+            MeasureView::Histogram => 1,
+            MeasureView::Scatter => 2,
+        };
+        right_items.push(view::segmented(
+            ctx,
+            "measure.view",
+            &labels,
+            index,
+            move |index| match MeasureView::ALL.get(index) {
+                Some(value) if *value != mode => Message::Command(Command::SetMeasureView(*value)),
+                _ => Message::Noop,
+            },
+        ));
+    }
+    right_items.push(view::caption(ctx, &caption));
+    right_items.push(view::icon_button(
+        ctx,
+        "measure.filter",
+        Icon::Filter,
+        28.0,
+        Role::Quiet,
+        "Add filter",
+        Message::Command(Command::AddFilter),
+    ));
+    right_items.push(view::icon_button(
+        ctx,
+        "measure.columns",
+        Icon::Columns,
+        28.0,
+        Role::Quiet,
+        "Choose columns",
+        Message::Noop,
+    ));
+    right_items.push(view::icon_button(
+        ctx,
+        "measure.export",
+        Icon::Export,
+        28.0,
+        Role::Quiet,
+        "Export CSV",
+        Message::Command(Command::ExportMeasure),
+    ));
+    let right_row = grana_ui::row()
+        .gap(8.0)
+        .align(Align::Center)
+        .justify(Align::End)
+        .children(right_items);
+    let mut children = vec![left, right_row.at(right)];
+    children.push(columns_menu(ctx, state));
+    children
 }
 
-fn plot_bar(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
+fn columns_menu<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+) -> Element<'a, Message> {
+    let theme = *ctx.theme();
     let Some(table) = state.measure.table() else {
-        return;
+        return grana_ui::column();
+    };
+    let visible = state.measure.visible();
+    let mut rows = vec![
+        grana_ui::widget::menu_row(&theme, "Show All Columns", false)
+            .named("measure.show.all")
+            .press(Message::Command(Command::ShowAllColumns)),
+        grana_ui::widget::separator(&theme).named("measure.columns.separator"),
+    ];
+    for (index, column) in table.columns().iter().enumerate() {
+        let shown = visible.get(index).copied().unwrap_or(false);
+        rows.push(
+            grana_ui::widget::menu_row(&theme, &view::column_label(column), shown)
+                .key(Key::index("measure.column", index))
+                .press(Message::Command(Command::SetColumnVisible {
+                    index,
+                    visible: !shown,
+                })),
+        );
+    }
+    grana_ui::popover::popup(Key::new("measure.columns"), 240.0, rows)
+}
+
+fn plot_bar<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+    rect: Rect,
+) -> Vec<Element<'a, Message>> {
+    let Some(table) = state.measure.table() else {
+        return Vec::new();
     };
     let view = state.measure.view();
     let axes = state.measure.axes();
@@ -218,7 +313,11 @@ fn plot_bar(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         .columns()
         .iter()
         .enumerate()
-        .map(|(index, column)| (index, crate::panel::column_label(column)))
+        .map(|(index, column)| (index, view::column_label(column)))
+        .collect::<Vec<_>>();
+    let labels = options
+        .iter()
+        .map(|(_, label)| label.clone())
         .collect::<Vec<_>>();
     let lasso = state.measure.lasso().is_some();
     let gated = lasso
@@ -226,278 +325,246 @@ fn plot_bar(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
             filter.column() == axes[0]
                 || (view == MeasureView::Scatter && filter.column() == axes[1])
         });
-    ui.space(4.0);
-    let row = ui.allocate_full(28.0);
-    ui.place(row, |ui| {
-        ui.row(
-            Block::row()
-                .gaps(8.0)
-                .align(Align::Center)
-                .height(Length::Fill),
-            |ui| {
-                widget::field_label(ui, "X Axis");
-                if let Some(column) =
-                    grana_ui::popover::combo(ui, "measure.plot.x", 180.0, &options, Some(axes[0]))
-                    && column != axes[0]
-                {
-                    commands.push(Command::SetPlotAxis {
-                        axis: PlotAxis::X,
-                        column,
-                    });
-                }
-                if view == MeasureView::Scatter {
-                    widget::field_label(ui, "Y Axis");
-                    if let Some(column) = grana_ui::popover::combo(
-                        ui,
-                        "measure.plot.y",
-                        180.0,
-                        &options,
-                        Some(axes[1]),
-                    ) && column != axes[1]
-                    {
-                        commands.push(Command::SetPlotAxis {
-                            axis: PlotAxis::Y,
-                            column,
-                        });
-                    }
-                }
-                if gated && widget::button(ui, "measure.gate.clear", "Clear Gate", Role::Quiet) {
-                    let mut indices = state
-                        .measure
-                        .filters()
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, filter)| {
-                            filter.column() == axes[0]
-                                || (view == MeasureView::Scatter && filter.column() == axes[1])
-                        })
-                        .map(|(index, _)| index)
-                        .collect::<Vec<_>>();
-                    indices.sort_unstable_by(|left, right| right.cmp(left));
-                    for index in indices {
-                        commands.push(Command::RemoveFilter(index));
-                    }
-                    if lasso {
-                        commands.push(Command::SetLasso(None));
-                    }
-                }
+    let selected_x = options
+        .iter()
+        .position(|(index, _)| *index == axes[0])
+        .unwrap_or(0);
+    let selected_y = options
+        .iter()
+        .position(|(index, _)| *index == axes[1])
+        .unwrap_or(0);
+    let options_x = options.clone();
+    let mut items = vec![
+        field_label(ctx, "X Axis"),
+        combo(
+            ctx,
+            "measure.plot.x",
+            180.0,
+            selected_x,
+            &labels,
+            move |index| match options_x.get(index) {
+                Some((column, _)) if *column != axes[0] => Message::Command(Command::SetPlotAxis {
+                    axis: PlotAxis::X,
+                    column: *column,
+                }),
+                _ => Message::Noop,
             },
-        );
-    });
-}
-
-fn columns_menu(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>, anchor: Rect) {
-    let key = ui.id("measure.columns");
-    let open = ui.popup_open(key);
-    let Some(table) = state.measure.table() else {
-        return;
-    };
-    let columns = table.columns().to_vec();
-    let mut toggles: Vec<(usize, bool)> = Vec::new();
-    let visible = state.measure.visible().to_vec();
-    grana_ui::popover::popover(ui, "measure.columns", open, anchor, 240.0, |ui| {
-        if widget::button(ui, "show.all", "Show All Columns", Role::Quiet) {
-            commands.push(Command::ShowAllColumns);
-        }
-        grana_ui::popover::separator(ui);
-        for (index, column) in columns.iter().enumerate() {
-            let shown = visible.get(index).copied().unwrap_or(false);
-            if let Some(next) = widget::checkbox(
-                ui,
-                &format!("column.{index}"),
-                &crate::panel::column_label(column),
-                shown,
-            ) {
-                toggles.push((index, next));
-            }
-        }
-    });
-    for (index, shown) in toggles {
-        commands.push(Command::SetColumnVisible {
-            index,
-            visible: shown,
-        });
+        ),
+    ];
+    if view == MeasureView::Scatter {
+        items.push(field_label(ctx, "Y Axis"));
+        items.push(combo(
+            ctx,
+            "measure.plot.y",
+            180.0,
+            selected_y,
+            &labels,
+            move |index| match options.get(index) {
+                Some((column, _)) if *column != axes[1] => Message::Command(Command::SetPlotAxis {
+                    axis: PlotAxis::Y,
+                    column: *column,
+                }),
+                _ => Message::Noop,
+            },
+        ));
     }
+    if gated {
+        items.push(view::button(ctx, "Clear Gate", Role::Quiet).press(Message::ClearGates));
+    }
+    vec![
+        grana_ui::row()
+            .gap(8.0)
+            .align(Align::Center)
+            .at(rect)
+            .children(items),
+    ]
 }
 
-fn filters(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
-    let Some(columns) = state.measure.table().map(|table| {
-        table
-            .columns()
-            .iter()
-            .map(|column| {
-                (
-                    column.label().to_string(),
-                    column.unit().suffix().to_string(),
-                )
-            })
-            .collect::<Vec<_>>()
-    }) else {
-        return;
+fn filters<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+    rect: Rect,
+    top: &mut f32,
+) -> Vec<Element<'a, Message>> {
+    let mut elements = Vec::new();
+    let Some(table) = state.measure.table() else {
+        return elements;
     };
-    let options = columns
+    let filters = state.measure.filters().to_vec();
+    let filtered = !filters.is_empty();
+    if filtered || state.measure.lasso().is_some() {
+        let row = Rect::from_min_size(
+            Vec2::new(rect.min.x, *top + 4.0),
+            Vec2::new(rect.width(), 28.0),
+        );
+        let theme = *ctx.theme();
+        let visibility = state.measure.visibility();
+        let mut items = vec![
+            grana_ui::widget::checkbox(&theme, "Hide Filtered Rows", visibility)
+                .key(Key::new("hide.filtered"))
+                .on_toggle(visibility, |value| {
+                    Message::Command(Command::SetMeasureVisibility(value))
+                }),
+            view::button(ctx, "Extract Filtered", Role::Tinted)
+                .press(Message::Command(Command::ExtractFiltered)),
+            view::button(ctx, "Delete Excluded", Role::Danger)
+                .press(Message::Command(Command::DeleteFiltered)),
+        ];
+        if !filtered {
+            items.remove(0);
+        }
+        elements.push(
+            grana_ui::row()
+                .gap(8.0)
+                .align(Align::Center)
+                .at(row)
+                .children(items),
+        );
+        *top += 32.0;
+    }
+    let options = table
+        .columns()
         .iter()
         .enumerate()
-        .map(|(index, (name, unit))| {
-            let text = if unit.is_empty() {
-                name.clone()
-            } else {
-                format!("{name} ({unit})")
-            };
-            (index, text)
-        })
+        .map(|(index, column)| (index, view::column_label(column)))
         .collect::<Vec<_>>();
-    let visibility = state.measure.visibility();
-    let filtered = !state.measure.filters().is_empty();
-    if filtered || state.measure.lasso().is_some() {
-        ui.space(4.0);
-        ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-            if filtered
-                && let Some(value) =
-                    widget::checkbox(ui, "hide.filtered", "Hide Filtered Rows", visibility)
-            {
-                commands.push(Command::SetMeasureVisibility(value));
-            }
-            if widget::button(ui, "extract.filtered", "Extract Filtered", Role::Tinted) {
-                commands.push(Command::ExtractFiltered);
-            }
-            if widget::button(ui, "delete.excluded", "Delete Excluded", Role::Danger) {
-                commands.push(Command::DeleteFiltered);
-            }
-        });
-    }
-    let filters = state.measure.filters().to_vec();
-    let mut removed = None;
-    let mut retargeted = None;
-    let mut applied = None;
+    let labels = options
+        .iter()
+        .map(|(_, label)| label.clone())
+        .collect::<Vec<_>>();
+    let surface = ctx.theme().surface(Role::Card, State::Rest);
     for (index, filter) in filters.iter().enumerate() {
-        ui.space(4.0);
-        ui.push_id(&format!("filter.{index}"));
-        let mut column = filter.column();
-        let mut minimum = filter.minimum();
-        let mut maximum = filter.maximum();
-        ui.column(
-            Block::column()
-                .padding(grana_ui::Edges::symmetric(10.0, 4.0))
-                .gaps(4.0)
-                .background(card_look(ui)),
-            |ui| {
-                let row = ui.allocate_full(28.0);
-                let remove = Rect::from_center_size(
-                    Vec2::new(row.max.x - 12.0, row.center().y),
-                    Vec2::splat(22.0),
-                );
-                let controls =
-                    Rect::from_min_max(row.min, Vec2::new(remove.min.x - 8.0, row.max.y));
-                ui.place(controls, |ui| {
-                    ui.row(
-                        Block::row()
-                            .gaps(6.0)
-                            .align(Align::Center)
-                            .height(Length::Fill),
-                        |ui| {
-                            widget::field_label(ui, "Filter");
-                            if let Some(value) = grana_ui::popover::combo(
-                                ui,
-                                "column",
-                                180.0,
-                                &options,
-                                Some(column),
-                            ) {
-                                column = value;
-                            }
-                            let speed = ((maximum - minimum).abs().max(1.0)) / 200.0;
-                            if let Some(value) =
-                                widget::drag_value(ui, "minimum", minimum, speed, 4)
-                            {
-                                minimum = value;
-                            }
-                            widget::caption(ui, "–");
-                            if let Some(value) =
-                                widget::drag_value(ui, "maximum", maximum, speed, 4)
-                            {
-                                maximum = value;
-                            }
-                        },
-                    );
-                });
-                ui.place(remove, |ui| {
-                    if widget::icon_button(
-                        ui,
-                        "remove",
-                        Icon::Close,
-                        22.0,
-                        Role::Quiet,
-                        "Remove filter",
-                    ) {
-                        removed = Some(index);
+        let card = Rect::from_min_size(
+            Vec2::new(rect.min.x, *top + 4.0),
+            Vec2::new(rect.width(), 36.0),
+        );
+        let remove = Rect::from_center_size(
+            Vec2::new(card.max.x - 22.0, card.center().y),
+            Vec2::splat(22.0),
+        );
+        let controls = Rect::from_min_max(
+            Vec2::new(card.min.x + 10.0, card.min.y + 4.0),
+            Vec2::new(remove.min.x - 8.0, card.max.y - 4.0),
+        );
+        let theme = *ctx.theme();
+        let mut surface = surface;
+        surface.corners = Corners::all(theme.metrics.card_radius);
+        elements.push(grana_ui::column().at(card).background(surface));
+        let selected = options
+            .iter()
+            .position(|(column, _)| *column == filter.column())
+            .unwrap_or(0);
+        let column_index = filter.column();
+        let minimum = filter.minimum();
+        let maximum = filter.maximum();
+        let speed = ((maximum - minimum).abs().max(1.0)) / 200.0;
+        let minimum_value = grana_ui::widget::drag_value(&theme, minimum, 4)
+            .key(Key::index("measure.filter.minimum", index))
+            .on_drag_value(minimum, speed, move |value| {
+                let low = value.min(maximum);
+                let high = value.max(maximum);
+                if (low - minimum).abs() > f32::EPSILON || (high - maximum).abs() > f32::EPSILON {
+                    Message::Command(Command::SetFilter {
+                        index,
+                        filter: Filter::new(column_index, low, high),
+                    })
+                } else {
+                    Message::Noop
+                }
+            });
+        let maximum_value = grana_ui::widget::drag_value(&theme, maximum, 4)
+            .key(Key::index("measure.filter.maximum", index))
+            .on_drag_value(maximum, speed, move |value| {
+                let low = minimum.min(value);
+                let high = minimum.max(value);
+                if (low - minimum).abs() > f32::EPSILON || (high - maximum).abs() > f32::EPSILON {
+                    Message::Command(Command::SetFilter {
+                        index,
+                        filter: Filter::new(column_index, low, high),
+                    })
+                } else {
+                    Message::Noop
+                }
+            });
+        let options_for_combo = options.clone();
+        let combo_key = format!("measure.filter.column.{index}");
+        let remove_key = format!("measure.filter.remove.{index}");
+        let row = grana_ui::row()
+            .gap(6.0)
+            .align(Align::Center)
+            .at(controls)
+            .children([
+                field_label(ctx, "Filter"),
+                combo(ctx, &combo_key, 180.0, selected, &labels, move |choice| {
+                    match options_for_combo.get(choice) {
+                        Some((column, _)) if *column != column_index => {
+                            Message::Command(Command::RetargetFilter {
+                                index,
+                                column: *column,
+                            })
+                        }
+                        _ => Message::Noop,
                     }
-                });
-            },
+                }),
+                minimum_value,
+                view::caption(ctx, "–"),
+                maximum_value,
+            ]);
+        elements.push(row);
+        elements.push(
+            view::icon_button(
+                ctx,
+                &remove_key,
+                Icon::Close,
+                22.0,
+                Role::Quiet,
+                "Remove filter",
+                Message::Command(Command::RemoveFilter(index)),
+            )
+            .at(remove),
         );
-        ui.pop_id();
-        if column != filter.column() {
-            retargeted = Some((index, column));
-        } else if minimum != filter.minimum() || maximum != filter.maximum() {
-            let (low, high) = if minimum <= maximum {
-                (minimum, maximum)
-            } else {
-                (maximum, minimum)
-            };
-            applied = Some((index, Filter::new(column, low, high)));
-        }
+        *top += 40.0;
     }
-    if let Some((index, column)) = retargeted {
-        commands.push(Command::RetargetFilter { index, column });
-    }
-    if let Some((index, filter)) = applied {
-        commands.push(Command::SetFilter { index, filter });
-    }
-    if let Some(index) = removed {
-        commands.push(Command::RemoveFilter(index));
-    }
+    elements
 }
 
-fn card_look(ui: &Ui) -> grana_ui::Surface {
-    let mut look = ui.theme().surface(Role::Card, grana_ui::State::Rest);
-    look.corners = Corners::all(ui.theme().metrics.card_radius);
-    look
-}
-
-fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
+fn table<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+    rect: Rect,
+) -> Vec<Element<'a, Message>> {
     let Some(set) = state.measure.set() else {
-        empty_state(
-            ui,
-            Icon::Table,
-            "No Object Set Selected",
-            "Choose an object set to inspect its measurements.",
-        );
-        return;
+        return vec![
+            view::empty_state(
+                ctx,
+                Icon::Table,
+                "No Object Set Selected",
+                "Choose an object set to inspect its measurements.",
+            )
+            .at(rect),
+        ];
     };
     let Some(table) = state.measure.table() else {
-        empty_state(
-            ui,
-            Icon::Table,
-            "No Detection Yet",
-            "Detect this object set to build its measurement table.",
-        );
-        return;
+        return vec![
+            view::empty_state(
+                ctx,
+                Icon::Table,
+                "No Detection Yet",
+                "Detect this object set to build its measurement table.",
+            )
+            .at(rect),
+        ];
     };
     if table.rows() == 0 {
-        empty_state(
-            ui,
-            Icon::Table,
-            "No Rows",
-            match state.measure.group() {
-                Group::Track => "Track the objects to summarise their trajectories.",
-                Group::Object | Group::Timepoint => {
-                    "Detect objects in the region to build a measurement table."
-                }
-            },
-        );
-        return;
+        let detail = match state.measure.group() {
+            Group::Track => "Track the objects to summarise their trajectories.",
+            Group::Object | Group::Timepoint => {
+                "Detect objects in the region to build a measurement table."
+            }
+        };
+        return vec![view::empty_state(ctx, Icon::Table, "No Rows", detail).at(rect)];
     }
-    let visible = state.measure.visible().to_vec();
+    let visible = state.measure.visible();
     let columns = table
         .columns()
         .iter()
@@ -506,137 +573,179 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
         .map(|(index, column)| (index, column.clone()))
         .collect::<Vec<_>>();
     if columns.is_empty() {
-        empty_state(
-            ui,
-            Icon::Columns,
-            "No Visible Columns",
-            "Choose at least one column from the columns menu.",
-        );
-        return;
+        return vec![
+            view::empty_state(
+                ctx,
+                Icon::Columns,
+                "No Visible Columns",
+                "Choose at least one column from the columns menu.",
+            )
+            .at(rect),
+        ];
     }
-    let surface = Rect::from_min_size(ui.cursor_position(), ui.available());
-    crate::panel::card_surface(ui, surface);
-    let available = surface.width();
-    let widths = column_widths(ui, &columns, available - 1.0);
+    let available = rect.width();
+    let widths = column_widths(state, &columns, available - 1.0);
     let total = widths.iter().sum::<f32>();
-    let band = ui.allocate(Vec2::new(total, HEADER_HEIGHT));
-    let palette = ui.theme().palette;
-    {
-        let mut painter = ui.painter();
-        painter.rect(band, Corners::top(16.0), Color::white_alpha(0.025));
-        painter.rect(
-            Rect::from_min_size(
-                Vec2::new(band.min.x, band.max.y - 1.0),
-                Vec2::new(band.width(), 1.0),
-            ),
-            Corners::ZERO,
-            palette.border,
-        );
-    }
+    let surface = ctx.theme().surface(Role::Card, State::Rest);
+    let palette = ctx.theme().palette;
+    let theme = *ctx.theme();
+    let mut elements = vec![
+        grana_ui::canvas(Length::Fill, rect.height(), 0, move |painter, info| {
+            painter.outlined(
+                info.rect,
+                surface.corners,
+                surface.fill,
+                surface.border,
+                surface.shadow,
+            );
+        })
+        .at(rect),
+    ];
+    let band = Rect::from_min_size(rect.min, Vec2::new(total, HEADER_HEIGHT));
+    elements.push(
+        grana_ui::canvas(Length::Fill, HEADER_HEIGHT, 0, move |painter, info| {
+            painter.rect(info.rect, Corners::top(16.0), Color::white_alpha(0.025));
+            painter.rect(
+                Rect::from_min_size(
+                    Vec2::new(info.rect.min.x, info.rect.max.y - 1.0),
+                    Vec2::new(info.rect.width(), 1.0),
+                ),
+                Corners::ZERO,
+                palette.border,
+            );
+        })
+        .at(band),
+    );
     let mut left = band.min.x;
-    let mut toggled = Vec::new();
+    let sort = state.measure.sort();
     for ((index, column), width) in columns.iter().zip(widths.iter()) {
-        let rect = Rect::from_min_size(
-            Vec2::new(left, band.min.y),
-            Vec2::new(*width, HEADER_HEIGHT),
-        );
-        let sorted = state
-            .measure
-            .sort()
-            .filter(|(current, _)| current == index)
+        let width = *width;
+        let cell =
+            Rect::from_min_size(Vec2::new(left, band.min.y), Vec2::new(width, HEADER_HEIGHT));
+        let sorted = sort
+            .filter(|(current, _)| *current == *index)
             .map(|(_, descending)| descending);
-        let key = ui.id_index("head", *index);
-        if header_cell(ui, key, &crate::panel::column_label(column), sorted, rect) {
-            toggled.push(*index);
-        }
-        let grip = Rect::from_min_max(
-            Vec2::new(rect.max.x - 3.0, rect.min.y),
-            Vec2::new(rect.max.x + 1.0, rect.max.y),
+        let label = view::column_label(column);
+        let style = TextStyle::new(
+            theme.label_font(),
+            if sorted.is_some() {
+                palette.text_primary
+            } else {
+                palette.text_tertiary
+            },
+        )
+        .aligned(Align::End)
+        .truncating();
+        let icon_color = palette.text_secondary;
+        let arrow = match sorted {
+            Some(true) => Some(Icon::ChevronDown),
+            Some(false) => Some(Icon::ChevronUp),
+            None => None,
+        };
+        elements.push(
+            grana_ui::canvas(
+                Length::Fixed(width),
+                HEADER_HEIGHT,
+                0,
+                move |painter, info| {
+                    if info.hover > 0.01 {
+                        painter.rect(
+                            info.rect,
+                            Corners::ZERO,
+                            palette.material_hover.with_alpha(0.55 * info.hover),
+                        );
+                    }
+                    painter.text_in(
+                        Rect::from_min_max(
+                            info.rect.min + Vec2::new(8.0, 0.0),
+                            Vec2::new(
+                                info.rect.max.x - arrow.map_or(8.0, |_| 16.0),
+                                info.rect.max.y,
+                            ),
+                        ),
+                        &label,
+                        style,
+                        Align::Center,
+                    );
+                    if let Some(arrow) = arrow {
+                        icon::paint(
+                            arrow,
+                            painter,
+                            Vec2::new(info.rect.max.x - 9.0, info.rect.center().y),
+                            9.0,
+                            icon_color,
+                            1.4,
+                        );
+                    }
+                },
+            )
+            .at(cell)
+            .key(Key::index("measure.head", *index))
+            .press(Message::Command(Command::ToggleSort(*index))),
         );
-        let grip_key = ui.id_index("measure.grip", *index);
-        let grip_response = ui.interact(grip_key, grip);
-        if grip_response.hovered || grip_response.dragging {
-            ui.set_cursor(Cursor::ResizeHorizontal);
-        }
-        if grip_response.dragging {
-            let width_key = ui.id_index("measure.width", *index);
-            let current = ui.value_of(width_key).unwrap_or(*width);
-            let spare = available - 1.0 - total;
-            let maximum = (current + spare).max(MIN_COLUMN_WIDTH);
-            let next = (current + ui.input().delta().x).clamp(MIN_COLUMN_WIDTH, maximum);
-            ui.store_value(width_key, next);
-        }
-        left += *width;
+        let grip = Rect::from_min_max(
+            Vec2::new(cell.max.x - 3.0, cell.min.y),
+            Vec2::new(cell.max.x + 1.0, cell.max.y),
+        );
+        let grip_key = Key::index("measure.width", *index);
+        let spare = (available - 1.0 - total).max(0.0);
+        let ceiling = (width + spare).max(MIN_COLUMN_WIDTH);
+        elements.push(
+            grana_ui::canvas(Length::Fixed(4.0), HEADER_HEIGHT, 0, |_, _| {})
+                .at(grip)
+                .key(grip_key)
+                .cursor(Cursor::ResizeHorizontal)
+                .on_pointer(move |pointer| {
+                    (pointer.phase == grana_ui::Phase::Move).then_some(Message::SetValue(
+                        grip_key,
+                        (width + pointer.delta.x).clamp(MIN_COLUMN_WIDTH, ceiling),
+                    ))
+                }),
+        );
+        left += width;
     }
     let shown = state.measure.rows().len();
     let content = shown as f32 * ROW_HEIGHT;
-    let key = ui.id("measure.rows");
-    let mut info = ui.scroll_info(key);
-    if info.viewport <= 0.0 {
-        info.viewport = ui.available().y;
-    }
-    ui.scroll_axis(key, Axis::Column, Length::Fill, Some(content + 4.0), |ui| {
-        let first = (info.offset / ROW_HEIGHT).floor().max(0.0) as usize;
-        let visible_rows = (info.viewport / ROW_HEIGHT).ceil() as usize + 1;
-        let last = (first + visible_rows).min(shown);
-        if first > 0 {
-            ui.space(first as f32 * ROW_HEIGHT);
-        }
-        for row in first..last {
-            let Some(index) = state.measure.rows().get(row).copied() else {
-                continue;
-            };
-            let observation = table.observation(index);
-            let selected = match (observation.time(), observation.object()) {
-                (Some(time), Some(object)) => {
-                    state.scene.selection()
-                        == Some(Selection {
-                            set,
-                            item: Item::Object(object),
-                        })
-                        && state.scene.time() == time
-                }
-                _ => match observation.track() {
-                    Some(track) => {
-                        state.scene.selection()
-                            == Some(Selection {
-                                set,
-                                item: Item::Track(track),
-                            })
-                    }
-                    None => false,
-                },
-            };
-            let row_rect = ui.allocate(Vec2::new(total, ROW_HEIGHT));
-            let row_key = ui.id_index("row", row);
-            let response = ui.interact(row_key, row_rect);
-            let hover = ui.animate(
-                ui.id_index("row.hover", row),
-                if response.hovered { 1.0 } else { 0.0 },
-                grana_ui::Motion::quick(),
-            );
-            {
-                let palette = ui.theme().palette;
-                let accent = palette.accent;
-                let color = if selected {
-                    palette.text_primary
-                } else {
-                    palette.text_secondary
+    let body = Rect::from_min_max(
+        Vec2::new(rect.min.x, band.max.y),
+        Vec2::new(rect.min.x + total.max(1.0), rect.max.y),
+    );
+    let rows_key = Key::new("measure.rows");
+    let offset = ctx.scroll_offset(rows_key);
+    let first = (offset / ROW_HEIGHT).floor().max(0.0) as usize;
+    let visible_rows = (body.height() / ROW_HEIGHT).ceil() as usize + 1;
+    let last = (first + visible_rows).min(shown);
+    let rows = state.measure.rows();
+    let time = state.scene.time();
+    let selection = state.scene.selection();
+    let accent = palette.accent;
+    let font = theme.font(Level::Monospace);
+    let text_primary = palette.text_primary;
+    let text_secondary = palette.text_secondary;
+    let separator = palette.separator;
+    let hover = palette.material_hover;
+    let revision = shown as u64 ^ (offset.to_bits() as u64) << 20;
+    let mut children = vec![grana_ui::canvas(
+        Length::Fill,
+        content,
+        revision,
+        move |painter, info| {
+            for row in first..last {
+                let Some(index) = state_index(rows, row) else {
+                    continue;
                 };
-                let font = ui.theme().font(Level::Monospace);
-                let mut painter = ui.painter();
+                let observation = table.observation(index);
+                let selected = matches_selection(selection, set, observation, time);
+                let row_rect = Rect::from_min_size(
+                    Vec2::new(info.rect.min.x, info.rect.min.y + row as f32 * ROW_HEIGHT),
+                    Vec2::new(total, ROW_HEIGHT),
+                );
                 if selected {
                     painter.rect(row_rect, Corners::ZERO, accent.with_alpha(0.16));
                     painter.rect(
                         Rect::from_min_size(row_rect.min, Vec2::new(2.5, row_rect.height())),
                         Corners::ZERO,
                         accent,
-                    );
-                } else if hover > 0.01 {
-                    painter.rect(
-                        row_rect,
-                        Corners::ZERO,
-                        palette.material_hover.with_alpha(0.65 * hover),
                     );
                 } else if row % 2 == 1 {
                     painter.rect(row_rect, Corners::ZERO, Color::white_alpha(0.015));
@@ -647,7 +756,7 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                         Vec2::new(row_rect.width(), 1.0),
                     ),
                     Corners::ZERO,
-                    palette.separator,
+                    separator,
                 );
                 let mut left = row_rect.min.x;
                 for ((column_index, column), width) in columns.iter().zip(widths.iter()) {
@@ -655,131 +764,190 @@ fn table(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                         Vec2::new(left, row_rect.min.y),
                         Vec2::new(*width, ROW_HEIGHT),
                     );
-                    let value = table.value(index, *column_index);
                     painter.text_in(
                         cell.shrink2(Vec2::new(8.0, 0.0)),
-                        &column.format(value),
-                        TextStyle::new(font, color).aligned(Align::End),
+                        &column.format(table.value(index, *column_index)),
+                        TextStyle::new(
+                            font,
+                            if selected {
+                                text_primary
+                            } else {
+                                text_secondary
+                            },
+                        )
+                        .aligned(Align::End),
                         Align::Center,
                     );
                     left += *width;
                 }
             }
-            if response.clicked {
-                locate(commands, set, observation);
-            }
-        }
-        let remaining = shown.saturating_sub(last);
-        if remaining > 0 {
-            ui.space(remaining as f32 * ROW_HEIGHT);
-        }
-    });
-    for index in toggled {
-        commands.push(Command::ToggleSort(index));
-    }
-}
-
-pub(crate) fn locate(commands: &mut Vec<Command>, set: ObjectSetId, observation: Observation) {
-    match (
-        observation.time(),
-        observation.object(),
-        observation.track(),
-    ) {
-        (Some(time), Some(object), _) => {
-            commands.push(Command::SetTime(time));
-            commands.push(Command::Select(Some(Selection {
-                set,
-                item: Item::Object(object),
-            })));
-        }
-        (_, _, Some(track)) => {
-            commands.push(Command::Select(Some(Selection {
-                set,
-                item: Item::Track(track),
-            })));
-        }
-        (Some(time), _, _) => commands.push(Command::SetTime(time)),
-        _ => {}
-    }
-}
-
-fn header_cell(ui: &mut Ui, key: u64, text: &str, sorted: Option<bool>, rect: Rect) -> bool {
-    let mut response = ui.interact(key, rect);
-    if ui.focusable(key, rect, Corners::ZERO) && ui.activated(key) {
-        response.clicked = true;
-    }
-    let hover = ui.animate(
-        key,
-        if response.hovered { 1.0 } else { 0.0 },
-        grana_ui::Motion::quick(),
-    );
-    let palette = ui.theme().palette;
-    let style = TextStyle::new(
-        ui.theme().label_font(),
-        if sorted.is_some() {
-            palette.text_primary
-        } else {
-            palette.text_tertiary
         },
-    )
-    .aligned(Align::End)
-    .truncating();
-    let arrow = match sorted {
-        Some(true) => Some(Icon::ChevronDown),
-        Some(false) => Some(Icon::ChevronUp),
-        None => None,
-    };
-    let icon_color = palette.text_secondary;
-    let mut painter = ui.painter();
-    if hover > 0.01 {
-        painter.rect(
-            rect,
-            Corners::ZERO,
-            palette.material_hover.with_alpha(0.55 * hover),
+    )];
+    for row in first..last {
+        let row_rect = Rect::from_min_size(
+            Vec2::new(body.min.x, body.min.y + row as f32 * ROW_HEIGHT - offset),
+            Vec2::new(total, ROW_HEIGHT),
+        );
+        children.push(
+            grana_ui::canvas(Length::Fill, ROW_HEIGHT, 0, move |painter, info| {
+                if info.hover > 0.01 {
+                    painter.rect(
+                        info.rect,
+                        Corners::ZERO,
+                        hover.with_alpha(0.65 * info.hover),
+                    );
+                }
+            })
+            .at(row_rect)
+            .key(Key::index("measure.row", row))
+            .on_pointer(move |pointer| {
+                (pointer.phase == grana_ui::Phase::Up && row_rect.contains(pointer.position))
+                    .then_some(Message::Locate(row))
+            }),
         );
     }
-    painter.text_in(
-        Rect::from_min_max(
-            rect.min + Vec2::new(8.0, 0.0),
-            Vec2::new(rect.max.x - arrow.map_or(8.0, |_| 16.0), rect.max.y),
-        ),
-        text,
-        style,
-        Align::Center,
-    );
-    if let Some(arrow) = arrow {
-        icon::paint(
-            arrow,
-            &mut painter,
-            Vec2::new(rect.max.x - 9.0, rect.center().y),
-            9.0,
-            icon_color,
-            1.4,
-        );
-    }
-    response.clicked
+    let scroller = Element::new(grana_ui::Layout::column())
+        .at(body)
+        .scroll(Axis::Column, Length::Fill, Some(content + 4.0))
+        .clipped()
+        .children(children);
+    elements.push(scroller);
+    elements
 }
 
-fn column_widths(ui: &Ui, columns: &[(usize, Column)], available: f32) -> Vec<f32> {
+fn state_index(rows: &[usize], row: usize) -> Option<usize> {
+    rows.get(row).copied()
+}
+
+fn matches_selection(
+    selection: Option<Selection>,
+    set: ObjectSetId,
+    observation: grana_measure::Observation,
+    time: u32,
+) -> bool {
+    match (observation.time(), observation.object()) {
+        (Some(object_time), Some(object)) => {
+            selection
+                == Some(Selection {
+                    set,
+                    item: Item::Object(object),
+                })
+                && time == object_time
+        }
+        _ => match observation.track() {
+            Some(track) => {
+                selection
+                    == Some(Selection {
+                        set,
+                        item: Item::Track(track),
+                    })
+            }
+            None => false,
+        },
+    }
+}
+
+fn field_label<'a>(ctx: &mut BuildContext<'_, Message>, text: &str) -> Element<'a, Message> {
+    let theme = *ctx.theme();
+    grana_ui::text(
+        text,
+        TextStyle::new(theme.label_font(), theme.palette.text_tertiary),
+    )
+}
+
+fn segmented_width(ctx: &mut BuildContext<'_, Message>, labels: &[&str]) -> f32 {
+    let theme = *ctx.theme();
+    let style = TextStyle::new(theme.font(Level::Callout).medium(), Color::WHITE);
+    labels
+        .iter()
+        .map(|label| ctx.measure(label, style).x + 24.0)
+        .sum::<f32>()
+        + 6.0
+}
+
+fn combo<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    key: &str,
+    width: f32,
+    selected: usize,
+    labels: &[String],
+    message: impl Fn(usize) -> Message + 'static,
+) -> Element<'a, Message> {
+    let theme = *ctx.theme();
+    let palette = theme.palette;
+    let label = labels.get(selected).cloned().unwrap_or_default();
+    let style =
+        TextStyle::new(theme.font(Level::Callout).medium(), palette.text_primary).truncating();
+    let rest = theme.surface(Role::Control, State::Rest);
+    let hover = theme.surface(Role::Control, State::Hover);
+    let anchor = grana_ui::canvas(Length::Fixed(width), 28.0, 0, move |painter, info| {
+        let surface = if info.hover > 0.5 { hover } else { rest };
+        painter.outlined(
+            info.rect,
+            surface.corners,
+            surface.fill,
+            surface.border,
+            surface.shadow,
+        );
+        painter.text_in(
+            Rect::from_min_max(
+                info.rect.min + Vec2::new(10.0, 0.0),
+                Vec2::new(info.rect.max.x - 22.0, info.rect.max.y),
+            ),
+            &label,
+            style,
+            Align::Center,
+        );
+        icon::chevron(
+            painter,
+            Vec2::new(info.rect.max.x - 11.0, info.rect.center().y),
+            5.0,
+            std::f32::consts::FRAC_PI_2,
+            palette.text_tertiary,
+            1.5,
+        );
+    })
+    .named(key)
+    .press(Message::Noop)
+    .cursor(Cursor::Pointing);
+    let mut rows = Vec::with_capacity(labels.len());
+    for (index, label) in labels.iter().enumerate() {
+        rows.push(
+            grana_ui::widget::menu_row(&theme, label, index == selected)
+                .key(Key::index(key, index))
+                .press(message(index)),
+        );
+    }
+    let popup = grana_ui::popover::popup(Key::new(key), width.max(120.0), rows);
+    grana_ui::column()
+        .width(Length::Auto)
+        .children([anchor, popup])
+}
+
+fn column_widths(state: &View<'_>, columns: &[(usize, Column)], available: f32) -> Vec<f32> {
     let initial = columns
         .iter()
         .map(|(_, column)| {
-            let header = crate::panel::column_label(column).chars().count() as f32 * 5.9 + 22.0;
+            let header = view::column_label(column).chars().count() as f32 * 5.9 + 22.0;
             let value = (f32::from(column.decimals()) + 6.0) * 7.0 + 18.0;
             header.max(value).max(MIN_COLUMN_WIDTH)
         })
         .collect::<Vec<_>>();
     let total = initial.iter().sum::<f32>();
     let mut widths: Vec<f32> = if total <= available {
-        let extra = (available - total) / columns.len() as f32;
+        let extra = (available - total) / columns.len().max(1) as f32;
         initial.iter().map(|width| width + extra).collect()
     } else {
         let scale = available / total;
         initial.iter().map(|width| width * scale).collect()
     };
     for (slot, (index, _)) in columns.iter().enumerate() {
-        if let Some(width) = ui.value_of(ui.id_index("measure.width", *index)) {
-            widths[slot] = width.max(MIN_COLUMN_WIDTH);
+        let stored = state
+            .workspace
+            .interface
+            .value(Key::index("measure.width", *index), f32::NAN);
+        if stored.is_finite() {
+            widths[slot] = stored.max(MIN_COLUMN_WIDTH);
         }
     }
     let total = widths.iter().sum::<f32>();

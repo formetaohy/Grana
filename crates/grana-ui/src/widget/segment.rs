@@ -1,175 +1,260 @@
 use glam::Vec2;
 
 use crate::color::Color;
+use crate::element::{Content, Element, Layout, Length, SegmentContent, Size, TabsContent};
 use crate::geometry::{Corners, Rect};
 use crate::glass::GlassStyle;
-use crate::input::Button;
-use crate::motion::Motion;
+use crate::node::Runtime;
+use crate::paint::Painter;
 use crate::text::{Align, TextStyle};
-use crate::theme::Level;
-use crate::ui::Ui;
+use crate::theme::{Level, Theme};
 
-pub fn segmented(ui: &mut Ui, id: &str, options: &[&str], selected: usize) -> Option<usize> {
-    segmented_core(ui, id, options, selected, false)
+use super::{PaintInfo, SubGlass};
+
+pub fn segmented<'a, A>(theme: &Theme, options: &[String], selected: usize) -> Element<'a, A> {
+    segmented_core(theme, options, selected, false)
 }
 
-pub fn segmented_fill(ui: &mut Ui, id: &str, options: &[&str], selected: usize) -> Option<usize> {
-    segmented_core(ui, id, options, selected, true)
+pub fn segmented_fill<'a, A>(theme: &Theme, options: &[String], selected: usize) -> Element<'a, A> {
+    segmented_core(theme, options, selected, true)
 }
 
-fn segmented_core(
-    ui: &mut Ui,
-    id: &str,
-    options: &[&str],
+fn segmented_core<'a, A>(
+    theme: &Theme,
+    options: &[String],
     selected: usize,
     fill: bool,
-) -> Option<usize> {
-    let key = ui.id(id);
-    let metrics = ui.theme().metrics;
-    let palette = ui.theme().palette;
-    let font = ui.theme().font(Level::Callout).medium();
-    let style = TextStyle::new(font, Color::WHITE);
-    let measured = options
-        .iter()
-        .map(|option| ui.measure_text(option, style).x + 24.0)
-        .collect::<Vec<_>>();
-    let total = if fill {
-        ui.available().x
+) -> Element<'a, A> {
+    Element::new(Layout {
+        size: Size::new(Length::Fill, Length::Fixed(theme.metrics.control_height)),
+        ..Layout::row()
+    })
+    .with_content(Content::Segment(SegmentContent {
+        options: options.to_vec(),
+        selected,
+        fill,
+        tabs: false,
+        bordered: false,
+        font: theme.font(Level::Callout).medium(),
+        width: Length::Fill,
+    }))
+    .focus_ring(Corners::capsule())
+    .cursor(crate::input::Cursor::Pointing)
+}
+
+pub fn tabs<'a, A>(theme: &Theme, options: &[String], selected: usize) -> Element<'a, A> {
+    tab_bar(theme, options, selected, false)
+}
+
+pub fn tab_bar<'a, A>(
+    theme: &Theme,
+    options: &[String],
+    selected: usize,
+    bordered: bool,
+) -> Element<'a, A> {
+    Element::new(Layout {
+        size: Size::new(Length::Fill, Length::Fixed(32.0)),
+        ..Layout::row()
+    })
+    .with_content(Content::Tabs(TabsContent {
+        options: options.to_vec(),
+        selected,
+        bordered,
+        font: theme.font(Level::Callout).medium(),
+    }))
+    .focus_ring(Corners::capsule())
+    .cursor(crate::input::Cursor::Pointing)
+}
+
+pub(super) fn measure_segment(
+    segment: &SegmentContent,
+    available: Vec2,
+    text: &mut crate::text::Text,
+    theme: &Theme,
+) -> Vec2 {
+    let style = TextStyle::new(segment.font, Color::WHITE);
+    let measured = text_widths(&segment.options, text, style);
+    let total = if segment.fill {
+        available.x
     } else {
         measured.iter().sum::<f32>() + 6.0
     };
-    let widths = if fill && !options.is_empty() {
-        vec![(total - 6.0) / options.len() as f32; options.len()]
-    } else {
-        measured
-    };
-    let rect = ui.allocate(Vec2::new(total, metrics.control_height));
-    let mut changed = None;
-    let mut dragging = false;
-    let mut engaged = false;
-    let mut left = rect.min.x + 3.0;
-    let mut cells = Vec::new();
-    for (index, width) in widths.iter().enumerate() {
-        let cell = Rect::from_min_size(
-            Vec2::new(left, rect.min.y + 3.0),
-            Vec2::new(*width, rect.height() - 6.0),
-        );
-        cells.push(cell);
-        let cell_key = key ^ (index as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-        let response = ui.interact(cell_key, cell);
-        dragging |= response.dragging;
-        engaged |= response.active;
-        let corners = Corners::capsule();
-        if ui.focusable(cell_key, cell, corners) && ui.activated(cell_key) {
-            changed = Some(index);
-        }
-        if response.clicked {
-            changed = Some(index);
-        }
-        left += width;
-    }
-    let pointer = ui.input().position();
-    if dragging
-        && ui.input().button(Button::Primary).down
-        && let Some(index) = cells.iter().position(|cell| cell.contains(pointer))
-    {
-        changed = Some(index);
-    }
-    let target = changed
-        .unwrap_or(selected)
-        .min(options.len().saturating_sub(1));
-    let target_cell = cells.get(target).copied().unwrap_or(rect);
-    let dragging = dragging && ui.input().button(Button::Primary).down && rect.contains(pointer);
-    let width_target = target_cell.width();
-    let x_target = if dragging {
-        (pointer.x - width_target * 0.5).clamp(rect.min.x + 3.0, rect.max.x - 3.0 - width_target)
-    } else {
-        target_cell.min.x
-    };
-    let motion = if dragging {
-        Motion::response(0.16, 0.12)
-    } else {
-        Motion::response(0.42, 0.22)
-    };
-    let x = ui.spring_to(key, x_target, motion);
-    let width = ui.spring_to(key ^ 0x1f, width_target, motion);
-    let pill = Rect::from_min_size(
-        Vec2::new(x, rect.min.y + 3.0),
-        Vec2::new(width, rect.height() - 6.0),
-    );
-    let mut hovered = Vec::with_capacity(cells.len());
-    for (index, cell) in cells.iter().enumerate() {
-        hovered.push(ui.animate(
-            key ^ (index as u64 + 7).wrapping_mul(0x517c_c1b7_2722_0a95),
-            if index != target && cell.contains(pointer) {
-                1.0
+    Vec2::new(total, theme.metrics.control_height)
+}
+
+pub(super) fn measure_tabs(
+    tabs: &TabsContent,
+    available: Vec2,
+    _text: &mut crate::text::Text,
+    _theme: &Theme,
+) -> Vec2 {
+    let _ = tabs;
+    Vec2::new(available.x, 32.0)
+}
+
+fn text_widths(options: &[String], text: &mut crate::text::Text, style: TextStyle) -> Vec<f32> {
+    options
+        .iter()
+        .map(|option| {
+            text.layout(option, style.font, 0.0, false, false, Align::Start)
+                .size
+                .x
+                + 24.0
+        })
+        .collect()
+}
+
+fn cell_widths(content: &Content, rect: Rect, widths: &[f32], tabs: bool) -> Vec<Rect> {
+    let mut left = if tabs { rect.min.x } else { rect.min.x + 3.0 };
+    let top = rect.min.y + 3.0;
+    let height = rect.height() - 6.0;
+    let measured = match content {
+        Content::Segment(segment) => {
+            if segment.fill && !widths.is_empty() {
+                widths
+                    .iter()
+                    .map(|_| (rect.width() - 6.0) / widths.len() as f32)
+                    .collect::<Vec<_>>()
             } else {
-                0.0
-            },
-            Motion::quick(),
-        ));
-    }
-    {
-        let mut painter = ui.painter();
-        painter.rect(
-            rect,
-            Corners::capsule(),
-            palette.material_fill.amplify(0.75),
-        );
-        for (index, cell) in cells.iter().enumerate() {
-            let hover = hovered[index];
-            if hover > 0.01 {
-                painter.rect(
-                    *cell,
-                    Corners::capsule(),
-                    palette.material_hover.amplify(0.5 * hover),
-                );
+                widths.to_vec()
             }
         }
-        for (index, cell) in cells.iter().enumerate() {
-            let active = index == target;
-            let color = if active {
-                palette.text_primary
-            } else {
-                palette
-                    .text_secondary
-                    .lerp(palette.text_primary, hovered[index])
-            };
-            let style = TextStyle::new(font, color).aligned(Align::Center);
-            painter.text_in(*cell, options[index], style, Align::Center);
+        Content::Tabs(_) => widths.to_vec(),
+        _ => Vec::new(),
+    };
+    measured
+        .iter()
+        .map(|width| {
+            let cell = Rect::from_min_size(Vec2::new(left, top), Vec2::new(*width, height));
+            left += width;
+            cell
+        })
+        .collect()
+}
+
+fn measure_widths(content: &Content, _rect: Rect, text: &mut crate::text::Text) -> Vec<f32> {
+    match content {
+        Content::Segment(segment) => {
+            let style = TextStyle::new(segment.font, Color::WHITE);
+            text_widths(&segment.options, text, style)
+        }
+        Content::Tabs(tabs) => {
+            let style = TextStyle::new(tabs.font, Color::WHITE);
+            text_widths(&tabs.options, text, style)
+        }
+        _ => Vec::new(),
+    }
+}
+
+pub(crate) fn pill_target(
+    segment: &SegmentContent,
+    rect: Rect,
+    text: &mut crate::text::Text,
+    _theme: &Theme,
+) -> (f32, f32) {
+    let widths = measure_widths(&Content::Segment(segment.clone()), rect, text);
+    let cells = cell_widths(&Content::Segment(segment.clone()), rect, &widths, false);
+    let target = segment
+        .selected
+        .min(segment.options.len().saturating_sub(1));
+    let cell = cells.get(target).copied().unwrap_or(rect);
+    (cell.min.x, cell.width())
+}
+
+pub(crate) fn tabs_pill_target(
+    tabs: &TabsContent,
+    rect: Rect,
+    text: &mut crate::text::Text,
+    _theme: &Theme,
+) -> (f32, f32) {
+    let widths = measure_widths(&Content::Tabs(tabs.clone()), rect, text);
+    let cells = cell_widths(&Content::Tabs(tabs.clone()), rect, &widths, true);
+    let target = tabs.selected.min(tabs.options.len().saturating_sub(1));
+    let cell = cells.get(target).copied().unwrap_or(rect);
+    (cell.min.x, cell.width())
+}
+
+pub(crate) fn hover_cell(
+    content: &Content,
+    rect: Rect,
+    pointer: Vec2,
+    text: &mut crate::text::Text,
+) -> usize {
+    let tabs = matches!(content, Content::Tabs(_));
+    let widths = measure_widths(content, rect, text);
+    cell_widths(content, rect, &widths, tabs)
+        .iter()
+        .position(|cell| cell.contains(pointer))
+        .unwrap_or(usize::MAX)
+}
+
+pub(super) fn paint_segment(
+    segment: &SegmentContent,
+    runtime: &Runtime,
+    painter: &mut Painter,
+    info: &PaintInfo<'_>,
+    glass: &mut Vec<SubGlass>,
+) {
+    let rect = info.rect;
+    let palette = info.theme.palette;
+    let style = TextStyle::new(segment.font, Color::WHITE);
+    let widths = segment
+        .options
+        .iter()
+        .map(|option| painter.measure(option, style).x + 24.0)
+        .collect::<Vec<_>>();
+    let cells = cell_widths(&Content::Segment(segment.clone()), rect, &widths, false);
+    painter.rect(
+        rect,
+        Corners::capsule(),
+        palette.material_fill.amplify(0.75),
+    );
+    for (index, cell) in cells.iter().enumerate() {
+        if index == runtime.thumb as usize && info.hover > 0.01 {
+            painter.rect(
+                *cell,
+                Corners::capsule(),
+                palette.material_hover.amplify(0.5 * info.hover),
+            );
         }
     }
-    let pill_key = key ^ 0x2f;
-    ui.glass(pill_key, pill, GlassStyle::tab_lens());
-    ui.engage_glass(pill_key, engaged);
-    changed
+    for (index, cell) in cells.iter().enumerate() {
+        let active = index == segment.selected;
+        let color = if active {
+            palette.text_primary
+        } else {
+            palette.text_secondary
+        };
+        painter.text_in(
+            *cell,
+            &segment.options[index],
+            TextStyle::new(style.font, color).aligned(Align::Center),
+            Align::Center,
+        );
+    }
+    let pill = Rect::from_min_size(
+        Vec2::new(runtime.value.value, rect.min.y + 3.0),
+        Vec2::new(runtime.extent.value, rect.height() - 6.0),
+    );
+    glass.push(SubGlass {
+        rect: pill,
+        style: GlassStyle::tab_lens(),
+        engaged: info.press > 0.5,
+    });
 }
 
-pub fn tabs(ui: &mut Ui, id: &str, options: &[&str], selected: usize) -> Option<usize> {
-    tab_bar(ui, id, options, selected, false)
-}
-
-pub fn tab_bar(
-    ui: &mut Ui,
-    id: &str,
-    options: &[&str],
-    selected: usize,
-    bordered: bool,
-) -> Option<usize> {
-    let key = ui.id(id);
-    let palette = ui.theme().palette;
-    let metrics = ui.theme().metrics;
-    let font = ui.theme().font(Level::Callout).medium();
-    let style = TextStyle::new(font, Color::WHITE);
-    let height = 32.0;
-    let available = ui.available().x;
-    let widths = options
-        .iter()
-        .map(|option| ui.measure_text(option, style).x + 24.0)
-        .collect::<Vec<_>>();
-    let rect = ui.allocate(Vec2::new(available, height));
-    if bordered {
-        let mut painter = ui.painter();
+pub(super) fn paint_tabs(
+    tabs: &TabsContent,
+    runtime: &Runtime,
+    painter: &mut Painter,
+    info: &PaintInfo<'_>,
+    glass: &mut Vec<SubGlass>,
+) {
+    let rect = info.rect;
+    let palette = info.theme.palette;
+    let metrics = info.theme.metrics;
+    let style = TextStyle::new(tabs.font, Color::WHITE);
+    if tabs.bordered {
         painter.rect(
             Rect::from_min_size(
                 Vec2::new(rect.min.x, rect.max.y - metrics.hairline),
@@ -179,105 +264,42 @@ pub fn tab_bar(
             palette.separator,
         );
     }
-    let mut changed = None;
-    let mut dragging = false;
-    let mut engaged = false;
-    let mut left = rect.min.x;
-    let mut cells = Vec::new();
-    for (index, width) in widths.iter().enumerate() {
-        let cell = Rect::from_min_size(
-            Vec2::new(left, rect.min.y + 3.0),
-            Vec2::new(*width, height - 6.0),
-        );
-        cells.push(cell);
-        let cell_key = ui.id(&format!("{id}.tab.{index}"));
-        let response = ui.interact(cell_key, cell);
-        dragging |= response.dragging;
-        engaged |= response.active;
-        if ui.focusable(cell_key, cell, Corners::capsule()) && ui.activated(cell_key) {
-            changed = Some(index);
-        }
-        if response.clicked {
-            changed = Some(index);
-        }
-        left += width;
-    }
-    let pointer = ui.input().position();
-    if dragging
-        && ui.input().button(Button::Primary).down
-        && let Some(index) = cells.iter().position(|cell| cell.contains(pointer))
-    {
-        changed = Some(index);
-    }
-    let target = changed
-        .unwrap_or(selected)
-        .min(options.len().saturating_sub(1));
-    let target_cell = cells.get(target).copied().unwrap_or(rect);
-    let total_tabs_width = left - rect.min.x;
-    let dragging = dragging && ui.input().button(Button::Primary).down && rect.contains(pointer);
-    let width_target = target_cell.width();
-    let x_target = if dragging {
-        (pointer.x - width_target * 0.5).clamp(
-            rect.min.x,
-            (rect.min.x + total_tabs_width - width_target).max(rect.min.x),
-        )
-    } else {
-        target_cell.min.x
-    };
-    let motion = if dragging {
-        Motion::response(0.16, 0.12)
-    } else {
-        Motion::response(0.42, 0.20)
-    };
-    let x = ui.spring_to(key, x_target, motion);
-    let width = ui.spring_to(key ^ 0x2f, width_target, motion);
-    let pill = Rect::from_min_size(
-        Vec2::new(x, rect.min.y + 3.0),
-        Vec2::new(width, height - 6.0),
-    );
-    let mut hovered = Vec::with_capacity(cells.len());
+    let widths = tabs
+        .options
+        .iter()
+        .map(|option| painter.measure(option, style).x + 24.0)
+        .collect::<Vec<_>>();
+    let cells = cell_widths(&Content::Tabs(tabs.clone()), rect, &widths, true);
     for (index, cell) in cells.iter().enumerate() {
-        hovered.push(ui.animate(
-            key ^ (index as u64 + 3).wrapping_mul(0x9e37_79b9_7f4a_7c15),
-            if cell.contains(pointer) && index != target {
-                1.0
-            } else {
-                0.0
-            },
-            Motion::quick(),
-        ));
-    }
-    {
-        let mut painter = ui.painter();
-        for (index, cell) in cells.iter().enumerate() {
-            let hover = hovered[index];
-            if hover > 0.01 {
-                painter.rect(
-                    cell.shrink2(Vec2::new(2.0, 0.0)),
-                    Corners::capsule(),
-                    palette.material_hover.amplify(0.4 * hover),
-                );
-            }
-        }
-        for (index, cell) in cells.iter().enumerate() {
-            let active = index == target;
-            let color = if active {
-                palette.text_primary
-            } else {
-                palette
-                    .text_secondary
-                    .lerp(palette.text_primary, hovered[index])
-            };
-            painter.text_in(
-                *cell,
-                options[index],
-                TextStyle::new(font, color).aligned(Align::Center),
-                Align::Center,
+        if index == runtime.thumb as usize && info.hover > 0.01 {
+            painter.rect(
+                cell.shrink2(Vec2::new(2.0, 0.0)),
+                Corners::capsule(),
+                palette.material_hover.amplify(0.4 * info.hover),
             );
         }
     }
-    let pill_key = key ^ 0x71;
-    ui.glass(pill_key, pill, GlassStyle::tab_lens());
-    ui.engage_glass(pill_key, engaged);
-    changed
+    for (index, cell) in cells.iter().enumerate() {
+        let active = index == tabs.selected;
+        let color = if active {
+            palette.text_primary
+        } else {
+            palette.text_secondary
+        };
+        painter.text_in(
+            *cell,
+            &tabs.options[index],
+            TextStyle::new(style.font, color).aligned(Align::Center),
+            Align::Center,
+        );
+    }
+    let pill = Rect::from_min_size(
+        Vec2::new(runtime.value.value, rect.min.y + 3.0),
+        Vec2::new(runtime.extent.value, 26.0),
+    );
+    glass.push(SubGlass {
+        rect: pill,
+        style: GlassStyle::tab_lens(),
+        engaged: info.press > 0.5,
+    });
 }

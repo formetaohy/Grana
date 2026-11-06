@@ -1,9 +1,12 @@
+use std::collections::{HashMap, HashSet};
+
 use glam::Vec2;
 use grana_animation::Timeline;
 use grana_display::Viewport;
 use grana_measure::MeasureView;
 use grana_scene::{Measure, ObjectSetId, Progress, Scene};
 use grana_session::{BatchView, HistoryView, IoView, SeriesView};
+use grana_ui::Key;
 
 use crate::panel::Panel;
 use crate::stage::Stage;
@@ -67,18 +70,86 @@ pub(crate) struct PlotDrag {
 }
 
 #[derive(Default)]
+pub struct Interface {
+    values: HashMap<Key, f32>,
+    open: HashSet<Key>,
+}
+
+impl Interface {
+    pub fn value(&self, key: Key, fallback: f32) -> f32 {
+        self.values.get(&key).copied().unwrap_or(fallback)
+    }
+
+    pub fn set(&mut self, key: Key, value: f32) {
+        self.values.insert(key, value);
+    }
+
+    pub fn open(&self, key: Key) -> bool {
+        self.open.contains(&key)
+    }
+
+    pub fn set_open(&mut self, key: Key, open: bool) {
+        if open {
+            self.open.insert(key);
+        } else {
+            self.open.remove(&key);
+        }
+    }
+
+    pub fn toggle(&mut self, key: Key) {
+        if !self.open.remove(&key) {
+            self.open.insert(key);
+        }
+    }
+}
+
 pub struct Workspace {
     pub panel: Option<Panel>,
     pub sidebar_hidden: bool,
+    pub sidebar_tab: usize,
+    pub dock_height: f32,
+    pub dock_last: usize,
     pub playback: Playback,
-    pub movie_size: [u32; 2],
     pub track_set: Option<ObjectSetId>,
     pub join: Option<(u32, usize)>,
     pub seed: Option<ObjectSetId>,
+    pub renaming: Option<ObjectSetId>,
+    pub expanded: HashSet<ObjectSetId>,
+    pub interface: Interface,
     pub(crate) drag: PlotDrag,
 }
 
-pub struct State<'a> {
+impl Default for Workspace {
+    fn default() -> Self {
+        Self {
+            panel: None,
+            sidebar_hidden: false,
+            sidebar_tab: 0,
+            dock_height: Self::default_height(),
+            dock_last: 0,
+            playback: Playback::default(),
+            track_set: None,
+            join: None,
+            seed: None,
+            renaming: None,
+            expanded: HashSet::new(),
+            interface: Interface::default(),
+            drag: PlotDrag::default(),
+        }
+    }
+}
+
+impl Workspace {
+    pub fn default_height() -> f32 {
+        340.0
+    }
+
+    pub fn expanded(&self, set: ObjectSetId) -> bool {
+        self.expanded.contains(&set)
+    }
+}
+
+pub struct View<'a> {
     pub scene: &'a Scene,
     pub measure: &'a Measure,
     pub timeline: &'a Timeline,
@@ -87,13 +158,17 @@ pub struct State<'a> {
     pub batch: Option<&'a BatchView<'a>>,
     pub history: HistoryView,
     pub series: &'a SeriesView<'a>,
-    pub viewport: &'a mut Viewport,
-    pub stage: &'a mut Stage,
-    pub workspace: &'a mut Workspace,
+    pub viewport: &'a Viewport,
+    pub stage: &'a Stage,
+    pub workspace: &'a Workspace,
     pub frame: FrameStats,
+    pub physics: bool,
+    pub reduce_motion: bool,
+    pub glass_on_glass: bool,
+    pub light_angle: f32,
 }
 
-impl State<'_> {
+impl View<'_> {
     pub fn batch_protocol(&self) -> Option<&str> {
         self.batch.and_then(|batch| batch.protocol)
     }

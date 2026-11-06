@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_ui::{Clipboard, Edit, EditOutcome, Event, Input, Key, Modifiers};
+use grana_ui::{Clipboard, Edit, EditOutcome, Event, Input, InputKey as Key, Modifiers};
 
 fn step(input: &mut Input, time: f64) {
     input.begin(Vec2::new(400.0, 300.0), 1.0, time);

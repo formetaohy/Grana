@@ -32,7 +32,7 @@ const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
 struct Surface {
     window: Arc<Window>,
     gpu: Gpu,
-    ui: Ui,
+    ui: Ui<grana_editor::Message>,
 }
 
 pub struct App {
@@ -112,7 +112,7 @@ impl App {
         window.set_ime_allowed(false);
         window.set_theme(Some(winit::window::Theme::Dark));
         let gpu = Gpu::new(window.clone(), [size.width, size.height]);
-        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let mut ui: Ui<grana_editor::Message> = Ui::new(&gpu.device, &gpu.queue, gpu.format());
         ui.set_clipboard(Box::new(SystemClipboard::new()));
         let mut engine = Engine::new(&gpu.device, &gpu.queue, gpu.format());
         self.session.open_sample();
@@ -500,7 +500,7 @@ impl App {
         let size = surface.gpu.size();
         let points = UiVec2::new(size[0] as f32 / scale, size[1] as f32 / scale);
         surface.ui.resize(size);
-        surface
+        let actions = surface
             .ui
             .begin(points, scale, self.start.elapsed().as_secs_f64());
         let adapter = surface.gpu.adapter.clone();
@@ -517,8 +517,15 @@ impl App {
             series: session.series(),
         };
         let frame = frame_stats(*info);
-        let commands =
-            grana_editor::build(&mut surface.ui, &view, viewport, stage, workspace, frame);
+        let commands = grana_editor::build(
+            &mut surface.ui,
+            actions,
+            &view,
+            viewport,
+            stage,
+            workspace,
+            frame,
+        );
         let frame = surface.ui.end();
         (commands, frame.animating)
     }
@@ -1260,23 +1267,23 @@ fn view_stats(info: grana_render::ViewInfo) -> ViewStats {
     }
 }
 
-fn interface_key(key: &Key) -> Option<grana_ui::Key> {
+fn interface_key(key: &Key) -> Option<grana_ui::InputKey> {
     match key {
-        Key::Named(NamedKey::Escape) => Some(grana_ui::Key::Escape),
-        Key::Named(NamedKey::Enter) => Some(grana_ui::Key::Enter),
-        Key::Named(NamedKey::Tab) => Some(grana_ui::Key::Tab),
-        Key::Named(NamedKey::Space) => Some(grana_ui::Key::Space),
-        Key::Named(NamedKey::ArrowLeft) => Some(grana_ui::Key::Left),
-        Key::Named(NamedKey::ArrowRight) => Some(grana_ui::Key::Right),
-        Key::Named(NamedKey::ArrowUp) => Some(grana_ui::Key::Up),
-        Key::Named(NamedKey::ArrowDown) => Some(grana_ui::Key::Down),
-        Key::Named(NamedKey::Home) => Some(grana_ui::Key::Home),
-        Key::Named(NamedKey::End) => Some(grana_ui::Key::End),
-        Key::Named(NamedKey::PageUp) => Some(grana_ui::Key::PageUp),
-        Key::Named(NamedKey::PageDown) => Some(grana_ui::Key::PageDown),
-        Key::Named(NamedKey::Backspace) => Some(grana_ui::Key::Backspace),
-        Key::Named(NamedKey::Delete) => Some(grana_ui::Key::Delete),
-        Key::Character(text) => text.chars().next().map(grana_ui::Key::Character),
+        Key::Named(NamedKey::Escape) => Some(grana_ui::InputKey::Escape),
+        Key::Named(NamedKey::Enter) => Some(grana_ui::InputKey::Enter),
+        Key::Named(NamedKey::Tab) => Some(grana_ui::InputKey::Tab),
+        Key::Named(NamedKey::Space) => Some(grana_ui::InputKey::Space),
+        Key::Named(NamedKey::ArrowLeft) => Some(grana_ui::InputKey::Left),
+        Key::Named(NamedKey::ArrowRight) => Some(grana_ui::InputKey::Right),
+        Key::Named(NamedKey::ArrowUp) => Some(grana_ui::InputKey::Up),
+        Key::Named(NamedKey::ArrowDown) => Some(grana_ui::InputKey::Down),
+        Key::Named(NamedKey::Home) => Some(grana_ui::InputKey::Home),
+        Key::Named(NamedKey::End) => Some(grana_ui::InputKey::End),
+        Key::Named(NamedKey::PageUp) => Some(grana_ui::InputKey::PageUp),
+        Key::Named(NamedKey::PageDown) => Some(grana_ui::InputKey::PageDown),
+        Key::Named(NamedKey::Backspace) => Some(grana_ui::InputKey::Backspace),
+        Key::Named(NamedKey::Delete) => Some(grana_ui::InputKey::Delete),
+        Key::Character(text) => text.chars().next().map(grana_ui::InputKey::Character),
         _ => None,
     }
 }

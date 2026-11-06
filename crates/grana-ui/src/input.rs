@@ -1,5 +1,18 @@
 use glam::Vec2;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cursor {
+    Arrow,
+    Pointing,
+    Crosshair,
+    Grab,
+    Grabbing,
+    ResizeHorizontal,
+    ResizeVertical,
+    Move,
+    Text,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Button {
     Primary,

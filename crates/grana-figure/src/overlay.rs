@@ -5,18 +5,17 @@ use grana_display::{Camera, Palette, SectionCamera, plane_basis};
 use grana_measure::Unit;
 use grana_scene::{ObjectColor, Scene, TrackColor};
 use grana_ui::{
-    Align, Color, Corners, Fill, Icon, Painter, Rect, TextLayout, TextStyle, TypeStyle, Ui, icon,
+    Align, Color, Corners, Fill, Painter, Rect, Text, TextLayout, TextStyle, TypeStyle,
 };
 use grana_volume::{Axis, Clip, Region};
 
 use crate::labels::{self, Label};
 use crate::value;
 
-const LABEL: Color = Color::rgba(1.0, 1.0, 1.0, 0.82);
 const BAR: Color = Color::rgba(1.0, 1.0, 1.0, 0.90);
 const PLANE: Color = Color::rgba(1.0, 1.0, 1.0, 0.22);
+const LABEL: Color = Color::rgba(1.0, 1.0, 1.0, 0.82);
 const REGION: Color = Color::rgba(0.98, 0.75, 0.29, 0.40);
-const REGION_ACTIVE: Color = Color::rgba(0.98, 0.83, 0.45, 0.95);
 const CUT: Color = Color::rgba(1.00, 0.48, 0.44, 0.60);
 const HANDLE_SIDE: f32 = 9.0;
 const HANDLE_MINIMUM: f32 = 1.0e-3;
@@ -71,13 +70,36 @@ pub(crate) struct Placed {
 }
 
 impl Placed {
-    pub(crate) fn new(ui: &mut Ui, caption: &Caption, rect: Rect) -> Self {
-        let title = ui.layout_text(&caption.title, title_style(), CAPTION_WIDTH);
-        let detail = ui.layout_text(&caption.detail, detail_style(), CAPTION_WIDTH);
+    pub(crate) fn new(text: &mut Text, caption: &Caption, rect: Rect) -> Self {
+        let title = text.layout(
+            &caption.title,
+            title_style().font,
+            CAPTION_WIDTH,
+            true,
+            false,
+            Align::Start,
+        );
+        let detail = text.layout(
+            &caption.detail,
+            detail_style().font,
+            CAPTION_WIDTH,
+            true,
+            false,
+            Align::Start,
+        );
         let mut lines = caption
             .lines
             .iter()
-            .map(|line| ui.layout_text(line, line_style(), CAPTION_WIDTH))
+            .map(|line| {
+                text.layout(
+                    line,
+                    line_style().font,
+                    CAPTION_WIDTH,
+                    true,
+                    false,
+                    Align::Start,
+                )
+            })
             .collect::<Vec<_>>();
         let room = (rect.height() - CAPTION_MARGIN - 34.0).max(0.0);
         let mut height = height_of(&title, &detail, &lines);
@@ -118,30 +140,27 @@ pub struct Overlay<'a> {
     pub section_stage: Rect,
     pub volume_rect: Rect,
     pub section_rect: Rect,
-    pub region: &'a mut Region,
+    pub region: &'a Region,
     pub clip: Clip,
     pub legends: &'a [Legend],
     pub labels: &'a [Label],
     pub recording: Option<(u32, u32)>,
 }
 
-pub fn paint(ui: &mut Ui, overlay: &mut Overlay<'_>) {
-    paint_volume(ui, overlay);
-    paint_section(ui, overlay);
-    if let Some((frame, frames)) = overlay.recording {
-        chip(
-            ui,
-            "figure.recording",
-            overlay.volume_rect,
-            overlay.volume_safe.min + Vec2::new(0.0, 34.0),
-            Icon::Record,
-            &format!("REC · frame {frame} of {frames}"),
-            Color::rgba(1.0, 0.52, 0.44, 1.0),
-        );
-    }
+pub struct Handle {
+    pub axis: usize,
+    pub side: usize,
+    pub rect: Rect,
+    pub screen: Vec2,
+    pub world_per_point: f32,
 }
 
-fn paint_volume(ui: &mut Ui, overlay: &mut Overlay<'_>) {
+pub fn paint(painter: &mut Painter, overlay: &Overlay<'_>) {
+    paint_volume(painter, overlay);
+    paint_section(painter, overlay);
+}
+
+fn paint_volume(painter: &mut Painter, overlay: &Overlay<'_>) {
     let rect = overlay.volume_rect;
     let aspect = rect.width() / rect.height();
     let view_projection = overlay
@@ -153,85 +172,94 @@ fn paint_volume(ui: &mut Ui, overlay: &mut Overlay<'_>) {
         overlay.world,
     );
     let projected = corners.map(|corner| project(view_projection, corner, rect));
-    let bounds = ui.clip().intersect(rect, Corners::ZERO);
-    {
-        let mut painter = ui.painter_in(bounds);
-        if let [Some(a), Some(b), Some(c), Some(d)] = projected {
-            for (from, to) in [(a, b), (b, c), (c, d), (d, a)] {
-                painter.segment(from, to, 1.0, PLANE);
-            }
+    let clip = painter.clip();
+    painter.push_clip(painter.clip().rect.intersect(rect), Corners::ZERO);
+    if let [Some(a), Some(b), Some(c), Some(d)] = projected {
+        for (from, to) in [(a, b), (b, c), (c, d), (d, a)] {
+            painter.segment(from, to, 1.0, PLANE);
         }
-        region_box(&mut painter, view_projection, *overlay.region, rect);
-        clip_plane(
-            &mut painter,
-            view_projection,
-            overlay.clip,
-            overlay.world,
-            rect,
-        );
     }
-    region_handles(ui, view_projection, overlay.region, rect, overlay.world);
+    region_box(painter, view_projection, *overlay.region, rect);
+    clip_plane(painter, view_projection, overlay.clip, overlay.world, rect);
     let world_per_point =
         2.0 * overlay.camera.distance() * (overlay.camera.fov_y() * 0.5).tan() / rect.height();
-    {
-        let mut painter = ui.painter_in(bounds);
-        figure(
-            &mut painter,
-            overlay.volume_safe,
-            world_per_point,
-            overlay.legends,
-            None,
-            true,
-        );
-    }
+    figure(
+        painter,
+        overlay.volume_safe,
+        world_per_point,
+        overlay.legends,
+        None,
+        true,
+    );
     if !overlay.labels.is_empty() {
         let placed =
             labels::volume_labels(overlay.labels, view_projection, overlay.camera.eye(), rect);
-        let mut painter = ui.painter_in(bounds);
-        labels::paint(&mut painter, rect, &placed);
+        labels::paint(painter, rect, &placed);
     }
-    chip(
-        ui,
-        "figure.volume",
-        overlay.volume_safe,
-        overlay.volume_safe.min,
-        Icon::Cube,
-        "3D",
-        LABEL,
-    );
+    painter.pop_clip(clip);
 }
 
-fn paint_section(ui: &mut Ui, overlay: &Overlay<'_>) {
+pub fn handles(overlay: &Overlay<'_>) -> Vec<Handle> {
+    let rect = overlay.volume_rect;
+    let aspect = rect.width() / rect.height();
+    let view_projection = overlay
+        .camera
+        .view_projection(aspect, 0.5 * overlay.world.length());
+    let minimum = (HANDLE_MINIMUM * overlay.world.min_element()).max(1.0e-5);
+    let low = overlay.region.min();
+    let high = overlay.region.max();
+    let mut handles = Vec::new();
+    if !overlay.region.enabled() {
+        return handles;
+    }
+    for axis in 0..3 {
+        let step = (0.05 * overlay.world[axis]).max(minimum);
+        for side in 0..2 {
+            let mut point = 0.5 * (low + high);
+            point[axis] = if side == 0 { low[axis] } else { high[axis] };
+            let Some(anchor) = project(view_projection, point, rect) else {
+                continue;
+            };
+            let mut direction = Vec3::ZERO;
+            direction[axis] = step;
+            let Some(ahead) = project(view_projection, point + direction, rect) else {
+                continue;
+            };
+            let screen = ahead - anchor;
+            let length = screen.length();
+            if length < 1.0e-3 {
+                continue;
+            }
+            handles.push(Handle {
+                axis,
+                side,
+                rect: Rect::from_center_size(anchor, Vec2::splat(HANDLE_SIDE)),
+                screen,
+                world_per_point: step / length,
+            });
+        }
+    }
+    handles
+}
+
+fn paint_section(painter: &mut Painter, overlay: &Overlay<'_>) {
     let rect = overlay.section_rect;
     let stage = overlay.section_stage;
-    let axis = overlay.section.axis();
     let focus = overlay.camera.focus();
-    let plane = focus[axis.index()] + 0.5 * overlay.world[axis.index()];
     let world_per_point = overlay.section.span() / rect.height();
-    let clip = ui.clip().intersect(rect, Corners::ZERO);
-    {
-        let mut painter = ui.painter_in(clip);
-        painter.outlined(
-            stage,
-            Corners::all(2.0),
-            Fill::None,
-            grana_ui::Border {
-                width: 1.0,
-                color: Color::white_alpha(0.12),
-            },
-            grana_ui::Shadow::NONE,
-        );
-        scale_bar(&mut painter, overlay.section_safe, world_per_point, true);
-    }
-    chip(
-        ui,
-        "figure.section",
-        rect,
-        overlay.section_safe.min,
-        Icon::Section,
-        &format!("{} · {} = {plane:.2} µm", plane_name(axis), axis.name()),
-        LABEL,
+    let clip = painter.clip();
+    painter.push_clip(painter.clip().rect.intersect(rect), Corners::ZERO);
+    painter.outlined(
+        stage,
+        Corners::all(2.0),
+        Fill::None,
+        grana_ui::Border {
+            width: 1.0,
+            color: Color::white_alpha(0.12),
+        },
+        grana_ui::Shadow::NONE,
     );
+    scale_bar(painter, overlay.section_safe, world_per_point, true);
     if !overlay.labels.is_empty() {
         let placed = labels::section_labels(
             overlay.labels,
@@ -240,9 +268,9 @@ fn paint_section(ui: &mut Ui, overlay: &Overlay<'_>) {
             overlay.section.span(),
             rect,
         );
-        let mut painter = ui.painter_in(clip);
-        labels::paint(&mut painter, rect, &placed);
+        labels::paint(painter, rect, &placed);
     }
+    painter.pop_clip(clip);
 }
 pub(crate) fn figure(
     painter: &mut Painter,
@@ -491,61 +519,6 @@ fn clipped(points: Vec<Vec3>, normal: Vec3, offset: f32) -> Vec<Vec3> {
     kept
 }
 
-fn region_handles(
-    ui: &mut Ui,
-    view_projection: Mat4,
-    region: &mut Region,
-    rect: Rect,
-    world: Vec3,
-) {
-    if !region.enabled() {
-        return;
-    }
-    let half = 0.5 * world;
-    let minimum = (HANDLE_MINIMUM * world.min_element()).max(1.0e-5);
-    let mut low = region.min();
-    let mut high = region.max();
-    for axis in 0..3 {
-        let step = (0.05 * world[axis]).max(minimum);
-        for side in 0..2 {
-            let mut point = 0.5 * (low + high);
-            point[axis] = if side == 0 { low[axis] } else { high[axis] };
-            let Some(anchor) = project(view_projection, point, rect) else {
-                continue;
-            };
-            let mut direction = Vec3::ZERO;
-            direction[axis] = step;
-            let Some(ahead) = project(view_projection, point + direction, rect) else {
-                continue;
-            };
-            let screen = ahead - anchor;
-            let length = screen.length();
-            if length < 1.0e-3 {
-                continue;
-            }
-            let world_per_point = step / length;
-            let handle = Rect::from_center_size(anchor, Vec2::splat(HANDLE_SIDE));
-            let response = ui.interact(ui.id(&format!("region.handle.{axis}.{side}")), handle);
-            if response.dragging {
-                let delta = ui.input().delta().dot(screen / length) * world_per_point;
-                if side == 0 {
-                    low[axis] = (low[axis] + delta).clamp(-half[axis], high[axis] - minimum);
-                } else {
-                    high[axis] = (high[axis] + delta).clamp(low[axis] + minimum, half[axis]);
-                }
-            }
-            let active = response.hovered || response.dragging;
-            let color = if active { REGION_ACTIVE } else { REGION };
-            let clip = ui.clip().intersect(rect, Corners::ZERO);
-            let mut painter = ui.painter_in(clip);
-            painter.rect(handle, Corners::all(2.5), color);
-        }
-    }
-    if low != region.min() || high != region.max() {
-        region.set_bounds(low, high);
-    }
-}
-
 fn plane_corners(focus: Vec3, axis: Axis, world: Vec3) -> [Vec3; 4] {
     let (u, v) = axis.in_plane();
     let (right, up) = plane_basis(axis);
@@ -587,30 +560,6 @@ fn detail_style() -> TextStyle {
 
 fn line_style() -> TextStyle {
     TextStyle::new(TypeStyle::new(10.5, 400.0, 14.0), CAPTION_LINE)
-}
-
-fn chip(ui: &mut Ui, key: &str, pane: Rect, origin: Vec2, symbol: Icon, title: &str, tint: Color) {
-    let title_style = TextStyle::new(TypeStyle::new(11.5, 500.0, 15.0), tint);
-    let maximum = (pane.width() - 64.0).max(96.0);
-    let title_layout = ui.layout_text(title, title_style, maximum);
-    let width = (title_layout.size.x + 42.0).min(maximum + 24.0);
-    let height = 26.0;
-    let rect = Rect::from_min_size(origin, Vec2::new(width, height));
-    ui.glass(ui.id(key), rect, grana_ui::glass::GlassStyle::hud_chip());
-    let mut painter = ui.painter();
-    icon::paint(
-        symbol,
-        &mut painter,
-        Vec2::new(rect.min.x + 15.0, rect.center().y),
-        13.0,
-        tint,
-        1.5,
-    );
-    painter.text(
-        &title_layout,
-        Vec2::new(rect.min.x + 25.0, rect.min.y + 5.5),
-        tint,
-    );
 }
 
 fn scale_bar(painter: &mut Painter, rect: Rect, world_per_point: f32, backdrop: bool) {
@@ -762,13 +711,5 @@ fn format_length(length: f32) -> String {
         format!("{length:.1} µm")
     } else {
         format!("{length:.3} µm")
-    }
-}
-
-fn plane_name(axis: Axis) -> &'static str {
-    match axis {
-        Axis::X => "YZ",
-        Axis::Y => "XZ",
-        Axis::Z => "XY",
     }
 }

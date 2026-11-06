@@ -1,13 +1,15 @@
 use glam::Vec2;
+use grana_display::Viewport;
+use grana_session::{Command, SessionView};
 use grana_ui::glass::GlassStyle;
 use grana_ui::{
-    Align, Block, Border, Corners, Cursor, Edges, Fill, Icon, Length, Level, Motion, Rect, Role,
-    TextStyle, TypeStyle, Ui, icon,
+    Axis, BuildContext, Corners, Edges, Element, Icon, Key, Layout as UiLayout, Length, Motion,
+    Rect, Role, Ui,
 };
 
-use crate::state::State;
-use crate::widget;
-use grana_session::Command;
+use crate::message::Message;
+use crate::stage::Stage;
+use crate::state::{FrameStats, View, Workspace};
 
 mod header;
 mod stage;
@@ -17,16 +19,16 @@ pub const MARGIN: f32 = 16.0;
 pub const GAP: f32 = 12.0;
 pub const FORM_LABEL: f32 = 72.0;
 
-const TOOLBAR_HEIGHT: f32 = 36.0;
-const SIDEBAR_WIDTH: f32 = 320.0;
-const SIDEBAR_PAD: f32 = 14.0;
-const TRANSPORT_HEIGHT: f32 = 44.0;
-const DOCK_HEADER: f32 = 36.0;
-const DOCK_DEFAULT: f32 = 340.0;
-const DOCK_MINIMUM: f32 = 220.0;
-const ANALYSIS_WIDTH: f32 = 114.0;
-const TOOLBAR_LEFT: f32 = 320.0;
-const TOOLBAR_RIGHT: f32 = 124.0;
+pub const TOOLBAR_HEIGHT: f32 = 36.0;
+pub const SIDEBAR_WIDTH: f32 = 320.0;
+pub const SIDEBAR_PAD: f32 = 14.0;
+pub const TRANSPORT_HEIGHT: f32 = 44.0;
+pub const DOCK_HEADER: f32 = 36.0;
+pub const DOCK_DEFAULT: f32 = 340.0;
+pub const DOCK_MINIMUM: f32 = 220.0;
+pub const ANALYSIS_WIDTH: f32 = 114.0;
+pub const TOOLBAR_LEFT: f32 = 320.0;
+pub const TOOLBAR_RIGHT: f32 = 124.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
@@ -57,21 +59,93 @@ impl Panel {
     }
 }
 
-struct Layout {
-    toolbar_left: Rect,
-    toolbar_right: Rect,
-    analysis: Rect,
-    sidebar: Rect,
-    stage: Rect,
-    volume: Rect,
-    section: Rect,
-    transport: Option<Rect>,
-    dock: Option<Rect>,
-    sidebar_visible: bool,
+pub fn build(
+    ui: &mut Ui<Message>,
+    actions: Vec<Message>,
+    view: &SessionView<'_>,
+    viewport: &mut Viewport,
+    stage: &mut Stage,
+    workspace: &mut Workspace,
+    frame: FrameStats,
+) -> Vec<Command> {
+    let mut commands = Vec::new();
+    apply(ui, actions, view, viewport, stage, workspace, &mut commands);
+    if workspace.panel.is_some() {
+        workspace.dock_last = panel_index(workspace.panel);
+    }
+    if workspace.panel == Some(Panel::Statistics)
+        && view.measure.set().is_none()
+        && let Some(set) = view.scene.objects.iter().find(|set| set.detected() > 0)
+    {
+        commands.push(Command::SetMeasureSet(Some(set.id())));
+    }
+    let full = Rect::from_min_size(Vec2::ZERO, ui.size());
+    let state = View {
+        scene: view.scene,
+        measure: view.measure,
+        timeline: view.timeline,
+        jobs: view.jobs,
+        io: &view.io,
+        batch: view.batch.as_ref(),
+        history: view.history,
+        series: &view.series,
+        viewport: &*viewport,
+        stage: &*stage,
+        workspace: &*workspace,
+        frame,
+        physics: ui.physics(),
+        reduce_motion: ui.reduce_motion(),
+        glass_on_glass: ui.theme().glass_on_glass,
+        light_angle: ui.theme().light_angle,
+    };
+    let (volume, section, elements) = {
+        let mut ctx = ui.build();
+        let layout = Layout::new(&mut ctx, &state, full);
+        let elements = view_elements(&mut ctx, &layout, &state, full);
+        (layout.volume, layout.section, elements)
+    };
+    ui.show(grana_ui::place(full, elements));
+    stage.set_rects(volume, section);
+    commands
+}
+
+fn view_elements<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    layout: &Layout,
+    state: &'a View<'a>,
+    full: Rect,
+) -> Vec<Element<'a, Message>> {
+    let mut elements = stage::view(ctx, layout, state, full);
+    elements.extend(header::view(ctx, layout, state));
+    if layout.sidebar_visible {
+        elements.push(sidebar(ctx, layout, state));
+    }
+    if let Some(rect) = layout.transport {
+        elements.push(timeline::transport(ctx, rect, state));
+    }
+    if let Some(rect) = layout.dock {
+        elements.push(dock(ctx, rect, state));
+    }
+    elements.extend(stage::toast(ctx, layout, state));
+    elements
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Layout {
+    pub toolbar_left: Rect,
+    pub toolbar_right: Rect,
+    pub analysis: Rect,
+    pub sidebar: Rect,
+    pub stage: Rect,
+    pub volume: Rect,
+    pub section: Rect,
+    pub transport: Option<Rect>,
+    pub dock: Option<Rect>,
+    pub sidebar_visible: bool,
 }
 
 impl Layout {
-    fn new(ui: &mut Ui, state: &State<'_>, full: Rect) -> Self {
+    fn new(ctx: &mut BuildContext<'_, Message>, state: &View<'_>, full: Rect) -> Self {
         let top = full.min.y + MARGIN;
         let toolbar_left = Rect::from_min_size(
             Vec2::new(full.min.x + MARGIN, top),
@@ -90,7 +164,11 @@ impl Layout {
         } else {
             1.0
         };
-        let sidebar_t = ui.spring_to(ui.id("sidebar.open"), sidebar_target, Motion::snappy());
+        let sidebar_t = ctx.animate(
+            Key::new("sidebar.open").id(),
+            sidebar_target,
+            Motion::snappy(),
+        );
         let sidebar_visible = sidebar_t > 0.005;
         let sidebar_slide = (1.0 - sidebar_t) * (SIDEBAR_WIDTH + MARGIN + GAP);
         let sidebar = if sidebar_visible {
@@ -126,14 +204,18 @@ impl Layout {
         } else {
             0.0
         };
-        let dock_t = ui.spring_to(ui.id("dock.open"), dock_target, Motion::snappy());
+        let dock_t = ctx.animate(Key::new("dock.open").id(), dock_target, Motion::snappy());
         let dock = (dock_t > 0.005).then(|| {
             let top = toolbar_left.max.y + GAP + 120.0;
             let available = (dock_bottom - top).max(DOCK_MINIMUM);
-            let stored = ui.value_of(ui.id("dock.height")).unwrap_or(DOCK_DEFAULT);
+            let stored = if state.workspace.dock_height > 0.0 {
+                state.workspace.dock_height
+            } else {
+                DOCK_DEFAULT
+            };
             let clamped = stored.clamp(DOCK_MINIMUM, available);
-            let height = ui.spring_to(
-                ui.id("dock.height.spring"),
+            let height = ctx.animate(
+                Key::new("dock.height.spring").id(),
                 clamped,
                 Motion::response(0.20, 0.08),
             );
@@ -143,8 +225,8 @@ impl Layout {
                 Vec2::new(right, dock_bottom + slide),
             )
         });
-        let split_ratio = ui.spring_to(
-            ui.id("viewport.split.spring"),
+        let split_ratio = ctx.animate(
+            Key::new("viewport.split.spring").id(),
             state.viewport.split(),
             Motion::response(0.18, 0.06),
         );
@@ -166,147 +248,88 @@ impl Layout {
     }
 }
 
-pub fn build(
-    ui: &mut Ui,
-    view: &grana_session::SessionView<'_>,
-    viewport: &mut grana_display::Viewport,
-    stage: &mut crate::stage::Stage,
-    workspace: &mut crate::state::Workspace,
-    frame: crate::state::FrameStats,
-) -> Vec<Command> {
-    let mut state = State {
-        scene: view.scene,
-        measure: view.measure,
-        timeline: view.timeline,
-        jobs: view.jobs,
-        io: &view.io,
-        batch: view.batch.as_ref(),
-        history: view.history,
-        series: &view.series,
-        viewport,
-        stage,
-        workspace,
-        frame,
-    };
-    let mut commands = Vec::new();
-    let size = ui.size();
-    let full = Rect::from_min_size(Vec2::ZERO, size);
-    let layout = Layout::new(ui, &state, full);
-    ui.root(|ui| {
-        state.stage.set_rects(layout.volume, layout.section);
-        stage::paint(ui, &layout, &mut state, &mut commands);
-        header::bar(ui, &layout, &mut state, &mut commands);
-        if layout.sidebar_visible {
-            sidebar_panel(ui, &layout, &mut state, &mut commands);
-        }
-        if let Some(rect) = layout.transport {
-            timeline::transport(ui, rect, &mut state, &mut commands);
-        }
-        if let Some(rect) = layout.dock {
-            dock_panel(ui, rect, &mut state, &mut commands);
-        }
-        stage::toast(ui, &layout, &state);
-        ui.paint_tooltip();
-    });
-    commands
-}
-
-fn sidebar_panel(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: &mut Vec<Command>) {
+fn sidebar<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    layout: &Layout,
+    state: &'a View<'a>,
+) -> Element<'a, Message> {
     let rect = layout.sidebar;
-    let palette = ui.theme().palette;
-    ui.glass(ui.id("sidebar.glass"), rect, GlassStyle::panel());
-    let tabs = Rect::from_min_size(
+    let palette = ctx.theme().palette;
+    let tabs_rect = Rect::from_min_size(
         Vec2::new(rect.min.x + SIDEBAR_PAD, rect.min.y + SIDEBAR_PAD),
         Vec2::new(rect.width() - SIDEBAR_PAD * 2.0, 28.0),
     );
-    let labels = ["View", "Objects"];
-    let key = ui.id("sidebar.tab");
-    let active = ui
-        .value_of(key)
-        .map_or(0, |value| value.round().clamp(0.0, 1.0) as usize);
-    ui.place(tabs, |ui| {
-        if let Some(index) = widget::segmented_fill(ui, "sidebar.tabs", &labels, active) {
-            ui.store_value(key, index as f32);
-        }
-    });
-    {
-        let mut painter = ui.painter();
-        painter.rect(
-            Rect::from_min_size(
-                Vec2::new(rect.min.x + SIDEBAR_PAD, tabs.max.y + 8.0),
-                Vec2::new(rect.width() - SIDEBAR_PAD * 2.0, 1.0),
-            ),
-            Corners::ZERO,
-            palette.separator,
-        );
-    }
+    let active = state.workspace.sidebar_tab.min(1);
+    let tabs = crate::view::segmented_fill(
+        ctx,
+        "sidebar.tabs",
+        &["View", "Objects"],
+        active,
+        Message::SetSidebarTab,
+    )
+    .at(tabs_rect);
+    let separator_rect = Rect::from_min_size(
+        Vec2::new(rect.min.x + SIDEBAR_PAD, tabs_rect.max.y + 8.0),
+        Vec2::new(rect.width() - SIDEBAR_PAD * 2.0, 1.0),
+    );
+    let separator = grana_ui::canvas(Length::Fill, 1.0, 0, move |painter, info| {
+        painter.rect(info.rect, Corners::ZERO, palette.separator);
+    })
+    .at(separator_rect);
     let body = Rect::from_min_max(
-        Vec2::new(rect.min.x, tabs.max.y + 9.0),
+        Vec2::new(rect.min.x, tabs_rect.max.y + 9.0),
         Vec2::new(rect.max.x, rect.max.y - 4.0),
     );
-    ui.stacked(body, true, |ui| {
-        ui.scroll(
-            ui.id(&format!("sidebar.scroll.{active}")),
-            Length::Fill,
-            |ui| {
-                ui.column(
-                    Block::column()
-                        .padding(Edges {
-                            left: SIDEBAR_PAD,
-                            top: 8.0,
-                            right: SIDEBAR_PAD,
-                            bottom: 16.0,
-                        })
-                        .gaps(8.0),
-                    |ui| {
-                        crate::inspector::source(ui, state, commands);
-                        match active {
-                            0 => crate::inspector::view_body(ui, state, commands),
-                            _ => crate::inspector::objects_body(ui, state, commands),
-                        }
-                    },
-                );
-            },
-        );
-    });
+    let mut content = vec![crate::inspector::source(ctx, state)];
+    match active {
+        0 => content.extend(crate::inspector::view_body(ctx, state)),
+        _ => content.extend(crate::inspector::objects_body(ctx, state)),
+    }
+    let column = grana_ui::column()
+        .padding(Edges {
+            left: SIDEBAR_PAD,
+            top: 8.0,
+            right: SIDEBAR_PAD,
+            bottom: 16.0,
+        })
+        .gap(8.0)
+        .children(content);
+    let scroll = Element::new(UiLayout::column())
+        .named("sidebar.scroll")
+        .at(body)
+        .scroll(Axis::Column, Length::Fill, None)
+        .clipped()
+        .children([column]);
+    Element::new(UiLayout::column())
+        .named("sidebar")
+        .at(rect)
+        .glass(GlassStyle::panel())
+        .children([tabs, separator, scroll])
 }
 
-fn dock_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec<Command>) {
-    let palette = ui.theme().palette;
-    ui.glass(ui.id("dock.glass"), rect, GlassStyle::sheet());
+fn dock<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    rect: Rect,
+    state: &'a View<'a>,
+) -> Element<'a, Message> {
+    let palette = ctx.theme().palette;
     let grip = Rect::from_min_max(rect.min, Vec2::new(rect.max.x, rect.min.y + 10.0));
-    let response = ui.interact(ui.id("dock.resize"), grip);
-    if response.hovered || response.dragging {
-        ui.set_cursor(Cursor::ResizeVertical);
-    }
-    if response.dragging {
-        let delta = ui.input().delta().y;
-        let key = ui.id("dock.height");
-        let stored = ui.value_of(key).unwrap_or(DOCK_DEFAULT);
-        ui.store_value(key, stored - delta);
-    }
-    {
-        let mut painter = ui.painter();
+    let grip_element = grana_ui::canvas(Length::Fill, 10.0, 0, move |painter, info| {
+        let engaged = info.hover.max(info.press);
         painter.rect(
             Rect::from_center_size(
-                Vec2::new(grip.center().x, grip.min.y + 5.0),
-                Vec2::new(
-                    if response.hovered || response.dragging {
-                        52.0
-                    } else {
-                        36.0
-                    },
-                    4.0,
-                ),
+                Vec2::new(info.rect.center().x, info.rect.min.y + 5.0),
+                Vec2::new(36.0 + 16.0 * engaged, 4.0),
             ),
             Corners::capsule(),
-            if response.hovered || response.dragging {
-                palette.text_tertiary
-            } else {
-                palette.text_quaternary
-            },
+            palette.text_quaternary.lerp(palette.text_tertiary, engaged),
         );
-    }
+    })
+    .at(grip)
+    .cursor(grana_ui::Cursor::ResizeVertical)
+    .on_pointer(|pointer| {
+        (pointer.phase == grana_ui::Phase::Move).then_some(Message::SetDockHeight(-pointer.delta.y))
+    });
     let header = Rect::from_min_size(
         rect.min + Vec2::new(16.0, 8.0),
         Vec2::new(rect.width() - 32.0, DOCK_HEADER),
@@ -315,437 +338,228 @@ fn dock_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec
         Vec2::new(header.max.x - 14.0, header.center().y),
         Vec2::splat(28.0),
     );
-    let tabs = Rect::from_min_max(header.min, Vec2::new(close.min.x - 12.0, header.max.y));
+    let tabs_rect = Rect::from_min_max(header.min, Vec2::new(close.min.x - 12.0, header.max.y));
     let labels = Panel::ALL.map(Panel::name);
-    let active = if state.workspace.panel.is_some() {
-        let index = panel_index(state);
-        ui.store_value(ui.id("dock.last"), index as f32);
-        index
-    } else {
-        ui.value_of(ui.id("dock.last"))
-            .map_or(0, |value| value.round().clamp(0.0, 4.0) as usize)
-    };
-    ui.place(tabs, |ui| {
-        if let Some(index) = widget::tabs(ui, "dock.tabs", &labels, active) {
-            state.workspace.panel = Some(Panel::ALL[index]);
-        }
-    });
-    {
-        let mut painter = ui.painter();
-        painter.rect(
-            Rect::from_min_size(
-                Vec2::new(rect.min.x + 16.0, header.max.y + 2.0),
-                Vec2::new(rect.width() - 32.0, 1.0),
-            ),
-            Corners::ZERO,
-            palette.separator,
-        );
-    }
-    ui.place(close, |ui| {
-        if widget::icon_button(
-            ui,
-            "dock.close",
-            Icon::Close,
-            28.0,
-            Role::Quiet,
-            "Close panel",
-        ) {
-            state.workspace.panel = None;
-        }
-    });
+    let active = state.workspace.dock_last.min(4);
+    let tabs = crate::view::tabs(ctx, "dock.tabs", &labels, active, |index| {
+        Message::SetPanel(Some(Panel::ALL[index]))
+    })
+    .at(Rect::from_min_size(
+        tabs_rect.min,
+        Vec2::new(tabs_rect.width(), 32.0),
+    ));
+    let close_element = crate::view::icon_button(
+        ctx,
+        "dock.close",
+        Icon::Close,
+        28.0,
+        Role::Quiet,
+        "Close panel",
+        Message::SetPanel(None),
+    )
+    .at(close);
+    let separator_rect = Rect::from_min_size(
+        Vec2::new(rect.min.x + 16.0, header.max.y + 2.0),
+        Vec2::new(rect.width() - 32.0, 1.0),
+    );
+    let separator = grana_ui::canvas(Length::Fill, 1.0, 0, move |painter, info| {
+        painter.rect(info.rect, Corners::ZERO, palette.separator);
+    })
+    .at(separator_rect);
     let content = Rect::from_min_max(
         Vec2::new(rect.min.x + 16.0, header.max.y + 11.0),
         Vec2::new(rect.max.x - 16.0, rect.max.y - 14.0),
     );
     let panel = state.workspace.panel.unwrap_or(Panel::ALL[active]);
-    ui.stacked(content, true, |ui| match panel {
-        Panel::Statistics => crate::measure_panel::build(ui, state, commands),
-        Panel::Tracks => crate::track_panel::build(ui, state, commands),
-        _ => {
-            ui.scroll(
-                ui.id(&format!("dock.body.{active}")),
-                Length::Fill,
-                |ui| match panel {
-                    Panel::Colocalization => crate::coloc_panel::build(ui, state, commands),
-                    Panel::Batch => crate::batch_panel::build(ui, state, commands),
-                    Panel::Animation => crate::animation_panel::build(ui, state, commands),
-                    Panel::Statistics | Panel::Tracks => {
-                        unreachable!("statistics and tracks manage their own layout")
-                    }
-                },
+    let mut children = vec![grip_element, tabs, close_element, separator];
+    match panel {
+        Panel::Statistics => children.push(clipped(
+            content,
+            crate::measure_panel::view(ctx, state, content),
+        )),
+        Panel::Tracks => children.push(clipped(
+            content,
+            crate::track_panel::view(ctx, state, content),
+        )),
+        panel => {
+            let body = match panel {
+                Panel::Colocalization => crate::coloc_panel::view(ctx, state),
+                Panel::Batch => crate::batch_panel::view(ctx, state),
+                Panel::Animation => crate::animation_panel::view(ctx, state),
+                Panel::Statistics | Panel::Tracks => {
+                    unreachable!("statistics and tracks manage their own layout")
+                }
+            };
+            children.push(
+                Element::new(UiLayout::column())
+                    .named("dock.scroll")
+                    .at(content)
+                    .scroll(Axis::Column, Length::Fill, None)
+                    .clipped()
+                    .children([body]),
             );
         }
-    });
+    }
+    Element::new(UiLayout::column())
+        .named("dock")
+        .at(rect)
+        .glass(GlassStyle::sheet())
+        .children(children)
 }
 
-fn panel_index(state: &State<'_>) -> usize {
+fn clipped<'a>(rect: Rect, children: Vec<Element<'a, Message>>) -> Element<'a, Message> {
+    Element::new(UiLayout::column())
+        .at(rect)
+        .clipped()
+        .children(children)
+}
+
+pub fn apply(
+    ui: &mut Ui<Message>,
+    actions: Vec<Message>,
+    view: &SessionView<'_>,
+    viewport: &mut Viewport,
+    stage: &mut Stage,
+    workspace: &mut Workspace,
+    commands: &mut Vec<Command>,
+) {
+    for action in actions {
+        match action {
+            Message::Noop => {}
+            Message::Copy(text) => ui.copy(&text),
+            Message::Command(command) => {
+                let busy = view.io.loading.is_some()
+                    && matches!(
+                        command,
+                        Command::OpenImage
+                            | Command::OpenDataset
+                            | Command::OpenProject
+                            | Command::SaveProject
+                            | Command::SaveProjectAs
+                            | Command::SaveSnapshot
+                    );
+                if matches!(command, Command::Track(_) | Command::CutTrack { .. }) {
+                    workspace.join = None;
+                }
+                if !busy {
+                    commands.push(command);
+                }
+            }
+            Message::SetPanel(panel) => {
+                workspace.panel = panel;
+                if let Some(panel) = panel {
+                    workspace.dock_last = panel_index(Some(panel));
+                }
+            }
+            Message::SetSidebarTab(index) => workspace.sidebar_tab = index,
+            Message::SetDockLast(index) => workspace.dock_last = index,
+            Message::ToggleSidebar => workspace.sidebar_hidden = !workspace.sidebar_hidden,
+            Message::SetDockHeight(value) => {
+                let height = if workspace.dock_height > 0.0 {
+                    workspace.dock_height
+                } else {
+                    DOCK_DEFAULT
+                };
+                workspace.dock_height = (height + value).max(DOCK_MINIMUM);
+            }
+            Message::SetSplit(value) => viewport.set_split(value.clamp(0.3, 0.75)),
+            Message::SetValue(key, value) => workspace.interface.set(key, value),
+            Message::ToggleOpen(key) => workspace.interface.toggle(key),
+            Message::ExpandObject { set, open } => {
+                if open {
+                    workspace.expanded.insert(set);
+                } else {
+                    workspace.expanded.remove(&set);
+                }
+            }
+            Message::BeginRename(set) => workspace.renaming = Some(set),
+            Message::EndRename => workspace.renaming = None,
+            Message::RenameObject { set, name } => {
+                commands.push(Command::RenameObject { set, name });
+                workspace.renaming = None;
+            }
+            Message::SetPlaying(playing) => {
+                workspace.playback.playing = playing;
+                if playing {
+                    workspace.playback.previewing = false;
+                }
+            }
+            Message::SetPreviewing(previewing) => {
+                workspace.playback.previewing = previewing;
+                if previewing {
+                    workspace.playback.playing = false;
+                }
+            }
+            Message::SetPlaybackPosition(position) => workspace.playback.position = position,
+            Message::SetPlaybackWidth(width) => workspace.playback.width = width,
+            Message::SetPlaybackSelected(selected) => workspace.playback.selected = selected,
+            Message::SetTrackSet(set) => {
+                workspace.track_set = set;
+                workspace.join = None;
+            }
+            Message::SetJoin(join) => workspace.join = join,
+            Message::SetSeed(seed) => workspace.seed = seed,
+            Message::SetSectionAxis(axis) => {
+                viewport.section_mut().set_axis(axis);
+                crate::fitting::fit_section(view.scene, viewport, stage);
+            }
+            Message::SetSectionDepth(position) => {
+                let axis = viewport.section().axis();
+                let extent = view.scene.dataset.world_size()[axis.index()];
+                viewport
+                    .camera_mut()
+                    .set_focus_along(axis, position.clamp(0.0, extent) - 0.5 * extent);
+            }
+            Message::SetPhysics(value) => ui.set_physics(value),
+            Message::SetReduceMotion(value) => ui.set_reduce_motion(value),
+            Message::SetGlassOnGlass(value) => ui.theme_mut().glass_on_glass = value,
+            Message::SetLightAngle(value) => {
+                ui.theme_mut().light_angle = value.clamp(-180.0, 180.0)
+            }
+            Message::SetExport(export) => {
+                workspace.playback.width = if export.width == 0 {
+                    workspace.playback.width
+                } else {
+                    export.width
+                };
+                workspace
+                    .interface
+                    .set(Key::new("export.width"), export.width as f32);
+                workspace.interface.set(
+                    Key::new("export.transparent"),
+                    if export.transparent { 1.0 } else { 0.0 },
+                );
+                commands.push(Command::SetExport(export));
+            }
+            Message::FitVolume => crate::fitting::fit_volume(view.scene, viewport, stage),
+            Message::FitSection => crate::fitting::fit_section(view.scene, viewport, stage),
+            Message::Plot(event) => {
+                crate::plot::apply(event, view.scene, view.measure, workspace, commands)
+            }
+            Message::Locate(row) => crate::plot::locate(view.scene, view.measure, row, commands),
+            Message::ClearGates => crate::plot::clear_gates(view.measure, commands),
+            Message::Region { axis, side, delta } => {
+                let mut region = view.scene.region;
+                let mut low = region.min();
+                let mut high = region.max();
+                let world = view.scene.dataset.world_size();
+                let half = 0.5 * world;
+                let minimum = (1.0e-3 * world.min_element()).max(1.0e-5);
+                if side == 0 {
+                    low[axis] = (low[axis] + delta).clamp(-half[axis], high[axis] - minimum);
+                } else {
+                    high[axis] = (high[axis] + delta).clamp(low[axis] + minimum, half[axis]);
+                }
+                region.set_bounds(low, high);
+                commands.push(Command::SetRegion(region));
+            }
+        }
+    }
+}
+
+pub fn panel_index(panel: Option<Panel>) -> usize {
     Panel::ALL
         .iter()
-        .position(|panel| Some(*panel) == state.workspace.panel)
+        .position(|candidate| Some(*candidate) == panel)
         .unwrap_or(0)
-}
-
-pub fn scene_uv(rect: Rect, size: Vec2) -> [f32; 4] {
-    [
-        rect.min.x / size.x,
-        rect.min.y / size.y,
-        rect.max.x / size.x,
-        rect.max.y / size.y,
-    ]
-}
-
-pub fn progress(
-    analysis: &[grana_scene::Progress],
-    job: grana_scene::Job,
-) -> Option<grana_scene::Progress> {
-    analysis
-        .iter()
-        .copied()
-        .find(|progress| progress.job == job)
-}
-
-pub fn progress_caption(
-    kind: grana_scene::ObjectKind,
-    job: grana_scene::Job,
-    progress: grana_scene::Progress,
-    frames: u32,
-) -> String {
-    let unit = match job {
-        grana_scene::Job::Detect(_) => match kind {
-            grana_scene::ObjectKind::Spots => "blocks",
-            grana_scene::ObjectKind::Surfaces => "tiles",
-            grana_scene::ObjectKind::Filaments => "frames",
-        },
-        grana_scene::Job::Track(_)
-        | grana_scene::Job::Recut(_)
-        | grana_scene::Job::Relation { .. }
-        | grana_scene::Job::Coloc
-        | grana_scene::Job::Drift => "frames",
-    };
-    let prefix = match job {
-        grana_scene::Job::Detect(_) if frames > 1 => format!("Frame {} · ", progress.time + 1),
-        grana_scene::Job::Detect(_)
-        | grana_scene::Job::Recut(_)
-        | grana_scene::Job::Track(_)
-        | grana_scene::Job::Relation { .. }
-        | grana_scene::Job::Coloc
-        | grana_scene::Job::Drift => String::new(),
-    };
-    if progress.total > 0 {
-        format!("{prefix}{}/{} {unit}", progress.done, progress.total)
-    } else {
-        format!("{prefix}Preparing")
-    }
-}
-
-pub fn divider(ui: &mut Ui) {
-    let rect = ui.allocate_full(9.0);
-    let palette = ui.theme().palette;
-    let mut painter = ui.painter();
-    painter.rect(
-        Rect::from_min_size(
-            Vec2::new(rect.min.x, rect.center().y),
-            Vec2::new(rect.width(), 1.0),
-        ),
-        Corners::ZERO,
-        palette.separator,
-    );
-}
-
-pub fn section_header(ui: &mut Ui, title: &str, detail: Option<&str>) {
-    let rect = ui.allocate_full(22.0);
-    let palette = ui.theme().palette;
-    let font = TypeStyle {
-        size: 10.0,
-        weight: 600.0,
-        tracking: 0.7,
-        leading: 14.0,
-    };
-    let style = TextStyle::new(font, palette.text_tertiary);
-    let detail_style =
-        TextStyle::new(ui.theme().font(Level::Caption), palette.text_tertiary).aligned(Align::End);
-    let mut painter = ui.painter();
-    painter.text_in(rect, &title.to_uppercase(), style, Align::Center);
-    if let Some(detail) = detail {
-        painter.text_in(
-            Rect::from_min_max(Vec2::new(rect.min.x + 64.0, rect.min.y), rect.max),
-            detail,
-            detail_style,
-            Align::Center,
-        );
-    }
-}
-
-pub fn card(ui: &mut Ui, gap: f32, content: impl FnOnce(&mut Ui)) -> Rect {
-    let surface = ui.theme().surface(Role::Card, grana_ui::State::Rest);
-    ui.column(
-        Block::column()
-            .padding(Edges::all(12.0))
-            .gaps(gap)
-            .background(surface),
-        content,
-    )
-}
-
-pub fn card_surface(ui: &mut Ui, rect: Rect) {
-    let surface = ui.theme().surface(Role::Card, grana_ui::State::Rest);
-    let mut painter = ui.painter();
-    painter.outlined(
-        rect,
-        surface.corners,
-        surface.fill,
-        surface.border,
-        surface.shadow,
-    );
-}
-
-pub fn column_label(column: &grana_measure::Column) -> String {
-    let raw = column.label();
-    let mut chars = raw.chars();
-    let label = match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    };
-    let unit = column.unit().suffix();
-    if unit.is_empty() {
-        label
-    } else {
-        format!("{label} ({unit})")
-    }
-}
-
-pub fn card_title(ui: &mut Ui, symbol: Icon, title: &str, detail: Option<&str>) {
-    let rect = ui.allocate_full(22.0);
-    let palette = ui.theme().palette;
-    let title_style = TextStyle::new(TypeStyle::new(12.5, 600.0, 17.0), palette.text_primary);
-    let detail_style = TextStyle::new(ui.theme().font(Level::Caption), palette.text_tertiary)
-        .aligned(Align::End)
-        .truncating();
-    let mut painter = ui.painter();
-    icon::paint(
-        symbol,
-        &mut painter,
-        Vec2::new(rect.min.x + 7.0, rect.center().y),
-        13.0,
-        palette.text_secondary,
-        1.5,
-    );
-    painter.text_in(
-        Rect::from_min_max(Vec2::new(rect.min.x + 20.0, rect.min.y), rect.max),
-        title,
-        title_style,
-        Align::Center,
-    );
-    if let Some(detail) = detail {
-        painter.text_in(
-            Rect::from_min_max(Vec2::new(rect.min.x + 96.0, rect.min.y), rect.max),
-            detail,
-            detail_style,
-            Align::Center,
-        );
-    }
-}
-
-pub fn disclosure_card(
-    ui: &mut Ui,
-    id: &str,
-    symbol: Icon,
-    title: &str,
-    detail: Option<&str>,
-    content: impl FnOnce(&mut Ui),
-) {
-    let open = ui.disclosure_open(id, false);
-    let mut next = open;
-    card(ui, 8.0, |ui| {
-        let key = ui.id_index(id, 1);
-        let rect = ui.allocate_full(22.0);
-        let mut response = ui.interact(key, rect);
-        if ui.focusable(key, rect, Corners::all(8.0)) && ui.activated(key) {
-            response.clicked = true;
-        }
-        if response.clicked {
-            next = !open;
-        }
-        let hover = ui.animate(
-            key ^ 0x31,
-            if response.hovered { 1.0 } else { 0.0 },
-            Motion::quick(),
-        );
-        let arrow = ui.animate(
-            key ^ 0x19,
-            if open { 1.0 } else { 0.0 },
-            Motion::response(0.32, 0.18),
-        );
-        let palette = ui.theme().palette;
-        let title_style = TextStyle::new(TypeStyle::new(12.5, 600.0, 17.0), palette.text_primary);
-        let detail_style = TextStyle::new(ui.theme().font(Level::Caption), palette.text_tertiary)
-            .aligned(Align::End)
-            .truncating();
-        let mut painter = ui.painter();
-        icon::paint(
-            symbol,
-            &mut painter,
-            Vec2::new(rect.min.x + 7.0, rect.center().y),
-            13.0,
-            palette.text_secondary.lerp(palette.text_primary, hover),
-            1.5,
-        );
-        painter.text_in(
-            Rect::from_min_max(
-                Vec2::new(rect.min.x + 20.0, rect.min.y),
-                Vec2::new(rect.max.x - 20.0, rect.max.y),
-            ),
-            title,
-            title_style,
-            Align::Center,
-        );
-        if let Some(detail) = detail {
-            painter.text_in(
-                Rect::from_min_max(
-                    Vec2::new(rect.min.x + 96.0, rect.min.y),
-                    Vec2::new(rect.max.x - 20.0, rect.max.y),
-                ),
-                detail,
-                detail_style,
-                Align::Center,
-            );
-        }
-        icon::chevron(
-            &mut painter,
-            Vec2::new(rect.max.x - 6.0, rect.center().y),
-            8.0,
-            std::f32::consts::FRAC_PI_2 * arrow,
-            palette.text_tertiary.lerp(palette.text_secondary, hover),
-            1.5,
-        );
-        if next {
-            divider(ui);
-            content(ui);
-        }
-    });
-    ui.store_open(id, next);
-}
-
-pub fn form_row<R>(ui: &mut Ui, label: &str, content: impl FnOnce(&mut Ui) -> R) -> R {
-    let mut output = None;
-    let height = ui.theme().metrics.control_height;
-    ui.row(
-        Block::row()
-            .gaps(0.0)
-            .align(Align::Center)
-            .width(Length::Fill),
-        |ui| {
-            let label_rect = ui.allocate(Vec2::new(FORM_LABEL, height));
-            let style = TextStyle::new(ui.theme().label_font(), ui.theme().palette.text_tertiary)
-                .truncating();
-            ui.text_in(
-                Rect::from_min_max(
-                    label_rect.min,
-                    Vec2::new(label_rect.max.x - 6.0, label_rect.max.y),
-                ),
-                label,
-                style,
-                Align::Center,
-            );
-            output = Some(content(ui));
-        },
-    );
-    output.expect("the form row runs its content closure")
-}
-
-pub fn form_combo<T: Copy + PartialEq>(
-    ui: &mut Ui,
-    id: &str,
-    label: &str,
-    items: &[(T, String)],
-    selected: Option<T>,
-) -> Option<T> {
-    form_row(ui, label, |ui| {
-        let width = ui.available().x.max(64.0);
-        grana_ui::popover::combo(ui, id, width, items, selected)
-    })
-}
-
-pub fn empty_state(ui: &mut Ui, symbol: Icon, title: &str, detail: &str) {
-    let palette = ui.theme().palette;
-    let corners = Corners::all(ui.theme().metrics.card_radius);
-    let available = ui.available();
-    let width = available.x.min(480.0);
-    let detail_style = TextStyle::new(ui.theme().font(Level::Callout), palette.text_tertiary)
-        .wrapping()
-        .aligned(Align::Center);
-    let detail_layout = ui.layout_text(detail, detail_style, (width - 56.0).max(80.0));
-    let natural_height = 24.0 + 48.0 + 12.0 + 20.0 + 6.0 + detail_layout.size.y + 24.0;
-    let height = if available.y > natural_height + 24.0 && available.y < 420.0 {
-        natural_height
-    } else {
-        natural_height.min(available.y.max(natural_height))
-    };
-    let outer = ui.allocate(Vec2::new(available.x, height));
-    let rect = Rect::from_min_size(
-        Vec2::new(outer.min.x + (available.x - width) * 0.5, outer.min.y),
-        Vec2::new(width, natural_height),
-    );
-    {
-        let mut painter = ui.painter();
-        painter.outlined(
-            rect,
-            corners,
-            Fill::Solid(palette.card),
-            Border {
-                width: 1.0,
-                color: palette.material_border,
-            },
-            grana_ui::Shadow::NONE,
-        );
-        let art = Rect::from_center_size(
-            Vec2::new(rect.center().x, rect.min.y + 24.0 + 24.0),
-            Vec2::splat(48.0),
-        );
-        painter.outlined(
-            art,
-            Corners::all(14.0),
-            Fill::Solid(palette.material_fill.amplify(0.8)),
-            Border {
-                width: 1.0,
-                color: palette.material_border,
-            },
-            grana_ui::Shadow::NONE,
-        );
-        painter.rect(
-            Rect::from_center_size(art.center(), Vec2::splat(34.0)),
-            Corners::all(10.0),
-            palette.accent.with_alpha(0.12),
-        );
-        icon::paint(
-            symbol,
-            &mut painter,
-            art.center(),
-            20.0,
-            palette.text_secondary,
-            1.5,
-        );
-    }
-    ui.text_in(
-        Rect::from_min_size(
-            Vec2::new(rect.min.x + 28.0, rect.min.y + 24.0 + 48.0 + 12.0),
-            Vec2::new(rect.width() - 56.0, 20.0),
-        ),
-        title,
-        TextStyle::new(ui.theme().font(Level::Headline), palette.text_primary)
-            .aligned(Align::Center),
-        Align::Center,
-    );
-    ui.text_in(
-        Rect::from_min_size(
-            Vec2::new(
-                rect.min.x + 28.0,
-                rect.min.y + 24.0 + 48.0 + 12.0 + 20.0 + 6.0,
-            ),
-            Vec2::new(rect.width() - 56.0, detail_layout.size.y),
-        ),
-        detail,
-        detail_style,
-        Align::Center,
-    );
 }

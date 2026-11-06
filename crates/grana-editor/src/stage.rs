@@ -108,7 +108,12 @@ impl Stage {
         }
     }
 
-    pub fn input(&mut self, ui: &mut Ui, viewport: &mut Viewport, spacing: Spacing) -> Interaction {
+    pub fn input<A: Clone>(
+        &mut self,
+        ui: &mut Ui<A>,
+        viewport: &mut Viewport,
+        spacing: Spacing,
+    ) -> Interaction {
         let mut interaction = Interaction::default();
         let blocked = ui.pointer_over_chrome() || ui.pointer_over_widget() || ui.pointer_captured();
         let input = ui.input();

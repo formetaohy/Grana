@@ -345,6 +345,28 @@ impl<'a> Painter<'a> {
         self.glyphs(layout, position, color);
     }
 
+    pub fn layout(
+        &mut self,
+        text: &str,
+        style: TextStyle,
+        max_width: f32,
+    ) -> std::sync::Arc<TextLayout> {
+        self.text.layout(
+            text,
+            style.font,
+            max_width,
+            style.wrap,
+            style.truncate,
+            style.align,
+        )
+    }
+
+    pub fn measure(&mut self, text: &str, style: TextStyle) -> Vec2 {
+        self.text
+            .layout(text, style.font, 0.0, false, style.truncate, style.align)
+            .size
+    }
+
     pub fn text_at(&mut self, position: Vec2, text: &str, style: TextStyle) {
         let layout = self
             .text

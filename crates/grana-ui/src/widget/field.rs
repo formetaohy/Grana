@@ -1,171 +1,105 @@
-use std::sync::Arc;
-
 use glam::Vec2;
 
-use crate::edit::Outcome;
+use crate::element::{Content, Element, FieldContent, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
-use crate::input::Button;
-use crate::registry::Cursor;
-use crate::style::Shadow;
-use crate::text::{TextLayout, TextStyle};
-use crate::theme::Role;
-use crate::ui::{Response, Ui};
+use crate::node::Runtime;
+use crate::paint::Painter;
+use crate::style::{Shadow, State};
+use crate::text::TextStyle;
+use crate::theme::{Role, Theme};
+
+use super::PaintInfo;
 
 const FIELD_PAD: f32 = 8.0;
 
-pub fn text_field(
-    ui: &mut Ui,
-    id: &str,
-    rect: Rect,
+pub fn text_field<'a, A>(
+    theme: &Theme,
+    value: &str,
     style: TextStyle,
-) -> Option<(Outcome, String)> {
-    let key = ui.id(id);
-    if !ui.is_editing(key) {
-        return None;
-    }
-    ui.touch_edit();
-    let response = ui.interact(key, rect);
-    ui.focusable(key, rect, Corners::all(10.0));
-    if response.hovered {
-        ui.set_cursor(Cursor::Text);
-    }
-    let time = ui.time();
-    let pointer = ui.input().position();
-    let primary = ui.input().button(Button::Primary);
-    let modifiers = ui.input().modifiers();
-    let preedit = ui.input().preedit().map(str::to_string).unwrap_or_default();
-    let offset = field_offset(ui, style, rect, &preedit);
-    let outcome = match ui.poll_edit() {
-        Some(outcome) => Some(outcome),
-        None if primary.pressed => {
-            if !rect.contains(pointer) {
-                Some(Outcome::Commit)
-            } else if preedit.is_empty() {
-                let count = ui.edit_mut().map_or(1, |edit| edit.click(pointer, time));
-                let caret = caret_at(ui, style, rect, offset, pointer.x);
-                if let Some(edit) = ui.edit_mut() {
-                    match count {
-                        2 => {
-                            let range = edit.word(caret);
-                            edit.select(range, time);
-                        }
-                        3 => edit.select_all(time),
-                        _ => edit.place(caret, modifiers.shift, time),
-                    }
-                }
-                None
-            } else {
-                None
-            }
-        }
-        None if primary.down && response.dragging => {
-            let caret = caret_at(ui, style, rect, offset, pointer.x);
-            if let Some(edit) = ui.edit_mut() {
-                edit.place(caret, true, time);
-            }
-            None
-        }
-        None => None,
-    };
-    let snapshot = ui.edit().map(|edit| {
-        (
-            edit.text().to_string(),
-            edit.caret(),
-            edit.anchor(),
-            edit.caret_visible(time),
-        )
-    });
-    if outcome.is_some() {
-        ui.end_edit();
-    }
-    let (text, caret, anchor, blinking) = snapshot?;
-    paint_field(
-        ui,
-        key,
-        &response,
-        rect,
+    width: f32,
+    multiline: bool,
+) -> Element<'a, A> {
+    let _ = theme;
+    Element::new(Layout {
+        size: Size::new(
+            Length::Fixed(width),
+            Length::Fixed(if multiline { 96.0 } else { 24.0 }),
+        ),
+        ..Layout::row()
+    })
+    .with_content(Content::Field(FieldContent {
+        value: value.to_string(),
         style,
-        Field {
-            text: &text,
-            caret,
-            anchor,
-            blinking,
-            preedit: &preedit,
-        },
-    );
-    outcome.map(|outcome| (outcome, text))
+        multiline,
+        radius: 10.0,
+        editing: false,
+    }))
+    .focus_ring(Corners::all(10.0))
+    .cursor(crate::input::Cursor::Text)
+    .field_height(multiline)
 }
 
-struct Field<'a> {
-    text: &'a str,
-    caret: usize,
-    anchor: usize,
-    blinking: bool,
-    preedit: &'a str,
-}
-
-fn field_offset(ui: &mut Ui, style: TextStyle, rect: Rect, preedit: &str) -> f32 {
-    let Some(edit) = ui.edit() else {
-        return 0.0;
-    };
-    let text = edit.text().to_string();
-    let composition = format!("{}{}", prefix(&text, edit.caret()), preedit);
-    let caret_x = text_width(ui, style, &composition);
-    let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0)).width();
-    (caret_x - inner + 2.0).max(0.0)
-}
-
-fn paint_field(
-    ui: &mut Ui,
-    key: u64,
-    response: &Response,
-    rect: Rect,
+pub fn text_area<'a, A>(
+    theme: &Theme,
+    value: &str,
     style: TextStyle,
-    field: Field<'_>,
-) {
-    let Field {
-        text,
-        caret,
-        anchor,
-        blinking,
-        preedit,
-    } = field;
-    let look = ui.surface(key, Role::Field, response);
-    let palette = ui.theme().palette;
-    let radius = 10.0;
-    let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0));
-    let offset_of = |index: usize| prefix(text, index).len();
-    let display = if preedit.is_empty() {
-        text.to_string()
-    } else {
-        let mut display = String::with_capacity(text.len() + preedit.len());
-        display.push_str(prefix(text, caret));
-        display.push_str(preedit);
-        display.push_str(&text[offset_of(caret)..]);
-        display
+    width: f32,
+    height: f32,
+) -> Element<'a, A> {
+    let mut element = text_field(theme, value, style, width, true);
+    element.layout.size.height = Length::Fixed(height);
+    element
+}
+
+trait FieldHeight<'a, A> {
+    fn field_height(self, multiline: bool) -> Self;
+}
+
+impl<'a, A> FieldHeight<'a, A> for Element<'a, A> {
+    fn field_height(self, _multiline: bool) -> Self {
+        self
+    }
+}
+
+pub(super) fn measure_field(field: &FieldContent, layout: Layout, available: Vec2) -> Vec2 {
+    let width = match layout.size.width {
+        Length::Auto | Length::Fill => available.x,
+        Length::Fixed(value) => value,
+        Length::Minimum(minimum) => minimum.max(available.x),
+        Length::Maximum(maximum) => maximum.min(available.x),
     };
-    let composed = preedit.chars().count();
-    let display_caret = caret + composed;
-    let caret_x = text_width(ui, style, prefix(&display, display_caret));
-    let offset = (caret_x - inner.width() + 2.0).max(0.0);
-    let layout = ui.layout_text(&display, style, 0.0);
-    let origin = Vec2::new(
-        inner.min.x - offset,
-        inner.min.y + (inner.height() - layout.size.y) * 0.5,
-    );
-    let height = (layout.size.y * 0.86).max(8.0);
-    let top = origin.y + (layout.size.y - height) * 0.5;
-    let selection = (preedit.is_empty() && caret != anchor).then(|| {
-        let (start, end) = (caret.min(anchor), caret.max(anchor));
-        (
-            text_width(ui, style, prefix(text, start)),
-            text_width(ui, style, prefix(text, end)),
-        )
-    });
-    let composition =
-        (composed > 0).then(|| (text_width(ui, style, prefix(&display, caret)), caret_x));
-    let accent = palette.accent;
-    let mut painter = ui.painter();
+    let height = match layout.size.height {
+        Length::Auto | Length::Fill => available.y,
+        other => other.resolve(available.y),
+    };
+    let _ = field;
+    Vec2::new(width, height)
+}
+
+pub(super) fn paint_field(
+    field: &FieldContent,
+    runtime: &Runtime,
+    painter: &mut Painter,
+    info: &PaintInfo<'_>,
+) -> Option<Rect> {
+    let rect = info.rect;
+    let radius = field.radius;
+    let hovered = RuntimeHover {
+        hover: info.hover,
+        press: info.press,
+    };
+    let state = if !info.enabled {
+        State::Disabled
+    } else if hovered.press > 0.5 {
+        State::Pressed
+    } else if hovered.hover > 0.5 {
+        State::Hover
+    } else {
+        State::Rest
+    };
+    let look = info.theme.surface(Role::Field, state);
+    let palette = info.theme.palette;
+    let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0));
     painter.outlined(
         rect,
         Corners::all(radius),
@@ -175,204 +109,123 @@ fn paint_field(
     );
     let clip = painter.clip();
     painter.push_clip(inner, Corners::ZERO);
-    if let Some((left, right)) = selection {
-        painter.rect(
-            Rect::from_min_max(
-                Vec2::new(inner.min.x - offset + left, top),
-                Vec2::new(inner.min.x - offset + right, top + height),
-            ),
-            Corners::ZERO,
-            accent.with_alpha(0.28),
-        );
-    }
-    if let Some((left, right)) = composition {
-        painter.rect(
-            Rect::from_min_max(
-                Vec2::new(inner.min.x - offset + left, top + height + 2.0),
-                Vec2::new(inner.min.x - offset + right, top + height + 3.2),
-            ),
-            Corners::ZERO,
-            accent,
-        );
-    }
-    painter.glyphs(&layout, origin, style.color);
-    if blinking {
-        painter.rect(
-            Rect::from_min_size(
-                Vec2::new(inner.min.x - offset + caret_x, top),
-                Vec2::new(1.4, height),
-            ),
-            Corners::ZERO,
-            accent,
-        );
-    }
-    painter.pop_clip(clip);
-    ui.set_edit_caret(Rect::from_min_size(
-        Vec2::new(inner.min.x - offset + caret_x, top),
-        Vec2::new(1.4, height),
-    ));
-}
-
-pub fn text_area(ui: &mut Ui, id: &str, rect: Rect, style: TextStyle) -> Option<(Outcome, String)> {
-    let key = ui.id(id);
-    if !ui.is_editing(key) {
-        return None;
-    }
-    ui.touch_edit();
-    let response = ui.interact(key, rect);
-    let radius = 10.0;
-    ui.focusable(key, rect, Corners::all(radius));
-    if response.hovered {
-        ui.set_cursor(Cursor::Text);
-    }
-    let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0));
-    let line_height = style.font.leading.max(style.font.size * 1.28);
-    let scroll_key = key ^ 0x2f6e_9a3d_1c4b_8a57;
-    let mut scroll = ui.value_of(scroll_key).unwrap_or(0.0).max(0.0);
-    let time = ui.time();
-    let pointer = ui.input().position();
-    let primary = ui.input().button(Button::Primary);
-    let chars = ui
-        .edit()
-        .map(|edit| edit.text().chars().collect::<Vec<_>>())
-        .unwrap_or_default();
-    let spans = line_spans(&chars);
-    if response.hovered && ui.input().wheel().y != 0.0 {
-        scroll -= ui.input().wheel().y * line_height * 3.0;
-    }
-    let mut commit = false;
-    if primary.pressed {
-        if !rect.contains(pointer) {
-            commit = true;
+    let style = field.style;
+    if let Some(edit) = &runtime.edit {
+        let text = edit.text();
+        let caret = edit.caret();
+        let anchor = edit.anchor();
+        let before = prefix(text, caret);
+        let caret_x = if before.is_empty() {
+            0.0
         } else {
-            let caret = area_caret_at(
-                ui,
-                style,
-                AreaText {
-                    inner,
-                    chars: &chars,
-                    spans: &spans,
-                    line_height,
-                    scroll,
-                },
-                pointer,
-            );
-            let count = ui.edit_mut().map_or(1, |edit| edit.click(pointer, time));
-            if let Some(edit) = ui.edit_mut() {
-                match count {
-                    2 => {
-                        let range = edit.word(caret);
-                        edit.select(range, time);
+            painter.measure(before, style).x
+        };
+        let mut offset = (caret_x - inner.width() + 2.0).max(0.0);
+        if field.multiline {
+            let line_height = style.font.leading.max(style.font.size * 1.28);
+            let chars: Vec<char> = text.chars().collect();
+            let spans = line_spans(&chars);
+            let (_, line_x) = caret_xy(painter, style, &chars, &spans, caret);
+            let mut next = 0.0;
+            if line_x < next + 2.0 {
+                next = line_x - 2.0;
+            } else if line_x + 2.0 > next + inner.width() {
+                next = line_x + 2.0 - inner.width();
+            }
+            offset = next.max(0.0);
+            let selection = anchor.min(caret)..anchor.max(caret);
+            if selection.start != selection.end {
+                for (index, (start, end)) in spans.iter().enumerate() {
+                    let low = selection.start.max(*start);
+                    let high = selection.end.min(*end);
+                    if low < high {
+                        let left = line_width(painter, style, &chars, *start, low);
+                        let right = line_width(painter, style, &chars, *start, high);
+                        painter.rect(
+                            Rect::from_min_size(
+                                Vec2::new(
+                                    inner.min.x + left - offset,
+                                    inner.min.y + index as f32 * line_height,
+                                ),
+                                Vec2::new(right - left, line_height),
+                            ),
+                            Corners::ZERO,
+                            palette.accent.with_alpha(0.28),
+                        );
                     }
-                    3 => edit.select_all(time),
-                    _ => edit.place(caret, false, time),
                 }
             }
-        }
-    } else if primary.down && response.dragging {
-        let caret = area_caret_at(
-            ui,
-            style,
-            AreaText {
-                inner,
-                chars: &chars,
-                spans: &spans,
-                line_height,
-                scroll,
-            },
-            pointer,
-        );
-        if let Some(edit) = ui.edit_mut() {
-            edit.place(caret, true, time);
-        }
-    }
-    let outcome = if commit {
-        Some(Outcome::Commit)
-    } else {
-        ui.poll_edit()
-    };
-    let snapshot = ui.edit().map(|edit| {
-        (
-            edit.text().to_string(),
-            edit.caret(),
-            edit.anchor(),
-            edit.caret_visible(time),
-        )
-    });
-    if outcome.is_some() {
-        ui.end_edit();
-    }
-    let (text, caret, anchor, blinking) = snapshot?;
-    let chars = text.chars().collect::<Vec<_>>();
-    let spans = line_spans(&chars);
-    let (caret_line, caret_x, caret_y) =
-        area_caret_xy(ui, style, &chars, &spans, caret, line_height);
-    let max_scroll = (spans.len() as f32 * line_height - inner.height()).max(0.0);
-    if caret_y < scroll {
-        scroll = caret_y;
-    } else if caret_y + line_height > scroll + inner.height() {
-        scroll = caret_y + line_height - inner.height();
-    }
-    scroll = scroll.clamp(0.0, max_scroll);
-    ui.store_value(scroll_key, scroll);
-    let selection = (anchor.min(caret), anchor.max(caret));
-    let mut select_rects = Vec::new();
-    if selection.0 != selection.1 {
-        for (index, (start, end)) in spans.iter().enumerate() {
-            let low = selection.0.max(*start);
-            let high = selection.1.min(*end);
-            if low < high {
-                let x1 = line_width(ui, style, &chars, *start, low);
-                let x2 = line_width(ui, style, &chars, *start, high);
-                select_rects.push(Rect::from_min_size(
+            for (index, (start, end)) in spans.iter().enumerate() {
+                let line = chars[*start..*end].iter().collect::<String>();
+                let layout = painter.layout(&line, style, 0.0);
+                painter.text(
+                    &layout,
                     Vec2::new(
-                        inner.min.x + x1,
-                        inner.min.y - scroll + index as f32 * line_height,
+                        inner.min.x - offset,
+                        inner.min.y + index as f32 * line_height,
                     ),
-                    Vec2::new(x2 - x1, line_height),
-                ));
+                    style.color,
+                );
             }
+            let (_, caret_x) = caret_xy(painter, style, &chars, &spans, caret);
+            let caret_line = caret_line_of(&chars, caret);
+            let caret_rect = Rect::from_min_size(
+                Vec2::new(
+                    inner.min.x + caret_x - offset,
+                    inner.min.y + caret_line as f32 * line_height + 1.0,
+                ),
+                Vec2::new(1.4, (line_height - 2.0).max(1.0)),
+            );
+            if edit.caret_visible(info.time) {
+                painter.rect(caret_rect, Corners::ZERO, palette.accent);
+            }
+            painter.pop_clip(clip);
+            return Some(caret_rect);
         }
-    }
-    let layouts = spans
-        .iter()
-        .map(|(start, end)| {
-            let line = chars[*start..*end].iter().collect::<String>();
-            ui.layout_text(&line, style, 0.0)
-        })
-        .collect::<Vec<Arc<TextLayout>>>();
-    let palette = ui.theme().palette;
-    let mut painter = ui.painter();
-    let clip = painter.clip();
-    painter.push_clip(inner, Corners::all(radius));
-    for selection in select_rects {
-        painter.rect(selection, Corners::ZERO, palette.accent.with_alpha(0.28));
-    }
-    let first = (scroll / line_height).floor().max(0.0) as usize;
-    let last = ((scroll + inner.height()) / line_height).ceil() as usize + 1;
-    for (index, layout) in layouts.iter().enumerate().take(last).skip(first) {
-        painter.text(
-            layout,
-            Vec2::new(
-                inner.min.x,
-                inner.min.y - scroll + index as f32 * line_height,
-            ),
-            style.color,
+        let selection = anchor.min(caret)..anchor.max(caret);
+        if selection.start != selection.end {
+            let left = text_width(painter, style, prefix(text, selection.start));
+            let right = text_width(painter, style, prefix(text, selection.end));
+            painter.rect(
+                Rect::from_min_size(
+                    Vec2::new(inner.min.x + left - offset, inner.min.y + 2.0),
+                    Vec2::new(right - left, inner.height() - 4.0),
+                ),
+                Corners::ZERO,
+                palette.accent.with_alpha(0.28),
+            );
+        }
+        let layout = painter.layout(text, style, 0.0);
+        let origin = Vec2::new(
+            inner.min.x - offset,
+            inner.min.y + (inner.height() - layout.size.y) * 0.5,
         );
+        painter.text(&layout, origin, style.color);
+        let caret_rect = Rect::from_min_size(
+            Vec2::new(inner.min.x + caret_x - offset, inner.min.y + 2.0),
+            Vec2::new(1.4, inner.height() - 4.0),
+        );
+        if edit.caret_visible(info.time) {
+            painter.rect(caret_rect, Corners::ZERO, palette.accent);
+        }
+        painter.pop_clip(clip);
+        Some(caret_rect)
+    } else {
+        let text = &field.value;
+        let layout = painter.layout(text, style, inner.width());
+        let origin = Vec2::new(
+            inner.min.x,
+            inner.min.y + (inner.height() - layout.size.y) * 0.5,
+        );
+        painter.text(&layout, origin, style.color);
+        painter.pop_clip(clip);
+        None
     }
-    let caret_rect = Rect::from_min_size(
-        Vec2::new(
-            inner.min.x + caret_x,
-            inner.min.y - scroll + caret_line as f32 * line_height + 1.0,
-        ),
-        Vec2::new(1.4, (line_height - 2.0).max(1.0)),
-    );
-    if blinking {
-        painter.rect(caret_rect, Corners::ZERO, palette.accent);
-    }
-    painter.pop_clip(clip);
-    ui.set_edit_caret(caret_rect);
-    outcome.map(|outcome| (outcome, text))
+}
+
+struct RuntimeHover {
+    hover: f32,
+    press: f32,
 }
 
 fn line_spans(chars: &[char]) -> Vec<(usize, usize)> {
@@ -388,24 +241,23 @@ fn line_spans(chars: &[char]) -> Vec<(usize, usize)> {
     spans
 }
 
-fn line_width(ui: &mut Ui, style: TextStyle, chars: &[char], start: usize, end: usize) -> f32 {
-    if start >= end {
-        return 0.0;
-    }
-    let line = chars[start..end].iter().collect::<String>();
-    ui.measure_text(&line, style).x
+fn caret_line_of(chars: &[char], caret: usize) -> usize {
+    chars
+        .iter()
+        .take(caret.min(chars.len()))
+        .filter(|c| **c == '\n')
+        .count()
 }
 
-fn area_caret_xy(
-    ui: &mut Ui,
+fn caret_xy(
+    painter: &mut Painter,
     style: TextStyle,
     chars: &[char],
     spans: &[(usize, usize)],
     caret: usize,
-    line_height: f32,
-) -> (usize, f32, f32) {
+) -> (usize, f32) {
     let caret = caret.min(chars.len());
-    let mut line = spans.len() - 1;
+    let mut line = spans.len().saturating_sub(1);
     for (index, (_, end)) in spans.iter().enumerate() {
         if caret <= *end {
             line = index;
@@ -413,61 +265,30 @@ fn area_caret_xy(
         }
     }
     let start = spans[line].0;
-    let x = line_width(ui, style, chars, start, caret);
-    (line, x, line as f32 * line_height)
+    let x = line_width(painter, style, chars, start, caret);
+    (line, x)
 }
 
-struct AreaText<'a> {
-    inner: Rect,
-    chars: &'a [char],
-    spans: &'a [(usize, usize)],
-    line_height: f32,
-    scroll: f32,
-}
-
-fn area_caret_at(ui: &mut Ui, style: TextStyle, area: AreaText<'_>, point: Vec2) -> usize {
-    let line = (((point.y - area.inner.min.y + area.scroll) / area.line_height).floor() as isize)
-        .clamp(0, area.spans.len() as isize - 1) as usize;
-    let (start, end) = area.spans[line];
-    let x = point.x - area.inner.min.x;
-    let mut best = start;
-    let mut distance = f32::INFINITY;
-    for column in 0..=end - start {
-        let width = line_width(ui, style, area.chars, start, start + column);
-        let candidate = (width - x).abs();
-        if candidate < distance {
-            distance = candidate;
-            best = start + column;
-        }
-    }
-    best
-}
-
-fn caret_at(ui: &mut Ui, style: TextStyle, rect: Rect, offset: f32, x: f32) -> usize {
-    let Some(edit) = ui.edit() else {
-        return 0;
-    };
-    let text = edit.text().to_string();
-    let inner = rect.shrink2(Vec2::new(FIELD_PAD, 3.0));
-    let x = x - inner.min.x + offset;
-    let mut best = 0usize;
-    let mut distance = f32::INFINITY;
-    for index in 0..=text.chars().count() {
-        let width = text_width(ui, style, prefix(&text, index));
-        let candidate = (width - x).abs();
-        if candidate < distance {
-            distance = candidate;
-            best = index;
-        }
-    }
-    best
-}
-
-fn text_width(ui: &mut Ui, style: TextStyle, text: &str) -> f32 {
-    if text.is_empty() {
+fn line_width(
+    painter: &mut Painter,
+    style: TextStyle,
+    chars: &[char],
+    start: usize,
+    end: usize,
+) -> f32 {
+    if start >= end {
         return 0.0;
     }
-    ui.measure_text(text, style).x
+    let line = chars[start..end].iter().collect::<String>();
+    painter.measure(&line, style).x
+}
+
+fn text_width(painter: &mut Painter, style: TextStyle, text: &str) -> f32 {
+    if text.is_empty() {
+        0.0
+    } else {
+        painter.measure(text, style).x
+    }
 }
 
 fn prefix(text: &str, index: usize) -> &str {

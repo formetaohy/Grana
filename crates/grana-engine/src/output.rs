@@ -169,12 +169,12 @@ impl Export {
         (self.frame as u32, self.poses.len() as u32)
     }
 
-    pub fn render(
+    pub fn render<A: Clone>(
         &mut self,
         renderer: &mut Renderer,
         device: &Device,
         queue: &Queue,
-        ui: &mut Ui,
+        ui: &mut Ui<A>,
         scene: &Scene,
     ) -> Outcome {
         let pose = self.poses[self.frame];
@@ -225,11 +225,11 @@ impl Export {
         }
     }
 
-    fn store(
+    fn store<A: Clone>(
         &mut self,
         device: &Device,
         queue: &Queue,
-        ui: &mut Ui,
+        ui: &mut Ui<A>,
         scene: &Scene,
         pose: Pose,
     ) -> Result<Option<PathBuf>, String> {
@@ -270,11 +270,11 @@ impl Export {
         sink.finish().map(Some)
     }
 
-    fn capture(
+    fn capture<A: Clone>(
         &mut self,
         device: &Device,
         queue: &Queue,
-        ui: &mut Ui,
+        ui: &mut Ui<A>,
         instances: &[grana_ui::Instance],
     ) -> Result<Vec<u8>, String> {
         let size = self.panes.size;

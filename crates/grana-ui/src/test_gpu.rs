@@ -1,8 +1,8 @@
 use std::ops::Deref;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use grana_gpu::{HEADLESS_FORMAT, Headless};
-use wgpu::{Device, Queue, TextureFormat};
+use grana_gpu::Headless;
+use wgpu::{Device, Queue};
 
 static SHARED: OnceLock<Option<(Device, Queue)>> = OnceLock::new();
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -37,8 +37,4 @@ pub(crate) fn gpu() -> (TestGpu, Queue) {
         },
         queue,
     )
-}
-
-pub(crate) fn format() -> TextureFormat {
-    HEADLESS_FORMAT
 }

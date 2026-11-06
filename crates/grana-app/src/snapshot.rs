@@ -71,7 +71,7 @@ impl Snapshotter for Snapshot {
             Some(view) => (view.camera, view.section),
             None => fitted(scene, &panes),
         };
-        let mut ui = Ui::new(&gpu.device, &gpu.queue, gpu.format());
+        let mut ui: Ui<()> = Ui::new(&gpu.device, &gpu.queue, gpu.format());
         ui.resize(panes.size);
         engine.set_dataset(&gpu.device, scene.dataset.pyramid());
         engine.start_export(

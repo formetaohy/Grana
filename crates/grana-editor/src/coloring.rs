@@ -1,22 +1,22 @@
-use grana_display::Palette;
-use grana_measure::Unit;
-use grana_scene::Coloring;
-use grana_ui::{Align, Block, Color, Role, Ui};
+use grana_display::{Coloring, Extent, Palette};
+use grana_scene::{ObjectColor, ObjectSetId};
+use grana_session::Command;
+use grana_ui::{Align, BuildContext, Color, Element, Length, Level, Role, TextStyle};
 
-use crate::panel::{form_combo, form_row};
-use crate::widget;
-use grana_figure::value;
+use crate::message::Message;
 
-pub fn edit<M: Copy + PartialEq>(
-    ui: &mut Ui,
+pub fn edit<'a>(
+    ctx: &mut BuildContext<'_, Message>,
     salt: &str,
-    coloring: &mut Coloring<M>,
-    measurements: &[(M, String)],
-    extent: Option<(f32, f32)>,
-    describe: impl Fn(M) -> (Unit, u8),
-) -> bool {
-    let mut changed = false;
-    ui.push_id(salt);
+    set: ObjectSetId,
+    coloring: &Coloring<ObjectColor>,
+    measurements: &[(ObjectColor, String)],
+    extent: Option<Extent>,
+    width: f32,
+) -> Vec<Element<'a, Message>> {
+    let theme = *ctx.theme();
+    let base = coloring.clone();
+    let mut children = Vec::new();
     let mut options = vec![(None, "Uniform".to_string())];
     options.extend(
         measurements
@@ -24,44 +24,67 @@ pub fn edit<M: Copy + PartialEq>(
             .map(|(metric, label)| (Some(*metric), label.clone())),
     );
     let current = coloring.metric();
-    if let Some(chosen) = form_combo(ui, "metric", "Color by", &options, Some(current))
-        && chosen != current
-        && coloring.set_metric(chosen)
-    {
-        if chosen.is_some() {
-            coloring.set_manual(None);
-        }
-        changed = true;
-    }
-    let Some(metric) = coloring.metric() else {
-        ui.pop_id();
-        return changed;
-    };
-    let (unit, decimals) = describe(metric);
-    form_row(ui, "Palette", |ui| {
-        ui.row(Block::row().gaps(8.0).align(Align::Center), |ui| {
-            let palettes = Palette::ALL
-                .iter()
-                .map(|palette| (*palette, palette.name().to_string()))
-                .collect::<Vec<_>>();
-            let combo_w = (ui.available().x - 64.0).max(88.0);
-            if let Some(chosen) = grana_ui::popover::combo(
-                ui,
-                "palette",
-                combo_w,
-                &palettes,
-                Some(coloring.palette()),
-            ) && chosen != coloring.palette()
-            {
-                coloring.set_palette(chosen);
-                changed = true;
+    children.push(crate::inspector::form_combo(
+        ctx,
+        &format!("{salt}.metric"),
+        "Color by",
+        &options,
+        Some(current),
+        width - crate::panel::FORM_LABEL,
+        {
+            let base = base.clone();
+            move |chosen: Option<ObjectColor>| {
+                if chosen == current {
+                    return Message::Noop;
+                }
+                let mut next = base.clone();
+                next.set_metric(chosen);
+                if chosen.is_some() {
+                    next.set_manual(None);
+                }
+                apply(set, next)
             }
-            if let Some(reversed) = widget::checkbox(ui, "reverse", "Rev", coloring.reversed()) {
-                coloring.set_reversed(reversed);
-                changed = true;
+        },
+    ));
+    let Some(metric) = current else {
+        return children;
+    };
+    let palettes = Palette::ALL
+        .iter()
+        .map(|palette| (*palette, palette.name().to_string()))
+        .collect::<Vec<_>>();
+    let combo_width = (width - crate::panel::FORM_LABEL - 64.0).max(88.0);
+    let palette_combo = crate::inspector::combo(
+        ctx,
+        &format!("{salt}.palette"),
+        Length::Fixed(combo_width),
+        combo_width,
+        &palettes,
+        Some(coloring.palette()),
+        {
+            let base = base.clone();
+            move |chosen: Palette| {
+                let mut next = base.clone();
+                next.set_palette(chosen);
+                apply(set, next)
+            }
+        },
+    );
+    let reverse = grana_ui::widget::checkbox(&theme, "Rev", coloring.reversed())
+        .named(&format!("{salt}.reverse"))
+        .on_toggle(coloring.reversed(), {
+            let base = base.clone();
+            move |value| {
+                let mut next = base.clone();
+                next.set_reversed(value);
+                apply(set, next)
             }
         });
-    });
+    let palette_row = grana_ui::row()
+        .gap(8.0)
+        .align(Align::Center)
+        .children([palette_combo, reverse]);
+    children.push(crate::view::form_row(ctx, "Palette", palette_row));
     let samples = 64;
     let colors = (0..samples)
         .map(|index| {
@@ -75,64 +98,93 @@ pub fn edit<M: Copy + PartialEq>(
             Color::rgb(red, green, blue)
         })
         .collect::<Vec<_>>();
-    widget::gradient(ui, &colors, 10.0);
-    changed |= range(ui, coloring, extent, unit, decimals);
-    ui.pop_id();
-    changed
+    children.push(grana_ui::widget::gradient_bar(&colors, 10.0));
+    children.extend(range(ctx, salt, set, coloring, extent, metric, width));
+    children
 }
 
-fn range<M: Copy + PartialEq>(
-    ui: &mut Ui,
-    coloring: &mut Coloring<M>,
-    extent: Option<(f32, f32)>,
-    unit: Unit,
-    decimals: u8,
-) -> bool {
-    let mut changed = false;
+fn range<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    salt: &str,
+    set: ObjectSetId,
+    coloring: &Coloring<ObjectColor>,
+    extent: Option<Extent>,
+    metric: ObjectColor,
+    width: f32,
+) -> Vec<Element<'a, Message>> {
+    let theme = *ctx.theme();
+    let palette = theme.palette;
+    let base = coloring.clone();
+    let unit = metric.unit();
+    let decimals = metric.decimals();
+    let mut children = Vec::new();
     match (coloring.manual(), extent) {
         (Some((minimum, maximum)), _) => {
             let speed = ((maximum - minimum).abs() / 100.0).max(1.0e-6);
-            let mut low = minimum;
-            let mut high = maximum;
-            form_row(ui, "Range", |ui| {
-                ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
-                    if let Some(value) =
-                        widget::drag_value(ui, "low", low, speed, decimals as usize)
-                    {
-                        low = value;
-                    }
-                    if let Some(value) =
-                        widget::drag_value(ui, "high", high, speed, decimals as usize)
-                    {
-                        high = value;
-                    }
-                    if widget::button(ui, "auto", "Auto", Role::Quiet) {
-                        coloring.set_manual(None);
-                        changed = true;
+            let low = grana_ui::widget::drag_value(&theme, minimum, decimals as usize)
+                .named(&format!("{salt}.range.low"))
+                .on_drag_value(minimum, speed, {
+                    let base = base.clone();
+                    move |value| {
+                        let mut next = base.clone();
+                        next.set_manual(Some((value, maximum)));
+                        apply(set, next)
                     }
                 });
+            let high = grana_ui::widget::drag_value(&theme, maximum, decimals as usize)
+                .named(&format!("{salt}.range.high"))
+                .on_drag_value(maximum, speed, {
+                    let base = base.clone();
+                    move |value| {
+                        let mut next = base.clone();
+                        next.set_manual(Some((value, minimum)));
+                        apply(set, next)
+                    }
+                });
+            let auto = crate::view::button(ctx, "Auto", Role::Quiet).press({
+                let mut next = base.clone();
+                next.set_manual(None);
+                apply(set, next)
             });
-            if low != minimum || high != maximum {
-                coloring.set_manual(Some((low, high)));
-                changed = true;
-            }
+            let row = grana_ui::row()
+                .gap(6.0)
+                .align(Align::Center)
+                .children([low, high, auto]);
+            children.push(crate::view::form_row(ctx, "Range", row));
         }
         (None, Some((minimum, maximum))) => {
             let text = format!(
                 "Auto: {} – {}",
-                value(minimum, unit, decimals),
-                value(maximum, unit, decimals)
+                grana_figure::value(minimum, unit, decimals),
+                grana_figure::value(maximum, unit, decimals)
             );
-            ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
-                widget::caption(ui, &text);
-                ui.space((ui.available().x - 76.0).max(0.0));
-                if widget::button(ui, "fix", "Fix Range", Role::Quiet) {
-                    coloring.set_manual(Some((minimum, maximum)));
-                    changed = true;
-                }
+            let style = TextStyle::new(theme.font(Level::Caption), palette.text_tertiary);
+            let inset = (theme.metrics.control_height * 0.5).round() - 3.0;
+            let button =
+                ctx.measure(
+                    "Fix Range",
+                    TextStyle::new(theme.button_font(), palette.text_primary),
+                )
+                .x + inset * 2.0;
+            let caption = (width - crate::panel::FORM_LABEL - 6.0 - button - 2.0).max(40.0);
+            let label = grana_ui::canvas(Length::Fixed(caption), 18.0, 0, move |painter, info| {
+                painter.text_in(info.rect, &text, style, Align::Center);
             });
+            let fix = crate::view::button(ctx, "Fix Range", Role::Quiet).press({
+                let mut next = base.clone();
+                next.set_manual(Some((minimum, maximum)));
+                apply(set, next)
+            });
+            children.push(grana_ui::row().gap(6.0).align(Align::Center).children([
+                crate::inspector::centered(theme.metrics.control_height, label),
+                fix,
+            ]));
         }
-        (None, None) => widget::weak(ui, "No measured values to map yet."),
+        (None, None) => children.push(crate::view::weak(ctx, "No measured values to map yet.")),
     }
-    changed
+    children
+}
+
+fn apply(set: ObjectSetId, coloring: Coloring<ObjectColor>) -> Message {
+    Message::Command(Command::SetObjectColoring { set, coloring })
 }

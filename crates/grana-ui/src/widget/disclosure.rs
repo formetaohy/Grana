@@ -1,68 +1,69 @@
-use glam::Vec2;
-
+use crate::element::{Content, DisclosureContent, Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
-use crate::motion::Motion;
+use crate::node::Runtime;
+use crate::paint::Painter;
 use crate::text::{Align, TextStyle};
-use crate::theme::Level;
-use crate::ui::{Block, Ui};
+use crate::theme::Theme;
 
-pub fn disclosure(
-    ui: &mut Ui,
-    id: &str,
-    title: &str,
-    open: bool,
-    content: impl FnOnce(&mut Ui),
-) -> bool {
-    let key = ui.id(id);
-    let palette = ui.theme().palette;
-    let header = ui.allocate_full(26.0);
-    let mut response = ui.interact(key, header);
-    let corners = Corners::all(8.0);
-    if ui.focusable(key, header, corners) && ui.activated(key) {
-        response.clicked = true;
-    }
-    let next = if response.clicked { !open } else { open };
-    let arrow = ui.animate(
-        key,
-        if open { 1.0 } else { 0.0 },
-        Motion::response(0.32, 0.18),
-    );
-    let font = ui.theme().font(Level::Callout).medium();
-    let hover = ui.animate(
-        key ^ 0x31,
-        if response.hovered { 1.0 } else { 0.0 },
-        Motion::quick(),
-    );
-    let color = palette.text_secondary.lerp(palette.text_primary, hover);
-    let style = TextStyle::new(font, color);
-    {
-        let mut painter = ui.painter();
-        if hover > 0.01 {
-            painter.rect(
-                header.expand(2.0),
-                corners,
-                palette.material_hover.amplify(0.45 * hover),
-            );
-        }
-        painter.text_in(
-            Rect::from_min_max(header.min, Vec2::new(header.max.x - 18.0, header.max.y)),
-            title,
-            style,
-            Align::Center,
-        );
-        let centre = Vec2::new(header.max.x - 6.0, header.center().y);
-        let tint = palette.text_tertiary.lerp(palette.text_secondary, hover);
-        crate::icon::chevron(
-            &mut painter,
-            centre,
-            8.0,
-            std::f32::consts::FRAC_PI_2 * arrow,
-            tint,
-            1.5,
+use super::PaintInfo;
+
+pub fn disclosure<'a, A>(theme: &Theme, title: &str, open: bool) -> Element<'a, A> {
+    Element::new(Layout {
+        flow: crate::element::Flow::Column,
+        size: Size::new(Length::Fill, Length::Auto),
+        gap: 6.0,
+        ..Layout::column()
+    })
+    .with_content(Content::Disclosure(DisclosureContent {
+        title: title.to_string(),
+        open,
+        font: theme.font(crate::theme::Level::Callout).medium(),
+    }))
+    .focus_ring(Corners::all(8.0))
+    .cursor(crate::input::Cursor::Pointing)
+}
+
+pub(super) fn paint_disclosure(
+    disclosure: &DisclosureContent,
+    runtime: &Runtime,
+    painter: &mut Painter,
+    info: &PaintInfo<'_>,
+) {
+    let rect = info.rect;
+    let header = Rect::from_min_size(rect.min, glam::Vec2::new(rect.width(), 26.0));
+    let palette = info.theme.palette;
+    if info.hover > 0.01 {
+        painter.rect(
+            header.expand(2.0),
+            Corners::all(8.0),
+            palette.material_hover.amplify(0.45 * info.hover),
         );
     }
-    if next {
-        ui.column(Block::column().gaps(6.0), content);
-    }
-    next
+    let style = TextStyle::new(
+        disclosure.font,
+        palette
+            .text_secondary
+            .lerp(palette.text_primary, info.hover),
+    );
+    painter.text_in(
+        Rect::from_min_max(
+            header.min,
+            glam::Vec2::new(header.max.x - 18.0, header.max.y),
+        ),
+        &disclosure.title,
+        style,
+        Align::Center,
+    );
+    let centre = glam::Vec2::new(header.max.x - 6.0, header.center().y);
+    let tint = palette
+        .text_tertiary
+        .lerp(palette.text_secondary, info.hover);
+    crate::icon::chevron(
+        painter,
+        centre,
+        8.0,
+        std::f32::consts::FRAC_PI_2 * runtime.value.value,
+        tint,
+        1.5,
+    );
 }

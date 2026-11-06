@@ -1,211 +1,221 @@
 use glam::Vec2;
 
-use crate::color::Color;
+use crate::element::{ButtonContent, Content, Element, IconButtonContent, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
 use crate::glass::GlassStyle;
 use crate::icon::{self, Icon};
-use crate::motion::Motion;
+use crate::node::Runtime;
+use crate::paint::Painter;
+use crate::style::State;
 use crate::text::{Align, TextStyle};
-use crate::theme::Role;
-use crate::ui::{GlassGroup, Length, Response, Ui};
+use crate::theme::{Role, Theme};
 
-use super::{button_font, padding, pressed_grow};
+use super::{PaintInfo, padding, press_grow};
 
-pub fn button(ui: &mut Ui, id: &str, label: &str, role: Role) -> bool {
-    button_with(ui, id, label, role, Length::Auto).clicked
+pub fn button<'a, A>(theme: &Theme, label: &str, role: Role) -> Element<'a, A> {
+    button_width(theme, label, role, Length::Auto)
 }
 
-pub fn button_with(ui: &mut Ui, id: &str, label: &str, role: Role, width: Length) -> Response {
-    let key = ui.id(id);
-    let metrics = ui.theme().metrics;
-    let font = button_font(ui);
-    let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE));
-    let inset = padding(ui);
-    let natural = measured.x + inset * 2.0;
-    let width = match width {
-        Length::Auto => natural,
-        Length::Fill => ui.available().x,
-        Length::Fixed(value) => value,
-        Length::Minimum(minimum) => natural.max(minimum),
-        Length::Maximum(maximum) => natural.min(maximum),
-    };
-    let rect = ui.allocate(Vec2::new(width, metrics.control_height));
-    let mut response = ui.interact(key, rect);
-    if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
-        response.clicked = true;
-    }
-    let press = ui.animate(
-        key ^ 0x51,
-        if response.active { 1.0 } else { 0.0 },
-        if response.active {
-            Motion::response(0.22, 0.0)
-        } else {
-            Motion::bouncy()
-        },
-    );
-    let surface = ui.surface(key, role, &response);
-    let body = rect.expand(pressed_grow(press));
-    let mut painter = ui.painter();
-    painter.outlined(
-        body,
-        Corners::capsule(),
-        surface.fill,
-        surface.border,
-        surface.shadow,
-    );
-    painter.text_in(
-        body,
-        label,
-        TextStyle::new(font, surface.text).aligned(Align::Center),
-        Align::Center,
-    );
-    response
+pub fn button_width<'a, A>(
+    theme: &Theme,
+    label: &str,
+    role: Role,
+    width: Length,
+) -> Element<'a, A> {
+    Element::new(Layout {
+        size: Size::new(width, Length::Fixed(theme.metrics.control_height)),
+        ..Layout::row()
+    })
+    .with_content(Content::Button(ButtonContent {
+        label: label.to_string(),
+        role,
+        font: theme.button_font(),
+        symbol: None,
+        style: None,
+        inset: padding(theme),
+        width,
+        height: theme.metrics.control_height,
+    }))
+    .focus_ring(Corners::capsule())
+    .cursor(crate::input::Cursor::Pointing)
 }
 
-pub fn action_button(ui: &mut Ui, id: &str, symbol: Icon, label: &str, role: Role) -> Response {
-    let key = ui.id(id);
-    let metrics = ui.theme().metrics;
-    let font = button_font(ui);
-    let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE));
-    let inset = padding(ui);
-    let width = measured.x + inset * 2.0 + 17.0;
-    let rect = ui.allocate(Vec2::new(width, metrics.control_height));
-    let mut response = ui.interact(key, rect);
-    if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
-        response.clicked = true;
-    }
-    let press = ui.animate(
-        key ^ 0x61,
-        if response.active { 1.0 } else { 0.0 },
-        if response.active {
-            Motion::response(0.22, 0.0)
-        } else {
-            Motion::bouncy()
-        },
-    );
-    let surface = ui.surface(key, role, &response);
-    let body = rect.expand(pressed_grow(press));
-    let glyph = Rect::from_center_size(
-        Vec2::new(body.min.x + inset + 4.0, body.center().y),
-        Vec2::splat(14.0),
-    );
-    let mut painter = ui.painter();
-    painter.outlined(
-        body,
-        Corners::capsule(),
-        surface.fill,
-        surface.border,
-        surface.shadow,
-    );
-    icon::paint(
-        symbol,
-        &mut painter,
-        glyph.center(),
-        14.0,
-        surface.text,
-        1.6,
-    );
-    painter.text_in(
-        Rect::from_min_max(
-            Vec2::new(glyph.max.x + 7.0, body.min.y),
-            Vec2::new(body.max.x - inset, body.max.y),
-        ),
-        label,
-        TextStyle::new(font, surface.text).aligned(Align::Start),
-        Align::Center,
-    );
-    response
-}
-
-pub fn text_button(ui: &mut Ui, id: &str, label: &str) -> bool {
-    button(ui, id, label, Role::Quiet)
-}
-
-pub fn button_with_enabled(
-    ui: &mut Ui,
-    id: &str,
+pub fn button_enabled<'a, A>(
+    theme: &Theme,
     label: &str,
     role: Role,
     width: Length,
     enabled: bool,
-) -> Response {
+) -> Element<'a, A> {
+    let element = button_width(theme, label, role, width);
     if enabled {
-        return button_with(ui, id, label, role, width);
+        element
+    } else {
+        element.enabled(false).press_disabled()
     }
-    let metrics = ui.theme().metrics;
-    let font = button_font(ui);
-    let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE));
-    let inset = padding(ui);
-    let natural = measured.x + inset * 2.0;
-    let width = match width {
+}
+
+pub fn action_button<'a, A>(
+    theme: &Theme,
+    symbol: Icon,
+    label: &str,
+    role: Role,
+) -> Element<'a, A> {
+    let mut element = button_width(theme, label, role, Length::Auto);
+    if let Content::Button(button) = &mut element.content {
+        button.symbol = Some(symbol);
+        button.inset += 2.0;
+    }
+    element
+}
+
+pub fn glass_button<'a, A>(theme: &Theme, label: &str, style: GlassStyle) -> Element<'a, A> {
+    let mut element = glass_button_core(theme, label, style);
+    if let Content::Button(button) = &mut element.content {
+        button.symbol = None;
+    }
+    element
+}
+
+pub fn glass_action_button<'a, A>(
+    theme: &Theme,
+    symbol: Icon,
+    label: &str,
+    style: GlassStyle,
+) -> Element<'a, A> {
+    let mut element = glass_button_core(theme, label, style);
+    if let Content::Button(button) = &mut element.content {
+        button.symbol = Some(symbol);
+    }
+    element
+}
+
+fn glass_button_core<'a, A>(theme: &Theme, label: &str, style: GlassStyle) -> Element<'a, A> {
+    let height = theme.metrics.control_height + 8.0;
+    Element::new(Layout {
+        size: Size::new(Length::Auto, Length::Fixed(height)),
+        ..Layout::row()
+    })
+    .with_content(Content::Button(ButtonContent {
+        label: label.to_string(),
+        role: Role::Control,
+        font: theme.button_font(),
+        symbol: None,
+        style: Some(style.interactive()),
+        inset: padding(theme) + 2.0,
+        width: Length::Auto,
+        height,
+    }))
+    .glass(style.interactive())
+    .focus_ring(Corners::capsule())
+    .cursor(crate::input::Cursor::Pointing)
+}
+
+pub fn icon_button<'a, A>(
+    theme: &Theme,
+    symbol: Icon,
+    size: f32,
+    role: Role,
+    tooltip: &str,
+) -> Element<'a, A> {
+    let _ = theme;
+    Element::new(Layout {
+        size: Size::new(Length::Fixed(size), Length::Fixed(size)),
+        ..Layout::row()
+    })
+    .with_content(Content::IconButton(IconButtonContent {
+        symbol,
+        size,
+        role,
+        style: None,
+    }))
+    .tooltip(tooltip)
+    .focus_ring(Corners::capsule())
+    .cursor(crate::input::Cursor::Pointing)
+}
+
+pub fn icon_button_disabled<'a, A>(
+    theme: &Theme,
+    symbol: Icon,
+    size: f32,
+    role: Role,
+) -> Element<'a, A> {
+    icon_button(theme, symbol, size, role, "")
+        .enabled(false)
+        .press_disabled()
+}
+
+pub fn glass_icon_button<'a, A>(
+    theme: &Theme,
+    group: Option<crate::element::Key>,
+    symbol: Icon,
+    size: f32,
+    style: GlassStyle,
+    tooltip: &str,
+) -> Element<'a, A> {
+    let mut element = icon_button(theme, symbol, size, Role::Control, tooltip);
+    if let Content::IconButton(icon) = &mut element.content {
+        icon.style = Some(style.interactive());
+    }
+    let element = element.glass(style.interactive());
+    match group {
+        Some(group) => element.glass_group(group),
+        None => element,
+    }
+}
+
+pub fn glass_icon_button_disabled<'a, A>(
+    theme: &Theme,
+    group: Option<crate::element::Key>,
+    symbol: Icon,
+    size: f32,
+    style: GlassStyle,
+) -> Element<'a, A> {
+    let mut element = icon_button_disabled(theme, symbol, size, Role::Control);
+    if let Content::IconButton(icon) = &mut element.content {
+        icon.style = Some(style);
+    }
+    let element = element.glass(style);
+    match group {
+        Some(group) => element.glass_group(group),
+        None => element,
+    }
+}
+pub(super) fn measure_button(
+    button: &ButtonContent,
+    available: Vec2,
+    text: &mut crate::text::Text,
+    theme: &Theme,
+) -> Vec2 {
+    let _ = theme;
+    let measured = text
+        .layout(&button.label, button.font, 0.0, false, false, Align::Start)
+        .size
+        .x;
+    let extra = if button.symbol.is_some() { 17.0 } else { 0.0 };
+    let natural = measured + button.inset * 2.0 + extra;
+    let width = match button.width {
         Length::Auto => natural,
-        Length::Fill => ui.available().x,
+        Length::Fill => available.x,
         Length::Fixed(value) => value,
         Length::Minimum(minimum) => natural.max(minimum),
         Length::Maximum(maximum) => natural.min(maximum),
     };
-    let rect = ui.allocate(Vec2::new(width, metrics.control_height));
-    let surface = ui.surface_disabled(role);
-    let mut painter = ui.painter();
-    painter.outlined(
-        rect,
-        Corners::capsule(),
-        surface.fill,
-        surface.border,
-        surface.shadow,
-    );
-    painter.text_in(
-        rect,
-        label,
-        TextStyle::new(font, surface.text).aligned(Align::Center),
-        Align::Center,
-    );
-    Response {
-        rect,
-        ..Response::default()
-    }
+    Vec2::new(width, button.height)
 }
 
-pub fn icon_button(
-    ui: &mut Ui,
-    id: &str,
-    symbol: Icon,
-    size: f32,
-    role: Role,
-    tooltip: &str,
-) -> bool {
-    icon_button_response(ui, id, symbol, size, role, tooltip).clicked
-}
-
-pub fn icon_button_response(
-    ui: &mut Ui,
-    id: &str,
-    symbol: Icon,
-    size: f32,
-    role: Role,
-    tooltip: &str,
-) -> Response {
-    let key = ui.id(id);
-    let rect = ui.allocate(Vec2::splat(size));
-    let mut response = ui.interact(key, rect);
-    if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
-        response.clicked = true;
-    }
-    if response.hovered {
-        ui.tooltip(tooltip);
-    }
-    let press = ui.animate(
-        key ^ 0x71,
-        if response.active { 1.0 } else { 0.0 },
-        if response.active {
-            Motion::response(0.22, 0.0)
-        } else {
-            Motion::bouncy()
-        },
-    );
-    let surface = ui.surface(key, role, &response);
-    let body = rect.expand(pressed_grow(press));
-    let mut painter = ui.painter();
+pub(super) fn paint_button(
+    button: &ButtonContent,
+    runtime: &Runtime,
+    painter: &mut Painter,
+    info: &PaintInfo<'_>,
+) {
+    let surface = surface(button.role, runtime, info);
+    let body = if button.style.is_some() {
+        info.glass.unwrap_or(info.rect)
+    } else {
+        info.rect.expand(press_grow(runtime.press.value))
+    };
     painter.outlined(
         body,
         Corners::capsule(),
@@ -213,271 +223,70 @@ pub fn icon_button_response(
         surface.border,
         surface.shadow,
     );
-    icon::paint(
-        symbol,
-        &mut painter,
-        body.center(),
-        (size * 0.50).clamp(11.0, 17.0),
-        surface.text,
-        1.6,
-    );
-    response
+    let style = TextStyle::new(button.font, surface.text);
+    match button.symbol {
+        Some(symbol) => {
+            let glyph = Vec2::new(body.min.x + button.inset + 4.0, body.center().y);
+            icon::paint(symbol, painter, glyph, 14.0, surface.text, 1.6);
+            painter.text_in(
+                Rect::from_min_max(
+                    Vec2::new(glyph.x + 7.0, body.min.y),
+                    Vec2::new(body.max.x - button.inset, body.max.y),
+                ),
+                &button.label,
+                style.aligned(Align::Start),
+                Align::Center,
+            );
+        }
+        None => {
+            painter.text_in(
+                body,
+                &button.label,
+                style.aligned(Align::Center),
+                Align::Center,
+            );
+        }
+    }
 }
 
-pub fn icon_button_enabled(
-    ui: &mut Ui,
-    id: &str,
-    symbol: Icon,
-    size: f32,
-    role: Role,
-    tooltip: &str,
-    enabled: bool,
-) -> bool {
-    if !enabled {
-        let rect = ui.allocate(Vec2::splat(size));
-        let surface = ui.surface_disabled(role);
-        let mut painter = ui.painter();
+pub(super) fn paint_icon_button(
+    icon_content: &IconButtonContent,
+    runtime: &Runtime,
+    painter: &mut Painter,
+    info: &PaintInfo<'_>,
+) {
+    let surface = surface(icon_content.role, runtime, info);
+    let body = if icon_content.style.is_some() {
+        info.glass.unwrap_or(info.rect)
+    } else {
+        info.rect.expand(press_grow(runtime.press.value))
+    };
+    if icon_content.style.is_none() {
         painter.outlined(
-            rect,
-            surface.corners,
+            body,
+            Corners::capsule(),
             surface.fill,
             surface.border,
             surface.shadow,
         );
-        icon::paint(
-            symbol,
-            &mut painter,
-            rect.center(),
-            (size * 0.50).clamp(11.0, 17.0),
-            surface.text,
-            1.6,
-        );
-        return false;
     }
-    icon_button_response(ui, id, symbol, size, role, tooltip).clicked
-}
-
-pub fn glass_icon_button(
-    ui: &mut Ui,
-    group: Option<GlassGroup>,
-    id: &str,
-    symbol: Icon,
-    size: f32,
-    style: GlassStyle,
-    tooltip: &str,
-) -> bool {
-    glass_icon_button_response(ui, group, id, symbol, size, style, tooltip).clicked
-}
-
-pub fn glass_icon_button_response(
-    ui: &mut Ui,
-    group: Option<GlassGroup>,
-    id: &str,
-    symbol: Icon,
-    size: f32,
-    style: GlassStyle,
-    tooltip: &str,
-) -> Response {
-    let key = ui.id(id);
-    let rect = ui.allocate(Vec2::splat(size));
-    let mut response = ui.interact(key, rect);
-    if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
-        response.clicked = true;
-    }
-    if response.hovered {
-        ui.tooltip(tooltip);
-    }
-    let mut glass_style = style.interactive();
-    if response.hovered || response.active {
-        glass_style.material.specular = (glass_style.material.specular + 0.14).min(1.0);
-        glass_style.material.rim += 0.05;
-    }
-    ui.glass_in(group, key, rect, glass_style);
-    let frame = ui.glass_frame(key).unwrap_or(rect);
-    let hover = ui.animate(
-        key ^ 0x81,
-        if response.hovered || response.active {
-            1.0
-        } else {
-            0.0
-        },
-        Motion::quick(),
-    );
-    let palette = ui.theme().palette;
-    let color = palette
-        .text_secondary
-        .lerp(palette.text_primary, 0.55 + 0.45 * hover);
-    let mut painter = ui.painter();
     icon::paint(
-        symbol,
-        &mut painter,
-        frame.center(),
-        (size * 0.50).clamp(11.0, 17.0),
-        color,
+        icon_content.symbol,
+        painter,
+        body.center(),
+        (icon_content.size * 0.50).clamp(11.0, 17.0),
+        surface.text,
         1.6,
     );
-    response
 }
 
-pub fn glass_icon_button_disabled(
-    ui: &mut Ui,
-    group: Option<GlassGroup>,
-    id: &str,
-    symbol: Icon,
-    size: f32,
-    style: GlassStyle,
-) -> Response {
-    let key = ui.id(id);
-    let rect = ui.allocate(Vec2::splat(size));
-    ui.glass_in(group, key, rect, style);
-    let frame = ui.glass_frame(key).unwrap_or(rect);
-    let color = ui.theme().palette.text_quaternary;
-    let mut painter = ui.painter();
-    icon::paint(
-        symbol,
-        &mut painter,
-        frame.center(),
-        (size * 0.50).clamp(11.0, 17.0),
-        color,
-        1.6,
-    );
-    Response {
-        rect,
-        hovered: false,
-        pressed: false,
-        active: false,
-        clicked: false,
-        dragging: false,
+fn surface(role: Role, runtime: &Runtime, info: &PaintInfo<'_>) -> crate::style::Surface {
+    if !info.enabled {
+        return info.theme.surface(role, State::Disabled);
     }
-}
-
-pub fn glass_menu_button(
-    ui: &mut Ui,
-    group: Option<GlassGroup>,
-    id: &str,
-    label: &str,
-    dirty: bool,
-    maximum: f32,
-) -> Rect {
-    let key = ui.id(id);
-    let palette = ui.theme().palette;
-    let font = ui.theme().font(crate::theme::Level::Callout).medium();
-    let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE)).x;
-    let label_width = measured.min(maximum);
-    let width = label_width + if dirty { 30.0 } else { 26.0 };
-    let rect = ui.allocate(Vec2::new(width, 34.0));
-    let mut response = ui.interact(key, rect);
-    if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
-        response.clicked = true;
-    }
-    if response.clicked {
-        ui.toggle_popup(key);
-    }
-    let active = ui.popup_open(key);
-    let hover = ui.animate(
-        key,
-        if response.hovered || active { 1.0 } else { 0.0 },
-        Motion::quick(),
-    );
-    let mut style = GlassStyle::button().interactive();
-    if response.hovered || response.active || active {
-        style.material.specular = (style.material.specular + 0.14).min(1.0);
-        style.material.rim += 0.05;
-    }
-    ui.glass_in(group, key, rect, style);
-    let frame = ui.glass_frame(key).unwrap_or(rect);
-    let mut painter = ui.painter();
-    painter.text_in(
-        Rect::from_min_max(
-            Vec2::new(frame.min.x + 11.0, frame.min.y),
-            Vec2::new(frame.min.x + 11.0 + label_width, frame.max.y),
-        ),
-        label,
-        TextStyle::new(
-            font,
-            palette.text_secondary.lerp(palette.text_primary, hover),
-        )
-        .truncating(),
-        Align::Center,
-    );
-    if dirty {
-        painter.rect(
-            Rect::from_center_size(
-                Vec2::new(frame.min.x + 16.0 + label_width, frame.center().y),
-                Vec2::splat(5.0),
-            ),
-            Corners::capsule(),
-            palette.warning,
-        );
-    }
-    icon::paint(
-        Icon::ChevronDown,
-        &mut painter,
-        Vec2::new(frame.max.x - 10.0, frame.center().y),
-        9.0,
-        palette.text_tertiary,
-        1.5,
-    );
-    rect
-}
-
-pub fn glass_button(ui: &mut Ui, id: &str, label: &str, style: GlassStyle) -> Response {
-    glass_button_core(ui, id, None, label, style)
-}
-
-pub fn glass_action_button(
-    ui: &mut Ui,
-    id: &str,
-    symbol: Icon,
-    label: &str,
-    style: GlassStyle,
-) -> Response {
-    glass_button_core(ui, id, Some(symbol), label, style)
-}
-
-fn glass_button_core(
-    ui: &mut Ui,
-    id: &str,
-    symbol: Option<Icon>,
-    label: &str,
-    style: GlassStyle,
-) -> Response {
-    let key = ui.id(id);
-    let font = button_font(ui);
-    let height = ui.theme().metrics.control_height + 8.0;
-    let measured = ui.measure_text(label, TextStyle::new(font, Color::WHITE));
-    let inset = padding(ui) + 2.0;
-    let width = measured.x + inset * 2.0 + symbol.map_or(0.0, |_| 17.0);
-    let rect = ui.allocate(Vec2::new(width, height));
-    let mut response = ui.interact(key, rect);
-    if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
-        response.clicked = true;
-    }
-    let mut glass_style = style.interactive();
-    if response.hovered || response.active {
-        glass_style.material.specular = (glass_style.material.specular + 0.14).min(1.0);
-        glass_style.material.rim += 0.05;
-    }
-    ui.glass(key, rect, glass_style);
-    let frame = ui.glass_frame(key).unwrap_or(rect);
-    let color = ui.theme().palette.text_primary;
-    let mut painter = ui.painter();
-    let text = match symbol {
-        Some(symbol) => {
-            let glyph = Vec2::new(frame.min.x + inset + 3.0, frame.center().y);
-            icon::paint(symbol, &mut painter, glyph, 14.0, color, 1.6);
-            Rect::from_min_max(
-                Vec2::new(glyph.x + 9.0, frame.min.y),
-                Vec2::new(frame.max.x - inset, frame.max.y),
-            )
-        }
-        None => frame.shrink2(Vec2::new(inset, 0.0)),
-    };
-    painter.text_in(
-        text,
-        label,
-        TextStyle::new(font, color).aligned(Align::Center),
-        Align::Center,
-    );
-    response
+    let rest = info.theme.surface(role, State::Rest);
+    let hovered = info.theme.surface(role, State::Hover);
+    let pressed = info.theme.surface(role, State::Pressed);
+    let _ = runtime;
+    rest.lerp(hovered, info.hover).lerp(pressed, info.press)
 }

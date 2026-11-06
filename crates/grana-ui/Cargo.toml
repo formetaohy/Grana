@@ -12,6 +12,7 @@ glam = { workspace = true }
 grana-glass = { workspace = true }
 grana-gpu = { workspace = true }
 grana-text = { workspace = true }
+slotmap = { workspace = true }
 wgpu = { workspace = true }
 
 

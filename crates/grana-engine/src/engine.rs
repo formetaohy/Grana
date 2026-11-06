@@ -176,11 +176,11 @@ impl Engine {
         self.output_message = message;
     }
 
-    pub fn render_export(
+    pub fn render_export<A: Clone>(
         &mut self,
         device: &Device,
         queue: &Queue,
-        ui: &mut Ui,
+        ui: &mut Ui<A>,
         scene: &Scene,
     ) -> Outcome {
         let Self {

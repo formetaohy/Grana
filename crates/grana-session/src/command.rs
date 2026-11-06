@@ -9,6 +9,7 @@ use grana_volume::{Clip, Intensity, Region};
 
 pub use grana_project::Export;
 
+#[derive(Clone)]
 pub enum Command {
     OpenDataset,
     OpenImage,
