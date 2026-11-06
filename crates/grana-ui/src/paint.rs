@@ -4,7 +4,7 @@ use glam::Vec2;
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
 use crate::style::{Border, Fill, Shadow};
-use crate::text::{Text, TextLayout, TextStyle};
+use crate::text::{Align, Text, TextLayout, TextStyle};
 
 pub const KIND_SURFACE: u32 = 0;
 pub const KIND_SHADOW: u32 = 1;
@@ -352,13 +352,7 @@ impl<'a> Painter<'a> {
         self.glyphs(&layout, position, style.color);
     }
 
-    pub fn text_in(
-        &mut self,
-        rect: Rect,
-        text: &str,
-        style: TextStyle,
-        vertical: crate::text::Align,
-    ) {
+    pub fn text_in(&mut self, rect: Rect, text: &str, style: TextStyle, vertical: Align) {
         let layout = self.text.layout(
             text,
             style.font,
@@ -368,15 +362,58 @@ impl<'a> Painter<'a> {
             style.align,
         );
         let factor = match vertical {
-            crate::text::Align::Start | crate::text::Align::Baseline => 0.0,
-            crate::text::Align::Center => 0.5,
-            crate::text::Align::End => 1.0,
+            Align::Start | Align::Baseline => 0.0,
+            Align::Center => 0.5,
+            Align::End => 1.0,
         };
         let origin = Vec2::new(
             rect.min.x,
             rect.min.y + (rect.height() - layout.size.y) * factor,
         );
+        let material_start = self.instances.material.len();
+        let ink_start = self.instances.ink.len();
         self.glyphs(&layout, origin, style.color);
+        let (instances, start) = if self.vibrancy {
+            (&mut self.instances.ink, ink_start)
+        } else {
+            (&mut self.instances.material, material_start)
+        };
+        if start >= instances.len() {
+            return;
+        }
+        let mut min = Vec2::splat(f32::INFINITY);
+        let mut max = Vec2::splat(f32::NEG_INFINITY);
+        for instance in &instances[start..] {
+            let corner = Vec2::new(instance.rect[0], instance.rect[1]);
+            let size = Vec2::new(instance.rect[2], instance.rect[3]);
+            min = min.min(corner);
+            max = max.max(corner + size);
+        }
+        let mut delta = Vec2::ZERO;
+        if matches!(style.align, Align::Center | Align::End) {
+            let target = if style.align == Align::Center {
+                rect.center().x
+            } else {
+                rect.max.x
+            };
+            let current = if style.align == Align::Center {
+                (min.x + max.x) * 0.5
+            } else {
+                max.x
+            };
+            delta.x = target - current;
+        }
+        if factor > 0.0 {
+            let target = rect.min.y + rect.height() * factor;
+            let current = min.y + (max.y - min.y) * factor;
+            delta.y = target - current;
+        }
+        let pixels_per_point = self.text.pixels_per_point();
+        delta = (delta * pixels_per_point).round() / pixels_per_point;
+        for instance in &mut instances[start..] {
+            instance.rect[0] += delta.x;
+            instance.rect[1] += delta.y;
+        }
     }
 }
 

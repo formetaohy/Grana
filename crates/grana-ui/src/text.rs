@@ -301,6 +301,10 @@ impl Text {
         }
     }
 
+    pub fn pixels_per_point(&self) -> f32 {
+        self.pixels_per_point
+    }
+
     pub fn emit(
         &mut self,
         layout: &TextLayout,
@@ -312,7 +316,7 @@ impl Text {
             return;
         }
         let pixels_per_point = self.pixels_per_point;
-        let hint = pixels_per_point < 1.5;
+        let hint = false;
         for glyph in &layout.glyphs {
             let pen_x = (origin.x + glyph.x) * pixels_per_point;
             let baseline = (origin.y + glyph.baseline) * pixels_per_point;

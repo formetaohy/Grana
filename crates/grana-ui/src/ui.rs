@@ -1502,7 +1502,7 @@ impl Ui {
         let dark = self.theme.dark;
         match self.layer {
             Layer::Content => Painter::new(&mut self.content, &mut self.text, clip, dark, false),
-            Layer::Chrome => Painter::new(&mut self.chrome, &mut self.text, clip, dark, true),
+            Layer::Chrome => Painter::new(&mut self.chrome, &mut self.text, clip, dark, false),
             Layer::Labels => Painter::new(&mut self.labels, &mut self.text, clip, dark, true),
             Layer::Popup => Painter::new(&mut self.popup, &mut self.text, clip, dark, true),
             Layer::Hud => Painter::new(&mut self.hud, &mut self.text, clip, dark, true),
@@ -1655,13 +1655,8 @@ impl Ui {
     }
 
     pub fn text_in(&mut self, rect: Rect, text: &str, style: TextStyle, vertical: Align) -> Rect {
-        let layout = self.layout_text(text, style, rect.width());
-        let origin = Vec2::new(
-            rect.min.x,
-            rect.min.y + (rect.height() - layout.size.y) * cross_factor(vertical),
-        );
         let mut painter = self.painter();
-        painter.text(&layout, origin, style.color);
+        painter.text_in(rect, text, style, vertical);
         rect
     }
 
@@ -2384,6 +2379,36 @@ mod tests {
         ui.begin(Vec2::new(400.0, 300.0), 1.0, 0.0);
         ui.root(content);
         let _ = ui.end();
+    }
+
+    #[test]
+    fn text_in_centers_the_glyph_ink() {
+        let (device, queue) = crate::test_gpu::gpu();
+        let mut ui = Ui::new(&device, &queue, crate::test_gpu::format());
+        let rect = Rect::from_min_size(Vec2::new(20.0, 20.0), Vec2::new(200.0, 40.0));
+        let style = TextStyle::new(ui.theme().font(Level::Body), crate::Color::WHITE)
+            .aligned(Align::Center);
+        frame(&mut ui, |ui| {
+            ui.text_in(rect, "Hg", style, Align::Center);
+        });
+        let glyphs = ui
+            .chrome_instances()
+            .iter()
+            .filter(|instance| instance.meta[0] == crate::paint::KIND_GLYPH);
+        let mut min = Vec2::splat(f32::INFINITY);
+        let mut max = Vec2::splat(f32::NEG_INFINITY);
+        let mut count = 0;
+        for instance in glyphs {
+            let origin = Vec2::new(instance.rect[0], instance.rect[1]);
+            let size = Vec2::new(instance.rect[2], instance.rect[3]);
+            min = min.min(origin);
+            max = max.max(origin + size);
+            count += 1;
+        }
+        assert!(count > 0, "the text emits glyphs");
+        let center = (min + max) * 0.5;
+        assert!((center.x - rect.center().x).abs() <= 1.0);
+        assert!((center.y - rect.center().y).abs() <= 1.0);
     }
 
     #[test]
