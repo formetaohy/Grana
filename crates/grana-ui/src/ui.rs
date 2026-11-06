@@ -1798,6 +1798,7 @@ impl Ui {
         };
         self.registry
             .register_wheel(key, outer, self.layer == Layer::Popup);
+        self.registry.register(key, outer, self.area().clip.rect);
         if self.registry.wheel_owner() == Some(key) {
             let wheel = match axis {
                 Axis::Column => -self.input.wheel().y,
@@ -1856,7 +1857,6 @@ impl Ui {
         if bar.0 > 0.01 && bar.1 > 0.0 {
             self.scrollbar(key, outer, axis, bar.0);
         }
-        self.registry.register(key, outer, self.area().clip.rect);
         outer
     }
 
@@ -2421,6 +2421,41 @@ mod tests {
         });
         render(&mut ui);
         assert_eq!(chosen, Some(1));
+    }
+
+    #[test]
+    fn scrolled_controls_receive_clicks() {
+        let (device, queue) = crate::test_gpu::gpu();
+        let mut ui = Ui::new(&device, &queue, crate::test_gpu::format());
+        let mut toggled = None;
+        let mut time = 0.0;
+        for step in 0..4 {
+            time += 0.1;
+            match step {
+                1 => ui
+                    .input_mut()
+                    .push(crate::input::Event::Moved(Vec2::new(21.0, 13.0))),
+                2 => {
+                    ui.input_mut()
+                        .push(crate::input::Event::Down(crate::input::Button::Primary));
+                }
+                3 => ui
+                    .input_mut()
+                    .push(crate::input::Event::Up(crate::input::Button::Primary)),
+                _ => {}
+            }
+            ui.resize([400, 300]);
+            ui.begin(Vec2::new(400.0, 300.0), 1.0, time);
+            ui.root(|ui| {
+                ui.scroll(ui.id("scroll"), Length::Fill, |ui| {
+                    if let Some(value) = crate::widget::toggle(ui, "toggle", false) {
+                        toggled = Some(value);
+                    }
+                });
+            });
+            let _ = ui.end();
+        }
+        assert_eq!(toggled, Some(true));
     }
 
     #[test]
