@@ -1,11 +1,11 @@
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
 use grana_geometry::{Bounds, PackedMesh};
+use grana_measure::{ChildField, ChildMetric, Filter, Measurement, TrackMeasurement};
 use grana_measure::{
     ColocCost, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocSeriesInfo, ColocSettings,
     ColocSignificance, ColocThresholds,
 };
-use grana_measure::{Filter, Measurement, TrackMeasurement};
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, RelationFrame,
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackNode, TrackSet,
@@ -589,6 +589,46 @@ impl Encode for ObjectColor {
                 writer.u64(target.raw());
                 writer.u8(field.index());
                 writer.i32(*shift);
+            }
+            Self::Child { target, field } => {
+                writer.u8(2);
+                writer.u64(target.raw());
+                field.encode(writer);
+            }
+        }
+    }
+}
+
+impl Encode for ChildField {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        match self {
+            Self::Count => writer.u8(0),
+            Self::Stat { metric, statistic } => {
+                writer.u8(1);
+                metric.encode(writer);
+                writer.u8(statistic.index());
+            }
+        }
+    }
+}
+
+impl Encode for ChildMetric {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        match self {
+            Self::Diameter => writer.u8(0),
+            Self::Contrast => writer.u8(1),
+            Self::Volume => writer.u8(2),
+            Self::Area => writer.u8(3),
+            Self::Sphericity => writer.u8(4),
+            Self::Voxels => writer.u8(5),
+            Self::Length => writer.u8(6),
+            Self::Branches => writer.u8(7),
+            Self::Terminals => writer.u8(8),
+            Self::Junctions => writer.u8(9),
+            Self::Nodes => writer.u8(10),
+            Self::Intensity(channel) => {
+                writer.u8(11);
+                writer.count(*channel);
             }
         }
     }

@@ -45,6 +45,7 @@ pub fn labels(scene: &Scene, time: u32) -> Vec<Label> {
             continue;
         };
         let metric = set.label_metric();
+        let values = scene.label_values(set);
         let anchors = frame.anchors();
         for (index, anchor) in anchors.into_iter().enumerate() {
             if !set.visible_object(time, index) {
@@ -59,7 +60,13 @@ pub fn labels(scene: &Scene, time: u32) -> Vec<Label> {
                 position,
                 low: bounds.min(),
                 high: bounds.max(),
-                text: text(set, frame, metric, time, index),
+                text: text(
+                    metric,
+                    values
+                        .as_ref()
+                        .and_then(|values| values.get(index).copied()),
+                    index,
+                ),
                 color: set.color(),
                 selected: scene.object_selected(set.id(), index),
             });
@@ -68,25 +75,13 @@ pub fn labels(scene: &Scene, time: u32) -> Vec<Label> {
     labels
 }
 
-fn text(
-    set: &grana_scene::ObjectSet,
-    frame: &grana_scene::ObjectFrame,
-    metric: Option<grana_scene::ObjectColor>,
-    time: u32,
-    index: usize,
-) -> String {
+fn text(metric: Option<grana_scene::ObjectColor>, value: Option<f32>, index: usize) -> String {
     let Some(metric) = metric else {
         return (index + 1).to_string();
     };
-    let relation = metric
-        .relation()
-        .and_then(|(target, shift)| set.relation(target, shift))
-        .and_then(|relation| relation.frame(time));
-    let value = metric.value(frame.objects(), relation, index);
-    if value.is_finite() {
-        crate::value(value, metric.unit(), metric.decimals())
-    } else {
-        "–".to_string()
+    match value {
+        Some(value) if value.is_finite() => crate::value(value, metric.unit(), metric.decimals()),
+        _ => "–".to_string(),
     }
 }
 

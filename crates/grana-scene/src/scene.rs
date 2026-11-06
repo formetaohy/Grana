@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_display::{Shading, TransferFunction};
+use grana_display::{Coloring, Shading, TransferFunction};
 use grana_geometry::ray_hit;
 use grana_measure::{Aggregate, Frame, Group, RelationRow, Table};
 use grana_object::{RelationFrame, TrackSet};
@@ -478,9 +478,57 @@ impl Scene {
     }
 
     pub fn set_label_metric(&mut self, id: ObjectSetId, metric: Option<ObjectColor>) -> bool {
-        self.objects
-            .get_mut(id)
-            .is_some_and(|set| set.set_label_metric(metric))
+        self.objects.set_label_metric(id, metric)
+    }
+
+    pub fn set_object_coloring(
+        &mut self,
+        id: ObjectSetId,
+        coloring: Coloring<ObjectColor>,
+    ) -> bool {
+        self.objects.set_object_coloring(id, coloring)
+    }
+
+    pub fn object_colors(&self, set: &ObjectSet) -> Option<Vec<[f32; 3]>> {
+        let metric = set.object_coloring().metric()?;
+        let extent = set.object_extent()?;
+        let values = self.objects.metric_values(set.id(), metric, self.time)?;
+        let coloring = set.object_coloring();
+        Some(
+            values
+                .iter()
+                .map(|value| {
+                    if value.is_finite() {
+                        coloring.color(extent, *value)
+                    } else {
+                        set.color()
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    pub fn label_values(&self, set: &ObjectSet) -> Option<Vec<f32>> {
+        let metric = set.label_metric()?;
+        self.objects.metric_values(set.id(), metric, self.time)
+    }
+
+    pub fn child_sets(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
+        self.objects.child_sets(id)
+    }
+
+    pub fn table_revision(&self, id: ObjectSetId) -> Option<u64> {
+        self.objects.table_revision(id)
+    }
+
+    pub fn child_count(&self, parent: ObjectSetId, child: ObjectSetId) -> Option<usize> {
+        let query = self.objects.child(parent, child, self.time)?;
+        let parents = self.objects.get(parent)?.frame(self.time)?.object_count();
+        let values = query.values(parents, grana_measure::ChildField::Count);
+        if values.iter().any(|value| !value.is_finite()) {
+            return None;
+        }
+        Some(values.iter().sum::<f32>() as usize)
     }
 
     pub fn set_region(&mut self, region: Region) {
@@ -709,9 +757,29 @@ impl Scene {
         let relations = (0..object.frame_count())
             .map(|time| self.relation_rows(id, time))
             .collect::<Vec<_>>();
+        let children = match group {
+            Group::Object => self.objects.child_sets(id),
+            Group::Track | Group::Timepoint => Vec::new(),
+        };
+        let mut per_time = Vec::with_capacity(object.frame_count() as usize);
+        for time in 0..object.frame_count() {
+            per_time.push(
+                children
+                    .iter()
+                    .filter_map(|child| self.objects.child(id, *child, time))
+                    .collect::<Vec<_>>(),
+            );
+        }
         let frames = object
             .frames()
-            .map(|(time, frame)| Frame::new(time, frame.objects(), &relations[time as usize]))
+            .map(|(time, frame)| {
+                Frame::new(
+                    time,
+                    frame.objects(),
+                    &relations[time as usize],
+                    &per_time[time as usize],
+                )
+            })
             .collect::<Vec<_>>();
         if frames.is_empty() {
             return None;

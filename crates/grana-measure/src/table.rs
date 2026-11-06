@@ -2,6 +2,7 @@ use grana_object::{
     FilamentSet, IntensityTable, SampleAccumulator, SampleStatistics, SpotSet, SurfaceSet, TrackSet,
 };
 
+use crate::child::Child;
 use crate::column::{Column, Unit};
 use crate::csv;
 use crate::filter::Filter;
@@ -163,14 +164,21 @@ pub struct Frame<'a> {
     time: u32,
     objects: Objects<'a>,
     relations: &'a [RelationRow<'a>],
+    children: &'a [Child<'a>],
 }
 
 impl<'a> Frame<'a> {
-    pub fn new(time: u32, objects: Objects<'a>, relations: &'a [RelationRow<'a>]) -> Self {
+    pub fn new(
+        time: u32,
+        objects: Objects<'a>,
+        relations: &'a [RelationRow<'a>],
+        children: &'a [Child<'a>],
+    ) -> Self {
         Self {
             time,
             objects,
             relations,
+            children,
         }
     }
 
@@ -190,6 +198,7 @@ enum ObjectCell {
     Track,
     Measure(Measurement),
     Relation { index: usize, field: RelationField },
+    Child { index: usize, field: usize },
 }
 
 impl ObjectCell {
@@ -198,6 +207,7 @@ impl ObjectCell {
         channels: &[String],
         keys: &[String],
         relations: &[RelationRow<'_>],
+        children: &[Child<'_>],
     ) -> Column {
         match self {
             Self::Frame => Column::new("frame", "frame", Unit::Count, 0),
@@ -209,6 +219,10 @@ impl ObjectCell {
                 let row = relations[*index];
                 field.column(row.key(), row.target(), row.shift())
             }
+            Self::Child { index, field } => {
+                let child = &children[*index];
+                child.fields()[*field].column(child.key(), child.name(), channels, keys)
+            }
         }
     }
 
@@ -218,6 +232,7 @@ impl ObjectCell {
         object: usize,
         tracks: Option<&TrackSet>,
         frame_interval: f32,
+        children: &[Vec<Vec<f32>>],
     ) -> f32 {
         match self {
             Self::Frame => (frame.time + 1) as f32,
@@ -228,6 +243,7 @@ impl ObjectCell {
                 .map_or(0.0, |track| (track + 1) as f32),
             Self::Measure(measurement) => measurement.value(frame.objects, object),
             Self::Relation { index, field } => field.value(frame.relations[*index], object),
+            Self::Child { index, field } => children[*index][*field][object],
         }
     }
 }
@@ -302,6 +318,10 @@ impl Table {
                         .all(|(row, first)| row.target() == first.target()
                             && row.shift() == first.shift()),
                 "every frame carries the relations of its object set"
+            );
+            assert!(
+                same_children(frame.children, frames[0].children),
+                "every frame carries the children of its object set"
             );
         }
         let keys = channel_keys(channels);
@@ -502,14 +522,25 @@ fn object_table(
             cells.push(ObjectCell::Relation { index, field });
         }
     }
+    for (index, child) in frames[0].children.iter().enumerate() {
+        for field in 0..child.fields().len() {
+            cells.push(ObjectCell::Child { index, field });
+        }
+    }
     let columns = cells
         .iter()
-        .map(|cell| cell.column(channels, keys, frames[0].relations))
+        .map(|cell| cell.column(channels, keys, frames[0].relations, frames[0].children))
         .collect::<Vec<_>>();
     let mut observations = Vec::new();
     let mut values = Vec::new();
     for frame in frames {
-        for object in 0..frame.objects.count() {
+        let parents = frame.objects.count();
+        let children = frame
+            .children
+            .iter()
+            .map(|child| child.columns(parents))
+            .collect::<Vec<_>>();
+        for object in 0..parents {
             let track = tracks.and_then(|set| set.track_at(frame.time, object));
             observations.push(Observation {
                 time: Some(frame.time),
@@ -517,7 +548,7 @@ fn object_table(
                 track,
             });
             for cell in &cells {
-                values.push(cell.value(frame, object, tracks, frame_interval));
+                values.push(cell.value(frame, object, tracks, frame_interval, &children));
             }
         }
     }
@@ -700,6 +731,14 @@ fn same_kind(left: Objects<'_>, right: Objects<'_>) -> bool {
             | (Objects::Surfaces(_), Objects::Surfaces(_))
             | (Objects::Filaments(_), Objects::Filaments(_))
     )
+}
+
+fn same_children(left: &[Child<'_>], right: &[Child<'_>]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| left.key() == right.key() && left.fields() == right.fields())
 }
 
 pub fn channel_keys(channels: &[String]) -> Vec<String> {

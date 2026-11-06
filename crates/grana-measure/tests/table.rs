@@ -10,8 +10,8 @@ fn summarises_spots_by_object_track_and_timepoint() {
     let tracks = tracks();
     let channels = [CHANNEL.to_string()];
     let frames = [
-        Frame::new(0, Objects::Spots(&first), &[]),
-        Frame::new(1, Objects::Spots(&second), &[]),
+        Frame::new(0, Objects::Spots(&first), &[], &[]),
+        Frame::new(1, Objects::Spots(&second), &[], &[]),
     ];
 
     let objects = Table::build(
@@ -93,8 +93,8 @@ fn filters_sorts_and_exports_rows() {
     let tracks = tracks();
     let channels = [CHANNEL.to_string()];
     let frames = [
-        Frame::new(0, Objects::Spots(&first), &[]),
-        Frame::new(1, Objects::Spots(&second), &[]),
+        Frame::new(0, Objects::Spots(&first), &[], &[]),
+        Frame::new(1, Objects::Spots(&second), &[], &[]),
     ];
     let table = Table::build(
         &frames,

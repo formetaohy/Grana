@@ -10,8 +10,8 @@ use grana_geometry::GeometryStore;
 use grana_geometry::{Bounds, Mesh, MeshVertex};
 use grana_measure::Measurement;
 use grana_measure::{
-    Aggregate, ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
-    RelationField,
+    Aggregate, ChildField, ChildMetric, ColocCost, ColocFrame, ColocPair, ColocSeries,
+    ColocSeriesInfo, ColocSignificance, RelationField, Statistic,
 };
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, RelationFrame,
@@ -64,11 +64,7 @@ fn round_trips_a_project() {
         .get_mut(spots)
         .expect("the spots exist")
         .set_labels(true);
-    scene
-        .objects
-        .get_mut(spots)
-        .expect("the spots exist")
-        .set_label_metric(Some(ObjectColor::Measurement(Measurement::Diameter)));
+    assert!(scene.set_label_metric(spots, Some(ObjectColor::Measurement(Measurement::Diameter))));
     assert!(scene.set_object_hidden(spots, 0, &[1], true));
     scene.set_time(1);
     assert!(scene.add_seed(surfaces, [0.25, -0.5, 0.75]));
@@ -772,7 +768,6 @@ fn stage(scene: &mut Scene) {
     coloring.set_palette(Palette::Inferno);
     coloring.set_reversed(true);
     coloring.set_manual(Some((0.2, 0.8)));
-    spots.set_object_coloring(coloring);
     let mut track_coloring = spots.track_coloring().clone();
     track_coloring.set_metric(Some(TrackColor::Relation {
         target: surfaces,
@@ -783,6 +778,7 @@ fn stage(scene: &mut Scene) {
     track_coloring.set_palette(Palette::Plasma);
     spots.set_track_coloring(track_coloring);
     let spot_set = spots.id();
+    scene.objects.set_object_coloring(spot_set, coloring);
     scene.set_track_thickness(spot_set, 2.0);
     let nodes = vec![
         TrackNode::new(0, 0, [0.0, 0.0, 0.0]),
@@ -811,8 +807,9 @@ fn stage(scene: &mut Scene) {
     let mut coloring = surfaces.object_coloring().clone();
     coloring.set_metric(Some(ObjectColor::Measurement(Measurement::Volume)));
     coloring.set_palette(Palette::Magma);
-    surfaces.set_object_coloring(coloring);
+    let surface_set = surfaces.id();
     surfaces.set_visible(false);
+    scene.objects.set_object_coloring(surface_set, coloring);
     scene.channels[1].opacity = 0.35;
     scene.channels[0].enabled = false;
     scene.set_window(0, 100.0, 200.0);
@@ -1058,6 +1055,111 @@ fn round_trips_the_seed_source_of_a_surface() {
         restored.seed_frames(cells).len(),
         restored.frame_count() as usize
     );
+}
+
+#[test]
+fn round_trips_a_child_color() {
+    let mut scene = fixture();
+    stage(&mut scene);
+    let spots = scene
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Spots)
+        .map(|set| set.id())
+        .expect("the spots exist");
+    let surfaces = scene
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Surfaces && set.channel() == 1)
+        .map(|set| set.id())
+        .expect("the surfaces exist");
+    assert!(scene.add_relation(spots, surfaces, 0));
+    for time in 0..2 {
+        scene.install_relation(
+            spots,
+            surfaces,
+            0,
+            time,
+            RelationFrame::new(vec![0.0, 0.0], vec![1.0, 1.0], vec![0.0, 0.0], vec![1, 1]),
+        );
+    }
+    let count = ChildField::Count;
+    let diameter = ChildField::Stat {
+        metric: ChildMetric::Diameter,
+        statistic: Statistic::Mean,
+    };
+    let mut coloring = scene
+        .objects
+        .get(surfaces)
+        .expect("the surfaces exist")
+        .object_coloring()
+        .clone();
+    coloring.set_metric(Some(ObjectColor::Child {
+        target: spots,
+        field: count,
+    }));
+    assert!(scene.objects.set_object_coloring(surfaces, coloring));
+    assert!(scene.set_label_metric(
+        surfaces,
+        Some(ObjectColor::Child {
+            target: spots,
+            field: diameter,
+        })
+    ));
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "fixture".to_string(),
+        },
+        ViewState {
+            camera: CameraState {
+                pivot: [0.0; 3],
+                yaw: 0.0,
+                pitch: 0.0,
+                distance: 10.0,
+                fov_y: 0.6,
+            },
+            section: SectionState {
+                axis: Axis::Z,
+                span: 10.0,
+            },
+            split: 0.5,
+            timeline: Timeline::default(),
+            export: Export::NATIVE,
+        },
+    );
+    let path = std::env::temp_dir().join(format!("grana-child-{}.grana", std::process::id()));
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_done, _total| {})
+        .expect("the project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_done, _total| {},
+    )
+    .expect("the project reads");
+    fs::remove_file(&path).ok();
+    assert_eq!(loaded, project, "the child colors travel with their set");
+    let mut restored = fixture();
+    restored.restore(loaded.scene);
+    let surfaces = restored.objects.get(surfaces).expect("the surfaces exist");
+    assert_eq!(
+        surfaces.object_coloring().metric(),
+        Some(ObjectColor::Child {
+            target: spots,
+            field: count,
+        })
+    );
+    assert_eq!(
+        surfaces.label_metric(),
+        Some(ObjectColor::Child {
+            target: spots,
+            field: diameter,
+        })
+    );
+    assert_eq!(surfaces.object_extent(), Some((2.0, 2.0)));
 }
 
 fn lobes() -> Volume {

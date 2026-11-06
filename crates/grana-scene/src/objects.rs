@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
+use grana_display::Extent;
+use grana_measure::{Child, RelationField, UNASSIGNED};
 use grana_object::{RelationFrame, TrackSet};
 
+use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::dataset::Dataset;
 use crate::key::ObjectSetKey;
@@ -161,6 +164,7 @@ impl Objects {
         for dependency in doomed {
             self.clear_relations(dependency);
         }
+        self.prune_children();
     }
 
     pub fn reorder(&mut self, id: ObjectSetId, index: usize) -> bool {
@@ -217,11 +221,20 @@ impl Objects {
             })
             .map(ObjectSet::id)
             .collect::<Vec<_>>();
+        let mut changed = Vec::new();
         for target in targets {
             let stamp = take_stamp(&mut self.stamp);
-            if let Some(set) = self.get_mut(target) {
-                set.invalidate_relation(id, time, stamp);
+            if let Some(set) = self.get_mut(target)
+                && set.invalidate_relation(id, time, stamp)
+            {
+                changed.push(target);
             }
+        }
+        self.refresh_bounds(id, Some(time));
+        self.refresh_child_bounds(id, Some(time));
+        for target in changed {
+            self.refresh_bounds(target, Some(time));
+            self.refresh_child_bounds(target, Some(time));
         }
         Ok(true)
     }
@@ -267,6 +280,8 @@ impl Objects {
             .expect("the derived object set exists");
         self.next_id += 1;
         self.sets.insert(position + 1, copy);
+        self.prune_children();
+        self.refresh_bounds(derived, None);
         Some(derived)
     }
 
@@ -329,6 +344,8 @@ impl Objects {
             set.forget_copies(&[source]);
         }
         self.clear_relations(source);
+        self.refresh_bounds(target, None);
+        self.refresh_child_bounds(target, None);
         Ok(())
     }
 
@@ -361,8 +378,13 @@ impl Objects {
 
     pub fn add_relation(&mut self, id: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {
         let stamp = take_stamp(&mut self.stamp);
-        self.get_mut(id)
-            .is_some_and(|set| set.add_relation(target, shift, stamp))
+        let added = self
+            .get_mut(id)
+            .is_some_and(|set| set.add_relation(target, shift, stamp));
+        if added {
+            self.settle_relation_change(id);
+        }
+        added
     }
 
     pub fn add_relation_with_key(
@@ -373,8 +395,13 @@ impl Objects {
         key: String,
     ) -> bool {
         let stamp = take_stamp(&mut self.stamp);
-        self.get_mut(id)
-            .is_some_and(|set| set.add_relation_with_key(target, shift, key, stamp))
+        let added = self
+            .get_mut(id)
+            .is_some_and(|set| set.add_relation_with_key(target, shift, key, stamp));
+        if added {
+            self.settle_relation_change(id);
+        }
+        added
     }
 
     pub fn move_relation(
@@ -385,14 +412,24 @@ impl Objects {
         to: i32,
     ) -> bool {
         let stamp = take_stamp(&mut self.stamp);
-        self.get_mut(id)
-            .is_some_and(|set| set.move_relation(target, from, to, stamp))
+        let moved = self
+            .get_mut(id)
+            .is_some_and(|set| set.move_relation(target, from, to, stamp));
+        if moved {
+            self.settle_relation_change(id);
+        }
+        moved
     }
 
     pub fn remove_relation(&mut self, id: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {
         let stamp = take_stamp(&mut self.stamp);
-        self.get_mut(id)
-            .is_some_and(|set| set.remove_relation(target, shift, stamp))
+        let removed = self
+            .get_mut(id)
+            .is_some_and(|set| set.remove_relation(target, shift, stamp));
+        if removed {
+            self.settle_relation_change(id);
+        }
+        removed
     }
 
     pub fn install_relation(
@@ -408,17 +445,26 @@ impl Objects {
             return false;
         };
         set.install_relation(target, shift, time, frame, stamp);
+        self.refresh_bounds(id, Some(time));
+        self.refresh_child_bounds(id, Some(time));
         true
     }
 
     pub fn clear_relations(&mut self, id: ObjectSetId) {
         let stamp = take_stamp(&mut self.stamp);
+        let mut changed = Vec::new();
         for set in &mut self.sets {
             if set.id() == id {
                 set.clear_relations(stamp);
-            } else {
-                set.remove_relations_to(id, stamp);
+                changed.push(set.id());
+            } else if set.remove_relations_to(id, stamp) {
+                changed.push(set.id());
             }
+        }
+        self.prune_children();
+        for set in changed {
+            self.refresh_bounds(set, None);
+            self.refresh_child_bounds(set, None);
         }
     }
 
@@ -428,7 +474,7 @@ impl Objects {
             return false;
         };
         set.install(time, frame, stamp);
-        self.invalidate_relations(id, time);
+        self.settle_frame(id, time);
         true
     }
 
@@ -438,7 +484,7 @@ impl Objects {
             return false;
         };
         set.install_shared(time, frame, stamp);
-        self.invalidate_relations(id, time);
+        self.settle_frame(id, time);
         true
     }
 
@@ -453,20 +499,41 @@ impl Objects {
             return false;
         };
         set.install_optional(time, frame, stamp);
-        self.invalidate_relations(id, time);
+        self.settle_frame(id, time);
         true
     }
 
-    fn invalidate_relations(&mut self, id: ObjectSetId, time: u32) {
+    fn settle_frame(&mut self, id: ObjectSetId, time: u32) {
+        let changed = self.invalidate_relations(id, time);
+        for set in changed {
+            self.refresh_bounds(set, Some(time));
+            self.refresh_child_bounds(set, Some(time));
+        }
+        self.refresh_bounds(id, Some(time));
+        self.refresh_child_bounds(id, Some(time));
+    }
+
+    fn settle_relation_change(&mut self, id: ObjectSetId) {
+        self.prune_children();
+        self.refresh_bounds(id, None);
+        self.refresh_child_bounds(id, None);
+    }
+
+    fn invalidate_relations(&mut self, id: ObjectSetId, time: u32) -> Vec<ObjectSetId> {
+        let mut changed = Vec::new();
         for index in 0..self.sets.len() {
             let stamp = take_stamp(&mut self.stamp);
             let set = &mut self.sets[index];
-            if set.id() == id {
-                set.invalidate_relations(time, stamp);
+            let invalidated = if set.id() == id {
+                set.invalidate_relations(time, stamp)
             } else {
-                set.invalidate_relation(id, time, stamp);
+                set.invalidate_relation(id, time, stamp)
+            };
+            if invalidated {
+                changed.push(set.id());
             }
         }
+        changed
     }
 
     pub fn clear(&mut self, id: ObjectSetId) {
@@ -474,6 +541,7 @@ impl Objects {
         if let Some(set) = self.get_mut(id) {
             set.clear(stamp);
         }
+        self.refresh_child_bounds(id, None);
     }
 
     pub fn install_tracks(&mut self, id: ObjectSetId, tracks: TrackSet) -> bool {
@@ -494,7 +562,12 @@ impl Objects {
 
     pub fn apply_curation(&mut self, id: ObjectSetId) -> usize {
         let stamp = take_stamp(&mut self.stamp);
-        self.get_mut(id).map_or(0, |set| set.apply_curation(stamp))
+        let applied = self.get_mut(id).map_or(0, |set| set.apply_curation(stamp));
+        if applied > 0 {
+            self.refresh_bounds(id, None);
+            self.refresh_child_bounds(id, None);
+        }
+        applied
     }
 
     pub fn reapply_hidden(&mut self, id: ObjectSetId) -> usize {
@@ -508,8 +581,14 @@ impl Objects {
 
     pub fn cut_track(&mut self, id: ObjectSetId, time: u32, object: usize) -> bool {
         let stamp = take_stamp(&mut self.stamp);
-        self.get_mut(id)
-            .is_some_and(|set| set.cut_track(time, object, stamp))
+        let cut = self
+            .get_mut(id)
+            .is_some_and(|set| set.cut_track(time, object, stamp));
+        if cut {
+            self.refresh_bounds(id, None);
+            self.refresh_child_bounds(id, None);
+        }
+        cut
     }
 
     pub fn add_seed(&mut self, id: ObjectSetId, time: u32, position: [f32; 3]) -> bool {
@@ -548,8 +627,14 @@ impl Objects {
         target: (u32, usize),
     ) -> bool {
         let stamp = take_stamp(&mut self.stamp);
-        self.get_mut(id)
-            .is_some_and(|set| set.join_tracks(source, target, stamp))
+        let joined = self
+            .get_mut(id)
+            .is_some_and(|set| set.join_tracks(source, target, stamp));
+        if joined {
+            self.refresh_bounds(id, None);
+            self.refresh_child_bounds(id, None);
+        }
+        joined
     }
 
     pub fn set_track_thickness(&mut self, id: ObjectSetId, thickness: f32) {
@@ -637,6 +722,250 @@ impl Objects {
                     .and_then(ObjectSet::seed_source);
             }
         }
+        let ids = self.sets.iter().map(ObjectSet::id).collect::<Vec<_>>();
+        for id in &ids {
+            let set = self.get(*id).expect("the restored object set exists");
+            self.check_object_metric(*id, set.object_coloring().metric());
+            self.check_object_metric(*id, set.label_metric());
+        }
+        for id in ids {
+            self.refresh_bounds(id, None);
+        }
+    }
+
+    pub fn child_sets(&self, parent: ObjectSetId) -> Vec<ObjectSetId> {
+        self.sets
+            .iter()
+            .filter(|set| set.id() != parent && set.relation(parent, 0).is_some())
+            .map(ObjectSet::id)
+            .collect()
+    }
+
+    pub fn child(&self, parent: ObjectSetId, child: ObjectSetId, time: u32) -> Option<Child<'_>> {
+        let set = self.get(child)?;
+        let relation = set.relation(parent, 0)?;
+        let frame = set.frame(time);
+        let members = frame.and_then(|frame| {
+            relation
+                .frame(time)
+                .filter(|relation| relation.objects() == frame.object_count())
+                .map(members_of)
+        });
+        Some(Child::new(
+            set.key().as_str(),
+            set.name(),
+            set.child_fields(),
+            frame.map(ObjectFrame::objects),
+            members,
+        ))
+    }
+
+    pub fn table_revision(&self, id: ObjectSetId) -> Option<u64> {
+        let set = self.get(id)?;
+        let mut revision = set.revision();
+        for child in self.child_sets(id) {
+            if let Some(child) = self.get(child) {
+                revision = crate::state::mix(revision, child.revision());
+            }
+        }
+        Some(revision)
+    }
+
+    pub fn metric_values(
+        &self,
+        id: ObjectSetId,
+        metric: ObjectColor,
+        time: u32,
+    ) -> Option<Vec<f32>> {
+        let set = self.get(id)?;
+        let frame = set.frame(time)?;
+        match metric {
+            ObjectColor::Measurement(measurement) => Some(
+                (0..frame.object_count())
+                    .map(|object| measurement.value(frame.objects(), object))
+                    .collect(),
+            ),
+            ObjectColor::Relation {
+                target,
+                field,
+                shift,
+            } => {
+                let relation = set
+                    .relation(target, shift)
+                    .and_then(|relation| relation.frame(time));
+                Some(
+                    (0..frame.object_count())
+                        .map(|object| crate::track_color::relation_value(field, relation, object))
+                        .collect(),
+                )
+            }
+            ObjectColor::Child { target, field } => {
+                let child = self.child(id, target, time)?;
+                Some(child.values(frame.object_count(), field))
+            }
+        }
+    }
+
+    pub fn set_object_coloring(
+        &mut self,
+        id: ObjectSetId,
+        coloring: grana_display::Coloring<ObjectColor>,
+    ) -> bool {
+        self.check_object_metric(id, coloring.metric());
+        let changed = self
+            .get_mut(id)
+            .is_some_and(|set| set.set_object_coloring(coloring));
+        if changed {
+            self.refresh_bounds(id, None);
+        }
+        changed
+    }
+
+    pub fn set_label_metric(&mut self, id: ObjectSetId, metric: Option<ObjectColor>) -> bool {
+        self.check_object_metric(id, metric);
+        self.get_mut(id)
+            .is_some_and(|set| set.set_label_metric(metric))
+    }
+
+    fn check_object_metric(&self, id: ObjectSetId, metric: Option<ObjectColor>) {
+        let Some(set) = self.get(id) else {
+            return;
+        };
+        match metric {
+            None => {}
+            Some(ObjectColor::Measurement(measurement)) => assert!(
+                set.colorable_measurements().contains(&measurement),
+                "the measurement colors the objects of its set"
+            ),
+            Some(ObjectColor::Relation {
+                target,
+                field,
+                shift,
+            }) => {
+                assert!(
+                    self.get(target).is_some(),
+                    "the relation target of a metric is an object set of the scene"
+                );
+                assert!(
+                    set.relation(target, shift).is_some(),
+                    "the relation of a metric is measured by its set"
+                );
+                assert!(
+                    RelationField::CONTINUOUS.contains(&field),
+                    "a relation field colors the objects of its set"
+                );
+            }
+            Some(ObjectColor::Child { target, field }) => {
+                assert_ne!(
+                    target, id,
+                    "an object set colors by the children of another set"
+                );
+                let Some(child) = self.get(target) else {
+                    panic!("the child of a metric is an object set of the scene")
+                };
+                assert!(
+                    child.relation(id, 0).is_some(),
+                    "the child of a metric relates to its parent set"
+                );
+                assert!(
+                    child.child_fields().contains(&field),
+                    "a child field colors the objects of its parent set"
+                );
+            }
+        }
+    }
+
+    fn child_still_relates(&self, parent: ObjectSetId, child: ObjectSetId) -> bool {
+        self.get(child)
+            .is_some_and(|child| child.relation(parent, 0).is_some())
+    }
+
+    fn prune_children(&mut self) {
+        let ids = self.sets.iter().map(ObjectSet::id).collect::<Vec<_>>();
+        for id in ids {
+            let Some(set) = self.get(id) else {
+                continue;
+            };
+            let clear_coloring = matches!(
+                set.object_coloring().metric(),
+                Some(ObjectColor::Child { target, .. }) if !self.child_still_relates(id, target)
+            );
+            let clear_label = matches!(
+                set.label_metric(),
+                Some(ObjectColor::Child { target, .. }) if !self.child_still_relates(id, target)
+            );
+            if !clear_coloring && !clear_label {
+                continue;
+            }
+            let Some(set) = self.get_mut(id) else {
+                continue;
+            };
+            if clear_coloring {
+                let mut coloring = set.object_coloring().clone();
+                coloring.set_metric(None);
+                set.set_object_coloring(coloring);
+            }
+            if clear_label {
+                set.set_label_metric(None);
+            }
+        }
+    }
+
+    fn bounds_of(&self, id: ObjectSetId, time: u32) -> Option<Extent> {
+        let set = self.get(id)?;
+        let metric = set.object_coloring().metric()?;
+        match metric {
+            ObjectColor::Child { target, field } => {
+                let parents = set.frame(time)?.object_count();
+                let values = self.child(id, target, time)?.values(parents, field);
+                extent_of(values)
+            }
+            _ => {
+                let frame = set.frame(time)?;
+                let relation = metric
+                    .relation()
+                    .and_then(|(target, shift)| set.relation(target, shift))
+                    .and_then(|relation| relation.frame(time));
+                metric.extent(frame, relation)
+            }
+        }
+    }
+
+    fn refresh_bounds(&mut self, id: ObjectSetId, time: Option<u32>) {
+        let Some(set) = self.get(id) else {
+            return;
+        };
+        let times = match time {
+            Some(time) => vec![time],
+            None => (0..set.frame_count()).collect(),
+        };
+        let updates = times
+            .iter()
+            .map(|time| (*time, self.bounds_of(id, *time)))
+            .collect::<Vec<_>>();
+        if let Some(set) = self.get_mut(id) {
+            for (time, bound) in updates {
+                set.set_frame_bound(time, bound);
+            }
+        }
+    }
+
+    fn refresh_child_bounds(&mut self, child: ObjectSetId, time: Option<u32>) {
+        let parents = self
+            .sets
+            .iter()
+            .filter(|set| {
+                set.id() != child
+                    && matches!(
+                        set.object_coloring().metric(),
+                        Some(ObjectColor::Child { target, .. }) if target == child
+                    )
+            })
+            .map(ObjectSet::id)
+            .collect::<Vec<_>>();
+        for parent in parents {
+            self.refresh_bounds(parent, time);
+        }
     }
 
     pub fn get(&self, id: ObjectSetId) -> Option<&ObjectSet> {
@@ -658,4 +987,28 @@ impl Objects {
     pub fn is_empty(&self) -> bool {
         self.sets.is_empty()
     }
+}
+
+fn members_of(relation: &RelationFrame) -> Vec<u32> {
+    (0..relation.objects())
+        .map(|object| {
+            if relation.inside(object) > 0.0 && relation.partner(object) > 0 {
+                relation.partner(object) - 1
+            } else {
+                UNASSIGNED
+            }
+        })
+        .collect()
+}
+
+fn extent_of(values: Vec<f32>) -> Option<Extent> {
+    values
+        .into_iter()
+        .filter(|value| value.is_finite())
+        .fold(None, |accumulated, value| {
+            Some(match accumulated {
+                None => (value, value),
+                Some((minimum, maximum)) => (minimum.min(value), maximum.max(value)),
+            })
+        })
 }

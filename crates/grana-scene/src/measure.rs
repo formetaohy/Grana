@@ -383,7 +383,7 @@ impl Measure {
         let Some(id) = self.set else {
             return;
         };
-        let Some(object) = scene.objects.get(id) else {
+        if scene.objects.get(id).is_none() {
             self.set = None;
             self.revision = None;
             self.table = None;
@@ -395,11 +395,11 @@ impl Measure {
             self.axes = [0; 2];
             self.dirty = true;
             return;
-        };
+        }
         let time = scene.time();
         let moved = self.time != time;
         self.time = time;
-        if !busy && self.revision != Some((id, object.revision())) {
+        if !busy && self.revision != scene.table_revision(id).map(|revision| (id, revision)) {
             self.rebuild(scene);
         } else if moved && self.scope == Scope::Current {
             self.refresh();
@@ -607,15 +607,15 @@ impl Measure {
             self.axes = [0; 2];
             return;
         };
-        let Some(object) = scene.objects.get(id) else {
+        if scene.objects.get(id).is_none() {
             self.set = None;
             self.revision = None;
             self.visible.clear();
             self.lasso = None;
             self.axes = [0; 2];
             return;
-        };
-        self.revision = Some((id, object.revision()));
+        }
+        self.revision = scene.table_revision(id).map(|revision| (id, revision));
         let Some(table) = scene.table(id, self.group, self.aggregate) else {
             self.visible.clear();
             self.lasso = None;
@@ -768,6 +768,7 @@ fn default_visibility(table: &Table) -> Vec<bool> {
                     || key.contains("_intensity_mean")
                     || key.ends_with("_distance_um")
                     || key.ends_with("_inside")
+                    || key.ends_with("_count")
             }
         })
         .collect()

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use grana_display::Coloring;
-use grana_measure::{ColocPair, Group, TrackMeasurement, channel_keys, relation_keys};
+use grana_measure::{ChildField, ColocPair, Group, TrackMeasurement, channel_keys, relation_keys};
 use grana_scene::{
     Criteria, FilterRange, LassoPath, MaskFilter, ObjectColor, ObjectSetId, ObjectSetKey, Scene,
     TrackColor,
@@ -295,12 +295,7 @@ impl Protocol {
             let id = builder.ids[&spec.key];
             if let Some(color) = &spec.color_by {
                 let coloring = object_coloring(color, builder.scene, id, &keys)?;
-                builder
-                    .scene
-                    .objects
-                    .get_mut(id)
-                    .expect("the staged object set exists")
-                    .set_object_coloring(coloring);
+                builder.scene.set_object_coloring(id, coloring);
             }
             if let Some(color) = &spec.track_by {
                 let coloring = track_coloring(color, builder.scene)?;
@@ -318,12 +313,7 @@ impl Protocol {
                     .get(id)
                     .expect("the staged object set exists");
                 let metric = label.metric(set, builder.scene, &keys)?;
-                builder
-                    .scene
-                    .objects
-                    .get_mut(id)
-                    .expect("the staged object set exists")
-                    .set_label_metric(Some(metric));
+                builder.scene.set_label_metric(id, Some(metric));
             }
         }
         let mask = masks.iter().rev().flatten().next().copied();
@@ -662,45 +652,79 @@ fn object_coloring(
     if let Some([low, high]) = spec.range {
         coloring.set_manual(Some((low, high)));
     }
-    let metric = match (&spec.key, &spec.target) {
-        (Some(key), _) => {
-            let set = scene.objects.get(id).expect("the staged object set exists");
-            let measurement = set
-                .colorable_measurements()
-                .into_iter()
-                .find(|measurement| measurement.key(keys) == *key)
-                .ok_or_else(|| {
-                    ProtocolError::Invalid(format!(
-                        "the set {} has no colorable measurement {key}",
-                        set.name()
-                    ))
-                })?;
-            ObjectColor::Measurement(measurement)
+    let metric = if spec.child {
+        let target = spec
+            .target
+            .as_deref()
+            .expect("a checked color names a child set");
+        let child = scene
+            .objects
+            .iter()
+            .find(|set| set.key().as_str() == target)
+            .ok_or_else(|| {
+                ProtocolError::Invalid(format!(
+                    "the color names the child set {target}, which is not an object set of the scene"
+                ))
+            })?;
+        let key = spec
+            .key
+            .as_deref()
+            .expect("a checked color names a child measurement");
+        let field = ChildField::parse(key, spec.aggregate.as_deref(), keys)
+            .filter(|field| child.child_fields().contains(field))
+            .ok_or_else(|| {
+                ProtocolError::Invalid(format!(
+                    "the set {} has no child measurement {key}",
+                    child.name()
+                ))
+            })?;
+        if child.relation(id, 0).is_none() {
+            return Err(ProtocolError::Invalid(format!(
+                "the child set {} does not relate to the colored set",
+                child.name()
+            )));
         }
-        (_, Some(target)) => {
-            let names = scene
-                .objects
-                .iter()
-                .map(|set| (set.id(), set.name().to_string()))
-                .collect::<Vec<_>>();
-            let target = names
-                .iter()
-                .find(|(_, name)| name == target)
-                .map(|(id, _)| *id)
-                .ok_or_else(|| {
-                    ProtocolError::Invalid(format!(
-                        "the color names the relation target {target}, which is not an object set of the scene"
-                    ))
-                })?;
-            ObjectColor::Relation {
-                target,
-                field: spec
-                    .field()
-                    .expect("a checked color names a relation field"),
-                shift: spec.shift,
+        ObjectColor::Child {
+            target: child.id(),
+            field,
+        }
+    } else {
+        match (&spec.key, &spec.target) {
+            (Some(key), _) => {
+                let set = scene.objects.get(id).expect("the staged object set exists");
+                let measurement = set
+                    .colorable_measurements()
+                    .into_iter()
+                    .find(|measurement| measurement.key(keys) == *key)
+                    .ok_or_else(|| {
+                        ProtocolError::Invalid(format!(
+                            "the set {} has no colorable measurement {key}",
+                            set.name()
+                        ))
+                    })?;
+                ObjectColor::Measurement(measurement)
             }
+            (_, Some(target)) => {
+                let target = scene
+                    .objects
+                    .iter()
+                    .find(|set| set.key().as_str() == target)
+                    .map(|set| set.id())
+                    .ok_or_else(|| {
+                        ProtocolError::Invalid(format!(
+                            "the color names the relation target {target}, which is not an object set of the scene"
+                        ))
+                    })?;
+                ObjectColor::Relation {
+                    target,
+                    field: spec
+                        .field()
+                        .expect("a checked color names a relation field"),
+                    shift: spec.shift,
+                }
+            }
+            _ => unreachable!("a checked color names one measurement or relation"),
         }
-        _ => unreachable!("a checked color names one measurement or relation"),
     };
     coloring.set_metric(Some(metric));
     Ok(coloring)

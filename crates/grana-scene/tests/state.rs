@@ -1,12 +1,13 @@
 use grana_measure::{
-    Aggregate, ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
-    Group, RelationField,
+    Aggregate, ChildField, ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo,
+    ColocSignificance, Group, RelationField,
 };
 use grana_object::{
     IntensityTable, RelationFrame, SampleAccumulator, Spot, SpotSet, Track, TrackNode, TrackSet,
 };
 use grana_scene::{
-    Dataset, Item, ObjectColor, ObjectFrame, ObjectKind, Scene, Selection, TrackColor,
+    Criteria, Dataset, FilterRange, Item, ObjectColor, ObjectFrame, ObjectKind, Scene, Selection,
+    TrackColor,
 };
 use grana_volume::{Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -177,17 +178,14 @@ fn colors_objects_by_their_relation_to_another_set() {
     );
     scene.install(target, 0, spots(&[[0.0, 0.0, 0.0]]));
     assert!(scene.add_relation(source, target, 0));
-    let set = scene
-        .objects
-        .get_mut(source)
-        .expect("the source set exists");
+    let set = scene.objects.get(source).expect("the source set exists");
     let mut coloring = set.object_coloring().clone();
     coloring.set_metric(Some(ObjectColor::Relation {
         target,
         field: RelationField::Distance,
         shift: 0,
     }));
-    assert!(set.set_object_coloring(coloring));
+    assert!(scene.objects.set_object_coloring(source, coloring));
     assert!(
         scene
             .objects
@@ -498,4 +496,107 @@ fn measures_one_relation_at_several_offsets() {
         "the other offset survives the removal"
     );
     assert!(set.relation(target, 0).is_none());
+}
+
+fn two_channel_spots(centres: &[[f32; 3]]) -> ObjectFrame {
+    let mut accumulator = SampleAccumulator::new();
+    accumulator.push(0.5);
+    ObjectFrame::Spots(SpotSet::new(
+        0,
+        centres
+            .iter()
+            .map(|centre| Spot::new(*centre, 1.0, 0.5))
+            .collect(),
+        IntensityTable::new(2, vec![accumulator.statistics(); centres.len() * 2]),
+    ))
+}
+
+#[test]
+fn aggregates_children_into_their_parent_objects() {
+    let mut scene = scene();
+    let parent = scene.add_object(ObjectKind::Spots, 0);
+    let child = scene.add_object(ObjectKind::Spots, 0);
+    scene.install(
+        parent,
+        0,
+        two_channel_spots(&[[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]]),
+    );
+    scene.install(
+        child,
+        0,
+        two_channel_spots(&[[0.2, 0.0, 0.0], [4.2, 0.0, 0.0], [4.4, 0.0, 0.0]]),
+    );
+    assert!(scene.add_relation(child, parent, 0));
+    scene.install_relation(
+        child,
+        parent,
+        0,
+        0,
+        RelationFrame::new(
+            vec![0.0, 0.0, 1.0],
+            vec![1.0, 1.0, 0.0],
+            vec![0.0, 0.0, 0.0],
+            vec![1, 1, 2],
+        ),
+    );
+    let child_key = scene
+        .objects
+        .get(child)
+        .expect("the child set exists")
+        .key()
+        .as_str()
+        .to_string();
+    let table = scene
+        .table(parent, Group::Object, Aggregate::Mean)
+        .expect("the parent measures its children");
+    let count = table
+        .column(&format!("{child_key}_count"))
+        .expect("the child count column exists");
+    assert_eq!(table.value(0, count), 2.0);
+    assert_eq!(table.value(1, count), 0.0);
+    let diameter = table
+        .column(&format!("{child_key}_diameter_um_mean"))
+        .expect("the child diameter column exists");
+    assert_eq!(table.value(0, diameter), 2.0);
+    assert!(table.value(1, diameter).is_nan());
+
+    let mut coloring = scene
+        .objects
+        .get(parent)
+        .expect("the parent set exists")
+        .object_coloring()
+        .clone();
+    coloring.set_metric(Some(ObjectColor::Child {
+        target: child,
+        field: ChildField::Count,
+    }));
+    assert!(scene.objects.set_object_coloring(parent, coloring));
+    let set = scene.objects.get(parent).expect("the parent set exists");
+    assert_eq!(set.object_extent(), Some((0.0, 2.0)));
+    assert_eq!(
+        scene
+            .object_colors(set)
+            .expect("the parents are colored")
+            .len(),
+        2
+    );
+
+    let criteria = Criteria::new(
+        Group::Object,
+        vec![FilterRange::new(&format!("{child_key}_count"), 1.0, 2.0)],
+        None,
+    );
+    let filtered = scene
+        .filter_object(parent, "counted", criteria)
+        .expect("the derived set exists");
+    assert!(scene.refresh_filtered(filtered).expect("the filter runs"));
+    assert_eq!(
+        scene
+            .objects
+            .get(filtered)
+            .and_then(|set| set.frame(0))
+            .map_or(0, ObjectFrame::object_count),
+        1,
+        "only the parent that holds children survives the filter"
+    );
 }

@@ -1,5 +1,5 @@
 use grana_display::Extent;
-use grana_measure::{Measurement, Objects, RelationField, Unit};
+use grana_measure::{ChildField, Measurement, Objects, RelationField, Unit};
 use grana_object::RelationFrame;
 
 use crate::object::ObjectFrame;
@@ -14,6 +14,10 @@ pub enum ObjectColor {
         field: RelationField,
         shift: i32,
     },
+    Child {
+        target: ObjectSetId,
+        field: ChildField,
+    },
 }
 
 impl ObjectColor {
@@ -21,6 +25,7 @@ impl ObjectColor {
         match self {
             Self::Measurement(measurement) => measurement.unit(),
             Self::Relation { field, .. } => field.unit(),
+            Self::Child { field, .. } => field.unit(),
         }
     }
 
@@ -28,12 +33,13 @@ impl ObjectColor {
         match self {
             Self::Measurement(measurement) => measurement.decimals(),
             Self::Relation { field, .. } => field.decimals(),
+            Self::Child { field, .. } => field.decimals(),
         }
     }
 
     pub fn relation(self) -> Option<(ObjectSetId, i32)> {
         match self {
-            Self::Measurement(_) => None,
+            Self::Measurement(_) | Self::Child { .. } => None,
             Self::Relation { target, shift, .. } => Some((target, shift)),
         }
     }
@@ -51,6 +57,9 @@ impl ObjectColor {
         match self {
             Self::Measurement(measurement) => measurement.value(objects, object),
             Self::Relation { field, .. } => relation_value(field, relation, object),
+            Self::Child { .. } => {
+                panic!("a child aggregate is read from the objects of its parent set")
+            }
         }
     }
 

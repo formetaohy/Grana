@@ -413,6 +413,13 @@ fn metric_label(scene: &Scene, metric: ObjectColor, channels: &[String]) -> Stri
             };
             format!("{target}{offset} · {}", field.label())
         }
+        ObjectColor::Child { target, field } => {
+            let target = scene
+                .objects
+                .get(target)
+                .map_or_else(|| "children".to_string(), |set| set.name().to_string());
+            format!("{target} · {}", field.label(channels))
+        }
     }
 }
 

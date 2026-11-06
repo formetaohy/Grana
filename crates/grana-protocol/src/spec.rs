@@ -1,7 +1,9 @@
 use glam::Vec3;
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
-use grana_measure::{Aggregate, Filter, Group, MeasureView, RelationField, Scope, Table};
+use grana_measure::{
+    Aggregate, ChildField, Filter, Group, MeasureView, RelationField, Scope, Statistic, Table,
+};
 use grana_object::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
 use grana_project::{Export, ViewState};
 use grana_scene::{ObjectColor, ObjectKind, ObjectParams, ObjectSet, Scene};
@@ -93,6 +95,8 @@ pub struct ColorSpec {
     pub field: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregate: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub child: bool,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub shift: i32,
     pub palette: String,
@@ -266,6 +270,10 @@ pub struct MetricSpec {
     pub target: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statistic: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub child: bool,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub shift: i32,
 }
@@ -650,6 +658,12 @@ impl ColorSpec {
         Aggregate::parse(aggregate)
     }
 
+    pub fn child_field(&self, set: &ObjectSet, keys: &[String]) -> Option<ChildField> {
+        let key = self.key.as_deref()?;
+        ChildField::parse(key, self.aggregate.as_deref(), keys)
+            .filter(|field| set.child_fields().contains(field))
+    }
+
     pub(super) fn checked(&self, what: &str) -> Result<(), ProtocolError> {
         let invalid = |detail: String| {
             Err(ProtocolError::Invalid(format!(
@@ -662,35 +676,69 @@ impl ColorSpec {
         {
             return invalid(format!("names an unknown palette {}", self.palette));
         }
-        match (&self.key, &self.target) {
-            (Some(key), None) => {
-                if key.trim().is_empty() {
-                    return invalid("names an empty measurement".to_string());
-                }
-                if self.field.is_some() {
-                    return invalid("names a relation field without a target".to_string());
-                }
+        if self.child {
+            let Some(target) = &self.target else {
+                return invalid("names no child set".to_string());
+            };
+            if target.trim().is_empty() {
+                return invalid("names an empty child set".to_string());
+            }
+            let Some(key) = &self.key else {
+                return invalid("names no child measurement".to_string());
+            };
+            if key.trim().is_empty() {
+                return invalid("names an empty child measurement".to_string());
+            }
+            if self.field.is_some() {
+                return invalid("names a relation field of a child".to_string());
+            }
+            if self.shift != 0 {
+                return invalid("shifts the children of an object".to_string());
+            }
+            if key == "count" {
                 if self.aggregate.is_some() {
-                    return invalid("names a reduction without a relation".to_string());
+                    return invalid("reduces a child count".to_string());
                 }
-                if self.shift != 0 {
-                    return invalid("shifts a measurement that names no relation".to_string());
-                }
+            } else if let Some(statistic) = &self.aggregate
+                && !Statistic::ALL
+                    .into_iter()
+                    .any(|candidate| candidate.key() == statistic)
+            {
+                return invalid("names an unknown child reduction".to_string());
+            } else if self.aggregate.is_none() {
+                return invalid("names a child measurement without a reduction".to_string());
             }
-            (None, Some(target)) => {
-                if target.trim().is_empty() {
-                    return invalid("names an empty relation target".to_string());
+        } else {
+            match (&self.key, &self.target) {
+                (Some(key), None) => {
+                    if key.trim().is_empty() {
+                        return invalid("names an empty measurement".to_string());
+                    }
+                    if self.field.is_some() {
+                        return invalid("names a relation field without a target".to_string());
+                    }
+                    if self.aggregate.is_some() {
+                        return invalid("names a reduction without a relation".to_string());
+                    }
+                    if self.shift != 0 {
+                        return invalid("shifts a measurement that names no relation".to_string());
+                    }
                 }
-                if self.field().is_none() {
-                    return invalid("names an unknown relation field".to_string());
+                (None, Some(target)) => {
+                    if target.trim().is_empty() {
+                        return invalid("names an empty relation target".to_string());
+                    }
+                    if self.field().is_none() {
+                        return invalid("names an unknown relation field".to_string());
+                    }
+                    if let Some(aggregate) = &self.aggregate
+                        && Aggregate::parse(aggregate).is_none()
+                    {
+                        return invalid("names an unknown reduction".to_string());
+                    }
                 }
-                if let Some(aggregate) = &self.aggregate
-                    && Aggregate::parse(aggregate).is_none()
-                {
-                    return invalid("names an unknown reduction".to_string());
-                }
+                _ => return invalid("names exactly one measurement or relation".to_string()),
             }
-            _ => return invalid("names exactly one measurement or relation".to_string()),
         }
         if let Some([low, high]) = self.range {
             if !(low.is_finite() && high.is_finite()) {
@@ -711,6 +759,8 @@ impl MetricSpec {
                 key: Some(measurement.key(keys)),
                 target: None,
                 field: None,
+                statistic: None,
+                child: false,
                 shift: 0,
             },
             ObjectColor::Relation {
@@ -721,7 +771,23 @@ impl MetricSpec {
                 key: None,
                 target: Some(scene.objects.get(target)?.key().as_str().to_string()),
                 field: Some(field.key().to_string()),
+                statistic: None,
+                child: false,
                 shift,
+            },
+            ObjectColor::Child { target, field } => Self {
+                key: Some(
+                    field
+                        .metric()
+                        .map_or_else(|| "count".to_string(), |metric| metric.key(keys)),
+                ),
+                target: Some(scene.objects.get(target)?.key().as_str().to_string()),
+                field: None,
+                statistic: field
+                    .statistic()
+                    .map(|statistic| statistic.key().to_string()),
+                child: true,
+                shift: 0,
             },
         })
     }
@@ -732,6 +798,45 @@ impl MetricSpec {
         scene: &Scene,
         keys: &[String],
     ) -> Result<ObjectColor, ProtocolError> {
+        if self.child {
+            let target = self
+                .target
+                .as_deref()
+                .expect("a checked label names a child set");
+            let key = self
+                .key
+                .as_deref()
+                .expect("a checked label names a child measurement");
+            let child = scene
+                .objects
+                .iter()
+                .find(|candidate| candidate.key().as_str() == target)
+                .ok_or_else(|| {
+                    ProtocolError::Invalid(format!(
+                        "the label names the child set {target}, which is not an object set of the scene"
+                    ))
+                })?;
+            let field = ChildField::parse(key, self.statistic.as_deref(), keys)
+                .filter(|field| child.child_fields().contains(field))
+                .ok_or_else(|| {
+                    ProtocolError::Invalid(format!(
+                        "the child set {} of {} measures no {key}",
+                        child.name(),
+                        set.name()
+                    ))
+                })?;
+            if child.relation(set.id(), 0).is_none() {
+                return Err(ProtocolError::Invalid(format!(
+                    "the child set {} does not relate to {}",
+                    child.name(),
+                    set.name()
+                )));
+            }
+            return Ok(ObjectColor::Child {
+                target: child.id(),
+                field,
+            });
+        }
         match (&self.key, &self.target) {
             (Some(key), None) => {
                 let measurement = set
@@ -782,6 +887,37 @@ impl MetricSpec {
                 "the label of {what} {detail}"
             )))
         };
+        if self.child {
+            let Some(target) = &self.target else {
+                return invalid("names no child set".to_string());
+            };
+            if target.trim().is_empty() {
+                return invalid("names an empty child set".to_string());
+            }
+            let Some(key) = &self.key else {
+                return invalid("names no child measurement".to_string());
+            };
+            if key.trim().is_empty() {
+                return invalid("names an empty child measurement".to_string());
+            }
+            if self.field.is_some() || self.shift != 0 {
+                return invalid("names a relation of a child".to_string());
+            }
+            if key == "count" {
+                if self.statistic.is_some() {
+                    return invalid("reduces a child count".to_string());
+                }
+            } else if let Some(statistic) = &self.statistic
+                && !Statistic::ALL
+                    .into_iter()
+                    .any(|candidate| candidate.key() == statistic)
+            {
+                return invalid("names an unknown child reduction".to_string());
+            } else if self.statistic.is_none() {
+                return invalid("names a child measurement without a reduction".to_string());
+            }
+            return Ok(());
+        }
         match (&self.key, &self.target) {
             (Some(key), None) => {
                 if key.trim().is_empty() {
@@ -790,6 +926,9 @@ impl MetricSpec {
                 if self.field.is_some() || self.shift != 0 {
                     return invalid("shifts a measurement that names no relation".to_string());
                 }
+                if self.statistic.is_some() {
+                    return invalid("reduces a measurement without a child".to_string());
+                }
             }
             (None, Some(target)) => {
                 if target.trim().is_empty() {
@@ -797,6 +936,9 @@ impl MetricSpec {
                 }
                 if self.field().is_none() {
                     return invalid("names an unknown relation field".to_string());
+                }
+                if self.statistic.is_some() {
+                    return invalid("reduces a relation without a child".to_string());
                 }
             }
             _ => return invalid("names exactly one measurement or relation".to_string()),

@@ -1,3 +1,4 @@
+mod child;
 mod coloc;
 mod column;
 mod correlation;
@@ -10,6 +11,7 @@ mod relation;
 mod scope;
 mod table;
 
+pub use child::{Child, ChildField, ChildMetric, UNASSIGNED};
 pub use coloc::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_DEFAULT, COLOC_BLOCK_MAX,
     COLOC_PERMUTATIONS_DEFAULT, COLOC_PERMUTATIONS_MAX, ColocCost, ColocFrame, ColocMoments,

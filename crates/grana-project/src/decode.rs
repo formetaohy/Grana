@@ -5,8 +5,8 @@ use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
 use grana_geometry::{Bounds, Geometry, PackedMesh};
 use grana_measure::{
-    Aggregate, Filter, Group, Lasso, MeasureView, Measurement, RelationField, Scope, Statistic,
-    TrackMeasurement,
+    Aggregate, ChildField, ChildMetric, Filter, Group, Lasso, MeasureView, Measurement,
+    RelationField, Scope, Statistic, TrackMeasurement,
 };
 use grana_measure::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocCost, ColocFrame,
@@ -200,10 +200,10 @@ impl Decode for SceneState {
                 || set
                     .object_color
                     .metric
-                    .is_some_and(|metric| !color_applies(set, channels, metric))
+                    .is_some_and(|metric| !color_applies(&state.sets, set, channels, metric))
                 || set
                     .label
-                    .is_some_and(|metric| !color_applies(set, channels, metric))
+                    .is_some_and(|metric| !color_applies(&state.sets, set, channels, metric))
                 || set
                     .track_color
                     .metric
@@ -997,8 +997,48 @@ impl Decode for ObjectColor {
                     shift,
                 })
             }
+            2 => {
+                let target = ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?;
+                Ok(Self::Child {
+                    target,
+                    field: ChildField::decode(reader)?,
+                })
+            }
             _ => Err(FAULT_SHAPE),
         }
+    }
+}
+
+impl Decode for ChildField {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        match reader.u8()? {
+            0 => Ok(Self::Count),
+            1 => Ok(Self::Stat {
+                metric: ChildMetric::decode(reader)?,
+                statistic: Statistic::from_index(reader.u8()?).ok_or(FAULT_SHAPE)?,
+            }),
+            _ => Err(FAULT_SHAPE),
+        }
+    }
+}
+
+impl Decode for ChildMetric {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        Ok(match reader.u8()? {
+            0 => Self::Diameter,
+            1 => Self::Contrast,
+            2 => Self::Volume,
+            3 => Self::Area,
+            4 => Self::Sphericity,
+            5 => Self::Voxels,
+            6 => Self::Length,
+            7 => Self::Branches,
+            8 => Self::Terminals,
+            9 => Self::Junctions,
+            10 => Self::Nodes,
+            11 => Self::Intensity(reader.u32()? as usize),
+            _ => return Err(FAULT_SHAPE),
+        })
     }
 }
 
@@ -1605,7 +1645,7 @@ fn provenance_acyclic(sets: &[SetState]) -> bool {
     true
 }
 
-fn color_applies(set: &SetState, channels: usize, metric: ObjectColor) -> bool {
+fn color_applies(sets: &[SetState], set: &SetState, channels: usize, metric: ObjectColor) -> bool {
     match metric {
         ObjectColor::Measurement(measurement) => {
             measurement.colorable() && set.kind.measurements(channels).contains(&measurement)
@@ -1620,6 +1660,23 @@ fn color_applies(set: &SetState, channels: usize, metric: ObjectColor) -> bool {
                     .relations
                     .iter()
                     .any(|relation| relation.target == target.raw() && relation.shift == shift)
+        }
+        ObjectColor::Child { target, field } => {
+            let Some(child) = sets.iter().find(|candidate| candidate.id == target.raw()) else {
+                return false;
+            };
+            let metrics = child
+                .kind
+                .measurements(channels)
+                .into_iter()
+                .filter_map(ChildMetric::of)
+                .collect::<Vec<_>>();
+            child.id != set.id
+                && child
+                    .relations
+                    .iter()
+                    .any(|relation| relation.target == set.id && relation.shift == 0)
+                && ChildField::fields(&metrics).contains(&field)
         }
     }
 }

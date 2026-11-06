@@ -8,8 +8,8 @@ fn gates_rows_within_a_lasso_polygon_and_a_frame() {
     let channels = ["EGFP".to_string()];
     let table = Table::build(
         &[
-            Frame::new(0, Objects::Spots(&first), &[]),
-            Frame::new(1, Objects::Spots(&second), &[]),
+            Frame::new(0, Objects::Spots(&first), &[], &[]),
+            Frame::new(1, Objects::Spots(&second), &[], &[]),
         ],
         None,
         &channels,
@@ -59,8 +59,8 @@ fn locates_the_nearest_observation_of_a_gated_row_set() {
     let channels = ["EGFP".to_string()];
     let table = Table::build(
         &[
-            Frame::new(0, Objects::Spots(&first), &[]),
-            Frame::new(1, Objects::Spots(&second), &[]),
+            Frame::new(0, Objects::Spots(&first), &[], &[]),
+            Frame::new(1, Objects::Spots(&second), &[], &[]),
         ],
         None,
         &channels,

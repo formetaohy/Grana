@@ -226,6 +226,7 @@ fn object<'a>(
         children.push(summary(ctx, kind, current, mean, detected, frames, time));
         children.extend(appearance(ctx, state, id, width));
         children.extend(relations(ctx, state, id));
+        children.extend(children_section(ctx, state, id));
         if state
             .scene
             .objects
@@ -677,7 +678,61 @@ fn label_metrics(scene: &Scene, set: &ObjectSet) -> Vec<(Option<ObjectColor>, St
             ));
         }
     }
+    options.extend(
+        child_metrics(scene, set, &channels)
+            .into_iter()
+            .map(|(metric, label)| (Some(metric), label)),
+    );
     options
+}
+
+fn child_metrics(scene: &Scene, set: &ObjectSet, names: &[String]) -> Vec<(ObjectColor, String)> {
+    let mut options = Vec::new();
+    for child in scene.child_sets(set.id()) {
+        let Some(child) = scene.objects.get(child) else {
+            continue;
+        };
+        for field in child.child_fields() {
+            options.push((
+                ObjectColor::Child {
+                    target: child.id(),
+                    field,
+                },
+                format!("{} · {}", child.name(), field.label(names)),
+            ));
+        }
+    }
+    options
+}
+
+fn children_section<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+    id: ObjectSetId,
+) -> Vec<Element<'a, Message>> {
+    let children = state.scene.child_sets(id);
+    if children.is_empty() {
+        return Vec::new();
+    }
+    let salt = format!("object.{}.children", id.raw());
+    let key = Key::new(&salt);
+    let open = state.workspace.sections.is_open(key);
+    let mut elements = Vec::new();
+    if open {
+        for child in children {
+            let Some(set) = state.scene.objects.get(child) else {
+                continue;
+            };
+            let text = match state.scene.child_count(id, child) {
+                Some(count) => format!("{} · {count} inside", set.name()),
+                None => set.name().to_string(),
+            };
+            elements.push(view::labelled(ctx, "Child", &text));
+        }
+    }
+    vec![crate::inspector::disclosure(
+        ctx, &salt, "Children", open, elements,
+    )]
 }
 
 fn origin<'a>(
@@ -1058,6 +1113,7 @@ fn appearance<'a>(
             metrics.push((metric, format!("{target} · {}{shift}", field.label())));
         }
     }
+    metrics.extend(child_metrics(state.scene, set, &names));
     let extent = set.object_extent();
     let coloring = set.object_coloring().clone();
     let salt = format!("object.{}.coloring", id.raw());

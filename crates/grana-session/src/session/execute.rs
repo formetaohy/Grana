@@ -267,8 +267,8 @@ impl Session {
                 }
             }
             Command::SetObjectColoring { set, coloring } => {
-                if let Some(target) = self.object_mut(set) {
-                    target.set_object_coloring(coloring);
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_object_coloring(set, coloring);
                 }
             }
             Command::SetMask(source) => {

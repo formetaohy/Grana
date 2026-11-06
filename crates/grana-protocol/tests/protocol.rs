@@ -4,9 +4,9 @@ use grana_display::{
     CameraState, Coloring, Palette, SectionState, Shading, Stop, TransferFunction,
 };
 use grana_measure::{
-    Aggregate, ColocCost, ColocFrame, ColocPair, ColocSeries, ColocSeriesInfo, ColocSignificance,
-    ColocThresholds, Group, Lasso, MeasureView, Measurement, RelationField, Scope,
-    TrackMeasurement,
+    Aggregate, ChildField, ChildMetric, ColocCost, ColocFrame, ColocPair, ColocSeries,
+    ColocSeriesInfo, ColocSignificance, ColocThresholds, Group, Lasso, MeasureView, Measurement,
+    RelationField, Scope, Statistic, TrackMeasurement,
 };
 use grana_object::{IntensityTable, RelationFrame, SampleAccumulator, Spot, SpotSet};
 use grana_project::{Export, ViewState};
@@ -773,11 +773,7 @@ fn stages_the_presentation_of_a_captured_protocol() {
     object.set_palette(Palette::Magma);
     object.set_reversed(true);
     object.set_manual(Some((0.5, 2.5)));
-    scene
-        .objects
-        .get_mut(beads)
-        .expect("the spot set")
-        .set_object_coloring(object);
+    assert!(scene.objects.set_object_coloring(beads, object));
     let mut track = Coloring::new();
     track.set_metric(Some(TrackColor::Measurement(TrackMeasurement::Speed)));
     scene
@@ -1512,4 +1508,87 @@ fn round_trips_an_imported_label_image() {
         .expect("the staged set exists");
     assert_eq!(set.kind(), ObjectKind::Surfaces);
     assert_eq!(set.provenance().label(), Some("original/cells"));
+}
+
+#[test]
+fn round_trips_a_child_color() {
+    let extent = Extent::new(4, 4, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "DAPI",
+            [0.3, 0.4, 1.0],
+            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+        )],
+    );
+    let series = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let parent = scene.add_object(ObjectKind::Spots, 0);
+    let child = scene.add_object(ObjectKind::Spots, 0);
+    assert!(scene.add_relation(child, parent, 0));
+    let count = ChildField::Count;
+    let diameter = ChildField::Stat {
+        metric: ChildMetric::Diameter,
+        statistic: Statistic::Mean,
+    };
+    let mut coloring = scene
+        .objects
+        .get(parent)
+        .expect("the parent exists")
+        .object_coloring()
+        .clone();
+    coloring.set_metric(Some(ObjectColor::Child {
+        target: child,
+        field: count,
+    }));
+    assert!(scene.objects.set_object_coloring(parent, coloring));
+    assert!(scene.set_label_metric(
+        parent,
+        Some(ObjectColor::Child {
+            target: child,
+            field: diameter,
+        })
+    ));
+    let protocol = Protocol::capture(&scene, &Measure::new(), None).expect("the analysis captures");
+    let color = protocol.sets()[0]
+        .color_by
+        .as_ref()
+        .expect("the protocol keeps the child color");
+    assert!(color.child);
+    assert_eq!(color.key.as_deref(), Some("count"));
+    let label = protocol.sets()[0]
+        .label
+        .as_ref()
+        .expect("the protocol keeps the child label");
+    assert!(label.child);
+    assert_eq!(label.statistic.as_deref(), Some("mean"));
+    let text = protocol.to_json().expect("the protocol serializes");
+    let parsed = Protocol::from_json(&text).expect("the protocol parses back");
+    assert_eq!(parsed, protocol);
+
+    let mut staged_scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let staged = parsed
+        .stage(&mut staged_scene)
+        .expect("the protocol stages");
+    let staged_parent = staged.set(0);
+    let staged_child = staged.set(1);
+    let set = staged_scene
+        .objects
+        .get(staged_parent)
+        .expect("the staged parent exists");
+    assert_eq!(
+        set.object_coloring().metric(),
+        Some(ObjectColor::Child {
+            target: staged_child,
+            field: count,
+        })
+    );
+    assert_eq!(
+        set.label_metric(),
+        Some(ObjectColor::Child {
+            target: staged_child,
+            field: diameter,
+        })
+    );
 }

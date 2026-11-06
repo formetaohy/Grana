@@ -402,6 +402,7 @@ fn object_color(
         target: None,
         field: None,
         aggregate: None,
+        child: false,
         shift: 0,
     };
     Some(match metric {
@@ -419,6 +420,19 @@ fn object_color(
             shift,
             ..color
         },
+        ObjectColor::Child { target, field } => ColorSpec {
+            key: Some(
+                field
+                    .metric()
+                    .map_or_else(|| "count".to_string(), |metric| metric.key(keys)),
+            ),
+            target: Some(scene.objects.get(target)?.key().as_str().to_string()),
+            aggregate: field
+                .statistic()
+                .map(|statistic| statistic.key().to_string()),
+            child: true,
+            ..color
+        },
     })
 }
 
@@ -429,6 +443,7 @@ fn track_color(coloring: &Coloring<TrackColor>, scene: &Scene) -> Option<ColorSp
         target: None,
         field: None,
         aggregate: None,
+        child: false,
         shift: 0,
         palette: coloring.palette().name().to_ascii_lowercase(),
         reversed: coloring.reversed(),

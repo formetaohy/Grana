@@ -36,6 +36,11 @@ impl Protocol {
         }
         let mut names = Vec::new();
         let mut set_keys = Vec::new();
+        let protocol_keys = self
+            .sets
+            .iter()
+            .map(|set| set.key.as_str())
+            .collect::<Vec<_>>();
         if let Some(drift) = &self.drift {
             validate(&drift.channel, "a channel name")?;
             if !self.channels.is_empty() && !self.channels.iter().any(|c| c.name == drift.channel) {
@@ -124,27 +129,33 @@ impl Protocol {
             if let Some(color) = &set.color_by {
                 color.checked(&set.name)?;
                 if let Some(target) = &color.target
-                    && !set_keys.contains(target)
+                    && !protocol_keys.contains(&target.as_str())
                 {
                     return Err(ProtocolError::Invalid(format!(
-                        "{} is colored by a relation to {target}, which is not an object set of the protocol",
-                        set.name
+                        "{} is colored by {}, which is not an object set of the protocol",
+                        set.name, target
                     )));
                 }
             }
             if let Some(label) = &set.label {
                 label.checked(&set.name)?;
                 if let Some(target) = &label.target
-                    && !set_keys.contains(target)
+                    && !protocol_keys.contains(&target.as_str())
                 {
                     return Err(ProtocolError::Invalid(format!(
-                        "{} labels its objects by a relation to {target}, which is not an object set of the protocol",
-                        set.name
+                        "{} labels its objects by {}, which is not an object set of the protocol",
+                        set.name, target
                     )));
                 }
             }
             if let Some(color) = &set.track_by {
                 color.checked(&format!("the tracks of {}", set.name))?;
+                if color.child {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{} colors its tracks by the children of an object",
+                        set.name
+                    )));
+                }
                 if set.track.is_none() {
                     return Err(ProtocolError::Invalid(format!(
                         "{} carries track colors without tracking",
@@ -258,10 +269,15 @@ impl Protocol {
                 let Some(target) = &color.target else {
                     continue;
                 };
-                if !relations.contains(&(&set.key, target, color.shift)) {
+                let measured = if color.child {
+                    relations.contains(&(target, &set.key, 0))
+                } else {
+                    relations.contains(&(&set.key, target, color.shift))
+                };
+                if !measured {
                     return Err(ProtocolError::Invalid(format!(
-                        "{} is colored by a relation to {target} at the offset {} that the protocol does not measure",
-                        set.name, color.shift
+                        "{} is colored by {} at the offset {} that the protocol does not measure",
+                        set.name, target, color.shift
                     )));
                 }
             }
@@ -273,10 +289,15 @@ impl Protocol {
             let Some(target) = &label.target else {
                 continue;
             };
-            if !relations.contains(&(&set.key, target, label.shift)) {
+            let measured = if label.child {
+                relations.contains(&(target, &set.key, 0))
+            } else {
+                relations.contains(&(&set.key, target, label.shift))
+            };
+            if !measured {
                 return Err(ProtocolError::Invalid(format!(
-                    "{} labels its objects by a relation to {target} at the offset {} that the protocol does not measure",
-                    set.name, label.shift
+                    "{} labels its objects by {} at the offset {} that the protocol does not measure",
+                    set.name, target, label.shift
                 )));
             }
         }

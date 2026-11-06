@@ -50,7 +50,13 @@ pub fn frame(scene: &Scene) -> Result<RenderedScene<'_>, String> {
         let Some(frame) = set.frame(scene.time()) else {
             continue;
         };
-        let color = |index: usize| set.object_color(scene.time(), frame, index);
+        let colors = scene.object_colors(set);
+        let color = |index: usize| {
+            colors
+                .as_ref()
+                .and_then(|colors| colors.get(index).copied())
+                .unwrap_or_else(|| set.color())
+        };
         if let Some(spots) = frame.spots() {
             for (index, spot) in spots.spots().iter().enumerate() {
                 if !set.visible_object(scene.time(), index) {
