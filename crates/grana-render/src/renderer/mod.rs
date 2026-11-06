@@ -22,7 +22,7 @@ use wgpu::{
     TextureViewDescriptor,
 };
 
-use crate::atlas::{Atlas, PACK, ResidentBrick};
+use crate::atlas::{Atlas, PACK, ResidentBrick, pack_components, pack_texels};
 use crate::brick::{BrickRecord, BrickTable};
 use crate::census::{CENSUS_LEVELS, Census};
 use crate::cut::CutLayer;
@@ -288,9 +288,10 @@ impl Renderer {
             "a pyramid holds at least one level"
         );
         let finest = BrickGrid::new(pyramid.level(0).extent()).count() as u64;
-        let packs = channels.div_ceil(PACK);
-        let slot_bytes =
-            (PADDED_SIDE as u64).pow(3) * size_of::<[u16; PACK]>() as u64 * packs as u64;
+        let texels = (0..channels.div_ceil(PACK))
+            .map(|pack| pack_texels(pack_components(channels, pack)))
+            .sum::<usize>();
+        let slot_bytes = (PADDED_SIDE as u64).pow(3) * size_of::<u16>() as u64 * texels as u64;
         let requested = (self.budget / slot_bytes).max(1).min(finest);
         let atlas = Atlas::new(
             device,
@@ -420,17 +421,15 @@ impl Renderer {
             other.set_record(queue, brick.index, BrickRecord::MISSING);
         }
         let voxels = data.channels()[0].voxel_count();
-        let mut units = vec![0u16; voxels * PACK];
         for pack in 0..(*channels).div_ceil(PACK) {
-            units.fill(0);
-            for component in 0..PACK {
+            let components = pack_components(*channels, pack);
+            let texels = pack_texels(components);
+            let mut units = vec![0u16; voxels * texels];
+            for component in 0..components {
                 let channel = pack * PACK + component;
-                if channel >= *channels {
-                    break;
-                }
                 let intensity = pyramid.channels()[channel].intensity();
                 data.channels()[channel]
-                    .write_units_strided(intensity, &mut units, PACK, component);
+                    .write_units_strided(intensity, &mut units, texels, component);
             }
             atlas.write(queue, pack, slot, &units);
         }

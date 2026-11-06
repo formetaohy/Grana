@@ -23,7 +23,7 @@ use grana_volume::{
 };
 
 const BUDGET: u64 = 512 << 20;
-const SLOT_BYTES: u64 = (PADDED_SIDE as u64).pow(3) * size_of::<[u16; 4]>() as u64;
+const SLOT_BYTES: u64 = (PADDED_SIDE as u64).pow(3) * size_of::<u16>() as u64;
 const WHOLE: [u32; 4] = [0, 0, SIDE, SIDE];
 const CORNER: [u32; 4] = [0, 0, 1, 1];
 const SECTION_AREA: [u32; 4] = [1, 1, SIDE - 1, SIDE - 1];
@@ -102,55 +102,23 @@ fn streams_two_channels() {
 
 #[test]
 fn samples_a_channel_beyond_the_first_pack() {
-    let Some((device, queue)) = device() else {
+    let Some(pixels) = packed_render(packed_volume(5, 4)) else {
         return;
     };
-    let texture = target(&device, SIDE);
-    let view = texture.create_view(&Default::default());
-    let volume = five_channel_volume();
-    let pyramid = volume.pyramid();
-    let transfers = pyramid
-        .channels()
-        .iter()
-        .map(|channel| TransferFunction::tinted(channel.tint()))
-        .collect::<Vec<_>>();
-    let channels = channels(&pyramid, &transfers);
-    let mut camera = Camera::new(35.0);
-    camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let section = SectionCamera::new(Axis::Z);
-    let scene = SceneFrame {
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        styles: &[],
-        layers: &[],
-        markers: &[],
-    };
-    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
-    renderer.set_dataset(&device, &pyramid);
-    settle(
-        &mut renderer,
-        Session {
-            device: &device,
-            queue: &queue,
-            target: &view,
-            camera: &camera,
-            section: &section,
-            scene: &scene,
-            volume_region: WHOLE,
-            section_region: CORNER,
-            region: Region::none(),
-            time: 0,
-        },
-        |request| {
-            let grid = BrickGrid::new(volume.extent());
-            volume.brick(&grid, request.coord)
-        },
-    );
-    let pixels = read_pixels(&device, &queue, &texture, SIDE);
     assert!(
         red_pixels(&pixels) > 200,
         "the fifth channel lives in the second pack"
+    );
+}
+
+#[test]
+fn samples_a_pack_with_three_channels() {
+    let Some(pixels) = packed_render(packed_volume(3, 2)) else {
+        return;
+    };
+    assert!(
+        red_pixels(&pixels) > 200,
+        "the third channel pads its pack to four texels"
     );
 }
 
@@ -2222,7 +2190,53 @@ fn two_channel_volume() -> Volume {
     )
 }
 
-fn five_channel_volume() -> Volume {
+fn packed_render(volume: Volume) -> Option<Vec<[u8; 4]>> {
+    let (device, queue) = device()?;
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let pyramid = volume.pyramid();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
+    renderer.set_dataset(&device, &pyramid);
+    settle(
+        &mut renderer,
+        Session {
+            device: &device,
+            queue: &queue,
+            target: &view,
+            camera: &camera,
+            section: &section,
+            scene: &scene,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            region: Region::none(),
+            time: 0,
+        },
+        |request| {
+            let grid = BrickGrid::new(volume.extent());
+            volume.brick(&grid, request.coord)
+        },
+    );
+    Some(read_pixels(&device, &queue, &texture, SIDE))
+}
+
+fn packed_volume(channels: usize, active: usize) -> Volume {
     let extent = Extent::new(128, 128, 96);
     let count = extent.voxel_count() as usize;
     let mut red = vec![0u16; count];
@@ -2234,18 +2248,24 @@ fn five_channel_volume() -> Volume {
             }
         }
     }
-    let empty = || VoxelData::U16(vec![0; count]);
-    Volume::new(
-        extent,
-        Spacing::new(0.1, 0.1, 0.13),
-        vec![
-            Channel::new("one", [0.2, 0.4, 1.0], empty()),
-            Channel::new("two", [0.2, 1.0, 0.3], empty()),
-            Channel::new("three", [0.9, 0.9, 0.3], empty()),
-            Channel::new("four", [0.6, 0.4, 1.0], empty()),
-            Channel::new("five", [1.0, 0.2, 0.2], VoxelData::U16(red)),
-        ],
-    )
+    let tint = |channel: usize| {
+        if channel == active {
+            [1.0, 0.2, 0.2]
+        } else {
+            [0.2, 0.4, 1.0]
+        }
+    };
+    let channels = (0..channels)
+        .map(|channel| {
+            let data = if channel == active {
+                VoxelData::U16(red.clone())
+            } else {
+                VoxelData::U16(vec![0; count])
+            };
+            Channel::new(format!("channel {}", channel + 1), tint(channel), data)
+        })
+        .collect();
+    Volume::new(extent, Spacing::new(0.1, 0.1, 0.13), channels)
 }
 
 fn density(x: u32, y: u32, z: u32, centre_x: f32) -> u16 {
