@@ -35,6 +35,10 @@ impl Motion {
         Self::response(0.18, 0.0)
     }
 
+    pub fn reduced(self) -> Self {
+        Self::response(self.duration, 0.0)
+    }
+
     pub fn spring(self) -> Analytic {
         Analytic::new(self.duration, self.bounce)
     }

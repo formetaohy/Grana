@@ -157,7 +157,7 @@ fn split_handle(ui: &mut Ui, volume: Rect, section: Rect, viewport: &mut grana_d
     ui.glass(
         ui.id("split.lens"),
         rect,
-        GlassStyle::stage_control().interactive(),
+        GlassStyle::stage_control().interactive().draggable(),
     );
     let mut painter = ui.painter();
     painter.rect(

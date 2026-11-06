@@ -86,8 +86,6 @@ pub struct Palette {
     pub material_border: Color,
     pub hud_fill: Color,
     pub hud_border: Color,
-    pub knob: Color,
-    pub knob_shade: Color,
     pub track: Color,
     pub shade: Color,
 }
@@ -121,8 +119,6 @@ impl Palette {
             material_border: Color::white_alpha(0.13),
             hud_fill: Color::rgba(0.03, 0.03, 0.04, 0.66),
             hud_border: Color::white_alpha(0.14),
-            knob: Color::bytes(255, 255, 255),
-            knob_shade: Color::bytes(226, 227, 233),
             track: Color::white_alpha(0.18),
             shade: Color::black_alpha(0.30),
         }
@@ -156,8 +152,6 @@ impl Palette {
             material_border: Color::black_alpha(0.10),
             hud_fill: Color::white_alpha(0.72),
             hud_border: Color::black_alpha(0.10),
-            knob: Color::bytes(255, 255, 255),
-            knob_shade: Color::bytes(240, 240, 245),
             track: Color::black_alpha(0.14),
             shade: Color::black_alpha(0.14),
         }
@@ -188,7 +182,7 @@ impl Metrics {
             card_radius: 16.0,
             hairline: 1.0,
             track: 4.0,
-            thumb: 18.0,
+            thumb: 20.0,
             switch_width: 42.0,
             switch_height: 26.0,
         }

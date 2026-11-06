@@ -77,10 +77,18 @@ impl Scroll {
         self.velocity = spring.velocity;
         self.moving = !spring.is_at_rest();
         let goal = if self.moving { 1.0 } else { 0.0 };
-        let smooth = Motion::smooth();
+        let smooth = if motion.is_instant() {
+            Motion::INSTANT
+        } else {
+            Motion::smooth()
+        };
         let mut bar = Animated::new(self.bar, smooth.spring());
         bar.animate_to(goal, smooth.spring());
-        bar.step(elapsed);
+        if motion.is_instant() {
+            bar.snap(goal);
+        } else {
+            bar.step(elapsed);
+        }
         self.bar = bar.value;
     }
 
@@ -248,10 +256,15 @@ impl Registry {
         self.popup_interacted = false;
     }
 
-    pub fn end(&mut self, elapsed: f32) {
+    pub fn end(&mut self, elapsed: f32, physics: bool) {
+        let motion = if physics {
+            Motion::quick()
+        } else {
+            Motion::INSTANT
+        };
         for scroll in self.scroll.values_mut() {
             if !scroll.settled() {
-                scroll.update(elapsed, Motion::quick());
+                scroll.update(elapsed, motion);
             }
         }
         std::mem::swap(&mut self.hits, &mut self.next_hits);

@@ -138,7 +138,7 @@ fn scrub(ui: &mut Ui, rect: Rect, frame: u32, frames: u32) -> Option<u32> {
         );
     }
     let knob = Rect::from_center_size(Vec2::new(knob_x, bar.center().y), knob_size);
-    ui.glass(ui.id("timeline.knob"), knob, GlassStyle::lens());
+    ui.glass(ui.id("timeline.knob"), knob, GlassStyle::lens().draggable());
     if frames <= 40 {
         let spacing = bar.width() / (frames - 1) as f32;
         if spacing >= 9.0 {

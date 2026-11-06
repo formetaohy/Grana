@@ -91,6 +91,15 @@ fn expand(b: Bounds, by: f32) -> Bounds {
     [b[0] - by, b[1] - by, b[2] + by, b[3] + by]
 }
 
+fn intersect_bounds(a: Bounds, b: Bounds) -> Bounds {
+    [
+        a[0].max(b[0]),
+        a[1].max(b[1]),
+        a[2].min(b[2]),
+        a[3].min(b[3]),
+    ]
+}
+
 fn intersects(a: Bounds, b: Bounds) -> bool {
     a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 }
@@ -195,6 +204,7 @@ fn pack(scene: &Scene, layers: Layers, scale: f32, viewport: Vec2, out: &mut Pac
 
         let first = out.shapes.len() as u32;
         let mut bounds = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+        let mut clip = screen;
 
         let mut margin: f32 = 2.0 * s;
         for member in &members {
@@ -225,10 +235,26 @@ fn pack(scene: &Scene, layers: Layers, scale: f32, viewport: Vec2, out: &mut Pac
             let c = g.center * s;
             let r = g.reach() * s;
             bounds = union(bounds, [c.x - r.x, c.y - r.y, c.x + r.x, c.y + r.y]);
+            if let Some(region) = scene.nodes[member.id].glass.clip {
+                clip = [
+                    clip[0].max(region.x * s),
+                    clip[1].max(region.y * s),
+                    clip[2].min((region.x + region.width) * s),
+                    clip[3].min((region.y + region.height) * s),
+                ];
+            }
         }
 
         let k = spacing * s;
-        let bounds = clamp_bounds(expand(bounds, margin + k * 0.25 + 1.0), screen);
+        let bounds = clamp_bounds(
+            intersect_bounds(expand(bounds, margin + k * 0.25 + 1.0), clip),
+            screen,
+        );
+        if bounds[0] >= bounds[2] || bounds[1] >= bounds[3] {
+            out.shapes.truncate(first as usize);
+            out.materials.truncate(first as usize);
+            continue;
+        }
 
         let blend = out.materials[first as usize..]
             .windows(2)

@@ -4,6 +4,7 @@ use glam::Vec2;
 
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
+use crate::glass::GlassStyle;
 use crate::input::Key;
 use crate::motion::Motion;
 use crate::registry::Cursor;
@@ -11,8 +12,6 @@ use crate::style::{Border, Fill, Shadow};
 use crate::text::{Align, TextStyle};
 use crate::theme::{Level, Role};
 use crate::ui::{Length, Ui};
-
-use super::knob_shadow;
 
 pub struct SliderText<'a> {
     pub label: Option<&'a str>,
@@ -211,10 +210,7 @@ fn slider_core(
     );
     let filled = Rect::from_min_max(
         bar.min,
-        Vec2::new(
-            (knob_rect.min.x + 2.0).clamp(bar.min.x, bar.max.x),
-            bar.max.y,
-        ),
+        Vec2::new(knob_rect.center().x.clamp(bar.min.x, bar.max.x), bar.max.y),
     );
     let readout_style = TextStyle::new(ui.theme().font(Level::Monospace), palette.text_secondary)
         .aligned(Align::End);
@@ -258,32 +254,7 @@ fn slider_core(
             );
         }
     }
-    {
-        let mut painter = ui.painter();
-        painter.shadow(knob_rect, Corners::capsule(), knob_shadow());
-        painter.gradient(
-            knob_rect,
-            Corners::capsule(),
-            palette.knob,
-            palette.knob_shade,
-        );
-        if knob_rect.height() > 8.0 {
-            painter.rect(
-                Rect::from_min_max(
-                    Vec2::new(
-                        knob_rect.min.x + knob_rect.width() * 0.28,
-                        knob_rect.min.y + 1.4,
-                    ),
-                    Vec2::new(
-                        knob_rect.max.x - knob_rect.width() * 0.28,
-                        knob_rect.min.y + 2.4,
-                    ),
-                ),
-                Corners::capsule(),
-                Color::white_alpha(0.7),
-            );
-        }
-    }
+    ui.glass(key ^ 0x5d, knob_rect, GlassStyle::knob().interactive());
     changed
 }
 
@@ -356,6 +327,17 @@ pub fn range_slider(
     let low_x = bar.min.x + bar.width() * normalize(next_start);
     let high_x = bar.min.x + bar.width() * normalize(next_end);
     let shade = palette.shade.amplify(0.55);
+    let knob_rect = |x: f32, active: bool| {
+        Rect::from_center_size(
+            Vec2::new(x, bar.center().y),
+            Vec2::new(
+                10.0 + grow * 2.0,
+                20.0 + grow * 3.0 + if active { 2.0 } else { 0.0 },
+            ),
+        )
+    };
+    let low_knob = knob_rect(low_x, low.active);
+    let high_knob = knob_rect(high_x, high.active);
     {
         let mut painter = ui.painter();
         painter.rect(
@@ -376,14 +358,13 @@ pub fn range_slider(
             },
             shade,
         );
-        for (x, active) in [(low_x, low.active), (high_x, high.active)] {
-            let width = 6.0 + grow * 2.0;
-            let height = 18.0 + grow * 2.0 + if active { 2.0 } else { 0.0 };
-            let knob =
-                Rect::from_center_size(Vec2::new(x, bar.center().y), Vec2::new(width, height));
-            painter.shadow(knob, Corners::capsule(), knob_shadow());
-            painter.gradient(knob, Corners::capsule(), palette.knob, palette.knob_shade);
-        }
+    }
+    for (index, knob) in [low_knob, high_knob].into_iter().enumerate() {
+        ui.glass(
+            key ^ (0x61 + index as u64),
+            knob,
+            GlassStyle::knob().interactive(),
+        );
     }
     let changed = (next_start - start).abs() > 1.0e-6 || (next_end - end).abs() > 1.0e-6;
     changed.then_some((

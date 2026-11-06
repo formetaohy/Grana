@@ -292,6 +292,8 @@ pub struct Ui {
     edit_seen: bool,
     edit_caret: Option<Rect>,
     clipboard: Box<dyn Clipboard>,
+    physics: bool,
+    reduce_motion: bool,
 }
 
 impl Ui {
@@ -330,6 +332,8 @@ impl Ui {
             edit_seen: false,
             edit_caret: None,
             clipboard: Box::new(NullClipboard),
+            physics: true,
+            reduce_motion: false,
         }
     }
 
@@ -363,6 +367,32 @@ impl Ui {
 
     pub fn time(&self) -> f32 {
         self.time
+    }
+
+    pub fn physics(&self) -> bool {
+        self.physics
+    }
+
+    pub fn set_physics(&mut self, on: bool) {
+        self.physics = on;
+    }
+
+    pub fn reduce_motion(&self) -> bool {
+        self.reduce_motion
+    }
+
+    pub fn set_reduce_motion(&mut self, on: bool) {
+        self.reduce_motion = on;
+    }
+
+    fn motion(&self, motion: Motion) -> Motion {
+        if !self.physics {
+            Motion::INSTANT
+        } else if self.reduce_motion {
+            motion.reduced()
+        } else {
+            motion
+        }
     }
 
     pub fn text(&mut self) -> &mut Text {
@@ -504,6 +534,8 @@ impl Ui {
         self.popup_clip = self.overlay_clip;
         self.glass.appearance.dark = self.theme.dark;
         self.glass.appearance.transparency = 0.5;
+        self.glass.appearance.reduce_motion = self.reduce_motion || !self.physics;
+        self.glass.physics = self.physics;
         let primary = self.input.button(Button::Primary);
         if primary.pressed && self.input.inside() {
             self.glass.pointer_down(pointer);
@@ -515,7 +547,7 @@ impl Ui {
     }
 
     pub fn end(&mut self) -> Frame {
-        self.registry.end(self.elapsed);
+        self.registry.end(self.elapsed, self.physics);
         if !self.edit_seen {
             self.end_edit();
         }
@@ -588,6 +620,7 @@ impl Ui {
         }
         self.glass_seen.push(key);
         self.register_occluder(rect);
+        let clip = self.area().clip.rect;
         let entry = self.glass_entries.get(&key).copied();
         match entry {
             Some(entry) => {
@@ -603,14 +636,19 @@ impl Ui {
                     );
                 }
                 self.glass.place(entry.id, frame);
+                self.glass.set_clip(entry.id, Some(glass_rect(clip)));
             }
             None => {
                 let mut glass = Glass::new(frame)
                     .shape(style.shape)
                     .material(style.material)
-                    .z(style.layer);
+                    .z(style.layer)
+                    .clip(glass_rect(clip));
                 if style.interactive {
                     glass = glass.interactive();
+                }
+                if style.lens {
+                    glass = glass.lens();
                 }
                 let id = self.glass.add(glass);
                 self.glass_entries.insert(key, GlassEntry { id, style });
@@ -1538,6 +1576,7 @@ impl Ui {
     }
 
     pub fn spring_to(&mut self, key: u64, target: f32, motion: Motion) -> f32 {
+        let motion = self.motion(motion);
         self.registry
             .spring(mix(key, PROPERTY_SALT), target, motion, self.elapsed)
     }
@@ -1710,6 +1749,7 @@ impl Ui {
     }
 
     pub fn animate(&mut self, key: u64, target: f32, motion: Motion) -> f32 {
+        let motion = self.motion(motion);
         self.registry
             .spring(mix(key, PROPERTY_SALT), target, motion, self.elapsed)
     }

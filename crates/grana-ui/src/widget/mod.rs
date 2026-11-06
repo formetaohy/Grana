@@ -24,8 +24,6 @@ pub use slider::{
 };
 pub use toggle::{checkbox, toggle, toggle_row};
 
-use crate::color::Color;
-use crate::style::Shadow;
 use crate::theme::TypeStyle;
 use crate::ui::Ui;
 
@@ -35,10 +33,6 @@ pub(crate) fn padding(ui: &Ui) -> f32 {
 
 pub(crate) fn button_font(ui: &Ui) -> TypeStyle {
     ui.theme().button_font()
-}
-
-pub(crate) fn knob_shadow() -> Shadow {
-    Shadow::new(Color::black_alpha(0.38), 9.0, 2.0)
 }
 
 pub(crate) fn pressed_inset(pressed: f32) -> f32 {

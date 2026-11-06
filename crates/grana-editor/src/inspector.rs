@@ -135,6 +135,8 @@ pub fn view_body(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>
     clip(ui, state.scene, commands);
     divider(ui);
     rendering(ui, state.scene, commands);
+    divider(ui);
+    motion(ui);
 }
 
 pub fn objects_body(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
@@ -927,6 +929,25 @@ fn rendering(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
         ui.store_open("lighting", next);
     });
     ui.store_open("rendering", next);
+}
+
+fn motion(ui: &mut Ui) {
+    let open = ui.disclosure_open("motion", false);
+    let next = widget::disclosure(ui, "motion", "Motion", open, |ui| {
+        let physics = ui.physics();
+        if let Some(value) = widget::toggle_row(ui, "motion.physics", "Spring physics", physics) {
+            ui.set_physics(value);
+        }
+        let reduce = ui.reduce_motion();
+        if let Some(value) = widget::toggle_row(ui, "motion.reduce", "Reduce motion", reduce) {
+            ui.set_reduce_motion(value);
+        }
+        widget::weak(
+            ui,
+            "Spring physics drives every control and glass press; reducing motion drops the bounce.",
+        );
+    });
+    ui.store_open("motion", next);
 }
 
 fn transfer_colors(transfer: &grana_display::TransferFunction) -> Vec<Color> {

@@ -1,4 +1,4 @@
-use grana_glass::{Material, Shape};
+use grana_glass::{Material, Shadow, Shape, Tone};
 
 pub const CHROME: i32 = 0;
 pub const FLOATING: i32 = 1;
@@ -10,6 +10,7 @@ pub struct GlassStyle {
     pub shape: Shape,
     pub layer: i32,
     pub interactive: bool,
+    pub lens: bool,
 }
 
 impl GlassStyle {
@@ -19,6 +20,7 @@ impl GlassStyle {
             shape,
             layer,
             interactive: false,
+            lens: false,
         }
     }
 
@@ -28,6 +30,7 @@ impl GlassStyle {
             shape,
             layer,
             interactive: false,
+            lens: false,
         }
     }
 
@@ -77,6 +80,7 @@ impl GlassStyle {
             shape: Shape::Capsule,
             layer: CHROME,
             interactive: false,
+            lens: false,
         }
     }
 
@@ -84,8 +88,49 @@ impl GlassStyle {
         Self::clear(Shape::Capsule, FLOATING)
     }
 
+    pub fn knob() -> Self {
+        let mut material = Material::clear();
+        material.refraction = 0.6;
+        material.depth = 12.0;
+        material.dispersion = 0.06;
+        material.frost = 2.2;
+        material.splay = 0.35;
+        material.specular = 1.05;
+        material.rim = 0.4;
+        material.rim_shade = 0.1;
+        material.edge = 0.3;
+        material.hairline = 0.16;
+        material.shadow = Shadow {
+            offset_y: 3.0,
+            blur: 6.0,
+            opacity: 0.22,
+        };
+        let tone = Tone {
+            lift: 0.11,
+            luminance: 1.0,
+            luminance_mix: 0.22,
+            lighten: 0.1,
+            darken_to: 1.0,
+            darken: 0.0,
+        };
+        material.light_tone = tone;
+        material.dark_tone = tone;
+        Self {
+            material,
+            shape: Shape::Capsule,
+            layer: FLOATING,
+            interactive: false,
+            lens: false,
+        }
+    }
+
     pub fn interactive(mut self) -> Self {
         self.interactive = true;
+        self
+    }
+
+    pub fn draggable(mut self) -> Self {
+        self.lens = true;
         self
     }
 }

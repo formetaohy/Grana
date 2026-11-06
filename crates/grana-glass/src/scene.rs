@@ -40,6 +40,13 @@ impl Rect {
     pub fn center(&self) -> Vec2 {
         Vec2::new(self.x + self.width * 0.5, self.y + self.height * 0.5)
     }
+
+    pub fn contains(&self, point: Vec2) -> bool {
+        point.x >= self.x
+            && point.y >= self.y
+            && point.x < self.x + self.width
+            && point.y < self.y + self.height
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -79,6 +86,7 @@ pub struct Glass {
     pub lens: bool,
     pub container: Option<ContainerId>,
     pub z: i32,
+    pub clip: Option<Rect>,
 }
 
 impl Glass {
@@ -91,6 +99,7 @@ impl Glass {
             lens: false,
             container: None,
             z: 0,
+            clip: None,
         }
     }
 
@@ -121,6 +130,11 @@ impl Glass {
 
     pub fn z(mut self, z: i32) -> Self {
         self.z = z;
+        self
+    }
+
+    pub fn clip(mut self, clip: Rect) -> Self {
+        self.clip = Some(clip);
         self
     }
 }
@@ -443,6 +457,12 @@ impl Scene {
         }
     }
 
+    pub fn set_clip(&mut self, id: GlassId, clip: Option<Rect>) {
+        if let Some(node) = self.nodes.get_mut(id) {
+            node.glass.clip = clip;
+        }
+    }
+
     pub fn set_light_angle(&mut self, degrees: f32) {
         let spring = self.spring(LIGHT_SWEEP);
         self.light_angle.animate_to(degrees, spring);
@@ -452,6 +472,7 @@ impl Scene {
         self.nodes
             .iter()
             .filter(|(_, n)| !n.removing && !n.glass.material.is_identity())
+            .filter(|(_, n)| n.glass.clip.is_none_or(|clip| clip.contains(p)))
             .filter(|(_, n)| self.geometry(n).contains(p))
             .max_by_key(|(_, n)| (self.z_of(n), n.order))
             .filter(|(_, n)| n.glass.interactive || n.glass.lens)

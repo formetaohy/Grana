@@ -2,13 +2,12 @@ use glam::Vec2;
 
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
+use crate::glass::GlassStyle;
 use crate::motion::Motion;
 use crate::style::{Border, Fill, Shadow};
 use crate::text::{Align, TextStyle};
 use crate::theme::Level;
 use crate::ui::Ui;
-
-use super::knob_shadow;
 
 pub fn toggle(ui: &mut Ui, id: &str, value: bool) -> Option<bool> {
     let key = ui.id(id);
@@ -33,16 +32,11 @@ fn switch(ui: &mut Ui, key: u64, rect: Rect, value: bool) -> Option<bool> {
         },
         Motion::quick(),
     );
-    let press = ui.animate(
-        key ^ 0x12,
-        if response.active { 1.0 } else { 0.0 },
-        Motion::quick(),
-    );
     let track = Rect::from_min_max(
         Vec2::new(rect.min.x, rect.center().y - rect.height() * 0.5 + 1.0),
         Vec2::new(rect.max.x, rect.center().y + rect.height() * 0.5 - 1.0),
     );
-    let knob = rect.height() + engaged * 0.9 + press * 0.9;
+    let knob = rect.height() + engaged * 0.9;
     let travel = (rect.width() - knob).max(0.0);
     let position = progress.clamp(-0.04, 1.04);
     let current = rect.min.x + travel * position;
@@ -61,45 +55,30 @@ fn switch(ui: &mut Ui, key: u64, rect: Rect, value: bool) -> Option<bool> {
     let fill = palette
         .track
         .lerp(palette.success, progress.clamp(0.0, 1.0));
-    let mut painter = ui.painter();
-    painter.outlined(
-        track,
-        Corners::capsule(),
-        Fill::Solid(fill),
-        Border {
-            width: 1.0,
-            color: palette.shade.amplify(0.55),
-        },
-        Shadow::NONE,
-    );
-    let inner = track.shrink(1.0);
-    let clip = painter.clip();
-    painter.push_clip(inner, Corners::capsule());
-    painter.gradient(
-        Rect::from_min_size(inner.min, Vec2::new(inner.width(), inner.height() * 0.5)),
-        Corners::ZERO,
-        palette.shade.amplify(0.35),
-        Color::TRANSPARENT,
-    );
-    painter.pop_clip(clip);
-    painter.shadow(knob_rect, Corners::capsule(), knob_shadow());
-    painter.gradient(
-        knob_rect,
-        Corners::capsule(),
-        palette.knob,
-        palette.knob_shade,
-    );
-    let highlight = Rect::from_min_max(
-        Vec2::new(
-            knob_rect.min.x + knob_rect.width() * 0.28,
-            knob_rect.min.y + 1.5,
-        ),
-        Vec2::new(
-            knob_rect.max.x - knob_rect.width() * 0.28,
-            knob_rect.min.y + 2.6,
-        ),
-    );
-    painter.rect(highlight, Corners::capsule(), Color::white_alpha(0.75));
+    {
+        let mut painter = ui.painter();
+        painter.outlined(
+            track,
+            Corners::capsule(),
+            Fill::Solid(fill),
+            Border {
+                width: 1.0,
+                color: palette.shade.amplify(0.55),
+            },
+            Shadow::NONE,
+        );
+        let inner = track.shrink(1.0);
+        let clip = painter.clip();
+        painter.push_clip(inner, Corners::capsule());
+        painter.gradient(
+            Rect::from_min_size(inner.min, Vec2::new(inner.width(), inner.height() * 0.5)),
+            Corners::ZERO,
+            palette.shade.amplify(0.35),
+            Color::TRANSPARENT,
+        );
+        painter.pop_clip(clip);
+    }
+    ui.glass(key ^ 0x5b, knob_rect, GlassStyle::knob().interactive());
     changed
 }
 
