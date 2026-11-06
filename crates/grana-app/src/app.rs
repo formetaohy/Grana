@@ -37,6 +37,7 @@ const FAST_FRAME_MS: f64 = 18.0;
 const MOTION_WARMUP: u32 = 2;
 const MOTION_SAMPLES: u32 = 3;
 const SETTLE_DELAY: Duration = Duration::from_millis(120);
+const REFINE_INTERVAL: Duration = Duration::from_millis(80);
 
 struct Surface {
     window: Arc<Window>,
@@ -186,12 +187,16 @@ impl App {
         } else {
             self.render().unwrap_or(Duration::MAX)
         };
+        let settling = !self.moving
+            && self
+                .last_motion
+                .is_some_and(|at| at.elapsed() < SETTLE_DELAY);
         if exporting || animating {
             delay = Duration::ZERO;
         } else if self.workspace.playback.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
-        } else if self.info.samples < SAMPLE_LIMIT {
-            delay = Duration::ZERO;
+        } else if self.info.samples < SAMPLE_LIMIT && !self.moving && !settling {
+            delay = delay.min(REFINE_INTERVAL);
         }
         if self.streaming() {
             delay = delay.min(STREAM_POLL);
@@ -199,12 +204,8 @@ impl App {
         if self.workspace.playback.playing {
             delay = delay.min(PLAYBACK_INTERVAL);
         }
-        let settling = !self.moving
-            && self
-                .last_motion
-                .is_some_and(|at| at.elapsed() < SETTLE_DELAY);
-        if settling {
-            delay = Duration::ZERO;
+        if settling && let Some(at) = self.last_motion {
+            delay = delay.min(SETTLE_DELAY.saturating_sub(at.elapsed()));
         }
         self.schedule(delay);
         self.finish_motion(frame_started);
