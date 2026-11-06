@@ -125,6 +125,7 @@ impl Session {
                     }
                     self.start_detect(set);
                 }
+                Step::Import { set } => self.start_import(set),
                 Step::Relation {
                     source,
                     target,

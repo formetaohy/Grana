@@ -106,6 +106,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 mask_radius,
                 filter,
             } => run.detect(*set, *mask, *mask_radius, *filter)?,
+            Step::Import { set } => run.import(*set)?,
             Step::Filter { set, .. } => run.refilter(*set)?,
             Step::Copy { set, source } => run.copy(*set, *source)?,
             Step::Merge { set, part } => run.merge(*set, *part)?,
@@ -390,6 +391,62 @@ impl Run<'_, '_> {
             &self.progress,
         )?;
         for (time, frame) in frames.into_iter().enumerate() {
+            if let Some(frame) = frame {
+                self.scene.install_shared(id, time as u32, Arc::new(frame));
+            }
+        }
+        self.scene.apply_curation(id);
+        self.track(id)
+    }
+
+    fn import(&mut self, id: ObjectSetId) -> Result<(), String> {
+        let task = self.task;
+        let label = self
+            .scene
+            .objects
+            .get(id)
+            .and_then(|set| set.provenance().label())
+            .map(str::to_string)
+            .ok_or_else(|| "the object set names no label image".to_string())?;
+        let name = self.name(id);
+        let _ = task.events.send(Event::Step {
+            index: task.index,
+            label: format!("importing {name}"),
+        });
+        let frames = self.scene.frame_count() as usize;
+        let mut collected = vec![None; frames];
+        let mut failure = None;
+        let progress = &self.progress;
+        let mut sink = |event: RunEvent| match event {
+            RunEvent::Frame { time, frame } => collected[time as usize] = Some(frame),
+            RunEvent::Failed(detail) => failure = Some(detail),
+            RunEvent::Progress { done, total, .. } if progress.hold() => {
+                let _ = progress.events.send(Event::Progress {
+                    index: progress.index,
+                    done,
+                    total,
+                });
+            }
+            RunEvent::Progress { .. } => {}
+            RunEvent::Tracks(_)
+            | RunEvent::Relation { .. }
+            | RunEvent::Coloc { .. }
+            | RunEvent::Drift(_)
+            | RunEvent::Done => {}
+        };
+        crate::run::import(
+            self.reader,
+            crate::run::ImportRequest::new(&label, self.scene.drift().clone()),
+            task.cancel,
+            &mut sink,
+        )?;
+        if let Some(detail) = failure {
+            return Err(detail);
+        }
+        if task.cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".to_string());
+        }
+        for (time, frame) in collected.into_iter().enumerate() {
             if let Some(frame) = frame {
                 self.scene.install_shared(id, time as u32, Arc::new(frame));
             }

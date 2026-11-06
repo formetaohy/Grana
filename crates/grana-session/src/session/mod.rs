@@ -4,6 +4,7 @@ mod cache;
 mod edit;
 mod execute;
 mod export;
+mod import;
 mod label;
 mod open;
 mod replay;
@@ -103,6 +104,7 @@ pub struct Session {
     history: History,
     export: Export,
     labels: Option<label::Labels>,
+    label_images: Vec<String>,
     resume: Vec<(ObjectSetId, ObjectSetId, i32)>,
     recut: Option<(ObjectSetId, SurfaceCut)>,
     snapshotter: Option<SnapshotFactory>,
@@ -157,6 +159,7 @@ impl Session {
             history: History::default(),
             export: Export::NATIVE,
             labels: None,
+            label_images: Vec::new(),
             resume: Vec::new(),
             recut: None,
             snapshotter: None,
@@ -243,6 +246,9 @@ impl Session {
             entries: &self.series,
             selected: self.series_index,
         }
+    }
+    pub fn label_images(&self) -> &[String] {
+        &self.label_images
     }
     pub fn io<'a>(
         &'a self,

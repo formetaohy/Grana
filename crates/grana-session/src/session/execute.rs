@@ -42,6 +42,7 @@ impl Session {
                     scene.add_object(kind, channel);
                 }
             }
+            Command::ImportLabels { label } => self.import_labels(&label),
             Command::RenameObject { set, name } => {
                 let renamed = self
                     .scene
@@ -100,14 +101,24 @@ impl Session {
             Command::Detect(set) => self.detect_root(set),
             Command::CancelDetect(set) => {
                 let set = self.detection_root(set).unwrap_or(set);
-                self.cancel(Job::Detect(set));
-                self.cancel(Job::Recut(set));
-                if self.recut.is_some_and(|(pending, _)| pending == set) {
-                    self.recut = None;
+                if self
+                    .analysis
+                    .iter()
+                    .any(|analysis| analysis.job() == Job::Import(set))
+                {
+                    self.remove_object(set);
+                    self.message = None;
+                } else {
+                    self.cancel(Job::Detect(set));
+                    self.cancel(Job::Recut(set));
+                    if self.recut.is_some_and(|(pending, _)| pending == set) {
+                        self.recut = None;
+                    }
                 }
             }
             Command::ClearObject(set) => {
                 self.cancel(Job::Detect(set));
+                self.cancel(Job::Import(set));
                 self.cancel(Job::Recut(set));
                 self.cancel(Job::Track(set));
                 if self.recut.is_some_and(|(pending, _)| pending == set) {
@@ -238,6 +249,14 @@ impl Session {
             }
             Command::SetObjectParams { set, params } => {
                 let root = self.detection_root(set).unwrap_or(set);
+                let imported = self
+                    .scene
+                    .as_ref()
+                    .and_then(|scene| scene.objects.get(root))
+                    .is_some_and(|object| object.provenance().is_imported());
+                if imported {
+                    return effects;
+                }
                 let previous = self.object_mut(root).map(|target| {
                     let previous = target.params();
                     target.set_params(params);

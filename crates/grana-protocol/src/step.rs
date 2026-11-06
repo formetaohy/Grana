@@ -13,6 +13,9 @@ pub enum Step {
         mask_radius: f32,
         filter: Option<MaskFilter>,
     },
+    Import {
+        set: ObjectSetId,
+    },
     Filter {
         set: ObjectSetId,
         source: ObjectSetId,
@@ -46,6 +49,7 @@ impl Step {
         match self {
             Self::Drift { .. } => None,
             Self::Detect { set, .. }
+            | Self::Import { set }
             | Self::Filter { set, .. }
             | Self::Copy { set, .. }
             | Self::Merge { set, .. } => Some(*set),

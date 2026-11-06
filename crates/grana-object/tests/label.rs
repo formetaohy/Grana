@@ -86,3 +86,26 @@ fn rasterizes_meshes_into_label_chunks() {
         "the chunk lies inside the cube"
     );
 }
+
+#[test]
+fn skips_the_objects_that_are_not_visible() {
+    let shape = Shape::spots(
+        vec![
+            Spot::new([-2.5, -2.5, -2.5], 1.2, 1.0),
+            Spot::new([2.5, 2.5, 2.5], 1.2, 1.0),
+        ]
+        .into(),
+    );
+    let raster = LabelRaster::new(&shape, level());
+    let labels = raster.render_visible(Some(&[true, false]), 0..SIDE, 0..SIDE, 0..SIDE);
+    assert_eq!(
+        label(&labels, 1, 1, 1),
+        1,
+        "the visible spot keeps its label"
+    );
+    assert_eq!(
+        label(&labels, 6, 6, 6),
+        0,
+        "the hidden spot leaves no label"
+    );
+}

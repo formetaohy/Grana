@@ -182,6 +182,14 @@ impl Image {
         &self.name
     }
 
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn labels(&self) -> Result<crate::Labels, Error> {
+        crate::read_labels(&self.path)
+    }
+
     pub fn pyramid(&self) -> &Pyramid {
         &self.pyramid
     }

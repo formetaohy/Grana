@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dev-dependencies]
 grana-raster = { workspace = true }
+serde_json = { workspace = true }
 
 [dependencies]
 glam = { workspace = true }

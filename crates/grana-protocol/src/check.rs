@@ -373,7 +373,9 @@ impl Protocol {
                 }
                 Ok(())
             }
-            SourceSpec::Spots { .. } | SourceSpec::Filaments { .. } => Ok(()),
+            SourceSpec::Spots { .. } | SourceSpec::Filaments { .. } | SourceSpec::Labels { .. } => {
+                Ok(())
+            }
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
                 if !earlier.contains(source) {
                     return Err(ProtocolError::Invalid(format!(

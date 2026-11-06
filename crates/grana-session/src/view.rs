@@ -101,4 +101,5 @@ pub struct SessionView<'a> {
     pub batch: Option<BatchView<'a>>,
     pub history: HistoryView,
     pub series: SeriesView<'a>,
+    pub labels: &'a [String],
 }

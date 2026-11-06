@@ -657,6 +657,13 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
             }
             Ok(Provenance::Merged { parts })
         }
+        4 => {
+            let label = reader.string()?;
+            if label.trim().is_empty() {
+                return Err(FAULT_VALUE);
+            }
+            Ok(Provenance::Imported { label })
+        }
         _ => Err(FAULT_TAG),
     }
 }

@@ -154,6 +154,10 @@ impl Scene {
         self.objects.add(kind, channel, &self.dataset)
     }
 
+    pub fn import_object(&mut self, label: &str) -> ObjectSetId {
+        self.objects.import(label, self.selected, &self.dataset)
+    }
+
     pub fn remove_object(&mut self, id: ObjectSetId) {
         self.objects.remove(id);
         if self
@@ -281,7 +285,10 @@ impl Scene {
             let set = self.objects.get(current)?;
             match set.provenance() {
                 Provenance::Filtered { source, .. } => current = *source,
-                Provenance::Detection | Provenance::Copied { .. } | Provenance::Merged { .. } => {
+                Provenance::Detection
+                | Provenance::Imported { .. }
+                | Provenance::Copied { .. }
+                | Provenance::Merged { .. } => {
                     return Some(current);
                 }
             }
@@ -992,7 +999,10 @@ impl Scene {
     }
 
     pub fn shown(&self, set: &ObjectSet) -> bool {
-        set.visible() && (set.provenance().is_merged() || self.channels[set.channel()].enabled)
+        set.visible()
+            && (set.provenance().is_merged()
+                || set.provenance().is_imported()
+                || self.channels[set.channel()].enabled)
     }
 
     pub fn object_selected(&self, set: ObjectSetId, index: usize) -> bool {

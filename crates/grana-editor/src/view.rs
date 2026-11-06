@@ -574,6 +574,7 @@ pub fn progress_caption(
             grana_scene::ObjectKind::Surfaces => "tiles",
             grana_scene::ObjectKind::Filaments => "frames",
         },
+        grana_scene::Job::Import(_) => "tiles",
         grana_scene::Job::Track(_)
         | grana_scene::Job::Recut(_)
         | grana_scene::Job::Relation { .. }
@@ -581,8 +582,11 @@ pub fn progress_caption(
         | grana_scene::Job::Drift => "frames",
     };
     let prefix = match job {
-        grana_scene::Job::Detect(_) if frames > 1 => format!("Frame {} · ", progress.time + 1),
+        grana_scene::Job::Detect(_) | grana_scene::Job::Import(_) if frames > 1 => {
+            format!("Frame {} · ", progress.time + 1)
+        }
         grana_scene::Job::Detect(_)
+        | grana_scene::Job::Import(_)
         | grana_scene::Job::Recut(_)
         | grana_scene::Job::Track(_)
         | grana_scene::Job::Relation { .. }

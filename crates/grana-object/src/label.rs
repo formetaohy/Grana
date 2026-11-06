@@ -75,6 +75,16 @@ impl<'a> LabelRaster<'a> {
     }
 
     pub fn render(&self, x: Range<u32>, y: Range<u32>, z: Range<u32>) -> Vec<u16> {
+        self.render_visible(None, x, y, z)
+    }
+
+    pub fn render_visible(
+        &self,
+        keep: Option<&[bool]>,
+        x: Range<u32>,
+        y: Range<u32>,
+        z: Range<u32>,
+    ) -> Vec<u16> {
         let origin = [x.start, y.start, z.start];
         let ranges = [x, y, z];
         assert!(
@@ -93,6 +103,9 @@ impl<'a> LabelRaster<'a> {
             world: self.world,
         };
         for (object, bounds) in self.bounds.iter().enumerate() {
+            if keep.is_some_and(|keep| !keep.get(object).copied().unwrap_or(false)) {
+                continue;
+            }
             let overlap = [0, 1, 2].map(|axis| {
                 bounds[axis].start.max(ranges[axis].start)..bounds[axis].end.min(ranges[axis].end)
             });

@@ -127,6 +127,26 @@ fn add_menu<'a>(
         };
         rows.push(action_row(ctx, key, symbol, label, message));
     }
+    if !state.labels.is_empty() {
+        rows.push(view::menu_separator(ctx));
+        rows.push(view::caption(ctx, "Import Labels"));
+        for (index, label) in state.labels.iter().enumerate() {
+            let message = if loading {
+                Message::Noop
+            } else {
+                Message::Command(Command::ImportLabels {
+                    label: label.clone(),
+                })
+            };
+            rows.push(action_row(
+                ctx,
+                &format!("add.labels.{index}"),
+                Icon::Layers,
+                label,
+                message,
+            ));
+        }
+    }
     vec![view::menu(ctx, Key::new("objects.add"), 184.0, rows)]
 }
 
@@ -166,6 +186,12 @@ fn object<'a>(
     let width = width();
     let kind = set.kind();
     let merged = set.provenance().is_merged();
+    let imported = set.provenance().is_imported();
+    let imported_root = state
+        .scene
+        .detection_root(id)
+        .and_then(|root| state.scene.objects.get(root))
+        .is_some_and(|root| root.provenance().is_imported());
     let frames = state.scene.frame_count();
     let time = state.scene.time();
     let detected = set.detected();
@@ -188,7 +214,9 @@ fn object<'a>(
         if let Some(element) = curated(ctx, state, id) {
             children.push(element);
         }
-        if !merged {
+        if imported {
+            children.extend(importing(ctx, state, id, kind));
+        } else if !merged && !imported_root {
             children.extend(params(ctx, state, id));
             if kind == ObjectKind::Surfaces {
                 children.extend(seeds(ctx, state, id));
@@ -335,7 +363,16 @@ fn header_row<'a>(
     let name = set.name().to_string();
     let kind = set.kind();
     let channel = set.channel();
-    let channel_name = state.scene.dataset.channels()[channel].name().to_string();
+    let imported = set.provenance().is_imported();
+    let channel_name = state
+        .scene
+        .detection_root(id)
+        .and_then(|root| state.scene.objects.get(root))
+        .and_then(|root| root.provenance().label())
+        .map_or_else(
+            || state.scene.dataset.channels()[channel].name().to_string(),
+            str::to_string,
+        );
     let tint = Color::from_rgb_f32(set.color());
     let visible = set.visible();
     let detected = set.detected();
@@ -368,6 +405,7 @@ fn header_row<'a>(
         None if detected > 0 => {
             format!("{channel_name} · 0 on frame {}", time + 1)
         }
+        None if imported => format!("{channel_name} · Ready to import"),
         None => format!("{channel_name} · Ready to detect"),
     };
     let subtitle = if hidden > 0 {
@@ -657,6 +695,7 @@ fn origin<'a>(
     };
     let text = match set.provenance() {
         Provenance::Detection => return None,
+        Provenance::Imported { label } => format!("Imported from {label}"),
         Provenance::Filtered { source, .. } => format!("Filtered from {}", name(*source)),
         Provenance::Copied { source } => format!("Copy of {}", name(*source)),
         Provenance::Merged { parts } => format!(
@@ -815,6 +854,38 @@ fn detect<'a>(
                 .press(Message::Command(Command::Detect(id)))
         }
     }
+}
+
+fn importing<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+    id: ObjectSetId,
+    kind: ObjectKind,
+) -> Vec<Element<'a, Message>> {
+    let Some(running) = view::progress(state.jobs, Job::Import(id)) else {
+        return Vec::new();
+    };
+    let fraction = if running.total > 0 {
+        running.done as f32 / running.total as f32
+    } else {
+        0.0
+    };
+    let spinner = view::spinner(ctx, 13.0);
+    let caption = view::caption(
+        ctx,
+        &view::progress_caption(kind, Job::Import(id), running, state.scene.frame_count()),
+    );
+    let progress = grana_ui::widget::progress(fraction, width());
+    let cancel = view::button_with(ctx, "Cancel", Role::Control, Length::Fill)
+        .press(Message::Command(Command::CancelDetect(id)));
+    vec![
+        grana_ui::row()
+            .gap(6.0)
+            .align(Align::Center)
+            .children([spinner, caption]),
+        progress,
+        cancel,
+    ]
 }
 
 fn seeds<'a>(

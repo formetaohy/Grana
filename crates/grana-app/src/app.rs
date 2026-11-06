@@ -533,6 +533,7 @@ impl App {
             batch: session.batch(),
             history: session.history(),
             series: session.series(),
+            labels: session.label_images(),
         };
         let frame = frame_stats(*info);
         let commands = grana_editor::build(

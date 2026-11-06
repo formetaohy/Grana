@@ -371,6 +371,10 @@ impl Encode for Provenance {
                 writer.u8(3);
                 parts.encode(writer);
             }
+            Self::Imported { label } => {
+                writer.u8(4);
+                writer.string(label);
+            }
         }
     }
 }

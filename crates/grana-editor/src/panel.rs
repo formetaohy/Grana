@@ -89,6 +89,7 @@ pub fn build(
         batch: view.batch.as_ref(),
         history: view.history,
         series: &view.series,
+        labels: view.labels,
         viewport: &*viewport,
         stage: &*stage,
         workspace: &*workspace,

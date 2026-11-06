@@ -163,6 +163,13 @@ impl Protocol {
                     )));
                 }
             }
+            SourceSpec::Labels { label } => {
+                if label.trim().is_empty() {
+                    return Err(ProtocolError::Invalid(
+                        "a label import names a label image".to_string(),
+                    ));
+                }
+            }
             SourceSpec::Merged { parts } => {
                 for part in parts {
                     self.validate_source(&part.source, names, frames)?;
@@ -395,6 +402,7 @@ impl Builder<'_> {
             SourceSpec::Spots { .. }
             | SourceSpec::Surfaces { .. }
             | SourceSpec::Filaments { .. } => self.detect(source, name, named, track, mask),
+            SourceSpec::Labels { label } => self.import(label, name, named, track),
             SourceSpec::Filtered {
                 source: reference,
                 group,
@@ -499,6 +507,20 @@ impl Builder<'_> {
         self.ids.get(key).copied().ok_or_else(|| {
             ProtocolError::Invalid(format!("{key} is referenced before the protocol stages it"))
         })
+    }
+
+    fn import(
+        &mut self,
+        label: &str,
+        name: &str,
+        named: bool,
+        track: Option<crate::TrackSpec>,
+    ) -> Result<ObjectSetId, ProtocolError> {
+        let id = self.scene.import_object(label);
+        self.rename(id, name, named)?;
+        self.apply_track(id, track);
+        self.steps.push(Step::Import { set: id });
+        Ok(id)
     }
 
     fn assign_key(&mut self, id: ObjectSetId, key: &str, name: &str) -> Result<(), ProtocolError> {
@@ -751,6 +773,7 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
     for (index, step) in steps.iter().enumerate() {
         match step {
             Step::Drift { .. } => {}
+            Step::Import { .. } => dependencies[index].extend(drift),
             Step::Detect {
                 set, mask, filter, ..
             } => {

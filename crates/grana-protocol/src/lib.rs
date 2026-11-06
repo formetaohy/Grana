@@ -152,11 +152,13 @@ impl Protocol {
             .sets
             .iter()
             .map(|set| {
-                let mut text = format!(
-                    "{} on {}",
-                    set.name,
-                    self.channel_of(&set.key).unwrap_or("an unknown channel")
-                );
+                let mut text = match (&set.source, self.channel_of(&set.key)) {
+                    (SourceSpec::Labels { label }, _) => {
+                        format!("{} from the label image {label}", set.name)
+                    }
+                    (_, Some(channel)) => format!("{} on {channel}", set.name),
+                    (_, None) => format!("{} on an unknown channel", set.name),
+                };
                 match &set.source {
                     SourceSpec::Filtered { source, .. } => {
                         text = format!("{text} · filtered from {source}");
@@ -180,7 +182,8 @@ impl Protocol {
                     }
                     SourceSpec::Spots { .. }
                     | SourceSpec::Surfaces { .. }
-                    | SourceSpec::Filaments { .. } => {}
+                    | SourceSpec::Filaments { .. }
+                    | SourceSpec::Labels { .. } => {}
                 }
                 if let Some(measure) = &set.measure {
                     let group = measure.group();

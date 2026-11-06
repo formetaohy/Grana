@@ -327,6 +327,9 @@ pub enum SourceSpec {
         threshold: f32,
         min_length: f32,
     },
+    Labels {
+        label: String,
+    },
     Filtered {
         source: String,
         #[serde(default = "objects", skip_serializing_if = "is_objects")]
@@ -1376,7 +1379,7 @@ impl SourceSpec {
     pub fn kind(&self) -> Option<ObjectKind> {
         match self {
             Self::Spots { .. } => Some(ObjectKind::Spots),
-            Self::Surfaces { .. } => Some(ObjectKind::Surfaces),
+            Self::Surfaces { .. } | Self::Labels { .. } => Some(ObjectKind::Surfaces),
             Self::Filaments { .. } => Some(ObjectKind::Filaments),
             Self::Filtered { .. } | Self::Copy { .. } | Self::Merged { .. } => None,
         }
@@ -1387,7 +1390,22 @@ impl SourceSpec {
             Self::Spots { channel, .. }
             | Self::Surfaces { channel, .. }
             | Self::Filaments { channel, .. } => Some(channel),
-            Self::Filtered { .. } | Self::Copy { .. } | Self::Merged { .. } => None,
+            Self::Labels { .. }
+            | Self::Filtered { .. }
+            | Self::Copy { .. }
+            | Self::Merged { .. } => None,
+        }
+    }
+
+    pub fn label(&self) -> Option<&str> {
+        match self {
+            Self::Labels { label } => Some(label),
+            Self::Spots { .. }
+            | Self::Surfaces { .. }
+            | Self::Filaments { .. }
+            | Self::Filtered { .. }
+            | Self::Copy { .. }
+            | Self::Merged { .. } => None,
         }
     }
 
@@ -1418,7 +1436,12 @@ impl SourceSpec {
                 min_length,
                 ..
             } => ObjectParams::Filaments(FilamentParams::new(threshold, min_length)),
-            Self::Filtered { .. } | Self::Copy { .. } | Self::Merged { .. } => return None,
+            Self::Labels { .. }
+            | Self::Filtered { .. }
+            | Self::Copy { .. }
+            | Self::Merged { .. } => {
+                return None;
+            }
         })
     }
 
@@ -1427,6 +1450,7 @@ impl SourceSpec {
             Self::Surfaces { seeds, .. } => seeds,
             Self::Spots { .. }
             | Self::Filaments { .. }
+            | Self::Labels { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Merged { .. } => &[],
@@ -1438,6 +1462,7 @@ impl SourceSpec {
             Self::Surfaces { seed_source, .. } => seed_source.as_deref(),
             Self::Spots { .. }
             | Self::Filaments { .. }
+            | Self::Labels { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Merged { .. } => None,
@@ -1528,6 +1553,9 @@ impl SourceSpec {
                 if !(min_length.is_finite() && *min_length > 0.0) {
                     return invalid("needs a positive minimum length".to_string());
                 }
+            }
+            Self::Labels { label } => {
+                validate(label, &format!("the label image of {set}"))?;
             }
             Self::Filtered {
                 source,
@@ -1641,7 +1669,8 @@ impl Protocol {
         match source {
             SourceSpec::Spots { .. }
             | SourceSpec::Surfaces { .. }
-            | SourceSpec::Filaments { .. } => source.kind(),
+            | SourceSpec::Filaments { .. }
+            | SourceSpec::Labels { .. } => source.kind(),
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
                 self.kind_of_key(source, depth + 1)
             }
@@ -1667,6 +1696,7 @@ impl Protocol {
             SourceSpec::Spots { .. }
             | SourceSpec::Surfaces { .. }
             | SourceSpec::Filaments { .. } => source.channel(),
+            SourceSpec::Labels { .. } => None,
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
                 self.channel_of_key(source, depth + 1)
             }

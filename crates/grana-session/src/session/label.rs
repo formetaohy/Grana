@@ -30,6 +30,7 @@ struct Request {
     color: [f32; 3],
     opacity: f32,
     shapes: Vec<Option<Arc<ObjectFrame>>>,
+    visible: Vec<Vec<bool>>,
     levels: Vec<Level>,
     title: String,
 }
@@ -44,6 +45,7 @@ impl Labels {
             color,
             opacity,
             shapes,
+            visible,
             levels,
             title,
         } = request;
@@ -77,7 +79,9 @@ impl Labels {
                         "the label image names a level the dataset does not hold".to_string()
                     })?;
                     let raster = LabelRaster::new(shape, level);
-                    let rendered = raster.render(
+                    let keep = visible.get(time as usize).map(Vec::as_slice);
+                    let rendered = raster.render_visible(
+                        keep,
                         origin[0]..origin[0] + extent[0],
                         origin[1]..origin[1] + extent[1],
                         origin[2]..origin[2] + extent[2],
@@ -196,6 +200,22 @@ impl super::Session {
         let shapes = (0..scene.frame_count())
             .map(|time| object.frame_shared(time))
             .collect::<Vec<_>>();
+        let visible = (0..scene.frame_count())
+            .map(|time| {
+                object.frame(time).map_or_else(Vec::new, |frame| {
+                    (0..frame.object_count())
+                        .map(|index| object.visible_object(time, index))
+                        .collect()
+                })
+            })
+            .collect::<Vec<_>>();
+        if visible.iter().flatten().all(|shown| !shown) {
+            self.message = Some(crate::Message::error(format!(
+                "{} hides every object it labels",
+                object.name()
+            )));
+            return;
+        }
         let levels = scene.dataset.pyramid().levels()[..scene.dataset.stored_levels()].to_vec();
         if levels.is_empty() {
             return;
@@ -208,6 +228,7 @@ impl super::Session {
             color: object.color(),
             opacity: object.opacity(),
             shapes,
+            visible,
             levels,
             title: object.name().to_string(),
         };

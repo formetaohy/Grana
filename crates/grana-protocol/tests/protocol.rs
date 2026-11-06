@@ -1455,3 +1455,61 @@ fn round_trips_object_labels() {
     );
     assert!(set.labels(), "the staged set labels its objects");
 }
+
+#[test]
+fn round_trips_an_imported_label_image() {
+    let extent = Extent::new(4, 4, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "DAPI",
+            [0.3, 0.4, 1.0],
+            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+        )],
+    );
+    let series = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let id = scene.import_object("original/cells");
+    assert_eq!(
+        scene
+            .objects
+            .get(id)
+            .and_then(|set| set.provenance().label()),
+        Some("original/cells")
+    );
+    let protocol = Protocol::capture(&scene, &Measure::new(), None).expect("the analysis captures");
+    assert_eq!(
+        protocol.sets()[0].source,
+        SourceSpec::Labels {
+            label: "original/cells".to_string()
+        }
+    );
+    assert!(
+        protocol.summary().contains("original/cells"),
+        "{}",
+        protocol.summary()
+    );
+    let text = protocol.to_json().expect("the protocol serializes");
+    let restored = Protocol::from_json(&text).expect("the label import round trips");
+    assert_eq!(protocol, restored);
+
+    let mut staged_scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let staged = restored
+        .stage(&mut staged_scene)
+        .expect("the label import stages");
+    assert_eq!(staged.sets().len(), 1);
+    assert!(
+        staged
+            .steps()
+            .iter()
+            .any(|step| matches!(step, Step::Import { set } if *set == staged.set(0))),
+        "the labels are read by an import step"
+    );
+    let set = staged_scene
+        .objects
+        .get(staged.set(0))
+        .expect("the staged set exists");
+    assert_eq!(set.kind(), ObjectKind::Surfaces);
+    assert_eq!(set.provenance().label(), Some("original/cells"));
+}

@@ -57,7 +57,9 @@ impl Session {
             }
         }
         let mut removed = Vec::new();
+        let mut failed = Vec::new();
         let mut detected = Vec::new();
+        let mut imported = Vec::new();
         let mut recutted = Vec::new();
         let mut finished = Vec::new();
         for (index, job, update) in updates {
@@ -67,7 +69,7 @@ impl Session {
                     self.record_progress(job, time, done, total);
                 }
                 Update::Frame(time, frame) => {
-                    if let (Job::Detect(set) | Job::Recut(set), Some(scene)) =
+                    if let (Job::Detect(set) | Job::Import(set) | Job::Recut(set), Some(scene)) =
                         (job, self.scene.as_mut())
                     {
                         scene.install(set, time, frame);
@@ -118,6 +120,7 @@ impl Session {
                     finished.push(job);
                     match job {
                         Job::Detect(set) => detected.push(set),
+                        Job::Import(set) => imported.push(set),
                         Job::Recut(set) => recutted.push(set),
                         Job::Track(_) | Job::Relation { .. } | Job::Coloc | Job::Drift => {}
                     }
@@ -132,6 +135,9 @@ impl Session {
                     {
                         self.abort_recipe();
                     }
+                    if let Job::Import(set) = job {
+                        failed.push(set);
+                    }
                     self.message = Some(Message::error(detail));
                 }
             }
@@ -140,6 +146,9 @@ impl Session {
         removed.dedup();
         for index in removed.into_iter().rev() {
             self.analysis.remove(index);
+        }
+        for set in failed {
+            self.remove_object(set);
         }
         if let Some((set, cut)) = self.recut.take()
             && !self
@@ -152,6 +161,7 @@ impl Session {
         for (set, recut) in detected
             .into_iter()
             .map(|set| (set, false))
+            .chain(imported.into_iter().map(|set| (set, false)))
             .chain(recutted.into_iter().map(|set| (set, true)))
         {
             if self.recut.is_some_and(|(pending, _)| pending == set)
@@ -433,6 +443,17 @@ impl Session {
 
     pub(super) fn start_detect(&mut self, set: ObjectSetId) {
         if self.loading.is_some() {
+            return;
+        }
+        if self
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.objects.get(set))
+            .is_some_and(|object| object.provenance().is_imported())
+        {
+            self.message = Some(Message::error(
+                "an imported object set is measured from its label image",
+            ));
             return;
         }
         self.cancel(Job::Recut(set));

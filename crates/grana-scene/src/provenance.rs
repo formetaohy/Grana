@@ -188,6 +188,9 @@ impl Criteria {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Provenance {
     Detection,
+    Imported {
+        label: String,
+    },
     Filtered {
         source: ObjectSetId,
         criteria: Criteria,
@@ -205,8 +208,25 @@ impl Provenance {
         Self::Detection
     }
 
+    pub fn imported(label: &str) -> Self {
+        Self::Imported {
+            label: label.to_string(),
+        }
+    }
+
     pub fn is_detection(&self) -> bool {
         matches!(self, Self::Detection)
+    }
+
+    pub fn is_imported(&self) -> bool {
+        matches!(self, Self::Imported { .. })
+    }
+
+    pub fn label(&self) -> Option<&str> {
+        match self {
+            Self::Imported { label } => Some(label),
+            _ => None,
+        }
     }
 
     pub fn is_merged(&self) -> bool {
@@ -216,27 +236,32 @@ impl Provenance {
     pub fn source(&self) -> Option<ObjectSetId> {
         match self {
             Self::Filtered { source, .. } | Self::Copied { source } => Some(*source),
-            Self::Detection | Self::Merged { .. } => None,
+            Self::Detection | Self::Imported { .. } | Self::Merged { .. } => None,
         }
     }
 
     pub fn criteria(&self) -> Option<&Criteria> {
         match self {
             Self::Filtered { criteria, .. } => Some(criteria),
-            Self::Detection | Self::Copied { .. } | Self::Merged { .. } => None,
+            Self::Detection | Self::Imported { .. } | Self::Copied { .. } | Self::Merged { .. } => {
+                None
+            }
         }
     }
 
     pub fn parts(&self) -> &[Recipe] {
         match self {
             Self::Merged { parts } => parts,
-            Self::Detection | Self::Filtered { .. } | Self::Copied { .. } => &[],
+            Self::Detection
+            | Self::Imported { .. }
+            | Self::Filtered { .. }
+            | Self::Copied { .. } => &[],
         }
     }
 
     pub fn references(&self, set: ObjectSetId) -> bool {
         match self {
-            Self::Detection => false,
+            Self::Detection | Self::Imported { .. } => false,
             Self::Filtered { source, .. } | Self::Copied { source } => *source == set,
             Self::Merged { parts } => parts.iter().any(|part| part.provenance().references(set)),
         }
@@ -244,7 +269,7 @@ impl Provenance {
 
     pub fn depends_on(&self, set: ObjectSetId) -> bool {
         match self {
-            Self::Detection | Self::Copied { .. } => false,
+            Self::Detection | Self::Imported { .. } | Self::Copied { .. } => false,
             Self::Filtered { source, .. } => *source == set,
             Self::Merged { parts } => parts.iter().any(|part| part.provenance().depends_on(set)),
         }
@@ -258,7 +283,10 @@ impl Provenance {
                     part.provenance.forget_copied(removed);
                 }
             }
-            Self::Detection | Self::Filtered { .. } | Self::Copied { .. } => {}
+            Self::Detection
+            | Self::Imported { .. }
+            | Self::Filtered { .. }
+            | Self::Copied { .. } => {}
         }
     }
 
@@ -270,7 +298,7 @@ impl Provenance {
 
     fn collect_sources(&self, sources: &mut Vec<ObjectSetId>) {
         match self {
-            Self::Detection => {}
+            Self::Detection | Self::Imported { .. } => {}
             Self::Filtered { source, .. } | Self::Copied { source } => sources.push(*source),
             Self::Merged { parts } => {
                 for part in parts {

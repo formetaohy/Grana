@@ -195,7 +195,6 @@ pub fn write(path: &Path, spec: LabelSpec<'_>) -> Result<Written, Error> {
         .map(|(label, name)| json!({ "label-value": label, "name": name }))
         .collect::<Vec<_>>();
     let image_label = json!({
-        "version": OME_VERSION,
         "colors": colors,
         "properties": properties,
         "source": { "image": "../../" },

@@ -65,6 +65,35 @@ impl Objects {
         id
     }
 
+    pub fn import(&mut self, label: &str, channel: usize, dataset: &Dataset) -> ObjectSetId {
+        assert!(
+            !label.trim().is_empty(),
+            "an imported object set names its label image"
+        );
+        assert!(
+            channel < dataset.channels().len(),
+            "every object set names an existing channel"
+        );
+        let id = ObjectSetId::new(self.next_id);
+        self.next_id += 1;
+        let base = format!(
+            "Labels {}",
+            label.rsplit('/').next().unwrap_or(label).trim()
+        );
+        let mut name = base.clone();
+        let mut ordinal = 2;
+        while self.occupied(&name, None) {
+            name = format!("{base} {ordinal}");
+            ordinal += 1;
+        }
+        let key = self.key_for(&name, None);
+        let color = PALETTE[(id.raw() as usize - 1) % PALETTE.len()];
+        let mut set = ObjectSet::new(id, key, ObjectKind::Surfaces, name, channel, color, dataset);
+        set.set_provenance(Provenance::imported(label));
+        self.sets.push(set);
+        id
+    }
+
     fn key_for(&self, name: &str, except: Option<ObjectSetId>) -> ObjectSetKey {
         let slug = slug(name).to_ascii_lowercase();
         let trimmed = slug.trim_matches(|character| character == '-' || character == '_');
@@ -277,7 +306,10 @@ impl Objects {
         let mut merged = self.sets[target_index].merged(&self.sets[source_index], stamp)?;
         let mut parts = match merged.provenance() {
             Provenance::Merged { parts } => parts.clone(),
-            Provenance::Detection | Provenance::Filtered { .. } | Provenance::Copied { .. } => {
+            Provenance::Detection
+            | Provenance::Imported { .. }
+            | Provenance::Filtered { .. }
+            | Provenance::Copied { .. } => {
                 vec![self.sets[target_index].recipe()]
             }
         };

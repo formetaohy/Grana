@@ -22,6 +22,7 @@ impl Session {
         self.in_flight.clear();
         self.bricks.clear();
         self.measure.reset();
+        self.label_images.clear();
         self.set_time(0);
     }
 
@@ -248,6 +249,7 @@ impl Session {
         self.timeline = Timeline::new(30, 1.0);
         self.view = None;
         self.history.clear();
+        self.label_images.clear();
     }
 
     pub(super) fn open_dataset(&mut self, dataset: Dataset) {
@@ -281,11 +283,25 @@ impl Session {
         }
         self.scene = Some(scene);
         self.generation += 1;
+        self.refresh_labels();
         if let Some(source) = &self.source {
             source.set_time(0);
             if let Some(scene) = self.scene.as_ref() {
                 source.set_drift(scene.drift().clone());
             }
+        }
+    }
+
+    fn refresh_labels(&mut self) {
+        self.label_images.clear();
+        let Some(reader) = self.source.as_ref().and_then(Loader::reader) else {
+            return;
+        };
+        match reader.labels() {
+            Ok(labels) => {
+                self.label_images = labels.names().map(str::to_string).collect();
+            }
+            Err(error) => self.message = Some(Message::error(error.to_string())),
         }
     }
 

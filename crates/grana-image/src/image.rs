@@ -8,6 +8,7 @@ use grana_volume::{
     BrickCoord, BrickData, BrickGrid, Extent, Pyramid, VolumeSeries, VoxelData, VoxelFormat,
     pad_brick,
 };
+use grana_zarr::Labels;
 
 use crate::align;
 use crate::cache::{self, Cache, Key, Shape, Store};
@@ -103,6 +104,13 @@ impl Image {
 
     pub fn pyramid(&self) -> &Pyramid {
         &self.pyramid
+    }
+
+    pub fn labels(&self) -> Result<Labels, Error> {
+        match &self.inner {
+            Inner::Zarr(image) => Ok(image.labels()?),
+            Inner::Memory(_) | Inner::Tiff(_) | Inner::Czi(_) => Ok(Labels::empty()),
+        }
     }
 
     pub fn format(&self) -> Option<Format> {

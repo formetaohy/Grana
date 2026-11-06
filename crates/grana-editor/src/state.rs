@@ -145,6 +145,7 @@ pub struct View<'a> {
     pub batch: Option<&'a BatchView<'a>>,
     pub history: HistoryView,
     pub series: &'a SeriesView<'a>,
+    pub labels: &'a [String],
     pub viewport: &'a Viewport,
     pub stage: &'a Stage,
     pub workspace: &'a Workspace,

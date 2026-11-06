@@ -1175,6 +1175,7 @@ dependencies = [
  "grana-volume",
  "grana-zarr",
  "rfd",
+ "serde_json",
 ]
 
 [[package]]

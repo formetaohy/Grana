@@ -55,7 +55,10 @@ impl Recipe {
     pub(crate) fn step_sets(&self) -> Vec<ObjectSetId> {
         match self.step() {
             Step::Drift { .. } => Vec::new(),
-            Step::Detect { set, .. } | Step::Filter { set, .. } | Step::Copy { set, .. } => {
+            Step::Detect { set, .. }
+            | Step::Import { set }
+            | Step::Filter { set, .. }
+            | Step::Copy { set, .. } => {
                 vec![*set]
             }
             Step::Merge { set, part } => vec![*set, *part],
@@ -73,6 +76,7 @@ impl Recipe {
         match self.step() {
             Step::Drift { .. } => Some(Job::Drift),
             Step::Detect { set, .. } => Some(Job::Detect(*set)),
+            Step::Import { set } => Some(Job::Import(*set)),
             Step::Relation {
                 source,
                 target,

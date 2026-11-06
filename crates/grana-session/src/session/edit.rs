@@ -432,6 +432,7 @@ impl Session {
 
     pub(super) fn remove_object(&mut self, set: ObjectSetId) {
         self.cancel(Job::Detect(set));
+        self.cancel(Job::Import(set));
         self.cancel(Job::Recut(set));
         self.cancel(Job::Track(set));
         if self.recut.is_some_and(|(pending, _)| pending == set) {

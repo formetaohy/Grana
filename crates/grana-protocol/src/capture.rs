@@ -190,6 +190,9 @@ fn source(
             set.params(),
             set.surface_seeds(),
         ),
+        Provenance::Imported { label } => Ok(SourceSpec::Labels {
+            label: label.clone(),
+        }),
         Provenance::Filtered { source, criteria } => {
             let reference = scene.objects.get(*source).ok_or_else(|| {
                 ProtocolError::Invalid(format!(
@@ -244,6 +247,9 @@ fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSp
             part.params(),
             part.seeds(),
         )?,
+        Provenance::Imported { label } => SourceSpec::Labels {
+            label: label.clone(),
+        },
         Provenance::Filtered { source, criteria } => {
             let reference = scene.objects.get(*source).ok_or_else(|| {
                 ProtocolError::Invalid(format!(
@@ -378,7 +384,7 @@ fn collect_dependencies(source: &SourceSpec, names: &mut Vec<String>) {
                 collect_dependencies(&part.source, names);
             }
         }
-        SourceSpec::Spots { .. } | SourceSpec::Filaments { .. } => {}
+        SourceSpec::Spots { .. } | SourceSpec::Filaments { .. } | SourceSpec::Labels { .. } => {}
     }
 }
 

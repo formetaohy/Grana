@@ -17,9 +17,11 @@ use grana_volume::VoxelData;
 use crate::event::Event;
 
 mod frames;
+mod import;
 
 use self::frames::Notice;
 use self::frames::frames as pipeline;
+pub use self::import::{ImportRequest, import};
 
 const FRAME_WORKERS: usize = 4;
 

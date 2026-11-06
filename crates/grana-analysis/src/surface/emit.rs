@@ -5,36 +5,10 @@ use grana_geometry::MeshVertex;
 
 use super::tile::Contact;
 use super::{EMPTY, OUTSIDE, Tile, find};
-use crate::table::{EDGE_TABLE, TRIANGLE_TABLE};
+use crate::table::{CORNER, EDGE_CORNER, EDGE_TABLE, TRIANGLE_TABLE};
 
 const WORD: usize = 64;
 const SHIFT: usize = 1;
-
-const CORNER: [[i64; 3]; 8] = [
-    [0, 0, 0],
-    [1, 0, 0],
-    [1, 1, 0],
-    [0, 1, 0],
-    [0, 0, 1],
-    [1, 0, 1],
-    [1, 1, 1],
-    [0, 1, 1],
-];
-
-const EDGE_CORNER: [[usize; 2]; 12] = [
-    [0, 1],
-    [1, 2],
-    [2, 3],
-    [3, 0],
-    [4, 5],
-    [5, 6],
-    [6, 7],
-    [7, 4],
-    [0, 4],
-    [1, 5],
-    [2, 6],
-    [3, 7],
-];
 
 const DIRECTIONS: [[i64; 3]; 7] = [
     [1, 0, 0],

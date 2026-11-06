@@ -3,6 +3,7 @@ mod coloc;
 mod drift;
 mod filament;
 mod hash;
+mod label;
 mod local;
 mod morphology;
 mod relation;
@@ -20,6 +21,7 @@ pub use drift::{
     working_level as drift_level,
 };
 pub use filament::{FilamentScan, filament_level};
+pub use label::{LabelBuilder, LabelSlab};
 pub use relation::{Reference, RelationRun, relate_frames};
 pub use scan::{ChannelRead, SpotScan, SpotScanner, spot_level};
 pub use schedule::{parallel, receive, workers};
