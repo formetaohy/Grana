@@ -5,8 +5,7 @@ use grana_display::{Camera, Palette, SectionCamera, plane_basis};
 use grana_measure::Unit;
 use grana_scene::{ObjectColor, Scene, TrackColor};
 use grana_ui::{
-    Align, Color, Corners, Fill, Icon, Painter, Rect, Role, TextLayout, TextStyle, TypeStyle, Ui,
-    icon,
+    Align, Color, Corners, Fill, Icon, Painter, Rect, TextLayout, TextStyle, TypeStyle, Ui, icon,
 };
 use grana_volume::{Axis, Clip, Region};
 
@@ -115,6 +114,7 @@ pub struct Overlay<'a> {
     pub section: &'a SectionCamera,
     pub world: Vec3,
     pub volume_safe: Rect,
+    pub section_safe: Rect,
     pub section_stage: Rect,
     pub volume_rect: Rect,
     pub section_rect: Rect,
@@ -131,11 +131,9 @@ pub fn paint(ui: &mut Ui, overlay: &mut Overlay<'_>) {
     if let Some((frame, frames)) = overlay.recording {
         chip(
             ui,
+            "figure.recording",
             overlay.volume_rect,
-            Vec2::new(
-                overlay.volume_rect.min.x + 12.0,
-                overlay.volume_rect.min.y + 46.0,
-            ),
+            overlay.volume_safe.min + Vec2::new(12.0, 46.0),
             Icon::Record,
             &format!("REC · frame {frame} of {frames}"),
             Color::rgba(1.0, 0.52, 0.44, 1.0),
@@ -194,6 +192,7 @@ fn paint_volume(ui: &mut Ui, overlay: &mut Overlay<'_>) {
     }
     chip(
         ui,
+        "figure.volume",
         overlay.volume_safe,
         overlay.volume_safe.min + Vec2::new(12.0, 12.0),
         Icon::Cube,
@@ -226,8 +225,9 @@ fn paint_section(ui: &mut Ui, overlay: &Overlay<'_>) {
     }
     chip(
         ui,
+        "figure.section",
         rect,
-        rect.min + Vec2::new(12.0, 12.0),
+        overlay.section_safe.min,
         Icon::Section,
         &format!("{} · {} = {plane:.2} µm", plane_name(axis), axis.name()),
         LABEL,
@@ -589,23 +589,15 @@ fn line_style() -> TextStyle {
     TextStyle::new(TypeStyle::new(10.5, 400.0, 14.0), CAPTION_LINE)
 }
 
-fn chip(ui: &mut Ui, pane: Rect, origin: Vec2, symbol: Icon, title: &str, tint: Color) {
-    let clip = ui.clip().intersect(pane, Corners::ZERO);
+fn chip(ui: &mut Ui, key: &str, pane: Rect, origin: Vec2, symbol: Icon, title: &str, tint: Color) {
     let title_style = TextStyle::new(TypeStyle::new(11.5, 500.0, 15.0), tint);
     let maximum = (pane.width() - 64.0).max(96.0);
     let title_layout = ui.layout_text(title, title_style, maximum);
     let width = (title_layout.size.x + 42.0).min(maximum + 24.0);
     let height = 26.0;
     let rect = Rect::from_min_size(origin, Vec2::new(width, height));
-    let surface = ui.theme().surface(Role::Chip, grana_ui::State::Rest);
-    let mut painter = ui.painter_in(clip);
-    painter.outlined(
-        rect,
-        surface.corners,
-        surface.fill,
-        surface.border,
-        surface.shadow,
-    );
+    ui.glass(ui.id(key), rect, grana_ui::glass::GlassStyle::hud_chip());
+    let mut painter = ui.painter();
     icon::paint(
         symbol,
         &mut painter,

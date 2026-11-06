@@ -1,12 +1,14 @@
 use glam::Vec2;
 use grana_figure::{self as overlay, Overlay};
 use grana_ui::glass::GlassStyle;
-use grana_ui::{Corners, Cursor, Icon, Level, Rect, TextStyle, Ui, icon};
+use grana_ui::{Color, Corners, Cursor, Icon, Level, Motion, Rect, TextStyle, Ui, icon};
 
 use crate::state::State;
 use grana_session::Command;
 
 use super::{Layout, scene_uv};
+
+const PANE_CONTROL: f32 = 32.0;
 
 pub(super) fn paint(
     ui: &mut Ui,
@@ -19,18 +21,15 @@ pub(super) fn paint(
     ui.content(|ui| {
         let mut painter = ui.content_painter();
         painter.rect(layout.stage, Corners::ZERO, palette.scene_backdrop);
-        painter.scene(layout.volume, Corners::ZERO, scene_uv(layout.volume, size));
-        painter.scene(
-            layout.section,
-            Corners::ZERO,
-            scene_uv(layout.section, size),
-        );
+        for pane in [layout.volume, layout.section] {
+            painter.scene(pane, Corners::ZERO, scene_uv(pane, size));
+        }
     });
     paint_overlay(ui, layout, state, commands);
     pane_fit(
         ui,
         layout.volume,
-        layout.toolbar.max.y,
+        layout.toolbar_left.max.y,
         "volume.fit",
         "Fit volume",
         crate::view::fit_volume,
@@ -39,7 +38,7 @@ pub(super) fn paint(
     pane_fit(
         ui,
         layout.section,
-        layout.toolbar.max.y,
+        layout.toolbar_left.max.y,
         "section.fit",
         "Fit section",
         crate::view::fit_section,
@@ -57,14 +56,17 @@ fn pane_fit(
     action: fn(&mut State<'_>),
     state: &mut State<'_>,
 ) {
-    let rect = Rect::from_min_size(Vec2::new(pane.max.x - 44.0, top + 12.0), Vec2::splat(30.0));
+    let rect = Rect::from_min_size(
+        Vec2::new(pane.max.x - PANE_CONTROL - 12.0, top + 12.0),
+        Vec2::splat(PANE_CONTROL),
+    );
     ui.place(rect, |ui| {
         if grana_ui::widget::glass_icon_button(
             ui,
             id,
             Icon::Fit,
-            30.0,
-            GlassStyle::media_control().interactive(),
+            PANE_CONTROL,
+            GlassStyle::stage_control(),
             tooltip,
         ) {
             action(state);
@@ -94,20 +96,21 @@ fn paint_overlay(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: 
     } else {
         layout.stage.min.x + 18.0
     };
-    let safe_top = if layout.sidebar_visible {
-        layout.toolbar.max.y + 18.0
-    } else {
-        layout.toolbar.max.y + 74.0
-    };
+    let safe_top = layout.toolbar_left.max.y + 18.0;
     let safe = Rect::from_min_max(
         Vec2::new(safe_left, safe_top),
         Vec2::new(layout.volume.max.x - 18.0, layout.stage.max.y - 18.0),
+    );
+    let section_safe = Rect::from_min_max(
+        Vec2::new(layout.section.min.x + 12.0, safe_top),
+        layout.section.max,
     );
     let mut overlay = Overlay {
         camera: state.viewport.camera(),
         section: state.viewport.section(),
         world,
         volume_safe: safe,
+        section_safe,
         section_stage: stage,
         volume_rect: layout.volume,
         section_rect: layout.section,
@@ -124,13 +127,13 @@ fn paint_overlay(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: 
 }
 
 fn split_handle(ui: &mut Ui, volume: Rect, section: Rect, viewport: &mut grana_display::Viewport) {
-    let x = volume.max.x;
-    let rect = Rect::from_center_size(
+    let x = (volume.max.x + section.min.x) * 0.5;
+    let grab = Rect::from_center_size(
         Vec2::new(x, volume.center().y),
-        Vec2::new(14.0, volume.height()),
+        Vec2::new(18.0, volume.height()),
     );
-    let response = ui.interact(ui.id("split.handle"), rect);
-    ui.register_occluder(rect);
+    let response = ui.interact(ui.id("split.handle"), grab);
+    ui.register_occluder(grab);
     if response.hovered || response.dragging {
         ui.set_cursor(Cursor::ResizeHorizontal);
     }
@@ -139,29 +142,45 @@ fn split_handle(ui: &mut Ui, volume: Rect, section: Rect, viewport: &mut grana_d
         let total = (volume.width() + section.width()).max(1.0);
         viewport.set_split(((pointer - volume.min.x) / total).clamp(0.3, 0.75));
     }
+    let engaged = ui.animate(
+        ui.id("split.grow"),
+        if response.hovered || response.dragging {
+            1.0
+        } else {
+            0.0
+        },
+        Motion::quick(),
+    );
     let palette = ui.theme().palette;
-    let active = response.hovered || response.dragging;
-    ui.content(|ui| {
-        let mut painter = ui.content_painter();
+    let size = Vec2::new(7.0 + engaged * 5.0, 36.0 + engaged * 22.0);
+    let rect = Rect::from_center_size(Vec2::new(x, volume.center().y), size);
+    ui.glass(
+        ui.id("split.lens"),
+        rect,
+        GlassStyle::stage_control().interactive(),
+    );
+    let mut painter = ui.painter();
+    painter.rect(
+        Rect::from_center_size(
+            Vec2::new(x, volume.center().y),
+            Vec2::new(1.0, volume.height()),
+        ),
+        Corners::ZERO,
+        palette.separator.amplify(0.6),
+    );
+    painter.rect(
+        Rect::from_center_size(rect.center(), Vec2::new(1.4, size.y * 0.34)),
+        Corners::capsule(),
+        palette.text_primary.with_alpha(0.22 + engaged * 0.40),
+    );
+    if engaged > 0.01 {
         painter.rect(
             Rect::from_center_size(
                 Vec2::new(x, volume.center().y),
-                Vec2::new(if active { 2.0 } else { 1.0 }, volume.height()),
+                Vec2::new(1.0, 26.0 + 10.0 * engaged),
             ),
-            Corners::ZERO,
-            if active {
-                palette.separator.with_alpha(0.45)
-            } else {
-                palette.separator.with_alpha(0.12)
-            },
-        );
-    });
-    if active {
-        let mut painter = ui.painter();
-        painter.rect(
-            Rect::from_center_size(Vec2::new(x, volume.center().y), Vec2::new(5.0, 34.0)),
             Corners::capsule(),
-            palette.text_quaternary,
+            Color::white_alpha(0.10 * engaged),
         );
     }
 }

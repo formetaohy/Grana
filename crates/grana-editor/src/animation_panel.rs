@@ -167,26 +167,27 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                         }
                         None => {
                             let enabled = !empty;
-                            let role = if enabled {
-                                Role::Prominent
-                            } else {
-                                Role::Quiet
-                            };
-                            if widget::button_with(ui, "export", "Export movie", role, Length::Fill)
-                                .clicked
-                                && enabled
+                            if widget::button_with_enabled(
+                                ui,
+                                "export",
+                                "Export movie",
+                                Role::Prominent,
+                                Length::Fill,
+                                enabled,
+                            )
+                            .clicked
                             {
                                 commands.push(Command::ExportMovie(Export::new(width, false)));
                             }
-                            if widget::button_with(
+                            if widget::button_with_enabled(
                                 ui,
                                 "export.alpha",
                                 "Transparent movie",
-                                if enabled { Role::Control } else { Role::Quiet },
+                                Role::Control,
                                 Length::Fill,
+                                enabled,
                             )
                             .clicked
-                                && enabled
                             {
                                 commands.push(Command::ExportMovie(Export::new(width, true)));
                             }
@@ -232,28 +233,27 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
                     }
                     ui.separator();
                     let idle = export.is_none();
-                    if widget::button_with(
+                    if widget::button_with_enabled(
                         ui,
                         "save.image",
                         "Save image",
-                        if idle { Role::Prominent } else { Role::Quiet },
+                        Role::Prominent,
                         Length::Fill,
+                        idle,
                     )
                     .clicked
-                        && idle
                     {
                         commands.push(Command::SaveSnapshot);
                     }
-                    if widget::button_with(
+                    if widget::button_with_enabled(
                         ui,
                         "export.sequence",
                         "Export sequence",
-                        if idle { Role::Control } else { Role::Quiet },
+                        Role::Control,
                         Length::Fill,
+                        idle && frames > 0,
                     )
                     .clicked
-                        && idle
-                        && frames > 0
                     {
                         commands.push(Command::ExportSequence(Export::new(
                             image_width,

@@ -1,6 +1,6 @@
 use glam::{Vec2, Vec3};
 use grana_scene::Scene;
-use grana_ui::{Align, Block, Color, Corners, Icon, Level, Rect, Role, TextStyle, Ui};
+use grana_ui::{Align, Block, Color, Corners, Icon, Level, Motion, Rect, Role, TextStyle, Ui};
 use grana_volume::{Axis, Clip, Intensity};
 
 use crate::panel::{divider, section_header};
@@ -8,18 +8,18 @@ use crate::state::State;
 use crate::widget;
 use grana_session::Command;
 
-const CHANNEL_ROW: f32 = 34.0;
+const CHANNEL_ROW: f32 = 38.0;
 
 pub fn dataset_height(state: &State<'_>) -> f32 {
-    let mut height = 78.0;
+    let mut height = 68.0;
     if state.series.entries.len() > 1 {
-        height += 32.0;
+        height += 34.0;
     }
     if state.io.loading.is_some() {
-        height += 22.0;
+        height += 20.0;
     }
     if state.io.document.is_some() {
-        height += 22.0;
+        height += 20.0;
     }
     height
 }
@@ -31,7 +31,7 @@ pub fn dataset(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) 
     let spacing = dataset.spacing();
     let channels = dataset.channels().len();
     let frames = dataset.frame_count();
-    ui.column(Block::column().gaps(4.0), |ui| {
+    ui.column(Block::column().gaps(5.0), |ui| {
         ui.text_style(
             dataset.name(),
             TextStyle::new(ui.theme().font(Level::Title), palette.text_primary).truncating(),
@@ -264,6 +264,7 @@ fn frame_table(ui: &mut Ui, drift: &grana_scene::Drift, time: u32, commands: &mu
 
 fn channels(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
     let palette = ui.theme().palette;
+    let metrics = ui.theme().metrics;
     section_header(ui, "Channels", Some(&scene.channels.len().to_string()));
     let selected = scene.selected;
     let count = scene.channels.len();
@@ -275,21 +276,25 @@ fn channels(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
         let enabled = scene.channels[index].enabled;
         ui.push_id(&format!("channel.{index}"));
         let row = ui.allocate_full(CHANNEL_ROW);
-        let control = Rect::from_min_max(row.min, Vec2::new(row.max.x - 30.0, row.max.y));
-        let pick = ui.id("pick");
-        let mut response = ui.interact(pick, control);
-        if ui.focusable(pick, control, Corners::all(10.0)) && ui.activated(pick) {
+        let pick = Rect::from_min_max(
+            row.min,
+            Vec2::new(row.max.x - metrics.switch_width - 14.0, row.max.y),
+        );
+        let pick_key = ui.id("pick");
+        let mut response = ui.interact(pick_key, pick);
+        if ui.focusable(pick_key, pick, Corners::all(10.0)) && ui.activated(pick_key) {
             response.clicked = true;
         }
         if response.clicked {
             chosen = Some(index);
         }
+        let active = selected == index;
+        let hovered = ui.pointer_in(row).is_some();
         let hover = ui.animate(
             ui.id("hover"),
-            if response.hovered { 1.0 } else { 0.0 },
-            grana_ui::Motion::quick(),
+            if hovered { 1.0 } else { 0.0 },
+            Motion::quick(),
         );
-        let active = selected == index;
         let color = if !enabled {
             palette.text_quaternary
         } else if active {
@@ -298,21 +303,44 @@ fn channels(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
             palette.text_secondary
         };
         let text_style = TextStyle::new(ui.theme().font(Level::Body), color).truncating();
+        let switch = Rect::from_center_size(
+            Vec2::new(row.max.x - metrics.switch_width * 0.5 - 6.0, row.center().y),
+            Vec2::new(metrics.switch_width, metrics.switch_height),
+        );
         {
             let mut painter = ui.painter();
             if active {
-                painter.rect(row, Corners::all(10.0), palette.accent.with_alpha(0.22));
+                painter.outlined(
+                    row.shrink2(Vec2::new(0.0, 1.0)),
+                    Corners::all(10.0),
+                    grana_ui::Fill::Solid(palette.accent.with_alpha(0.16)),
+                    grana_ui::Border {
+                        width: 1.0,
+                        color: palette.accent.with_alpha(0.34),
+                    },
+                    grana_ui::Shadow::NONE,
+                );
             } else if hover > 0.01 {
                 painter.rect(
-                    row,
+                    row.shrink2(Vec2::new(0.0, 1.0)),
                     Corners::all(10.0),
-                    palette.material_hover.with_alpha(0.7 * hover),
+                    palette.material_hover.amplify(0.55 * hover),
                 );
             }
             let dot = Rect::from_center_size(
-                Vec2::new(row.min.x + 11.0, row.center().y),
-                Vec2::splat(8.0),
+                Vec2::new(row.min.x + 13.0, row.center().y),
+                Vec2::splat(9.0),
             );
+            if active {
+                painter.ring(
+                    dot.center(),
+                    7.2,
+                    1.2,
+                    0.0,
+                    std::f32::consts::TAU,
+                    Color::from_rgb_f32(tint).with_alpha(if enabled { 0.45 } else { 0.18 }),
+                );
+            }
             painter.rect(
                 dot,
                 Corners::capsule(),
@@ -320,40 +348,22 @@ fn channels(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
             );
             painter.text_in(
                 Rect::from_min_max(
-                    Vec2::new(row.min.x + 23.0, row.min.y),
-                    Vec2::new(row.max.x - 34.0, row.max.y),
+                    Vec2::new(row.min.x + 26.0, row.min.y),
+                    Vec2::new(switch.min.x - 10.0, row.max.y),
                 ),
                 &name,
                 text_style,
                 Align::Center,
             );
         }
-        ui.place(
-            Rect::from_center_size(
-                Vec2::new(row.max.x - 15.0, row.center().y),
-                Vec2::splat(22.0),
-            ),
-            |ui| {
-                let tooltip = if enabled {
-                    "Hide channel"
-                } else {
-                    "Show channel"
-                };
-                if widget::icon_button(
-                    ui,
-                    "enabled",
-                    if enabled { Icon::Eye } else { Icon::EyeOff },
-                    22.0,
-                    Role::Quiet,
-                    tooltip,
-                ) {
-                    commands.push(Command::SetChannelEnabled {
-                        channel: index,
-                        enabled: !enabled,
-                    });
-                }
-            },
-        );
+        ui.place(switch, |ui| {
+            if let Some(value) = widget::toggle(ui, "enabled", enabled) {
+                commands.push(Command::SetChannelEnabled {
+                    channel: index,
+                    enabled: value,
+                });
+            }
+        });
         ui.pop_id();
     }
     if let Some(index) = chosen {
@@ -420,17 +430,42 @@ fn display(ui: &mut Ui, scene: &Scene, commands: &mut Vec<Command>) {
             opacity: value.clamp(0.0, 1.0),
         });
     }
+    let width = (ui.available().x - 12.0) / 3.0;
     ui.row(Block::row().gaps(6.0).align(Align::Center), |ui| {
-        if widget::button(ui, "preset.auto", "Auto", Role::Control) {
+        if widget::button_with(
+            ui,
+            "preset.auto",
+            "Auto",
+            Role::Control,
+            grana_ui::Length::Fixed(width),
+        )
+        .clicked
+        {
             commands.push(Command::ResetWindow(index));
         }
-        if widget::button(ui, "preset.tinted", "Tinted", Role::Control) {
+        if widget::button_with(
+            ui,
+            "preset.tinted",
+            "Tinted",
+            Role::Control,
+            grana_ui::Length::Fixed(width),
+        )
+        .clicked
+        {
             commands.push(Command::SetTransfer {
                 channel: index,
                 transfer: grana_display::TransferFunction::tinted(tint),
             });
         }
-        if widget::button(ui, "preset.gray", "Gray", Role::Control) {
+        if widget::button_with(
+            ui,
+            "preset.gray",
+            "Gray",
+            Role::Control,
+            grana_ui::Length::Fixed(width),
+        )
+        .clicked
+        {
             commands.push(Command::SetTransfer {
                 channel: index,
                 transfer: grana_display::TransferFunction::grayscale(),

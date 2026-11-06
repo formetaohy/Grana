@@ -260,8 +260,16 @@ fn output(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>) {
             let ready = state.batch_protocol().is_some()
                 && !state.batch_datasets().is_empty()
                 && state.batch_output().is_some();
-            let role = if ready { Role::Prominent } else { Role::Quiet };
-            if widget::button_with(ui, "run", "Run batch", role, Length::Fill).clicked && ready {
+            if widget::button_with_enabled(
+                ui,
+                "run",
+                "Run batch",
+                Role::Prominent,
+                Length::Fill,
+                ready,
+            )
+            .clicked
+            {
                 commands.push(Command::RunBatch);
             }
         }

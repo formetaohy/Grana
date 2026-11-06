@@ -29,7 +29,7 @@ pub fn popover(
     let margin = 12.0;
     let x = anchor.min.x.min(window.x - width - margin).max(margin);
     let room = (window.y - anchor.max.y - gap - margin).max(160.0);
-    let padding = 6.0;
+    let padding = 8.0;
     let area = Rect::from_min_size(Vec2::new(x, anchor.max.y + gap), Vec2::new(width, room));
     let start = ui.popup_len();
     ui.push_id(id);
@@ -169,7 +169,7 @@ pub fn combo<T: Copy + PartialEq>(
     chosen
 }
 
-const MENU_ROW: f32 = 30.0;
+const MENU_ROW: f32 = 32.0;
 
 fn rows<T: Copy + PartialEq>(
     ui: &mut Ui,
@@ -230,7 +230,7 @@ fn menu_row_highlighted(
         painter.rect(
             rect.shrink2(Vec2::new(2.0, 0.0)),
             Corners::all(8.0),
-            palette.material_hover.with_alpha(0.9 * press),
+            palette.selected.amplify(0.9 * press),
         );
     }
     if checked {
@@ -280,7 +280,7 @@ pub fn action_row(
         painter.rect(
             rect.shrink2(Vec2::new(2.0, 0.0)),
             Corners::all(8.0),
-            palette.material_hover.with_alpha(0.9 * press),
+            palette.selected.amplify(0.9 * press),
         );
     }
     icon::paint(
@@ -343,7 +343,7 @@ pub fn disclosure_row(ui: &mut Ui, id: &str, label: &str, open: bool) -> bool {
         painter.rect(
             rect.shrink2(Vec2::new(2.0, 1.0)),
             Corners::all(8.0),
-            palette.material_hover.with_alpha(0.9 * press),
+            palette.selected.amplify(0.9 * press),
         );
     }
     let centre = Vec2::new(rect.min.x + 11.0, rect.center().y);

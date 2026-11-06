@@ -42,20 +42,28 @@ pub fn build(ui: &mut Ui, state: &mut State<'_>, commands: &mut Vec<Command>) {
 }
 
 fn header(ui: &mut Ui, count: usize) -> Rect {
-    let row = ui.allocate_full(24.0);
+    let row = ui.allocate_full(26.0);
     let palette = ui.theme().palette;
     let add = Rect::from_center_size(
-        Vec2::new(row.max.x - 11.0, row.center().y),
-        Vec2::splat(22.0),
+        Vec2::new(row.max.x - 12.0, row.center().y),
+        Vec2::splat(24.0),
     );
-    let label = TextStyle::new(ui.theme().label_font(), palette.text_tertiary);
+    let label = TextStyle::new(
+        grana_ui::TypeStyle {
+            size: 10.0,
+            weight: 600.0,
+            tracking: 0.8,
+            leading: 14.0,
+        },
+        palette.text_tertiary,
+    );
     let detail =
         TextStyle::new(ui.theme().font(Level::Caption), palette.text_tertiary).aligned(Align::End);
     {
         let mut painter = ui.painter();
-        painter.text_in(row, "Object sets", label, Align::Center);
+        painter.text_in(row, "OBJECT SETS", label, Align::Center);
         painter.text_in(
-            Rect::from_min_max(row.min, Vec2::new(add.min.x - 8.0, row.max.y)),
+            Rect::from_min_max(row.min, Vec2::new(add.min.x - 10.0, row.max.y)),
             &count.to_string(),
             detail,
             Align::Center,
@@ -73,7 +81,11 @@ fn header(ui: &mut Ui, count: usize) -> Rect {
     {
         let mut painter = ui.painter();
         if hover > 0.01 {
-            painter.rect(add, Corners::all(8.0), palette.material_fill);
+            painter.rect(
+                add,
+                Corners::all(9.0),
+                palette.material_hover.amplify(0.7 * hover),
+            );
         }
         grana_ui::icon::paint(
             Icon::Plus,
@@ -173,20 +185,20 @@ fn object(
         |ui| {
             let header = ui.allocate_full(38.0);
             let icon_rect = Rect::from_center_size(
-                Vec2::new(header.min.x + 14.0, header.center().y),
-                Vec2::splat(28.0),
+                Vec2::new(header.min.x + 15.0, header.center().y),
+                Vec2::splat(30.0),
             );
             let menu_rect = Rect::from_center_size(
-                Vec2::new(header.max.x - 11.0, header.center().y),
-                Vec2::splat(22.0),
+                Vec2::new(header.max.x - 12.0, header.center().y),
+                Vec2::splat(24.0),
             );
             let eye_rect = Rect::from_center_size(
-                Vec2::new(menu_rect.min.x - 22.0, header.center().y),
-                Vec2::splat(22.0),
+                Vec2::new(menu_rect.min.x - 24.0, header.center().y),
+                Vec2::splat(24.0),
             );
             let text_area = Rect::from_min_max(
-                Vec2::new(icon_rect.max.x + 9.0, header.min.y),
-                Vec2::new(eye_rect.min.x - 22.0, header.max.y),
+                Vec2::new(icon_rect.max.x + 10.0, header.min.y),
+                Vec2::new(eye_rect.min.x - 24.0, header.max.y),
             );
             let hit =
                 Rect::from_min_max(text_area.min, Vec2::new(eye_rect.min.x - 8.0, header.max.y));
@@ -239,14 +251,14 @@ fn object(
             );
             {
                 let mut painter = ui.painter();
-                painter.rect(icon_rect, Corners::all(12.0), tint.with_alpha(0.12));
+                painter.rect(icon_rect, Corners::all(10.0), tint.with_alpha(0.14));
                 painter.outlined(
                     icon_rect,
-                    Corners::all(6.0),
+                    Corners::all(10.0),
                     grana_ui::Fill::None,
                     grana_ui::Border {
                         width: 1.0,
-                        color: tint.with_alpha(0.26),
+                        color: tint.with_alpha(0.30),
                     },
                     grana_ui::Shadow::NONE,
                 );
@@ -270,11 +282,15 @@ fn object(
                     subtitle_style,
                     Align::Center,
                 );
-                let centre = Vec2::new(text_area.max.x + 8.0, header.center().y);
-                let angle = std::f32::consts::FRAC_PI_2 * (0.5 + 0.5 * arrow);
-                let tip = centre + Vec2::new(angle.cos(), angle.sin()) * 2.2;
-                painter.segment(tip + Vec2::new(-2.0, -1.3), tip, 1.4, palette.text_tertiary);
-                painter.segment(tip, tip + Vec2::new(2.0, -1.3), 1.4, palette.text_tertiary);
+                let centre = Vec2::new(text_area.max.x + 10.0, header.center().y);
+                grana_ui::icon::chevron(
+                    &mut painter,
+                    centre,
+                    8.0,
+                    std::f32::consts::FRAC_PI_2 * arrow,
+                    palette.text_tertiary,
+                    1.4,
+                );
             }
             if editing
                 && let Some((outcome, text)) = widget::text_field(ui, "name", name_rect, name_style)
@@ -296,7 +312,7 @@ fn object(
                     ui,
                     "visible",
                     if visible { Icon::Eye } else { Icon::EyeOff },
-                    22.0,
+                    24.0,
                     Role::Quiet,
                     tooltip,
                 ) {
@@ -309,7 +325,7 @@ fn object(
                     ui,
                     "menu.button",
                     Icon::Ellipsis,
-                    22.0,
+                    24.0,
                     Role::Quiet,
                     "Object commands",
                 ) {

@@ -10,8 +10,6 @@ pub enum Role {
     Quiet,
     Tinted,
     Field,
-    Chip,
-    Hud,
     Danger,
 }
 
@@ -88,13 +86,17 @@ pub struct Palette {
     pub material_border: Color,
     pub hud_fill: Color,
     pub hud_border: Color,
+    pub knob: Color,
+    pub knob_shade: Color,
+    pub track: Color,
+    pub shade: Color,
 }
 
 impl Palette {
     pub fn dark() -> Self {
         Self {
-            text_primary: Color::white_alpha(0.94),
-            text_secondary: Color::white_alpha(0.66),
+            text_primary: Color::white_alpha(0.95),
+            text_secondary: Color::white_alpha(0.68),
             text_tertiary: Color::white_alpha(0.45),
             text_quaternary: Color::white_alpha(0.26),
             text_on_accent: Color::bytes(255, 255, 255),
@@ -105,20 +107,24 @@ impl Palette {
             danger: Color::bytes(255, 69, 58),
             warning: Color::bytes(255, 159, 10),
             success: Color::bytes(48, 209, 88),
-            separator: Color::white_alpha(0.10),
+            separator: Color::white_alpha(0.09),
             border: Color::white_alpha(0.14),
-            selected: Color::white_alpha(0.16),
+            selected: Color::white_alpha(0.17),
             card: Color::white_alpha(0.055),
-            field: Color::black_alpha(0.22),
+            field: Color::black_alpha(0.24),
             focus: Color::bytes(10, 132, 255),
             scrim: Color::rgba(0.0, 0.0, 0.0, 0.55),
-            scene_backdrop: Color::bytes(5, 5, 6),
-            material_fill: Color::white_alpha(0.09),
-            material_hover: Color::white_alpha(0.15),
-            material_press: Color::white_alpha(0.22),
-            material_border: Color::white_alpha(0.12),
-            hud_fill: Color::rgba(0.03, 0.03, 0.04, 0.62),
+            scene_backdrop: Color::bytes(6, 6, 8),
+            material_fill: Color::white_alpha(0.10),
+            material_hover: Color::white_alpha(0.16),
+            material_press: Color::white_alpha(0.24),
+            material_border: Color::white_alpha(0.13),
+            hud_fill: Color::rgba(0.03, 0.03, 0.04, 0.66),
             hud_border: Color::white_alpha(0.14),
+            knob: Color::bytes(255, 255, 255),
+            knob_shade: Color::bytes(226, 227, 233),
+            track: Color::white_alpha(0.18),
+            shade: Color::black_alpha(0.30),
         }
     }
 
@@ -139,17 +145,21 @@ impl Palette {
             separator: Color::black_alpha(0.10),
             border: Color::black_alpha(0.12),
             selected: Color::black_alpha(0.12),
-            card: Color::white_alpha(0.42),
-            field: Color::white_alpha(0.58),
+            card: Color::white_alpha(0.46),
+            field: Color::white_alpha(0.60),
             focus: Color::bytes(0, 122, 255),
             scrim: Color::rgba(0.0, 0.0, 0.0, 0.35),
             scene_backdrop: Color::bytes(238, 238, 240),
-            material_fill: Color::black_alpha(0.06),
-            material_hover: Color::black_alpha(0.10),
-            material_press: Color::black_alpha(0.16),
+            material_fill: Color::black_alpha(0.07),
+            material_hover: Color::black_alpha(0.11),
+            material_press: Color::black_alpha(0.17),
             material_border: Color::black_alpha(0.10),
             hud_fill: Color::white_alpha(0.72),
             hud_border: Color::black_alpha(0.10),
+            knob: Color::bytes(255, 255, 255),
+            knob_shade: Color::bytes(240, 240, 245),
+            track: Color::black_alpha(0.14),
+            shade: Color::black_alpha(0.14),
         }
     }
 }
@@ -171,16 +181,16 @@ pub struct Metrics {
 impl Metrics {
     pub const fn standard() -> Self {
         Self {
-            control_height: 30.0,
+            control_height: 28.0,
             row_height: 30.0,
             gap: 8.0,
             radius: 12.0,
-            card_radius: 18.0,
+            card_radius: 16.0,
             hairline: 1.0,
             track: 4.0,
-            thumb: 14.0,
-            switch_width: 38.0,
-            switch_height: 22.0,
+            thumb: 18.0,
+            switch_width: 42.0,
+            switch_height: 26.0,
         }
     }
 }
@@ -312,25 +322,51 @@ impl Theme {
                 text,
             },
             Role::Control => Surface {
-                fill: Fill::Solid(if disabled { Color::TRANSPARENT } else { tint }),
+                fill: Fill::Gradient(
+                    if disabled { Color::TRANSPARENT } else { tint },
+                    if disabled {
+                        Color::TRANSPARENT
+                    } else {
+                        tint.with_alpha(tint.alpha * 0.72)
+                    },
+                ),
                 corners: Corners::capsule(),
-                border: Border::NONE,
+                border: Border {
+                    width: metrics.hairline,
+                    color: if disabled {
+                        Color::TRANSPARENT
+                    } else {
+                        palette.material_border
+                    },
+                },
                 shadow: Shadow::NONE,
                 text,
             },
             Role::Prominent => Surface {
-                fill: Fill::Solid(if disabled {
-                    palette.accent.with_alpha(0.3)
-                } else if pressed {
-                    palette.accent_press
-                } else if hovered {
-                    palette.accent_hover
-                } else {
-                    palette.accent
-                }),
+                fill: Fill::Gradient(
+                    if disabled {
+                        palette.accent.with_alpha(0.3)
+                    } else if pressed {
+                        palette.accent_press
+                    } else if hovered {
+                        palette.accent_hover
+                    } else {
+                        palette.accent
+                    },
+                    if disabled {
+                        palette.accent.with_alpha(0.24)
+                    } else if pressed {
+                        palette.accent_press
+                    } else {
+                        palette.accent.with_alpha(0.88)
+                    },
+                ),
                 corners: Corners::capsule(),
-                border: Border::NONE,
-                shadow: Shadow::new(Color::black_alpha(0.18), 10.0, 3.0),
+                border: Border {
+                    width: metrics.hairline,
+                    color: Color::white_alpha(0.22),
+                },
+                shadow: Shadow::new(Color::black_alpha(0.22), 10.0, 3.0),
                 text: if disabled {
                     palette.text_on_accent.with_alpha(0.5)
                 } else {
@@ -355,31 +391,48 @@ impl Theme {
                 },
             },
             Role::Tinted => Surface {
-                fill: Fill::Solid(if disabled {
-                    palette.accent.with_alpha(0.12)
-                } else if pressed {
-                    palette.accent.with_alpha(0.32)
-                } else if hovered {
-                    palette.accent.with_alpha(0.26)
-                } else {
-                    palette.accent.with_alpha(0.18)
-                }),
+                fill: Fill::Gradient(
+                    if disabled {
+                        palette.accent.with_alpha(0.12)
+                    } else if pressed {
+                        palette.accent.with_alpha(0.36)
+                    } else if hovered {
+                        palette.accent.with_alpha(0.28)
+                    } else {
+                        palette.accent.with_alpha(0.20)
+                    },
+                    if disabled {
+                        palette.accent.with_alpha(0.10)
+                    } else {
+                        palette.accent.with_alpha(0.14)
+                    },
+                ),
                 corners: Corners::capsule(),
-                border: Border::NONE,
+                border: Border {
+                    width: metrics.hairline,
+                    color: palette.accent.with_alpha(if pressed { 0.5 } else { 0.28 }),
+                },
                 shadow: Shadow::NONE,
                 text: palette.text_primary,
             },
             Role::Field => Surface {
-                fill: Fill::Solid(if disabled {
-                    palette.field.with_alpha(0.4)
-                } else {
-                    palette.field
-                }),
+                fill: Fill::Gradient(
+                    if disabled {
+                        palette.field.with_alpha(0.4)
+                    } else {
+                        palette.field
+                    },
+                    if disabled {
+                        palette.field.with_alpha(0.3)
+                    } else {
+                        palette.field.with_alpha(palette.field.alpha * 0.86)
+                    },
+                ),
                 corners: Corners::all(10.0),
                 border: Border {
                     width: metrics.hairline,
                     color: if interactive && !disabled {
-                        palette.border.with_alpha(0.22)
+                        palette.border.with_alpha(0.26)
                     } else {
                         palette.material_border
                     },
@@ -387,29 +440,9 @@ impl Theme {
                 shadow: Shadow::NONE,
                 text,
             },
-            Role::Chip => Surface {
-                fill: Fill::Solid(palette.material_fill),
-                corners: Corners::capsule(),
-                border: Border {
-                    width: metrics.hairline,
-                    color: palette.material_border,
-                },
-                shadow: Shadow::NONE,
-                text: palette.text_secondary,
-            },
-            Role::Hud => Surface {
-                fill: Fill::Solid(palette.hud_fill),
-                corners: Corners::all(18.0),
-                border: Border {
-                    width: metrics.hairline,
-                    color: palette.hud_border,
-                },
-                shadow: Shadow::new(Color::black_alpha(0.35), 28.0, 10.0),
-                text: palette.text_primary,
-            },
             Role::Danger => Surface {
                 fill: Fill::Solid(if pressed {
-                    palette.danger.with_alpha(0.24)
+                    palette.danger.with_alpha(0.26)
                 } else if hovered {
                     palette.danger.with_alpha(0.16)
                 } else {

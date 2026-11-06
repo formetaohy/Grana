@@ -540,6 +540,17 @@ impl Renderer {
             );
             &back.encoded
         } else {
+            self.paint_instances(
+                encoder,
+                atlas,
+                Layer {
+                    target: &front.linear,
+                    scene: &scene,
+                    buffer: &self.buffers.popup,
+                    instances: popup,
+                    load: LoadOp::Load,
+                },
+            );
             &front.encoded
         };
         let group = self.blit_group(present);

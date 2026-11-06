@@ -56,6 +56,24 @@ pub enum Icon {
     Pencil,
 }
 
+pub fn chevron(
+    painter: &mut Painter<'_>,
+    center: Vec2,
+    size: f32,
+    angle: f32,
+    color: Color,
+    weight: f32,
+) {
+    let (sine, cosine) = angle.sin_cos();
+    let direction = Vec2::new(cosine, sine);
+    let normal = Vec2::new(-sine, cosine);
+    let tip = center + direction * size * 0.28;
+    let back = center - direction * size * 0.28;
+    let wing = size * 0.30;
+    painter.segment(back + normal * wing, tip, weight, color);
+    painter.segment(back - normal * wing, tip, weight, color);
+}
+
 pub fn paint(
     icon: Icon,
     painter: &mut Painter<'_>,
