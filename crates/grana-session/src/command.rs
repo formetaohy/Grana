@@ -1,7 +1,7 @@
 use grana_display::{Coloring, Shading, TransferFunction};
 use grana_measure::{
     Aggregate, ColocPair, ColocSettings, ColocThresholds, Filter, Group, Lasso, MeasureView,
-    PlotAxis, Scope,
+    Measurement, PlotAxis, Scope,
 };
 use grana_object::TrackParams;
 use grana_scene::{
@@ -177,6 +177,11 @@ pub enum Command {
     SetShading(Shading),
     ResetRendering,
     SetMeasureSet(Option<ObjectSetId>),
+    TrainClassifier {
+        set: ObjectSetId,
+        features: Vec<Measurement>,
+    },
+    ClearClassifier(ObjectSetId),
     SetMeasureGroup(Group),
     SetMeasureAggregate(Aggregate),
     SetMeasureScope(Scope),
@@ -295,6 +300,7 @@ pub enum Action {
     StepScale,
     Shading,
     ResetRendering,
+    Classifier,
     MeasureGroup,
     MeasureAggregate,
     MeasureScope,
@@ -364,6 +370,7 @@ impl Action {
             Self::StepScale => "sampling",
             Self::Shading => "lighting",
             Self::ResetRendering => "rendering reset",
+            Self::Classifier => "object classifier",
             Self::MeasureGroup => "statistics group",
             Self::MeasureAggregate => "statistics aggregate",
             Self::MeasureScope => "statistics range",
@@ -519,6 +526,9 @@ impl Command {
             Self::SetStepScale(_) => Edit::new(Action::StepScale),
             Self::SetShading(_) => Edit::new(Action::Shading),
             Self::ResetRendering => Edit::new(Action::ResetRendering),
+            Self::TrainClassifier { set, .. } | Self::ClearClassifier(set) => {
+                Edit::targeted(Action::Classifier, set.raw())
+            }
             Self::SetMeasureGroup(_) => Edit::new(Action::MeasureGroup),
             Self::SetMeasureAggregate(_) => Edit::new(Action::MeasureAggregate),
             Self::SetMeasureScope(_) => Edit::new(Action::MeasureScope),

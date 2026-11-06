@@ -1592,3 +1592,87 @@ fn round_trips_a_child_color() {
         })
     );
 }
+
+#[test]
+fn round_trips_a_classifier() {
+    let extent = Extent::new(4, 4, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "DAPI",
+            [0.3, 0.4, 1.0],
+            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+        )],
+    );
+    let series = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    let statistics = |value: f32| {
+        let mut accumulator = SampleAccumulator::new();
+        accumulator.push(value);
+        accumulator.statistics()
+    };
+    scene.install(
+        set,
+        0,
+        ObjectFrame::Spots(SpotSet::new(
+            0,
+            vec![
+                Spot::new([0.0, 0.0, 0.0], 1.5, 0.4),
+                Spot::new([1.0, 1.0, 1.0], 0.75, 0.25),
+                Spot::new([2.0, 0.0, 0.0], 1.2, 0.35),
+                Spot::new([0.0, 2.0, 0.0], 0.9, 0.2),
+            ],
+            IntensityTable::new(
+                1,
+                vec![
+                    statistics(0.4),
+                    statistics(0.2),
+                    statistics(0.3),
+                    statistics(0.1),
+                ],
+            ),
+        )),
+    );
+    let table = scene
+        .table(
+            set,
+            grana_measure::Group::Object,
+            grana_measure::Aggregate::Mean,
+        )
+        .expect("the spots build a table");
+    let contrast = table
+        .column("contrast")
+        .expect("the table measures contrast");
+    let positives = (0..table.rows())
+        .filter(|row| table.value(*row, contrast) > 0.3)
+        .collect::<Vec<_>>();
+    scene
+        .train_classifier(
+            set,
+            &[Measurement::Diameter, Measurement::Contrast],
+            &positives,
+        )
+        .expect("the classifier trains on the gate");
+    let protocol =
+        Protocol::capture(&scene, &Measure::new(), None).expect("the classified scene captures");
+    let spec = &protocol.sets()[0];
+    let classifier = spec.classifier.as_ref().expect("the classifier captures");
+    assert_eq!(classifier.features.len(), 2);
+    assert!(classifier.accuracy > 0.99);
+    let text = protocol.to_json().expect("the protocol serializes");
+    let restored = Protocol::from_json(&text).expect("the protocol round trips");
+    assert_eq!(protocol, restored);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let staged = restored
+        .stage(&mut scene)
+        .expect("the classified protocol stages");
+    let set = scene
+        .objects
+        .get(staged.set(0))
+        .expect("the staged set exists");
+    let classifier = set.classifier().expect("the classifier restages");
+    assert_eq!(classifier.features().len(), 2);
+    assert_eq!(classifier.positives(), 2);
+}

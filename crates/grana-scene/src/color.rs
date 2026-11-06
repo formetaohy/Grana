@@ -18,6 +18,7 @@ pub enum ObjectColor {
         target: ObjectSetId,
         field: ChildField,
     },
+    Score,
 }
 
 impl ObjectColor {
@@ -26,6 +27,7 @@ impl ObjectColor {
             Self::Measurement(measurement) => measurement.unit(),
             Self::Relation { field, .. } => field.unit(),
             Self::Child { field, .. } => field.unit(),
+            Self::Score => Unit::Count,
         }
     }
 
@@ -34,12 +36,13 @@ impl ObjectColor {
             Self::Measurement(measurement) => measurement.decimals(),
             Self::Relation { field, .. } => field.decimals(),
             Self::Child { field, .. } => field.decimals(),
+            Self::Score => 3,
         }
     }
 
     pub fn relation(self) -> Option<(ObjectSetId, i32)> {
         match self {
-            Self::Measurement(_) | Self::Child { .. } => None,
+            Self::Measurement(_) | Self::Child { .. } | Self::Score => None,
             Self::Relation { target, shift, .. } => Some((target, shift)),
         }
     }
@@ -60,6 +63,7 @@ impl ObjectColor {
             Self::Child { .. } => {
                 panic!("a child aggregate is read from the objects of its parent set")
             }
+            Self::Score => panic!("a classifier score is read from the classifier of its set"),
         }
     }
 
@@ -68,6 +72,9 @@ impl ObjectColor {
         frame: &ObjectFrame,
         relation: Option<&RelationFrame>,
     ) -> Option<Extent> {
+        if self == Self::Score {
+            return None;
+        }
         let objects = frame.objects();
         (0..frame.object_count()).fold(None, |accumulated, object| {
             let value = self.value(objects, relation, object);

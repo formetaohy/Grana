@@ -1269,3 +1269,81 @@ fn triangle() -> Mesh {
     ];
     Mesh::new(vertices.to_vec(), vec![0, 1, 2])
 }
+
+#[test]
+fn round_trips_a_classifier() {
+    let mut scene = fixture();
+    stage(&mut scene);
+    let spots = scene
+        .objects
+        .iter()
+        .find(|set| set.kind() == ObjectKind::Spots)
+        .expect("the fixture stages spots")
+        .id();
+    let table = scene
+        .table(spots, grana_measure::Group::Object, Aggregate::Mean)
+        .expect("the spots build a table");
+    let contrast = table
+        .column("contrast")
+        .expect("the table measures contrast");
+    let positives = (0..table.rows())
+        .filter(|row| table.value(*row, contrast) > 0.3)
+        .collect::<Vec<_>>();
+    scene
+        .train_classifier(
+            spots,
+            &[Measurement::Diameter, Measurement::Contrast],
+            &positives,
+        )
+        .expect("the classifier trains on the gate");
+    let mut coloring = grana_display::Coloring::new();
+    coloring.set_metric(Some(ObjectColor::Score));
+    assert!(scene.set_object_coloring(spots, coloring));
+    let view = ViewState {
+        camera: CameraState {
+            pivot: [0.0, 0.0, 0.0],
+            yaw: 0.0,
+            pitch: 0.0,
+            distance: 10.0,
+            fov_y: 0.7,
+        },
+        section: SectionState {
+            axis: Axis::Z,
+            span: 8.0,
+        },
+        split: 0.5,
+        timeline: Timeline::new(24, 1.0),
+        export: Export::NATIVE,
+    };
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "fixture".to_string(),
+        },
+        view,
+    );
+    let path = std::env::temp_dir().join(format!("grana-classifier-{}.grana", std::process::id()));
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the classified project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::temporary(1).expect("the store opens a spill file"),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the classified project reads");
+    fs::remove_file(&path).ok();
+    assert_eq!(loaded, project);
+    let set = loaded
+        .scene
+        .sets
+        .iter()
+        .find(|set| set.id == spots.raw())
+        .expect("the classified set restores");
+    let classifier = set.classifier.as_ref().expect("the classifier restores");
+    assert_eq!(classifier.features.len(), 2);
+    assert!(classifier.accuracy > 0.99);
+    assert_eq!(set.object_color.metric, Some(ObjectColor::Score));
+}

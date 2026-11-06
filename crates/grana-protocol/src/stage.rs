@@ -237,6 +237,15 @@ impl Protocol {
                 set.set_visible(spec.visible);
                 set.set_labels(spec.labels);
             }
+            if let Some(classifier) = &spec.classifier {
+                let set = builder
+                    .scene
+                    .objects
+                    .get(id)
+                    .expect("the staged object set exists");
+                let classifier = classifier.classifier(set, &keys)?;
+                builder.scene.install_classifier(id, classifier);
+            }
             if let Some(curation) = &spec.curation {
                 builder.apply_curation(id, Some(curation), &spec.name)?;
             }
@@ -690,6 +699,16 @@ fn object_coloring(
         }
     } else {
         match (&spec.key, &spec.target) {
+            (Some(key), _) if key == grana_measure::SCORE_KEY => {
+                let set = scene.objects.get(id).expect("the staged object set exists");
+                if set.classifier().is_none() {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the color names the classifier score of {}, which does not classify",
+                        set.name()
+                    )));
+                }
+                ObjectColor::Score
+            }
             (Some(key), _) => {
                 let set = scene.objects.get(id).expect("the staged object set exists");
                 let measurement = set

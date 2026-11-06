@@ -500,6 +500,9 @@ pub fn apply(
             }
             Message::SetJoin(join) => workspace.join = join,
             Message::SetSeed(seed) => workspace.seed = seed,
+            Message::SetClassifierFeatures { set, features } => {
+                workspace.classifier.insert(set, features);
+            }
             Message::SetSectionAxis(axis) => {
                 viewport.section_mut().set_axis(axis);
                 crate::fitting::fit_section(view.scene, viewport, stage);

@@ -11,11 +11,12 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use spec::{
-    AnchorSpec, AxisSpec, CameraSpec, ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec,
-    ColorSpec, CurationSpec, DriftSpec, EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec,
-    LassoSpec, MaskFilterSpec, MeasureSpec, MetricSpec, NodeSpec, PartSpec, RegionSpec,
-    RelationSpec, RemovalSpec, RenderSpec, SectionSpec, SetSpec, ShadingSpec, SnapshotSpec,
-    SortSpec, SourceSpec, StopSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    AnchorSpec, AxisSpec, CameraSpec, ChannelSpec, ClassifierSpec, ColocPairSpec,
+    ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DriftSpec, EditSpec, ExportSpec,
+    FilterSpec, HiddenSpec, KeySpec, LassoSpec, MaskFilterSpec, MeasureSpec, MetricSpec, NodeSpec,
+    PartSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, SectionSpec, SetSpec, ShadingSpec,
+    SnapshotSpec, SortSpec, SourceSpec, StopSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec,
+    WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -197,6 +198,12 @@ impl Protocol {
                             if filters == 1 { "" } else { "s" }
                         );
                     }
+                }
+                if let Some(classifier) = &set.classifier {
+                    text = format!(
+                        "{text} · classifier on {} measurements",
+                        classifier.features.len()
+                    );
                 }
                 if let Some(mask) = &set.mask {
                     text = format!("{text} within {}", self.name_of(mask).unwrap_or(mask));

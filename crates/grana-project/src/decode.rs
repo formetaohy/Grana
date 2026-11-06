@@ -5,8 +5,8 @@ use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
 use grana_geometry::{Bounds, Geometry, PackedMesh};
 use grana_measure::{
-    Aggregate, ChildField, ChildMetric, Filter, Group, Lasso, MeasureView, Measurement,
-    RelationField, Scope, Statistic, TrackMeasurement,
+    Aggregate, ChildField, ChildMetric, ClassifierState, Filter, Group, Lasso, MeasureView,
+    Measurement, RelationField, Scope, Statistic, TrackMeasurement,
 };
 use grana_measure::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocCost, ColocFrame,
@@ -431,6 +431,7 @@ impl Decode for SetState {
         let track_visible = Option::<bool>::decode(reader)?;
         let object_color = ColorState::<ObjectColor>::decode(reader)?;
         let track_color = ColorState::<TrackColor>::decode(reader)?;
+        let classifier = Option::<ClassifierState>::decode(reader)?;
         let visibility = Visibility::decode(reader)?;
         let seeds = decode_seeds(reader)?;
         let frames = Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?;
@@ -468,6 +469,7 @@ impl Decode for SetState {
             track_visible,
             object_color,
             track_color,
+            classifier,
             visibility,
             seeds,
             frames,
@@ -1004,8 +1006,26 @@ impl Decode for ObjectColor {
                     field: ChildField::decode(reader)?,
                 })
             }
+            3 => Ok(Self::Score),
             _ => Err(FAULT_SHAPE),
         }
+    }
+}
+
+impl Decode for ClassifierState {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let state = Self {
+            features: Vec::<Measurement>::decode(reader)?,
+            mean: Vec::<f64>::decode(reader)?,
+            scale: Vec::<f64>::decode(reader)?,
+            weights: Vec::<f64>::decode(reader)?,
+            bias: reader.f64()?,
+            positives: reader.u32()? as usize,
+            negatives: reader.u32()? as usize,
+            accuracy: reader.f32()?,
+        };
+        grana_measure::Classifier::restore(state.clone()).map_err(|_| FAULT_VALUE)?;
+        Ok(state)
     }
 }
 
@@ -1661,6 +1681,7 @@ fn color_applies(sets: &[SetState], set: &SetState, channels: usize, metric: Obj
                     .iter()
                     .any(|relation| relation.target == target.raw() && relation.shift == shift)
         }
+        ObjectColor::Score => set.classifier.is_some(),
         ObjectColor::Child { target, field } => {
             let Some(child) = sets.iter().find(|candidate| candidate.id == target.raw()) else {
                 return false;

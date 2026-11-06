@@ -370,6 +370,12 @@ impl Session {
                     self.measure.select(set, scene);
                 }
             }
+            Command::TrainClassifier { set, features } => self.train_classifier(set, features),
+            Command::ClearClassifier(set) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.clear_classifier(set);
+                }
+            }
             Command::SetMeasureGroup(group) => {
                 if let Some(scene) = self.scene.as_mut() {
                     self.measure.set_group(group, scene);

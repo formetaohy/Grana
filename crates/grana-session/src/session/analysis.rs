@@ -194,6 +194,64 @@ impl Session {
         repaint
     }
 
+    pub(super) fn train_classifier(
+        &mut self,
+        set: ObjectSetId,
+        features: Vec<grana_measure::Measurement>,
+    ) {
+        if self.loading.is_some() || self.scene.is_none() {
+            return;
+        }
+        if self.measure.set() != Some(set) {
+            self.message = Some(Message::error(
+                "select the object set in the statistics panel before training",
+            ));
+            return;
+        }
+        if self.measure.group() != Group::Object {
+            self.message = Some(Message::error(
+                "switch the statistics table to objects before training",
+            ));
+            return;
+        }
+        let rows = self.measure.rows().to_vec();
+        if rows.is_empty() {
+            self.message = Some(Message::error(
+                "gate the objects with statistics filters before training",
+            ));
+            return;
+        }
+        if features.is_empty() {
+            self.message = Some(Message::error(
+                "choose at least one measurement to train the classifier",
+            ));
+            return;
+        }
+        let outcome = self
+            .scene
+            .as_mut()
+            .expect("the classifier names a scene")
+            .train_classifier(set, &features, &rows);
+        match outcome {
+            Ok(()) => {
+                let summary = self
+                    .scene
+                    .as_ref()
+                    .and_then(|scene| scene.objects.get(set))
+                    .and_then(|set| set.classifier())
+                    .map(|classifier| {
+                        format!(
+                            "trained a classifier on {} measurements · {:.0}% balanced fit",
+                            classifier.features().len(),
+                            classifier.accuracy() * 100.0
+                        )
+                    });
+                self.message = summary.map(Message::info);
+            }
+            Err(detail) => self.message = Some(Message::error(detail)),
+        }
+    }
+
     pub(super) fn record_progress(&mut self, job: Job, time: u32, done: usize, total: usize) {
         let progress = Progress {
             job,

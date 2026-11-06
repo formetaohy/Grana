@@ -420,6 +420,7 @@ fn metric_label(scene: &Scene, metric: ObjectColor, channels: &[String]) -> Stri
                 .map_or_else(|| "children".to_string(), |set| set.name().to_string());
             format!("{target} · {}", field.label(channels))
         }
+        ObjectColor::Score => grana_measure::SCORE_LABEL.to_string(),
     }
 }
 

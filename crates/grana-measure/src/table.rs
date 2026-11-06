@@ -353,6 +353,30 @@ impl Table {
         }
     }
 
+    pub fn with_column(mut self, column: Column, values: Vec<f32>) -> Self {
+        let rows = self.observations.len();
+        assert_eq!(
+            values.len(),
+            rows,
+            "an appended column covers every observation"
+        );
+        assert!(
+            self.columns
+                .iter()
+                .all(|existing| existing.key() != column.key()),
+            "a table names each column once"
+        );
+        let width = self.columns.len();
+        let mut appended = Vec::with_capacity(rows * (width + 1));
+        for (row, value) in values.into_iter().enumerate() {
+            appended.extend_from_slice(&self.values[row * width..(row + 1) * width]);
+            appended.push(value);
+        }
+        self.columns.push(column);
+        self.values = appended;
+        self
+    }
+
     pub fn columns(&self) -> &[Column] {
         &self.columns
     }

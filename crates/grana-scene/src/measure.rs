@@ -769,6 +769,7 @@ fn default_visibility(table: &Table) -> Vec<bool> {
                     || key.ends_with("_distance_um")
                     || key.ends_with("_inside")
                     || key.ends_with("_count")
+                    || key == grana_measure::SCORE_KEY
             }
         })
         .collect()

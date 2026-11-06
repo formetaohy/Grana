@@ -5,10 +5,10 @@ use grana_scene::{
 };
 
 use crate::{
-    ChannelSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DriftSpec,
-    FilterSpec, LassoSpec, MaskFilterSpec, MeasureSpec, MetricSpec, PartSpec, Protocol,
-    ProtocolError, RegionSpec, RelationSpec, RenderSpec, SetSpec, SnapshotSpec, SortSpec,
-    SourceSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec,
+    CurationSpec, DriftSpec, FilterSpec, LassoSpec, MaskFilterSpec, MeasureSpec, MetricSpec,
+    PartSpec, Protocol, ProtocolError, RegionSpec, RelationSpec, RenderSpec, SetSpec, SnapshotSpec,
+    SortSpec, SourceSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -59,6 +59,9 @@ impl Protocol {
                     opacity: set.opacity(),
                     color_by: object_color(set.object_coloring(), scene, &keys),
                     track_by: track_color(set.track_coloring(), scene),
+                    classifier: set
+                        .classifier()
+                        .map(|classifier| ClassifierSpec::of(classifier, &keys)),
                     source: source(scene, &channels, set)?,
                     mask: None,
                     track: set.track_style().map(|style| TrackSpec {
@@ -406,6 +409,10 @@ fn object_color(
         shift: 0,
     };
     Some(match metric {
+        ObjectColor::Score => ColorSpec {
+            key: Some(grana_measure::SCORE_KEY.to_string()),
+            ..color
+        },
         ObjectColor::Measurement(measurement) => ColorSpec {
             key: Some(measurement.key(keys)),
             ..color

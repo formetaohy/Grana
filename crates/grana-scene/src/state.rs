@@ -88,6 +88,7 @@ pub struct SetState {
     pub track_visible: Option<bool>,
     pub object_color: ColorState<ObjectColor>,
     pub track_color: ColorState<TrackColor>,
+    pub classifier: Option<grana_measure::ClassifierState>,
     pub visibility: Visibility,
     pub seeds: Seeds,
     pub frames: Vec<Option<Arc<ObjectFrame>>>,
@@ -118,6 +119,19 @@ impl SceneState {
                             })
                     })
                 }) && self.sets.iter().any(|set| set.id == filter.target().raw())
+            })
+            && self.sets.iter().all(|set| {
+                set.classifier.as_ref().is_none_or(|classifier| {
+                    classifier.features.iter().all(|feature| {
+                        set.kind.measurements(channel_count).contains(feature)
+                            && match feature {
+                                grana_measure::Measurement::Intensity { channel, .. } => {
+                                    *channel < channel_count
+                                }
+                                _ => true,
+                            }
+                    })
+                })
             })
             && self
                 .sets

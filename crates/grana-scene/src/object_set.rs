@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use grana_measure::{ChildField, ChildMetric, Measurement, RelationField, TrackMeasurement};
+use grana_measure::{
+    ChildField, ChildMetric, Classifier, Measurement, RelationField, TrackMeasurement,
+};
 use grana_object::TrackParams;
 use grana_object::{RelationFrame, TrackSet};
 
@@ -79,6 +81,7 @@ pub struct ObjectSet {
     frame_bounds: Vec<Option<Extent>>,
     object_coloring: Coloring<ObjectColor>,
     track_coloring: Coloring<TrackColor>,
+    classifier: Option<Classifier>,
     track_bounds: Option<Extent>,
     revision: u64,
     document: u64,
@@ -126,6 +129,7 @@ impl ObjectSet {
             frames,
             object_coloring: Coloring::new(),
             track_coloring: Coloring::new(),
+            classifier: None,
             track_bounds: None,
             revision: 1,
             document: 1,
@@ -266,6 +270,28 @@ impl ObjectSet {
         }
         self.opacity = opacity;
         self.document += 1;
+    }
+
+    pub fn classifier(&self) -> Option<&Classifier> {
+        self.classifier.as_ref()
+    }
+
+    pub(crate) fn set_classifier(&mut self, classifier: Option<Classifier>, stamp: u64) -> bool {
+        if self.classifier == classifier {
+            return false;
+        }
+        self.classifier = classifier;
+        if self.classifier.is_none() {
+            if self.object_coloring.metric() == Some(ObjectColor::Score) {
+                self.object_coloring.set_metric(None);
+            }
+            if self.label == Some(ObjectColor::Score) {
+                self.label = None;
+            }
+        }
+        self.revision = stamp;
+        self.document += 1;
+        true
     }
 
     pub fn object_coloring(&self) -> &Coloring<ObjectColor> {
@@ -811,6 +837,7 @@ impl ObjectSet {
             track_visible: self.tracks.as_ref().map(TrackLayer::visible),
             object_color: self.object_coloring.state(),
             track_color: self.track_coloring.state(),
+            classifier: self.classifier.as_ref().map(Classifier::state),
             visibility: self.visibility.clone(),
             seeds: self.seeds.clone(),
             frames: self.frames.iter().map(|slot| slot.data.clone()).collect(),
@@ -850,6 +877,7 @@ impl ObjectSet {
             track_visible,
             object_color,
             track_color,
+            classifier,
             visibility,
             seeds,
             frames,
@@ -895,6 +923,10 @@ impl ObjectSet {
             frames: (0..frame_count).map(|_| FrameSlot::new()).collect(),
             object_coloring: Coloring::new(),
             track_coloring: Coloring::new(),
+            classifier: classifier
+                .map(Classifier::restore)
+                .transpose()
+                .expect("a restored classifier keeps its coefficients"),
             track_bounds: None,
             revision: 1,
             document: 1,
@@ -1482,6 +1514,7 @@ impl ObjectSet {
             frame_bounds: vec![None; self.frames.len()],
             object_coloring: self.object_coloring.clone(),
             track_coloring: self.track_coloring.clone(),
+            classifier: self.classifier.clone(),
             track_bounds: None,
             revision: 1,
             document: 1,
@@ -1624,6 +1657,7 @@ impl ObjectSet {
             frame_bounds: vec![None; self.frames.len()],
             object_coloring,
             track_coloring,
+            classifier: self.classifier.clone(),
             track_bounds: None,
             revision: stamp,
             document: self.document + 1,

@@ -1,7 +1,9 @@
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
 use grana_geometry::{Bounds, PackedMesh};
-use grana_measure::{ChildField, ChildMetric, Filter, Measurement, TrackMeasurement};
+use grana_measure::{
+    ChildField, ChildMetric, ClassifierState, Filter, Measurement, TrackMeasurement,
+};
 use grana_measure::{
     ColocCost, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocSeriesInfo, ColocSettings,
     ColocSignificance, ColocThresholds,
@@ -278,6 +280,7 @@ impl Encode for SetState {
         self.track_visible.encode(writer);
         self.object_color.encode(writer);
         self.track_color.encode(writer);
+        self.classifier.encode(writer);
         self.visibility.encode(writer);
         self.seeds.encode(writer);
         self.frames.encode(writer);
@@ -595,7 +598,21 @@ impl Encode for ObjectColor {
                 writer.u64(target.raw());
                 field.encode(writer);
             }
+            Self::Score => writer.u8(3),
         }
+    }
+}
+
+impl Encode for ClassifierState {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        self.features.encode(writer);
+        self.mean.encode(writer);
+        self.scale.encode(writer);
+        self.weights.encode(writer);
+        writer.f64(self.bias);
+        writer.count(self.positives);
+        writer.count(self.negatives);
+        writer.f32(self.accuracy);
     }
 }
 

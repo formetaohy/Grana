@@ -126,8 +126,19 @@ impl Protocol {
                     set.name
                 )));
             }
+            if let Some(classifier) = &set.classifier {
+                classifier.checked(&set.name)?;
+            }
             if let Some(color) = &set.color_by {
                 color.checked(&set.name)?;
+                if color.key.as_deref() == Some(grana_measure::SCORE_KEY)
+                    && set.classifier.is_none()
+                {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{} is colored by a classifier score without a classifier",
+                        set.name
+                    )));
+                }
                 if let Some(target) = &color.target
                     && !protocol_keys.contains(&target.as_str())
                 {
@@ -139,6 +150,14 @@ impl Protocol {
             }
             if let Some(label) = &set.label {
                 label.checked(&set.name)?;
+                if label.key.as_deref() == Some(grana_measure::SCORE_KEY)
+                    && set.classifier.is_none()
+                {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{} labels its objects by a classifier score without a classifier",
+                        set.name
+                    )));
+                }
                 if let Some(target) = &label.target
                     && !protocol_keys.contains(&target.as_str())
                 {

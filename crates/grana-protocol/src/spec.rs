@@ -296,6 +296,8 @@ pub struct SetSpec {
     pub color_by: Option<ColorSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_by: Option<ColorSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classifier: Option<ClassifierSpec>,
     pub source: SourceSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask: Option<String>,
@@ -362,6 +364,22 @@ pub struct PartSpec {
     pub source: SourceSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub curation: Option<CurationSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClassifierSpec {
+    pub features: Vec<String>,
+    pub mean: Vec<f64>,
+    pub scale: Vec<f64>,
+    pub weights: Vec<f64>,
+    pub bias: f64,
+    #[serde(default, skip_serializing_if = "is_u32_zero")]
+    pub positives: u32,
+    #[serde(default, skip_serializing_if = "is_u32_zero")]
+    pub negatives: u32,
+    #[serde(default, skip_serializing_if = "is_f32_zero")]
+    pub accuracy: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -752,9 +770,111 @@ impl ColorSpec {
     }
 }
 
+impl ClassifierSpec {
+    pub fn of(classifier: &grana_measure::Classifier, keys: &[String]) -> Self {
+        let state = classifier.state();
+        Self {
+            features: state
+                .features
+                .iter()
+                .map(|feature| feature.key(keys))
+                .collect(),
+            mean: state.mean,
+            scale: state.scale,
+            weights: state.weights,
+            bias: state.bias,
+            positives: state.positives as u32,
+            negatives: state.negatives as u32,
+            accuracy: state.accuracy,
+        }
+    }
+
+    pub fn classifier(
+        &self,
+        set: &ObjectSet,
+        keys: &[String],
+    ) -> Result<grana_measure::Classifier, ProtocolError> {
+        let features = self
+            .features
+            .iter()
+            .map(|key| {
+                set.colorable_measurements()
+                    .into_iter()
+                    .find(|measurement| measurement.key(keys) == *key)
+                    .ok_or_else(|| {
+                        ProtocolError::Invalid(format!(
+                            "the classifier of {} trains on {key}, which the set does not measure",
+                            set.name()
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        grana_measure::Classifier::restore(grana_measure::ClassifierState {
+            features,
+            mean: self.mean.clone(),
+            scale: self.scale.clone(),
+            weights: self.weights.clone(),
+            bias: self.bias,
+            positives: self.positives as usize,
+            negatives: self.negatives as usize,
+            accuracy: self.accuracy,
+        })
+        .map_err(ProtocolError::Invalid)
+    }
+
+    pub(super) fn checked(&self, what: &str) -> Result<(), ProtocolError> {
+        let invalid = |detail: String| {
+            Err(ProtocolError::Invalid(format!(
+                "the classifier of {what} {detail}"
+            )))
+        };
+        if self.features.is_empty() {
+            return invalid("trains on no measurement".to_string());
+        }
+        if self.mean.len() != self.features.len()
+            || self.scale.len() != self.features.len()
+            || self.weights.len() != self.features.len()
+        {
+            return invalid("carries coefficients of another length".to_string());
+        }
+        if !self
+            .mean
+            .iter()
+            .chain(&self.scale)
+            .chain(&self.weights)
+            .chain([&self.bias])
+            .all(|value| value.is_finite())
+        {
+            return invalid("carries a non-finite coefficient".to_string());
+        }
+        if self.scale.iter().any(|value| *value <= 0.0) {
+            return invalid("scales a measurement by a non-positive factor".to_string());
+        }
+        if !self.accuracy.is_finite() {
+            return invalid("records a non-finite accuracy".to_string());
+        }
+        if self
+            .features
+            .iter()
+            .any(|feature| feature.trim().is_empty())
+        {
+            return invalid("trains on an empty measurement name".to_string());
+        }
+        Ok(())
+    }
+}
+
 impl MetricSpec {
     pub fn of(metric: ObjectColor, scene: &Scene, keys: &[String]) -> Option<Self> {
         Some(match metric {
+            ObjectColor::Score => Self {
+                key: Some(grana_measure::SCORE_KEY.to_string()),
+                target: None,
+                field: None,
+                statistic: None,
+                child: false,
+                shift: 0,
+            },
             ObjectColor::Measurement(measurement) => Self {
                 key: Some(measurement.key(keys)),
                 target: None,
@@ -838,6 +958,15 @@ impl MetricSpec {
             });
         }
         match (&self.key, &self.target) {
+            (Some(key), None) if key == grana_measure::SCORE_KEY => {
+                if set.classifier().is_none() {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the set {} names a classifier score before it classifies",
+                        set.name()
+                    )));
+                }
+                Ok(ObjectColor::Score)
+            }
             (Some(key), None) => {
                 let measurement = set
                     .colorable_measurements()

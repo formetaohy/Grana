@@ -1,10 +1,10 @@
-use std::collections::{HashMap, HashSet};
+﻿use std::collections::{HashMap, HashSet};
 
 use glam::Vec2;
 use grana_animation::Timeline;
 use grana_display::Viewport;
-use grana_measure::MeasureView;
-use grana_scene::{Measure, ObjectSetId, Progress, Scene};
+use grana_measure::{MeasureView, Measurement};
+use grana_scene::{Measure, ObjectSet, ObjectSetId, Progress, Scene};
 use grana_session::{BatchView, Export, HistoryView, IoView, SeriesView};
 use grana_ui::Key;
 
@@ -101,6 +101,7 @@ pub struct Workspace {
     pub renaming: Option<ObjectSetId>,
     pub expanded: HashSet<ObjectSetId>,
     pub sections: Sections,
+    pub classifier: HashMap<ObjectSetId, Vec<Measurement>>,
     pub(crate) drag: PlotDrag,
 }
 
@@ -121,6 +122,7 @@ impl Default for Workspace {
             renaming: None,
             expanded: HashSet::new(),
             sections: Sections::default(),
+            classifier: HashMap::new(),
             drag: PlotDrag::default(),
         }
     }
@@ -133,6 +135,13 @@ impl Workspace {
 
     pub fn expanded(&self, set: ObjectSetId) -> bool {
         self.expanded.contains(&set)
+    }
+
+    pub fn classifier_features(&self, set: &ObjectSet) -> Vec<Measurement> {
+        self.classifier
+            .get(&set.id())
+            .cloned()
+            .unwrap_or_else(|| set.colorable_measurements())
     }
 }
 

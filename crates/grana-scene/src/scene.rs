@@ -3,7 +3,7 @@ use std::sync::Arc;
 use glam::Vec3;
 use grana_display::{Coloring, Shading, TransferFunction};
 use grana_geometry::ray_hit;
-use grana_measure::{Aggregate, Frame, Group, RelationRow, Table};
+use grana_measure::{Aggregate, Classifier, Frame, Group, Measurement, RelationRow, Table};
 use grana_object::{RelationFrame, TrackSet};
 use grana_object::{Shape, TrackParams};
 use grana_volume::{ChannelInfo, Clip, Intensity, Region};
@@ -20,6 +20,53 @@ use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
 use crate::provenance::{Criteria, Provenance};
+
+fn aggregate_scores(
+    set: &ObjectSet,
+    classifier: &Classifier,
+    aggregate: Aggregate,
+    group: Group,
+) -> Vec<f32> {
+    match group {
+        Group::Object => Vec::new(),
+        Group::Track => {
+            let Some(tracks) = set.tracks().map(|layer| layer.set()) else {
+                return Vec::new();
+            };
+            let mut accumulators = vec![grana_object::SampleAccumulator::new(); tracks.len()];
+            for (time, frame) in set.frames() {
+                let objects = frame.objects();
+                for index in 0..frame.object_count() {
+                    let Some(track) = tracks.track_at(time, index) else {
+                        continue;
+                    };
+                    let score = classifier.score(objects, index);
+                    if score.is_finite() {
+                        accumulators[track].push(score);
+                    }
+                }
+            }
+            accumulators
+                .iter()
+                .map(|accumulator| aggregate.apply(accumulator.statistics()))
+                .collect()
+        }
+        Group::Timepoint => set
+            .frames()
+            .map(|(_, frame)| {
+                let objects = frame.objects();
+                let mut accumulator = grana_object::SampleAccumulator::new();
+                for index in 0..frame.object_count() {
+                    let score = classifier.score(objects, index);
+                    if score.is_finite() {
+                        accumulator.push(score);
+                    }
+                }
+                aggregate.apply(accumulator.statistics())
+            })
+            .collect(),
+    }
+}
 
 fn shape_at(frames: &[Option<Arc<ObjectFrame>>], time: u32) -> Result<Option<Shape>, String> {
     let Some(frame) = frames.get(time as usize).and_then(|frame| frame.as_deref()) else {
@@ -791,14 +838,77 @@ impl Scene {
             .map(|channel| channel.name().to_string())
             .collect::<Vec<_>>();
         let tracks = object.tracks().map(|layer| layer.set());
-        Some(Table::build(
+        let mut table = Table::build(
             &frames,
             tracks,
             &channels,
             self.dataset.frame_interval(),
             group,
             aggregate,
-        ))
+        );
+        if let Some(classifier) = object.classifier() {
+            let keys = grana_measure::channel_keys(&channels);
+            let column = match group {
+                Group::Object => {
+                    let scores = classifier.scores(&table, &keys);
+                    table = table.with_column(classifier.column(), scores);
+                    None
+                }
+                Group::Track => Some((
+                    classifier.aggregate_column(aggregate),
+                    aggregate_scores(object, classifier, aggregate, Group::Track),
+                )),
+                Group::Timepoint => Some((
+                    classifier.aggregate_column(aggregate),
+                    aggregate_scores(object, classifier, aggregate, Group::Timepoint),
+                )),
+            };
+            if let Some((column, values)) = column {
+                table = table.with_column(column, values);
+            }
+        }
+        Some(table)
+    }
+
+    pub fn train_classifier(
+        &mut self,
+        id: ObjectSetId,
+        features: &[Measurement],
+        positives: &[usize],
+    ) -> Result<(), String> {
+        if features.is_empty() {
+            return Err("a classifier trains on at least one measurement".to_string());
+        }
+        let set = self
+            .objects
+            .get(id)
+            .ok_or("the object set left the scene before it classified")?;
+        let colorable = set.colorable_measurements();
+        if !features.iter().all(|feature| colorable.contains(feature)) {
+            return Err("a classifier trains on measurements of its object set".to_string());
+        }
+        let table = self
+            .table(id, Group::Object, Aggregate::Mean)
+            .ok_or("the object set holds no measurements to train on")?;
+        let keys = grana_measure::channel_keys(
+            &self
+                .dataset
+                .channels()
+                .iter()
+                .map(|channel| channel.name().to_string())
+                .collect::<Vec<_>>(),
+        );
+        let classifier = Classifier::train(&table, &keys, features, positives)?;
+        self.objects.set_classifier(id, Some(classifier));
+        Ok(())
+    }
+
+    pub fn clear_classifier(&mut self, id: ObjectSetId) -> bool {
+        self.objects.set_classifier(id, None)
+    }
+
+    pub fn install_classifier(&mut self, id: ObjectSetId, classifier: Classifier) -> bool {
+        self.objects.set_classifier(id, Some(classifier))
     }
 
     pub fn install(&mut self, id: ObjectSetId, time: u32, frame: ObjectFrame) {

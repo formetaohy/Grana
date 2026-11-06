@@ -45,6 +45,10 @@ pub enum Message {
     SetTrackSet(Option<ObjectSetId>),
     SetJoin(Option<(u32, usize)>),
     SetSeed(Option<ObjectSetId>),
+    SetClassifierFeatures {
+        set: ObjectSetId,
+        features: Vec<grana_measure::Measurement>,
+    },
     FitVolume,
     FitSection,
     Plot(PlotEvent),
