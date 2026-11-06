@@ -338,17 +338,21 @@ fn keyframe_track(
             painter.text_at(Vec2::new(x + 2.0, bar.max.y + 8.0), &label, label_style);
         }
         painter.segment(
-            Vec2::new(playhead_x, rect.min.y + 6.0),
+            Vec2::new(playhead_x, rect.min.y + 8.0),
             Vec2::new(playhead_x, rect.max.y - 16.0),
             1.2,
             accent,
         );
-        painter.rect(
-            Rect::from_center_size(Vec2::new(playhead_x, rect.min.y + 5.0), Vec2::splat(5.0)),
-            Corners::capsule(),
-            accent,
-        );
     }
+    let playhead_knob =
+        Rect::from_center_size(Vec2::new(playhead_x, bar.center().y), Vec2::new(14.0, 20.0));
+    let playhead_key = key ^ 0x77;
+    ui.glass(
+        playhead_key,
+        playhead_knob,
+        grana_ui::glass::GlassStyle::knob(),
+    );
+    ui.engage_glass(playhead_key, response.active);
     let mut chose = None;
     for (index, key) in keys.iter().enumerate() {
         let x = bar.min.x + bar.width() * (key.at / duration.max(1.0e-6)).clamp(0.0, 1.0);

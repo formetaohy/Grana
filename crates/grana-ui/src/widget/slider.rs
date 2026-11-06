@@ -118,7 +118,8 @@ fn slider_core(
         Vec2::new(rect.max.x - readout_width, rect.center().y + 13.0),
     );
     let bar = Rect::from_center_size(hit.center(), Vec2::new(hit.width(), metrics.track));
-    let knob = metrics.thumb;
+    let knob = metrics.thumb + 4.0;
+    let knob_height = 17.0;
     let travel = (bar.width() - knob).max(0.0);
     let response = ui.interact(key, hit);
     let (minimum, maximum) = (*range.start(), *range.end());
@@ -194,24 +195,23 @@ fn slider_core(
         },
         Motion::quick(),
     );
-    let size = knob + engaged * 2.0;
+    let size_w = knob + engaged * 2.0;
+    let size_h = knob_height + engaged * 1.5;
     let position = position.clamp(0.0, 1.0);
     let center = Vec2::new(bar.min.x + knob * 0.5 + travel * position, bar.center().y);
     let lag = (target - position) * travel;
-    let reach = (lag.abs() * 0.45).min(knob * 0.4);
+    let reach = (lag.abs() * 0.48).min(knob * 0.45);
     let (left, right) = if lag >= 0.0 {
-        (center.x - size * 0.5, center.x + size * 0.5 + reach)
+        (center.x - size_w * 0.5, center.x + size_w * 0.5 + reach)
     } else {
-        (center.x - size * 0.5 - reach, center.x + size * 0.5)
+        (center.x - size_w * 0.5 - reach, center.x + size_w * 0.5)
     };
     let knob_rect = Rect::from_min_max(
-        Vec2::new(left, center.y - size * 0.5),
-        Vec2::new(right, center.y + size * 0.5),
+        Vec2::new(left, center.y - size_h * 0.5),
+        Vec2::new(right, center.y + size_h * 0.5),
     );
-    let filled = Rect::from_min_max(
-        bar.min,
-        Vec2::new(knob_rect.center().x.clamp(bar.min.x, bar.max.x), bar.max.y),
-    );
+    let fill_end = (knob_rect.min.x + position * knob_rect.width()).clamp(bar.min.x, bar.max.x);
+    let filled = Rect::from_min_max(bar.min, Vec2::new(fill_end, bar.max.y));
     let readout_style = TextStyle::new(ui.theme().font(Level::Monospace), palette.text_secondary)
         .aligned(Align::End);
     {
@@ -254,7 +254,9 @@ fn slider_core(
             );
         }
     }
-    ui.glass(key ^ 0x5d, knob_rect, GlassStyle::knob().interactive());
+    let knob_key = key ^ 0x5d;
+    ui.glass(knob_key, knob_rect, GlassStyle::knob());
+    ui.engage_glass(knob_key, response.active);
     changed
 }
 
@@ -324,14 +326,32 @@ pub fn range_slider(
             painter.pop_clip(clip);
         }
     }
-    let low_x = bar.min.x + bar.width() * normalize(next_start);
-    let high_x = bar.min.x + bar.width() * normalize(next_end);
+    let low_t = ui.spring_to(
+        key ^ 0x31,
+        normalize(next_start),
+        if low.active {
+            Motion::response(0.16, 0.12)
+        } else {
+            Motion::response(0.32, 0.2)
+        },
+    );
+    let high_t = ui.spring_to(
+        key ^ 0x33,
+        normalize(next_end),
+        if high.active {
+            Motion::response(0.16, 0.12)
+        } else {
+            Motion::response(0.32, 0.2)
+        },
+    );
+    let low_x = bar.min.x + bar.width() * low_t.clamp(0.0, 1.0);
+    let high_x = bar.min.x + bar.width() * high_t.clamp(0.0, 1.0);
     let shade = palette.shade.amplify(0.55);
     let knob_rect = |x: f32, active: bool| {
         Rect::from_center_size(
             Vec2::new(x, bar.center().y),
             Vec2::new(
-                10.0 + grow * 2.0,
+                12.0 + grow * 2.0,
                 20.0 + grow * 3.0 + if active { 2.0 } else { 0.0 },
             ),
         )
@@ -359,12 +379,13 @@ pub fn range_slider(
             shade,
         );
     }
-    for (index, knob) in [low_knob, high_knob].into_iter().enumerate() {
-        ui.glass(
-            key ^ (0x61 + index as u64),
-            knob,
-            GlassStyle::knob().interactive(),
-        );
+    for (index, (knob, active)) in [(low_knob, low.active), (high_knob, high.active)]
+        .into_iter()
+        .enumerate()
+    {
+        let knob_key = key ^ (0x61 + index as u64);
+        ui.glass(knob_key, knob, GlassStyle::knob());
+        ui.engage_glass(knob_key, active);
     }
     let changed = (next_start - start).abs() > 1.0e-6 || (next_end - end).abs() > 1.0e-6;
     changed.then_some((

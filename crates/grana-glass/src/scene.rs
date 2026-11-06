@@ -150,6 +150,8 @@ pub(crate) struct Node {
     pub lift: Animated,
     pub stretch: Animated,
     pub stretch_dir: Vec2,
+    pub prev_center: Vec2,
+    pub velocity: Vec2,
     pub from_shape: Shape,
     pub morph: Animated,
     pub from_material: Material,
@@ -322,6 +324,8 @@ impl Scene {
             lift: at(0.0),
             stretch: at(0.0),
             stretch_dir: Vec2::X,
+            prev_center: f.center(),
+            velocity: Vec2::ZERO,
             from_shape: glass.shape,
             morph: at(1.0),
             from_material: glass.material,
@@ -447,6 +451,72 @@ impl Scene {
         node.y.snap(frame.y);
         node.w.snap(frame.width);
         node.h.snap(frame.height);
+        if !node.glass.lens {
+            node.prev_center = frame.center();
+            node.velocity = Vec2::ZERO;
+        }
+    }
+
+    pub fn snap_presence(&mut self, id: GlassId, presence: f32) {
+        if let Some(node) = self.nodes.get_mut(id) {
+            node.presence.snap(presence);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_engaged(&mut self, id: GlassId, engaged: bool, pointer: Option<Vec2>) {
+        let still = self.still();
+        let lift = self.spring(LIFT);
+        let release = self.spring(PRESS_RELEASE);
+        let lift_release = self.spring(Spring::SNAPPY);
+        let jelly = self.spring(JELLY);
+        let Some(node) = self.nodes.get_mut(id) else {
+            return;
+        };
+        if engaged {
+            if node.glass.interactive && (node.press.target - 1.0).abs() > 1e-4 {
+                node.press.animate_to(1.0, PRESS_DOWN);
+                self.dirty = true;
+            }
+            if node.glass.lens && !still && (node.lift.target - 1.0).abs() > 1e-4 {
+                node.lift.animate_to(1.0, lift);
+                self.dirty = true;
+            }
+            if let Some(pos) = pointer {
+                let size = Vec2::new(node.w.target, node.h.target);
+                if self.pressed != Some(id) {
+                    self.pressed = Some(id);
+                    self.touch.pos = pos;
+                    self.touch.intensity.animate_to(1.0, GLOW_IN);
+                    self.touch.radius.snap(0.0);
+                    self.touch
+                        .radius
+                        .animate_to(size.max_element() * 1.2, GLOW_SPREAD);
+                    self.dirty = true;
+                } else if self.touch.pos != pos {
+                    self.touch.pos = pos;
+                    self.dirty = true;
+                }
+            }
+        } else {
+            if node.press.target > 0.0 {
+                node.press.animate_to(0.0, release);
+                self.dirty = true;
+            }
+            if node.lift.target > 0.0 {
+                node.lift.animate_to(0.0, lift_release);
+                self.dirty = true;
+            }
+            if node.stretch.target > 0.0 && node.velocity == Vec2::ZERO {
+                node.stretch.animate_to(0.0, jelly);
+                self.dirty = true;
+            }
+            if self.pressed == Some(id) {
+                self.pressed = None;
+                self.touch.intensity.animate_to(0.0, GLOW_OUT);
+                self.dirty = true;
+            }
+        }
     }
 
     pub fn set_material(&mut self, id: GlassId, material: Material) {
@@ -532,6 +602,7 @@ impl Scene {
             node.x.target += delta.x;
             node.y.value += delta.y;
             node.y.target += delta.y;
+            node.prev_center += delta;
             self.dirty = true;
         }
     }
@@ -631,11 +702,50 @@ impl Scene {
 
         let elapsed = dt.max(0.0);
         let dt = elapsed.min(1.0 / 30.0);
+        let still = self.still();
+        let jelly = self.spring(JELLY);
+        let dragged = self.drag.as_ref().map(|d| d.id);
 
         self.update_drag_stretch(elapsed);
 
         let mut moving = false;
-        for node in self.nodes.values_mut() {
+        for (id, node) in &mut self.nodes {
+            if dragged != Some(id) && node.glass.lens {
+                let center = Vec2::new(
+                    node.x.value + node.w.value * 0.5,
+                    node.y.value + node.h.value * 0.5,
+                );
+                if elapsed > 1e-4 {
+                    let instant = (center - node.prev_center) / elapsed;
+                    let spring_vel = Vec2::new(
+                        node.x.velocity + node.w.velocity * 0.5,
+                        node.y.velocity + node.h.velocity * 0.5,
+                    );
+                    let v = if instant.length_squared() > spring_vel.length_squared() {
+                        instant
+                    } else {
+                        spring_vel
+                    };
+                    node.velocity = node.velocity.lerp(v, 0.5);
+                    if node.velocity.length_squared() < 1.0 {
+                        node.velocity = Vec2::ZERO;
+                    }
+                }
+                node.prev_center = center;
+                let speed = node.velocity.length();
+                if speed > 1.0 {
+                    node.stretch_dir = node.velocity / speed;
+                }
+                let target = if still {
+                    0.0
+                } else {
+                    (speed / STRETCH_SPEED).min(1.0) * MAX_STRETCH
+                };
+                if (node.stretch.target - target).abs() > 1e-3 {
+                    node.stretch.animate_to(target, jelly);
+                }
+                moving |= node.velocity != Vec2::ZERO;
+            }
             for a in [
                 &mut node.x,
                 &mut node.y,
@@ -649,6 +759,12 @@ impl Scene {
                 &mut node.material_mix,
             ] {
                 moving |= a.step(dt);
+            }
+            if dragged == Some(id) || !node.glass.lens {
+                node.prev_center = Vec2::new(
+                    node.x.value + node.w.value * 0.5,
+                    node.y.value + node.h.value * 0.5,
+                );
             }
         }
         moving |= self.touch.intensity.step(dt);
@@ -665,6 +781,7 @@ impl Scene {
         self.dirty = true;
         for node in self.nodes.values_mut() {
             node.stretch.target = 0.0;
+            node.velocity = Vec2::ZERO;
             for a in [
                 &mut node.x,
                 &mut node.y,
@@ -679,6 +796,10 @@ impl Scene {
             ] {
                 a.snap(a.target);
             }
+            node.prev_center = Vec2::new(
+                node.x.value + node.w.value * 0.5,
+                node.y.value + node.h.value * 0.5,
+            );
         }
         for a in [
             &mut self.touch.intensity,
@@ -725,13 +846,15 @@ impl Scene {
 
     pub(crate) fn geometry(&self, node: &Node) -> Geometry {
         let size = Vec2::new(node.w.value.max(0.0), node.h.value.max(0.0));
+        let min_side = size.min_element();
         let grow = if self.still() {
             0.0
         } else {
-            (10.0 / size.min_element().max(1.0)).min(0.15)
+            (10.0 / min_side.max(1.0)).min(0.15)
         };
-        let scale = 1.0 + node.press.value * grow + node.lift.value * LENS_LIFT;
-        let half = size * 0.5 * scale;
+        let boost = node.press.value * grow + node.lift.value * LENS_LIFT;
+        let scale = 1.0 + boost;
+        let half = size * 0.5 + Vec2::splat(min_side * 0.5 * boost);
         let budget = half.min_element();
         let corner = |shape| match shape {
             Shape::Capsule => (budget, 2.0),

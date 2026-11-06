@@ -291,6 +291,7 @@ pub struct Ui {
     glass: GlassScene,
     glass_entries: HashMap<u64, GlassEntry>,
     glass_groups: HashMap<u64, ContainerId>,
+    glass_engaged: HashMap<GlassId, bool>,
     glass_placed: Vec<GlassId>,
     glass_seen: Vec<u64>,
     transitions: HashMap<u64, GlassTransition>,
@@ -342,6 +343,7 @@ impl Ui {
             glass: GlassScene::new(),
             glass_entries: HashMap::new(),
             glass_groups: HashMap::new(),
+            glass_engaged: HashMap::new(),
             glass_placed: Vec::new(),
             glass_seen: Vec::new(),
             transitions: HashMap::new(),
@@ -550,6 +552,7 @@ impl Ui {
         self.labels.clear();
         self.popup.clear();
         self.hud.clear();
+        self.glass_engaged.clear();
         self.glass_placed.clear();
         self.occluders.clear();
         self.focus_rings.clear();
@@ -569,14 +572,6 @@ impl Ui {
         self.glass.physics = self.physics;
         self.glass.glass_on_glass = self.theme.glass_on_glass;
         self.glass.set_light_angle(self.theme.light_angle);
-        let primary = self.input.button(Button::Primary);
-        if primary.pressed && self.input.inside() {
-            self.glass.pointer_down(pointer);
-        } else if primary.down {
-            self.glass.pointer_move(pointer);
-        } else if primary.released {
-            self.glass.pointer_up();
-        }
     }
 
     pub fn end(&mut self) -> Frame {
@@ -601,6 +596,11 @@ impl Ui {
             }
         }
         self.retire_glass();
+        let pointer = self.input.inside().then_some(self.input.position());
+        for (&id, &engaged) in &self.glass_engaged {
+            self.glass
+                .set_engaged(id, engaged, engaged.then_some(pointer).flatten());
+        }
         self.settle_transitions();
         let animating_glass = self.glass.update(self.elapsed);
         let glass_changed = self.glass.take_dirty();
@@ -702,6 +702,7 @@ impl Ui {
         self.glass_seen.push(key);
         self.register_occluder(rect);
         let clip = self.area().clip.rect;
+        let engaged = self.registry.active(key) && self.input.button(Button::Primary).down;
         let entry = self.glass_entries.get(&key).copied();
         match entry {
             Some(entry) => {
@@ -721,6 +722,10 @@ impl Ui {
                 }
                 self.glass.place(entry.id, frame);
                 self.glass.set_clip(entry.id, Some(glass_rect(clip)));
+                self.glass_engaged
+                    .entry(entry.id)
+                    .and_modify(|e| *e |= engaged)
+                    .or_insert(engaged);
                 self.glass_placed.push(entry.id);
             }
             None => {
@@ -739,9 +744,23 @@ impl Ui {
                     glass = glass.lens();
                 }
                 let id = self.glass.add(glass);
+                self.glass_engaged
+                    .entry(id)
+                    .and_modify(|e| *e |= engaged)
+                    .or_insert(engaged);
                 self.glass_placed.push(id);
                 self.glass_entries.insert(key, GlassEntry { id, style });
             }
+        }
+    }
+
+    pub fn engage_glass(&mut self, key: u64, engaged: bool) {
+        if let Some(entry) = self.glass_entries.get(&key).copied() {
+            let active = engaged && self.input.button(Button::Primary).down;
+            self.glass_engaged
+                .entry(entry.id)
+                .and_modify(|e| *e |= active)
+                .or_insert(active);
         }
     }
 
@@ -776,29 +795,41 @@ impl Ui {
                     self.glass
                         .set_frame_with(id, glass_rect(body), GlassSpring::new(0.3, 0.0));
                 }
+                let ratio = self
+                    .glass
+                    .current_frame(id)
+                    .map_or(1.0, |frame| glass_ratio(frame, body));
+                let anchor_material = if ratio > 0.92 {
+                    Material::identity()
+                } else {
+                    Material::regular()
+                };
+                self.glass.set_material(transition.anchor, anchor_material);
                 return expand_alpha(&self.glass, id, body);
             }
         }
         let container = match self.floating_container {
             Some(container) => container,
             None => {
-                let container = self.glass.add_container(6.0, MENU);
+                let container = self.glass.add_container(16.0, MENU);
                 self.floating_container = Some(container);
                 container
             }
         };
         let anchor_id = self.glass.add(
             Glass::new(glass_rect(anchor))
-                .material(Material::identity())
+                .shape(grana_glass::Shape::Capsule)
+                .material(Material::regular())
                 .container(container),
         );
+        self.glass.snap_presence(anchor_id, 1.0);
         let popover = Glass::new(glass_rect(body))
             .shape(style.shape)
             .material(style.material)
             .container(container);
         let id = self
             .glass
-            .expand_from(anchor_id, popover, GlassSpring::new(0.44, 0.16));
+            .expand_from(anchor_id, popover, GlassSpring::new(0.45, 0.22));
         self.transitions.insert(
             key,
             GlassTransition {
@@ -831,8 +862,10 @@ impl Ui {
         let anchor = transition.anchor;
         transition.closing = Some(id);
         transition.closing_at = Some(time);
+        self.glass.set_material(anchor, Material::regular());
+        self.glass.snap_presence(anchor, 1.0);
         self.glass
-            .collapse_into(id, anchor, GlassSpring::new(0.32, 0.0));
+            .collapse_into(id, anchor, GlassSpring::new(0.35, 0.0));
         self.floating_draining = true;
         true
     }
@@ -854,8 +887,35 @@ impl Ui {
                 .to_vec(),
             ink: self.popup.ink.get(start.1..).unwrap_or_default().to_vec(),
         };
+        let morph = self.transitions.get(&key).and_then(|transition| {
+            let id = transition.popover?;
+            let frame = self.glass.current_frame(id)?;
+            let corner = self.glass.current_corner(id).map_or(24.0, |(r, _)| r);
+            Some((frame, corner, transition.body))
+        });
         if let Some(transition) = self.transitions.get_mut(&key) {
             transition.snapshot = snapshot;
+        }
+        if let Some((frame, corner, body)) = morph {
+            let current = Rect::from_min_size(
+                Vec2::new(frame.x, frame.y),
+                Vec2::new(frame.width, frame.height),
+            );
+            let delta = Vec2::new(
+                current.center().x - body.center().x,
+                current.min.y - body.min.y,
+            );
+            let corners = Corners::all(corner);
+            let material = start.0.min(self.popup.material.len());
+            let ink = start.1.min(self.popup.ink.len());
+            for instance in &mut self.popup.material[material..] {
+                instance.translate(delta);
+                clip_instance(instance, current, corners);
+            }
+            for instance in &mut self.popup.ink[ink..] {
+                instance.translate(delta);
+                clip_instance(instance, current, corners);
+            }
         }
     }
 
@@ -883,15 +943,29 @@ impl Ui {
         let Some(frame) = self.glass.current_frame(id) else {
             return false;
         };
+        let corner = self.glass.current_corner(id).map_or(24.0, |(r, _)| r);
+        let current = Rect::from_min_size(
+            Vec2::new(frame.x, frame.y),
+            Vec2::new(frame.width, frame.height),
+        );
+        let delta = Vec2::new(
+            current.center().x - transition.body.center().x,
+            current.min.y - transition.body.min.y,
+        );
+        let corners = Corners::all(corner);
         let factor = closing_alpha(frame, transition.body);
         let snapshot = transition.snapshot.clone();
         for instance in &snapshot.material {
             let mut instance = *instance;
+            instance.translate(delta);
+            clip_instance(&mut instance, current, corners);
             scale_alpha(&mut instance, factor);
             self.popup.material.push(instance);
         }
         for instance in &snapshot.ink {
             let mut instance = *instance;
+            instance.translate(delta);
+            clip_instance(&mut instance, current, corners);
             scale_alpha(&mut instance, factor);
             self.popup.ink.push(instance);
         }
@@ -913,8 +987,10 @@ impl Ui {
             self.floating_draining = true;
         }
         for (id, anchor) in collapsing {
+            self.glass.set_material(anchor, Material::regular());
+            self.glass.snap_presence(anchor, 1.0);
             self.glass
-                .collapse_into(id, anchor, GlassSpring::new(0.32, 0.0));
+                .collapse_into(id, anchor, GlassSpring::new(0.35, 0.0));
         }
         let expired = self
             .transitions
@@ -2435,6 +2511,27 @@ fn hash_layer(layer: &LayerInstances, seed: u64) -> u64 {
 fn scale_alpha(instance: &mut Instance, factor: f32) {
     instance.color[3] *= factor;
     instance.color2[3] *= factor;
+}
+
+fn clip_instance(instance: &mut Instance, bounds: Rect, corners: Corners) {
+    let current = Rect::from_min_size(
+        Vec2::new(instance.clip[0], instance.clip[1]),
+        Vec2::new(instance.clip[2], instance.clip[3]),
+    );
+    let intersected = current.intersect(bounds);
+    let resolved = corners.resolved(bounds.size());
+    instance.clip = [
+        intersected.min.x,
+        intersected.min.y,
+        intersected.width().max(0.0),
+        intersected.height().max(0.0),
+    ];
+    instance.clip_corners = [
+        instance.clip_corners[0].max(resolved.top_left),
+        instance.clip_corners[1].max(resolved.top_right),
+        instance.clip_corners[2].max(resolved.bottom_right),
+        instance.clip_corners[3].max(resolved.bottom_left),
+    ];
 }
 
 fn hash_string(value: &str) -> u64 {

@@ -123,22 +123,25 @@ fn scrub(ui: &mut Ui, rect: Rect, frame: u32, frames: u32) -> Option<u32> {
     );
     let travel = (bar.width() - KNOB).max(0.0);
     let knob_x = bar.min.x + KNOB * 0.5 + travel * position;
-    let knob_size = Vec2::new(KNOB * 0.58 + engaged * 1.6, KNOB + engaged * 4.0);
+    let knob_size = Vec2::new(KNOB * 0.72 + engaged * 2.0, KNOB * 0.82 + engaged * 2.0);
+    let knob = Rect::from_center_size(Vec2::new(knob_x, bar.center().y), knob_size);
+    let fill_end =
+        (knob.min.x + position.clamp(0.0, 1.0) * knob.width()).clamp(bar.min.x, bar.max.x);
     {
         let mut painter = ui.painter();
         painter.rect(bar, Corners::capsule(), palette.material_fill.amplify(0.9));
-        painter.gradient(
-            Rect::from_min_max(
-                bar.min,
-                Vec2::new((knob_x - 2.0).max(bar.min.x + 2.0), bar.max.y),
-            ),
-            Corners::capsule(),
-            palette.accent_hover,
-            palette.accent,
-        );
+        if fill_end > bar.min.x {
+            painter.gradient(
+                Rect::from_min_max(bar.min, Vec2::new(fill_end, bar.max.y)),
+                Corners::capsule(),
+                palette.accent_hover,
+                palette.accent,
+            );
+        }
     }
-    let knob = Rect::from_center_size(Vec2::new(knob_x, bar.center().y), knob_size);
-    ui.glass(ui.id("timeline.knob"), knob, GlassStyle::lens().draggable());
+    let knob_key = ui.id("timeline.knob");
+    ui.glass(knob_key, knob, GlassStyle::knob());
+    ui.engage_glass(knob_key, response.active);
     if frames <= 40 {
         let spacing = bar.width() / (frames - 1) as f32;
         if spacing >= 9.0 {

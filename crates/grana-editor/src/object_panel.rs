@@ -69,33 +69,18 @@ fn header(ui: &mut Ui, count: usize) -> Rect {
             Align::Center,
         );
     }
-    let response = ui.interact(ui.id("objects.add"), add);
-    if response.clicked {
-        ui.toggle_popup(ui.id("objects.add"));
-    }
-    let hover = ui.animate(
-        ui.id("objects.add.hover"),
-        if response.hovered { 1.0 } else { 0.0 },
-        grana_ui::Motion::quick(),
-    );
-    {
-        let mut painter = ui.painter();
-        if hover > 0.01 {
-            painter.rect(
-                add,
-                Corners::all(9.0),
-                palette.material_hover.amplify(0.7 * hover),
-            );
-        }
-        grana_ui::icon::paint(
+    ui.place(add, |ui| {
+        if widget::icon_button(
+            ui,
+            "objects.add",
             Icon::Plus,
-            &mut painter,
-            add.center(),
-            13.0,
-            palette.text_secondary.lerp(palette.text_primary, hover),
-            1.6,
-        );
-    }
+            24.0,
+            Role::Quiet,
+            "Add object set",
+        ) {
+            ui.toggle_popup(ui.id("objects.add"));
+        }
+    });
     add
 }
 

@@ -93,18 +93,22 @@ fn paint_overlay(ui: &mut Ui, layout: &Layout, state: &mut State<'_>, commands: 
     let legends = overlay::legends(state.scene);
     let labels = overlay::labels(state.scene, state.scene.time());
     let safe_left = if layout.sidebar_visible {
-        layout.sidebar.max.x + 18.0
+        layout.sidebar.max.x.max(layout.stage.min.x) + 18.0
     } else {
         layout.stage.min.x + 18.0
     };
     let safe_top = layout.toolbar_left.max.y + 18.0;
+    let safe_bottom = layout
+        .dock
+        .or(layout.transport)
+        .map_or(layout.stage.max.y - 18.0, |rect| rect.min.y - 12.0);
     let safe = Rect::from_min_max(
         Vec2::new(safe_left, safe_top),
-        Vec2::new(layout.volume.max.x - 18.0, layout.stage.max.y - 18.0),
+        Vec2::new(layout.volume.max.x - 18.0, safe_bottom),
     );
     let section_safe = Rect::from_min_max(
         Vec2::new(layout.section.min.x + 12.0, safe_top),
-        layout.section.max,
+        Vec2::new(layout.section.max.x, safe_bottom),
     );
     let mut overlay = Overlay {
         camera: state.viewport.camera(),
@@ -153,26 +157,27 @@ fn split_handle(ui: &mut Ui, volume: Rect, section: Rect, viewport: &mut grana_d
         Motion::quick(),
     );
     let palette = ui.theme().palette;
-    let size = Vec2::new(7.0 + engaged * 5.0, 36.0 + engaged * 22.0);
+    let size = Vec2::new(8.0 + engaged * 5.0, 36.0 + engaged * 20.0);
     let rect = Rect::from_center_size(Vec2::new(x, volume.center().y), size);
-    ui.glass(
-        ui.id("split.lens"),
-        rect,
-        GlassStyle::stage_control().interactive().draggable(),
-    );
-    let mut painter = ui.painter();
-    painter.rect(
-        Rect::from_center_size(
-            Vec2::new(x, volume.center().y),
-            Vec2::new(1.0, volume.height()),
-        ),
-        Corners::ZERO,
-        palette.separator.amplify(0.6),
-    );
+    {
+        let mut painter = ui.painter();
+        painter.rect(
+            Rect::from_center_size(
+                Vec2::new(x, volume.center().y),
+                Vec2::new(1.0, volume.height()),
+            ),
+            Corners::ZERO,
+            palette.separator.amplify(0.6),
+        );
+    }
+    let lens_key = ui.id("split.lens");
+    ui.glass(lens_key, rect, GlassStyle::lens());
+    ui.engage_glass(lens_key, response.active);
+    let mut painter = ui.labels_painter();
     painter.rect(
         Rect::from_center_size(rect.center(), Vec2::new(1.4, size.y * 0.34)),
         Corners::capsule(),
-        palette.text_primary.with_alpha(0.22 + engaged * 0.40),
+        palette.text_primary.with_alpha(0.26 + engaged * 0.44),
     );
     if engaged > 0.01 {
         painter.rect(
@@ -181,7 +186,7 @@ fn split_handle(ui: &mut Ui, volume: Rect, section: Rect, viewport: &mut grana_d
                 Vec2::new(1.0, 26.0 + 10.0 * engaged),
             ),
             Corners::capsule(),
-            Color::white_alpha(0.10 * engaged),
+            Color::white_alpha(0.12 * engaged),
         );
     }
 }
@@ -198,7 +203,7 @@ pub(super) fn toast(ui: &mut Ui, layout: &Layout, state: &State<'_>) {
         .map_or(stage.max.y - 28.0, |rect| rect.min.y - 16.0);
     let width = (stage.width() - 28.0).min(440.0);
     let style = TextStyle::new(ui.theme().font(Level::Callout), palette.text_primary).wrapping();
-    let layout_text = ui.layout_text(message.text(), style, width - 56.0);
+    let layout_text = ui.layout_text(message.text(), style, width - 60.0);
     let height = (layout_text.size.y + 24.0).max(46.0);
     let rect = Rect::from_min_size(
         Vec2::new(stage.center().x - width * 0.5, ceiling - height),
@@ -208,21 +213,24 @@ pub(super) fn toast(ui: &mut Ui, layout: &Layout, state: &State<'_>) {
         grana_session::Kind::Error => (Icon::Warning, palette.warning),
         grana_session::Kind::Info => (Icon::Info, palette.text_secondary),
     };
+    let appear = ui.appeared(ui.id(message.text()), 0.25);
     ui.glass(ui.id("toast.glass"), rect, GlassStyle::toast());
     ui.hud_scope(rect, |ui| {
         let mut painter = ui.painter();
         icon::paint(
             mark,
             &mut painter,
-            Vec2::new(rect.min.x + 20.0, rect.center().y),
+            Vec2::new(rect.min.x + 22.0, rect.center().y),
             16.0,
-            tint,
+            tint.with_alpha(tint.alpha * appear),
             1.6,
         );
         painter.text(
             &layout_text,
-            Vec2::new(rect.min.x + 38.0, rect.min.y + 12.0),
-            palette.text_primary,
+            Vec2::new(rect.min.x + 40.0, rect.min.y + 12.0),
+            palette
+                .text_primary
+                .with_alpha(palette.text_primary.alpha * appear),
         );
     });
 }

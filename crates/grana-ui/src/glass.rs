@@ -36,11 +36,17 @@ impl GlassStyle {
     }
 
     pub fn bar() -> Self {
-        Self::regular(Shape::Rounded(24.0), CHROME)
+        Self {
+            material: Material::clear_bar(),
+            shape: Shape::Capsule,
+            layer: CHROME,
+            interactive: false,
+            lens: false,
+        }
     }
 
     pub fn button() -> Self {
-        Self::regular(Shape::Rounded(12.0), CHROME)
+        Self::regular(Shape::Capsule, CHROME)
     }
 
     pub fn button_disabled() -> Self {
@@ -58,7 +64,13 @@ impl GlassStyle {
     }
 
     pub fn transport() -> Self {
-        Self::regular(Shape::Capsule, CHROME)
+        Self {
+            material: Material::clear_bar(),
+            shape: Shape::Capsule,
+            layer: CHROME,
+            interactive: false,
+            lens: false,
+        }
     }
 
     pub fn status() -> Self {
@@ -66,15 +78,15 @@ impl GlassStyle {
     }
 
     pub fn popover() -> Self {
-        Self::regular(Shape::Rounded(20.0), MENU)
+        Self::regular(Shape::Rounded(24.0), MENU)
     }
 
     pub fn tooltip() -> Self {
-        Self::regular(Shape::Rounded(12.0), HUD)
+        Self::regular(Shape::Capsule, HUD)
     }
 
     pub fn toast() -> Self {
-        Self::regular(Shape::Rounded(18.0), HUD)
+        Self::regular(Shape::Capsule, HUD)
     }
 
     pub fn stage_control() -> Self {
@@ -82,12 +94,18 @@ impl GlassStyle {
     }
 
     pub fn hud_chip() -> Self {
-        Self::regular(Shape::Capsule, CHROME)
+        Self {
+            material: Material::clear_bar(),
+            shape: Shape::Capsule,
+            layer: CHROME,
+            interactive: false,
+            lens: false,
+        }
     }
 
     pub fn primary() -> Self {
         Self {
-            material: Material::tinted(grana_glass::Color::hex(0x0A84FF)),
+            material: Material::tinted(grana_glass::Color::BLUE),
             shape: Shape::Capsule,
             layer: CHROME,
             interactive: false,
@@ -106,8 +124,8 @@ impl GlassStyle {
             material: clear_lens(),
             shape: Shape::Capsule,
             layer: OVERLAY,
-            interactive: false,
-            lens: false,
+            interactive: true,
+            lens: true,
         }
     }
 
@@ -116,33 +134,33 @@ impl GlassStyle {
             material: clear_lens(),
             shape: Shape::Capsule,
             layer: OVERLAY,
-            interactive: false,
-            lens: false,
+            interactive: true,
+            lens: true,
         }
     }
 
     pub fn knob() -> Self {
         let mut material = Material::clear();
-        material.refraction = 0.6;
-        material.depth = 12.0;
-        material.dispersion = 0.06;
-        material.frost = 2.2;
+        material.refraction = 0.72;
+        material.depth = 16.0;
+        material.dispersion = 0.14;
+        material.frost = 1.6;
         material.splay = 0.35;
-        material.specular = 1.05;
-        material.rim = 0.4;
+        material.specular = 0.95;
+        material.rim = 0.38;
         material.rim_shade = 0.1;
-        material.edge = 0.3;
+        material.edge = 0.28;
         material.hairline = 0.16;
         material.shadow = Shadow {
             offset_y: 3.0,
-            blur: 6.0,
-            opacity: 0.22,
+            blur: 7.0,
+            opacity: 0.20,
         };
         let tone = Tone {
-            lift: 0.11,
+            lift: 0.09,
             luminance: 1.0,
-            luminance_mix: 0.22,
-            lighten: 0.1,
+            luminance_mix: 0.16,
+            lighten: 0.08,
             darken_to: 1.0,
             darken: 0.0,
         };
@@ -152,8 +170,8 @@ impl GlassStyle {
             material,
             shape: Shape::Capsule,
             layer: OVERLAY,
-            interactive: false,
-            lens: false,
+            interactive: true,
+            lens: true,
         }
     }
 

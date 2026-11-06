@@ -5,12 +5,11 @@ use crate::geometry::{Corners, Rect};
 use crate::glass::GlassStyle;
 use crate::icon::{self, Icon};
 use crate::motion::Motion;
-use crate::style::Border;
 use crate::text::{Align, TextStyle};
 use crate::theme::Role;
 use crate::ui::{GlassGroup, Length, Response, Ui};
 
-use super::{button_font, padding, pressed_inset};
+use super::{button_font, padding, pressed_grow};
 
 pub fn button(ui: &mut Ui, id: &str, label: &str, role: Role) -> bool {
     button_with(ui, id, label, role, Length::Auto).clicked
@@ -38,10 +37,14 @@ pub fn button_with(ui: &mut Ui, id: &str, label: &str, role: Role, width: Length
     let press = ui.animate(
         key ^ 0x51,
         if response.active { 1.0 } else { 0.0 },
-        Motion::quick(),
+        if response.active {
+            Motion::response(0.22, 0.0)
+        } else {
+            Motion::bouncy()
+        },
     );
     let surface = ui.surface(key, role, &response);
-    let body = rect.shrink(pressed_inset(press));
+    let body = rect.expand(pressed_grow(press));
     let mut painter = ui.painter();
     painter.outlined(
         body,
@@ -74,10 +77,14 @@ pub fn action_button(ui: &mut Ui, id: &str, symbol: Icon, label: &str, role: Rol
     let press = ui.animate(
         key ^ 0x61,
         if response.active { 1.0 } else { 0.0 },
-        Motion::quick(),
+        if response.active {
+            Motion::response(0.22, 0.0)
+        } else {
+            Motion::bouncy()
+        },
     );
     let surface = ui.surface(key, role, &response);
-    let body = rect.shrink(pressed_inset(press));
+    let body = rect.expand(pressed_grow(press));
     let glyph = Rect::from_center_size(
         Vec2::new(body.min.x + inset + 4.0, body.center().y),
         Vec2::splat(14.0),
@@ -190,10 +197,14 @@ pub fn icon_button_response(
     let press = ui.animate(
         key ^ 0x71,
         if response.active { 1.0 } else { 0.0 },
-        Motion::quick(),
+        if response.active {
+            Motion::response(0.22, 0.0)
+        } else {
+            Motion::bouncy()
+        },
     );
     let surface = ui.surface(key, role, &response);
-    let body = rect.shrink(pressed_inset(press));
+    let body = rect.expand(pressed_grow(press));
     let mut painter = ui.painter();
     painter.outlined(
         body,
@@ -276,10 +287,26 @@ pub fn glass_icon_button_response(
     if response.hovered {
         ui.tooltip(tooltip);
     }
-    ui.glass_in(group, key, rect, style.interactive());
-    glass_ring(ui, key, rect, &response);
+    let mut glass_style = style.interactive();
+    if response.hovered || response.active {
+        glass_style.material.specular = (glass_style.material.specular + 0.14).min(1.0);
+        glass_style.material.rim += 0.05;
+    }
+    ui.glass_in(group, key, rect, glass_style);
     let frame = ui.glass_frame(key).unwrap_or(rect);
-    let color = ui.theme().palette.text_primary;
+    let hover = ui.animate(
+        key ^ 0x81,
+        if response.hovered || response.active {
+            1.0
+        } else {
+            0.0
+        },
+        Motion::quick(),
+    );
+    let palette = ui.theme().palette;
+    let color = palette
+        .text_secondary
+        .lerp(palette.text_primary, 0.55 + 0.45 * hover);
     let mut painter = ui.painter();
     icon::paint(
         symbol,
@@ -352,8 +379,12 @@ pub fn glass_menu_button(
         if response.hovered || active { 1.0 } else { 0.0 },
         Motion::quick(),
     );
-    ui.glass_in(group, key, rect, GlassStyle::button().interactive());
-    glass_ring(ui, key, rect, &response);
+    let mut style = GlassStyle::button().interactive();
+    if response.hovered || response.active || active {
+        style.material.specular = (style.material.specular + 0.14).min(1.0);
+        style.material.rim += 0.05;
+    }
+    ui.glass_in(group, key, rect, style);
     let frame = ui.glass_frame(key).unwrap_or(rect);
     let mut painter = ui.painter();
     painter.text_in(
@@ -422,8 +453,12 @@ fn glass_button_core(
     if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
         response.clicked = true;
     }
-    ui.glass(key, rect, style.interactive());
-    glass_ring(ui, key, rect, &response);
+    let mut glass_style = style.interactive();
+    if response.hovered || response.active {
+        glass_style.material.specular = (glass_style.material.specular + 0.14).min(1.0);
+        glass_style.material.rim += 0.05;
+    }
+    ui.glass(key, rect, glass_style);
     let frame = ui.glass_frame(key).unwrap_or(rect);
     let color = ui.theme().palette.text_primary;
     let mut painter = ui.painter();
@@ -445,31 +480,4 @@ fn glass_button_core(
         Align::Center,
     );
     response
-}
-
-fn glass_ring(ui: &mut Ui, key: u64, rect: Rect, response: &Response) {
-    let engaged = ui.animate(
-        key ^ 0x91,
-        if response.hovered || response.active {
-            1.0
-        } else {
-            0.0
-        },
-        Motion::quick(),
-    );
-    if engaged <= 0.01 {
-        return;
-    }
-    let palette = ui.theme().palette;
-    let mut painter = ui.painter();
-    painter.outlined(
-        rect.shrink(0.5),
-        Corners::capsule(),
-        crate::style::Fill::None,
-        Border {
-            width: 1.0,
-            color: palette.text_primary.amplify(0.16 * engaged),
-        },
-        crate::style::Shadow::NONE,
-    );
 }

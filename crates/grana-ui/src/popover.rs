@@ -24,7 +24,7 @@ pub fn popover(
         ui.replay_popup(key);
         return false;
     }
-    let gap = 14.0;
+    let gap = 16.0;
     let window = ui.size();
     let margin = 12.0;
     let x = anchor.min.x.min(window.x - width - margin).max(margin);
@@ -78,21 +78,31 @@ pub fn combo<T: Copy + PartialEq>(
     if response.clicked {
         ui.toggle_popup(key);
     }
+    let press = ui.animate(
+        key ^ 0x31,
+        if response.active { 1.0 } else { 0.0 },
+        if response.active {
+            Motion::response(0.22, 0.0)
+        } else {
+            Motion::bouncy()
+        },
+    );
+    let body = rect.expand(1.2 * press);
     let surface = ui.surface(key, Role::Field, &response);
     let chevron_color = ui.theme().palette.text_tertiary;
     let text_style = TextStyle::new(font, surface.text).truncating();
     let mut painter = ui.painter();
     painter.outlined(
-        rect,
-        surface.corners,
+        body,
+        Corners::capsule(),
         surface.fill,
         surface.border,
         surface.shadow,
     );
     painter.text_in(
         Rect::from_min_max(
-            rect.min + Vec2::new(11.0, 0.0),
-            Vec2::new(rect.max.x - 24.0, rect.max.y),
+            body.min + Vec2::new(12.0, 0.0),
+            Vec2::new(body.max.x - 24.0, body.max.y),
         ),
         &label,
         text_style,
@@ -101,7 +111,7 @@ pub fn combo<T: Copy + PartialEq>(
     icon::paint(
         Icon::ChevronDown,
         &mut painter,
-        Vec2::new(rect.max.x - 13.0, rect.center().y),
+        Vec2::new(body.max.x - 13.0, body.center().y),
         10.0,
         chevron_color,
         1.6,
@@ -229,7 +239,7 @@ fn menu_row_highlighted(
     if press > 0.01 {
         painter.rect(
             rect.shrink2(Vec2::new(2.0, 0.0)),
-            Corners::all(8.0),
+            Corners::all(10.0),
             palette.selected.amplify(0.9 * press),
         );
     }
@@ -279,7 +289,7 @@ pub fn action_row(
     if press > 0.01 {
         painter.rect(
             rect.shrink2(Vec2::new(2.0, 0.0)),
-            Corners::all(8.0),
+            Corners::all(10.0),
             palette.selected.amplify(0.9 * press),
         );
     }

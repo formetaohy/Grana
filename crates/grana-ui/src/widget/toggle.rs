@@ -52,7 +52,7 @@ fn switch(ui: &mut Ui, key: u64, rect: Rect, value: bool) -> Option<bool> {
         Vec2::new(rect.min.x, rect.center().y - rect.height() * 0.5 + 1.0),
         Vec2::new(rect.max.x, rect.center().y + rect.height() * 0.5 - 1.0),
     );
-    let knob = rect.height() + engaged * 0.9;
+    let knob = rect.height() - 1.0 + engaged * 1.2;
     let travel = (rect.width() - knob).max(0.0);
     let current_value = if value { 1.0 } else { 0.0 };
     let target = if active {
@@ -66,14 +66,14 @@ fn switch(ui: &mut Ui, key: u64, rect: Rect, value: bool) -> Option<bool> {
         if active {
             Motion::response(0.14, 0.0)
         } else {
-            Motion::response(0.36, 0.22)
+            Motion::response(0.42, 0.30)
         },
     );
-    let position = progress.clamp(-0.04, 1.04);
+    let position = progress.clamp(-0.06, 1.06);
     let current = rect.min.x + travel * position;
     let target_x = rect.min.x + travel * target;
     let lag = target_x - current;
-    let reach = (lag.abs() * 0.6).min(knob * 0.5);
+    let reach = (lag.abs() * 0.65).min(knob * 0.55);
     let (left, right) = if lag >= 0.0 {
         (current, current + knob + reach)
     } else {
@@ -109,7 +109,9 @@ fn switch(ui: &mut Ui, key: u64, rect: Rect, value: bool) -> Option<bool> {
         );
         painter.pop_clip(clip);
     }
-    ui.glass(key ^ 0x5b, knob_rect, GlassStyle::knob().interactive());
+    let knob_key = key ^ 0x5b;
+    ui.glass(knob_key, knob_rect, GlassStyle::knob());
+    ui.engage_glass(knob_key, response.active);
     changed
 }
 

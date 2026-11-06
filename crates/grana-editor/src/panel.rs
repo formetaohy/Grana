@@ -23,8 +23,8 @@ const DOCK_DEFAULT: f32 = 360.0;
 const DOCK_MINIMUM: f32 = 220.0;
 const SIDEBAR_PAD: f32 = 18.0;
 const ANALYSIS_WIDTH: f32 = 126.0;
-const TOOLBAR_LEFT: f32 = SIDEBAR_WIDTH;
-const TOOLBAR_RIGHT: f32 = 184.0;
+const TOOLBAR_LEFT: f32 = 332.0;
+const TOOLBAR_RIGHT: f32 = 192.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
@@ -83,20 +83,33 @@ impl Layout {
             Vec2::new(analysis.min.x - GAP - TOOLBAR_RIGHT, top),
             Vec2::new(TOOLBAR_RIGHT, TOOLBAR_HEIGHT),
         );
-        let sidebar_visible = !state.workspace.sidebar_hidden;
+        let sidebar_target = if state.workspace.sidebar_hidden {
+            0.0
+        } else {
+            1.0
+        };
+        let sidebar_t = ui.spring_to(
+            ui.id("sidebar.open"),
+            sidebar_target,
+            grana_ui::Motion::snappy(),
+        );
+        let sidebar_visible = sidebar_t > 0.005;
+        let sidebar_slide = (1.0 - sidebar_t) * (SIDEBAR_WIDTH + MARGIN + GAP);
         let sidebar = if sidebar_visible {
             Rect::from_min_max(
-                Vec2::new(full.min.x + MARGIN, toolbar_left.max.y + GAP),
-                Vec2::new(full.min.x + MARGIN + SIDEBAR_WIDTH, full.max.y - MARGIN),
+                Vec2::new(
+                    full.min.x + MARGIN - sidebar_slide,
+                    toolbar_left.max.y + GAP,
+                ),
+                Vec2::new(
+                    full.min.x + MARGIN + SIDEBAR_WIDTH - sidebar_slide,
+                    full.max.y - MARGIN,
+                ),
             )
         } else {
             Rect::ZERO
         };
-        let left = if sidebar_visible {
-            sidebar.max.x + GAP
-        } else {
-            full.min.x + MARGIN
-        };
+        let left = full.min.x + MARGIN + (SIDEBAR_WIDTH + GAP) * sidebar_t.clamp(0.0, 1.0);
         let right = full.max.x - MARGIN;
         let transport_height = if state.scene.frame_count() > 1 {
             TRANSPORT_HEIGHT
@@ -110,17 +123,34 @@ impl Layout {
             )
         });
         let dock_bottom = transport.map_or(full.max.y - MARGIN, |rect| rect.min.y - GAP);
-        let dock = state.workspace.panel.map(|_| {
+        let dock_target = if state.workspace.panel.is_some() {
+            1.0
+        } else {
+            0.0
+        };
+        let dock_t = ui.spring_to(ui.id("dock.open"), dock_target, grana_ui::Motion::snappy());
+        let dock = (dock_t > 0.005).then(|| {
             let top = toolbar_left.max.y + GAP + 120.0;
             let available = (dock_bottom - top).max(DOCK_MINIMUM);
             let stored = ui.value_of(ui.id("dock.height")).unwrap_or(DOCK_DEFAULT);
-            let height = stored.clamp(DOCK_MINIMUM, available);
+            let clamped = stored.clamp(DOCK_MINIMUM, available);
+            let height = ui.spring_to(
+                ui.id("dock.height.spring"),
+                clamped,
+                grana_ui::Motion::response(0.20, 0.08),
+            );
+            let slide = (1.0 - dock_t) * (height + MARGIN + GAP * 2.0);
             Rect::from_min_max(
-                Vec2::new(left, dock_bottom - height),
-                Vec2::new(right, dock_bottom),
+                Vec2::new(left, dock_bottom - height + slide),
+                Vec2::new(right, dock_bottom + slide),
             )
         });
-        let split = full.width() * state.viewport.split();
+        let split_ratio = ui.spring_to(
+            ui.id("viewport.split.spring"),
+            state.viewport.split(),
+            grana_ui::Motion::response(0.18, 0.06),
+        );
+        let split = full.width() * split_ratio;
         let gutter = GAP * 0.5;
         let volume = Rect::from_min_max(full.min, Vec2::new(split - gutter, full.max.y));
         let section = Rect::from_min_max(Vec2::new(split + gutter, full.min.y), full.max);
@@ -278,8 +308,14 @@ fn dock_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec
     );
     let tabs = Rect::from_min_max(header.min, Vec2::new(close.min.x - 16.0, header.max.y));
     let labels = Panel::ALL.map(Panel::name);
-    let active = panel_index(state);
-    ui.store_value(ui.id("dock.last"), active as f32);
+    let active = if state.workspace.panel.is_some() {
+        let index = panel_index(state);
+        ui.store_value(ui.id("dock.last"), index as f32);
+        index
+    } else {
+        ui.value_of(ui.id("dock.last"))
+            .map_or(0, |value| value.round().clamp(0.0, 4.0) as usize)
+    };
     ui.place(tabs, |ui| {
         if let Some(index) = widget::tabs(ui, "dock.tabs", &labels, active) {
             state.workspace.panel = Some(Panel::ALL[index]);
@@ -312,8 +348,8 @@ fn dock_panel(ui: &mut Ui, rect: Rect, state: &mut State<'_>, commands: &mut Vec
         Vec2::new(rect.min.x + SIDEBAR_PAD, header.max.y + 14.0),
         Vec2::new(rect.max.x - SIDEBAR_PAD, rect.max.y - 18.0),
     );
-    let panel = state.workspace.panel.unwrap_or(Panel::Statistics);
-    ui.place(content, |ui| match panel {
+    let panel = state.workspace.panel.unwrap_or(Panel::ALL[active]);
+    ui.stacked(content, true, |ui| match panel {
         Panel::Statistics => crate::measure_panel::build(ui, state, commands),
         Panel::Tracks => crate::track_panel::build(ui, state, commands),
         _ => {

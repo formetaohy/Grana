@@ -1,8 +1,7 @@
 use glam::Vec2;
 use grana_ui::glass::{CHROME, GlassStyle};
 use grana_ui::{
-    Align, Block, Color, Corners, GlassGroup, Icon, Length, Level, Motion, Rect, Role, TextStyle,
-    Ui, icon,
+    Align, Block, Color, Corners, GlassGroup, Icon, Length, Level, Rect, Role, TextStyle, Ui, icon,
 };
 
 use crate::panel::Layout;
@@ -22,54 +21,11 @@ pub(super) fn bar(
     state: &mut State<'_>,
     commands: &mut Vec<Command>,
 ) {
-    let left = ui.glass_group(ui.id("header.navigation.group"), 6.0, CHROME);
-    let right = ui.glass_group(ui.id("header.actions.group"), 6.0, CHROME);
-    let mut left_hover = Vec::new();
-    let mut right_hover = Vec::new();
-    navigation(
-        ui,
-        layout.toolbar_left,
-        state,
-        commands,
-        left,
-        &mut left_hover,
-    );
-    actions(
-        ui,
-        layout.toolbar_right,
-        state,
-        commands,
-        right,
-        &mut right_hover,
-    );
+    let left = ui.glass_group(ui.id("header.navigation.group"), 14.0, CHROME);
+    let right = ui.glass_group(ui.id("header.actions.group"), 14.0, CHROME);
+    navigation(ui, layout.toolbar_left, state, commands, left);
+    actions(ui, layout.toolbar_right, state, commands, right);
     analysis(ui, layout.analysis, state);
-    let pointer = ui.input().position();
-    let left_spacing = ui.spring_to(
-        ui.id("header.navigation.spacing"),
-        if left_hover.iter().any(|key| {
-            ui.glass_frame(*key)
-                .is_some_and(|rect| rect.contains(pointer))
-        }) {
-            14.0
-        } else {
-            6.0
-        },
-        Motion::quick(),
-    );
-    ui.set_glass_group_spacing(left, left_spacing);
-    let right_spacing = ui.spring_to(
-        ui.id("header.actions.spacing"),
-        if right_hover.iter().any(|key| {
-            ui.glass_frame(*key)
-                .is_some_and(|rect| rect.contains(pointer))
-        }) {
-            14.0
-        } else {
-            6.0
-        },
-        Motion::quick(),
-    );
-    ui.set_glass_group_spacing(right, right_spacing);
 }
 
 fn navigation(
@@ -78,13 +34,12 @@ fn navigation(
     state: &mut State<'_>,
     commands: &mut Vec<Command>,
     group: GlassGroup,
-    hover: &mut Vec<u64>,
 ) {
     let inner = rect.shrink2(Vec2::new(8.0, 0.0));
     ui.place(inner, |ui| {
         ui.row(
             Block::row()
-                .gaps(6.0)
+                .gaps(8.0)
                 .align(Align::Center)
                 .height(Length::Fill),
             |ui| {
@@ -102,14 +57,12 @@ fn navigation(
                         "Hide sidebar"
                     },
                 );
-                hover.push(ui.id("sidebar.toggle"));
                 if response.clicked {
                     state.workspace.sidebar_hidden = !hidden;
                 }
-                brand(ui, group);
+                brand(ui);
                 let open =
                     widget::glass_menu_button(ui, Some(group), "open.menu", "Open", false, 80.0);
-                hover.push(ui.id("open.menu"));
                 open_menu(ui, state, commands, open);
                 let project = widget::glass_menu_button(
                     ui,
@@ -119,7 +72,6 @@ fn navigation(
                     state.io.dirty,
                     148.0,
                 );
-                hover.push(ui.id("project.menu"));
                 project_menu(ui, state, commands, project);
             },
         );
@@ -132,13 +84,12 @@ fn actions(
     state: &mut State<'_>,
     commands: &mut Vec<Command>,
     group: GlassGroup,
-    hover: &mut Vec<u64>,
 ) {
     let inner = rect.shrink2(Vec2::new(8.0, 0.0));
     ui.place(inner, |ui| {
         ui.row(
             Block::row()
-                .gaps(6.0)
+                .gaps(8.0)
                 .align(Align::Center)
                 .justify(Align::End)
                 .width(Length::Fill)
@@ -174,7 +125,6 @@ fn actions(
                         GlassStyle::button_disabled(),
                     )
                 };
-                hover.push(ui.id("undo"));
                 if response.clicked {
                     commands.push(Command::Undo);
                 }
@@ -198,7 +148,6 @@ fn actions(
                         GlassStyle::button_disabled(),
                     )
                 };
-                hover.push(ui.id("redo"));
                 if response.clicked {
                     commands.push(Command::Redo);
                 }
@@ -211,7 +160,6 @@ fn actions(
                     GlassStyle::button(),
                     "Fit volume to view",
                 );
-                hover.push(ui.id("fit"));
                 if response.clicked {
                     crate::view::fit_volume(state);
                 }
@@ -225,7 +173,6 @@ fn actions(
                     GlassStyle::button(),
                     "Streaming diagnostics",
                 );
-                hover.push(key);
                 if response.clicked {
                     ui.toggle_popup(key);
                 }
@@ -243,33 +190,21 @@ fn analysis(ui: &mut Ui, rect: Rect, state: &mut State<'_>) {
         response.clicked = true;
     }
     let open = state.workspace.panel.is_some();
-    let style = if open {
+    let mut style = if open {
         GlassStyle::primary_active()
     } else {
         GlassStyle::primary()
-    };
-    ui.glass(key, rect, style.interactive());
-    let hover = ui.animate(
-        key ^ 0x41,
-        if response.hovered { 1.0 } else { 0.0 },
-        Motion::quick(),
-    );
+    }
+    .interactive();
+    if response.hovered || response.active {
+        style.material.specular = (style.material.specular + 0.14).min(1.0);
+        style.material.rim += 0.05;
+    }
+    ui.glass(key, rect, style);
     let font = ui.theme().button_font();
     let frame = ui.glass_frame(key).unwrap_or(rect);
     {
         let mut painter = ui.painter();
-        if hover > 0.01 {
-            painter.outlined(
-                frame.shrink(0.5),
-                Corners::capsule(),
-                grana_ui::Fill::None,
-                grana_ui::Border {
-                    width: 1.0,
-                    color: Color::white_alpha(0.18 * hover),
-                },
-                grana_ui::Shadow::NONE,
-            );
-        }
         let mark = Rect::from_center_size(
             Vec2::new(frame.min.x + 24.0, frame.center().y),
             Vec2::splat(13.0),
@@ -314,14 +249,9 @@ fn analysis(ui: &mut Ui, rect: Rect, state: &mut State<'_>) {
     }
 }
 
-fn brand(ui: &mut Ui, group: GlassGroup) {
-    let rect = ui.allocate(Vec2::new(88.0, 34.0));
-    ui.glass_in(
-        Some(group),
-        ui.id("header.brand"),
-        rect,
-        GlassStyle::button(),
-    );
+fn brand(ui: &mut Ui) {
+    let rect = ui.allocate(Vec2::new(96.0, 34.0));
+    ui.glass(ui.id("header.brand"), rect, GlassStyle::button());
     let brand = ui.theme().palette.brand;
     let palette = ui.theme().palette;
     let font = ui.theme().font(Level::Title);
@@ -330,7 +260,7 @@ fn brand(ui: &mut Ui, group: GlassGroup) {
     let mut y = rect.center().y - 8.0;
     for width in widths {
         painter.rect(
-            Rect::from_min_size(Vec2::new(rect.min.x + 2.0, y), Vec2::new(width, 2.2)),
+            Rect::from_min_size(Vec2::new(rect.min.x + 11.0, y), Vec2::new(width, 2.2)),
             Corners::capsule(),
             brand,
         );
@@ -338,8 +268,8 @@ fn brand(ui: &mut Ui, group: GlassGroup) {
     }
     painter.text_in(
         Rect::from_min_size(
-            Vec2::new(rect.min.x + 20.0, rect.min.y),
-            Vec2::new(rect.width() - 20.0, rect.height()),
+            Vec2::new(rect.min.x + 28.0, rect.min.y),
+            Vec2::new(rect.width() - 36.0, rect.height()),
         ),
         "grana",
         TextStyle::new(font, palette.text_primary),
@@ -415,9 +345,6 @@ fn project_menu(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, rec
 
 fn diagnostics(ui: &mut Ui, state: &State<'_>, commands: &mut Vec<Command>, anchor: Rect) {
     let open = ui.popup_open(ui.id("header.diagnostics"));
-    if !open {
-        return;
-    }
     let mut clear = false;
     grana_ui::popover::popover(ui, "header.diagnostics", open, anchor, 300.0, |ui| {
         crate::panel::section_header(ui, "Streaming", None);

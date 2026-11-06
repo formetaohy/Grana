@@ -46,6 +46,7 @@ fn segmented_core(
     let rect = ui.allocate(Vec2::new(total, metrics.control_height));
     let mut changed = None;
     let mut dragging = false;
+    let mut engaged = false;
     let mut left = rect.min.x + 3.0;
     let mut cells = Vec::new();
     for (index, width) in widths.iter().enumerate() {
@@ -57,6 +58,7 @@ fn segmented_core(
         let cell_key = key ^ (index as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
         let response = ui.interact(cell_key, cell);
         dragging |= response.dragging;
+        engaged |= response.active;
         let corners = Corners::capsule();
         if ui.focusable(cell_key, cell, corners) && ui.activated(cell_key) {
             changed = Some(index);
@@ -84,8 +86,13 @@ fn segmented_core(
     } else {
         target_cell.min.x
     };
-    let x = ui.spring_to(key, x_target, Motion::response(0.4, 0.16));
-    let width = ui.spring_to(key ^ 0x1f, width_target, Motion::response(0.4, 0.16));
+    let motion = if dragging {
+        Motion::response(0.16, 0.12)
+    } else {
+        Motion::response(0.42, 0.22)
+    };
+    let x = ui.spring_to(key, x_target, motion);
+    let width = ui.spring_to(key ^ 0x1f, width_target, motion);
     let pill = Rect::from_min_size(
         Vec2::new(x, rect.min.y + 3.0),
         Vec2::new(width, rect.height() - 6.0),
@@ -119,21 +126,22 @@ fn segmented_core(
                 );
             }
         }
+        for (index, cell) in cells.iter().enumerate() {
+            let active = index == target;
+            let color = if active {
+                palette.text_primary
+            } else {
+                palette
+                    .text_secondary
+                    .lerp(palette.text_primary, hovered[index])
+            };
+            let style = TextStyle::new(font, color).aligned(Align::Center);
+            painter.text_in(*cell, options[index], style, Align::Center);
+        }
     }
-    ui.glass(key ^ 0x2f, pill, GlassStyle::tab_lens().interactive());
-    let mut painter = ui.labels_painter();
-    for (index, cell) in cells.iter().enumerate() {
-        let active = index == target;
-        let color = if active {
-            palette.text_primary
-        } else {
-            palette
-                .text_secondary
-                .lerp(palette.text_primary, hovered[index])
-        };
-        let style = TextStyle::new(font, color).aligned(Align::Center);
-        painter.text_in(*cell, options[index], style, Align::Center);
-    }
+    let pill_key = key ^ 0x2f;
+    ui.glass(pill_key, pill, GlassStyle::tab_lens());
+    ui.engage_glass(pill_key, engaged);
     changed
 }
 
@@ -172,6 +180,8 @@ pub fn tab_bar(
         );
     }
     let mut changed = None;
+    let mut dragging = false;
+    let mut engaged = false;
     let mut left = rect.min.x;
     let mut cells = Vec::new();
     for (index, width) in widths.iter().enumerate() {
@@ -182,6 +192,8 @@ pub fn tab_bar(
         cells.push(cell);
         let cell_key = ui.id(&format!("{id}.tab.{index}"));
         let response = ui.interact(cell_key, cell);
+        dragging |= response.dragging;
+        engaged |= response.active;
         if ui.focusable(cell_key, cell, Corners::capsule()) && ui.activated(cell_key) {
             changed = Some(index);
         }
@@ -190,19 +202,39 @@ pub fn tab_bar(
         }
         left += width;
     }
-    let target = selected.min(options.len().saturating_sub(1));
+    let pointer = ui.input().position();
+    if dragging
+        && ui.input().button(Button::Primary).down
+        && let Some(index) = cells.iter().position(|cell| cell.contains(pointer))
+    {
+        changed = Some(index);
+    }
+    let target = changed
+        .unwrap_or(selected)
+        .min(options.len().saturating_sub(1));
     let target_cell = cells.get(target).copied().unwrap_or(rect);
-    let x = ui.spring_to(key, target_cell.min.x, Motion::response(0.42, 0.14));
-    let width = ui.spring_to(
-        key ^ 0x2f,
-        target_cell.width(),
-        Motion::response(0.42, 0.14),
-    );
+    let total_tabs_width = left - rect.min.x;
+    let dragging = dragging && ui.input().button(Button::Primary).down && rect.contains(pointer);
+    let width_target = target_cell.width();
+    let x_target = if dragging {
+        (pointer.x - width_target * 0.5).clamp(
+            rect.min.x,
+            (rect.min.x + total_tabs_width - width_target).max(rect.min.x),
+        )
+    } else {
+        target_cell.min.x
+    };
+    let motion = if dragging {
+        Motion::response(0.16, 0.12)
+    } else {
+        Motion::response(0.42, 0.20)
+    };
+    let x = ui.spring_to(key, x_target, motion);
+    let width = ui.spring_to(key ^ 0x2f, width_target, motion);
     let pill = Rect::from_min_size(
         Vec2::new(x, rect.min.y + 3.0),
         Vec2::new(width, height - 6.0),
     );
-    let pointer = ui.input().position();
     let mut hovered = Vec::with_capacity(cells.len());
     for (index, cell) in cells.iter().enumerate() {
         hovered.push(ui.animate(
@@ -227,24 +259,25 @@ pub fn tab_bar(
                 );
             }
         }
+        for (index, cell) in cells.iter().enumerate() {
+            let active = index == target;
+            let color = if active {
+                palette.text_primary
+            } else {
+                palette
+                    .text_secondary
+                    .lerp(palette.text_primary, hovered[index])
+            };
+            painter.text_in(
+                *cell,
+                options[index],
+                TextStyle::new(font, color).aligned(Align::Center),
+                Align::Center,
+            );
+        }
     }
-    ui.glass(key ^ 0x71, pill, GlassStyle::tab_lens().interactive());
-    let mut painter = ui.labels_painter();
-    for (index, cell) in cells.iter().enumerate() {
-        let active = index == target;
-        let color = if active {
-            palette.text_primary
-        } else {
-            palette
-                .text_secondary
-                .lerp(palette.text_primary, hovered[index])
-        };
-        painter.text_in(
-            *cell,
-            options[index],
-            TextStyle::new(font, color).aligned(Align::Center),
-            Align::Center,
-        );
-    }
+    let pill_key = key ^ 0x71;
+    ui.glass(pill_key, pill, GlassStyle::tab_lens());
+    ui.engage_glass(pill_key, engaged);
     changed
 }

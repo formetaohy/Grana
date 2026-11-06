@@ -35,6 +35,6 @@ pub(crate) fn button_font(ui: &Ui) -> TypeStyle {
     ui.theme().button_font()
 }
 
-pub(crate) fn pressed_inset(pressed: f32) -> f32 {
-    0.8 * pressed
+pub(crate) fn pressed_grow(pressed: f32) -> f32 {
+    1.4 * pressed
 }
