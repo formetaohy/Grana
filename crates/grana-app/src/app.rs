@@ -60,6 +60,7 @@ pub struct App {
     resume: Option<(u32, f32)>,
     ime: bool,
     ime_area: Option<(i32, i32, u32, u32)>,
+    scene_changed: bool,
 }
 
 impl App {
@@ -91,6 +92,7 @@ impl App {
             resume: None,
             ime: false,
             ime_area: None,
+            scene_changed: true,
         }
     }
 
@@ -123,7 +125,9 @@ impl App {
     }
 
     fn redraw(&mut self) {
-        self.session.poll();
+        if self.session.poll() {
+            self.scene_changed = true;
+        }
         if let Some(set) = self.workspace.seed
             && self
                 .session
@@ -139,6 +143,7 @@ impl App {
         self.sync_ime();
         self.interact_viewport();
         if self.apply(commands) {
+            self.scene_changed = true;
             return;
         }
         self.session.apply_measure();
@@ -174,6 +179,7 @@ impl App {
             engine,
             session,
             info,
+            scene_changed,
             ..
         } = self;
         let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_mut()) else {
@@ -197,9 +203,11 @@ impl App {
         }
         for (request, data) in session.take_bricks() {
             engine.upload(&surface.gpu.device, &surface.gpu.queue, request, &data);
+            *scene_changed = true;
         }
         if session.generation() != self.generation {
             self.generation = session.generation();
+            *scene_changed = true;
             if let Some(scene) = session.scene() {
                 engine.set_dataset(&surface.gpu.device, scene.dataset.pyramid());
             }
@@ -215,12 +223,14 @@ impl App {
         let reload = session.reload();
         if reload != self.reload {
             self.reload = reload;
+            *scene_changed = true;
             if let Some(scene) = session.scene() {
                 engine.set_dataset(&surface.gpu.device, scene.dataset.pyramid());
             }
             *info = FrameInfo::default();
         }
         if let Some(view) = view {
+            *scene_changed = true;
             self.apply_view(&view);
         }
     }
@@ -248,11 +258,13 @@ impl App {
         if self.fit_section && sized {
             self.viewport.fit_section(world, voxel, section_aspect);
             self.fit_section = false;
+            self.scene_changed = true;
         }
         if self.needs_fit && sized {
             self.viewport
                 .fit(world, voxel, volume_aspect, section_aspect);
             self.needs_fit = false;
+            self.scene_changed = true;
         }
     }
 
@@ -330,7 +342,9 @@ impl App {
             }
             surface.window.request_redraw();
         }
+        let camera = interaction.camera;
         let pick = interaction.pick;
+        let picked = pick.is_some();
         let modifiers = interaction.modifiers;
         if let Some((pane, point)) = pick {
             match seeding.filter(|_| pane == Pane::Volume) {
@@ -338,6 +352,9 @@ impl App {
                 None => self.pick(pane, point),
             }
             self.request_redraw();
+        }
+        if camera || picked {
+            self.scene_changed = true;
         }
     }
 
@@ -551,6 +568,7 @@ impl App {
             engine,
             session,
             viewport,
+            scene_changed,
             ..
         } = self;
         let surface = surface.as_mut()?;
@@ -586,6 +604,7 @@ impl App {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("grana.ui.paint"),
                 });
+        surface.ui.set_scene_changed(std::mem::take(scene_changed));
         surface.ui.paint(&mut encoder, &view);
         surface.gpu.queue.submit([encoder.finish()]);
         surface.gpu.queue.present(frame);
@@ -671,6 +690,7 @@ impl App {
         if let Some((time, position)) = self.resume.take() {
             self.restore_time(time, position);
         }
+        self.scene_changed = true;
         self.repaint_at = Some(Instant::now());
     }
 
@@ -847,6 +867,8 @@ impl App {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("grana.ui.present"),
                 });
+        let changed = std::mem::take(&mut self.scene_changed);
+        surface.ui.set_scene_changed(changed);
         surface.ui.paint(&mut encoder, &view);
         surface.gpu.queue.submit([encoder.finish()]);
         surface.gpu.queue.present(frame);
@@ -946,6 +968,7 @@ impl App {
             Picked::Seed => return,
             Picked::Miss => None,
         };
+        self.scene_changed = true;
         self.apply(vec![Command::Select(selection)]);
     }
 
@@ -991,6 +1014,7 @@ impl App {
         }
         let next = (scene.time() + 1) % scene.frame_count();
         self.session.set_time(next);
+        self.scene_changed = true;
         self.workspace.playback.previewing = false;
         self.last_advance = Some(now);
     }
@@ -1007,6 +1031,7 @@ impl App {
                 (self.workspace.playback.position + elapsed) % duration;
         }
         self.pose_animation();
+        self.scene_changed = true;
     }
 
     fn pose_animation(&mut self) {
@@ -1047,6 +1072,7 @@ impl App {
         self.last_advance = None;
         self.last_animation = None;
         self.session.set_time(time);
+        self.scene_changed = true;
     }
 
     fn pick_folder() -> Option<PathBuf> {

@@ -1,8 +1,9 @@
 use grana_glass::{Material, Shadow, Shape, Tone};
 
 pub const CHROME: i32 = 0;
-pub const FLOATING: i32 = 1;
-pub const HUD: i32 = 2;
+pub const OVERLAY: i32 = 1;
+pub const MENU: i32 = 2;
+pub const HUD: i32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassStyle {
@@ -55,7 +56,7 @@ impl GlassStyle {
     }
 
     pub fn popover() -> Self {
-        Self::regular(Shape::Rounded(20.0), FLOATING)
+        Self::regular(Shape::Rounded(20.0), MENU)
     }
 
     pub fn tooltip() -> Self {
@@ -84,8 +85,30 @@ impl GlassStyle {
         }
     }
 
+    pub fn primary_active() -> Self {
+        let mut style = Self::primary();
+        style.material = Material::tinted(grana_glass::Color::hex(0x3D9BFF));
+        style
+    }
+
     pub fn lens() -> Self {
-        Self::clear(Shape::Capsule, FLOATING)
+        Self {
+            material: clear_lens(),
+            shape: Shape::Capsule,
+            layer: OVERLAY,
+            interactive: false,
+            lens: false,
+        }
+    }
+
+    pub fn tab_lens() -> Self {
+        Self {
+            material: clear_lens(),
+            shape: Shape::Capsule,
+            layer: OVERLAY,
+            interactive: false,
+            lens: false,
+        }
     }
 
     pub fn knob() -> Self {
@@ -118,7 +141,7 @@ impl GlassStyle {
         Self {
             material,
             shape: Shape::Capsule,
-            layer: FLOATING,
+            layer: OVERLAY,
             interactive: false,
             lens: false,
         }
@@ -133,4 +156,34 @@ impl GlassStyle {
         self.lens = true;
         self
     }
+}
+
+fn clear_lens() -> Material {
+    let mut material = Material::clear();
+    material.refraction = 0.9;
+    material.depth = 18.0;
+    material.dispersion = 0.1;
+    material.frost = 0.8;
+    material.splay = 0.5;
+    material.specular = 0.6;
+    material.rim = 0.5;
+    material.rim_shade = 0.06;
+    material.edge = 0.32;
+    material.hairline = 0.14;
+    material.shadow = Shadow {
+        offset_y: 2.0,
+        blur: 6.0,
+        opacity: 0.18,
+    };
+    let tone = Tone {
+        lift: 0.06,
+        luminance: 1.0,
+        luminance_mix: 0.08,
+        lighten: 0.12,
+        darken_to: 1.0,
+        darken: 0.0,
+    };
+    material.light_tone = tone;
+    material.dark_tone = tone;
+    material
 }

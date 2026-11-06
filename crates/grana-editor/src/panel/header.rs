@@ -140,13 +140,18 @@ fn analysis(ui: &mut Ui, rect: Rect, state: &mut State<'_>) {
     if ui.focusable(key, rect, Corners::capsule()) && ui.activated(key) {
         response.clicked = true;
     }
-    ui.glass(key, rect, GlassStyle::primary().interactive());
+    let open = state.workspace.panel.is_some();
+    let style = if open {
+        GlassStyle::primary_active()
+    } else {
+        GlassStyle::primary()
+    };
+    ui.glass(key, rect, style.interactive());
     let hover = ui.animate(
         key ^ 0x41,
         if response.hovered { 1.0 } else { 0.0 },
         Motion::quick(),
     );
-    let open = state.workspace.panel.is_some();
     let font = ui.theme().button_font();
     let frame = ui.glass_frame(key).unwrap_or(rect);
     {

@@ -14,8 +14,8 @@ use wgpu::{
 };
 
 use crate::atlas::Atlas;
-use crate::glass::FLOATING;
-use crate::paint::Instance;
+use crate::glass::{HUD, MENU, OVERLAY};
+use crate::paint::{Instance, LayerInstances};
 use grana_gpu::Target;
 use grana_gpu::layout;
 
@@ -35,6 +35,38 @@ const PREMULTIPLIED: BlendState = BlendState {
         operation: BlendOperation::Add,
     },
 };
+
+const PLUS_LIGHTER: BlendState = BlendState {
+    color: BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::One,
+        operation: BlendOperation::Add,
+    },
+    alpha: BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::OneMinusSrcAlpha,
+        operation: BlendOperation::Add,
+    },
+};
+
+const MULTIPLY: BlendState = BlendState {
+    color: BlendComponent {
+        src_factor: BlendFactor::Dst,
+        dst_factor: BlendFactor::OneMinusSrcAlpha,
+        operation: BlendOperation::Add,
+    },
+    alpha: BlendComponent {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::OneMinusSrcAlpha,
+        operation: BlendOperation::Add,
+    },
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ink {
+    Light,
+    Dark,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -87,77 +119,109 @@ impl Surface {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slot {
+    Front,
+    Back,
+}
+
+impl Slot {
+    fn other(self) -> Self {
+        match self {
+            Self::Front => Self::Back,
+            Self::Back => Self::Front,
+        }
+    }
+}
+
 pub(crate) struct PaintFrame<'a> {
     pub target: &'a TextureView,
     pub atlas: &'a Atlas,
-    pub base: &'a [Instance],
-    pub chrome: &'a [Instance],
-    pub popup: &'a [Instance],
+    pub content: &'a [Instance],
+    pub chrome: &'a LayerInstances,
+    pub labels: &'a LayerInstances,
+    pub popup: &'a LayerInstances,
+    pub hud: &'a LayerInstances,
     pub glass: &'a GlassScene,
-    pub floating: bool,
+    pub glass_on_glass: bool,
+    pub base_changed: bool,
+    pub interface_changed: bool,
+    pub ink: Ink,
 }
 
-struct Layer<'a> {
+struct PaintTarget<'a> {
     target: &'a TextureView,
     scene: &'a TextureView,
-    buffer: &'a Buffer,
-    instances: &'a [Instance],
     load: LoadOp<wgpu::Color>,
 }
 
+struct InstanceBuffer {
+    buffer: Buffer,
+    capacity: usize,
+}
+
+impl InstanceBuffer {
+    fn new(device: &Device, label: &str) -> Self {
+        Self {
+            buffer: instance_buffer(device, label, MINIMUM_INSTANCES),
+            capacity: MINIMUM_INSTANCES,
+        }
+    }
+
+    fn upload(&mut self, device: &Device, queue: &Queue, label: &str, instances: &[Instance]) {
+        upload_instances(
+            device,
+            queue,
+            label,
+            instances,
+            &mut self.buffer,
+            &mut self.capacity,
+        );
+    }
+}
+
+struct LayerBuffers {
+    material: InstanceBuffer,
+    ink: InstanceBuffer,
+}
+
+impl LayerBuffers {
+    fn new(device: &Device, label: &str) -> Self {
+        Self {
+            material: InstanceBuffer::new(device, &format!("{label}.material")),
+            ink: InstanceBuffer::new(device, &format!("{label}.ink")),
+        }
+    }
+
+    fn upload(&mut self, device: &Device, queue: &Queue, label: &str, instances: &LayerInstances) {
+        self.material.upload(
+            device,
+            queue,
+            &format!("{label}.material"),
+            &instances.material,
+        );
+        self.ink
+            .upload(device, queue, &format!("{label}.ink"), &instances.ink);
+    }
+}
+
 struct Buffers {
-    base: Buffer,
-    base_capacity: usize,
-    chrome: Buffer,
-    chrome_capacity: usize,
-    popup: Buffer,
-    popup_capacity: usize,
+    content: InstanceBuffer,
+    chrome: LayerBuffers,
+    labels: LayerBuffers,
+    popup: LayerBuffers,
+    hud: LayerBuffers,
 }
 
 impl Buffers {
     fn new(device: &Device) -> Self {
         Self {
-            base: instance_buffer(device, "grana.ui.instances.base", MINIMUM_INSTANCES),
-            base_capacity: MINIMUM_INSTANCES,
-            chrome: instance_buffer(device, "grana.ui.instances.chrome", MINIMUM_INSTANCES),
-            chrome_capacity: MINIMUM_INSTANCES,
-            popup: instance_buffer(device, "grana.ui.instances.popup", MINIMUM_INSTANCES),
-            popup_capacity: MINIMUM_INSTANCES,
+            content: InstanceBuffer::new(device, "grana.ui.instances.content"),
+            chrome: LayerBuffers::new(device, "grana.ui.instances.chrome"),
+            labels: LayerBuffers::new(device, "grana.ui.instances.labels"),
+            popup: LayerBuffers::new(device, "grana.ui.instances.popup"),
+            hud: LayerBuffers::new(device, "grana.ui.instances.hud"),
         }
-    }
-
-    fn upload(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        base: &[Instance],
-        chrome: &[Instance],
-        popup: &[Instance],
-    ) {
-        upload_instances(
-            device,
-            queue,
-            "grana.ui.instances.base",
-            base,
-            &mut self.base,
-            &mut self.base_capacity,
-        );
-        upload_instances(
-            device,
-            queue,
-            "grana.ui.instances.chrome",
-            chrome,
-            &mut self.chrome,
-            &mut self.chrome_capacity,
-        );
-        upload_instances(
-            device,
-            queue,
-            "grana.ui.instances.popup",
-            popup,
-            &mut self.popup,
-            &mut self.popup_capacity,
-        );
     }
 }
 
@@ -187,15 +251,20 @@ pub struct Renderer {
     size: [u32; 2],
     scale: f32,
     scene: Option<Target>,
-    back: Option<Surface>,
+    base: Option<Surface>,
     front: Option<Surface>,
+    back: Option<Surface>,
     blit: RenderPipeline,
     present_encoded: RenderPipeline,
     present_linear: RenderPipeline,
     ui: RenderPipeline,
+    ui_add: RenderPipeline,
+    ui_multiply: RenderPipeline,
     figure: RenderPipeline,
     lower: GlassRenderer,
-    upper: GlassRenderer,
+    overlay: GlassRenderer,
+    menu_glass: GlassRenderer,
+    hud_glass: GlassRenderer,
     ui_layout: BindGroupLayout,
     blit_layout: BindGroupLayout,
     sampler: Sampler,
@@ -204,7 +273,7 @@ pub struct Renderer {
     figure_instances: Buffer,
     figure_capacity: usize,
     figure_uniforms: Buffer,
-    floating: bool,
+    presented: Option<Slot>,
 }
 
 impl Renderer {
@@ -291,6 +360,23 @@ impl Renderer {
             &ui_pipeline_layout,
             &ui_shader,
             raw(encoded),
+            PREMULTIPLIED,
+        );
+        let ui_add = instance_pipeline(
+            device,
+            "grana.ui.instances.add",
+            &ui_pipeline_layout,
+            &ui_shader,
+            raw(encoded),
+            PLUS_LIGHTER,
+        );
+        let ui_multiply = instance_pipeline(
+            device,
+            "grana.ui.instances.multiply",
+            &ui_pipeline_layout,
+            &ui_shader,
+            raw(encoded),
+            MULTIPLY,
         );
         let figure = instance_pipeline(
             device,
@@ -298,6 +384,7 @@ impl Renderer {
             &ui_pipeline_layout,
             &ui_shader,
             format,
+            PREMULTIPLIED,
         );
         let uniforms = device.create_buffer(&BufferDescriptor {
             label: Some("grana.ui.uniforms"),
@@ -322,15 +409,20 @@ impl Renderer {
             size: [0, 0],
             scale: 1.0,
             scene: None,
-            back: None,
+            base: None,
             front: None,
+            back: None,
             blit,
             present_encoded,
             present_linear,
             ui,
+            ui_add,
+            ui_multiply,
             figure,
             lower: GlassRenderer::new(device, encoded),
-            upper: GlassRenderer::new(device, encoded),
+            overlay: GlassRenderer::new(device, encoded),
+            menu_glass: GlassRenderer::new(device, encoded),
+            hud_glass: GlassRenderer::new(device, encoded),
             ui_layout,
             blit_layout,
             sampler,
@@ -348,7 +440,7 @@ impl Renderer {
                 usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            floating: false,
+            presented: None,
         }
     }
 
@@ -360,8 +452,10 @@ impl Renderer {
         self.size = size;
         let device = self.device.clone();
         self.scene = Some(Target::new(&device, "grana.ui.scene", size, self.format));
-        self.back = Some(Surface::new(&device, "grana.ui.back", size, self.encoded));
+        self.base = Some(Surface::new(&device, "grana.ui.base", size, self.encoded));
         self.front = Some(Surface::new(&device, "grana.ui.front", size, self.encoded));
+        self.back = Some(Surface::new(&device, "grana.ui.back", size, self.encoded));
+        self.presented = None;
     }
 
     pub fn scene_view(&self) -> &TextureView {
@@ -369,11 +463,12 @@ impl Renderer {
     }
 
     pub fn read_color(&mut self) -> (Vec<u8>, [u32; 2], TextureFormat) {
-        let surface = if self.floating {
-            self.back.as_ref().expect("the renderer is sized")
-        } else {
-            self.front.as_ref().expect("the renderer is sized")
-        };
+        let slot = self.presented.unwrap_or(Slot::Front);
+        let surface = match slot {
+            Slot::Front => self.front.as_ref(),
+            Slot::Back => self.back.as_ref(),
+        }
+        .expect("the renderer is sized");
         let [width, height] = self.size;
         let padded = (width * 4).div_ceil(256) * 256;
         let buffer = self.device.create_buffer(&BufferDescriptor {
@@ -446,113 +541,282 @@ impl Renderer {
         let PaintFrame {
             target: target_view,
             atlas,
-            base,
+            content,
             chrome,
+            labels,
             popup,
+            hud,
             glass,
-            floating,
+            glass_on_glass,
+            base_changed,
+            interface_changed,
+            ink,
         } = frame;
         assert!(
             self.size[0] > 0 && self.size[1] > 0,
             "the UI renderer needs a sized target"
         );
-        let (Some(scene), Some(back), Some(front)) = (
-            self.scene.as_ref().map(|scene| scene.view.clone()),
-            self.back.as_ref(),
-            self.front.as_ref(),
-        ) else {
-            return;
-        };
-        self.floating = floating;
+        let scene = self
+            .scene
+            .as_ref()
+            .expect("the renderer is sized")
+            .view
+            .clone();
+        let base = self.base.as_ref().expect("the renderer is sized");
+        let front = self.front.as_ref().expect("the renderer is sized");
+        let back = self.back.as_ref().expect("the renderer is sized");
+        let base_view = base.linear.clone();
+        let base_encoded = base.encoded.clone();
+        let front_encoded = front.encoded.clone();
+        let front_linear = front.linear.clone();
+        let back_encoded = back.encoded.clone();
+        let back_linear = back.linear.clone();
+        self.buffers.content.upload(
+            &self.device,
+            &self.queue,
+            "grana.ui.instances.content",
+            content,
+        );
+        self.buffers.chrome.upload(
+            &self.device,
+            &self.queue,
+            "grana.ui.instances.chrome",
+            chrome,
+        );
+        self.buffers.labels.upload(
+            &self.device,
+            &self.queue,
+            "grana.ui.instances.labels",
+            labels,
+        );
         self.buffers
-            .upload(&self.device, &self.queue, base, chrome, popup);
+            .popup
+            .upload(&self.device, &self.queue, "grana.ui.instances.popup", popup);
+        self.buffers
+            .hud
+            .upload(&self.device, &self.queue, "grana.ui.instances.hud", hud);
         let scale = self.scale;
         let size = (self.size[0], self.size[1]);
+
         let scene_group = self.blit_group(&scene);
         fullscreen(
             encoder,
             &self.blit,
             &scene_group,
-            &back.linear,
+            &base_view,
             LoadOp::Clear(wgpu::Color::BLACK),
         );
-        self.paint_instances(
+        self.paint_material(
             encoder,
             atlas,
-            Layer {
-                target: &back.linear,
+            &PaintTarget {
+                target: &base_view,
                 scene: &scene,
-                buffer: &self.buffers.base,
-                instances: base,
                 load: LoadOp::Load,
             },
+            &self.buffers.content.buffer,
+            content.len(),
         );
+
         self.lower.render_layers(
             &self.device,
             &self.queue,
             encoder,
             &GlassFrame {
-                content: &back.encoded,
-                target: &front.encoded,
+                content: &base_encoded,
+                target: &front_encoded,
                 size,
                 scale,
-                content_changed: true,
+                content_changed: base_changed,
+                copy: true,
             },
             glass,
-            ..FLOATING,
+            ..OVERLAY,
         );
-        self.paint_instances(
+        self.paint_layer(
             encoder,
             atlas,
-            Layer {
-                target: &front.linear,
+            &PaintTarget {
+                target: &front_linear,
                 scene: &scene,
-                buffer: &self.buffers.chrome,
-                instances: chrome,
                 load: LoadOp::Load,
             },
+            &self.buffers.chrome,
+            chrome,
+            ink,
         );
-        let present = if floating {
-            self.upper.render_layers(
+
+        let mut current = Slot::Front;
+        if glass.has_layers(OVERLAY..MENU) {
+            let content = slot_view(current, &front_encoded, &back_encoded);
+            let target = slot_view(current.other(), &front_encoded, &back_encoded);
+            self.overlay.render_layers(
                 &self.device,
                 &self.queue,
                 encoder,
                 &GlassFrame {
-                    content: &front.encoded,
-                    target: &back.encoded,
+                    content,
+                    target,
                     size,
                     scale,
-                    content_changed: true,
+                    content_changed: interface_changed,
+                    copy: true,
                 },
                 glass,
-                FLOATING..,
+                OVERLAY..MENU,
             );
-            self.paint_instances(
+            let linear = slot_view(current.other(), &front_linear, &back_linear);
+            self.paint_layer(
                 encoder,
                 atlas,
-                Layer {
-                    target: &back.linear,
+                &PaintTarget {
+                    target: linear,
                     scene: &scene,
-                    buffer: &self.buffers.popup,
-                    instances: popup,
                     load: LoadOp::Load,
                 },
+                &self.buffers.labels,
+                labels,
+                ink,
             );
-            &back.encoded
+            current = current.other();
         } else {
-            self.paint_instances(
+            self.paint_layer(
                 encoder,
                 atlas,
-                Layer {
-                    target: &front.linear,
+                &PaintTarget {
+                    target: &front_linear,
                     scene: &scene,
-                    buffer: &self.buffers.popup,
-                    instances: popup,
                     load: LoadOp::Load,
                 },
+                &self.buffers.labels,
+                labels,
+                ink,
             );
-            &front.encoded
-        };
+        }
+
+        if glass.has_layers(MENU..HUD) {
+            let target_slot = if glass_on_glass {
+                current.other()
+            } else {
+                current
+            };
+            let content = if glass_on_glass {
+                slot_view(current, &front_encoded, &back_encoded)
+            } else {
+                &base_encoded
+            };
+            let target = slot_view(target_slot, &front_encoded, &back_encoded);
+            self.menu_glass.render_layers(
+                &self.device,
+                &self.queue,
+                encoder,
+                &GlassFrame {
+                    content,
+                    target,
+                    size,
+                    scale,
+                    content_changed: if glass_on_glass {
+                        interface_changed
+                    } else {
+                        base_changed
+                    },
+                    copy: glass_on_glass,
+                },
+                glass,
+                MENU..HUD,
+            );
+            let linear = slot_view(target_slot, &front_linear, &back_linear);
+            self.paint_layer(
+                encoder,
+                atlas,
+                &PaintTarget {
+                    target: linear,
+                    scene: &scene,
+                    load: LoadOp::Load,
+                },
+                &self.buffers.popup,
+                popup,
+                ink,
+            );
+            current = target_slot;
+        } else {
+            let linear = slot_view(current, &front_linear, &back_linear);
+            self.paint_layer(
+                encoder,
+                atlas,
+                &PaintTarget {
+                    target: linear,
+                    scene: &scene,
+                    load: LoadOp::Load,
+                },
+                &self.buffers.popup,
+                popup,
+                ink,
+            );
+        }
+
+        if glass.has_layers(HUD..) {
+            let target_slot = if glass_on_glass {
+                current.other()
+            } else {
+                current
+            };
+            let content = if glass_on_glass {
+                slot_view(current, &front_encoded, &back_encoded)
+            } else {
+                &base_encoded
+            };
+            let target = slot_view(target_slot, &front_encoded, &back_encoded);
+            self.hud_glass.render_layers(
+                &self.device,
+                &self.queue,
+                encoder,
+                &GlassFrame {
+                    content,
+                    target,
+                    size,
+                    scale,
+                    content_changed: if glass_on_glass {
+                        interface_changed
+                    } else {
+                        base_changed
+                    },
+                    copy: glass_on_glass,
+                },
+                glass,
+                HUD..,
+            );
+            let linear = slot_view(target_slot, &front_linear, &back_linear);
+            self.paint_layer(
+                encoder,
+                atlas,
+                &PaintTarget {
+                    target: linear,
+                    scene: &scene,
+                    load: LoadOp::Load,
+                },
+                &self.buffers.hud,
+                hud,
+                ink,
+            );
+            current = target_slot;
+        } else {
+            let linear = slot_view(current, &front_linear, &back_linear);
+            self.paint_layer(
+                encoder,
+                atlas,
+                &PaintTarget {
+                    target: linear,
+                    scene: &scene,
+                    load: LoadOp::Load,
+                },
+                &self.buffers.hud,
+                hud,
+                ink,
+            );
+        }
+
+        let present = slot_view(current, &front_encoded, &back_encoded);
         let group = self.blit_group(present);
         let pipeline = if self.format.is_srgb() {
             &self.present_linear
@@ -566,21 +830,29 @@ impl Renderer {
             target_view,
             LoadOp::Clear(wgpu::Color::BLACK),
         );
+        self.presented = Some(current);
     }
 
-    fn paint_instances(&self, encoder: &mut CommandEncoder, atlas: &Atlas, layer: Layer<'_>) {
-        if layer.instances.is_empty() {
+    fn paint_material(
+        &self,
+        encoder: &mut CommandEncoder,
+        atlas: &Atlas,
+        target: &PaintTarget<'_>,
+        buffer: &Buffer,
+        count: usize,
+    ) {
+        if count == 0 {
             return;
         }
-        let group = self.ui_group(atlas, layer.scene, layer.buffer, &self.uniforms);
+        let group = self.ui_group(atlas, target.scene, buffer, &self.uniforms);
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.ui.pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: layer.target,
+                view: target.target,
                 depth_slice: None,
                 resolve_target: None,
                 ops: PassOperations {
-                    load: layer.load,
+                    load: target.load,
                     store: StoreOp::Store,
                 },
             })],
@@ -588,7 +860,54 @@ impl Renderer {
         });
         pass.set_pipeline(&self.ui);
         pass.set_bind_group(0, &group, &[]);
-        pass.draw(0..6, 0..layer.instances.len() as u32);
+        pass.draw(0..6, 0..count as u32);
+    }
+
+    fn paint_layer(
+        &self,
+        encoder: &mut CommandEncoder,
+        atlas: &Atlas,
+        target: &PaintTarget<'_>,
+        buffers: &LayerBuffers,
+        instances: &LayerInstances,
+        ink: Ink,
+    ) {
+        if instances.is_empty() {
+            return;
+        }
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("grana.ui.layer.pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: target.target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: PassOperations {
+                    load: target.load,
+                    store: StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        if !instances.material.is_empty() {
+            let group = self.ui_group(
+                atlas,
+                target.scene,
+                &buffers.material.buffer,
+                &self.uniforms,
+            );
+            pass.set_pipeline(&self.ui);
+            pass.set_bind_group(0, &group, &[]);
+            pass.draw(0..6, 0..instances.material.len() as u32);
+        }
+        if !instances.ink.is_empty() {
+            let group = self.ui_group(atlas, target.scene, &buffers.ink.buffer, &self.uniforms);
+            pass.set_pipeline(match ink {
+                Ink::Light => &self.ui_add,
+                Ink::Dark => &self.ui_multiply,
+            });
+            pass.set_bind_group(0, &group, &[]);
+            pass.draw(0..6, 0..instances.ink.len() as u32);
+        }
     }
 
     pub fn paint_figure(
@@ -704,6 +1023,13 @@ impl Renderer {
     }
 }
 
+fn slot_view<'a>(slot: Slot, front: &'a TextureView, back: &'a TextureView) -> &'a TextureView {
+    match slot {
+        Slot::Front => front,
+        Slot::Back => back,
+    }
+}
+
 fn raw(format: TextureFormat) -> TextureFormat {
     match format {
         TextureFormat::Bgra8UnormSrgb => TextureFormat::Bgra8Unorm,
@@ -802,6 +1128,7 @@ fn instance_pipeline(
     layout: &wgpu::PipelineLayout,
     shader: &ShaderModule,
     format: TextureFormat,
+    blend: BlendState,
 ) -> RenderPipeline {
     device.create_render_pipeline(&RenderPipelineDescriptor {
         label: Some(label),
@@ -821,7 +1148,7 @@ fn instance_pipeline(
             compilation_options: Default::default(),
             targets: &[Some(ColorTargetState {
                 format,
-                blend: Some(PREMULTIPLIED),
+                blend: Some(blend),
                 write_mask: ColorWrites::ALL,
             })],
         }),

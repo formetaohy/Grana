@@ -240,6 +240,8 @@ pub struct Theme {
     pub typography: Typography,
     pub metrics: Metrics,
     pub dark: bool,
+    pub light_angle: f32,
+    pub glass_on_glass: bool,
 }
 
 impl Theme {
@@ -249,6 +251,8 @@ impl Theme {
             typography: Typography::standard(),
             metrics: Metrics::standard(),
             dark: true,
+            light_angle: 0.0,
+            glass_on_glass: true,
         }
     }
 
@@ -258,6 +262,8 @@ impl Theme {
             typography: Typography::standard(),
             metrics: Metrics::standard(),
             dark: false,
+            light_angle: 0.0,
+            glass_on_glass: true,
         }
     }
 

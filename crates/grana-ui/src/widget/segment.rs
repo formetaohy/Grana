@@ -2,6 +2,7 @@ use glam::Vec2;
 
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
+use crate::glass::GlassStyle;
 use crate::motion::Motion;
 use crate::style::Shadow;
 use crate::text::{Align, TextStyle};
@@ -192,38 +193,41 @@ pub fn tab_bar(
         Vec2::new(width, height - 6.0),
     );
     let pointer = ui.input().position();
-    {
-        let mut painter = ui.painter();
-        painter.gradient(
-            pill,
-            Corners::capsule(),
-            palette.material_hover,
-            palette.material_fill,
-        );
-    }
+    let mut hovered = Vec::with_capacity(cells.len());
     for (index, cell) in cells.iter().enumerate() {
-        let active = index == target;
-        let hover = ui.animate(
+        hovered.push(ui.animate(
             key ^ (index as u64 + 3).wrapping_mul(0x9e37_79b9_7f4a_7c15),
-            if cell.contains(pointer) && !active {
+            if cell.contains(pointer) && index != target {
                 1.0
             } else {
                 0.0
             },
             Motion::quick(),
-        );
+        ));
+    }
+    {
         let mut painter = ui.painter();
-        if hover > 0.01 {
-            painter.rect(
-                cell.shrink2(Vec2::new(2.0, 0.0)),
-                Corners::capsule(),
-                palette.material_hover.amplify(0.4 * hover),
-            );
+        for (index, cell) in cells.iter().enumerate() {
+            let hover = hovered[index];
+            if hover > 0.01 {
+                painter.rect(
+                    cell.shrink2(Vec2::new(2.0, 0.0)),
+                    Corners::capsule(),
+                    palette.material_hover.amplify(0.4 * hover),
+                );
+            }
         }
+    }
+    ui.glass(key ^ 0x71, pill, GlassStyle::tab_lens().interactive());
+    let mut painter = ui.labels_painter();
+    for (index, cell) in cells.iter().enumerate() {
+        let active = index == target;
         let color = if active {
             palette.text_primary
         } else {
-            palette.text_secondary.lerp(palette.text_primary, hover)
+            palette
+                .text_secondary
+                .lerp(palette.text_primary, hovered[index])
         };
         painter.text_in(
             *cell,

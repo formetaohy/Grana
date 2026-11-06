@@ -98,25 +98,49 @@ impl Clip {
     }
 }
 
+#[derive(Clone, Default)]
+pub(crate) struct LayerInstances {
+    pub material: Vec<Instance>,
+    pub ink: Vec<Instance>,
+}
+
+impl LayerInstances {
+    pub fn clear(&mut self) {
+        self.material.clear();
+        self.ink.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.material.len() + self.ink.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.material.is_empty() && self.ink.is_empty()
+    }
+}
+
 pub struct Painter<'a> {
-    instances: &'a mut Vec<Instance>,
+    instances: &'a mut LayerInstances,
     text: &'a mut Text,
     clip: Clip,
     gamma: f32,
+    vibrancy: bool,
 }
 
 impl<'a> Painter<'a> {
-    pub fn new(
-        instances: &'a mut Vec<Instance>,
+    pub(crate) fn new(
+        instances: &'a mut LayerInstances,
         text: &'a mut Text,
         clip: Clip,
         dark: bool,
+        vibrancy: bool,
     ) -> Self {
         Self {
             instances,
             text,
             clip,
             gamma: if dark { 0.86 } else { 1.0 },
+            vibrancy,
         }
     }
 
@@ -134,7 +158,13 @@ impl<'a> Painter<'a> {
 
     fn push(&mut self, instance: Instance) {
         let clip = self.clip;
-        self.instances.push(clipped(instance, clip));
+        let ink = self.vibrancy && instance.meta[0] == KIND_GLYPH;
+        let target = if ink {
+            &mut self.instances.ink
+        } else {
+            &mut self.instances.material
+        };
+        target.push(clipped(instance, clip));
     }
 
     pub fn count(&self) -> usize {
@@ -291,16 +321,23 @@ impl<'a> Painter<'a> {
             text,
             clip,
             gamma,
+            vibrancy,
         } = self;
         let clip = *clip;
         let gamma = *gamma;
+        let vibrancy = *vibrancy;
         text.emit(layout, origin, color, |plot| {
             let mut instance = Instance::blank(KIND_GLYPH);
             instance.rect = [plot.left, plot.top, plot.width, plot.height];
             instance.color = plot.color.to_array();
             instance.uv = plot.slot.uv;
             instance.extra = [gamma, 0.0, 0.0, 0.0];
-            instances.push(clipped(instance, clip));
+            let target = if vibrancy {
+                &mut instances.ink
+            } else {
+                &mut instances.material
+            };
+            target.push(clipped(instance, clip));
         });
     }
 

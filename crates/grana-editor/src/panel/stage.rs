@@ -208,7 +208,7 @@ pub(super) fn toast(ui: &mut Ui, layout: &Layout, state: &State<'_>) {
         grana_session::Kind::Info => (Icon::Info, palette.text_secondary),
     };
     ui.glass(ui.id("toast.glass"), rect, GlassStyle::toast());
-    ui.popup_scope(rect, |ui| {
+    ui.hud_scope(rect, |ui| {
         let mut painter = ui.painter();
         icon::paint(
             mark,

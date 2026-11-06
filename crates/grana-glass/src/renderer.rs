@@ -11,6 +11,7 @@ pub struct Frame<'a> {
     pub size: (u32, u32),
     pub scale: f32,
     pub content_changed: bool,
+    pub copy: bool,
 }
 
 #[repr(C)]
@@ -765,7 +766,9 @@ impl Renderer {
         let copy = self.binds.blit.get(frame.content.clone(), |src| {
             blit_bind_group(device, pipelines, src)
         });
-        blit(pipelines, encoder, &copy, frame.target, None, size);
+        if frame.copy {
+            blit(pipelines, encoder, &copy, frame.target, None, size);
+        }
         if self.packed.layers.is_empty() {
             return;
         }
