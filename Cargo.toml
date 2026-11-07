@@ -61,6 +61,7 @@ grana-tiff = { version = "0.1.1", path = "crates/grana-tiff" }
 grana-czi = { version = "0.1.1", path = "crates/grana-czi" }
 grana-readout = { version = "0.1.1", path = "crates/grana-readout" }
 grana-image = { version = "0.1.1", path = "crates/grana-image" }
+grana-interop = { version = "0.1.1", path = "crates/grana-interop" }
 grana-measure = { version = "0.1.1", path = "crates/grana-measure" }
 grana-obj = { version = "0.1.1", path = "crates/grana-obj" }
 grana-optics = { version = "0.1.1", path = "crates/grana-optics" }

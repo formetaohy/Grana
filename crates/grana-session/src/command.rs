@@ -65,6 +65,9 @@ pub enum Command {
     ImportLabels {
         label: String,
     },
+    ImportTracks,
+    ExportTracks(ObjectSetId),
+    ExportGeff(ObjectSetId),
     RemoveObject(ObjectSetId),
     AddSeed {
         set: ObjectSetId,
@@ -509,7 +512,7 @@ impl Command {
     pub(crate) fn edit(&self) -> Option<Edit> {
         let edit = match self {
             Self::AddObject(_) => Edit::new(Action::AddObject),
-            Self::ImportLabels { .. } => Edit::new(Action::AddObject),
+            Self::ImportLabels { .. } | Self::ImportTracks => Edit::new(Action::AddObject),
             Self::RemoveObject(_) => Edit::new(Action::RemoveObject),
             Self::RenameObject { set, .. } => Edit::targeted(Action::RenameObject, set.raw()),
             Self::ReorderObject { .. } => Edit::new(Action::ReorderObject),

@@ -18,10 +18,12 @@ use crate::event::Event;
 
 mod frames;
 mod import;
+mod interop;
 
 use self::frames::Notice;
 use self::frames::frames as pipeline;
 pub use self::import::{ImportRequest, import};
+pub use self::interop::{InteropRequest, interop};
 
 const FRAME_WORKERS: usize = 4;
 

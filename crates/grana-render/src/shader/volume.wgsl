@@ -123,7 +123,7 @@ fn shade_channel(
     return mix(color, lit(color, normal, direction, lighting(uvw, normal)), weight);
 }
 
-fn cell_visible(index: u32, channels_active: u32) -> bool {
+fn brick_visible(index: u32, channels_active: u32) -> bool {
     for (var channel = 0u; channel < channels_active; channel += 1u) {
         if (channel_opacity(channel) <= 0.0) {
             continue;
@@ -137,20 +137,42 @@ fn cell_visible(index: u32, channels_active: u32) -> bool {
     return false;
 }
 
-fn cell_extinction(index: u32, channels_active: u32) -> f32 {
+fn cell_visible(slot: u32, cell: u32, channels_active: u32) -> bool {
+    let planes = (channels_active + PACK - 1u) / PACK;
+    for (var plane = 0u; plane < planes; plane += 1u) {
+        let maxima = cell_maxima(slot, cell, plane);
+        for (var component = 0u; component < PACK; component += 1u) {
+            let channel = plane * PACK + component;
+            if (channel >= channels_active) {
+                break;
+            }
+            if (channel_opacity(channel) <= 0.0) {
+                continue;
+            }
+            if (maxima[component] >= channel_threshold(channel)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn cell_extinction(slot: u32, cell: u32, channels_active: u32) -> f32 {
+    let planes = (channels_active + PACK - 1u) / PACK;
     var extinction = 0.0;
-    for (var channel = 0u; channel < channels_active; channel += 1u) {
-        let opacity = channel_opacity(channel);
-        if (opacity <= 0.0) {
-            continue;
+    for (var plane = 0u; plane < planes; plane += 1u) {
+        let maxima = cell_maxima(slot, cell, plane);
+        for (var component = 0u; component < PACK; component += 1u) {
+            let channel = plane * PACK + component;
+            if (channel >= channels_active) {
+                break;
+            }
+            let opacity = channel_opacity(channel);
+            if (opacity <= 0.0 || maxima[component] < channel_threshold(channel)) {
+                continue;
+            }
+            extinction = max(extinction, channel_tau(channel, maxima[component]).a * opacity);
         }
-        let plane = channel / PACK;
-        let component = channel - plane * PACK;
-        let maximum = bricks[index].maxima[plane][component];
-        if (maximum < channel_threshold(channel)) {
-            continue;
-        }
-        extinction = max(extinction, channel_tau(channel, maximum).a * opacity);
     }
     return extinction;
 }
@@ -178,105 +200,116 @@ fn march(begin: f32, finish: f32, direction: vec3<f32>) -> vec4<f32> {
     var cells = 0u;
     var complete = false;
     while (t < finish && samples < MAX_SAMPLES && cells < MAX_CELLS && !complete) {
-        cells += 1u;
         let uvw = ray_uvw(t, direction);
-        let cell = brick_cell(grid, dims, uvw);
-        let index = brick_index(grid, cell);
+        let brick = brick_cell(grid, dims, uvw);
+        let index = brick_index(grid, brick);
         let boundary = min(t + boundary_delta(uvw, direction_uvw, step * 0.25), finish);
         let record = bricks[index];
-        if (record.slot == 0u || record.flags == 0u || !cell_visible(index, channel_count)) {
+        if (record.slot == 0u || record.flags == 0u || !brick_visible(index, channel_count)) {
             t = boundary;
             continue;
         }
-        let extinction = cell_extinction(index, channel_count);
-        let stride = clamp(
-            SAMPLING_ERROR / max(extinction * voxels_per_world, 1.0e-9),
-            step,
-            step * STRIDE_LIMIT,
-        );
-        let origin = slot_origin(frame.atlas.xyz, record.slot - 1u);
+        let slot = record.slot - 1u;
+        let origin = slot_origin(frame.atlas.xyz, slot);
         var texel =
-            (origin + (clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0)) * dims - brick_origin(cell))
+            (origin + (clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0)) * dims - brick_origin(brick))
                 + vec3<f32>(1.0)) / atlas_extent;
         var cursor = t;
-        while (cursor < boundary && samples < MAX_SAMPLES) {
-            let next = min(cursor + stride, boundary);
-            let segment = next - cursor;
-            let position = ray_uvw(cursor, direction);
-            var optical_depth = 0.0;
-            var emission = vec3<f32>(0.0);
-            for (var pack = 0u; pack < pack_count; pack += 1u) {
-                if (!pack_active(pack, channel_count)) {
-                    continue;
-                }
-                let values = sample_atlas(pack, texel);
-                var tau = array<f32, PACK>(0.0, 0.0, 0.0, 0.0);
-                var color = array<vec3<f32>, PACK>(
-                    vec3<f32>(0.0),
-                    vec3<f32>(0.0),
-                    vec3<f32>(0.0),
-                    vec3<f32>(0.0),
-                );
-                var shaded = false;
-                for (var component = 0u; component < PACK; component += 1u) {
-                    let channel = pack * PACK + component;
-                    if (channel >= channel_count) {
-                        break;
-                    }
-                    if (channel_opacity(channel) <= 0.0
-                        || values[component] < channel_threshold(channel)) {
+        while (cursor < boundary && cells < MAX_CELLS && !complete) {
+            cells += 1u;
+            let local = ray_uvw(cursor, direction);
+            let subcell = cell_index(cell_coord(cell_voxel(local, brick)));
+            let limit = min(cursor + cell_delta(local, brick, direction_uvw, step * 0.25), boundary);
+            if (!cell_visible(slot, subcell, channel_count)) {
+                texel += texel_rate * (limit - cursor);
+                cursor = limit;
+                continue;
+            }
+            let extinction = cell_extinction(slot, subcell, channel_count);
+            let stride = clamp(
+                SAMPLING_ERROR / max(extinction * voxels_per_world, 1.0e-9),
+                step,
+                step * STRIDE_LIMIT,
+            );
+            while (cursor < limit && samples < MAX_SAMPLES) {
+                let next = min(cursor + stride, limit);
+                let segment = next - cursor;
+                let position = ray_uvw(cursor, direction);
+                var optical_depth = 0.0;
+                var emission = vec3<f32>(0.0);
+                for (var pack = 0u; pack < pack_count; pack += 1u) {
+                    if (!pack_active(pack, channel_count)) {
                         continue;
                     }
-                    let extinction = channel_tau(channel, values[component]);
-                    tau[component] = extinction.a;
-                    color[component] = extinction.rgb;
-                    shaded = shaded || extinction.a > SHADING_TAU;
-                }
-                if (shaded) {
-                    let gradient = pack_gradient(pack, position, gradient_step);
+                    let values = sample_atlas(pack, texel);
+                    var tau = array<f32, PACK>(0.0, 0.0, 0.0, 0.0);
+                    var color = array<vec3<f32>, PACK>(
+                        vec3<f32>(0.0),
+                        vec3<f32>(0.0),
+                        vec3<f32>(0.0),
+                        vec3<f32>(0.0),
+                    );
+                    var shaded = false;
                     for (var component = 0u; component < PACK; component += 1u) {
                         let channel = pack * PACK + component;
                         if (channel >= channel_count) {
                             break;
                         }
-                        if (tau[component] <= SHADING_TAU || channel_opacity(channel) <= 0.0) {
+                        if (channel_opacity(channel) <= 0.0
+                            || values[component] < channel_threshold(channel)) {
                             continue;
                         }
-                        color[component] = shade_channel(
-                            gradient[component],
-                            color[component],
-                            position,
-                            direction,
-                        );
+                        let extinction = channel_tau(channel, values[component]);
+                        tau[component] = extinction.a;
+                        color[component] = extinction.rgb;
+                        shaded = shaded || extinction.a > SHADING_TAU;
+                    }
+                    if (shaded) {
+                        let gradient = pack_gradient(pack, position, gradient_step);
+                        for (var component = 0u; component < PACK; component += 1u) {
+                            let channel = pack * PACK + component;
+                            if (channel >= channel_count) {
+                                break;
+                            }
+                            if (tau[component] <= SHADING_TAU || channel_opacity(channel) <= 0.0) {
+                                continue;
+                            }
+                            color[component] = shade_channel(
+                                gradient[component],
+                                color[component],
+                                position,
+                                direction,
+                            );
+                        }
+                    }
+                    for (var component = 0u; component < PACK; component += 1u) {
+                        let channel = pack * PACK + component;
+                        if (channel >= channel_count) {
+                            break;
+                        }
+                        let opacity = channel_opacity(channel);
+                        let weight_tau = tau[component];
+                        if (opacity <= 0.0 || weight_tau <= MINIMUM_TAU) {
+                            continue;
+                        }
+                        let weight = weight_tau * opacity * segment * voxels_per_world;
+                        optical_depth += weight;
+                        emission += weight * color[component];
                     }
                 }
-                for (var component = 0u; component < PACK; component += 1u) {
-                    let channel = pack * PACK + component;
-                    if (channel >= channel_count) {
-                        break;
-                    }
-                    let opacity = channel_opacity(channel);
-                    let weight_tau = tau[component];
-                    if (opacity <= 0.0 || weight_tau <= MINIMUM_TAU) {
-                        continue;
-                    }
-                    let weight = weight_tau * opacity * segment * voxels_per_world;
-                    optical_depth += weight;
-                    emission += weight * color[component];
+                if (optical_depth > 0.0) {
+                    let segment_transmittance = exp(-optical_depth);
+                    let average_color = emission / optical_depth;
+                    radiance += transmittance * (1.0 - segment_transmittance) * average_color;
+                    transmittance *= segment_transmittance;
                 }
-            }
-            if (optical_depth > 0.0) {
-                let segment_transmittance = exp(-optical_depth);
-                let average_color = emission / optical_depth;
-                radiance += transmittance * (1.0 - segment_transmittance) * average_color;
-                transmittance *= segment_transmittance;
-            }
-            texel += texel_rate * segment;
-            cursor = next;
-            samples += 1u;
-            if (transmittance < MINIMUM_TRANSMITTANCE) {
-                complete = true;
-                break;
+                texel += texel_rate * segment;
+                cursor = next;
+                samples += 1u;
+                if (transmittance < MINIMUM_TRANSMITTANCE) {
+                    complete = true;
+                    break;
+                }
             }
         }
         t = max(cursor, boundary);

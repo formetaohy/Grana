@@ -97,6 +97,32 @@ impl Objects {
         id
     }
 
+    pub fn import_tracks(&mut self, file: &str, channel: usize, dataset: &Dataset) -> ObjectSetId {
+        assert!(
+            !file.trim().is_empty(),
+            "an imported track set names its file"
+        );
+        assert!(
+            channel < dataset.channels().len(),
+            "every object set names an existing channel"
+        );
+        let id = ObjectSetId::new(self.next_id);
+        self.next_id += 1;
+        let base = format!("Tracks {}", stem(file));
+        let mut name = base.clone();
+        let mut ordinal = 2;
+        while self.occupied(&name, None) {
+            name = format!("{base} {ordinal}");
+            ordinal += 1;
+        }
+        let key = self.key_for(&name, None);
+        let color = PALETTE[(id.raw() as usize - 1) % PALETTE.len()];
+        let mut set = ObjectSet::new(id, key, ObjectKind::Spots, name, channel, color, dataset);
+        set.set_provenance(Provenance::interop(file));
+        self.sets.push(set);
+        id
+    }
+
     fn key_for(&self, name: &str, except: Option<ObjectSetId>) -> ObjectSetKey {
         let slug = slug(name).to_ascii_lowercase();
         let trimmed = slug.trim_matches(|character| character == '-' || character == '_');
@@ -323,6 +349,7 @@ impl Objects {
             Provenance::Merged { parts } => parts.clone(),
             Provenance::Detection
             | Provenance::Imported { .. }
+            | Provenance::Interop { .. }
             | Provenance::Filtered { .. }
             | Provenance::Copied { .. } => {
                 vec![self.sets[target_index].recipe()]
@@ -1047,4 +1074,16 @@ fn extent_of(values: Vec<f32>) -> Option<Extent> {
                 Some((minimum, maximum)) => (minimum.min(value), maximum.max(value)),
             })
         })
+}
+
+fn stem(file: &str) -> String {
+    let name = file
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(file);
+    name.rsplit_once('.')
+        .map_or(name, |(stem, _)| stem)
+        .trim()
+        .to_string()
 }

@@ -423,13 +423,26 @@ impl Run<'_, '_> {
 
     fn import(&mut self, id: ObjectSetId) -> Result<(), String> {
         let task = self.task;
-        let label = self
+        let provenance = self
             .scene
             .objects
             .get(id)
-            .and_then(|set| set.provenance().label())
-            .map(str::to_string)
-            .ok_or_else(|| "the object set names no label image".to_string())?;
+            .map(|set| set.provenance().clone())
+            .ok_or_else(|| "the object set left the scene".to_string())?;
+        let label = match provenance {
+            grana_scene::Provenance::Imported { label } => label,
+            grana_scene::Provenance::Interop { .. } => {
+                return Err(
+                    "imported tracks belong to a single dataset and cannot be batched".to_string(),
+                );
+            }
+            grana_scene::Provenance::Detection
+            | grana_scene::Provenance::Filtered { .. }
+            | grana_scene::Provenance::Copied { .. }
+            | grana_scene::Provenance::Merged { .. } => {
+                return Err("the object set names no label image".to_string());
+            }
+        };
         let name = self.name(id);
         let _ = task.events.send(Event::Step {
             index: task.index,

@@ -261,6 +261,7 @@ fn source(
         Provenance::Imported { label } => Ok(SourceSpec::Labels {
             label: label.clone(),
         }),
+        Provenance::Interop { file } => Ok(SourceSpec::Tracks { file: file.clone() }),
         Provenance::Filtered { source, criteria } => {
             let reference = scene.objects.get(*source).ok_or_else(|| {
                 ProtocolError::Invalid(format!(
@@ -318,6 +319,7 @@ fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSp
         Provenance::Imported { label } => SourceSpec::Labels {
             label: label.clone(),
         },
+        Provenance::Interop { file } => SourceSpec::Tracks { file: file.clone() },
         Provenance::Filtered { source, criteria } => {
             let reference = scene.objects.get(*source).ok_or_else(|| {
                 ProtocolError::Invalid(format!(
@@ -457,7 +459,10 @@ fn collect_dependencies(source: &SourceSpec, derived: &[DerivedSpec], names: &mu
                 collect_dependencies(&part.source, derived, names);
             }
         }
-        SourceSpec::Spots { .. } | SourceSpec::Filaments { .. } | SourceSpec::Labels { .. } => {}
+        SourceSpec::Spots { .. }
+        | SourceSpec::Filaments { .. }
+        | SourceSpec::Labels { .. }
+        | SourceSpec::Tracks { .. } => {}
     }
 }
 

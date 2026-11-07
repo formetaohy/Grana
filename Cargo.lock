@@ -1086,6 +1086,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-interop"
+version = "0.1.1"
+dependencies = [
+ "grana-object",
+ "quick-xml",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zarrs",
+]
+
+[[package]]
 name = "grana-measure"
 version = "0.1.1"
 dependencies = [
@@ -1127,6 +1138,7 @@ dependencies = [
  "grana-display",
  "grana-geometry",
  "grana-image",
+ "grana-interop",
  "grana-measure",
  "grana-object",
  "grana-optics",
@@ -1251,6 +1263,7 @@ dependencies = [
  "grana-display",
  "grana-geometry",
  "grana-image",
+ "grana-interop",
  "grana-measure",
  "grana-obj",
  "grana-object",
@@ -1264,6 +1277,7 @@ dependencies = [
  "grana-zarr",
  "rfd",
  "serde_json",
+ "zarrs",
 ]
 
 [[package]]

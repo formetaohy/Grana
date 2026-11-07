@@ -55,6 +55,7 @@ impl Session {
             } => self.set_restore_channel(channel, params, iterations),
             Command::RemoveDerivedChannel { channel } => self.remove_derived_channel(channel),
             Command::ImportLabels { label } => self.import_labels(&label),
+            Command::ImportTracks => self.choose_import_tracks(),
             Command::RenameObject { set, name } => {
                 let renamed = self
                     .scene
@@ -519,6 +520,8 @@ impl Session {
             Command::ExportMeasure => self.export_measure(),
             Command::ExportMesh(set) => self.export_mesh(set),
             Command::ExportLabels(set) => self.export_labels(set),
+            Command::ExportTracks(set) => self.choose_export_tracks(set),
+            Command::ExportGeff(set) => self.choose_export_geff(set),
             Command::CaptureProtocol => self.capture_protocol(),
             Command::ApplyProtocol => self.apply_protocol(),
             Command::LoadProtocol => self.load_protocol(),

@@ -480,6 +480,65 @@ fn marches_bricks_shorter_than_their_side() {
     );
 }
 
+#[test]
+fn marches_a_bead_inside_a_sparse_brick() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let volume = bead_volume(Extent::new(128, 128, 64), Spacing::new(0.1, 0.1, 0.2));
+    let pixels = scene_render(
+        &device,
+        &queue,
+        Job {
+            texture: &texture,
+            volume: &volume,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            focus_z: 0.0,
+            mesh: None,
+        },
+    );
+    assert!(
+        lit(&pixels) > 40,
+        "a bead inside one brick still renders: {} lit pixels",
+        lit(&pixels)
+    );
+    let brightest = pixels
+        .iter()
+        .map(|pixel| pixel.map(u32::from))
+        .map(|[red, green, blue, _]| red + green + blue)
+        .max()
+        .expect("the pane holds pixels");
+    assert!(
+        brightest > 400,
+        "the bead survives empty cell skipping: {brightest}"
+    );
+}
+
+fn bead_volume(extent: Extent, spacing: Spacing) -> Volume {
+    let mut data = vec![0u16; extent.voxel_count() as usize];
+    let centre = [80.5, 48.5, 48.5];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let radius = (0..3)
+                    .map(|axis| ([x as f32, y as f32, z as f32][axis] - centre[axis]).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+                if radius <= 6.0 {
+                    data[extent.index(x, y, z) as usize] = 60000;
+                }
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        spacing,
+        vec![Channel::new("bead", [1.0, 1.0, 1.0], VoxelData::U16(data))],
+    )
+}
+
 fn slab_volume(ribbon: std::ops::Range<u32>) -> Volume {
     let extent = Extent::new(64, 64, 48);
     let mut voxels = vec![0u16; extent.voxel_count() as usize];

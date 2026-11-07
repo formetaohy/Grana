@@ -14,6 +14,9 @@ pub struct BrickRequest {
 pub const BRICK_SIDE: u32 = 32;
 pub const BRICK_APRON: u32 = 1;
 pub const PADDED_SIDE: u32 = BRICK_SIDE + 2 * BRICK_APRON;
+pub const CELL_SIDE: u32 = 8;
+pub const CELL_COUNT: usize = (BRICK_SIDE / CELL_SIDE).pow(3) as usize;
+pub const CELL_AXIS: usize = BRICK_SIDE as usize / CELL_SIDE as usize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BrickCoord {

@@ -8,7 +8,9 @@ use grana_scene::{Job, ObjectFrame};
 
 use crate::task::{Poll, Task};
 use grana_pipeline::Event;
-use grana_pipeline::run::{self, ColocRequest, DetectRequest, DriftRequest, ImportRequest};
+use grana_pipeline::run::{
+    self, ColocRequest, DetectRequest, DriftRequest, ImportRequest, InteropRequest,
+};
 
 pub struct Analysis {
     job: Job,
@@ -34,6 +36,12 @@ pub fn detect(job: Job, channels: Arc<Channels>, request: DetectRequest) -> Anal
 pub fn import(job: Job, channels: Arc<Channels>, request: ImportRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
         run::import(&channels, request, cancel, sink)
+    })
+}
+
+pub fn interop(job: Job, channels: Arc<Channels>, request: InteropRequest) -> Analysis {
+    analyse(job, move |cancel, sink| {
+        run::interop(&channels, request, cancel, sink)
     })
 }
 

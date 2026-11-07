@@ -149,27 +149,43 @@ pub struct TrackSet {
 
 impl TrackSet {
     pub fn new(frame_interval: f32, tracks: Vec<Track>) -> Self {
-        assert!(
-            frame_interval.is_finite() && frame_interval > 0.0,
-            "the frame interval is a positive duration"
-        );
+        match Self::try_new(frame_interval, tracks) {
+            Ok(set) => set,
+            Err(detail) => panic!("{detail}"),
+        }
+    }
+
+    pub fn try_new(frame_interval: f32, tracks: Vec<Track>) -> Result<Self, String> {
+        if !(frame_interval.is_finite() && frame_interval > 0.0) {
+            return Err("the frame interval is a positive duration".to_string());
+        }
         let mut children = vec![0usize; tracks.len()];
         for (index, track) in tracks.iter().enumerate() {
+            if track.nodes().is_empty() {
+                return Err("a track holds at least one node".to_string());
+            }
+            if track
+                .nodes()
+                .windows(2)
+                .any(|pair| pair[1].time() <= pair[0].time())
+            {
+                return Err("track nodes follow the time axis".to_string());
+            }
             if let Some(parent) = track.parent() {
                 let parent = parent as usize;
-                assert!(parent < index, "a track follows its parent");
-                assert!(
-                    tracks[parent].end() < track.start(),
-                    "a child track starts after its parent ends"
-                );
+                if parent >= index {
+                    return Err("a track follows its parent".to_string());
+                }
+                if tracks[parent].end() >= track.start() {
+                    return Err("a child track starts after its parent ends".to_string());
+                }
                 children[parent] += 1;
             }
         }
         for count in &children {
-            assert!(
-                *count == 0 || *count == 2,
-                "a division produces exactly two daughter tracks"
-            );
+            if !(*count == 0 || *count == 2) {
+                return Err("a division produces exactly two daughter tracks".to_string());
+            }
         }
         let divisions = children.iter().filter(|count| **count == 2).count();
         let mut links = Vec::new();
@@ -179,18 +195,18 @@ impl TrackSet {
             }
         }
         links.sort_unstable();
-        assert!(
-            links
-                .windows(2)
-                .all(|pair| (pair[0].0, pair[0].1) != (pair[1].0, pair[1].1)),
-            "every detection belongs to one track"
-        );
-        Self {
+        if links
+            .windows(2)
+            .any(|pair| (pair[0].0, pair[0].1) == (pair[1].0, pair[1].1))
+        {
+            return Err("every detection belongs to one track".to_string());
+        }
+        Ok(Self {
             frame_interval,
             tracks,
             links,
             divisions,
-        }
+        })
     }
 
     pub fn frame_interval(&self) -> f32 {

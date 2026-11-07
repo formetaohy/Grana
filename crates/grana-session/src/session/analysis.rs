@@ -76,7 +76,9 @@ impl Session {
                     }
                 }
                 Update::Tracks(tracks) => {
-                    if let (Job::Track(set), Some(scene)) = (job, self.scene.as_mut()) {
+                    if let (Job::Track(set) | Job::Import(set), Some(scene)) =
+                        (job, self.scene.as_mut())
+                    {
                         scene.install_tracks(set, tracks);
                     }
                 }
@@ -182,7 +184,14 @@ impl Session {
                     scene.apply_curation(set);
                 }
             }
-            self.start_tracks(set);
+            let imported_tracks = self
+                .scene
+                .as_ref()
+                .and_then(|scene| scene.objects.get(set))
+                .is_some_and(|object| object.provenance().is_interop());
+            if !imported_tracks {
+                self.start_tracks(set);
+            }
             self.resume_relations(set);
             if self.recipe.is_none() {
                 self.refresh_dependents(set);

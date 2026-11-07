@@ -45,6 +45,7 @@ impl Renderer {
             present,
             scene: scene_table,
             atlas,
+            summary,
             bricks,
             planner,
             census,
@@ -74,13 +75,22 @@ impl Renderer {
             dropped,
             ..
         } = self;
-        let (Some(pyramid), Some(atlas), Some(scene_table), Some(planner), Some(census)) = (
+        let (
+            Some(pyramid),
+            Some(atlas),
+            Some(scene_table),
+            Some(planner),
+            Some(census),
+            Some(summary),
+        ) = (
             pyramid.as_ref(),
             atlas.as_mut(),
             scene_table.as_mut(),
             planner.as_mut(),
             census.as_ref(),
-        ) else {
+            summary.as_ref(),
+        )
+        else {
             clear(&mut encoder, surface);
             queue.submit([encoder.finish()]);
             return *info;
@@ -150,6 +160,7 @@ impl Renderer {
             pyramid.level(section_level),
             section_level,
             slot_grid,
+            summary,
         );
         ensure_brick(
             device,
@@ -158,6 +169,7 @@ impl Renderer {
             pyramid.level(volume_level),
             volume_level,
             slot_grid,
+            summary,
         );
         if bricks[section_level]
             .as_ref()
@@ -250,6 +262,7 @@ impl Renderer {
         let signature = Signature {
             scene,
             data: &frame_data,
+            section: &section_data,
             levels,
             time,
             exposure,
@@ -266,7 +279,7 @@ impl Renderer {
         }
         let reset = target.samples == 0;
         info.samples = target.samples;
-        if target.samples < samples {
+        if reset {
             meshes.set(device, queue, layouts, scene);
             slice.prepare(
                 device,
@@ -279,6 +292,13 @@ impl Renderer {
                     camera,
                 },
             );
+            markers.prepare(device, queue, layouts, scene.markers);
+            meshes.cull_volume(&mut encoder, scene_table.group());
+            markers.cull_volume(&mut encoder, scene_table.group());
+            markers.cull_section(&mut encoder, scene_table.group());
+            if scene.shading.shadows > 0.0 {
+                meshes.cull_shadow(&mut encoder, scene_table.group());
+            }
         }
         let sample_index = target.samples.min(samples - 1);
         let offset = sample::offset(sample_index, [volume_width, volume_height]);
@@ -338,11 +358,7 @@ impl Renderer {
             target.samples += 1;
             info.samples = target.samples;
             meshes.write_uniforms(queue, &frame_data, scene.shading);
-            markers.prepare(device, queue, layouts, scene.markers);
             let styles = scene_styles(scene);
-            if scene.shading.shadows > 0.0 {
-                meshes.cull_shadow(&mut encoder, scene_group);
-            }
             if let Some(shadow) = shadow.as_mut() {
                 let groups = ShadowGroups {
                     scene: scene_group,
@@ -368,9 +384,6 @@ impl Renderer {
                     );
                 }
             }
-            meshes.cull_volume(&mut encoder, scene_group);
-            markers.cull_volume(&mut encoder, scene_group);
-            markers.cull_section(&mut encoder, scene_group);
             crate::target::clear(&mut encoder, target.scene.color(), target.scene.depth());
             let shadow_group = shadow
                 .as_ref()

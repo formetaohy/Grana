@@ -478,6 +478,10 @@ impl Encode for Provenance {
                 writer.u8(4);
                 writer.string(label);
             }
+            Self::Interop { file } => {
+                writer.u8(5);
+                writer.string(file);
+            }
         }
     }
 }

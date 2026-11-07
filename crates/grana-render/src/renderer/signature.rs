@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct Signature<'a, 'b> {
     pub(super) scene: &'a SceneFrame<'b>,
     pub(super) data: &'a FrameData,
+    pub(super) section: &'a SectionData,
     pub(super) levels: Levels,
     pub(super) time: u32,
     pub(super) exposure: f32,
@@ -18,6 +19,7 @@ impl Signature<'_, '_> {
         let Self {
             scene,
             data,
+            section,
             levels,
             time,
             exposure,
@@ -29,6 +31,9 @@ impl Signature<'_, '_> {
         } = self;
         let mut hasher = DefaultHasher::new();
         bytemuck::bytes_of(data).hash(&mut hasher);
+        let mut section = *section;
+        section.jitter = [0.0; 4];
+        bytemuck::bytes_of(&section).hash(&mut hasher);
         exposure.to_bits().hash(&mut hasher);
         time.hash(&mut hasher);
         epoch.hash(&mut hasher);

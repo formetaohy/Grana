@@ -7,6 +7,7 @@ use wgpu::{
 };
 
 use crate::atlas::Atlas;
+use crate::summary::Summary;
 use grana_volume::CHANNEL_LIMIT;
 
 const MAXIMA_PLANE: usize = CHANNEL_LIMIT / 4;
@@ -72,6 +73,7 @@ impl BrickTable {
         level: usize,
         source: Level,
         atlas: [u32; 3],
+        summary: &Summary,
     ) -> Self {
         let grid = BrickGrid::new(source.extent());
         let records = vec![BrickRecord::MISSING; grid.count()];
@@ -83,10 +85,16 @@ impl BrickTable {
         let group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.level.group"),
             layout,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: summary.buffer().as_entire_binding(),
+                },
+            ],
         });
         let world = Vec3::from(source.world_extent());
         let extent = source.extent();

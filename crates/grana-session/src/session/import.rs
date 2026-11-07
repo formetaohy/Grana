@@ -1,6 +1,7 @@
 use super::*;
 
-use grana_pipeline::run::ImportRequest;
+use grana_pipeline::run::{ImportRequest, InteropRequest};
+use grana_scene::Provenance;
 
 impl Session {
     pub(super) fn import_labels(&mut self, label: &str) {
@@ -41,19 +42,34 @@ impl Session {
         let Some(object) = scene.objects.get(set) else {
             return;
         };
-        let Some(label) = object.provenance().label().map(str::to_string) else {
-            self.message = Some(Message::error(
-                "only an imported object set reads a label image",
-            ));
-            return;
-        };
+        let provenance = object.provenance().clone();
         let drift = scene.drift().clone();
         self.message = None;
-        self.record_progress(Job::Import(set), 0, 0, 0);
-        self.analysis.push(crate::import(
-            Job::Import(set),
-            channels,
-            ImportRequest::new(&label, drift),
-        ));
+        match provenance {
+            Provenance::Imported { label } => {
+                self.record_progress(Job::Import(set), 0, 0, 0);
+                self.analysis.push(crate::import(
+                    Job::Import(set),
+                    channels,
+                    ImportRequest::new(&label, drift),
+                ));
+            }
+            Provenance::Interop { file } => {
+                self.record_progress(Job::Import(set), 0, 0, 0);
+                self.analysis.push(crate::interop(
+                    Job::Import(set),
+                    channels,
+                    InteropRequest::new(&file, drift),
+                ));
+            }
+            Provenance::Detection
+            | Provenance::Filtered { .. }
+            | Provenance::Copied { .. }
+            | Provenance::Merged { .. } => {
+                self.message = Some(Message::error(
+                    "only an imported object set reads a label image or a track file",
+                ));
+            }
+        }
     }
 }

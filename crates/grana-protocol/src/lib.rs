@@ -176,6 +176,9 @@ impl Protocol {
                     (SourceSpec::Labels { label }, _) => {
                         format!("{} from the label image {label}", set.name)
                     }
+                    (SourceSpec::Tracks { file }, _) => {
+                        format!("{} from the track file {file}", set.name)
+                    }
                     (_, Some(channel)) => format!("{} on {channel}", set.name),
                     (_, None) => format!("{} on an unknown channel", set.name),
                 };
@@ -203,7 +206,8 @@ impl Protocol {
                     SourceSpec::Spots { .. }
                     | SourceSpec::Surfaces { .. }
                     | SourceSpec::Filaments { .. }
-                    | SourceSpec::Labels { .. } => {}
+                    | SourceSpec::Labels { .. }
+                    | SourceSpec::Tracks { .. } => {}
                 }
                 if let Some(measure) = &set.measure {
                     let group = measure.group();

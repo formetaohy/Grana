@@ -821,6 +821,13 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
             }
             Ok(Provenance::Imported { label })
         }
+        5 => {
+            let file = reader.string()?;
+            if file.trim().is_empty() {
+                return Err(FAULT_VALUE);
+            }
+            Ok(Provenance::Interop { file })
+        }
         _ => Err(FAULT_TAG),
     }
 }

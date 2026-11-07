@@ -1,8 +1,63 @@
 @group(1) @binding(0) var<storage, read> bricks: array<BrickRecord>;
+@group(1) @binding(1) var<storage, read> summaries: array<vec2<u32>>;
 @group(2) @binding(0) var atlases: binding_array<texture_3d<f32>, 4>;
 @group(2) @binding(1) var atlas_sampler: sampler;
 
 const GRADIENT_EPSILON: f32 = 1.0e-8;
+const CELL_SIDE: f32 = 8.0;
+const CELL_AXIS: f32 = 4.0;
+const CELLS: u32 = 64u;
+const PLANES: u32 = 4u;
+const UNIT: f32 = 65535.0;
+
+fn cell_maxima(slot: u32, cell: u32, plane: u32) -> vec4<f32> {
+    let word = summaries[slot * (CELLS * PLANES) + cell * PLANES + plane];
+    return vec4<f32>(
+        f32(word.x & 0xffffu) / UNIT,
+        f32(word.x >> 16u) / UNIT,
+        f32(word.y & 0xffffu) / UNIT,
+        f32(word.y >> 16u) / UNIT,
+    );
+}
+
+fn cell_voxel(uvw: vec3<f32>, brick: vec3<u32>) -> vec3<f32> {
+    return clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0)) * frame.dims.xyz - brick_origin(brick);
+}
+
+fn cell_coord(local: vec3<f32>) -> vec3<u32> {
+    return vec3<u32>(
+        clamp(floor(local / CELL_SIDE), vec3<f32>(0.0), vec3<f32>(CELL_AXIS - 1.0)),
+    );
+}
+
+fn cell_index(cell: vec3<u32>) -> u32 {
+    return cell.x + u32(CELL_AXIS) * (cell.y + u32(CELL_AXIS) * cell.z);
+}
+
+fn cell_edge(uvw: vec3<f32>, brick: vec3<u32>, direction: vec3<f32>) -> vec3<f32> {
+    let dims = frame.dims.xyz;
+    let origin = brick_origin(brick);
+    let base = floor(cell_voxel(uvw, brick) / CELL_SIDE) * CELL_SIDE;
+    var edge = vec3<f32>(0.0);
+    for (var axis = 0u; axis < 3u; axis += 1u) {
+        let limit = clamp(dims[axis] - origin[axis] - base[axis], 0.0, CELL_SIDE);
+        let far = select(base[axis] + limit, base[axis], direction[axis] < 0.0);
+        edge[axis] = (origin[axis] + far) / dims[axis];
+    }
+    return edge;
+}
+
+fn cell_delta(uvw: vec3<f32>, brick: vec3<u32>, direction: vec3<f32>, minimum: f32) -> f32 {
+    let edge = cell_edge(uvw, brick, direction);
+    var delta = 1.0e20;
+    for (var axis = 0u; axis < 3u; axis += 1u) {
+        let step = direction[axis];
+        if (abs(step) > 1.0e-9) {
+            delta = min(delta, (edge[axis] - uvw[axis]) / step);
+        }
+    }
+    return max(delta, minimum);
+}
 
 fn unproject(ndc: vec3<f32>) -> vec3<f32> {
     let homogeneous = frame.inv_view_projection * vec4<f32>(ndc, 1.0);

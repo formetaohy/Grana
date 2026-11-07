@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use crate::brick::{BRICK_APRON, BRICK_SIDE, CELL_AXIS, CELL_COUNT, CELL_SIDE, PADDED_SIDE};
 use crate::{Extent, Intensity};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -61,6 +62,29 @@ impl VoxelData {
             }
         });
         max
+    }
+
+    pub fn cell_unit_maxima(&self, intensity: Intensity) -> Vec<f32> {
+        let side = PADDED_SIDE as usize;
+        let mut maxima = vec![0.0f32; CELL_COUNT];
+        self.for_each_indexed_value(|index, value| {
+            let voxel = [index % side, (index / side) % side, index / (side * side)];
+            let mut cell = 0usize;
+            let mut stride = 1usize;
+            for coordinate in voxel {
+                let inner = coordinate as u32;
+                if !(BRICK_APRON..BRICK_APRON + BRICK_SIDE).contains(&inner) {
+                    return;
+                }
+                cell += ((inner - BRICK_APRON) / CELL_SIDE) as usize * stride;
+                stride *= CELL_AXIS;
+            }
+            let unit = intensity.unit(value);
+            if unit > maxima[cell] {
+                maxima[cell] = unit;
+            }
+        });
+        maxima
     }
 
     pub fn write_units_strided(
@@ -146,10 +170,23 @@ impl VoxelData {
     }
 
     fn for_each_value(&self, mut visit: impl FnMut(f32)) {
+        self.for_each_indexed_value(|_, value| visit(value));
+    }
+
+    fn for_each_indexed_value(&self, mut visit: impl FnMut(usize, f32)) {
         match self {
-            Self::U8(data) => data.iter().for_each(|&value| visit(f32::from(value))),
-            Self::U16(data) => data.iter().for_each(|&value| visit(f32::from(value))),
-            Self::F32(data) => data.iter().for_each(|&value| visit(value)),
+            Self::U8(data) => data
+                .iter()
+                .enumerate()
+                .for_each(|(index, &value)| visit(index, f32::from(value))),
+            Self::U16(data) => data
+                .iter()
+                .enumerate()
+                .for_each(|(index, &value)| visit(index, f32::from(value))),
+            Self::F32(data) => data
+                .iter()
+                .enumerate()
+                .for_each(|(index, &value)| visit(index, value)),
         }
     }
 }

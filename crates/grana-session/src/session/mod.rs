@@ -5,6 +5,7 @@ mod edit;
 mod execute;
 mod export;
 mod import;
+mod interop;
 mod label;
 mod mask;
 mod open;

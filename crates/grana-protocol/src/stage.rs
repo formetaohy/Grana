@@ -170,6 +170,13 @@ impl Protocol {
                     ));
                 }
             }
+            SourceSpec::Tracks { file } => {
+                if file.trim().is_empty() {
+                    return Err(ProtocolError::Invalid(
+                        "a track import names a track file".to_string(),
+                    ));
+                }
+            }
             SourceSpec::Merged { parts } => {
                 for part in parts {
                     self.validate_source(&part.source, names, frames)?;
@@ -425,6 +432,7 @@ impl Builder<'_> {
             | SourceSpec::Surfaces { .. }
             | SourceSpec::Filaments { .. } => self.detect(source, name, named, track, mask),
             SourceSpec::Labels { label } => self.import(label, name, named, track),
+            SourceSpec::Tracks { file } => self.tracks(file, name, named, track),
             SourceSpec::Filtered {
                 source: reference,
                 group,
@@ -539,6 +547,20 @@ impl Builder<'_> {
         track: Option<crate::TrackSpec>,
     ) -> Result<ObjectSetId, ProtocolError> {
         let id = self.scene.import_object(label);
+        self.rename(id, name, named)?;
+        self.apply_track(id, track);
+        self.steps.push(Step::Import { set: id });
+        Ok(id)
+    }
+
+    fn tracks(
+        &mut self,
+        file: &str,
+        name: &str,
+        named: bool,
+        track: Option<crate::TrackSpec>,
+    ) -> Result<ObjectSetId, ProtocolError> {
+        let id = self.scene.import_tracks(file);
         self.rename(id, name, named)?;
         self.apply_track(id, track);
         self.steps.push(Step::Import { set: id });

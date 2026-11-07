@@ -2,6 +2,7 @@ mod feedback;
 mod render;
 mod residency;
 mod signature;
+
 use residency::{FrameTarget, Levels, Regions, Residency};
 use signature::Signature;
 use std::collections::hash_map::DefaultHasher;
@@ -42,6 +43,7 @@ use crate::schema::SceneFrame;
 use crate::section::SectionPass;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
 use crate::slice::SlicePass;
+use crate::summary::Summary;
 use crate::target::{self, SceneTarget};
 use crate::volume::VolumePass;
 use grana_display::{Camera, SectionCamera};
@@ -130,6 +132,7 @@ pub struct Renderer {
     target: Option<FrameTarget>,
     scene: Option<crate::table::SceneTable>,
     atlas: Option<Atlas>,
+    summary: Option<Summary>,
     bricks: Vec<Option<BrickTable>>,
     planner: Option<Planner>,
     census: Option<Census>,
@@ -190,6 +193,7 @@ impl Renderer {
             target: None,
             scene: None,
             atlas: None,
+            summary: None,
             bricks: Vec::new(),
             planner: None,
             census: None,
@@ -270,6 +274,7 @@ impl Renderer {
             device.limits().max_texture_dimension_3d,
         );
         let slots = atlas.slots();
+        self.summary = Some(Summary::new(device, slots));
         self.view_words = planner::plan_words(slots);
         self.view_bytes = (self.view_words * size_of::<u32>()) as u64;
         self.feedback = Some(Readback::new(
@@ -325,6 +330,7 @@ impl Renderer {
             layouts,
             bricks,
             atlas,
+            summary,
             pyramid,
             channels,
             time: now,
@@ -332,7 +338,9 @@ impl Renderer {
             pin,
             ..
         } = self;
-        let (Some(pyramid), Some(atlas)) = (pyramid.as_ref(), atlas.as_mut()) else {
+        let (Some(pyramid), Some(atlas), Some(summary)) =
+            (pyramid.as_ref(), atlas.as_mut(), summary.as_ref())
+        else {
             return false;
         };
         let BrickRequest { time, level, coord } = request;
@@ -355,9 +363,11 @@ impl Renderer {
             return true;
         }
         let mut maxima = [[0.0f32; 4]; CHANNEL_LIMIT / 4];
+        let mut cells = Vec::with_capacity(*channels);
         for channel in 0..*channels {
             let intensity = pyramid.channels()[channel].intensity();
             maxima[channel / 4][channel % 4] = data.channels()[channel].unit_max(intensity);
+            cells.push(data.channels()[channel].cell_unit_maxima(intensity));
         }
         if maxima.iter().flatten().all(|maximum| *maximum <= 0.0) {
             atlas.assign_hollow(time, level, index);
@@ -377,6 +387,7 @@ impl Renderer {
             pyramid.level(level),
             level,
             slot_grid,
+            summary,
         );
         let Some((slot, evicted)) = atlas.allocate(*pin, *now, time) else {
             return false;
@@ -400,6 +411,7 @@ impl Renderer {
             }
             atlas.write(queue, pack, slot, &units);
         }
+        summary.write(queue, slot, &cells);
         atlas.assign(
             slot,
             ResidentBrick {
@@ -565,9 +577,12 @@ pub(super) fn ensure_brick(
     source: Level,
     level: usize,
     atlas: [u32; 3],
+    summary: &Summary,
 ) {
     if bricks[level].is_none() {
-        bricks[level] = Some(BrickTable::new(device, layout, level, source, atlas));
+        bricks[level] = Some(BrickTable::new(
+            device, layout, level, source, atlas, summary,
+        ));
     }
 }
 

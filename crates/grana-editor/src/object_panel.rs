@@ -148,6 +148,20 @@ fn add_menu<'a>(
             ));
         }
     }
+    rows.push(view::menu_separator(ctx));
+    rows.push(view::caption(ctx, "Import Tracks"));
+    let message = if loading {
+        Message::Noop
+    } else {
+        Message::Command(Command::ImportTracks)
+    };
+    rows.push(action_row(
+        ctx,
+        "add.tracks",
+        Icon::Target,
+        "TrackMate XML",
+        message,
+    ));
     vec![view::menu(ctx, Key::new("objects.add"), 184.0, rows)]
 }
 
@@ -187,12 +201,12 @@ fn object<'a>(
     let width = width();
     let kind = set.kind();
     let merged = set.provenance().is_merged();
-    let imported = set.provenance().is_imported();
+    let imported = set.provenance().is_external();
     let imported_root = state
         .scene
         .detection_root(id)
         .and_then(|root| state.scene.objects.get(root))
-        .is_some_and(|root| root.provenance().is_imported());
+        .is_some_and(|root| root.provenance().is_external());
     let frames = state.scene.frame_count();
     let time = state.scene.time();
     let detected = set.detected();
@@ -605,6 +619,22 @@ fn object_menu<'a>(
         "Export Labels…",
         Message::Command(Command::ExportLabels(id)),
     ));
+    if set.kind().trackable() && set.tracks().is_some() {
+        rows.push(action_row(
+            ctx,
+            &format!("object.{}.menu.tracks", id.raw()),
+            Icon::Export,
+            "Export Tracks…",
+            Message::Command(Command::ExportTracks(id)),
+        ));
+        rows.push(action_row(
+            ctx,
+            &format!("object.{}.menu.geff", id.raw()),
+            Icon::Export,
+            "Export GEFF…",
+            Message::Command(Command::ExportGeff(id)),
+        ));
+    }
     if !merges.is_empty() {
         rows.push(view::menu_separator(ctx));
         rows.push(view::caption(ctx, "Merge Into"));
@@ -765,6 +795,7 @@ fn origin<'a>(
     let text = match set.provenance() {
         Provenance::Detection => return None,
         Provenance::Imported { label } => format!("Imported from {label}"),
+        Provenance::Interop { file } => format!("Imported tracks from {file}"),
         Provenance::Filtered { source, .. } => format!("Filtered from {}", name(*source)),
         Provenance::Copied { source } => format!("Copy of {}", name(*source)),
         Provenance::Merged { parts } => format!(

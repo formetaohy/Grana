@@ -64,11 +64,10 @@ impl Layouts {
         });
         let level = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.level.layout"),
-            entries: &[storage(
-                0,
-                ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE),
-                true,
-            )],
+            entries: &[
+                storage(0, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE), true),
+                storage(1, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE), true),
+            ],
         });
         let level_write = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.level.write.layout"),

@@ -568,6 +568,9 @@ pub enum SourceSpec {
     Labels {
         label: String,
     },
+    Tracks {
+        file: String,
+    },
     Filtered {
         source: String,
         #[serde(default = "objects", skip_serializing_if = "is_objects")]
@@ -1877,7 +1880,7 @@ impl MeasureSpec {
 impl SourceSpec {
     pub fn kind(&self) -> Option<ObjectKind> {
         match self {
-            Self::Spots { .. } => Some(ObjectKind::Spots),
+            Self::Spots { .. } | Self::Tracks { .. } => Some(ObjectKind::Spots),
             Self::Surfaces { .. } | Self::Labels { .. } => Some(ObjectKind::Surfaces),
             Self::Filaments { .. } => Some(ObjectKind::Filaments),
             Self::Filtered { .. } | Self::Copy { .. } | Self::Merged { .. } => None,
@@ -1890,6 +1893,7 @@ impl SourceSpec {
             | Self::Surfaces { channel, .. }
             | Self::Filaments { channel, .. } => Some(channel),
             Self::Labels { .. }
+            | Self::Tracks { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Merged { .. } => None,
@@ -1900,8 +1904,22 @@ impl SourceSpec {
         match self {
             Self::Labels { label } => Some(label),
             Self::Spots { .. }
+            | Self::Tracks { .. }
             | Self::Surfaces { .. }
             | Self::Filaments { .. }
+            | Self::Filtered { .. }
+            | Self::Copy { .. }
+            | Self::Merged { .. } => None,
+        }
+    }
+
+    pub fn file(&self) -> Option<&str> {
+        match self {
+            Self::Tracks { file } => Some(file),
+            Self::Spots { .. }
+            | Self::Surfaces { .. }
+            | Self::Filaments { .. }
+            | Self::Labels { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Merged { .. } => None,
@@ -1936,6 +1954,7 @@ impl SourceSpec {
                 ..
             } => ObjectParams::Filaments(FilamentParams::new(threshold, min_length)),
             Self::Labels { .. }
+            | Self::Tracks { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Merged { .. } => {
@@ -1950,6 +1969,7 @@ impl SourceSpec {
             Self::Spots { .. }
             | Self::Filaments { .. }
             | Self::Labels { .. }
+            | Self::Tracks { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Merged { .. } => &[],
@@ -1962,6 +1982,7 @@ impl SourceSpec {
             Self::Spots { .. }
             | Self::Filaments { .. }
             | Self::Labels { .. }
+            | Self::Tracks { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Merged { .. } => None,
@@ -2055,6 +2076,9 @@ impl SourceSpec {
             }
             Self::Labels { label } => {
                 validate(label, &format!("the label image of {set}"))?;
+            }
+            Self::Tracks { file } => {
+                validate(file, &format!("the track file of {set}"))?;
             }
             Self::Filtered {
                 source,
@@ -2169,7 +2193,8 @@ impl Protocol {
             SourceSpec::Spots { .. }
             | SourceSpec::Surfaces { .. }
             | SourceSpec::Filaments { .. }
-            | SourceSpec::Labels { .. } => source.kind(),
+            | SourceSpec::Labels { .. }
+            | SourceSpec::Tracks { .. } => source.kind(),
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
                 self.kind_of_key(source, depth + 1)
             }
@@ -2195,7 +2220,7 @@ impl Protocol {
             SourceSpec::Spots { .. }
             | SourceSpec::Surfaces { .. }
             | SourceSpec::Filaments { .. } => source.channel(),
-            SourceSpec::Labels { .. } => None,
+            SourceSpec::Labels { .. } | SourceSpec::Tracks { .. } => None,
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
                 self.channel_of_key(source, depth + 1)
             }

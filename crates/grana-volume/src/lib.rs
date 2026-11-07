@@ -14,8 +14,8 @@ mod voxel;
 
 pub use axis::Axis;
 pub use brick::{
-    BRICK_APRON, BRICK_SIDE, BrickCoord, BrickData, BrickGrid, BrickRequest, CHANNEL_LIMIT,
-    PADDED_SIDE, pad_brick,
+    BRICK_APRON, BRICK_SIDE, BrickCoord, BrickData, BrickGrid, BrickRequest, CELL_AXIS, CELL_COUNT,
+    CELL_SIDE, CHANNEL_LIMIT, PADDED_SIDE, pad_brick,
 };
 pub use channel::ChannelInfo;
 pub use clip::Clip;
