@@ -492,6 +492,7 @@ impl Protocol {
             }
             SourceSpec::Spots { .. }
             | SourceSpec::Filaments { .. }
+            | SourceSpec::Segments { .. }
             | SourceSpec::Labels { .. }
             | SourceSpec::Tracks { .. } => Ok(()),
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {

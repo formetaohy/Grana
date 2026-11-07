@@ -6,7 +6,9 @@ use grana_measure::{
 };
 use grana_object::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
 use grana_project::{Export, ViewState};
-use grana_scene::{Annotation, ObjectColor, ObjectKind, ObjectParams, ObjectSet, Scene};
+use grana_scene::{
+    Annotation, ObjectColor, ObjectKind, ObjectParams, ObjectSet, Scene, SegmentParams,
+};
 use grana_volume::{Axis, Clip};
 use serde::{Deserialize, Serialize};
 
@@ -558,6 +560,15 @@ pub enum SourceSpec {
         channel: String,
         threshold: f32,
         min_length: f32,
+    },
+    Segments {
+        channel: String,
+        model: String,
+        cellprob: f32,
+        flow: f32,
+        minimum_size: u32,
+        tile_overlap: u32,
+        slice_overlap: f32,
     },
     Labels {
         label: String,
@@ -1875,7 +1886,9 @@ impl SourceSpec {
     pub fn kind(&self) -> Option<ObjectKind> {
         match self {
             Self::Spots { .. } | Self::Tracks { .. } => Some(ObjectKind::Spots),
-            Self::Surfaces { .. } | Self::Labels { .. } => Some(ObjectKind::Surfaces),
+            Self::Surfaces { .. } | Self::Segments { .. } | Self::Labels { .. } => {
+                Some(ObjectKind::Surfaces)
+            }
             Self::Filaments { .. } => Some(ObjectKind::Filaments),
             Self::Filtered { .. } | Self::Copy { .. } | Self::Merged { .. } => None,
         }
@@ -1885,7 +1898,8 @@ impl SourceSpec {
         match self {
             Self::Spots { channel, .. }
             | Self::Surfaces { channel, .. }
-            | Self::Filaments { channel, .. } => Some(channel),
+            | Self::Filaments { channel, .. }
+            | Self::Segments { channel, .. } => Some(channel),
             Self::Labels { .. }
             | Self::Tracks { .. }
             | Self::Filtered { .. }
@@ -1901,6 +1915,7 @@ impl SourceSpec {
             | Self::Tracks { .. }
             | Self::Surfaces { .. }
             | Self::Filaments { .. }
+            | Self::Segments { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Merged { .. } => None,
@@ -1913,6 +1928,7 @@ impl SourceSpec {
             Self::Spots { .. }
             | Self::Surfaces { .. }
             | Self::Filaments { .. }
+            | Self::Segments { .. }
             | Self::Labels { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
@@ -1948,6 +1964,7 @@ impl SourceSpec {
                 ..
             } => ObjectParams::Filaments(FilamentParams::new(threshold, min_length)),
             Self::Labels { .. }
+            | Self::Segments { .. }
             | Self::Tracks { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
@@ -1957,11 +1974,34 @@ impl SourceSpec {
         })
     }
 
+    pub fn segment(&self) -> Option<SegmentParams> {
+        match self {
+            Self::Segments {
+                model,
+                cellprob,
+                flow,
+                minimum_size,
+                tile_overlap,
+                slice_overlap,
+                ..
+            } => Some(SegmentParams::with_settings(
+                model,
+                *cellprob,
+                *flow,
+                *minimum_size,
+                *tile_overlap,
+                *slice_overlap,
+            )),
+            _ => None,
+        }
+    }
+
     pub fn seeds(&self) -> &[Vec<[f32; 3]>] {
         match self {
             Self::Surfaces { seeds, .. } => seeds,
             Self::Spots { .. }
             | Self::Filaments { .. }
+            | Self::Segments { .. }
             | Self::Labels { .. }
             | Self::Tracks { .. }
             | Self::Filtered { .. }
@@ -1975,6 +2015,7 @@ impl SourceSpec {
             Self::Surfaces { seed_source, .. } => seed_source.as_deref(),
             Self::Spots { .. }
             | Self::Filaments { .. }
+            | Self::Segments { .. }
             | Self::Labels { .. }
             | Self::Tracks { .. }
             | Self::Filtered { .. }
@@ -2066,6 +2107,33 @@ impl SourceSpec {
                 }
                 if !(min_length.is_finite() && *min_length > 0.0) {
                     return invalid("needs a positive minimum length".to_string());
+                }
+            }
+            Self::Segments {
+                channel,
+                model,
+                cellprob,
+                flow,
+                minimum_size,
+                tile_overlap,
+                slice_overlap,
+            } => {
+                validate(channel, &format!("the channel of {set}"))?;
+                validate(model, &format!("the model of {set}"))?;
+                if !(cellprob.is_finite() && (-10.0..=10.0).contains(cellprob)) {
+                    return invalid("needs a bounded cell probability threshold".to_string());
+                }
+                if !(flow.is_finite() && (0.0..=1.0).contains(flow)) {
+                    return invalid("needs a unit flow error threshold".to_string());
+                }
+                if *minimum_size > 10_000 {
+                    return invalid("needs a bounded minimum size".to_string());
+                }
+                if *tile_overlap > 192 {
+                    return invalid("needs a bounded tile overlap".to_string());
+                }
+                if !(slice_overlap.is_finite() && (0.0..=1.0).contains(slice_overlap)) {
+                    return invalid("needs a unit slice overlap".to_string());
                 }
             }
             Self::Labels { label } => {
@@ -2187,6 +2255,7 @@ impl Protocol {
             SourceSpec::Spots { .. }
             | SourceSpec::Surfaces { .. }
             | SourceSpec::Filaments { .. }
+            | SourceSpec::Segments { .. }
             | SourceSpec::Labels { .. }
             | SourceSpec::Tracks { .. } => source.kind(),
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
@@ -2213,7 +2282,8 @@ impl Protocol {
         match source {
             SourceSpec::Spots { .. }
             | SourceSpec::Surfaces { .. }
-            | SourceSpec::Filaments { .. } => source.channel(),
+            | SourceSpec::Filaments { .. }
+            | SourceSpec::Segments { .. } => source.channel(),
             SourceSpec::Labels { .. } | SourceSpec::Tracks { .. } => None,
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
                 self.channel_of_key(source, depth + 1)

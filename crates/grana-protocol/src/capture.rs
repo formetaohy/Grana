@@ -1,7 +1,8 @@
 use grana_display::Coloring;
 use grana_measure::{Aggregate, Group, channel_keys};
 use grana_scene::{
-    Measure, ObjectColor, ObjectParams, ObjectSet, Provenance, Recipe, Scene, Seeds, TrackColor,
+    Measure, ObjectColor, ObjectParams, ObjectSet, Provenance, Recipe, Scene, Seeds, SegmentParams,
+    TrackColor,
 };
 
 use crate::{
@@ -252,6 +253,7 @@ fn source(
             set.params(),
             set.surface_seeds(),
         ),
+        Provenance::Segmented { params } => segments(&channels[set.channel()], params),
         Provenance::Imported { label } => Ok(SourceSpec::Labels {
             label: label.clone(),
         }),
@@ -310,6 +312,7 @@ fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSp
             part.params(),
             part.seeds(),
         )?,
+        Provenance::Segmented { params } => segments(&channels[part.channel()], params)?,
         Provenance::Imported { label } => SourceSpec::Labels {
             label: label.clone(),
         },
@@ -411,6 +414,26 @@ fn detection(
     }
 }
 
+fn segments(channel: &str, params: &SegmentParams) -> Result<SourceSpec, ProtocolError> {
+    let model = params.model().to_str().ok_or_else(|| {
+        ProtocolError::Invalid("a segmentation model path is not valid utf-8".to_string())
+    })?;
+    if model.trim().is_empty() {
+        return Err(ProtocolError::Invalid(
+            "a segmentation names an ONNX model".to_string(),
+        ));
+    }
+    Ok(SourceSpec::Segments {
+        channel: channel.to_string(),
+        model: model.to_string(),
+        cellprob: params.cellprob_threshold(),
+        flow: params.flow_threshold(),
+        minimum_size: params.minimum_size(),
+        tile_overlap: params.tile_overlap(),
+        slice_overlap: params.slice_overlap(),
+    })
+}
+
 fn ordered(mut sets: Vec<SetSpec>, derived: &[DerivedSpec]) -> Result<Vec<SetSpec>, ProtocolError> {
     let mut ordered: Vec<SetSpec> = Vec::with_capacity(sets.len());
     while !sets.is_empty() {
@@ -455,6 +478,7 @@ fn collect_dependencies(source: &SourceSpec, derived: &[DerivedSpec], names: &mu
         }
         SourceSpec::Spots { .. }
         | SourceSpec::Filaments { .. }
+        | SourceSpec::Segments { .. }
         | SourceSpec::Labels { .. }
         | SourceSpec::Tracks { .. } => {}
     }

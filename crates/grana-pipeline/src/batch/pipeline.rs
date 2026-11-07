@@ -389,6 +389,7 @@ impl Run<'_, '_> {
         let name = object.name().to_string();
         let channel = object.channel();
         let params = object.params();
+        let segmented = object.provenance().segment().cloned();
         let seeds = self.scene.seed_frames(id);
         let policy = match self.scene.seed_source(id) {
             Some(_) => crate::SeedPolicy::Sourced,
@@ -399,21 +400,25 @@ impl Run<'_, '_> {
             index: task.index,
             label: format!("detecting {name}"),
         });
-        let frames = detect(
-            task,
-            Reading {
-                reader: &self.channels,
-                channel,
-                region: self.scene.region,
-                roi,
-                drift: self.scene.drift().clone(),
-            },
-            params,
-            seeds,
-            policy,
-            self.store,
-            &self.progress,
-        )?;
+        let reading = Reading {
+            reader: &self.channels,
+            channel,
+            region: self.scene.region,
+            roi,
+            drift: self.scene.drift().clone(),
+        };
+        let frames = match segmented {
+            Some(params) => segment_frames(reading, params, &self.progress)?,
+            None => detect(
+                task,
+                reading,
+                params,
+                seeds,
+                policy,
+                self.store,
+                &self.progress,
+            )?,
+        };
         for (time, frame) in frames.into_iter().enumerate() {
             if let Some(frame) = frame {
                 self.scene.install_shared(id, time as u32, Arc::new(frame));
@@ -439,6 +444,7 @@ impl Run<'_, '_> {
                 );
             }
             grana_scene::Provenance::Detection
+            | grana_scene::Provenance::Segmented { .. }
             | grana_scene::Provenance::Filtered { .. }
             | grana_scene::Provenance::Copied { .. }
             | grana_scene::Provenance::Merged { .. } => {
@@ -836,6 +842,39 @@ fn detect(
             Arc::clone(store),
         )
         .with_seeds(seeds, policy),
+        progress.cancel,
+        &mut sink,
+    )?;
+    Ok(collected)
+}
+
+fn segment_frames(
+    reading: Reading<'_>,
+    params: grana_scene::SegmentParams,
+    progress: &Progress<'_>,
+) -> Result<Vec<Option<ObjectFrame>>, String> {
+    let frames = reading.reader.pyramid().frame_count() as usize;
+    let mut collected = vec![None; frames];
+    let mut sink = |event: RunEvent| match event {
+        RunEvent::Frame { time, frame } => collected[time as usize] = Some(frame),
+        RunEvent::Progress { done, total, .. } if progress.hold() => {
+            let _ = progress.events.send(Event::Progress {
+                index: progress.index,
+                done,
+                total,
+            });
+        }
+        RunEvent::Progress { .. } => {}
+        RunEvent::Tracks(_)
+        | RunEvent::Relation { .. }
+        | RunEvent::Coloc { .. }
+        | RunEvent::Drift(_)
+        | RunEvent::Done
+        | RunEvent::Failed(_) => {}
+    };
+    run::segment(
+        reading.reader,
+        run::SegmentRequest::new(reading.channel, params, reading.region, reading.drift),
         progress.cancel,
         &mut sink,
     )?;

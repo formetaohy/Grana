@@ -1,0 +1,15 @@
+[package]
+name = "grana-segment"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+half = { workspace = true }
+ort = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

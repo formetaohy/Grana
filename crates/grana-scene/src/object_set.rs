@@ -576,6 +576,18 @@ impl ObjectSet {
         self.params
     }
 
+    pub fn set_segment_params(&mut self, params: crate::segment::SegmentParams) -> bool {
+        let Provenance::Segmented { params: held } = &mut self.provenance else {
+            return false;
+        };
+        if *held == params {
+            return false;
+        }
+        *held = params;
+        self.document += 1;
+        true
+    }
+
     pub fn set_params(&mut self, params: ObjectParams) {
         assert_eq!(
             params.kind(),

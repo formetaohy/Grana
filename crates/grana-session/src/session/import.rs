@@ -63,6 +63,7 @@ impl Session {
                 ));
             }
             Provenance::Detection
+            | Provenance::Segmented { .. }
             | Provenance::Filtered { .. }
             | Provenance::Copied { .. }
             | Provenance::Merged { .. } => {

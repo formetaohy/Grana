@@ -458,6 +458,15 @@ impl Encode for Provenance {
     fn encode(&self, writer: &mut Encoder<'_>) {
         match self {
             Self::Detection => writer.u8(0),
+            Self::Segmented { params } => {
+                writer.u8(6);
+                writer.string(&params.model().to_string_lossy());
+                writer.f32(params.cellprob_threshold());
+                writer.f32(params.flow_threshold());
+                writer.count(params.minimum_size() as usize);
+                writer.count(params.tile_overlap() as usize);
+                writer.f32(params.slice_overlap());
+            }
             Self::Filtered { source, criteria } => {
                 writer.u8(1);
                 writer.u64(source.raw());

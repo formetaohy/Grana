@@ -133,7 +133,8 @@ impl Protocol {
     ) -> Result<(), ProtocolError> {
         match source {
             SourceSpec::Spots { channel: name, .. }
-            | SourceSpec::Filaments { channel: name, .. } => {
+            | SourceSpec::Filaments { channel: name, .. }
+            | SourceSpec::Segments { channel: name, .. } => {
                 channel(names, name)?;
             }
             SourceSpec::Surfaces {
@@ -425,7 +426,8 @@ impl Builder<'_> {
         match source {
             SourceSpec::Spots { .. }
             | SourceSpec::Surfaces { .. }
-            | SourceSpec::Filaments { .. } => self.detect(source, name, named, track, mask),
+            | SourceSpec::Filaments { .. }
+            | SourceSpec::Segments { .. } => self.detect(source, name, named, track, mask),
             SourceSpec::Labels { label } => self.import(label, name, named, track),
             SourceSpec::Tracks { file } => self.tracks(file, name, named, track),
             SourceSpec::Filtered {
@@ -499,14 +501,20 @@ impl Builder<'_> {
             source.channel().expect("a detection names its channel"),
         )?;
         let kind = source.kind().expect("a detection names its object kind");
-        let params = source.params().expect("a detection carries its parameters");
-        let id = self.scene.add_object(kind, channel);
+        let id = match source.segment() {
+            Some(params) => self.scene.add_segment(channel, params),
+            None => {
+                let params = source.params().expect("a detection carries its parameters");
+                let id = self.scene.add_object(kind, channel);
+                self.scene
+                    .objects
+                    .get_mut(id)
+                    .expect("the staged object set exists")
+                    .set_params(params);
+                id
+            }
+        };
         self.rename(id, name, named)?;
-        self.scene
-            .objects
-            .get_mut(id)
-            .expect("the staged object set exists")
-            .set_params(params);
         if !source.seeds().is_empty() {
             self.scene.set_seed_frames(id, source.seeds().to_vec());
         }

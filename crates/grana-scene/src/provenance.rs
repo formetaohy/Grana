@@ -5,6 +5,7 @@ use crate::curation::Curation;
 use crate::object::{ObjectKind, ObjectParams};
 use crate::object_set::ObjectSetId;
 use crate::seed::Seeds;
+use crate::segment::SegmentParams;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilterRange {
@@ -188,6 +189,9 @@ impl Criteria {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Provenance {
     Detection,
+    Segmented {
+        params: SegmentParams,
+    },
     Imported {
         label: String,
     },
@@ -211,6 +215,10 @@ impl Provenance {
         Self::Detection
     }
 
+    pub fn segmented(params: SegmentParams) -> Self {
+        Self::Segmented { params }
+    }
+
     pub fn imported(label: &str) -> Self {
         Self::Imported {
             label: label.to_string(),
@@ -224,7 +232,18 @@ impl Provenance {
     }
 
     pub fn is_detection(&self) -> bool {
-        matches!(self, Self::Detection)
+        matches!(self, Self::Detection | Self::Segmented { .. })
+    }
+
+    pub fn is_segmented(&self) -> bool {
+        matches!(self, Self::Segmented { .. })
+    }
+
+    pub fn segment(&self) -> Option<&SegmentParams> {
+        match self {
+            Self::Segmented { params } => Some(params),
+            _ => None,
+        }
     }
 
     pub fn is_imported(&self) -> bool {
@@ -261,6 +280,7 @@ impl Provenance {
         match self {
             Self::Filtered { source, .. } | Self::Copied { source } => Some(*source),
             Self::Detection
+            | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
             | Self::Merged { .. } => None,
@@ -271,6 +291,7 @@ impl Provenance {
         match self {
             Self::Filtered { criteria, .. } => Some(criteria),
             Self::Detection
+            | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
             | Self::Copied { .. }
@@ -282,6 +303,7 @@ impl Provenance {
         match self {
             Self::Merged { parts } => parts,
             Self::Detection
+            | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
             | Self::Filtered { .. }
@@ -291,7 +313,10 @@ impl Provenance {
 
     pub fn references(&self, set: ObjectSetId) -> bool {
         match self {
-            Self::Detection | Self::Imported { .. } | Self::Interop { .. } => false,
+            Self::Detection
+            | Self::Segmented { .. }
+            | Self::Imported { .. }
+            | Self::Interop { .. } => false,
             Self::Filtered { source, .. } | Self::Copied { source } => *source == set,
             Self::Merged { parts } => parts.iter().any(|part| part.provenance().references(set)),
         }
@@ -300,6 +325,7 @@ impl Provenance {
     pub fn depends_on(&self, set: ObjectSetId) -> bool {
         match self {
             Self::Detection
+            | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
             | Self::Copied { .. } => false,
@@ -317,6 +343,7 @@ impl Provenance {
                 }
             }
             Self::Detection
+            | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
             | Self::Filtered { .. }
@@ -332,7 +359,10 @@ impl Provenance {
 
     fn collect_sources(&self, sources: &mut Vec<ObjectSetId>) {
         match self {
-            Self::Detection | Self::Imported { .. } | Self::Interop { .. } => {}
+            Self::Detection
+            | Self::Segmented { .. }
+            | Self::Imported { .. }
+            | Self::Interop { .. } => {}
             Self::Filtered { source, .. } | Self::Copied { source } => sources.push(*source),
             Self::Merged { parts } => {
                 for part in parts {

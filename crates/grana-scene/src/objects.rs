@@ -11,6 +11,7 @@ use crate::key::ObjectSetKey;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId, take_stamp};
 use crate::provenance::{Criteria, Provenance};
+use crate::segment::SegmentParams;
 use crate::slug::slug;
 use crate::state::SetState;
 
@@ -93,6 +94,32 @@ impl Objects {
         let color = PALETTE[(id.raw() as usize - 1) % PALETTE.len()];
         let mut set = ObjectSet::new(id, key, ObjectKind::Surfaces, name, channel, color, dataset);
         set.set_provenance(Provenance::imported(label));
+        self.sets.push(set);
+        id
+    }
+
+    pub fn segment(
+        &mut self,
+        params: SegmentParams,
+        channel: usize,
+        dataset: &Dataset,
+    ) -> ObjectSetId {
+        assert!(
+            channel < dataset.channels().len(),
+            "every object set names an existing channel"
+        );
+        let id = ObjectSetId::new(self.next_id);
+        self.next_id += 1;
+        let mut ordinal = 1;
+        let mut name = format!("Segments {ordinal}");
+        while self.occupied(&name, None) {
+            ordinal += 1;
+            name = format!("Segments {ordinal}");
+        }
+        let key = self.key_for(&name, None);
+        let color = PALETTE[(id.raw() as usize - 1) % PALETTE.len()];
+        let mut set = ObjectSet::new(id, key, ObjectKind::Surfaces, name, channel, color, dataset);
+        set.set_provenance(Provenance::segmented(params));
         self.sets.push(set);
         id
     }
@@ -348,6 +375,7 @@ impl Objects {
         let mut parts = match merged.provenance() {
             Provenance::Merged { parts } => parts.clone(),
             Provenance::Detection
+            | Provenance::Segmented { .. }
             | Provenance::Imported { .. }
             | Provenance::Interop { .. }
             | Provenance::Filtered { .. }

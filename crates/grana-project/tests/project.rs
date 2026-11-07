@@ -22,7 +22,7 @@ use grana_object::{SpotParams, SurfaceFilter, SurfaceParams};
 use grana_project::{Export, Project, Source, ViewState};
 use grana_scene::{
     Criteria, Dataset, Drift, FilterRange, Item, MaskFilter, Measure, ObjectColor, ObjectFrame,
-    ObjectKind, ObjectParams, Scene, Selection, TrackColor, Visibility,
+    ObjectKind, ObjectParams, Scene, SegmentParams, Selection, TrackColor, Visibility,
 };
 use grana_volume::{Axis, Channel, Clip, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -411,6 +411,62 @@ fn round_trips_an_imported_label_image() {
         set.frame(0).map(ObjectFrame::object_count),
         Some(1),
         "the imported frame returns"
+    );
+}
+
+#[test]
+fn round_trips_a_segmentation_provenance() {
+    let mut scene = fixture();
+    let params = SegmentParams::with_settings("models/cpsam.onnx", 0.25, 0.3, 24, 16, 0.6);
+    let id = scene.add_segment(0, params.clone());
+    let view = ViewState {
+        camera: CameraState {
+            pivot: [0.0, 0.0, 0.0],
+            yaw: 0.0,
+            pitch: 0.0,
+            distance: 10.0,
+            fov_y: 0.6,
+        },
+        section: SectionState {
+            axis: Axis::Z,
+            span: 20.0,
+        },
+        split: 0.5,
+        timeline: timeline(),
+        export: Export::NATIVE,
+    };
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "fixture".to_string(),
+        },
+        view,
+    );
+    assert_eq!(project.scene.sets[0].provenance.segment(), Some(&params));
+    let path = std::env::temp_dir().join(format!("grana-segment-{}.grana", std::process::id()));
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::temporary(1).expect("the store opens a spill file"),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the project reads");
+    fs::remove_file(&path).ok();
+    assert_eq!(loaded, project);
+    let mut restored = fixture();
+    restored.restore(loaded.scene);
+    assert_eq!(
+        restored
+            .objects
+            .get(id)
+            .expect("the segmented set returns")
+            .provenance()
+            .segment(),
+        Some(&params)
     );
 }
 

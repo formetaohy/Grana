@@ -200,6 +200,7 @@ impl Protocol {
                     SourceSpec::Spots { .. }
                     | SourceSpec::Surfaces { .. }
                     | SourceSpec::Filaments { .. }
+                    | SourceSpec::Segments { .. }
                     | SourceSpec::Labels { .. }
                     | SourceSpec::Tracks { .. } => {}
                 }

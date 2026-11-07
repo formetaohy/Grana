@@ -15,7 +15,7 @@ use grana_project::{Export, ViewState};
 use grana_protocol::{Protocol, SnapshotSpec, SourceSpec, Step, ViewSpec};
 use grana_scene::{
     Criteria, Dataset, FilterRange, MaskFilter, Measure, ObjectColor, ObjectFrame, ObjectKind,
-    Scene, TrackColor,
+    Scene, SegmentParams, TrackColor,
 };
 use grana_volume::{Axis, Channel, Clip, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -58,6 +58,47 @@ const PROTOCOL: &str = r#"
   "coloc": {"settings": {"permutations": 200, "block": 3}, "pairs": [{"a": "GFP", "b": "RFP", "thresholds": [0.4, 0.6]}, {"a": "GFP", "b": "DAPI", "thresholds": [0.5, 0.5]}], "mask": null}
 }
 "#;
+
+#[test]
+fn captures_and_stages_a_segmented_set() {
+    let extent = Extent::new(4, 4, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "DAPI",
+            [0.3, 0.4, 1.0],
+            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+        )],
+    );
+    let series = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let params = SegmentParams::with_settings("models/cpsam.onnx", 0.1, 0.2, 8, 16, 0.5);
+    scene.add_segment(0, params.clone());
+    let protocol =
+        Protocol::capture(&scene, &Measure::new(), None).expect("the segmentation captures");
+    let SourceSpec::Segments { model, .. } = &protocol.sets()[0].source else {
+        panic!("the set keeps its segmentation source");
+    };
+    assert_eq!(model, "models/cpsam.onnx");
+    let text = serde_json::to_string(&protocol).expect("the protocol serializes");
+    let parsed: Protocol = serde_json::from_str(&text).expect("the protocol parses");
+    let mut staged_scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let staged = parsed
+        .stage(&mut staged_scene)
+        .expect("the segmentation stages");
+    let set = staged_scene
+        .objects
+        .get(staged.sets()[0])
+        .expect("the staged set exists");
+    assert_eq!(set.provenance().segment(), Some(&params));
+    assert!(
+        staged
+            .steps()
+            .iter()
+            .any(|step| matches!(step, Step::Detect { set, .. } if *set == staged.sets()[0]))
+    );
+}
 
 #[test]
 fn captures_the_manual_edits_of_a_merged_part() {

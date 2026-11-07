@@ -9,7 +9,7 @@ use grana_scene::{Job, ObjectFrame};
 use crate::task::{Poll, Task};
 use grana_pipeline::Event;
 use grana_pipeline::run::{
-    self, ColocRequest, DetectRequest, DriftRequest, ImportRequest, InteropRequest,
+    self, ColocRequest, DetectRequest, DriftRequest, ImportRequest, InteropRequest, SegmentRequest,
 };
 
 pub struct Analysis {
@@ -30,6 +30,12 @@ impl Analysis {
 pub fn detect(job: Job, channels: Arc<Channels>, request: DetectRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
         run::detect(&channels, request, cancel, sink)
+    })
+}
+
+pub fn segment(job: Job, channels: Arc<Channels>, request: SegmentRequest) -> Analysis {
+    analyse(job, move |cancel, sink| {
+        run::segment(&channels, request, cancel, sink)
     })
 }
 

@@ -1,5 +1,7 @@
 use super::*;
 
+use grana_pipeline::run::SegmentRequest;
+
 impl Session {
     pub(super) fn poll_analysis(&mut self) -> bool {
         enum Update {
@@ -569,6 +571,7 @@ impl Session {
             }
         }
         let params = object.params();
+        let segment = object.provenance().segment().cloned();
         let region = scene.region;
         let drift = scene.drift().clone();
         let seed_source = scene.seed_source(set);
@@ -642,6 +645,14 @@ impl Session {
         }
         self.message = None;
         self.record_progress(Job::Detect(set), 0, 0, 0);
+        if let Some(params) = segment {
+            self.analysis.push(crate::segment(
+                Job::Detect(set),
+                Arc::clone(&channels),
+                SegmentRequest::new(channel, params, region, drift),
+            ));
+            return;
+        }
         let policy = match seed_source {
             Some(_) => grana_pipeline::SeedPolicy::Sourced,
             None if seeds.iter().any(|frame| !frame.is_empty()) => {

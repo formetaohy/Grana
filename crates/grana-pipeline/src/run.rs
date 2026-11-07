@@ -19,11 +19,13 @@ use crate::event::Event;
 mod frames;
 mod import;
 mod interop;
+mod segment;
 
 use self::frames::Notice;
 use self::frames::frames as pipeline;
 pub use self::import::{ImportRequest, import};
 pub use self::interop::{InteropRequest, interop};
+pub use self::segment::{SegmentRequest, segment};
 
 const FRAME_WORKERS: usize = 4;
 

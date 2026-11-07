@@ -23,6 +23,7 @@ use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
 use crate::provenance::{Criteria, Provenance};
+use crate::segment::SegmentParams;
 use crate::state::{HASH_OFFSET, mix};
 
 fn aggregate_scores(
@@ -484,6 +485,10 @@ impl Scene {
         self.objects.add(kind, channel, &self.dataset)
     }
 
+    pub fn add_segment(&mut self, channel: usize, params: SegmentParams) -> ObjectSetId {
+        self.objects.segment(params, channel, &self.dataset)
+    }
+
     pub fn import_object(&mut self, label: &str) -> ObjectSetId {
         self.objects.import(label, self.selected, &self.dataset)
     }
@@ -628,6 +633,7 @@ impl Scene {
             match set.provenance() {
                 Provenance::Filtered { source, .. } => current = *source,
                 Provenance::Detection
+                | Provenance::Segmented { .. }
                 | Provenance::Imported { .. }
                 | Provenance::Interop { .. }
                 | Provenance::Copied { .. }

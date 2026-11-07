@@ -1,5 +1,7 @@
 use super::*;
 
+use grana_scene::SegmentParams;
+
 pub(super) struct Recording {
     edit: Edit,
     snapshot: Snapshot,
@@ -42,6 +44,25 @@ impl Session {
                     scene.add_object(kind, channel);
                 }
             }
+            Command::AddSegment { model } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    let channel = scene.selected;
+                    scene.add_segment(channel, SegmentParams::new(model));
+                }
+            }
+            Command::SetSegment { set, params } => {
+                let changed = self
+                    .scene
+                    .as_mut()
+                    .and_then(|scene| scene.objects.get_mut(set))
+                    .is_some_and(|object| object.set_segment_params(params));
+                if changed {
+                    self.message = Some(Message::info(
+                        "detect the object set to apply the new segmentation settings",
+                    ));
+                }
+            }
+            Command::ChooseSegment | Command::ChooseSegmentModel(_) => {}
             Command::AddMaskChannel { set } => self.add_mask_channel(set),
             Command::AddRestoreChannel {
                 source,

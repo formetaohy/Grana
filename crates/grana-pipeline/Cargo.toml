@@ -22,6 +22,7 @@ grana-protocol = { workspace = true }
 grana-raster = { workspace = true }
 grana-restore = { workspace = true }
 grana-scene = { workspace = true }
+grana-segment = { workspace = true }
 grana-text = { workspace = true }
 grana-volume = { workspace = true }
 serde = { workspace = true }

@@ -2,7 +2,7 @@ use glam::Vec2;
 use grana_measure::{Group, Measurement};
 use grana_scene::{
     Item, Job, ObjectColor, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, ParamField,
-    ParamScale, Provenance, RelationField, Scene,
+    ParamScale, Provenance, RelationField, SEGMENT_FIELDS, Scene,
 };
 use grana_session::Command;
 use grana_ui::{
@@ -128,6 +128,18 @@ fn add_menu<'a>(
         };
         rows.push(action_row(ctx, key, symbol, label, message));
     }
+    let message = if loading {
+        Message::Noop
+    } else {
+        Message::Command(Command::ChooseSegment)
+    };
+    rows.push(action_row(
+        ctx,
+        "add.segments",
+        Icon::Sparkles,
+        "Segments",
+        message,
+    ));
     if !state.labels.is_empty() {
         rows.push(view::menu_separator(ctx));
         rows.push(view::caption(ctx, "Import Labels"));
@@ -233,7 +245,7 @@ fn object<'a>(
             children.extend(importing(ctx, state, id, kind));
         } else if !merged && !imported_root {
             children.extend(params(ctx, state, id));
-            if kind == ObjectKind::Surfaces {
+            if kind == ObjectKind::Surfaces && set.provenance().segment().is_none() {
                 children.extend(seeds(ctx, state, id));
             }
             children.push(detect(ctx, state, id, kind, frames));
@@ -794,6 +806,9 @@ fn origin<'a>(
     };
     let text = match set.provenance() {
         Provenance::Detection => return None,
+        Provenance::Segmented { params } => {
+            format!("Segmented with {}", params.model_name())
+        }
         Provenance::Imported { label } => format!("Imported from {label}"),
         Provenance::Interop { file } => format!("Imported tracks from {file}"),
         Provenance::Filtered { source, .. } => format!("Filtered from {}", name(*source)),
@@ -856,6 +871,41 @@ fn params<'a>(
     let world = state.scene.dataset.world_size().max_element();
     let params = set.params();
     let mut children = Vec::new();
+    if let Some(segment) = set.provenance().segment() {
+        let model = segment.model_name().to_string();
+        children.push(action_row(
+            ctx,
+            &format!("object.{}.segment.model", id.raw()),
+            Icon::Sparkles,
+            &model,
+            Message::Command(Command::ChooseSegmentModel(id)),
+        ));
+        for (index, field) in SEGMENT_FIELDS.iter().enumerate() {
+            let (minimum, maximum) = bounds(field, voxel, world);
+            let value = segment.field(index).clamp(minimum, maximum);
+            let readout = format!("{value:.3}{}", field.suffix);
+            let label = capitalized(field.label);
+            let segment = segment.clone();
+            children.push(crate::view::slider_readout(
+                ctx,
+                &format!("object.{}.segment.{index}", id.raw()),
+                Some(&label),
+                value,
+                minimum..=maximum,
+                field.logarithmic,
+                &readout,
+                move |value: f32| {
+                    let mut next = segment.clone();
+                    next.set_field(index, value.clamp(minimum, maximum));
+                    Command::SetSegment {
+                        set: id,
+                        params: next,
+                    }
+                },
+            ));
+        }
+        return children;
+    }
     for (index, field) in kind.fields().iter().enumerate() {
         let (minimum, maximum) = bounds(field, voxel, world);
         let value = params.value(index).clamp(minimum, maximum);
