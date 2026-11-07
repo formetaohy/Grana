@@ -14,9 +14,10 @@ use grana_object::{
 };
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, ChannelState, ColocResult, ColocState, ColorState,
-    Criteria, Curation, Drift, FilterRange, ItemState, LassoPath, MaskSpec, MeasureState,
-    ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe, RelationState, SceneState, Seeds,
-    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
+    Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState, LassoPath, MaskSpec,
+    MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe, RelationState,
+    RestoreSpec, SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit,
+    TrackStyle, Visibility,
 };
 use grana_volume::{Clip, Intensity, Region};
 
@@ -40,6 +41,21 @@ impl Encode for Project {
     }
 }
 
+impl Encode for DerivedSpec {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        match self {
+            Self::Mask(spec) => {
+                writer.u8(0);
+                spec.encode(writer);
+            }
+            Self::Restore(spec) => {
+                writer.u8(1);
+                spec.encode(writer);
+            }
+        }
+    }
+}
+
 impl Encode for MaskSpec {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.count(self.channel());
@@ -48,6 +64,29 @@ impl Encode for MaskSpec {
         for value in self.tint() {
             writer.f32(value);
         }
+    }
+}
+
+impl Encode for RestoreSpec {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.count(self.channel());
+        writer.string(self.name());
+        for value in self.tint() {
+            writer.f32(value);
+        }
+        writer.f32(self.intensity().min());
+        writer.f32(self.intensity().max());
+        let params = self.params();
+        for value in [
+            params.numerical_aperture(),
+            params.wavelength(),
+            params.immersion(),
+            params.sample(),
+            params.depth(),
+        ] {
+            writer.f32(value);
+        }
+        writer.u32(self.iterations());
     }
 }
 

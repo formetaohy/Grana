@@ -105,10 +105,13 @@ fn masks_a_channel_from_an_object_set() {
     {
         let scene = session.scene().expect("the series opens");
         assert_eq!(scene.dataset.channels().len(), 2);
-        assert_eq!(scene.masks().len(), 1);
-        assert_eq!(scene.masks()[0].set(), nuclei);
-        assert_eq!(scene.masks()[0].channel(), 0);
-        assert_eq!(scene.mask_channels().len(), 1);
+        assert_eq!(scene.derived().len(), 1);
+        assert_eq!(
+            scene.derived()[0].spec().mask().map(|spec| spec.set()),
+            Some(nuclei)
+        );
+        assert_eq!(scene.derived()[0].spec().source(), 0);
+        assert!(scene.derived()[0].mask().is_some());
     }
 
     session.request(
@@ -140,9 +143,9 @@ fn masks_a_channel_from_an_object_set() {
 
     session.execute(Command::CaptureProtocol);
     let protocol = session.protocol().expect("the protocol captures");
-    assert_eq!(protocol.masks().len(), 1);
+    assert_eq!(protocol.derived().len(), 1);
     assert_eq!(
-        protocol.masks()[0].name,
+        protocol.derived()[0].name(),
         session
             .scene()
             .expect("the series opens")
@@ -159,7 +162,7 @@ fn masks_a_channel_from_an_object_set() {
         "spots detect on the mask channel"
     );
 
-    session.execute(Command::RemoveMaskChannel { channel: 1 });
+    session.execute(Command::RemoveDerivedChannel { channel: 1 });
     let scene = session.scene().expect("the series opens");
     assert_eq!(
         scene.dataset.channels().len(),

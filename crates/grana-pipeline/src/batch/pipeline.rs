@@ -74,18 +74,18 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
     let mut scene = Scene::new(dataset_of(reader.format(), &name, reader.pyramid()));
     let infos = task
         .protocol
-        .mask_infos(reader.pyramid().channels())
+        .derived_infos(reader.pyramid().channels())
         .map_err(|error| error.to_string())?;
-    scene.set_mask_layout(infos)?;
+    scene.set_derived_layout(infos)?;
     let staged = task
         .protocol
         .stage(&mut scene)
         .map_err(|error: ProtocolError| error.to_string())?;
-    let masks = task
+    let derived = task
         .protocol
-        .mask_specs(&scene, &staged)
+        .derived_specs(&scene, &staged)
         .map_err(|error| error.to_string())?;
-    scene.bind_masks(masks)?;
+    scene.bind_derived(derived)?;
     let channels = Channels::new(Arc::clone(&reader), &scene);
     let mut run = Run {
         task,

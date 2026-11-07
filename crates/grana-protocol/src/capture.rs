@@ -6,10 +6,10 @@ use grana_scene::{
 
 use crate::{
     AnnotationSpec, ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec,
-    ColorSpec, CurationSpec, DriftSpec, FilterSpec, LassoSpec, MaskFilterSpec, MaskSpec,
-    MeasureSpec, MetricSpec, PartSpec, Protocol, ProtocolError, RegionSpec, RelationSpec,
-    RenderSpec, SetSpec, SnapshotSpec, SortSpec, SourceSpec, TrackSpec, TransferSpec, ViewSpec,
-    WindowSpec,
+    ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec, LassoSpec, MaskFilterSpec,
+    MaskSpec, MeasureSpec, MetricSpec, PartSpec, Protocol, ProtocolError, RegionSpec, RelationSpec,
+    RenderSpec, RestoreSpec, SetSpec, SnapshotSpec, SortSpec, SourceSpec, TrackSpec, TransferSpec,
+    ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -25,33 +25,54 @@ impl Protocol {
             .map(|channel| channel.name().to_string())
             .collect::<Vec<_>>();
         let keys = channel_keys(&channels);
-        let masks = scene
-            .masks()
+        let derived = scene
+            .derived()
             .iter()
-            .map(|mask| {
-                let set = scene.objects.get(mask.set()).ok_or_else(|| {
-                    ProtocolError::Invalid(format!(
-                        "the mask channel {} masks an object set that left the scene",
-                        mask.name()
-                    ))
-                })?;
+            .map(|entry| {
+                let spec = entry.spec();
                 let channel = scene
                     .dataset
                     .channels()
-                    .get(mask.channel())
+                    .get(spec.source())
                     .ok_or_else(|| {
                         ProtocolError::Invalid(format!(
-                            "the mask channel {} masks a channel of the dataset that left the scene",
-                            mask.name()
+                            "the derived channel {} derives from a channel of the dataset that left the scene",
+                            spec.name()
                         ))
                     })?
                     .name()
                     .to_string();
-                Ok(MaskSpec {
-                    set: set.key().as_str().to_string(),
-                    channel,
-                    name: mask.name().to_string(),
-                    tint: mask.tint(),
+                Ok(match spec {
+                    grana_scene::DerivedSpec::Mask(mask) => {
+                        let set = scene.objects.get(mask.set()).ok_or_else(|| {
+                            ProtocolError::Invalid(format!(
+                                "the mask channel {} masks an object set that left the scene",
+                                mask.name()
+                            ))
+                        })?;
+                        DerivedSpec::Mask(MaskSpec {
+                            set: set.key().as_str().to_string(),
+                            channel,
+                            name: mask.name().to_string(),
+                            tint: mask.tint(),
+                        })
+                    }
+                    grana_scene::DerivedSpec::Restore(restore) => {
+                        let params = restore.params();
+                        let intensity = restore.intensity();
+                        DerivedSpec::Restore(RestoreSpec {
+                            channel,
+                            name: restore.name().to_string(),
+                            tint: restore.tint(),
+                            intensity: [intensity.min(), intensity.max()],
+                            numerical_aperture: params.numerical_aperture(),
+                            wavelength: params.wavelength(),
+                            immersion: params.immersion(),
+                            sample: params.sample(),
+                            depth: params.depth(),
+                            iterations: restore.iterations(),
+                        })
+                    }
                 })
             })
             .collect::<Result<Vec<_>, ProtocolError>>()?;
@@ -126,7 +147,7 @@ impl Protocol {
                 }
             }
         }
-        let sets = ordered(sets, &masks)?;
+        let sets = ordered(sets, &derived)?;
         let relations = scene
             .objects
             .iter()
@@ -209,7 +230,7 @@ impl Protocol {
                 scene.clip,
             )),
             channels: specs,
-            masks,
+            derived,
             drift,
             mask_radius: scene.mask_radius,
             mask_filter,
@@ -394,13 +415,13 @@ fn detection(
     }
 }
 
-fn ordered(mut sets: Vec<SetSpec>, masks: &[MaskSpec]) -> Result<Vec<SetSpec>, ProtocolError> {
+fn ordered(mut sets: Vec<SetSpec>, derived: &[DerivedSpec]) -> Result<Vec<SetSpec>, ProtocolError> {
     let mut ordered: Vec<SetSpec> = Vec::with_capacity(sets.len());
     while !sets.is_empty() {
         let position = sets
             .iter()
             .position(|set| {
-                dependencies(set, masks)
+                dependencies(set, derived)
                     .iter()
                     .all(|key| ordered.iter().any(|placed| placed.key == *key))
             })
@@ -414,17 +435,17 @@ fn ordered(mut sets: Vec<SetSpec>, masks: &[MaskSpec]) -> Result<Vec<SetSpec>, P
     Ok(ordered)
 }
 
-fn dependencies(set: &SetSpec, masks: &[MaskSpec]) -> Vec<String> {
+fn dependencies(set: &SetSpec, derived: &[DerivedSpec]) -> Vec<String> {
     let mut names = set.mask.iter().cloned().collect::<Vec<_>>();
-    collect_dependencies(&set.source, masks, &mut names);
+    collect_dependencies(&set.source, derived, &mut names);
     names
 }
 
-fn collect_dependencies(source: &SourceSpec, masks: &[MaskSpec], names: &mut Vec<String>) {
+fn collect_dependencies(source: &SourceSpec, derived: &[DerivedSpec], names: &mut Vec<String>) {
     if let Some(channel) = source.channel()
-        && let Some(mask) = masks.iter().find(|mask| mask.name == channel)
+        && let Some(set) = mask_set(derived, channel)
     {
-        names.push(mask.set.clone());
+        names.push(set.to_string());
     }
     match source {
         SourceSpec::Surfaces { seed_source, .. } => names.extend(seed_source.clone()),
@@ -433,11 +454,18 @@ fn collect_dependencies(source: &SourceSpec, masks: &[MaskSpec], names: &mut Vec
         }
         SourceSpec::Merged { parts } => {
             for part in parts {
-                collect_dependencies(&part.source, masks, names);
+                collect_dependencies(&part.source, derived, names);
             }
         }
         SourceSpec::Spots { .. } | SourceSpec::Filaments { .. } | SourceSpec::Labels { .. } => {}
     }
+}
+
+fn mask_set<'a>(derived: &'a [DerivedSpec], channel: &str) -> Option<&'a str> {
+    derived.iter().find_map(|spec| match spec {
+        DerivedSpec::Mask(mask) if mask.name == channel => Some(mask.set.as_str()),
+        DerivedSpec::Mask(_) | DerivedSpec::Restore(_) => None,
+    })
 }
 
 fn object_color(

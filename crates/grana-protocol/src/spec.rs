@@ -376,6 +376,97 @@ impl MaskSpec {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DerivedSpec {
+    Mask(MaskSpec),
+    Restore(RestoreSpec),
+}
+
+impl DerivedSpec {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Mask(spec) => &spec.name,
+            Self::Restore(spec) => &spec.name,
+        }
+    }
+
+    pub fn channel(&self) -> &str {
+        match self {
+            Self::Mask(spec) => &spec.channel,
+            Self::Restore(spec) => &spec.channel,
+        }
+    }
+
+    pub(super) fn checked(&self) -> Result<(), ProtocolError> {
+        match self {
+            Self::Mask(spec) => spec.checked(),
+            Self::Restore(spec) => spec.checked(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreSpec {
+    pub channel: String,
+    pub name: String,
+    pub tint: [f32; 3],
+    pub intensity: [f32; 2],
+    pub numerical_aperture: f32,
+    pub wavelength: f32,
+    pub immersion: f32,
+    pub sample: f32,
+    pub depth: f32,
+    pub iterations: u32,
+}
+
+impl RestoreSpec {
+    pub(super) fn checked(&self) -> Result<(), ProtocolError> {
+        for (label, value) in [("channel", &self.channel), ("name", &self.name)] {
+            if value.trim().is_empty() {
+                return Err(ProtocolError::Invalid(format!(
+                    "a restored channel names a {label}"
+                )));
+            }
+        }
+        if self.tint.iter().any(|value| !(0.0..=1.0).contains(value)) {
+            return Err(ProtocolError::Invalid(format!(
+                "the tint of the restored channel {} is not an srgb triple",
+                self.name
+            )));
+        }
+        if !(self.intensity[0].is_finite() && self.intensity[1].is_finite())
+            || self.intensity[0] >= self.intensity[1]
+        {
+            return Err(ProtocolError::Invalid(format!(
+                "the intensity range of the restored channel {} is unordered",
+                self.name
+            )));
+        }
+        let physical = [
+            self.numerical_aperture,
+            self.wavelength,
+            self.immersion,
+            self.sample,
+            self.depth,
+        ];
+        if physical.iter().any(|value| !value.is_finite()) {
+            return Err(ProtocolError::Invalid(format!(
+                "the optics of the restored channel {} are not finite",
+                self.name
+            )));
+        }
+        if !(1..=1000).contains(&self.iterations) {
+            return Err(ProtocolError::Invalid(format!(
+                "the restored channel {} runs an unbounded number of iterations",
+                self.name
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DriftSpec {
     pub channel: String,

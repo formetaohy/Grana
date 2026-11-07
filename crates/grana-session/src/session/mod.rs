@@ -20,10 +20,11 @@ use grana_image::Format;
 use grana_measure::{ColocPair, ColocThresholds, Group, Scope};
 use grana_object::SurfaceCut;
 use grana_object::TrackSet;
+use grana_optics::PsfParams;
 use grana_project::{Project, Source as ProjectSource, ViewState};
 use grana_scene::{
     Criteria, Dataset, FilterRange, Item, Job, LassoPath, Measure, ObjectFrame, ObjectParams,
-    ObjectSetId, Origin, Progress, Scene,
+    ObjectSetId, Origin, Progress, RestoreSpec, Scene,
 };
 use grana_volume::{BrickData, BrickRequest, Region};
 

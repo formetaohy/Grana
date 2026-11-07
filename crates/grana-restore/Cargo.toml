@@ -1,0 +1,21 @@
+[package]
+name = "grana-restore"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytemuck = { workspace = true }
+grana-gpu = { workspace = true }
+grana-optics = { workspace = true }
+pollster = { workspace = true }
+rayon = { workspace = true }
+wgpu = { workspace = true }
+
+[dev-dependencies]
+grana-volume = { workspace = true }
+
+[lints]
+workspace = true

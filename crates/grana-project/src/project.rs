@@ -7,7 +7,7 @@ use std::time::Duration;
 use grana_animation::Timeline;
 use grana_display::{CameraState, SectionState};
 use grana_geometry::GeometryStore;
-use grana_scene::{Dataset, MaskSpec, Measure, MeasureState, ObjectFrame, Scene, SceneState};
+use grana_scene::{Dataset, DerivedSpec, Measure, MeasureState, ObjectFrame, Scene, SceneState};
 
 use grana_codec::Encoder;
 
@@ -27,7 +27,7 @@ pub struct Project {
     pub shape: Shape,
     pub source: Source,
     pub scene: SceneState,
-    pub masks: Vec<MaskSpec>,
+    pub masks: Vec<DerivedSpec>,
     pub measure: MeasureState,
     pub view: ViewState,
 }
@@ -91,7 +91,7 @@ impl Project {
             },
             source,
             scene: scene.state(),
-            masks: scene.masks().to_vec(),
+            masks: scene.derived_specs(),
             measure: measure.state(),
             view,
         }

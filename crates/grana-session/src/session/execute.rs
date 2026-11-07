@@ -43,7 +43,17 @@ impl Session {
                 }
             }
             Command::AddMaskChannel { set } => self.add_mask_channel(set),
-            Command::RemoveMaskChannel { channel } => self.remove_mask_channel(channel),
+            Command::AddRestoreChannel {
+                source,
+                params,
+                iterations,
+            } => self.add_restore_channel(source, params, iterations),
+            Command::SetRestore {
+                channel,
+                params,
+                iterations,
+            } => self.set_restore_channel(channel, params, iterations),
+            Command::RemoveDerivedChannel { channel } => self.remove_derived_channel(channel),
             Command::ImportLabels { label } => self.import_labels(&label),
             Command::RenameObject { set, name } => {
                 let renamed = self
@@ -100,10 +110,12 @@ impl Session {
                 self.merge_objects(source, target);
             }
             Command::RemoveObject(set) => {
-                let masked = self
-                    .scene
-                    .as_ref()
-                    .is_some_and(|scene| scene.masks().iter().any(|spec| spec.set() == set));
+                let masked = self.scene.as_ref().is_some_and(|scene| {
+                    scene
+                        .derived()
+                        .iter()
+                        .any(|entry| entry.spec().mask().is_some_and(|spec| spec.set() == set))
+                });
                 if masked {
                     self.message = Some(Message::error(
                         "a mask channel derives from this object set",

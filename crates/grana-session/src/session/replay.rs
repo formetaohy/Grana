@@ -49,14 +49,14 @@ impl Session {
                 return;
             };
             scene.clear_objects();
-            let infos = match protocol.mask_infos(scene.dataset.channels()) {
+            let infos = match protocol.derived_infos(scene.dataset.channels()) {
                 Ok(infos) => infos,
                 Err(error) => {
                     self.message = Some(Message::error(error.to_string()));
                     return;
                 }
             };
-            if let Err(detail) = scene.set_mask_layout(infos) {
+            if let Err(detail) = scene.set_derived_layout(infos) {
                 self.message = Some(Message::error(detail));
                 return;
             }
@@ -71,14 +71,14 @@ impl Session {
                     return;
                 }
             };
-            let masks = match protocol.mask_specs(scene, &staged) {
+            let derived = match protocol.derived_specs(scene, &staged) {
                 Ok(masks) => masks,
                 Err(error) => {
                     self.message = Some(Message::error(error.to_string()));
                     return;
                 }
             };
-            if let Err(detail) = scene.bind_masks(masks) {
+            if let Err(detail) = scene.bind_derived(derived) {
                 self.message = Some(Message::error(detail));
                 return;
             }

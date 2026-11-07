@@ -275,30 +275,30 @@ impl Session {
         self.bricks.clear();
         self.timeline = Timeline::new(30, self.frame_duration());
         self.history.clear();
-        let mut masks = Vec::new();
+        let mut derived = Vec::new();
         if let Some(pending) = &self.pending {
-            masks = pending.project.masks.clone();
-            let infos = masks
+            derived = pending.project.masks.clone();
+            let infos = derived
                 .iter()
                 .map(|spec| {
                     scene
                         .dataset
                         .channels()
-                        .get(spec.channel())
+                        .get(spec.source())
                         .map(|source| spec.info(source))
                 })
                 .collect::<Option<Vec<_>>>();
             match infos {
                 Some(infos) => {
-                    if let Err(detail) = scene.set_mask_layout(infos) {
-                        masks.clear();
+                    if let Err(detail) = scene.set_derived_layout(infos) {
+                        derived.clear();
                         self.message = Some(Message::error(detail));
                     }
                 }
                 None => {
-                    masks.clear();
+                    derived.clear();
                     self.message = Some(Message::error(
-                        "the project masks a channel that the dataset does not hold",
+                        "the project derives from a channel that the dataset does not hold",
                     ));
                 }
             }
@@ -306,7 +306,7 @@ impl Session {
         if let Some(pending) = self.pending.take() {
             if pending.project.matches(&scene.dataset) {
                 scene.restore(pending.project.scene);
-                if let Err(detail) = scene.bind_masks(masks) {
+                if let Err(detail) = scene.bind_derived(derived) {
                     self.message = Some(Message::error(detail));
                 }
                 self.measure.restore(pending.project.measure, &scene);
@@ -317,7 +317,7 @@ impl Session {
                     scene.document_hash() ^ self.measure.document_hash() ^ self.timeline.document(),
                 );
             } else {
-                let _ = scene.set_mask_layout(Vec::new());
+                let _ = scene.set_derived_layout(Vec::new());
                 self.message = Some(Message::error(
                     "the project was saved from a dataset with a different shape, channels or duration",
                 ));

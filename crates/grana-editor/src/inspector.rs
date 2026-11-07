@@ -1,5 +1,6 @@
 use glam::{Vec2, Vec3};
 use grana_display::TransferFunction;
+use grana_optics::PsfParams;
 use grana_scene::{MaskFilter, RelationField};
 use grana_session::Command;
 use grana_ui::{
@@ -14,6 +15,143 @@ use crate::view;
 
 const CHANNEL_ROW: f32 = 34.0;
 const SWITCH_TRAIL: f32 = 4.0;
+const DEFAULT_APERTURE: f32 = 1.4;
+const DEFAULT_WAVELENGTH: f32 = 0.52;
+const DEFAULT_IMMERSION: f32 = 1.515;
+const DEFAULT_SAMPLE: f32 = 1.33;
+const DEFAULT_ITERATIONS: u32 = 10;
+
+fn restore_fields<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    channel: usize,
+    spec: &grana_scene::RestoreSpec,
+    depth_limit: f32,
+) -> Vec<crate::view::View<'a>> {
+    let params = spec.params();
+    let iterations = spec.iterations();
+    let set = move |params: PsfParams, iterations: u32| Command::SetRestore {
+        channel,
+        params,
+        iterations,
+    };
+    let mut rows = Vec::new();
+    rows.push(view::slider_readout(
+        ctx,
+        "restore.iterations",
+        Some("Iterations"),
+        iterations as f32,
+        1.0..=50.0,
+        false,
+        &format!("{iterations}"),
+        move |value| set(params, value.round().max(1.0) as u32),
+    ));
+    rows.push(view::slider_readout(
+        ctx,
+        "restore.aperture",
+        Some("Aperture"),
+        params.numerical_aperture(),
+        0.3..=1.45,
+        false,
+        &format!("{:.2} NA", params.numerical_aperture()),
+        move |value| {
+            set(
+                PsfParams::new(
+                    value,
+                    params.wavelength(),
+                    params.immersion(),
+                    params.sample(),
+                    params.depth(),
+                ),
+                iterations,
+            )
+        },
+    ));
+    rows.push(view::slider_readout(
+        ctx,
+        "restore.wavelength",
+        Some("Emission"),
+        params.wavelength(),
+        0.35..=0.8,
+        false,
+        &format!("{:.3} µm", params.wavelength()),
+        move |value| {
+            set(
+                PsfParams::new(
+                    params.numerical_aperture(),
+                    value,
+                    params.immersion(),
+                    params.sample(),
+                    params.depth(),
+                ),
+                iterations,
+            )
+        },
+    ));
+    rows.push(view::slider_readout(
+        ctx,
+        "restore.immersion",
+        Some("Immersion"),
+        params.immersion(),
+        1.3..=1.6,
+        false,
+        &format!("{:.3}", params.immersion()),
+        move |value| {
+            set(
+                PsfParams::new(
+                    params.numerical_aperture(),
+                    params.wavelength(),
+                    value,
+                    params.sample(),
+                    params.depth(),
+                ),
+                iterations,
+            )
+        },
+    ));
+    rows.push(view::slider_readout(
+        ctx,
+        "restore.sample",
+        Some("Specimen"),
+        params.sample(),
+        1.0..=1.6,
+        false,
+        &format!("{:.3}", params.sample()),
+        move |value| {
+            set(
+                PsfParams::new(
+                    params.numerical_aperture(),
+                    params.wavelength(),
+                    params.immersion(),
+                    value,
+                    params.depth(),
+                ),
+                iterations,
+            )
+        },
+    ));
+    rows.push(view::slider_readout(
+        ctx,
+        "restore.depth",
+        Some("Depth"),
+        params.depth(),
+        0.0..=depth_limit,
+        false,
+        &format!("{:.1} µm", params.depth()),
+        move |value| {
+            set(
+                PsfParams::new(
+                    params.numerical_aperture(),
+                    params.wavelength(),
+                    params.immersion(),
+                    params.sample(),
+                    value,
+                ),
+                iterations,
+            )
+        },
+    ));
+    rows
+}
 
 pub(crate) fn panel_width() -> f32 {
     crate::panel::SIDEBAR_WIDTH - crate::panel::SIDEBAR_PAD * 2.0
@@ -372,22 +510,54 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
             .align(Align::Center)
             .children([auto, tinted, gray]),
     );
-    if index >= scene.base_channels() {
+    let derived = (index >= scene.base_channels())
+        .then(|| scene.derived().get(index - scene.base_channels()))
+        .flatten()
+        .map(|entry| entry.spec().clone());
+    if let Some(grana_scene::DerivedSpec::Restore(restore)) = derived.as_ref() {
         children.push(view::divider(ctx));
+        children.extend(restore_fields(
+            ctx,
+            index,
+            restore,
+            scene.dataset.world_size().z.max(1.0),
+        ));
+    }
+    children.push(view::divider(ctx));
+    if derived.is_some() {
         children.push(
             grana_ui::row()
                 .justify(Align::End)
                 .width(Length::Fill)
-                .children([view::button_with(
-                    ctx,
-                    "Remove Mask Channel",
-                    Role::Quiet,
-                    Length::Fill,
-                )
-                .named("display.mask.remove")
-                .press(Message::Command(Command::RemoveMaskChannel {
-                    channel: index,
-                }))]),
+                .children([
+                    view::button_with(ctx, "Remove Channel", Role::Quiet, Length::Fill)
+                        .named("display.derived.remove")
+                        .press(Message::Command(Command::RemoveDerivedChannel {
+                            channel: index,
+                        })),
+                ]),
+        );
+    } else {
+        let depth = scene.dataset.world_size().z * 0.5;
+        children.push(
+            grana_ui::row()
+                .justify(Align::End)
+                .width(Length::Fill)
+                .children([
+                    view::button_with(ctx, "Deconvolve", Role::Quiet, Length::Fill)
+                        .named("display.restore.add")
+                        .press(Message::Command(Command::AddRestoreChannel {
+                            source: index,
+                            params: PsfParams::new(
+                                DEFAULT_APERTURE,
+                                DEFAULT_WAVELENGTH,
+                                DEFAULT_IMMERSION,
+                                DEFAULT_SAMPLE,
+                                depth,
+                            ),
+                            iterations: DEFAULT_ITERATIONS,
+                        })),
+                ]),
         );
     }
     children.push(view::divider(ctx));

@@ -47,7 +47,9 @@ fn a_mask_channel_keeps_the_signal_inside_the_objects() {
         grana_volume::Intensity::new(0.0, 1000.0)
     );
     let level = reader.pyramid().level(0);
-    let mask = scene.mask_channels()[0]
+    let mask = scene.derived()[0]
+        .mask()
+        .expect("the mask channel is bound")
         .mask(0, level)
         .expect("the object mask rasterizes");
     assert!(mask.contains_cell([8, 8, 2]), "the spot covers its centre");
@@ -89,9 +91,11 @@ fn a_mask_channel_rides_every_brick_of_the_volume() {
 fn removing_a_mask_channel_restores_the_stored_channels() {
     let reader = Arc::new(Image::open(&Source::memory(series())).expect("the volume opens"));
     let mut scene = scene(&reader);
-    scene.remove_mask(1).expect("the mask channel is removed");
+    scene
+        .remove_derived(1)
+        .expect("the mask channel is removed");
     assert_eq!(scene.base_channels(), 1);
     assert_eq!(scene.dataset.channels().len(), 1);
-    assert!(scene.masks().is_empty());
-    assert!(scene.mask_channels().is_empty());
+    assert!(scene.derived().is_empty());
+    assert!(scene.derived().is_empty());
 }

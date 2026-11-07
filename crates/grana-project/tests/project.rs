@@ -49,6 +49,17 @@ fn round_trips_a_project() {
     let mask = scene
         .add_mask(spots, 0)
         .expect("the fixture masks its channel");
+    let restored_channel = scene
+        .add_restore(grana_scene::RestoreSpec::new(
+            0,
+            "dapi restored",
+            [0.0, 0.0, 1.0],
+            grana_volume::Intensity::new(0.0, 4000.0),
+            grana_optics::PsfParams::new(1.4, 0.52, 1.515, 1.33, 0.4),
+            12,
+        ))
+        .expect("the fixture restores its channel");
+    assert_eq!(restored_channel, mask + 1);
     scene
         .objects
         .get_mut(spots)
@@ -175,22 +186,31 @@ fn round_trips_a_project() {
     let masks = loaded.masks.clone();
     let infos = masks
         .iter()
-        .map(|spec| spec.info(&restored.dataset.channels()[spec.channel()]))
+        .map(|spec| spec.info(&restored.dataset.channels()[spec.source()]))
         .collect::<Vec<_>>();
     restored
-        .set_mask_layout(infos)
-        .expect("the mask channels fit the dataset");
+        .set_derived_layout(infos)
+        .expect("the derived channels fit the dataset");
     restored.restore(loaded.scene);
     restored
-        .bind_masks(masks)
+        .bind_derived(masks)
         .expect("the mask channels bind their object sets");
-    assert_eq!(restored.dataset.channels().len(), 3);
-    assert_eq!(restored.masks().len(), 1);
+    assert_eq!(restored.dataset.channels().len(), 4);
+    assert_eq!(restored.derived().len(), 2);
+    let restore = restored.derived()[1]
+        .spec()
+        .restore()
+        .expect("the restored channel survives the project");
+    assert_eq!(restore.iterations(), 12);
+    assert_eq!(restore.channel(), 0);
     assert_eq!(
         restored.dataset.channels()[mask].name(),
         loaded.masks[0].name()
     );
-    assert_eq!(restored.masks()[0].set(), spots);
+    assert_eq!(
+        restored.derived()[0].spec().mask().map(|spec| spec.set()),
+        Some(spots)
+    );
     let mut restored_measure = Measure::new();
     restored_measure.restore(loaded.measure, &restored);
     assert_eq!(restored.state(), project.scene);

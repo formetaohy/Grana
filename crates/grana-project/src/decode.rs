@@ -18,12 +18,14 @@ use grana_object::{
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, SurfaceTopology, Track,
     TrackNode, TrackSet,
 };
+use grana_optics::PsfParams;
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, AnnotationTag, ChannelState, ColocResult,
-    ColocState, ColorState, Criteria, Curation, Drift, FilterRange, ItemState, LassoPath,
-    MaskFilter, MaskSpec, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind,
-    ObjectParams, ObjectSetId, ObjectSetKey, Provenance, Recipe, RelationState, SceneState, Seeds,
-    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
+    ColocState, ColorState, Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState,
+    LassoPath, MaskFilter, MaskSpec, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame,
+    ObjectKind, ObjectParams, ObjectSetId, ObjectSetKey, Provenance, Recipe, RelationState,
+    RestoreSpec, SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit,
+    TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Clip, Intensity, Region};
 
@@ -43,7 +45,7 @@ impl Decode for Project {
             shape: Shape::decode(reader)?,
             source: Source::decode(reader)?,
             scene: SceneState::decode(reader)?,
-            masks: Vec::<MaskSpec>::decode(reader)?,
+            masks: Vec::<DerivedSpec>::decode(reader)?,
             measure: MeasureState::decode(reader)?,
             view: ViewState::decode(reader)?,
         };
@@ -51,6 +53,16 @@ impl Decode for Project {
             return Err(FAULT_SHAPE);
         }
         Ok(project)
+    }
+}
+
+impl Decode for DerivedSpec {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        match reader.u8()? {
+            0 => Ok(Self::Mask(MaskSpec::decode(reader)?)),
+            1 => Ok(Self::Restore(RestoreSpec::decode(reader)?)),
+            _ => Err(FAULT_TAG),
+        }
     }
 }
 
@@ -70,6 +82,47 @@ impl Decode for MaskSpec {
             }
         }
         Ok(Self::new(set, channel, name, tint))
+    }
+}
+
+impl Decode for RestoreSpec {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let channel = reader.count(1)?;
+        let name = reader.string()?;
+        if name.trim().is_empty() {
+            return Err(FAULT_VALUE);
+        }
+        let mut tint = [0.0; 3];
+        for value in &mut tint {
+            *value = reader.f32()?;
+            if !(0.0..=1.0).contains(value) {
+                return Err(FAULT_VALUE);
+            }
+        }
+        let min = reader.f32()?;
+        let max = reader.f32()?;
+        if !(min.is_finite() && max.is_finite() && min < max) {
+            return Err(FAULT_VALUE);
+        }
+        let mut params = [0.0; 5];
+        for value in &mut params {
+            *value = reader.f32()?;
+            if !value.is_finite() {
+                return Err(FAULT_VALUE);
+            }
+        }
+        let iterations = reader.u32()?;
+        if !(1..=1000).contains(&iterations) {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self::new(
+            channel,
+            name,
+            tint,
+            Intensity::new(min, max),
+            PsfParams::new(params[0], params[1], params[2], params[3], params[4]),
+            iterations,
+        ))
     }
 }
 

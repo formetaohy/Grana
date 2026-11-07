@@ -8,6 +8,7 @@ use crate::annotation::{AnnotationState, AnnotationTag};
 use crate::coloc::{ColocState, MaskKey};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
+use crate::derived::DerivedSpec;
 use crate::drift::Drift;
 use crate::key::ObjectSetKey;
 use crate::mask::MaskFilter;
@@ -285,14 +286,30 @@ impl Scene {
 
     pub fn document_hash(&self) -> u64 {
         let mut hash = HASH_OFFSET;
-        for mask in self.masks() {
-            hash = mix(hash, mask.set().raw());
-            hash = mix(hash, mask.channel() as u64);
-            for byte in mask.name().bytes() {
+        for entry in self.derived() {
+            let spec = entry.spec();
+            hash = mix(hash, spec.source() as u64);
+            for byte in spec.name().bytes() {
                 hash = mix(hash, u64::from(byte));
             }
-            for component in mask.tint() {
+            for component in spec.tint() {
                 hash = mix(hash, u64::from(component.to_bits()));
+            }
+            match spec {
+                DerivedSpec::Mask(mask) => hash = mix(hash, mask.set().raw()),
+                DerivedSpec::Restore(restore) => {
+                    let params = restore.params();
+                    for value in [
+                        params.numerical_aperture(),
+                        params.wavelength(),
+                        params.immersion(),
+                        params.sample(),
+                        params.depth(),
+                    ] {
+                        hash = mix(hash, u64::from(value.to_bits()));
+                    }
+                    hash = mix(hash, u64::from(restore.iterations()));
+                }
             }
         }
         for channel in &self.channels {

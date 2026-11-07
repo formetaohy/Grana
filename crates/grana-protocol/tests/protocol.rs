@@ -1780,7 +1780,7 @@ fn captures_and_stages_a_mask_channel() {
     assert!(scene.rename_object(beads, "Masked beads"));
     let protocol =
         Protocol::capture(&scene, &Measure::new(), None).expect("the mask channel captures");
-    assert_eq!(protocol.masks().len(), 1);
+    assert_eq!(protocol.derived().len(), 1);
     let nuclei_key = scene
         .objects
         .get(nuclei)
@@ -1788,11 +1788,11 @@ fn captures_and_stages_a_mask_channel() {
         .key()
         .as_str()
         .to_string();
-    assert_eq!(protocol.masks()[0].set, nuclei_key);
-    assert_eq!(
-        protocol.masks()[0].name,
-        scene.dataset.channels()[masked].name()
-    );
+    let grana_protocol::DerivedSpec::Mask(mask) = &protocol.derived()[0] else {
+        panic!("the derived channel masks an object set");
+    };
+    assert_eq!(mask.set, nuclei_key);
+    assert_eq!(mask.name, scene.dataset.channels()[masked].name());
     assert_eq!(
         protocol.sets()[0].name,
         "Nuclei",
@@ -1803,24 +1803,29 @@ fn captures_and_stages_a_mask_channel() {
         protocol
             .channels()
             .iter()
-            .any(|channel| channel.name == protocol.masks()[0].name)
+            .any(|channel| channel.name == mask.name)
     );
 
     let mut staged = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
     let infos = protocol
-        .mask_infos(staged.dataset.channels())
+        .derived_infos(staged.dataset.channels())
         .expect("the mask channels resolve");
     staged
-        .set_mask_layout(infos)
+        .set_derived_layout(infos)
         .expect("the masks fit the dataset");
     let sets = protocol.stage(&mut staged).expect("the protocol stages");
-    let masks = protocol
-        .mask_specs(&staged, &sets)
+    let derived = protocol
+        .derived_specs(&staged, &sets)
         .expect("the mask specs resolve");
-    staged.bind_masks(masks).expect("the mask channels bind");
+    staged
+        .bind_derived(derived)
+        .expect("the derived channels bind");
     assert_eq!(staged.dataset.channels().len(), 3);
-    assert_eq!(staged.masks().len(), 1);
-    assert_eq!(staged.masks()[0].set(), sets.set(0));
-    assert_eq!(staged.masks()[0].channel(), 0);
-    assert_eq!(staged.mask_channels().len(), 1);
+    assert_eq!(staged.derived().len(), 1);
+    assert_eq!(
+        staged.derived()[0].spec().mask().map(|spec| spec.set()),
+        Some(sets.set(0))
+    );
+    assert_eq!(staged.derived()[0].spec().source(), 0);
+    assert!(staged.derived()[0].mask().is_some());
 }

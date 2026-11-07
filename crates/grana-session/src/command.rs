@@ -4,6 +4,7 @@ use grana_measure::{
     Measurement, PlotAxis, Scope,
 };
 use grana_object::TrackParams;
+use grana_optics::PsfParams;
 use grana_scene::{
     MaskFilter, ObjectColor, ObjectKind, ObjectParams, ObjectSetId, Selection, TrackColor,
 };
@@ -48,7 +49,17 @@ pub enum Command {
     AddMaskChannel {
         set: ObjectSetId,
     },
-    RemoveMaskChannel {
+    AddRestoreChannel {
+        source: usize,
+        params: PsfParams,
+        iterations: u32,
+    },
+    SetRestore {
+        channel: usize,
+        params: PsfParams,
+        iterations: u32,
+    },
+    RemoveDerivedChannel {
         channel: usize,
     },
     ImportLabels {

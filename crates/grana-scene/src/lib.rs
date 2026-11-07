@@ -30,7 +30,9 @@ pub use coloc::{Coloc, ColocResult, ColocState, MaskKey};
 pub use color::ObjectColor;
 pub use curation::{Curation, ObjectAnchor, TrackAnchor, TrackEdit};
 pub use dataset::{Dataset, Origin};
-pub use derived::{MaskChannel, MaskFrames, MaskSpec, mask_info};
+pub use derived::{
+    Derived, DerivedSpec, MaskChannel, MaskFrames, MaskSpec, RestoreSpec, mask_info,
+};
 pub use drift::Drift;
 pub use grana_display::{ColorState, Coloring, Extent};
 pub use grana_measure::RelationField;

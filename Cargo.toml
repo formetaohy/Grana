@@ -63,6 +63,8 @@ grana-readout = { version = "0.1.1", path = "crates/grana-readout" }
 grana-image = { version = "0.1.1", path = "crates/grana-image" }
 grana-measure = { version = "0.1.1", path = "crates/grana-measure" }
 grana-obj = { version = "0.1.1", path = "crates/grana-obj" }
+grana-optics = { version = "0.1.1", path = "crates/grana-optics" }
+grana-restore = { version = "0.1.1", path = "crates/grana-restore" }
 grana-session = { version = "0.1.1", path = "crates/grana-session" }
 grana-video = { version = "0.1.1", path = "crates/grana-video" }
 

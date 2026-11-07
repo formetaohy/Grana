@@ -6,6 +6,7 @@ use grana_geometry::ray_hit;
 use grana_measure::{Aggregate, Classifier, Frame, Group, Measurement, RelationRow, Table};
 use grana_object::{RelationFrame, TrackSet};
 use grana_object::{Shape, TrackParams};
+use grana_optics::PsfParams;
 use grana_volume::{CHANNEL_LIMIT, ChannelInfo, Clip, Intensity, Region};
 
 use crate::annotation::Annotations;
@@ -14,7 +15,7 @@ use crate::coloc::{Coloc, MaskKey};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::dataset::Dataset;
-use crate::derived::{MaskChannel, MaskFrames, MaskSpec};
+use crate::derived::{Derived, DerivedSpec, MaskChannel, MaskFrames, MaskSpec, RestoreSpec};
 use crate::drift::Drift;
 use crate::key::ObjectSetKey;
 use crate::mask::MaskFilter;
@@ -106,8 +107,7 @@ pub struct Scene {
     drift: Drift,
     pub objects: Objects,
     pub coloc: Coloc,
-    masks: Vec<MaskSpec>,
-    mask_channels: Vec<Arc<MaskChannel>>,
+    derived: Vec<Derived>,
     base_channels: usize,
     time: u32,
     selection: Option<Selection>,
@@ -145,8 +145,7 @@ impl Scene {
             drift: Drift::default(),
             objects: Objects::new(),
             coloc: Coloc::new(channel_count, region),
-            masks: Vec::new(),
-            mask_channels: Vec::new(),
+            derived: Vec::new(),
             base_channels: channel_count,
             time: 0,
             selection: None,
@@ -161,15 +160,18 @@ impl Scene {
         self.base_channels
     }
 
-    pub fn masks(&self) -> &[MaskSpec] {
-        &self.masks
+    pub fn derived(&self) -> &[Derived] {
+        &self.derived
     }
 
-    pub fn mask_channels(&self) -> &[Arc<MaskChannel>] {
-        &self.mask_channels
+    pub fn derived_specs(&self) -> Vec<DerivedSpec> {
+        self.derived
+            .iter()
+            .map(|entry| entry.spec().clone())
+            .collect()
     }
 
-    pub fn set_mask_layout(&mut self, infos: Vec<ChannelInfo>) -> Result<(), String> {
+    pub fn set_derived_layout(&mut self, infos: Vec<ChannelInfo>) -> Result<(), String> {
         let base = self.base_channels;
         if base + infos.len() > CHANNEL_LIMIT {
             return Err(format!(
@@ -194,8 +196,7 @@ impl Scene {
                 ),
             })
             .collect();
-        self.masks.clear();
-        self.mask_channels.clear();
+        self.derived.clear();
         self.coloc.set_channel_count(self.channels.len());
         if self.selected >= self.channels.len() {
             self.selected = 0;
@@ -203,37 +204,41 @@ impl Scene {
         Ok(())
     }
 
-    pub fn bind_masks(&mut self, specs: Vec<MaskSpec>) -> Result<(), String> {
+    pub fn bind_derived(&mut self, specs: Vec<DerivedSpec>) -> Result<(), String> {
         assert!(
-            self.masks.is_empty() && self.mask_channels.is_empty(),
-            "a scene binds its mask channels once"
+            self.derived.is_empty(),
+            "a scene binds its derived channels once"
         );
-        let mut channels = Vec::with_capacity(specs.len());
-        for (index, spec) in specs.iter().enumerate() {
+        let mut entries = Vec::with_capacity(specs.len());
+        for (index, spec) in specs.into_iter().enumerate() {
             let channel = self.base_channels + index;
             let Some(info) = self.dataset.channels().get(channel) else {
-                return Err("a mask channel lies outside the dataset".to_string());
+                return Err("a derived channel lies outside the dataset".to_string());
             };
             if info.name() != spec.name() {
                 return Err(format!(
-                    "the mask channel {} does not match the dataset channel {}",
+                    "the derived channel {} does not match the dataset channel {}",
                     spec.name(),
                     info.name()
                 ));
             }
-            let Some(set) = self.objects.get(spec.set()) else {
-                return Err(format!(
-                    "the mask channel {} names an object set that left the scene",
-                    spec.name()
-                ));
-            };
-            if spec.channel() >= self.base_channels {
-                return Err("a mask channel masks a stored channel".to_string());
+            if spec.source() >= self.base_channels {
+                return Err("a derived channel derives from a stored channel".to_string());
             }
-            channels.push(Arc::new(MaskChannel::new(spec.channel(), mask_frames(set))));
+            entries.push(match spec {
+                DerivedSpec::Mask(spec) => {
+                    let Some(set) = self.objects.get(spec.set()) else {
+                        return Err(format!(
+                            "the mask channel {} names an object set that left the scene",
+                            spec.name()
+                        ));
+                    };
+                    Derived::masked(spec, mask_frames(set))
+                }
+                DerivedSpec::Restore(spec) => Derived::restored(spec),
+            });
         }
-        self.masks = specs;
-        self.mask_channels = channels;
+        self.derived = entries;
         Ok(())
     }
 
@@ -247,27 +252,49 @@ impl Scene {
         if object.detected() == 0 {
             return Err(format!("{} detected no objects to mask", object.name()));
         }
-        if self
-            .masks
-            .iter()
-            .any(|spec| spec.set() == set && spec.channel() == channel)
-        {
+        if self.derived.iter().any(|entry| {
+            entry
+                .spec()
+                .mask()
+                .is_some_and(|spec| spec.set() == set && spec.channel() == channel)
+        }) {
             return Err(format!(
                 "{} already masks {}",
                 object.name(),
                 self.dataset.channels()[channel].name()
             ));
         }
+        let color = object.color();
+        let frames = mask_frames(object);
+        let source = self.dataset.channels()[channel].clone();
+        let name = self.mask_name(&source, object);
+        let spec = MaskSpec::new(set, channel, name, color);
+        let info = spec.info(&source);
+        self.push_derived(Derived::masked(spec, frames), info)
+    }
+
+    pub fn add_restore(&mut self, spec: RestoreSpec) -> Result<usize, String> {
+        if spec.channel() >= self.base_channels {
+            return Err("a restored channel restores a stored channel".to_string());
+        }
+        if self
+            .derived
+            .iter()
+            .any(|entry| entry.spec().name() == spec.name())
+        {
+            return Err(format!("the scene already holds {}", spec.name()));
+        }
+        let info = spec.info();
+        self.push_derived(Derived::restored(spec), info)
+    }
+
+    fn push_derived(&mut self, entry: Derived, info: ChannelInfo) -> Result<usize, String> {
         if self.channels.len() >= CHANNEL_LIMIT {
             return Err(format!(
                 "the dataset holds {} channels and grana displays at most {CHANNEL_LIMIT}",
                 self.channels.len()
             ));
         }
-        let source = self.dataset.channels()[channel].clone();
-        let name = self.mask_name(&source, object);
-        let spec = MaskSpec::new(set, channel, name, object.color());
-        let info = spec.info(&source);
         let mut channels = self.dataset.channels().to_vec();
         channels.push(info.clone());
         self.dataset = self.dataset.with_channels(channels);
@@ -277,15 +304,13 @@ impl Scene {
             TransferFunction::tinted(info.tint()),
         ));
         self.coloc.set_channel_count(self.channels.len());
-        self.masks.push(spec);
-        self.mask_channels
-            .push(Arc::new(MaskChannel::new(channel, mask_frames(object))));
+        self.derived.push(entry);
         Ok(self.channels.len() - 1)
     }
 
-    pub fn remove_mask(&mut self, channel: usize) -> Result<(), String> {
+    pub fn remove_derived(&mut self, channel: usize) -> Result<(), String> {
         if channel < self.base_channels || channel >= self.channels.len() {
-            return Err("only a mask channel can be removed".to_string());
+            return Err("only a derived channel can be removed".to_string());
         }
         let index = channel - self.base_channels;
         if self
@@ -293,13 +318,12 @@ impl Scene {
             .iter()
             .any(|set| set.channel() >= channel || set.measured_channels() > channel)
         {
-            return Err("an object set measures this mask channel".to_string());
+            return Err("an object set measures this derived channel".to_string());
         }
         if self.drift().channel() == channel && !self.drift().is_empty() {
-            return Err("the drift correction aligns this mask channel".to_string());
+            return Err("the drift correction aligns this derived channel".to_string());
         }
-        self.masks.remove(index);
-        self.mask_channels.remove(index);
+        self.derived.remove(index);
         self.channels.remove(channel);
         let infos = self
             .dataset
@@ -317,8 +341,39 @@ impl Scene {
         Ok(())
     }
 
+    pub fn set_restore(
+        &mut self,
+        channel: usize,
+        params: PsfParams,
+        iterations: u32,
+    ) -> Result<bool, String> {
+        if channel < self.base_channels || channel >= self.channels.len() {
+            return Err("only a derived channel can be restored".to_string());
+        }
+        let index = channel - self.base_channels;
+        let Some(restore) = self.derived[index].spec().restore().cloned() else {
+            return Err("the derived channel masks an object set".to_string());
+        };
+        if restore.params() == params && restore.iterations() == iterations {
+            return Ok(false);
+        }
+        let spec = RestoreSpec::new(
+            restore.channel(),
+            restore.name().to_string(),
+            restore.tint(),
+            restore.intensity(),
+            params,
+            iterations,
+        );
+        self.derived[index] = Derived::restored(spec);
+        Ok(true)
+    }
+
     pub fn sync_masks(&mut self) {
-        for (spec, channel) in self.masks.iter().zip(&self.mask_channels) {
+        for entry in &self.derived {
+            let (Some(spec), Some(channel)) = (entry.spec().mask(), entry.mask()) else {
+                continue;
+            };
             let Some(set) = self.objects.get(spec.set()) else {
                 continue;
             };
@@ -331,7 +386,10 @@ impl Scene {
 
     pub fn mask_stamp(&self, time: u32) -> u64 {
         let mut stamp = HASH_OFFSET;
-        for (spec, channel) in self.masks.iter().zip(&self.mask_channels) {
+        for entry in &self.derived {
+            let (Some(spec), Some(channel)) = (entry.spec().mask(), entry.mask()) else {
+                continue;
+            };
             stamp = mix(stamp, spec.set().raw());
             stamp = mix(stamp, spec.channel() as u64);
             stamp = mix(stamp, Arc::as_ptr(channel) as u64);
@@ -347,14 +405,17 @@ impl Scene {
     }
 
     fn mask_name(&self, source: &ChannelInfo, object: &ObjectSet) -> String {
-        let base = format!("{} in {}", source.name(), object.name());
+        self.unique_channel_name(&format!("{} in {}", source.name(), object.name()))
+    }
+
+    pub fn unique_channel_name(&self, base: &str) -> String {
         if !self
             .dataset
             .channels()
             .iter()
             .any(|channel| channel.name() == base)
         {
-            return base;
+            return base.to_string();
         }
         (2..)
             .map(|ordinal| format!("{base} {ordinal}"))
@@ -365,7 +426,7 @@ impl Scene {
                     .iter()
                     .any(|channel| channel.name() == candidate)
             })
-            .expect("a mask channel name is unique")
+            .expect("a derived channel name is unique")
     }
 
     pub fn time(&self) -> u32 {
@@ -463,7 +524,7 @@ impl Scene {
         self.mask = None;
         self.mask_filter = None;
         self.selection = None;
-        let _ = self.set_mask_layout(Vec::new());
+        let _ = self.set_derived_layout(Vec::new());
         self.coloc.clear();
         self.sync_coloc_inputs();
     }
@@ -643,7 +704,11 @@ impl Scene {
         source: ObjectSetId,
         target: ObjectSetId,
     ) -> Result<(), String> {
-        if self.masks.iter().any(|spec| spec.set() == source) {
+        if self
+            .derived
+            .iter()
+            .any(|entry| entry.spec().mask().is_some_and(|spec| spec.set() == source))
+        {
             return Err("a mask channel derives from the merged object set".to_string());
         }
         self.objects.merge(source, target)?;
@@ -1216,26 +1281,29 @@ impl Scene {
     }
 
     fn retain_masks(&mut self, set: ObjectSetId) {
-        if !self.masks.iter().any(|spec| spec.set() == set) {
+        if !self
+            .derived
+            .iter()
+            .any(|entry| entry.spec().mask().is_some_and(|spec| spec.set() == set))
+        {
             return;
         }
         let specs = self
-            .masks
-            .iter()
-            .filter(|spec| spec.set() != set)
-            .cloned()
+            .derived_specs()
+            .into_iter()
+            .filter(|spec| spec.mask().is_none_or(|mask| mask.set() != set))
             .collect::<Vec<_>>();
         let infos = specs
             .iter()
             .filter_map(|spec| {
                 self.dataset
                     .channels()
-                    .get(spec.channel())
+                    .get(spec.source())
                     .map(|source| spec.info(source))
             })
             .collect::<Vec<_>>();
-        let _ = self.set_mask_layout(infos);
-        let _ = self.bind_masks(specs);
+        let _ = self.set_derived_layout(infos);
+        let _ = self.bind_derived(specs);
         self.sync_masks();
     }
 

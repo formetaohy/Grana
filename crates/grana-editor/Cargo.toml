@@ -13,6 +13,7 @@ grana-display = { workspace = true }
 grana-figure = { workspace = true }
 grana-measure = { workspace = true }
 grana-object = { workspace = true }
+grana-optics = { workspace = true }
 grana-scene = { workspace = true }
 grana-session = { workspace = true }
 grana-ui = { workspace = true }

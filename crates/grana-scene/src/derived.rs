@@ -1,7 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use grana_object::{Mask, Roi};
-use grana_volume::{ChannelInfo, Intensity, Level};
+use grana_optics::PsfParams;
+use grana_volume::{ChannelInfo, Intensity, Level, VoxelFormat};
 
 use crate::object::ObjectFrame;
 use crate::object_set::ObjectSetId;
@@ -56,6 +57,171 @@ impl MaskSpec {
 
     pub fn info(&self, source: &ChannelInfo) -> ChannelInfo {
         mask_info(&self.name, self.tint, source)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RestoreSpec {
+    channel: usize,
+    name: String,
+    tint: [f32; 3],
+    intensity: Intensity,
+    params: PsfParams,
+    iterations: u32,
+}
+
+impl RestoreSpec {
+    pub fn new(
+        channel: usize,
+        name: impl Into<String>,
+        tint: [f32; 3],
+        intensity: Intensity,
+        params: PsfParams,
+        iterations: u32,
+    ) -> Self {
+        let name = name.into();
+        assert!(
+            !name.trim().is_empty(),
+            "a restored channel carries a name for its display"
+        );
+        assert!(
+            tint.iter().all(|component| (0.0..=1.0).contains(component)),
+            "a channel tint is an srgb triple"
+        );
+        assert!(
+            intensity.span() > 0.0,
+            "a restored channel declares a positive intensity span"
+        );
+        assert!(
+            (1..=1000).contains(&iterations),
+            "richardson-lucy runs a bounded number of iterations"
+        );
+        Self {
+            channel,
+            name,
+            tint,
+            intensity,
+            params,
+            iterations,
+        }
+    }
+
+    pub fn channel(&self) -> usize {
+        self.channel
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn tint(&self) -> [f32; 3] {
+        self.tint
+    }
+
+    pub fn intensity(&self) -> Intensity {
+        self.intensity
+    }
+
+    pub fn params(&self) -> PsfParams {
+        self.params
+    }
+
+    pub fn iterations(&self) -> u32 {
+        self.iterations
+    }
+
+    pub fn info(&self) -> ChannelInfo {
+        ChannelInfo::new(
+            self.name.clone(),
+            self.tint,
+            self.intensity,
+            self.intensity,
+            VoxelFormat::F32,
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum DerivedSpec {
+    Mask(MaskSpec),
+    Restore(RestoreSpec),
+}
+
+impl DerivedSpec {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Mask(spec) => spec.name(),
+            Self::Restore(spec) => spec.name(),
+        }
+    }
+
+    pub fn tint(&self) -> [f32; 3] {
+        match self {
+            Self::Mask(spec) => spec.tint(),
+            Self::Restore(spec) => spec.tint(),
+        }
+    }
+
+    pub fn source(&self) -> usize {
+        match self {
+            Self::Mask(spec) => spec.channel(),
+            Self::Restore(spec) => spec.channel(),
+        }
+    }
+
+    pub fn mask(&self) -> Option<&MaskSpec> {
+        match self {
+            Self::Mask(spec) => Some(spec),
+            Self::Restore(_) => None,
+        }
+    }
+
+    pub fn restore(&self) -> Option<&RestoreSpec> {
+        match self {
+            Self::Mask(_) => None,
+            Self::Restore(spec) => Some(spec),
+        }
+    }
+
+    pub fn info(&self, source: &ChannelInfo) -> ChannelInfo {
+        match self {
+            Self::Mask(spec) => spec.info(source),
+            Self::Restore(spec) => spec.info(),
+        }
+    }
+}
+
+pub struct Derived {
+    spec: DerivedSpec,
+    mask: Option<Arc<MaskChannel>>,
+}
+
+impl Derived {
+    pub fn restored(spec: RestoreSpec) -> Self {
+        Self {
+            spec: DerivedSpec::Restore(spec),
+            mask: None,
+        }
+    }
+
+    pub fn masked(spec: MaskSpec, frames: MaskFrames) -> Self {
+        let channel = Arc::new(MaskChannel::new(spec.channel(), frames));
+        Self {
+            spec: DerivedSpec::Mask(spec),
+            mask: Some(channel),
+        }
+    }
+
+    pub fn spec(&self) -> &DerivedSpec {
+        &self.spec
+    }
+
+    pub fn mask(&self) -> Option<&Arc<MaskChannel>> {
+        self.mask.as_ref()
+    }
+
+    pub fn frames(&self) -> Option<MaskFrames> {
+        self.mask.as_ref().map(|channel| channel.frames())
     }
 }
 
