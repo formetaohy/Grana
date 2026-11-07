@@ -1,3 +1,4 @@
+mod channel;
 mod discover;
 mod gate;
 mod pipeline;
@@ -41,6 +42,7 @@ pub struct Plan {
     pub output: PathBuf,
     pub jobs: usize,
     pub project: bool,
+    pub channels: bool,
     pub snapshot: Option<Arc<dyn Snapshotter>>,
 }
 
@@ -172,6 +174,7 @@ struct Task<'a> {
     content: u64,
     index: usize,
     project: bool,
+    channels: bool,
     snapshot: Option<&'a dyn Snapshotter>,
     events: &'a Sender<Event>,
     cancel: &'a AtomicBool,
@@ -228,6 +231,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
                             content,
                             index,
                             project: plan.project,
+                            channels: plan.channels,
                             snapshot: plan.snapshot.as_deref(),
                             events: &events,
                             cancel: &cancel,
@@ -314,7 +318,7 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
     let index = task.index;
     let dataset = &plan.datasets[index];
     let folder = plan.output.join(dataset.folder());
-    let artifacts = artifacts(task.protocol, &dataset.title(), task.project);
+    let artifacts = artifacts(task.protocol, &dataset.title(), task.project, task.channels);
     if let Some(record) = completed(&folder, task.digest, &build(), task.content, &artifacts) {
         let _ = task.events.send(Event::Dataset {
             index,

@@ -524,18 +524,34 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
         ));
     }
     children.push(view::divider(ctx));
+    children.push(
+        grana_ui::row()
+            .justify(Align::End)
+            .width(Length::Fill)
+            .children([view::button_with(
+                ctx,
+                "Export Channel",
+                Role::Quiet,
+                Length::Fixed(width),
+            )
+            .named("display.export")
+            .press(Message::Command(Command::ExportChannel(index)))]),
+    );
     if derived.is_some() {
         children.push(
             grana_ui::row()
                 .justify(Align::End)
                 .width(Length::Fill)
-                .children([
-                    view::button_with(ctx, "Remove Channel", Role::Quiet, Length::Fill)
-                        .named("display.derived.remove")
-                        .press(Message::Command(Command::RemoveDerivedChannel {
-                            channel: index,
-                        })),
-                ]),
+                .children([view::button_with(
+                    ctx,
+                    "Remove Channel",
+                    Role::Quiet,
+                    Length::Fixed(width),
+                )
+                .named("display.derived.remove")
+                .press(Message::Command(Command::RemoveDerivedChannel {
+                    channel: index,
+                }))]),
         );
     } else {
         let depth = scene.dataset.world_size().z * 0.5;
@@ -543,21 +559,24 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
             grana_ui::row()
                 .justify(Align::End)
                 .width(Length::Fill)
-                .children([
-                    view::button_with(ctx, "Deconvolve", Role::Quiet, Length::Fill)
-                        .named("display.restore.add")
-                        .press(Message::Command(Command::AddRestoreChannel {
-                            source: index,
-                            params: PsfParams::new(
-                                DEFAULT_APERTURE,
-                                DEFAULT_WAVELENGTH,
-                                DEFAULT_IMMERSION,
-                                DEFAULT_SAMPLE,
-                                depth,
-                            ),
-                            iterations: DEFAULT_ITERATIONS,
-                        })),
-                ]),
+                .children([view::button_with(
+                    ctx,
+                    "Deconvolve",
+                    Role::Quiet,
+                    Length::Fixed(width),
+                )
+                .named("display.restore.add")
+                .press(Message::Command(Command::AddRestoreChannel {
+                    source: index,
+                    params: PsfParams::new(
+                        DEFAULT_APERTURE,
+                        DEFAULT_WAVELENGTH,
+                        DEFAULT_IMMERSION,
+                        DEFAULT_SAMPLE,
+                        depth,
+                    ),
+                    iterations: DEFAULT_ITERATIONS,
+                }))]),
         );
     }
     children.push(view::divider(ctx));

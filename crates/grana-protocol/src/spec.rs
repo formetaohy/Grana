@@ -82,6 +82,10 @@ fn default_azimuth() -> f32 {
     grana_display::DEFAULT_AZIMUTH
 }
 
+fn default_segment_model() -> String {
+    grana_scene::SegmentModel::default().name().to_string()
+}
+
 fn default_elevation() -> f32 {
     grana_display::DEFAULT_ELEVATION
 }
@@ -568,6 +572,8 @@ pub enum SourceSpec {
         minimum_size: u32,
         tile_overlap: u32,
         slice_overlap: f32,
+        #[serde(default = "default_segment_model")]
+        model: String,
     },
     Labels {
         label: String,
@@ -1981,14 +1987,18 @@ impl SourceSpec {
                 minimum_size,
                 tile_overlap,
                 slice_overlap,
+                model,
                 ..
-            } => Some(SegmentParams::with_settings(
-                *cellprob,
-                *flow,
-                *minimum_size,
-                *tile_overlap,
-                *slice_overlap,
-            )),
+            } => grana_scene::SegmentModel::from_name(model).map(|model| {
+                SegmentParams::with_settings(
+                    *cellprob,
+                    *flow,
+                    *minimum_size,
+                    *tile_overlap,
+                    *slice_overlap,
+                )
+                .with_model(model)
+            }),
             _ => None,
         }
     }
@@ -2113,6 +2123,7 @@ impl SourceSpec {
                 minimum_size,
                 tile_overlap,
                 slice_overlap,
+                model,
             } => {
                 validate(channel, &format!("the channel of {set}"))?;
                 if !(cellprob.is_finite() && (-10.0..=10.0).contains(cellprob)) {
@@ -2129,6 +2140,9 @@ impl SourceSpec {
                 }
                 if !(slice_overlap.is_finite() && (0.0..=1.0).contains(slice_overlap)) {
                     return invalid("needs a unit slice overlap".to_string());
+                }
+                if grana_scene::SegmentModel::from_name(model).is_none() {
+                    return invalid("names an unknown segmentation model".to_string());
                 }
             }
             Self::Labels { label } => {

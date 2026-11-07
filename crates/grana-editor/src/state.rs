@@ -226,6 +226,10 @@ impl View<'_> {
         self.batch.is_some_and(|batch| batch.project)
     }
 
+    pub fn batch_channels(&self) -> bool {
+        self.batch.is_some_and(|batch| batch.channels)
+    }
+
     pub fn batch_message(&self) -> Option<&str> {
         self.batch.and_then(|batch| batch.message.as_deref())
     }

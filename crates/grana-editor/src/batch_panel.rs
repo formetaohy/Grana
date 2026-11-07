@@ -256,6 +256,13 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
             state.batch_project(),
             Command::SetBatchProject,
         ));
+        children.push(view::toggle_row(
+            ctx,
+            "batch.channels",
+            "Export Derived Channels",
+            state.batch_channels(),
+            Command::SetBatchChannels,
+        ));
     }
     children.push(view::divider(ctx));
     if state.batch_running() {

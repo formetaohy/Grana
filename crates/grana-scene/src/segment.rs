@@ -15,6 +15,50 @@ const SIZE_DEFAULT: f32 = 15.0;
 const TILE_DEFAULT: f32 = 32.0;
 const SLICE_DEFAULT: f32 = 0.5;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SegmentModel {
+    Cpsam,
+    #[default]
+    CpsamV2,
+}
+
+impl SegmentModel {
+    pub const ALL: [Self; 2] = [Self::CpsamV2, Self::Cpsam];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Cpsam => "cpsam",
+            Self::CpsamV2 => "cpsam_v2",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Cpsam => "Cellpose-SAM v1",
+            Self::CpsamV2 => "Cellpose-SAM v2",
+        }
+    }
+
+    pub fn index(self) -> u8 {
+        match self {
+            Self::Cpsam => 0,
+            Self::CpsamV2 => 1,
+        }
+    }
+
+    pub fn from_index(index: u8) -> Option<Self> {
+        match index {
+            0 => Some(Self::Cpsam),
+            1 => Some(Self::CpsamV2),
+            _ => None,
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|model| model.name() == name)
+    }
+}
+
 pub const SEGMENT_FIELDS: [ParamField; 5] = [
     ParamField {
         label: "cell probability",
@@ -60,6 +104,7 @@ pub struct SegmentParams {
     minimum_size: u32,
     tile_overlap: u32,
     slice_overlap: f32,
+    model: SegmentModel,
 }
 
 impl Default for SegmentParams {
@@ -70,6 +115,7 @@ impl Default for SegmentParams {
             minimum_size: SIZE_DEFAULT as u32,
             tile_overlap: TILE_DEFAULT as u32,
             slice_overlap: SLICE_DEFAULT,
+            model: SegmentModel::default(),
         }
     }
 }
@@ -111,6 +157,15 @@ impl SegmentParams {
 
     pub fn slice_overlap(&self) -> f32 {
         self.slice_overlap
+    }
+
+    pub fn model(&self) -> SegmentModel {
+        self.model
+    }
+
+    pub fn with_model(mut self, model: SegmentModel) -> Self {
+        self.model = model;
+        self
     }
 
     pub fn field(&self, index: usize) -> f32 {

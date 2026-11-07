@@ -36,7 +36,7 @@ pub(super) fn completed(
         && record.build == build
         && record.content == content
         && record.artifacts == artifacts
-        && artifacts.iter().all(|name| folder.join(name).is_file()))
+        && artifacts.iter().all(|name| folder.join(name).exists()))
     .then_some(record)
 }
 

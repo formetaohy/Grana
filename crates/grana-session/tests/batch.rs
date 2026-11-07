@@ -1,4 +1,4 @@
-﻿use std::fs;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -357,6 +357,81 @@ fn replays_derived_and_merged_object_sets() {
     );
 }
 
+#[test]
+fn exports_the_derived_channels_of_every_dataset() {
+    const CHANNEL_EXPORT: &str = r#"
+{
+  "channels": [
+    {"name": "Cells", "enabled": true, "opacity": 1.0, "window": {"low": 0.0, "high": 65535.0}},
+    {"name": "Signal", "enabled": true, "opacity": 1.0, "window": {"low": 0.0, "high": 65535.0}},
+    {"name": "Cells in Puncta", "enabled": false, "opacity": 1.0, "window": {"low": 0.0, "high": 65535.0}}
+  ],
+  "sets": [
+    {
+      "key": "puncta",
+      "name": "Puncta",
+      "color": [0.3, 0.8, 1.0],
+      "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05}
+    }
+  ],
+  "derived": [
+    {"kind": "mask", "set": "puncta", "channel": "Cells", "name": "Cells in Puncta", "tint": [0.3, 0.8, 1.0]}
+  ]
+}
+"#;
+    let temp = TempDir::new("grana-batch-channel");
+    let root = temp.path().join("datasets");
+    write_dataset(&root.join("alpha.zarr"), "Cells", "Signal");
+    let output = temp.path().join("out");
+    let datasets = discover(&root).expect("the folder lists its datasets");
+    let protocol = Protocol::from_json(CHANNEL_EXPORT).expect("the protocol is valid");
+    let completed = run_with(&protocol, &datasets, &output, 1, false, true, None);
+    assert_eq!(completed, [Status::Ok], "the batch finishes");
+    let path = output.join("alpha").join("cells-in-puncta.ome.zarr");
+    let image = grana_zarr::Image::open(&path).expect("the exported channel opens");
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.channel_count(), 1);
+    assert_eq!(pyramid.frame_count(), FRAMES);
+    assert_eq!(pyramid.channels()[0].name(), "Cells in Puncta");
+    assert_eq!(
+        pyramid.level(0).extent(),
+        grana_volume::Extent::new(EXTENT[0], EXTENT[1], EXTENT[2])
+    );
+    let frame = image
+        .read_region(0, 0, 0, 0..EXTENT[0], 0..EXTENT[1], 0..EXTENT[2])
+        .expect("the first frame reads");
+    let grana_volume::VoxelData::F32(values) = &frame else {
+        panic!("the exported channel stores float voxels");
+    };
+    let signal = f32::from(SIGNAL);
+    let mut inside = 0;
+    let mut outside = 0;
+    for value in values {
+        if *value == signal {
+            inside += 1;
+        } else if *value == 0.0 {
+            outside += 1;
+        } else {
+            assert_eq!(
+                *value,
+                f32::from(BACKGROUND),
+                "the mask keeps the source signal"
+            );
+        }
+    }
+    assert!(inside > 0, "the mask keeps the signal inside the spots");
+    assert!(outside > 0, "the mask clears the background outside");
+    assert!(inside > 0, "the mask keeps the signal inside the spots");
+    assert!(outside > 0, "the mask clears the background outside");
+
+    let resumed = run_with(&protocol, &datasets, &output, 1, false, true, None);
+    assert_eq!(
+        resumed,
+        [Status::Resumed],
+        "the exported channel invalidates the resume marker"
+    );
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Status {
     Ok,
@@ -371,7 +446,7 @@ fn run(
     jobs: usize,
     project: bool,
 ) -> Vec<Status> {
-    run_with(protocol, datasets, output, jobs, project, None)
+    run_with(protocol, datasets, output, jobs, project, false, None)
 }
 
 fn run_with(
@@ -380,6 +455,7 @@ fn run_with(
     output: &Path,
     jobs: usize,
     project: bool,
+    channels: bool,
     snapshot: Option<std::sync::Arc<dyn Snapshotter>>,
 ) -> Vec<Status> {
     let batch = Batch::start(Plan {
@@ -388,6 +464,7 @@ fn run_with(
         output: output.to_path_buf(),
         jobs,
         project,
+        channels,
         snapshot,
     });
     let mut completed = vec![Status::Failed; datasets.len()];
@@ -707,6 +784,7 @@ fn renders_a_snapshot_at_the_end_of_every_dataset() {
         &output,
         1,
         false,
+        false,
         Some(recorder.clone()),
     );
     assert_eq!(completed, [Status::Ok], "the batch finishes");
@@ -760,6 +838,7 @@ fn renders_a_snapshot_at_the_end_of_every_dataset() {
         &datasets,
         &output,
         1,
+        false,
         false,
         Some(recorder.clone()),
     );

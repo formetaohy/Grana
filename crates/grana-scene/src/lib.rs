@@ -46,7 +46,7 @@ pub use provenance::{Criteria, FilterRange, LassoPath, Provenance, Recipe};
 pub use relation::Relation;
 pub use scene::{Item, Scene, Selection};
 pub use seed::Seeds;
-pub use segment::{SEGMENT_FIELDS, SegmentParams};
+pub use segment::{SEGMENT_FIELDS, SegmentModel, SegmentParams};
 pub use slug::slug;
 pub use state::{ChannelState, ItemState, RelationState, SceneState, SelectionState, SetState};
 pub use track_color::TrackColor;

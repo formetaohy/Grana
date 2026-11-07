@@ -22,7 +22,8 @@ use grana_object::{SpotParams, SurfaceFilter, SurfaceParams};
 use grana_project::{Export, Project, Source, ViewState};
 use grana_scene::{
     Criteria, Dataset, Drift, FilterRange, Item, MaskFilter, Measure, ObjectColor, ObjectFrame,
-    ObjectKind, ObjectParams, Scene, SegmentParams, Selection, TrackColor, Visibility,
+    ObjectKind, ObjectParams, Scene, SegmentModel, SegmentParams, Selection, TrackColor,
+    Visibility,
 };
 use grana_volume::{Axis, Channel, Clip, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -417,7 +418,8 @@ fn round_trips_an_imported_label_image() {
 #[test]
 fn round_trips_a_segmentation_provenance() {
     let mut scene = fixture();
-    let params = SegmentParams::with_settings(0.25, 0.3, 24, 16, 0.6);
+    let params =
+        SegmentParams::with_settings(0.25, 0.3, 24, 16, 0.6).with_model(SegmentModel::Cpsam);
     let id = scene.add_segment(0, params.clone());
     let view = ViewState {
         camera: CameraState {

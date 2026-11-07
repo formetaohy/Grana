@@ -59,17 +59,17 @@ pub fn segment(
         request.params.tile_overlap(),
         request.params.slice_overlap(),
     );
-    let path = match grana_weight::weights(
-        grana_weight::ModelVersion::DEFAULT,
-        cancel,
-        &mut |done, total| {
-            sink(Event::Progress {
-                time: 0,
-                done: done as usize,
-                total: total as usize,
-            });
-        },
-    ) {
+    let version = match request.params.model() {
+        grana_scene::SegmentModel::Cpsam => grana_weight::ModelVersion::Cpsam,
+        grana_scene::SegmentModel::CpsamV2 => grana_weight::ModelVersion::CpsamV2,
+    };
+    let path = match grana_weight::weights(version, cancel, &mut |done, total| {
+        sink(Event::Progress {
+            time: 0,
+            done: done as usize,
+            total: total as usize,
+        });
+    }) {
         Ok(path) => path,
         Err(grana_weight::Error::Cancelled) => return Ok(()),
         Err(error) => return Err(error.to_string()),

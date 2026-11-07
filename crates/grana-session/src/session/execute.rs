@@ -534,6 +534,7 @@ impl Session {
             Command::ExportMeasure => self.export_measure(),
             Command::ExportMesh(set) => self.export_mesh(set),
             Command::ExportLabels(set) => self.export_labels(set),
+            Command::ExportChannel(channel) => self.export_channel(channel),
             Command::ExportTracks(set) => self.choose_export_tracks(set),
             Command::ExportGeff(set) => self.choose_export_geff(set),
             Command::CaptureProtocol => self.capture_protocol(),
@@ -549,6 +550,10 @@ impl Session {
             Command::SetBatchJobs(jobs) => self.set_batch_jobs(jobs),
             Command::SetBatchProject(project) => {
                 self.batch_project = project;
+                self.reset_batch_rows();
+            }
+            Command::SetBatchChannels(channels) => {
+                self.batch_channels = channels;
                 self.reset_batch_rows();
             }
             Command::RunBatch => self.run_batch(),

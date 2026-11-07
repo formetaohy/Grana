@@ -465,6 +465,7 @@ impl Encode for Provenance {
                 writer.count(params.minimum_size() as usize);
                 writer.count(params.tile_overlap() as usize);
                 writer.f32(params.slice_overlap());
+                writer.u8(params.model().index());
             }
             Self::Filtered { source, criteria } => {
                 writer.u8(1);

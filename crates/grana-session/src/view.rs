@@ -54,6 +54,7 @@ pub struct BatchView<'a> {
     pub output: Option<String>,
     pub jobs: usize,
     pub project: bool,
+    pub channels: bool,
     pub running: bool,
     pub paused: bool,
     pub message: Option<String>,

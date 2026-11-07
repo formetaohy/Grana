@@ -1,6 +1,7 @@
 mod analysis;
 mod batch;
 mod cache;
+mod channel;
 mod edit;
 mod execute;
 mod export;
@@ -100,6 +101,7 @@ pub struct Session {
     batch_paused: bool,
     batch_jobs: usize,
     batch_project: bool,
+    batch_channels: bool,
     batch_message: Option<String>,
     generation: u64,
     reload: u64,
@@ -107,6 +109,7 @@ pub struct Session {
     history: History,
     export: Export,
     labels: Option<label::Labels>,
+    channel_export: Option<channel::ChannelExport>,
     label_images: Vec<String>,
     resume: Vec<(ObjectSetId, ObjectSetId, i32)>,
     recut: Option<(ObjectSetId, SurfaceCut)>,
@@ -156,6 +159,7 @@ impl Session {
             batch_paused: false,
             batch_jobs: grana_pipeline::default_jobs(),
             batch_project: false,
+            batch_channels: false,
             batch_message: None,
             generation: 0,
             reload: 0,
@@ -163,6 +167,7 @@ impl Session {
             history: History::default(),
             export: Export::NATIVE,
             labels: None,
+            channel_export: None,
             label_images: Vec::new(),
             resume: Vec::new(),
             recut: None,
@@ -241,6 +246,7 @@ impl Session {
                 .map(|path| path.display().to_string()),
             jobs: self.batch_jobs,
             project: self.batch_project,
+            channels: self.batch_channels,
             running: self.batch_running,
             paused: self.batch_paused,
             message: self.batch_message.clone(),
@@ -286,7 +292,7 @@ impl Session {
             frame_interval: interval,
             export,
             export_message,
-            label: self.label_progress(),
+            label: self.write_progress(),
             store: StoreView {
                 resident: stats.resident(),
                 spilled: stats.spilled(),
@@ -330,8 +336,22 @@ impl Session {
         repaint |= self.poll_analysis();
         repaint |= self.poll_batch();
         repaint |= self.poll_labels();
+        repaint |= self.poll_channel();
         repaint |= self.refresh_masks();
         repaint
+    }
+
+    pub fn writing(&self) -> bool {
+        self.labels.is_some() || self.channel_export.is_some()
+    }
+
+    pub fn write_progress(&self) -> Option<(&str, usize, usize)> {
+        if let Some(labels) = self.labels.as_ref() {
+            return Some((labels.label(), labels.progress().0, labels.progress().1));
+        }
+        self.channel_export
+            .as_ref()
+            .map(|export| (export.label(), export.progress().0, export.progress().1))
     }
     pub fn request(&mut self, time: u32, bricks: &[BrickRequest]) {
         if self.loading.is_some() {

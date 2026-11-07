@@ -422,6 +422,7 @@ fn segments(channel: &str, params: &SegmentParams) -> Result<SourceSpec, Protoco
         minimum_size: params.minimum_size(),
         tile_overlap: params.tile_overlap(),
         slice_overlap: params.slice_overlap(),
+        model: params.model().name().to_string(),
     })
 }
 

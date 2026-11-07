@@ -15,7 +15,7 @@ use grana_project::{Export, ViewState};
 use grana_protocol::{Protocol, SnapshotSpec, SourceSpec, Step, ViewSpec};
 use grana_scene::{
     Criteria, Dataset, FilterRange, MaskFilter, Measure, ObjectColor, ObjectFrame, ObjectKind,
-    Scene, SegmentParams, TrackColor,
+    Scene, SegmentModel, SegmentParams, TrackColor,
 };
 use grana_volume::{Axis, Channel, Clip, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -73,7 +73,7 @@ fn captures_and_stages_a_segmented_set() {
     );
     let series = VolumeSeries::new(vec![volume], 1.0);
     let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
-    let params = SegmentParams::with_settings(0.1, 0.2, 8, 16, 0.5);
+    let params = SegmentParams::with_settings(0.1, 0.2, 8, 16, 0.5).with_model(SegmentModel::Cpsam);
     scene.add_segment(0, params.clone());
     let protocol =
         Protocol::capture(&scene, &Measure::new(), None).expect("the segmentation captures");

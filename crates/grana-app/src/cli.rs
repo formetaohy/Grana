@@ -41,6 +41,7 @@ pub fn batch(
     output: &Path,
     jobs: Option<usize>,
     project: bool,
+    channels: bool,
 ) -> ExitCode {
     let protocol = match Protocol::read(protocol) {
         Ok(protocol) => protocol,
@@ -66,6 +67,7 @@ pub fn batch(
         output: output.to_path_buf(),
         jobs: jobs.unwrap_or_else(grana_pipeline::default_jobs),
         project,
+        channels,
         snapshot: Some(Arc::new(Snapshot::new())),
     });
     listen(running.control());

@@ -828,6 +828,7 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
             let minimum = reader.count(1)?;
             let tile = reader.count(0)?;
             let slice = reader.f32()?;
+            let model = reader.u8()?;
             if !(cellprob.is_finite() && (-10.0..=10.0).contains(&cellprob))
                 || !(flow.is_finite() && (0.0..=1.0).contains(&flow))
                 || minimum > 10_000
@@ -836,6 +837,7 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
             {
                 return Err(FAULT_VALUE);
             }
+            let model = grana_scene::SegmentModel::from_index(model).ok_or(FAULT_VALUE)?;
             Ok(Provenance::Segmented {
                 params: grana_scene::SegmentParams::with_settings(
                     cellprob,
@@ -843,7 +845,8 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
                     minimum as u32,
                     tile as u32,
                     slice,
-                ),
+                )
+                .with_model(model),
             })
         }
         _ => Err(FAULT_TAG),

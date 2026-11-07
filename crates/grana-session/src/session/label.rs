@@ -275,14 +275,4 @@ impl super::Session {
         }
         repaint
     }
-
-    pub fn writing(&self) -> bool {
-        self.labels.is_some()
-    }
-
-    pub fn label_progress(&self) -> Option<(&str, usize, usize)> {
-        self.labels
-            .as_ref()
-            .map(|labels| (labels.label(), labels.progress().0, labels.progress().1))
-    }
 }

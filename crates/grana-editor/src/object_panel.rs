@@ -806,7 +806,9 @@ fn origin<'a>(
     };
     let text = match set.provenance() {
         Provenance::Detection => return None,
-        Provenance::Segmented { .. } => "Segmented with Cellpose-SAM".to_string(),
+        Provenance::Segmented { params } => {
+            format!("Segmented with {}", params.model().label())
+        }
         Provenance::Imported { label } => format!("Imported from {label}"),
         Provenance::Interop { file } => format!("Imported tracks from {file}"),
         Provenance::Filtered { source, .. } => format!("Filtered from {}", name(*source)),
@@ -870,6 +872,25 @@ fn params<'a>(
     let params = set.params();
     let mut children = Vec::new();
     if let Some(segment) = set.provenance().segment() {
+        let models = grana_scene::SegmentModel::ALL
+            .iter()
+            .map(|model| (*model, model.label().to_string()))
+            .collect::<Vec<_>>();
+        let selected = segment.clone();
+        children.push(crate::inspector::form_combo(
+            ctx,
+            &format!("object.{}.segment.model", id.raw()),
+            "Model",
+            &models,
+            Some(segment.model()),
+            200.0,
+            move |model| {
+                Message::Command(Command::SetSegment {
+                    set: id,
+                    params: selected.clone().with_model(model),
+                })
+            },
+        ));
         for (index, field) in SEGMENT_FIELDS.iter().enumerate() {
             let (minimum, maximum) = bounds(field, voxel, world);
             let value = segment.field(index).clamp(minimum, maximum);

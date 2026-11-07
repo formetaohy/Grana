@@ -3587,6 +3587,7 @@ dependencies = [
  "grana-text",
  "grana-volume",
  "grana-weight",
+ "grana-zarr",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

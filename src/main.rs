@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: grana [--batch <protocol.json> <datasets> <output> [--jobs <n>] [--project]] | grana [--capture <image.png>] | grana [--clear-cache]";
+const USAGE: &str = "usage: grana [--batch <protocol.json> <datasets> <output> [--jobs <n>] [--project] [--channels]] | grana [--capture <image.png>] | grana [--clear-cache]";
 
 fn main() -> ExitCode {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
@@ -26,6 +26,7 @@ fn run(arguments: &[String]) -> Option<ExitCode> {
             let mut paths = Vec::new();
             let mut jobs = None;
             let mut project = false;
+            let mut channels = false;
             let mut index = 1;
             while index < arguments.len() {
                 match arguments[index].as_str() {
@@ -35,6 +36,10 @@ fn run(arguments: &[String]) -> Option<ExitCode> {
                     }
                     "--project" => {
                         project = true;
+                        index += 1;
+                    }
+                    "--channels" => {
+                        channels = true;
                         index += 1;
                     }
                     option if option.starts_with("--") => return None,
@@ -51,6 +56,7 @@ fn run(arguments: &[String]) -> Option<ExitCode> {
                     output.as_path(),
                     jobs,
                     project,
+                    channels,
                 )),
                 _ => None,
             }

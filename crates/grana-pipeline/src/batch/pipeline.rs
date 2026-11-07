@@ -20,6 +20,7 @@ use crate::run;
 use crate::snapshot::SnapshotRequest;
 use grana_protocol::{Protocol, ProtocolError, Step};
 
+use super::channel;
 use super::quality::{self, Quality};
 use super::resume::{Record, build};
 use super::{DatasetEntry, Event, PARTIAL, Progress, RESULT, SNAPSHOT, Task};
@@ -70,7 +71,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
     let store = GeometryStore::temporary(DEFAULT_BUDGET)
         .map_err(|error| format!("the dataset cannot page its geometry: {error}"))?;
     let name = dataset.title();
-    let artifacts = artifacts(task.protocol, &name, task.project);
+    let artifacts = artifacts(task.protocol, &name, task.project, task.channels);
     let mut scene = Scene::new(dataset_of(reader.format(), &name, reader.pyramid()));
     let infos = task
         .protocol
@@ -147,6 +148,10 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         channels,
         ..
     } = run;
+    scene.sync_masks();
+    if task.channels {
+        channel::write(task, &scene, &channels, folder)?;
+    }
     let mut objects = 0usize;
     let mut detail = Vec::new();
     let mut quality = Vec::new();
@@ -731,7 +736,12 @@ fn frames_of(scene: &Scene, id: ObjectSetId) -> Vec<Option<Arc<ObjectFrame>>> {
         .collect()
 }
 
-pub(super) fn artifacts(protocol: &Protocol, name: &str, project: bool) -> Vec<String> {
+pub(super) fn artifacts(
+    protocol: &Protocol,
+    name: &str,
+    project: bool,
+    channels: bool,
+) -> Vec<String> {
     let mut artifacts = protocol
         .sets()
         .iter()
@@ -742,6 +752,11 @@ pub(super) fn artifacts(protocol: &Protocol, name: &str, project: bool) -> Vec<S
             let stem = format!("coloc-{}-{}", slug(&pair.a), slug(&pair.b));
             artifacts.push(format!("{stem}.csv"));
             artifacts.push(format!("{stem}.png"));
+        }
+    }
+    if channels {
+        for derived in protocol.derived() {
+            artifacts.push(format!("{}.ome.zarr", slug(derived.name())));
         }
     }
     if protocol.snapshot().is_some() {
