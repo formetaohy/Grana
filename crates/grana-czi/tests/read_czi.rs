@@ -212,6 +212,76 @@ fn reads_every_scene() {
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn reads_a_subblock_that_holds_several_planes() {
+    let path = write_stacked();
+    let image = Image::open(&path, 0).expect("the stacked file opens");
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.level(0).extent(), Extent::new(2, 2, 3));
+    let VoxelData::U8(values) = image
+        .read_region(0, 0, 0, 0..2, 0..2, 0..3)
+        .expect("the stacked planes read")
+    else {
+        panic!("the fixture stores eight bit voxels");
+    };
+    assert_eq!(values, (0..12).collect::<Vec<u8>>());
+    let plane = image
+        .read_region(0, 0, 0, 0..2, 0..2, 1..2)
+        .expect("a middle plane reads");
+    let VoxelData::U8(plane) = plane else {
+        panic!("the fixture stores eight bit voxels");
+    };
+    assert_eq!(plane, vec![4, 5, 6, 7]);
+    let _ = std::fs::remove_file(&path);
+}
+
+fn write_stacked() -> PathBuf {
+    let xml = "<ImageDocument><Metadata><Information><Image>\
+<SizeX>2</SizeX><SizeY>2</SizeY><SizeZ>3</SizeZ><SizeC>1</SizeC><SizeT>1</SizeT>\
+</Image></Information>\
+<Scaling><Items>\
+<Distance Id=\"X\"><Value>1E-06</Value></Distance>\
+<Distance Id=\"Y\"><Value>1E-06</Value></Distance>\
+<Distance Id=\"Z\"><Value>2E-06</Value></Distance>\
+</Items></Scaling></Metadata></ImageDocument>";
+    let axes = vec![
+        Axis::new(*b"X\0\0\0", 0, 2),
+        Axis::stored(*b"Y\0\0\0", 0, 2, 2),
+        Axis::stored(*b"Z\0\0\0", 0, 3, 3),
+        Axis::new(*b"C\0\0\0", 0, 1),
+        Axis::new(*b"T\0\0\0", 0, 1),
+    ];
+    let data = (0..12).collect::<Vec<u8>>();
+    let payload = {
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        body.extend_from_slice(&entry(0, 0, 0, &axes));
+        body.resize(16 + ENTRY_MINIMUM, 0);
+        body.extend_from_slice(&data);
+        segment(b"ZISRAWSUBBLOCK", &body)
+    };
+    let metadata_length = METADATA_XML_OFFSET + xml.len();
+    let directory_body = 128 + 32 + axes.len() * 20;
+    let metadata = 32 + FILE_HEADER_BODY;
+    let directory = metadata + 32 + metadata_length;
+    let payload_position = directory + 32 + directory_body;
+    let mut content = vec![0u8; 128];
+    content[..4].copy_from_slice(&1i32.to_le_bytes());
+    content.extend_from_slice(&entry(0, 0, payload_position as u64, &axes));
+    let mut file = segment(b"ZISRAWFILE", &[0u8; FILE_HEADER_BODY]);
+    file[32..36].copy_from_slice(&1i32.to_le_bytes());
+    file.extend_from_slice(&segment(b"ZISRAWMETADATA", &metadata_body(xml)));
+    file.extend_from_slice(&segment(b"ZISRAWDIRECTORY", &content));
+    file.extend_from_slice(&payload);
+    patch(&mut file, 52, directory as u64);
+    patch(&mut file, 60, metadata as u64);
+    let path = std::env::temp_dir().join("grana-stacked.czi");
+    std::fs::write(&path, &file).expect("the file writes");
+    path
+}
+
 fn expected(channel: u16) -> Vec<u16> {
     (0..WIDTH * HEIGHT)
         .map(|index| channel * 1000 + index as u16)

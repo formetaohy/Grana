@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-type Key = (usize, usize, usize);
+type Key = (usize, usize, usize, usize);
 
 const SHARDS: usize = 16;
 
@@ -39,8 +39,12 @@ impl Cache {
     }
 
     fn shard(&self, key: Key) -> &Mutex<Shard> {
-        let slot = key.0.wrapping_mul(0x9e37_79b1) ^ key.1.wrapping_mul(0x85eb_ca6b);
-        &self.shards[(slot ^ key.2.wrapping_mul(0xc2b2_ae35)) % SHARDS]
+        let slot = key
+            .0
+            .wrapping_mul(0x9e37_79b1)
+            .wrapping_add(key.1.wrapping_mul(0x85eb_ca6b))
+            .wrapping_add(key.2.wrapping_mul(0xc2b2_ae35));
+        &self.shards[slot % SHARDS]
     }
 
     pub(crate) fn lookup(&self, key: Key) -> Option<Arc<Vec<u8>>> {

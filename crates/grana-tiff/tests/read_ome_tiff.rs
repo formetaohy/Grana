@@ -169,6 +169,79 @@ fn reads_a_pillow_ome_tiff() {
     }
 }
 
+#[test]
+fn reads_a_series_split_over_several_files() {
+    let temp = TempDir::new("grana-tiff-series");
+    let first = temp.path().join("field.c1.ome.tif");
+    let second = temp.path().join("field.c2.ome.tif");
+    fs::write(&first, channel_image(&first, 0)).expect("the first file is written");
+    fs::write(&second, channel_image(&second, 1)).expect("the second file is written");
+    let image = Image::open(&first).expect("the series opens from its first file");
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.channel_count(), 2);
+    assert_eq!(pyramid.level(0).extent(), Extent::new(4, 3, 1));
+    for channel in 0..2u32 {
+        let data = image
+            .read_region(0, 0, channel as usize, 0..4, 0..3, 0..1)
+            .expect("a channel reads");
+        let VoxelData::U8(values) = data else {
+            panic!("the fixture stores bytes");
+        };
+        for y in 0..3u32 {
+            for x in 0..4u32 {
+                let expected = 50 * channel + 10 * y + x;
+                assert_eq!(
+                    u32::from(values[(y * 4 + x) as usize]),
+                    expected,
+                    "channel {channel} voxel {x},{y}"
+                );
+            }
+        }
+    }
+}
+
+fn channel_image(path: &Path, channel: u32) -> Vec<u8> {
+    let mut tiff = Tiff::new(false);
+    let mut raw = Vec::new();
+    for y in 0..3u32 {
+        for x in 0..4u32 {
+            raw.push((50 * channel + 10 * y + x) as u8);
+        }
+    }
+    let count = raw.len() as u64;
+    let offset = tiff.append(&raw);
+    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+    let other = if channel == 0 {
+        "field.c2.ome.tif"
+    } else {
+        "field.c1.ome.tif"
+    };
+    let xml = format!(
+        "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\">\
+<Image Name=\"Field\"><Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"4\" SizeY=\"3\" SizeZ=\"1\" SizeC=\"2\" SizeT=\"1\">\
+<TiffData IFD=\"0\" PlaneCount=\"1\" FirstC=\"{channel}\"><UUID FileName=\"{name}\"/></TiffData>\
+<TiffData IFD=\"0\" PlaneCount=\"1\" FirstC=\"{}\"><UUID FileName=\"{other}\"/></TiffData>\
+</Pixels></Image></OME>",
+        1 - channel
+    );
+    let page = tiff.directory(vec![
+        longs(TAG_IMAGE_WIDTH, &[4]),
+        longs(TAG_IMAGE_LENGTH, &[3]),
+        shorts(TAG_BITS_PER_SAMPLE, &[8]),
+        shorts(TAG_COMPRESSION, &[COMPRESSION_NONE]),
+        shorts(TAG_PHOTOMETRIC, &[1]),
+        offsets(false, TAG_STRIP_OFFSETS, &[offset]),
+        shorts(TAG_SAMPLES_PER_PIXEL, &[1]),
+        shorts(TAG_ROWS_PER_STRIP, &[3]),
+        offsets(false, TAG_STRIP_BYTE_COUNTS, &[count]),
+        shorts(TAG_PLANAR_CONFIGURATION, &[1]),
+        shorts(TAG_SAMPLE_FORMAT, &[1]),
+        ascii(TAG_IMAGE_DESCRIPTION, &xml),
+    ]);
+    tiff.chain(&[page]);
+    tiff.finish()
+}
+
 fn pyramid_image() -> Vec<u8> {
     let mut tiff = Tiff::new(false);
     let width = 8u32;

@@ -21,7 +21,12 @@ pub(crate) struct Channel {
     pub tint: Option<[f32; 3]>,
 }
 
+#[derive(Default, Clone)]
 pub(crate) struct TiffData {
+    pub ifd: u32,
+    pub z: u32,
+    pub c: u32,
+    pub t: u32,
     pub planes: u32,
     pub file: Option<String>,
 }
@@ -32,6 +37,7 @@ pub(crate) fn parse(xml: &str) -> Result<Option<Ome>, String> {
     let mut ome = Ome::default();
     let mut depth = 0usize;
     let mut image_depth = None;
+    let mut pending: Option<TiffData> = None;
     loop {
         let event = reader.read_event().map_err(|error| error.to_string())?;
         match event {
@@ -43,12 +49,17 @@ pub(crate) fn parse(xml: &str) -> Result<Option<Ome>, String> {
                         ome.name = attribute(&start, b"Name")?;
                     }
                 } else if image_depth.is_some() {
-                    element(&start, &mut ome)?;
+                    element(&start, &mut ome, &mut pending)?;
                 }
             }
             Event::Empty(start) => {
                 if image_depth.is_some() {
-                    element(&start, &mut ome)?;
+                    element(&start, &mut ome, &mut pending)?;
+                    if start.name().local_name().as_ref() == b"TiffData"
+                        && let Some(block) = pending.take()
+                    {
+                        ome.tiff_data.push(block);
+                    }
                 }
             }
             Event::End(end) => {
@@ -58,20 +69,51 @@ pub(crate) fn parse(xml: &str) -> Result<Option<Ome>, String> {
                 if depth == 0 {
                     break;
                 }
+                if end.name().local_name().as_ref() == b"TiffData"
+                    && let Some(block) = pending.take()
+                {
+                    ome.tiff_data.push(block);
+                }
                 depth -= 1;
             }
             Event::Eof => break,
             _ => {}
         }
     }
+    if let Some(block) = pending {
+        ome.tiff_data.push(block);
+    }
     Ok(image_depth.map(|_| ome))
 }
 
-fn element(start: &BytesStart, ome: &mut Ome) -> Result<(), String> {
+fn element(
+    start: &BytesStart,
+    ome: &mut Ome,
+    pending: &mut Option<TiffData>,
+) -> Result<(), String> {
     match start.name().local_name().as_ref() {
         b"Pixels" => pixels(start, ome),
         b"Channel" => channel(start, ome),
-        b"TiffData" => tiff_data(start, ome),
+        b"TiffData" => {
+            *pending = Some(TiffData {
+                ifd: integer_attribute(start, b"IFD")?.unwrap_or(0),
+                z: integer_attribute(start, b"FirstZ")?.unwrap_or(0),
+                c: integer_attribute(start, b"FirstC")?.unwrap_or(0),
+                t: integer_attribute(start, b"FirstT")?.unwrap_or(0),
+                planes: integer_attribute(start, b"PlaneCount")?.unwrap_or(1),
+                file: attribute(start, b"FileName")?,
+            });
+            Ok(())
+        }
+        b"UUID" => {
+            let Some(name) = attribute(start, b"FileName")? else {
+                return Ok(());
+            };
+            if let Some(block) = pending.as_mut() {
+                block.file.get_or_insert(name);
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
@@ -108,13 +150,6 @@ fn channel(start: &BytesStart, ome: &mut Ome) -> Result<(), String> {
         None => None,
     };
     ome.channels.push(Channel { name, tint });
-    Ok(())
-}
-
-fn tiff_data(start: &BytesStart, ome: &mut Ome) -> Result<(), String> {
-    let planes = integer_attribute(start, b"PlaneCount")?.unwrap_or(1);
-    let file = attribute(start, b"FileName")?;
-    ome.tiff_data.push(TiffData { planes, file });
     Ok(())
 }
 

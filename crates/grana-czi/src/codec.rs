@@ -12,11 +12,20 @@ pub(crate) fn decompress(
     pixel: PixelType,
     input: &[u8],
     size: [u32; 2],
+    depth: u32,
 ) -> Result<Vec<u8>, String> {
-    let expected = size[0] as usize * size[1] as usize * pixel.bytes();
+    let planes = size[0] as usize * size[1] as usize * pixel.bytes();
+    let expected = planes * depth as usize;
     match compression {
         Compression::None => Ok(fit(input.to_vec(), expected)),
-        Compression::JpegXr => jpeg_xr(pixel, input, expected, size),
+        Compression::JpegXr => {
+            if depth != 1 {
+                return Err(
+                    "a CZI JPEG XR subblock spanning several planes is not supported".to_string(),
+                );
+            }
+            jpeg_xr(pixel, input, expected, size)
+        }
         Compression::Zstd0 => zstd(input, expected),
         Compression::Zstd1 => zstd1(input, expected),
     }

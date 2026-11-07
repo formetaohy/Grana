@@ -19,6 +19,7 @@ const COMPRESSION_NONE: u16 = 1;
 const PREDICTOR_NONE: u16 = 1;
 const PREDICTOR_HORIZONTAL: u16 = 2;
 
+#[derive(Clone)]
 pub(crate) struct Page {
     pub width: u32,
     pub height: u32,
@@ -32,6 +33,7 @@ pub(crate) struct Page {
     layout: Layout,
 }
 
+#[derive(Clone)]
 enum Layout {
     Tiles {
         width: u32,
@@ -55,6 +57,7 @@ pub(crate) struct Source<'a> {
     pub store: &'a Store,
     pub cache: &'a Cache,
     pub path: &'a Path,
+    pub file: usize,
 }
 
 struct Block {
@@ -279,7 +282,7 @@ impl Page {
         block: &Block,
     ) -> Result<Arc<Vec<u8>>, Error> {
         let path = source.path;
-        let key = (level, page_index, block.index);
+        let key = (source.file, level, page_index, block.index);
         if let Some(data) = source.cache.lookup(key) {
             return Ok(data);
         }

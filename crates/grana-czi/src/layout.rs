@@ -68,7 +68,6 @@ fn group(
 ) -> Result<BTreeMap<u32, BTreeMap<u32, Vec<Entry>>>, Error> {
     let mut scenes: BTreeMap<u32, BTreeMap<u32, Vec<Entry>>> = BTreeMap::new();
     for entry in entries {
-        block(&entry, path)?;
         if entry.file_part != 0 {
             return Err(Error::unsupported(
                 path,
@@ -140,7 +139,7 @@ fn assemble(
         }
         channels = channels.max(entry.start(Dimension::C) as u32 + 1);
         frames = frames.max(entry.start(Dimension::T) as u32 + 1);
-        depth = depth.max(entry.start(Dimension::Z) as u32 + 1);
+        depth = depth.max(entry.start(Dimension::Z) as u32 + entry.stored(Dimension::Z));
     }
     let extent = Extent::new((high[0] - low[0]) as u32, (high[1] - low[1]) as u32, depth);
     if let Some(image) = image {
@@ -266,26 +265,36 @@ fn assemble_level(
                 .ok_or_else(|| Error::metadata(context.path, "a resolution level is too large"))?;
             high[axis] = high[axis].max(end);
         }
-        depth = depth.max(
-            plane
-                .checked_add(1)
-                .ok_or_else(|| Error::metadata(context.path, "a resolution level is too deep"))?,
-        );
+        let planes = entry.stored(Dimension::Z);
+        let limit = plane
+            .checked_add(planes)
+            .ok_or_else(|| Error::metadata(context.path, "a resolution level is too deep"))?;
+        if limit > context.base_depth {
+            return Err(Error::metadata(
+                context.path,
+                "a subblock reaches past the planes the image declares",
+            ));
+        }
+        depth = depth.max(limit);
         let tile = Tile {
             position: entry.position,
             x: position[0],
             y: position[1],
             width: size[0],
             height: size[1],
+            depth: planes,
+            plane,
             mosaic: entry.start(Dimension::Mosaic),
             pixel: entry.pixel,
             compression: entry.compression,
         };
-        plans
-            .entry((time, channel, plane))
-            .or_insert(Plan { tiles: Vec::new() })
-            .tiles
-            .push(tile);
+        for held in plane..limit {
+            plans
+                .entry((time, channel, held))
+                .or_insert(Plan { tiles: Vec::new() })
+                .tiles
+                .push(tile);
+        }
     }
     if high[0] == 0 || high[1] == 0 || depth == 0 {
         return Err(Error::metadata(
@@ -294,7 +303,8 @@ fn assemble_level(
         ));
     }
     for plan in plans.values_mut() {
-        plan.tiles.sort_by_key(|tile| tile.mosaic);
+        plan.tiles
+            .sort_by_key(|tile| (tile.mosaic, tile.plane, tile.position));
     }
     for time in 0..context.frames {
         for channel in 0..context.channels {
@@ -353,7 +363,7 @@ fn minification(entry: &Entry) -> Option<u32> {
 }
 
 fn axes(entry: &Entry, path: &Path) -> Result<(), Error> {
-    for dimension in [Dimension::Z, Dimension::C, Dimension::T, Dimension::Scene] {
+    for dimension in [Dimension::C, Dimension::T, Dimension::Scene] {
         if entry.size(dimension) != 1 {
             return Err(Error::unsupported(
                 path,
@@ -374,7 +384,26 @@ fn axes(entry: &Entry, path: &Path) -> Result<(), Error> {
             ));
         }
     }
+    for dimension in [Dimension::Z, Dimension::Block] {
+        if entry.start(dimension) < 0 {
+            return Err(Error::metadata(
+                path,
+                format!(
+                    "a CZI subblock starts before the image along {}",
+                    dimension.label()
+                ),
+            ));
+        }
+    }
     for axis in &entry.axes {
+        if let Dimension::Block = axis.dimension
+            && axis.start < 0
+        {
+            return Err(Error::metadata(
+                path,
+                "a CZI subblock starts before the image along B",
+            ));
+        }
         if let Dimension::Other(code) = axis.dimension
             && axis.size > 1
         {
@@ -383,16 +412,6 @@ fn axes(entry: &Entry, path: &Path) -> Result<(), Error> {
                 format!("the CZI dimension `{}` is not supported", char::from(code)),
             ));
         }
-    }
-    Ok(())
-}
-
-fn block(entry: &Entry, path: &Path) -> Result<(), Error> {
-    if entry.size(Dimension::Block) > 1 || entry.start(Dimension::Block) > 0 {
-        return Err(Error::unsupported(
-            path,
-            "the CZI image is split into several acquisition blocks",
-        ));
     }
     Ok(())
 }

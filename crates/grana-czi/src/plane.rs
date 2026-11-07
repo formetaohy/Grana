@@ -13,12 +13,15 @@ const ENTRY_MINIMUM: u64 = 240;
 const AXIS_LENGTH: u64 = 20;
 const AXIS_HEADER: u64 = 32;
 
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Tile {
     pub(crate) position: u64,
     pub(crate) x: u32,
     pub(crate) y: u32,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    pub(crate) depth: u32,
+    pub(crate) plane: u32,
     pub(crate) mosaic: i32,
     pub(crate) pixel: PixelType,
     pub(crate) compression: Compression,
@@ -71,6 +74,7 @@ pub(crate) fn samples(store: &Store, path: &Path, tile: &Tile) -> Result<Vec<u8>
         tile.pixel,
         &input,
         [tile.width, tile.height],
+        tile.depth,
     )
     .map_err(|detail| Error::read(path, detail))
 }

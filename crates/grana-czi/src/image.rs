@@ -354,6 +354,7 @@ fn region(
             plan,
             cache,
             request,
+            depth,
             &mut bytes[target..target + row * height],
         )?;
     }
@@ -366,6 +367,7 @@ fn blit(
     plan: &Plan,
     cache: &Cache,
     request: &Request<'_>,
+    depth: u32,
     out: &mut [u8],
 ) -> Result<(), Error> {
     let sample = sample_bytes(request.format);
@@ -379,12 +381,17 @@ fn blit(
         if left >= right || top >= bottom {
             continue;
         }
+        if depth < tile.plane || depth >= tile.plane + tile.depth {
+            continue;
+        }
+        let held = (depth - tile.plane) as usize;
+        let origin = held * row * tile.height as usize;
         let samples = samples(store, path, cache, tile)?;
         let columns = (right - left) as usize * sample;
         for line in top..bottom {
-            let source = (((line - tile.y) as usize) * tile.width as usize
-                + (left - tile.x) as usize)
-                * sample;
+            let source = origin
+                + (((line - tile.y) as usize) * tile.width as usize + (left - tile.x) as usize)
+                    * sample;
             let target = ((line - request.y.start) as usize) * row
                 + (left - request.x.start) as usize * sample;
             out[target..target + columns].copy_from_slice(&samples[source..source + columns]);

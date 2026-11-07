@@ -7,6 +7,7 @@ enum Axis {
 
 const AXES: [Axis; 3] = [Axis::Z, Axis::C, Axis::T];
 
+#[derive(Clone)]
 pub(crate) struct Planes {
     order: Vec<Axis>,
     sizes: [u32; 3],
@@ -71,6 +72,10 @@ impl Planes {
 
     pub(crate) fn channels(&self) -> u32 {
         self.sizes[slot(Axis::C)]
+    }
+
+    pub(crate) fn depth(&self) -> u32 {
+        self.sizes[slot(Axis::Z)]
     }
 
     pub(crate) fn count(&self) -> u64 {
