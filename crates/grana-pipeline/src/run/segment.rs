@@ -59,8 +59,18 @@ pub fn segment(
         request.params.tile_overlap(),
         request.params.slice_overlap(),
     );
-    let mut segmenter = Segmenter::open(request.params.model(), settings)
-        .map_err(|error| format!("the segmentation model cannot open: {error}"))?;
+    let path = match grana_weight::weights(cancel, &mut |done, total| {
+        sink(Event::Progress {
+            time: 0,
+            done: done as usize,
+            total: total as usize,
+        });
+    }) {
+        Ok(path) => path,
+        Err(grana_weight::Error::Cancelled) => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut segmenter = Segmenter::open(&path, settings).map_err(|error| error.to_string())?;
     let frames = reader.pyramid().frame_count();
     let total = frames as usize * depth as usize;
     sink(Event::Progress {

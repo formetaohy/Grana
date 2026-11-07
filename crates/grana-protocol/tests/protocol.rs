@@ -73,14 +73,14 @@ fn captures_and_stages_a_segmented_set() {
     );
     let series = VolumeSeries::new(vec![volume], 1.0);
     let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
-    let params = SegmentParams::with_settings("models/cpsam.onnx", 0.1, 0.2, 8, 16, 0.5);
+    let params = SegmentParams::with_settings(0.1, 0.2, 8, 16, 0.5);
     scene.add_segment(0, params.clone());
     let protocol =
         Protocol::capture(&scene, &Measure::new(), None).expect("the segmentation captures");
-    let SourceSpec::Segments { model, .. } = &protocol.sets()[0].source else {
+    let SourceSpec::Segments { cellprob, .. } = &protocol.sets()[0].source else {
         panic!("the set keeps its segmentation source");
     };
-    assert_eq!(model, "models/cpsam.onnx");
+    assert_eq!(*cellprob, 0.1);
     let text = serde_json::to_string(&protocol).expect("the protocol serializes");
     let parsed: Protocol = serde_json::from_str(&text).expect("the protocol parses");
     let mut staged_scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));

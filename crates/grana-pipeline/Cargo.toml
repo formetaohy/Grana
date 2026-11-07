@@ -25,9 +25,11 @@ grana-scene = { workspace = true }
 grana-segment = { workspace = true }
 grana-text = { workspace = true }
 grana-volume = { workspace = true }
+grana-weight = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]
 workspace = true
+

@@ -44,10 +44,10 @@ impl Session {
                     scene.add_object(kind, channel);
                 }
             }
-            Command::AddSegment { model } => {
+            Command::AddSegment => {
                 if let Some(scene) = self.scene.as_mut() {
                     let channel = scene.selected;
-                    scene.add_segment(channel, SegmentParams::new(model));
+                    scene.add_segment(channel, SegmentParams::default());
                 }
             }
             Command::SetSegment { set, params } => {
@@ -62,7 +62,6 @@ impl Session {
                     ));
                 }
             }
-            Command::ChooseSegment | Command::ChooseSegmentModel(_) => {}
             Command::AddMaskChannel { set } => self.add_mask_channel(set),
             Command::AddRestoreChannel {
                 source,

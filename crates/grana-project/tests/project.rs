@@ -417,7 +417,7 @@ fn round_trips_an_imported_label_image() {
 #[test]
 fn round_trips_a_segmentation_provenance() {
     let mut scene = fixture();
-    let params = SegmentParams::with_settings("models/cpsam.onnx", 0.25, 0.3, 24, 16, 0.6);
+    let params = SegmentParams::with_settings(0.25, 0.3, 24, 16, 0.6);
     let id = scene.add_segment(0, params.clone());
     let view = ViewState {
         camera: CameraState {

@@ -823,16 +823,12 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
             Ok(Provenance::Interop { file })
         }
         6 => {
-            let model = reader.string()?;
             let cellprob = reader.f32()?;
             let flow = reader.f32()?;
             let minimum = reader.count(1)?;
             let tile = reader.count(0)?;
             let slice = reader.f32()?;
-            let path = std::path::PathBuf::from(&model);
-            if model.trim().is_empty()
-                || path.file_name().is_none()
-                || !(cellprob.is_finite() && (-10.0..=10.0).contains(&cellprob))
+            if !(cellprob.is_finite() && (-10.0..=10.0).contains(&cellprob))
                 || !(flow.is_finite() && (0.0..=1.0).contains(&flow))
                 || minimum > 10_000
                 || tile > 192
@@ -842,7 +838,6 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
             }
             Ok(Provenance::Segmented {
                 params: grana_scene::SegmentParams::with_settings(
-                    path,
                     cellprob,
                     flow,
                     minimum as u32,

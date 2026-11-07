@@ -460,7 +460,6 @@ impl Encode for Provenance {
             Self::Detection => writer.u8(0),
             Self::Segmented { params } => {
                 writer.u8(6);
-                writer.string(&params.model().to_string_lossy());
                 writer.f32(params.cellprob_threshold());
                 writer.f32(params.flow_threshold());
                 writer.count(params.minimum_size() as usize);

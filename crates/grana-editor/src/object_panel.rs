@@ -131,7 +131,7 @@ fn add_menu<'a>(
     let message = if loading {
         Message::Noop
     } else {
-        Message::Command(Command::ChooseSegment)
+        Message::Command(Command::AddSegment)
     };
     rows.push(action_row(
         ctx,
@@ -806,9 +806,7 @@ fn origin<'a>(
     };
     let text = match set.provenance() {
         Provenance::Detection => return None,
-        Provenance::Segmented { params } => {
-            format!("Segmented with {}", params.model_name())
-        }
+        Provenance::Segmented { .. } => "Segmented with Cellpose-SAM".to_string(),
         Provenance::Imported { label } => format!("Imported from {label}"),
         Provenance::Interop { file } => format!("Imported tracks from {file}"),
         Provenance::Filtered { source, .. } => format!("Filtered from {}", name(*source)),
@@ -872,14 +870,6 @@ fn params<'a>(
     let params = set.params();
     let mut children = Vec::new();
     if let Some(segment) = set.provenance().segment() {
-        let model = segment.model_name().to_string();
-        children.push(action_row(
-            ctx,
-            &format!("object.{}.segment.model", id.raw()),
-            Icon::Sparkles,
-            &model,
-            Message::Command(Command::ChooseSegmentModel(id)),
-        ));
         for (index, field) in SEGMENT_FIELDS.iter().enumerate() {
             let (minimum, maximum) = bounds(field, voxel, world);
             let value = segment.field(index).clamp(minimum, maximum);

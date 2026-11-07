@@ -415,17 +415,8 @@ fn detection(
 }
 
 fn segments(channel: &str, params: &SegmentParams) -> Result<SourceSpec, ProtocolError> {
-    let model = params.model().to_str().ok_or_else(|| {
-        ProtocolError::Invalid("a segmentation model path is not valid utf-8".to_string())
-    })?;
-    if model.trim().is_empty() {
-        return Err(ProtocolError::Invalid(
-            "a segmentation names an ONNX model".to_string(),
-        ));
-    }
     Ok(SourceSpec::Segments {
         channel: channel.to_string(),
-        model: model.to_string(),
         cellprob: params.cellprob_threshold(),
         flow: params.flow_threshold(),
         minimum_size: params.minimum_size(),

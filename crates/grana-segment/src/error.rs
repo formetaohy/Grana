@@ -8,6 +8,8 @@ pub enum Error {
     Inference { detail: String },
     #[error("the segmentation input is invalid: {detail}")]
     Input { detail: String },
+    #[error("the segmentation device is unusable: {detail}")]
+    Device { detail: String },
 }
 
 impl Error {
@@ -25,6 +27,12 @@ impl Error {
 
     pub(crate) fn input(detail: impl Into<String>) -> Self {
         Self::Input {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn device(detail: impl Into<String>) -> Self {
+        Self::Device {
             detail: detail.into(),
         }
     }

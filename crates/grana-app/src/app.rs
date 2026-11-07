@@ -697,30 +697,6 @@ impl App {
         let view = self.view_state();
         self.session.observe_view(view);
         for command in commands {
-            let command = match command {
-                Command::ChooseSegment => {
-                    let Some(model) = Self::pick_model() else {
-                        continue;
-                    };
-                    Command::AddSegment { model }
-                }
-                Command::ChooseSegmentModel(set) => {
-                    let Some(model) = Self::pick_model() else {
-                        continue;
-                    };
-                    let Some(params) = self
-                        .session
-                        .scene()
-                        .and_then(|scene| scene.objects.get(set))
-                        .and_then(|object| object.provenance().segment())
-                        .map(|params| params.clone().with_model(model))
-                    else {
-                        continue;
-                    };
-                    Command::SetSegment { set, params }
-                }
-                command => command,
-            };
             let effects = self.session.execute(command);
             if self.react(effects) {
                 return true;
@@ -1400,13 +1376,6 @@ impl App {
             .add_filter("Nikon ND2", &["nd2"])
             .add_filter("Leica LIF", &["lif"])
             .add_filter("OME-TIFF", &["ome.tif", "ome.tiff", "tif", "tiff"])
-            .pick_file()
-    }
-
-    fn pick_model() -> Option<PathBuf> {
-        rfd::FileDialog::new()
-            .set_title("Open a Cellpose-SAM ONNX model")
-            .add_filter("ONNX model", &["onnx"])
             .pick_file()
     }
 

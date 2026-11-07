@@ -1,5 +1,3 @@
-use std::path::{Path, PathBuf};
-
 use crate::object::{ParamField, ParamScale};
 
 const CELLPROB_MINIMUM: f32 = -10.0;
@@ -57,7 +55,6 @@ pub const SEGMENT_FIELDS: [ParamField; 5] = [
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SegmentParams {
-    model: PathBuf,
     cellprob_threshold: f32,
     flow_threshold: f32,
     minimum_size: u32,
@@ -65,17 +62,9 @@ pub struct SegmentParams {
     slice_overlap: f32,
 }
 
-impl SegmentParams {
-    pub const FIELD_COUNT: usize = SEGMENT_FIELDS.len();
-
-    pub fn new(model: impl Into<PathBuf>) -> Self {
-        let model = model.into();
-        assert!(
-            model.file_name().is_some(),
-            "a segmentation model names an ONNX file"
-        );
+impl Default for SegmentParams {
+    fn default() -> Self {
         Self {
-            model,
             cellprob_threshold: CELLPROB_DEFAULT,
             flow_threshold: FLOW_DEFAULT,
             minimum_size: SIZE_DEFAULT as u32,
@@ -83,43 +72,25 @@ impl SegmentParams {
             slice_overlap: SLICE_DEFAULT,
         }
     }
+}
+
+impl SegmentParams {
+    pub const FIELD_COUNT: usize = SEGMENT_FIELDS.len();
 
     pub fn with_settings(
-        model: impl Into<PathBuf>,
         cellprob_threshold: f32,
         flow_threshold: f32,
         minimum_size: u32,
         tile_overlap: u32,
         slice_overlap: f32,
     ) -> Self {
-        let mut params = Self::new(model);
+        let mut params = Self::default();
         params.set_cellprob_threshold(cellprob_threshold);
         params.set_flow_threshold(flow_threshold);
         params.set_minimum_size(minimum_size);
         params.set_tile_overlap(tile_overlap);
         params.set_slice_overlap(slice_overlap);
         params
-    }
-
-    pub fn model(&self) -> &Path {
-        &self.model
-    }
-
-    pub fn model_name(&self) -> &str {
-        self.model
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("the ONNX model")
-    }
-
-    pub fn with_model(mut self, model: impl Into<PathBuf>) -> Self {
-        let model = model.into();
-        assert!(
-            model.file_name().is_some(),
-            "a segmentation model names an ONNX file"
-        );
-        self.model = model;
-        self
     }
 
     pub fn cellprob_threshold(&self) -> f32 {

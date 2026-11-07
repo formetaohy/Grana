@@ -4,7 +4,7 @@ use std::path::Path;
 use crate::Result;
 use crate::dynamics;
 use crate::error::Error;
-use crate::model::{Model, ModelInfo};
+use crate::model::Model;
 use crate::tile::{self, Tile, UnionFind};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -68,10 +68,6 @@ impl Segmenter {
 
     pub fn settings(&self) -> Settings {
         self.settings
-    }
-
-    pub fn info(&self) -> &ModelInfo {
-        self.model.info()
     }
 
     pub fn segment(&mut self, plane: &[f32], width: u32, height: u32) -> Result<Vec<u32>> {

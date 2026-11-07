@@ -5,7 +5,6 @@ use grana_measure::{
 };
 use grana_object::TrackParams;
 use grana_optics::PsfParams;
-use std::path::PathBuf;
 
 use grana_scene::{
     MaskFilter, ObjectColor, ObjectKind, ObjectParams, ObjectSetId, SegmentParams, Selection,
@@ -49,15 +48,11 @@ pub enum Command {
         target: ObjectSetId,
     },
     AddObject(ObjectKind),
-    AddSegment {
-        model: PathBuf,
-    },
+    AddSegment,
     SetSegment {
         set: ObjectSetId,
         params: SegmentParams,
     },
-    ChooseSegment,
-    ChooseSegmentModel(ObjectSetId),
     AddMaskChannel {
         set: ObjectSetId,
     },
@@ -524,7 +519,7 @@ impl Edit {
 impl Command {
     pub(crate) fn edit(&self) -> Option<Edit> {
         let edit = match self {
-            Self::AddObject(_) | Self::AddSegment { .. } => Edit::new(Action::AddObject),
+            Self::AddObject(_) | Self::AddSegment => Edit::new(Action::AddObject),
             Self::SetSegment { set, .. } => Edit::targeted(Action::ObjectParameters, set.raw()),
             Self::ImportLabels { .. } | Self::ImportTracks => Edit::new(Action::AddObject),
             Self::RemoveObject(_) => Edit::new(Action::RemoveObject),

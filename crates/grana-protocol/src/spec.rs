@@ -563,7 +563,6 @@ pub enum SourceSpec {
     },
     Segments {
         channel: String,
-        model: String,
         cellprob: f32,
         flow: f32,
         minimum_size: u32,
@@ -1977,7 +1976,6 @@ impl SourceSpec {
     pub fn segment(&self) -> Option<SegmentParams> {
         match self {
             Self::Segments {
-                model,
                 cellprob,
                 flow,
                 minimum_size,
@@ -1985,7 +1983,6 @@ impl SourceSpec {
                 slice_overlap,
                 ..
             } => Some(SegmentParams::with_settings(
-                model,
                 *cellprob,
                 *flow,
                 *minimum_size,
@@ -2111,7 +2108,6 @@ impl SourceSpec {
             }
             Self::Segments {
                 channel,
-                model,
                 cellprob,
                 flow,
                 minimum_size,
@@ -2119,7 +2115,6 @@ impl SourceSpec {
                 slice_overlap,
             } => {
                 validate(channel, &format!("the channel of {set}"))?;
-                validate(model, &format!("the model of {set}"))?;
                 if !(cellprob.is_finite() && (-10.0..=10.0).contains(cellprob)) {
                     return invalid("needs a bounded cell probability threshold".to_string());
                 }
