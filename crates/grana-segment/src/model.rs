@@ -12,8 +12,8 @@ use crate::error::Error;
 use crate::weights::{self, BlockNames, Checkpoint, NeckNames};
 
 const NORMALIZATION_EPSILON: f64 = 1.0e-6;
-const ROW_EQUATION: &str = "bhwc,hkc->bhwk";
-const COLUMN_EQUATION: &str = "bhwc,wkc->bhwk";
+const ROW_EQUATION: &str = "bghwc,hkc->bghwk";
+const COLUMN_EQUATION: &str = "bghwc,wkc->bghwk";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ModelInfo {
@@ -49,8 +49,14 @@ struct Linear {
 }
 
 impl Linear {
-    fn forward(&self, input: Tensor<2>) -> Tensor<2> {
-        input.matmul(self.weight.clone()) + self.bias.clone()
+    fn forward_batch(&self, input: Tensor<3>) -> Tensor<3> {
+        let [batch, tokens, dimension] = input.dims();
+        let width = self.weight.dims()[1];
+        (input
+            .reshape([batch * tokens, dimension])
+            .matmul(self.weight.clone())
+            + self.bias.clone())
+        .reshape([batch, tokens, width])
     }
 
     fn load(checkpoint: &Checkpoint, weight: &str, bias: &str, device: &Device) -> Result<Self> {
@@ -103,40 +109,42 @@ impl Attention {
         let grid = geometry.grid;
         let folded = self
             .query_key_value
-            .forward(input.reshape([tokens, dimension]))
-            .reshape([tokens, 3, heads, head_dimension])
-            .permute([1, 2, 0, 3]);
+            .forward_batch(input.reshape([batch, tokens, dimension]))
+            .reshape([batch, tokens, 3, heads, head_dimension])
+            .permute([2, 0, 3, 1, 4]);
         let query = folded
             .clone()
             .narrow(0, 0, 1)
-            .reshape([heads, tokens, head_dimension]);
+            .reshape([batch, heads, tokens, head_dimension]);
         let key = folded
             .clone()
             .narrow(0, 1, 1)
-            .reshape([heads, tokens, head_dimension]);
+            .reshape([batch, heads, tokens, head_dimension]);
         let value = folded
             .narrow(0, 2, 1)
-            .reshape([heads, tokens, head_dimension]);
-        let table = query.clone().reshape([heads, grid, grid, head_dimension]);
+            .reshape([batch, heads, tokens, head_dimension]);
+        let table = query
+            .clone()
+            .reshape([batch, heads, grid, grid, head_dimension]);
         let query = query.mul_scalar(geometry.scale());
         let scores = query.matmul(key.transpose());
-        let row: Tensor<4> = Tensor::einsum(
+        let row: Tensor<5> = Tensor::einsum(
             ROW_EQUATION,
             [table.clone().into(), self.row.clone().into()],
         );
-        let column: Tensor<4> =
+        let column: Tensor<5> =
             Tensor::einsum(COLUMN_EQUATION, [table.into(), self.column.clone().into()]);
-        let scores = scores.reshape([heads, grid, grid, grid, grid])
-            + row.reshape([heads, grid, grid, grid, 1])
-            + column.reshape([heads, grid, grid, 1, grid]);
-        let weights = softmax(scores.reshape([heads, tokens, tokens]), 2);
+        let scores = scores.reshape([batch, heads, grid, grid, grid, grid])
+            + row.reshape([batch, heads, grid, grid, grid, 1])
+            + column.reshape([batch, heads, grid, grid, 1, grid]);
+        let weights = softmax(scores.reshape([batch, heads, tokens, tokens]), 3);
         let attended = weights
             .matmul(value)
             .reshape([batch, heads, grid, grid, head_dimension])
             .permute([0, 2, 3, 1, 4])
-            .reshape([tokens, dimension]);
+            .reshape([batch, tokens, dimension]);
         self.projection
-            .forward(attended)
+            .forward_batch(attended)
             .reshape([batch, height, width, dimension])
     }
 
@@ -176,9 +184,12 @@ impl Perceptron {
     fn forward(&self, input: Tensor<4>, geometry: Geometry) -> Tensor<4> {
         let [batch, height, width, dimension] = input.dims();
         let tokens = geometry.tokens();
-        let hidden = gelu(self.first.forward(input.reshape([tokens, dimension])));
+        let hidden = gelu(
+            self.first
+                .forward_batch(input.reshape([batch, tokens, dimension])),
+        );
         self.second
-            .forward(hidden)
+            .forward_batch(hidden)
             .reshape([batch, height, width, dimension])
     }
 
@@ -394,7 +405,7 @@ impl Model {
             heads: layout.heads,
             head_dimension: layout.head_dimension,
         };
-        let embedding_weight = tensor(checkpoint, weights::PATCH_WEIGHT, &device)?;
+        let embedding_weight = tensor(checkpoint, weights::PATCH_WEIGHT, &device)?.narrow(1, 0, 1);
         let embedding_bias = tensor(checkpoint, weights::PATCH_BIAS, &device)?;
         let position = tensor(checkpoint, weights::POSITION, &device)?;
         let mut blocks = Vec::with_capacity(layout.blocks);
@@ -428,46 +439,53 @@ impl Model {
         &self.info
     }
 
-    pub fn infer(&self, tile: &[f32]) -> Result<Flow> {
+    pub fn infer_batch(&self, tiles: &[Vec<f32>]) -> Result<Vec<Flow>> {
+        if tiles.is_empty() {
+            return Err(Error::input("the model needs at least one tile"));
+        }
         let side = self.info.side;
         let area = side as usize * side as usize;
-        let length = area * 3;
-        if tile.len() != length {
-            return Err(Error::input(format!(
-                "the model tile must contain {length} values, found {}",
-                tile.len()
-            )));
+        let length = area;
+        let mut values = Vec::with_capacity(tiles.len() * length);
+        for tile in tiles {
+            if tile.len() != length {
+                return Err(Error::input(format!(
+                    "the model tile must contain {length} values, found {}",
+                    tile.len()
+                )));
+            }
+            values.extend_from_slice(tile);
         }
         let input = Tensor::<4>::from_data(
-            TensorData::new(tile.to_vec(), vec![1, 3, side as usize, side as usize]),
+            TensorData::new(values, vec![tiles.len(), 1, side as usize, side as usize]),
             &self.device,
         );
         let output = self.forward(input);
         let values = output.into_data().try_to_vec::<f32>().map_err(|error| {
             Error::inference(format!("the model output cannot be read: {error}"))
         })?;
-        let expected = area * self.outputs;
+        let expected = tiles.len() * area * self.outputs;
         if values.len() != expected {
             return Err(Error::inference(format!(
                 "the model must predict {expected} values, found {}",
                 values.len()
             )));
         }
-        let mut values = values;
-        let cellprob = values.split_off(area * 2);
-        let dx = values.split_off(area);
-        let dy = values;
-        if dy
-            .iter()
-            .chain(dx.iter())
-            .chain(cellprob.iter())
-            .any(|value| !value.is_finite())
-        {
-            return Err(Error::inference(
-                "the model produced non-finite flow values",
-            ));
+        let mut flows = Vec::with_capacity(tiles.len());
+        for index in 0..tiles.len() {
+            let base = index * area * self.outputs;
+            let region = &values[base..base + area * self.outputs];
+            if region.iter().any(|value| !value.is_finite()) {
+                return Err(Error::inference(
+                    "the model produced non-finite flow values",
+                ));
+            }
+            let cellprob = region[2 * area..3 * area].to_vec();
+            let dx = region[area..2 * area].to_vec();
+            let dy = region[..area].to_vec();
+            flows.push(Flow::from_parts(side, side, dy, dx, cellprob));
         }
-        Ok(Flow::from_parts(side, dy, dx, cellprob))
+        Ok(flows)
     }
 
     fn forward(&self, image: Tensor<4>) -> Tensor<4> {
@@ -500,9 +518,9 @@ impl Layout {
     fn resolve(checkpoint: &Checkpoint) -> Result<Self> {
         let patch = checkpoint.shape(weights::PATCH_WEIGHT)?;
         expect_rank(&patch, 4, weights::PATCH_WEIGHT)?;
-        if patch[1] != 3 || patch[2] != patch[3] {
+        if patch[1] == 0 || patch[2] != patch[3] {
             return Err(Error::model(format!(
-                "the patch embedding must map three channels through a square kernel, found {patch:?}"
+                "the patch embedding must map the image channels through a square kernel, found {patch:?}"
             )));
         }
         let dimension = patch[0];

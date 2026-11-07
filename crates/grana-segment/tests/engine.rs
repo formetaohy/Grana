@@ -24,7 +24,7 @@ fn radial_flow(side: usize, centers: &[(f32, f32)], radius: f32) -> Flow {
             }
         }
     }
-    Flow::from_parts(side as u32, dy, dx, cellprob)
+    Flow::from_parts(side as u32, side as u32, dy, dx, cellprob)
 }
 
 fn disk_plane(width: usize, height: usize, disks: &[(u32, u32, u32, u32)]) -> Vec<u32> {
@@ -51,7 +51,8 @@ fn radial_flow_masks_two_disks() {
     let centers = [(28.0f32, 28.0f32), (68.0, 60.0)];
     let radius = 12.0;
     let flow = radial_flow(side, &centers, radius);
-    assert_eq!(flow.side(), side as u32);
+    assert_eq!(flow.width(), side as u32);
+    assert_eq!(flow.height(), side as u32);
     assert_eq!(flow.dy().len(), side * side);
     assert_eq!(flow.dx().len(), side * side);
     assert_eq!(flow.cellprob().len(), side * side);

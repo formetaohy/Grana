@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 burn = { workspace = true }
 half = { workspace = true }
+rayon = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

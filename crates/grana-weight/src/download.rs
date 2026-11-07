@@ -7,11 +7,12 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 
 use crate::Error;
-use crate::source;
+use crate::source::ModelVersion;
 
 const BUFFER: usize = 1 << 20;
 
 pub(crate) fn fetch(
+    version: ModelVersion,
     target: &Path,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, u64),
@@ -27,7 +28,7 @@ pub(crate) fn fetch(
         .build()
         .new_agent();
     let response = agent
-        .get(source::URL)
+        .get(version.url())
         .call()
         .map_err(|error| Error::download(error.to_string()))?;
     let total = response
@@ -35,7 +36,7 @@ pub(crate) fn fetch(
         .get("content-length")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse().ok())
-        .unwrap_or(source::LENGTH);
+        .unwrap_or(version.length());
     let mut reader = response.into_body().into_reader();
     let mut writer = BufWriter::new(
         File::create(&staging)
@@ -67,9 +68,13 @@ pub(crate) fn fetch(
         .flush()
         .map_err(|error| Error::storage(format!("`{}`: {error}", staging.display())))?;
     drop(writer);
-    if written != source::LENGTH || hex(&hasher.finalize()) != source::CHECKSUM {
+    if written != version.length() || hex(&hasher.finalize()) != version.checksum() {
         let _ = fs::remove_file(&staging);
         return Err(Error::Checksum);
+    }
+    if let Err(error) = crate::archive::normalize(&staging) {
+        let _ = fs::remove_file(&staging);
+        return Err(error);
     }
     fs::rename(&staging, target)
         .map_err(|error| Error::storage(format!("`{}`: {error}", target.display())))?;

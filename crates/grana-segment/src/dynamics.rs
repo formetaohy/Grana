@@ -1,3 +1,5 @@
+use rayon::prelude::*;
+
 const INTEGRATION_STEPS: usize = 200;
 const FLOW_TO_STEP: f32 = 5.0;
 const ENDPOINT_PADDING: usize = 20;
@@ -8,18 +10,24 @@ const SEED_WINDOW_RADIUS: usize = 5;
 const SEED_WINDOW_SIDE: usize = SEED_WINDOW_RADIUS * 2 + 1;
 const SEED_GROWTH_STEPS: usize = 5;
 const SEED_WINDOW_MIN_COUNT: u32 = 2;
+const NEIGHBOUR_COUNT: f64 = 9.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Flow {
-    side: u32,
+    width: u32,
+    height: u32,
     dy: Vec<f32>,
     dx: Vec<f32>,
     cellprob: Vec<f32>,
 }
 
 impl Flow {
-    pub fn side(&self) -> u32 {
-        self.side
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
     }
 
     pub fn dy(&self) -> &[f32] {
@@ -34,18 +42,25 @@ impl Flow {
         &self.cellprob
     }
 
-    pub fn from_parts(side: u32, dy: Vec<f32>, dx: Vec<f32>, cellprob: Vec<f32>) -> Self {
-        assert!(side > 0, "flow side must be positive");
-        let area = side as usize * side as usize;
-        assert_eq!(dy.len(), area, "flow dy must contain side * side values");
-        assert_eq!(dx.len(), area, "flow dx must contain side * side values");
+    pub fn from_parts(
+        width: u32,
+        height: u32,
+        dy: Vec<f32>,
+        dx: Vec<f32>,
+        cellprob: Vec<f32>,
+    ) -> Self {
+        assert!(width > 0 && height > 0, "a flow field is not empty");
+        let area = width as usize * height as usize;
+        assert_eq!(dy.len(), area, "flow dy must contain width * height values");
+        assert_eq!(dx.len(), area, "flow dx must contain width * height values");
         assert_eq!(
             cellprob.len(),
             area,
-            "flow cellprob must contain side * side values"
+            "flow cellprob must contain width * height values"
         );
         Self {
-            side,
+            width,
+            height,
             dy,
             dx,
             cellprob,
@@ -53,9 +68,10 @@ impl Flow {
     }
 
     pub fn masks(&self, cellprob_threshold: f32) -> Vec<u32> {
-        let side = self.side as usize;
-        let area = side * side;
-        if side < 2 {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        let area = width * height;
+        if width < 2 || height < 2 {
             return vec![0; area];
         }
         let mut indices = Vec::new();
@@ -64,63 +80,73 @@ impl Flow {
         for (index, &probability) in self.cellprob.iter().enumerate() {
             if probability > cellprob_threshold {
                 indices.push(index);
-                rows.push((index / side) as f32);
-                columns.push((index % side) as f32);
+                rows.push((index / width) as f32);
+                columns.push((index % width) as f32);
             }
         }
         if indices.is_empty() {
             return vec![0; area];
         }
 
-        let scale = (side - 1) as f32;
-        let normalized_scale = 2.0 / scale;
+        let scale_x = (width - 1) as f32;
+        let scale_y = (height - 1) as f32;
+        let normalized_x = 2.0 / scale_x;
+        let normalized_y = 2.0 / scale_y;
         let mut flow_y = vec![0f32; area];
         let mut flow_x = vec![0f32; area];
         for &index in &indices {
-            flow_y[index] = self.dy[index] / FLOW_TO_STEP * normalized_scale;
-            flow_x[index] = self.dx[index] / FLOW_TO_STEP * normalized_scale;
+            flow_y[index] = self.dy[index] / FLOW_TO_STEP * normalized_y;
+            flow_x[index] = self.dx[index] / FLOW_TO_STEP * normalized_x;
         }
 
-        let mut points_y: Vec<f32> = rows.iter().map(|&row| row / scale * 2.0 - 1.0).collect();
+        let mut points_y: Vec<f32> = rows.iter().map(|&row| row / scale_y * 2.0 - 1.0).collect();
         let mut points_x: Vec<f32> = columns
             .iter()
-            .map(|&column| column / scale * 2.0 - 1.0)
+            .map(|&column| column / scale_x * 2.0 - 1.0)
             .collect();
 
         for _ in 0..INTEGRATION_STEPS {
-            for point in 0..indices.len() {
-                let step_x = sample_bilinear(&flow_x, side, points_x[point], points_y[point]);
-                let step_y = sample_bilinear(&flow_y, side, points_x[point], points_y[point]);
-                points_x[point] = (points_x[point] + step_x).clamp(-1.0, 1.0);
-                points_y[point] = (points_y[point] + step_y).clamp(-1.0, 1.0);
-            }
+            points_x
+                .par_iter_mut()
+                .zip(points_y.par_iter_mut())
+                .for_each(|(point_x, point_y)| {
+                    let step_x = sample_bilinear(&flow_x, width, height, *point_x, *point_y);
+                    let step_y = sample_bilinear(&flow_y, width, height, *point_x, *point_y);
+                    *point_x = (*point_x + step_x).clamp(-1.0, 1.0);
+                    *point_y = (*point_y + step_y).clamp(-1.0, 1.0);
+                });
         }
 
-        let padded = side + 2 * ENDPOINT_PADDING;
-        let padded_area = padded * padded;
+        let padded_width = width + 2 * ENDPOINT_PADDING;
+        let padded_height = height + 2 * ENDPOINT_PADDING;
+        let padded_area = padded_width * padded_height;
         let mut end_y = Vec::with_capacity(indices.len());
         let mut end_x = Vec::with_capacity(indices.len());
         for point in 0..indices.len() {
-            let row = ((points_y[point] + 1.0) * 0.5 * scale).trunc() as isize;
-            let column = ((points_x[point] + 1.0) * 0.5 * scale).trunc() as isize;
-            end_y.push((row + ENDPOINT_PADDING as isize).clamp(0, padded as isize - 1) as usize);
-            end_x.push((column + ENDPOINT_PADDING as isize).clamp(0, padded as isize - 1) as usize);
+            let row = ((points_y[point] + 1.0) * 0.5 * scale_y).trunc() as isize;
+            let column = ((points_x[point] + 1.0) * 0.5 * scale_x).trunc() as isize;
+            end_y.push(
+                (row + ENDPOINT_PADDING as isize).clamp(0, padded_height as isize - 1) as usize,
+            );
+            end_x.push(
+                (column + ENDPOINT_PADDING as isize).clamp(0, padded_width as isize - 1) as usize,
+            );
         }
 
         let mut histogram = vec![0u32; padded_area];
         for point in 0..indices.len() {
-            histogram[end_y[point] * padded + end_x[point]] += 1;
+            histogram[end_y[point] * padded_width + end_x[point]] += 1;
         }
-        let maximum = maximum_filter(&histogram, padded, MAX_FILTER_RADIUS);
+        let maximum = maximum_filter(&histogram, padded_width, padded_height, MAX_FILTER_RADIUS);
         let margin = SEED_WINDOW_RADIUS;
         let mut seeds: Vec<usize> = (0..padded_area)
             .filter(|&index| {
-                let y = index / padded;
-                let x = index % padded;
+                let y = index / padded_width;
+                let x = index % padded_width;
                 y >= margin
-                    && y + margin < padded
+                    && y + margin < padded_height
                     && x >= margin
-                    && x + margin < padded
+                    && x + margin < padded_width
                     && histogram[index] > SEED_MIN_COUNT
                     && histogram[index] >= maximum[index]
             })
@@ -132,15 +158,15 @@ impl Flow {
 
         let mut endpoints = vec![0u32; padded_area];
         for (rank, &seed) in seeds.iter().enumerate() {
-            let seed_y = seed / padded;
-            let seed_x = seed % padded;
+            let seed_y = seed / padded_width;
+            let seed_x = seed % padded_width;
             let mut window = [0u32; SEED_WINDOW_SIDE * SEED_WINDOW_SIDE];
             for row in 0..SEED_WINDOW_SIDE {
                 let source_y = seed_y + row - SEED_WINDOW_RADIUS;
                 for column in 0..SEED_WINDOW_SIDE {
                     let source_x = seed_x + column - SEED_WINDOW_RADIUS;
                     window[row * SEED_WINDOW_SIDE + column] =
-                        histogram[source_y * padded + source_x];
+                        histogram[source_y * padded_width + source_x];
                 }
             }
             let mut selected = [false; SEED_WINDOW_SIDE * SEED_WINDOW_SIDE];
@@ -179,7 +205,7 @@ impl Flow {
                     }
                     let target_y = seed_y + row - SEED_WINDOW_RADIUS;
                     let target_x = seed_x + column - SEED_WINDOW_RADIUS;
-                    let target = target_y * padded + target_x;
+                    let target = target_y * padded_width + target_x;
                     if endpoints[target] < label {
                         endpoints[target] = label;
                     }
@@ -189,7 +215,7 @@ impl Flow {
 
         let mut masks = vec![0u32; area];
         for (point, &index) in indices.iter().enumerate() {
-            masks[index] = endpoints[end_y[point] * padded + end_x[point]];
+            masks[index] = endpoints[end_y[point] * padded_width + end_x[point]];
         }
 
         let mut counts = vec![0u32; seeds.len() + 1];
@@ -220,11 +246,12 @@ impl Flow {
 }
 
 pub(crate) fn remove_bad_flow_masks(flow: &Flow, labels: &mut [u32], threshold: f32) {
-    let side = flow.side as usize;
+    let width = flow.width as usize;
+    let height = flow.height as usize;
     assert_eq!(
         labels.len(),
-        side * side,
-        "flow labels must match side * side"
+        width * height,
+        "flow labels must match width * height"
     );
     if threshold <= 0.0 {
         return;
@@ -238,44 +265,149 @@ pub(crate) fn remove_bad_flow_masks(flow: &Flow, labels: &mut [u32], threshold: 
     }
 
     let length = max_label as usize + 1;
-    let mut counts = vec![0u32; length];
-    let mut sum_y = vec![0f64; length];
-    let mut sum_x = vec![0f64; length];
+    let mut geometry = vec![Geometry::default(); length];
     for (index, &label) in labels.iter().enumerate() {
         if label == 0 {
             continue;
         }
-        counts[label as usize] += 1;
-        sum_y[label as usize] += (index / side) as f64;
-        sum_x[label as usize] += (index % side) as f64;
-    }
-    let mut errors = vec![0f64; length];
-    for (index, &label) in labels.iter().enumerate() {
-        if label == 0 {
-            continue;
-        }
-        let count = counts[label as usize] as f64;
-        let center_y = sum_y[label as usize] / count;
-        let center_x = sum_x[label as usize] / count;
-        let y = (index / side) as f64;
-        let x = (index % side) as f64;
-        let offset_y = center_y - y;
-        let offset_x = center_x - x;
-        let magnitude = (offset_y * offset_y + offset_x * offset_x).sqrt();
-        let (direction_y, direction_x) = if magnitude > 0.0 {
-            (offset_y / magnitude, offset_x / magnitude)
+        let geometry = &mut geometry[label as usize];
+        let y = index / width;
+        let x = index % width;
+        if geometry.pixels.is_empty() {
+            geometry.min_y = y;
+            geometry.max_y = y;
+            geometry.min_x = x;
+            geometry.max_x = x;
         } else {
-            (0.0, 0.0)
+            geometry.min_y = geometry.min_y.min(y);
+            geometry.max_y = geometry.max_y.max(y);
+            geometry.min_x = geometry.min_x.min(x);
+            geometry.max_x = geometry.max_x.max(x);
+        }
+        geometry.pixels.push(index);
+        geometry.sum_y += y as u64;
+        geometry.sum_x += x as u64;
+    }
+
+    let iterations = 2 * geometry
+        .iter()
+        .filter(|geometry| !geometry.pixels.is_empty())
+        .map(|geometry| geometry.max_y - geometry.min_y + geometry.max_x - geometry.min_x + 4)
+        .max()
+        .unwrap_or(0);
+    if iterations == 0 {
+        return;
+    }
+
+    let padded_width = width + 2;
+    let padded_height = height + 2;
+    let slot_count: usize = geometry.iter().map(|geometry| geometry.pixels.len()).sum();
+    let mut slots = Vec::with_capacity(slot_count);
+    let mut neighbours = Vec::with_capacity(slot_count * 9);
+    let mut neighbours_same = Vec::with_capacity(slot_count * 9);
+    let mut label_of_slot = Vec::with_capacity(slot_count);
+    let mut error = vec![0.0f64; length];
+    let mut centers = vec![0usize; length];
+    for label in 1..length {
+        let geometry = &mut geometry[label];
+        if geometry.pixels.is_empty() {
+            continue;
+        }
+        let count = geometry.pixels.len() as f64;
+        let center_y = (geometry.sum_y as f64 / count).round() as usize;
+        let center_x = (geometry.sum_x as f64 / count).round() as usize;
+        let center = if labels[center_y * width + center_x] == label as u32 {
+            center_y * width + center_x
+        } else {
+            geometry
+                .pixels
+                .iter()
+                .copied()
+                .min_by_key(|&pixel| {
+                    let y = pixel / width;
+                    let x = pixel % width;
+                    y.abs_diff(center_y).pow(2) + x.abs_diff(center_x).pow(2)
+                })
+                .expect("a mask holds pixels")
         };
-        let residual_y = direction_y - flow.dy[index] as f64 / FLOW_TO_STEP as f64;
-        let residual_x = direction_x - flow.dx[index] as f64 / FLOW_TO_STEP as f64;
-        errors[label as usize] += residual_y * residual_y + residual_x * residual_x;
+        for &pixel in geometry.pixels.iter() {
+            let y = pixel / width;
+            let x = pixel % width;
+            let slot = slots.len();
+            if pixel == center {
+                centers[label] = slot;
+            }
+            slots.push((y + 1) * padded_width + (x + 1));
+            label_of_slot.push(label as u32);
+            for offset_y in -1isize..=1 {
+                for offset_x in -1isize..=1 {
+                    let near_y = y as isize + offset_y;
+                    let near_x = x as isize + offset_x;
+                    let inside = near_y >= 0
+                        && near_x >= 0
+                        && near_y < height as isize
+                        && near_x < width as isize;
+                    neighbours.push(
+                        (near_y + 1).max(0) as usize * padded_width + (near_x + 1).max(0) as usize,
+                    );
+                    neighbours_same.push(
+                        inside && labels[near_y as usize * width + near_x as usize] == label as u32,
+                    );
+                }
+            }
+        }
+    }
+
+    let size = padded_width * padded_height;
+    let mut field = vec![0f64; size];
+    let mut next = vec![0f64; slot_count];
+    for _ in 0..iterations {
+        for label in 1..length {
+            if !geometry[label].pixels.is_empty() {
+                field[slots[centers[label]]] += 1.0;
+            }
+        }
+        next.par_iter_mut().enumerate().for_each(|(slot, value)| {
+            let mut total = 0.0;
+            for offset in 0..9 {
+                if neighbours_same[slot * 9 + offset] {
+                    total += field[neighbours[slot * 9 + offset]];
+                }
+            }
+            *value = total / NEIGHBOUR_COUNT;
+        });
+        for slot in 0..slot_count {
+            field[slots[slot]] = next[slot];
+        }
+    }
+
+    for slot in 0..slot_count {
+        let index = slots[slot];
+        let down = field[index + padded_width];
+        let up = field[index - padded_width];
+        let right = field[index + 1];
+        let left = field[index - 1];
+        let mut dy = down - up;
+        let mut dx = right - left;
+        let magnitude = (dy * dy + dx * dx).sqrt();
+        if magnitude > 0.0 {
+            dy /= magnitude;
+            dx /= magnitude;
+        } else {
+            dy = 0.0;
+            dx = 0.0;
+        }
+        let pixel = (index / padded_width - 1) * width + index % padded_width - 1;
+        let residual_y = dy - f64::from(flow.dy[pixel] / FLOW_TO_STEP);
+        let residual_x = dx - f64::from(flow.dx[pixel] / FLOW_TO_STEP);
+        error[label_of_slot[slot] as usize] += residual_y * residual_y + residual_x * residual_x;
     }
 
     let mut remove = vec![false; length];
     let mut removed = false;
     for label in 1..length {
-        if counts[label] > 0 && errors[label] / counts[label] as f64 > threshold as f64 {
+        let count = geometry[label].pixels.len();
+        if count > 0 && error[label] / count as f64 > f64::from(threshold) {
             remove[label] = true;
             removed = true;
         }
@@ -288,6 +420,17 @@ pub(crate) fn remove_bad_flow_masks(flow: &Flow, labels: &mut [u32], threshold: 
         }
         renumber(labels);
     }
+}
+
+#[derive(Clone, Default)]
+struct Geometry {
+    pixels: Vec<usize>,
+    min_y: usize,
+    max_y: usize,
+    min_x: usize,
+    max_x: usize,
+    sum_y: u64,
+    sum_x: u64,
 }
 
 pub(crate) fn remove_small_masks(labels: &mut [u32], minimum_size: u32) {
@@ -457,52 +600,52 @@ pub(crate) fn renumber(labels: &mut [u32]) {
     }
 }
 
-fn sample_bilinear(field: &[f32], side: usize, x: f32, y: f32) -> f32 {
-    let source_x = ((x + 1.0) * side as f32 - 1.0) * 0.5;
-    let source_y = ((y + 1.0) * side as f32 - 1.0) * 0.5;
+fn sample_bilinear(field: &[f32], width: usize, height: usize, x: f32, y: f32) -> f32 {
+    let source_x = ((x + 1.0) * width as f32 - 1.0) * 0.5;
+    let source_y = ((y + 1.0) * height as f32 - 1.0) * 0.5;
     let left = source_x.floor() as isize;
     let top = source_y.floor() as isize;
     let weight_x = source_x - left as f32;
     let weight_y = source_y - top as f32;
-    let top_left = sample_or_zero(field, side, left, top);
-    let top_right = sample_or_zero(field, side, left + 1, top);
-    let bottom_left = sample_or_zero(field, side, left, top + 1);
-    let bottom_right = sample_or_zero(field, side, left + 1, top + 1);
+    let top_left = sample_or_zero(field, width, height, left, top);
+    let top_right = sample_or_zero(field, width, height, left + 1, top);
+    let bottom_left = sample_or_zero(field, width, height, left, top + 1);
+    let bottom_right = sample_or_zero(field, width, height, left + 1, top + 1);
     (top_left * (1.0 - weight_x) + top_right * weight_x) * (1.0 - weight_y)
         + (bottom_left * (1.0 - weight_x) + bottom_right * weight_x) * weight_y
 }
 
-fn sample_or_zero(field: &[f32], side: usize, x: isize, y: isize) -> f32 {
-    if x < 0 || y < 0 || x as usize >= side || y as usize >= side {
+fn sample_or_zero(field: &[f32], width: usize, height: usize, x: isize, y: isize) -> f32 {
+    if x < 0 || y < 0 || x as usize >= width || y as usize >= height {
         0.0
     } else {
-        field[y as usize * side + x as usize]
+        field[y as usize * width + x as usize]
     }
 }
 
-fn maximum_filter(field: &[u32], side: usize, radius: usize) -> Vec<u32> {
+fn maximum_filter(field: &[u32], width: usize, height: usize, radius: usize) -> Vec<u32> {
     let mut horizontal = vec![0u32; field.len()];
-    for y in 0..side {
-        for x in 0..side {
+    for y in 0..height {
+        for x in 0..width {
             let start = x.saturating_sub(radius);
-            let end = (x + radius).min(side - 1);
+            let end = (x + radius).min(width - 1);
             let mut maximum = 0u32;
             for candidate in start..=end {
-                maximum = maximum.max(field[y * side + candidate]);
+                maximum = maximum.max(field[y * width + candidate]);
             }
-            horizontal[y * side + x] = maximum;
+            horizontal[y * width + x] = maximum;
         }
     }
     let mut vertical = vec![0u32; field.len()];
-    for y in 0..side {
+    for y in 0..height {
         let start = y.saturating_sub(radius);
-        let end = (y + radius).min(side - 1);
-        for x in 0..side {
+        let end = (y + radius).min(height - 1);
+        for x in 0..width {
             let mut maximum = 0u32;
             for candidate in start..=end {
-                maximum = maximum.max(horizontal[candidate * side + x]);
+                maximum = maximum.max(horizontal[candidate * width + x]);
             }
-            vertical[y * side + x] = maximum;
+            vertical[y * width + x] = maximum;
         }
     }
     vertical
