@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -24,6 +24,7 @@ pub(super) struct Labels {
 
 struct Request {
     path: PathBuf,
+    group: String,
     name: String,
     frames: Vec<u32>,
     labels: usize,
@@ -39,6 +40,7 @@ impl Labels {
     fn start(request: Request) -> Self {
         let Request {
             path,
+            group,
             name,
             frames,
             labels,
@@ -90,8 +92,9 @@ impl Labels {
                     Ok(())
                 };
             let mut progress = |done: usize, total: usize| sink(Event::Progress(done, total));
-            let outcome = grana_zarr::write_labels(
+            let outcome = grana_zarr::write_group_labels(
                 &path,
+                &group,
                 grana_zarr::LabelSpec {
                     name: &name,
                     frames: &frames,
@@ -220,8 +223,15 @@ impl super::Session {
         if levels.is_empty() {
             return;
         }
+        let group = self
+            .source
+            .as_ref()
+            .map(|loader| loader.source())
+            .and_then(|source| source.group().map(str::to_string))
+            .unwrap_or_else(|| "/".to_string());
         let request = Request {
             path,
+            group: grana_zarr::group_path(Path::new(&group)),
             name: grana_scene::slug(object.name()),
             frames,
             labels,

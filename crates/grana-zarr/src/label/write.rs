@@ -62,6 +62,10 @@ impl Written {
 }
 
 pub fn write(path: &Path, spec: LabelSpec<'_>) -> Result<Written, Error> {
+    write_group(path, "/", spec)
+}
+
+pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Written, Error> {
     assert!(
         !spec.name.is_empty() && !spec.name.contains('/') && !spec.name.contains('\\'),
         "a label image name is a path segment"
@@ -78,30 +82,33 @@ pub fn write(path: &Path, spec: LabelSpec<'_>) -> Result<Written, Error> {
         (0.0..=1.0).contains(&spec.opacity),
         "a label color is a unit opacity"
     );
-    if !path.join("zarr.json").is_file() {
+    let directory = path.join(group.trim_start_matches('/'));
+    if !directory.join("zarr.json").is_file() {
         return Err(Error::Unsupported {
-            path: path.to_path_buf(),
+            path: directory,
             detail: "label images are written into OME-Zarr 0.5 (zarr v3) datasets".to_string(),
         });
     }
-    let root = path.join("labels").join(spec.name);
+    let labels_group = crate::hcs::join(group, "labels");
+    let root = directory.join("labels").join(spec.name);
     let temporary_name = format!(".{}.{}.tmp", spec.name, std::process::id());
-    let temporary = path.join("labels").join(&temporary_name);
+    let temporary_group = crate::hcs::join(&labels_group, &temporary_name);
+    let temporary = directory.join("labels").join(&temporary_name);
     if temporary.exists() {
         std::fs::remove_dir_all(&temporary).map_err(|error| Error::Write {
-            path: path.to_path_buf(),
+            path: directory.clone(),
             detail: error.to_string(),
         })?;
     }
     let fail = |detail: String| {
         let _ = std::fs::remove_dir_all(&temporary);
         Error::Write {
-            path: path.to_path_buf(),
+            path: directory.clone(),
             detail,
         }
     };
-    reject_translation(path).map_err(&fail)?;
-    let image = Image::open(path)?;
+    reject_translation(&directory).map_err(&fail)?;
+    let image = Image::open_group(path, group)?;
     if spec.frames.is_empty()
         || spec
             .frames
@@ -194,10 +201,16 @@ pub fn write(path: &Path, spec: LabelSpec<'_>) -> Result<Written, Error> {
         .iter()
         .map(|(label, name)| json!({ "label-value": label, "name": name }))
         .collect::<Vec<_>>();
+    let depth = group
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .count();
+    let source = "../".repeat(depth + 2);
     let image_label = json!({
         "colors": colors,
         "properties": properties,
-        "source": { "image": "../../" },
+        "source": { "image": source },
     });
     let label_attributes = json!({
         "ome": {
@@ -210,15 +223,15 @@ pub fn write(path: &Path, spec: LabelSpec<'_>) -> Result<Written, Error> {
         path: path.to_path_buf(),
         detail: error.to_string(),
     })?);
-    let mut group = GroupBuilder::new();
-    group.attributes(
+    let mut group_builder = GroupBuilder::new();
+    group_builder.attributes(
         label_attributes
             .as_object()
             .expect("label attributes are a json object")
             .clone(),
     );
-    let group = group
-        .build(store.clone(), &format!("/labels/{temporary_name}"))
+    let group = group_builder
+        .build(store.clone(), &temporary_group)
         .map_err(|error| fail(error.to_string()))?;
     group
         .store_metadata()
@@ -247,7 +260,10 @@ pub fn write(path: &Path, spec: LabelSpec<'_>) -> Result<Written, Error> {
         let array = ArrayBuilder::new(shape, chunk.clone(), data_type::uint16(), 0u16)
             .bytes_to_bytes_codecs(vec![Arc::new(ZstdCodec::new(3, false))])
             .dimension_names(Some(names))
-            .build(store.clone(), &format!("/labels/{temporary_name}/{level}"))
+            .build(
+                store.clone(),
+                &crate::hcs::join(&temporary_group, &level.to_string()),
+            )
             .map_err(|error| fail(error.to_string()))?;
         array
             .store_metadata()
@@ -276,7 +292,7 @@ pub fn write(path: &Path, spec: LabelSpec<'_>) -> Result<Written, Error> {
         std::fs::remove_dir_all(&root).map_err(|error| fail(error.to_string()))?;
     }
     std::fs::rename(&temporary, &root).map_err(|error| fail(error.to_string()))?;
-    if let Err(detail) = register_labels(store.clone(), path, spec.name) {
+    if let Err(detail) = register_labels(store.clone(), &directory, &labels_group, spec.name) {
         let _ = std::fs::remove_dir_all(&root);
         return Err(fail(detail));
     }
@@ -381,10 +397,15 @@ where
     Ok(())
 }
 
-fn register_labels(store: Arc<FilesystemStore>, path: &Path, name: &str) -> Result<(), String> {
-    let present = path.join("labels").join("zarr.json").is_file();
+fn register_labels(
+    store: Arc<FilesystemStore>,
+    directory: &Path,
+    labels_group: &str,
+    name: &str,
+) -> Result<(), String> {
+    let present = directory.join("labels").join("zarr.json").is_file();
     let mut attributes = if present {
-        let group = Group::open(store.clone(), "/labels").map_err(|error| error.to_string())?;
+        let group = Group::open(store.clone(), labels_group).map_err(|error| error.to_string())?;
         group.attributes().clone()
     } else {
         Map::new()
@@ -415,7 +436,7 @@ fn register_labels(store: Arc<FilesystemStore>, path: &Path, name: &str) -> Resu
     let mut builder = GroupBuilder::new();
     builder.attributes(attributes);
     let group = builder
-        .build(store, "/labels")
+        .build(store, labels_group)
         .map_err(|error| error.to_string())?;
     group.store_metadata().map_err(|error| error.to_string())
 }

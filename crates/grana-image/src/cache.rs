@@ -411,10 +411,18 @@ fn accounting(root: &Path) -> Accounting {
 
 pub(crate) fn identity(source: &crate::Source, geometry: &[u8]) -> u64 {
     let mut hash = mix(FNV_BASE, geometry);
-    if let crate::Source::File { path, series } = source {
+    if let crate::Source::File {
+        path,
+        series,
+        group,
+    } = source
+    {
         let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
         hash = mix(hash, resolved.to_string_lossy().as_bytes());
         hash = mix(hash, &(*series as u64).to_le_bytes());
+        if let Some(group) = group {
+            hash = mix(hash, group.as_bytes());
+        }
         hash = contents(hash, path);
     }
     hash

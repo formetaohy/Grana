@@ -215,11 +215,14 @@ impl Loader {
     }
 
     pub fn file(path: PathBuf) -> Self {
-        Self::open(Source::file(path))
+        Self::file_series(path, 0)
     }
 
     pub fn file_series(path: PathBuf, series: usize) -> Self {
-        Self::open(Source::file_series(path, series))
+        match grana_image::series_group(&path, series) {
+            Ok(Some(group)) => Self::open(Source::file_group(path, series, group)),
+            _ => Self::open(Source::file_series(path, series)),
+        }
     }
 
     fn open(source: Source) -> Self {

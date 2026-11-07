@@ -340,6 +340,134 @@ fn write(path: PathBuf, content: &[u8]) {
     fs::write(path, content).expect("the fixture files are written");
 }
 
+#[test]
+fn lists_and_opens_the_fields_of_a_plate() {
+    let temporary = Temporary::new("grana-image-plate");
+    let plate = temporary.path().join("plate.zarr");
+    write_plate(&plate);
+    assert_eq!(
+        grana_image::series_count(&plate).expect("the plate counts"),
+        2
+    );
+    assert_eq!(
+        grana_image::series_names(&plate).expect("the plate names its fields"),
+        vec![Some("A1/0".to_string()), Some("A2/0".to_string())]
+    );
+    let group = grana_image::series_group(&plate, 1)
+        .expect("the second field resolves")
+        .expect("a plate field is a group");
+    assert_eq!(group, "/A/2/0");
+
+    let image = Image::open(&Source::file_group(plate, 1, group)).expect("the second field opens");
+    assert_eq!(image.name(), "field two");
+    assert_eq!(image.pyramid().level(0).extent(), Extent::new(4, 3, 2));
+    let data = image
+        .read_region(0, 0, 0, &[0..4, 0..3, 0..1], [0.0; 3])
+        .expect("the field reads");
+    let VoxelData::U8(values) = data else {
+        panic!("the field stores bytes");
+    };
+    assert_eq!(values[4 + 2], 20 + 5 + 2);
+}
+
+fn write_plate(root: &Path) {
+    write(
+        root.join("zarr.json"),
+        br#"{
+            "zarr_format": 3,
+            "node_type": "group",
+            "attributes": {
+                "ome": {
+                    "version": "0.5",
+                    "plate": {
+                        "columns": [{"name": "1"}, {"name": "2"}],
+                        "rows": [{"name": "A"}],
+                        "wells": [
+                            {"path": "A/1", "rowIndex": 0, "columnIndex": 0},
+                            {"path": "A/2", "rowIndex": 0, "columnIndex": 1}
+                        ]
+                    }
+                }
+            }
+        }"#,
+    );
+    for (column, name, base) in [(1u8, "field one", 10u8), (2, "field two", 20)] {
+        let well = root.join("A").join(column.to_string());
+        write(
+            well.join("zarr.json"),
+            br#"{
+                "zarr_format": 3,
+                "node_type": "group",
+                "attributes": {
+                    "ome": {"version": "0.5", "well": {"images": [{"path": "0"}]}}
+                }
+            }"#,
+        );
+        let field = well.join("0");
+        let attributes = format!(
+            r#"{{
+                "zarr_format": 3,
+                "node_type": "group",
+                "attributes": {{
+                    "ome": {{
+                        "version": "0.5",
+                        "multiscales": [{{
+                            "name": "{name}",
+                            "axes": [
+                                {{"name": "c", "type": "channel"}},
+                                {{"name": "z", "type": "space", "unit": "micrometer"}},
+                                {{"name": "y", "type": "space", "unit": "micrometer"}},
+                                {{"name": "x", "type": "space", "unit": "micrometer"}}
+                            ],
+                            "datasets": [
+                                {{"path": "0", "coordinateTransformations": [{{"type": "scale", "scale": [1.0, 1.0, 1.0, 1.0]}}]}}
+                            ]
+                        }}],
+                        "omero": {{
+                            "channels": [
+                                {{"color": "FF0000", "window": {{"min": 0, "max": 255, "start": 0, "end": 255}}, "label": "signal"}}
+                            ]
+                        }}
+                    }}
+                }}
+            }}"#
+        );
+        write(field.join("zarr.json"), attributes.as_bytes());
+        write(
+            field.join("0").join("zarr.json"),
+            br#"{
+                "zarr_format": 3,
+                "node_type": "array",
+                "shape": [1, 2, 3, 4],
+                "data_type": "uint8",
+                "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [1, 2, 3, 4]}},
+                "chunk_key_encoding": {"name": "default", "configuration": {"separator": "/"}},
+                "fill_value": 0,
+                "codecs": [{"name": "bytes", "configuration": {"endian": "little"}}],
+                "attributes": {}
+            }"#,
+        );
+        let mut data = Vec::new();
+        for z in 0..2u8 {
+            for y in 0..3u8 {
+                for x in 0..4u8 {
+                    data.push(base + 10 * z + 5 * y + x);
+                }
+            }
+        }
+        write(
+            field
+                .join("0")
+                .join("c")
+                .join("0")
+                .join("0")
+                .join("0")
+                .join("0"),
+            &data,
+        );
+    }
+}
+
 struct Temporary {
     path: PathBuf,
 }

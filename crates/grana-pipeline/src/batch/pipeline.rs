@@ -66,7 +66,10 @@ pub(super) fn analyse(
 }
 
 fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Result<Report, String> {
-    let source = Source::file_series(dataset.path().to_path_buf(), dataset.scene());
+    let source = match grana_image::series_group(dataset.path(), dataset.scene())? {
+        Some(group) => Source::file_group(dataset.path().to_path_buf(), dataset.scene(), group),
+        None => Source::file_series(dataset.path().to_path_buf(), dataset.scene()),
+    };
     let reader = Arc::new(Image::open(&source)?);
     let store = GeometryStore::temporary(DEFAULT_BUDGET)
         .map_err(|error| format!("the dataset cannot page its geometry: {error}"))?;

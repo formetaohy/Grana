@@ -58,7 +58,11 @@ impl Image {
                 let series = vec![Series::of(series.pyramid())];
                 (inner, series)
             }
-            Source::File { path, series } => Inner::open_file(path, *series)?,
+            Source::File {
+                path,
+                series,
+                group,
+            } => Inner::open_file(path, *series, group.as_deref())?,
         };
         let declared = match &inner {
             Inner::Memory(series) => series.pyramid(),
@@ -572,7 +576,7 @@ pub fn is_image(path: &Path) -> bool {
 
 pub fn series_count(path: &Path) -> Result<usize, Error> {
     if path.is_dir() {
-        return Ok(1);
+        return plate_of(path).map(|plate| plate.map_or(1, |plate| plate.len().max(1)));
     }
     if is_czi(path)? {
         return Ok(grana_czi::scene_count(path)?);
@@ -585,7 +589,15 @@ pub fn series_count(path: &Path) -> Result<usize, Error> {
 
 pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
     if path.is_dir() {
-        return Ok(Vec::new());
+        return Ok(plate_of(path)?
+            .map(|plate| {
+                plate
+                    .fields()
+                    .iter()
+                    .map(|field| Some(field.name().to_string()))
+                    .collect()
+            })
+            .unwrap_or_default());
     }
     if is_czi(path)? {
         return Ok(grana_czi::scenes(path)?
@@ -600,6 +612,37 @@ pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
             .collect());
     }
     Ok(Vec::new())
+}
+
+pub fn series_group(path: &Path, series: usize) -> Result<Option<String>, Error> {
+    if !path.is_dir() {
+        return Ok(None);
+    }
+    let Some(plate) = plate_of(path)? else {
+        return Ok(None);
+    };
+    let field = plate.field(series).ok_or_else(|| Error::Unsupported {
+        path: path.to_path_buf(),
+        detail: format!(
+            "the plate holds {} fields of view and field {series} was requested",
+            plate.len()
+        ),
+    })?;
+    Ok(Some(field.path().to_string()))
+}
+
+fn plate_of(path: &Path) -> Result<Option<grana_zarr::Plate>, Error> {
+    if grana_zarr::group_kind(path)? != grana_zarr::GroupKind::Plate {
+        return Ok(None);
+    }
+    let plate = grana_zarr::open_plate(path)?;
+    if plate.is_empty() {
+        return Err(Error::Unsupported {
+            path: path.to_path_buf(),
+            detail: "the OME-Zarr plate holds no field of view".to_string(),
+        });
+    }
+    Ok(Some(plate))
 }
 
 pub fn dataset_name(path: &Path) -> String {
@@ -619,8 +662,23 @@ pub fn dataset_name(path: &Path) -> String {
 }
 
 impl Inner {
-    fn open_file(path: &Path, series: usize) -> Result<(Self, Vec<Series>), Error> {
+    fn open_file(
+        path: &Path,
+        series: usize,
+        group: Option<&str>,
+    ) -> Result<(Self, Vec<Series>), Error> {
         if path.is_dir() {
+            if let Some(group) = group {
+                let image = grana_zarr::Image::open_group(path, group)?;
+                let series = vec![Series::of(image.pyramid())];
+                return Ok((Self::Zarr(image), series));
+            }
+            if grana_zarr::group_kind(path)? == grana_zarr::GroupKind::Plate {
+                return Err(Error::Unsupported {
+                    path: path.to_path_buf(),
+                    detail: "the OME-Zarr plate lists its fields of view as series".to_string(),
+                });
+            }
             let image = grana_zarr::Image::open(path)?;
             let series = single_series(image.pyramid(), path, series)?;
             return Ok((Self::Zarr(image), series));

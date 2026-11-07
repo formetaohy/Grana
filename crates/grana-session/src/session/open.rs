@@ -231,7 +231,7 @@ impl Session {
             Origin::Synthetic => Some(ProjectSource::Synthetic { name }),
             Origin::Zarr | Origin::Tiff | Origin::Czi | Origin::Nikon | Origin::Leica => {
                 match self.source.as_ref()?.source() {
-                    Source::File { path, series } => {
+                    Source::File { path, series, .. } => {
                         Some(ProjectSource::File { name, path, series })
                     }
                     Source::Memory(_) => None,

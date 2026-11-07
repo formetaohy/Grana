@@ -190,7 +190,12 @@ impl Label {
 }
 
 pub fn read(path: &Path) -> Result<Labels, Error> {
-    let labels = path.join("labels");
+    read_at(path, "/")
+}
+
+pub fn read_at(path: &Path, group: &str) -> Result<Labels, Error> {
+    let root = path.join(group.trim_start_matches('/'));
+    let labels = root.join("labels");
     if !labels.join("zarr.json").is_file()
         && !labels.join(".zattrs").is_file()
         && !labels.join(".zgroup").is_file()
@@ -201,25 +206,32 @@ pub fn read(path: &Path) -> Result<Labels, Error> {
         path: path.to_path_buf(),
         detail: error.to_string(),
     })?);
-    let group = Group::open(store.clone(), "/labels").map_err(|error| Error::Open {
-        path: path.to_path_buf(),
+    let labels_group = crate::hcs::join(group, "labels");
+    let opened = Group::open(store.clone(), &labels_group).map_err(|error| Error::Open {
+        path: labels.clone(),
         detail: error.to_string(),
     })?;
-    let names = names(path, group.attributes())?;
+    let names = names(&labels, opened.attributes())?;
     let readable: Arc<dyn ReadableStorageTraits> = store;
     let cache_bytes = (CACHE_BYTES / names.len().max(1) as u64).max(CACHE_MINIMUM);
     let mut images = Vec::with_capacity(names.len());
     for name in names {
-        images.push(image(path, &name, readable.clone(), cache_bytes)?);
+        images.push(image(
+            &labels,
+            &labels_group,
+            &name,
+            readable.clone(),
+            cache_bytes,
+        )?);
     }
     Ok(Labels { images })
 }
 
-fn names(path: &Path, attributes: &Map<String, Value>) -> Result<Vec<String>, Error> {
+fn names(labels: &Path, attributes: &Map<String, Value>) -> Result<Vec<String>, Error> {
     let fields: AnyOmeFields =
         serde_json::from_value(Value::Object(attributes.clone())).map_err(|error| {
             Error::Metadata {
-                path: path.join("labels"),
+                path: labels.to_path_buf(),
                 detail: error.to_string(),
             }
         })?;
@@ -237,7 +249,7 @@ fn names(path: &Path, attributes: &Map<String, Value>) -> Result<Vec<String>, Er
                 .any(|part| part.is_empty() || part == "." || part == "..")
         {
             return Err(Error::Metadata {
-                path: path.join("labels"),
+                path: labels.to_path_buf(),
                 detail: format!("the label image `{name}` is not a relative group path"),
             });
         }
@@ -246,41 +258,42 @@ fn names(path: &Path, attributes: &Map<String, Value>) -> Result<Vec<String>, Er
 }
 
 fn image(
-    path: &Path,
+    labels: &Path,
+    labels_group: &str,
     name: &str,
     store: Arc<dyn ReadableStorageTraits>,
     cache_bytes: u64,
 ) -> Result<Label, Error> {
-    let group =
-        Group::open(store.clone(), &format!("/labels/{name}")).map_err(|error| Error::Open {
-            path: path.join("labels").join(name),
-            detail: error.to_string(),
-        })?;
+    let group_path = crate::hcs::join(labels_group, name);
+    let directory = labels.join(name);
+    let group = Group::open(store.clone(), &group_path).map_err(|error| Error::Open {
+        path: directory.clone(),
+        detail: error.to_string(),
+    })?;
     let attributes = normalized(group.attributes());
-    let metadata = metadata::parse(path, &attributes).map_err(|error| Error::Metadata {
-        path: path.join("labels").join(name),
+    let metadata = metadata::parse(&directory, &attributes).map_err(|error| Error::Metadata {
+        path: directory.clone(),
         detail: error.to_string(),
     })?;
     let mut frames = None;
     let mut levels = Vec::with_capacity(metadata.datasets.len());
     for dataset in &metadata.datasets {
-        let array_path = array_path(&dataset.path);
-        let opened = format!("/labels/{name}{array_path}");
+        let opened = crate::hcs::join(&group_path, &dataset.path);
         let array = Array::open(store.clone(), &opened).map_err(|error| Error::Open {
-            path: path.join("labels").join(name),
+            path: directory.clone(),
             detail: error.to_string(),
         })?;
-        let kind = kind(path, name, &array)?;
+        let kind = kind(&directory, &array)?;
         let layout =
             axes::layout(&metadata.axes, array.shape(), &dataset.scale).map_err(|detail| {
                 Error::Metadata {
-                    path: path.join("labels").join(name),
+                    path: directory.clone(),
                     detail,
                 }
             })?;
         if layout.channel_count() != 1 {
             return Err(Error::Unsupported {
-                path: path.join("labels").join(name),
+                path: directory.clone(),
                 detail: "a label image holds a single channel".to_string(),
             });
         }
@@ -288,7 +301,7 @@ fn image(
             None => frames = Some(layout.frame_count()),
             Some(known) if known != layout.frame_count() => {
                 return Err(Error::Unsupported {
-                    path: path.join("labels").join(name),
+                    path: directory.clone(),
                     detail: "the resolution levels disagree on the frame count".to_string(),
                 });
             }
@@ -303,18 +316,18 @@ fn image(
     }
     if levels.is_empty() {
         return Err(Error::Metadata {
-            path: path.join("labels").join(name),
+            path: directory.clone(),
             detail: "the label image has no resolution level".to_string(),
         });
     }
     if !ordered(&levels) {
         return Err(Error::Unsupported {
-            path: path.join("labels").join(name),
+            path: directory.clone(),
             detail: "the label levels are not ordered from fine to coarse".to_string(),
         });
     }
     Ok(Label {
-        path: path.join("labels").join(name),
+        path: directory,
         name: name.to_string(),
         frames: frames.expect("a label image has a level"),
         levels,
@@ -336,7 +349,7 @@ fn ordered(levels: &[LevelArray]) -> bool {
     })
 }
 
-fn kind(path: &Path, name: &str, array: &Array<dyn ReadableStorageTraits>) -> Result<Kind, Error> {
+fn kind(directory: &Path, array: &Array<dyn ReadableStorageTraits>) -> Result<Kind, Error> {
     let data_type: DataType = array.data_type().clone();
     if data_type == uint8() {
         Ok(Kind::U8)
@@ -348,7 +361,7 @@ fn kind(path: &Path, name: &str, array: &Array<dyn ReadableStorageTraits>) -> Re
         Ok(Kind::U64)
     } else {
         Err(Error::Unsupported {
-            path: path.join("labels").join(name),
+            path: directory.to_path_buf(),
             detail: format!("the label data type `{data_type}` is not an unsigned integer"),
         })
     }
@@ -403,12 +416,4 @@ fn normalized(attributes: &Map<String, Value>) -> Map<String, Value> {
         image_label.remove("version");
     }
     attributes
-}
-
-fn array_path(path: &str) -> String {
-    if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{path}")
-    }
 }

@@ -45,6 +45,7 @@ struct LevelArray {
 
 pub struct Image {
     path: PathBuf,
+    group: String,
     name: String,
     levels: Vec<LevelArray>,
     pyramid: Pyramid,
@@ -54,15 +55,20 @@ pub struct Image {
 
 impl Image {
     pub fn open(path: &Path) -> Result<Self, Error> {
+        Self::open_group(path, "/")
+    }
+
+    pub fn open_group(path: &Path, group: &str) -> Result<Self, Error> {
         let store = Arc::new(FilesystemStore::new(path).map_err(|error| Error::Open {
             path: path.to_path_buf(),
             detail: error.to_string(),
         })?);
-        let group = Group::open(store.clone(), "/").map_err(|error| Error::Open {
-            path: path.to_path_buf(),
+        let opened = Group::open(store.clone(), group).map_err(|error| Error::Open {
+            path: path.join(group.trim_start_matches('/')),
             detail: error.to_string(),
         })?;
-        let metadata = metadata::parse(path, group.attributes())?;
+        let directory = path.join(group.trim_start_matches('/'));
+        let metadata = metadata::parse(&directory, opened.attributes())?;
         let readable: Arc<dyn ReadableStorageTraits> = store;
         let cache_bytes =
             (CHUNK_CACHE_BYTES / metadata.datasets.len() as u64).max(CHUNK_CACHE_MINIMUM);
@@ -72,9 +78,9 @@ impl Image {
         let mut interval = None;
         let mut format = None;
         for dataset in &metadata.datasets {
-            let array_path = array_path(&dataset.path);
+            let array_path = crate::hcs::join(group, &dataset.path);
             let array = Arc::new(open_array(readable.clone(), &array_path)?);
-            let level_format = supported_format(path, &array)?;
+            let level_format = supported_format(&directory, &array)?;
             match format {
                 None => format = Some(level_format),
                 Some(known) if known != level_format => {
@@ -154,7 +160,7 @@ impl Image {
             .name
             .clone()
             .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| dataset_name(path));
+            .unwrap_or_else(|| dataset_name(&directory));
         let level_metadata = levels
             .iter()
             .map(|level| Level::new(level.layout.extent, level.layout.spacing))
@@ -162,6 +168,7 @@ impl Image {
         let stored = level_metadata.len();
         Ok(Self {
             path: path.to_path_buf(),
+            group: group.to_string(),
             name,
             levels,
             pyramid: Pyramid::new(level_metadata, stored, channels, frames, interval),
@@ -187,7 +194,11 @@ impl Image {
     }
 
     pub fn labels(&self) -> Result<crate::Labels, Error> {
-        crate::read_labels(&self.path)
+        crate::label::read_at(&self.path, &self.group)
+    }
+
+    pub fn group(&self) -> &str {
+        &self.group
     }
 
     pub fn pyramid(&self) -> &Pyramid {
@@ -333,14 +344,6 @@ fn levels_ordered(levels: &[LevelArray]) -> bool {
             && fine_spacing.y() <= coarse_spacing.y()
             && fine_spacing.z() <= coarse_spacing.z()
     })
-}
-
-fn array_path(path: &str) -> String {
-    if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{path}")
-    }
 }
 
 fn open_array(
