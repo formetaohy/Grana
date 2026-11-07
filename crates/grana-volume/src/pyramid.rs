@@ -80,6 +80,17 @@ impl Pyramid {
         self.channels.len()
     }
 
+    pub fn with_channels(&self, channels: Vec<ChannelInfo>) -> Pyramid {
+        assert!(!channels.is_empty(), "a pyramid needs at least one channel");
+        Pyramid {
+            levels: self.levels.clone(),
+            stored: self.stored,
+            channels,
+            frames: self.frames,
+            frame_interval: self.frame_interval,
+        }
+    }
+
     pub fn frame_count(&self) -> u32 {
         self.frames
     }

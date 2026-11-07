@@ -6,9 +6,10 @@ use grana_scene::{
 
 use crate::{
     AnnotationSpec, ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec,
-    ColorSpec, CurationSpec, DriftSpec, FilterSpec, LassoSpec, MaskFilterSpec, MeasureSpec,
-    MetricSpec, PartSpec, Protocol, ProtocolError, RegionSpec, RelationSpec, RenderSpec, SetSpec,
-    SnapshotSpec, SortSpec, SourceSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    ColorSpec, CurationSpec, DriftSpec, FilterSpec, LassoSpec, MaskFilterSpec, MaskSpec,
+    MeasureSpec, MetricSpec, PartSpec, Protocol, ProtocolError, RegionSpec, RelationSpec,
+    RenderSpec, SetSpec, SnapshotSpec, SortSpec, SourceSpec, TrackSpec, TransferSpec, ViewSpec,
+    WindowSpec,
 };
 
 impl Protocol {
@@ -24,6 +25,36 @@ impl Protocol {
             .map(|channel| channel.name().to_string())
             .collect::<Vec<_>>();
         let keys = channel_keys(&channels);
+        let masks = scene
+            .masks()
+            .iter()
+            .map(|mask| {
+                let set = scene.objects.get(mask.set()).ok_or_else(|| {
+                    ProtocolError::Invalid(format!(
+                        "the mask channel {} masks an object set that left the scene",
+                        mask.name()
+                    ))
+                })?;
+                let channel = scene
+                    .dataset
+                    .channels()
+                    .get(mask.channel())
+                    .ok_or_else(|| {
+                        ProtocolError::Invalid(format!(
+                            "the mask channel {} masks a channel of the dataset that left the scene",
+                            mask.name()
+                        ))
+                    })?
+                    .name()
+                    .to_string();
+                Ok(MaskSpec {
+                    set: set.key().as_str().to_string(),
+                    channel,
+                    name: mask.name().to_string(),
+                    tint: mask.tint(),
+                })
+            })
+            .collect::<Result<Vec<_>, ProtocolError>>()?;
         let specs = scene
             .channels
             .iter()
@@ -95,7 +126,7 @@ impl Protocol {
                 }
             }
         }
-        let sets = ordered(sets)?;
+        let sets = ordered(sets, &masks)?;
         let relations = scene
             .objects
             .iter()
@@ -178,6 +209,7 @@ impl Protocol {
                 scene.clip,
             )),
             channels: specs,
+            masks,
             drift,
             mask_radius: scene.mask_radius,
             mask_filter,
@@ -362,13 +394,13 @@ fn detection(
     }
 }
 
-fn ordered(mut sets: Vec<SetSpec>) -> Result<Vec<SetSpec>, ProtocolError> {
+fn ordered(mut sets: Vec<SetSpec>, masks: &[MaskSpec]) -> Result<Vec<SetSpec>, ProtocolError> {
     let mut ordered: Vec<SetSpec> = Vec::with_capacity(sets.len());
     while !sets.is_empty() {
         let position = sets
             .iter()
             .position(|set| {
-                dependencies(set)
+                dependencies(set, masks)
                     .iter()
                     .all(|key| ordered.iter().any(|placed| placed.key == *key))
             })
@@ -382,13 +414,18 @@ fn ordered(mut sets: Vec<SetSpec>) -> Result<Vec<SetSpec>, ProtocolError> {
     Ok(ordered)
 }
 
-fn dependencies(set: &SetSpec) -> Vec<String> {
+fn dependencies(set: &SetSpec, masks: &[MaskSpec]) -> Vec<String> {
     let mut names = set.mask.iter().cloned().collect::<Vec<_>>();
-    collect_dependencies(&set.source, &mut names);
+    collect_dependencies(&set.source, masks, &mut names);
     names
 }
 
-fn collect_dependencies(source: &SourceSpec, names: &mut Vec<String>) {
+fn collect_dependencies(source: &SourceSpec, masks: &[MaskSpec], names: &mut Vec<String>) {
+    if let Some(channel) = source.channel()
+        && let Some(mask) = masks.iter().find(|mask| mask.name == channel)
+    {
+        names.push(mask.set.clone());
+    }
     match source {
         SourceSpec::Surfaces { seed_source, .. } => names.extend(seed_source.clone()),
         SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
@@ -396,7 +433,7 @@ fn collect_dependencies(source: &SourceSpec, names: &mut Vec<String>) {
         }
         SourceSpec::Merged { parts } => {
             for part in parts {
-                collect_dependencies(&part.source, names);
+                collect_dependencies(&part.source, masks, names);
             }
         }
         SourceSpec::Spots { .. } | SourceSpec::Filaments { .. } | SourceSpec::Labels { .. } => {}

@@ -328,6 +328,52 @@ impl Coloc {
         self.revision
     }
 
+    pub fn set_channel_count(&mut self, channels: usize) {
+        if self.channels == channels {
+            return;
+        }
+        let grown = channels > self.channels;
+        self.channels = channels;
+        if self
+            .pair
+            .is_some_and(|pair| pair.a() >= channels || pair.b() >= channels)
+        {
+            self.pair = (channels >= 2).then(|| ColocPair::new(0, 1));
+        }
+        if !grown {
+            self.results.clear();
+        }
+        self.revision += 1;
+    }
+
+    pub fn remove_channel(&mut self, index: usize) {
+        if index >= self.channels {
+            return;
+        }
+        self.channels -= 1;
+        self.results.clear();
+        self.pair = match self.pair {
+            None => {
+                return self.revision += 1;
+            }
+            Some(pair) if pair.a() == index || pair.b() == index => None,
+            Some(pair) => {
+                let a = if pair.a() > index {
+                    pair.a() - 1
+                } else {
+                    pair.a()
+                };
+                let b = if pair.b() > index {
+                    pair.b() - 1
+                } else {
+                    pair.b()
+                };
+                Some(ColocPair::new(a, b))
+            }
+        };
+        self.revision += 1;
+    }
+
     fn result_mut(&mut self) -> Option<&mut ColocResult> {
         let pair = self.pair?;
         self.results.iter_mut().find(|result| result.pair() == pair)

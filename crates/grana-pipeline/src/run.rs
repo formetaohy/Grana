@@ -2,13 +2,13 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::channels::Channels;
 use grana_analysis::{
     ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, RelationRun, SeedPolicy, Sources,
     SpotScanner, SurfaceBuilder, TrackBuilder, coloc_levels, filament_level, relate_frames,
     spot_level, surface_level,
 };
 use grana_geometry::GeometryStore;
-use grana_image::Image;
 use grana_measure::{ColocPair, ColocSettings};
 use grana_object::Roi;
 use grana_scene::{Drift, ObjectFrame, ObjectParams};
@@ -90,7 +90,7 @@ impl DetectRequest {
 }
 
 pub fn detect(
-    reader: &Image,
+    reader: &Channels,
     mut request: DetectRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
@@ -232,7 +232,7 @@ impl ColocRequest {
 }
 
 pub fn coloc(
-    reader: &Image,
+    reader: &Channels,
     request: ColocRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
@@ -361,7 +361,7 @@ pub fn coloc(
 }
 
 fn spots(
-    reader: &Image,
+    reader: &Channels,
     params: grana_object::SpotParams,
     request: DetectRequest,
     cancel: &AtomicBool,
@@ -419,7 +419,7 @@ fn spots(
 }
 
 fn surfaces(
-    reader: &Image,
+    reader: &Channels,
     params: grana_object::SurfaceParams,
     request: DetectRequest,
     cancel: &AtomicBool,
@@ -506,7 +506,7 @@ fn surfaces(
 }
 
 fn filaments(
-    reader: &Image,
+    reader: &Channels,
     params: grana_object::FilamentParams,
     request: DetectRequest,
     cancel: &AtomicBool,
@@ -581,7 +581,7 @@ fn filaments(
 }
 
 fn full_region(
-    reader: &Image,
+    reader: &Channels,
     pyramid: &grana_volume::Pyramid,
     time: u32,
     level: usize,
@@ -612,7 +612,7 @@ impl DriftRequest {
 }
 
 pub fn drift(
-    reader: &Image,
+    reader: &Channels,
     request: DriftRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),

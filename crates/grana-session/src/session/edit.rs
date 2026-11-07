@@ -439,8 +439,15 @@ impl Session {
             self.recut = None;
         }
         self.clear_relations(set);
+        let masked = self
+            .scene
+            .as_ref()
+            .is_some_and(|scene| scene.masks().iter().any(|spec| spec.set() == set));
         if let Some(scene) = self.scene.as_mut() {
             scene.remove_object(set);
+        }
+        if masked {
+            self.after_mask_layout();
         }
     }
 }

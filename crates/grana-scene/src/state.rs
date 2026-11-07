@@ -280,10 +280,21 @@ impl Scene {
             },
         }));
         self.validate_selection();
+        self.sync_masks();
     }
 
     pub fn document_hash(&self) -> u64 {
         let mut hash = HASH_OFFSET;
+        for mask in self.masks() {
+            hash = mix(hash, mask.set().raw());
+            hash = mix(hash, mask.channel() as u64);
+            for byte in mask.name().bytes() {
+                hash = mix(hash, u64::from(byte));
+            }
+            for component in mask.tint() {
+                hash = mix(hash, u64::from(component.to_bits()));
+            }
+        }
         for channel in &self.channels {
             hash = mix(hash, u64::from(u8::from(channel.enabled)));
             hash = mix(hash, u64::from(channel.opacity.to_bits()));

@@ -23,7 +23,12 @@ impl Session {
         self.bricks.clear();
         self.measure.reset();
         self.label_images.clear();
+        self.mask_stamp = None;
         self.set_time(0);
+        self.install_channels();
+        if let Some(scene) = self.scene.as_ref() {
+            self.mask_stamp = Some((0, scene.mask_stamp(0)));
+        }
     }
 
     pub fn open_sample(&mut self) {
@@ -254,6 +259,7 @@ impl Session {
         self.view = None;
         self.history.clear();
         self.label_images.clear();
+        self.mask_stamp = None;
     }
 
     pub(super) fn open_dataset(&mut self, dataset: Dataset) {
@@ -269,9 +275,40 @@ impl Session {
         self.bricks.clear();
         self.timeline = Timeline::new(30, self.frame_duration());
         self.history.clear();
+        let mut masks = Vec::new();
+        if let Some(pending) = &self.pending {
+            masks = pending.project.masks.clone();
+            let infos = masks
+                .iter()
+                .map(|spec| {
+                    scene
+                        .dataset
+                        .channels()
+                        .get(spec.channel())
+                        .map(|source| spec.info(source))
+                })
+                .collect::<Option<Vec<_>>>();
+            match infos {
+                Some(infos) => {
+                    if let Err(detail) = scene.set_mask_layout(infos) {
+                        masks.clear();
+                        self.message = Some(Message::error(detail));
+                    }
+                }
+                None => {
+                    masks.clear();
+                    self.message = Some(Message::error(
+                        "the project masks a channel that the dataset does not hold",
+                    ));
+                }
+            }
+        }
         if let Some(pending) = self.pending.take() {
             if pending.project.matches(&scene.dataset) {
                 scene.restore(pending.project.scene);
+                if let Err(detail) = scene.bind_masks(masks) {
+                    self.message = Some(Message::error(detail));
+                }
                 self.measure.restore(pending.project.measure, &scene);
                 self.export = pending.project.view.export;
                 self.view = Some(pending.project.view);
@@ -280,6 +317,7 @@ impl Session {
                     scene.document_hash() ^ self.measure.document_hash() ^ self.timeline.document(),
                 );
             } else {
+                let _ = scene.set_mask_layout(Vec::new());
                 self.message = Some(Message::error(
                     "the project was saved from a dataset with a different shape, channels or duration",
                 ));
@@ -287,6 +325,7 @@ impl Session {
         }
         self.scene = Some(scene);
         self.generation += 1;
+        self.mask_stamp = None;
         self.refresh_labels();
         if let Some(source) = &self.source {
             source.set_time(0);
@@ -294,14 +333,18 @@ impl Session {
                 source.set_drift(scene.drift().clone());
             }
         }
+        self.install_channels();
+        if let Some(scene) = self.scene.as_ref() {
+            self.mask_stamp = Some((0, scene.mask_stamp(0)));
+        }
     }
 
     fn refresh_labels(&mut self) {
         self.label_images.clear();
-        let Some(reader) = self.source.as_ref().and_then(Loader::reader) else {
+        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
             return;
         };
-        match reader.labels() {
+        match channels.image().labels() {
             Ok(labels) => {
                 self.label_images = labels.names().map(str::to_string).collect();
             }

@@ -14,6 +14,7 @@ use grana_scene::{
 };
 use grana_volume::{Axis, Pyramid, Region};
 
+use crate::channels::Channels;
 use crate::event::Event as RunEvent;
 use crate::run;
 use crate::snapshot::SnapshotRequest;
@@ -65,19 +66,30 @@ pub(super) fn analyse(
 
 fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Result<Report, String> {
     let source = Source::file_series(dataset.path().to_path_buf(), dataset.scene());
-    let reader = Image::open(&source)?;
+    let reader = Arc::new(Image::open(&source)?);
     let store = GeometryStore::temporary(DEFAULT_BUDGET)
         .map_err(|error| format!("the dataset cannot page its geometry: {error}"))?;
     let name = dataset.title();
     let artifacts = artifacts(task.protocol, &name, task.project);
     let mut scene = Scene::new(dataset_of(reader.format(), &name, reader.pyramid()));
+    let infos = task
+        .protocol
+        .mask_infos(reader.pyramid().channels())
+        .map_err(|error| error.to_string())?;
+    scene.set_mask_layout(infos)?;
     let staged = task
         .protocol
         .stage(&mut scene)
         .map_err(|error: ProtocolError| error.to_string())?;
+    let masks = task
+        .protocol
+        .mask_specs(&scene, &staged)
+        .map_err(|error| error.to_string())?;
+    scene.bind_masks(masks)?;
+    let channels = Channels::new(Arc::clone(&reader), &scene);
     let mut run = Run {
         task,
-        reader: &reader,
+        channels,
         store: &store,
         scene,
         sets: staged.sets().to_vec(),
@@ -130,7 +142,10 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         }
     }
     let Run {
-        mut scene, sets, ..
+        mut scene,
+        sets,
+        channels,
+        ..
     } = run;
     let mut objects = 0usize;
     let mut detail = Vec::new();
@@ -258,7 +273,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             transparent: spec.transparent,
             time: scene.time(),
         };
-        snapshotter.snapshot(&reader, &scene, &request, &folder.join(SNAPSHOT))?;
+        snapshotter.snapshot(&channels, &scene, &request, &folder.join(SNAPSHOT))?;
     }
     if task.project {
         let _ = task.events.send(Event::Step {
@@ -303,7 +318,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
 
 struct Run<'a, 'b> {
     task: &'b Task<'a>,
-    reader: &'b Image,
+    channels: Channels,
     store: &'b Arc<GeometryStore>,
     scene: Scene,
     sets: Vec<ObjectSetId>,
@@ -321,7 +336,7 @@ impl Run<'_, '_> {
         let task = self.task;
         let _ = task.events.send(Event::Step {
             index: task.index,
-            label: format!("aligning the frames of {}", self.reader.name()),
+            label: format!("aligning the frames of {}", self.channels.name()),
         });
         self.scene.set_drift(grana_scene::Drift::new(
             channel,
@@ -385,7 +400,7 @@ impl Run<'_, '_> {
         let frames = detect(
             task,
             Reading {
-                reader: self.reader,
+                reader: &self.channels,
                 channel,
                 region: self.scene.region,
                 roi,
@@ -442,7 +457,7 @@ impl Run<'_, '_> {
             | RunEvent::Done => {}
         };
         crate::run::import(
-            self.reader,
+            &self.channels,
             crate::run::ImportRequest::new(&label, self.scene.drift().clone()),
             task.cancel,
             &mut sink,
@@ -656,7 +671,7 @@ impl Run<'_, '_> {
             _ => {}
         };
         run::coloc(
-            self.reader,
+            &self.channels,
             run::ColocRequest::new(
                 pair,
                 region,
@@ -759,7 +774,7 @@ fn view_state(protocol: &Protocol, scene: &Scene) -> ViewState {
 }
 
 struct Reading<'a> {
-    reader: &'a Image,
+    reader: &'a Channels,
     channel: usize,
     region: Region,
     roi: Option<Roi>,

@@ -182,6 +182,10 @@ impl ObjectSet {
         self.channel
     }
 
+    pub fn measured_channels(&self) -> usize {
+        self.channels
+    }
+
     pub fn provenance(&self) -> &Provenance {
         &self.provenance
     }
@@ -982,6 +986,17 @@ impl ObjectSet {
         set.restore_hidden(hidden);
         if applied {
             set.curation.set_applied();
+        }
+        if let Some(channels) = set
+            .frames
+            .iter()
+            .find_map(|slot| slot.data.as_ref().map(|frame| frame.objects().channels()))
+        {
+            assert!(
+                channels <= dataset.channels().len(),
+                "a restored object set measures the channels of the dataset"
+            );
+            set.channels = channels;
         }
         for relation in relations {
             let target = ObjectSetId::new(relation.target);

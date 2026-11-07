@@ -29,9 +29,13 @@ pub(crate) struct PopupTransition {
 #[derive(Default)]
 pub(crate) struct LayerChange {
     pub hashes: [Option<u64>; Layer::ALL.len()],
+    pub orders: [u64; Layer::ALL.len()],
+    pub next_orders: [u64; Layer::ALL.len()],
+    pub touched: [bool; Layer::ALL.len()],
     pub base: bool,
     pub interface: bool,
     pub reset: bool,
+    pub restructured: bool,
 }
 
 pub struct Ui<A = ()> {
@@ -271,6 +275,7 @@ impl<A: Clone> Ui<A> {
     pub fn present<'a>(&mut self, element: Element<'a, A>) {
         let mut canvases: HashMap<NodeId, CanvasPaint<'a>> = HashMap::new();
         let removed = self.tree.apply(element, &mut canvases);
+        self.change.restructured = !removed.is_empty() || self.tree.layout_dirty;
         self.prune(&removed);
         self.sync_fields();
         self.rebuild_popup_anchors();
@@ -281,11 +286,13 @@ impl<A: Clone> Ui<A> {
         if self.ensure_popups() {
             self.collect_popup_windows();
             self.run_layout();
+            self.change.restructured = true;
         }
         self.paint_layers(&canvases);
         self.sync_glass();
         self.update_tooltip();
         self.paint_overlays();
+        self.change.touched[Layer::Hud.index()] = true;
     }
 
     fn run_layout(&mut self) {

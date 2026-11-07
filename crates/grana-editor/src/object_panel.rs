@@ -580,6 +580,15 @@ fn object_menu<'a>(
         "Duplicate",
         Message::Command(Command::DuplicateObject(id)),
     ));
+    if set.detected() > 0 {
+        rows.push(action_row(
+            ctx,
+            &format!("object.{}.menu.mask", id.raw()),
+            Icon::Channel,
+            "Mask Channel",
+            Message::Command(Command::AddMaskChannel { set: id }),
+        ));
+    }
     if kind != ObjectKind::Spots {
         rows.push(action_row(
             ctx,

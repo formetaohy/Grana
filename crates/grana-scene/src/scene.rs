@@ -6,7 +6,7 @@ use grana_geometry::ray_hit;
 use grana_measure::{Aggregate, Classifier, Frame, Group, Measurement, RelationRow, Table};
 use grana_object::{RelationFrame, TrackSet};
 use grana_object::{Shape, TrackParams};
-use grana_volume::{ChannelInfo, Clip, Intensity, Region};
+use grana_volume::{CHANNEL_LIMIT, ChannelInfo, Clip, Intensity, Region};
 
 use crate::annotation::Annotations;
 use crate::channel::Channel;
@@ -14,6 +14,7 @@ use crate::coloc::{Coloc, MaskKey};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::dataset::Dataset;
+use crate::derived::{MaskChannel, MaskFrames, MaskSpec};
 use crate::drift::Drift;
 use crate::key::ObjectSetKey;
 use crate::mask::MaskFilter;
@@ -21,6 +22,7 @@ use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::objects::Objects;
 use crate::provenance::{Criteria, Provenance};
+use crate::state::{HASH_OFFSET, mix};
 
 fn aggregate_scores(
     set: &ObjectSet,
@@ -104,6 +106,9 @@ pub struct Scene {
     drift: Drift,
     pub objects: Objects,
     pub coloc: Coloc,
+    masks: Vec<MaskSpec>,
+    mask_channels: Vec<Arc<MaskChannel>>,
+    base_channels: usize,
     time: u32,
     selection: Option<Selection>,
 }
@@ -140,6 +145,9 @@ impl Scene {
             drift: Drift::default(),
             objects: Objects::new(),
             coloc: Coloc::new(channel_count, region),
+            masks: Vec::new(),
+            mask_channels: Vec::new(),
+            base_channels: channel_count,
             time: 0,
             selection: None,
         }
@@ -147,6 +155,217 @@ impl Scene {
 
     pub fn channel(&self, index: usize) -> &ChannelInfo {
         &self.dataset.channels()[index]
+    }
+
+    pub fn base_channels(&self) -> usize {
+        self.base_channels
+    }
+
+    pub fn masks(&self) -> &[MaskSpec] {
+        &self.masks
+    }
+
+    pub fn mask_channels(&self) -> &[Arc<MaskChannel>] {
+        &self.mask_channels
+    }
+
+    pub fn set_mask_layout(&mut self, infos: Vec<ChannelInfo>) -> Result<(), String> {
+        let base = self.base_channels;
+        if base + infos.len() > CHANNEL_LIMIT {
+            return Err(format!(
+                "the dataset holds {base} channels and grana displays at most {CHANNEL_LIMIT}"
+            ));
+        }
+        let mut channels = self.dataset.channels()[..base].to_vec();
+        channels.extend(infos);
+        self.dataset = self.dataset.with_channels(channels);
+        let mut previous = std::mem::take(&mut self.channels).into_iter();
+        self.channels = self
+            .dataset
+            .channels()
+            .iter()
+            .enumerate()
+            .map(|(index, info)| match previous.next() {
+                Some(channel) if index < base => channel,
+                Some(_) | None => Channel::new(
+                    info.window(),
+                    info.window(),
+                    TransferFunction::tinted(info.tint()),
+                ),
+            })
+            .collect();
+        self.masks.clear();
+        self.mask_channels.clear();
+        self.coloc.set_channel_count(self.channels.len());
+        if self.selected >= self.channels.len() {
+            self.selected = 0;
+        }
+        Ok(())
+    }
+
+    pub fn bind_masks(&mut self, specs: Vec<MaskSpec>) -> Result<(), String> {
+        assert!(
+            self.masks.is_empty() && self.mask_channels.is_empty(),
+            "a scene binds its mask channels once"
+        );
+        let mut channels = Vec::with_capacity(specs.len());
+        for (index, spec) in specs.iter().enumerate() {
+            let channel = self.base_channels + index;
+            let Some(info) = self.dataset.channels().get(channel) else {
+                return Err("a mask channel lies outside the dataset".to_string());
+            };
+            if info.name() != spec.name() {
+                return Err(format!(
+                    "the mask channel {} does not match the dataset channel {}",
+                    spec.name(),
+                    info.name()
+                ));
+            }
+            let Some(set) = self.objects.get(spec.set()) else {
+                return Err(format!(
+                    "the mask channel {} names an object set that left the scene",
+                    spec.name()
+                ));
+            };
+            if spec.channel() >= self.base_channels {
+                return Err("a mask channel masks a stored channel".to_string());
+            }
+            channels.push(Arc::new(MaskChannel::new(spec.channel(), mask_frames(set))));
+        }
+        self.masks = specs;
+        self.mask_channels = channels;
+        Ok(())
+    }
+
+    pub fn add_mask(&mut self, set: ObjectSetId, channel: usize) -> Result<usize, String> {
+        if channel >= self.base_channels {
+            return Err("a mask channel masks a stored channel".to_string());
+        }
+        let Some(object) = self.objects.get(set) else {
+            return Err("the masked object set is missing from the scene".to_string());
+        };
+        if object.detected() == 0 {
+            return Err(format!("{} detected no objects to mask", object.name()));
+        }
+        if self
+            .masks
+            .iter()
+            .any(|spec| spec.set() == set && spec.channel() == channel)
+        {
+            return Err(format!(
+                "{} already masks {}",
+                object.name(),
+                self.dataset.channels()[channel].name()
+            ));
+        }
+        if self.channels.len() >= CHANNEL_LIMIT {
+            return Err(format!(
+                "the dataset holds {} channels and grana displays at most {CHANNEL_LIMIT}",
+                self.channels.len()
+            ));
+        }
+        let source = self.dataset.channels()[channel].clone();
+        let name = self.mask_name(&source, object);
+        let spec = MaskSpec::new(set, channel, name, object.color());
+        let info = spec.info(&source);
+        let mut channels = self.dataset.channels().to_vec();
+        channels.push(info.clone());
+        self.dataset = self.dataset.with_channels(channels);
+        self.channels.push(Channel::new(
+            info.window(),
+            info.window(),
+            TransferFunction::tinted(info.tint()),
+        ));
+        self.coloc.set_channel_count(self.channels.len());
+        self.masks.push(spec);
+        self.mask_channels
+            .push(Arc::new(MaskChannel::new(channel, mask_frames(object))));
+        Ok(self.channels.len() - 1)
+    }
+
+    pub fn remove_mask(&mut self, channel: usize) -> Result<(), String> {
+        if channel < self.base_channels || channel >= self.channels.len() {
+            return Err("only a mask channel can be removed".to_string());
+        }
+        let index = channel - self.base_channels;
+        if self
+            .objects
+            .iter()
+            .any(|set| set.channel() >= channel || set.measured_channels() > channel)
+        {
+            return Err("an object set measures this mask channel".to_string());
+        }
+        if self.drift().channel() == channel && !self.drift().is_empty() {
+            return Err("the drift correction aligns this mask channel".to_string());
+        }
+        self.masks.remove(index);
+        self.mask_channels.remove(index);
+        self.channels.remove(channel);
+        let infos = self
+            .dataset
+            .channels()
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| *position != channel)
+            .map(|(_, info)| info.clone())
+            .collect::<Vec<_>>();
+        self.dataset = self.dataset.with_channels(infos);
+        self.coloc.remove_channel(channel);
+        if self.selected >= channel {
+            self.selected = self.selected.saturating_sub(1);
+        }
+        Ok(())
+    }
+
+    pub fn sync_masks(&mut self) {
+        for (spec, channel) in self.masks.iter().zip(&self.mask_channels) {
+            let Some(set) = self.objects.get(spec.set()) else {
+                continue;
+            };
+            if mask_frames_current(channel, set) {
+                continue;
+            }
+            channel.set_frames(mask_frames(set));
+        }
+    }
+
+    pub fn mask_stamp(&self, time: u32) -> u64 {
+        let mut stamp = HASH_OFFSET;
+        for (spec, channel) in self.masks.iter().zip(&self.mask_channels) {
+            stamp = mix(stamp, spec.set().raw());
+            stamp = mix(stamp, spec.channel() as u64);
+            stamp = mix(stamp, Arc::as_ptr(channel) as u64);
+            stamp = mix(
+                stamp,
+                self.objects
+                    .get(spec.set())
+                    .and_then(|set| set.frame_shared(time))
+                    .map_or(0, |frame| Arc::as_ptr(&frame) as u64),
+            );
+        }
+        stamp
+    }
+
+    fn mask_name(&self, source: &ChannelInfo, object: &ObjectSet) -> String {
+        let base = format!("{} in {}", source.name(), object.name());
+        if !self
+            .dataset
+            .channels()
+            .iter()
+            .any(|channel| channel.name() == base)
+        {
+            return base;
+        }
+        (2..)
+            .map(|ordinal| format!("{base} {ordinal}"))
+            .find(|candidate| {
+                !self
+                    .dataset
+                    .channels()
+                    .iter()
+                    .any(|channel| channel.name() == candidate)
+            })
+            .expect("a mask channel name is unique")
     }
 
     pub fn time(&self) -> u32 {
@@ -224,6 +443,7 @@ impl Scene {
         }
         self.prune_mask_filter();
         self.sync_coloc_inputs();
+        self.retain_masks(id);
     }
 
     pub fn rename_object(&mut self, id: ObjectSetId, name: &str) -> bool {
@@ -243,6 +463,7 @@ impl Scene {
         self.mask = None;
         self.mask_filter = None;
         self.selection = None;
+        let _ = self.set_mask_layout(Vec::new());
         self.coloc.clear();
         self.sync_coloc_inputs();
     }
@@ -313,11 +534,16 @@ impl Scene {
                 });
         }
         self.sync_coloc_inputs();
+        self.sync_masks();
         Ok(true)
     }
 
     pub fn copy_object(&mut self, id: ObjectSetId) -> Option<ObjectSetId> {
-        self.objects.copy(id)
+        let copied = self.objects.copy(id);
+        if copied.is_some() {
+            self.sync_masks();
+        }
+        copied
     }
 
     pub fn filter_object(
@@ -417,6 +643,9 @@ impl Scene {
         source: ObjectSetId,
         target: ObjectSetId,
     ) -> Result<(), String> {
+        if self.masks.iter().any(|spec| spec.set() == source) {
+            return Err("a mask channel derives from the merged object set".to_string());
+        }
         self.objects.merge(source, target)?;
         if self.mask == Some(source) {
             self.mask = None;
@@ -429,6 +658,7 @@ impl Scene {
         }
         self.prune_mask_filter();
         self.sync_coloc_inputs();
+        self.sync_masks();
         Ok(())
     }
 
@@ -834,9 +1064,11 @@ impl Scene {
         if frames.is_empty() {
             return None;
         }
-        let channels = self
-            .dataset
-            .channels()
+        assert!(
+            object.measured_channels() <= self.dataset.channels().len(),
+            "an object set measures the channels of the dataset"
+        );
+        let channels = self.dataset.channels()[..object.measured_channels()]
             .iter()
             .map(|channel| channel.name().to_string())
             .collect::<Vec<_>>();
@@ -945,6 +1177,7 @@ impl Scene {
             }
         }
         self.sync_coloc_inputs();
+        self.sync_masks();
     }
 
     pub fn clear_object(&mut self, id: ObjectSetId) {
@@ -963,15 +1196,47 @@ impl Scene {
     }
 
     pub fn apply_curation(&mut self, id: ObjectSetId) -> usize {
-        self.objects.apply_curation(id)
+        let applied = self.objects.apply_curation(id);
+        self.sync_masks();
+        applied
     }
 
     pub fn reapply_hidden(&mut self, id: ObjectSetId) -> usize {
-        self.objects.reapply_hidden(id)
+        let applied = self.objects.reapply_hidden(id);
+        self.sync_masks();
+        applied
     }
 
     pub fn set_curation(&mut self, id: ObjectSetId, curation: Curation) -> bool {
-        self.objects.set_curation(id, curation)
+        let changed = self.objects.set_curation(id, curation);
+        if changed {
+            self.sync_masks();
+        }
+        changed
+    }
+
+    fn retain_masks(&mut self, set: ObjectSetId) {
+        if !self.masks.iter().any(|spec| spec.set() == set) {
+            return;
+        }
+        let specs = self
+            .masks
+            .iter()
+            .filter(|spec| spec.set() != set)
+            .cloned()
+            .collect::<Vec<_>>();
+        let infos = specs
+            .iter()
+            .filter_map(|spec| {
+                self.dataset
+                    .channels()
+                    .get(spec.channel())
+                    .map(|source| spec.info(source))
+            })
+            .collect::<Vec<_>>();
+        let _ = self.set_mask_layout(infos);
+        let _ = self.bind_masks(specs);
+        self.sync_masks();
     }
 
     pub fn clear_tracks(&mut self, id: ObjectSetId) {
@@ -1235,4 +1500,27 @@ impl Scene {
         let mask = self.mask_key();
         self.coloc.set_inputs(self.region, mask);
     }
+}
+
+fn mask_frames(set: &ObjectSet) -> MaskFrames {
+    Arc::new(
+        (0..set.frame_count())
+            .map(|time| set.frame_shared(time))
+            .collect(),
+    )
+}
+
+fn mask_frames_current(channel: &MaskChannel, set: &ObjectSet) -> bool {
+    let held = channel.frames();
+    held.len() == set.frame_count() as usize
+        && (0..set.frame_count()).all(|time| {
+            match (
+                held.get(time as usize).and_then(Option::as_ref),
+                set.frame_shared(time),
+            ) {
+                (Some(held), Some(latest)) => Arc::ptr_eq(held, &latest),
+                (None, None) => true,
+                _ => false,
+            }
+        })
 }

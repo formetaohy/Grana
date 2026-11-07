@@ -1,14 +1,14 @@
-use std::fs;
+﻿use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
-use grana_image::Image;
 use grana_measure::Measurement;
 use grana_pipeline::{
-    Batch, BatchEvent, DatasetEntry, Outcome, Plan, SnapshotRequest, Snapshotter, discover,
+    Batch, BatchEvent, Channels, DatasetEntry, Outcome, Plan, SnapshotRequest, Snapshotter,
+    discover,
 };
 use grana_project::{Project, Source as ProjectSource};
 use grana_protocol::Protocol;
@@ -1033,7 +1033,7 @@ impl Snapshotter for Recorder {
 
     fn snapshot(
         &self,
-        _reader: &Image,
+        _channels: &Channels,
         scene: &Scene,
         request: &SnapshotRequest,
         path: &Path,

@@ -21,8 +21,8 @@ use grana_object::{
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, AnnotationTag, ChannelState, ColocResult,
     ColocState, ColorState, Criteria, Curation, Drift, FilterRange, ItemState, LassoPath,
-    MaskFilter, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind, ObjectParams,
-    ObjectSetId, ObjectSetKey, Provenance, Recipe, RelationState, SceneState, Seeds,
+    MaskFilter, MaskSpec, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind,
+    ObjectParams, ObjectSetId, ObjectSetKey, Provenance, Recipe, RelationState, SceneState, Seeds,
     SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Clip, Intensity, Region};
@@ -39,13 +39,37 @@ const MAX_PROVENANCE_DEPTH: usize = 32;
 
 impl Decode for Project {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        Ok(Self {
+        let project = Self {
             shape: Shape::decode(reader)?,
             source: Source::decode(reader)?,
             scene: SceneState::decode(reader)?,
+            masks: Vec::<MaskSpec>::decode(reader)?,
             measure: MeasureState::decode(reader)?,
             view: ViewState::decode(reader)?,
-        })
+        };
+        if project.masks.len() > project.scene.channels.len() {
+            return Err(FAULT_SHAPE);
+        }
+        Ok(project)
+    }
+}
+
+impl Decode for MaskSpec {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let channel = reader.count(1)?;
+        let set = ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?;
+        let name = reader.string()?;
+        if name.trim().is_empty() {
+            return Err(FAULT_VALUE);
+        }
+        let mut tint = [0.0; 3];
+        for value in &mut tint {
+            *value = reader.f32()?;
+            if !(0.0..=1.0).contains(value) {
+                return Err(FAULT_VALUE);
+            }
+        }
+        Ok(Self::new(set, channel, name, tint))
     }
 }
 

@@ -57,6 +57,54 @@ impl Protocol {
                 )));
             }
         }
+        if !self.masks.is_empty() {
+            if self.channels.len() < self.masks.len() {
+                return Err(ProtocolError::Invalid(
+                    "a protocol presents every mask channel".to_string(),
+                ));
+            }
+            let base = self.channels.len() - self.masks.len();
+            for (index, spec) in self.masks.iter().enumerate() {
+                spec.checked()?;
+                if self.masks[..index]
+                    .iter()
+                    .any(|other| other.name == spec.name)
+                {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the mask channel {} appears twice",
+                        spec.name
+                    )));
+                }
+                if self.channels[base + index].name != spec.name {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the mask channel {} does not close the channel list",
+                        spec.name
+                    )));
+                }
+                if !self.sets.iter().any(|set| set.key == spec.set) {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the mask channel {} masks an object set of the protocol",
+                        spec.name
+                    )));
+                }
+                let Some(source) = self
+                    .channels
+                    .iter()
+                    .position(|channel| channel.name == spec.channel)
+                else {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the mask channel {} masks the missing channel {}",
+                        spec.name, spec.channel
+                    )));
+                };
+                if source >= base {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the mask channel {} masks a stored channel",
+                        spec.name
+                    )));
+                }
+            }
+        }
         let mut names = Vec::new();
         let mut set_keys = Vec::new();
         let protocol_keys = self
@@ -425,6 +473,15 @@ impl Protocol {
         earlier: &[String],
         set: &str,
     ) -> Result<(), ProtocolError> {
+        if let Some(channel) = source.channel()
+            && let Some(mask) = self.masks.iter().find(|mask| mask.name == channel)
+            && !earlier.contains(&mask.set)
+        {
+            return Err(ProtocolError::Invalid(format!(
+                "{set} detects on the mask channel {channel}, whose object set {} does not run before it",
+                mask.set
+            )));
+        }
         match source {
             SourceSpec::Surfaces { seed_source, .. } => {
                 if let Some(source) = seed_source

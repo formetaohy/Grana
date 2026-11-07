@@ -122,6 +122,12 @@ impl BrickGrid {
         range
     }
 
+    pub fn padded_cell(self, coord: BrickCoord, offset: [u32; 3]) -> [u32; 3] {
+        let origin = self.origin(coord);
+        let limits = [self.extent.x(), self.extent.y(), self.extent.z()];
+        [0, 1, 2].map(|axis| clamp(limits[axis], origin[axis], offset[axis]))
+    }
+
     pub fn cover(self, ranges: &[Range<u32>; 3]) -> ([u32; 3], [u32; 3]) {
         let limits = [self.extent.x(), self.extent.y(), self.extent.z()];
         assert!(

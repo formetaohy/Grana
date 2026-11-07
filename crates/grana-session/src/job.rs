@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_geometry::GeometryStore;
-use grana_image::Image;
 use grana_object::{SurfaceCut, TrackParams};
+use grana_pipeline::Channels;
 use grana_scene::{Job, ObjectFrame};
 
 use crate::task::{Poll, Task};
@@ -25,15 +25,15 @@ impl Analysis {
     }
 }
 
-pub fn detect(job: Job, reader: Arc<Image>, request: DetectRequest) -> Analysis {
+pub fn detect(job: Job, channels: Arc<Channels>, request: DetectRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
-        run::detect(&reader, request, cancel, sink)
+        run::detect(&channels, request, cancel, sink)
     })
 }
 
-pub fn import(job: Job, reader: Arc<Image>, request: ImportRequest) -> Analysis {
+pub fn import(job: Job, channels: Arc<Channels>, request: ImportRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
-        run::import(&reader, request, cancel, sink)
+        run::import(&channels, request, cancel, sink)
     })
 }
 
@@ -111,15 +111,15 @@ pub fn relation(
     })
 }
 
-pub fn coloc(job: Job, reader: Arc<Image>, request: ColocRequest) -> Analysis {
+pub fn coloc(job: Job, channels: Arc<Channels>, request: ColocRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
-        run::coloc(&reader, request, cancel, sink)
+        run::coloc(&channels, request, cancel, sink)
     })
 }
 
-pub fn drift(job: Job, reader: Arc<Image>, request: DriftRequest) -> Analysis {
+pub fn drift(job: Job, channels: Arc<Channels>, request: DriftRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
-        run::drift(&reader, request, cancel, sink)
+        run::drift(&channels, request, cancel, sink)
     })
 }
 

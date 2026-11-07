@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::channels::Channels;
 use grana_analysis::{LabelBuilder, LabelSlab};
-use grana_image::Image;
 use grana_scene::{Drift, ObjectFrame};
 use grana_volume::{Pyramid, Spacing, VoxelData};
 
@@ -31,7 +31,7 @@ impl ImportRequest {
 }
 
 pub fn import(
-    reader: &Image,
+    reader: &Channels,
     request: ImportRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),

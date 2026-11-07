@@ -345,6 +345,38 @@ pub struct RegionSpec {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct MaskSpec {
+    pub set: String,
+    pub channel: String,
+    pub name: String,
+    pub tint: [f32; 3],
+}
+
+impl MaskSpec {
+    pub(super) fn checked(&self) -> Result<(), ProtocolError> {
+        for (label, value) in [
+            ("set", &self.set),
+            ("channel", &self.channel),
+            ("name", &self.name),
+        ] {
+            if value.trim().is_empty() {
+                return Err(ProtocolError::Invalid(format!(
+                    "a mask channel names a {label}"
+                )));
+            }
+        }
+        if self.tint.iter().any(|value| !(0.0..=1.0).contains(value)) {
+            return Err(ProtocolError::Invalid(format!(
+                "the tint of the mask channel {} is not an srgb triple",
+                self.name
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DriftSpec {
     pub channel: String,
     #[serde(default, skip_serializing_if = "is_u32_zero")]

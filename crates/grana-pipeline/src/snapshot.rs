@@ -1,9 +1,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use grana_image::Image;
 use grana_project::ViewState;
 use grana_scene::Scene;
+
+use crate::channels::Channels;
 
 pub struct SnapshotRequest {
     pub view: Option<ViewState>,
@@ -17,7 +18,7 @@ pub trait Snapshotter: Send + Sync {
 
     fn snapshot(
         &self,
-        reader: &Image,
+        channels: &Channels,
         scene: &Scene,
         request: &SnapshotRequest,
         path: &Path,

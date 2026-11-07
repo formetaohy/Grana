@@ -31,7 +31,7 @@ impl Session {
         {
             return;
         }
-        let Some(reader) = self.source.as_ref().and_then(Loader::reader) else {
+        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
             self.message = Some(Message::error("the dataset is still opening"));
             return;
         };
@@ -52,7 +52,7 @@ impl Session {
         self.record_progress(Job::Import(set), 0, 0, 0);
         self.analysis.push(crate::import(
             Job::Import(set),
-            reader,
+            channels,
             ImportRequest::new(&label, drift),
         ));
     }

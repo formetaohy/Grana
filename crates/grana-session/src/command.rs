@@ -45,6 +45,12 @@ pub enum Command {
         target: ObjectSetId,
     },
     AddObject(ObjectKind),
+    AddMaskChannel {
+        set: ObjectSetId,
+    },
+    RemoveMaskChannel {
+        channel: usize,
+    },
     ImportLabels {
         label: String,
     },

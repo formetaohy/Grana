@@ -6,6 +6,7 @@ mod execute;
 mod export;
 mod import;
 mod label;
+mod mask;
 mod open;
 mod replay;
 use std::collections::HashSet;
@@ -110,6 +111,7 @@ pub struct Session {
     snapshotter: Option<SnapshotFactory>,
     series: Vec<Series>,
     series_index: usize,
+    mask_stamp: Option<(u32, u64)>,
 }
 
 impl Default for Session {
@@ -165,6 +167,7 @@ impl Session {
             snapshotter: None,
             series: Vec::new(),
             series_index: 0,
+            mask_stamp: None,
         }
     }
     pub fn insert_keyframe(&mut self, key: Keyframe) -> usize {
@@ -325,6 +328,7 @@ impl Session {
         repaint |= self.poll_analysis();
         repaint |= self.poll_batch();
         repaint |= self.poll_labels();
+        repaint |= self.refresh_masks();
         repaint
     }
     pub fn request(&mut self, time: u32, bricks: &[BrickRequest]) {

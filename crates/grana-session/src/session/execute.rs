@@ -42,6 +42,8 @@ impl Session {
                     scene.add_object(kind, channel);
                 }
             }
+            Command::AddMaskChannel { set } => self.add_mask_channel(set),
+            Command::RemoveMaskChannel { channel } => self.remove_mask_channel(channel),
             Command::ImportLabels { label } => self.import_labels(&label),
             Command::RenameObject { set, name } => {
                 let renamed = self
@@ -97,7 +99,19 @@ impl Session {
             Command::MergeObjects { source, target } => {
                 self.merge_objects(source, target);
             }
-            Command::RemoveObject(set) => self.remove_object(set),
+            Command::RemoveObject(set) => {
+                let masked = self
+                    .scene
+                    .as_ref()
+                    .is_some_and(|scene| scene.masks().iter().any(|spec| spec.set() == set));
+                if masked {
+                    self.message = Some(Message::error(
+                        "a mask channel derives from this object set",
+                    ));
+                } else {
+                    self.remove_object(set);
+                }
+            }
             Command::Detect(set) => self.detect_root(set),
             Command::CancelDetect(set) => {
                 let set = self.detection_root(set).unwrap_or(set);

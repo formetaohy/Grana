@@ -8,7 +8,9 @@ use grana_measure::{
     ColocSeriesInfo, ColocSignificance, ColocThresholds, Group, Lasso, MeasureView, Measurement,
     RelationField, Scope, Statistic, TrackMeasurement,
 };
-use grana_object::{IntensityTable, RelationFrame, SampleAccumulator, Spot, SpotSet};
+use grana_object::{
+    IntensityTable, RelationFrame, SampleAccumulator, SampleStatistics, Spot, SpotSet,
+};
 use grana_project::{Export, ViewState};
 use grana_protocol::{Protocol, SnapshotSpec, SourceSpec, Step, ViewSpec};
 use grana_scene::{
@@ -1731,4 +1733,94 @@ fn round_trips_a_classifier() {
     let classifier = set.classifier().expect("the classifier restages");
     assert_eq!(classifier.features().len(), 2);
     assert_eq!(classifier.positives(), 2);
+}
+
+#[test]
+fn captures_and_stages_a_mask_channel() {
+    let extent = Extent::new(8, 8, 4);
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![
+            Channel::new(
+                "DAPI",
+                [0.3, 0.4, 1.0],
+                VoxelData::U16(vec![60000; extent.voxel_count() as usize]),
+            ),
+            Channel::new(
+                "GFP",
+                [0.3, 1.0, 0.4],
+                VoxelData::U16(vec![30000; extent.voxel_count() as usize]),
+            ),
+        ],
+    );
+    let series = VolumeSeries::new(vec![volume], 1.0);
+    let mut scene = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let nuclei = scene.add_object(ObjectKind::Spots, 0);
+    assert!(scene.rename_object(nuclei, "Nuclei"));
+    scene.install(
+        nuclei,
+        0,
+        ObjectFrame::Spots(SpotSet::new(
+            0,
+            vec![Spot::new([0.0, 0.0, 0.0], 2.0, 1.0)],
+            IntensityTable::new(
+                2,
+                vec![
+                    SampleStatistics::new(60000.0, 60000.0, 60000.0, 0.0, 60000.0),
+                    SampleStatistics::new(30000.0, 30000.0, 30000.0, 0.0, 30000.0),
+                ],
+            ),
+        )),
+    );
+    let masked = scene
+        .add_mask(nuclei, 0)
+        .expect("the scene masks its channel");
+    let beads = scene.add_object(ObjectKind::Spots, masked);
+    assert!(scene.rename_object(beads, "Masked beads"));
+    let protocol =
+        Protocol::capture(&scene, &Measure::new(), None).expect("the mask channel captures");
+    assert_eq!(protocol.masks().len(), 1);
+    let nuclei_key = scene
+        .objects
+        .get(nuclei)
+        .expect("the nuclei exist")
+        .key()
+        .as_str()
+        .to_string();
+    assert_eq!(protocol.masks()[0].set, nuclei_key);
+    assert_eq!(
+        protocol.masks()[0].name,
+        scene.dataset.channels()[masked].name()
+    );
+    assert_eq!(
+        protocol.sets()[0].name,
+        "Nuclei",
+        "the masked set runs before the set that reads its channel"
+    );
+    assert_eq!(protocol.sets().len(), 2);
+    assert!(
+        protocol
+            .channels()
+            .iter()
+            .any(|channel| channel.name == protocol.masks()[0].name)
+    );
+
+    let mut staged = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
+    let infos = protocol
+        .mask_infos(staged.dataset.channels())
+        .expect("the mask channels resolve");
+    staged
+        .set_mask_layout(infos)
+        .expect("the masks fit the dataset");
+    let sets = protocol.stage(&mut staged).expect("the protocol stages");
+    let masks = protocol
+        .mask_specs(&staged, &sets)
+        .expect("the mask specs resolve");
+    staged.bind_masks(masks).expect("the mask channels bind");
+    assert_eq!(staged.dataset.channels().len(), 3);
+    assert_eq!(staged.masks().len(), 1);
+    assert_eq!(staged.masks()[0].set(), sets.set(0));
+    assert_eq!(staged.masks()[0].channel(), 0);
+    assert_eq!(staged.mask_channels().len(), 1);
 }

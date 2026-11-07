@@ -4,8 +4,7 @@ use std::sync::{Mutex, MutexGuard};
 use grana_display::{Camera, CameraState, SectionCamera, SectionState, Viewport};
 use grana_engine::{Destination, Engine, Outcome, Panels, Panes, Plan, Pose};
 use grana_gpu::Headless;
-use grana_image::Image;
-use grana_pipeline::{SnapshotRequest, Snapshotter};
+use grana_pipeline::{Channels, SnapshotRequest, Snapshotter};
 use grana_scene::Scene;
 use grana_ui::{Rect, Ui, Vec2};
 use grana_volume::Axis;
@@ -54,7 +53,7 @@ impl Snapshotter for Snapshot {
 
     fn snapshot(
         &self,
-        reader: &Image,
+        channels: &Channels,
         scene: &Scene,
         request: &SnapshotRequest,
         path: &Path,
@@ -91,7 +90,7 @@ impl Snapshotter for Snapshot {
                 fps: 0,
             },
         )?;
-        let outcome = render(engine, gpu, &mut ui, reader, scene, path);
+        let outcome = render(engine, gpu, &mut ui, channels, scene, path);
         if outcome.is_err() {
             engine.cancel_export();
         }
@@ -103,12 +102,12 @@ fn render(
     engine: &mut Engine,
     gpu: &Headless,
     ui: &mut Ui,
-    reader: &Image,
+    channels: &Channels,
     scene: &Scene,
     path: &Path,
 ) -> Result<(), String> {
     for _ in 0..ATTEMPTS {
-        pump(engine, gpu, reader, scene.drift())?;
+        pump(engine, gpu, channels, scene.drift())?;
         match engine.render_export(&gpu.device, &gpu.queue, ui, scene) {
             Outcome::Running => {}
             Outcome::Complete { .. } => return Ok(()),
@@ -153,7 +152,7 @@ fn aspect(region: [u32; 4]) -> f32 {
 fn pump(
     engine: &mut Engine,
     gpu: &Headless,
-    reader: &Image,
+    channels: &Channels,
     drift: &grana_scene::Drift,
 ) -> Result<(), String> {
     let Some(requests) = engine.poll_requests(&gpu.device) else {
@@ -165,7 +164,7 @@ fn pump(
         .chain(&requests.section)
         .chain(&requests.prefetch)
     {
-        let data = reader
+        let data = channels
             .read_brick(
                 request.time,
                 request.level,

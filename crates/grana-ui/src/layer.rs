@@ -8,8 +8,13 @@ use crate::paint::{Clip, Instance, LayerInstances, Painter};
 use crate::ui::Ui;
 use crate::widget::PaintInfo;
 
+const ORDER_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const ORDER_PRIME: u64 = 0x0000_0100_0000_01b3;
+
 impl<A: Clone> Ui<A> {
     pub(crate) fn paint_layers<'a>(&mut self, canvases: &HashMap<NodeId, CanvasPaint<'a>>) {
+        self.change.next_orders = [ORDER_OFFSET; Layer::ALL.len()];
+        self.change.touched = [false; Layer::ALL.len()];
         for layer in &mut self.layers {
             layer.clear();
         }
@@ -47,9 +52,13 @@ impl<A: Clone> Ui<A> {
             )
         };
         let layer_index = layer.index();
+        let order = self.change.next_orders[layer_index];
+        self.change.next_orders[layer_index] =
+            order.wrapping_mul(ORDER_PRIME) ^ self.tree.nodes[id].key.id();
         let mut instances = std::mem::take(&mut self.tree.nodes[id].paint);
         let dirty = self.tree.nodes[id].paint_dirty || self.tree.nodes[id].glass_rect != glass;
         if dirty {
+            self.change.touched[layer_index] = true;
             instances.clear();
             let vibrancy = matches!(layer, Layer::Labels | Layer::Popup | Layer::Hud);
             let dark = self.theme.dark;
@@ -122,10 +131,17 @@ impl<A: Clone> Ui<A> {
     pub(crate) fn measure_layers(&mut self, glass_changed: bool) {
         let mut changed = [false; Layer::ALL.len()];
         for (index, layer) in self.layers.iter().enumerate() {
+            let reordered = self.change.orders[index] != self.change.next_orders[index];
+            self.change.orders[index] = self.change.next_orders[index];
+            let touched = self.change.restructured || self.change.touched[index] || reordered;
+            if !touched && self.change.hashes[index].is_some() {
+                continue;
+            }
             let hash = hash_layer(layer, 0x9e37_79b9_7f4a_7c15 ^ index as u64);
             changed[index] = self.change.hashes[index] != Some(hash);
             self.change.hashes[index] = Some(hash);
         }
+        self.change.restructured = false;
         let base = changed[Layer::Content.index()] || self.change.reset;
         let interface = changed[Layer::Chrome.index()]
             || changed[Layer::Labels.index()]

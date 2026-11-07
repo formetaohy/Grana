@@ -1,5 +1,6 @@
 mod capture;
 mod check;
+mod mask;
 mod present;
 mod spec;
 mod stage;
@@ -13,10 +14,10 @@ use thiserror::Error;
 pub use spec::{
     AnchorSpec, AnnotationSpec, AxisSpec, CameraSpec, ChannelSpec, ClassifierSpec, ColocPairSpec,
     ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DriftSpec, EditSpec, ExportSpec,
-    FilterSpec, HiddenSpec, KeySpec, LassoSpec, MaskFilterSpec, MeasureSpec, MetricSpec, NodeSpec,
-    PartSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, SectionSpec, SetSpec, ShadingSpec,
-    SnapshotSpec, SortSpec, SourceSpec, StopSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec,
-    WindowSpec,
+    FilterSpec, HiddenSpec, KeySpec, LassoSpec, MaskFilterSpec, MaskSpec, MeasureSpec, MetricSpec,
+    NodeSpec, PartSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, SectionSpec, SetSpec,
+    ShadingSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec, TimelineSpec, TrackSpec,
+    TransferSpec, ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -30,6 +31,8 @@ pub struct Protocol {
     render: Option<RenderSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     channels: Vec<ChannelSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    masks: Vec<MaskSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     drift: Option<DriftSpec>,
     #[serde(default, skip_serializing_if = "spec::is_f32_zero")]
@@ -74,6 +77,10 @@ impl Protocol {
 
     pub fn channels(&self) -> &[ChannelSpec] {
         &self.channels
+    }
+
+    pub fn masks(&self) -> &[MaskSpec] {
+        &self.masks
     }
 
     pub fn drift(&self) -> Option<&DriftSpec> {
@@ -266,6 +273,9 @@ impl Protocol {
                 filter.maximum,
                 self.name_of(&filter.target).unwrap_or(&filter.target)
             ));
+        }
+        if !self.masks.is_empty() {
+            summary.push_str(&format!(" · {} mask channels", self.masks.len()));
         }
         if !self.annotations.is_empty() {
             summary.push_str(&format!(" · {} annotations", self.annotations.len()));

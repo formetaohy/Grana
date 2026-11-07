@@ -372,6 +372,24 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
             .align(Align::Center)
             .children([auto, tinted, gray]),
     );
+    if index >= scene.base_channels() {
+        children.push(view::divider(ctx));
+        children.push(
+            grana_ui::row()
+                .justify(Align::End)
+                .width(Length::Fill)
+                .children([view::button_with(
+                    ctx,
+                    "Remove Mask Channel",
+                    Role::Quiet,
+                    Length::Fill,
+                )
+                .named("display.mask.remove")
+                .press(Message::Command(Command::RemoveMaskChannel {
+                    channel: index,
+                }))]),
+        );
+    }
     children.push(view::divider(ctx));
     let key = Key::new("display.transfer");
     let open = state.workspace.sections.is_open(key);

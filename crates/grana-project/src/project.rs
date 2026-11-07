@@ -7,14 +7,14 @@ use std::time::Duration;
 use grana_animation::Timeline;
 use grana_display::{CameraState, SectionState};
 use grana_geometry::GeometryStore;
-use grana_scene::{Dataset, Measure, MeasureState, ObjectFrame, Scene, SceneState};
+use grana_scene::{Dataset, MaskSpec, Measure, MeasureState, ObjectFrame, Scene, SceneState};
 
 use grana_codec::Encoder;
 
 use crate::codec::{Decode, Encode, Reader};
 use crate::error::Error;
 
-const MAGIC: &[u8; 11] = b"granaproj35";
+const MAGIC: &[u8; 11] = b"granaproj36";
 const LENGTH: usize = size_of::<u64>();
 const STEPS: usize = size_of::<u32>();
 const HEADER: usize = MAGIC.len() + LENGTH + STEPS;
@@ -27,6 +27,7 @@ pub struct Project {
     pub shape: Shape,
     pub source: Source,
     pub scene: SceneState,
+    pub masks: Vec<MaskSpec>,
     pub measure: MeasureState,
     pub view: ViewState,
 }
@@ -90,6 +91,7 @@ impl Project {
             },
             source,
             scene: scene.state(),
+            masks: scene.masks().to_vec(),
             measure: measure.state(),
             view,
         }
@@ -98,7 +100,8 @@ impl Project {
     pub fn matches(&self, dataset: &Dataset) -> bool {
         let extent = dataset.extent();
         let spacing = dataset.spacing();
-        self.shape.extent == [extent.x(), extent.y(), extent.z()]
+        self.masks.len() <= dataset.channels().len()
+            && self.shape.extent == [extent.x(), extent.y(), extent.z()]
             && self.shape.spacing == [spacing.x(), spacing.y(), spacing.z()]
             && self
                 .scene

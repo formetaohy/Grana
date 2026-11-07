@@ -533,7 +533,7 @@ impl Session {
         if let Some(scene) = self.scene.as_mut() {
             scene.clear_tracks(set);
         }
-        let Some(reader) = self.source.as_ref().and_then(Loader::reader) else {
+        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
             self.message = Some(Message::error("the dataset is still opening"));
             return;
         };
@@ -544,6 +544,19 @@ impl Session {
             return;
         };
         let channel = object.channel();
+        if channel >= scene.base_channels() {
+            let mask = &scene.masks()[channel - scene.base_channels()];
+            let ready = scene
+                .objects
+                .get(mask.set())
+                .is_some_and(|set| set.detected() > 0);
+            if !ready {
+                self.message = Some(Message::error(
+                    "the mask channel needs its object set detected",
+                ));
+                return;
+            }
+        }
         let params = object.params();
         let region = scene.region;
         let drift = scene.drift().clone();
@@ -627,7 +640,7 @@ impl Session {
         };
         self.analysis.push(crate::detect(
             Job::Detect(set),
-            reader,
+            channels,
             DetectRequest::new(channel, params, region, roi, drift, 0, self.store())
                 .with_seeds(seeds, policy),
         ));
@@ -788,7 +801,7 @@ impl Session {
         {
             return;
         }
-        let Some(reader) = self.source.as_ref().and_then(Loader::reader) else {
+        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
             self.message = Some(Message::error("the dataset is still opening"));
             return;
         };
@@ -854,7 +867,7 @@ impl Session {
         self.record_progress(Job::Coloc, 0, 0, 0);
         self.analysis.push(crate::coloc(
             Job::Coloc,
-            reader,
+            channels,
             grana_pipeline::ColocRequest::new(
                 pair,
                 region,
@@ -885,7 +898,7 @@ impl Session {
         {
             return;
         }
-        let Some(reader) = self.source.as_ref().and_then(Loader::reader) else {
+        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
             self.message = Some(Message::error("the dataset is still opening"));
             return;
         };
@@ -899,6 +912,12 @@ impl Session {
         if channel >= scene.dataset.channels().len() {
             self.message = Some(Message::error(
                 "the protocol aligns a channel the dataset does not hold",
+            ));
+            return;
+        }
+        if channel >= scene.base_channels() {
+            self.message = Some(Message::error(
+                "the drift correction aligns a stored channel",
             ));
             return;
         }
@@ -918,7 +937,7 @@ impl Session {
         self.record_progress(Job::Drift, 0, 0, scene.frame_count() as usize);
         self.analysis.push(crate::drift(
             Job::Drift,
-            reader,
+            channels,
             grana_pipeline::DriftRequest::new(channel, reference),
         ));
     }

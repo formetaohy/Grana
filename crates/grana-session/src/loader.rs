@@ -3,9 +3,10 @@ use std::collections::{BinaryHeap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 
 use grana_image::{Format, Image, Series, Source};
+use grana_pipeline::Channels;
 use grana_scene::Drift;
 use grana_volume::{BrickData, BrickRequest, CHANNEL_LIMIT, Pyramid, VolumeSeries};
 
@@ -37,7 +38,7 @@ pub struct Loader {
     queue: Arc<Queue>,
     time: Arc<AtomicU32>,
     drift: Arc<RwLock<Drift>>,
-    reader: Arc<OnceLock<Arc<Image>>>,
+    channels: Arc<RwLock<Option<Arc<Channels>>>>,
     source: Source,
 }
 
@@ -190,24 +191,23 @@ impl Queue {
 impl Loader {
     pub fn memory(series: VolumeSeries) -> (Self, Pyramid) {
         let source = Source::memory(series);
-        let reader = Image::open(&source).expect("an in-memory volume opens");
-        let pyramid = reader.pyramid().clone();
+        let channels = Channels::stored(Arc::new(
+            Image::open(&source).expect("an in-memory volume opens"),
+        ));
+        let pyramid = channels.pyramid().clone();
         let (sender, events) = mpsc::channel();
         let queue = Arc::new(Queue::new());
         let time = Arc::new(AtomicU32::new(0));
         let drift = Arc::new(RwLock::new(Drift::default()));
-        let reader = Arc::new(reader);
-        let resident = Arc::new(OnceLock::new());
-        let installed = resident.set(Arc::clone(&reader));
-        assert!(installed.is_ok(), "a fresh loader holds no reader");
-        spawn(Arc::clone(&reader), &queue, &time, &drift, &sender);
+        let resident = Arc::new(RwLock::new(Some(Arc::new(channels))));
+        spawn(Arc::clone(&resident), &queue, &time, &drift, &sender);
         (
             Self {
                 events,
                 queue,
                 time,
                 drift,
-                reader: resident,
+                channels: resident,
                 source,
             },
             pyramid,
@@ -227,13 +227,13 @@ impl Loader {
         let queue = Arc::new(Queue::new());
         let time = Arc::new(AtomicU32::new(0));
         let drift = Arc::new(RwLock::new(Drift::default()));
-        let resident = Arc::new(OnceLock::new());
+        let resident = Arc::new(RwLock::new(None));
         let opened = source.clone();
         let opening_sender = sender.clone();
         let opening_queue = Arc::clone(&queue);
         let opening_time = Arc::clone(&time);
         let opening_drift = Arc::clone(&drift);
-        let opening_reader = Arc::clone(&resident);
+        let opening_channels = Arc::clone(&resident);
         std::thread::spawn(move || {
             let reader = match Image::open(&opened) {
                 Ok(reader) => reader,
@@ -259,13 +259,15 @@ impl Loader {
                 series: reader.series().to_vec(),
                 selected: reader.selected(),
             };
-            let reader = Arc::new(reader);
-            let _ = opening_reader.set(Arc::clone(&reader));
+            let channels = Arc::new(Channels::stored(Arc::new(reader)));
+            *opening_channels
+                .write()
+                .unwrap_or_else(|error| error.into_inner()) = Some(Arc::clone(&channels));
             if opening_sender.send(opened).is_err() {
                 return;
             }
             spawn(
-                Arc::clone(&reader),
+                opening_channels,
                 &opening_queue,
                 &opening_time,
                 &opening_drift,
@@ -277,7 +279,7 @@ impl Loader {
             queue,
             time,
             drift,
-            reader: resident,
+            channels: resident,
             source,
         }
     }
@@ -313,8 +315,18 @@ impl Loader {
         self.source.clone()
     }
 
-    pub fn reader(&self) -> Option<Arc<Image>> {
-        self.reader.get().cloned()
+    pub fn set_channels(&self, channels: Channels) {
+        *self
+            .channels
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = Some(Arc::new(channels));
+    }
+
+    pub fn channels(&self) -> Option<Arc<Channels>> {
+        self.channels
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
 }
 
@@ -325,24 +337,24 @@ impl Drop for Loader {
 }
 
 fn spawn(
-    reader: Arc<Image>,
+    channels: Arc<RwLock<Option<Arc<Channels>>>>,
     queue: &Arc<Queue>,
     time: &Arc<AtomicU32>,
     drift: &Arc<RwLock<Drift>>,
     events: &Sender<Event>,
 ) {
     for _ in 0..workers() {
-        let reader = Arc::clone(&reader);
+        let channels = Arc::clone(&channels);
         let queue = Arc::clone(queue);
         let time = Arc::clone(time);
         let drift = Arc::clone(drift);
         let events = events.clone();
-        std::thread::spawn(move || serve(reader, queue, time, drift, events));
+        std::thread::spawn(move || serve(channels, queue, time, drift, events));
     }
 }
 
 fn serve(
-    reader: Arc<Image>,
+    channels: Arc<RwLock<Option<Arc<Channels>>>>,
     queue: Arc<Queue>,
     time: Arc<AtomicU32>,
     drift: Arc<RwLock<Drift>>,
@@ -353,7 +365,14 @@ fn serve(
             .read()
             .unwrap_or_else(|error| error.into_inner())
             .offset(request.time);
-        match reader.read_brick(request.time, request.level, request.coord, shift) {
+        let Some(channels) = channels
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+        else {
+            return;
+        };
+        match channels.read_brick(request.time, request.level, request.coord, shift) {
             Ok(data) => {
                 if events.send(Event::Brick { request, data }).is_err() {
                     return;

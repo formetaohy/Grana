@@ -14,8 +14,8 @@ use grana_object::{
 };
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, ChannelState, ColocResult, ColocState, ColorState,
-    Criteria, Curation, Drift, FilterRange, ItemState, LassoPath, MeasureState, ObjectColor,
-    ObjectFrame, ObjectParams, Provenance, Recipe, RelationState, SceneState, Seeds,
+    Criteria, Curation, Drift, FilterRange, ItemState, LassoPath, MaskSpec, MeasureState,
+    ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe, RelationState, SceneState, Seeds,
     SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
 };
 use grana_volume::{Clip, Intensity, Region};
@@ -34,8 +34,20 @@ impl Encode for Project {
         self.shape.encode(writer);
         self.source.encode(writer);
         self.scene.encode(writer);
+        self.masks.encode(writer);
         self.measure.encode(writer);
         self.view.encode(writer);
+    }
+}
+
+impl Encode for MaskSpec {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.count(self.channel());
+        writer.u64(self.set().raw());
+        writer.string(self.name());
+        for value in self.tint() {
+            writer.f32(value);
+        }
     }
 }
 

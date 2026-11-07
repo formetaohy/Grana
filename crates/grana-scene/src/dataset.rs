@@ -124,4 +124,12 @@ impl Dataset {
             .all(|channel| channel.format() == first)
             .then_some(first)
     }
+
+    pub fn with_channels(&self, channels: Vec<ChannelInfo>) -> Dataset {
+        Dataset {
+            name: self.name.clone(),
+            pyramid: self.pyramid.with_channels(channels),
+            origin: self.origin,
+        }
+    }
 }

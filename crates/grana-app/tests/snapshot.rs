@@ -1,8 +1,9 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use grana_app::Snapshot;
 use grana_image::{Image, Source};
-use grana_pipeline::{SnapshotRequest, Snapshotter};
+use grana_pipeline::{Channels, SnapshotRequest, Snapshotter};
 use grana_scene::{Dataset, Scene};
 use grana_volume::{Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -12,8 +13,9 @@ fn renders_a_snapshot_without_a_window() {
         println!("no graphics adapter is available, skipping");
         return;
     }
-    let reader = reader();
-    let scene = Scene::new(Dataset::synthetic("cells", reader.pyramid().clone()));
+    let reader = Arc::new(reader());
+    let channels = Channels::stored(Arc::clone(&reader));
+    let scene = Scene::new(Dataset::synthetic("cells", channels.pyramid().clone()));
     let path = scratch("snapshot").join("snapshot.png");
     let request = SnapshotRequest {
         view: None,
@@ -22,7 +24,7 @@ fn renders_a_snapshot_without_a_window() {
         time: 0,
     };
     Snapshot::new()
-        .snapshot(&reader, &scene, &request, &path)
+        .snapshot(&channels, &scene, &request, &path)
         .expect("the snapshot renders");
     let captured = decode(&path);
     assert_eq!(captured.size, [320, 200]);

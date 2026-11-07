@@ -46,6 +46,9 @@ fn round_trips_a_project() {
         .find(|set| set.kind() == ObjectKind::Surfaces)
         .expect("the fixture stages surfaces")
         .id();
+    let mask = scene
+        .add_mask(spots, 0)
+        .expect("the fixture masks its channel");
     scene
         .objects
         .get_mut(spots)
@@ -169,7 +172,25 @@ fn round_trips_a_project() {
     assert_eq!(loaded, project);
 
     let mut restored = fixture();
+    let masks = loaded.masks.clone();
+    let infos = masks
+        .iter()
+        .map(|spec| spec.info(&restored.dataset.channels()[spec.channel()]))
+        .collect::<Vec<_>>();
+    restored
+        .set_mask_layout(infos)
+        .expect("the mask channels fit the dataset");
     restored.restore(loaded.scene);
+    restored
+        .bind_masks(masks)
+        .expect("the mask channels bind their object sets");
+    assert_eq!(restored.dataset.channels().len(), 3);
+    assert_eq!(restored.masks().len(), 1);
+    assert_eq!(
+        restored.dataset.channels()[mask].name(),
+        loaded.masks[0].name()
+    );
+    assert_eq!(restored.masks()[0].set(), spots);
     let mut restored_measure = Measure::new();
     restored_measure.restore(loaded.measure, &restored);
     assert_eq!(restored.state(), project.scene);

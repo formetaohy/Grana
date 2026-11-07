@@ -44,25 +44,49 @@ impl Session {
         self.progress.clear();
         self.resume.clear();
         self.recut = None;
-        if let Some(scene) = self.scene.as_ref()
-            && let Err(error) = protocol.validate(scene)
-        {
-            self.message = Some(Message::error(error.to_string()));
-            return;
-        }
         let staged = {
             let Some(scene) = self.scene.as_mut() else {
                 return;
             };
             scene.clear_objects();
-            match protocol.stage(scene) {
+            let infos = match protocol.mask_infos(scene.dataset.channels()) {
+                Ok(infos) => infos,
+                Err(error) => {
+                    self.message = Some(Message::error(error.to_string()));
+                    return;
+                }
+            };
+            if let Err(detail) = scene.set_mask_layout(infos) {
+                self.message = Some(Message::error(detail));
+                return;
+            }
+            if let Err(error) = protocol.validate(scene) {
+                self.message = Some(Message::error(error.to_string()));
+                return;
+            }
+            let staged = match protocol.stage(scene) {
                 Ok(staged) => staged,
                 Err(error) => {
                     self.message = Some(Message::error(error.to_string()));
                     return;
                 }
+            };
+            let masks = match protocol.mask_specs(scene, &staged) {
+                Ok(masks) => masks,
+                Err(error) => {
+                    self.message = Some(Message::error(error.to_string()));
+                    return;
+                }
+            };
+            if let Err(detail) = scene.bind_masks(masks) {
+                self.message = Some(Message::error(detail));
+                return;
             }
+            staged
         };
+        self.history.clear();
+        self.install_channels();
+        self.mask_stamp = None;
         let sets = staged.sets().to_vec();
         let steps = staged.steps().to_vec();
         self.realign();
