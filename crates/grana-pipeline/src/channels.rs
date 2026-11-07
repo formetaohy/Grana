@@ -331,6 +331,11 @@ impl RestoreChannel {
             let end = (ranges[axis].end + halo[axis]).min(limits[axis]);
             start..end
         });
+        if probe.iter().any(|range| range.start >= range.end) {
+            return Err(ChannelsError::Derived {
+                detail: "the requested region lies outside the volume".to_string(),
+            });
+        }
         let probe_extent = extent_of(&probe);
         let mut probe_values = vec![0.0f32; probe_extent.voxel_count() as usize];
         let first = [0, 1, 2].map(|axis| probe[axis].start / TILE);
