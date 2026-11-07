@@ -183,7 +183,7 @@ fn fs_oit_color(input: VertexOutput) {
     if (index < 0) {
         return;
     }
-    let covered = oit_covered(pixel, mesh.oit.z);
+    let covered = oit_covered(pixel);
     if (covered <= 0.0) {
         return;
     }
@@ -213,7 +213,7 @@ fn fs_oit_tail(input: VertexOutput) -> TailFragment {
     if (index < 0) {
         discard;
     }
-    let covered = oit_covered(pixel, mesh.oit.z);
+    let covered = oit_covered(pixel);
     if (covered <= 0.0) {
         discard;
     }

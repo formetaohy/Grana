@@ -9,7 +9,7 @@ use grana_editor::{AnnotationTool, FrameStats, Pane, Stage, ViewStats, Workspace
 use grana_engine::{Destination, Engine, Outcome, Panels, Picked, Plan, Pose, SAMPLE_LIMIT};
 use grana_gpu::Gpu;
 use grana_project::ViewState;
-use grana_render::{FrameInfo, PickPane, Quality};
+use grana_render::{FrameInfo, PickPane};
 use grana_scene::ObjectSetId;
 use grana_session::{Command, Effects, Export, Session, SessionView};
 use grana_ui::{
@@ -28,8 +28,6 @@ const STREAM_POLL: Duration = Duration::from_millis(16);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
 const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
-const SETTLE_DELAY: Duration = Duration::from_millis(120);
-const REFINE_INTERVAL: Duration = Duration::from_millis(80);
 
 struct Surface {
     window: Arc<Window>,
@@ -63,8 +61,6 @@ pub struct App {
     ime: bool,
     ime_area: Option<(i32, i32, u32, u32)>,
     scene_changed: bool,
-    moving: bool,
-    last_motion: Option<Instant>,
 }
 
 impl App {
@@ -97,8 +93,6 @@ impl App {
             ime: false,
             ime_area: None,
             scene_changed: true,
-            moving: false,
-            last_motion: None,
         }
     }
 
@@ -156,10 +150,6 @@ impl App {
         self.sync_title();
         self.advance_playback();
         self.advance_animation();
-        self.moving |= self.workspace.playback.playing || self.workspace.playback.previewing;
-        if self.moving {
-            self.last_motion = Some(Instant::now());
-        }
         self.fit_views();
         let exporting = self.engine.as_ref().is_some_and(Engine::exporting);
         let mut delay = if exporting {
@@ -167,25 +157,18 @@ impl App {
         } else {
             self.render().unwrap_or(Duration::MAX)
         };
-        let settling = !self.moving
-            && self
-                .last_motion
-                .is_some_and(|at| at.elapsed() < SETTLE_DELAY);
         if exporting || animating {
             delay = Duration::ZERO;
         } else if self.workspace.playback.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
-        } else if self.info.samples < SAMPLE_LIMIT && !self.moving && !settling {
-            delay = delay.min(REFINE_INTERVAL);
+        } else if self.info.samples < SAMPLE_LIMIT {
+            delay = Duration::ZERO;
         }
         if self.streaming() {
             delay = delay.min(STREAM_POLL);
         }
         if self.workspace.playback.playing {
             delay = delay.min(PLAYBACK_INTERVAL);
-        }
-        if settling && let Some(at) = self.last_motion {
-            delay = delay.min(SETTLE_DELAY.saturating_sub(at.elapsed()));
         }
         self.schedule(delay);
     }
@@ -381,7 +364,6 @@ impl App {
         if camera || picked {
             self.scene_changed = true;
         }
-        self.moving = camera;
     }
 
     fn place_seed(&mut self, set: ObjectSetId, point: Vec2, remove: bool) {
@@ -690,14 +672,6 @@ impl App {
         let scale = self.surface.as_ref()?.window.scale_factor() as f32;
         let panes = self.panels().screen(scale, size);
         let playing = self.workspace.playback.playing;
-        let settling = self
-            .last_motion
-            .is_some_and(|at| at.elapsed() < SETTLE_DELAY);
-        let quality = if self.moving || settling {
-            Quality::Interactive
-        } else {
-            Quality::Full
-        };
         let App {
             surface,
             engine,
@@ -724,7 +698,6 @@ impl App {
                 volume_region: panes.volume,
                 section_region: panes.section,
                 prefetch: playing,
-                quality,
             },
         ) {
             Ok(info) => info,
@@ -1152,7 +1125,6 @@ impl App {
         let next = (scene.time() + 1) % scene.frame_count();
         self.session.set_time(next);
         self.scene_changed = true;
-        self.moving = true;
         self.workspace.playback.previewing = false;
         self.last_advance = Some(now);
     }
@@ -1170,7 +1142,6 @@ impl App {
         }
         self.pose_animation();
         self.scene_changed = true;
-        self.moving = true;
     }
 
     fn pose_animation(&mut self) {
@@ -1400,7 +1371,6 @@ fn frame_stats(info: FrameInfo) -> FrameStats {
         fragments: info.fragments,
         indices: info.cut.indices,
         samples: info.samples,
-        msaa: info.msaa,
         oit_layers: info.oit.layers,
         oit_dropped: info.oit.dropped,
     }

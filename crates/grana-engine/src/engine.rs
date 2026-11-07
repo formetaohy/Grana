@@ -1,5 +1,5 @@
 use grana_display::Viewport;
-use grana_render::{FrameInfo, PickId, PickPane, Quality, Renderer, Requests};
+use grana_render::{FrameInfo, PickId, PickPane, Renderer, Requests};
 use grana_scene::{Scene, Selection};
 use grana_ui::Ui;
 use grana_volume::{BrickData, BrickRequest, Pyramid};
@@ -19,7 +19,6 @@ pub struct ViewportFrame<'a> {
     pub volume_region: [u32; 4],
     pub section_region: [u32; 4],
     pub prefetch: bool,
-    pub quality: Quality,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,7 +99,6 @@ impl Engine {
                 samples: SAMPLE_LIMIT,
                 prefetch: frame.prefetch,
                 transparent: false,
-                quality: frame.quality,
             },
             &rendered,
         );

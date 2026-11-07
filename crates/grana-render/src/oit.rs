@@ -6,7 +6,6 @@ use wgpu::{
 };
 
 use crate::layout::Layouts;
-use crate::target::SCENE_SAMPLES;
 
 const COUNT_BYTES: u64 = 4;
 const KEY_BYTES: u64 = 4;
@@ -255,10 +254,7 @@ impl Oit {
     pub fn bytes(&self) -> u64 {
         let store = self.keys.size() + self.colors.size() + self.counts.size();
         let tail = u64::from(self.tail_size[0]) * u64::from(self.tail_size[1]) * TAIL_BYTES;
-        let coverage = u64::from(self.size[0])
-            * u64::from(self.size[1])
-            * COVERAGE_BYTES
-            * u64::from(SCENE_SAMPLES);
+        let coverage = u64::from(self.size[0]) * u64::from(self.size[1]) * COVERAGE_BYTES;
         store + tail + coverage
     }
 
@@ -353,7 +349,7 @@ fn coverage(device: &Device, size: [u32; 2]) -> TextureView {
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: SCENE_SAMPLES,
+            sample_count: 1,
             dimension: TextureDimension::D2,
             format: COVERAGE_FORMAT,
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,

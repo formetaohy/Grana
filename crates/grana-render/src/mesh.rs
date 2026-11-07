@@ -16,7 +16,7 @@ use wgpu::{
 
 use crate::layout::Layouts;
 use crate::schema::{LayerKey, SceneFrame, Style};
-use crate::target::{PICK_FORMAT, SCENE_FORMAT, SCENE_SAMPLES};
+use crate::target::{PICK_FORMAT, SCENE_FORMAT};
 use crate::volume::depth_state;
 use grana_display::{Shading, srgb_to_linear};
 
@@ -226,7 +226,7 @@ impl MeshPasses {
             },
             primitive: PrimitiveState::default(),
             depth_stencil: Some(depth_state(true, CompareFunction::Less)),
-            multisample: crate::target::scene_multisample(),
+            multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &volume_module,
                 entry_point: Some("fs_main"),
@@ -251,11 +251,7 @@ impl MeshPasses {
             },
             primitive: PrimitiveState::default(),
             depth_stencil: Some(depth_state(false, CompareFunction::Less)),
-            multisample: MultisampleState {
-                count: SCENE_SAMPLES,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
+            multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &volume_module,
                 entry_point: Some("fs_oit_key"),
@@ -301,7 +297,7 @@ impl MeshPasses {
             },
             primitive: PrimitiveState::default(),
             depth_stencil: Some(depth_state(false, CompareFunction::Always)),
-            multisample: crate::target::scene_multisample(),
+            multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &volume_module,
                 entry_point: Some("fs_oit_color"),

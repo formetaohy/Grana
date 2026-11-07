@@ -13,8 +13,8 @@ impl Renderer {
         let Frame {
             target: surface,
             size,
-            volume_region: window_volume,
-            section_region: window_section,
+            volume_region,
+            section_region,
             time,
             camera,
             section,
@@ -22,16 +22,11 @@ impl Renderer {
             clip,
             exposure,
             samples,
-            quality,
             scene,
             prefetch,
         } = frame;
-        let scale = quality.scale();
-        let render_size = crate::scale::size(size, scale);
-        let volume_region = crate::scale::region(window_volume, scale, render_size);
-        let section_region = crate::scale::region(window_section, scale, render_size);
         assert!(
-            inside(volume_region, render_size) && inside(section_region, render_size),
+            inside(volume_region, size) && inside(section_region, size),
             "the panes lie on the surface"
         );
         self.time = time;
@@ -109,7 +104,7 @@ impl Renderer {
         let cut_size = [section_width, section_height];
         let slots = atlas.slots();
         let level_count = pyramid.level_count();
-        let section_target_level = select_section_level(pyramid, section, window_section[3] as f32);
+        let section_target_level = select_section_level(pyramid, section, section_region[3] as f32);
         let (section_level, section_count) = resolve_section_level(
             pyramid,
             camera,
@@ -119,7 +114,7 @@ impl Renderer {
             (slots / SECTION_BUDGET_DIVISOR).max(1),
             region,
         );
-        let volume_target_level = select_volume_level(pyramid, camera, window_volume[3] as f32);
+        let volume_target_level = select_volume_level(pyramid, camera, volume_region[3] as f32);
         let section_capacity = section_count.clamp(1, slots.saturating_sub(1).max(1));
         let volume_capacity = slots.saturating_sub(section_capacity).max(1);
         let volume_level =
@@ -139,8 +134,8 @@ impl Renderer {
             ResidencyView {
                 camera,
                 section,
-                volume_region: window_volume,
-                section_region: window_section,
+                volume_region,
+                section_region,
                 region,
             },
             levels,
@@ -234,12 +229,12 @@ impl Renderer {
             && target
                 .oit
                 .as_ref()
-                .is_none_or(|oit| !oit.matches(render_size, volume_region))
+                .is_none_or(|oit| !oit.matches(size, volume_region))
         {
             target.oit = Some(Oit::new(
                 device,
                 layouts,
-                render_size,
+                size,
                 volume_region,
                 *budget / FRAGMENT_BUDGET_DIVISOR,
             ));
@@ -248,7 +243,6 @@ impl Renderer {
             frame_data.oit[1] = oit.layers();
             frame_data.oit[3] = oit.tail_scale();
         }
-        frame_data.oit[2] = crate::target::SCENE_SAMPLES;
         let oit_group = match target.oit.as_ref() {
             Some(oit) if translucent => oit.read_group(),
             _ => dummy_oit.read_group(),
@@ -377,30 +371,25 @@ impl Renderer {
             meshes.cull_volume(&mut encoder, scene_group);
             markers.cull_volume(&mut encoder, scene_group);
             markers.cull_section(&mut encoder, scene_group);
-            present.clear(&mut encoder, target.scene.samples());
-            clear_depth(&mut encoder, target.scene.depth());
+            crate::target::clear(&mut encoder, target.scene.color(), target.scene.depth());
             let shadow_group = shadow
                 .as_ref()
                 .map(Shadow::group)
                 .expect("the shadow is ready");
             meshes.draw_volume(
                 &mut encoder,
-                target.scene.samples(),
+                target.scene.color(),
                 target.scene.depth(),
                 volume_region,
                 shadow_group,
             );
             markers.draw_volume(
                 &mut encoder,
-                target.scene.samples(),
+                target.scene.color(),
                 target.scene.depth(),
                 volume_region,
                 scene_group,
             );
-            target::resolve(&mut encoder, target.scene.samples(), target.scene.color());
-            target
-                .depth
-                .draw(&mut encoder, target.scene.resolved_depth());
             if let Some(oit) = target.oit.as_ref().filter(|_| translucent) {
                 oit.clear(&mut encoder);
                 {
@@ -621,25 +610,8 @@ impl Renderer {
         info.fragments = target.oit.as_ref().map_or(0, Oit::bytes);
         info.oit.layers = target.oit.as_ref().map_or(0, Oit::layers);
         info.oit.dropped = *dropped;
-        info.msaa = crate::target::SCENE_SAMPLES;
         *info
     }
-}
-
-pub(super) fn clear_depth(encoder: &mut CommandEncoder, depth: &TextureView) {
-    let _ = encoder.begin_render_pass(&RenderPassDescriptor {
-        label: Some("grana.depth.clear"),
-        color_attachments: &[],
-        depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-            view: depth,
-            depth_ops: Some(Operations {
-                load: LoadOp::Clear(1.0),
-                store: StoreOp::Store,
-            }),
-            stencil_ops: None,
-        }),
-        ..Default::default()
-    });
 }
 
 pub(super) fn clear(encoder: &mut CommandEncoder, target: &TextureView) {

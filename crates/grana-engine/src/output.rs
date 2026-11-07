@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use grana_display::{CameraState, SectionState};
 use grana_raster::Raster;
-use grana_render::{Quality, Renderer};
+use grana_render::Renderer;
 use grana_scene::Scene;
 use grana_ui::Ui;
 use grana_video::{Recorder, Sequence};
@@ -199,7 +199,6 @@ impl Export {
                 samples: self.samples,
                 prefetch: false,
                 transparent: self.transparent,
-                quality: Quality::Export,
             },
             &rendered,
         );

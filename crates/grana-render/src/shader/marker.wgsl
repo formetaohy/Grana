@@ -154,7 +154,7 @@ fn fs_oit_color(input: MarkerOutput) {
     if (index < 0) {
         return;
     }
-    let covered = oit_covered(pixel, frame.oit.z);
+    let covered = oit_covered(pixel);
     if (covered <= 0.0) {
         return;
     }
@@ -185,7 +185,7 @@ fn fs_oit_tail(input: MarkerOutput) -> TailFragment {
     if (index < 0) {
         discard;
     }
-    let covered = oit_covered(pixel, frame.oit.z);
+    let covered = oit_covered(pixel);
     if (covered <= 0.0) {
         discard;
     }

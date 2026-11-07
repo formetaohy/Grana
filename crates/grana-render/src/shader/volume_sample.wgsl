@@ -9,6 +9,10 @@ fn unproject(ndc: vec3<f32>) -> vec3<f32> {
     return homogeneous.xyz / homogeneous.w;
 }
 
+fn sample_atlas(pack: u32, texel: vec3<f32>) -> vec4<f32> {
+    return textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);
+}
+
 fn sample_pack(pack: u32, uvw: vec3<f32>) -> vec4<f32> {
     let cell = brick_cell(frame.grid.xyz, frame.dims.xyz, uvw);
     let record = bricks[brick_index(frame.grid.xyz, cell)];

@@ -2,7 +2,6 @@ mod feedback;
 mod render;
 mod residency;
 mod signature;
-
 use residency::{FrameTarget, Levels, Regions, Residency};
 use signature::Signature;
 use std::collections::hash_map::DefaultHasher;
@@ -26,7 +25,6 @@ use crate::atlas::{Atlas, PACK, ResidentBrick, pack_components, pack_texels};
 use crate::brick::{BrickRecord, BrickTable};
 use crate::census::{CENSUS_LEVELS, Census};
 use crate::cut::CutLayer;
-use crate::depth::DepthResolve;
 use crate::frame::{FrameData, SectionData, VolumeView};
 use crate::layout::Layouts;
 use crate::marker::MarkerPasses;
@@ -65,8 +63,6 @@ const CENSUS_BYTES: u64 = (CENSUS_LEVELS * size_of::<u32>()) as u64;
 
 const UNIT: f32 = 65535.0;
 
-const INTERACTIVE_SCALE: f32 = 0.5;
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ViewInfo {
     pub level: usize,
@@ -99,7 +95,6 @@ pub struct FrameInfo {
     pub geometry: u64,
     pub fragments: u64,
     pub samples: u32,
-    pub msaa: u32,
     pub settled: bool,
 }
 
@@ -111,31 +106,6 @@ pub struct Requests {
     pub prefetch: Vec<BrickRequest>,
     pub volume_view: ViewInfo,
     pub section_view: ViewInfo,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Quality {
-    #[default]
-    Full,
-    Interactive,
-    Export,
-}
-
-impl Quality {
-    pub fn scale(self) -> f32 {
-        match self {
-            Self::Full | Self::Export => 1.0,
-            Self::Interactive => INTERACTIVE_SCALE,
-        }
-    }
-
-    fn index(self) -> usize {
-        match self {
-            Self::Full => 0,
-            Self::Interactive => 1,
-            Self::Export => 2,
-        }
-    }
 }
 
 pub struct Frame<'a, 'b> {
@@ -150,7 +120,6 @@ pub struct Frame<'a, 'b> {
     pub clip: Clip,
     pub exposure: f32,
     pub samples: u32,
-    pub quality: Quality,
     pub scene: &'a SceneFrame<'b>,
     pub prefetch: bool,
 }
@@ -158,7 +127,7 @@ pub struct Frame<'a, 'b> {
 pub struct Renderer {
     layouts: Layouts,
     present: Present,
-    targets: [Option<FrameTarget>; 3],
+    target: Option<FrameTarget>,
     scene: Option<crate::table::SceneTable>,
     atlas: Option<Atlas>,
     bricks: Vec<Option<BrickTable>>,
@@ -192,7 +161,6 @@ pub struct Renderer {
     settled: Option<Residency>,
     planned: Option<Residency>,
     regions: Option<Regions>,
-    render_scale: f32,
     pick_target: Option<PickTarget>,
     pick_readback: Option<Readback>,
     pick_pending: bool,
@@ -219,7 +187,7 @@ impl Renderer {
         });
         Self {
             present: Present::new(device, format),
-            targets: [None, None, None],
+            target: None,
             scene: None,
             atlas: None,
             bricks: Vec::new(),
@@ -254,7 +222,6 @@ impl Renderer {
             settled: None,
             planned: None,
             regions: None,
-            render_scale: 1.0,
             pick_target: None,
             pick_readback: None,
             pick_pending: false,
@@ -273,7 +240,7 @@ impl Renderer {
     }
 
     pub fn begin_export(&mut self) {
-        self.targets[Quality::Export.index()] = None;
+        self.target = None;
         self.settled = None;
     }
 
@@ -336,7 +303,7 @@ impl Renderer {
         self.time = 0;
         self.counts.fill(0);
         self.meshes.clear();
-        self.targets = [None, None, None];
+        self.target = None;
         self.regions = None;
         self.pick_readback = None;
         self.pick_pending = false;
@@ -462,23 +429,18 @@ impl Renderer {
             "an exposure scales radiance by a positive factor"
         );
         assert!(frame.samples > 0, "a target resolves at least one sample");
-        let quality = frame.quality;
-        let size = crate::scale::size(frame.size, quality.scale());
-        let index = quality.index();
-        if self.targets[index]
+        let size = frame.size;
+        if self
+            .target
             .as_ref()
             .is_none_or(|target| target.size != size)
         {
-            self.targets[index] =
-                Some(FrameTarget::new(device, &self.layouts, &self.present, size));
+            self.target = Some(FrameTarget::new(device, &self.layouts, &self.present, size));
             self.settled = None;
         }
-        self.render_scale = quality.scale();
-        let mut target = self.targets[index]
-            .take()
-            .expect("the frame target is ready");
+        let mut target = self.target.take().expect("the frame target is ready");
         let info = self.render(device, queue, &mut target, frame);
-        self.targets[index] = Some(target);
+        self.target = Some(target);
         info
     }
 
@@ -495,7 +457,6 @@ impl Renderer {
         let Some(regions) = self.regions else {
             return false;
         };
-        let point = crate::scale::point(point, self.render_scale);
         let region = match pane {
             PickPane::Volume => regions.volume,
             PickPane::Section => regions.section,

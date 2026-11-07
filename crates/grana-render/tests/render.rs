@@ -15,7 +15,7 @@ use grana_display::{
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_object::{Track, TrackNode, TrackSet};
 use grana_render::{
-    CutInfo, Frame, Layer, LayerKey, Marker, PickId, PickPane, Quality, Renderer, SceneFrame, Style,
+    CutInfo, Frame, Layer, LayerKey, Marker, PickId, PickPane, Renderer, SceneFrame, Style,
 };
 use grana_volume::{
     Axis, BrickGrid, Channel, Clip, Extent, Level, PADDED_SIDE, Pyramid, Region, Spacing, Volume,
@@ -119,71 +119,6 @@ fn samples_a_pack_with_three_channels() {
     assert!(
         red_pixels(&pixels) > 200,
         "the third channel pads its pack to four texels"
-    );
-}
-
-#[test]
-fn keeps_a_settled_frame_across_quality_switches() {
-    let Some((device, queue)) = device() else {
-        return;
-    };
-    let texture = target(&device, SIDE);
-    let view = texture.create_view(&Default::default());
-    let volume = sphere(Extent::new(128, 128, 96), Spacing::new(0.1, 0.1, 0.13));
-    let pyramid = volume.pyramid();
-    let transfers = vec![TransferFunction::tinted([0.3, 0.6, 1.0])];
-    let channels = channels(&pyramid, &transfers);
-    let mut camera = Camera::new(35.0);
-    camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let section = SectionCamera::new(Axis::Z);
-    let scene = SceneFrame {
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 1.0,
-        styles: &[],
-        layers: &[],
-        markers: &[],
-    };
-    let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
-    renderer.set_dataset(&device, &pyramid);
-    let session = Session {
-        device: &device,
-        queue: &queue,
-        target: &view,
-        camera: &camera,
-        section: &section,
-        scene: &scene,
-        volume_region: WHOLE,
-        section_region: CORNER,
-        region: Region::none(),
-        time: 0,
-    };
-    settle(&mut renderer, session, |request| {
-        let grid = BrickGrid::new(volume.extent());
-        volume.brick(&grid, request.coord)
-    });
-    let settled = read_pixels(&device, &queue, &texture, SIDE);
-    let interactive = renderer.draw(
-        &device,
-        &queue,
-        Frame {
-            quality: Quality::Interactive,
-            ..common::frame(&session)
-        },
-    );
-    assert!(
-        interactive.samples < SAMPLES,
-        "the interactive target resolves its own frame"
-    );
-    let restored = renderer.draw(&device, &queue, common::frame(&session));
-    assert_eq!(
-        restored.samples, SAMPLES,
-        "the settled target keeps its samples across a quality switch"
-    );
-    let again = read_pixels(&device, &queue, &texture, SIDE);
-    assert_eq!(
-        settled, again,
-        "the retained frame is presented without resampling"
     );
 }
 
@@ -2505,7 +2440,6 @@ impl Resident<'_> {
                     clip: Clip::none(),
                     exposure: 1.0,
                     samples: SAMPLES,
-                    quality: Quality::Full,
                     scene: &scene,
                     prefetch: false,
                 },
@@ -4155,26 +4089,25 @@ fn antialiases_transparent_silhouettes() {
         };
         let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
         renderer.set_dataset(&device, &pyramid);
-        let info = renderer.draw(
-            &device,
-            &queue,
-            Frame {
-                target: &view,
-                size: [SIDE, SIDE],
-                volume_region: WHOLE,
-                section_region: CORNER,
-                time: 0,
-                camera: &camera,
-                section: &section,
-                region: Region::none(),
-                clip: Clip::none(),
-                exposure: 1.0,
-                samples: 1,
-                quality: Quality::Full,
-                scene: &scene,
-                prefetch: false,
-            },
-        );
+        let frame = || Frame {
+            target: &view,
+            size: [SIDE, SIDE],
+            volume_region: WHOLE,
+            section_region: CORNER,
+            time: 0,
+            camera: &camera,
+            section: &section,
+            region: Region::none(),
+            clip: Clip::none(),
+            exposure: 1.0,
+            samples: SAMPLES,
+            scene: &scene,
+            prefetch: false,
+        };
+        let mut info = renderer.draw(&device, &queue, frame());
+        while info.samples < SAMPLES {
+            info = renderer.draw(&device, &queue, frame());
+        }
         (info, read_pixels(&device, &queue, &texture, SIDE))
     };
     let (info, shown) = render(true);
@@ -4196,79 +4129,5 @@ fn antialiases_transparent_silhouettes() {
     assert!(
         partial > 20,
         "the silhouette of a transparent object carries no partial pixels: {partial}"
-    );
-}
-
-#[test]
-fn antialiases_opaque_silhouettes() {
-    let Some((device, queue)) = device() else {
-        return;
-    };
-    let texture = target(&device, SIDE);
-    let view = texture.create_view(&Default::default());
-    let volume = empty_volume();
-    let pyramid = volume.pyramid();
-    let mut camera = Camera::new(35.0);
-    camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let section = SectionCamera::new(Axis::Z);
-    let mesh = PackedMesh::new(view_plane(&camera, 0.0, 0.5));
-    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
-    let channels = channels(&pyramid, &transfers);
-    let render = |visible: bool| {
-        let style = Style::new([1.0, 1.0, 1.0], visible, false, 1.0);
-        let styles = [style];
-        let layers = [Layer {
-            key: LayerKey::at_frame(1, 0, 0, 1),
-            mesh: Arc::new(mesh.clone()),
-            style_start: 0,
-            style_count: 1,
-        }];
-        let scene = SceneFrame {
-            channels: &channels,
-            shading: Shading::default(),
-            step_scale: 1.0,
-            styles: &styles,
-            layers: &layers,
-            markers: &[],
-        };
-        let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, BUDGET);
-        renderer.set_dataset(&device, &pyramid);
-        let info = renderer.draw(
-            &device,
-            &queue,
-            Frame {
-                target: &view,
-                size: [SIDE, SIDE],
-                volume_region: WHOLE,
-                section_region: CORNER,
-                time: 0,
-                camera: &camera,
-                section: &section,
-                region: Region::none(),
-                clip: Clip::none(),
-                exposure: 1.0,
-                samples: 1,
-                quality: Quality::Full,
-                scene: &scene,
-                prefetch: false,
-            },
-        );
-        (info, read_pixels(&device, &queue, &texture, SIDE))
-    };
-    let (info, shown) = render(true);
-    let (_, hidden) = render(false);
-    assert_eq!(info.msaa, 4, "the volume pane renders four samples a pixel");
-    let centre = pixel(&shown, SIDE / 2, SIDE / 2);
-    let partial = shown
-        .iter()
-        .zip(&hidden)
-        .filter(|(shown, hidden)| {
-            (0..3).any(|channel| shown[channel].abs_diff(centre[channel]) > 6)
-                && (0..3).any(|channel| shown[channel].abs_diff(hidden[channel]) > 6)
-        })
-        .count();
-    assert!(
-        partial > 20,
-        "the silhouette of an opaque object carries no partial pixels: {partial}"
     );
 }

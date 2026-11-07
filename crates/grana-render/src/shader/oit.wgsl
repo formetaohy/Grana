@@ -2,11 +2,10 @@
 @group(4) @binding(1) var<storage, read_write> oit_colors: array<vec2<u32>>;
 @group(4) @binding(2) var<storage, read_write> oit_counts: array<atomic<u32>>;
 @group(4) @binding(3) var<storage, read_write> oit_dropped: atomic<u32>;
-@group(6) @binding(0) var oit_coverage: texture_multisampled_2d<u32>;
+@group(6) @binding(0) var oit_coverage: texture_2d<u32>;
 
 const OIT_WEIGHT_FLOOR: f32 = 1.0e-2;
 const OIT_WEIGHT_CEIL: f32 = 3.0e3;
-const OIT_SAMPLE_LIMIT: u32 = 16u;
 
 fn oit_key(depth: f32) -> u32 {
     return ~bitcast<u32>(clamp(depth, 0.0, 1.0));
@@ -20,17 +19,8 @@ fn oit_index(origin: vec2<i32>, size: vec2<i32>, pixel: vec2<i32>) -> i32 {
     return local.y * size.x + local.x;
 }
 
-fn oit_sample_count(samples: u32) -> u32 {
-    return clamp(samples, 1u, OIT_SAMPLE_LIMIT);
-}
-
-fn oit_covered(pixel: vec2<i32>, samples: u32) -> f32 {
-    let count = oit_sample_count(samples);
-    var covered = 0u;
-    for (var sample = 0u; sample < count; sample += 1u) {
-        covered += textureLoad(oit_coverage, pixel, sample).r;
-    }
-    return f32(covered) / f32(count);
+fn oit_covered(pixel: vec2<i32>) -> f32 {
+    return f32(textureLoad(oit_coverage, pixel, 0).r);
 }
 
 fn oit_offer(index: u32, layers: u32, key: u32) {

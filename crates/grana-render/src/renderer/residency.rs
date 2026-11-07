@@ -71,7 +71,6 @@ impl Residency {
 
 pub(super) struct FrameTarget {
     pub(super) scene: SceneTarget,
-    pub(super) depth: DepthResolve,
     pub(super) accumulation: TextureView,
     pub(super) accumulate_group: BindGroup,
     pub(super) present_group: BindGroup,
@@ -89,13 +88,11 @@ impl FrameTarget {
         size: [u32; 2],
     ) -> Self {
         let scene = SceneTarget::new(device, &layouts.depth, size);
-        let depth = DepthResolve::new(device, layouts, scene.depth());
         let accumulation = target::accumulation(device, size);
         let accumulate_group = present.bind(device, scene.color());
         let present_group = present.bind(device, &accumulation);
         Self {
             scene,
-            depth,
             accumulation,
             accumulate_group,
             present_group,

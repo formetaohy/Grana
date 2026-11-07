@@ -44,6 +44,7 @@ struct ChannelData {
     start: f32,
     inverse: f32,
     lut_row: f32,
+    threshold: f32,
 }
 
 @group(0) @binding(0) var<uniform> frame: FrameData;
@@ -51,18 +52,37 @@ struct ChannelData {
 @group(0) @binding(2) var<storage, read> channels: array<ChannelData>;
 @group(0) @binding(3) var lut: texture_2d<f32>;
 @group(0) @binding(4) var lut_sampler: sampler;
+@group(0) @binding(5) var extinction_lut: texture_2d<f32>;
+
+const SHADING_TAU: f32 = 0.020203;
 
 fn channel_opacity(index: u32) -> f32 {
     return channels[index].opacity;
 }
 
-fn channel_sample(index: u32, unit: f32) -> vec4<f32> {
+fn channel_threshold(index: u32) -> f32 {
+    return channels[index].threshold;
+}
+
+fn channel_position(index: u32, unit: f32) -> f32 {
     let channel = channels[index];
-    let position = clamp((unit - channel.start) * channel.inverse, 0.0, 1.0);
+    return clamp((unit - channel.start) * channel.inverse, 0.0, 1.0);
+}
+
+fn channel_sample(index: u32, unit: f32) -> vec4<f32> {
     return textureSampleLevel(
         lut,
         lut_sampler,
-        vec2<f32>(position, channel.lut_row),
+        vec2<f32>(channel_position(index, unit), channels[index].lut_row),
+        0.0,
+    );
+}
+
+fn channel_tau(index: u32, unit: f32) -> vec4<f32> {
+    return textureSampleLevel(
+        extinction_lut,
+        lut_sampler,
+        vec2<f32>(channel_position(index, unit), channels[index].lut_row),
         0.0,
     );
 }

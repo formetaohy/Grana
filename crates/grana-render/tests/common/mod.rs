@@ -1,5 +1,5 @@
 use grana_display::{Camera, SectionCamera, TransferFunction};
-use grana_render::{Frame, Quality, Renderer, Requests, SceneFrame};
+use grana_render::{Frame, Renderer, Requests, SceneFrame};
 use grana_volume::BrickRequest;
 use grana_volume::{BrickData, Clip, Pyramid, Region};
 
@@ -113,7 +113,6 @@ pub fn frame_sized<'a>(session: &Session<'a>, size: [u32; 2]) -> Frame<'a, 'a> {
         clip: Clip::none(),
         exposure: 1.0,
         samples: SAMPLES,
-        quality: Quality::Full,
         scene: session.scene,
         prefetch: false,
     }

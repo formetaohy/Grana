@@ -39,7 +39,6 @@ pub(crate) struct Present {
     present: RenderPipeline,
     layout: BindGroupLayout,
     uniforms: Buffer,
-    sampler: wgpu::Sampler,
     encode: bool,
     format: TextureFormat,
 }
@@ -67,12 +66,6 @@ impl Present {
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
@@ -110,20 +103,11 @@ impl Present {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("grana.present.sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            ..Default::default()
-        });
         Self {
             accumulate,
             present,
             layout,
             uniforms,
-            sampler,
             encode: !format.is_srgb(),
             format,
         }
@@ -146,10 +130,6 @@ impl Present {
                     binding: 1,
                     resource: self.uniforms.as_entire_binding(),
                 },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
             ],
         })
     }
@@ -169,22 +149,6 @@ impl Present {
             ],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
-    }
-
-    pub fn clear(&self, encoder: &mut CommandEncoder, target: &TextureView) {
-        let _ = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("grana.present.clear.pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Clear(Color::TRANSPARENT),
-                    store: StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
     }
 
     pub fn accumulate(
