@@ -200,7 +200,7 @@ fn paint_volume(painter: &mut Painter, overlay: &Overlay<'_>) {
             labels::volume_labels(overlay.labels, view_projection, overlay.camera.eye(), rect);
         labels::paint(painter, rect, &placed);
     }
-    let placed = annotation::volume(overlay.annotations, view_projection, world_per_point, rect);
+    let placed = annotation::volume(overlay.annotations, view_projection, rect);
     annotation::paint(painter, rect, &placed);
     if let Some(pending) = overlay.pending {
         annotation::pending(painter, rect, view_projection, rect, pending);
@@ -269,6 +269,7 @@ fn paint_section(painter: &mut Painter, overlay: &Overlay<'_>) {
         grana_ui::Shadow::NONE,
     );
     scale_bar(painter, overlay.section_safe, world_per_point, true);
+    region_rect(painter, overlay, rect, focus);
     if !overlay.labels.is_empty() {
         let placed = labels::section_labels(
             overlay.labels,
@@ -290,6 +291,46 @@ fn paint_section(painter: &mut Painter, overlay: &Overlay<'_>) {
     );
     annotation::paint(painter, rect, &placed);
     painter.pop_clip(clip);
+}
+
+fn region_rect(painter: &mut Painter, overlay: &Overlay<'_>, rect: Rect, focus: Vec3) {
+    let region = *overlay.region;
+    if !region.enabled() {
+        return;
+    }
+    let axis = overlay.section.axis();
+    let plane = focus[axis.index()];
+    if plane < region.min()[axis.index()] || plane > region.max()[axis.index()] {
+        return;
+    }
+    let (u, v) = axis.in_plane();
+    let points_per_micron = rect.height() / overlay.section.span();
+    let low = region.min();
+    let high = region.max();
+    let span = Vec2::new(
+        (high[u.index()] - low[u.index()]) * points_per_micron,
+        (high[v.index()] - low[v.index()]) * points_per_micron,
+    );
+    let center = Vec2::new(
+        rect.center().x
+            + (0.5 * (low[u.index()] + high[u.index()]) - focus[u.index()]) * points_per_micron,
+        rect.center().y
+            - (0.5 * (low[v.index()] + high[v.index()]) - focus[v.index()]) * points_per_micron,
+    );
+    let body = Rect::from_center_size(center, span.abs()).intersect(rect);
+    if body.width() < 1.0 || body.height() < 1.0 {
+        return;
+    }
+    painter.outlined(
+        body,
+        Corners::ZERO,
+        Fill::Solid(Color::rgba(0.98, 0.75, 0.29, 0.06)),
+        grana_ui::Border {
+            width: 1.0,
+            color: REGION,
+        },
+        grana_ui::Shadow::NONE,
+    );
 }
 pub(crate) fn figure(
     painter: &mut Painter,

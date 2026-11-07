@@ -1,7 +1,7 @@
 use grana_measure::{COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX};
 use grana_scene::ObjectSetKey;
 
-use crate::spec::{AnnotationSpec, SourceSpec, validate};
+use crate::spec::{SourceSpec, validate};
 use crate::{DerivedSpec, Protocol, ProtocolError};
 
 impl Protocol {
@@ -32,15 +32,6 @@ impl Protocol {
                 )));
             }
             annotation_names.push(annotation.name().to_string());
-        }
-        if let Some(roi) = &self.annotation_roi
-            && !self.annotations.iter().any(|annotation| {
-                annotation.name() == roi && matches!(annotation, AnnotationSpec::Roi { .. })
-            })
-        {
-            return Err(ProtocolError::Invalid(format!(
-                "the statistics region {roi} is not a region annotation of the protocol"
-            )));
         }
         if let Some(render) = self.render {
             render.checked()?;

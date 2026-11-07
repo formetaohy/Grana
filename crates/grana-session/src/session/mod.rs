@@ -313,7 +313,7 @@ impl Session {
                     .any(|analysis| analysis.job().streams(set))
             });
         if let Some(scene) = self.scene.as_ref() {
-            self.measure.set_roi(scene.annotations.roi_geometry());
+            self.measure.set_roi(scene.region_scope());
             self.measure.sync(scene, busy);
         }
     }

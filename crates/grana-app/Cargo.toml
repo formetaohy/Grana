@@ -13,6 +13,7 @@ grana-animation = { workspace = true }
 grana-display = { workspace = true }
 grana-editor = { workspace = true }
 grana-engine = { workspace = true }
+grana-figure = { workspace = true }
 grana-gpu = { workspace = true }
 grana-image = { workspace = true }
 grana-pipeline = { workspace = true }

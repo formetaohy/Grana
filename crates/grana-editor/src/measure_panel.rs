@@ -198,7 +198,11 @@ fn toolbar<'a>(
     let mode = state.measure.view();
     let total = state.measure.total();
     let shown = state.measure.rows().len();
-    let caption = format!("{shown}/{total} rows");
+    let caption = if state.scene.region.enabled() {
+        format!("{shown}/{total} rows · ROI")
+    } else {
+        format!("{shown}/{total} rows")
+    };
     let caption_style = TextStyle::new(
         ctx.theme().font(Level::Caption),
         ctx.theme().palette.text_tertiary,

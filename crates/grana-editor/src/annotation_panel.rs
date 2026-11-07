@@ -14,9 +14,10 @@ const ROW_PAD: f32 = 2.0;
 
 pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let mut children = vec![tools_card(ctx, state), list_card(ctx, state)];
-    if let Some(statistics) = statistics_card(ctx, state) {
-        children.push(statistics);
+    if let Some(annotation) = selected_card(ctx, state) {
+        children.push(annotation);
     }
+    children.push(region_card(ctx, state));
     grana_ui::column()
         .gap(8.0)
         .width(Length::Fill)
@@ -46,7 +47,7 @@ fn tools_card<'a>(
     let detail = match active {
         Some(AnnotationTool::Point) => "Click a surface to drop a measurement point.",
         Some(AnnotationTool::Distance) => "Click two surfaces to measure their distance.",
-        Some(AnnotationTool::Roi) => "Click a surface to place a statistics region.",
+        Some(AnnotationTool::Roi) => "Drag in the section to draw the region of interest.",
         None => "Choose a tool, then click the volume or the section.",
     };
     let caption = view::weak(ctx, detail);
@@ -112,7 +113,7 @@ fn list_card<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
     if scene.annotations.is_empty() {
         children.push(view::weak(
             ctx,
-            "Nothing is measured yet. Points, distances and regions stay with the project and the protocol.",
+            "Nothing is measured yet. Points and distances stay with the project and the protocol.",
         ));
         return view::card(ctx, 8.0, children);
     }
@@ -154,26 +155,18 @@ fn row<'a>(
         .expect("the annotation row names an annotation");
     let selected = state.scene.annotations.selected() == Some(index);
     let visible = annotation.visible();
-    let scoped = state.scene.annotations.roi() == Some(index);
     let name = annotation.name().to_string();
     let kind = annotation.kind();
     let detail = match kind.tag() {
-        AnnotationTag::Point => "point".to_string(),
+        AnnotationTag::Point => format!("point · {}", scope(state, annotation.frame())),
         AnnotationTag::Distance => format!(
-            "distance · {}",
+            "distance · {} · {}",
             grana_figure::value(
                 kind.length().unwrap_or(0.0),
                 grana_measure::Unit::Micrometer,
                 2
-            )
-        ),
-        AnnotationTag::Roi => format!(
-            "region · r {}",
-            grana_figure::value(
-                kind.radius().unwrap_or(0.0),
-                grana_measure::Unit::Micrometer,
-                2
-            )
+            ),
+            scope(state, annotation.frame())
         ),
     };
     let font = if selected {
@@ -206,16 +199,11 @@ fn row<'a>(
             match kind.tag() {
                 AnnotationTag::Point => Icon::Target,
                 AnnotationTag::Distance => Icon::Ruler,
-                AnnotationTag::Roi => Icon::Sphere,
             },
             painter,
             Vec2::new(rect.min.x + 14.0, rect.center().y),
             14.0,
-            if scoped {
-                palette.accent
-            } else {
-                palette.text_secondary
-            },
+            palette.text_secondary,
             1.5,
         );
         painter.text_in(
@@ -229,7 +217,7 @@ fn row<'a>(
         );
         painter.text_in(
             Rect::from_min_max(
-                Vec2::new(rect.max.x - 160.0, rect.min.y),
+                Vec2::new(rect.max.x - 190.0, rect.min.y),
                 Vec2::new(rect.max.x - 4.0, rect.max.y),
             ),
             &detail,
@@ -262,44 +250,107 @@ fn row<'a>(
         .children([eye, body])
 }
 
-fn statistics_card<'a>(
+fn scope(state: &View<'_>, frame: Option<u32>) -> String {
+    if state.scene.frame_count() <= 1 {
+        return "single frame".to_string();
+    }
+    match frame {
+        Some(frame) => format!("frame {} of {}", frame + 1, state.scene.frame_count()),
+        None => "every frame".to_string(),
+    }
+}
+
+fn selected_card<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
 ) -> Option<Element<'a, Message>> {
     let index = state.scene.annotations.selected()?;
     let annotation = state.scene.annotations.get(index)?;
-    if annotation.kind().tag() != AnnotationTag::Roi {
-        return None;
+    let time = state.scene.time();
+    let every = annotation.frame().is_none();
+    let mut children = Vec::new();
+    let detail = if state.scene.frame_count() <= 1 {
+        "The dataset holds a single frame.".to_string()
+    } else {
+        match annotation.frame() {
+            Some(frame) => format!(
+                "Placed on frame {} of {}",
+                frame + 1,
+                state.scene.frame_count()
+            ),
+            None => "Shown on every frame.".to_string(),
+        }
+    };
+    let title = view::card_title(ctx, Icon::Clock, "Time", Some(annotation.name()));
+    children.push(title);
+    children.push(view::weak(ctx, &detail));
+    if state.scene.frame_count() > 1 {
+        children.push(view::toggle_row(
+            ctx,
+            "annotation.every_frame",
+            "On every frame",
+            every,
+            move |every| Command::SetAnnotationFrame {
+                index,
+                frame: (!every).then_some(time),
+            },
+        ));
     }
-    let radius = annotation
-        .kind()
-        .radius()
-        .expect("a region keeps its radius");
-    let scoped = state.scene.annotations.roi() == Some(index);
-    let world = state.scene.dataset.world_size().min_element();
-    let maximum = (radius * 2.0).max(world * 0.5).max(radius + 1.0e-3);
-    let slider = view::slider_readout(
+    Some(view::card(ctx, 8.0, children))
+}
+
+fn region_card<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+) -> Element<'a, Message> {
+    let region = state.scene.region;
+    let enabled = region.enabled();
+    let size = region.size();
+    let detail = if enabled {
+        format!(
+            "{} × {} × {} µm",
+            size.x.round(),
+            size.y.round(),
+            size.z.round()
+        )
+    } else {
+        "whole volume".to_string()
+    };
+    let title = view::card_title(
         ctx,
-        "annotation.radius",
-        Some("Radius"),
-        radius,
-        0.05..=maximum,
-        false,
-        &grana_figure::value(radius, grana_measure::Unit::Micrometer, 2),
-        move |radius| Command::SetAnnotationRadius { index, radius },
+        Icon::Filter,
+        "Region of Interest",
+        Some(detail.as_str()),
     );
-    let toggle = view::toggle_row(
+    let current = region;
+    let mut children = vec![title];
+    children.push(view::weak(
         ctx,
-        "annotation.roi",
-        "Scope statistics",
-        scoped,
-        move |on| Command::SetAnnotationRoi(if on { Some(index) } else { None }),
-    );
-    let count = format!(
-        "{} of {} objects in range",
-        state.measure.rows().len(),
-        state.measure.total()
-    );
-    let title = view::card_title(ctx, Icon::Filter, "Statistics Region", Some(&count));
-    Some(view::card(ctx, 8.0, vec![title, slider, toggle]))
+        "Statistics, detection, drift and batch stay inside an enabled region. Drag in the section to draw one.",
+    ));
+    children.push(view::toggle_row(
+        ctx,
+        "annotation.region",
+        "Restrict to region",
+        enabled,
+        move |on| {
+            let mut region = current;
+            region.set_enabled(on);
+            Command::SetRegion(region)
+        },
+    ));
+    if enabled {
+        let half = 0.5 * state.scene.dataset.world_size();
+        let whole = grana_volume::Region::full(-half, half);
+        let clear = view::button_with(ctx, "Clear", Role::Quiet, Length::Fixed(132.0))
+            .named("annotation.region.clear")
+            .press(Message::Command(Command::SetRegion(whole)));
+        children.push(
+            grana_ui::row()
+                .justify(Align::End)
+                .width(Length::Fill)
+                .children([clear]),
+        );
+    }
+    view::card(ctx, 8.0, children)
 }

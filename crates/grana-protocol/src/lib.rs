@@ -41,8 +41,6 @@ pub struct Protocol {
     mask_filter: Option<MaskFilterSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     annotations: Vec<AnnotationSpec>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    annotation_roi: Option<String>,
     sets: Vec<SetSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     relations: Vec<RelationSpec>,
@@ -97,10 +95,6 @@ impl Protocol {
 
     pub fn annotations(&self) -> &[AnnotationSpec] {
         &self.annotations
-    }
-
-    pub fn annotation_roi(&self) -> Option<&str> {
-        self.annotation_roi.as_deref()
     }
 
     pub fn sets(&self) -> &[SetSpec] {
@@ -283,9 +277,6 @@ impl Protocol {
         }
         if !self.annotations.is_empty() {
             summary.push_str(&format!(" · {} annotations", self.annotations.len()));
-        }
-        if let Some(roi) = &self.annotation_roi {
-            summary.push_str(&format!(" · statistics within {roi}"));
         }
         for relation in &self.relations {
             summary.push_str(&format!(

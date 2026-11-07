@@ -22,9 +22,7 @@ mod state;
 mod track_color;
 mod track_layer;
 
-pub use annotation::{
-    Annotation, AnnotationKind, AnnotationState, AnnotationTag, Annotations, Roi,
-};
+pub use annotation::{Annotation, AnnotationKind, AnnotationState, AnnotationTag, Annotations};
 pub use channel::Channel;
 pub use coloc::{Coloc, ColocResult, ColocState, MaskKey};
 pub use color::ObjectColor;

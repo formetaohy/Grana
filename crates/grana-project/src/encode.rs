@@ -213,13 +213,6 @@ impl Encode for AnnotationState {
             }
             None => writer.u8(0),
         }
-        match self.roi {
-            Some(index) => {
-                writer.u8(1);
-                writer.count(index);
-            }
-            None => writer.u8(0),
-        }
         for count in self.counts {
             writer.u32(count);
         }
@@ -230,6 +223,13 @@ impl Encode for Annotation {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.string(self.name());
         writer.bool(self.visible());
+        match self.frame() {
+            Some(frame) => {
+                writer.u8(1);
+                writer.u32(frame);
+            }
+            None => writer.u8(0),
+        }
         self.kind().encode(writer);
     }
 }
@@ -244,9 +244,6 @@ impl Encode for AnnotationKind {
             for value in end {
                 writer.f32(value);
             }
-        }
-        if let Some(radius) = self.radius() {
-            writer.f32(radius);
         }
     }
 }

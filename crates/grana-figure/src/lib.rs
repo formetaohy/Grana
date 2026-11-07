@@ -4,9 +4,9 @@ mod labels;
 mod overlay;
 
 pub use annotation::{
-    Item as AnnotationItem, Placed as PlacedAnnotation, collect as annotations,
-    paint as paint_annotations, pending as pending_annotation, section as section_annotations,
-    volume as volume_annotations,
+    Item as AnnotationItem, Part as AnnotationPart, Placed as PlacedAnnotation,
+    collect as annotations, paint as paint_annotations, pending as pending_annotation,
+    pick as pick_annotation, section as section_annotations, volume as volume_annotations,
 };
 pub use figure::{Contents, instances};
 pub use labels::{Label, Placed, labels, section_labels, volume_labels};

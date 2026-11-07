@@ -216,11 +216,6 @@ impl Protocol {
             .iter()
             .map(AnnotationSpec::of)
             .collect::<Vec<_>>();
-        let annotation_roi = scene
-            .annotations
-            .roi()
-            .and_then(|index| scene.annotations.get(index))
-            .map(|annotation| annotation.name().to_string());
         Protocol {
             region: RegionSpec::of(scene.region, scene.dataset.world_size()),
             render: Some(RenderSpec::of(
@@ -235,7 +230,6 @@ impl Protocol {
             mask_radius: scene.mask_radius,
             mask_filter,
             annotations,
-            annotation_roi,
             sets,
             relations,
             coloc,

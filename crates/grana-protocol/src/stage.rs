@@ -188,22 +188,17 @@ impl Protocol {
 
     fn stage_annotations(&self, scene: &mut Scene) {
         let mut entries = Vec::with_capacity(self.annotations.len());
-        let mut counts = [0u32; 3];
+        let mut counts = [0u32; 2];
         for spec in &self.annotations {
             let kind = spec.kind();
             counts[kind.tag().index()] += 1;
-            entries.push(Annotation::new(spec.name(), kind).with_visible(spec.visible()));
+            entries.push(
+                Annotation::new(spec.name(), spec.frame(), kind).with_visible(spec.visible()),
+            );
         }
-        let roi = self.annotation_roi.as_deref().map(|name| {
-            entries
-                .iter()
-                .position(|entry| entry.name() == name)
-                .expect("a checked protocol names a region annotation")
-        });
         scene.annotations.restore(AnnotationState {
             entries,
             selected: None,
-            roi,
             counts,
         });
     }

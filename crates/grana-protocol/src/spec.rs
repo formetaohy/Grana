@@ -238,21 +238,18 @@ pub enum AnnotationSpec {
         name: String,
         #[serde(default = "truth", skip_serializing_if = "is_true")]
         visible: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame: Option<u32>,
         at: [f32; 3],
     },
     Distance {
         name: String,
         #[serde(default = "truth", skip_serializing_if = "is_true")]
         visible: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame: Option<u32>,
         from: [f32; 3],
         to: [f32; 3],
-    },
-    Roi {
-        name: String,
-        #[serde(default = "truth", skip_serializing_if = "is_true")]
-        visible: bool,
-        center: [f32; 3],
-        radius: f32,
     },
 }
 
@@ -260,37 +257,42 @@ impl AnnotationSpec {
     pub fn of(annotation: &Annotation) -> Self {
         let name = annotation.name().to_string();
         let visible = annotation.visible();
+        let frame = annotation.frame();
         match annotation.kind().as_point() {
-            Some(at) => Self::Point { name, visible, at },
-            None => match (annotation.kind().end(), annotation.kind().radius()) {
-                (Some(to), _) => Self::Distance {
-                    name,
-                    visible,
-                    from: annotation.kind().anchor(),
-                    to,
-                },
-                (None, Some(radius)) => Self::Roi {
-                    name,
-                    visible,
-                    center: annotation.kind().anchor(),
-                    radius,
-                },
-                (None, None) => unreachable!("an annotation names a point, a distance or a region"),
+            Some(at) => Self::Point {
+                name,
+                visible,
+                frame,
+                at,
+            },
+            None => Self::Distance {
+                name,
+                visible,
+                frame,
+                from: annotation.kind().anchor(),
+                to: annotation
+                    .kind()
+                    .end()
+                    .expect("a distance annotation names its end"),
             },
         }
     }
 
     pub fn name(&self) -> &str {
         match self {
-            Self::Point { name, .. } | Self::Distance { name, .. } | Self::Roi { name, .. } => name,
+            Self::Point { name, .. } | Self::Distance { name, .. } => name,
         }
     }
 
     pub fn visible(&self) -> bool {
         match self {
-            Self::Point { visible, .. }
-            | Self::Distance { visible, .. }
-            | Self::Roi { visible, .. } => *visible,
+            Self::Point { visible, .. } | Self::Distance { visible, .. } => *visible,
+        }
+    }
+
+    pub fn frame(&self) -> Option<u32> {
+        match self {
+            Self::Point { frame, .. } | Self::Distance { frame, .. } => *frame,
         }
     }
 
@@ -298,7 +300,6 @@ impl AnnotationSpec {
         match *self {
             Self::Point { at, .. } => grana_scene::AnnotationKind::point(at),
             Self::Distance { from, to, .. } => grana_scene::AnnotationKind::distance(from, to),
-            Self::Roi { center, radius, .. } => grana_scene::AnnotationKind::roi(center, radius),
         }
     }
 
@@ -321,13 +322,6 @@ impl AnnotationSpec {
                 if !finite(from) || !finite(to) || from == to {
                     return Err(ProtocolError::Invalid(
                         "an annotation distance spans two distinct points".to_string(),
-                    ));
-                }
-            }
-            Self::Roi { center, radius, .. } => {
-                if !finite(center) || !radius.is_finite() || radius <= 0.0 {
-                    return Err(ProtocolError::Invalid(
-                        "an annotation region grows by a positive radius".to_string(),
                     ));
                 }
             }

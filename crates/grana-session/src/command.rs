@@ -167,20 +167,19 @@ pub enum Command {
         from: [f32; 3],
         to: [f32; 3],
     },
-    AddRoi {
-        center: [f32; 3],
-        radius: f32,
-    },
     SelectAnnotation(Option<usize>),
     SetAnnotationVisible {
         index: usize,
         visible: bool,
     },
-    SetAnnotationRadius {
+    SetAnnotationKind {
         index: usize,
-        radius: f32,
+        kind: grana_scene::AnnotationKind,
     },
-    SetAnnotationRoi(Option<usize>),
+    SetAnnotationFrame {
+        index: usize,
+        frame: Option<u32>,
+    },
     RemoveAnnotation(usize),
     ClearAnnotations,
     SetTrackParams {
@@ -562,12 +561,10 @@ impl Command {
             }
             Self::AddPoint { .. }
             | Self::AddDistance { .. }
-            | Self::AddRoi { .. }
             | Self::SetAnnotationVisible { .. }
-            | Self::SetAnnotationRoi(_)
             | Self::RemoveAnnotation(_)
             | Self::ClearAnnotations => Edit::new(Action::Annotation),
-            Self::SetAnnotationRadius { index, .. } => {
+            Self::SetAnnotationKind { index, .. } | Self::SetAnnotationFrame { index, .. } => {
                 Edit::targeted(Action::Annotation, *index as u64)
             }
             Self::SetTrackVisible { set, .. } => Edit::targeted(Action::TrackVisible, set.raw()),

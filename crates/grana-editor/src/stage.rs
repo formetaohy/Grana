@@ -3,19 +3,40 @@ use grana_display::Viewport;
 use grana_ui::{Button, Cursor, Modifiers, Rect, Ui};
 use grana_volume::Spacing;
 
+use crate::state::AnnotationTool;
+
 const SECTION_STEP_VOXELS: f32 = 1.0;
 const CLICK_SLOP: f32 = 3.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Pane {
+    #[default]
     Volume,
     Section,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ToolDrag {
+    pub pane: Pane,
+    pub start: Vec2,
+    pub position: Vec2,
+    pub finished: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GrabDrag {
+    pub pane: Pane,
+    pub position: Vec2,
+    pub delta: Vec2,
+    pub finished: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Interaction {
     pub camera: bool,
     pub pick: Option<(Pane, Vec2)>,
+    pub tool: Option<ToolDrag>,
+    pub grab: Option<GrabDrag>,
     pub modifiers: Modifiers,
 }
 
@@ -24,6 +45,8 @@ enum Drag {
     Orbit,
     Pan,
     Section,
+    Tool,
+    Grab,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -113,6 +136,8 @@ impl Stage {
         ui: &mut Ui<A>,
         viewport: &mut Viewport,
         spacing: Spacing,
+        tool: Option<AnnotationTool>,
+        grabbed: bool,
     ) -> Interaction {
         let mut interaction = Interaction::default();
         let blocked = ui.pointer_over_chrome() || ui.pointer_over_widget() || ui.pointer_captured();
@@ -124,22 +149,53 @@ impl Stage {
         self.hovered = self.pane_at(pointer);
         let delta = input.delta();
         if let Some(drag) = self.drag {
-            if delta.length_squared() > 0.0 {
-                match drag {
-                    Drag::Orbit => viewport.camera_mut().orbit(delta),
-                    Drag::Pan => viewport
-                        .camera_mut()
-                        .pan(delta, self.volume_region[3] as f32 / ui.scale()),
-                    Drag::Section => {
+            let moving = delta.length_squared() > 0.0;
+            match drag {
+                Drag::Orbit => {
+                    if moving {
+                        viewport.camera_mut().orbit(delta);
+                        interaction.camera = true;
+                    }
+                }
+                Drag::Pan => {
+                    if moving {
+                        viewport
+                            .camera_mut()
+                            .pan(delta, self.volume_region[3] as f32 / ui.scale());
+                        interaction.camera = true;
+                    }
+                }
+                Drag::Section => {
+                    if moving {
                         let axis = viewport.section().axis();
                         let world_per_pixel =
                             viewport.section().span() / self.section_rect.height();
                         viewport
                             .camera_mut()
                             .pan_in_plane(axis, delta, world_per_pixel);
+                        interaction.camera = true;
                     }
                 }
-                interaction.camera = true;
+                Drag::Tool => {
+                    if let Some(press) = self.press {
+                        interaction.tool = Some(ToolDrag {
+                            pane: press.pane,
+                            start: press.cursor,
+                            position: pointer,
+                            finished: false,
+                        });
+                    }
+                }
+                Drag::Grab => {
+                    if let Some(press) = self.press {
+                        interaction.grab = Some(GrabDrag {
+                            pane: press.pane,
+                            position: pointer,
+                            delta,
+                            finished: false,
+                        });
+                    }
+                }
             }
             if let Some(press) = self.press.as_mut()
                 && (pointer - press.cursor).length() > CLICK_SLOP
@@ -162,11 +218,18 @@ impl Stage {
                 if !state.pressed {
                     continue;
                 }
-                self.drag = Some(match (pane, button) {
-                    (Pane::Volume, Button::Primary) => Drag::Orbit,
-                    (Pane::Volume, _) => Drag::Pan,
-                    (Pane::Section, _) => Drag::Section,
-                });
+                let drag = if button == Button::Primary && tool.is_some() {
+                    Drag::Tool
+                } else if button == Button::Primary && grabbed {
+                    Drag::Grab
+                } else {
+                    match (pane, button) {
+                        (Pane::Volume, Button::Primary) => Drag::Orbit,
+                        (Pane::Volume, _) => Drag::Pan,
+                        (Pane::Section, _) => Drag::Section,
+                    }
+                };
+                self.drag = Some(drag);
                 self.drag_button = Some(button);
                 self.press = Some(Press {
                     pane,
@@ -176,7 +239,7 @@ impl Stage {
                 break;
             }
         }
-        if self.drag.is_some() {
+        if let Some(drag) = self.drag {
             let released = match self.drag_button {
                 Some(Button::Primary) => left.released,
                 Some(Button::Middle) => middle.released,
@@ -186,11 +249,28 @@ impl Stage {
             if released {
                 self.drag = None;
                 self.drag_button = None;
-                if let Some(press) = self.press.take()
-                    && !press.dragged
-                    && self.pane_at(press.cursor).is_some()
-                {
-                    interaction.pick = Some((press.pane, press.cursor));
+                let press = self.press.take();
+                match (drag, press) {
+                    (Drag::Tool, Some(press)) => {
+                        interaction.tool = Some(ToolDrag {
+                            pane: press.pane,
+                            start: press.cursor,
+                            position: pointer,
+                            finished: true,
+                        });
+                    }
+                    (Drag::Grab, Some(press)) => {
+                        interaction.grab = Some(GrabDrag {
+                            pane: press.pane,
+                            position: pointer,
+                            delta,
+                            finished: true,
+                        });
+                    }
+                    (_, Some(press)) if !press.dragged && self.pane_at(press.cursor).is_some() => {
+                        interaction.pick = Some((press.pane, press.cursor));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -211,7 +291,7 @@ impl Stage {
             }
             interaction.camera = true;
         }
-        if self.hovered.is_some() && !blocked {
+        if self.hovered.is_some() && !blocked && tool.is_none() && !grabbed {
             ui.set_cursor(if self.hovered == Some(Pane::Section) {
                 Cursor::Move
             } else {

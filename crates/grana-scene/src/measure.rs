@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use grana_measure::{Aggregate, Filter, Group, Lasso, MeasureView, Plot, PlotAxis, Scope, Table};
 
-use crate::annotation::Roi;
+use glam::Vec3;
+use grana_volume::Region;
+
 use crate::object::ObjectFrame;
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::scene::Scene;
@@ -30,7 +32,7 @@ pub struct Measure {
     scope: Scope,
     filters: Vec<Filter>,
     lasso: Option<Lasso>,
-    roi: Option<Roi>,
+    roi: Option<Region>,
     sort: Option<(usize, bool)>,
     table: Option<Table>,
     rows: Vec<usize>,
@@ -143,11 +145,15 @@ impl Measure {
         self.lasso.as_ref()
     }
 
-    pub fn roi(&self) -> Option<Roi> {
+    pub fn roi(&self) -> Option<Region> {
         self.roi
     }
 
-    pub fn set_roi(&mut self, roi: Option<Roi>) {
+    pub fn set_roi(&mut self, roi: Option<Region>) {
+        assert!(
+            roi.is_none_or(Region::enabled),
+            "a statistics scope carries an enabled region"
+        );
         if self.roi == roi {
             return;
         }
@@ -446,7 +452,7 @@ impl Measure {
         let rows = table.matching(&self.filters, self.lasso.as_ref(), None);
         let mut rows = rows;
         if let Some(roi) = roi {
-            rows.retain(|row| roi.holds_row(table, *row));
+            rows.retain(|row| holds_row(roi, table, *row));
         }
         let visibility = match self.group {
             Group::Object => {
@@ -677,13 +683,13 @@ impl Measure {
             Some(roi) => (0..table.rows())
                 .filter(|row| {
                     frame.is_none_or(|time| table.observation(*row).time() == Some(time))
-                        && roi.holds_row(table, *row)
+                        && holds_row(roi, table, *row)
                 })
                 .count(),
         };
         let mut rows = table.matching(&self.filters, self.lasso.as_ref(), frame);
         if let Some(roi) = roi {
-            rows.retain(|row| roi.holds_row(table, *row));
+            rows.retain(|row| holds_row(roi, table, *row));
         }
         if let Some((column, descending)) = self.sort
             && column < table.columns().len()
@@ -704,6 +710,12 @@ impl Measure {
             .as_ref()
             .and_then(|table| table.plot(self.view, self.axes, &self.rows));
     }
+}
+
+fn holds_row(region: Region, table: &Table, row: usize) -> bool {
+    table
+        .position(row)
+        .is_none_or(|position| region.contains(Vec3::from(position)))
 }
 
 fn readable_axes(table: &Table, axes: [usize; 2]) -> [usize; 2] {

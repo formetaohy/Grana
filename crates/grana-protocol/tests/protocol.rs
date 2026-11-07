@@ -180,24 +180,23 @@ fn round_trips_annotations() {
             IntensityTable::new(1, vec![accumulator.statistics()]),
         )),
     );
-    scene.annotations.add_point([0.0, 0.0, 0.0]);
+    scene.annotations.add_point([0.0, 0.0, 0.0], Some(0));
     scene
         .annotations
-        .add_distance([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
-    let roi = scene.annotations.add_roi([0.0, 0.0, 0.0], 2.0);
-    scene.annotations.set_roi(Some(roi));
+        .add_distance([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], None);
     let protocol =
         Protocol::capture(&scene, &Measure::new(), None).expect("the annotations capture");
-    assert_eq!(protocol.annotations().len(), 3);
-    assert_eq!(protocol.annotation_roi(), Some("ROI 1"));
+    assert_eq!(protocol.annotations().len(), 2);
+    assert_eq!(protocol.annotations()[0].frame(), Some(0));
+    assert_eq!(protocol.annotations()[1].frame(), None);
     let text = protocol.to_json().expect("the protocol serializes");
     assert!(text.contains("annotations"), "{text}");
     let mut staged = Scene::new(Dataset::synthetic("fixture", series.pyramid().clone()));
     protocol.stage(&mut staged).expect("the annotations stage");
-    assert_eq!(staged.annotations.len(), 3);
+    assert_eq!(staged.annotations.len(), 2);
     assert_eq!(
-        staged.annotations.roi_geometry().map(|roi| roi.radius()),
-        Some(2.0)
+        staged.annotations.get(0).map(|entry| entry.frame()),
+        Some(Some(0))
     );
     assert_eq!(
         staged

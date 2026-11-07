@@ -4,8 +4,10 @@ use std::time::{Duration, Instant};
 
 use glam::{Vec2, Vec3};
 use grana_animation::Keyframe;
-use grana_display::Viewport;
-use grana_editor::{AnnotationTool, FrameStats, Pane, Stage, ViewStats, Workspace};
+use grana_display::{Viewport, plane_basis};
+use grana_editor::{
+    AnnotationTool, FrameStats, GrabDrag, Pane, Stage, ToolDrag, ViewStats, Workspace,
+};
 use grana_engine::{Destination, Engine, Outcome, Panels, Picked, Plan, Pose, SAMPLE_LIMIT};
 use grana_gpu::Gpu;
 use grana_project::ViewState;
@@ -28,6 +30,7 @@ const STREAM_POLL: Duration = Duration::from_millis(16);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
 const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
+const TOOL_CLICK_SLOP: f32 = 3.0;
 
 struct Surface {
     window: Arc<Window>,
@@ -311,58 +314,239 @@ impl App {
     }
 
     fn interact_viewport(&mut self) {
-        let App {
-            surface,
-            session,
-            viewport,
-            stage,
-            workspace,
-            ..
-        } = self;
-        let Some(surface) = surface.as_mut() else {
-            return;
-        };
-        let spacing = session
-            .scene()
-            .map_or(grana_volume::Spacing::new(1.0, 1.0, 1.0), |scene| {
-                scene.dataset.spacing()
-            });
-        let interaction = stage.input(&mut surface.ui, viewport, spacing);
-        let seeding = workspace
-            .seed
-            .filter(|_| stage.hovered() == Some(Pane::Volume));
-        let measuring = workspace
-            .annotation_tool
-            .filter(|_| seeding.is_none() && stage.hovered().is_some());
-        surface
-            .window
-            .set_cursor(if seeding.is_some() || measuring.is_some() {
+        let (interaction, hovered) = {
+            let App {
+                surface,
+                session,
+                viewport,
+                stage,
+                workspace,
+                ..
+            } = self;
+            let Some(surface) = surface.as_mut() else {
+                return;
+            };
+            let spacing = session
+                .scene()
+                .map_or(grana_volume::Spacing::new(1.0, 1.0, 1.0), |scene| {
+                    scene.dataset.spacing()
+                });
+            let tool = workspace
+                .annotation_tool
+                .filter(|_| workspace.seed.is_none());
+            let blocked = surface.ui.pointer_over_chrome()
+                || surface.ui.pointer_over_widget()
+                || surface.ui.pointer_captured();
+            let hovered = (!blocked && tool.is_none() && workspace.seed.is_none())
+                .then(|| annotation_hit(surface, session, viewport, stage))
+                .flatten();
+            let pressed = surface.ui.input().button(UiButton::Primary).pressed;
+            let grabbed = hovered.is_some() && pressed;
+            let interaction = stage.input(&mut surface.ui, viewport, spacing, tool, grabbed);
+            if interaction.camera {
+                if let Some(scene) = session.scene() {
+                    viewport.clamp_focus(0.5 * scene.dataset.world_size());
+                }
+                surface.window.request_redraw();
+            }
+            let cursor = if workspace.seed.is_some() || tool.is_some() {
                 CursorIcon::Crosshair
+            } else if interaction.grab.is_some() {
+                CursorIcon::Grabbing
+            } else if hovered.is_some() {
+                CursorIcon::Move
             } else {
                 interface_cursor(surface.ui.cursor())
-            });
-        if interaction.camera {
-            if let Some(scene) = session.scene() {
-                viewport.clamp_focus(0.5 * scene.dataset.world_size());
-            }
-            surface.window.request_redraw();
+            };
+            surface.window.set_cursor(cursor);
+            (interaction, hovered)
+        };
+        if let Some((index, part)) = hovered
+            && interaction.grab.is_some()
+            && self.workspace.annotation_drag.is_none()
+        {
+            self.workspace.annotation_drag = Some((index, part));
+            self.apply(vec![Command::SelectAnnotation(Some(index))]);
         }
-        let camera = interaction.camera;
-        let pick = interaction.pick;
-        let picked = pick.is_some();
-        let modifiers = interaction.modifiers;
-        if let Some((pane, point)) = pick {
-            match seeding.filter(|_| pane == Pane::Volume) {
-                Some(set) => self.place_seed(set, point, modifiers.alt),
-                None => match measuring {
-                    Some(tool) => self.place_annotation(tool, pane, point),
-                    None => self.pick(pane, point),
-                },
+        if let Some(tool) = interaction.tool {
+            self.use_tool(tool);
+        }
+        if let Some(grab) = interaction.grab {
+            self.drag_annotation(grab);
+        }
+        let picking = interaction.pick.is_some();
+        if let Some((pane, point)) = interaction.pick {
+            match self.workspace.seed.filter(|_| pane == Pane::Volume) {
+                Some(set) => self.place_seed(set, point, interaction.modifiers.alt),
+                None => self.pick(pane, point),
             }
             self.request_redraw();
         }
-        if camera || picked {
+        if interaction.camera || interaction.tool.is_some() || interaction.grab.is_some() || picking
+        {
             self.scene_changed = true;
+        }
+    }
+
+    fn use_tool(&mut self, drag: ToolDrag) {
+        let Some(tool) = self.workspace.annotation_tool else {
+            return;
+        };
+        match tool {
+            AnnotationTool::Roi => self.draw_region(drag),
+            AnnotationTool::Point | AnnotationTool::Distance => {
+                if !drag.finished || (drag.position - drag.start).length() > TOOL_CLICK_SLOP {
+                    return;
+                }
+                self.place_annotation(tool, drag.pane, drag.position);
+            }
+        }
+        self.scene_changed = true;
+    }
+
+    fn draw_region(&mut self, drag: ToolDrag) {
+        match drag.pane {
+            Pane::Section => {
+                if (drag.position - drag.start).length() <= TOOL_CLICK_SLOP {
+                    if drag.finished {
+                        self.default_region(Pane::Section, drag.start);
+                    }
+                    return;
+                }
+                let Some(from) = self.annotation_point(Pane::Section, drag.start) else {
+                    return;
+                };
+                let Some(to) = self.annotation_point(Pane::Section, drag.position) else {
+                    return;
+                };
+                let Some(scene) = self.session.scene() else {
+                    return;
+                };
+                let half = 0.5 * scene.dataset.world_size();
+                let voxel = scene.dataset.voxel_size();
+                let axis = self.viewport.section().axis();
+                let (u, v) = axis.in_plane();
+                let mut min = Vec3::splat(f32::INFINITY);
+                let mut max = Vec3::splat(f32::NEG_INFINITY);
+                for point in [from, to] {
+                    for index in 0..3 {
+                        min[index] = min[index].min(point[index]);
+                        max[index] = max[index].max(point[index]);
+                    }
+                }
+                min[axis.index()] = -half[axis.index()];
+                max[axis.index()] = half[axis.index()];
+                for index in [u.index(), v.index()] {
+                    let low = min[index].max(-half[index]);
+                    let high = max[index].min(half[index]);
+                    if high - low < voxel[index] {
+                        let centre = 0.5 * (low + high);
+                        min[index] = (centre - 0.5 * voxel[index]).max(-half[index]);
+                        max[index] = (centre + 0.5 * voxel[index]).min(half[index]);
+                    } else {
+                        min[index] = low;
+                        max[index] = high;
+                    }
+                }
+                if min.cmplt(max).all() {
+                    self.apply(vec![Command::SetRegion(grana_volume::Region::new(
+                        min, max,
+                    ))]);
+                }
+            }
+            Pane::Volume => {
+                if !drag.finished {
+                    return;
+                }
+                self.default_region(Pane::Volume, drag.start);
+            }
+        }
+    }
+
+    fn default_region(&mut self, pane: Pane, point: Vec2) {
+        let Some(centre) = self.annotation_point(pane, point) else {
+            return;
+        };
+        let Some(scene) = self.session.scene() else {
+            return;
+        };
+        let half = 0.5 * scene.dataset.world_size();
+        let voxel = scene.dataset.voxel_size();
+        let reach = (0.06 * half.min_element()).max(voxel.min_element());
+        let min = (Vec3::from(centre) - Vec3::splat(reach)).max(-half);
+        let max = (Vec3::from(centre) + Vec3::splat(reach)).min(half);
+        if min.cmplt(max).all() {
+            self.apply(vec![Command::SetRegion(grana_volume::Region::new(
+                min, max,
+            ))]);
+        }
+    }
+
+    fn drag_annotation(&mut self, drag: GrabDrag) {
+        let Some((index, part)) = self.workspace.annotation_drag else {
+            return;
+        };
+        if drag.finished {
+            self.workspace.annotation_drag = None;
+        }
+        if drag.delta.length_squared() <= 0.0 {
+            return;
+        }
+        let Some(offset) = self.annotation_offset(drag.pane, index, drag.delta) else {
+            return;
+        };
+        let Some(scene) = self.session.scene() else {
+            return;
+        };
+        let Some(annotation) = scene.annotations.get(index) else {
+            return;
+        };
+        let kind = annotation.kind();
+        let next = match part {
+            grana_figure::AnnotationPart::Anchor => {
+                let at = (Vec3::from(kind.anchor()) + offset).to_array();
+                (at.iter().all(|value| value.is_finite()) && kind.end() != Some(at))
+                    .then(|| kind.with_anchor(at))
+            }
+            grana_figure::AnnotationPart::End => kind.end().and_then(|end| {
+                let at = (Vec3::from(end) + offset).to_array();
+                (at.iter().all(|value| value.is_finite()) && kind.anchor() != at)
+                    .then(|| kind.with_end(at))
+            }),
+            grana_figure::AnnotationPart::Body => offset
+                .is_finite()
+                .then(|| kind.translated(offset.to_array())),
+        };
+        if let Some(kind) = next {
+            self.apply(vec![Command::SetAnnotationKind { index, kind }]);
+        }
+    }
+
+    fn annotation_offset(&self, pane: Pane, index: usize, delta: Vec2) -> Option<Vec3> {
+        let scene = self.session.scene()?;
+        let anchor = scene.annotations.get(index)?.kind().anchor();
+        match pane {
+            Pane::Volume => {
+                let rect = self.stage.volume_rect();
+                if rect.height() <= 0.0 {
+                    return None;
+                }
+                let camera = self.viewport.camera();
+                let depth = (Vec3::from(anchor) - camera.eye()).dot(camera.forward());
+                let per_point =
+                    2.0 * depth.abs().max(1.0e-6) * (camera.fov_y() * 0.5).tan() / rect.height();
+                Some(camera.right() * delta.x * per_point - camera.up() * delta.y * per_point)
+            }
+            Pane::Section => {
+                let rect = self.stage.section_rect();
+                if rect.height() <= 0.0 {
+                    return None;
+                }
+                let axis = self.viewport.section().axis();
+                let (right, up) = plane_basis(axis);
+                let per_point = self.viewport.section().span() / rect.height();
+                Some(right * delta.x * per_point - up * delta.y * per_point)
+            }
         }
     }
 
@@ -505,17 +689,7 @@ impl App {
                 Some(from) => self.workspace.annotation_pending = Some(from),
                 None => self.workspace.annotation_pending = Some(position),
             },
-            AnnotationTool::Roi => {
-                let Some(scene) = self.session.scene() else {
-                    return;
-                };
-                let radius = (0.06 * scene.dataset.world_size().min_element())
-                    .max(2.0 * scene.dataset.voxel_size().min_element());
-                self.apply(vec![Command::AddRoi {
-                    center: position,
-                    radius,
-                }]);
-            }
+            AnnotationTool::Roi => {}
         }
     }
 
@@ -1349,6 +1523,52 @@ impl App {
             None => event_loop.set_control_flow(ControlFlow::Poll),
         }
     }
+}
+
+fn annotation_hit(
+    surface: &Surface,
+    session: &Session,
+    viewport: &Viewport,
+    stage: &Stage,
+) -> Option<(usize, grana_figure::AnnotationPart)> {
+    let pointer = surface.ui.input().position();
+    let pane = stage.pane_at(pointer)?;
+    let scene = session.scene()?;
+    let items = grana_figure::annotations(scene, scene.time());
+    if items.is_empty() {
+        return None;
+    }
+    let placed = match pane {
+        Pane::Volume => {
+            let rect = stage.volume_rect();
+            if rect.height() <= 0.0 {
+                return None;
+            }
+            let world = scene.dataset.world_size();
+            let aspect = rect.width() / rect.height();
+            let view_projection = viewport
+                .camera()
+                .view_projection(aspect, 0.5 * world.length());
+            grana_figure::volume_annotations(&items, view_projection, rect)
+        }
+        Pane::Section => {
+            let rect = stage.section_rect();
+            if rect.height() <= 0.0 {
+                return None;
+            }
+            let axis = viewport.section().axis();
+            let tolerance = 1.5 * scene.dataset.voxel_size()[axis.index()];
+            grana_figure::section_annotations(
+                &items,
+                viewport.camera().focus(),
+                axis,
+                viewport.section().span(),
+                rect,
+                tolerance,
+            )
+        }
+    };
+    grana_figure::pick_annotation(&placed, pointer)
 }
 
 fn poses(timeline: &grana_animation::Timeline) -> Vec<Pose> {

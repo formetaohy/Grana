@@ -47,7 +47,6 @@ pub(crate) fn instances<A: Clone>(ui: &mut Ui<A>, figure: Figure<'_>) -> Vec<Ins
     let volume_annotations = grana_figure::volume_annotations(
         figure.annotations,
         figure.labels.view_projection,
-        volume_world_per_point,
         volume_rect,
     );
     let mut instances = grana_figure::instances(

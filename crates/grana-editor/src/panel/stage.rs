@@ -176,7 +176,7 @@ fn overlay_of<'a>(
 fn overlay_view<'a>(state: &'a View<'a>, geometry: Geometry, full: Rect) -> Element<'a, Message> {
     let legends = overlay::legends(state.scene);
     let labels = overlay::labels(state.scene, state.scene.time());
-    let annotations = overlay::annotations(state.scene);
+    let annotations = overlay::annotations(state.scene, state.scene.time());
     grana_ui::canvas(Length::Fill, full.height(), move |painter, info| {
         let _ = info;
         let overlay = overlay_of(state, geometry, &legends, &labels, &annotations);

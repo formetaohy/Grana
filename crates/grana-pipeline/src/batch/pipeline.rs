@@ -165,12 +165,14 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 Lasso::new(x, y, lasso.points.clone())
             });
         let mut rows = table.matching(&filters, lasso.as_ref(), None);
-        if let Some(roi) = scene
-            .annotations
-            .roi_geometry()
-            .filter(|_| spec.group() == Group::Object)
+        if spec.group() == Group::Object
+            && let Some(region) = scene.region_scope()
         {
-            rows.retain(|row| roi.holds_row(&table, *row));
+            rows.retain(|row| {
+                table
+                    .position(*row)
+                    .is_none_or(|position| region.contains(glam::Vec3::from(position)))
+            });
         }
         if let Some(measure) = spec.measure()
             && let Some(sort) = &measure.sort

@@ -88,15 +88,13 @@ fn round_trips_a_project() {
         set: surfaces,
         item: Item::Track(2),
     }));
-    let hidden_point = scene.annotations.add_point([0.1, 0.2, 0.3]);
+    let hidden_point = scene.annotations.add_point([0.1, 0.2, 0.3], Some(0));
     scene
         .annotations
-        .add_distance([0.1, 0.2, 0.3], [0.4, -0.2, 0.1]);
-    let roi = scene.annotations.add_roi([0.0, 0.0, 0.0], 1.0);
+        .add_distance([0.1, 0.2, 0.3], [0.4, -0.2, 0.1], Some(1));
     assert!(scene.annotations.set_visible(hidden_point, false));
-    assert!(scene.annotations.set_radius(roi, 1.25));
-    assert!(scene.annotations.select(Some(roi)));
-    assert!(scene.annotations.set_roi(Some(roi)));
+    assert!(scene.annotations.select(Some(hidden_point)));
+    assert!(scene.annotations.set_frame(hidden_point, None));
     measure.select(spots, &scene);
     measure.set_group(grana_measure::Group::Track, &scene);
     measure.add_filter();
@@ -243,7 +241,7 @@ fn round_trips_a_project() {
     assert_eq!(restored.seed_count(surfaces), 2);
     restored.set_time(0);
     assert_eq!(restored_measure.state(), project.measure);
-    assert_eq!(restored.annotations.len(), 3);
+    assert_eq!(restored.annotations.len(), 2);
     assert!(
         !restored
             .annotations
@@ -252,8 +250,15 @@ fn round_trips_a_project() {
             .visible()
     );
     assert_eq!(
-        restored.annotations.roi_geometry().map(|roi| roi.radius()),
-        Some(1.25)
+        restored
+            .annotations
+            .get(hidden_point)
+            .map(|entry| entry.frame()),
+        Some(None)
+    );
+    assert_eq!(
+        restored.annotations.get(1).map(|entry| entry.frame()),
+        Some(Some(1))
     );
     assert_eq!(loaded.view, project.view);
     let restored_result = restored

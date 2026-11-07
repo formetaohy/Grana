@@ -3,9 +3,9 @@ use std::sync::Arc;
 use grana_measure::{Lasso, MeasureView, Plot, PlotAxis, Scope};
 use grana_object::{IntensityTable, RelationFrame, SampleAccumulator, Spot, SpotSet};
 use grana_scene::{
-    Dataset, MaskFilter, Measure, ObjectFrame, ObjectKind, RelationField, Roi, Scene, Visibility,
+    Dataset, MaskFilter, Measure, ObjectFrame, ObjectKind, RelationField, Scene, Visibility,
 };
-use grana_volume::{Channel, Extent, Spacing, Volume, VolumeSeries, VoxelData};
+use grana_volume::{Channel, Extent, Region, Spacing, Volume, VolumeSeries, VoxelData};
 
 fn scene() -> Scene {
     let extent = Extent::new(4, 4, 2);
@@ -180,7 +180,10 @@ fn scopes_the_table_to_the_statistics_region() {
     let mut measure = Measure::new();
     measure.select(set, &scene);
     assert_eq!(measure.total(), 6);
-    measure.set_roi(Some(Roi::new([1.0, 0.0, 0.0], 0.4)));
+    measure.set_roi(Some(Region::new(
+        glam::Vec3::new(0.6, -0.4, -0.4),
+        glam::Vec3::new(1.4, 0.4, 0.4),
+    )));
     assert_eq!(measure.rows().len(), 2);
     assert_eq!(measure.total(), 2);
     measure.set_roi(None);

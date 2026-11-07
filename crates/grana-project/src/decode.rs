@@ -20,12 +20,11 @@ use grana_object::{
 };
 use grana_optics::PsfParams;
 use grana_scene::{
-    Annotation, AnnotationKind, AnnotationState, AnnotationTag, ChannelState, ColocResult,
-    ColocState, ColorState, Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState,
-    LassoPath, MaskFilter, MaskSpec, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame,
-    ObjectKind, ObjectParams, ObjectSetId, ObjectSetKey, Provenance, Recipe, RelationState,
-    RestoreSpec, SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit,
-    TrackStyle, Visibility,
+    Annotation, AnnotationKind, AnnotationState, ChannelState, ColocResult, ColocState, ColorState,
+    Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState, LassoPath, MaskFilter,
+    MaskSpec, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind, ObjectParams,
+    ObjectSetId, ObjectSetKey, Provenance, Recipe, RelationState, RestoreSpec, SceneState, Seeds,
+    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Clip, Intensity, Region};
 
@@ -354,25 +353,16 @@ impl Decode for AnnotationState {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let entries = Vec::<Annotation>::decode(reader)?;
         let selected = decode_index(reader)?;
-        let roi = decode_index(reader)?;
         if selected.is_some_and(|index| index >= entries.len()) {
             return Err(FAULT_SHAPE);
         }
-        if roi.is_some_and(|index| {
-            entries
-                .get(index)
-                .is_none_or(|entry| entry.kind().tag() != AnnotationTag::Roi)
-        }) {
-            return Err(FAULT_SHAPE);
-        }
-        let mut counts = [0u32; 3];
+        let mut counts = [0u32; 2];
         for count in &mut counts {
             *count = reader.u32()?;
         }
         Ok(Self {
             entries,
             selected,
-            roi,
             counts,
         })
     }
@@ -393,7 +383,16 @@ impl Decode for Annotation {
             return Err(FAULT_VALUE);
         }
         let visible = reader.bool()?;
-        Ok(Self::new(name, AnnotationKind::decode(reader)?).with_visible(visible))
+        let frame = decode_frame(reader)?;
+        Ok(Self::new(name, frame, AnnotationKind::decode(reader)?).with_visible(visible))
+    }
+}
+
+fn decode_frame(reader: &mut Reader<'_>) -> Result<Option<u32>, &'static str> {
+    match reader.u8()? {
+        0 => Ok(None),
+        1 => Ok(Some(reader.u32()?)),
+        _ => Err(FAULT_TAG),
     }
 }
 
@@ -408,11 +407,6 @@ impl Decode for AnnotationKind {
                     return Err(FAULT_VALUE);
                 }
                 Ok(AnnotationKind::distance(from, to))
-            }
-            2 => {
-                let center = decode_point(reader)?;
-                let radius = positive(reader.f32()?)?;
-                Ok(AnnotationKind::roi(center, radius))
             }
             _ => Err(FAULT_TAG),
         }

@@ -4,7 +4,7 @@ use grana_display::{Shading, TransferFunction};
 use grana_object::{RelationFrame, TrackSet};
 use grana_volume::{Clip, Intensity, Region};
 
-use crate::annotation::{AnnotationState, AnnotationTag};
+use crate::annotation::AnnotationState;
 use crate::coloc::{ColocState, MaskKey};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
@@ -116,12 +116,11 @@ impl SceneState {
                 .annotations
                 .selected
                 .is_none_or(|index| index < self.annotations.entries.len())
-            && self.annotations.roi.is_none_or(|index| {
-                self.annotations
-                    .entries
-                    .get(index)
-                    .is_some_and(|entry| entry.kind().tag() == AnnotationTag::Roi)
-            })
+            && self
+                .annotations
+                .entries
+                .iter()
+                .all(|entry| entry.frame().is_none_or(|frame| frame < frame_count))
             && self.mask_filter.is_none_or(|filter| {
                 self.mask.is_some_and(|mask| {
                     self.sets.iter().any(|set| {

@@ -890,6 +890,10 @@ impl Scene {
         self.sync_coloc_inputs();
     }
 
+    pub fn region_scope(&self) -> Option<Region> {
+        self.region.enabled().then_some(self.region)
+    }
+
     pub fn set_clip(&mut self, clip: Clip) {
         self.clip = clip;
     }
