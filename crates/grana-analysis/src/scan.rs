@@ -210,8 +210,8 @@ impl SpotWorker {
 
 pub struct SpotScan {
     extent: [u32; 3],
+    level: Level,
     spacing: [f32; 3],
-    world: [f32; 3],
     sigma_world: f32,
     truncate: [usize; 3],
     halo: [u32; 3],
@@ -269,8 +269,8 @@ impl SpotScan {
         let weights = spacing.map(|step| 1.0 / (step * step));
         Self {
             extent,
+            level,
             spacing,
-            world: level.world_extent(),
             sigma_world,
             truncate,
             halo,
@@ -295,8 +295,8 @@ impl SpotScan {
     fn worker(&self) -> Self {
         Self {
             extent: self.extent,
+            level: self.level,
             spacing: self.spacing,
-            world: self.world,
             sigma_world: self.sigma_world,
             truncate: self.truncate,
             halo: self.halo,
@@ -454,9 +454,7 @@ impl SpotScan {
                             voxel[axis] += (0.5 * (minus - plus) / denominator).clamp(-0.5, 0.5);
                         }
                     }
-                    let center = [0, 1, 2].map(|axis| {
-                        (voxel[axis] + 0.5) * self.spacing[axis] - 0.5 * self.world[axis]
-                    });
+                    let center = self.level.voxel_center(voxel);
                     if roi.is_some_and(|roi| !roi.contains(center)) {
                         continue;
                     }
@@ -485,7 +483,7 @@ impl SpotScan {
                 let mut low = [0u32; 3];
                 let mut high = [0u32; 3];
                 for axis in 0..3 {
-                    let voxel = (center[axis] + 0.5 * self.world[axis]) / self.spacing[axis] - 0.5;
+                    let voxel = self.level.voxel_of(center)[axis] - 0.5;
                     let reach = radius / self.spacing[axis];
                     let minimum = origin[axis] as f32;
                     let maximum = (origin[axis] + dims[axis] as u32 - 1) as f32;
@@ -499,9 +497,9 @@ impl SpotScan {
                         for x in low[0]..=high[0] {
                             let squared = (0..3)
                                 .map(|axis| {
-                                    let voxel = [x, y, z][axis];
-                                    let world = (voxel as f32 + 0.5) * self.spacing[axis]
-                                        - 0.5 * self.world[axis];
+                                    let world = self
+                                        .level
+                                        .voxel_center([x as f32, y as f32, z as f32])[axis];
                                     (world - center[axis]).powi(2)
                                 })
                                 .sum::<f32>();
@@ -520,8 +518,7 @@ impl SpotScan {
                 if !sampled {
                     let mut index = 0;
                     for axis in 0..3 {
-                        let voxel =
-                            (center[axis] + 0.5 * self.world[axis]) / self.spacing[axis] - 0.5;
+                        let voxel = self.level.voxel_of(center)[axis] - 0.5;
                         let minimum = origin[axis] as f32;
                         let maximum = (origin[axis] + dims[axis] as u32 - 1) as f32;
                         let nearest = voxel.round().clamp(minimum, maximum) as usize;

@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ome_zarr_metadata::v0_4::{Axis, AxisType};
 use serde_json::{Map, Value, json};
 use zarrs::array::codec::ZstdCodec;
 use zarrs::array::{Array, ArrayBuilder, data_type};
@@ -10,8 +9,8 @@ use zarrs::group::{Group, GroupBuilder};
 
 use crate::Image;
 use crate::error::Error;
+use crate::metadata::{Axis, AxisKind};
 
-const OME_VERSION: &str = "0.5";
 const CHUNK_X: u32 = 256;
 const CHUNK_Y: u32 = 256;
 const CHUNK_Z: u32 = 32;
@@ -86,7 +85,7 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
     if !directory.join("zarr.json").is_file() {
         return Err(Error::Unsupported {
             path: directory,
-            detail: "label images are written into OME-Zarr 0.5 (zarr v3) datasets".to_string(),
+            detail: "label images are written into OME-Zarr 0.6 (zarr v3) datasets".to_string(),
         });
     }
     let labels_group = crate::hcs::join(group, "labels");
@@ -107,8 +106,13 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
             detail,
         }
     };
-    reject_translation(&directory).map_err(&fail)?;
     let image = Image::open_group(path, group)?;
+    if image.minor() < 5 {
+        return Err(fail(format!(
+            "label images are written into OME-Zarr 0.5 or newer datasets, not {}",
+            image.version()
+        )));
+    }
     if spec.frames.is_empty()
         || spec
             .frames
@@ -151,38 +155,49 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
             "the dataset does not describe the scales of its levels".to_string(),
         ));
     }
-    let axes_json = axes
-        .iter()
-        .map(|axis| serde_json::to_value(axis).expect("an axis serializes"))
-        .collect::<Vec<_>>();
-    let scales = image
+    let axes_json = axes.iter().map(Axis::json).collect::<Vec<_>>();
+    let datasets = image
         .datasets()
         .iter()
-        .map(|dataset| dataset.scale.clone())
-        .collect::<Vec<_>>();
-    for scale in &scales {
-        if scale.len() != axes.len() || scale.iter().any(|value| !value.is_finite()) {
-            return Err(fail(
-                "the level scale does not describe every axis of the dataset".to_string(),
-            ));
-        }
-    }
-    let datasets = (0..levels)
-        .map(|level| {
-            json!({
-                "path": level.to_string(),
-                "coordinateTransformations": [{
-                    "type": "scale",
-                    "scale": scales[level],
-                }],
+        .enumerate()
+        .map(|(level, dataset)| {
+            if dataset.scale.len() != axes.len() || dataset.translation.len() != axes.len() {
+                return Err(fail(
+                    "the level transform does not describe every axis of the dataset".to_string(),
+                ));
+            }
+            if dataset
+                .scale
+                .iter()
+                .chain(&dataset.translation)
+                .any(|value| !value.is_finite())
+            {
+                return Err(fail(
+                    "the level transform holds a non-finite component".to_string(),
+                ));
+            }
+            Ok(if image.modern() {
+                crate::schema::dataset(&level.to_string(), &dataset.scale, &dataset.translation)
+            } else {
+                json!({
+                    "path": level.to_string(),
+                    "coordinateTransformations": [
+                        { "type": "scale", "scale": dataset.scale },
+                        { "type": "translation", "translation": dataset.translation },
+                    ],
+                })
             })
         })
-        .collect::<Vec<_>>();
-    let multiscales = json!([{
-        "name": spec.name,
-        "axes": axes_json,
-        "datasets": datasets,
-    }]);
+        .collect::<Result<Vec<_>, Error>>()?;
+    let multiscales = if image.modern() {
+        crate::schema::multiscales(spec.name, &axes_json, datasets)
+    } else {
+        json!([{
+            "name": spec.name,
+            "axes": axes_json,
+            "datasets": datasets,
+        }])
+    };
     let colors = (1..=spec.labels)
         .map(|label| {
             json!({
@@ -214,7 +229,7 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
     });
     let label_attributes = json!({
         "ome": {
-            "version": OME_VERSION,
+            "version": image.version(),
             "multiscales": multiscales,
             "image-label": image_label,
         },
@@ -255,7 +270,7 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
         let shape = shape(extent, image.pyramid().frame_count(), &kinds);
         let names = axes
             .iter()
-            .map(|axis| axis.name.clone())
+            .map(|axis| axis.name().to_string())
             .collect::<Vec<_>>();
         let array = ArrayBuilder::new(shape, chunk.clone(), data_type::uint16(), 0u16)
             .bytes_to_bytes_codecs(vec![Arc::new(ZstdCodec::new(3, false))])
@@ -292,7 +307,13 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
         std::fs::remove_dir_all(&root).map_err(|error| fail(error.to_string()))?;
     }
     std::fs::rename(&temporary, &root).map_err(|error| fail(error.to_string()))?;
-    if let Err(detail) = register_labels(store.clone(), &directory, &labels_group, spec.name) {
+    if let Err(detail) = register_labels(
+        store.clone(),
+        &directory,
+        &labels_group,
+        spec.name,
+        image.version(),
+    ) {
         let _ = std::fs::remove_dir_all(&root);
         return Err(fail(detail));
     }
@@ -402,6 +423,7 @@ fn register_labels(
     directory: &Path,
     labels_group: &str,
     name: &str,
+    version: &str,
 ) -> Result<(), String> {
     let present = directory.join("labels").join("zarr.json").is_file();
     let mut attributes = if present {
@@ -412,17 +434,17 @@ fn register_labels(
     };
     let ome = attributes
         .entry("ome".to_string())
-        .or_insert_with(|| json!({ "version": OME_VERSION }));
+        .or_insert_with(|| json!({ "version": version }));
     let object = ome
         .as_object_mut()
         .ok_or_else(|| "the labels group carries invalid ome metadata".to_string())?;
-    let version = object
+    let held = object
         .get("version")
         .and_then(Value::as_str)
-        .unwrap_or(OME_VERSION);
-    if version != OME_VERSION {
+        .unwrap_or(version);
+    if held != version {
         return Err(format!(
-            "the dataset labels its images with OME-Zarr {version}, not {OME_VERSION}"
+            "the dataset labels its images with OME-Zarr {held}, not {version}"
         ));
     }
     let labels = object
@@ -439,40 +461,6 @@ fn register_labels(
         .build(store, labels_group)
         .map_err(|error| error.to_string())?;
     group.store_metadata().map_err(|error| error.to_string())
-}
-
-fn reject_translation(path: &Path) -> Result<(), String> {
-    let text = std::fs::read_to_string(path.join("zarr.json"))
-        .map_err(|error| format!("failed to read the dataset metadata: {error}"))?;
-    let root: Value = serde_json::from_str(&text)
-        .map_err(|error| format!("the dataset metadata is not valid json: {error}"))?;
-    let multiscales = root
-        .get("attributes")
-        .and_then(|attributes| attributes.get("ome"))
-        .and_then(|ome| ome.get("multiscales"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    for multiscale in multiscales {
-        let mut groups = vec![multiscale];
-        while let Some(value) = groups.pop() {
-            let Some(transforms) = value
-                .get("coordinateTransformations")
-                .and_then(Value::as_array)
-            else {
-                continue;
-            };
-            if transforms.iter().any(|transform| {
-                transform.get("type").and_then(Value::as_str) == Some("translation")
-            }) {
-                return Err("label images do not follow translated image datasets".to_string());
-            }
-            if let Some(datasets) = value.get("datasets").and_then(Value::as_array) {
-                groups.extend(datasets.iter().cloned());
-            }
-        }
-    }
-    Ok(())
 }
 
 fn spatial_chunks(
@@ -530,18 +518,9 @@ enum Kind {
 }
 
 fn kind(axis: &Axis) -> Result<Kind, String> {
-    match &axis.r#type {
-        Some(AxisType::Space) => Ok(Kind::Space),
-        Some(AxisType::Time) => Ok(Kind::Time),
-        Some(AxisType::Channel) => Ok(Kind::Channel),
-        Some(AxisType::Custom(name)) => {
-            Err(format!("the custom axis `{name}` cannot carry labels"))
-        }
-        _ => match axis.name.as_str() {
-            "x" | "y" | "z" => Ok(Kind::Space),
-            "c" => Ok(Kind::Channel),
-            "t" => Ok(Kind::Time),
-            name => Err(format!("the axis `{name}` has no recognisable type")),
-        },
+    match axis.kind() {
+        AxisKind::Space => Ok(Kind::Space),
+        AxisKind::Time => Ok(Kind::Time),
+        AxisKind::Channel => Ok(Kind::Channel),
     }
 }

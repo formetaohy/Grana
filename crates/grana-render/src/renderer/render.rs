@@ -334,7 +334,11 @@ impl Renderer {
                     layer: 0,
                     range: SectionRange::default(),
                     dispatch: volume_dispatch(volume_table),
-                    bucket_scale: bucket_scale(camera, volume_table.world.to_array()),
+                    bucket_scale: bucket_scale(
+                        camera,
+                        volume_table.origin.to_array(),
+                        volume_table.world.to_array(),
+                    ),
                 },
             );
             planner.section.prepare(

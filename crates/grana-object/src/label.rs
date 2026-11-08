@@ -12,8 +12,7 @@ const UNIT: f32 = 65535.0;
 
 pub struct LabelRaster<'a> {
     shape: &'a Shape,
-    spacing: [f32; 3],
-    world: [f32; 3],
+    level: Level,
     extent: [u32; 3],
     bounds: Vec<[Range<u32>; 3]>,
     planes: Vec<[usize; 3]>,
@@ -26,11 +25,8 @@ impl<'a> LabelRaster<'a> {
             objects <= LABEL_LIMIT,
             "a label image addresses at most {LABEL_LIMIT} objects"
         );
-        let spacing = level.spacing();
-        let spacing = [spacing.x(), spacing.y(), spacing.z()];
         let extent = level.extent();
         let extent = [extent.x(), extent.y(), extent.z()];
-        let world = level.world_extent();
         let mut bounds = Vec::with_capacity(objects);
         let mut planes = Vec::with_capacity(objects);
         match shape {
@@ -40,7 +36,7 @@ impl<'a> LabelRaster<'a> {
                     let radius = spot.radius();
                     let low = [0, 1, 2].map(|axis| center[axis] - radius);
                     let high = [0, 1, 2].map(|axis| center[axis] + radius);
-                    bounds.push(cells(low, high, spacing, world, extent));
+                    bounds.push(cells(low, high, level, extent));
                     planes.push([0, 1, 2]);
                 }
             }
@@ -48,7 +44,7 @@ impl<'a> LabelRaster<'a> {
                 for group in mesh.groups() {
                     let low = group.min();
                     let high = [0, 1, 2].map(|axis| low[axis] + UNIT * group.scale()[axis]);
-                    let cells = cells(low, high, spacing, world, extent);
+                    let cells = cells(low, high, level, extent);
                     let spread = [0, 1, 2].map(|axis| cells[axis].end - cells[axis].start);
                     let plane = spread
                         .iter()
@@ -62,8 +58,7 @@ impl<'a> LabelRaster<'a> {
         }
         Self {
             shape,
-            spacing,
-            world,
+            level,
             extent,
             bounds,
             planes,
@@ -99,8 +94,7 @@ impl<'a> LabelRaster<'a> {
         let area = Area {
             origin,
             extent,
-            spacing: self.spacing,
-            world: self.world,
+            level: self.level,
         };
         for (object, bounds) in self.bounds.iter().enumerate() {
             if keep.is_some_and(|keep| !keep.get(object).copied().unwrap_or(false)) {
@@ -255,18 +249,12 @@ impl<'a> LabelRaster<'a> {
     }
 }
 
-fn cells(
-    low: [f32; 3],
-    high: [f32; 3],
-    spacing: [f32; 3],
-    world: [f32; 3],
-    extent: [u32; 3],
-) -> [Range<u32>; 3] {
+fn cells(low: [f32; 3], high: [f32; 3], level: Level, extent: [u32; 3]) -> [Range<u32>; 3] {
+    let low = level.voxel_of(low);
+    let high = level.voxel_of(high);
     [0, 1, 2].map(|axis| {
-        let start = (((low[axis] + 0.5 * world[axis]) / spacing[axis]).floor() as i64)
-            .clamp(0, i64::from(extent[axis])) as u32;
-        let end = (((high[axis] + 0.5 * world[axis]) / spacing[axis]).ceil() as i64 + 1)
-            .clamp(0, i64::from(extent[axis])) as u32;
+        let start = (low[axis].floor() as i64).clamp(0, i64::from(extent[axis])) as u32;
+        let end = ((high[axis].ceil() as i64) + 1).clamp(0, i64::from(extent[axis])) as u32;
         start..end
     })
 }
@@ -274,13 +262,12 @@ fn cells(
 struct Area {
     origin: [u32; 3],
     extent: [u32; 3],
-    spacing: [f32; 3],
-    world: [f32; 3],
+    level: Level,
 }
 
 impl Area {
     fn continuous(&self, point: [f32; 3]) -> [f32; 3] {
-        [0, 1, 2].map(|axis| (point[axis] + 0.5 * self.world[axis]) / self.spacing[axis])
+        self.level.voxel_of(point)
     }
 
     fn sphere(&self, center: [f32; 3], radius: f32, label: u16, labels: &mut [u16]) {
@@ -288,10 +275,11 @@ impl Area {
             return;
         }
         let center = self.continuous(center);
+        let spacing = self.level.voxel();
         let mut low = [0u32; 3];
         let mut high = [0u32; 3];
         for axis in 0..3 {
-            let reach = radius / self.spacing[axis];
+            let reach = radius / spacing[axis];
             low[axis] =
                 ((center[axis] - reach).floor() as i64).max(i64::from(self.origin[axis])) as u32;
             high[axis] = (((center[axis] + reach).ceil() as i64) + 1)
@@ -307,9 +295,8 @@ impl Area {
             while cell[1] < high[1] {
                 cell[0] = low[0];
                 while cell[0] < high[0] {
-                    let offset = [0, 1, 2].map(|axis| {
-                        ((cell[axis] as f32 + 0.5) - center[axis]) * self.spacing[axis]
-                    });
+                    let offset = [0, 1, 2]
+                        .map(|axis| ((cell[axis] as f32 + 0.5) - center[axis]) * spacing[axis]);
                     if offset.iter().map(|value| value * value).sum::<f32>() <= radius * radius {
                         self.set(cell.map(i64::from), label, labels);
                     }

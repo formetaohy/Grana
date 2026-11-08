@@ -81,7 +81,6 @@ fn measure(
     let dims = [extent.x(), extent.y(), extent.z()];
     let span = info.spacing();
     let step = [span.x(), span.y(), span.z()];
-    let world = info.world_extent();
     let mut values = vec![SampleStatistics::new(0.0, 0.0, 0.0, 0.0, 0.0); spots.len() * channels];
     for channel in 0..channels {
         for (slot, spot) in spots.iter().enumerate() {
@@ -91,7 +90,7 @@ fn measure(
             let mut low = [0u32; 3];
             let mut high = [0u32; 3];
             for axis in 0..3 {
-                voxel[axis] = (center[axis] + 0.5 * world[axis]) / step[axis] - 0.5;
+                voxel[axis] = info.voxel_of(center)[axis] - 0.5;
                 let reach = radius / step[axis];
                 low[axis] = (voxel[axis] - reach)
                     .floor()
@@ -123,10 +122,11 @@ fn measure(
                     for x in 0..size[0] {
                         let squared = (0..3)
                             .map(|axis| {
-                                let local =
-                                    [x, y, z][axis] + [low[0], low[1], low[2]][axis] as usize;
-                                let position =
-                                    (local as f32 + 0.5) * step[axis] - 0.5 * world[axis];
+                                let position = info.voxel_center([
+                                    (low[0] + x as u32) as f32,
+                                    (low[1] + y as u32) as f32,
+                                    (low[2] + z as u32) as f32,
+                                ])[axis];
                                 (position - center[axis]).powi(2)
                             })
                             .sum::<f32>();

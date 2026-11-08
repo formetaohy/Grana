@@ -103,6 +103,7 @@ impl FrameData {
         } = view;
         let view_projection = camera.view_projection(aspect, 0.5 * table.world.length());
         let world = table.world;
+        let origin = table.origin;
         let grid = table.grid.counts();
         let step = step_length(camera, table, step_scale, height as f32);
         let pixel_scale = 0.5 * height as f32 / (0.5 * camera.fov_y()).tan();
@@ -116,7 +117,7 @@ impl FrameData {
             right: camera.right().extend(0.0).to_array(),
             up: camera.up().extend(0.0).to_array(),
             forward: camera.forward().extend(0.0).to_array(),
-            box_min: [-0.5 * world.x, -0.5 * world.y, -0.5 * world.z, 0.0],
+            box_min: [origin.x, origin.y, origin.z, 0.0],
             box_size: [world.x, world.y, world.z, 0.0],
             region_min: [
                 region.min().x,
@@ -162,16 +163,18 @@ impl SectionData {
         let axis = section.axis();
         let (u_axis, v_axis) = axis.in_plane();
         let world = table.world;
+        let origin = table.origin;
         let dims = table.dims;
         let focus = camera.focus();
         let plane_index = axis.index();
-        let layer = ((focus[plane_index] / world[plane_index] + 0.5) * dims[plane_index])
+        let layer = (((focus[plane_index] - origin[plane_index]) / world[plane_index])
+            * dims[plane_index])
             .floor()
             .clamp(0.0, dims[plane_index] - 1.0);
         let plane = (layer + 0.5) / dims[plane_index];
         let uv_center = [
-            focus[u_axis.index()] / world[u_axis.index()] + 0.5,
-            focus[v_axis.index()] / world[v_axis.index()] + 0.5,
+            (focus[u_axis.index()] - origin[u_axis.index()]) / world[u_axis.index()],
+            (focus[v_axis.index()] - origin[v_axis.index()]) / world[v_axis.index()],
             0.0,
             0.0,
         ];
@@ -193,7 +196,7 @@ impl SectionData {
                 plane_index as u32,
                 0,
             ],
-            box_min: [-0.5 * world.x, -0.5 * world.y, -0.5 * world.z, 0.0],
+            box_min: [origin.x, origin.y, origin.z, 0.0],
             world: [world.x, world.y, world.z, 0.0],
             dims: [dims.x, dims.y, dims.z, 0.0],
             grid: [grid[0], grid[1], grid[2], 0],

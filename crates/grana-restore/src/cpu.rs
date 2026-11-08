@@ -28,8 +28,16 @@ impl Grid {
     }
 
     fn source_axis(&self, axis: usize, position: u32, tap: u32) -> u32 {
+        let limit = self.dims[axis] as i64;
         let value = position as i64 + tap as i64 - self.centre[axis] as i64;
-        value.clamp(0, self.dims[axis] as i64 - 1) as u32
+        let mirrored = if value < 0 {
+            -value
+        } else if value >= limit {
+            2 * (limit - 1) - value
+        } else {
+            value
+        };
+        mirrored.clamp(0, limit - 1) as u32
     }
 
     fn weight(&self, tap: [u32; 3], flipped: bool) -> usize {

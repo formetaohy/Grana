@@ -10,7 +10,6 @@ use zarrs::group::GroupBuilder;
 
 use crate::error::Error;
 
-const OME_VERSION: &str = "0.5";
 const CHUNK_X: u32 = 256;
 const CHUNK_Y: u32 = 256;
 const CHUNK_Z: u32 = 32;
@@ -29,6 +28,7 @@ pub struct ImageSpec<'a> {
     pub name: &'a str,
     pub channels: &'a [WriteChannel<'a>],
     pub levels: &'a [Level],
+    pub placement: [f32; 3],
     pub frames: u32,
     pub interval: f32,
     pub fill: &'a mut ChunkFill<'a>,
@@ -93,6 +93,10 @@ pub fn write_image(path: &Path, mut spec: ImageSpec<'_>) -> Result<ImageWritten,
     assert!(
         spec.interval.is_finite() && spec.interval > 0.0,
         "an exported image carries a positive frame interval"
+    );
+    assert!(
+        spec.placement.iter().all(|value| value.is_finite()),
+        "an exported image carries a finite placement"
     );
     if path.is_file() {
         return Err(Error::Write {
@@ -314,32 +318,21 @@ fn shape(level: Level, spec: &ImageSpec<'_>) -> Vec<u64> {
 }
 
 fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
-    let axes = json!([
-        { "name": "t", "type": "time", "unit": "second" },
-        { "name": "c", "type": "channel" },
-        { "name": "z", "type": "space", "unit": "micrometer" },
-        { "name": "y", "type": "space", "unit": "micrometer" },
-        { "name": "x", "type": "space", "unit": "micrometer" },
-    ]);
+    let axes = crate::schema::axes();
     let datasets = spec
         .levels
         .iter()
         .enumerate()
         .map(|(level, value)| {
             let spacing = value.spacing();
-            json!({
-                "path": level.to_string(),
-                "coordinateTransformations": [{
-                    "type": "scale",
-                    "scale": [
-                        f64::from(spec.interval),
-                        1.0,
-                        f64::from(spacing.z()),
-                        f64::from(spacing.y()),
-                        f64::from(spacing.x()),
-                    ],
-                }],
-            })
+            let origin = value.origin();
+            let scale = [spacing.x(), spacing.y(), spacing.z()].map(f64::from);
+            let translation = [0, 1, 2].map(|axis| {
+                f64::from(spec.placement[axis]) + f64::from(origin[axis]) + 0.5 * scale[axis]
+            });
+            let scale = [f64::from(spec.interval), 1.0, scale[2], scale[1], scale[0]];
+            let translation = [0.0, 0.0, translation[2], translation[1], translation[0]];
+            crate::schema::dataset(&level.to_string(), &scale, &translation)
         })
         .collect::<Vec<_>>();
     let channels = spec
@@ -365,12 +358,8 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
         })
         .collect::<Vec<_>>();
     let ome = json!({
-        "version": OME_VERSION,
-        "multiscales": [{
-            "name": spec.name,
-            "axes": axes,
-            "datasets": datasets,
-        }],
+        "version": crate::schema::VERSION,
+        "multiscales": crate::schema::multiscales(spec.name, &axes, datasets),
         "omero": { "channels": channels },
     });
     let mut attributes = serde_json::Map::new();

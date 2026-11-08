@@ -7,6 +7,7 @@ pub struct Pyramid {
     channels: Vec<ChannelInfo>,
     frames: u32,
     frame_interval: f32,
+    placement: [f32; 3],
 }
 
 impl Pyramid {
@@ -16,6 +17,17 @@ impl Pyramid {
         channels: Vec<ChannelInfo>,
         frames: u32,
         frame_interval: f32,
+    ) -> Self {
+        Self::placed(levels, stored, channels, frames, frame_interval, [0.0; 3])
+    }
+
+    pub fn placed(
+        levels: Vec<Level>,
+        stored: usize,
+        channels: Vec<ChannelInfo>,
+        frames: u32,
+        frame_interval: f32,
+        placement: [f32; 3],
     ) -> Self {
         assert!(!levels.is_empty(), "a pyramid needs at least one level");
         assert!(
@@ -27,6 +39,10 @@ impl Pyramid {
         assert!(
             frame_interval.is_finite() && frame_interval > 0.0,
             "the frame interval is a positive duration"
+        );
+        assert!(
+            placement.iter().all(|value| value.is_finite()),
+            "a pyramid placement is finite"
         );
         for pair in levels.windows(2) {
             let (fine, coarse) = (pair[0], pair[1]);
@@ -53,6 +69,7 @@ impl Pyramid {
             channels,
             frames,
             frame_interval,
+            placement,
         }
     }
 
@@ -72,6 +89,10 @@ impl Pyramid {
         self.stored
     }
 
+    pub fn placement(&self) -> [f32; 3] {
+        self.placement
+    }
+
     pub fn channels(&self) -> &[ChannelInfo] {
         &self.channels
     }
@@ -88,6 +109,7 @@ impl Pyramid {
             channels,
             frames: self.frames,
             frame_interval: self.frame_interval,
+            placement: self.placement,
         }
     }
 

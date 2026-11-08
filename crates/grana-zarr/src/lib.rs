@@ -1,9 +1,11 @@
 mod axes;
 mod error;
+mod frame;
 mod hcs;
 mod image;
 mod label;
 mod metadata;
+mod schema;
 mod write;
 
 pub use error::Error;

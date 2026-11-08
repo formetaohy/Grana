@@ -131,7 +131,9 @@ fn match_levels(pyramid: &Pyramid, label: &grana_image::Label) -> Option<(usize,
     for label_level in 0..label.level_count() {
         let info = label.level(label_level)?;
         if let Some(image_level) = pyramid.levels().iter().position(|level| {
-            level.extent() == info.extent() && close(level.spacing(), info.spacing())
+            level.extent() == info.extent()
+                && close(level.spacing(), info.spacing())
+                && close_origin(level.origin(), info.origin())
         }) {
             return Some((label_level, image_level));
         }
@@ -147,4 +149,10 @@ fn close(left: Spacing, right: Spacing) -> bool {
     ]
     .into_iter()
     .all(|(left, right)| (left - right).abs() <= 1.0e-4 * left.abs().max(right.abs()).max(1.0))
+}
+
+fn close_origin(left: [f32; 3], right: [f32; 3]) -> bool {
+    left.into_iter()
+        .zip(right)
+        .all(|(left, right)| (left - right).abs() <= 1.0e-4 * left.abs().max(right.abs()).max(1.0))
 }

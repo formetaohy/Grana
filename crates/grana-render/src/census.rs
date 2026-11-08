@@ -71,10 +71,11 @@ impl Census {
                 let bricks = grid.counts();
                 let extent = level.extent();
                 let world = level.world_extent();
+                let origin = level.origin();
                 let data = CensusData {
                     grid: [bricks[0], bricks[1], bricks[2], grid.count() as u32],
                     dims: [extent.x() as f32, extent.y() as f32, extent.z() as f32, 0.0],
-                    box_min: [-0.5 * world[0], -0.5 * world[1], -0.5 * world[2], 0.0],
+                    box_min: [origin[0], origin[1], origin[2], 0.0],
                     box_size: [world[0], world[1], world[2], 0.0],
                     index: [level_index as u32, 0, 0, 0],
                 };

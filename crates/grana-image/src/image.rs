@@ -16,7 +16,7 @@ use crate::level::{self, Field, Scale};
 use crate::region;
 use crate::{Error, Series, Source};
 
-const RESOLVED_VERSION: u32 = 1;
+const RESOLVED_VERSION: u32 = 2;
 const PARTIAL_DIVISOR: u64 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,12 +71,7 @@ impl Image {
             Inner::Czi(image) => image.pyramid(),
             Inner::Readout(image) => image.pyramid(),
         };
-        let pyramid = level::extended(
-            declared.levels(),
-            declared.channels(),
-            declared.frame_count(),
-            declared.frame_interval(),
-        );
+        let pyramid = level::extended(declared);
         let identity = cache::identity(source, &geometry(&pyramid));
         let store = match source {
             Source::Memory(_) => None,
@@ -522,6 +517,12 @@ fn geometry(pyramid: &Pyramid) -> Vec<u8> {
         for value in [spacing.x(), spacing.y(), spacing.z()] {
             bytes.extend_from_slice(&value.to_bits().to_le_bytes());
         }
+        for value in level.origin() {
+            bytes.extend_from_slice(&value.to_bits().to_le_bytes());
+        }
+    }
+    for value in pyramid.placement() {
+        bytes.extend_from_slice(&value.to_bits().to_le_bytes());
     }
     for channel in pyramid.channels() {
         bytes.extend_from_slice(channel.name().as_bytes());

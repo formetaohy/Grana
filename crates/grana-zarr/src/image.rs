@@ -3,10 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid, VoxelData,
+    BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Pyramid, VoxelData,
     VoxelFormat, pad_brick,
 };
-use ome_zarr_metadata::v0_4::Axis;
 use zarrs::array::chunk_cache::{ChunkCache, ChunkCacheLruSizeLimit, ChunkCacheTypeDecoded};
 use zarrs::array::data_type::{float32, uint8, uint16};
 use zarrs::array::{Array, ArraySubset, CodecOptions};
@@ -47,9 +46,11 @@ pub struct Image {
     path: PathBuf,
     group: String,
     name: String,
+    version: String,
+    minor: u32,
     levels: Vec<LevelArray>,
     pyramid: Pyramid,
-    axes: Vec<Axis>,
+    axes: Vec<metadata::Axis>,
     datasets: Vec<metadata::Dataset>,
 }
 
@@ -91,13 +92,16 @@ impl Image {
                 }
                 Some(_) => {}
             }
-            let layout =
-                axes::layout(&metadata.axes, array.shape(), &dataset.scale).map_err(|detail| {
-                    Error::Unsupported {
-                        path: path.to_path_buf(),
-                        detail,
-                    }
-                })?;
+            let layout = axes::layout(
+                &metadata.axes,
+                array.shape(),
+                &dataset.scale,
+                &dataset.translation,
+            )
+            .map_err(|detail| Error::Unsupported {
+                path: path.to_path_buf(),
+                detail,
+            })?;
             let count = u32::try_from(layout.channel_count()).map_err(|_| Error::Unsupported {
                 path: path.to_path_buf(),
                 detail: "the channel axis is too long".to_string(),
@@ -161,23 +165,46 @@ impl Image {
             .clone()
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| dataset_name(&directory));
-        let level_metadata = levels
-            .iter()
-            .map(|level| Level::new(level.layout.extent, level.layout.spacing))
-            .collect::<Vec<_>>();
+        let (level_metadata, placement) = crate::frame::levels(
+            &levels
+                .iter()
+                .map(|level| level.layout.clone())
+                .collect::<Vec<_>>(),
+        );
         let stored = level_metadata.len();
         Ok(Self {
             path: path.to_path_buf(),
             group: group.to_string(),
             name,
+            version: metadata.version,
+            minor: metadata.minor,
             levels,
-            pyramid: Pyramid::new(level_metadata, stored, channels, frames, interval),
+            pyramid: Pyramid::placed(
+                level_metadata,
+                stored,
+                channels,
+                frames,
+                interval,
+                placement,
+            ),
             axes: metadata.axes,
             datasets: metadata.datasets,
         })
     }
 
-    pub(crate) fn axes(&self) -> &[Axis] {
+    pub(crate) fn version(&self) -> &str {
+        &self.version
+    }
+
+    pub(crate) fn minor(&self) -> u32 {
+        self.minor
+    }
+
+    pub(crate) fn modern(&self) -> bool {
+        self.minor >= 6
+    }
+
+    pub(crate) fn axes(&self) -> &[metadata::Axis] {
         &self.axes
     }
 

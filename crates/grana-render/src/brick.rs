@@ -70,6 +70,7 @@ impl BrickRecord {
 
 pub(crate) struct BrickTable {
     pub grid: BrickGrid,
+    pub origin: Vec3,
     pub world: Vec3,
     pub dims: Vec3,
     pub voxel: Vec3,
@@ -113,11 +114,13 @@ impl BrickTable {
             ],
         });
         let world = Vec3::from(source.world_extent());
+        let origin = Vec3::from(source.origin());
         let extent = source.extent();
         let dims = Vec3::new(extent.x() as f32, extent.y() as f32, extent.z() as f32);
         let voxel = world / dims;
         Self {
             grid,
+            origin,
             world,
             dims,
             voxel,

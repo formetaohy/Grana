@@ -446,19 +446,20 @@ pub(super) fn mesh_piece(
         return None;
     }
     let spacing = info.spacing();
-    let world = info.world();
+    let origin = info.origin();
     let centroid = [0, 1, 2].map(|axis| {
-        ((node.sum()[axis] / count + 0.5) * f64::from(spacing[axis]) - 0.5 * f64::from(world[axis]))
+        (f64::from(origin[axis]) + (node.sum()[axis] / count + 0.5) * f64::from(spacing[axis]))
             as f32
     });
     let bounds = Bounds::new(
         [0, 1, 2].map(|axis| {
-            (f64::from(node.low()[axis]) * f64::from(spacing[axis]) - 0.5 * f64::from(world[axis]))
+            (f64::from(origin[axis]) + f64::from(node.low()[axis]) * f64::from(spacing[axis]))
                 as f32
         }),
         [0, 1, 2].map(|axis| {
-            ((f64::from(node.high()[axis]) + 1.0) * f64::from(spacing[axis])
-                - 0.5 * f64::from(world[axis])) as f32
+            (f64::from(origin[axis])
+                + (f64::from(node.high()[axis]) + 1.0) * f64::from(spacing[axis]))
+                as f32
         }),
     );
     let statistics = SurfaceStatistics::new(node.voxels(), volume, area, centroid, bounds);

@@ -18,7 +18,17 @@ fn cell(x: u32, y: u32, z: u32) -> u32 {
 }
 
 fn clamp_axis(value: i32, limit: u32) -> u32 {
-    return u32(clamp(value, 0, i32(limit) - 1));
+    if (limit <= 1u) {
+        return 0u;
+    }
+    let span = i32(limit);
+    var mirrored = value;
+    if (mirrored < 0) {
+        mirrored = -mirrored;
+    } else if (mirrored >= span) {
+        mirrored = 2 * (span - 1) - mirrored;
+    }
+    return u32(clamp(mirrored, 0, span - 1));
 }
 
 fn tap(x: u32, y: u32, z: u32) -> u32 {

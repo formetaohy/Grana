@@ -190,7 +190,7 @@ impl Tile<'_> {
         let fallback = if low < high { -fallback } else { fallback };
         let normal = self.normal(point, fallback);
         let world = [0, 1, 2].map(|component| {
-            (point[component] + 0.5) * plan.spacing[component] - 0.5 * plan.world[component]
+            plan.origin[component] + (point[component] + 0.5) * plan.spacing[component]
         });
         let vertex = self.vertices.len() as u32;
         self.vertices

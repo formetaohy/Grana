@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ome_zarr_metadata::AnyOmeFields;
 use serde_json::{Map, Value};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::group::Group;
@@ -62,76 +61,54 @@ pub enum Kind {
 
 pub fn kind(path: &Path) -> Result<Kind, Error> {
     let attributes = attributes(path, Path::new("/"))?;
-    let parsed = parse(path, &attributes)?;
-    Ok(match parsed {
-        AnyOmeFields::V0_4(attributes) => {
-            if attributes.plate.is_some() {
-                Kind::Plate
-            } else if attributes.well.is_some() {
-                Kind::Well
-            } else if attributes.multiscales.is_some() {
-                Kind::Image
-            } else {
-                Kind::Collection
-            }
-        }
-        AnyOmeFields::V0_5(attributes) => {
-            if attributes.plate.is_some() {
-                Kind::Plate
-            } else if attributes.well.is_some() {
-                Kind::Well
-            } else if attributes.multiscales.is_some() {
-                Kind::Image
-            } else {
-                Kind::Collection
-            }
-        }
+    let fields = fields(&attributes);
+    Ok(if fields.get("plate").is_some() {
+        Kind::Plate
+    } else if fields.get("well").is_some() {
+        Kind::Well
+    } else if fields.get("multiscales").is_some() {
+        Kind::Image
+    } else {
+        Kind::Collection
     })
 }
 
 pub fn open(path: &Path) -> Result<Plate, Error> {
     let attributes = attributes(path, Path::new("/"))?;
-    let parsed = parse(path, &attributes)?;
-    let wells = match parsed {
-        AnyOmeFields::V0_4(attributes) => attributes.plate.map(|plate| {
-            (
-                plate.name,
-                plate.rows.len(),
-                plate.columns.len(),
-                plate
-                    .wells
-                    .into_iter()
-                    .map(|well| WellSpec {
-                        path: well.path,
-                        row: well.row_index,
-                        column: well.column_index,
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        }),
-        AnyOmeFields::V0_5(attributes) => attributes.plate.map(|plate| {
-            (
-                plate.name,
-                plate.rows.len(),
-                plate.columns.len(),
-                plate
-                    .wells
-                    .into_iter()
-                    .map(|well| WellSpec {
-                        path: well.path,
-                        row: well.row_index,
-                        column: well.column_index,
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        }),
-    };
-    let Some((name, rows, columns, mut wells)) = wells else {
-        return Err(Error::Metadata {
+    let fields = fields(&attributes);
+    let plate = fields
+        .get("plate")
+        .and_then(Value::as_object)
+        .ok_or_else(|| Error::Metadata {
             path: path.to_path_buf(),
             detail: "the group carries no plate metadata".to_string(),
-        });
-    };
+        })?;
+    let rows = count(plate, "rows", path)?;
+    let columns = count(plate, "columns", path)?;
+    let mut wells = plate
+        .get("wells")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::Metadata {
+            path: path.to_path_buf(),
+            detail: "the plate metadata lists no wells".to_string(),
+        })?
+        .iter()
+        .map(|well| {
+            let detail = || Error::Metadata {
+                path: path.to_path_buf(),
+                detail: "a well names no path or index".to_string(),
+            };
+            Ok(WellSpec {
+                path: PathBuf::from(
+                    well.get("path")
+                        .and_then(Value::as_str)
+                        .ok_or_else(detail)?,
+                ),
+                row: index(well, "rowIndex").ok_or_else(detail)?,
+                column: index(well, "columnIndex").ok_or_else(detail)?,
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
     for well in &wells {
         if well.row >= rows || well.column >= columns {
             return Err(Error::Metadata {
@@ -155,7 +132,12 @@ pub fn open(path: &Path) -> Result<Plate, Error> {
         }
     }
     Ok(Plate {
-        name: name.unwrap_or_else(|| dataset_name(path)),
+        name: plate
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| dataset_name(path)),
         fields,
     })
 }
@@ -170,25 +152,27 @@ fn well_fields(path: &Path, well: &WellSpec) -> Result<Vec<Field>, Error> {
     let group = group_path(&well.path);
     let directory = path.join(&well.path);
     let attributes = attributes(path, Path::new(&group))?;
-    let parsed = parse(&directory, &attributes)?;
-    let images = match parsed {
-        AnyOmeFields::V0_4(attributes) => attributes.well.map(|well| {
-            well.images
-                .into_iter()
-                .map(|image| image.path)
-                .collect::<Vec<_>>()
-        }),
-        AnyOmeFields::V0_5(attributes) => attributes.well.map(|well| {
-            well.images
-                .into_iter()
-                .map(|image| image.path)
-                .collect::<Vec<_>>()
-        }),
-    }
-    .ok_or_else(|| Error::Metadata {
-        path: directory.clone(),
-        detail: "the well group carries no well metadata".to_string(),
-    })?;
+    let fields = fields(&attributes);
+    let images = fields
+        .get("well")
+        .and_then(|well| well.get("images"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::Metadata {
+            path: directory.clone(),
+            detail: "the well group carries no well metadata".to_string(),
+        })?
+        .iter()
+        .map(|image| {
+            image
+                .get("path")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+                .ok_or_else(|| Error::Metadata {
+                    path: directory.clone(),
+                    detail: "a field of view names no path".to_string(),
+                })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
     let mut fields = images
         .into_iter()
         .map(|field| {
@@ -201,6 +185,21 @@ fn well_fields(path: &Path, well: &WellSpec) -> Result<Vec<Field>, Error> {
         .collect::<Vec<_>>();
     fields.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(fields)
+}
+
+fn count(plate: &Map<String, Value>, key: &str, path: &Path) -> Result<usize, Error> {
+    plate
+        .get(key)
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .ok_or_else(|| Error::Metadata {
+            path: path.to_path_buf(),
+            detail: format!("the plate metadata lists no {key}"),
+        })
+}
+
+fn index(well: &Value, key: &str) -> Option<usize> {
+    usize::try_from(well.get(key).and_then(Value::as_u64)?).ok()
 }
 
 fn field_name(row: usize, column: usize, field: &Path) -> String {
@@ -276,11 +275,11 @@ fn attributes(path: &Path, group: &Path) -> Result<Map<String, Value>, Error> {
     Ok(opened.attributes().clone())
 }
 
-fn parse(path: &Path, attributes: &Map<String, Value>) -> Result<AnyOmeFields, Error> {
-    serde_json::from_value(Value::Object(attributes.clone())).map_err(|error| Error::Metadata {
-        path: path.to_path_buf(),
-        detail: error.to_string(),
-    })
+fn fields(attributes: &Map<String, Value>) -> &Map<String, Value> {
+    attributes
+        .get("ome")
+        .and_then(Value::as_object)
+        .unwrap_or(attributes)
 }
 
 fn dataset_name(path: &Path) -> String {

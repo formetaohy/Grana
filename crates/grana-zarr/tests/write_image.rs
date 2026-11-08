@@ -45,12 +45,14 @@ fn writes_an_ome_zarr_image_that_reads_back() {
         Ok(())
     };
     let mut progress = |_, _| {};
+    let placement = [12.0, -3.5, 40.0];
     let written = write_image(
         &path,
         ImageSpec {
             name,
             channels: &channels,
             levels: &levels,
+            placement,
             frames: 2,
             interval: 3.0,
             fill: &mut fill,
@@ -81,6 +83,20 @@ fn writes_an_ome_zarr_image_that_reads_back() {
     assert_eq!(pyramid.level(0).spacing(), Spacing::new(0.5, 0.5, 1.0));
     assert_eq!(pyramid.level(1).extent(), Extent::new(150, 20, 6));
     assert_eq!(pyramid.level(1).spacing(), Spacing::new(1.0, 1.0, 2.0));
+    for (first, second) in pyramid.placement().iter().zip(placement) {
+        assert!((first - second).abs() < 1.0e-3);
+    }
+    for (index, level) in levels.iter().enumerate() {
+        let read = pyramid.level(index);
+        assert_eq!(read.extent(), level.extent());
+        assert_eq!(read.spacing(), level.spacing());
+        assert!(
+            read.origin()
+                .iter()
+                .zip(level.origin())
+                .all(|(first, second)| (first - second).abs() < 1.0e-3)
+        );
+    }
 
     let x = 250..260u32;
     let y = 4..7u32;

@@ -128,12 +128,12 @@ impl Gpu {
             dims[1].div_ceil(WORKGROUP[1]),
             dims[2].div_ceil(WORKGROUP[2]),
         ];
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("grana.restore"),
+            });
         for iteration in 0..iterations {
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("grana.restore"),
-                });
             let group = &workspace.groups[(iteration % 2) as usize];
             for pipeline in [&self.pipelines.blur, &self.pipelines.correct] {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -144,8 +144,8 @@ impl Gpu {
                 pass.set_bind_group(0, group, &[]);
                 pass.dispatch_workgroups(dispatch[0], dispatch[1], dispatch[2]);
             }
-            self.queue.submit([encoder.finish()]);
         }
+        self.queue.submit([encoder.finish()]);
         self.read(iterations)
     }
 

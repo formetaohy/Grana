@@ -56,6 +56,7 @@ pub(super) fn write(
             name,
             channels: layers,
             levels: levels.to_vec(),
+            placement: scene.dataset.pyramid().placement(),
             frames,
             interval: scene.dataset.frame_interval(),
             drift,

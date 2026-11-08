@@ -26,14 +26,14 @@ pub(super) struct Grid {
     pub padded: [u32; 3],
     pub stride: [usize; 3],
     pub spacing: [f32; 3],
-    pub world: [f32; 3],
+    pub origin: [f32; 3],
     pub extent: [u32; 3],
     pub step: [u32; 3],
 }
 
 impl Grid {
     pub(super) fn position(&self, voxel: [f32; 3]) -> [f32; 3] {
-        [0, 1, 2].map(|axis| (voxel[axis] + 0.5) * self.spacing[axis] - 0.5 * self.world[axis])
+        [0, 1, 2].map(|axis| self.origin[axis] + (voxel[axis] + 0.5) * self.spacing[axis])
     }
 
     pub(super) fn mean_spacing(&self) -> f32 {
@@ -92,7 +92,7 @@ impl FilamentScan {
                 .all(|value| value.is_finite() && *value > 0.0),
             "a filament scan needs a positive voxel size"
         );
-        let world = info.world_extent();
+        let world = info.origin();
         let maximum = spacing.iter().copied().fold(0.0f32, f32::max);
         let step = spacing.map(|value| ((maximum / value).round() as u32).clamp(1, MAX_STEP));
         let working = [0, 1, 2].map(|axis| spacing[axis] * step[axis] as f32);
@@ -129,7 +129,7 @@ impl FilamentScan {
                 padded,
                 stride,
                 spacing: working,
-                world,
+                origin: world,
                 extent,
                 step,
             },

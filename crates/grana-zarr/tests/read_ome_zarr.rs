@@ -107,8 +107,92 @@ fn reads_ome_zarr_v04_and_v05() {
             }
         }
     }
-    assert_eq!(voxel(data, 3, 2, 1), 33);
-    assert_eq!(voxel(data, SIDE - 2, SIDE - 2, SIDE - 2), 33);
+    let v6 = temp.path().join("v06.zarr");
+    write_v06(&v6);
+
+    let image = Image::open(&v6).expect("the v0.6 dataset opens");
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.channel_count(), 1);
+    assert_eq!(pyramid.level(0).extent(), Extent::new(4, 3, 2));
+    assert_eq!(pyramid.level(0).spacing(), Spacing::new(0.25, 0.5, 4.0));
+    assert_eq!(pyramid.level(0).origin(), [-0.5, -0.75, -4.0]);
+    assert_eq!(pyramid.placement(), [6.375, -1.5, 12.0]);
+    let brick = image
+        .read_brick(0, 0, BrickCoord::new(0, 0, 0))
+        .expect("the v0.6 brick reads");
+    let VoxelData::U8(data) = &brick.channels()[0] else {
+        panic!("the fixture stores uint8 voxels");
+    };
+    assert_eq!(voxel(data, 2, 1, 1), 27);
+}
+
+fn write_v06(root: &Path) {
+    write(
+        root.join("zarr.json"),
+        br#"{
+            "zarr_format": 3,
+            "node_type": "group",
+            "attributes": {
+                "ome": {
+                    "version": "0.6",
+                    "multiscales": [{
+                        "name": "fixture-v6",
+                        "coordinateSystems": [{
+                            "name": "physical",
+                            "axes": [
+                                {"name": "z", "type": "space", "unit": "micrometer"},
+                                {"name": "y", "type": "space", "unit": "micrometer"},
+                                {"name": "x", "type": "space", "unit": "micrometer"}
+                            ]
+                        }],
+                        "datasets": [{
+                            "path": "0",
+                            "coordinateTransformations": [{
+                                "type": "sequence",
+                                "input": {"path": "0"},
+                                "output": {"name": "physical"},
+                                "transformations": [
+                                    {"type": "scale", "scale": [4.0, 0.5, 0.25]},
+                                    {"type": "translation", "translation": [10.0, -2.0, 6.0]}
+                                ]
+                            }]
+                        }]
+                    }],
+                    "omero": {
+                        "channels": [
+                            {"color": "00FF00", "window": {"min": 0, "max": 255, "start": 0, "end": 255}}
+                        ]
+                    }
+                }
+            }
+        }"#,
+    );
+    write(
+        root.join("0").join("zarr.json"),
+        br#"{
+            "zarr_format": 3,
+            "node_type": "array",
+            "shape": [2, 3, 4],
+            "data_type": "uint8",
+            "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [2, 3, 4]}},
+            "chunk_key_encoding": {"name": "default", "configuration": {"separator": "/"}},
+            "fill_value": 0,
+            "codecs": [{"name": "bytes", "configuration": {"endian": "little"}}],
+            "attributes": {}
+        }"#,
+    );
+    let mut data = Vec::new();
+    for z in 0..2u8 {
+        for y in 0..3u8 {
+            for x in 0..4u8 {
+                data.push(20 * z + 5 * y + x);
+            }
+        }
+    }
+    write(
+        root.join("0").join("c").join("0").join("0").join("0"),
+        &data,
+    );
 }
 
 fn voxel<T: Copy>(data: &[T], x: u32, y: u32, z: u32) -> T {

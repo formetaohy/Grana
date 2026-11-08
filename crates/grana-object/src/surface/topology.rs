@@ -119,7 +119,7 @@ pub struct TopologyInfo {
     channels: usize,
     detection: usize,
     spacing: [f32; 3],
-    world: [f32; 3],
+    origin: [f32; 3],
     voxel_volume: f64,
     span: f32,
     seeds: usize,
@@ -131,7 +131,7 @@ impl TopologyInfo {
         channels: usize,
         detection: usize,
         spacing: [f32; 3],
-        world: [f32; 3],
+        origin: [f32; 3],
     ) -> Self {
         assert!(channels > 0, "a surface measures at least one channel");
         assert!(
@@ -145,15 +145,15 @@ impl TopologyInfo {
             "a surface voxel is a positive size on every axis"
         );
         assert!(
-            world.iter().all(|value| value.is_finite() && *value > 0.0),
-            "a surface extent is a positive length on every axis"
+            origin.iter().all(|value| value.is_finite()),
+            "a surface origin is finite on every axis"
         );
         Self {
             level,
             channels,
             detection,
             spacing,
-            world,
+            origin,
             voxel_volume: 1.0,
             span: 0.0,
             seeds: 0,
@@ -191,8 +191,8 @@ impl TopologyInfo {
         self.spacing
     }
 
-    pub fn world(self) -> [f32; 3] {
-        self.world
+    pub fn origin(self) -> [f32; 3] {
+        self.origin
     }
 
     pub fn voxel_volume(self) -> f64 {
@@ -212,7 +212,7 @@ impl TopologyInfo {
             && self.channels == other.channels
             && self.detection == other.detection
             && self.spacing == other.spacing
-            && self.world == other.world
+            && self.origin == other.origin
             && self.voxel_volume == other.voxel_volume
             && self.span == other.span
     }
@@ -425,7 +425,7 @@ impl SurfaceTopology {
         writer.count(info.level());
         writer.count(info.channels());
         writer.count(info.detection());
-        for value in info.spacing().into_iter().chain(info.world()) {
+        for value in info.spacing().into_iter().chain(info.origin()) {
             writer.f32(value);
         }
         writer.f64(info.voxel_volume());
@@ -505,18 +505,15 @@ impl SurfaceTopology {
             return Err(FAULT_VALUE);
         }
         let mut spacing = [0.0f32; 3];
-        let mut world = [0.0f32; 3];
+        let mut origin = [0.0f32; 3];
         for value in &mut spacing {
             *value = finite(reader.f32()?)?;
             if *value <= 0.0 {
                 return Err(FAULT_VALUE);
             }
         }
-        for value in &mut world {
+        for value in &mut origin {
             *value = finite(reader.f32()?)?;
-            if *value <= 0.0 {
-                return Err(FAULT_VALUE);
-            }
         }
         let voxel_volume = reader.f64()?;
         if !voxel_volume.is_finite() || voxel_volume <= 0.0 {
@@ -640,7 +637,7 @@ impl SurfaceTopology {
             tagged_basins,
         );
         Ok(Self::new(
-            TopologyInfo::new(level, channels, detection, spacing, world).with_sampling(
+            TopologyInfo::new(level, channels, detection, spacing, origin).with_sampling(
                 voxel_volume,
                 span,
                 seeds,

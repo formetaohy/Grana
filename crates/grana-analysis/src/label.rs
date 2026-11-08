@@ -29,8 +29,7 @@ pub struct LabelSlab<'a> {
 
 pub struct LabelBuilder {
     level: usize,
-    spacing: [f32; 3],
-    world: [f32; 3],
+    info: Level,
     channels: usize,
     objects: Vec<Object>,
     index: HashMap<u32, usize>,
@@ -39,11 +38,9 @@ pub struct LabelBuilder {
 impl LabelBuilder {
     pub fn new(level: usize, info: Level, channels: usize) -> Self {
         assert!(channels > 0, "a label image measures at least one channel");
-        let spacing = info.spacing();
         Self {
             level,
-            spacing: [spacing.x(), spacing.y(), spacing.z()],
-            world: info.world_extent(),
+            info,
             channels,
             objects: Vec::new(),
             index: HashMap::new(),
@@ -94,8 +91,8 @@ impl LabelBuilder {
         let mut indices = Vec::new();
         let mut statistics = Vec::with_capacity(objects.len());
         let mut intensities = Vec::with_capacity(objects.len() * self.channels);
-        let spacing =
-            f64::from(self.spacing[0]) * f64::from(self.spacing[1]) * f64::from(self.spacing[2]);
+        let spacing = self.info.voxel();
+        let voxel_volume = f64::from(spacing[0]) * f64::from(spacing[1]) * f64::from(spacing[2]);
         for (object_index, object) in objects.iter().enumerate() {
             assert!(
                 object.voxels > 0 && !object.indices.is_empty(),
@@ -127,23 +124,26 @@ impl LabelBuilder {
             }
             indices.extend(object.indices.iter().map(|vertex| base + vertex));
             let count = object.voxels as f64;
-            let centroid = [0, 1, 2].map(|axis| {
-                ((object.sum[axis] / count + 0.5) * f64::from(self.spacing[axis])
-                    - 0.5 * f64::from(self.world[axis])) as f32
-            });
+            let centroid = self.info.voxel_center([
+                (object.sum[0] / count) as f32,
+                (object.sum[1] / count) as f32,
+                (object.sum[2] / count) as f32,
+            ]);
             let bounds = Bounds::new(
-                [0, 1, 2].map(|axis| {
-                    (f64::from(object.low[axis]) * f64::from(self.spacing[axis])
-                        - 0.5 * f64::from(self.world[axis])) as f32
-                }),
-                [0, 1, 2].map(|axis| {
-                    ((f64::from(object.high[axis]) + 1.0) * f64::from(self.spacing[axis])
-                        - 0.5 * f64::from(self.world[axis])) as f32
-                }),
+                self.info.voxel_center([
+                    object.low[0] as f32,
+                    object.low[1] as f32,
+                    object.low[2] as f32,
+                ]),
+                self.info.voxel_center([
+                    object.high[0] as f32 + 1.0,
+                    object.high[1] as f32 + 1.0,
+                    object.high[2] as f32 + 1.0,
+                ]),
             );
             statistics.push(SurfaceStatistics::new(
                 object.voxels,
-                count * spacing,
+                count * voxel_volume,
                 area,
                 centroid,
                 bounds,
@@ -275,9 +275,7 @@ impl LabelBuilder {
             let offset = if component == axis { 0.5 } else { 0.0 };
             point[component] = lower[component] as f32 + offset;
         }
-        let world = [0, 1, 2].map(|component| {
-            (point[component] + 0.5) * self.spacing[component] - 0.5 * self.world[component]
-        });
+        let world = self.info.voxel_center(point);
         let vertex = target.positions.len() as u32;
         target.positions.push(world);
         target.edges.insert(key, vertex);

@@ -16,27 +16,22 @@ pub struct Mask {
     origin: [i64; 3],
     extent: [u32; 3],
     bits: Vec<u64>,
-    spacing: [f32; 3],
-    world: [f32; 3],
+    level: Level,
 }
 
 impl Mask {
     pub fn empty(level: Level) -> Self {
-        let spacing = level.spacing();
-        let world = level.world_extent();
         Self {
             origin: [0; 3],
             extent: [0; 3],
             bits: Vec::new(),
-            spacing: [spacing.x(), spacing.y(), spacing.z()],
-            world,
+            level,
         }
     }
 
     pub fn contains(&self, point: [f32; 3]) -> bool {
-        let cell = [0, 1, 2].map(|axis| {
-            ((point[axis] + 0.5 * self.world[axis]) / self.spacing[axis]).floor() as i64
-        });
+        let continuous = self.level.voxel_of(point);
+        let cell = continuous.map(|value| value.floor() as i64);
         self.contains_cell_index(&cell)
     }
 
@@ -100,9 +95,9 @@ impl Mask {
             }
         }
         let dims = self.extent.map(|value| value as usize);
-        for axis in 0..3 {
-            let weight = self.spacing[axis] * self.spacing[axis];
-            transform(&mut field, dims, axis, weight);
+        let spacing = self.level.voxel();
+        for (axis, spacing) in spacing.into_iter().enumerate() {
+            transform(&mut field, dims, axis, spacing * spacing);
         }
         let reach = radius * radius;
         let mut bits = vec![0u64; self.bits.len()];
@@ -115,8 +110,7 @@ impl Mask {
             origin: self.origin,
             extent: self.extent,
             bits,
-            spacing: self.spacing,
-            world: self.world,
+            level: self.level,
         })
     }
 
@@ -182,11 +176,9 @@ impl Roi {
         };
         let spacing = level.spacing();
         let spacing = [spacing.x(), spacing.y(), spacing.z()];
-        let world = level.world_extent();
         let extent = level.extent();
         let extent = [extent.x(), extent.y(), extent.z()];
-        let continuous =
-            |point: [f32; 3], axis: usize| (point[axis] + 0.5 * world[axis]) / spacing[axis];
+        let continuous = |point: [f32; 3], axis: usize| level.voxel_of(point)[axis];
         let mut origin = [0i64; 3];
         let mut limit = [0i64; 3];
         let margin = [0, 1, 2].map(|axis| {
@@ -204,7 +196,7 @@ impl Roi {
         if (0..3).any(|axis| limit[axis] <= origin[axis]) {
             return Ok(Mask::empty(level));
         }
-        let mut area = Area::new(origin, limit, spacing, world);
+        let mut area = Area::new(origin, limit, level);
         match frame {
             Shape::Spots(spots) => {
                 for spot in spots.iter() {
@@ -226,12 +218,11 @@ struct Area {
     origin: [i64; 3],
     extent: [u32; 3],
     bits: Vec<u64>,
-    spacing: [f32; 3],
-    world: [f32; 3],
+    level: Level,
 }
 
 impl Area {
-    fn new(origin: [i64; 3], limit: [i64; 3], spacing: [f32; 3], world: [f32; 3]) -> Self {
+    fn new(origin: [i64; 3], limit: [i64; 3], level: Level) -> Self {
         let extent = [0, 1, 2].map(|axis| (limit[axis] - origin[axis]) as u32);
         let cells = extent
             .iter()
@@ -242,13 +233,12 @@ impl Area {
             origin,
             extent,
             bits: vec![0; words],
-            spacing,
-            world,
+            level,
         }
     }
 
     fn continuous(&self, point: [f32; 3]) -> [f32; 3] {
-        [0, 1, 2].map(|axis| (point[axis] + 0.5 * self.world[axis]) / self.spacing[axis])
+        self.level.voxel_of(point)
     }
 
     fn sphere(&mut self, center: [f32; 3], radius: f32) {
@@ -256,10 +246,11 @@ impl Area {
             return;
         }
         let center = self.continuous(center);
+        let spacing = self.level.voxel();
         let mut low = [0i64; 3];
         let mut high = [0i64; 3];
         for axis in 0..3 {
-            let reach = radius / self.spacing[axis];
+            let reach = radius / spacing[axis];
             low[axis] = self.clip_axis((center[axis] - reach).floor() as i64, axis);
             high[axis] = self.clip_axis((center[axis] + reach).ceil() as i64 + 1, axis);
             if high[axis] <= low[axis] {
@@ -272,9 +263,8 @@ impl Area {
             while cell[1] < high[1] {
                 cell[0] = low[0];
                 while cell[0] < high[0] {
-                    let offset = [0, 1, 2].map(|axis| {
-                        ((cell[axis] as f32 + 0.5) - center[axis]) * self.spacing[axis]
-                    });
+                    let offset = [0, 1, 2]
+                        .map(|axis| ((cell[axis] as f32 + 0.5) - center[axis]) * spacing[axis]);
                     if offset.iter().map(|value| value * value).sum::<f32>() <= radius * radius {
                         self.set(cell);
                     }
@@ -309,8 +299,7 @@ impl Area {
             origin: self.origin,
             extent: self.extent,
             bits: self.bits,
-            spacing: self.spacing,
-            world: self.world,
+            level: self.level,
         }
     }
 }

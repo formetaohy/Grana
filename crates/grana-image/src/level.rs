@@ -1,17 +1,12 @@
 use std::ops::Range;
 
-use grana_volume::{BRICK_SIDE, ChannelInfo, Extent, Level, Pyramid, VoxelData, VoxelFormat};
+use grana_volume::{BRICK_SIDE, Extent, Pyramid, VoxelData, VoxelFormat};
 
 const RESOLVED_LIMIT: usize = 8;
 const CHUNK: u32 = 64;
 
-pub(crate) fn extended(
-    levels: &[Level],
-    channels: &[ChannelInfo],
-    frames: u32,
-    interval: f32,
-) -> Pyramid {
-    let mut levels = levels.to_vec();
+pub(crate) fn extended(pyramid: &Pyramid) -> Pyramid {
+    let mut levels = pyramid.levels().to_vec();
     let stored = levels.len();
     while levels.len() - stored < RESOLVED_LIMIT {
         let last = *levels.last().expect("a source holds at least one level");
@@ -20,7 +15,14 @@ pub(crate) fn extended(
         }
         levels.push(last.coarser());
     }
-    Pyramid::new(levels, stored, channels.to_vec(), frames, interval)
+    Pyramid::placed(
+        levels,
+        stored,
+        pyramid.channels().to_vec(),
+        pyramid.frame_count(),
+        pyramid.frame_interval(),
+        pyramid.placement(),
+    )
 }
 
 pub(crate) struct Scale {

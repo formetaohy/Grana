@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::Level;
-use ome_zarr_metadata::AnyOmeFields;
 use serde_json::{Map, Value};
 use zarrs::array::chunk_cache::{ChunkCache, ChunkCacheLruSizeLimit, ChunkCacheTypeDecoded};
 use zarrs::array::data_type::{uint8, uint16, uint32, uint64};
@@ -67,6 +66,7 @@ pub struct Label {
     name: String,
     frames: u32,
     levels: Vec<LevelArray>,
+    geometry: Vec<Level>,
 }
 
 impl Label {
@@ -83,8 +83,7 @@ impl Label {
     }
 
     pub fn level(&self, index: usize) -> Option<Level> {
-        let level = self.levels.get(index)?;
-        Some(Level::new(level.layout.extent, level.layout.spacing))
+        self.geometry.get(index).copied()
     }
 
     pub fn read(
@@ -228,18 +227,28 @@ pub fn read_at(path: &Path, group: &str) -> Result<Labels, Error> {
 }
 
 fn names(labels: &Path, attributes: &Map<String, Value>) -> Result<Vec<String>, Error> {
-    let fields: AnyOmeFields =
-        serde_json::from_value(Value::Object(attributes.clone())).map_err(|error| {
-            Error::Metadata {
-                path: labels.to_path_buf(),
-                detail: error.to_string(),
-            }
-        })?;
-    let names = match fields {
-        AnyOmeFields::V0_4(fields) => fields.labels,
-        AnyOmeFields::V0_5(fields) => fields.labels,
-    };
-    let names = names.unwrap_or_default();
+    let fields = attributes
+        .get("ome")
+        .and_then(Value::as_object)
+        .unwrap_or(attributes);
+    let names = fields
+        .get("labels")
+        .and_then(Value::as_array)
+        .map(|names| {
+            names
+                .iter()
+                .map(|name| {
+                    name.as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| Error::Metadata {
+                            path: labels.to_path_buf(),
+                            detail: "a label name is not a string".to_string(),
+                        })
+                })
+                .collect::<Result<Vec<_>, Error>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
     for name in &names {
         if name.is_empty()
             || name.starts_with('/')
@@ -270,11 +279,11 @@ fn image(
         path: directory.clone(),
         detail: error.to_string(),
     })?;
-    let attributes = normalized(group.attributes());
-    let metadata = metadata::parse(&directory, &attributes).map_err(|error| Error::Metadata {
-        path: directory.clone(),
-        detail: error.to_string(),
-    })?;
+    let metadata =
+        metadata::parse(&directory, group.attributes()).map_err(|error| Error::Metadata {
+            path: directory.clone(),
+            detail: error.to_string(),
+        })?;
     let mut frames = None;
     let mut levels = Vec::with_capacity(metadata.datasets.len());
     for dataset in &metadata.datasets {
@@ -284,13 +293,16 @@ fn image(
             detail: error.to_string(),
         })?;
         let kind = kind(&directory, &array)?;
-        let layout =
-            axes::layout(&metadata.axes, array.shape(), &dataset.scale).map_err(|detail| {
-                Error::Metadata {
-                    path: directory.clone(),
-                    detail,
-                }
-            })?;
+        let layout = axes::layout(
+            &metadata.axes,
+            array.shape(),
+            &dataset.scale,
+            &dataset.translation,
+        )
+        .map_err(|detail| Error::Metadata {
+            path: directory.clone(),
+            detail,
+        })?;
         if layout.channel_count() != 1 {
             return Err(Error::Unsupported {
                 path: directory.clone(),
@@ -326,11 +338,18 @@ fn image(
             detail: "the label levels are not ordered from fine to coarse".to_string(),
         });
     }
+    let (geometry, _) = crate::frame::levels(
+        &levels
+            .iter()
+            .map(|level| level.layout.clone())
+            .collect::<Vec<_>>(),
+    );
     Ok(Label {
         path: directory,
         name: name.to_string(),
         frames: frames.expect("a label image has a level"),
         levels,
+        geometry,
     })
 }
 
@@ -406,14 +425,4 @@ fn retrieve(
             })
             .collect(),
     }
-}
-
-fn normalized(attributes: &Map<String, Value>) -> Map<String, Value> {
-    let mut attributes = attributes.clone();
-    if let Some(ome) = attributes.get_mut("ome").and_then(Value::as_object_mut)
-        && let Some(image_label) = ome.get_mut("image-label").and_then(Value::as_object_mut)
-    {
-        image_label.remove("version");
-    }
-    attributes
 }

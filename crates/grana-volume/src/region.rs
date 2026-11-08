@@ -105,14 +105,12 @@ impl Region {
         if !self.enabled {
             return Some([0..dims[0], 0..dims[1], 0..dims[2]]);
         }
-        let spacing = level.spacing();
-        let step = [spacing.x(), spacing.y(), spacing.z()];
-        let world = level.world_extent();
+        let step = level.voxel();
+        let origin = level.origin();
         let mut ranges = [0..0, 0..0, 0..0];
         for axis in 0..3 {
-            let offset = 0.5 * (world[axis] - step[axis]);
-            let first = (self.min[axis] + offset) / step[axis];
-            let last = (self.max[axis] + offset) / step[axis];
+            let first = (self.min[axis] - origin[axis]) / step[axis];
+            let last = (self.max[axis] - origin[axis]) / step[axis];
             let start = (first - VOXEL_EPSILON).ceil().max(0.0);
             let end = (last + VOXEL_EPSILON).floor().min((dims[axis] - 1) as f32);
             if start > end {

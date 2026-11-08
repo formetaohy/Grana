@@ -338,15 +338,14 @@ pub(crate) fn decode_plan(
     })
 }
 
-pub(crate) fn bucket_scale(camera: &Camera, world: [f32; 3]) -> f32 {
+pub(crate) fn bucket_scale(camera: &Camera, origin: [f32; 3], world: [f32; 3]) -> f32 {
     let eye = camera.eye();
-    let half = 0.5 * Vec3::from(world);
     let mut far = 0.0f32;
     for index in 0..8u32 {
         let corner = Vec3::new(
-            if index & 1 == 0 { -half.x } else { half.x },
-            if index & 2 == 0 { -half.y } else { half.y },
-            if index & 4 == 0 { -half.z } else { half.z },
+            origin[0] + if index & 1 == 0 { 0.0 } else { world[0] },
+            origin[1] + if index & 2 == 0 { 0.0 } else { world[1] },
+            origin[2] + if index & 4 == 0 { 0.0 } else { world[2] },
         );
         far = far.max((corner - eye).length());
     }
@@ -364,16 +363,17 @@ pub(crate) fn section_range(
     let level = pyramid.level(level_index);
     let extent = level.extent();
     let world = level.world_extent();
+    let origin = level.origin();
     let dims = [extent.x() as f32, extent.y() as f32, extent.z() as f32];
     let axis = section.axis().index();
     let (u_axis, v_axis) = section.axis().in_plane();
     let (u, v) = (u_axis.index(), v_axis.index());
     let focus = camera.focus();
-    let layer = ((focus[axis] / world[axis] + 0.5) * dims[axis])
+    let layer = (((focus[axis] - origin[axis]) / world[axis]) * dims[axis])
         .floor()
         .clamp(0.0, dims[axis] - 1.0);
-    let center_u = focus[u] / world[u] + 0.5;
-    let center_v = focus[v] / world[v] + 0.5;
+    let center_u = (focus[u] - origin[u]) / world[u];
+    let center_v = (focus[v] - origin[v]) / world[v];
     let half_u = section.span() * aspect / (2.0 * world[u]);
     let half_v = section.span() / (2.0 * world[v]);
     let mut umin = (center_u - half_u).clamp(0.0, 1.0);
@@ -386,10 +386,10 @@ pub(crate) fn section_range(
         if focus[axis] < region_min[axis] || focus[axis] > region_max[axis] {
             return SectionRange::default();
         }
-        let region_umin = (region_min[u] / world[u] + 0.5).clamp(0.0, 1.0);
-        let region_umax = (region_max[u] / world[u] + 0.5).clamp(0.0, 1.0);
-        let region_vmin = (region_min[v] / world[v] + 0.5).clamp(0.0, 1.0);
-        let region_vmax = (region_max[v] / world[v] + 0.5).clamp(0.0, 1.0);
+        let region_umin = ((region_min[u] - origin[u]) / world[u]).clamp(0.0, 1.0);
+        let region_umax = ((region_max[u] - origin[u]) / world[u]).clamp(0.0, 1.0);
+        let region_vmin = ((region_min[v] - origin[v]) / world[v]).clamp(0.0, 1.0);
+        let region_vmax = ((region_max[v] - origin[v]) / world[v]).clamp(0.0, 1.0);
         umin = umin.max(region_umin);
         umax = umax.min(region_umax);
         vmin = vmin.max(region_vmin);

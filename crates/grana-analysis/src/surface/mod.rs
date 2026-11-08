@@ -140,7 +140,7 @@ pub(super) struct Gate<'a> {
     pub(super) region: [u32; 3],
     pub(super) limit: [u32; 3],
     pub(super) spacing: [f32; 3],
-    pub(super) world: [f32; 3],
+    pub(super) origin: [f32; 3],
     pub(super) roi: Option<&'a Mask>,
 }
 
@@ -153,9 +153,11 @@ impl Gate<'_> {
             return false;
         }
         match self.roi {
-            Some(roi) => roi.contains([0, 1, 2].map(|axis| {
-                (voxel[axis] as f32 + 0.5) * self.spacing[axis] - 0.5 * self.world[axis]
-            })),
+            Some(roi) => {
+                roi.contains([0, 1, 2].map(|axis| {
+                    self.origin[axis] + (voxel[axis] as f32 + 0.5) * self.spacing[axis]
+                }))
+            }
             None => true,
         }
     }
@@ -167,7 +169,7 @@ pub struct SurfaceBuilder {
     channels: usize,
     extent: [u32; 3],
     spacing: [f32; 3],
-    world: [f32; 3],
+    origin: [f32; 3],
     voxel_volume: f64,
     span: f32,
     intensity: Intensity,
@@ -205,7 +207,7 @@ impl SurfaceBuilder {
         let extent = [extent.x(), extent.y(), extent.z()];
         let spacing = level.spacing();
         let spacing = [spacing.x(), spacing.y(), spacing.z()];
-        let world = level.world_extent();
+        let origin = level.origin();
         let voxel_volume = f64::from(spacing[0]) * f64::from(spacing[1]) * f64::from(spacing[2]);
         let region = region.voxel_range(level);
         let region = region.unwrap_or([0..0, 0..0, 0..0]);
@@ -241,7 +243,7 @@ impl SurfaceBuilder {
             channels,
             extent,
             spacing,
-            world,
+            origin,
             voxel_volume,
             span: intensity.span(),
             intensity,
@@ -349,7 +351,7 @@ impl SurfaceBuilder {
             ],
             limit: [self.region[0].end, self.region[1].end, self.region[2].end],
             spacing: self.spacing,
-            world: self.world,
+            origin: self.origin,
             roi,
         }
     }
@@ -368,7 +370,7 @@ impl SurfaceBuilder {
 
     fn landing(&self, solid: &SolidMask, seed: [f32; 3]) -> Option<[i64; 3]> {
         let centre = [0, 1, 2].map(|axis| {
-            ((seed[axis] + 0.5 * self.world[axis]) / self.spacing[axis] - 0.5).round() as i64
+            ((seed[axis] - self.origin[axis]) / self.spacing[axis] - 0.5).round() as i64
         });
         let mut nearest: Option<(i64, [i64; 3])> = None;
         for dz in -SEED_SNAP..=SEED_SNAP {

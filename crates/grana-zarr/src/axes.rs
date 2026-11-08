@@ -1,7 +1,8 @@
 use std::ops::Range;
 
 use grana_volume::{Extent, Spacing};
-use ome_zarr_metadata::v0_4::{Axis, AxisType, AxisUnit, AxisUnitSpace, AxisUnitTime};
+
+use crate::metadata::{Axis, AxisKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -18,6 +19,7 @@ pub struct Layout {
     space_count: usize,
     pub extent: Extent,
     pub spacing: Spacing,
+    pub translation: [f64; 3],
     frames: u32,
     frame_interval: f32,
 }
@@ -68,7 +70,12 @@ impl Layout {
     }
 }
 
-pub fn layout(axes: &[Axis], shape: &[u64], scale: &[f32]) -> Result<Layout, String> {
+pub fn layout(
+    axes: &[Axis],
+    shape: &[u64],
+    scale: &[f64],
+    translation: &[f64],
+) -> Result<Layout, String> {
     if axes.len() != shape.len() {
         return Err(format!(
             "{} axes describe an array of {} dimensions",
@@ -76,14 +83,14 @@ pub fn layout(axes: &[Axis], shape: &[u64], scale: &[f32]) -> Result<Layout, Str
             shape.len()
         ));
     }
-    if scale.len() != axes.len() {
+    if scale.len() != axes.len() || translation.len() != axes.len() {
         return Err(format!(
-            "the scale transform has {} components for {} axes",
+            "the coordinate transformation of {} components does not describe {} axes",
             scale.len(),
             axes.len()
         ));
     }
-    let kinds = axes.iter().map(kind).collect::<Result<Vec<_>, String>>()?;
+    let kinds = axes.iter().map(kind).collect::<Vec<_>>();
     let space_count = kinds.iter().filter(|kind| **kind == Kind::Space).count();
     if !(2..=3).contains(&space_count) {
         return Err(format!(
@@ -93,19 +100,20 @@ pub fn layout(axes: &[Axis], shape: &[u64], scale: &[f32]) -> Result<Layout, Str
     let time = single(&kinds, Kind::Time, "time")?;
     let channel = single(&kinds, Kind::Channel, "channel")?;
     let first_space = axes.len() - space_count;
-    let order = kinds[..first_space]
-        .iter()
-        .copied()
-        .filter(|kind| *kind != Kind::Space)
-        .collect::<Vec<_>>();
-    let mut expected = Vec::new();
+    let mut expected = 0;
     if time.is_some() {
-        expected.push(Kind::Time);
+        if time != Some(0) {
+            return Err("the time axis must precede the channel and space axes".to_string());
+        }
+        expected = 1;
     }
     if channel.is_some() {
-        expected.push(Kind::Channel);
+        if channel != Some(expected) {
+            return Err("the channel axis must follow the time axis".to_string());
+        }
+        expected += 1;
     }
-    if order != expected {
+    if first_space != expected {
         return Err("time and channel axes must precede the space axes".to_string());
     }
     if !kinds[first_space..].iter().all(|kind| *kind == Kind::Space) {
@@ -115,6 +123,20 @@ pub fn layout(axes: &[Axis], shape: &[u64], scale: &[f32]) -> Result<Layout, Str
     let x = axes.len() - 1;
     let y = axes.len() - 2;
     let z = (space_count == 3).then_some(axes.len() - 3);
+    let mut expected_names = vec!["y", "x"];
+    if z.is_some() {
+        expected_names.insert(0, "z");
+    }
+    let names = axes[first_space..]
+        .iter()
+        .map(|axis| axis.name().to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    if names != expected_names {
+        return Err(format!(
+            "the space axes `{}` must be ordered z, y, x",
+            names.join(", ")
+        ));
+    }
 
     let extent = Extent::new(
         dimension(shape[x])?,
@@ -125,13 +147,18 @@ pub fn layout(axes: &[Axis], shape: &[u64], scale: &[f32]) -> Result<Layout, Str
         },
     );
 
-    let spacing_x = spacing(axes, scale, x)?;
-    let spacing_y = spacing(axes, scale, y)?;
+    let spacing_x = spacing(&axes[x], scale[x])?;
+    let spacing_y = spacing(&axes[y], scale[y])?;
     let spacing_z = match z {
-        Some(z) => spacing(axes, scale, z)?,
+        Some(z) => spacing(&axes[z], scale[z])?,
         None => spacing_x.min(spacing_y),
     };
-
+    let translation_x = length(&axes[x], translation[x])?;
+    let translation_y = length(&axes[y], translation[y])?;
+    let translation_z = match z {
+        Some(z) => length(&axes[z], translation[z])?,
+        None => 0.0,
+    };
     let frames = match time {
         Some(time) => dimension(shape[time])?,
         None => 1,
@@ -144,23 +171,17 @@ pub fn layout(axes: &[Axis], shape: &[u64], scale: &[f32]) -> Result<Layout, Str
         space_count,
         extent,
         spacing: Spacing::new(spacing_x, spacing_y, spacing_z),
+        translation: [translation_x, translation_y, translation_z],
         frames,
-        frame_interval: frame_interval(axes, scale, time)?,
+        frame_interval: frame_interval(scale, time)?,
     })
 }
 
-fn kind(axis: &Axis) -> Result<Kind, String> {
-    match &axis.r#type {
-        Some(AxisType::Space) => Ok(Kind::Space),
-        Some(AxisType::Time) => Ok(Kind::Time),
-        Some(AxisType::Channel) => Ok(Kind::Channel),
-        Some(AxisType::Custom(name)) => Err(format!("the custom axis `{name}` is not supported")),
-        _ => match axis.name.as_str() {
-            "x" | "y" | "z" => Ok(Kind::Space),
-            "c" => Ok(Kind::Channel),
-            "t" => Ok(Kind::Time),
-            name => Err(format!("the axis `{name}` has no recognisable type")),
-        },
+fn kind(axis: &Axis) -> Kind {
+    match axis.kind() {
+        AxisKind::Space => Kind::Space,
+        AxisKind::Time => Kind::Time,
+        AxisKind::Channel => Kind::Channel,
     }
 }
 
@@ -185,131 +206,44 @@ fn dimension(length: u64) -> Result<u32, String> {
         .ok_or_else(|| format!("the axis length {length} is outside the supported range"))
 }
 
-fn spacing(axes: &[Axis], scale: &[f32], axis: usize) -> Result<f32, String> {
-    let factor = match &axes[axis].unit {
-        Some(AxisUnit::Space(unit)) => space_factor(*unit)?,
-        Some(AxisUnit::Time(_)) => {
-            return Err(format!(
-                "the space axis `{}` carries a time unit",
-                axes[axis].name
-            ));
-        }
-        Some(AxisUnit::Custom(unit)) => {
-            return Err(format!("the unit `{unit}` is not supported"));
-        }
-        _ => 1.0,
-    };
-    let value = f64::from(scale[axis]) * factor;
-    if !value.is_finite() || value <= 0.0 {
+fn spacing(axis: &Axis, scale: f64) -> Result<f32, String> {
+    if !scale.is_finite() || scale <= 0.0 {
         return Err(format!(
             "the scale of the axis `{}` is not a positive length",
-            axes[axis].name
+            axis.name()
         ));
     }
-    let value = value as f32;
-    if !value.is_finite() {
+    let value = scale as f32;
+    if !value.is_finite() || value <= 0.0 {
         return Err(format!(
             "the scale of the axis `{}` is outside the supported range",
-            axes[axis].name
+            axis.name()
         ));
     }
     Ok(value)
 }
 
-fn space_factor(unit: AxisUnitSpace) -> Result<f64, String> {
-    let micrometer = match unit {
-        AxisUnitSpace::Angstrom => 1e-4,
-        AxisUnitSpace::Attometer => 1e-12,
-        AxisUnitSpace::Centimeter => 1e4,
-        AxisUnitSpace::Decimeter => 1e5,
-        AxisUnitSpace::Exameter => 1e24,
-        AxisUnitSpace::Femtometer => 1e-9,
-        AxisUnitSpace::Foot => 304_800.0,
-        AxisUnitSpace::Gigameter => 1e15,
-        AxisUnitSpace::Hectometer => 1e8,
-        AxisUnitSpace::Inch => 25_400.0,
-        AxisUnitSpace::Kilometer => 1e9,
-        AxisUnitSpace::Megameter => 1e12,
-        AxisUnitSpace::Meter => 1e6,
-        AxisUnitSpace::Micrometer => 1.0,
-        AxisUnitSpace::Mile => 1_609_344_000.0,
-        AxisUnitSpace::Millimeter => 1e3,
-        AxisUnitSpace::Nanometer => 1e-3,
-        AxisUnitSpace::Parsec => 3.085_677_581_491_367e22,
-        AxisUnitSpace::Petameter => 1e21,
-        AxisUnitSpace::Picometer => 1e-6,
-        AxisUnitSpace::Terameter => 1e18,
-        AxisUnitSpace::Yard => 914_400.0,
-        AxisUnitSpace::Yoctometer => 1e-18,
-        AxisUnitSpace::Yottameter => 1e30,
-        AxisUnitSpace::Zeptometer => 1e-15,
-        AxisUnitSpace::Zettameter => 1e27,
-        _ => return Err("the physical unit is not supported".to_string()),
-    };
-    Ok(micrometer)
+fn length(axis: &Axis, translation: f64) -> Result<f64, String> {
+    if !translation.is_finite() {
+        return Err(format!(
+            "the translation of the axis `{}` is outside the supported range",
+            axis.name()
+        ));
+    }
+    Ok(translation)
 }
 
-fn frame_interval(axes: &[Axis], scale: &[f32], time: Option<usize>) -> Result<f32, String> {
+fn frame_interval(scale: &[f64], time: Option<usize>) -> Result<f32, String> {
     let Some(time) = time else {
         return Ok(1.0);
     };
-    let factor = match &axes[time].unit {
-        Some(AxisUnit::Time(unit)) => time_factor(*unit)?,
-        Some(AxisUnit::Space(_)) => {
-            return Err(format!(
-                "the time axis `{}` carries a space unit",
-                axes[time].name
-            ));
-        }
-        Some(AxisUnit::Custom(unit)) => {
-            return Err(format!("the unit `{unit}` is not supported"));
-        }
-        None => 1.0,
-        Some(_) => return Err("the time unit is not supported".to_string()),
-    };
-    let value = f64::from(scale[time]) * factor;
+    let value = scale[time];
     if !value.is_finite() || value <= 0.0 {
-        return Err(format!(
-            "the scale of the axis `{}` is not a positive duration",
-            axes[time].name
-        ));
+        return Err("the scale of the time axis is not a positive duration".to_string());
     }
     let value = value as f32;
-    if !value.is_finite() {
-        return Err(format!(
-            "the scale of the axis `{}` is outside the supported range",
-            axes[time].name
-        ));
+    if !value.is_finite() || value <= 0.0 {
+        return Err("the scale of the time axis is outside the supported range".to_string());
     }
     Ok(value)
-}
-
-fn time_factor(unit: AxisUnitTime) -> Result<f64, String> {
-    let second = match unit {
-        AxisUnitTime::Attosecond => 1e-18,
-        AxisUnitTime::Centisecond => 1e-2,
-        AxisUnitTime::Day => 86_400.0,
-        AxisUnitTime::Decisecond => 1e-1,
-        AxisUnitTime::Exasecond => 1e18,
-        AxisUnitTime::Femtosecond => 1e-15,
-        AxisUnitTime::Gigasecond => 1e9,
-        AxisUnitTime::Hectosecond => 1e2,
-        AxisUnitTime::Hour => 3_600.0,
-        AxisUnitTime::Kilosecond => 1e3,
-        AxisUnitTime::Megasecond => 1e6,
-        AxisUnitTime::Microsecond => 1e-6,
-        AxisUnitTime::Millisecond => 1e-3,
-        AxisUnitTime::Minute => 60.0,
-        AxisUnitTime::Nanosecond => 1e-9,
-        AxisUnitTime::Petasecond => 1e15,
-        AxisUnitTime::Picosecond => 1e-12,
-        AxisUnitTime::Second => 1.0,
-        AxisUnitTime::Terasecond => 1e12,
-        AxisUnitTime::Yoctosecond => 1e-24,
-        AxisUnitTime::Yottasecond => 1e24,
-        AxisUnitTime::Zeptosecond => 1e-21,
-        AxisUnitTime::Zettasecond => 1e21,
-        _ => return Err("the time unit is not supported".to_string()),
-    };
-    Ok(second)
 }
