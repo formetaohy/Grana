@@ -1,4 +1,4 @@
-use grana_optics::Kernel;
+use grana_optics::KernelBank;
 use rayon::prelude::*;
 
 const FLOOR: f32 = 1.0e-6;
@@ -11,8 +11,7 @@ struct Grid {
 }
 
 impl Grid {
-    fn of(dims: [u32; 3], kernel: &Kernel) -> Self {
-        let taps = kernel.dims();
+    fn of(dims: [u32; 3], taps: [u32; 3]) -> Self {
         Self {
             dims,
             taps,
@@ -23,10 +22,14 @@ impl Grid {
     fn source(&self, position: [u32; 3], tap: [u32; 3]) -> usize {
         let mut cell = [0u32; 3];
         for axis in 0..3 {
-            let value = position[axis] as i64 + tap[axis] as i64 - self.centre[axis] as i64;
-            cell[axis] = value.clamp(0, self.dims[axis] as i64 - 1) as u32;
+            cell[axis] = self.source_axis(axis, position[axis], tap[axis]);
         }
         (cell[0] + self.dims[0] * (cell[1] + self.dims[1] * cell[2])) as usize
+    }
+
+    fn source_axis(&self, axis: usize, position: u32, tap: u32) -> u32 {
+        let value = position as i64 + tap as i64 - self.centre[axis] as i64;
+        value.clamp(0, self.dims[axis] as i64 - 1) as u32
     }
 
     fn weight(&self, tap: [u32; 3], flipped: bool) -> usize {
@@ -43,7 +46,13 @@ impl Grid {
     }
 }
 
-pub fn restore(dims: [u32; 3], source: &[f32], kernel: &Kernel, iterations: u32) -> Vec<f32> {
+pub fn restore(
+    dims: [u32; 3],
+    source: &[f32],
+    bank: &KernelBank,
+    first_plane: u32,
+    iterations: u32,
+) -> Vec<f32> {
     let voxels = (dims[0] * dims[1] * dims[2]) as usize;
     assert_eq!(
         source.len(),
@@ -63,12 +72,13 @@ pub fn restore(dims: [u32; 3], source: &[f32], kernel: &Kernel, iterations: u32)
     let mut estimate = measured.clone();
     let mut blurred = vec![0.0f32; voxels];
     let mut updated = vec![0.0f32; voxels];
-    let grid = Grid::of(dims, kernel);
+    let grid = Grid::of(dims, bank.dims());
     for _ in 0..iterations {
-        blur(&grid, kernel.values(), &estimate, &mut blurred);
+        blur(&grid, bank, first_plane, &estimate, &mut blurred);
         correct(
             &grid,
-            kernel.values(),
+            bank,
+            first_plane,
             &measured,
             &blurred,
             &estimate,
@@ -79,7 +89,7 @@ pub fn restore(dims: [u32; 3], source: &[f32], kernel: &Kernel, iterations: u32)
     estimate
 }
 
-fn blur(grid: &Grid, taps: &[f32], estimate: &[f32], out: &mut [f32]) {
+fn blur(grid: &Grid, bank: &KernelBank, first_plane: u32, estimate: &[f32], out: &mut [f32]) {
     let [width, height, _] = grid.dims;
     out.par_chunks_mut((width * height) as usize)
         .enumerate()
@@ -89,6 +99,8 @@ fn blur(grid: &Grid, taps: &[f32], estimate: &[f32], out: &mut [f32]) {
                     let position = [x, y, z as u32];
                     let mut sum = 0.0f32;
                     for tap_z in 0..grid.taps[2] {
+                        let source_z = grid.source_axis(2, position[2], tap_z);
+                        let taps = bank.taps(bank.layer(first_plane, source_z));
                         for tap_y in 0..grid.taps[1] {
                             for tap_x in 0..grid.taps[0] {
                                 let tap = [tap_x, tap_y, tap_z];
@@ -105,7 +117,8 @@ fn blur(grid: &Grid, taps: &[f32], estimate: &[f32], out: &mut [f32]) {
 
 fn correct(
     grid: &Grid,
-    taps: &[f32],
+    bank: &KernelBank,
+    first_plane: u32,
     measured: &[f32],
     blurred: &[f32],
     estimate: &[f32],
@@ -115,6 +128,7 @@ fn correct(
     out.par_chunks_mut((width * height) as usize)
         .enumerate()
         .for_each(|(z, slice)| {
+            let taps = bank.taps(bank.layer(first_plane, z as u32));
             for y in 0..height {
                 for x in 0..width {
                     let position = [x, y, z as u32];

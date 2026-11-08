@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
 use grana_image::{Image, Source};
-use grana_optics::PsfParams;
+use grana_optics::{KernelBank, PsfParams};
 use grana_pipeline::Channels;
+use grana_restore::Restorer;
 use grana_scene::{Dataset, RestoreSpec, Scene};
 use grana_volume::{
     BrickCoord, Channel, Extent, Intensity, Spacing, Volume, VolumeSeries, VoxelData,
 };
 
 const EXTENT: Extent = Extent::new(24, 24, 8);
+const ITERATIONS: u32 = 4;
 
 fn series() -> VolumeSeries {
     let mut data = vec![0u16; EXTENT.voxel_count() as usize];
@@ -37,16 +39,47 @@ fn series() -> VolumeSeries {
     VolumeSeries::new(vec![volume], 1.0)
 }
 
-fn scene(reader: &Image) -> Scene {
+fn blob_series() -> VolumeSeries {
+    let extent = Extent::new(130, 40, 6);
+    let mut data = vec![0u16; extent.voxel_count() as usize];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let left = gaussian(x as f32, y as f32, 64.0, 20.0, 12.0);
+                let right = gaussian(x as f32, y as f32, 110.0, 20.0, 6.0);
+                let value = (9000.0 * left.max(right)).round();
+                let index = extent.index(x, y, z) as usize;
+                data[index] = value as u16;
+            }
+        }
+    }
+    let volume = Volume::new(
+        extent,
+        Spacing::new(0.05, 0.05, 0.3),
+        vec![Channel::new("dapi", [0.0, 0.0, 1.0], VoxelData::U16(data))],
+    );
+    VolumeSeries::new(vec![volume], 1.0)
+}
+
+fn gaussian(x: f32, y: f32, at_x: f32, at_y: f32, sigma: f32) -> f32 {
+    let dx = x - at_x;
+    let dy = y - at_y;
+    (-(dx * dx + dy * dy) / (2.0 * sigma * sigma)).exp()
+}
+
+fn params() -> PsfParams {
+    PsfParams::new(1.4, 0.52, 1.515, 1.33, 0.2)
+}
+
+fn scene(reader: &Image, iterations: u32) -> Scene {
     let mut scene = Scene::new(Dataset::synthetic("restore", reader.pyramid().clone()));
-    let params = PsfParams::new(1.4, 0.52, 1.515, 1.33, 0.2);
     let spec = RestoreSpec::new(
         0,
         "dapi restored",
         [0.0, 0.0, 1.0],
         Intensity::new(0.0, 20000.0),
-        params,
-        8,
+        params(),
+        iterations,
     );
     let channel = scene
         .add_restore(spec)
@@ -65,7 +98,7 @@ fn values(data: &VoxelData) -> &[f32] {
 #[test]
 fn a_restored_channel_reads_regions_and_bricks_consistently() {
     let reader = Arc::new(Image::open(&Source::memory(series())).expect("the volume opens"));
-    let scene = scene(&reader);
+    let scene = scene(&reader, 8);
     let channels = Channels::new(Arc::clone(&reader), &scene);
     let extent = reader.pyramid().level(0).extent();
     let whole = [0..extent.x(), 0..extent.y(), 0..extent.z()];
@@ -127,4 +160,72 @@ fn values_of(data: &VoxelData) -> &[f32] {
         panic!("the restored brick reads as floats");
     };
     values
+}
+
+#[test]
+fn a_restored_channel_blends_its_tiles() {
+    let reader = Arc::new(Image::open(&Source::memory(blob_series())).expect("the volume opens"));
+    let scene = scene(&reader, ITERATIONS);
+    let channels = Channels::new(Arc::clone(&reader), &scene);
+    let level = reader.pyramid().level(0);
+    let extent = level.extent();
+    let read = |x: std::ops::Range<u32>| {
+        channels
+            .read_region(0, 0, 1, &[x, 0..extent.y(), 0..extent.z()], [0.0; 3])
+            .expect("the restored range reads")
+    };
+    let whole = read(0..extent.x());
+    let whole = values(&whole);
+    let left = read(0..70);
+    let left = values(&left);
+    let right = read(60..extent.x());
+    let right = values(&right);
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..70 {
+                let blended = whole[extent.index(x, y, z) as usize];
+                let split = left[(x + 70 * (y + 40 * z)) as usize];
+                assert!(
+                    (blended - split).abs() <= blended.abs().max(1.0) * 1.0e-5,
+                    "the left read matches the whole read at ({x}, {y}, {z})"
+                );
+                let offset = x + 60;
+                let blended = whole[extent.index(offset, y, z) as usize];
+                let split = right[(x + 70 * (y + 40 * z)) as usize];
+                assert!(
+                    (blended - split).abs() <= blended.abs().max(1.0) * 1.0e-5,
+                    "the right read matches the whole read at ({offset}, {y}, {z})"
+                );
+            }
+        }
+    }
+    let bank = KernelBank::new(params(), level.spacing(), extent.z());
+    let stored = reader
+        .read_region(
+            0,
+            0,
+            0,
+            &[0..extent.x(), 0..extent.y(), 0..extent.z()],
+            [0.0; 3],
+        )
+        .expect("the stored channel reads");
+    let mut source = vec![0.0f32; extent.voxel_count() as usize];
+    stored.write_values(&mut source);
+    let whole_volume = Restorer::shared().restore(
+        [extent.x(), extent.y(), extent.z()],
+        &source,
+        &bank,
+        0,
+        ITERATIONS,
+    );
+    let peak = whole_volume.iter().copied().fold(0.0f32, f32::max);
+    let deviation = whole
+        .iter()
+        .zip(&whole_volume)
+        .map(|(tiled, whole)| (tiled - whole).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        deviation <= peak * 0.01,
+        "the stitched tiles approach a whole volume restoration by {deviation} of {peak}"
+    );
 }

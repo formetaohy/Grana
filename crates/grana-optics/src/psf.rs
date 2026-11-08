@@ -2,6 +2,8 @@ use grana_volume::Spacing;
 
 use crate::bessel;
 
+const DEPTH_STEP: f32 = 4.0;
+const LAYER_LIMIT: u32 = 16;
 const GENEROUS_HALF: [u32; 3] = [9, 9, 6];
 const HALF_LIMIT: [u32; 3] = [6, 6, 4];
 const QUADRATURE: usize = 512;
@@ -166,6 +168,99 @@ impl Kernel {
     pub fn voxels(&self) -> usize {
         self.values.len()
     }
+
+    fn padded(&self, dims: [u32; 3]) -> Vec<f32> {
+        let source = self.dims;
+        let offset = [0, 1, 2].map(|axis| (dims[axis] - source[axis]) / 2);
+        let mut values = vec![0.0f32; (dims[0] * dims[1] * dims[2]) as usize];
+        for z in 0..source[2] {
+            for y in 0..source[1] {
+                for x in 0..source[0] {
+                    let from = (x + source[0] * (y + source[1] * z)) as usize;
+                    let to = (x + offset[0] + dims[0] * (y + offset[1] + dims[1] * (z + offset[2])))
+                        as usize;
+                    values[to] = self.values[from];
+                }
+            }
+        }
+        values
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct KernelBank {
+    dims: [u32; 3],
+    values: Vec<f32>,
+    band: u32,
+    layers: u32,
+}
+
+impl KernelBank {
+    pub fn new(params: PsfParams, spacing: Spacing, planes: u32) -> Self {
+        assert!(planes > 0, "a kernel bank covers at least one plane");
+        let span = (planes - 1) as f32 * spacing.z();
+        let layers = (span / DEPTH_STEP).ceil().max(1.0) as u32;
+        let layers = layers.min(LAYER_LIMIT).min(planes);
+        let band = planes.div_ceil(layers);
+        let middle = 0.5 * (planes - 1) as f32;
+        let kernels = (0..layers)
+            .map(|layer| {
+                let start = layer * band;
+                let end = ((layer + 1) * band).min(planes);
+                let centre = 0.5 * (start + end - 1) as f32;
+                let depth = if layers == 1 {
+                    params.depth()
+                } else {
+                    (params.depth() + (centre - middle) * spacing.z()).max(0.0)
+                };
+                Kernel::new(params.with_depth(depth), spacing)
+            })
+            .collect::<Vec<_>>();
+        let dims = kernels.iter().fold([1u32; 3], |dims, kernel| {
+            [0, 1, 2].map(|axis| dims[axis].max(kernel.dims()[axis]))
+        });
+        let mut values =
+            Vec::with_capacity((dims[0] * dims[1] * dims[2]) as usize * layers as usize);
+        for kernel in &kernels {
+            values.extend(kernel.padded(dims));
+        }
+        Self {
+            dims,
+            values,
+            band,
+            layers,
+        }
+    }
+
+    pub fn dims(&self) -> [u32; 3] {
+        self.dims
+    }
+
+    pub fn layers(&self) -> u32 {
+        self.layers
+    }
+
+    pub fn band(&self) -> u32 {
+        self.band
+    }
+
+    pub fn voxels(&self) -> usize {
+        (self.dims[0] * self.dims[1] * self.dims[2]) as usize
+    }
+
+    pub fn taps(&self, layer: u32) -> &[f32] {
+        assert!(layer < self.layers, "a kernel bank names one of its layers");
+        let voxels = self.voxels();
+        &self.values[layer as usize * voxels..(layer as usize + 1) * voxels]
+    }
+
+    pub fn values(&self) -> &[f32] {
+        &self.values
+    }
+
+    pub fn layer(&self, first_plane: u32, plane: u32) -> u32 {
+        ((first_plane + plane) / self.band).min(self.layers - 1)
+    }
 }
 
 struct Sampled {
@@ -300,5 +395,61 @@ mod tests {
                 "offset {offset}: {relative} against {airy}"
             );
         }
+    }
+
+    fn spread(taps: &[f32], dims: [u32; 3], axis: usize) -> f32 {
+        let centre = dims[axis] / 2;
+        let mut total = 0.0f32;
+        let mut moment = 0.0f32;
+        for z in 0..dims[2] {
+            for y in 0..dims[1] {
+                for x in 0..dims[0] {
+                    let position = [x, y, z][axis];
+                    let offset = position as f32 - centre as f32;
+                    let value = taps[(x + dims[0] * (y + dims[1] * z)) as usize];
+                    total += value;
+                    moment += value * offset * offset;
+                }
+            }
+        }
+        (moment / total).sqrt()
+    }
+
+    #[test]
+    fn a_kernel_bank_samples_the_depth_it_covers() {
+        let params = PsfParams::new(1.4, 0.52, 1.515, 1.515, 0.0);
+        let spacing = Spacing::new(0.04, 0.04, 0.2);
+        let bank = KernelBank::new(params, spacing, 101);
+        assert_eq!(bank.layers(), 5, "a 20 µm stack samples its depth");
+        assert_eq!(bank.band(), 21, "the layers tile every plane");
+        for layer in 0..bank.layers() {
+            let total = bank.taps(layer).iter().sum::<f32>();
+            assert!(
+                (total - 1.0).abs() < 1.0e-4,
+                "layer {layer} carries {total} of energy"
+            );
+        }
+        let near = spread(bank.taps(0), bank.dims(), 2);
+        let far = spread(bank.taps(bank.layers() - 1), bank.dims(), 2);
+        assert!(
+            far > near * 1.2,
+            "the deepest layer is axially wider: {far} against {near}"
+        );
+    }
+
+    #[test]
+    fn a_single_layer_bank_is_the_kernel_it_holds() {
+        let params = PsfParams::new(1.4, 0.52, 1.515, 1.515, 0.4);
+        let spacing = Spacing::new(0.04, 0.04, 0.2);
+        let bank = KernelBank::new(params, spacing, 6);
+        let kernel = Kernel::new(params, spacing);
+        assert_eq!(
+            bank.layers(),
+            1,
+            "a thin stack keeps one point spread function"
+        );
+        assert_eq!(bank.dims(), kernel.dims());
+        assert_eq!(bank.taps(0), kernel.values());
+        assert_eq!(bank.layer(0, 5), 0);
     }
 }

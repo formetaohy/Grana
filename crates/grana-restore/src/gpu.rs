@@ -6,6 +6,7 @@ struct Workspace {
     staging: wgpu::Buffer,
     groups: [wgpu::BindGroup; 2],
     dims: [u32; 3],
+    taps_bytes: u64,
 }
 
 struct Pipelines {
@@ -76,6 +77,7 @@ fn binding(index: u32, ty: wgpu::BufferBindingType) -> wgpu::BindGroupLayoutEntr
 struct Dims {
     volume: [u32; 4],
     kernel: [u32; 4],
+    bank: [u32; 4],
 }
 
 pub struct Gpu {
@@ -101,10 +103,11 @@ impl Gpu {
         &mut self,
         dims: [u32; 3],
         source: &[f32],
-        kernel: &grana_optics::Kernel,
+        bank: &grana_optics::KernelBank,
+        first_plane: u32,
         iterations: u32,
     ) -> Vec<f32> {
-        self.prepare(dims, kernel);
+        self.prepare(dims, bank, first_plane);
         let workspace = self
             .workspace
             .as_ref()
@@ -182,23 +185,24 @@ impl Gpu {
         values
     }
 
-    fn prepare(&mut self, dims: [u32; 3], kernel: &grana_optics::Kernel) {
-        let kernel_dims = kernel.dims();
+    fn prepare(&mut self, dims: [u32; 3], bank: &grana_optics::KernelBank, first_plane: u32) {
+        let kernel_dims = bank.dims();
         let uniform = Dims {
             volume: [dims[0], dims[1], dims[2], 0],
             kernel: [kernel_dims[0], kernel_dims[1], kernel_dims[2], 0],
+            bank: [bank.layers(), bank.band(), first_plane, 0],
         };
-        if let Some(workspace) = self.workspace.as_ref() {
+        let taps_bytes = bank.values().len() as u64 * 4;
+        let fits = self
+            .workspace
+            .as_ref()
+            .is_some_and(|held| held.dims == dims && held.taps_bytes >= taps_bytes);
+        if fits {
+            let workspace = self.workspace.as_ref().expect("the restore workspace fits");
             self.queue
                 .write_buffer(&workspace.uniforms, 0, bytemuck::bytes_of(&uniform));
             self.queue
-                .write_buffer(&workspace.taps, 0, bytemuck::cast_slice(kernel.values()));
-        }
-        if self
-            .workspace
-            .as_ref()
-            .is_some_and(|held| held.dims == dims)
-        {
+                .write_buffer(&workspace.taps, 0, bytemuck::cast_slice(bank.values()));
             return;
         }
         let device = &self.device;
@@ -221,7 +225,7 @@ impl Gpu {
         });
         let taps = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grana.restore.taps"),
-            size: (kernel.voxels() as u64 * 4).max(16),
+            size: taps_bytes.max(16),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -234,7 +238,7 @@ impl Gpu {
         self.queue
             .write_buffer(&uniforms, 0, bytemuck::bytes_of(&uniform));
         self.queue
-            .write_buffer(&taps, 0, bytemuck::cast_slice(kernel.values()));
+            .write_buffer(&taps, 0, bytemuck::cast_slice(bank.values()));
         let measured = volume("grana.restore.measured");
         let estimate = [
             volume("grana.restore.estimate"),
@@ -272,6 +276,7 @@ impl Gpu {
             staging,
             groups,
             dims,
+            taps_bytes,
         });
     }
 }

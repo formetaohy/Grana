@@ -4,16 +4,16 @@ use std::sync::{Arc, Mutex};
 
 use grana_image::{Format, Image, Labels};
 use grana_object::Mask;
-use grana_optics::{Kernel, PsfParams};
+use grana_optics::{KernelBank, PsfParams};
 use grana_restore::Restorer;
 use grana_scene::{DerivedSpec, MaskChannel, Scene};
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, Extent, Intensity, Level, PADDED_SIDE, Pyramid, Spacing,
-    VoxelData, pad_brick,
+    BrickCoord, BrickData, BrickGrid, Extent, Intensity, Level, PADDED_SIDE, Pyramid, VoxelData,
+    pad_brick,
 };
 
 const TILE: u32 = 64;
-const TILE_LIMIT: usize = 16;
+const TILE_LIMIT: usize = 32;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChannelsError {
@@ -44,16 +44,40 @@ struct Site<'a> {
 
 struct RestoredTile {
     key: (u32, u32, [u32; 3], [u32; 3]),
-    origin: [u32; 3],
-    dims: [u32; 3],
+    core: [Range<u32>; 3],
+    ranges: [Range<u32>; 3],
     values: Vec<f32>,
+}
+
+impl RestoredTile {
+    fn axis_weight(&self, axis: usize, position: u32) -> f32 {
+        let core = &self.core[axis];
+        let cover = &self.ranges[axis];
+        let centre = position as f32 + 0.5;
+        if position < core.start {
+            ramp(centre, cover.start as f32, core.start as f32)
+        } else if position >= core.end {
+            ramp(centre, cover.end as f32, core.end as f32)
+        } else {
+            1.0
+        }
+    }
+}
+
+fn ramp(value: f32, edge: f32, inner: f32) -> f32 {
+    let span = inner - edge;
+    if span <= 0.0 {
+        return 1.0;
+    }
+    let t = ((value - edge) / span).clamp(0.0, 1.0);
+    0.5 - 0.5 * (std::f32::consts::PI * t).cos()
 }
 
 struct RestoreChannel {
     source: usize,
     params: PsfParams,
     iterations: u32,
-    kernels: Mutex<HashMap<u32, Arc<Kernel>>>,
+    banks: Mutex<HashMap<u32, Arc<KernelBank>>>,
     tiles: Mutex<Vec<Arc<RestoredTile>>>,
 }
 
@@ -273,23 +297,24 @@ impl RestoreChannel {
             source,
             params,
             iterations,
-            kernels: Mutex::new(HashMap::new()),
+            banks: Mutex::new(HashMap::new()),
             tiles: Mutex::new(Vec::new()),
         }
     }
 
-    fn kernel(&self, level: usize, spacing: Spacing) -> Result<Arc<Kernel>, ChannelsError> {
-        let key = level as u32;
-        let mut kernels = self
-            .kernels
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if let Some(kernel) = kernels.get(&key) {
-            return Ok(Arc::clone(kernel));
+    fn bank(&self, site: &Site<'_>) -> Arc<KernelBank> {
+        let key = site.level as u32;
+        let mut banks = self.banks.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(bank) = banks.get(&key) {
+            return Arc::clone(bank);
         }
-        let kernel = Arc::new(Kernel::new(self.params, spacing));
-        kernels.insert(key, Arc::clone(&kernel));
-        Ok(kernel)
+        let bank = Arc::new(KernelBank::new(
+            self.params,
+            site.info.spacing(),
+            site.info.extent().z(),
+        ));
+        banks.insert(key, Arc::clone(&bank));
+        bank
     }
 
     fn brick(
@@ -320,76 +345,80 @@ impl RestoreChannel {
         site: &Site<'_>,
         ranges: &[Range<u32>; 3],
     ) -> Result<VoxelData, ChannelsError> {
-        let info = site.info;
-        let extent = info.extent();
-        let limits = [extent.x(), extent.y(), extent.z()];
-        let kernel = self.kernel(site.level, info.spacing())?;
-        let dims = kernel.dims();
-        let halo = [dims[0] / 2, dims[1] / 2, dims[2] / 2];
-        let probe = [0, 1, 2].map(|axis| {
-            let start = ranges[axis].start.saturating_sub(halo[axis]);
-            let end = (ranges[axis].end + halo[axis]).min(limits[axis]);
-            start..end
-        });
-        if probe.iter().any(|range| range.start >= range.end) {
+        let limits = {
+            let extent = site.info.extent();
+            [extent.x(), extent.y(), extent.z()]
+        };
+        if (0..3)
+            .any(|axis| ranges[axis].start >= ranges[axis].end || ranges[axis].end > limits[axis])
+        {
             return Err(ChannelsError::Derived {
                 detail: "the requested region lies outside the volume".to_string(),
             });
         }
-        let probe_extent = extent_of(&probe);
-        let mut probe_values = vec![0.0f32; probe_extent.voxel_count() as usize];
-        let first = [0, 1, 2].map(|axis| probe[axis].start / TILE);
-        let last = [0, 1, 2].map(|axis| (probe[axis].end - 1) / TILE);
-        for z in first[2]..=last[2] {
-            for y in first[1]..=last[1] {
-                for x in first[0]..=last[0] {
-                    let tile = self.tile(site, &kernel, [x, y, z])?;
-                    let covered = [
-                        tile.origin[0]..tile.origin[0] + tile.dims[0],
-                        tile.origin[1]..tile.origin[1] + tile.dims[1],
-                        tile.origin[2]..tile.origin[2] + tile.dims[2],
-                    ];
-                    let overlap = intersection(&probe, &covered);
+        let bank = self.bank(site);
+        let dims = [0, 1, 2].map(|axis| ranges[axis].end - ranges[axis].start);
+        let width = dims[0] as usize;
+        let height = dims[1] as usize;
+        let mut summed = vec![0.0f32; (width * height * dims[2] as usize).max(1)];
+        let mut weights = vec![0.0f32; summed.len()];
+        let taps = bank.dims();
+        let halo = [taps[0] / 2, taps[1] / 2, taps[2] / 2];
+        let counts = [0, 1, 2].map(|axis| limits[axis].div_ceil(TILE));
+        let first = [0, 1, 2].map(|axis| ranges[axis].start.saturating_sub(halo[axis]) / TILE);
+        let last = [0, 1, 2].map(|axis| {
+            let end = (ranges[axis].end + halo[axis]).min(limits[axis]);
+            ((end - 1) / TILE).min(counts[axis] - 1)
+        });
+        for tile_z in first[2]..=last[2] {
+            for tile_y in first[1]..=last[1] {
+                for tile_x in first[0]..=last[0] {
+                    let tile = self.tile(site, &bank, [tile_x, tile_y, tile_z])?;
+                    let overlap = intersection(ranges, &tile.ranges);
                     if overlap.iter().any(|range| range.start >= range.end) {
                         continue;
                     }
-                    copy(
-                        &mut Target {
-                            values: &mut probe_values,
-                            extent: probe_extent,
-                            ranges: probe.clone(),
-                        },
-                        &Source {
-                            values: &tile.values,
-                            extent: extent_of(&covered),
-                            ranges: covered,
-                        },
-                        &overlap,
-                    );
+                    let axis = [0, 1, 2].map(|axis| {
+                        overlap[axis]
+                            .clone()
+                            .map(|position| tile.axis_weight(axis, position))
+                            .collect::<Vec<f32>>()
+                    });
+                    let tile_width = (tile.ranges[0].end - tile.ranges[0].start) as usize;
+                    let tile_height = (tile.ranges[1].end - tile.ranges[1].start) as usize;
+                    for z in overlap[2].clone() {
+                        for y in overlap[1].clone() {
+                            for x in overlap[0].clone() {
+                                let weight = axis[0][(x - overlap[0].start) as usize]
+                                    * axis[1][(y - overlap[1].start) as usize]
+                                    * axis[2][(z - overlap[2].start) as usize];
+                                let target = (x - ranges[0].start) as usize
+                                    + width
+                                        * ((y - ranges[1].start) as usize
+                                            + height * (z - ranges[2].start) as usize);
+                                let source = (x - tile.ranges[0].start) as usize
+                                    + tile_width
+                                        * ((y - tile.ranges[1].start) as usize
+                                            + tile_height * (z - tile.ranges[2].start) as usize);
+                                summed[target] += weight * tile.values[source];
+                                weights[target] += weight;
+                            }
+                        }
+                    }
                 }
             }
         }
-        let mut output = vec![0.0f32; extent_of(ranges).voxel_count() as usize];
-        copy(
-            &mut Target {
-                values: &mut output,
-                extent: extent_of(ranges),
-                ranges: ranges.clone(),
-            },
-            &Source {
-                values: &probe_values,
-                extent: probe_extent,
-                ranges: probe,
-            },
-            ranges,
-        );
-        Ok(VoxelData::F32(output))
+        for (value, weight) in summed.iter_mut().zip(&weights) {
+            assert!(*weight > 0.0, "every restored voxel lies under a tile");
+            *value /= *weight;
+        }
+        Ok(VoxelData::F32(summed))
     }
 
     fn tile(
         &self,
         site: &Site<'_>,
-        kernel: &Kernel,
+        bank: &KernelBank,
         coord: [u32; 3],
     ) -> Result<Arc<RestoredTile>, ChannelsError> {
         let key = (
@@ -405,18 +434,22 @@ impl RestoreChannel {
             tiles.push(Arc::clone(&tile));
             return Ok(tile);
         }
-        let extent = site.info.extent();
-        let limits = [extent.x(), extent.y(), extent.z()];
-        let origin = [coord[0] * TILE, coord[1] * TILE, coord[2] * TILE];
-        let dims = [0, 1, 2].map(|axis| (extent_dims(extent)[axis] - origin[axis]).min(TILE));
-        let core = [0, 1, 2].map(|axis| origin[axis]..origin[axis] + dims[axis]);
-        let dims_kernel = kernel.dims();
-        let halo = [dims_kernel[0] / 2, dims_kernel[1] / 2, dims_kernel[2] / 2];
-        let probe = [0, 1, 2].map(|axis| {
-            let start = core[axis].start.saturating_sub(halo[axis]);
-            let end = (core[axis].end + halo[axis]).min(limits[axis]);
-            start..end
+        let limits = {
+            let extent = site.info.extent();
+            [extent.x(), extent.y(), extent.z()]
+        };
+        let core = [0, 1, 2].map(|axis| {
+            let start = coord[axis] * TILE;
+            start..(start + TILE).min(limits[axis])
         });
+        assert!(
+            core.iter().all(|range| range.start < range.end),
+            "a restored tile lies inside the volume"
+        );
+        let dims = bank.dims();
+        let halo = [dims[0] / 2, dims[1] / 2, dims[2] / 2];
+        let ranges = expand(&core, &halo, &limits);
+        let probe = expand(&ranges, &halo, &limits);
         let probe_extent = extent_of(&probe);
         let source = site
             .reader
@@ -427,28 +460,30 @@ impl RestoreChannel {
         let restored = Restorer::shared().restore(
             [probe_extent.x(), probe_extent.y(), probe_extent.z()],
             &values,
-            kernel,
+            bank,
+            probe[2].start,
             self.iterations,
         );
-        let mut core_values = vec![0.0f32; dims[0] as usize * dims[1] as usize * dims[2] as usize];
+        let covered = extent_of(&ranges);
+        let mut tile_values = vec![0.0f32; covered.voxel_count() as usize];
         copy(
             &mut Target {
-                values: &mut core_values,
-                extent: Extent::new(dims[0], dims[1], dims[2]),
-                ranges: core.clone(),
+                values: &mut tile_values,
+                extent: covered,
+                ranges: ranges.clone(),
             },
             &Source {
                 values: &restored,
                 extent: probe_extent,
                 ranges: probe,
             },
-            &core,
+            &ranges,
         );
         let tile = Arc::new(RestoredTile {
             key,
-            origin,
-            dims,
-            values: core_values,
+            core,
+            ranges,
+            values: tile_values,
         });
         tiles.push(Arc::clone(&tile));
         if tiles.len() > TILE_LIMIT {
@@ -458,8 +493,10 @@ impl RestoreChannel {
     }
 }
 
-fn extent_dims(extent: Extent) -> [u32; 3] {
-    [extent.x(), extent.y(), extent.z()]
+fn expand(ranges: &[Range<u32>; 3], by: &[u32; 3], limits: &[u32; 3]) -> [Range<u32>; 3] {
+    [0, 1, 2].map(|axis| {
+        ranges[axis].start.saturating_sub(by[axis])..(ranges[axis].end + by[axis]).min(limits[axis])
+    })
 }
 
 fn extent_of(ranges: &[Range<u32>; 3]) -> Extent {

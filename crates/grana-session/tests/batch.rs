@@ -645,6 +645,72 @@ const PROJECT: &str = r#"
 "#;
 
 #[test]
+fn exports_the_restored_channels_of_every_dataset() {
+    const RESTORE_EXPORT: &str = r#"
+{
+  "channels": [
+    {"name": "Cells", "enabled": true, "opacity": 1.0, "window": {"low": 0.0, "high": 65535.0}},
+    {"name": "Signal", "enabled": true, "opacity": 1.0, "window": {"low": 0.0, "high": 65535.0}},
+    {"name": "Cells restored", "enabled": false, "opacity": 1.0, "window": {"low": 0.0, "high": 65535.0}}
+  ],
+  "sets": [
+    {
+      "key": "puncta",
+      "name": "Puncta",
+      "color": [0.3, 0.8, 1.0],
+      "source": {"kind": "spots", "channel": "Cells", "diameter": 5.0, "contrast": 0.05}
+    }
+  ],
+  "derived": [
+    {
+      "kind": "restore",
+      "channel": "Cells",
+      "name": "Cells restored",
+      "tint": [0.3, 0.8, 1.0],
+      "intensity": [0.0, 65535.0],
+      "numerical_aperture": 1.4,
+      "wavelength": 0.52,
+      "immersion": 1.515,
+      "sample": 1.33,
+      "depth": 0.2,
+      "iterations": 2
+    }
+  ]
+}
+"#;
+    let temp = TempDir::new("grana-batch-restore");
+    let root = temp.path().join("datasets");
+    write_dataset(&root.join("alpha.zarr"), "Cells", "Signal");
+    let output = temp.path().join("out");
+    let datasets = discover(&root).expect("the folder lists its datasets");
+    let protocol = Protocol::from_json(RESTORE_EXPORT).expect("the protocol is valid");
+    let completed = run_with(&protocol, &datasets, &output, 1, false, true, None);
+    assert_eq!(completed, [Status::Ok], "the batch finishes");
+    let path = output.join("alpha").join("cells-restored.ome.zarr");
+    let image = grana_zarr::Image::open(&path).expect("the restored channel opens");
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.channel_count(), 1);
+    assert_eq!(pyramid.frame_count(), FRAMES);
+    assert_eq!(pyramid.channels()[0].name(), "Cells restored");
+    let frame = image
+        .read_region(0, 0, 0, 0..EXTENT[0], 0..EXTENT[1], 0..EXTENT[2])
+        .expect("the first frame reads");
+    let grana_volume::VoxelData::F32(values) = &frame else {
+        panic!("the restored channel stores float voxels");
+    };
+    assert!(
+        values
+            .iter()
+            .all(|value| value.is_finite() && *value >= 0.0),
+        "the restored channel stays finite and non negative"
+    );
+    assert!(
+        values.iter().any(|value| *value > 0.0),
+        "the restored channel keeps the signal"
+    );
+}
+
+#[test]
 fn writes_a_project_that_reopens() {
     let temp = TempDir::new("grana-batch-project");
     let root = temp.path().join("datasets");

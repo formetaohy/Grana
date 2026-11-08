@@ -4,7 +4,7 @@ mod gpu;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
-use grana_optics::Kernel;
+use grana_optics::KernelBank;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
@@ -58,7 +58,8 @@ impl Restorer {
         &self,
         dims: [u32; 3],
         source: &[f32],
-        kernel: &Kernel,
+        bank: &KernelBank,
+        first_plane: u32,
         iterations: u32,
     ) -> Vec<f32> {
         assert!(
@@ -74,8 +75,8 @@ impl Restorer {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         match held.as_mut() {
-            Some(gpu) => gpu.restore(dims, source, kernel, iterations),
-            None => cpu::restore(dims, source, kernel, iterations),
+            Some(gpu) => gpu.restore(dims, source, bank, first_plane, iterations),
+            None => cpu::restore(dims, source, bank, first_plane, iterations),
         }
     }
 }
