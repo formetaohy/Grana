@@ -19,6 +19,12 @@ struct Boundary {
     occupied: HashSet<(u32, u32)>,
 }
 
+impl Default for Cap {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 impl Cap {
     fn empty() -> Self {
         Self {

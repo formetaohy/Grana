@@ -637,6 +637,7 @@ impl Scene {
                 | Provenance::Imported { .. }
                 | Provenance::Interop { .. }
                 | Provenance::Copied { .. }
+                | Provenance::Edited { .. }
                 | Provenance::Merged { .. } => {
                     return Some(current);
                 }
@@ -737,6 +738,20 @@ impl Scene {
         self.sync_coloc_inputs();
         self.sync_masks();
         Ok(())
+    }
+
+    pub fn edit_objects(
+        &mut self,
+        id: ObjectSetId,
+        time: u32,
+        frame: ObjectFrame,
+        suffix: &str,
+    ) -> Option<ObjectSetId> {
+        let edited = self.objects.edit(id, suffix, time, frame)?;
+        self.selection = None;
+        self.sync_coloc_inputs();
+        self.sync_masks();
+        Some(edited)
     }
 
     pub fn duplicate_object(&mut self, id: ObjectSetId) -> Option<ObjectSetId> {

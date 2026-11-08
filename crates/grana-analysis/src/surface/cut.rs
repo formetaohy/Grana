@@ -54,43 +54,40 @@ pub(super) fn cut(
             leaves_of[*target as usize].push(basin as u32);
         }
     }
-    let meshed = Meshed {
-        topology,
-        merged: &merged,
-        spec,
-    };
+    let channels = info.channels();
     let chunks = schedule::map(&candidates, workers, |root| {
         if cancelled(cancel) {
             return None;
         }
         let range = offsets[*root as usize] as usize..offsets[*root as usize + 1] as usize;
-        meshed.chunk(*root, &order[range])
+        let accumulators =
+            &merged.accumulators[*root as usize * channels..(*root as usize + 1) * channels];
+        mesh_piece(
+            topology,
+            Piece {
+                node: merged.nodes[*root as usize],
+                accumulators,
+                triangles: &order[range],
+            },
+            true,
+            Some(spec),
+        )
     });
     if cancelled(cancel) {
         return Ok(None);
     }
-    let mut objects = Vec::new();
     let mut leaves = Vec::new();
-    let mut intensities = Vec::new();
     let mut kept = Vec::new();
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
+    let mut pieces = Vec::new();
     for (root, chunk) in candidates.into_iter().zip(chunks) {
         let Some(chunk) = chunk else {
             continue;
         };
-        let object = objects.len() as u32;
-        let base = vertices.len() as u32;
-        for (position, normal) in &chunk.vertices {
-            vertices.push(MeshVertex::new(*position, *normal, object));
-        }
-        indices.extend(chunk.indices.iter().map(|index| base + index));
-        objects.push(chunk.statistics);
-        leaves.push(std::mem::take(&mut leaves_of[root as usize]));
         if let Some(seed) = chunk.seed {
             kept.push(seed);
         }
-        intensities.extend(chunk.intensities);
+        leaves.push(std::mem::take(&mut leaves_of[root as usize]));
+        pieces.push(chunk);
     }
     if kept.len() != info.seeds() {
         let missing = (0..info.seeds())
@@ -101,19 +98,17 @@ pub(super) fn cut(
             missing + 1
         ));
     }
-    let mesh = Mesh::new(vertices, indices);
-    let intensities = IntensityTable::new(info.channels(), intensities);
-    let removed = removed.to_vec();
-    let set = match store {
-        Some(store) => SurfaceSet::paged(info.level(), store, mesh, objects, intensities)
-            .map(|set| set.with_cut(leaves, removed))
-            .map_err(|error| error.to_string())?,
-        None => SurfaceSet::new(info.level(), mesh, objects, intensities).with_cut(leaves, removed),
-    };
-    Ok(Some(set))
+    Ok(Some(assemble(
+        info.level(),
+        channels,
+        pieces,
+        leaves,
+        removed,
+        store,
+    )?))
 }
 
-fn grouped(topology: &SurfaceTopology, targets: &[u32]) -> (Vec<u32>, Vec<u32>) {
+pub(super) fn grouped(topology: &SurfaceTopology, targets: &[u32]) -> (Vec<u32>, Vec<u32>) {
     let patches = topology.patches();
     let roots = topology.basins().len();
     let mut offsets = vec![0u32; roots + 1];
@@ -364,139 +359,190 @@ impl<'a> Merged<'a> {
     }
 }
 
-struct Meshed<'a> {
-    topology: &'a SurfaceTopology,
-    merged: &'a Merged<'a>,
-    spec: SurfaceCut,
+pub(super) struct Chunk {
+    pub(super) statistics: SurfaceStatistics,
+    pub(super) seed: Option<u32>,
+    pub(super) intensities: Vec<SampleStatistics>,
+    pub(super) vertices: Vec<([f32; 3], [f32; 3])>,
+    pub(super) indices: Vec<u32>,
 }
 
-struct Chunk {
-    statistics: SurfaceStatistics,
-    seed: Option<u32>,
-    intensities: Vec<SampleStatistics>,
-    vertices: Vec<([f32; 3], [f32; 3])>,
-    indices: Vec<u32>,
+pub(super) struct Piece<'a> {
+    pub(super) node: Basin,
+    pub(super) accumulators: &'a [SampleAccumulator],
+    pub(super) triangles: &'a [u32],
 }
 
-impl Meshed<'_> {
-    fn chunk(&self, root: u32, triangles: &[u32]) -> Option<Chunk> {
-        let info = self.topology.info();
-        let patches = self.topology.patches();
-        let node = self.merged.nodes[root as usize];
-        let count = node.voxels() as f64;
-        let volume = count * info.voxel_volume();
-        if volume < f64::from(self.spec.min_volume()) {
-            return None;
-        }
-        let channels = info.channels();
-        let mean = self.merged.accumulators[root as usize * channels + info.detection()]
-            .statistics()
-            .mean();
-        if info.span() > 0.0 && mean / info.span() < self.spec.min_mean_intensity() {
-            return None;
-        }
-        let mut local: Map<[u32; 3], u32> =
-            Map::with_capacity_and_hasher(triangles.len(), Default::default());
-        let mut positions = Vec::with_capacity(triangles.len());
-        let mut summed: Vec<[f32; 3]> = Vec::with_capacity(triangles.len());
-        let mut mesh = Vec::with_capacity(triangles.len());
-        for index in triangles {
-            let triangle = patches.triangles()[*index as usize];
-            let mut mapped = [0u32; 3];
-            for (corner, vertex) in triangle.iter().enumerate() {
-                let point = patches.positions()[*vertex as usize];
-                let slot = local.entry(point.map(f32::to_bits)).or_insert_with(|| {
-                    let slot = positions.len() as u32;
-                    positions.push(point);
-                    summed.push([0.0; 3]);
-                    slot
-                });
-                mapped[corner] = *slot;
-                let normal = patches.normals()[*vertex as usize];
-                for (axis, value) in normal.iter().enumerate() {
-                    summed[*slot as usize][axis] += value;
-                }
+pub(super) fn mesh_piece(
+    topology: &SurfaceTopology,
+    piece: Piece<'_>,
+    cap_open: bool,
+    filter: Option<SurfaceCut>,
+) -> Option<Chunk> {
+    let info = topology.info();
+    let patches = topology.patches();
+    let node = piece.node;
+    let count = node.voxels() as f64;
+    let volume = count * info.voxel_volume();
+    if let Some(spec) = filter
+        && volume < f64::from(spec.min_volume())
+    {
+        return None;
+    }
+    let mean = piece.accumulators[info.detection()].statistics().mean();
+    if let Some(spec) = filter
+        && info.span() > 0.0
+        && mean / info.span() < spec.min_mean_intensity()
+    {
+        return None;
+    }
+    let triangles = piece.triangles;
+    let mut local: Map<[u32; 3], u32> =
+        Map::with_capacity_and_hasher(triangles.len(), Default::default());
+    let mut positions = Vec::with_capacity(triangles.len());
+    let mut summed: Vec<[f32; 3]> = Vec::with_capacity(triangles.len());
+    let mut mesh = Vec::with_capacity(triangles.len());
+    for index in triangles {
+        let triangle = patches.triangles()[*index as usize];
+        let mut mapped = [0u32; 3];
+        for (corner, vertex) in triangle.iter().enumerate() {
+            let point = patches.positions()[*vertex as usize];
+            let slot = local.entry(point.map(f32::to_bits)).or_insert_with(|| {
+                let slot = positions.len() as u32;
+                positions.push(point);
+                summed.push([0.0; 3]);
+                slot
+            });
+            mapped[corner] = *slot;
+            let normal = patches.normals()[*vertex as usize];
+            for (axis, value) in normal.iter().enumerate() {
+                summed[*slot as usize][axis] += value;
             }
-            if mapped[0] == mapped[1] || mapped[1] == mapped[2] || mapped[2] == mapped[0] {
-                continue;
-            }
-            mesh.push(mapped);
         }
-        if mesh.is_empty() {
-            return None;
+        if mapped[0] == mapped[1] || mapped[1] == mapped[2] || mapped[2] == mapped[0] {
+            continue;
         }
+        mesh.push(mapped);
+    }
+    if mesh.is_empty() {
+        return None;
+    }
+    let mut area = 0.0f64;
+    for triangle in &mesh {
+        area += triangle_area(&positions, triangle);
+    }
+    let cut = if cap_open {
         let components = Components::new(positions.len(), &mesh);
-        let mut area = 0.0f64;
-        for triangle in &mesh {
-            area += triangle_area(&positions, triangle);
-        }
         let open = (0..mesh.len())
             .filter(|index| !components.closed[components.slot[*index]])
             .collect::<Vec<_>>();
         let cut = cap::build(&positions, &mesh, &open);
         area += cut.area;
-        if area <= 0.0 {
-            return None;
-        }
-        let spacing = info.spacing();
-        let world = info.world();
-        let centroid = [0, 1, 2].map(|axis| {
-            ((node.sum()[axis] / count + 0.5) * f64::from(spacing[axis])
+        cut
+    } else {
+        cap::Cap::default()
+    };
+    if area <= 0.0 {
+        return None;
+    }
+    let spacing = info.spacing();
+    let world = info.world();
+    let centroid = [0, 1, 2].map(|axis| {
+        ((node.sum()[axis] / count + 0.5) * f64::from(spacing[axis]) - 0.5 * f64::from(world[axis]))
+            as f32
+    });
+    let bounds = Bounds::new(
+        [0, 1, 2].map(|axis| {
+            (f64::from(node.low()[axis]) * f64::from(spacing[axis]) - 0.5 * f64::from(world[axis]))
+                as f32
+        }),
+        [0, 1, 2].map(|axis| {
+            ((f64::from(node.high()[axis]) + 1.0) * f64::from(spacing[axis])
                 - 0.5 * f64::from(world[axis])) as f32
-        });
-        let bounds = Bounds::new(
-            [0, 1, 2].map(|axis| {
-                (f64::from(node.low()[axis]) * f64::from(spacing[axis])
-                    - 0.5 * f64::from(world[axis])) as f32
-            }),
-            [0, 1, 2].map(|axis| {
-                ((f64::from(node.high()[axis]) + 1.0) * f64::from(spacing[axis])
-                    - 0.5 * f64::from(world[axis])) as f32
-            }),
-        );
-        let statistics = SurfaceStatistics::new(node.voxels(), volume, area, centroid, bounds);
-        if statistics.sphericity() < f64::from(self.spec.min_sphericity()) {
-            return None;
-        }
-        let intensities = (0..channels)
-            .map(|channel| {
-                self.merged.accumulators[root as usize * channels + channel].statistics()
-            })
-            .collect();
-        let mut vertices = Vec::with_capacity(positions.len());
-        let mut indices = Vec::with_capacity(mesh.len() * 3 + cut.triangles.len());
-        let mut welded: Vec<u32> = vec![EMPTY; positions.len()];
-        for triangle in &mesh {
-            let fallback = triangle_normal(&positions, triangle);
-            let mut mapped = [0u32; 3];
-            for (corner, vertex) in triangle.iter().enumerate() {
-                let slot = &mut welded[*vertex as usize];
-                if *slot == EMPTY {
-                    let normal = Vec3::from(summed[*vertex as usize]).normalize_or_zero();
-                    let normal = if normal == Vec3::ZERO {
-                        fallback
-                    } else {
-                        normal
-                    };
-                    *slot = vertices.len() as u32;
-                    vertices.push((positions[*vertex as usize], normal.to_array()));
-                }
-                mapped[corner] = *slot;
+        }),
+    );
+    let statistics = SurfaceStatistics::new(node.voxels(), volume, area, centroid, bounds);
+    if let Some(spec) = filter
+        && statistics.sphericity() < f64::from(spec.min_sphericity())
+    {
+        return None;
+    }
+    let intensities = piece
+        .accumulators
+        .iter()
+        .map(|accumulator| accumulator.statistics())
+        .collect();
+    let mut vertices = Vec::with_capacity(positions.len());
+    let mut indices = Vec::with_capacity(mesh.len() * 3 + cut.triangles.len());
+    let mut welded: Vec<u32> = vec![EMPTY; positions.len()];
+    for triangle in &mesh {
+        let fallback = triangle_normal(&positions, triangle);
+        let mut mapped = [0u32; 3];
+        for (corner, vertex) in triangle.iter().enumerate() {
+            let slot = &mut welded[*vertex as usize];
+            if *slot == EMPTY {
+                let normal = Vec3::from(summed[*vertex as usize]).normalize_or_zero();
+                let normal = if normal == Vec3::ZERO {
+                    fallback
+                } else {
+                    normal
+                };
+                *slot = vertices.len() as u32;
+                vertices.push((positions[*vertex as usize], normal.to_array()));
             }
-            indices.extend_from_slice(&mapped);
+            mapped[corner] = *slot;
         }
+        indices.extend_from_slice(&mapped);
+    }
+    let base = vertices.len() as u32;
+    for (position, normal) in cut.positions.iter().zip(&cut.normals) {
+        vertices.push((*position, *normal));
+    }
+    indices.extend(cut.triangles.iter().map(|index| base + index));
+    Some(Chunk {
+        statistics,
+        seed: node.seed(),
+        intensities,
+        vertices,
+        indices,
+    })
+}
+
+pub(super) fn assemble(
+    level: usize,
+    channels: usize,
+    pieces: Vec<Chunk>,
+    leaves: Vec<Vec<u32>>,
+    removed: &[u32],
+    store: Option<&Arc<GeometryStore>>,
+) -> Result<SurfaceSet, String> {
+    assert_eq!(
+        leaves.len(),
+        pieces.len(),
+        "every assembled surface names the watershed basins it holds"
+    );
+    let mut objects = Vec::with_capacity(pieces.len());
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let mut intensities = Vec::with_capacity(pieces.len() * channels);
+    for (object, piece) in pieces.into_iter().enumerate() {
+        let object = object as u32;
         let base = vertices.len() as u32;
-        for (position, normal) in cut.positions.iter().zip(&cut.normals) {
-            vertices.push((*position, *normal));
+        for (position, normal) in &piece.vertices {
+            vertices.push(MeshVertex::new(*position, *normal, object));
         }
-        indices.extend(cut.triangles.iter().map(|index| base + index));
-        Some(Chunk {
-            statistics,
-            seed: node.seed(),
-            intensities,
-            vertices,
-            indices,
-        })
+        indices.extend(piece.indices.iter().map(|index| base + index));
+        objects.push(piece.statistics);
+        intensities.extend(piece.intensities);
+    }
+    let mesh = Mesh::new(vertices, indices);
+    let intensities = IntensityTable::new(channels, intensities);
+    let removed = removed.to_vec();
+    match store {
+        Some(store) => SurfaceSet::paged(level, store, mesh, objects, intensities)
+            .map(|set| set.with_cut(leaves, removed))
+            .map_err(|error| error.to_string()),
+        None => Ok(SurfaceSet::new(level, mesh, objects, intensities).with_cut(leaves, removed)),
     }
 }
 

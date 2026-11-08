@@ -25,5 +25,5 @@ pub use label::{LabelBuilder, LabelSlab};
 pub use relation::{Reference, RelationRun, relate_frames};
 pub use scan::{ChannelRead, SpotScan, SpotScanner, spot_level};
 pub use schedule::{parallel, receive, workers};
-pub use surface::{SeedPolicy, Sources, SurfaceBuilder, recut, surface_level};
+pub use surface::{SeedPolicy, Sources, SurfaceBuilder, merge, recut, split, surface_level};
 pub use track::TrackBuilder;

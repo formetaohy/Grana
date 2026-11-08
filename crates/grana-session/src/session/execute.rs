@@ -2,6 +2,8 @@ use super::*;
 
 use grana_scene::SegmentParams;
 
+use super::edit::SurfaceEdit;
+
 pub(super) struct Recording {
     edit: Edit,
     snapshot: Snapshot,
@@ -129,6 +131,17 @@ impl Session {
             }
             Command::MergeObjects { source, target } => {
                 self.merge_objects(source, target);
+            }
+            Command::MergeSurfaces {
+                set,
+                time,
+                source,
+                target,
+            } => {
+                self.edit_surfaces(set, time, SurfaceEdit::Merge { source, target });
+            }
+            Command::SplitSurface { set, time, object } => {
+                self.edit_surfaces(set, time, SurfaceEdit::Split { object });
             }
             Command::RemoveObject(set) => {
                 let masked = self.scene.as_ref().is_some_and(|scene| {
@@ -534,7 +547,7 @@ impl Session {
             Command::ExportMeasure => self.export_measure(),
             Command::ExportMesh(set) => self.export_mesh(set),
             Command::ExportLabels(set) => self.export_labels(set),
-            Command::ExportChannel(channel) => self.export_channel(channel),
+            Command::ExportDataset => self.export_dataset(),
             Command::ExportTracks(set) => self.choose_export_tracks(set),
             Command::ExportGeff(set) => self.choose_export_geff(set),
             Command::CaptureProtocol => self.capture_protocol(),

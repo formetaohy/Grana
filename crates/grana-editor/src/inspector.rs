@@ -530,12 +530,12 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
             .width(Length::Fill)
             .children([view::button_with(
                 ctx,
-                "Export Channel",
+                "Export Dataset",
                 Role::Quiet,
                 Length::Fixed(width),
             )
             .named("display.export")
-            .press(Message::Command(Command::ExportChannel(index)))]),
+            .press(Message::Command(Command::ExportDataset))]),
     );
     if derived.is_some() {
         children.push(

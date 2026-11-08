@@ -476,6 +476,10 @@ impl Encode for Provenance {
                 writer.u8(2);
                 writer.u64(source.raw());
             }
+            Self::Edited { source } => {
+                writer.u8(7);
+                writer.u64(source.raw());
+            }
             Self::Merged { parts } => {
                 writer.u8(3);
                 parts.encode(writer);

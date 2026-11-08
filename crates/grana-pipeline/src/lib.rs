@@ -1,6 +1,7 @@
 mod batch;
 pub mod channels;
 pub mod event;
+pub mod export;
 pub mod run;
 pub mod snapshot;
 
@@ -10,6 +11,7 @@ pub use batch::{
 };
 pub use channels::{Channels, ChannelsError};
 pub use event::Event;
+pub use export::{ChannelLayer, DatasetSpec, LabelLayer, Summary as ExportSummary, write_dataset};
 pub use grana_analysis::SeedPolicy;
 pub use run::{ColocRequest, DetectRequest, DriftRequest};
 pub use snapshot::{SnapshotFactory, SnapshotRequest, Snapshotter};

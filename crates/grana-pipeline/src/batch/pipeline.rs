@@ -455,6 +455,7 @@ impl Run<'_, '_> {
             | grana_scene::Provenance::Segmented { .. }
             | grana_scene::Provenance::Filtered { .. }
             | grana_scene::Provenance::Copied { .. }
+            | grana_scene::Provenance::Edited { .. }
             | grana_scene::Provenance::Merged { .. } => {
                 return Err("the object set names no label image".to_string());
             }
@@ -758,9 +759,7 @@ pub(super) fn artifacts(
         }
     }
     if channels {
-        for derived in protocol.derived() {
-            artifacts.push(format!("{}.ome.zarr", slug(derived.name())));
-        }
+        artifacts.push(format!("{}.ome.zarr", slug(name)));
     }
     if protocol.snapshot().is_some() {
         artifacts.push(SNAPSHOT.to_string());

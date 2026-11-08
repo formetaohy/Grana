@@ -338,6 +338,45 @@ impl Objects {
         Some(derived)
     }
 
+    pub fn edit(
+        &mut self,
+        id: ObjectSetId,
+        suffix: &str,
+        time: u32,
+        frame: ObjectFrame,
+    ) -> Option<ObjectSetId> {
+        let stamp = take_stamp(&mut self.stamp);
+        let source = self.get(id)?;
+        if source.kind() != frame.kind() {
+            return None;
+        }
+        let edited = ObjectSetId::new(self.next_id);
+        let base = format!("{} {suffix}", source.name());
+        let mut name = base.clone();
+        let mut ordinal = 2;
+        while self.occupied(&name, None) {
+            name = format!("{base} {ordinal}");
+            ordinal += 1;
+        }
+        let color = source.color();
+        let key = self.key_for(&name, None);
+        let mut copy =
+            source.duplicate(edited, key, name, color, Provenance::Edited { source: id });
+        let seeds = vec![Vec::new(); copy.frame_count() as usize];
+        copy.set_seed_frames(seeds);
+        copy.install_shared(time, Arc::new(frame), stamp);
+        let position = self
+            .sets
+            .iter()
+            .position(|set| set.id() == id)
+            .expect("the edited object set exists");
+        self.next_id += 1;
+        self.sets.insert(position + 1, copy);
+        self.prune_children();
+        self.refresh_bounds(edited, Some(time));
+        Some(edited)
+    }
+
     pub fn merge(&mut self, source: ObjectSetId, target: ObjectSetId) -> Result<(), String> {
         if source == target {
             return Err("an object set merges into another object set".to_string());
@@ -379,7 +418,8 @@ impl Objects {
             | Provenance::Imported { .. }
             | Provenance::Interop { .. }
             | Provenance::Filtered { .. }
-            | Provenance::Copied { .. } => {
+            | Provenance::Copied { .. }
+            | Provenance::Edited { .. } => {
                 vec![self.sets[target_index].recipe()]
             }
         };

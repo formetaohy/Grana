@@ -205,6 +205,9 @@ pub enum Provenance {
     Copied {
         source: ObjectSetId,
     },
+    Edited {
+        source: ObjectSetId,
+    },
     Merged {
         parts: Vec<Recipe>,
     },
@@ -278,7 +281,9 @@ impl Provenance {
 
     pub fn source(&self) -> Option<ObjectSetId> {
         match self {
-            Self::Filtered { source, .. } | Self::Copied { source } => Some(*source),
+            Self::Filtered { source, .. } | Self::Copied { source } | Self::Edited { source } => {
+                Some(*source)
+            }
             Self::Detection
             | Self::Segmented { .. }
             | Self::Imported { .. }
@@ -295,6 +300,7 @@ impl Provenance {
             | Self::Imported { .. }
             | Self::Interop { .. }
             | Self::Copied { .. }
+            | Self::Edited { .. }
             | Self::Merged { .. } => None,
         }
     }
@@ -307,7 +313,8 @@ impl Provenance {
             | Self::Imported { .. }
             | Self::Interop { .. }
             | Self::Filtered { .. }
-            | Self::Copied { .. } => &[],
+            | Self::Copied { .. }
+            | Self::Edited { .. } => &[],
         }
     }
 
@@ -317,7 +324,9 @@ impl Provenance {
             | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. } => false,
-            Self::Filtered { source, .. } | Self::Copied { source } => *source == set,
+            Self::Filtered { source, .. } | Self::Copied { source } | Self::Edited { source } => {
+                *source == set
+            }
             Self::Merged { parts } => parts.iter().any(|part| part.provenance().references(set)),
         }
     }
@@ -328,7 +337,8 @@ impl Provenance {
             | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
-            | Self::Copied { .. } => false,
+            | Self::Copied { .. }
+            | Self::Edited { .. } => false,
             Self::Filtered { source, .. } => *source == set,
             Self::Merged { parts } => parts.iter().any(|part| part.provenance().depends_on(set)),
         }
@@ -337,6 +347,7 @@ impl Provenance {
     pub(crate) fn forget_copied(&mut self, removed: &[ObjectSetId]) {
         match self {
             Self::Copied { source } if removed.contains(source) => *self = Self::Detection,
+            Self::Edited { source } if removed.contains(source) => *self = Self::Detection,
             Self::Merged { parts } => {
                 for part in parts {
                     part.provenance.forget_copied(removed);
@@ -347,7 +358,8 @@ impl Provenance {
             | Self::Imported { .. }
             | Self::Interop { .. }
             | Self::Filtered { .. }
-            | Self::Copied { .. } => {}
+            | Self::Copied { .. }
+            | Self::Edited { .. } => {}
         }
     }
 
@@ -362,7 +374,8 @@ impl Provenance {
             Self::Detection
             | Self::Segmented { .. }
             | Self::Imported { .. }
-            | Self::Interop { .. } => {}
+            | Self::Interop { .. }
+            | Self::Edited { .. } => {}
             Self::Filtered { source, .. } | Self::Copied { source } => sources.push(*source),
             Self::Merged { parts } => {
                 for part in parts {

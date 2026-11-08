@@ -47,6 +47,17 @@ pub enum Command {
         source: ObjectSetId,
         target: ObjectSetId,
     },
+    MergeSurfaces {
+        set: ObjectSetId,
+        time: u32,
+        source: usize,
+        target: usize,
+    },
+    SplitSurface {
+        set: ObjectSetId,
+        time: u32,
+        object: usize,
+    },
     AddObject(ObjectKind),
     AddSegment,
     SetSegment {
@@ -280,7 +291,7 @@ pub enum Command {
     ExportMeasure,
     ExportMesh(ObjectSetId),
     ExportLabels(ObjectSetId),
-    ExportChannel(usize),
+    ExportDataset,
     CaptureProtocol,
     ApplyProtocol,
     LoadProtocol,
@@ -320,6 +331,7 @@ pub enum Action {
     ExtractFiltered,
     DuplicateObject,
     MergeObjects,
+    EditObjects,
     ClearObject,
     Seed,
     SeedSource,
@@ -392,6 +404,7 @@ impl Action {
             Self::ExtractFiltered => "filtered object set",
             Self::DuplicateObject => "copy an object set",
             Self::MergeObjects => "merge object sets",
+            Self::EditObjects => "edit surfaces",
             Self::ClearObject => "clear objects",
             Self::Seed => "seed points",
             Self::SeedSource => "seed source",
@@ -532,6 +545,9 @@ impl Command {
             Self::ExtractFiltered => Edit::new(Action::ExtractFiltered),
             Self::DuplicateObject(_) => Edit::new(Action::DuplicateObject),
             Self::MergeObjects { target, .. } => Edit::targeted(Action::MergeObjects, target.raw()),
+            Self::MergeSurfaces { set, .. } | Self::SplitSurface { set, .. } => {
+                Edit::targeted(Action::EditObjects, set.raw())
+            }
             Self::ClearObject(_) => Edit::new(Action::ClearObject),
             Self::AddSeed { set, .. } | Self::RemoveSeed { set, .. } | Self::ClearSeeds(set) => {
                 Edit::targeted(Action::Seed, set.raw())

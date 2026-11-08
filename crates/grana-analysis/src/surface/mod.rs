@@ -5,6 +5,7 @@ mod cap;
 mod cut;
 mod detection;
 mod distance;
+mod edit;
 mod emit;
 mod label;
 mod mask;
@@ -29,6 +30,7 @@ use grana_object::SurfaceParams;
 use assemble::Assembler;
 use detection::{Detection, DetectionBuild, DetectionInput, DetectionSource, DetectionStore};
 use distance::Distance;
+pub use edit::{merge, split};
 use mask::SolidMask;
 use tile::{Tile, TileResult};
 

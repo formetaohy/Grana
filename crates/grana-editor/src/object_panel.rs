@@ -663,6 +663,7 @@ fn object_menu<'a>(
             ));
         }
     }
+    rows.extend(object_edit_rows(ctx, state, id, set));
     rows.push(view::menu_separator(ctx));
     if position > 0 {
         rows.push(action_row(
@@ -696,6 +697,88 @@ fn object_menu<'a>(
         Message::Command(Command::RemoveObject(id)),
     ));
     rows
+}
+
+const MERGE_CANDIDATES: usize = 8;
+
+fn object_edit_rows<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+    id: ObjectSetId,
+    set: &ObjectSet,
+) -> Vec<Element<'a, Message>> {
+    if set.kind() != ObjectKind::Surfaces {
+        return Vec::new();
+    }
+    let Some(selection) = state
+        .scene
+        .selection()
+        .filter(|selection| selection.set == id)
+    else {
+        return Vec::new();
+    };
+    let Item::Object(object) = selection.item else {
+        return Vec::new();
+    };
+    let time = state.scene.time();
+    let Some(ObjectFrame::Surfaces(surfaces)) = set.frame(time) else {
+        return Vec::new();
+    };
+    if !surfaces.cuttable() {
+        return Vec::new();
+    }
+    let centroids = surfaces
+        .objects()
+        .iter()
+        .map(|statistics| statistics.centroid())
+        .collect::<Vec<_>>();
+    let Some(origin) = centroids.get(object) else {
+        return Vec::new();
+    };
+    let mut neighbours = centroids
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != object)
+        .map(|(index, centroid)| (index, squared(origin, centroid)))
+        .collect::<Vec<_>>();
+    neighbours.sort_by(|left, right| left.1.total_cmp(&right.1));
+    let mut rows = vec![
+        view::menu_separator(ctx),
+        view::caption(ctx, "Edit Objects"),
+    ];
+    for (index, (candidate, _)) in neighbours.iter().take(MERGE_CANDIDATES).enumerate() {
+        rows.push(view::menu_row(
+            ctx,
+            &format!("object.{}.edit.merge.{index}", id.raw()),
+            &format!("Merge Into Object {}", candidate + 1),
+            false,
+            Some(Message::Command(Command::MergeSurfaces {
+                set: id,
+                time,
+                source: object,
+                target: *candidate,
+            })),
+        ));
+    }
+    rows.push(view::menu_row(
+        ctx,
+        &format!("object.{}.edit.split", id.raw()),
+        "Split Object",
+        false,
+        Some(Message::Command(Command::SplitSurface {
+            set: id,
+            time,
+            object,
+        })),
+    ));
+    rows
+}
+
+fn squared(left: &[f32; 3], right: &[f32; 3]) -> f32 {
+    left.iter()
+        .zip(right)
+        .map(|(left, right)| (left - right) * (left - right))
+        .sum()
 }
 
 fn label_metrics(scene: &Scene, set: &ObjectSet) -> Vec<(Option<ObjectColor>, String)> {
@@ -813,6 +896,7 @@ fn origin<'a>(
         Provenance::Interop { file } => format!("Imported tracks from {file}"),
         Provenance::Filtered { source, .. } => format!("Filtered from {}", name(*source)),
         Provenance::Copied { source } => format!("Copy of {}", name(*source)),
+        Provenance::Edited { source } => format!("Edited from {}", name(*source)),
         Provenance::Merged { parts } => format!(
             "Merged from {}",
             parts

@@ -1,7 +1,7 @@
 mod analysis;
 mod batch;
 mod cache;
-mod channel;
+mod dataset;
 mod edit;
 mod execute;
 mod export;
@@ -26,7 +26,7 @@ use grana_optics::PsfParams;
 use grana_project::{Project, Source as ProjectSource, ViewState};
 use grana_scene::{
     Criteria, Dataset, FilterRange, Item, Job, LassoPath, Measure, ObjectFrame, ObjectParams,
-    ObjectSetId, Origin, Progress, RestoreSpec, Scene,
+    ObjectSetId, Origin, Progress, RestoreSpec, Scene, Selection,
 };
 use grana_volume::{BrickData, BrickRequest, Region};
 
@@ -109,7 +109,7 @@ pub struct Session {
     history: History,
     export: Export,
     labels: Option<label::Labels>,
-    channel_export: Option<channel::ChannelExport>,
+    dataset_export: Option<dataset::DatasetExport>,
     label_images: Vec<String>,
     resume: Vec<(ObjectSetId, ObjectSetId, i32)>,
     recut: Option<(ObjectSetId, SurfaceCut)>,
@@ -167,7 +167,7 @@ impl Session {
             history: History::default(),
             export: Export::NATIVE,
             labels: None,
-            channel_export: None,
+            dataset_export: None,
             label_images: Vec::new(),
             resume: Vec::new(),
             recut: None,
@@ -336,20 +336,20 @@ impl Session {
         repaint |= self.poll_analysis();
         repaint |= self.poll_batch();
         repaint |= self.poll_labels();
-        repaint |= self.poll_channel();
+        repaint |= self.poll_dataset();
         repaint |= self.refresh_masks();
         repaint
     }
 
     pub fn writing(&self) -> bool {
-        self.labels.is_some() || self.channel_export.is_some()
+        self.labels.is_some() || self.dataset_export.is_some()
     }
 
     pub fn write_progress(&self) -> Option<(&str, usize, usize)> {
         if let Some(labels) = self.labels.as_ref() {
             return Some((labels.label(), labels.progress().0, labels.progress().1));
         }
-        self.channel_export
+        self.dataset_export
             .as_ref()
             .map(|export| (export.label(), export.progress().0, export.progress().1))
     }

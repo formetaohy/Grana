@@ -800,6 +800,9 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
         2 => Ok(Provenance::Copied {
             source: ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?,
         }),
+        7 => Ok(Provenance::Edited {
+            source: ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?,
+        }),
         3 => {
             let count = reader.count(1)?;
             let mut parts = Vec::new();

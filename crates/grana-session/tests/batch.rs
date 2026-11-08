@@ -358,7 +358,7 @@ fn replays_derived_and_merged_object_sets() {
 }
 
 #[test]
-fn exports_the_derived_channels_of_every_dataset() {
+fn exports_the_channels_and_labels_of_every_dataset() {
     const CHANNEL_EXPORT: &str = r#"
 {
   "channels": [
@@ -387,18 +387,20 @@ fn exports_the_derived_channels_of_every_dataset() {
     let protocol = Protocol::from_json(CHANNEL_EXPORT).expect("the protocol is valid");
     let completed = run_with(&protocol, &datasets, &output, 1, false, true, None);
     assert_eq!(completed, [Status::Ok], "the batch finishes");
-    let path = output.join("alpha").join("cells-in-puncta.ome.zarr");
-    let image = grana_zarr::Image::open(&path).expect("the exported channel opens");
+    let path = output.join("alpha").join("alpha.ome.zarr");
+    let image = grana_zarr::Image::open(&path).expect("the exported dataset opens");
     let pyramid = image.pyramid();
-    assert_eq!(pyramid.channel_count(), 1);
+    assert_eq!(pyramid.channel_count(), 3);
     assert_eq!(pyramid.frame_count(), FRAMES);
-    assert_eq!(pyramid.channels()[0].name(), "Cells in Puncta");
+    assert_eq!(pyramid.channels()[2].name(), "Cells in Puncta");
     assert_eq!(
         pyramid.level(0).extent(),
         grana_volume::Extent::new(EXTENT[0], EXTENT[1], EXTENT[2])
     );
+    let labels = image.labels().expect("the dataset lists its labels");
+    assert_eq!(labels.names().collect::<Vec<_>>(), ["Puncta"]);
     let frame = image
-        .read_region(0, 0, 0, 0..EXTENT[0], 0..EXTENT[1], 0..EXTENT[2])
+        .read_region(0, 0, 2, 0..EXTENT[0], 0..EXTENT[1], 0..EXTENT[2])
         .expect("the first frame reads");
     let grana_volume::VoxelData::F32(values) = &frame else {
         panic!("the exported channel stores float voxels");
@@ -686,14 +688,14 @@ fn exports_the_restored_channels_of_every_dataset() {
     let protocol = Protocol::from_json(RESTORE_EXPORT).expect("the protocol is valid");
     let completed = run_with(&protocol, &datasets, &output, 1, false, true, None);
     assert_eq!(completed, [Status::Ok], "the batch finishes");
-    let path = output.join("alpha").join("cells-restored.ome.zarr");
-    let image = grana_zarr::Image::open(&path).expect("the restored channel opens");
+    let path = output.join("alpha").join("alpha.ome.zarr");
+    let image = grana_zarr::Image::open(&path).expect("the restored dataset opens");
     let pyramid = image.pyramid();
-    assert_eq!(pyramid.channel_count(), 1);
+    assert_eq!(pyramid.channel_count(), 3);
     assert_eq!(pyramid.frame_count(), FRAMES);
-    assert_eq!(pyramid.channels()[0].name(), "Cells restored");
+    assert_eq!(pyramid.channels()[2].name(), "Cells restored");
     let frame = image
-        .read_region(0, 0, 0, 0..EXTENT[0], 0..EXTENT[1], 0..EXTENT[2])
+        .read_region(0, 0, 2, 0..EXTENT[0], 0..EXTENT[1], 0..EXTENT[2])
         .expect("the first frame reads");
     let grana_volume::VoxelData::F32(values) = &frame else {
         panic!("the restored channel stores float voxels");

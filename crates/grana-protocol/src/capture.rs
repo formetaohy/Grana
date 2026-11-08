@@ -295,6 +295,9 @@ fn source(
                 set.surface_seeds(),
             ),
         },
+        Provenance::Edited { .. } => Err(ProtocolError::Invalid(
+            "manual surface edits are not replayable".to_string(),
+        )),
         Provenance::Merged { parts } => Ok(SourceSpec::Merged {
             parts: parts
                 .iter()
@@ -354,6 +357,11 @@ fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSp
                 part.seeds(),
             )?,
         },
+        Provenance::Edited { .. } => {
+            return Err(ProtocolError::Invalid(
+                "manual surface edits are not replayable".to_string(),
+            ));
+        }
         Provenance::Merged { parts } => SourceSpec::Merged {
             parts: parts
                 .iter()

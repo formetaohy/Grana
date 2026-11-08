@@ -2,6 +2,12 @@ use super::*;
 
 type Deletions = (ObjectSetId, Vec<(u32, Vec<usize>)>);
 
+#[derive(Clone, Copy, Debug)]
+pub(super) enum SurfaceEdit {
+    Merge { source: usize, target: usize },
+    Split { object: usize },
+}
+
 impl Session {
     pub fn delete_selected(&mut self) -> bool {
         let Some(scene) = self.scene.as_ref() else {
@@ -388,6 +394,71 @@ impl Session {
             }
             self.start_detect(set);
         }
+    }
+
+    pub(super) fn edit_surfaces(&mut self, set: ObjectSetId, time: u32, edit: SurfaceEdit) -> bool {
+        if self.recipe.is_some() {
+            self.message = Some(Message::error("a protocol replay edits no surfaces"));
+            return false;
+        }
+        if self.busy(set) {
+            self.message = Some(Message::error("the object set is busy with an analysis"));
+            return false;
+        }
+        let Some(frame) = self
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.objects.get(set))
+            .and_then(|set| set.frame(time))
+        else {
+            self.message = Some(Message::error("the object set holds no surface here"));
+            return false;
+        };
+        let ObjectFrame::Surfaces(surfaces) = frame else {
+            self.message = Some(Message::error("only surfaces can be merged or split"));
+            return false;
+        };
+        let store = Arc::clone(&self.store);
+        let outcome = match edit {
+            SurfaceEdit::Merge { source, target } => {
+                grana_analysis::merge(surfaces, &[source, target], Some(&store))
+            }
+            SurfaceEdit::Split { object } => grana_analysis::split(surfaces, object, Some(&store)),
+        };
+        let (edited, suffix, item) = match (outcome, edit) {
+            (Ok(edited), SurfaceEdit::Merge { source, target }) => {
+                (edited, "merged", source.min(target))
+            }
+            (Ok(edited), SurfaceEdit::Split { object }) => (edited, "split", object),
+            (Err(detail), _) => {
+                self.message = Some(Message::error(detail));
+                return false;
+            }
+        };
+        let edited = self
+            .scene
+            .as_mut()
+            .and_then(|scene| scene.edit_objects(set, time, ObjectFrame::Surfaces(edited), suffix));
+        let Some(edited) = edited else {
+            self.message = Some(Message::error("the surface edit produced no object set"));
+            return false;
+        };
+        if let Some(source) = self.object_mut(set) {
+            source.set_visible(false);
+        }
+        if let Some(scene) = self.scene.as_mut() {
+            scene.select(Some(Selection {
+                set: edited,
+                item: Item::Object(item),
+            }));
+        }
+        if let Some(scene) = self.scene.as_ref() {
+            self.measure.select(edited, scene);
+        }
+        self.message = Some(Message::info(
+            "edited the surfaces into a derived object set",
+        ));
+        true
     }
 
     pub(super) fn merge_objects(&mut self, source: ObjectSetId, target: ObjectSetId) -> bool {
