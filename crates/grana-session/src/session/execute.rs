@@ -2,7 +2,7 @@ use super::*;
 
 use grana_scene::SegmentParams;
 
-use super::edit::SurfaceEdit;
+use super::edit::SurfaceEditRequest;
 
 pub(super) struct Recording {
     edit: Edit,
@@ -38,6 +38,11 @@ impl Session {
             Command::Select(selection) => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.select(selection);
+                }
+            }
+            Command::ToggleSelect(selection) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.toggle_select(selection);
                 }
             }
             Command::AddObject(kind) => {
@@ -132,16 +137,11 @@ impl Session {
             Command::MergeObjects { source, target } => {
                 self.merge_objects(source, target);
             }
-            Command::MergeSurfaces {
-                set,
-                time,
-                source,
-                target,
-            } => {
-                self.edit_surfaces(set, time, SurfaceEdit::Merge { source, target });
+            Command::MergeSurfaces { set, time, objects } => {
+                self.edit_surfaces(set, time, SurfaceEditRequest::Merge(objects));
             }
             Command::SplitSurface { set, time, object } => {
-                self.edit_surfaces(set, time, SurfaceEdit::Split { object });
+                self.edit_surfaces(set, time, SurfaceEditRequest::Split(object));
             }
             Command::RemoveObject(set) => {
                 let masked = self.scene.as_ref().is_some_and(|scene| {

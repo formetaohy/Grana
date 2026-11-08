@@ -200,6 +200,18 @@ impl Session {
                         return;
                     }
                 },
+                Step::Edit { set, .. } => match self.apply_edit_plan(set) {
+                    Ok(()) => {
+                        self.derive_settled(set, true);
+                        self.advance_step();
+                        continue;
+                    }
+                    Err(detail) => {
+                        self.abort_recipe();
+                        self.message = Some(Message::error(detail));
+                        return;
+                    }
+                },
                 Step::Merge { set, part } => {
                     let waiting = self.analysis.iter().any(|analysis| {
                         analysis.job().involves(set) || analysis.job().involves(part)

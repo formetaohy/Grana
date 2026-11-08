@@ -25,6 +25,10 @@ pub enum Step {
         set: ObjectSetId,
         source: ObjectSetId,
     },
+    Edit {
+        set: ObjectSetId,
+        source: ObjectSetId,
+    },
     Merge {
         set: ObjectSetId,
         part: ObjectSetId,
@@ -52,6 +56,7 @@ impl Step {
             | Self::Import { set }
             | Self::Filter { set, .. }
             | Self::Copy { set, .. }
+            | Self::Edit { set, .. }
             | Self::Merge { set, .. } => Some(*set),
             Self::Relation { .. } | Self::Coloc { .. } | Self::Present => None,
         }

@@ -24,7 +24,8 @@ use grana_scene::{
     Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState, LassoPath, MaskFilter,
     MaskSpec, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind, ObjectParams,
     ObjectSetId, ObjectSetKey, Provenance, Recipe, RelationState, RestoreSpec, SceneState, Seeds,
-    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
+    SelectionState, SetState, SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor, TrackEdit,
+    TrackStyle, Visibility,
 };
 use grana_volume::{Axis, Clip, Intensity, Region};
 
@@ -800,9 +801,21 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
         2 => Ok(Provenance::Copied {
             source: ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?,
         }),
-        7 => Ok(Provenance::Edited {
-            source: ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?,
-        }),
+        7 => {
+            let source = ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?;
+            let count = reader.count(9)?;
+            let mut edits = Vec::with_capacity(count);
+            for _ in 0..count {
+                let frame = reader.u32()?;
+                let kind = SurfaceEditKind::parse(reader.u8()? as usize).ok_or(FAULT_TAG)?;
+                let anchors = decode_anchors(reader)?;
+                edits.push(SurfaceEdit::restored(frame, kind, anchors).map_err(|_| FAULT_VALUE)?);
+            }
+            if edits.is_empty() {
+                return Err(FAULT_VALUE);
+            }
+            Ok(Provenance::Edited { source, edits })
+        }
         3 => {
             let count = reader.count(1)?;
             let mut parts = Vec::new();

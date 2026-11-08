@@ -3,11 +3,9 @@ use std::sync::Arc;
 use grana_geometry::{Bounds, PackedMesh};
 use grana_measure::{Measurement, Objects};
 use grana_object::{
-    FilamentParams, FilamentSet, IntensityTable, Shape, Spot, SpotParams, SpotSet, SurfaceFilter,
-    SurfaceParams, SurfaceSet, TrackParams,
+    FilamentParams, FilamentSet, IntensityTable, ObjectAnchor, Shape, Spot, SpotParams, SpotSet,
+    SurfaceFilter, SurfaceParams, SurfaceSet, TrackParams,
 };
-
-use crate::curation::ObjectAnchor;
 
 const SPOT_STEP: f32 = 8.0;
 const SURFACE_STEP: f32 = 12.0;

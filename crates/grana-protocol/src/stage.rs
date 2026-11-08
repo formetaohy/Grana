@@ -164,6 +164,21 @@ impl Protocol {
                     )));
                 }
             }
+            SourceSpec::Edited { source, edits } => {
+                if !self.sets.iter().any(|set| set.key == *source) {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{source} is not an object set of the protocol"
+                    )));
+                }
+                for edit in edits {
+                    if edit.frame() >= frames {
+                        return Err(ProtocolError::Invalid(format!(
+                            "the surface edits name frame {} of {frames}",
+                            edit.frame()
+                        )));
+                    }
+                }
+            }
             SourceSpec::Labels { label } => {
                 if label.trim().is_empty() {
                     return Err(ProtocolError::Invalid(
@@ -465,6 +480,29 @@ impl Builder<'_> {
                 self.rename(id, name, named)?;
                 self.apply_track(id, track);
                 self.steps.push(Step::Copy { set: id, source });
+                Ok(id)
+            }
+            SourceSpec::Edited {
+                source: reference,
+                edits,
+            } => {
+                let source = self.reference(reference)?;
+                let plan = edits
+                    .iter()
+                    .map(|edit| edit.clone().edit())
+                    .collect::<Result<Vec<_>, String>>()
+                    .map_err(ProtocolError::Invalid)?;
+                let id = self
+                    .scene
+                    .edited_object(source, "edited", plan)
+                    .ok_or_else(|| {
+                        ProtocolError::Invalid(format!(
+                            "{name} edits an object set that left the scene"
+                        ))
+                    })?;
+                self.rename(id, name, named)?;
+                self.apply_track(id, track);
+                self.steps.push(Step::Edit { set: id, source });
                 Ok(id)
             }
             SourceSpec::Merged { parts } => {
@@ -905,6 +943,7 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
                 }
             }
             Step::Copy { source, .. } => dependencies[index].push(settled(&ready, *source)?),
+            Step::Edit { source, .. } => dependencies[index].push(settled(&ready, *source)?),
             Step::Merge { set, part } => {
                 dependencies[index].push(settled(&ready, *part)?);
                 match merges.insert(*set, index) {

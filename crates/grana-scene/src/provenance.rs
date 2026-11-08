@@ -1,5 +1,5 @@
 use grana_measure::{Filter, Group, Lasso, Table};
-use grana_object::TrackSet;
+use grana_object::{SurfaceEdit, TrackSet};
 
 use crate::curation::Curation;
 use crate::object::{ObjectKind, ObjectParams};
@@ -207,6 +207,7 @@ pub enum Provenance {
     },
     Edited {
         source: ObjectSetId,
+        edits: Vec<SurfaceEdit>,
     },
     Merged {
         parts: Vec<Recipe>,
@@ -279,11 +280,37 @@ impl Provenance {
         matches!(self, Self::Merged { .. })
     }
 
+    pub fn edits(&self) -> &[SurfaceEdit] {
+        match self {
+            Self::Edited { edits, .. } => edits,
+            Self::Detection
+            | Self::Segmented { .. }
+            | Self::Imported { .. }
+            | Self::Interop { .. }
+            | Self::Filtered { .. }
+            | Self::Copied { .. }
+            | Self::Merged { .. } => &[],
+        }
+    }
+
+    pub fn editing(&self) -> Option<(ObjectSetId, &[SurfaceEdit])> {
+        match self {
+            Self::Edited { source, edits } => Some((*source, edits)),
+            Self::Detection
+            | Self::Segmented { .. }
+            | Self::Imported { .. }
+            | Self::Interop { .. }
+            | Self::Filtered { .. }
+            | Self::Copied { .. }
+            | Self::Merged { .. } => None,
+        }
+    }
+
     pub fn source(&self) -> Option<ObjectSetId> {
         match self {
-            Self::Filtered { source, .. } | Self::Copied { source } | Self::Edited { source } => {
-                Some(*source)
-            }
+            Self::Filtered { source, .. }
+            | Self::Copied { source }
+            | Self::Edited { source, .. } => Some(*source),
             Self::Detection
             | Self::Segmented { .. }
             | Self::Imported { .. }
@@ -324,9 +351,9 @@ impl Provenance {
             | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. } => false,
-            Self::Filtered { source, .. } | Self::Copied { source } | Self::Edited { source } => {
-                *source == set
-            }
+            Self::Filtered { source, .. }
+            | Self::Copied { source }
+            | Self::Edited { source, .. } => *source == set,
             Self::Merged { parts } => parts.iter().any(|part| part.provenance().references(set)),
         }
     }
@@ -337,9 +364,8 @@ impl Provenance {
             | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
-            | Self::Copied { .. }
-            | Self::Edited { .. } => false,
-            Self::Filtered { source, .. } => *source == set,
+            | Self::Copied { .. } => false,
+            Self::Filtered { source, .. } | Self::Edited { source, .. } => *source == set,
             Self::Merged { parts } => parts.iter().any(|part| part.provenance().depends_on(set)),
         }
     }
@@ -347,7 +373,7 @@ impl Provenance {
     pub(crate) fn forget_copied(&mut self, removed: &[ObjectSetId]) {
         match self {
             Self::Copied { source } if removed.contains(source) => *self = Self::Detection,
-            Self::Edited { source } if removed.contains(source) => *self = Self::Detection,
+            Self::Edited { source, .. } if removed.contains(source) => *self = Self::Detection,
             Self::Merged { parts } => {
                 for part in parts {
                     part.provenance.forget_copied(removed);
@@ -374,9 +400,10 @@ impl Provenance {
             Self::Detection
             | Self::Segmented { .. }
             | Self::Imported { .. }
-            | Self::Interop { .. }
-            | Self::Edited { .. } => {}
-            Self::Filtered { source, .. } | Self::Copied { source } => sources.push(*source),
+            | Self::Interop { .. } => {}
+            Self::Filtered { source, .. }
+            | Self::Copied { source }
+            | Self::Edited { source, .. } => sources.push(*source),
             Self::Merged { parts } => {
                 for part in parts {
                     part.provenance().collect_sources(sources);

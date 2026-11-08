@@ -1,11 +1,14 @@
 use super::*;
 
+use grana_object::ObjectAnchor;
+use grana_scene::{ObjectFrame, ObjectKind, ObjectSet, SurfaceEdit, SurfaceEditKind};
+
 type Deletions = (ObjectSetId, Vec<(u32, Vec<usize>)>);
 
-#[derive(Clone, Copy, Debug)]
-pub(super) enum SurfaceEdit {
-    Merge { source: usize, target: usize },
-    Split { object: usize },
+#[derive(Clone, Debug)]
+pub(super) enum SurfaceEditRequest {
+    Merge(Vec<usize>),
+    Split(usize),
 }
 
 impl Session {
@@ -354,12 +357,13 @@ impl Session {
     }
 
     pub(super) fn refresh_dependents(&mut self, root: ObjectSetId) {
-        let (filtered, seeded) = {
+        let (filtered, edited, seeded) = {
             let Some(scene) = self.scene.as_ref() else {
                 return;
             };
             (
                 scene.filtered_dependents(root),
+                scene.edited_dependents(root),
                 scene.seeded_dependents(root),
             )
         };
@@ -386,6 +390,11 @@ impl Session {
                 None => return,
             }
         }
+        for set in edited {
+            if !self.refresh_edited(set) {
+                return;
+            }
+        }
         seeded.sort_unstable_by_key(|set| set.raw());
         seeded.dedup();
         for set in seeded {
@@ -396,7 +405,62 @@ impl Session {
         }
     }
 
-    pub(super) fn edit_surfaces(&mut self, set: ObjectSetId, time: u32, edit: SurfaceEdit) -> bool {
+    pub(super) fn refresh_edited(&mut self, set: ObjectSetId) -> bool {
+        if let Err(detail) = self.apply_edit_plan(set) {
+            self.message = Some(Message::error(detail));
+            return false;
+        }
+        self.defer_relations(set);
+        self.resume_relations(set);
+        self.start_tracks(set);
+        true
+    }
+
+    pub(super) fn apply_edit_plan(&mut self, set: ObjectSetId) -> Result<(), String> {
+        let Some((source, plan, voxel)) = self
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.objects.get(set))
+            .and_then(|object| {
+                object
+                    .provenance()
+                    .editing()
+                    .map(|(source, edits)| (source, edits.to_vec(), object.voxel()))
+            })
+        else {
+            return Err("the object set carries no surface edits".to_string());
+        };
+        let frames = {
+            let Some(scene) = self.scene.as_ref() else {
+                return Err("no dataset is open".to_string());
+            };
+            (0..scene.frame_count())
+                .map(|time| {
+                    scene
+                        .objects
+                        .get(source)
+                        .and_then(|object| object.frame_shared(time))
+                })
+                .collect::<Vec<_>>()
+        };
+        let edited = grana_pipeline::run::edit(&frames, &plan, voxel, Some(&self.store))?;
+        if let Some(scene) = self.scene.as_mut() {
+            for (time, frame) in edited.into_iter().enumerate() {
+                if let Some(frame) = frame {
+                    scene.install_shared(set, time as u32, frame);
+                }
+            }
+            scene.clear_tracks(set);
+        }
+        Ok(())
+    }
+
+    pub(super) fn edit_surfaces(
+        &mut self,
+        set: ObjectSetId,
+        time: u32,
+        request: SurfaceEditRequest,
+    ) -> bool {
         if self.recipe.is_some() {
             self.message = Some(Message::error("a protocol replay edits no surfaces"));
             return false;
@@ -405,59 +469,94 @@ impl Session {
             self.message = Some(Message::error("the object set is busy with an analysis"));
             return false;
         }
-        let Some(frame) = self
+        let plan = {
+            let Some(scene) = self.scene.as_ref() else {
+                return false;
+            };
+            let Some(object) = scene.objects.get(set) else {
+                return false;
+            };
+            match surface_plan(scene, object, time, request) {
+                Ok(plan) => plan,
+                Err(detail) => {
+                    self.message = Some(Message::error(detail));
+                    return false;
+                }
+            }
+        };
+        let mut created = false;
+        let (source, target) = match self
             .scene
             .as_ref()
             .and_then(|scene| scene.objects.get(set))
-            .and_then(|set| set.frame(time))
-        else {
-            self.message = Some(Message::error("the object set holds no surface here"));
+            .and_then(|object| {
+                object
+                    .provenance()
+                    .editing()
+                    .map(|(source, edits)| (source, edits.to_vec()))
+            }) {
+            Some((source, mut edits)) => {
+                edits.extend(plan);
+                let replanned = self
+                    .scene
+                    .as_mut()
+                    .is_some_and(|scene| scene.replan_object(set, edits));
+                if !replanned {
+                    self.message = Some(Message::error("the object set holds no surface edits"));
+                    return false;
+                }
+                (source, set)
+            }
+            None => {
+                let Some(edited) = self
+                    .scene
+                    .as_mut()
+                    .and_then(|scene| scene.edited_object(set, "edited", plan))
+                else {
+                    self.message = Some(Message::error("the surface edits derive no object set"));
+                    return false;
+                };
+                created = true;
+                (set, edited)
+            }
+        };
+        if let Err(detail) = self.apply_edit_plan(target) {
+            if created {
+                self.remove_object(target);
+            }
+            self.message = Some(Message::error(detail));
             return false;
-        };
-        let ObjectFrame::Surfaces(surfaces) = frame else {
-            self.message = Some(Message::error("only surfaces can be merged or split"));
-            return false;
-        };
-        let store = Arc::clone(&self.store);
-        let outcome = match edit {
-            SurfaceEdit::Merge { source, target } => {
-                grana_analysis::merge(surfaces, &[source, target], Some(&store))
-            }
-            SurfaceEdit::Split { object } => grana_analysis::split(surfaces, object, Some(&store)),
-        };
-        let (edited, suffix, item) = match (outcome, edit) {
-            (Ok(edited), SurfaceEdit::Merge { source, target }) => {
-                (edited, "merged", source.min(target))
-            }
-            (Ok(edited), SurfaceEdit::Split { object }) => (edited, "split", object),
-            (Err(detail), _) => {
-                self.message = Some(Message::error(detail));
-                return false;
-            }
-        };
+        }
         let edited = self
             .scene
-            .as_mut()
-            .and_then(|scene| scene.edit_objects(set, time, ObjectFrame::Surfaces(edited), suffix));
-        let Some(edited) = edited else {
-            self.message = Some(Message::error("the surface edit produced no object set"));
-            return false;
-        };
-        if let Some(source) = self.object_mut(set) {
+            .as_ref()
+            .and_then(|scene| scene.objects.get(target))
+            .map_or(0, |object| {
+                let mut frames = object
+                    .provenance()
+                    .edits()
+                    .iter()
+                    .map(|edit| edit.frame())
+                    .collect::<Vec<_>>();
+                frames.sort_unstable();
+                frames.dedup();
+                frames.len()
+            });
+        if let Some(source) = self.object_mut(source) {
             source.set_visible(false);
         }
         if let Some(scene) = self.scene.as_mut() {
-            scene.select(Some(Selection {
-                set: edited,
-                item: Item::Object(item),
-            }));
+            scene.select(None);
         }
+        self.defer_relations(target);
+        self.resume_relations(target);
+        self.start_tracks(target);
         if let Some(scene) = self.scene.as_ref() {
-            self.measure.select(edited, scene);
+            self.measure.select(target, scene);
         }
-        self.message = Some(Message::info(
-            "edited the surfaces into a derived object set",
-        ));
+        self.message = Some(Message::info(format!(
+            "edited the surfaces of {edited} frames into a derived object set"
+        )));
         true
     }
 
@@ -523,4 +622,96 @@ impl Session {
             self.after_mask_layout();
         }
     }
+}
+
+fn surface_plan(
+    scene: &Scene,
+    object: &ObjectSet,
+    time: u32,
+    request: SurfaceEditRequest,
+) -> Result<Vec<SurfaceEdit>, String> {
+    let (objects, kind) = match request {
+        SurfaceEditRequest::Merge(objects) => (objects, SurfaceEditKind::Merge),
+        SurfaceEditRequest::Split(object) => (vec![object], SurfaceEditKind::Split),
+    };
+    let mut unique = objects.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    if unique.len() != objects.len() {
+        return Err("the surface edit names one surface twice".to_string());
+    }
+    if kind == SurfaceEditKind::Merge && unique.len() < 2 {
+        return Err("merging needs two distinct surfaces".to_string());
+    }
+    let Some(frame) = object.frame(time) else {
+        return Err("the object set holds no surface here".to_string());
+    };
+    if frame.kind() != ObjectKind::Surfaces {
+        return Err("only surfaces can be merged or split".to_string());
+    }
+    let anchors = frame.anchors();
+    let mut recorded = Vec::with_capacity(unique.len());
+    for index in &unique {
+        let Some(anchor) = anchors.get(*index) else {
+            return Err(format!(
+                "the frame {time} holds {} surfaces but names {index}",
+                anchors.len()
+            ));
+        };
+        recorded.push(*anchor);
+    }
+    let mut plan = Vec::new();
+    for current in 0..scene.frame_count() {
+        let resolved = if current == time {
+            Some(recorded.clone())
+        } else {
+            counterparts(object, current, time, &unique)
+        };
+        let Some(resolved) = resolved else {
+            continue;
+        };
+        if resolved
+            .iter()
+            .enumerate()
+            .any(|(index, anchor)| resolved[..index].contains(anchor))
+        {
+            continue;
+        }
+        plan.push(match kind {
+            SurfaceEditKind::Merge => SurfaceEdit::merge(current, resolved),
+            SurfaceEditKind::Split => SurfaceEdit::split(current, resolved[0]),
+        });
+    }
+    if plan.is_empty() {
+        return Err("the edited surfaces share no frame".to_string());
+    }
+    Ok(plan)
+}
+
+fn counterparts(
+    object: &ObjectSet,
+    current: u32,
+    recorded_time: u32,
+    objects: &[usize],
+) -> Option<Vec<ObjectAnchor>> {
+    let frame = object.frame(current)?;
+    if frame.kind() != ObjectKind::Surfaces {
+        return None;
+    }
+    let anchors = frame.anchors();
+    let tracks = object.tracks()?.set();
+    let mut indices = Vec::with_capacity(objects.len());
+    for index in objects {
+        let track = tracks.track_at(recorded_time, *index)?;
+        let node = tracks
+            .track(track)?
+            .nodes()
+            .iter()
+            .find(|node| node.time() == current)?;
+        indices.push(node.object());
+    }
+    indices
+        .into_iter()
+        .map(|index| anchors.get(index).copied())
+        .collect()
 }

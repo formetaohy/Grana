@@ -125,6 +125,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             Step::Import { set } => run.import(*set)?,
             Step::Filter { set, .. } => run.refilter(*set)?,
             Step::Copy { set, source } => run.copy(*set, *source)?,
+            Step::Edit { set, .. } => run.edit(*set)?,
             Step::Merge { set, part } => run.merge(*set, *part)?,
             Step::Relation {
                 source,
@@ -540,6 +541,41 @@ impl Run<'_, '_> {
         self.scene.merge_objects(part, id)?;
         self.scene.apply_curation(id);
         Ok(())
+    }
+
+    fn edit(&mut self, id: ObjectSetId) -> Result<(), String> {
+        let name = self.name(id);
+        let _ = self.task.events.send(Event::Step {
+            index: self.task.index,
+            label: format!("editing {name}"),
+        });
+        let (source, plan, voxel) = self
+            .scene
+            .objects
+            .get(id)
+            .and_then(|object| {
+                object
+                    .provenance()
+                    .editing()
+                    .map(|(source, edits)| (source, edits.to_vec(), object.voxel()))
+            })
+            .ok_or_else(|| format!("{name} carries no surface edits"))?;
+        let frames = (0..self.scene.frame_count())
+            .map(|time| {
+                self.scene
+                    .objects
+                    .get(source)
+                    .and_then(|object| object.frame_shared(time))
+            })
+            .collect::<Vec<_>>();
+        let edited = crate::run::edit(&frames, &plan, voxel, Some(self.store))?;
+        for (time, frame) in edited.into_iter().enumerate() {
+            if let Some(frame) = frame {
+                self.scene.install_shared(id, time as u32, frame);
+            }
+        }
+        self.scene.clear_tracks(id);
+        self.track(id)
     }
 
     fn name(&self, id: ObjectSetId) -> String {

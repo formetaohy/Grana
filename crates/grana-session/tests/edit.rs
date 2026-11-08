@@ -64,11 +64,17 @@ fn merging_two_surfaces_derives_an_edited_set() {
     session.execute(Command::MergeSurfaces {
         set,
         time,
-        source: 0,
-        target: 1,
+        objects: vec![0, 1],
     });
     let derived = edited(&session);
-    assert_eq!(objects(&session, derived, time), before - 1);
+    let scene = session.scene().expect("the sample opens");
+    for frame in 0..scene.frame_count() {
+        assert_eq!(
+            objects(&session, derived, frame),
+            objects(&session, set, frame) - 1,
+            "the merge follows the tracks into frame {frame}"
+        );
+    }
     assert_eq!(session.history().undo, Some(Action::EditObjects));
     assert_eq!(session.measure().set(), Some(derived));
     {
@@ -86,5 +92,58 @@ fn merging_two_surfaces_derives_an_edited_set() {
             .iter()
             .all(|set| !matches!(set.provenance(), Provenance::Edited { .. })),
         "undo removes the derived set"
+    );
+}
+
+#[test]
+fn editing_the_edited_set_extends_its_plan() {
+    let mut session = opened();
+    let set = surfaces(&session);
+    let time = session.scene().expect("the sample opens").time();
+    let frames = session.scene().expect("the sample opens").frame_count();
+    let before = objects(&session, set, time);
+    assert!(before >= 3);
+    session.execute(Command::MergeSurfaces {
+        set,
+        time,
+        objects: vec![0, 1],
+    });
+    settle(&mut session);
+    let derived = edited(&session);
+    assert_eq!(
+        session
+            .scene()
+            .expect("the sample opens")
+            .objects
+            .get(derived)
+            .expect("the edit derives an object set")
+            .provenance()
+            .edits()
+            .len(),
+        frames as usize,
+        "the merge records one edit per frame"
+    );
+    session.execute(Command::SplitSurface {
+        set: derived,
+        time,
+        object: 0,
+    });
+    settle(&mut session);
+    let scene = session.scene().expect("the sample opens");
+    let edited_sets = scene
+        .objects
+        .iter()
+        .filter(|set| matches!(set.provenance(), Provenance::Edited { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(edited_sets.len(), 1, "an edit extends the same object set");
+    assert_eq!(
+        edited_sets[0].provenance().edits().len(),
+        2 * frames as usize
+    );
+    assert_eq!(
+        edited_sets[0]
+            .frame(time)
+            .map_or(0, ObjectFrame::object_count),
+        before
     );
 }

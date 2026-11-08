@@ -27,6 +27,7 @@ pub enum Command {
     SetTime(u32),
     SelectSeries(usize),
     Select(Option<Selection>),
+    ToggleSelect(Selection),
     RenameObject {
         set: ObjectSetId,
         name: String,
@@ -50,8 +51,7 @@ pub enum Command {
     MergeSurfaces {
         set: ObjectSetId,
         time: u32,
-        source: usize,
-        target: usize,
+        objects: Vec<usize>,
     },
     SplitSurface {
         set: ObjectSetId,

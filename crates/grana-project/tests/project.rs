@@ -22,8 +22,8 @@ use grana_object::{SpotParams, SurfaceFilter, SurfaceParams};
 use grana_project::{Export, Project, Source, ViewState};
 use grana_scene::{
     Criteria, Dataset, Drift, FilterRange, Item, MaskFilter, Measure, ObjectColor, ObjectFrame,
-    ObjectKind, ObjectParams, Scene, SegmentModel, SegmentParams, Selection, TrackColor,
-    Visibility,
+    ObjectKind, ObjectParams, Scene, SegmentModel, SegmentParams, Selection, SurfaceEdit,
+    TrackColor, Visibility,
 };
 use grana_volume::{Axis, Channel, Clip, Extent, Spacing, Volume, VolumeSeries, VoxelData};
 
@@ -1042,6 +1042,81 @@ fn round_trips_the_surface_topology() {
         detect(&volume, deeper),
         "the restored recut matches a fresh detection"
     );
+}
+
+#[test]
+fn round_trips_the_surface_edits_of_a_derived_set() {
+    let volume = lobes();
+    let params = lobe_params(0.3);
+    let set = detect(&volume, params);
+    assert_eq!(set.object_count(), 2, "the deep split separates the lobes");
+    let mut scene = surface_scene(&volume);
+    let surfaces = scene.add_object(ObjectKind::Surfaces, 0);
+    scene.install(surfaces, 0, ObjectFrame::Surfaces(set));
+    scene
+        .objects
+        .get_mut(surfaces)
+        .expect("the surfaces exist")
+        .set_params(ObjectParams::Surfaces(params));
+    let anchors = scene
+        .objects
+        .get(surfaces)
+        .and_then(|set| set.frame(0))
+        .expect("the surfaces hold a frame")
+        .anchors();
+    let edited = scene
+        .edited_object(surfaces, "edited", vec![SurfaceEdit::merge(0, anchors)])
+        .expect("the surface edit derives an object set");
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "lobes".to_string(),
+        },
+        ViewState {
+            camera: CameraState {
+                pivot: [0.0; 3],
+                yaw: 0.0,
+                pitch: 0.0,
+                distance: 10.0,
+                fov_y: 0.6,
+            },
+            section: SectionState {
+                axis: Axis::Z,
+                span: 10.0,
+            },
+            split: 0.5,
+            timeline: Timeline::default(),
+            export: Export::NATIVE,
+        },
+    );
+    let path = std::env::temp_dir().join(format!("grana-edits-{}.grana", std::process::id()));
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the project reads");
+    fs::remove_file(&path).ok();
+    assert_eq!(loaded, project);
+    let mut restored = surface_scene(&volume);
+    restored.restore(loaded.scene);
+    let restored = restored
+        .objects
+        .get(edited)
+        .expect("the edited set restores");
+    let (source, edits) = restored
+        .provenance()
+        .editing()
+        .expect("the restored set keeps its surface edits");
+    assert_eq!(source, surfaces);
+    assert_eq!(edits.len(), 1);
+    assert_eq!(edits[0].kind(), grana_scene::SurfaceEditKind::Merge);
+    assert_eq!(edits[0].anchors().len(), 2);
 }
 
 #[test]

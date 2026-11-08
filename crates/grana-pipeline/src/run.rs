@@ -16,11 +16,13 @@ use grana_volume::VoxelData;
 
 use crate::event::Event;
 
+mod edit;
 mod frames;
 mod import;
 mod interop;
 mod segment;
 
+pub use self::edit::edit;
 use self::frames::Notice;
 use self::frames::frames as pipeline;
 pub use self::import::{ImportRequest, import};

@@ -317,6 +317,74 @@ fn replays_the_tracks_of_a_merged_set_like_the_commands_do() {
     );
 }
 
+#[test]
+fn replays_the_surface_edits_of_a_captured_protocol() {
+    let mut session = Session::new();
+    session.open_sample();
+    settle(&mut session);
+    let frames = session.scene().expect("the sample opens").frame_count();
+    let surfaces = session
+        .scene()
+        .expect("the sample opens")
+        .objects
+        .iter()
+        .find(|set| set.name() == "Surfaces 1")
+        .expect("the sample detects surfaces")
+        .id();
+    let before = (0..frames)
+        .map(|time| count(&session, surfaces, time))
+        .collect::<Vec<_>>();
+    session.execute(Command::MergeSurfaces {
+        set: surfaces,
+        time: 0,
+        objects: vec![0, 1],
+    });
+    settle(&mut session);
+    let edited = edited_set(&session);
+    let expected = (0..frames)
+        .map(|time| count(&session, edited, time))
+        .collect::<Vec<_>>();
+    assert!(
+        expected
+            .iter()
+            .zip(&before)
+            .all(|(merged, whole)| *merged + 1 == *whole),
+        "the merge follows the tracks into every frame"
+    );
+    session.execute(Command::CaptureProtocol);
+    let captured = session
+        .protocol()
+        .expect("the protocol is captured")
+        .clone();
+    let text = captured.to_json().expect("the protocol serializes");
+    assert!(
+        text.contains("\"edited\""),
+        "the capture records the surface edits by anchor"
+    );
+    session.set_protocol(Protocol::from_json(&text).expect("the captured protocol reads"));
+    session.execute(Command::ApplyProtocol);
+    settle(&mut session);
+    let replayed = edited_set(&session);
+    assert_eq!(
+        (0..frames)
+            .map(|time| count(&session, replayed, time))
+            .collect::<Vec<_>>(),
+        expected,
+        "the replay merges the same surfaces"
+    );
+}
+
+fn edited_set(session: &Session) -> grana_scene::ObjectSetId {
+    session
+        .scene()
+        .expect("the dataset stays open")
+        .objects
+        .iter()
+        .find(|set| matches!(set.provenance(), grana_scene::Provenance::Edited { .. }))
+        .expect("the surface edit derives an object set")
+        .id()
+}
+
 fn track_nodes(session: &Session, set: grana_scene::ObjectSetId) -> Vec<(u32, usize)> {
     let scene = session.scene().expect("the dataset stays open");
     let layer = scene

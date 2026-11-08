@@ -64,6 +64,7 @@ pub struct App {
     ime: bool,
     ime_area: Option<(i32, i32, u32, u32)>,
     scene_changed: bool,
+    pick_toggle: bool,
 }
 
 impl App {
@@ -96,6 +97,7 @@ impl App {
             ime: false,
             ime_area: None,
             scene_changed: true,
+            pick_toggle: false,
         }
     }
 
@@ -378,7 +380,10 @@ impl App {
         if let Some((pane, point)) = interaction.pick {
             match self.workspace.seed.filter(|_| pane == Pane::Volume) {
                 Some(set) => self.place_seed(set, point, interaction.modifiers.alt),
-                None => self.pick(pane, point),
+                None => {
+                    self.pick_toggle = interaction.modifiers.shift || interaction.modifiers.control;
+                    self.pick(pane, point);
+                }
             }
             self.request_redraw();
         }
@@ -1253,7 +1258,14 @@ impl App {
             Picked::Miss => None,
         };
         self.scene_changed = true;
-        self.apply(vec![Command::Select(selection)]);
+        match (selection, std::mem::take(&mut self.pick_toggle)) {
+            (Some(selection), true) => {
+                self.apply(vec![Command::ToggleSelect(selection)]);
+            }
+            (selection, _) => {
+                self.apply(vec![Command::Select(selection)]);
+            }
+        }
     }
 
     fn set_keyframe(&mut self) {

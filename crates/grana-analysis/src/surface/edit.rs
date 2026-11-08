@@ -1,11 +1,55 @@
 use std::sync::Arc;
 
 use grana_geometry::GeometryStore;
-use grana_object::{Basin, SampleAccumulator, SurfaceSet, SurfaceTopology};
+use grana_object::{
+    Basin, ObjectAnchor, SampleAccumulator, SurfaceEdit, SurfaceEditKind, SurfaceSet,
+    SurfaceTopology,
+};
 
 use super::cut::{self, Piece};
 
 const EMPTY: u32 = u32::MAX;
+
+pub fn apply(
+    set: &SurfaceSet,
+    edit: &SurfaceEdit,
+    voxel: f32,
+    store: Option<&Arc<GeometryStore>>,
+) -> Result<SurfaceSet, String> {
+    let anchors = set
+        .objects()
+        .iter()
+        .map(|statistics| ObjectAnchor::new(statistics.centroid(), statistics.bounds()))
+        .collect::<Vec<_>>();
+    let resolved = grana_object::assign(edit.anchors(), &anchors, voxel);
+    let mut objects = Vec::with_capacity(resolved.len());
+    for (index, anchor) in resolved.iter().enumerate() {
+        let Some(object) = anchor else {
+            return Err(format!(
+                "the {} of frame {} finds {} of the {} recorded objects",
+                edit.kind().verb(),
+                edit.frame(),
+                index,
+                edit.anchors().len()
+            ));
+        };
+        objects.push(*object);
+    }
+    objects.sort_unstable();
+    let recorded = objects.len();
+    objects.dedup();
+    if objects.len() != recorded {
+        return Err(format!(
+            "the {} of frame {} matches two recorded objects to one surface",
+            edit.kind().verb(),
+            edit.frame()
+        ));
+    }
+    match edit.kind() {
+        SurfaceEditKind::Merge => merge(set, &objects, store),
+        SurfaceEditKind::Split => split(set, objects[0], store),
+    }
+}
 
 pub fn merge(
     set: &SurfaceSet,
@@ -204,14 +248,20 @@ fn rebuild(
         };
         pieces.push(chunk);
     }
-    cut::assemble(
+    let assembled = cut::assemble(
         topology.info().level(),
         channels,
         pieces,
         leaves,
         set.removed(),
         store,
-    )
+    )?;
+    match set.topology() {
+        Some(topology) => assembled
+            .with_topology(topology.clone())
+            .map_err(|error| error.to_string()),
+        None => Ok(assembled),
+    }
 }
 
 struct Aggregate {

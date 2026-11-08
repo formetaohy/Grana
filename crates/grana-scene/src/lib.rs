@@ -27,7 +27,7 @@ pub use annotation::{Annotation, AnnotationKind, AnnotationState, AnnotationTag,
 pub use channel::Channel;
 pub use coloc::{Coloc, ColocResult, ColocState, MaskKey};
 pub use color::ObjectColor;
-pub use curation::{Curation, ObjectAnchor, TrackAnchor, TrackEdit};
+pub use curation::{Curation, TrackAnchor, TrackEdit};
 pub use dataset::{Dataset, Origin};
 pub use derived::{
     Derived, DerivedSpec, MaskChannel, MaskFrames, MaskSpec, RestoreSpec, mask_info,
@@ -35,6 +35,7 @@ pub use derived::{
 pub use drift::Drift;
 pub use grana_display::{ColorState, Coloring, Extent};
 pub use grana_measure::RelationField;
+pub use grana_object::{ObjectAnchor, SurfaceEdit, SurfaceEditKind};
 pub use job::{Job, Progress};
 pub use key::ObjectSetKey;
 pub use mask::MaskFilter;

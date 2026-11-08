@@ -1,3 +1,4 @@
+mod edit;
 mod topology;
 
 use std::sync::Arc;
@@ -6,6 +7,7 @@ use grana_geometry::{Bounds, Geometry, GeometryStore, Mesh, PackedMesh};
 
 use crate::IntensityTable;
 
+pub use edit::{SurfaceEdit, SurfaceEditKind};
 pub use topology::{Basin, Seam, SurfacePatches, SurfaceTopology, TopologyInfo};
 
 #[derive(Clone, Copy, Debug, PartialEq)]

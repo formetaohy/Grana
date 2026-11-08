@@ -16,8 +16,8 @@ pub use spec::{
     ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec, EditSpec,
     ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec, MaskFilterSpec, MaskSpec, MeasureSpec,
     MetricSpec, NodeSpec, PartSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, RestoreSpec,
-    SectionSpec, SetSpec, ShadingSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec, TimelineSpec,
-    TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    SectionSpec, SetSpec, ShadingSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec,
+    SurfaceEditSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -182,6 +182,9 @@ impl Protocol {
                     }
                     SourceSpec::Copy { source } => {
                         text = format!("{text} · copy of {source}");
+                    }
+                    SourceSpec::Edited { source, edits } => {
+                        text = format!("{text} · {} surface edits of {source}", edits.len());
                     }
                     SourceSpec::Merged { parts } => {
                         let names = parts

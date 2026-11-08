@@ -593,6 +593,10 @@ pub enum SourceSpec {
     Copy {
         source: String,
     },
+    Edited {
+        source: String,
+        edits: Vec<SurfaceEditSpec>,
+    },
     Merged {
         parts: Vec<PartSpec>,
     },
@@ -836,6 +840,61 @@ impl EditSpec {
                 source: node(source),
                 target: node(target),
             },
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum SurfaceEditSpec {
+    Merge {
+        frame: u32,
+        anchors: Vec<AnchorSpec>,
+    },
+    Split {
+        frame: u32,
+        anchor: AnchorSpec,
+    },
+}
+
+impl SurfaceEditSpec {
+    pub fn frame(&self) -> u32 {
+        match self {
+            Self::Merge { frame, .. } | Self::Split { frame, .. } => *frame,
+        }
+    }
+
+    pub(super) fn of(edit: &grana_scene::SurfaceEdit) -> Self {
+        let anchors = || {
+            edit.anchors()
+                .iter()
+                .map(|anchor| AnchorSpec::of(*anchor))
+                .collect::<Vec<_>>()
+        };
+        match edit.kind() {
+            grana_scene::SurfaceEditKind::Merge => Self::Merge {
+                frame: edit.frame(),
+                anchors: anchors(),
+            },
+            grana_scene::SurfaceEditKind::Split => Self::Split {
+                frame: edit.frame(),
+                anchor: AnchorSpec::of(edit.anchors()[0]),
+            },
+        }
+    }
+
+    pub(super) fn edit(self) -> Result<grana_scene::SurfaceEdit, String> {
+        match self {
+            Self::Merge { frame, anchors } => grana_scene::SurfaceEdit::restored(
+                frame,
+                grana_scene::SurfaceEditKind::Merge,
+                anchors.iter().map(|anchor| anchor.anchor()).collect(),
+            ),
+            Self::Split { frame, anchor } => grana_scene::SurfaceEdit::restored(
+                frame,
+                grana_scene::SurfaceEditKind::Split,
+                vec![anchor.anchor()],
+            ),
         }
     }
 }
@@ -1895,7 +1954,10 @@ impl SourceSpec {
                 Some(ObjectKind::Surfaces)
             }
             Self::Filaments { .. } => Some(ObjectKind::Filaments),
-            Self::Filtered { .. } | Self::Copy { .. } | Self::Merged { .. } => None,
+            Self::Filtered { .. }
+            | Self::Copy { .. }
+            | Self::Edited { .. }
+            | Self::Merged { .. } => None,
         }
     }
 
@@ -1909,6 +1971,7 @@ impl SourceSpec {
             | Self::Tracks { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
+            | Self::Edited { .. }
             | Self::Merged { .. } => None,
         }
     }
@@ -1923,6 +1986,7 @@ impl SourceSpec {
             | Self::Segments { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
+            | Self::Edited { .. }
             | Self::Merged { .. } => None,
         }
     }
@@ -1937,6 +2001,7 @@ impl SourceSpec {
             | Self::Labels { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
+            | Self::Edited { .. }
             | Self::Merged { .. } => None,
         }
     }
@@ -1973,6 +2038,7 @@ impl SourceSpec {
             | Self::Tracks { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
+            | Self::Edited { .. }
             | Self::Merged { .. } => {
                 return None;
             }
@@ -2013,6 +2079,7 @@ impl SourceSpec {
             | Self::Tracks { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
+            | Self::Edited { .. }
             | Self::Merged { .. } => &[],
         }
     }
@@ -2027,6 +2094,7 @@ impl SourceSpec {
             | Self::Tracks { .. }
             | Self::Filtered { .. }
             | Self::Copy { .. }
+            | Self::Edited { .. }
             | Self::Merged { .. } => None,
         }
     }
@@ -2177,6 +2245,17 @@ impl SourceSpec {
             Self::Copy { source } => {
                 validate(source, &format!("the source of {set}"))?;
             }
+            Self::Edited { source, edits } => {
+                validate(source, &format!("the source of {set}"))?;
+                if edits.is_empty() {
+                    return invalid("edits at least one surface".to_string());
+                }
+                for edit in edits {
+                    edit.clone().edit().map_err(|detail| {
+                        ProtocolError::Invalid(format!("the set {set} {detail}"))
+                    })?;
+                }
+            }
             Self::Merged { parts } => {
                 if parts.is_empty() {
                     return invalid("merges at least one part".to_string());
@@ -2267,9 +2346,9 @@ impl Protocol {
             | SourceSpec::Segments { .. }
             | SourceSpec::Labels { .. }
             | SourceSpec::Tracks { .. } => source.kind(),
-            SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
-                self.kind_of_key(source, depth + 1)
-            }
+            SourceSpec::Filtered { source, .. }
+            | SourceSpec::Copy { source }
+            | SourceSpec::Edited { source, .. } => self.kind_of_key(source, depth + 1),
             SourceSpec::Merged { parts } => {
                 self.kind_of_source_at(&parts.first()?.source, depth + 1)
             }
@@ -2294,9 +2373,9 @@ impl Protocol {
             | SourceSpec::Filaments { .. }
             | SourceSpec::Segments { .. } => source.channel(),
             SourceSpec::Labels { .. } | SourceSpec::Tracks { .. } => None,
-            SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
-                self.channel_of_key(source, depth + 1)
-            }
+            SourceSpec::Filtered { source, .. }
+            | SourceSpec::Copy { source }
+            | SourceSpec::Edited { source, .. } => self.channel_of_key(source, depth + 1),
             SourceSpec::Merged { parts } => {
                 self.channel_of_source_at(&parts.first()?.source, depth + 1)
             }

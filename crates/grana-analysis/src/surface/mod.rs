@@ -30,7 +30,7 @@ use grana_object::SurfaceParams;
 use assemble::Assembler;
 use detection::{Detection, DetectionBuild, DetectionInput, DetectionSource, DetectionStore};
 use distance::Distance;
-pub use edit::{merge, split};
+pub use edit::{apply, merge, split};
 use mask::SolidMask;
 use tile::{Tile, TileResult};
 

@@ -26,7 +26,7 @@ use grana_optics::PsfParams;
 use grana_project::{Project, Source as ProjectSource, ViewState};
 use grana_scene::{
     Criteria, Dataset, FilterRange, Item, Job, LassoPath, Measure, ObjectFrame, ObjectParams,
-    ObjectSetId, Origin, Progress, RestoreSpec, Scene, Selection,
+    ObjectSetId, Origin, Progress, RestoreSpec, Scene,
 };
 use grana_volume::{BrickData, BrickRequest, Region};
 

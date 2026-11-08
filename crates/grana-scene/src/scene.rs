@@ -4,7 +4,7 @@ use glam::Vec3;
 use grana_display::{Coloring, Shading, TransferFunction};
 use grana_geometry::ray_hit;
 use grana_measure::{Aggregate, Classifier, Frame, Group, Measurement, RelationRow, Table};
-use grana_object::{RelationFrame, TrackSet};
+use grana_object::{RelationFrame, SurfaceEdit, TrackSet};
 use grana_object::{Shape, TrackParams};
 use grana_optics::PsfParams;
 use grana_volume::{CHANNEL_LIMIT, ChannelInfo, Clip, Intensity, Region};
@@ -111,7 +111,7 @@ pub struct Scene {
     derived: Vec<Derived>,
     base_channels: usize,
     time: u32,
-    selection: Option<Selection>,
+    selections: Vec<Selection>,
 }
 
 impl Scene {
@@ -149,7 +149,7 @@ impl Scene {
             derived: Vec::new(),
             base_channels: channel_count,
             time: 0,
-            selection: None,
+            selections: Vec::new(),
         }
     }
 
@@ -445,10 +445,12 @@ impl Scene {
         }
         self.time = time;
         if self
-            .selection
-            .is_some_and(|selection| matches!(selection.item, Item::Object(_)))
+            .selections
+            .iter()
+            .any(|selection| matches!(selection.item, Item::Object(_)))
         {
-            self.selection = None;
+            self.selections
+                .retain(|selection| matches!(selection.item, Item::Track(_)));
         }
     }
 
@@ -500,12 +502,8 @@ impl Scene {
 
     pub fn remove_object(&mut self, id: ObjectSetId) {
         self.objects.remove(id);
-        if self
-            .selection
-            .is_some_and(|selection| self.objects.get(selection.set).is_none())
-        {
-            self.selection = None;
-        }
+        self.selections
+            .retain(|selection| self.objects.get(selection.set).is_some());
         if self
             .mask
             .is_some_and(|mask| self.objects.get(mask).is_none())
@@ -533,7 +531,7 @@ impl Scene {
         self.objects = Objects::new();
         self.mask = None;
         self.mask_filter = None;
-        self.selection = None;
+        self.selections.clear();
         let _ = self.set_derived_layout(Vec::new());
         self.coloc.clear();
         self.sync_coloc_inputs();
@@ -589,21 +587,29 @@ impl Scene {
         if !self.objects.retain_objects(id, time, keep)? {
             return Ok(false);
         }
-        if let Some(Selection {
-            set,
-            item: Item::Object(index),
-        }) = self.selection
-            && set == id
-        {
-            self.selection = keep
-                .get(index)
-                .copied()
-                .unwrap_or(false)
-                .then(|| Selection {
-                    set,
-                    item: Item::Object(keep[..index].iter().filter(|kept| **kept).count()),
-                });
+        let mut positions = Vec::with_capacity(keep.len());
+        let mut next = 0;
+        for kept in keep {
+            positions.push(kept.then_some(next));
+            if *kept {
+                next += 1;
+            }
         }
+        self.selections.retain_mut(|selection| {
+            if selection.set != id {
+                return true;
+            }
+            let Item::Object(index) = selection.item else {
+                return true;
+            };
+            match positions.get(index).copied().flatten() {
+                Some(mapped) => {
+                    selection.item = Item::Object(mapped);
+                    true
+                }
+                None => false,
+            }
+        });
         self.sync_coloc_inputs();
         self.sync_masks();
         Ok(true)
@@ -631,13 +637,14 @@ impl Scene {
         loop {
             let set = self.objects.get(current)?;
             match set.provenance() {
-                Provenance::Filtered { source, .. } => current = *source,
+                Provenance::Filtered { source, .. } | Provenance::Edited { source, .. } => {
+                    current = *source;
+                }
                 Provenance::Detection
                 | Provenance::Segmented { .. }
                 | Provenance::Imported { .. }
                 | Provenance::Interop { .. }
                 | Provenance::Copied { .. }
-                | Provenance::Edited { .. }
                 | Provenance::Merged { .. } => {
                     return Some(current);
                 }
@@ -647,6 +654,10 @@ impl Scene {
 
     pub fn filtered_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
         self.objects.filtered_dependents(id)
+    }
+
+    pub fn edited_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
+        self.objects.edited_dependents(id)
     }
 
     pub fn refresh_filtered(&mut self, id: ObjectSetId) -> Result<bool, String> {
@@ -728,30 +739,28 @@ impl Scene {
         if self.mask == Some(source) {
             self.mask = None;
         }
-        if self
-            .selection
-            .is_some_and(|selection| selection.set == source)
-        {
-            self.selection = None;
-        }
+        self.selections.retain(|selection| selection.set != source);
         self.prune_mask_filter();
         self.sync_coloc_inputs();
         self.sync_masks();
         Ok(())
     }
 
-    pub fn edit_objects(
+    pub fn edited_object(
         &mut self,
-        id: ObjectSetId,
-        time: u32,
-        frame: ObjectFrame,
+        source: ObjectSetId,
         suffix: &str,
+        edits: Vec<SurfaceEdit>,
     ) -> Option<ObjectSetId> {
-        let edited = self.objects.edit(id, suffix, time, frame)?;
-        self.selection = None;
+        let edited = self.objects.edited(source, suffix, edits)?;
+        self.selections.clear();
         self.sync_coloc_inputs();
         self.sync_masks();
         Some(edited)
+    }
+
+    pub fn replan_object(&mut self, id: ObjectSetId, edits: Vec<SurfaceEdit>) -> bool {
+        self.objects.replan(id, edits)
     }
 
     pub fn duplicate_object(&mut self, id: ObjectSetId) -> Option<ObjectSetId> {
@@ -1265,12 +1274,9 @@ impl Scene {
 
     fn settle_install(&mut self, id: ObjectSetId, time: u32) {
         if time == self.time {
-            let stale = self.selection.is_some_and(|selection| {
-                selection.set == id && matches!(selection.item, Item::Object(_))
+            self.selections.retain(|selection| {
+                !(selection.set == id && matches!(selection.item, Item::Object(_)))
             });
-            if stale {
-                self.selection = None;
-            }
         }
         self.sync_coloc_inputs();
         self.sync_masks();
@@ -1279,9 +1285,7 @@ impl Scene {
     pub fn clear_object(&mut self, id: ObjectSetId) {
         self.objects.clear(id);
         self.objects.clear_relations(id);
-        if self.selection.is_some_and(|selection| selection.set == id) {
-            self.selection = None;
-        }
+        self.selections.retain(|selection| selection.set != id);
         self.sync_coloc_inputs();
     }
 
@@ -1507,20 +1511,30 @@ impl Scene {
     }
 
     fn drop_track_selection(&mut self, id: ObjectSetId) {
-        let stale = self.selection.is_some_and(|selection| {
-            selection.set == id && matches!(selection.item, Item::Track(_))
-        });
-        if stale {
-            self.selection = None;
-        }
+        self.selections
+            .retain(|selection| !(selection.set == id && matches!(selection.item, Item::Track(_))));
     }
 
     pub fn selection(&self) -> Option<Selection> {
-        self.selection
+        self.selections.last().copied()
+    }
+
+    pub fn selections(&self) -> &[Selection] {
+        &self.selections
     }
 
     pub fn select(&mut self, selection: Option<Selection>) {
-        self.selection = selection;
+        self.selections.clear();
+        self.selections.extend(selection);
+    }
+
+    pub fn toggle_select(&mut self, selection: Selection) {
+        match self.selections.iter().position(|held| *held == selection) {
+            Some(position) => {
+                self.selections.remove(position);
+            }
+            None => self.selections.push(selection),
+        }
     }
 
     pub fn select_track(&mut self, id: ObjectSetId, index: usize) {
@@ -1531,14 +1545,14 @@ impl Scene {
                 .is_some_and(|layer| index < layer.set().len()),
             "the selected track exists"
         );
-        self.selection = Some(Selection {
+        self.select(Some(Selection {
             set: id,
             item: Item::Track(index),
-        });
+        }));
     }
 
     pub fn selected_track(&self, id: ObjectSetId) -> Option<usize> {
-        match self.selection {
+        match self.selection() {
             Some(Selection {
                 set,
                 item: Item::Track(index),
@@ -1570,19 +1584,17 @@ impl Scene {
     }
 
     pub fn object_selected(&self, set: ObjectSetId, index: usize) -> bool {
-        self.selection
-            == Some(Selection {
-                set,
-                item: Item::Object(index),
-            })
+        self.selections.contains(&Selection {
+            set,
+            item: Item::Object(index),
+        })
     }
 
     pub fn track_selected(&self, set: ObjectSetId, index: usize) -> bool {
-        self.selection
-            == Some(Selection {
-                set,
-                item: Item::Track(index),
-            })
+        self.selections.contains(&Selection {
+            set,
+            item: Item::Track(index),
+        })
     }
 
     fn mask_key(&self) -> Option<MaskKey> {

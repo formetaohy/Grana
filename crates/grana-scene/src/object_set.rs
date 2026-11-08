@@ -4,6 +4,7 @@ use grana_measure::{
     ChildField, ChildMetric, Classifier, Measurement, RelationField, TrackMeasurement,
 };
 use grana_object::TrackParams;
+use grana_object::match_anchor;
 use grana_object::{RelationFrame, TrackSet};
 
 use crate::color::ObjectColor;
@@ -184,6 +185,10 @@ impl ObjectSet {
 
     pub fn measured_channels(&self) -> usize {
         self.channels
+    }
+
+    pub fn voxel(&self) -> f32 {
+        self.voxel
     }
 
     pub fn provenance(&self) -> &Provenance {
@@ -1398,8 +1403,7 @@ impl ObjectSet {
     fn resolve_edit(&self, edit: TrackEdit) -> Option<TrackEdit> {
         let resolve = |node: TrackAnchor| -> Option<TrackAnchor> {
             let frame = self.frames.get(node.time() as usize)?.data.as_deref()?;
-            let object =
-                crate::curation::match_anchor(&frame.anchors(), node.position(), self.voxel)?;
+            let object = match_anchor(&frame.anchors(), node.position(), self.voxel)?;
             Some(TrackAnchor::new(node.time(), object, node.position()))
         };
         match edit {

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use grana_display::Extent;
 use grana_measure::{Child, RelationField, UNASSIGNED};
-use grana_object::{RelationFrame, TrackSet};
+use grana_object::{RelationFrame, SurfaceEdit, TrackSet};
 
 use crate::color::ObjectColor;
 use crate::curation::Curation;
@@ -338,43 +338,45 @@ impl Objects {
         Some(derived)
     }
 
-    pub fn edit(
+    pub fn edited(
         &mut self,
         id: ObjectSetId,
         suffix: &str,
-        time: u32,
-        frame: ObjectFrame,
+        edits: Vec<SurfaceEdit>,
     ) -> Option<ObjectSetId> {
-        let stamp = take_stamp(&mut self.stamp);
-        let source = self.get(id)?;
-        if source.kind() != frame.kind() {
+        if edits.is_empty() {
             return None;
         }
-        let edited = ObjectSetId::new(self.next_id);
-        let base = format!("{} {suffix}", source.name());
-        let mut name = base.clone();
-        let mut ordinal = 2;
-        while self.occupied(&name, None) {
-            name = format!("{base} {ordinal}");
-            ordinal += 1;
+        self.derive(id, suffix, || Provenance::Edited { source: id, edits })
+    }
+
+    pub fn replan(&mut self, id: ObjectSetId, edits: Vec<SurfaceEdit>) -> bool {
+        if edits.is_empty() {
+            return false;
         }
-        let color = source.color();
-        let key = self.key_for(&name, None);
-        let mut copy =
-            source.duplicate(edited, key, name, color, Provenance::Edited { source: id });
-        let seeds = vec![Vec::new(); copy.frame_count() as usize];
-        copy.set_seed_frames(seeds);
-        copy.install_shared(time, Arc::new(frame), stamp);
-        let position = self
-            .sets
+        let Some(source) = self
+            .get(id)
+            .and_then(|set| set.provenance().editing())
+            .map(|(source, _)| source)
+        else {
+            return false;
+        };
+        self.get_mut(id).is_some_and(|set| {
+            set.set_provenance(Provenance::Edited { source, edits });
+            true
+        })
+    }
+
+    pub fn edited_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
+        self.sets
             .iter()
-            .position(|set| set.id() == id)
-            .expect("the edited object set exists");
-        self.next_id += 1;
-        self.sets.insert(position + 1, copy);
-        self.prune_children();
-        self.refresh_bounds(edited, Some(time));
-        Some(edited)
+            .filter(|set| {
+                set.provenance()
+                    .editing()
+                    .is_some_and(|(source, _)| source == id)
+            })
+            .map(ObjectSet::id)
+            .collect()
     }
 
     pub fn merge(&mut self, source: ObjectSetId, target: ObjectSetId) -> Result<(), String> {

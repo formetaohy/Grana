@@ -476,9 +476,15 @@ impl Encode for Provenance {
                 writer.u8(2);
                 writer.u64(source.raw());
             }
-            Self::Edited { source } => {
+            Self::Edited { source, edits } => {
                 writer.u8(7);
                 writer.u64(source.raw());
+                writer.count(edits.len());
+                for edit in edits {
+                    writer.u32(edit.frame());
+                    writer.u8(edit.kind().index() as u8);
+                    encode_anchors(edit.anchors(), writer);
+                }
             }
             Self::Merged { parts } => {
                 writer.u8(3);

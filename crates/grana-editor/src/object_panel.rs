@@ -710,16 +710,21 @@ fn object_edit_rows<'a>(
     if set.kind() != ObjectKind::Surfaces {
         return Vec::new();
     }
-    let Some(selection) = state
+    let mut selected = state
         .scene
-        .selection()
+        .selections()
+        .iter()
         .filter(|selection| selection.set == id)
-    else {
+        .filter_map(|selection| match selection.item {
+            Item::Object(index) => Some(index),
+            Item::Track(_) => None,
+        })
+        .collect::<Vec<_>>();
+    selected.sort_unstable();
+    selected.dedup();
+    if selected.is_empty() {
         return Vec::new();
-    };
-    let Item::Object(object) = selection.item else {
-        return Vec::new();
-    };
+    }
     let time = state.scene.time();
     let Some(ObjectFrame::Surfaces(surfaces)) = set.frame(time) else {
         return Vec::new();
@@ -727,13 +732,32 @@ fn object_edit_rows<'a>(
     if !surfaces.cuttable() {
         return Vec::new();
     }
+    let mut rows = vec![
+        view::menu_separator(ctx),
+        view::caption(ctx, "Edit Objects"),
+    ];
+    if selected.len() > 1 {
+        rows.push(view::menu_row(
+            ctx,
+            &format!("object.{}.edit.merge.selected", id.raw()),
+            &format!("Merge {} Selected Objects", selected.len()),
+            false,
+            Some(Message::Command(Command::MergeSurfaces {
+                set: id,
+                time,
+                objects: selected.clone(),
+            })),
+        ));
+        return rows;
+    }
+    let object = selected[0];
     let centroids = surfaces
         .objects()
         .iter()
         .map(|statistics| statistics.centroid())
         .collect::<Vec<_>>();
     let Some(origin) = centroids.get(object) else {
-        return Vec::new();
+        return rows;
     };
     let mut neighbours = centroids
         .iter()
@@ -742,10 +766,6 @@ fn object_edit_rows<'a>(
         .map(|(index, centroid)| (index, squared(origin, centroid)))
         .collect::<Vec<_>>();
     neighbours.sort_by(|left, right| left.1.total_cmp(&right.1));
-    let mut rows = vec![
-        view::menu_separator(ctx),
-        view::caption(ctx, "Edit Objects"),
-    ];
     for (index, (candidate, _)) in neighbours.iter().take(MERGE_CANDIDATES).enumerate() {
         rows.push(view::menu_row(
             ctx,
@@ -755,8 +775,7 @@ fn object_edit_rows<'a>(
             Some(Message::Command(Command::MergeSurfaces {
                 set: id,
                 time,
-                source: object,
-                target: *candidate,
+                objects: vec![object, *candidate],
             })),
         ));
     }
@@ -896,7 +915,9 @@ fn origin<'a>(
         Provenance::Interop { file } => format!("Imported tracks from {file}"),
         Provenance::Filtered { source, .. } => format!("Filtered from {}", name(*source)),
         Provenance::Copied { source } => format!("Copy of {}", name(*source)),
-        Provenance::Edited { source } => format!("Edited from {}", name(*source)),
+        Provenance::Edited { source, edits } => {
+            format!("Edited from {} · {} edits", name(*source), edits.len())
+        }
         Provenance::Merged { parts } => format!(
             "Merged from {}",
             parts

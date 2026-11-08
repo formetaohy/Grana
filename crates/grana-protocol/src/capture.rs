@@ -9,8 +9,8 @@ use crate::{
     AnnotationSpec, ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec,
     ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec, LassoSpec, MaskFilterSpec,
     MaskSpec, MeasureSpec, MetricSpec, PartSpec, Protocol, ProtocolError, RegionSpec, RelationSpec,
-    RenderSpec, RestoreSpec, SetSpec, SnapshotSpec, SortSpec, SourceSpec, TrackSpec, TransferSpec,
-    ViewSpec, WindowSpec,
+    RenderSpec, RestoreSpec, SetSpec, SnapshotSpec, SortSpec, SourceSpec, SurfaceEditSpec,
+    TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -295,9 +295,18 @@ fn source(
                 set.surface_seeds(),
             ),
         },
-        Provenance::Edited { .. } => Err(ProtocolError::Invalid(
-            "manual surface edits are not replayable".to_string(),
-        )),
+        Provenance::Edited { source, edits } => {
+            let reference = scene.objects.get(*source).ok_or_else(|| {
+                ProtocolError::Invalid(format!(
+                    "{} edits an object set that left the scene",
+                    set.name()
+                ))
+            })?;
+            Ok(SourceSpec::Edited {
+                source: reference.key().as_str().to_string(),
+                edits: edits.iter().map(SurfaceEditSpec::of).collect(),
+            })
+        }
         Provenance::Merged { parts } => Ok(SourceSpec::Merged {
             parts: parts
                 .iter()
@@ -357,10 +366,17 @@ fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSp
                 part.seeds(),
             )?,
         },
-        Provenance::Edited { .. } => {
-            return Err(ProtocolError::Invalid(
-                "manual surface edits are not replayable".to_string(),
-            ));
+        Provenance::Edited { source, edits } => {
+            let reference = scene.objects.get(*source).ok_or_else(|| {
+                ProtocolError::Invalid(format!(
+                    "{} edits an object set that left the scene",
+                    part.name()
+                ))
+            })?;
+            SourceSpec::Edited {
+                source: reference.key().as_str().to_string(),
+                edits: edits.iter().map(SurfaceEditSpec::of).collect(),
+            }
         }
         Provenance::Merged { parts } => SourceSpec::Merged {
             parts: parts
@@ -468,7 +484,9 @@ fn collect_dependencies(source: &SourceSpec, derived: &[DerivedSpec], names: &mu
     }
     match source {
         SourceSpec::Surfaces { seed_source, .. } => names.extend(seed_source.clone()),
-        SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
+        SourceSpec::Filtered { source, .. }
+        | SourceSpec::Copy { source }
+        | SourceSpec::Edited { source, .. } => {
             names.push(source.clone());
         }
         SourceSpec::Merged { parts } => {
