@@ -364,7 +364,7 @@ impl Session {
         };
         let mut batch = Vec::with_capacity(bricks.len().min(MAX_IN_FLIGHT));
         for request in bricks {
-            if request.time != time || self.in_flight.contains(request) {
+            if request.time < time || self.in_flight.contains(request) {
                 continue;
             }
             if self.failed.contains(request) {

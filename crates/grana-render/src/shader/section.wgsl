@@ -1,6 +1,7 @@
 @group(1) @binding(0) var<storage, read> bricks: array<BrickRecord>;
 @group(2) @binding(0) var atlases: binding_array<texture_3d<f32>, 4>;
 @group(2) @binding(1) var atlas_sampler: sampler;
+@group(3) @binding(0) var<storage, read> fallback_bricks: array<BrickRecord>;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -20,19 +21,41 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
     return output;
 }
 
-fn sample_section_pack(pack: u32, uvw: vec3<f32>) -> vec4<f32> {
+struct SectionHit {
+    slot: u32,
+    uvw: vec3<f32>,
+    grid: vec3<u32>,
+    dims: vec3<f32>,
+}
+
+fn locate(uvw: vec3<f32>) -> SectionHit {
     let cell = brick_cell(section.grid.xyz, section.dims.xyz, uvw);
     let record = bricks[brick_index(section.grid.xyz, cell)];
     let slot = brick_slot(record);
-    if (slot == 0u || record.flags == 0u) {
+    if (slot != 0u) {
+        return SectionHit(select(0u, slot, record.flags != 0u), uvw, section.grid.xyz, section.dims.xyz);
+    }
+    if (brick_hollow(record) || section.fallback_grid.w == 0u) {
+        return SectionHit(0u, uvw, section.grid.xyz, section.dims.xyz);
+    }
+    let world = section.box_min.xyz + uvw * section.world.xyz;
+    let local = (world - section.fallback_min.xyz) / section.fallback_world.xyz;
+    let other = brick_cell(section.fallback_grid.xyz, section.fallback_dims.xyz, local);
+    let fallback = brick_slot(fallback_bricks[brick_index(section.fallback_grid.xyz, other)]);
+    return SectionHit(fallback, local, section.fallback_grid.xyz, section.fallback_dims.xyz);
+}
+
+fn sample_section_pack(pack: u32, uvw: vec3<f32>) -> vec4<f32> {
+    let hit = locate(uvw);
+    if (hit.slot == 0u) {
         return vec4<f32>(0.0);
     }
     let texel = atlas_texel(
-        section.grid.xyz,
+        hit.grid,
         section.atlas.xyz,
-        section.dims.xyz,
-        slot - 1u,
-        uvw,
+        hit.dims,
+        hit.slot - 1u,
+        hit.uvw,
     );
     return textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);
 }

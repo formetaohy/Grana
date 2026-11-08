@@ -57,6 +57,8 @@ impl Renderer {
             markers,
             pyramid,
             channels,
+            volume_level: volume_rendered,
+            section_level: section_rendered,
             feedback,
             frames,
             counts,
@@ -114,7 +116,12 @@ impl Renderer {
         let cut_size = [section_width, section_height];
         let slots = atlas.slots();
         let level_count = pyramid.level_count();
-        let section_target_level = select_section_level(pyramid, section, section_region[3] as f32);
+        let section_target_level = select_section_level(
+            pyramid,
+            section,
+            section_region[3] as f32,
+            *section_rendered,
+        );
         let (section_level, section_count) = resolve_section_level(
             pyramid,
             camera,
@@ -124,7 +131,8 @@ impl Renderer {
             (slots / SECTION_BUDGET_DIVISOR).max(1),
             region,
         );
-        let volume_target_level = select_volume_level(pyramid, camera, volume_region[3] as f32);
+        let volume_target_level =
+            select_volume_level(pyramid, camera, volume_region[3] as f32, *volume_rendered);
         let section_capacity = section_count.clamp(1, slots.saturating_sub(1).max(1));
         let volume_capacity = slots.saturating_sub(section_capacity).max(1);
         let volume_level =
@@ -132,9 +140,13 @@ impl Renderer {
         let levels = Levels {
             volume: volume_level,
             section: section_level,
+            volume_fallback: neighbour(*volume_rendered, volume_level, level_count),
+            section_fallback: neighbour(*section_rendered, section_level, level_count),
             volume_capacity,
             section_capacity,
         };
+        *volume_rendered = Some(volume_level);
+        *section_rendered = Some(section_level);
         let residency = Residency::of(
             *epoch,
             *content,
@@ -153,45 +165,32 @@ impl Renderer {
         let replan = *settled != Some(residency) || planned.as_ref() != Some(&residency);
         info.settled = !replan;
         let slot_grid = atlas.slot_grid();
-        ensure_brick(
-            device,
-            &layouts.level,
-            bricks,
-            pyramid.level(section_level),
+        let mut prepared = [usize::MAX; 4];
+        let mut count = 0;
+        for level in [
             section_level,
-            slot_grid,
-            summary,
-        );
-        ensure_brick(
-            device,
-            &layouts.level,
-            bricks,
-            pyramid.level(volume_level),
             volume_level,
-            slot_grid,
-            summary,
-        );
-        if bricks[section_level]
-            .as_ref()
-            .expect("the section level table exists")
-            .time()
-            != Some(time)
-        {
-            bricks[section_level]
-                .as_mut()
-                .expect("the section level table exists")
-                .rebase(queue, time, atlas);
-        }
-        if bricks[volume_level]
-            .as_ref()
-            .expect("the volume level table exists")
-            .time()
-            != Some(time)
-        {
-            bricks[volume_level]
-                .as_mut()
-                .expect("the volume level table exists")
-                .rebase(queue, time, atlas);
+            levels.section_fallback,
+            levels.volume_fallback,
+        ] {
+            if prepared[..count].contains(&level) {
+                continue;
+            }
+            prepared[count] = level;
+            count += 1;
+            ensure_brick(
+                device,
+                &layouts.level,
+                bricks,
+                pyramid.level(level),
+                level,
+                slot_grid,
+                summary,
+            );
+            let table = bricks[level].as_mut().expect("the brick table exists");
+            if table.time() != Some(time) {
+                table.rebase(queue, time, atlas);
+            }
         }
         let section_table = bricks[section_level]
             .as_ref()
@@ -199,8 +198,20 @@ impl Renderer {
         let volume_table = bricks[volume_level]
             .as_ref()
             .expect("the volume level table exists");
-        let mut section_data =
-            SectionData::new(camera, section, section_aspect, section_table, *channels);
+        let section_fallback = bricks[levels.section_fallback]
+            .as_ref()
+            .expect("the section fallback table exists");
+        let volume_fallback = bricks[levels.volume_fallback]
+            .as_ref()
+            .expect("the volume fallback table exists");
+        let mut section_data = SectionData::new(
+            camera,
+            section,
+            section_aspect,
+            section_table,
+            Some(section_fallback),
+            *channels,
+        );
         let finest = pyramid.level(0);
         let world = Vec3::from(finest.world_extent());
         let spacing = finest.spacing();
@@ -221,6 +232,7 @@ impl Renderer {
                 time,
             },
             volume_table,
+            Some(volume_fallback),
             scene.shading,
             scene.step_scale,
             *channels,
@@ -372,6 +384,7 @@ impl Renderer {
                 let groups = ShadowGroups {
                     scene: scene_group,
                     level: volume_table.group(),
+                    fallback: volume_fallback.group(),
                     atlas: atlas.group(),
                 };
                 shadow.encode_occlusion(
@@ -561,6 +574,7 @@ impl Renderer {
                     region: volume_region,
                     scene: scene_group,
                     level: volume_table.group(),
+                    fallback: volume_fallback.group(),
                     atlas: atlas.group(),
                     depth_group: target.scene.depth_group(),
                     shadow: shadow_group,
@@ -574,6 +588,7 @@ impl Renderer {
                     region: section_region,
                     scene: scene_group,
                     level: section_table.group(),
+                    fallback: section_fallback.group(),
                     atlas: atlas.group(),
                 },
             );

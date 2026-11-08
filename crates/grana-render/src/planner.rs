@@ -15,6 +15,7 @@ use grana_display::{Camera, SectionCamera};
 use grana_volume::BrickRequest;
 
 pub(crate) const BUCKETS: usize = 128;
+const LEVEL_HYSTERESIS: f32 = 1.2;
 const HEADER_WORDS: usize = 4;
 const DEMAND_BASE: usize = HEADER_WORDS + 3 * BUCKETS;
 const MISSING: u32 = 0x8000_0000;
@@ -421,7 +422,12 @@ pub(crate) fn volume_dispatch(table: &BrickTable) -> u32 {
     table.grid.count() as u32
 }
 
-pub(crate) fn select_volume_level(pyramid: &Pyramid, camera: &Camera, height: f32) -> usize {
+pub(crate) fn select_volume_level(
+    pyramid: &Pyramid,
+    camera: &Camera,
+    height: f32,
+    current: Option<usize>,
+) -> usize {
     let pixel_world = 2.0 * camera.distance() * (camera.fov_y() * 0.5).tan() / height.max(1.0);
     let mut level = 0;
     for index in 0..pyramid.level_count() {
@@ -432,13 +438,20 @@ pub(crate) fn select_volume_level(pyramid: &Pyramid, camera: &Camera, height: f3
             break;
         }
     }
-    level
+    hold_level(
+        pyramid.level_count(),
+        level,
+        current,
+        pixel_world,
+        |index| minimum_spacing(pyramid, index),
+    )
 }
 
 pub(crate) fn select_section_level(
     pyramid: &Pyramid,
     section: &SectionCamera,
     height: f32,
+    current: Option<usize>,
 ) -> usize {
     let pixel_world = section.span() / height.max(1.0);
     let mut level = 0;
@@ -449,7 +462,32 @@ pub(crate) fn select_section_level(
             break;
         }
     }
-    level
+    hold_level(
+        pyramid.level_count(),
+        level,
+        current,
+        pixel_world,
+        |index| section_spacing(pyramid, index, section.axis()),
+    )
+}
+
+fn hold_level(
+    levels: usize,
+    target: usize,
+    current: Option<usize>,
+    footprint: f32,
+    spacing: impl Fn(usize) -> f32,
+) -> usize {
+    let Some(current) = current.filter(|current| *current < levels) else {
+        return target;
+    };
+    if target < current && footprint > spacing(current - 1) / LEVEL_HYSTERESIS {
+        return current;
+    }
+    if target > current && footprint < spacing(current) * LEVEL_HYSTERESIS {
+        return current;
+    }
+    target
 }
 
 pub(crate) fn resolve_section_level(

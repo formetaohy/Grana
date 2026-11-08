@@ -35,6 +35,10 @@ pub(crate) struct FrameData {
     pub oit: [u32; 4],
     pub clip: [f32; 4],
     pub tag: [u32; 4],
+    pub fallback_dims: [f32; 4],
+    pub fallback_grid: [u32; 4],
+    pub fallback_min: [f32; 4],
+    pub fallback_size: [f32; 4],
 }
 
 #[repr(C)]
@@ -51,6 +55,10 @@ pub(crate) struct SectionData {
     pub grid: [u32; 4],
     pub atlas: [u32; 4],
     pub axes: [u32; 4],
+    pub fallback_dims: [f32; 4],
+    pub fallback_grid: [u32; 4],
+    pub fallback_min: [f32; 4],
+    pub fallback_world: [f32; 4],
 }
 
 #[repr(C)]
@@ -69,10 +77,10 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 672);
+    assert!(size_of::<FrameData>() == 736);
     assert!(std::mem::offset_of!(FrameData, planes) == 384);
     assert!(std::mem::offset_of!(FrameData, light_view) == 480);
-    assert!(size_of::<SectionData>() == 176);
+    assert!(size_of::<SectionData>() == 240);
     assert!(size_of::<ScheduleData>() == 48);
 };
 pub(crate) struct VolumeView<'a> {
@@ -88,6 +96,7 @@ impl FrameData {
     pub fn new(
         view: VolumeView<'_>,
         table: &BrickTable,
+        fallback: Option<&BrickTable>,
         shading: Shading,
         step_scale: f32,
         channels: usize,
@@ -109,6 +118,8 @@ impl FrameData {
         let pixel_scale = 0.5 * height as f32 / (0.5 * camera.fov_y()).tan();
         let eye = camera.eye();
         let light = shading.light();
+        let fallback = fallback.filter(|fallback| fallback.level() != table.level());
+        let support = fallback.unwrap_or(table);
         Self {
             view_projection: view_projection.to_cols_array_2d(),
             inv_view_projection: view_projection.inverse().to_cols_array_2d(),
@@ -148,6 +159,15 @@ impl FrameData {
                 [normal[0], normal[1], normal[2], offset]
             },
             tag: [time, 0, 0, 0],
+            fallback_dims: [support.dims.x, support.dims.y, support.dims.z, 0.0],
+            fallback_grid: [
+                support.grid.counts()[0],
+                support.grid.counts()[1],
+                support.grid.counts()[2],
+                u32::from(fallback.is_some()),
+            ],
+            fallback_min: [support.origin.x, support.origin.y, support.origin.z, 0.0],
+            fallback_size: [support.world.x, support.world.y, support.world.z, 0.0],
         }
     }
 }
@@ -158,6 +178,7 @@ impl SectionData {
         section: &SectionCamera,
         aspect: f32,
         table: &BrickTable,
+        fallback: Option<&BrickTable>,
         channels: usize,
     ) -> Self {
         let axis = section.axis();
@@ -185,6 +206,9 @@ impl SectionData {
             0.0,
         ];
         let grid = table.grid.counts();
+        let fallback = fallback.filter(|fallback| fallback.level() != table.level());
+        let support = fallback.unwrap_or(table);
+        let support_grid = support.grid.counts();
         Self {
             uv_center,
             uv_scale,
@@ -202,6 +226,15 @@ impl SectionData {
             grid: [grid[0], grid[1], grid[2], 0],
             atlas: [table.atlas[0], table.atlas[1], table.atlas[2], 0],
             axes: [channels as u32, 0, 0, 0],
+            fallback_dims: [support.dims.x, support.dims.y, support.dims.z, 0.0],
+            fallback_grid: [
+                support_grid[0],
+                support_grid[1],
+                support_grid[2],
+                u32::from(fallback.is_some()),
+            ],
+            fallback_min: [support.origin.x, support.origin.y, support.origin.z, 0.0],
+            fallback_world: [support.world.x, support.world.y, support.world.z, 0.0],
         }
     }
 }

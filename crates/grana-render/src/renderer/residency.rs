@@ -4,6 +4,8 @@ use super::*;
 pub(super) struct Levels {
     pub(super) volume: usize,
     pub(super) section: usize,
+    pub(super) volume_fallback: usize,
+    pub(super) section_fallback: usize,
     pub(super) volume_capacity: usize,
     pub(super) section_capacity: usize,
 }

@@ -48,6 +48,8 @@ impl Renderer {
             settled,
             pin,
             prefetch,
+            prefetched,
+            prefetch_key,
             ..
         } = self;
         let pyramid = pyramid.as_ref()?;
@@ -94,7 +96,23 @@ impl Renderer {
             && volume.info.resident == volume.info.demand
             && section.info.resident == section.info.demand;
         *settled = settled_now.then_some(meta);
-        let prefetched = prefetch_requests(*prefetch, atlas, meta.time, &volume, &section, pyramid);
+        let key = view_key(&meta);
+        if *prefetch_key != Some(key) {
+            *prefetch_key = Some(key);
+            prefetched.clear();
+        }
+        let prefetched = prefetch_requests(
+            &Prefetch {
+                enabled: *prefetch,
+                atlas,
+                time: meta.time,
+                levels: meta.levels,
+                volume: &volume,
+                section: &section,
+                pyramid,
+            },
+            prefetched,
+        );
         Some(Requests {
             time: meta.time,
             volume: volume.requests,
@@ -106,24 +124,78 @@ impl Renderer {
     }
 }
 
+pub(super) fn view_key(meta: &Residency) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    meta.epoch.hash(&mut hasher);
+    meta.style.hash(&mut hasher);
+    meta.prefetch.hash(&mut hasher);
+    meta.time.hash(&mut hasher);
+    meta.eye.map(f32::to_bits).hash(&mut hasher);
+    meta.focus.map(f32::to_bits).hash(&mut hasher);
+    meta.field_of_view.to_bits().hash(&mut hasher);
+    meta.axis.hash(&mut hasher);
+    meta.span.to_bits().hash(&mut hasher);
+    meta.volume.hash(&mut hasher);
+    meta.section.hash(&mut hasher);
+    meta.levels.volume.hash(&mut hasher);
+    meta.levels.section.hash(&mut hasher);
+    meta.levels.volume_fallback.hash(&mut hasher);
+    meta.levels.section_fallback.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub(super) struct Prefetch<'a> {
+    pub(super) enabled: bool,
+    pub(super) atlas: &'a Atlas,
+    pub(super) time: u32,
+    pub(super) levels: Levels,
+    pub(super) volume: &'a Demand,
+    pub(super) section: &'a Demand,
+    pub(super) pyramid: &'a Pyramid,
+}
+
 pub(super) fn prefetch_requests(
-    enabled: bool,
-    atlas: &Atlas,
-    time: u32,
-    volume: &Demand,
-    section: &Demand,
-    pyramid: &Pyramid,
+    prefetch: &Prefetch<'_>,
+    issued: &mut HashSet<BrickRequest>,
 ) -> Vec<BrickRequest> {
+    let Prefetch {
+        enabled,
+        atlas,
+        time,
+        levels,
+        volume,
+        section,
+        pyramid,
+    } = *prefetch;
+    let mut requests = Vec::new();
+    let mut budget = (atlas.slots() / PREFETCH_SHARE).min(PREFETCH_LIMIT);
+    for (demand, level, fallback) in [
+        (volume, levels.volume, levels.volume_fallback),
+        (section, levels.section, levels.section_fallback),
+    ] {
+        cover_level(
+            pyramid,
+            atlas,
+            time,
+            level,
+            fallback,
+            &demand.indices,
+            &mut requests,
+            &mut budget,
+            issued,
+        );
+        if budget == 0 {
+            break;
+        }
+    }
     if !enabled {
-        return Vec::new();
+        return requests;
     }
     let next = time + 1;
     if next >= pyramid.frame_count() {
-        return Vec::new();
+        return requests;
     }
-    let mut budget = (atlas.slots() / PREFETCH_SHARE).min(PREFETCH_LIMIT);
-    let mut requests = Vec::new();
-    for (demand, level) in [(volume, volume.info.level), (section, section.info.level)] {
+    for (demand, level) in [(volume, levels.volume), (section, levels.section)] {
         if budget == 0 {
             break;
         }
@@ -137,15 +209,86 @@ pub(super) fn prefetch_requests(
             {
                 continue;
             }
-            requests.push(BrickRequest {
+            let request = BrickRequest {
                 time: next,
                 level,
                 coord: grid.coord(*index as usize),
-            });
+            };
+            if !issued.insert(request) {
+                continue;
+            }
+            requests.push(request);
             budget -= 1;
         }
     }
     requests
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cover_level(
+    pyramid: &Pyramid,
+    atlas: &Atlas,
+    time: u32,
+    source: usize,
+    target: usize,
+    indices: &[u32],
+    requests: &mut Vec<BrickRequest>,
+    budget: &mut usize,
+    issued: &mut HashSet<BrickRequest>,
+) {
+    if source == target || *budget == 0 {
+        return;
+    }
+    let source_grid = BrickGrid::new(pyramid.level(source).extent());
+    let target_grid = BrickGrid::new(pyramid.level(target).extent());
+    let source_voxel = pyramid.level(source).voxel();
+    let target_voxel = pyramid.level(target).voxel();
+    let counts = target_grid.counts();
+    let mut seen = HashSet::new();
+    for index in indices {
+        if *budget == 0 {
+            return;
+        }
+        let coord = source_grid.coord(*index as usize);
+        let origin = source_grid.origin(coord);
+        let extent = source_grid.extent_of(coord);
+        let dimensions = [extent.x(), extent.y(), extent.z()];
+        let mut first = [0u32; 3];
+        let mut last = [0u32; 3];
+        for axis in 0..3 {
+            let ratio = f64::from(source_voxel[axis]) / f64::from(target_voxel[axis]);
+            let start = f64::from(origin[axis]) * ratio;
+            let end = f64::from(origin[axis] + dimensions[axis]) * ratio;
+            first[axis] = (start / f64::from(BRICK_SIDE)).floor() as u32;
+            last[axis] = (((end - 1.0) / f64::from(BRICK_SIDE)).floor() as u32)
+                .min(counts[axis].saturating_sub(1));
+        }
+        for z in first[2]..=last[2] {
+            for y in first[1]..=last[1] {
+                for x in first[0]..=last[0] {
+                    let coord = BrickCoord::new(x, y, z);
+                    let index = target_grid.index(coord);
+                    let request = BrickRequest {
+                        time,
+                        level: target,
+                        coord,
+                    };
+                    if !seen.insert(index)
+                        || atlas.slot(time, target, index).is_some()
+                        || atlas.is_hollow(time, target, index)
+                        || !issued.insert(request)
+                    {
+                        continue;
+                    }
+                    requests.push(request);
+                    *budget -= 1;
+                    if *budget == 0 {
+                        return;
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub(super) fn feedback_words(bytes: &[u8]) -> Vec<u32> {

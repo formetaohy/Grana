@@ -5,6 +5,7 @@ mod signature;
 
 use residency::{FrameTarget, Levels, Regions, Residency};
 use signature::Signature;
+use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -12,7 +13,8 @@ use bytemuck::cast_slice;
 use glam::Vec3;
 use grana_gpu::Readback;
 use grana_volume::{
-    BRICK_SIDE, BrickData, BrickGrid, BrickRequest, Clip, Level, PADDED_SIDE, Pyramid, Region,
+    BRICK_SIDE, BrickCoord, BrickData, BrickGrid, BrickRequest, Clip, Level, PADDED_SIDE, Pyramid,
+    Region,
 };
 use wgpu::{
     BindGroup, BindGroupLayout, CommandEncoder, Device, LoadOp, Operations, Queue,
@@ -149,6 +151,8 @@ pub struct Renderer {
     pyramid: Option<Pyramid>,
     channels: usize,
     time: u32,
+    volume_level: Option<usize>,
+    section_level: Option<usize>,
     budget: u64,
     feedback: Option<Readback>,
     frames: Vec<Option<Residency>>,
@@ -159,6 +163,8 @@ pub struct Renderer {
     content: u64,
     pin: u64,
     prefetch: bool,
+    prefetched: HashSet<BrickRequest>,
+    prefetch_key: Option<u64>,
     transparent: bool,
     object_key: Option<u64>,
     settled: Option<Residency>,
@@ -211,6 +217,8 @@ impl Renderer {
             pyramid: None,
             channels: 0,
             time: 0,
+            volume_level: None,
+            section_level: None,
             budget,
             feedback: None,
             frames: vec![None; FEEDBACK_SLOTS],
@@ -221,6 +229,8 @@ impl Renderer {
             content: 0,
             pin: 0,
             prefetch: false,
+            prefetched: HashSet::new(),
+            prefetch_key: None,
             transparent: false,
             object_key: None,
             settled: None,
@@ -306,6 +316,8 @@ impl Renderer {
         self.pyramid = Some(pyramid.clone());
         self.channels = channels;
         self.time = 0;
+        self.volume_level = None;
+        self.section_level = None;
         self.counts.fill(0);
         self.meshes.clear();
         self.target = None;
@@ -314,6 +326,8 @@ impl Renderer {
         self.pick_pending = false;
         self.epoch += 1;
         self.pin = 0;
+        self.prefetched.clear();
+        self.prefetch_key = None;
         self.settled = None;
         self.planned = None;
         self.info = FrameInfo::default();
@@ -562,6 +576,15 @@ impl Renderer {
 
     pub fn pick_pending(&self) -> bool {
         self.pick_pending
+    }
+}
+
+pub(super) fn neighbour(rendered: Option<usize>, level: usize, levels: usize) -> usize {
+    match rendered {
+        Some(rendered) if rendered != level => rendered,
+        _ if level + 1 < levels => level + 1,
+        _ if level > 0 => level - 1,
+        _ => level,
     }
 }
 

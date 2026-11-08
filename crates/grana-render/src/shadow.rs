@@ -136,6 +136,7 @@ impl ShadowSpace {
 pub(crate) struct ShadowGroups<'a> {
     pub scene: &'a BindGroup,
     pub level: &'a BindGroup,
+    pub fallback: &'a BindGroup,
     pub atlas: &'a BindGroup,
 }
 
@@ -256,6 +257,7 @@ impl Shadow {
         pass.set_bind_group(1, groups.level, &[]);
         pass.set_bind_group(2, groups.atlas, &[]);
         pass.set_bind_group(3, &self.tau_write, &[]);
+        pass.set_bind_group(6, groups.fallback, &[]);
         pass.dispatch_workgroups(
             self.dims[0].div_ceil(WORKGROUP),
             self.dims[1].div_ceil(WORKGROUP),
@@ -282,6 +284,7 @@ impl Shadow {
         pass.set_bind_group(1, groups.level, &[]);
         pass.set_bind_group(2, groups.atlas, &[]);
         pass.set_bind_group(3, &self.occlusion_write, &[]);
+        pass.set_bind_group(6, groups.fallback, &[]);
         pass.dispatch_workgroups(
             OCCLUSION_SIDE.div_ceil(WORKGROUP),
             OCCLUSION_SIDE.div_ceil(WORKGROUP),

@@ -24,6 +24,10 @@ struct FrameData {
     oit: vec4<u32>,
     clip: vec4<f32>,
     tag: vec4<u32>,
+    fallback_dims: vec4<f32>,
+    fallback_grid: vec4<u32>,
+    fallback_min: vec4<f32>,
+    fallback_size: vec4<f32>,
 }
 
 struct SectionData {
@@ -38,6 +42,10 @@ struct SectionData {
     grid: vec4<u32>,
     atlas: vec4<u32>,
     axes: vec4<u32>,
+    fallback_dims: vec4<f32>,
+    fallback_grid: vec4<u32>,
+    fallback_min: vec4<f32>,
+    fallback_world: vec4<f32>,
 }
 
 struct ChannelData {

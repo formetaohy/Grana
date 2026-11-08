@@ -259,9 +259,13 @@ impl Layouts {
         let volume = pipeline_layout(
             device,
             "grana.volume.layout",
-            &[&scene, &level, &atlas, &depth, &shadow, &oit_read],
+            &[&scene, &level, &atlas, &depth, &shadow, &oit_read, &level],
         );
-        let section = pipeline_layout(device, "grana.section.layout", &[&scene, &level, &atlas]);
+        let section = pipeline_layout(
+            device,
+            "grana.section.layout",
+            &[&scene, &level, &atlas, &level],
+        );
         let cull = pipeline_layout(
             device,
             "grana.cull.layout",
@@ -310,11 +314,19 @@ impl Layouts {
             &[&scene, &marker_cull],
         );
         let census = pipeline_layout(device, "grana.census.layout", &[&scene, &census_level]);
-        let shadow_pipeline = pipeline_layout(
-            device,
-            "grana.shadow.pipeline.layout",
-            &[&scene, &level, &atlas, &shadow_write],
-        );
+        let shadow_pipeline = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("grana.shadow.pipeline.layout"),
+            bind_group_layouts: &[
+                Some(&scene),
+                Some(&level),
+                Some(&atlas),
+                Some(&shadow_write),
+                None,
+                None,
+                Some(&level),
+            ],
+            immediate_size: 0,
+        });
         Self {
             scene,
             level,

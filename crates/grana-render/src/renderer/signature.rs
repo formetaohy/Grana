@@ -43,6 +43,8 @@ impl Signature<'_, '_> {
         section_region.hash(&mut hasher);
         levels.volume.hash(&mut hasher);
         levels.section.hash(&mut hasher);
+        levels.volume_fallback.hash(&mut hasher);
+        levels.section_fallback.hash(&mut hasher);
         levels.volume_capacity.hash(&mut hasher);
         levels.section_capacity.hash(&mut hasher);
         scene.channels.len().hash(&mut hasher);

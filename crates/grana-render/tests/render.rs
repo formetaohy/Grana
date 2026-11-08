@@ -1940,6 +1940,125 @@ fn switches_levels() {
     assert!(far.level > 0, "zooming out must coarsen again");
 }
 
+#[test]
+fn keeps_the_neighbour_level_visible_while_the_finer_level_loads() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let levels = [
+        (Extent::new(256, 256, 64), Spacing::new(0.1, 0.1, 0.2)),
+        (Extent::new(128, 128, 32), Spacing::new(0.2, 0.2, 0.4)),
+    ];
+    let volumes = levels
+        .iter()
+        .map(|(extent, spacing)| sphere(*extent, *spacing))
+        .collect::<Vec<_>>();
+    let pyramid = Pyramid::new(
+        levels
+            .iter()
+            .map(|(extent, spacing)| Level::new(*extent, *spacing))
+            .collect(),
+        2,
+        volumes[0].pyramid().channels().to_vec(),
+        1,
+        1.0,
+    );
+    let grids = levels
+        .iter()
+        .map(|(extent, _)| BrickGrid::new(*extent))
+        .collect::<Vec<_>>();
+    let transfers = vec![TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volumes[0].world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = Renderer::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        100 * SLOT_BYTES,
+    );
+    renderer.set_dataset(&device, &pyramid);
+    let source = |request: grana_volume::BrickRequest| {
+        let volume = &volumes[request.level];
+        volume.brick(&grids[request.level], request.coord)
+    };
+    for _ in 0..5 {
+        camera.zoom(-1.0);
+    }
+    let fitted = settle(
+        &mut renderer,
+        Session {
+            device: &device,
+            queue: &queue,
+            target: &view,
+            camera: &camera,
+            section: &section,
+            scene: &scene,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            region: Region::none(),
+            time: 0,
+        },
+        source,
+    )
+    .volume_view;
+    assert_eq!(fitted.level, 1, "the far view holds the coarse level");
+    let bright = |pixels: &[[u8; 4]]| {
+        pixels
+            .iter()
+            .filter(|pixel| {
+                pixel[..3]
+                    .iter()
+                    .map(|value| u32::from(*value))
+                    .sum::<u32>()
+                    > 400
+            })
+            .count()
+    };
+    let coarse = bright(&read_pixels(&device, &queue, &texture, SIDE));
+    assert!(coarse > 0, "the coarse level renders the sphere");
+    for _ in 0..15 {
+        camera.zoom(1.0);
+    }
+    let session = Session {
+        device: &device,
+        queue: &queue,
+        target: &view,
+        camera: &camera,
+        section: &section,
+        scene: &scene,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        region: Region::none(),
+        time: 0,
+    };
+    let mut info = renderer.draw(&device, &queue, common::frame(&session));
+    for _ in 0..6 {
+        let _ = common::next_demand(&mut renderer, &session);
+        info = renderer.draw(&device, &queue, common::frame(&session));
+    }
+    assert_eq!(info.volume.level, 0, "zooming in resolves the finest level");
+    assert_eq!(
+        info.volume.resident, 0,
+        "no brick of the finest level is resident yet"
+    );
+    let fallback = bright(&read_pixels(&device, &queue, &texture, SIDE));
+    assert!(
+        fallback > coarse / 3,
+        "the neighbour level keeps the volume visible: {fallback} against {coarse}"
+    );
+}
 fn section_render(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
