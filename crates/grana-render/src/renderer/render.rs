@@ -68,6 +68,8 @@ impl Renderer {
             planned,
             shadow,
             transparent,
+            exporting,
+            fade,
             object_key,
             info,
             dummy_oit,
@@ -263,14 +265,12 @@ impl Renderer {
             frame_data.oit[1] = oit.layers();
             frame_data.oit[3] = oit.tail_scale();
         }
-        let oit_group = match target.oit.as_ref() {
-            Some(oit) if translucent => oit.read_group(),
-            _ => dummy_oit.read_group(),
-        };
         let signature = Signature {
             scene,
             data: &frame_data,
             section: &section_data,
+            camera: camera.state(),
+            view: section.state(),
             levels,
             time,
             exposure,
@@ -279,12 +279,37 @@ impl Renderer {
             size,
             volume_region,
             section_region,
+        };
+        let structure = signature.digest();
+        let transition = signature.transition();
+        let key = LevelKey::of(levels);
+        let moved = target.transition != Some(transition);
+        if moved {
+            *fade = None;
         }
-        .digest();
-        if target.signature != Some(signature) {
-            target.signature = Some(signature);
+        if target.levels.is_some_and(|previous| previous != key)
+            && !moved
+            && !*exporting
+            && samples > 1
+            && target.samples > 0
+        {
+            target.fade_group(device, present);
+            target.snapshot(&mut encoder);
+            *fade = Some(Fade {
+                weight: 0.0,
+                samples: target.samples,
+            });
+        }
+        target.transition = Some(transition);
+        target.levels = Some(key);
+        if target.signature != Some(structure) {
+            target.signature = Some(structure);
             target.samples = 0;
         }
+        let oit_group = match target.oit.as_ref() {
+            Some(oit) if translucent => oit.read_group(),
+            _ => dummy_oit.read_group(),
+        };
         let reset = target.samples == 0;
         info.samples = target.samples;
         if reset {
@@ -625,13 +650,26 @@ impl Renderer {
             info.cut.indices = slice.index_bytes();
             present.accumulate(
                 &mut encoder,
-                &target.accumulation,
+                &target.accumulation_view,
                 &target.accumulate_group,
                 reset,
             );
         }
-        present.write(queue, exposure, target.samples, *transparent);
-        present.present(&mut encoder, surface, &target.present_group);
+        if let Some(active) = fade.as_mut() {
+            active.weight = (active.weight + 1.0 / FADE_DRAWS).min(1.0);
+        }
+        let blend = fade.as_ref().map(|fade| (fade.weight, fade.samples));
+        present.write(queue, exposure, target.samples, *transparent, blend);
+        if fade.is_some() {
+            let group = target.fade_group(device, present);
+            present.present(&mut encoder, surface, group);
+            if fade.as_ref().is_some_and(|active| active.weight >= 1.0) {
+                *fade = None;
+            }
+        } else {
+            present.present(&mut encoder, surface, &target.present_group);
+        }
+        info.fading = fade.is_some();
         if replan
             && let Some(feedback) = feedback.as_mut()
             && let Some(slot) = feedback.reserve()

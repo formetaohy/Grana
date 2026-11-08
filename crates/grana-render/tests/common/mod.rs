@@ -61,7 +61,7 @@ pub fn settle_clipped_sized(
             clipped_sized(&session, clip, size),
         );
         if !renderer.requests_pending() {
-            while info.samples < SAMPLES {
+            while info.samples < SAMPLES || info.fading {
                 info = renderer.draw(
                     session.device,
                     session.queue,

@@ -64,12 +64,14 @@ pub(crate) struct Resident {
 struct Slot {
     brick: Option<ResidentBrick>,
     used: u64,
+    held: bool,
 }
 
 impl Slot {
     const EMPTY: Self = Self {
         brick: None,
         used: 0,
+        held: false,
     };
 }
 
@@ -249,8 +251,16 @@ impl Atlas {
     pub fn touch(&mut self, time: u32, level: usize, indices: impl Iterator<Item = u32>, pin: u64) {
         for index in indices {
             if let Some(slot) = self.identity.get(&(time, level, index as usize)) {
-                self.slots[*slot as usize].used = pin;
+                let slot = &mut self.slots[*slot as usize];
+                slot.used = pin;
+                slot.held = true;
             }
+        }
+    }
+
+    pub fn clear_holds(&mut self) {
+        for slot in &mut self.slots {
+            slot.held = false;
         }
     }
 
@@ -259,42 +269,55 @@ impl Atlas {
         pin: u64,
         now: u32,
         request: u32,
+        demand: bool,
     ) -> Option<(u32, Option<ResidentBrick>)> {
         if let Some(slot) = self.free.pop() {
             return Some((slot, None));
         }
-        let victim = self.victim(pin, now, request <= now)?;
+        let victim = self.victim(pin, now, request <= now, demand)?;
         let brick = self.slots[victim]
             .brick
             .expect("the eviction candidate holds a brick");
-        self.slots[victim].brick = None;
+        self.slots[victim] = Slot::EMPTY;
         self.identity
             .remove(&(brick.time, brick.level, brick.index));
         Some((victim as u32, Some(brick)))
     }
 
-    fn victim(&self, pin: u64, now: u32, allow_future: bool) -> Option<usize> {
-        let current = self
-            .slots
-            .iter()
-            .enumerate()
-            .filter(|(_, slot)| {
-                slot.used < pin && slot.brick.is_some_and(|brick| brick.time <= now)
-            })
-            .min_by_key(|(_, slot)| slot.used)
-            .map(|(index, _)| index);
-        if current.is_some() || !allow_future {
-            return current;
+    fn victim(&self, pin: u64, now: u32, allow_future: bool, demand: bool) -> Option<usize> {
+        let pick = |stale: bool, unheld: bool, future: bool| {
+            self.slots
+                .iter()
+                .enumerate()
+                .filter(|(_, slot)| {
+                    let Some(brick) = slot.brick else {
+                        return false;
+                    };
+                    (future || brick.time <= now)
+                        && (!stale || slot.used < pin)
+                        && (!unheld || !slot.held)
+                })
+                .min_by_key(|(_, slot)| slot.used)
+                .map(|(index, _)| index)
+        };
+        if let Some(victim) = pick(true, false, false) {
+            return Some(victim);
         }
-        self.slots
-            .iter()
-            .enumerate()
-            .filter(|(_, slot)| slot.brick.is_some_and(|brick| brick.time > now))
-            .min_by_key(|(_, slot)| slot.used)
-            .map(|(index, _)| index)
+        if demand && let Some(victim) = pick(false, true, false) {
+            return Some(victim);
+        }
+        if allow_future {
+            if let Some(victim) = pick(true, false, true) {
+                return Some(victim);
+            }
+            if demand && let Some(victim) = pick(false, true, true) {
+                return Some(victim);
+            }
+        }
+        None
     }
 
-    pub fn assign(&mut self, slot: u32, brick: ResidentBrick, pin: u64) {
+    pub fn assign(&mut self, slot: u32, brick: ResidentBrick, pin: u64, hold: bool) {
         if let Some(previous) = self.slots[slot as usize].brick {
             self.identity
                 .remove(&(previous.time, previous.level, previous.index));
@@ -305,6 +328,7 @@ impl Atlas {
         self.slots[slot as usize] = Slot {
             brick: Some(brick),
             used: pin,
+            held: hold,
         };
     }
 

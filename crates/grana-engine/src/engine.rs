@@ -77,6 +77,7 @@ impl Engine {
         queue: &Queue,
         frame: ViewportFrame<'_>,
     ) -> Result<FrameInfo, String> {
+        self.renderer.set_exporting(false);
         let rendered = crate::view::frame(frame.scene)?;
         let info = frame::draw(
             &mut self.renderer,

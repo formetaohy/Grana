@@ -3,7 +3,7 @@ mod render;
 mod residency;
 mod signature;
 
-use residency::{FrameTarget, Levels, Regions, Residency};
+use residency::{FrameTarget, LevelKey, Levels, Regions, Residency};
 use signature::Signature;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -64,7 +64,15 @@ const PREFETCH_SHARE: usize = 4;
 
 const RECORD_SHARE: u64 = 8;
 
+const FADE_DRAWS: f32 = 10.0;
+
 const UNIT: f32 = 65535.0;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct Fade {
+    pub(super) weight: f32,
+    pub(super) samples: u32,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ViewInfo {
@@ -99,6 +107,7 @@ pub struct FrameInfo {
     pub fragments: u64,
     pub samples: u32,
     pub settled: bool,
+    pub fading: bool,
 }
 
 #[derive(Default)]
@@ -168,6 +177,8 @@ pub struct Renderer {
     prefetch_rate: f32,
     wanted: [usize; BAND],
     transparent: bool,
+    exporting: bool,
+    fade: Option<Fade>,
     object_key: Option<u64>,
     settled: Option<Residency>,
     planned: Option<Residency>,
@@ -237,6 +248,8 @@ impl Renderer {
             prefetch_rate: 1.0,
             wanted: [0; BAND],
             transparent: false,
+            exporting: false,
+            fade: None,
             object_key: None,
             settled: None,
             planned: None,
@@ -261,6 +274,15 @@ impl Renderer {
     pub fn begin_export(&mut self) {
         self.target = None;
         self.settled = None;
+        self.exporting = true;
+        self.fade = None;
+    }
+
+    pub fn set_exporting(&mut self, exporting: bool) {
+        if self.exporting != exporting {
+            self.fade = None;
+        }
+        self.exporting = exporting;
     }
 
     pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) {
@@ -358,6 +380,8 @@ impl Renderer {
         self.wanted = [0; BAND];
         self.settled = None;
         self.planned = None;
+        self.exporting = false;
+        self.fade = None;
         self.info = FrameInfo::default();
     }
 
@@ -372,6 +396,7 @@ impl Renderer {
             time: now,
             content,
             pin,
+            prefetched,
             ..
         } = self;
         let (Some(pyramid), Some(atlas), Some(summary), Some(arena)) = (
@@ -419,7 +444,8 @@ impl Renderer {
         }
         let slot_grid = atlas.slot_grid();
         ensure_brick(bricks, pyramid.level(level), level, slot_grid, arena);
-        let Some((slot, evicted)) = atlas.allocate(*pin, *now, time) else {
+        let demand = !prefetched.contains(&request);
+        let Some((slot, evicted)) = atlas.allocate(*pin, *now, time, demand) else {
             return false;
         };
         if let Some(brick) = evicted
@@ -450,6 +476,7 @@ impl Renderer {
                 maxima,
             },
             *pin,
+            demand,
         );
         if let Some(table) = bricks[level].as_mut() {
             table.set_record(

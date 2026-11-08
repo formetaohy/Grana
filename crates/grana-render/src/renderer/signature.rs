@@ -1,9 +1,13 @@
 use super::*;
+use grana_display::{CameraState, SectionState};
 
+#[derive(Clone, Copy)]
 pub(super) struct Signature<'a, 'b> {
     pub(super) scene: &'a SceneFrame<'b>,
     pub(super) data: &'a FrameData,
     pub(super) section: &'a SectionData,
+    pub(super) camera: CameraState,
+    pub(super) view: SectionState,
     pub(super) levels: Levels,
     pub(super) time: u32,
     pub(super) exposure: f32,
@@ -28,6 +32,7 @@ impl Signature<'_, '_> {
             size,
             volume_region,
             section_region,
+            ..
         } = self;
         let mut hasher = DefaultHasher::new();
         bytemuck::bytes_of(data).hash(&mut hasher);
@@ -47,37 +52,82 @@ impl Signature<'_, '_> {
         levels.section.hash(&mut hasher);
         levels.section_fallback.hash(&mut hasher);
         levels.section_capacity.hash(&mut hasher);
-        scene.channels.len().hash(&mut hasher);
-        for channel in scene.channels {
-            channel.visible.hash(&mut hasher);
-            channel.opacity.to_bits().hash(&mut hasher);
-            channel.window.min().to_bits().hash(&mut hasher);
-            channel.window.max().to_bits().hash(&mut hasher);
-            channel.transfer.stops().len().hash(&mut hasher);
-            for stop in channel.transfer.stops() {
-                stop.position().to_bits().hash(&mut hasher);
-                stop.opacity().to_bits().hash(&mut hasher);
-                stop.color().map(f32::to_bits).hash(&mut hasher);
-            }
-        }
-        scene.layers.len().hash(&mut hasher);
-        for layer in scene.layers {
-            layer.key.hash(&mut hasher);
-            layer.style_start.hash(&mut hasher);
-            layer.style_count.hash(&mut hasher);
-        }
-        scene.styles.len().hash(&mut hasher);
-        for style in scene.styles {
-            style.color().map(f32::to_bits).hash(&mut hasher);
-            style.visible().hash(&mut hasher);
-            style.selected().hash(&mut hasher);
-            style.opacity().to_bits().hash(&mut hasher);
-        }
-        scene.markers.len().hash(&mut hasher);
-        for marker in scene.markers {
-            marker.hash(&mut hasher);
-        }
+        content_digest(scene, &mut hasher);
         hasher.finish()
+    }
+
+    pub(super) fn transition(self) -> u64 {
+        let Self {
+            scene,
+            data,
+            camera,
+            view,
+            time,
+            exposure,
+            epoch,
+            size,
+            volume_region,
+            section_region,
+            ..
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        camera.pivot.map(f32::to_bits).hash(&mut hasher);
+        camera.yaw.to_bits().hash(&mut hasher);
+        camera.pitch.to_bits().hash(&mut hasher);
+        camera.fov_y.to_bits().hash(&mut hasher);
+        view.axis.hash(&mut hasher);
+        view.span.to_bits().hash(&mut hasher);
+        data.light.map(f32::to_bits).hash(&mut hasher);
+        data.region_min.map(f32::to_bits).hash(&mut hasher);
+        data.region_max.map(f32::to_bits).hash(&mut hasher);
+        data.shading.map(f32::to_bits).hash(&mut hasher);
+        for value in &data.march[1..] {
+            value.to_bits().hash(&mut hasher);
+        }
+        data.clip.map(f32::to_bits).hash(&mut hasher);
+        data.tag.hash(&mut hasher);
+        scene.step_scale.to_bits().hash(&mut hasher);
+        exposure.to_bits().hash(&mut hasher);
+        time.hash(&mut hasher);
+        epoch.hash(&mut hasher);
+        size.hash(&mut hasher);
+        volume_region.hash(&mut hasher);
+        section_region.hash(&mut hasher);
+        content_digest(scene, &mut hasher);
+        hasher.finish()
+    }
+}
+
+fn content_digest(scene: &SceneFrame<'_>, hasher: &mut DefaultHasher) {
+    scene.channels.len().hash(hasher);
+    for channel in scene.channels {
+        channel.visible.hash(hasher);
+        channel.opacity.to_bits().hash(hasher);
+        channel.window.min().to_bits().hash(hasher);
+        channel.window.max().to_bits().hash(hasher);
+        channel.transfer.stops().len().hash(hasher);
+        for stop in channel.transfer.stops() {
+            stop.position().to_bits().hash(hasher);
+            stop.opacity().to_bits().hash(hasher);
+            stop.color().map(f32::to_bits).hash(hasher);
+        }
+    }
+    scene.layers.len().hash(hasher);
+    for layer in scene.layers {
+        layer.key.hash(hasher);
+        layer.style_start.hash(hasher);
+        layer.style_count.hash(hasher);
+    }
+    scene.styles.len().hash(hasher);
+    for style in scene.styles {
+        style.color().map(f32::to_bits).hash(hasher);
+        style.visible().hash(hasher);
+        style.selected().hash(hasher);
+        style.opacity().to_bits().hash(hasher);
+    }
+    scene.markers.len().hash(hasher);
+    for marker in scene.markers {
+        marker.hash(hasher);
     }
 }
 

@@ -1944,6 +1944,162 @@ fn switches_levels() {
     assert!(far.level > 0, "zooming out must coarsen again");
 }
 
+fn pixel_difference(left: &[[u8; 4]], right: &[[u8; 4]]) -> u64 {
+    left.iter()
+        .zip(right)
+        .map(|(left, right)| {
+            left.iter()
+                .zip(right)
+                .map(|(left, right)| u64::from(left.abs_diff(*right)))
+                .sum::<u64>()
+        })
+        .sum()
+}
+
+#[test]
+fn fades_between_levels_instead_of_cutting() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = target(&device, SIDE);
+    let view = texture.create_view(&Default::default());
+    let levels = [
+        (Extent::new(256, 256, 64), Spacing::new(0.1, 0.1, 0.2)),
+        (Extent::new(128, 128, 32), Spacing::new(0.2, 0.2, 0.4)),
+        (Extent::new(64, 64, 16), Spacing::new(0.4, 0.4, 0.8)),
+    ];
+    let volumes = levels
+        .iter()
+        .map(|(extent, spacing)| sphere(*extent, *spacing))
+        .collect::<Vec<_>>();
+    let pyramid = Pyramid::new(
+        levels
+            .iter()
+            .map(|(extent, spacing)| Level::new(*extent, *spacing))
+            .collect(),
+        3,
+        volumes[0].pyramid().channels().to_vec(),
+        1,
+        1.0,
+    );
+    let grids = levels
+        .iter()
+        .map(|(extent, _)| BrickGrid::new(*extent))
+        .collect::<Vec<_>>();
+    let transfers = vec![TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volumes[0].world_extent()), 1.0);
+    let section = SectionCamera::new(Axis::Z);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = Renderer::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        100 * SLOT_BYTES,
+    );
+    renderer.set_dataset(&device, &pyramid);
+    let source = |request: grana_volume::BrickRequest| {
+        let volume = &volumes[request.level];
+        volume.brick(&grids[request.level], request.coord)
+    };
+    settle(
+        &mut renderer,
+        Session {
+            device: &device,
+            queue: &queue,
+            target: &view,
+            camera: &camera,
+            section: &section,
+            scene: &scene,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            region: Region::none(),
+            time: 0,
+        },
+        source,
+    );
+    for _ in 0..10 {
+        camera.zoom(1.0);
+    }
+    let near = settle(
+        &mut renderer,
+        Session {
+            device: &device,
+            queue: &queue,
+            target: &view,
+            camera: &camera,
+            section: &section,
+            scene: &scene,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            region: Region::none(),
+            time: 0,
+        },
+        source,
+    )
+    .volume_view;
+    assert_eq!(near.level, 0, "zooming in must resolve the finest level");
+    let before = read_pixels(&device, &queue, &texture, SIDE);
+    for _ in 0..20 {
+        camera.zoom(-1.0);
+    }
+    let switching = renderer.draw(
+        &device,
+        &queue,
+        common::frame(&Session {
+            device: &device,
+            queue: &queue,
+            target: &view,
+            camera: &camera,
+            section: &section,
+            scene: &scene,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            region: Region::none(),
+            time: 0,
+        }),
+    );
+    assert!(
+        switching.fading,
+        "a level switch cross fades: near={near:?} switching={:?}",
+        switching.volume
+    );
+    let blended = read_pixels(&device, &queue, &texture, SIDE);
+    let after = settle(
+        &mut renderer,
+        Session {
+            device: &device,
+            queue: &queue,
+            target: &view,
+            camera: &camera,
+            section: &section,
+            scene: &scene,
+            volume_region: WHOLE,
+            section_region: CORNER,
+            region: Region::none(),
+            time: 0,
+        },
+        source,
+    )
+    .volume_view;
+    assert!(after.level > 0, "zooming out must coarsen again");
+    let settled = read_pixels(&device, &queue, &texture, SIDE);
+    let blended_difference = pixel_difference(&before, &blended);
+    let total_difference = pixel_difference(&before, &settled);
+    assert!(
+        blended_difference > 0 && blended_difference < total_difference,
+        "the switch blends both levels: {blended_difference} of {total_difference}"
+    );
+}
+
 #[test]
 fn keeps_the_neighbour_level_visible_while_the_finer_level_loads() {
     let Some((device, queue)) = device() else {

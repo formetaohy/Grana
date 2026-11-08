@@ -81,6 +81,7 @@ impl Renderer {
             pyramid,
         )?;
         *pin += 1;
+        atlas.clear_holds();
         for (band, demand) in demands.iter().enumerate() {
             atlas.touch(
                 meta.time,
@@ -158,6 +159,9 @@ impl Renderer {
         let mut merged = Demand::default();
         for demand in demands {
             merged.merge(demand);
+        }
+        for request in merged.requests.iter().chain(&section.requests) {
+            prefetched.remove(request);
         }
         merged.info.level = ladder.base;
         info.volume = merged.info;

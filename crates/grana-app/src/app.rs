@@ -166,7 +166,7 @@ impl App {
             delay = Duration::ZERO;
         } else if self.workspace.playback.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
-        } else if self.info.samples < SAMPLE_LIMIT {
+        } else if self.info.samples < SAMPLE_LIMIT || self.info.fading {
             delay = Duration::ZERO;
         }
         if self.streaming() {
@@ -278,7 +278,10 @@ impl App {
         let streamed = self.info.volume.resident >= self.info.volume.demand
             && self.info.section.resident >= self.info.section.demand;
         if let Some(path) = self.capture.clone()
-            && ((self.elapsed_frames > 30 && streamed && self.info.samples >= SAMPLE_LIMIT)
+            && ((self.elapsed_frames > 30
+                && streamed
+                && self.info.samples >= SAMPLE_LIMIT
+                && !self.info.fading)
                 || self.elapsed_frames > 150)
         {
             self.capture = None;

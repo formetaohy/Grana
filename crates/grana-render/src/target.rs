@@ -1,7 +1,7 @@
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, CommandEncoder, Device,
     Extent3d, LoadOp, Operations, RenderPassColorAttachment, RenderPassDescriptor, StoreOp,
-    TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
+    Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
     TextureViewDescriptor,
 };
 
@@ -80,23 +80,28 @@ impl SceneTarget {
     }
 }
 
-pub(crate) fn accumulation(device: &Device, size: [u32; 2]) -> TextureView {
-    device
-        .create_texture(&TextureDescriptor {
-            label: Some("grana.scene.accumulation"),
-            size: Extent3d {
-                width: size[0],
-                height: size[1],
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: ACCUMULATION_FORMAT,
-            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        })
-        .create_view(&TextureViewDescriptor::default())
+pub(crate) fn accumulation(device: &Device, size: [u32; 2]) -> Texture {
+    device.create_texture(&TextureDescriptor {
+        label: Some("grana.scene.accumulation"),
+        size: Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: ACCUMULATION_FORMAT,
+        usage: TextureUsages::RENDER_ATTACHMENT
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_SRC
+            | TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
+}
+
+pub(crate) fn view(texture: &Texture) -> TextureView {
+    texture.create_view(&TextureViewDescriptor::default())
 }
 
 pub(crate) fn clear(encoder: &mut CommandEncoder, color: &TextureView, depth: &TextureView) {

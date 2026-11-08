@@ -32,6 +32,7 @@ const ACCUMULATE: BlendState = BlendState {
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct Uniforms {
     flags: [f32; 4],
+    fade: [f32; 4],
 }
 
 pub(crate) struct Present {
@@ -65,6 +66,16 @@ impl Present {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -117,7 +128,7 @@ impl Present {
         self.format
     }
 
-    pub fn bind(&self, device: &Device, source: &TextureView) -> BindGroup {
+    pub fn bind(&self, device: &Device, source: &TextureView, fade: &TextureView) -> BindGroup {
         device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.present.group"),
             layout: &self.layout,
@@ -130,16 +141,33 @@ impl Present {
                     binding: 1,
                     resource: self.uniforms.as_entire_binding(),
                 },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(fade),
+                },
             ],
         })
     }
 
-    pub fn write(&self, queue: &Queue, exposure: f32, samples: u32, transparent: bool) {
+    pub fn write(
+        &self,
+        queue: &Queue,
+        exposure: f32,
+        samples: u32,
+        transparent: bool,
+        fade: Option<(f32, u32)>,
+    ) {
         assert!(
             exposure.is_finite() && exposure > 0.0,
             "an exposure scales radiance by a positive factor"
         );
         assert!(samples > 0, "a present pass resolves at least one sample");
+        let (weight, previous) = fade.unwrap_or((0.0, samples));
+        assert!(
+            weight.is_finite() && (0.0..=1.0).contains(&weight),
+            "a cross fade blends two resolved images"
+        );
+        assert!(previous > 0, "a cross fade resolves the previous image");
         let uniforms = Uniforms {
             flags: [
                 if self.encode { 1.0 } else { 0.0 },
@@ -147,6 +175,7 @@ impl Present {
                 1.0 / samples as f32,
                 if transparent { 1.0 } else { 0.0 },
             ],
+            fade: [weight, 1.0 / previous as f32, 0.0, 0.0],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }
