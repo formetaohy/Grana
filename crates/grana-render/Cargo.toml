@@ -16,8 +16,5 @@ grana-volume = { workspace = true }
 half = { workspace = true }
 wgpu = { workspace = true }
 
-[dev-dependencies]
-grana-object = { workspace = true }
-
 [lints]
 workspace = true

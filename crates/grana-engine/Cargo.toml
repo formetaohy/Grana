@@ -20,11 +20,5 @@ grana-video = { workspace = true }
 grana-volume = { workspace = true }
 wgpu = { workspace = true }
 
-[dev-dependencies]
-glam = { workspace = true }
-grana-geometry = { workspace = true }
-grana-volume = { workspace = true }
-png = { workspace = true }
-
 [lints]
 workspace = true

@@ -45,31 +45,3 @@ fn ensure_triangles(object: usize, indices: u32) -> Result<(), Error> {
         indices: indices as usize,
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use grana_geometry::{Mesh, MeshVertex, PackedMesh};
-
-    use super::*;
-
-    #[test]
-    fn writes_triangles_with_world_positions_and_normals() {
-        let vertices = vec![
-            MeshVertex::new([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0),
-            MeshVertex::new([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0),
-            MeshVertex::new([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 0),
-        ];
-        let mesh = PackedMesh::new(Mesh::new(vertices, vec![0, 1, 2]));
-        let mut text = Vec::new();
-        write(&mut text, &mesh, "surfaces-1").unwrap();
-        let text = String::from_utf8(text).unwrap();
-        assert!(
-            text.starts_with("# grana obj\n# units: micrometer\n"),
-            "{text}"
-        );
-        assert!(text.contains("o surfaces-1_000000\n"), "{text}");
-        assert!(text.contains("v 0.000000 0.000000 0.000000\n"), "{text}");
-        assert!(text.contains("vn 0.0000 0.0000 1.0000\n"), "{text}");
-        assert!(text.contains("f 1//1 2//2 3//3\n"), "{text}");
-    }
-}

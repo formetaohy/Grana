@@ -19,10 +19,5 @@ grana-volume = { workspace = true }
 thiserror = { workspace = true }
 zstd = { workspace = true }
 
-[dev-dependencies]
-glam = { workspace = true }
-grana-optics = { workspace = true }
-grana-analysis = { workspace = true }
-
 [lints]
 workspace = true

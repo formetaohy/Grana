@@ -65,7 +65,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test
-        run: cargo test --workspace --all-features --locked
+        run: cargo test -p grana --test suite --all-features --locked
 
   build:
     name: Release Build

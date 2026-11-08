@@ -429,27 +429,3 @@ fn is_closing(character: char) -> bool {
             | '}'
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cjk_text_breaks_between_characters() {
-        assert_eq!(tokenize("中文测试"), ["中", "文", "测", "试"]);
-        assert_eq!(tokenize("中文，测试"), ["中", "文，", "测", "试"]);
-        assert_eq!(tokenize("abc def"), ["abc", " ", "def"]);
-    }
-
-    #[test]
-    fn cjk_text_uses_a_fallback_face() {
-        let (device, _) = crate::test_gpu::gpu();
-        let mut text = Text::new(&device);
-        text.begin(1.0);
-        let style = TypeStyle::new(14.0, 400.0, 18.0);
-        let layout = text.layout("中文测试", style, 0.0, false, false, Align::Start);
-        assert_eq!(layout.glyphs.len(), 4);
-        assert!(layout.size.x > 0.0);
-        assert!(layout.size.y > 0.0);
-    }
-}

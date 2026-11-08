@@ -95,8 +95,32 @@ repository.workspace = true
 name = "grana"
 path = "src/main.rs"
 
+[[test]]
+name = "suite"
+path = "tests/suite/main.rs"
+
 [dependencies]
 grana-app = { workspace = true }
+
+[dev-dependencies]
+glam = { workspace = true }
+grana-analysis = { workspace = true }
+grana-animation = { workspace = true }
+grana-display = { workspace = true }
+grana-geometry = { workspace = true }
+grana-gpu = { workspace = true }
+grana-image = { workspace = true }
+grana-measure = { workspace = true }
+grana-object = { workspace = true }
+grana-project = { workspace = true }
+grana-protocol = { workspace = true }
+grana-render = { workspace = true }
+grana-scene = { workspace = true }
+grana-session = { workspace = true }
+grana-tiff = { workspace = true }
+grana-volume = { workspace = true }
+grana-zarr = { workspace = true }
+wgpu = { workspace = true }
 
 [lints]
 workspace = true

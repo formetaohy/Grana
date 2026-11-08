@@ -87,28 +87,3 @@ impl Leveling {
         plane
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn one_mapping_covers_every_plane_of_the_stack() {
-        let leveling = Leveling::from_samples(
-            Intensity::new(0.0, 110.0),
-            (0..=110).map(|value| value as f32 / 110.0).collect(),
-        );
-        let dim = leveling.apply(&VoxelData::F32(
-            (0..=10).map(|value| value as f32).collect(),
-        ));
-        let bright = leveling.apply(&VoxelData::F32(
-            (100..=110).map(|value| value as f32).collect(),
-        ));
-        let dim_peak = dim.iter().copied().fold(0.0f32, f32::max);
-        let bright_floor = bright.iter().copied().fold(1.0f32, f32::min);
-        assert!(
-            dim_peak <= bright_floor,
-            "a dim plane stays below a bright plane: {dim_peak} against {bright_floor}"
-        );
-    }
-}

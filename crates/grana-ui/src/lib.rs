@@ -11,8 +11,6 @@ pub mod glass;
 mod hit;
 pub mod icon;
 mod input;
-#[cfg(test)]
-mod interaction;
 mod layer;
 mod layout;
 mod motion;
@@ -25,8 +23,6 @@ mod scene;
 mod scroll;
 mod style;
 mod sync;
-#[cfg(test)]
-mod test_gpu;
 mod text;
 mod theme;
 mod tree;

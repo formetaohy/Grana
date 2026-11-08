@@ -74,20 +74,3 @@ pub(crate) fn assign(cost: &[Vec<f64>], columns: usize) -> Vec<usize> {
     }
     assignment
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn assigns_the_cheapest_columns() {
-        let cost = vec![
-            vec![4.0, 1.0, 3.0],
-            vec![2.0, 0.0, 5.0],
-            vec![3.0, 2.0, 2.0],
-        ];
-        assert_eq!(assign(&cost, 3), vec![1, 0, 2]);
-        let rectangular = vec![vec![2.0, 1.0, 4.0], vec![3.0, 4.0, 0.0]];
-        assert_eq!(assign(&rectangular, 3), vec![1, 2]);
-    }
-}
