@@ -72,14 +72,19 @@ impl Session {
             Command::AddMaskChannel { set } => self.add_mask_channel(set),
             Command::AddRestoreChannel {
                 source,
-                params,
+                psf,
                 iterations,
-            } => self.add_restore_channel(source, params, iterations),
+            } => self.add_restore_channel(source, psf, iterations),
+            Command::CalibratePsf {
+                source,
+                threshold,
+                separation,
+            } => self.begin_calibration(source, threshold, separation),
             Command::SetRestore {
                 channel,
-                params,
+                psf,
                 iterations,
-            } => self.set_restore_channel(channel, params, iterations),
+            } => self.set_restore_channel(channel, psf, iterations),
             Command::RemoveDerivedChannel { channel } => self.remove_derived_channel(channel),
             Command::ImportLabels { label } => self.import_labels(&label),
             Command::ImportTracks => self.choose_import_tracks(),

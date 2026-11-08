@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use grana_optics::PsfParams;
+use grana_optics::{Kernel, MeasuredPsf, Psf};
 use grana_protocol::DerivedSpec;
 use grana_session::{Command, Session};
 use grana_volume::{
@@ -20,10 +20,9 @@ fn series() -> VolumeSeries {
                     y as f32 - centre[1] as f32,
                     z as f32 - centre[2] as f32,
                 ];
-                let distance = offset.iter().map(|value| value * value).sum::<f32>().sqrt();
-                if distance <= 3.0 {
-                    data[EXTENT.index(x, y, z) as usize] = 40_000;
-                }
+                let squared = offset.iter().map(|value| value * value).sum::<f32>();
+                let falloff = (-0.5 * squared / (1.5 * 1.5)).exp();
+                data[EXTENT.index(x, y, z) as usize] = (40_000.0 * falloff) as u16;
             }
         }
     }
@@ -35,8 +34,22 @@ fn series() -> VolumeSeries {
     VolumeSeries::new(vec![volume], 1.0)
 }
 
-fn params() -> PsfParams {
-    PsfParams::new(1.4, 0.52, 1.515, 1.33, 0.8)
+fn measured() -> Psf {
+    let dims = [5, 5, 3];
+    let mut values = vec![0.0f32; (dims[0] * dims[1] * dims[2]) as usize];
+    for z in 0..dims[2] {
+        for y in 0..dims[1] {
+            for x in 0..dims[0] {
+                let offset = [x as f32 - 2.0, y as f32 - 2.0, 1.5 * (z as f32 - 1.0)];
+                let falloff = (-0.5 * offset.iter().map(|value| value * value).sum::<f32>()).exp();
+                values[(x + dims[0] * (y + dims[1] * z)) as usize] = falloff;
+            }
+        }
+    }
+    Psf::measured(MeasuredPsf::new(
+        Spacing::new(0.1, 0.1, 0.2),
+        vec![Kernel::from_values(dims, values)],
+    ))
 }
 
 fn settle(session: &mut Session) {
@@ -86,7 +99,7 @@ fn a_restored_channel_rides_the_scene_and_its_protocol() {
     session.execute(Command::AddObject(grana_scene::ObjectKind::Spots));
     session.execute(Command::AddRestoreChannel {
         source: 0,
-        params: params(),
+        psf: measured(),
         iterations: 8,
     });
     settle(&mut session);
@@ -119,8 +132,11 @@ fn a_restored_channel_rides_the_scene_and_its_protocol() {
     assert_eq!(protocol.derived().len(), 1);
     assert!(matches!(
         protocol.derived()[0],
-        DerivedSpec::Restore(ref restore) if restore.iterations == 8
+        DerivedSpec::Restore(ref restore) if restore.iterations == 8 && restore.measured.is_some()
     ));
+    let text = protocol.to_json().expect("the protocol serializes");
+    let restored = grana_protocol::Protocol::from_json(&text).expect("the protocol reads back");
+    assert_eq!(&restored, protocol);
 
     session.execute(Command::RemoveDerivedChannel { channel: 1 });
     settle(&mut session);
@@ -129,4 +145,36 @@ fn a_restored_channel_rides_the_scene_and_its_protocol() {
         assert_eq!(scene.dataset.channels().len(), 1);
         assert!(scene.derived().is_empty());
     }
+}
+
+#[test]
+fn calibrates_a_measured_point_spread_function_from_a_bead_channel() {
+    let mut session = Session::new();
+    session.open_series("beads", series());
+    session.execute(Command::CalibratePsf {
+        source: 0,
+        threshold: 8.0,
+        separation: 1.5,
+    });
+    settle(&mut session);
+    let scene = session.scene().expect("the series opens");
+    assert!(
+        session
+            .message()
+            .is_none_or(|message| message.kind() != grana_session::Kind::Error),
+        "the calibration finishes without an error"
+    );
+    assert_eq!(
+        scene.dataset.channels().len(),
+        2,
+        "{:?}",
+        session.message().map(|message| message.text().to_string())
+    );
+    let restore = scene.derived()[0]
+        .spec()
+        .restore()
+        .expect("the calibration adds a restored channel");
+    assert!(matches!(restore.psf(), Psf::Measured(_)));
+    assert!(restore.intensity().span() > 0.0);
+    assert_eq!(restore.iterations(), 10);
 }

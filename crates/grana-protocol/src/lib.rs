@@ -15,9 +15,9 @@ pub use spec::{
     AnchorSpec, AnnotationSpec, AxisSpec, CameraSpec, ChannelSpec, ClassifierSpec, ColocPairSpec,
     ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec, EditSpec,
     ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec, MaskFilterSpec, MaskSpec, MeasureSpec,
-    MetricSpec, NodeSpec, PartSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, RestoreSpec,
-    SectionSpec, SetSpec, ShadingSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec,
-    SurfaceEditSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    MeasuredSpec, MetricSpec, NodeSpec, PartSpec, RegionSpec, RelationSpec, RemovalSpec,
+    RenderSpec, RestoreSpec, SectionSpec, SetSpec, ShadingSpec, SnapshotSpec, SortSpec, SourceSpec,
+    StopSpec, SurfaceEditSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;

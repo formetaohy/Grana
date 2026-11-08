@@ -417,7 +417,17 @@ pub struct RestoreSpec {
     pub immersion: f32,
     pub sample: f32,
     pub depth: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured: Option<MeasuredSpec>,
     pub iterations: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeasuredSpec {
+    pub spacing: [f32; 3],
+    pub dims: [u32; 3],
+    pub values: Vec<f32>,
 }
 
 impl RestoreSpec {
@@ -450,11 +460,41 @@ impl RestoreSpec {
             self.sample,
             self.depth,
         ];
-        if physical.iter().any(|value| !value.is_finite()) {
+        if self.measured.is_none() && physical.iter().any(|value| !value.is_finite()) {
             return Err(ProtocolError::Invalid(format!(
                 "the optics of the restored channel {} are not finite",
                 self.name
             )));
+        }
+        if let Some(measured) = &self.measured {
+            let finite = measured.spacing.iter().all(|value| value.is_finite());
+            let dims = measured
+                .dims
+                .iter()
+                .all(|extent| *extent % 2 == 1 && (1..=63).contains(extent));
+            let voxels =
+                measured.dims[0] as u64 * measured.dims[1] as u64 * measured.dims[2] as u64;
+            let layers = (measured.values.len() as u64)
+                .checked_div(voxels)
+                .unwrap_or(0);
+            let holds = voxels > 0
+                && measured.values.len() as u64 == voxels * layers
+                && (1..=16).contains(&layers)
+                && measured
+                    .values
+                    .iter()
+                    .all(|value| value.is_finite() && *value >= 0.0)
+                && (0..layers).all(|layer| {
+                    let start = (layer * voxels) as usize;
+                    let total: f32 = measured.values[start..start + voxels as usize].iter().sum();
+                    total > 0.0
+                });
+            if !(finite && dims && holds) {
+                return Err(ProtocolError::Invalid(format!(
+                    "the measured point spread function of the restored channel {} is malformed",
+                    self.name
+                )));
+            }
         }
         if !(1..=1000).contains(&self.iterations) {
             return Err(ProtocolError::Invalid(format!(

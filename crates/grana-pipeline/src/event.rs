@@ -1,5 +1,6 @@
 use grana_measure::ColocSeries;
 use grana_object::{RelationFrame, TrackSet};
+use grana_optics::MeasuredPsf;
 use grana_scene::{Drift, ObjectFrame};
 use grana_volume::Region;
 
@@ -23,6 +24,12 @@ pub enum Event {
         region: Region,
     },
     Drift(Drift),
+    Calibration {
+        source: usize,
+        psf: Box<MeasuredPsf>,
+        beads: usize,
+        iterations: u32,
+    },
     Done,
     Failed(String),
 }

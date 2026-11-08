@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use grana_image::{Format, Image, Labels};
 use grana_object::Mask;
-use grana_optics::{KernelBank, PsfParams};
+use grana_optics::{KernelBank, Psf};
 use grana_restore::{Job as RestoreJob, Restorer};
 use grana_scene::{DerivedSpec, MaskChannel, Scene};
 use grana_volume::{
@@ -77,7 +77,7 @@ fn ramp(value: f32, edge: f32, inner: f32) -> f32 {
 
 struct RestoreChannel {
     source: usize,
-    params: PsfParams,
+    psf: Psf,
     iterations: u32,
     banks: Mutex<HashMap<u32, Arc<KernelBank>>>,
     tiles: Mutex<Vec<Arc<RestoredTile>>>,
@@ -103,7 +103,7 @@ impl Channels {
                 ),
                 DerivedSpec::Restore(spec) => Derived::Restore(RestoreChannel::new(
                     spec.channel(),
-                    spec.params(),
+                    spec.psf().clone(),
                     spec.iterations(),
                 )),
             })
@@ -151,7 +151,7 @@ impl Channels {
     pub fn restored_range(
         &self,
         source: usize,
-        params: PsfParams,
+        psf: Psf,
         iterations: u32,
     ) -> Result<Intensity, ChannelsError> {
         let stored = self.stored_channels();
@@ -168,7 +168,7 @@ impl Channels {
             let start = (limits[axis] - window) / 2;
             start..start + window
         });
-        let restore = RestoreChannel::new(source, params, iterations);
+        let restore = RestoreChannel::new(source, psf, iterations);
         let site = Site {
             reader: &self.reader,
             time: 0,
@@ -294,10 +294,10 @@ impl Channels {
 }
 
 impl RestoreChannel {
-    fn new(source: usize, params: PsfParams, iterations: u32) -> Self {
+    fn new(source: usize, psf: Psf, iterations: u32) -> Self {
         Self {
             source,
-            params,
+            psf,
             iterations,
             banks: Mutex::new(HashMap::new()),
             tiles: Mutex::new(Vec::new()),
@@ -310,11 +310,7 @@ impl RestoreChannel {
         if let Some(bank) = banks.get(&key) {
             return Arc::clone(bank);
         }
-        let bank = Arc::new(KernelBank::new(
-            self.params,
-            site.info.spacing(),
-            site.info.extent().z(),
-        ));
+        let bank = Arc::new(self.psf.bank(site.info.spacing(), site.info.extent().z()));
         banks.insert(key, Arc::clone(&bank));
         bank
     }

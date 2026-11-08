@@ -18,7 +18,7 @@ use grana_object::{
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, SurfaceTopology, Track,
     TrackNode, TrackSet,
 };
-use grana_optics::PsfParams;
+use grana_optics::{Kernel, MeasuredPsf, Psf, PsfParams};
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, ChannelState, ColocResult, ColocState, ColorState,
     Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState, LassoPath, MaskFilter,
@@ -27,7 +27,7 @@ use grana_scene::{
     SelectionState, SetState, SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor, TrackEdit,
     TrackStyle, Visibility,
 };
-use grana_volume::{Axis, Clip, Fingerprint, Intensity, Region};
+use grana_volume::{Axis, Clip, Fingerprint, Intensity, Region, Spacing};
 
 use crate::codec::{Decode, Reader};
 use crate::encode::{TAG_FILAMENTS, TAG_SPOTS, TAG_SURFACES};
@@ -105,13 +105,65 @@ impl Decode for RestoreSpec {
         if !(min.is_finite() && max.is_finite() && min < max) {
             return Err(FAULT_VALUE);
         }
-        let mut params = [0.0; 5];
-        for value in &mut params {
-            *value = reader.f32()?;
-            if !value.is_finite() {
-                return Err(FAULT_VALUE);
+        let psf = match reader.u8()? {
+            0 => {
+                let mut params = [0.0; 5];
+                for value in &mut params {
+                    *value = reader.f32()?;
+                    if !value.is_finite() {
+                        return Err(FAULT_VALUE);
+                    }
+                }
+                Psf::theoretical(PsfParams::new(
+                    params[0], params[1], params[2], params[3], params[4],
+                ))
             }
-        }
+            1 => {
+                let mut measured = [0.0; 3];
+                for value in &mut measured {
+                    *value = reader.f32()?;
+                    if !(value.is_finite() && *value > 0.0) {
+                        return Err(FAULT_VALUE);
+                    }
+                }
+                let mut dims = [0u32; 3];
+                for value in &mut dims {
+                    *value = reader.u32()?;
+                    if *value % 2 == 0 || !(1..=63).contains(value) {
+                        return Err(FAULT_VALUE);
+                    }
+                }
+                let layers = reader.u32()?;
+                if !(1..=16).contains(&layers) {
+                    return Err(FAULT_VALUE);
+                }
+                let count = (dims[0] as u64 * dims[1] as u64 * dims[2] as u64) as usize;
+                if count == 0 || count > 1 << 22 {
+                    return Err(FAULT_VALUE);
+                }
+                let mut kernels = Vec::with_capacity(layers as usize);
+                for _ in 0..layers {
+                    let mut values = vec![0.0f32; count];
+                    let mut total = 0.0f32;
+                    for value in &mut values {
+                        *value = reader.f32()?;
+                        if !(value.is_finite() && *value >= 0.0) {
+                            return Err(FAULT_VALUE);
+                        }
+                        total += *value;
+                    }
+                    if !(total.is_finite() && total > 0.0) {
+                        return Err(FAULT_VALUE);
+                    }
+                    kernels.push(Kernel::from_values(dims, values));
+                }
+                Psf::measured(MeasuredPsf::new(
+                    Spacing::new(measured[0], measured[1], measured[2]),
+                    kernels,
+                ))
+            }
+            _ => return Err(FAULT_TAG),
+        };
         let iterations = reader.u32()?;
         if !(1..=1000).contains(&iterations) {
             return Err(FAULT_VALUE);
@@ -121,7 +173,7 @@ impl Decode for RestoreSpec {
             name,
             tint,
             Intensity::new(min, max),
-            PsfParams::new(params[0], params[1], params[2], params[3], params[4]),
+            psf,
             iterations,
         ))
     }

@@ -490,6 +490,7 @@ impl Run<'_, '_> {
             | RunEvent::Relation { .. }
             | RunEvent::Coloc { .. }
             | RunEvent::Drift(_)
+            | RunEvent::Calibration { .. }
             | RunEvent::Done => {}
         };
         crate::run::import(
@@ -885,6 +886,7 @@ fn detect(
         | RunEvent::Relation { .. }
         | RunEvent::Coloc { .. }
         | RunEvent::Drift(_)
+        | RunEvent::Calibration { .. }
         | RunEvent::Done
         | RunEvent::Failed(_) => {}
     };
@@ -927,6 +929,7 @@ fn segment_frames(
         | RunEvent::Relation { .. }
         | RunEvent::Coloc { .. }
         | RunEvent::Drift(_)
+        | RunEvent::Calibration { .. }
         | RunEvent::Done
         | RunEvent::Failed(_) => {}
     };

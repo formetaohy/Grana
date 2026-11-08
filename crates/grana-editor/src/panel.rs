@@ -533,6 +533,12 @@ pub fn apply(
                     .camera_mut()
                     .set_focus_along(axis, position.clamp(0.0, extent) - 0.5 * extent);
             }
+            Message::SetPsfThreshold(value) => {
+                workspace.psf_threshold = value.clamp(1.0, 64.0);
+            }
+            Message::SetPsfSeparation(value) => {
+                workspace.psf_separation = value.clamp(0.1, 50.0);
+            }
             Message::SetExport(export) => {
                 workspace.playback.width = if export.width == 0 {
                     workspace.playback.width

@@ -3,6 +3,7 @@ use grana_volume::Spacing;
 use crate::bessel;
 
 const DEPTH_STEP: f32 = 4.0;
+const KERNEL_LIMIT: u32 = 16;
 const LAYER_LIMIT: u32 = 16;
 const GENEROUS_HALF: [u32; 3] = [9, 9, 6];
 const HALF_LIMIT: [u32; 3] = [6, 6, 4];
@@ -157,6 +158,112 @@ impl Kernel {
         crop(&sampled, half)
     }
 
+    pub fn from_values(dims: [u32; 3], values: Vec<f32>) -> Self {
+        assert!(
+            dims.iter().all(|extent| *extent % 2 == 1),
+            "a point spread function carries an odd extent on every axis"
+        );
+        assert_eq!(
+            values.len(),
+            (dims[0] * dims[1] * dims[2]) as usize,
+            "a point spread function holds every voxel of its extent"
+        );
+        let total: f32 = values.iter().sum();
+        assert!(
+            values
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0)
+                && total.is_finite()
+                && total > 0.0,
+            "a point spread function carries finite non negative energy"
+        );
+        let values = values.into_iter().map(|value| value / total).collect();
+        Self { dims, values }
+    }
+
+    pub fn resample(&self, from: Spacing, to: Spacing) -> Self {
+        let source = self.dims;
+        let half = [
+            resampled_half(source[0], from.x(), to.x()),
+            resampled_half(source[1], from.y(), to.y()),
+            resampled_half(source[2], from.z(), to.z()),
+        ];
+        let dims = [2 * half[0] + 1, 2 * half[1] + 1, 2 * half[2] + 1];
+        let centre = [
+            (source[0] / 2) as f32,
+            (source[1] / 2) as f32,
+            (source[2] / 2) as f32,
+        ];
+        let scale = [to.x() / from.x(), to.y() / from.y(), to.z() / from.z()];
+        let mut values = vec![0.0f32; (dims[0] * dims[1] * dims[2]) as usize];
+        for z in 0..dims[2] {
+            for y in 0..dims[1] {
+                for x in 0..dims[0] {
+                    let position = [x, y, z];
+                    let at = [0, 1, 2].map(|axis| {
+                        centre[axis] + (position[axis] as f32 - half[axis] as f32) * scale[axis]
+                    });
+                    let value = self.sample(at);
+                    values[(x + dims[0] * (y + dims[1] * z)) as usize] = value;
+                }
+            }
+        }
+        Self::from_values(dims, values)
+    }
+
+    pub fn trimmed(&self, energy: f32) -> Self {
+        assert!(
+            energy.is_finite() && energy > 0.0 && energy <= 1.0,
+            "a trimmed point spread function keeps a fraction of its energy"
+        );
+        let total: f32 = self.values.iter().sum();
+        let half = [0, 1, 2].map(|axis| {
+            let centre = self.dims[axis] / 2;
+            let mut mass = 0.0f32;
+            let mut half = 0;
+            loop {
+                for z in 0..self.dims[2] {
+                    for y in 0..self.dims[1] {
+                        for x in 0..self.dims[0] {
+                            let offset = [x, y, z][axis].abs_diff(centre);
+                            if offset == half {
+                                mass += self.values
+                                    [(x + self.dims[0] * (y + self.dims[1] * z)) as usize];
+                            }
+                        }
+                    }
+                }
+                if mass >= total * energy || half >= centre {
+                    break;
+                }
+                half += 1;
+            }
+            half.max(1)
+        });
+        let dims = [2 * half[0] + 1, 2 * half[1] + 1, 2 * half[2] + 1];
+        let source = self.dims;
+        let mut values = vec![0.0f32; (dims[0] * dims[1] * dims[2]) as usize];
+        for z in 0..dims[2] {
+            for y in 0..dims[1] {
+                for x in 0..dims[0] {
+                    let from = x + source[0] / 2 - half[0]
+                        + source[0] * (y + source[1] / 2 - half[1])
+                        + source[0] * source[1] * (z + source[2] / 2 - half[2]);
+                    values[(x + dims[0] * (y + dims[1] * z)) as usize] = self.values[from as usize];
+                }
+            }
+        }
+        Self::from_values(dims, values)
+    }
+
+    pub fn pad(&self, dims: [u32; 3]) -> Self {
+        assert!(
+            (0..3).all(|axis| dims[axis] >= self.dims[axis] && dims[axis] % 2 == 1),
+            "a padded point spread function grows to an odd extent"
+        );
+        Self::from_values(dims, self.padded(dims))
+    }
+
     pub fn dims(&self) -> [u32; 3] {
         self.dims
     }
@@ -167,6 +274,37 @@ impl Kernel {
 
     pub fn voxels(&self) -> usize {
         self.values.len()
+    }
+
+    fn sample(&self, at: [f32; 3]) -> f32 {
+        let source = self.dims;
+        let low = [0, 1, 2].map(|axis| at[axis].floor() as i64);
+        let weight = [0, 1, 2].map(|axis| at[axis] - at[axis].floor());
+        let mut total = 0.0f32;
+        for z in 0..2 {
+            for y in 0..2 {
+                for x in 0..2 {
+                    let corner = [low[0] + x, low[1] + y, low[2] + z];
+                    if corner
+                        .iter()
+                        .enumerate()
+                        .any(|(axis, value)| *value < 0 || *value >= i64::from(source[axis]))
+                    {
+                        continue;
+                    }
+                    let corner_weight = [
+                        if x == 0 { 1.0 - weight[0] } else { weight[0] },
+                        if y == 0 { 1.0 - weight[1] } else { weight[1] },
+                        if z == 0 { 1.0 - weight[2] } else { weight[2] },
+                    ];
+                    let index = (corner[0]
+                        + i64::from(source[0]) * (corner[1] + i64::from(source[1]) * corner[2]))
+                        as usize;
+                    total += self.values[index] * corner_weight.iter().product::<f32>();
+                }
+            }
+        }
+        total
     }
 
     fn padded(&self, dims: [u32; 3]) -> Vec<f32> {
@@ -185,6 +323,12 @@ impl Kernel {
         }
         values
     }
+}
+
+fn resampled_half(extent: u32, from: f32, to: f32) -> u32 {
+    let half = extent / 2;
+    let cells = (half as f32 * from / to).ceil().max(1.0);
+    (cells as u32).min(KERNEL_LIMIT)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -232,6 +376,29 @@ impl KernelBank {
         }
     }
 
+    pub fn from_kernels(kernels: &[Kernel], planes: u32) -> Self {
+        assert!(
+            !kernels.is_empty() && kernels.len() <= LAYER_LIMIT as usize,
+            "a kernel bank holds one to {LAYER_LIMIT} point spread functions"
+        );
+        assert!(planes > 0, "a kernel bank covers at least one plane");
+        let dims = kernels.iter().fold([1u32; 3], |dims, kernel| {
+            [0, 1, 2].map(|axis| dims[axis].max(kernel.dims()[axis]))
+        });
+        let layers = kernels.len() as u32;
+        let band = planes.div_ceil(layers).max(1);
+        let mut values = Vec::with_capacity((dims[0] * dims[1] * dims[2]) as usize * kernels.len());
+        for kernel in kernels {
+            values.extend(kernel.padded(dims));
+        }
+        Self {
+            dims,
+            values,
+            band,
+            layers,
+        }
+    }
+
     pub fn dims(&self) -> [u32; 3] {
         self.dims
     }
@@ -260,6 +427,92 @@ impl KernelBank {
 
     pub fn layer(&self, first_plane: u32, plane: u32) -> u32 {
         ((first_plane + plane) / self.band).min(self.layers - 1)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeasuredPsf {
+    spacing: Spacing,
+    kernels: Vec<Kernel>,
+}
+
+impl MeasuredPsf {
+    pub fn new(spacing: Spacing, kernels: Vec<Kernel>) -> Self {
+        assert!(
+            !kernels.is_empty() && kernels.len() <= LAYER_LIMIT as usize,
+            "a measured point spread function holds one to {LAYER_LIMIT} depth bands"
+        );
+        let dims = kernels[0].dims();
+        assert!(
+            kernels.iter().all(|kernel| kernel.dims() == dims),
+            "the depth bands of a measured point spread function share one extent"
+        );
+        Self { spacing, kernels }
+    }
+
+    pub fn spacing(&self) -> Spacing {
+        self.spacing
+    }
+
+    pub fn kernels(&self) -> &[Kernel] {
+        &self.kernels
+    }
+
+    pub fn layers(&self) -> u32 {
+        self.kernels.len() as u32
+    }
+
+    pub fn dims(&self) -> [u32; 3] {
+        self.kernels[0].dims()
+    }
+
+    pub fn bank(&self, spacing: Spacing, planes: u32) -> KernelBank {
+        let kernels = if spacing == self.spacing {
+            self.kernels.clone()
+        } else {
+            self.kernels
+                .iter()
+                .map(|kernel| kernel.resample(self.spacing, spacing))
+                .collect::<Vec<_>>()
+        };
+        KernelBank::from_kernels(&kernels, planes)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Psf {
+    Theoretical(PsfParams),
+    Measured(MeasuredPsf),
+}
+
+impl Psf {
+    pub fn theoretical(params: PsfParams) -> Self {
+        Self::Theoretical(params)
+    }
+
+    pub fn measured(psf: MeasuredPsf) -> Self {
+        Self::Measured(psf)
+    }
+
+    pub fn params(&self) -> Option<PsfParams> {
+        match self {
+            Self::Theoretical(params) => Some(*params),
+            Self::Measured(_) => None,
+        }
+    }
+
+    pub fn measured_span(&self) -> Option<(usize, [u32; 3])> {
+        match self {
+            Self::Theoretical(_) => None,
+            Self::Measured(psf) => Some((psf.kernels().len(), psf.dims())),
+        }
+    }
+
+    pub fn bank(&self, spacing: Spacing, planes: u32) -> KernelBank {
+        match self {
+            Self::Theoretical(params) => KernelBank::new(*params, spacing, planes),
+            Self::Measured(psf) => psf.bank(spacing, planes),
+        }
     }
 }
 
@@ -451,5 +704,64 @@ mod tests {
         assert_eq!(bank.dims(), kernel.dims());
         assert_eq!(bank.taps(0), kernel.values());
         assert_eq!(bank.layer(0, 5), 0);
+    }
+
+    fn point(dims: [u32; 3]) -> Kernel {
+        let mut values = vec![0.0f32; (dims[0] * dims[1] * dims[2]) as usize];
+        let centre = (dims[0] / 2 + dims[0] * (dims[1] / 2 + dims[1] * (dims[2] / 2))) as usize;
+        values[centre] = 1.0;
+        Kernel::from_values(dims, values)
+    }
+
+    #[test]
+    fn a_measured_point_spread_function_resamples_and_bands() {
+        let spacing = Spacing::new(0.1, 0.1, 0.3);
+        let psf = MeasuredPsf::new(spacing, vec![point([5, 5, 3]), point([5, 5, 3])]);
+        assert_eq!(psf.layers(), 2);
+        assert_eq!(psf.dims(), [5, 5, 3]);
+        let bank = psf.bank(spacing, 8);
+        assert_eq!(bank.layers(), 2);
+        assert_eq!(bank.band(), 4);
+        assert_eq!(bank.layer(0, 3), 0);
+        assert_eq!(bank.layer(0, 4), 1);
+        let coarse = psf.bank(Spacing::new(0.2, 0.2, 0.6), 4);
+        assert_eq!(coarse.dims(), [3, 3, 3]);
+        let total: f32 = coarse.taps(0).iter().sum();
+        assert!(
+            (total - 1.0).abs() < 1.0e-5,
+            "the resampled kernel keeps its energy"
+        );
+        let centre = 1 + 3 * (1 + 3);
+        assert!(
+            coarse.taps(0)[centre] > 0.9,
+            "the point stays at the kernel centre: {:?}",
+            coarse.taps(0)
+        );
+    }
+
+    #[test]
+    fn trimming_crops_a_kernel_to_the_energy_it_carries() {
+        let kernel = point([7, 7, 7]);
+        let trimmed = kernel.trimmed(1.0);
+        assert_eq!(trimmed.dims(), [3, 3, 3]);
+        let padded = trimmed.pad([5, 5, 5]);
+        assert_eq!(padded.dims(), [5, 5, 5]);
+        assert!((padded.values().iter().sum::<f32>() - 1.0).abs() < 1.0e-6);
+        assert!(padded.values()[2 + 5 * (2 + 5 * 2)] > 0.99);
+    }
+
+    #[test]
+    fn a_profile_builds_the_bank_of_its_model() {
+        let params = PsfParams::new(1.4, 0.52, 1.515, 1.33, 1.0);
+        let spacing = Spacing::new(0.04, 0.04, 0.1);
+        let theoretical = Psf::theoretical(params).bank(spacing, 40);
+        let expected = KernelBank::new(params, spacing, 40);
+        assert_eq!(theoretical.dims(), expected.dims());
+        assert_eq!(theoretical.layers(), expected.layers());
+        assert_eq!(theoretical.taps(0), expected.taps(0));
+        let measured = Psf::measured(MeasuredPsf::new(spacing, vec![point([3, 3, 3])]));
+        assert!(measured.params().is_none());
+        assert_eq!(measured.measured_span(), Some((1, [3, 3, 3])));
+        assert_eq!(measured.bank(spacing, 3).layers(), 1);
     }
 }

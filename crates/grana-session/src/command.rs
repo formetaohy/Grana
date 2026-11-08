@@ -4,7 +4,7 @@ use grana_measure::{
     Measurement, PlotAxis, Scope,
 };
 use grana_object::TrackParams;
-use grana_optics::PsfParams;
+use grana_optics::Psf;
 
 use grana_scene::{
     MaskFilter, ObjectColor, ObjectKind, ObjectParams, ObjectSetId, SegmentParams, Selection,
@@ -69,12 +69,17 @@ pub enum Command {
     },
     AddRestoreChannel {
         source: usize,
-        params: PsfParams,
+        psf: Psf,
         iterations: u32,
+    },
+    CalibratePsf {
+        source: usize,
+        threshold: f32,
+        separation: f32,
     },
     SetRestore {
         channel: usize,
-        params: PsfParams,
+        psf: Psf,
         iterations: u32,
     },
     RemoveDerivedChannel {

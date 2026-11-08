@@ -386,6 +386,21 @@ pub fn slider_readout<'a>(
         .on_slide(move |value| Message::Command(command(value)))
 }
 
+pub fn slider_event<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    key: &str,
+    label: Option<&str>,
+    value: f32,
+    range: std::ops::RangeInclusive<f32>,
+    readout: &str,
+    message: impl Fn(f32) -> Message + 'static,
+) -> View<'a> {
+    let theme = *ctx.theme();
+    grana_ui::widget::slider_readout(&theme, label, value, range, false, readout)
+        .named(key)
+        .on_slide(message)
+}
+
 pub fn toggle_row<'a>(
     ctx: &mut BuildContext<'_, Message>,
     key: &str,
@@ -580,6 +595,7 @@ pub fn progress_caption(
         | grana_scene::Job::Relation { .. }
         | grana_scene::Job::Coloc
         | grana_scene::Job::Drift => "frames",
+        grana_scene::Job::Calibrate => "beads",
     };
     let prefix = match job {
         grana_scene::Job::Detect(_) | grana_scene::Job::Import(_) if frames > 1 => {
@@ -591,7 +607,8 @@ pub fn progress_caption(
         | grana_scene::Job::Track(_)
         | grana_scene::Job::Relation { .. }
         | grana_scene::Job::Coloc
-        | grana_scene::Job::Drift => String::new(),
+        | grana_scene::Job::Drift
+        | grana_scene::Job::Calibrate => String::new(),
     };
     if progress.total > 0 {
         format!("{prefix}{}/{} {unit}", progress.done, progress.total)

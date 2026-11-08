@@ -6,7 +6,7 @@ use grana_geometry::ray_hit;
 use grana_measure::{Aggregate, Classifier, Frame, Group, Measurement, RelationRow, Table};
 use grana_object::{RelationFrame, SurfaceEdit, TrackSet};
 use grana_object::{Shape, TrackParams};
-use grana_optics::PsfParams;
+use grana_optics::Psf;
 use grana_volume::{CHANNEL_LIMIT, ChannelInfo, Clip, Intensity, Region};
 
 use crate::annotation::Annotations;
@@ -350,7 +350,7 @@ impl Scene {
     pub fn set_restore(
         &mut self,
         channel: usize,
-        params: PsfParams,
+        psf: Psf,
         iterations: u32,
     ) -> Result<bool, String> {
         if channel < self.base_channels || channel >= self.channels.len() {
@@ -360,7 +360,7 @@ impl Scene {
         let Some(restore) = self.derived[index].spec().restore().cloned() else {
             return Err("the derived channel masks an object set".to_string());
         };
-        if restore.params() == params && restore.iterations() == iterations {
+        if restore.psf() == &psf && restore.iterations() == iterations {
             return Ok(false);
         }
         let spec = RestoreSpec::new(
@@ -368,7 +368,7 @@ impl Scene {
             restore.name().to_string(),
             restore.tint(),
             restore.intensity(),
-            params,
+            psf,
             iterations,
         );
         self.derived[index] = Derived::restored(spec);

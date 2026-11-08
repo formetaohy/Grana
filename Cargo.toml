@@ -39,6 +39,7 @@ sha2 = "0.10"
 ureq = "3"
 zstd = "0.13"
 grana-animation = { version = "0.1.1", path = "crates/grana-animation" }
+grana-calibration = { version = "0.1.1", path = "crates/grana-calibration" }
 grana-volume = { version = "0.1.1", path = "crates/grana-volume" }
 grana-object = { version = "0.1.1", path = "crates/grana-object" }
 grana-gpu = { version = "0.1.1", path = "crates/grana-gpu" }

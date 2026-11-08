@@ -1,5 +1,6 @@
 use grana_display::Coloring;
 use grana_measure::{Aggregate, Group, channel_keys};
+use grana_optics::{Psf, PsfParams};
 use grana_scene::{
     Measure, ObjectColor, ObjectParams, ObjectSet, Provenance, Recipe, Scene, Seeds, SegmentParams,
     TrackColor,
@@ -8,9 +9,9 @@ use grana_scene::{
 use crate::{
     AnnotationSpec, ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec,
     ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec, LassoSpec, MaskFilterSpec,
-    MaskSpec, MeasureSpec, MetricSpec, PartSpec, Protocol, ProtocolError, RegionSpec, RelationSpec,
-    RenderSpec, RestoreSpec, SetSpec, SnapshotSpec, SortSpec, SourceSpec, SurfaceEditSpec,
-    TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    MaskSpec, MeasureSpec, MeasuredSpec, MetricSpec, PartSpec, Protocol, ProtocolError, RegionSpec,
+    RelationSpec, RenderSpec, RestoreSpec, SetSpec, SnapshotSpec, SortSpec, SourceSpec,
+    SurfaceEditSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -59,8 +60,25 @@ impl Protocol {
                         })
                     }
                     grana_scene::DerivedSpec::Restore(restore) => {
-                        let params = restore.params();
                         let intensity = restore.intensity();
+                        let (params, measured) = match restore.psf() {
+                            Psf::Theoretical(params) => (*params, None),
+                            Psf::Measured(psf) => {
+                                let mut values = Vec::new();
+                                for kernel in psf.kernels() {
+                                    values.extend_from_slice(kernel.values());
+                                }
+                                let spacing = psf.spacing();
+                                (
+                                    PsfParams::new(1.4, 0.52, 1.515, 1.33, 0.0),
+                                    Some(MeasuredSpec {
+                                        spacing: [spacing.x(), spacing.y(), spacing.z()],
+                                        dims: psf.dims(),
+                                        values,
+                                    }),
+                                )
+                            }
+                        };
                         DerivedSpec::Restore(RestoreSpec {
                             channel,
                             name: restore.name().to_string(),
@@ -71,6 +89,7 @@ impl Protocol {
                             immersion: params.immersion(),
                             sample: params.sample(),
                             depth: params.depth(),
+                            measured,
                             iterations: restore.iterations(),
                         })
                     }

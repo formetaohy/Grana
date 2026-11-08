@@ -85,15 +85,34 @@ impl Encode for RestoreSpec {
         }
         writer.f32(self.intensity().min());
         writer.f32(self.intensity().max());
-        let params = self.params();
-        for value in [
-            params.numerical_aperture(),
-            params.wavelength(),
-            params.immersion(),
-            params.sample(),
-            params.depth(),
-        ] {
-            writer.f32(value);
+        match self.psf() {
+            grana_optics::Psf::Theoretical(params) => {
+                writer.u8(0);
+                for value in [
+                    params.numerical_aperture(),
+                    params.wavelength(),
+                    params.immersion(),
+                    params.sample(),
+                    params.depth(),
+                ] {
+                    writer.f32(value);
+                }
+            }
+            grana_optics::Psf::Measured(psf) => {
+                writer.u8(1);
+                for value in [psf.spacing().x(), psf.spacing().y(), psf.spacing().z()] {
+                    writer.f32(value);
+                }
+                for value in psf.dims() {
+                    writer.u32(value);
+                }
+                writer.u32(psf.layers());
+                for kernel in psf.kernels() {
+                    for value in kernel.values() {
+                        writer.f32(*value);
+                    }
+                }
+            }
         }
         writer.u32(self.iterations());
     }

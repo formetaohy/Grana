@@ -3407,6 +3407,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-calibration"
+version = "0.1.1"
+dependencies = [
+ "grana-image",
+ "grana-optics",
+ "grana-volume",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "grana-codec"
 version = "0.1.1"
 
@@ -3572,6 +3583,7 @@ dependencies = [
  "glam",
  "grana-analysis",
  "grana-animation",
+ "grana-calibration",
  "grana-display",
  "grana-geometry",
  "grana-image",
@@ -3710,6 +3722,7 @@ dependencies = [
  "glam",
  "grana-analysis",
  "grana-animation",
+ "grana-calibration",
  "grana-display",
  "grana-geometry",
  "grana-image",

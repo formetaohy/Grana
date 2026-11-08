@@ -19,6 +19,7 @@ use grana_object::{
     TrackNode, TrackSet,
 };
 use grana_object::{SpotParams, SurfaceFilter, SurfaceParams};
+use grana_optics::{Kernel, MeasuredPsf, Psf};
 use grana_project::{Export, Mismatch, Project, Source, ViewState};
 use grana_scene::{
     Criteria, Dataset, Drift, FilterRange, Item, MaskFilter, Measure, ObjectColor, ObjectFrame,
@@ -94,7 +95,9 @@ fn round_trips_a_project() {
             "dapi restored",
             [0.0, 0.0, 1.0],
             grana_volume::Intensity::new(0.0, 4000.0),
-            grana_optics::PsfParams::new(1.4, 0.52, 1.515, 1.33, 0.4),
+            grana_optics::Psf::theoretical(grana_optics::PsfParams::new(
+                1.4, 0.52, 1.515, 1.33, 0.4,
+            )),
             12,
         ))
         .expect("the fixture restores its channel");
@@ -1601,4 +1604,74 @@ fn round_trips_a_classifier() {
     assert_eq!(classifier.features.len(), 2);
     assert!(classifier.accuracy > 0.99);
     assert_eq!(set.object_color.metric, Some(ObjectColor::Score));
+}
+
+#[test]
+fn round_trips_a_measured_point_spread_function() {
+    let mut scene = fixture();
+    let dims = [3, 3, 3];
+    let mut values = vec![0.0f32; (dims[0] * dims[1] * dims[2]) as usize];
+    values[13] = 1.0;
+    let psf = Psf::measured(MeasuredPsf::new(
+        Spacing::new(0.1, 0.1, 0.2),
+        vec![Kernel::from_values(dims, values)],
+    ));
+    let channel = scene
+        .add_restore(grana_scene::RestoreSpec::new(
+            0,
+            "measured restore",
+            [1.0, 0.5, 0.0],
+            grana_volume::Intensity::new(0.0, 2000.0),
+            psf.clone(),
+            6,
+        ))
+        .expect("the measured restore joins the scene");
+    assert_eq!(channel, 2);
+    let view = ViewState {
+        camera: CameraState {
+            pivot: [0.0; 3],
+            yaw: 0.0,
+            pitch: 0.0,
+            distance: 10.0,
+            fov_y: 0.6,
+        },
+        section: SectionState {
+            axis: Axis::Z,
+            span: 20.0,
+        },
+        split: 0.5,
+        timeline: Timeline::default(),
+        export: Export::NATIVE,
+    };
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "fixture".to_string(),
+        },
+        view,
+        fingerprint(),
+    );
+    let path = std::env::temp_dir().join(format!(
+        "grana-project-measured-{}.grana",
+        std::process::id()
+    ));
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::temporary(1).expect("the store opens a spill file"),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the project reads");
+    fs::remove_file(&path).ok();
+    assert_eq!(loaded, project);
+    let spec = loaded
+        .masks
+        .last()
+        .and_then(|spec| spec.restore())
+        .expect("the measured restore survives the project");
+    assert_eq!(spec.psf(), &psf);
 }

@@ -13,7 +13,9 @@ pub use command::{Action, Command};
 pub use grana_image::{Image, Series, Source, is_image};
 pub use grana_project::Export;
 pub use grana_scene::slug;
-pub use job::{Analysis, coloc, detect, drift, import, interop, recut, relation, segment, track};
+pub use job::{
+    Analysis, calibration, coloc, detect, drift, import, interop, recut, relation, segment, track,
+};
 pub use loader::Loader;
 pub use session::{Effects, Session};
 pub use task::Poll;

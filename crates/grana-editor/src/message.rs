@@ -59,6 +59,8 @@ pub enum Message {
     SetExport(grana_session::Export),
     SetSectionAxis(grana_volume::Axis),
     SetSectionDepth(f32),
+    SetPsfThreshold(f32),
+    SetPsfSeparation(f32),
     Region {
         axis: usize,
         side: usize,

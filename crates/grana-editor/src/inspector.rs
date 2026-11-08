@@ -1,6 +1,6 @@
 use glam::{Vec2, Vec3};
 use grana_display::TransferFunction;
-use grana_optics::PsfParams;
+use grana_optics::{Psf, PsfParams};
 use grana_scene::{MaskFilter, RelationField};
 use grana_session::Command;
 use grana_ui::{
@@ -27,11 +27,11 @@ fn restore_fields<'a>(
     spec: &grana_scene::RestoreSpec,
     depth_limit: f32,
 ) -> Vec<crate::view::View<'a>> {
-    let params = spec.params();
     let iterations = spec.iterations();
-    let set = move |params: PsfParams, iterations: u32| Command::SetRestore {
+    let psf = spec.psf().clone();
+    let set = move |psf: Psf, iterations: u32| Command::SetRestore {
         channel,
-        params,
+        psf,
         iterations,
     };
     let mut rows = Vec::new();
@@ -43,113 +43,153 @@ fn restore_fields<'a>(
         1.0..=50.0,
         false,
         &format!("{iterations}"),
-        move |value| set(params, value.round().max(1.0) as u32),
+        move |value| set(psf.clone(), value.round().max(1.0) as u32),
     ));
-    rows.push(view::slider_readout(
-        ctx,
-        "restore.aperture",
-        Some("Aperture"),
-        params.numerical_aperture(),
-        0.3..=1.45,
-        false,
-        &format!("{:.2} NA", params.numerical_aperture()),
-        move |value| {
-            set(
-                PsfParams::new(
-                    value,
-                    params.wavelength(),
-                    params.immersion(),
-                    params.sample(),
-                    params.depth(),
+    match spec.psf() {
+        Psf::Theoretical(params) => {
+            let params = *params;
+            rows.push(view::slider_readout(
+                ctx,
+                "restore.aperture",
+                Some("Aperture"),
+                params.numerical_aperture(),
+                0.3..=1.45,
+                false,
+                &format!("{:.2} NA", params.numerical_aperture()),
+                move |value| {
+                    set(
+                        Psf::theoretical(PsfParams::new(
+                            value,
+                            params.wavelength(),
+                            params.immersion(),
+                            params.sample(),
+                            params.depth(),
+                        )),
+                        iterations,
+                    )
+                },
+            ));
+            rows.push(view::slider_readout(
+                ctx,
+                "restore.wavelength",
+                Some("Emission"),
+                params.wavelength(),
+                0.35..=0.8,
+                false,
+                &format!("{:.3} µm", params.wavelength()),
+                move |value| {
+                    set(
+                        Psf::theoretical(PsfParams::new(
+                            params.numerical_aperture(),
+                            value,
+                            params.immersion(),
+                            params.sample(),
+                            params.depth(),
+                        )),
+                        iterations,
+                    )
+                },
+            ));
+            rows.push(view::slider_readout(
+                ctx,
+                "restore.immersion",
+                Some("Immersion"),
+                params.immersion(),
+                1.3..=1.6,
+                false,
+                &format!("{:.3}", params.immersion()),
+                move |value| {
+                    set(
+                        Psf::theoretical(PsfParams::new(
+                            params.numerical_aperture(),
+                            params.wavelength(),
+                            value,
+                            params.sample(),
+                            params.depth(),
+                        )),
+                        iterations,
+                    )
+                },
+            ));
+            rows.push(view::slider_readout(
+                ctx,
+                "restore.sample",
+                Some("Specimen"),
+                params.sample(),
+                1.0..=1.6,
+                false,
+                &format!("{:.3}", params.sample()),
+                move |value| {
+                    set(
+                        Psf::theoretical(PsfParams::new(
+                            params.numerical_aperture(),
+                            params.wavelength(),
+                            params.immersion(),
+                            value,
+                            params.depth(),
+                        )),
+                        iterations,
+                    )
+                },
+            ));
+            rows.push(view::slider_readout(
+                ctx,
+                "restore.depth",
+                Some("Depth"),
+                params.depth(),
+                0.0..=depth_limit,
+                false,
+                &format!("{:.1} µm", params.depth()),
+                move |value| {
+                    set(
+                        Psf::theoretical(PsfParams::new(
+                            params.numerical_aperture(),
+                            params.wavelength(),
+                            params.immersion(),
+                            params.sample(),
+                            value,
+                        )),
+                        iterations,
+                    )
+                },
+            ));
+        }
+        Psf::Measured(psf) => {
+            let dims = psf.dims();
+            rows.push(view::caption(
+                ctx,
+                &format!(
+                    "Measured from beads · {} depth bands · {}×{}×{}",
+                    psf.layers(),
+                    dims[0],
+                    dims[1],
+                    dims[2]
                 ),
-                iterations,
-            )
-        },
-    ));
-    rows.push(view::slider_readout(
-        ctx,
-        "restore.wavelength",
-        Some("Emission"),
-        params.wavelength(),
-        0.35..=0.8,
-        false,
-        &format!("{:.3} µm", params.wavelength()),
-        move |value| {
-            set(
-                PsfParams::new(
-                    params.numerical_aperture(),
-                    value,
-                    params.immersion(),
-                    params.sample(),
-                    params.depth(),
-                ),
-                iterations,
-            )
-        },
-    ));
-    rows.push(view::slider_readout(
-        ctx,
-        "restore.immersion",
-        Some("Immersion"),
-        params.immersion(),
-        1.3..=1.6,
-        false,
-        &format!("{:.3}", params.immersion()),
-        move |value| {
-            set(
-                PsfParams::new(
-                    params.numerical_aperture(),
-                    params.wavelength(),
-                    value,
-                    params.sample(),
-                    params.depth(),
-                ),
-                iterations,
-            )
-        },
-    ));
-    rows.push(view::slider_readout(
-        ctx,
-        "restore.sample",
-        Some("Specimen"),
-        params.sample(),
-        1.0..=1.6,
-        false,
-        &format!("{:.3}", params.sample()),
-        move |value| {
-            set(
-                PsfParams::new(
-                    params.numerical_aperture(),
-                    params.wavelength(),
-                    params.immersion(),
-                    value,
-                    params.depth(),
-                ),
-                iterations,
-            )
-        },
-    ));
-    rows.push(view::slider_readout(
-        ctx,
-        "restore.depth",
-        Some("Depth"),
-        params.depth(),
-        0.0..=depth_limit,
-        false,
-        &format!("{:.1} µm", params.depth()),
-        move |value| {
-            set(
-                PsfParams::new(
-                    params.numerical_aperture(),
-                    params.wavelength(),
-                    params.immersion(),
-                    params.sample(),
-                    value,
-                ),
-                iterations,
-            )
-        },
-    ));
+            ));
+            rows.push(
+                grana_ui::row()
+                    .justify(Align::End)
+                    .width(Length::Fill)
+                    .children([view::button_with(
+                        ctx,
+                        "Theoretical Model",
+                        Role::Quiet,
+                        Length::Fixed(panel_width()),
+                    )
+                    .press(Message::Command(Command::SetRestore {
+                        channel,
+                        psf: Psf::theoretical(PsfParams::new(
+                            DEFAULT_APERTURE,
+                            DEFAULT_WAVELENGTH,
+                            DEFAULT_IMMERSION,
+                            DEFAULT_SAMPLE,
+                            depth_limit * 0.5,
+                        )),
+                        iterations,
+                    }))]),
+            );
+        }
+    }
     rows
 }
 
@@ -555,28 +595,64 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
         );
     } else {
         let depth = scene.dataset.world_size().z * 0.5;
+        let button = (width - 6.0) * 0.5;
+        let psf_key = Key::new("display.psf");
+        let psf_open = state.workspace.sections.is_open(psf_key);
+        let mut calibration = Vec::new();
+        if psf_open {
+            calibration.push(view::slider_event(
+                ctx,
+                "restore.bead_threshold",
+                Some("Bead Threshold"),
+                state.workspace.psf_threshold,
+                2.0..=20.0,
+                &format!("{:.1} σ", state.workspace.psf_threshold),
+                Message::SetPsfThreshold,
+            ));
+            calibration.push(view::slider_event(
+                ctx,
+                "restore.bead_separation",
+                Some("Bead Spacing"),
+                state.workspace.psf_separation,
+                0.3..=5.0,
+                &format!("{:.1} µm", state.workspace.psf_separation),
+                Message::SetPsfSeparation,
+            ));
+        }
+        children.push(disclosure(
+            ctx,
+            "display.psf",
+            "Bead Calibration",
+            psf_open,
+            calibration,
+        ));
         children.push(
             grana_ui::row()
+                .gap(6.0)
                 .justify(Align::End)
                 .width(Length::Fill)
-                .children([view::button_with(
-                    ctx,
-                    "Deconvolve",
-                    Role::Quiet,
-                    Length::Fixed(width),
-                )
-                .named("display.restore.add")
-                .press(Message::Command(Command::AddRestoreChannel {
-                    source: index,
-                    params: PsfParams::new(
-                        DEFAULT_APERTURE,
-                        DEFAULT_WAVELENGTH,
-                        DEFAULT_IMMERSION,
-                        DEFAULT_SAMPLE,
-                        depth,
-                    ),
-                    iterations: DEFAULT_ITERATIONS,
-                }))]),
+                .children([
+                    view::button_with(ctx, "Deconvolve", Role::Quiet, Length::Fixed(button))
+                        .named("display.restore.add")
+                        .press(Message::Command(Command::AddRestoreChannel {
+                            source: index,
+                            psf: Psf::theoretical(PsfParams::new(
+                                DEFAULT_APERTURE,
+                                DEFAULT_WAVELENGTH,
+                                DEFAULT_IMMERSION,
+                                DEFAULT_SAMPLE,
+                                depth,
+                            )),
+                            iterations: DEFAULT_ITERATIONS,
+                        })),
+                    view::button_with(ctx, "From Beads", Role::Quiet, Length::Fixed(button))
+                        .named("display.restore.beads")
+                        .press(Message::Command(Command::CalibratePsf {
+                            source: index,
+                            threshold: state.workspace.psf_threshold,
+                            separation: state.workspace.psf_separation,
+                        })),
+                ]),
         );
     }
     children.push(view::divider(ctx));

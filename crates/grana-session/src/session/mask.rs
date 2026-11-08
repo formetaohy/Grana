@@ -56,12 +56,7 @@ impl Session {
         )));
     }
 
-    pub(super) fn add_restore_channel(
-        &mut self,
-        source: usize,
-        params: PsfParams,
-        iterations: u32,
-    ) {
+    pub(super) fn add_restore_channel(&mut self, source: usize, psf: Psf, iterations: u32) {
         if self.recipe.is_some() {
             self.message = Some(Message::error(
                 "a protocol replay builds its own derived channels",
@@ -84,7 +79,7 @@ impl Session {
             }
             scene.dataset.channels()[source].clone()
         };
-        let intensity = match channels.restored_range(source, params, iterations) {
+        let intensity = match channels.restored_range(source, psf.clone(), iterations) {
             Ok(intensity) => intensity,
             Err(error) => {
                 self.message = Some(Message::error(error.to_string()));
@@ -95,7 +90,7 @@ impl Session {
             return;
         };
         let name = scene.unique_channel_name(&format!("{} restored", fundus.name()));
-        let spec = RestoreSpec::new(source, name, fundus.tint(), intensity, params, iterations);
+        let spec = RestoreSpec::new(source, name, fundus.tint(), intensity, psf, iterations);
         match scene.add_restore(spec) {
             Ok(channel) => {
                 let name = scene.dataset.channels()[channel].name().to_string();
@@ -110,12 +105,7 @@ impl Session {
         }
     }
 
-    pub(super) fn set_restore_channel(
-        &mut self,
-        channel: usize,
-        params: PsfParams,
-        iterations: u32,
-    ) {
+    pub(super) fn set_restore_channel(&mut self, channel: usize, psf: Psf, iterations: u32) {
         if self.recipe.is_some() {
             self.message = Some(Message::error(
                 "a protocol replay builds its own derived channels",
@@ -123,7 +113,7 @@ impl Session {
             return;
         }
         let outcome = match self.scene.as_mut() {
-            Some(scene) => scene.set_restore(channel, params, iterations),
+            Some(scene) => scene.set_restore(channel, psf, iterations),
             None => return,
         };
         match outcome {

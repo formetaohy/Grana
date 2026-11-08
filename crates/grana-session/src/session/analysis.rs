@@ -1,6 +1,9 @@
 use super::*;
 
+use grana_calibration::Settings;
 use grana_pipeline::run::SegmentRequest;
+
+const CALIBRATION_ITERATIONS: u32 = 10;
 
 impl Session {
     pub(super) fn poll_analysis(&mut self) -> bool {
@@ -11,6 +14,12 @@ impl Session {
             Relation(u32, grana_object::RelationFrame),
             Coloc(Box<grana_measure::ColocSeries>, Region),
             Drift(grana_scene::Drift),
+            Calibration {
+                source: usize,
+                psf: Box<grana_optics::MeasuredPsf>,
+                beads: usize,
+                iterations: u32,
+            },
             Done,
             Failed(String),
         }
@@ -37,6 +46,23 @@ impl Session {
                     }
                     Poll::Event(Event::Drift(drift)) => {
                         updates.push((index, job, Update::Drift(drift)));
+                    }
+                    Poll::Event(Event::Calibration {
+                        source,
+                        psf,
+                        beads,
+                        iterations,
+                    }) => {
+                        updates.push((
+                            index,
+                            job,
+                            Update::Calibration {
+                                source,
+                                psf,
+                                beads,
+                                iterations,
+                            },
+                        ));
                     }
                     Poll::Event(Event::Done) => {
                         updates.push((index, job, Update::Done));
@@ -118,6 +144,23 @@ impl Session {
                     }
                     self.realign();
                 }
+                Update::Calibration {
+                    source,
+                    psf,
+                    beads,
+                    iterations,
+                } => {
+                    if job == Job::Calibrate {
+                        let before = self.scene.as_ref().map_or(0, |scene| scene.derived().len());
+                        self.add_restore_channel(source, Psf::Measured(*psf), iterations);
+                        let after = self.scene.as_ref().map_or(0, |scene| scene.derived().len());
+                        if after > before {
+                            self.message = Some(Message::info(format!(
+                                "a measured point spread function was calibrated from {beads} beads"
+                            )));
+                        }
+                    }
+                }
                 Update::Done => {
                     self.progress.retain(|progress| progress.job != job);
                     removed.push(index);
@@ -127,6 +170,7 @@ impl Session {
                         Job::Import(set) => imported.push(set),
                         Job::Recut(set) => recutted.push(set),
                         Job::Track(_) | Job::Relation { .. } | Job::Coloc | Job::Drift => {}
+                        Job::Calibrate => {}
                     }
                 }
                 Update::Failed(detail) => {
@@ -485,6 +529,67 @@ impl Session {
             shift,
             gate,
             0,
+        ));
+    }
+
+    pub(super) fn begin_calibration(&mut self, source: usize, threshold: f32, separation: f32) {
+        if self.recipe.is_some() {
+            self.message = Some(Message::error(
+                "a protocol replay calibrates the point spread function it records",
+            ));
+            return;
+        }
+        if self.loading.is_some() {
+            return;
+        }
+        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
+            self.message = Some(Message::error("open a dataset before calibrating it"));
+            return;
+        };
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        if source >= scene.base_channels() {
+            self.message = Some(Message::error(
+                "a point spread function is calibrated from a stored channel",
+            ));
+            return;
+        }
+        if self
+            .analysis
+            .iter()
+            .any(|analysis| analysis.job() == Job::Calibrate)
+        {
+            self.message = Some(Message::error(
+                "a point spread function calibration is already running",
+            ));
+            return;
+        }
+        let image = channels.image_shared();
+        let defaults = Settings::for_image(&image, source, scene.time());
+        let settings = Settings::new(
+            source,
+            scene.time(),
+            threshold.clamp(1.0, 64.0),
+            separation
+                .max(
+                    2.0 * scene
+                        .dataset
+                        .voxel_size()
+                        .x
+                        .min(scene.dataset.voxel_size().y),
+                )
+                .min(1.0e3),
+            defaults.half(),
+            defaults.bands(),
+        );
+        self.message = None;
+        self.record_progress(Job::Calibrate, 0, 0, 1);
+        self.analysis.push(crate::calibration(
+            Job::Calibrate,
+            image,
+            settings,
+            CALIBRATION_ITERATIONS,
         ));
     }
 

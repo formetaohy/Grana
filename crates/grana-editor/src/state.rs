@@ -130,6 +130,8 @@ pub struct Workspace {
     pub renaming: Option<ObjectSetId>,
     pub expanded: HashSet<ObjectSetId>,
     pub sections: Sections,
+    pub psf_threshold: f32,
+    pub psf_separation: f32,
     pub classifier: HashMap<ObjectSetId, Vec<Measurement>>,
     pub(crate) drag: PlotDrag,
 }
@@ -154,6 +156,8 @@ impl Default for Workspace {
             renaming: None,
             expanded: HashSet::new(),
             sections: Sections::default(),
+            psf_threshold: 8.0,
+            psf_separation: 1.5,
             classifier: HashMap::new(),
             drag: PlotDrag::default(),
         }

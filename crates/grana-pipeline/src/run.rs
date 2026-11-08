@@ -16,12 +16,14 @@ use grana_volume::VoxelData;
 
 use crate::event::Event;
 
+mod calibration;
 mod edit;
 mod frames;
 mod import;
 mod interop;
 mod segment;
 
+pub use self::calibration::calibrate;
 pub use self::edit::edit;
 use self::frames::Notice;
 use self::frames::frames as pipeline;

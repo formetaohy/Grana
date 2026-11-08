@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use grana_object::{Mask, Roi};
-use grana_optics::PsfParams;
+use grana_optics::Psf;
 use grana_volume::{ChannelInfo, Intensity, Level, VoxelFormat};
 
 use crate::object::ObjectFrame;
@@ -66,7 +66,7 @@ pub struct RestoreSpec {
     name: String,
     tint: [f32; 3],
     intensity: Intensity,
-    params: PsfParams,
+    psf: Psf,
     iterations: u32,
 }
 
@@ -76,7 +76,7 @@ impl RestoreSpec {
         name: impl Into<String>,
         tint: [f32; 3],
         intensity: Intensity,
-        params: PsfParams,
+        psf: Psf,
         iterations: u32,
     ) -> Self {
         let name = name.into();
@@ -101,7 +101,7 @@ impl RestoreSpec {
             name,
             tint,
             intensity,
-            params,
+            psf,
             iterations,
         }
     }
@@ -122,8 +122,8 @@ impl RestoreSpec {
         self.intensity
     }
 
-    pub fn params(&self) -> PsfParams {
-        self.params
+    pub fn psf(&self) -> &Psf {
+        &self.psf
     }
 
     pub fn iterations(&self) -> u32 {

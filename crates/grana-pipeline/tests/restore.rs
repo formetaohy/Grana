@@ -78,7 +78,7 @@ fn scene(reader: &Image, iterations: u32) -> Scene {
         "dapi restored",
         [0.0, 0.0, 1.0],
         Intensity::new(0.0, 20000.0),
-        params(),
+        grana_optics::Psf::theoretical(params()),
         iterations,
     );
     let channel = scene

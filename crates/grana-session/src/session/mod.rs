@@ -22,7 +22,7 @@ use grana_image::Format;
 use grana_measure::{ColocPair, ColocThresholds, Group, Scope};
 use grana_object::SurfaceCut;
 use grana_object::TrackSet;
-use grana_optics::PsfParams;
+use grana_optics::Psf;
 use grana_project::{Mismatch, Project, Source as ProjectSource, ViewState};
 use grana_scene::{
     Criteria, Dataset, FilterRange, Item, Job, LassoPath, Measure, ObjectFrame, ObjectParams,

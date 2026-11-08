@@ -137,6 +137,17 @@ pub fn drift(job: Job, channels: Arc<Channels>, request: DriftRequest) -> Analys
     })
 }
 
+pub fn calibration(
+    job: Job,
+    image: Arc<grana_image::Image>,
+    settings: grana_calibration::Settings,
+    iterations: u32,
+) -> Analysis {
+    analyse(job, move |_, sink| {
+        run::calibrate(image, settings, iterations, sink)
+    })
+}
+
 fn analyse(
     job: Job,
     work: impl FnOnce(&AtomicBool, &mut dyn FnMut(Event)) -> Result<(), String> + Send + 'static,
