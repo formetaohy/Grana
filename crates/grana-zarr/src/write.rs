@@ -100,26 +100,26 @@ pub fn write_image(path: &Path, mut spec: ImageSpec<'_>) -> Result<ImageWritten,
     );
     if path.is_file() {
         return Err(Error::Write {
-            path: path.to_path_buf(),
+            path: path.display().to_string(),
             detail: "the destination is a file".to_string(),
         });
     }
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent).map_err(|error| Error::Write {
-        path: path.to_path_buf(),
+        path: path.display().to_string(),
         detail: format!("failed to create {}: {error}", parent.display()),
     })?;
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .ok_or_else(|| Error::Write {
-            path: path.to_path_buf(),
+            path: path.display().to_string(),
             detail: "the destination names no folder".to_string(),
         })?;
     let staging = parent.join(format!(".{name}.{}.tmp", std::process::id()));
     if staging.exists() {
         std::fs::remove_dir_all(&staging).map_err(|error| Error::Write {
-            path: path.to_path_buf(),
+            path: path.display().to_string(),
             detail: format!("failed to clear {}: {error}", staging.display()),
         })?;
     }
@@ -129,21 +129,21 @@ pub fn write_image(path: &Path, mut spec: ImageSpec<'_>) -> Result<ImageWritten,
         Err(detail) => {
             let _ = std::fs::remove_dir_all(&staging);
             return Err(Error::Write {
-                path: path.to_path_buf(),
+                path: path.display().to_string(),
                 detail,
             });
         }
     };
     if path.exists() {
         std::fs::remove_dir_all(path).map_err(|error| Error::Write {
-            path: path.to_path_buf(),
+            path: path.display().to_string(),
             detail: format!("failed to replace {}: {error}", path.display()),
         })?;
     }
     std::fs::rename(&staging, path).map_err(|error| {
         let _ = std::fs::remove_dir_all(&staging);
         Error::Write {
-            path: path.to_path_buf(),
+            path: path.display().to_string(),
             detail: format!("failed to move the dataset into place: {error}"),
         }
     })?;

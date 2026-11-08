@@ -127,6 +127,7 @@ fn view_elements<'a>(
         elements.push(dock(ctx, rect, state));
     }
     elements.extend(stage::toast(ctx, layout, state));
+    elements.extend(stage::remote(ctx, layout, state));
     elements
 }
 
@@ -482,6 +483,14 @@ pub fn apply(
             Message::RenameObject { set, name } => {
                 commands.push(Command::RenameObject { set, name });
                 workspace.renaming = None;
+            }
+            Message::BeginRemote => workspace.remote_open = true,
+            Message::CancelRemote => workspace.remote_open = false,
+            Message::OpenRemote(url) => {
+                workspace.remote_open = false;
+                if view.io.loading.is_none() {
+                    commands.push(Command::OpenRemote(url));
+                }
             }
             Message::SetPlaying(playing) => {
                 workspace.playback.playing = playing;

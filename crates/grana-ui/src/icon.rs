@@ -29,6 +29,7 @@ pub enum Icon {
     Save,
     Copy,
     Camera,
+    Globe,
     Film,
     Export,
     Trash,
@@ -337,6 +338,12 @@ pub fn paint(
         Icon::Search => {
             arc(painter, 8.8, 8.8, 5.2, 0.0, TAU);
             line(painter, (12.8, 12.8), (16.8, 16.8));
+        }
+        Icon::Globe => {
+            arc(painter, 10.0, 10.0, 7.2, 0.0, TAU);
+            line(painter, (2.8, 10.0), (17.2, 10.0));
+            arc(painter, 10.0, 10.0, 3.6, -0.5 * PI, PI);
+            arc(painter, 10.0, 10.0, 3.6, 0.5 * PI, PI);
         }
         Icon::Sliders => {
             for (y, knob) in [(5.8, 7.4), (10.0, 13.2), (14.2, 8.8)] {

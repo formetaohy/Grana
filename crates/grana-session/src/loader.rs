@@ -21,6 +21,9 @@ pub struct Opened {
     pub series: Vec<Series>,
     pub selected: usize,
     pub fingerprint: Fingerprint,
+    pub remote: bool,
+    pub labels: Vec<String>,
+    pub labels_error: Option<String>,
 }
 
 pub enum Event {
@@ -204,6 +207,9 @@ impl Loader {
             fingerprint: image
                 .fingerprint()
                 .expect("an in-memory volume fingerprints"),
+            remote: false,
+            labels: Vec::new(),
+            labels_error: None,
         };
         let channels = Channels::stored(Arc::new(image));
         let (sender, events) = mpsc::channel();
@@ -230,13 +236,19 @@ impl Loader {
     }
 
     pub fn file_series(path: PathBuf, series: usize) -> Self {
-        match grana_image::series_group(&path, series) {
-            Ok(Some(group)) => Self::open(Source::file_group(path, series, group)),
-            _ => Self::open(Source::file_series(path, series)),
-        }
+        Self::open(Source::file_series(path, series))
+    }
+
+    pub fn remote(url: String) -> Self {
+        Self::open(Source::remote(url))
+    }
+
+    pub fn remote_series(url: String, series: usize) -> Self {
+        Self::open(Source::remote_series(url, series))
     }
 
     fn open(source: Source) -> Self {
+        let remote = source.is_remote();
         let (sender, events) = mpsc::channel();
         let queue = Arc::new(Queue::new());
         let time = Arc::new(AtomicU32::new(0));
@@ -249,6 +261,14 @@ impl Loader {
         let opening_drift = Arc::clone(&drift);
         let opening_channels = Arc::clone(&resident);
         std::thread::spawn(move || {
+            let opened = match grana_image::resolve_series(&opened) {
+                Ok(source) => source,
+                Err(detail) => {
+                    let _ = opening_sender.send(Event::Failed(detail.to_string()));
+                    opening_queue.close();
+                    return;
+                }
+            };
             let reader = match Image::open(&opened) {
                 Ok(reader) => reader,
                 Err(detail) => {
@@ -276,6 +296,10 @@ impl Loader {
                     return;
                 }
             };
+            let (labels, labels_error) = match reader.labels() {
+                Ok(labels) => (labels.names().map(str::to_string).collect(), None),
+                Err(detail) => (Vec::new(), Some(detail.to_string())),
+            };
             let opened = Event::Opened(Opened {
                 name: reader.name().to_string(),
                 pyramid: reader.pyramid().clone(),
@@ -283,6 +307,9 @@ impl Loader {
                 series: reader.series().to_vec(),
                 selected: reader.selected(),
                 fingerprint,
+                remote,
+                labels,
+                labels_error,
             });
             let channels = Arc::new(Channels::stored(Arc::new(reader)));
             *opening_channels

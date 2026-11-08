@@ -18,6 +18,7 @@ pub use grana_project::Export;
 pub enum Command {
     OpenDataset,
     OpenImage,
+    OpenRemote(String),
     OpenDemo,
     OpenProject,
     SaveProject,

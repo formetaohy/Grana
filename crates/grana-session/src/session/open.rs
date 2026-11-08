@@ -59,6 +59,24 @@ impl Session {
         self.reset();
     }
 
+    pub fn begin_remote(&mut self, url: String) {
+        if self.reject_transfer() {
+            return;
+        }
+        if !grana_image::is_remote(&url) {
+            self.message = Some(Message::error(format!(
+                "`{url}` is not an http or https url"
+            )));
+            return;
+        }
+        self.loading = Some(url.clone());
+        self.source = Some(Loader::remote(url));
+        self.pending = None;
+        self.project = None;
+        self.saved = None;
+        self.reset();
+    }
+
     pub fn select_series(&mut self, index: usize) -> bool {
         if index == self.series_index || index >= self.series.len() {
             return false;
@@ -66,14 +84,16 @@ impl Session {
         let Some(source) = self.source.as_ref().map(Loader::source) else {
             return false;
         };
-        let Some(path) = source.path().map(Path::to_path_buf) else {
-            return false;
+        let next = match &source {
+            Source::Memory(_) => return false,
+            Source::File { path, .. } => Loader::file_series(path.clone(), index),
+            Source::Remote { url, .. } => Loader::remote_series(url.clone(), index),
         };
         if self.reject_transfer() {
             return false;
         }
-        self.loading = Some(file_name(&path));
-        self.source = Some(Loader::file_series(path, index));
+        self.loading = Some(source.label());
+        self.source = Some(next);
         self.pending = None;
         self.project = None;
         self.saved = None;
@@ -177,6 +197,19 @@ impl Session {
                 self.saved = None;
                 self.reset();
             }
+            ProjectSource::Remote { url, series, .. } => {
+                let url = url.clone();
+                let series = *series;
+                self.source = Some(Loader::remote_series(url.clone(), series));
+                self.loading = Some(url);
+                self.pending = Some(Pending {
+                    path: path.to_path_buf(),
+                    project,
+                });
+                self.project = None;
+                self.saved = None;
+                self.reset();
+            }
         }
     }
 
@@ -244,9 +277,15 @@ impl Session {
                     Source::File { path, series, .. } => {
                         Some(ProjectSource::File { name, path, series })
                     }
-                    Source::Memory(_) => None,
+                    Source::Memory(_) | Source::Remote { .. } => None,
                 }
             }
+            Origin::Remote => match self.source.as_ref()?.source() {
+                Source::Remote { url, series, .. } => {
+                    Some(ProjectSource::Remote { name, url, series })
+                }
+                Source::Memory(_) | Source::File { .. } => None,
+            },
         }
     }
 
@@ -346,7 +385,6 @@ impl Session {
         self.fingerprint = Some(fingerprint);
         self.generation += 1;
         self.mask_stamp = None;
-        self.refresh_labels();
         if let Some(source) = &self.source {
             source.set_time(0);
             if let Some(scene) = self.scene.as_ref() {
@@ -356,19 +394,6 @@ impl Session {
         self.install_channels();
         if let Some(scene) = self.scene.as_ref() {
             self.mask_stamp = Some((0, scene.mask_stamp(0)));
-        }
-    }
-
-    fn refresh_labels(&mut self) {
-        self.label_images.clear();
-        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
-            return;
-        };
-        match channels.image().labels() {
-            Ok(labels) => {
-                self.label_images = labels.names().map(str::to_string).collect();
-            }
-            Err(error) => self.message = Some(Message::error(error.to_string())),
         }
     }
 
@@ -395,15 +420,20 @@ impl Session {
                 LoaderEvent::Opened(opened) => {
                     self.series = opened.series;
                     self.series_index = opened.selected;
-                    let dataset = match opened.format {
-                        Some(Format::Zarr) => Dataset::zarr(opened.name, opened.pyramid),
-                        Some(Format::Tiff) => Dataset::tiff(opened.name, opened.pyramid),
-                        Some(Format::Czi) => Dataset::czi(opened.name, opened.pyramid),
-                        Some(Format::Nikon) => Dataset::nikon(opened.name, opened.pyramid),
-                        Some(Format::Leica) => Dataset::leica(opened.name, opened.pyramid),
-                        None => Dataset::synthetic(opened.name, opened.pyramid),
+                    self.label_images = opened.labels;
+                    let dataset = match (opened.remote, opened.format) {
+                        (true, _) => Dataset::remote(opened.name, opened.pyramid),
+                        (false, Some(Format::Zarr)) => Dataset::zarr(opened.name, opened.pyramid),
+                        (false, Some(Format::Tiff)) => Dataset::tiff(opened.name, opened.pyramid),
+                        (false, Some(Format::Czi)) => Dataset::czi(opened.name, opened.pyramid),
+                        (false, Some(Format::Nikon)) => Dataset::nikon(opened.name, opened.pyramid),
+                        (false, Some(Format::Leica)) => Dataset::leica(opened.name, opened.pyramid),
+                        (false, None) => Dataset::synthetic(opened.name, opened.pyramid),
                     };
                     self.open_dataset(dataset, opened.fingerprint);
+                    if let Some(detail) = opened.labels_error {
+                        self.message = Some(Message::error(detail));
+                    }
                 }
                 LoaderEvent::Brick { request, data } => {
                     self.in_flight.remove(&request);

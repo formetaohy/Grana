@@ -5,6 +5,7 @@ mod hcs;
 mod image;
 mod label;
 mod metadata;
+mod root;
 mod schema;
 mod write;
 
@@ -17,4 +18,5 @@ pub use label::{
     ChunkFill, Label, LabelSpec, Labels, Written, read_labels, write as write_labels,
     write_group_labels,
 };
+pub use root::Root;
 pub use write::{ChunkFill as ImageFill, ImageSpec, ImageWritten, WriteChannel, write_image};

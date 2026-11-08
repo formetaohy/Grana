@@ -1,11 +1,10 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use serde_json::{Map, Value};
-use zarrs::filesystem::FilesystemStore;
 use zarrs::group::Group;
 
 use crate::Error;
+use crate::root::Root;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Field {
@@ -59,8 +58,8 @@ pub enum Kind {
     Collection,
 }
 
-pub fn kind(path: &Path) -> Result<Kind, Error> {
-    let attributes = attributes(path, Path::new("/"))?;
+pub fn kind(root: &Root) -> Result<Kind, Error> {
+    let attributes = attributes(root, "/")?;
     let fields = fields(&attributes);
     Ok(if fields.get("plate").is_some() {
         Kind::Plate
@@ -73,29 +72,30 @@ pub fn kind(path: &Path) -> Result<Kind, Error> {
     })
 }
 
-pub fn open(path: &Path) -> Result<Plate, Error> {
-    let attributes = attributes(path, Path::new("/"))?;
+pub fn open(root: &Root) -> Result<Plate, Error> {
+    let origin = root.tag("/");
+    let attributes = attributes(root, "/")?;
     let fields = fields(&attributes);
     let plate = fields
         .get("plate")
         .and_then(Value::as_object)
         .ok_or_else(|| Error::Metadata {
-            path: path.to_path_buf(),
+            path: origin.clone(),
             detail: "the group carries no plate metadata".to_string(),
         })?;
-    let rows = count(plate, "rows", path)?;
-    let columns = count(plate, "columns", path)?;
+    let rows = count(plate, "rows", &origin)?;
+    let columns = count(plate, "columns", &origin)?;
     let mut wells = plate
         .get("wells")
         .and_then(Value::as_array)
         .ok_or_else(|| Error::Metadata {
-            path: path.to_path_buf(),
+            path: origin.clone(),
             detail: "the plate metadata lists no wells".to_string(),
         })?
         .iter()
         .map(|well| {
             let detail = || Error::Metadata {
-                path: path.to_path_buf(),
+                path: origin.clone(),
                 detail: "a well names no path or index".to_string(),
             };
             Ok(WellSpec {
@@ -112,7 +112,7 @@ pub fn open(path: &Path) -> Result<Plate, Error> {
     for well in &wells {
         if well.row >= rows || well.column >= columns {
             return Err(Error::Metadata {
-                path: path.to_path_buf(),
+                path: origin.clone(),
                 detail: format!(
                     "the well `{}` names the row {} and the column {} of a plate holding {rows} rows and {columns} columns",
                     well.path.display(),
@@ -127,7 +127,7 @@ pub fn open(path: &Path) -> Result<Plate, Error> {
     });
     let mut fields = Vec::new();
     for well in &wells {
-        for field in well_fields(path, well)? {
+        for field in well_fields(root, well)? {
             fields.push(field);
         }
     }
@@ -137,7 +137,7 @@ pub fn open(path: &Path) -> Result<Plate, Error> {
             .and_then(Value::as_str)
             .filter(|name| !name.is_empty())
             .map(str::to_owned)
-            .unwrap_or_else(|| dataset_name(path)),
+            .unwrap_or_else(|| root.name()),
         fields,
     })
 }
@@ -148,17 +148,16 @@ struct WellSpec {
     column: usize,
 }
 
-fn well_fields(path: &Path, well: &WellSpec) -> Result<Vec<Field>, Error> {
+fn well_fields(root: &Root, well: &WellSpec) -> Result<Vec<Field>, Error> {
     let group = group_path(&well.path);
-    let directory = path.join(&well.path);
-    let attributes = attributes(path, Path::new(&group))?;
+    let attributes = attributes(root, &group)?;
     let fields = fields(&attributes);
     let images = fields
         .get("well")
         .and_then(|well| well.get("images"))
         .and_then(Value::as_array)
         .ok_or_else(|| Error::Metadata {
-            path: directory.clone(),
+            path: root.tag(&group),
             detail: "the well group carries no well metadata".to_string(),
         })?
         .iter()
@@ -168,7 +167,7 @@ fn well_fields(path: &Path, well: &WellSpec) -> Result<Vec<Field>, Error> {
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
                 .ok_or_else(|| Error::Metadata {
-                    path: directory.clone(),
+                    path: root.tag(&group),
                     detail: "a field of view names no path".to_string(),
                 })
         })
@@ -187,13 +186,13 @@ fn well_fields(path: &Path, well: &WellSpec) -> Result<Vec<Field>, Error> {
     Ok(fields)
 }
 
-fn count(plate: &Map<String, Value>, key: &str, path: &Path) -> Result<usize, Error> {
+fn count(plate: &Map<String, Value>, key: &str, origin: &str) -> Result<usize, Error> {
     plate
         .get(key)
         .and_then(Value::as_array)
         .map(Vec::len)
         .ok_or_else(|| Error::Metadata {
-            path: path.to_path_buf(),
+            path: origin.to_string(),
             detail: format!("the plate metadata lists no {key}"),
         })
 }
@@ -263,13 +262,9 @@ pub fn join(group: &str, path: &str) -> String {
     }
 }
 
-fn attributes(path: &Path, group: &Path) -> Result<Map<String, Value>, Error> {
-    let store = Arc::new(FilesystemStore::new(path).map_err(|error| Error::Open {
-        path: path.to_path_buf(),
-        detail: error.to_string(),
-    })?);
-    let opened = Group::open(store, &group_path(group)).map_err(|error| Error::Open {
-        path: path.join(group),
+fn attributes(root: &Root, group: &str) -> Result<Map<String, Value>, Error> {
+    let opened = Group::open(root.listable(), group).map_err(|error| Error::Open {
+        path: root.tag(group),
         detail: error.to_string(),
     })?;
     Ok(opened.attributes().clone())
@@ -280,16 +275,4 @@ fn fields(attributes: &Map<String, Value>) -> &Map<String, Value> {
         .get("ome")
         .and_then(Value::as_object)
         .unwrap_or(attributes)
-}
-
-fn dataset_name(path: &Path) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| {
-            name.trim_end_matches(".zarr")
-                .trim_end_matches(".ome")
-                .to_string()
-        })
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "plate".to_string())
 }

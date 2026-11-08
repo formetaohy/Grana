@@ -8,8 +8,9 @@ use grana_zarr::Image;
 #[test]
 fn reads_the_fields_of_a_plate_in_row_major_order() {
     let temp = TempDir::new("grana-zarr-plate");
-    let root = temp.path().join("plate.zarr");
-    write_plate(&root);
+    let path = temp.path().join("plate.zarr");
+    write_plate(&path);
+    let root = grana_zarr::Root::local(&path).expect("the plate root opens");
 
     let plate = grana_zarr::open_plate(&root).expect("the plate opens");
     assert_eq!(plate.name(), "plate");
@@ -19,7 +20,7 @@ fn reads_the_fields_of_a_plate_in_row_major_order() {
     assert_eq!(plate.fields()[1].path(), "/A/2/0");
     assert_eq!(plate.fields()[1].name(), "A2/0");
 
-    let first = Image::open_group(&root, plate.fields()[0].path()).expect("the first field opens");
+    let first = Image::open_group(&path, plate.fields()[0].path()).expect("the first field opens");
     assert_eq!(first.name(), "field one");
     assert_eq!(first.pyramid().level(0).extent(), Extent::new(4, 3, 2));
     assert_eq!(
@@ -29,7 +30,7 @@ fn reads_the_fields_of_a_plate_in_row_major_order() {
     assert_eq!(voxel(&first, 2, 1, 0), 17);
 
     let second =
-        Image::open_group(&root, plate.fields()[1].path()).expect("the second field opens");
+        Image::open_group(&path, plate.fields()[1].path()).expect("the second field opens");
     assert_eq!(second.name(), "field two");
     assert_eq!(voxel(&second, 2, 1, 0), 27);
 
@@ -37,12 +38,15 @@ fn reads_the_fields_of_a_plate_in_row_major_order() {
         grana_zarr::group_kind(&root).expect("the plate kind reads"),
         grana_zarr::GroupKind::Plate
     );
+    let well = grana_zarr::Root::local(&path.join("A").join("1")).expect("the well root opens");
     assert_eq!(
-        grana_zarr::group_kind(&root.join("A").join("1")).expect("the well kind reads"),
+        grana_zarr::group_kind(&well).expect("the well kind reads"),
         grana_zarr::GroupKind::Well
     );
+    let field =
+        grana_zarr::Root::local(&path.join("A").join("1").join("0")).expect("the field root opens");
     assert_eq!(
-        grana_zarr::group_kind(&root.join("A").join("1").join("0")).expect("the field kind reads"),
+        grana_zarr::group_kind(&field).expect("the field kind reads"),
         grana_zarr::GroupKind::Image
     );
 }

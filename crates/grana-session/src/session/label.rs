@@ -158,7 +158,7 @@ impl super::Session {
         };
         if scene.dataset.origin() != grana_scene::Origin::Zarr {
             self.message = Some(crate::Message::error(
-                "label images are written into OME-Zarr datasets",
+                "label images are written into local OME-Zarr datasets",
             ));
             return;
         }

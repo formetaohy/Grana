@@ -56,6 +56,11 @@ pub enum Source {
         path: PathBuf,
         series: usize,
     },
+    Remote {
+        name: String,
+        url: String,
+        series: usize,
+    },
 }
 
 #[derive(Debug, PartialEq)]

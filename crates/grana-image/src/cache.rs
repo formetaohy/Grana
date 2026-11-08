@@ -409,21 +409,33 @@ fn accounting(root: &Path) -> Accounting {
     Arc::clone(accounts.entry(root.to_path_buf()).or_default())
 }
 
-pub(crate) fn identity(source: &crate::Source, geometry: &[u8]) -> u64 {
+pub(crate) fn identity(source: &crate::Source, geometry: &[u8], revision: Option<&str>) -> u64 {
     let mut hash = mix(FNV_BASE, geometry);
-    if let crate::Source::File {
-        path,
-        series,
-        group,
-    } = source
-    {
-        let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
-        hash = mix(hash, resolved.to_string_lossy().as_bytes());
-        hash = mix(hash, &(*series as u64).to_le_bytes());
-        if let Some(group) = group {
-            hash = mix(hash, group.as_bytes());
+    match source {
+        crate::Source::Memory(_) => {}
+        crate::Source::File {
+            path,
+            series,
+            group,
+        } => {
+            let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+            hash = mix(hash, resolved.to_string_lossy().as_bytes());
+            hash = mix(hash, &(*series as u64).to_le_bytes());
+            if let Some(group) = group {
+                hash = mix(hash, group.as_bytes());
+            }
+            hash = contents(hash, path);
         }
-        hash = contents(hash, path);
+        crate::Source::Remote { url, series, group } => {
+            hash = mix(hash, url.as_bytes());
+            hash = mix(hash, &(*series as u64).to_le_bytes());
+            if let Some(group) = group {
+                hash = mix(hash, group.as_bytes());
+            }
+            if let Some(revision) = revision {
+                hash = mix(hash, revision.as_bytes());
+            }
+        }
     }
     hash
 }
@@ -808,16 +820,16 @@ mod tests {
         let chunk = nested.join("0.0.0");
         std::fs::write(&chunk, b"first").expect("the chunk is written");
         let source = crate::Source::file_series(directory.clone(), 0);
-        let first = identity(&source, b"geometry");
+        let first = identity(&source, b"geometry", None);
         assert_eq!(
-            identity(&source, b"geometry"),
+            identity(&source, b"geometry", None),
             first,
             "an unchanged directory keeps its fingerprint"
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
         std::fs::write(&chunk, b"second").expect("the chunk is overwritten in place");
         assert_ne!(
-            identity(&source, b"geometry"),
+            identity(&source, b"geometry", None),
             first,
             "an overwritten chunk invalidates the fingerprint"
         );

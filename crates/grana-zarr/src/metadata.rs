@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use serde_json::{Map, Value};
 
 use crate::Error;
@@ -119,7 +117,7 @@ impl Transform {
     }
 }
 
-pub fn parse(path: &Path, attributes: &Map<String, Value>) -> Result<Metadata, Error> {
+pub fn parse(path: &str, attributes: &Map<String, Value>) -> Result<Metadata, Error> {
     let (version, fields) = match attributes.get("ome") {
         Some(Value::Object(ome)) => {
             let version = ome
@@ -172,7 +170,7 @@ pub fn parse(path: &Path, attributes: &Map<String, Value>) -> Result<Metadata, E
     })
 }
 
-fn minor_version(path: &Path, version: &str) -> Result<u32, Error> {
+fn minor_version(path: &str, version: &str) -> Result<u32, Error> {
     let mut parts = version.split('.');
     let major = parts
         .next()
@@ -195,7 +193,7 @@ fn minor_version(path: &Path, version: &str) -> Result<u32, Error> {
     Ok(minor)
 }
 
-fn absent(path: &Path, attributes: &Map<String, Value>, fields: &Map<String, Value>) -> Error {
+fn absent(path: &str, attributes: &Map<String, Value>, fields: &Map<String, Value>) -> Error {
     let collection = fields
         .get("bioformats2raw.layout")
         .or_else(|| attributes.get("bioformats2raw.layout"))
@@ -214,7 +212,7 @@ fn absent(path: &Path, attributes: &Map<String, Value>, fields: &Map<String, Val
     metadata_error(path, detail)
 }
 
-fn direct(path: &Path, multiscale: &Value) -> Result<(Vec<Axis>, Vec<Dataset>), Error> {
+fn direct(path: &str, multiscale: &Value) -> Result<(Vec<Axis>, Vec<Dataset>), Error> {
     let axes = axes_of(path, multiscale.get("axes"))?;
     let global = multiscale
         .get("coordinateTransformations")
@@ -225,7 +223,7 @@ fn direct(path: &Path, multiscale: &Value) -> Result<(Vec<Axis>, Vec<Dataset>), 
     Ok((axes, datasets))
 }
 
-fn named(path: &Path, multiscale: &Value) -> Result<(Vec<Axis>, Vec<Dataset>), Error> {
+fn named(path: &str, multiscale: &Value) -> Result<(Vec<Axis>, Vec<Dataset>), Error> {
     let systems = multiscale
         .get("coordinateSystems")
         .and_then(Value::as_array)
@@ -265,7 +263,7 @@ fn named(path: &Path, multiscale: &Value) -> Result<(Vec<Axis>, Vec<Dataset>), E
 }
 
 fn datasets_of(
-    path: &Path,
+    path: &str,
     multiscale: &Value,
     axes: usize,
     global: Option<&Transform>,
@@ -311,7 +309,7 @@ fn datasets_of(
         .collect()
 }
 
-fn transform(path: &Path, value: &Value, axes: usize) -> Result<Transform, Error> {
+fn transform(path: &str, value: &Value, axes: usize) -> Result<Transform, Error> {
     match value {
         Value::Array(transforms) => {
             let mut total = Transform::identity(axes);
@@ -328,7 +326,7 @@ fn transform(path: &Path, value: &Value, axes: usize) -> Result<Transform, Error
     }
 }
 
-fn single(path: &Path, value: &Value, axes: usize) -> Result<Transform, Error> {
+fn single(path: &str, value: &Value, axes: usize) -> Result<Transform, Error> {
     let kind = value
         .get("type")
         .and_then(Value::as_str)
@@ -357,7 +355,7 @@ fn single(path: &Path, value: &Value, axes: usize) -> Result<Transform, Error> {
     Ok(transform)
 }
 
-fn vector(path: &Path, value: &Value, key: &str, axes: usize) -> Result<Vec<f64>, Error> {
+fn vector(path: &str, value: &Value, key: &str, axes: usize) -> Result<Vec<f64>, Error> {
     let values = value
         .get(key)
         .and_then(Value::as_array)
@@ -382,7 +380,7 @@ fn vector(path: &Path, value: &Value, key: &str, axes: usize) -> Result<Vec<f64>
         .collect()
 }
 
-fn axes_of(path: &Path, value: Option<&Value>) -> Result<Vec<Axis>, Error> {
+fn axes_of(path: &str, value: Option<&Value>) -> Result<Vec<Axis>, Error> {
     let axes = value
         .and_then(Value::as_array)
         .ok_or_else(|| metadata_error(path, "the metadata lists no axes"))?;
@@ -391,7 +389,7 @@ fn axes_of(path: &Path, value: Option<&Value>) -> Result<Vec<Axis>, Error> {
         .collect::<Result<Vec<_>, Error>>()
 }
 
-fn axis_of(path: &Path, value: &Value) -> Result<Axis, Error> {
+fn axis_of(path: &str, value: &Value) -> Result<Axis, Error> {
     let name = value
         .get("name")
         .and_then(Value::as_str)
@@ -430,7 +428,7 @@ fn axis_of(path: &Path, value: &Value) -> Result<Axis, Error> {
     })
 }
 
-fn unit_of(path: &Path, kind: AxisKind, unit: &str) -> Result<AxisUnit, Error> {
+fn unit_of(path: &str, kind: AxisKind, unit: &str) -> Result<AxisUnit, Error> {
     match kind {
         AxisKind::Space => space_factor(unit)
             .map(AxisUnit::Space)
@@ -506,7 +504,7 @@ fn time_factor(unit: &str) -> Option<f64> {
     })
 }
 
-fn channels(path: &Path, omero: Option<&Value>) -> Result<Vec<ChannelMetadata>, Error> {
+fn channels(path: &str, omero: Option<&Value>) -> Result<Vec<ChannelMetadata>, Error> {
     let Some(channels) = omero
         .and_then(|omero| omero.get("channels"))
         .and_then(Value::as_array)
@@ -551,7 +549,7 @@ fn channels(path: &Path, omero: Option<&Value>) -> Result<Vec<ChannelMetadata>, 
         .collect()
 }
 
-fn color_of(path: &Path, color: &str) -> Result<[f32; 3], Error> {
+fn color_of(path: &str, color: &str) -> Result<[f32; 3], Error> {
     let digits = color.trim_start_matches('#');
     if digits.len() != 6 || !digits.chars().all(|digit| digit.is_ascii_hexdigit()) {
         return Err(metadata_error(
@@ -572,9 +570,9 @@ fn valid_range(min: Option<f32>, max: Option<f32>) -> Option<[f32; 2]> {
     (range[0].is_finite() && range[1].is_finite() && range[0] < range[1]).then_some(range)
 }
 
-fn metadata_error(path: &Path, detail: impl Into<String>) -> Error {
+fn metadata_error(path: &str, detail: impl Into<String>) -> Error {
     Error::Metadata {
-        path: path.to_path_buf(),
+        path: path.to_string(),
         detail: detail.into(),
     }
 }

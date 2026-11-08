@@ -11,7 +11,10 @@ mod source;
 pub use cache::default_root as cache_root;
 pub use error::Error;
 pub use grana_zarr::{Label, Labels};
-pub use image::{Format, Image, dataset_name, is_image, series_count, series_group, series_names};
+pub use image::{
+    Format, Image, dataset_name, is_image, is_remote, remote_series_group, resolve_series,
+    series_count, series_group, series_names,
+};
 pub use series::Series;
 pub use source::Source;
 

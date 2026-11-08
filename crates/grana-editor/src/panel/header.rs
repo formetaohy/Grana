@@ -373,33 +373,41 @@ fn open_menu<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
     if !ctx.popup_open(key) {
         return grana_ui::popover::popup(key, 236.0, std::iter::empty());
     }
-    let mut rows = Vec::new();
-    rows.push(action_menu_row(
-        ctx,
-        "open.image",
-        Icon::Cube,
-        "Open Image…",
-        None,
-        Command::OpenImage,
-    ));
-    rows.push(action_menu_row(
-        ctx,
-        "open.folder",
-        Icon::Folder,
-        "Open OME-Zarr Folder…",
-        None,
-        Command::OpenDataset,
-    ));
-    rows.push(menu_separator(ctx));
     let shortcut = format!("{COMMAND}O");
-    rows.push(action_menu_row(
-        ctx,
-        "open.project",
-        Icon::Folder,
-        "Open Project…",
-        Some(&shortcut),
-        Command::OpenProject,
-    ));
+    let rows = vec![
+        action_menu_row(
+            ctx,
+            "open.image",
+            Icon::Cube,
+            "Open Image…",
+            None,
+            Command::OpenImage,
+        ),
+        action_menu_row(
+            ctx,
+            "open.folder",
+            Icon::Folder,
+            "Open OME-Zarr Folder…",
+            None,
+            Command::OpenDataset,
+        ),
+        crate::view::action_menu_message(
+            ctx,
+            "open.remote",
+            Icon::Globe,
+            "Open Remote OME-Zarr…",
+            Message::BeginRemote,
+        ),
+        menu_separator(ctx),
+        action_menu_row(
+            ctx,
+            "open.project",
+            Icon::Folder,
+            "Open Project…",
+            Some(&shortcut),
+            Command::OpenProject,
+        ),
+    ];
     menu(ctx, key, 236.0, rows)
 }
 

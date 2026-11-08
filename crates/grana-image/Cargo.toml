@@ -12,6 +12,7 @@ grana-readout = { workspace = true }
 grana-tiff = { workspace = true }
 grana-volume = { workspace = true }
 grana-zarr = { workspace = true }
+rayon = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 

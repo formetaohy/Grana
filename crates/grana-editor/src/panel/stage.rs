@@ -2,8 +2,8 @@ use glam::{Vec2, Vec3};
 use grana_figure::{self as overlay, Handle, Label, Legend, Overlay};
 use grana_ui::glass::GlassStyle;
 use grana_ui::{
-    BuildContext, Color, Corners, Cursor, Element, Icon, Key, Layer, Length, Phase, Rect,
-    TextStyle, TypeStyle, icon,
+    BuildContext, Color, Corners, Cursor, Edges, Element, Icon, Key, Layer, Length, Level, Phase,
+    Rect, TextStyle, TypeStyle, icon,
 };
 
 use crate::message::Message;
@@ -102,6 +102,49 @@ pub(super) fn view<'a>(
         ));
     }
     elements
+}
+
+pub(super) fn remote<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    layout: &Layout,
+    state: &'a View<'a>,
+) -> Vec<Element<'a, Message>> {
+    if !state.workspace.remote_open {
+        return Vec::new();
+    }
+    let palette = ctx.theme().palette;
+    let width = (layout.stage.width() - 40.0).min(520.0);
+    let title = crate::view::card_title(
+        ctx,
+        Icon::Globe,
+        "Open Remote OME-Zarr",
+        Some("HTTP range access"),
+    );
+    let tip = crate::view::caption(ctx, "Paste the https url of an OME-Zarr dataset or plate");
+    let field = grana_ui::widget::text_field(
+        "",
+        TextStyle::new(ctx.theme().font(Level::Body), palette.text_primary),
+        width - 36.0,
+        false,
+    )
+    .named("remote.url")
+    .editing(true)
+    .on_commit(|text: &str| Message::OpenRemote(text.to_string()))
+    .on_cancel(|| Message::CancelRemote);
+    let hint = crate::view::caption(ctx, "Return opens the dataset · Escape cancels");
+    let sheet = grana_ui::column()
+        .padding(Edges::all(18.0))
+        .gap(8.0)
+        .glass(GlassStyle::sheet())
+        .children([title, tip, field, hint]);
+    let rect = Rect::from_min_size(
+        Vec2::new(
+            layout.stage.center().x - width * 0.5,
+            layout.stage.min.y + 96.0,
+        ),
+        Vec2::new(width, 158.0),
+    );
+    vec![sheet.at(rect).layer(Layer::Popup)]
 }
 
 fn geometry(layout: &Layout, state: &View<'_>) -> Geometry {

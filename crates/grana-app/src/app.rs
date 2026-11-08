@@ -30,6 +30,7 @@ const STREAM_POLL: Duration = Duration::from_millis(16);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
 const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
+const CAPTURE_BUDGET: Duration = Duration::from_secs(240);
 const TOOL_CLICK_SLOP: f32 = 3.0;
 
 struct Surface {
@@ -44,6 +45,7 @@ pub struct App {
     engine: Option<Engine>,
     start: Instant,
     capture: Option<PathBuf>,
+    startup: Option<String>,
     elapsed_frames: u32,
     exiting: bool,
     viewport: Viewport,
@@ -68,7 +70,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(capture: Option<PathBuf>) -> Self {
+    pub fn new(capture: Option<PathBuf>, startup: Option<String>) -> Self {
         let mut session = Session::new();
         session.set_snapshot_factory(Arc::new(|| Arc::new(crate::snapshot::Snapshot::new())));
         Self {
@@ -77,6 +79,7 @@ impl App {
             engine: None,
             start: Instant::now(),
             capture,
+            startup,
             elapsed_frames: 0,
             exiting: false,
             viewport: Viewport::new(),
@@ -120,7 +123,21 @@ impl App {
         let mut ui: Ui<grana_editor::Message> = Ui::new(&gpu.device, &gpu.queue, gpu.format());
         ui.set_clipboard(Box::new(SystemClipboard::new()));
         let mut engine = Engine::new(&gpu.device, &gpu.queue, gpu.format());
-        self.session.open_sample();
+        match self.startup.take() {
+            None => self.session.open_sample(),
+            Some(target) if grana_session::is_remote(&target) => self.session.begin_remote(target),
+            Some(target) => {
+                let path = PathBuf::from(target);
+                if path
+                    .extension()
+                    .is_some_and(|extension| extension == "grana")
+                {
+                    self.session.begin_project(path);
+                } else {
+                    self.session.begin_load(path);
+                }
+            }
+        }
         if let Some(scene) = self.session.scene() {
             engine.set_dataset(&gpu.device, scene.dataset.pyramid());
         }
@@ -275,14 +292,16 @@ impl App {
 
     fn schedule(&mut self, delay: Duration) {
         self.elapsed_frames += 1;
+        let loaded = self.session.scene().is_some();
         let streamed = self.info.volume.resident >= self.info.volume.demand
             && self.info.section.resident >= self.info.section.demand;
         if let Some(path) = self.capture.clone()
+            && loaded
             && ((self.elapsed_frames > 30
                 && streamed
                 && self.info.samples >= SAMPLE_LIMIT
                 && !self.info.fading)
-                || self.elapsed_frames > 150)
+                || self.start.elapsed() > CAPTURE_BUDGET)
         {
             self.capture = None;
             self.write_capture(&path);

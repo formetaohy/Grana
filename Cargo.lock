@@ -3528,6 +3528,7 @@ dependencies = [
  "grana-tiff",
  "grana-volume",
  "grana-zarr",
+ "rayon",
  "sha2",
  "thiserror 2.0.21",
 ]
@@ -3548,6 +3549,14 @@ name = "grana-measure"
 version = "0.1.1"
 dependencies = [
  "grana-object",
+]
+
+[[package]]
+name = "grana-net"
+version = "0.1.1"
+dependencies = [
+ "thiserror 2.0.21",
+ "ureq 3.5.1",
 ]
 
 [[package]]
@@ -3802,8 +3811,10 @@ dependencies = [
 name = "grana-zarr"
 version = "0.1.1"
 dependencies = [
+ "grana-net",
  "grana-volume",
  "ome_zarr_metadata",
+ "rayon",
  "serde_json",
  "thiserror 2.0.21",
  "zarrs",

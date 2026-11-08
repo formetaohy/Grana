@@ -259,6 +259,19 @@ pub fn action_menu_row<'a>(
         .press(Message::Command(command))
 }
 
+pub fn action_menu_message<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    key: &str,
+    symbol: Icon,
+    label: &str,
+    message: Message,
+) -> View<'a> {
+    let theme = *ctx.theme();
+    action_row_widget(&theme, symbol, label, None)
+        .named(key)
+        .press(message)
+}
+
 pub fn menu_row<'a>(
     ctx: &mut BuildContext<'_, Message>,
     key: &str,

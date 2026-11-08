@@ -9,10 +9,10 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use crate::app::App;
 use crate::snapshot::Snapshot;
 
-pub fn gui(capture: Option<PathBuf>) -> ExitCode {
+pub fn gui(capture: Option<PathBuf>, startup: Option<String>) -> ExitCode {
     let event_loop = EventLoop::new().expect("failed to create the event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
-    let mut app = App::new(capture);
+    let mut app = App::new(capture, startup);
     event_loop
         .run_app(&mut app)
         .expect("the event loop terminated abnormally");

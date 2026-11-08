@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: grana [--batch <protocol.json> <datasets> <output> [--jobs <n>] [--project] [--channels]] | grana [--capture <image.png>] | grana [--clear-cache]";
+const USAGE: &str = "usage: grana [<dataset>] | grana --capture <image.png> [<dataset>] | grana --batch <protocol.json> <datasets> <output> [--jobs <n>] [--project] [--channels] | grana --clear-cache";
 
 fn main() -> ExitCode {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
@@ -13,9 +13,13 @@ fn main() -> ExitCode {
 
 fn run(arguments: &[String]) -> Option<ExitCode> {
     match arguments.first().map(String::as_str) {
-        None => Some(grana_app::gui(None)),
+        None => Some(grana_app::gui(None, None)),
         Some("--capture") => match arguments {
-            [_, path] => Some(grana_app::gui(Some(PathBuf::from(path)))),
+            [_, path] => Some(grana_app::gui(Some(PathBuf::from(path)), None)),
+            [_, path, dataset] => Some(grana_app::gui(
+                Some(PathBuf::from(path)),
+                Some(dataset.clone()),
+            )),
             _ => None,
         },
         Some("--clear-cache") => match arguments {
@@ -61,7 +65,11 @@ fn run(arguments: &[String]) -> Option<ExitCode> {
                 _ => None,
             }
         }
-        Some(_) => None,
+        Some(option) if option.starts_with("--") => None,
+        Some(dataset) => match arguments {
+            [_] => Some(grana_app::gui(None, Some(dataset.to_string()))),
+            _ => None,
+        },
     }
 }
 

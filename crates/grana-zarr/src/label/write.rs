@@ -84,7 +84,7 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
     let directory = path.join(group.trim_start_matches('/'));
     if !directory.join("zarr.json").is_file() {
         return Err(Error::Unsupported {
-            path: directory,
+            path: directory.display().to_string(),
             detail: "label images are written into OME-Zarr 0.6 (zarr v3) datasets".to_string(),
         });
     }
@@ -95,14 +95,14 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
     let temporary = directory.join("labels").join(&temporary_name);
     if temporary.exists() {
         std::fs::remove_dir_all(&temporary).map_err(|error| Error::Write {
-            path: directory.clone(),
+            path: directory.display().to_string(),
             detail: error.to_string(),
         })?;
     }
     let fail = |detail: String| {
         let _ = std::fs::remove_dir_all(&temporary);
         Error::Write {
-            path: directory.clone(),
+            path: directory.display().to_string(),
             detail,
         }
     };
@@ -235,7 +235,7 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
         },
     });
     let store = Arc::new(FilesystemStore::new(path).map_err(|error| Error::Open {
-        path: path.to_path_buf(),
+        path: path.display().to_string(),
         detail: error.to_string(),
     })?);
     let mut group_builder = GroupBuilder::new();

@@ -1,5 +1,5 @@
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use grana_volume::{
@@ -9,13 +9,15 @@ use grana_volume::{
 use zarrs::array::chunk_cache::{ChunkCache, ChunkCacheLruSizeLimit, ChunkCacheTypeDecoded};
 use zarrs::array::data_type::{float32, uint8, uint16};
 use zarrs::array::{Array, ArraySubset, CodecOptions};
-use zarrs::filesystem::FilesystemStore;
 use zarrs::group::Group;
 use zarrs::storage::ReadableStorageTraits;
+
+use rayon::prelude::*;
 
 use crate::Error;
 use crate::axes::{self, Layout};
 use crate::metadata::{self, ChannelMetadata};
+use crate::root::Root;
 
 const PALETTE: [[f32; 3]; 8] = [
     [0.25, 0.55, 1.00],
@@ -43,7 +45,7 @@ struct LevelArray {
 }
 
 pub struct Image {
-    path: PathBuf,
+    root: Root,
     group: String,
     name: String,
     version: String,
@@ -56,21 +58,21 @@ pub struct Image {
 
 impl Image {
     pub fn open(path: &Path) -> Result<Self, Error> {
-        Self::open_group(path, "/")
+        Self::open_root(Root::local(path)?, "/")
     }
 
     pub fn open_group(path: &Path, group: &str) -> Result<Self, Error> {
-        let store = Arc::new(FilesystemStore::new(path).map_err(|error| Error::Open {
-            path: path.to_path_buf(),
-            detail: error.to_string(),
-        })?);
-        let opened = Group::open(store.clone(), group).map_err(|error| Error::Open {
-            path: path.join(group.trim_start_matches('/')),
+        Self::open_root(Root::local(path)?, group)
+    }
+
+    pub fn open_root(root: Root, group: &str) -> Result<Self, Error> {
+        let tag = root.tag(group);
+        let opened = Group::open(root.listable(), group).map_err(|error| Error::Open {
+            path: tag.clone(),
             detail: error.to_string(),
         })?;
-        let directory = path.join(group.trim_start_matches('/'));
-        let metadata = metadata::parse(&directory, opened.attributes())?;
-        let readable: Arc<dyn ReadableStorageTraits> = store;
+        let metadata = metadata::parse(&tag, opened.attributes())?;
+        let readable: Arc<dyn ReadableStorageTraits> = root.readable();
         let cache_bytes =
             (CHUNK_CACHE_BYTES / metadata.datasets.len() as u64).max(CHUNK_CACHE_MINIMUM);
         let mut levels = Vec::with_capacity(metadata.datasets.len());
@@ -81,12 +83,12 @@ impl Image {
         for dataset in &metadata.datasets {
             let array_path = crate::hcs::join(group, &dataset.path);
             let array = Arc::new(open_array(readable.clone(), &array_path)?);
-            let level_format = supported_format(&directory, &array)?;
+            let level_format = supported_format(&tag, &array)?;
             match format {
                 None => format = Some(level_format),
                 Some(known) if known != level_format => {
                     return Err(Error::Unsupported {
-                        path: path.to_path_buf(),
+                        path: tag.clone(),
                         detail: "the resolution levels disagree on the voxel data type".to_string(),
                     });
                 }
@@ -99,18 +101,18 @@ impl Image {
                 &dataset.translation,
             )
             .map_err(|detail| Error::Unsupported {
-                path: path.to_path_buf(),
+                path: tag.clone(),
                 detail,
             })?;
             let count = u32::try_from(layout.channel_count()).map_err(|_| Error::Unsupported {
-                path: path.to_path_buf(),
+                path: tag.clone(),
                 detail: "the channel axis is too long".to_string(),
             })?;
             match channel_count {
                 None => channel_count = Some(count),
                 Some(known) if known != count => {
                     return Err(Error::Unsupported {
-                        path: path.to_path_buf(),
+                        path: tag.clone(),
                         detail: "the resolution levels disagree on the channel count".to_string(),
                     });
                 }
@@ -120,7 +122,7 @@ impl Image {
                 None => frames = Some(layout.frame_count()),
                 Some(known) if known != layout.frame_count() => {
                     return Err(Error::Unsupported {
-                        path: path.to_path_buf(),
+                        path: tag.clone(),
                         detail: "the resolution levels disagree on the frame count".to_string(),
                     });
                 }
@@ -130,7 +132,7 @@ impl Image {
                 None => interval = Some(layout.frame_interval()),
                 Some(known) if known != layout.frame_interval() => {
                     return Err(Error::Unsupported {
-                        path: path.to_path_buf(),
+                        path: tag.clone(),
                         detail: "the resolution levels disagree on the frame interval".to_string(),
                     });
                 }
@@ -147,13 +149,13 @@ impl Image {
         let interval = interval.expect("a multiscale image has at least one dataset");
         if !levels_ordered(&levels) {
             return Err(Error::Unsupported {
-                path: path.to_path_buf(),
+                path: tag,
                 detail: "the multiscale levels are not ordered from fine to coarse".to_string(),
             });
         }
         let format = format.expect("a multiscale image has at least one dataset");
         let channels = channels(
-            path,
+            &root.tag(group),
             &metadata.channels,
             channel_count,
             format,
@@ -164,7 +166,7 @@ impl Image {
             .name
             .clone()
             .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| dataset_name(&directory));
+            .unwrap_or_else(|| root.name_at(group));
         let (level_metadata, placement) = crate::frame::levels(
             &levels
                 .iter()
@@ -173,7 +175,7 @@ impl Image {
         );
         let stored = level_metadata.len();
         Ok(Self {
-            path: path.to_path_buf(),
+            root,
             group: group.to_string(),
             name,
             version: metadata.version,
@@ -216,16 +218,12 @@ impl Image {
         &self.name
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub fn revision(&self) -> Option<String> {
+        self.root.revision()
     }
 
     pub fn labels(&self) -> Result<crate::Labels, Error> {
-        crate::label::read_at(&self.path, &self.group)
-    }
-
-    pub fn group(&self) -> &str {
-        &self.group
+        crate::label::read_at(&self.root, &self.group)
     }
 
     pub fn pyramid(&self) -> &Pyramid {
@@ -239,6 +237,7 @@ impl Image {
         coord: BrickCoord,
     ) -> Result<BrickData, Error> {
         let channels = (0..self.pyramid.channel_count())
+            .into_par_iter()
             .map(|channel| self.read_channel_brick(time, level, channel, coord))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(BrickData::new(channels))
@@ -253,19 +252,19 @@ impl Image {
     ) -> Result<VoxelData, Error> {
         let Some(level_array) = self.levels.get(level) else {
             return Err(Error::Unsupported {
-                path: self.path.clone(),
+                path: self.root.tag(&self.group),
                 detail: "the requested resolution level does not exist".to_string(),
             });
         };
         if channel >= self.pyramid.channel_count() {
             return Err(Error::Unsupported {
-                path: self.path.clone(),
+                path: self.root.tag(&self.group),
                 detail: "the requested channel does not exist".to_string(),
             });
         }
         if time >= self.pyramid.frame_count() {
             return Err(Error::Unsupported {
-                path: self.path.clone(),
+                path: self.root.tag(&self.group),
                 detail: "the requested frame does not exist".to_string(),
             });
         }
@@ -305,7 +304,7 @@ impl Image {
     ) -> Result<VoxelData, Error> {
         let Some(level) = self.levels.get(level) else {
             return Err(Error::Region {
-                array: self.path.display().to_string(),
+                array: self.root.tag(&self.group),
                 detail: "the requested resolution level does not exist".to_string(),
             });
         };
@@ -378,13 +377,13 @@ fn open_array(
     path: &str,
 ) -> Result<Array<dyn ReadableStorageTraits>, Error> {
     Array::open(store, path).map_err(|error| Error::Open {
-        path: PathBuf::from(path),
+        path: path.to_string(),
         detail: error.to_string(),
     })
 }
 
 fn supported_format(
-    path: &Path,
+    path: &str,
     array: &Array<dyn ReadableStorageTraits>,
 ) -> Result<VoxelFormat, Error> {
     let data_type = array.data_type();
@@ -396,7 +395,7 @@ fn supported_format(
         Ok(VoxelFormat::F32)
     } else {
         Err(Error::Unsupported {
-            path: path.to_path_buf(),
+            path: path.to_string(),
             detail: format!("the voxel data type `{data_type}` is not supported"),
         })
     }
@@ -432,7 +431,7 @@ fn retrieve(cache: &Cache, subset: &ArraySubset, path: &str) -> Result<VoxelData
 }
 
 fn channels(
-    path: &Path,
+    origin: &str,
     metadata: &[ChannelMetadata],
     count: u32,
     format: VoxelFormat,
@@ -441,7 +440,7 @@ fn channels(
 ) -> Result<Vec<ChannelInfo>, Error> {
     if !metadata.is_empty() && metadata.len() != count as usize {
         return Err(Error::Metadata {
-            path: path.to_path_buf(),
+            path: origin.to_string(),
             detail: format!(
                 "the omero metadata describes {} channels but the image has {count}",
                 metadata.len()
@@ -531,13 +530,4 @@ fn sample_range(
 fn valid(range: [f32; 2]) -> Option<Intensity> {
     (range[0].is_finite() && range[1].is_finite() && range[0] < range[1])
         .then(|| Intensity::new(range[0], range[1]))
-}
-
-fn dataset_name(path: &Path) -> String {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return "OME-Zarr".to_string();
-    };
-    let name = name.strip_suffix(".zarr").unwrap_or(name);
-    let name = name.strip_suffix(".ome").unwrap_or(name);
-    name.to_string()
 }

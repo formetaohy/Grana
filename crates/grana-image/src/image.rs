@@ -9,6 +9,7 @@ use grana_volume::{
     pad_brick,
 };
 use grana_zarr::Labels;
+use rayon::prelude::*;
 
 use crate::align;
 use crate::cache::{self, Cache, Key, Shape, Store};
@@ -63,6 +64,9 @@ impl Image {
                 series,
                 group,
             } => Inner::open_file(path, *series, group.as_deref())?,
+            Source::Remote { url, series, group } => {
+                Inner::open_remote(url, *series, group.as_deref())?
+            }
         };
         let declared = match &inner {
             Inner::Memory(series) => series.pyramid(),
@@ -72,10 +76,14 @@ impl Image {
             Inner::Readout(image) => image.pyramid(),
         };
         let pyramid = level::extended(declared);
-        let identity = cache::identity(source, &geometry(&pyramid));
+        let revision = match &inner {
+            Inner::Zarr(image) => image.revision(),
+            _ => None,
+        };
+        let identity = cache::identity(source, &geometry(&pyramid), revision.as_deref());
         let store = match source {
             Source::Memory(_) => None,
-            Source::File { .. } => cache.as_deref().and_then(Store::open),
+            Source::File { .. } | Source::Remote { .. } => cache.as_deref().and_then(Store::open),
         };
         Ok(Self {
             inner,
@@ -169,17 +177,19 @@ impl Image {
         let spatial = grid.padded_range(coord);
         let covered = covered_extent(&spatial);
         let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
-        let mut bricks = Vec::with_capacity(self.pyramid.channel_count());
-        for channel in 0..self.pyramid.channel_count() {
-            let data = self.brick_region(time, level, channel, coord, shift)?;
-            bricks.push(pad_brick(
-                &data,
-                origin,
-                covered,
-                grid.origin(coord),
-                extent,
-            ));
-        }
+        let bricks = (0..self.pyramid.channel_count())
+            .into_par_iter()
+            .map(|channel| {
+                let data = self.brick_region(time, level, channel, coord, shift)?;
+                Ok(pad_brick(
+                    &data,
+                    origin,
+                    covered,
+                    grid.origin(coord),
+                    extent,
+                ))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
         Ok(BrickData::new(bricks))
     }
 
@@ -577,7 +587,7 @@ pub fn is_image(path: &Path) -> bool {
 
 pub fn series_count(path: &Path) -> Result<usize, Error> {
     if path.is_dir() {
-        return plate_of(path).map(|plate| plate.map_or(1, |plate| plate.len().max(1)));
+        return series_count_at(&grana_zarr::Root::local(path)?);
     }
     if is_czi(path)? {
         return Ok(grana_czi::scene_count(path)?);
@@ -588,17 +598,13 @@ pub fn series_count(path: &Path) -> Result<usize, Error> {
     Ok(1)
 }
 
+fn series_count_at(root: &grana_zarr::Root) -> Result<usize, Error> {
+    plate(root).map(|plate| plate.map_or(1, |plate| plate.len().max(1)))
+}
+
 pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
     if path.is_dir() {
-        return Ok(plate_of(path)?
-            .map(|plate| {
-                plate
-                    .fields()
-                    .iter()
-                    .map(|field| Some(field.name().to_string()))
-                    .collect()
-            })
-            .unwrap_or_default());
+        return series_names_at(&grana_zarr::Root::local(path)?);
     }
     if is_czi(path)? {
         return Ok(grana_czi::scenes(path)?
@@ -615,15 +621,35 @@ pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
     Ok(Vec::new())
 }
 
+fn series_names_at(root: &grana_zarr::Root) -> Result<Vec<Option<String>>, Error> {
+    Ok(plate(root)?
+        .map(|plate| {
+            plate
+                .fields()
+                .iter()
+                .map(|field| Some(field.name().to_string()))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 pub fn series_group(path: &Path, series: usize) -> Result<Option<String>, Error> {
     if !path.is_dir() {
         return Ok(None);
     }
-    let Some(plate) = plate_of(path)? else {
+    series_group_at(&grana_zarr::Root::local(path)?, series)
+}
+
+pub fn remote_series_group(url: &str, series: usize) -> Result<Option<String>, Error> {
+    series_group_at(&grana_zarr::Root::remote(url)?, series)
+}
+
+fn series_group_at(root: &grana_zarr::Root, series: usize) -> Result<Option<String>, Error> {
+    let Some(plate) = plate(root)? else {
         return Ok(None);
     };
     let field = plate.field(series).ok_or_else(|| Error::Unsupported {
-        path: path.to_path_buf(),
+        path: PathBuf::from(root.display()),
         detail: format!(
             "the plate holds {} fields of view and field {series} was requested",
             plate.len()
@@ -632,18 +658,46 @@ pub fn series_group(path: &Path, series: usize) -> Result<Option<String>, Error>
     Ok(Some(field.path().to_string()))
 }
 
-fn plate_of(path: &Path) -> Result<Option<grana_zarr::Plate>, Error> {
-    if grana_zarr::group_kind(path)? != grana_zarr::GroupKind::Plate {
+fn plate(root: &grana_zarr::Root) -> Result<Option<grana_zarr::Plate>, Error> {
+    if grana_zarr::group_kind(root)? != grana_zarr::GroupKind::Plate {
         return Ok(None);
     }
-    let plate = grana_zarr::open_plate(path)?;
+    let plate = grana_zarr::open_plate(root)?;
     if plate.is_empty() {
         return Err(Error::Unsupported {
-            path: path.to_path_buf(),
+            path: PathBuf::from(root.display()),
             detail: "the OME-Zarr plate holds no field of view".to_string(),
         });
     }
     Ok(Some(plate))
+}
+
+pub fn is_remote(location: &str) -> bool {
+    grana_zarr::Root::remote(location).is_ok()
+}
+
+pub fn resolve_series(source: &Source) -> Result<Source, Error> {
+    match source {
+        Source::Memory(_) => Ok(source.clone()),
+        Source::File {
+            path,
+            series,
+            group,
+        } => match group {
+            Some(_) => Ok(source.clone()),
+            None => Ok(match series_group(path, *series)? {
+                Some(group) => Source::file_group(path.clone(), *series, group),
+                None => source.clone(),
+            }),
+        },
+        Source::Remote { url, series, group } => match group {
+            Some(_) => Ok(source.clone()),
+            None => Ok(match remote_series_group(url, *series)? {
+                Some(group) => Source::remote_group(url.clone(), *series, group),
+                None => source.clone(),
+            }),
+        },
+    }
 }
 
 pub fn dataset_name(path: &Path) -> String {
@@ -669,18 +723,19 @@ impl Inner {
         group: Option<&str>,
     ) -> Result<(Self, Vec<Series>), Error> {
         if path.is_dir() {
+            let root = grana_zarr::Root::local(path)?;
             if let Some(group) = group {
-                let image = grana_zarr::Image::open_group(path, group)?;
+                let image = grana_zarr::Image::open_root(root, group)?;
                 let series = vec![Series::of(image.pyramid())];
                 return Ok((Self::Zarr(image), series));
             }
-            if grana_zarr::group_kind(path)? == grana_zarr::GroupKind::Plate {
+            if grana_zarr::group_kind(&root)? == grana_zarr::GroupKind::Plate {
                 return Err(Error::Unsupported {
                     path: path.to_path_buf(),
                     detail: "the OME-Zarr plate lists its fields of view as series".to_string(),
                 });
             }
-            let image = grana_zarr::Image::open(path)?;
+            let image = grana_zarr::Image::open_root(root, "/")?;
             let series = single_series(image.pyramid(), path, series)?;
             return Ok((Self::Zarr(image), series));
         }
@@ -725,6 +780,28 @@ impl Inner {
         let image = grana_tiff::Image::open(path)?;
         let series = single_series(image.pyramid(), path, series)?;
         Ok((Self::Tiff(image), series))
+    }
+
+    fn open_remote(
+        url: &str,
+        series: usize,
+        group: Option<&str>,
+    ) -> Result<(Self, Vec<Series>), Error> {
+        let root = grana_zarr::Root::remote(url)?;
+        if let Some(group) = group {
+            let image = grana_zarr::Image::open_root(root, group)?;
+            let series = vec![Series::of(image.pyramid())];
+            return Ok((Self::Zarr(image), series));
+        }
+        if grana_zarr::group_kind(&root)? == grana_zarr::GroupKind::Plate {
+            return Err(Error::Unsupported {
+                path: PathBuf::from(url),
+                detail: "the OME-Zarr plate lists its fields of view as series".to_string(),
+            });
+        }
+        let image = grana_zarr::Image::open_root(root, "/")?;
+        let series = single_series(image.pyramid(), Path::new(url), series)?;
+        Ok((Self::Zarr(image), series))
     }
 }
 

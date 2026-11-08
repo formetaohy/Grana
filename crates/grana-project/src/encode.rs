@@ -142,6 +142,12 @@ impl Encode for Source {
                 writer.string(&path.to_string_lossy());
                 writer.u32(u32::try_from(*series).expect("a series index fits a project"));
             }
+            Self::Remote { name, url, series } => {
+                writer.u8(2);
+                writer.string(name);
+                writer.string(url);
+                writer.u32(u32::try_from(*series).expect("a series index fits a project"));
+            }
         }
     }
 }

@@ -9,6 +9,7 @@ pub enum Origin {
     Czi,
     Nikon,
     Leica,
+    Remote,
 }
 
 #[derive(Clone, Debug)]
@@ -64,6 +65,14 @@ impl Dataset {
             name: name.into(),
             pyramid,
             origin: Origin::Leica,
+        }
+    }
+
+    pub fn remote(name: impl Into<String>, pyramid: Pyramid) -> Self {
+        Self {
+            name: name.into(),
+            pyramid,
+            origin: Origin::Remote,
         }
     }
 
