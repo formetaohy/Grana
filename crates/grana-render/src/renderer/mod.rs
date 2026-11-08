@@ -371,10 +371,8 @@ impl Renderer {
         }
         if maxima.iter().flatten().all(|maximum| *maximum <= 0.0) {
             atlas.assign_hollow(time, level, index);
-            if let Some(table) = bricks[level].as_mut()
-                && table.time() == Some(time)
-            {
-                table.set_record(queue, index, BrickRecord::HOLLOW);
+            if let Some(table) = bricks[level].as_mut() {
+                table.set_record(queue, index, BrickRecord::hollow(time));
             }
             *content += 1;
             return true;
@@ -394,9 +392,8 @@ impl Renderer {
         };
         if let Some(brick) = evicted
             && let Some(other) = bricks.get_mut(brick.level).and_then(Option::as_mut)
-            && other.time() == Some(brick.time)
         {
-            other.set_record(queue, brick.index, BrickRecord::MISSING);
+            other.drop_record(queue, brick.index, brick.time);
         }
         let voxels = data.channels()[0].voxel_count();
         for pack in 0..(*channels).div_ceil(PACK) {
@@ -422,10 +419,8 @@ impl Renderer {
             },
             *pin,
         );
-        if let Some(table) = bricks[level].as_mut()
-            && table.time() == Some(time)
-        {
-            table.set_record(queue, index, BrickRecord::new(slot + 1, maxima));
+        if let Some(table) = bricks[level].as_mut() {
+            table.set_record(queue, index, BrickRecord::new(slot + 1, time, maxima));
         }
         *content += 1;
         true

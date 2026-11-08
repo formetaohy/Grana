@@ -2,10 +2,10 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{LabelBuilder, LabelSlab};
-use grana_object::SurfaceSet;
+use grana_object::{Mask, Roi, SurfaceSet};
 use grana_scene::{Drift, ObjectFrame, SegmentParams};
 use grana_segment::{Segmenter, Settings, assemble};
-use grana_volume::{Intensity, Region, VoxelData};
+use grana_volume::{Intensity, Level, Region, VoxelData};
 
 use crate::channels::Channels;
 use crate::event::Event;
@@ -18,15 +18,23 @@ pub struct SegmentRequest {
     params: SegmentParams,
     region: Region,
     drift: Drift,
+    roi: Option<Roi>,
 }
 
 impl SegmentRequest {
-    pub fn new(channel: usize, params: SegmentParams, region: Region, drift: Drift) -> Self {
+    pub fn new(
+        channel: usize,
+        params: SegmentParams,
+        region: Region,
+        drift: Drift,
+        roi: Option<Roi>,
+    ) -> Self {
         Self {
             channel,
             params,
             region,
             drift,
+            roi,
         }
     }
 }
@@ -38,20 +46,20 @@ pub fn segment(
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
     let info = reader.pyramid().level(0);
-    let ranges = request
+    let region = request
         .region
         .voxel_range(info)
         .ok_or_else(|| "the segmentation region overlaps no voxel".to_string())?;
-    let width = ranges[0].end - ranges[0].start;
-    let height = ranges[1].end - ranges[1].start;
-    let depth = ranges[2].end - ranges[2].start;
-    let voxels = u64::from(width) * u64::from(height) * u64::from(depth);
+    let voxels = (region[0].end - region[0].start) as u64
+        * (region[1].end - region[1].start) as u64
+        * (region[2].end - region[2].start) as u64;
     if voxels.saturating_mul(8) > 2 << 30 {
         return Err(
             "the segmentation region holds more than 2 GiB of slice labels; narrow the region"
                 .to_string(),
         );
     }
+    let depth = region[2].end - region[2].start;
     let settings = Settings::new(
         request.params.cellprob_threshold(),
         request.params.flow_threshold(),
@@ -87,6 +95,15 @@ pub fn segment(
             return Ok(());
         }
         let shift = request.drift.offset(time);
+        let mask = match request.roi.as_ref() {
+            Some(roi) => Some(roi.mask(info, time)?),
+            None => None,
+        };
+        let Some(ranges) = clip(&region, mask.as_ref(), info) else {
+            continue;
+        };
+        let width = ranges[0].end - ranges[0].start;
+        let height = ranges[1].end - ranges[1].start;
         let mut slices = Vec::with_capacity(depth as usize);
         for (offset, z) in ranges[2].clone().enumerate() {
             if cancel.load(Ordering::Relaxed) {
@@ -96,13 +113,24 @@ pub fn segment(
             let values = reader
                 .read_region(time, 0, request.channel, &slice, shift)
                 .map_err(|error| error.to_string())?;
-            let plane = normalized(
+            let mut plane = normalized(
                 &values,
                 reader.pyramid().channels()[request.channel].intensity(),
             );
-            let labels = segmenter
-                .segment(&plane, width, height)
-                .map_err(|error| format!("the segmentation model failed: {error}"))?;
+            let kept = match mask.as_ref() {
+                Some(mask) => keep_plane(&mut plane, mask, &ranges, z),
+                None => true,
+            };
+            let mut labels = if kept {
+                segmenter
+                    .segment(&plane, width, height)
+                    .map_err(|error| format!("the segmentation model failed: {error}"))?
+            } else {
+                vec![0u32; width as usize * height as usize]
+            };
+            if let Some(mask) = mask.as_ref() {
+                keep_labels(&mut labels, mask, &ranges, z);
+            }
             slices.push(labels);
             let done = time as usize * depth as usize + offset + 1;
             sink(Event::Progress { time, done, total });
@@ -124,6 +152,54 @@ pub fn segment(
     }
     sink(Event::Done);
     Ok(())
+}
+
+fn clip(region: &[Range<u32>; 3], mask: Option<&Mask>, level: Level) -> Option<[Range<u32>; 3]> {
+    let extent = level.extent();
+    let extent = [extent.x(), extent.y(), extent.z()];
+    let mut ranges = region.clone();
+    if let Some(mask) = mask {
+        for (axis, bounds) in mask.bounds().into_iter().enumerate() {
+            let limit = i64::from(extent[axis]);
+            let low = bounds.start.clamp(0, limit) as u32;
+            let high = bounds.end.clamp(0, limit) as u32;
+            ranges[axis] = ranges[axis].start.max(low)..ranges[axis].end.min(high);
+        }
+    }
+    ranges
+        .iter()
+        .all(|range| range.start < range.end)
+        .then_some(ranges)
+}
+
+fn keep_plane(plane: &mut [f32], mask: &Mask, ranges: &[Range<u32>; 3], z: u32) -> bool {
+    let width = (ranges[0].end - ranges[0].start) as usize;
+    let height = (ranges[1].end - ranges[1].start) as usize;
+    let mut any = false;
+    for y in 0..height {
+        let row = y * width;
+        for x in 0..width {
+            if mask.contains_cell([ranges[0].start + x as u32, ranges[1].start + y as u32, z]) {
+                any = true;
+            } else {
+                plane[row + x] = 0.0;
+            }
+        }
+    }
+    any
+}
+
+fn keep_labels(labels: &mut [u32], mask: &Mask, ranges: &[Range<u32>; 3], z: u32) {
+    let width = (ranges[0].end - ranges[0].start) as usize;
+    let height = (ranges[1].end - ranges[1].start) as usize;
+    for y in 0..height {
+        let row = y * width;
+        for x in 0..width {
+            if !mask.contains_cell([ranges[0].start + x as u32, ranges[1].start + y as u32, z]) {
+                labels[row + x] = 0;
+            }
+        }
+    }
 }
 
 fn surfaces(

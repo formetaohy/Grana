@@ -927,7 +927,13 @@ fn segment_frames(
     };
     run::segment(
         reading.reader,
-        run::SegmentRequest::new(reading.channel, params, reading.region, reading.drift),
+        run::SegmentRequest::new(
+            reading.channel,
+            params,
+            reading.region,
+            reading.drift,
+            reading.roi,
+        ),
         progress.cancel,
         &mut sink,
     )?;

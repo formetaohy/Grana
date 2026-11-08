@@ -124,6 +124,9 @@ fn shade_channel(
 }
 
 fn brick_visible(index: u32, channels_active: u32) -> bool {
+    if (!brick_holds(bricks[index])) {
+        return false;
+    }
     for (var channel = 0u; channel < channels_active; channel += 1u) {
         if (channel_opacity(channel) <= 0.0) {
             continue;
@@ -205,11 +208,12 @@ fn march(begin: f32, finish: f32, direction: vec3<f32>) -> vec4<f32> {
         let index = brick_index(grid, brick);
         let boundary = min(t + boundary_delta(uvw, direction_uvw, step * 0.25), finish);
         let record = bricks[index];
-        if (record.slot == 0u || record.flags == 0u || !brick_visible(index, channel_count)) {
+        let slot_of = brick_slot(record);
+        if (slot_of == 0u || record.flags == 0u || !brick_visible(index, channel_count)) {
             t = boundary;
             continue;
         }
-        let slot = record.slot - 1u;
+        let slot = slot_of - 1u;
         let origin = slot_origin(frame.atlas.xyz, slot);
         var texel =
             (origin + (clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0)) * dims - brick_origin(brick))

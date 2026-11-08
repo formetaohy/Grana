@@ -5,8 +5,21 @@ const HOLLOW: u32 = 2u;
 struct BrickRecord {
     slot: u32,
     flags: u32,
-    reserved: vec2<u32>,
+    time: u32,
+    reserved: u32,
     maxima: array<vec4<f32>, 4>,
+}
+
+fn brick_holds(record: BrickRecord) -> bool {
+    return record.time == frame.tag.x;
+}
+
+fn brick_hollow(record: BrickRecord) -> bool {
+    return brick_holds(record) && record.slot == 0u && (record.flags & HOLLOW) != 0u;
+}
+
+fn brick_slot(record: BrickRecord) -> u32 {
+    return select(0u, record.slot, brick_holds(record));
 }
 
 fn brick_cell(grid: vec3<u32>, dims: vec3<f32>, uvw: vec3<f32>) -> vec3<u32> {

@@ -204,8 +204,8 @@ impl Derived {
         }
     }
 
-    pub fn masked(spec: MaskSpec, frames: MaskFrames) -> Self {
-        let channel = Arc::new(MaskChannel::new(spec.channel(), frames));
+    pub fn masked(spec: MaskSpec, frames: MaskFrames, radius: f32, stamp: u64) -> Self {
+        let channel = Arc::new(MaskChannel::new(spec.channel(), frames, radius, stamp));
         Self {
             spec: DerivedSpec::Mask(spec),
             mask: Some(channel),
@@ -240,23 +240,33 @@ pub fn mask_info(name: &str, tint: [f32; 3], source: &ChannelInfo) -> ChannelInf
 }
 
 struct CacheEntry {
-    frames: usize,
+    stamp: u64,
     time: u32,
     level: Level,
     mask: Arc<Mask>,
 }
 
+struct Gate {
+    frames: MaskFrames,
+    radius: f32,
+    stamp: u64,
+}
+
 pub struct MaskChannel {
     source: usize,
-    frames: Mutex<MaskFrames>,
+    gate: Mutex<Gate>,
     cache: Mutex<Vec<CacheEntry>>,
 }
 
 impl MaskChannel {
-    pub fn new(source: usize, frames: MaskFrames) -> Self {
+    pub fn new(source: usize, frames: MaskFrames, radius: f32, stamp: u64) -> Self {
         Self {
             source,
-            frames: Mutex::new(frames),
+            gate: Mutex::new(Gate {
+                frames,
+                radius,
+                stamp,
+            }),
             cache: Mutex::new(Vec::new()),
         }
     }
@@ -266,34 +276,38 @@ impl MaskChannel {
     }
 
     pub fn frames(&self) -> MaskFrames {
-        Arc::clone(
-            &self
-                .frames
-                .lock()
-                .unwrap_or_else(|error| error.into_inner()),
-        )
+        let gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
+        Arc::clone(&gate.frames)
     }
 
-    pub fn set_frames(&self, frames: MaskFrames) -> bool {
-        let mut held = self
-            .frames
+    pub fn stamp(&self) -> u64 {
+        self.gate
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if Arc::ptr_eq(&held, &frames) {
+            .unwrap_or_else(|error| error.into_inner())
+            .stamp
+    }
+
+    pub fn refresh(&self, frames: MaskFrames, radius: f32, stamp: u64) -> bool {
+        let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
+        if gate.stamp == stamp {
             return false;
         }
-        *held = frames;
+        gate.frames = frames;
+        gate.radius = radius;
+        gate.stamp = stamp;
         true
     }
 
     pub fn mask(&self, time: u32, level: Level) -> Result<Arc<Mask>, String> {
-        let frames = self.frames();
-        let key = Arc::as_ptr(&frames) as usize;
+        let (frames, radius, stamp) = {
+            let gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
+            (Arc::clone(&gate.frames), gate.radius, gate.stamp)
+        };
         {
             let cache = self.cache.lock().unwrap_or_else(|error| error.into_inner());
             if let Some(entry) = cache
                 .iter()
-                .find(|entry| entry.frames == key && entry.time == time && entry.level == level)
+                .find(|entry| entry.stamp == stamp && entry.time == time && entry.level == level)
             {
                 return Ok(Arc::clone(&entry.mask));
             }
@@ -303,12 +317,13 @@ impl MaskChannel {
                 return Ok(None);
             };
             frame.shape().map(Some).map_err(|error| error.to_string())
-        });
+        })
+        .with_radius(radius);
         let mask = Arc::new(roi.mask(level, time)?);
         let mut cache = self.cache.lock().unwrap_or_else(|error| error.into_inner());
-        cache.retain(|entry| entry.frames == key && entry.time != time);
+        cache.retain(|entry| entry.stamp == stamp && entry.time != time);
         cache.push(CacheEntry {
-            frames: key,
+            stamp,
             time,
             level,
             mask: Arc::clone(&mask),

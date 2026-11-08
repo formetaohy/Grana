@@ -23,14 +23,15 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 fn sample_section_pack(pack: u32, uvw: vec3<f32>) -> vec4<f32> {
     let cell = brick_cell(section.grid.xyz, section.dims.xyz, uvw);
     let record = bricks[brick_index(section.grid.xyz, cell)];
-    if (record.slot == 0u || record.flags == 0u) {
+    let slot = brick_slot(record);
+    if (slot == 0u || record.flags == 0u) {
         return vec4<f32>(0.0);
     }
     let texel = atlas_texel(
         section.grid.xyz,
         section.atlas.xyz,
         section.dims.xyz,
-        record.slot - 1u,
+        slot - 1u,
         uvw,
     );
     return textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);

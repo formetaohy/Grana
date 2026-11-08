@@ -34,6 +34,7 @@ pub(crate) struct FrameData {
     pub light_reach: [f32; 4],
     pub oit: [u32; 4],
     pub clip: [f32; 4],
+    pub tag: [u32; 4],
 }
 
 #[repr(C)]
@@ -68,7 +69,7 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 656);
+    assert!(size_of::<FrameData>() == 672);
     assert!(std::mem::offset_of!(FrameData, planes) == 384);
     assert!(std::mem::offset_of!(FrameData, light_view) == 480);
     assert!(size_of::<SectionData>() == 176);
@@ -80,6 +81,7 @@ pub(crate) struct VolumeView<'a> {
     pub clip: Clip,
     pub aspect: f32,
     pub height: u32,
+    pub time: u32,
 }
 
 impl FrameData {
@@ -97,6 +99,7 @@ impl FrameData {
             clip,
             aspect,
             height,
+            time,
         } = view;
         let view_projection = camera.view_projection(aspect, 0.5 * table.world.length());
         let world = table.world;
@@ -143,6 +146,7 @@ impl FrameData {
                 let (normal, offset) = clip.parts();
                 [normal[0], normal[1], normal[2], offset]
             },
+            tag: [time, 0, 0, 0],
         }
     }
 }

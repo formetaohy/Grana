@@ -59,12 +59,12 @@ fn correct(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let extent = dims.kernel.xyz;
-    let base = bank(id.z);
     let centre = vec3<i32>(i32(extent.x / 2u), i32(extent.y / 2u), i32(extent.z / 2u));
     let here = vec3<i32>(id);
     var sum = 0.0;
     for (var z = 0u; z < extent.z; z += 1u) {
         let sz = clamp_axis(here.z + i32(z) - centre.z, dims.volume.z);
+        let base = bank(sz);
         for (var y = 0u; y < extent.y; y += 1u) {
             let sy = clamp_axis(here.y + i32(y) - centre.y, dims.volume.y);
             for (var x = 0u; x < extent.x; x += 1u) {

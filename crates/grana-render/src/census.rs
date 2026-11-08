@@ -118,8 +118,8 @@ impl Census {
         queue.write_buffer(&self.counts, 0, &[0u8; CENSUS_LEVELS * size_of::<u32>()]);
     }
 
-    pub fn encode(&self, encoder: &mut CommandEncoder, scene: &BindGroup) {
-        if self.levels.is_empty() {
+    pub fn encode(&self, encoder: &mut CommandEncoder, scene: &BindGroup, first_level: usize) {
+        if first_level >= self.levels.len() {
             return;
         }
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -128,7 +128,7 @@ impl Census {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, scene, &[]);
-        for level in &self.levels {
+        for level in &self.levels[first_level..] {
             pass.set_bind_group(1, &level.group, &[]);
             pass.dispatch_workgroups(level.dispatch, 1, 1);
         }

@@ -128,12 +128,13 @@ fn correct(
     out.par_chunks_mut((width * height) as usize)
         .enumerate()
         .for_each(|(z, slice)| {
-            let taps = bank.taps(bank.layer(first_plane, z as u32));
             for y in 0..height {
                 for x in 0..width {
                     let position = [x, y, z as u32];
                     let mut sum = 0.0f32;
                     for tap_z in 0..grid.taps[2] {
+                        let source_z = grid.source_axis(2, position[2], tap_z);
+                        let taps = bank.taps(bank.layer(first_plane, source_z));
                         for tap_y in 0..grid.taps[1] {
                             for tap_x in 0..grid.taps[0] {
                                 let tap = [tap_x, tap_y, tap_z];

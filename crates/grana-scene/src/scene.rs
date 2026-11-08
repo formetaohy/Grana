@@ -15,7 +15,7 @@ use crate::coloc::{Coloc, MaskKey};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::dataset::Dataset;
-use crate::derived::{Derived, DerivedSpec, MaskChannel, MaskFrames, MaskSpec, RestoreSpec};
+use crate::derived::{Derived, DerivedSpec, MaskFrames, MaskSpec, RestoreSpec};
 use crate::drift::Drift;
 use crate::key::ObjectSetKey;
 use crate::mask::MaskFilter;
@@ -234,7 +234,11 @@ impl Scene {
                             spec.name()
                         ));
                     };
-                    Derived::masked(spec, mask_frames(set))
+                    let (frames, stamp) = match self.masked_frames(set) {
+                        Ok(frames) => (frames, self.gate_stamp(set)),
+                        Err(_) => (plain_frames(set), 0),
+                    };
+                    Derived::masked(spec, frames, self.mask_radius, stamp)
                 }
                 DerivedSpec::Restore(spec) => Derived::restored(spec),
             });
@@ -266,12 +270,13 @@ impl Scene {
             ));
         }
         let color = object.color();
-        let frames = mask_frames(object);
+        let frames = self.masked_frames(object)?;
+        let stamp = self.gate_stamp(object);
         let source = self.dataset.channels()[channel].clone();
         let name = self.mask_name(&source, object);
         let spec = MaskSpec::new(set, channel, name, color);
         let info = spec.info(&source);
-        self.push_derived(Derived::masked(spec, frames), info)
+        self.push_derived(Derived::masked(spec, frames, self.mask_radius, stamp), info)
     }
 
     pub fn add_restore(&mut self, spec: RestoreSpec) -> Result<usize, String> {
@@ -378,22 +383,27 @@ impl Scene {
             let Some(set) = self.objects.get(spec.set()) else {
                 continue;
             };
-            if mask_frames_current(channel, set) {
+            let stamp = self.gate_stamp(set);
+            if channel.stamp() == stamp {
                 continue;
             }
-            channel.set_frames(mask_frames(set));
+            if let Ok(frames) = self.masked_frames(set) {
+                channel.refresh(frames, self.mask_radius, stamp);
+            }
         }
     }
 
     pub fn mask_stamp(&self, time: u32) -> u64 {
         let mut stamp = HASH_OFFSET;
+        stamp = mix(stamp, u64::from(self.mask_radius.to_bits()));
+        stamp = mix(stamp, filter_stamp(self.mask_filter));
         for entry in &self.derived {
             let (Some(spec), Some(channel)) = (entry.spec().mask(), entry.mask()) else {
                 continue;
             };
             stamp = mix(stamp, spec.set().raw());
             stamp = mix(stamp, spec.channel() as u64);
-            stamp = mix(stamp, Arc::as_ptr(channel) as u64);
+            stamp = mix(stamp, channel.stamp());
             stamp = mix(
                 stamp,
                 self.objects
@@ -944,6 +954,14 @@ impl Scene {
         let Some(set) = self.mask.and_then(|mask| self.objects.get(mask)) else {
             return Ok(None);
         };
+        let frames = self.masked_frames(set)?;
+        Ok(Some(
+            grana_object::Roi::paged(frames.len(), move |time| shape_at(&frames, time))
+                .with_radius(self.mask_radius),
+        ))
+    }
+
+    fn masked_frames(&self, set: &ObjectSet) -> Result<MaskFrames, String> {
         let filtered = set.filtered();
         let filter = self.mask_filter;
         if let Some(filter) = filter
@@ -1000,11 +1018,14 @@ impl Scene {
                     .map(Arc::new)
             });
         }
-        let frames = Arc::new(frames);
-        Ok(Some(
-            grana_object::Roi::paged(frames.len(), move |time| shape_at(&frames, time))
-                .with_radius(self.mask_radius),
-        ))
+        Ok(Arc::new(frames))
+    }
+
+    fn gate_stamp(&self, set: &ObjectSet) -> u64 {
+        let mut stamp = mix(HASH_OFFSET, set.document());
+        stamp = mix(stamp, u64::from(self.mask_radius.to_bits()));
+        stamp = mix(stamp, filter_stamp(self.mask_filter));
+        stamp
     }
 
     pub fn relation_gate(&self, source: ObjectSetId, target: ObjectSetId) -> f32 {
@@ -1613,7 +1634,7 @@ impl Scene {
     }
 }
 
-fn mask_frames(set: &ObjectSet) -> MaskFrames {
+fn plain_frames(set: &ObjectSet) -> MaskFrames {
     Arc::new(
         (0..set.frame_count())
             .map(|time| set.frame_shared(time))
@@ -1621,17 +1642,13 @@ fn mask_frames(set: &ObjectSet) -> MaskFrames {
     )
 }
 
-fn mask_frames_current(channel: &MaskChannel, set: &ObjectSet) -> bool {
-    let held = channel.frames();
-    held.len() == set.frame_count() as usize
-        && (0..set.frame_count()).all(|time| {
-            match (
-                held.get(time as usize).and_then(Option::as_ref),
-                set.frame_shared(time),
-            ) {
-                (Some(held), Some(latest)) => Arc::ptr_eq(held, &latest),
-                (None, None) => true,
-                _ => false,
-            }
-        })
+fn filter_stamp(filter: Option<MaskFilter>) -> u64 {
+    let Some(filter) = filter else {
+        return 0;
+    };
+    let mut stamp = filter.target().raw();
+    stamp = mix(stamp, filter.shift().cast_unsigned() as u64);
+    stamp = mix(stamp, u64::from(filter.field().index()));
+    stamp = mix(stamp, u64::from(filter.range()[0].to_bits()));
+    mix(stamp, u64::from(filter.range()[1].to_bits()))
 }

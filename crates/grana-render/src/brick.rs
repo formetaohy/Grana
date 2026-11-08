@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use grana_volume::{BrickGrid, Level};
+use std::collections::HashSet;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Buffer, BufferUsages, Device,
     Queue, util::DeviceExt,
@@ -15,11 +16,12 @@ const MAXIMA_PLANE: usize = CHANNEL_LIMIT / 4;
 pub(crate) const HOLLOW_FLAG: u32 = 2;
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub(crate) struct BrickRecord {
     pub slot: u32,
     pub flags: u32,
-    pub reserved: [u32; 2],
+    pub time: u32,
+    pub reserved: u32,
     pub maxima: [[f32; 4]; MAXIMA_PLANE],
 }
 
@@ -32,24 +34,37 @@ impl BrickRecord {
     pub const MISSING: Self = Self {
         slot: 0,
         flags: 0,
-        reserved: [0; 2],
+        time: u32::MAX,
+        reserved: 0,
         maxima: [[0.0; 4]; MAXIMA_PLANE],
     };
 
-    pub const HOLLOW: Self = Self {
-        slot: 0,
-        flags: HOLLOW_FLAG,
-        reserved: [0; 2],
-        maxima: [[0.0; 4]; MAXIMA_PLANE],
-    };
+    pub const fn hollow(time: u32) -> Self {
+        Self {
+            slot: 0,
+            flags: HOLLOW_FLAG,
+            time,
+            reserved: 0,
+            maxima: [[0.0; 4]; MAXIMA_PLANE],
+        }
+    }
 
-    pub fn new(slot: u32, maxima: [[f32; 4]; MAXIMA_PLANE]) -> Self {
+    pub fn new(slot: u32, time: u32, maxima: [[f32; 4]; MAXIMA_PLANE]) -> Self {
         Self {
             slot,
             flags: 0,
-            reserved: [0; 2],
+            time,
+            reserved: 0,
             maxima,
         }
+    }
+
+    pub fn time(&self) -> u32 {
+        self.time
+    }
+
+    pub fn is_live(&self) -> bool {
+        self.time != u32::MAX
     }
 }
 
@@ -62,6 +77,7 @@ pub(crate) struct BrickTable {
     level: usize,
     time: Option<u32>,
     records: Vec<BrickRecord>,
+    live: HashSet<u32>,
     buffer: Buffer,
     group: BindGroup,
 }
@@ -109,6 +125,7 @@ impl BrickTable {
             level,
             time: None,
             records,
+            live: HashSet::new(),
             buffer,
             group,
         }
@@ -126,21 +143,45 @@ impl BrickTable {
         &self.group
     }
 
-    pub fn sync(&mut self, queue: &Queue, time: u32, atlas: &Atlas) {
-        self.records.fill(BrickRecord::MISSING);
-        for resident in atlas.residents(time, self.level) {
-            self.records[resident.index] = match resident.slot {
-                Some(slot) => BrickRecord::new(slot + 1, resident.maxima),
-                None => BrickRecord::HOLLOW,
+    pub fn rebase(&mut self, queue: &Queue, time: u32, atlas: &Atlas) {
+        let residents = atlas.residents(time, self.level);
+        let mut settled = HashSet::with_capacity(residents.len());
+        for resident in &residents {
+            let record = match resident.slot {
+                Some(slot) => BrickRecord::new(slot + 1, time, resident.maxima),
+                None => BrickRecord::hollow(time),
             };
+            if self.records[resident.index] != record {
+                self.set_record(queue, resident.index, record);
+            }
+            settled.insert(resident.index as u32);
         }
-        queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&self.records));
+        for index in std::mem::take(&mut self.live) {
+            if settled.contains(&index) {
+                continue;
+            }
+            if self.records[index as usize].is_live() {
+                self.set_record(queue, index as usize, BrickRecord::MISSING);
+            }
+        }
+        self.live = settled;
         self.time = Some(time);
     }
 
     pub fn set_record(&mut self, queue: &Queue, index: usize, record: BrickRecord) {
         self.records[index] = record;
+        if record.is_live() {
+            self.live.insert(index as u32);
+        } else {
+            self.live.remove(&(index as u32));
+        }
         queue.write_buffer(&self.buffer, offset(index), bytemuck::bytes_of(&record));
+    }
+
+    pub fn drop_record(&mut self, queue: &Queue, index: usize, time: u32) {
+        if self.records[index].time() == time {
+            self.set_record(queue, index, BrickRecord::MISSING);
+        }
     }
 
     pub fn time(&self) -> Option<u32> {

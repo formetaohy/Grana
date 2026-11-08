@@ -180,7 +180,7 @@ impl Renderer {
             bricks[section_level]
                 .as_mut()
                 .expect("the section level table exists")
-                .sync(queue, time, atlas);
+                .rebase(queue, time, atlas);
         }
         if bricks[volume_level]
             .as_ref()
@@ -191,7 +191,7 @@ impl Renderer {
             bricks[volume_level]
                 .as_mut()
                 .expect("the volume level table exists")
-                .sync(queue, time, atlas);
+                .rebase(queue, time, atlas);
         }
         let section_table = bricks[section_level]
             .as_ref()
@@ -218,6 +218,7 @@ impl Renderer {
                 clip,
                 aspect: volume_aspect,
                 height: volume_height,
+                time,
             },
             volume_table,
             scene.shading,
@@ -350,7 +351,11 @@ impl Renderer {
             );
             planner.volume.bind_level(device, layouts, volume_table);
             planner.section.bind_level(device, layouts, section_table);
-            census.encode(&mut encoder, scene_group);
+            census.encode(
+                &mut encoder,
+                scene_group,
+                volume_target_level.saturating_sub(1),
+            );
             planner.encode(&mut encoder, scene_group, &planner.volume, &planner.section);
             *planned = Some(residency);
         }

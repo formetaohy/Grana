@@ -71,14 +71,15 @@ fn sample_atlas(pack: u32, texel: vec3<f32>) -> vec4<f32> {
 fn sample_pack(pack: u32, uvw: vec3<f32>) -> vec4<f32> {
     let cell = brick_cell(frame.grid.xyz, frame.dims.xyz, uvw);
     let record = bricks[brick_index(frame.grid.xyz, cell)];
-    if (record.slot == 0u) {
+    let slot = brick_slot(record);
+    if (slot == 0u) {
         return vec4<f32>(0.0);
     }
     let texel = atlas_texel(
         frame.grid.xyz,
         frame.atlas.xyz,
         frame.dims.xyz,
-        record.slot - 1u,
+        slot - 1u,
         uvw,
     );
     return textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);

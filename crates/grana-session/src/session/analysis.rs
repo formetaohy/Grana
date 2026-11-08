@@ -649,7 +649,7 @@ impl Session {
             self.analysis.push(crate::segment(
                 Job::Detect(set),
                 Arc::clone(&channels),
-                SegmentRequest::new(channel, params, region, drift),
+                SegmentRequest::new(channel, params, region, drift, roi),
             ));
             return;
         }

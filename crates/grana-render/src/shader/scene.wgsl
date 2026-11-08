@@ -23,6 +23,7 @@ struct FrameData {
     light_reach: vec4<f32>,
     oit: vec4<u32>,
     clip: vec4<f32>,
+    tag: vec4<u32>,
 }
 
 struct SectionData {
