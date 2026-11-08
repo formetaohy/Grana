@@ -1,7 +1,6 @@
 @group(1) @binding(0) var<storage, read> bricks: array<BrickRecord>;
 @group(2) @binding(0) var atlases: binding_array<texture_3d<f32>, 4>;
 @group(2) @binding(1) var atlas_sampler: sampler;
-@group(3) @binding(0) var<storage, read> fallback_bricks: array<BrickRecord>;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -30,7 +29,7 @@ struct SectionHit {
 
 fn locate(uvw: vec3<f32>) -> SectionHit {
     let cell = brick_cell(section.grid.xyz, section.dims.xyz, uvw);
-    let record = bricks[brick_index(section.grid.xyz, cell)];
+    let record = bricks[section.bases.x + brick_index(section.grid.xyz, cell)];
     let slot = brick_slot(record);
     if (slot != 0u) {
         return SectionHit(select(0u, slot, record.flags != 0u), uvw, section.grid.xyz, section.dims.xyz);
@@ -41,7 +40,7 @@ fn locate(uvw: vec3<f32>) -> SectionHit {
     let world = section.box_min.xyz + uvw * section.world.xyz;
     let local = (world - section.fallback_min.xyz) / section.fallback_world.xyz;
     let other = brick_cell(section.fallback_grid.xyz, section.fallback_dims.xyz, local);
-    let fallback = brick_slot(fallback_bricks[brick_index(section.fallback_grid.xyz, other)]);
+    let fallback = brick_slot(bricks[section.bases.y + brick_index(section.fallback_grid.xyz, other)]);
     return SectionHit(fallback, local, section.fallback_grid.xyz, section.fallback_dims.xyz);
 }
 

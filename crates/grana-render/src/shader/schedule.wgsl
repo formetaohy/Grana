@@ -1,6 +1,6 @@
 struct ScheduleData {
     time: u32,
-    level: u32,
+    band: u32,
     capacity: u32,
     layer: u32,
     u0: u32,
@@ -8,9 +8,9 @@ struct ScheduleData {
     u_count: u32,
     v_count: u32,
     bucket_scale: f32,
+    base: u32,
     reserved0: u32,
     reserved1: u32,
-    reserved2: u32,
 }
 
 const BUCKETS: u32 = 128u;

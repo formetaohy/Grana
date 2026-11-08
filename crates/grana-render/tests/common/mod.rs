@@ -73,7 +73,7 @@ pub fn settle_clipped_sized(
         if let Some(requests) = next_demand(renderer, &session) {
             for request in requests.volume.iter().chain(&requests.section) {
                 let brick = source(*request);
-                let _ = renderer.upload(session.device, session.queue, *request, &brick);
+                let _ = renderer.upload(session.queue, *request, &brick);
             }
             latest = requests;
         }

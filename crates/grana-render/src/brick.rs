@@ -1,19 +1,17 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
-use grana_volume::{BrickGrid, Level};
+use grana_volume::{BrickGrid, Level, Pyramid};
 use std::collections::HashSet;
-use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Buffer, BufferUsages, Device,
-    Queue, util::DeviceExt,
-};
+use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
 
 use crate::atlas::Atlas;
-use crate::summary::Summary;
 use grana_volume::CHANNEL_LIMIT;
 
 const MAXIMA_PLANE: usize = CHANNEL_LIMIT / 4;
 
 pub(crate) const HOLLOW_FLAG: u32 = 2;
+
+pub(crate) const RECORD_BYTES: u64 = size_of::<BrickRecord>() as u64;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
@@ -68,6 +66,72 @@ impl BrickRecord {
     }
 }
 
+pub(crate) struct BrickArena {
+    buffer: Buffer,
+    bases: Vec<u32>,
+    first: usize,
+    records: usize,
+}
+
+impl BrickArena {
+    pub fn new(device: &Device, pyramid: &Pyramid, limit: usize) -> Option<Self> {
+        let counts = (0..pyramid.level_count())
+            .map(|level| BrickGrid::new(pyramid.level(level).extent()).count())
+            .collect::<Vec<_>>();
+        let mut first = counts.len();
+        let mut records = 0usize;
+        for level in (0..counts.len()).rev() {
+            if records + counts[level] > limit {
+                break;
+            }
+            records += counts[level];
+            first = level;
+        }
+        if first == counts.len() {
+            return None;
+        }
+        assert!(records > 0, "a brick arena holds at least one record");
+        let mut bases = vec![0u32; counts.len()];
+        let mut base = 0usize;
+        for level in first..counts.len() {
+            bases[level] = base as u32;
+            base += counts[level];
+        }
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("grana.brick.records"),
+            size: records as u64 * RECORD_BYTES,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Some(Self {
+            buffer,
+            bases,
+            first,
+            records,
+        })
+    }
+
+    pub fn buffer(&self) -> &Buffer {
+        &self.buffer
+    }
+
+    pub fn first(&self) -> usize {
+        self.first
+    }
+
+    pub fn records(&self) -> usize {
+        self.records
+    }
+
+    pub fn base(&self, level: usize) -> u32 {
+        assert!(
+            level >= self.first && level < self.bases.len(),
+            "the arena holds the records of a reachable level"
+        );
+        self.bases[level]
+    }
+}
+
 pub(crate) struct BrickTable {
     pub grid: BrickGrid,
     pub origin: Vec3,
@@ -76,43 +140,15 @@ pub(crate) struct BrickTable {
     pub voxel: Vec3,
     pub atlas: [u32; 3],
     level: usize,
+    base: u32,
     time: Option<u32>,
     records: Vec<BrickRecord>,
     live: HashSet<u32>,
-    buffer: Buffer,
-    group: BindGroup,
 }
 
 impl BrickTable {
-    pub fn new(
-        device: &Device,
-        layout: &BindGroupLayout,
-        level: usize,
-        source: Level,
-        atlas: [u32; 3],
-        summary: &Summary,
-    ) -> Self {
+    pub fn new(level: usize, source: Level, atlas: [u32; 3], base: u32) -> Self {
         let grid = BrickGrid::new(source.extent());
-        let records = vec![BrickRecord::MISSING; grid.count()];
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("grana.brick.records"),
-            contents: bytemuck::cast_slice(&records),
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-        });
-        let group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.level.group"),
-            layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: summary.buffer().as_entire_binding(),
-                },
-            ],
-        });
         let world = Vec3::from(source.world_extent());
         let origin = Vec3::from(source.origin());
         let extent = source.extent();
@@ -126,11 +162,10 @@ impl BrickTable {
             voxel,
             atlas,
             level,
+            base,
             time: None,
-            records,
+            records: vec![BrickRecord::MISSING; grid.count()],
             live: HashSet::new(),
-            buffer,
-            group,
         }
     }
 
@@ -138,15 +173,11 @@ impl BrickTable {
         self.level
     }
 
-    pub fn buffer(&self) -> &Buffer {
-        &self.buffer
+    pub fn record_base(&self) -> u32 {
+        self.base
     }
 
-    pub fn group(&self) -> &BindGroup {
-        &self.group
-    }
-
-    pub fn rebase(&mut self, queue: &Queue, time: u32, atlas: &Atlas) {
+    pub fn rebase(&mut self, queue: &Queue, time: u32, atlas: &Atlas, arena: &BrickArena) {
         let residents = atlas.residents(time, self.level);
         let mut settled = HashSet::with_capacity(residents.len());
         for resident in &residents {
@@ -155,7 +186,7 @@ impl BrickTable {
                 None => BrickRecord::hollow(time),
             };
             if self.records[resident.index] != record {
-                self.set_record(queue, resident.index, record);
+                self.set_record(queue, arena, resident.index, record);
             }
             settled.insert(resident.index as u32);
         }
@@ -164,34 +195,44 @@ impl BrickTable {
                 continue;
             }
             if self.records[index as usize].is_live() {
-                self.set_record(queue, index as usize, BrickRecord::MISSING);
+                self.set_record(queue, arena, index as usize, BrickRecord::MISSING);
             }
         }
         self.live = settled;
         self.time = Some(time);
     }
 
-    pub fn set_record(&mut self, queue: &Queue, index: usize, record: BrickRecord) {
+    pub fn set_record(
+        &mut self,
+        queue: &Queue,
+        arena: &BrickArena,
+        index: usize,
+        record: BrickRecord,
+    ) {
+        assert!(
+            self.base as usize + index < arena.records(),
+            "a brick record lies inside the arena"
+        );
         self.records[index] = record;
         if record.is_live() {
             self.live.insert(index as u32);
         } else {
             self.live.remove(&(index as u32));
         }
-        queue.write_buffer(&self.buffer, offset(index), bytemuck::bytes_of(&record));
+        queue.write_buffer(
+            arena.buffer(),
+            (self.base as u64 + index as u64) * RECORD_BYTES,
+            bytemuck::bytes_of(&record),
+        );
     }
 
-    pub fn drop_record(&mut self, queue: &Queue, index: usize, time: u32) {
+    pub fn drop_record(&mut self, queue: &Queue, arena: &BrickArena, index: usize, time: u32) {
         if self.records[index].time() == time {
-            self.set_record(queue, index, BrickRecord::MISSING);
+            self.set_record(queue, arena, index, BrickRecord::MISSING);
         }
     }
 
     pub fn time(&self) -> Option<u32> {
         self.time
     }
-}
-
-fn offset(index: usize) -> u64 {
-    (index * size_of::<BrickRecord>()) as u64
 }

@@ -17,16 +17,15 @@ use grana_volume::{
     Region,
 };
 use wgpu::{
-    BindGroup, BindGroupLayout, CommandEncoder, Device, LoadOp, Operations, Queue,
-    RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor, Sampler,
-    SamplerDescriptor, StoreOp, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, CommandEncoder, Device, LoadOp, Operations,
+    Queue, RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor,
+    Sampler, SamplerDescriptor, StoreOp, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture,
     TextureAspect, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
     TextureViewDescriptor,
 };
 
 use crate::atlas::{Atlas, PACK, ResidentBrick, pack_components, pack_texels};
-use crate::brick::{BrickRecord, BrickTable};
-use crate::census::{CENSUS_LEVELS, Census};
+use crate::brick::{BrickArena, BrickRecord, BrickTable};
 use crate::cut::CutLayer;
 use crate::frame::{FrameData, SectionData, VolumeView};
 use crate::layout::Layouts;
@@ -35,9 +34,9 @@ use crate::mesh::MeshPasses;
 use crate::oit::Oit;
 use crate::pick::{self, PICK_ROW, PickId, PickPane, PickTarget};
 use crate::planner::{
-    self, Demand, Planner, Schedule, SectionRange, bucket_scale, decode_plan,
-    resolve_section_level, resolve_volume_level, section_range, select_section_level,
-    select_volume_level, volume_dispatch,
+    self, BAND, Demand, Ladder, Planner, Schedule, SectionRange, bucket_scale, capacities,
+    decode_plan, resolve_section_level, section_range, select_section_level, volume_dispatch,
+    volume_ladder,
 };
 use crate::present::Present;
 use crate::sample;
@@ -63,7 +62,7 @@ const PREFETCH_LIMIT: usize = 1024;
 
 const PREFETCH_SHARE: usize = 4;
 
-const CENSUS_BYTES: u64 = (CENSUS_LEVELS * size_of::<u32>()) as u64;
+const RECORD_SHARE: u64 = 8;
 
 const UNIT: f32 = 65535.0;
 
@@ -135,9 +134,10 @@ pub struct Renderer {
     scene: Option<crate::table::SceneTable>,
     atlas: Option<Atlas>,
     summary: Option<Summary>,
+    arena: Option<BrickArena>,
+    level_group: Option<BindGroup>,
     bricks: Vec<Option<BrickTable>>,
     planner: Option<Planner>,
-    census: Option<Census>,
     shadow: Option<Shadow>,
     volume: VolumePass,
     section: SectionPass,
@@ -156,7 +156,6 @@ pub struct Renderer {
     budget: u64,
     feedback: Option<Readback>,
     frames: Vec<Option<Residency>>,
-    counts: Vec<u32>,
     view_words: usize,
     view_bytes: u64,
     epoch: u64,
@@ -165,6 +164,9 @@ pub struct Renderer {
     prefetch: bool,
     prefetched: HashSet<BrickRequest>,
     prefetch_key: Option<u64>,
+    prefetch_issued: Vec<BrickRequest>,
+    prefetch_rate: f32,
+    wanted: [usize; BAND],
     transparent: bool,
     object_key: Option<u64>,
     settled: Option<Residency>,
@@ -200,9 +202,10 @@ impl Renderer {
             scene: None,
             atlas: None,
             summary: None,
+            arena: None,
+            level_group: None,
             bricks: Vec::new(),
             planner: None,
-            census: None,
             shadow: None,
             volume: VolumePass::new(device, &layouts),
             section: SectionPass::new(device, &layouts),
@@ -222,7 +225,6 @@ impl Renderer {
             budget,
             feedback: None,
             frames: vec![None; FEEDBACK_SLOTS],
-            counts: vec![0; CENSUS_LEVELS],
             view_words: 0,
             view_bytes: 0,
             epoch: 0,
@@ -231,6 +233,9 @@ impl Renderer {
             prefetch: false,
             prefetched: HashSet::new(),
             prefetch_key: None,
+            prefetch_issued: Vec::new(),
+            prefetch_rate: 1.0,
+            wanted: [0; BAND],
             transparent: false,
             object_key: None,
             settled: None,
@@ -284,19 +289,37 @@ impl Renderer {
             device.limits().max_texture_dimension_3d,
         );
         let slots = atlas.slots();
-        self.summary = Some(Summary::new(device, slots));
+        let summary = Summary::new(device, slots);
+        let limit = (self.budget / RECORD_SHARE / crate::brick::RECORD_BYTES) as usize;
+        let arena = BrickArena::new(device, pyramid, limit)
+            .expect("the record budget holds the coarsest level");
+        let level_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.level.group"),
+            layout: &self.layouts.level,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: arena.buffer().as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: summary.buffer().as_entire_binding(),
+                },
+            ],
+        });
         self.view_words = planner::plan_words(slots);
         self.view_bytes = (self.view_words * size_of::<u32>()) as u64;
         self.feedback = Some(Readback::new(
             device,
             "grana.feedback",
-            (2 * self.view_words + CENSUS_LEVELS) as u64 * size_of::<u32>() as u64,
+            ((BAND + 1) * self.view_words) as u64 * size_of::<u32>() as u64,
             FEEDBACK_SLOTS,
         ));
         self.frames = vec![None; FEEDBACK_SLOTS];
         self.bricks = (0..pyramid.level_count()).map(|_| None).collect();
-        self.planner = Some(Planner::new(device, &self.layouts, slots));
-        self.census = Some(Census::new(device, &self.layouts, pyramid));
+        let mut planner = Planner::new(device, &self.layouts, slots);
+        planner.bind_arena(device, &self.layouts, &arena);
+        self.planner = Some(planner);
         let finest = pyramid.level(0);
         let world = Vec3::from(finest.world_extent());
         let spacing = finest.spacing();
@@ -313,12 +336,14 @@ impl Renderer {
             channels,
         ));
         self.atlas = Some(atlas);
+        self.summary = Some(summary);
+        self.arena = Some(arena);
+        self.level_group = Some(level_group);
         self.pyramid = Some(pyramid.clone());
         self.channels = channels;
         self.time = 0;
         self.volume_level = None;
         self.section_level = None;
-        self.counts.fill(0);
         self.meshes.clear();
         self.target = None;
         self.regions = None;
@@ -328,23 +353,20 @@ impl Renderer {
         self.pin = 0;
         self.prefetched.clear();
         self.prefetch_key = None;
+        self.prefetch_issued.clear();
+        self.prefetch_rate = 1.0;
+        self.wanted = [0; BAND];
         self.settled = None;
         self.planned = None;
         self.info = FrameInfo::default();
     }
 
-    pub fn upload(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        request: BrickRequest,
-        data: &BrickData,
-    ) -> bool {
+    pub fn upload(&mut self, queue: &Queue, request: BrickRequest, data: &BrickData) -> bool {
         let Self {
-            layouts,
             bricks,
             atlas,
             summary,
+            arena,
             pyramid,
             channels,
             time: now,
@@ -352,13 +374,17 @@ impl Renderer {
             pin,
             ..
         } = self;
-        let (Some(pyramid), Some(atlas), Some(summary)) =
-            (pyramid.as_ref(), atlas.as_mut(), summary.as_ref())
-        else {
+        let (Some(pyramid), Some(atlas), Some(summary), Some(arena)) = (
+            pyramid.as_ref(),
+            atlas.as_mut(),
+            summary.as_ref(),
+            arena.as_ref(),
+        ) else {
             return false;
         };
         let BrickRequest { time, level, coord } = request;
         if level >= pyramid.level_count()
+            || level < arena.first()
             || time >= pyramid.frame_count()
             || data.channels().len() != *channels
         {
@@ -386,28 +412,20 @@ impl Renderer {
         if maxima.iter().flatten().all(|maximum| *maximum <= 0.0) {
             atlas.assign_hollow(time, level, index);
             if let Some(table) = bricks[level].as_mut() {
-                table.set_record(queue, index, BrickRecord::hollow(time));
+                table.set_record(queue, arena, index, BrickRecord::hollow(time));
             }
             *content += 1;
             return true;
         }
         let slot_grid = atlas.slot_grid();
-        ensure_brick(
-            device,
-            &layouts.level,
-            bricks,
-            pyramid.level(level),
-            level,
-            slot_grid,
-            summary,
-        );
+        ensure_brick(bricks, pyramid.level(level), level, slot_grid, arena);
         let Some((slot, evicted)) = atlas.allocate(*pin, *now, time) else {
             return false;
         };
         if let Some(brick) = evicted
             && let Some(other) = bricks.get_mut(brick.level).and_then(Option::as_mut)
         {
-            other.drop_record(queue, brick.index, brick.time);
+            other.drop_record(queue, arena, brick.index, brick.time);
         }
         let voxels = data.channels()[0].voxel_count();
         for pack in 0..(*channels).div_ceil(PACK) {
@@ -434,7 +452,12 @@ impl Renderer {
             *pin,
         );
         if let Some(table) = bricks[level].as_mut() {
-            table.set_record(queue, index, BrickRecord::new(slot + 1, time, maxima));
+            table.set_record(
+                queue,
+                arena,
+                index,
+                BrickRecord::new(slot + 1, time, maxima),
+            );
         }
         *content += 1;
         true
@@ -589,18 +612,14 @@ pub(super) fn neighbour(rendered: Option<usize>, level: usize, levels: usize) ->
 }
 
 pub(super) fn ensure_brick(
-    device: &Device,
-    layout: &BindGroupLayout,
     bricks: &mut [Option<BrickTable>],
     source: Level,
     level: usize,
     atlas: [u32; 3],
-    summary: &Summary,
+    arena: &BrickArena,
 ) {
     if bricks[level].is_none() {
-        bricks[level] = Some(BrickTable::new(
-            device, layout, level, source, atlas, summary,
-        ));
+        bricks[level] = Some(BrickTable::new(level, source, atlas, arena.base(level)));
     }
 }
 

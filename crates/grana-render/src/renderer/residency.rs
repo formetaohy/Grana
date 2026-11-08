@@ -2,11 +2,10 @@ use super::*;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct Levels {
-    pub(super) volume: usize,
+    pub(super) ladder: Ladder,
+    pub(super) capacity: [usize; BAND],
     pub(super) section: usize,
-    pub(super) volume_fallback: usize,
     pub(super) section_fallback: usize,
-    pub(super) volume_capacity: usize,
     pub(super) section_capacity: usize,
 }
 

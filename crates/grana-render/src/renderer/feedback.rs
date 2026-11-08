@@ -42,7 +42,6 @@ impl Renderer {
             pyramid,
             planner,
             atlas,
-            counts,
             view_words,
             info,
             settled,
@@ -50,78 +49,132 @@ impl Renderer {
             prefetch,
             prefetched,
             prefetch_key,
+            prefetch_issued,
+            prefetch_rate,
+            wanted,
             ..
         } = self;
         let pyramid = pyramid.as_ref()?;
         let planner = planner.as_ref()?;
         let atlas = atlas.as_mut()?;
         let words = feedback_words(bytes);
-        if words.len() < 2 * *view_words + CENSUS_LEVELS {
+        if words.len() < (BAND + 1) * *view_words {
             return None;
         }
-        let (volume_words, rest) = words.split_at(*view_words);
-        let (section_words, census_words) = rest.split_at(*view_words);
-        let volume = decode_plan(
-            volume_words,
-            planner.volume.capacity(),
-            meta.time,
-            meta.levels.volume,
-            pyramid,
-        )?;
+        let ladder = meta.levels.ladder;
+        let mut demands = Vec::with_capacity(ladder.count);
+        for band in 0..ladder.count {
+            let slice = &words[band * *view_words..(band + 1) * *view_words];
+            demands.push(decode_plan(
+                slice,
+                planner.bands[band].capacity(),
+                meta.time,
+                ladder.level(band),
+                pyramid,
+            )?);
+        }
         let section = decode_plan(
-            section_words,
+            &words[BAND * *view_words..(BAND + 1) * *view_words],
             planner.section.capacity(),
             meta.time,
             meta.levels.section,
             pyramid,
         )?;
         *pin += 1;
-        atlas.touch(
-            meta.time,
-            meta.levels.volume,
-            volume.indices.iter().copied(),
-            *pin,
-        );
+        for (band, demand) in demands.iter().enumerate() {
+            atlas.touch(
+                meta.time,
+                ladder.level(band),
+                demand.indices.iter().copied(),
+                *pin,
+            );
+            wanted[band] = demand.info.visible;
+        }
+        wanted[ladder.count..].fill(0);
         atlas.touch(
             meta.time,
             meta.levels.section,
             section.indices.iter().copied(),
             *pin,
         );
-        counts.copy_from_slice(census_words);
-        info.volume = volume.info;
         info.section = section.info;
-        let settled_now = volume.requests.is_empty()
+        let settled_now = demands.iter().all(|demand| demand.requests.is_empty())
             && section.requests.is_empty()
-            && volume.info.resident == volume.info.demand
+            && demands
+                .iter()
+                .all(|demand| demand.info.resident == demand.info.demand)
             && section.info.resident == section.info.demand;
         *settled = settled_now.then_some(meta);
+        let mut demanded = HashSet::new();
+        for (band, demand) in demands.iter().enumerate() {
+            let level = ladder.level(band);
+            demanded.extend(demand.indices.iter().map(|index| (level, *index)));
+        }
+        demanded.extend(
+            section
+                .indices
+                .iter()
+                .map(|index| (meta.levels.section, *index)),
+        );
+        if !prefetch_issued.is_empty() {
+            let issued = prefetch_issued
+                .iter()
+                .filter(|request| request.time == meta.time)
+                .count();
+            let hit = prefetch_issued
+                .iter()
+                .filter(|request| {
+                    request.time == meta.time
+                        && demanded.contains(&(request.level, index_of(request, pyramid)))
+                })
+                .count();
+            if issued > 0 {
+                let rate = hit as f32 / issued as f32;
+                *prefetch_rate = 0.7 * *prefetch_rate + 0.3 * rate.clamp(0.25, 1.0);
+            }
+        }
+        prefetch_issued.clear();
         let key = view_key(&meta);
         if *prefetch_key != Some(key) {
             *prefetch_key = Some(key);
             prefetched.clear();
         }
-        let prefetched = prefetch_requests(
+        let issued = prefetch_requests(
             &Prefetch {
                 enabled: *prefetch,
+                rate: *prefetch_rate,
                 atlas,
                 time: meta.time,
-                levels: meta.levels,
-                volume: &volume,
+                ladder,
+                demands: &demands,
                 section: &section,
+                section_level: meta.levels.section,
+                section_fallback: meta.levels.section_fallback,
                 pyramid,
             },
             prefetched,
         );
+        prefetch_issued.extend_from_slice(&issued);
+        let mut merged = Demand::default();
+        for demand in demands {
+            merged.merge(demand);
+        }
+        merged.info.level = ladder.base;
+        info.volume = merged.info;
         Some(Requests {
             time: meta.time,
-            volume: volume.requests,
+            volume: merged.requests,
             section: section.requests,
-            prefetch: prefetched,
-            volume_view: volume.info,
+            prefetch: issued,
+            volume_view: merged.info,
             section_view: section.info,
         })
     }
+}
+
+fn index_of(request: &BrickRequest, pyramid: &Pyramid) -> u32 {
+    let grid = BrickGrid::new(pyramid.level(request.level).extent());
+    grid.index(request.coord) as u32
 }
 
 pub(super) fn view_key(meta: &Residency) -> u64 {
@@ -137,20 +190,22 @@ pub(super) fn view_key(meta: &Residency) -> u64 {
     meta.span.to_bits().hash(&mut hasher);
     meta.volume.hash(&mut hasher);
     meta.section.hash(&mut hasher);
-    meta.levels.volume.hash(&mut hasher);
+    meta.levels.ladder.hash(&mut hasher);
     meta.levels.section.hash(&mut hasher);
-    meta.levels.volume_fallback.hash(&mut hasher);
     meta.levels.section_fallback.hash(&mut hasher);
     hasher.finish()
 }
 
 pub(super) struct Prefetch<'a> {
     pub(super) enabled: bool,
+    pub(super) rate: f32,
     pub(super) atlas: &'a Atlas,
     pub(super) time: u32,
-    pub(super) levels: Levels,
-    pub(super) volume: &'a Demand,
+    pub(super) ladder: Ladder,
+    pub(super) demands: &'a [Demand],
     pub(super) section: &'a Demand,
+    pub(super) section_level: usize,
+    pub(super) section_fallback: usize,
     pub(super) pyramid: &'a Pyramid,
 }
 
@@ -160,34 +215,31 @@ pub(super) fn prefetch_requests(
 ) -> Vec<BrickRequest> {
     let Prefetch {
         enabled,
+        rate,
         atlas,
         time,
-        levels,
-        volume,
+        ladder,
+        demands,
         section,
+        section_level,
+        section_fallback,
         pyramid,
     } = *prefetch;
     let mut requests = Vec::new();
-    let mut budget = (atlas.slots() / PREFETCH_SHARE).min(PREFETCH_LIMIT);
-    for (demand, level, fallback) in [
-        (volume, levels.volume, levels.volume_fallback),
-        (section, levels.section, levels.section_fallback),
-    ] {
-        cover_level(
-            pyramid,
-            atlas,
-            time,
-            level,
-            fallback,
-            &demand.indices,
-            &mut requests,
-            &mut budget,
-            issued,
-        );
-        if budget == 0 {
-            break;
-        }
-    }
+    let total = ((atlas.slots() as f32 / PREFETCH_SHARE as f32) * rate.clamp(0.25, 1.0))
+        .min(PREFETCH_LIMIT as f32) as usize;
+    let mut covering = total;
+    cover_level(
+        pyramid,
+        atlas,
+        time,
+        section_level,
+        section_fallback,
+        &section.indices,
+        &mut requests,
+        &mut covering,
+        issued,
+    );
     if !enabled {
         return requests;
     }
@@ -195,33 +247,72 @@ pub(super) fn prefetch_requests(
     if next >= pyramid.frame_count() {
         return requests;
     }
-    for (demand, level) in [(volume, levels.volume), (section, levels.section)] {
+    let mut budget = total.saturating_sub(requests.len());
+    for (band, demand) in demands.iter().enumerate() {
         if budget == 0 {
             break;
         }
-        let grid = BrickGrid::new(pyramid.level(level).extent());
-        for index in &demand.indices {
-            if budget == 0 {
-                break;
-            }
-            if atlas.slot(next, level, *index as usize).is_some()
-                || atlas.is_hollow(next, level, *index as usize)
-            {
-                continue;
-            }
-            let request = BrickRequest {
-                time: next,
-                level,
-                coord: grid.coord(*index as usize),
-            };
-            if !issued.insert(request) {
-                continue;
-            }
-            requests.push(request);
-            budget -= 1;
-        }
+        carry(
+            pyramid,
+            atlas,
+            next,
+            ladder.level(band),
+            &demand.indices,
+            &mut requests,
+            &mut budget,
+            issued,
+        );
+    }
+    if budget > 0 {
+        carry(
+            pyramid,
+            atlas,
+            next,
+            section_level,
+            &section.indices,
+            &mut requests,
+            &mut budget,
+            issued,
+        );
     }
     requests
+}
+
+#[allow(clippy::too_many_arguments)]
+fn carry(
+    pyramid: &Pyramid,
+    atlas: &Atlas,
+    time: u32,
+    level: usize,
+    indices: &[u32],
+    requests: &mut Vec<BrickRequest>,
+    budget: &mut usize,
+    issued: &mut HashSet<BrickRequest>,
+) {
+    if *budget == 0 || indices.is_empty() {
+        return;
+    }
+    let grid = BrickGrid::new(pyramid.level(level).extent());
+    for index in indices {
+        if *budget == 0 {
+            return;
+        }
+        if atlas.slot(time, level, *index as usize).is_some()
+            || atlas.is_hollow(time, level, *index as usize)
+        {
+            continue;
+        }
+        let request = BrickRequest {
+            time,
+            level,
+            coord: grid.coord(*index as usize),
+        };
+        if !issued.insert(request) {
+            continue;
+        }
+        requests.push(request);
+        *budget -= 1;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -1,6 +1,5 @@
 mod atlas;
 mod brick;
-mod census;
 mod cut;
 mod frame;
 mod image;
@@ -22,7 +21,7 @@ mod table;
 mod target;
 mod volume;
 
-pub const DEPTH_BUCKETS: usize = planner::BUCKETS;
+pub const DEPTH_BUCKETS: usize = planner::BUCKET_COUNT;
 
 pub use image::{Image, read as read_image};
 pub use marker::Marker;

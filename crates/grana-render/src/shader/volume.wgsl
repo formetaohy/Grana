@@ -32,6 +32,7 @@ struct VertexOutput {
 struct BrickSight {
     usable: bool,
     missing: bool,
+    band: u32,
     cell: vec3<u32>,
     uvw: vec3<f32>,
 }
@@ -81,13 +82,14 @@ fn region_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(entry, exit);
 }
 
-fn lighting(uvw: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
-    let occlusion = local_occlusion(uvw);
+fn lighting(band: u32, uvw: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
+    let occlusion = local_occlusion(band_uvw(band, uvw));
     let strength = clamp(frame.march.y, 0.0, 1.0);
     if (strength <= 0.0) {
         return vec2<f32>(1.0, occlusion);
     }
-    let world = frame.box_min.xyz + uvw * frame.box_size.xyz;
+    let g = level_frame(band);
+    let world = g.box_min + uvw * g.box_size;
     let coordinate = shadow_coordinate(frame.light_view, world);
     let sun = sun_transmittance(
         coordinate,
@@ -109,6 +111,7 @@ fn lit(color: vec3<f32>, normal: vec3<f32>, direction: vec3<f32>, light: vec2<f3
 }
 
 fn shade_channel(
+    band: u32,
     gradient: vec3<f32>,
     color: vec3<f32>,
     uvw: vec3<f32>,
@@ -128,7 +131,7 @@ fn shade_channel(
         return color;
     }
     let normal = shaded_normal(gradient, voxel);
-    return mix(color, lit(color, normal, direction, lighting(uvw, normal)), weight);
+    return mix(color, lit(color, normal, direction, lighting(band, uvw, normal)), weight);
 }
 
 fn brick_visible(record: BrickRecord, channels_active: u32) -> bool {
@@ -148,10 +151,10 @@ fn brick_visible(record: BrickRecord, channels_active: u32) -> bool {
     return false;
 }
 
-fn cell_visible(level: u32, slot: u32, cell: u32, channels_active: u32) -> bool {
+fn cell_visible(band: u32, slot: u32, cell: u32, channels_active: u32) -> bool {
     let planes = (channels_active + PACK - 1u) / PACK;
     for (var plane = 0u; plane < planes; plane += 1u) {
-        let maxima = level_maxima(level, slot, cell, plane);
+        let maxima = level_maxima(band, slot, cell, plane);
         for (var component = 0u; component < PACK; component += 1u) {
             let channel = plane * PACK + component;
             if (channel >= channels_active) {
@@ -168,11 +171,11 @@ fn cell_visible(level: u32, slot: u32, cell: u32, channels_active: u32) -> bool 
     return false;
 }
 
-fn cell_extinction(level: u32, slot: u32, cell: u32, channels_active: u32) -> f32 {
+fn cell_extinction(band: u32, slot: u32, cell: u32, channels_active: u32) -> f32 {
     let planes = (channels_active + PACK - 1u) / PACK;
     var extinction = 0.0;
     for (var plane = 0u; plane < planes; plane += 1u) {
-        let maxima = level_maxima(level, slot, cell, plane);
+        let maxima = level_maxima(band, slot, cell, plane);
         for (var component = 0u; component < PACK; component += 1u) {
             let channel = plane * PACK + component;
             if (channel >= channels_active) {
@@ -188,60 +191,85 @@ fn cell_extinction(level: u32, slot: u32, cell: u32, channels_active: u32) -> f3
     return extinction;
 }
 
-fn sight(level: u32, t: f32, direction: vec3<f32>, channels_active: u32) -> BrickSight {
-    let g = level_frame(level);
-    let uvw = ray_uvw(level, t, direction);
+fn sight(band: u32, t: f32, direction: vec3<f32>, channels_active: u32) -> BrickSight {
+    let g = level_frame(band);
+    let uvw = ray_uvw(band, t, direction);
     let cell = brick_cell(g.grid, g.dims, uvw);
-    let record = level_record(level, brick_index(g.grid, cell));
+    let record = level_record(band, brick_index(g.grid, cell));
     let slot = brick_slot(record);
     let hollow = brick_hollow(record);
     var usable = slot != 0u && brick_visible(record, channels_active);
-    if (level == 0u && slot != 0u && record.flags == 0u) {
+    if (slot != 0u && record.flags == 0u) {
         usable = false;
     }
-    return BrickSight(usable, slot == 0u && !hollow, cell, uvw);
+    return BrickSight(usable, slot == 0u && !hollow, band, cell, uvw);
 }
 
-fn march(begin: f32, finish: f32, direction: vec3<f32>) -> vec4<f32> {
+fn reachable(band: u32, t: f32, direction: vec3<f32>, channels_active: u32) -> BrickSight {
+    let count = band_count();
+    let first = sight(band, t, direction, channels_active);
+    if (first.usable) {
+        return first;
+    }
+    var chosen = first;
+    for (var step = 1u; step < count; step += 1u) {
+        let coarser = band + step;
+        if (coarser < count) {
+            let other = sight(coarser, t, direction, channels_active);
+            if (other.usable) {
+                return other;
+            }
+            if (chosen.missing && !other.missing) {
+                chosen = other;
+            }
+        }
+        if (step <= band) {
+            let finer = band - step;
+            let other = sight(finer, t, direction, channels_active);
+            if (other.usable) {
+                return other;
+            }
+            if (chosen.missing && !other.missing) {
+                chosen = other;
+            }
+        }
+    }
+    return chosen;
+}
+
+fn local_step(t: f32) -> f32 {
+    return max(frame.march.x, 0.5 * frame.jitter.w * t / frame.march.w);
+}
+
+fn march(begin: f32, finish: f32, direction: vec3<f32>, dither: f32) -> vec4<f32> {
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
     if (finish <= begin) {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
-    let step = frame.march.x;
     let channel_count = u32(frame.march.z);
     let pack_count = (channel_count + PACK - 1u) / PACK;
     let atlas_extent = vec3<f32>(frame.atlas.xyz) * PADDED_SIDE;
-    let fallback = frame.fallback_grid.w > 0u;
     var t = begin;
     var samples = 0u;
     var cells = 0u;
     var complete = false;
     while (t < finish && samples < MAX_SAMPLES && cells < MAX_CELLS && !complete) {
-        var level = 0u;
-        var found = sight(0u, t, direction, channel_count);
+        var found = reachable(band_for(t, dither), t, direction, channel_count);
+        let band = found.band;
         if (!found.usable) {
-            if (!found.missing || !fallback) {
-                let skip = ray_uvw(0u, t, direction);
-                let edge = boundary_delta(0u, skip, direction / frame.box_size.xyz, step * 0.25);
-                t = min(t + edge, finish);
-                continue;
-            }
-            found = sight(1u, t, direction, channel_count);
-            if (!found.usable) {
-                let skip = ray_uvw(1u, t, direction);
-                let edge = boundary_delta(1u, skip, direction / frame.fallback_size.xyz, step * 0.25);
-                t = min(t + edge, finish);
-                continue;
-            }
-            level = 1u;
+            let skip = ray_uvw(band, t, direction);
+            let g = level_frame(band);
+            let edge = boundary_delta(band, skip, direction / g.box_size, local_step(t) * 0.25);
+            t = min(t + edge, finish);
+            continue;
         }
-        let g = level_frame(level);
+        let g = level_frame(band);
         let direction_uvw = direction / g.box_size;
         let brick = found.cell;
         let uvw = found.uvw;
-        let boundary = min(t + boundary_delta(level, uvw, direction_uvw, step * 0.25), finish);
-        let record = level_record(level, brick_index(g.grid, brick));
+        let boundary = min(t + boundary_delta(band, uvw, direction_uvw, local_step(t) * 0.25), finish);
+        let record = level_record(band, brick_index(g.grid, brick));
         let slot = brick_slot(record) - 1u;
         let voxel = g.box_size / g.dims;
         let voxels_per_world = length(direction / voxel);
@@ -254,15 +282,16 @@ fn march(begin: f32, finish: f32, direction: vec3<f32>) -> vec4<f32> {
         var cursor = t;
         while (cursor < boundary && cells < MAX_CELLS && !complete) {
             cells += 1u;
-            let local = ray_uvw(level, cursor, direction);
-            let subcell = cell_index(cell_coord(cell_voxel(level, local, brick)));
-            let limit = min(cursor + cell_delta(level, local, brick, direction_uvw, step * 0.25), boundary);
-            if (!cell_visible(level, slot, subcell, channel_count)) {
+            let step = local_step(cursor);
+            let local = ray_uvw(band, cursor, direction);
+            let subcell = cell_index(cell_coord(cell_voxel(band, local, brick)));
+            let limit = min(cursor + cell_delta(band, local, brick, direction_uvw, step * 0.25), boundary);
+            if (!cell_visible(band, slot, subcell, channel_count)) {
                 texel += texel_rate * (limit - cursor);
                 cursor = limit;
                 continue;
             }
-            let extinction = cell_extinction(level, slot, subcell, channel_count);
+            let extinction = cell_extinction(band, slot, subcell, channel_count);
             let stride = clamp(
                 SAMPLING_ERROR / max(extinction * voxels_per_world, 1.0e-9),
                 step,
@@ -271,7 +300,7 @@ fn march(begin: f32, finish: f32, direction: vec3<f32>) -> vec4<f32> {
             while (cursor < limit && samples < MAX_SAMPLES) {
                 let next = min(cursor + stride, limit);
                 let segment = next - cursor;
-                let position = ray_uvw(level, cursor, direction);
+                let position = ray_uvw(band, cursor, direction);
                 var optical_depth = 0.0;
                 var emission = vec3<f32>(0.0);
                 for (var pack = 0u; pack < pack_count; pack += 1u) {
@@ -302,7 +331,7 @@ fn march(begin: f32, finish: f32, direction: vec3<f32>) -> vec4<f32> {
                         shaded = shaded || extinction.a > SHADING_TAU;
                     }
                     if (shaded) {
-                        let gradient = pack_gradient(level, pack, position, gradient_step);
+                        let gradient = pack_gradient(band, pack, position, gradient_step);
                         for (var component = 0u; component < PACK; component += 1u) {
                             let channel = pack * PACK + component;
                             if (channel >= channel_count) {
@@ -312,6 +341,7 @@ fn march(begin: f32, finish: f32, direction: vec3<f32>) -> vec4<f32> {
                                 continue;
                             }
                             color[component] = shade_channel(
+                                band,
                                 gradient[component],
                                 color[component],
                                 position,
@@ -379,7 +409,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         min(min(object, clip.y), 1.0e19),
     );
     let start = max(max(entry, 0.0), clip.x);
-    let jitter = sample_noise(input.clip_position.xy, frame.jitter.z) * frame.march.x;
+    let jitter = sample_noise(input.clip_position.xy, frame.jitter.z) * local_step(start);
+    let dither = sample_noise(input.clip_position.xy, frame.jitter.z + 8.0);
 
     var layer_depth: array<f32, MAXIMUM_ENTRIES>;
     var layer_color: array<vec2<u32>, MAXIMUM_ENTRIES>;
@@ -476,7 +507,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     for (var index = 0u; index < layers; index += 1u) {
         let limit = min(object_distance(layer_depth[index], ndc), exit);
         if (limit > cursor) {
-            let segment = march(cursor, limit, direction);
+            let segment = march(cursor, limit, direction, dither);
             radiance += transmittance * segment.rgb;
             transmittance *= segment.a;
             cursor = limit;
@@ -492,7 +523,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
     if (cursor < exit) {
-        let segment = march(cursor, exit, direction);
+        let segment = march(cursor, exit, direction, dither);
         radiance += transmittance * segment.rgb;
         transmittance *= segment.a;
     }

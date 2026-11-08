@@ -207,7 +207,7 @@ impl App {
             }
         }
         for (request, data) in session.take_bricks() {
-            engine.upload(&surface.gpu.device, &surface.gpu.queue, request, &data);
+            engine.upload(&surface.gpu.queue, request, &data);
             *scene_changed = true;
         }
         if session.generation() != self.generation {

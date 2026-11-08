@@ -172,7 +172,7 @@ fn pump(
                 drift.offset(request.time),
             )
             .map_err(|error| error.to_string())?;
-        engine.upload(&gpu.device, &gpu.queue, *request, &data);
+        engine.upload(&gpu.queue, *request, &data);
     }
     Ok(())
 }

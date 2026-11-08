@@ -45,10 +45,10 @@ impl Renderer {
             present,
             scene: scene_table,
             atlas,
-            summary,
+            arena,
+            level_group,
             bricks,
             planner,
-            census,
             volume,
             section: section_pass,
             cut,
@@ -61,7 +61,6 @@ impl Renderer {
             section_level: section_rendered,
             feedback,
             frames,
-            counts,
             view_bytes,
             epoch,
             content,
@@ -75,6 +74,7 @@ impl Renderer {
             budget,
             oit_readback,
             dropped,
+            wanted,
             ..
         } = self;
         let (
@@ -82,15 +82,15 @@ impl Renderer {
             Some(atlas),
             Some(scene_table),
             Some(planner),
-            Some(census),
-            Some(summary),
+            Some(arena),
+            Some(level_group),
         ) = (
             pyramid.as_ref(),
             atlas.as_mut(),
             scene_table.as_mut(),
             planner.as_mut(),
-            census.as_ref(),
-            summary.as_ref(),
+            arena.as_ref(),
+            level_group.as_ref(),
         )
         else {
             clear(&mut encoder, surface);
@@ -116,11 +116,13 @@ impl Renderer {
         let cut_size = [section_width, section_height];
         let slots = atlas.slots();
         let level_count = pyramid.level_count();
+        let first = arena.first();
         let section_target_level = select_section_level(
             pyramid,
             section,
-            section_region[3] as f32,
+            section_height as f32,
             *section_rendered,
+            first,
         );
         let (section_level, section_count) = resolve_section_level(
             pyramid,
@@ -131,21 +133,26 @@ impl Renderer {
             (slots / SECTION_BUDGET_DIVISOR).max(1),
             region,
         );
-        let volume_target_level =
-            select_volume_level(pyramid, camera, volume_region[3] as f32, *volume_rendered);
         let section_capacity = section_count.clamp(1, slots.saturating_sub(1).max(1));
         let volume_capacity = slots.saturating_sub(section_capacity).max(1);
-        let volume_level =
-            resolve_volume_level(volume_target_level, level_count, volume_capacity, counts);
-        let levels = Levels {
-            volume: volume_level,
-            section: section_level,
-            volume_fallback: neighbour(*volume_rendered, volume_level, level_count),
-            section_fallback: neighbour(*section_rendered, section_level, level_count),
+        let ladder = volume_ladder(
+            pyramid,
+            camera,
+            volume_height as f32,
+            *volume_rendered,
+            first,
+            info.volume.visible,
             volume_capacity,
+        );
+        let capacity = capacities(volume_capacity, wanted, ladder.count);
+        let levels = Levels {
+            ladder,
+            capacity,
+            section: section_level,
+            section_fallback: neighbour(*section_rendered, section_level, level_count).max(first),
             section_capacity,
         };
-        *volume_rendered = Some(volume_level);
+        *volume_rendered = Some(ladder.base);
         *section_rendered = Some(section_level);
         let residency = Residency::of(
             *epoch,
@@ -165,45 +172,33 @@ impl Renderer {
         let replan = *settled != Some(residency) || planned.as_ref() != Some(&residency);
         info.settled = !replan;
         let slot_grid = atlas.slot_grid();
-        let mut prepared = [usize::MAX; 4];
+        let mut prepared = [usize::MAX; BAND + 2];
         let mut count = 0;
-        for level in [
-            section_level,
-            volume_level,
-            levels.section_fallback,
-            levels.volume_fallback,
-        ] {
+        for level in ladder
+            .levels()
+            .chain([section_level, levels.section_fallback])
+        {
             if prepared[..count].contains(&level) {
                 continue;
             }
             prepared[count] = level;
             count += 1;
-            ensure_brick(
-                device,
-                &layouts.level,
-                bricks,
-                pyramid.level(level),
-                level,
-                slot_grid,
-                summary,
-            );
+            ensure_brick(bricks, pyramid.level(level), level, slot_grid, arena);
             let table = bricks[level].as_mut().expect("the brick table exists");
             if table.time() != Some(time) {
-                table.rebase(queue, time, atlas);
+                table.rebase(queue, time, atlas, arena);
             }
         }
+        let tables = ladder
+            .levels()
+            .map(|level| bricks[level].as_ref().expect("the band table exists"))
+            .collect::<Vec<&BrickTable>>();
         let section_table = bricks[section_level]
             .as_ref()
             .expect("the section level table exists");
-        let volume_table = bricks[volume_level]
-            .as_ref()
-            .expect("the volume level table exists");
         let section_fallback = bricks[levels.section_fallback]
             .as_ref()
             .expect("the section fallback table exists");
-        let volume_fallback = bricks[levels.volume_fallback]
-            .as_ref()
-            .expect("the volume fallback table exists");
         let mut section_data = SectionData::new(
             camera,
             section,
@@ -231,8 +226,8 @@ impl Renderer {
                 height: volume_height,
                 time,
             },
-            volume_table,
-            Some(volume_fallback),
+            ladder,
+            &tables,
             scene.shading,
             scene.step_scale,
             *channels,
@@ -315,7 +310,12 @@ impl Renderer {
         }
         let sample_index = target.samples.min(samples - 1);
         let offset = sample::offset(sample_index, [volume_width, volume_height]);
-        frame_data.jitter = [offset.x, offset.y, sample_index as f32, 0.0];
+        frame_data.jitter = [
+            offset.x,
+            offset.y,
+            sample_index as f32,
+            scene.step_scale.max(1.0e-3),
+        ];
         let cut_offset = sample::offset(sample_index, cut_size);
         section_data.jitter = [cut_offset.x, cut_offset.y, 0.0, 0.0];
         let range = section_range(
@@ -336,43 +336,58 @@ impl Renderer {
         );
         let scene_group = scene_table.group();
         if replan {
-            census.prepare(queue);
-            planner.volume.prepare(
-                queue,
-                Schedule {
-                    time,
-                    level: volume_level,
-                    capacity: volume_capacity as u32,
-                    layer: 0,
-                    range: SectionRange::default(),
-                    dispatch: volume_dispatch(volume_table),
-                    bucket_scale: bucket_scale(
-                        camera,
-                        volume_table.origin.to_array(),
-                        volume_table.world.to_array(),
-                    ),
-                },
+            let scale = bucket_scale(
+                camera,
+                tables[0].origin.to_array(),
+                tables[0].world.to_array(),
             );
+            for band in 0..BAND {
+                let plan = &mut planner.bands[band];
+                if band < ladder.count {
+                    let table = tables[band];
+                    plan.prepare(
+                        queue,
+                        Schedule {
+                            time,
+                            band: band as u32,
+                            capacity: capacity[band] as u32,
+                            layer: 0,
+                            range: SectionRange::default(),
+                            dispatch: volume_dispatch(table),
+                            bucket_scale: scale,
+                            base: table.record_base(),
+                        },
+                    );
+                } else {
+                    plan.prepare(
+                        queue,
+                        Schedule {
+                            time,
+                            band: band as u32,
+                            capacity: 0,
+                            layer: 0,
+                            range: SectionRange::default(),
+                            dispatch: 0,
+                            bucket_scale: scale,
+                            base: 0,
+                        },
+                    );
+                }
+            }
             planner.section.prepare(
                 queue,
                 Schedule {
                     time,
-                    level: section_level,
+                    band: 0,
                     capacity: section_capacity as u32,
                     layer: range.layer,
                     range,
                     dispatch: range.dispatch(),
                     bucket_scale: 0.0,
+                    base: section_table.record_base(),
                 },
             );
-            planner.volume.bind_level(device, layouts, volume_table);
-            planner.section.bind_level(device, layouts, section_table);
-            census.encode(
-                &mut encoder,
-                scene_group,
-                volume_target_level.saturating_sub(1),
-            );
-            planner.encode(&mut encoder, scene_group, &planner.volume, &planner.section);
+            planner.encode(&mut encoder, scene_group);
             *planned = Some(residency);
         }
         if target.samples < samples {
@@ -383,14 +398,13 @@ impl Renderer {
             if let Some(shadow) = shadow.as_mut() {
                 let groups = ShadowGroups {
                     scene: scene_group,
-                    level: volume_table.group(),
-                    fallback: volume_fallback.group(),
+                    level: level_group,
                     atlas: atlas.group(),
                 };
                 shadow.encode_occlusion(
                     &mut encoder,
                     groups,
-                    digest(&[*content, styles, volume_level as u64]),
+                    digest(&[*content, styles, ladder.base as u64, ladder.count as u64]),
                 );
                 if scene.shading.shadows > 0.0 {
                     let object = digest(&[shadow_geometry(scene), space.digest()]);
@@ -402,7 +416,13 @@ impl Renderer {
                     shadow.encode_tau(
                         &mut encoder,
                         groups,
-                        digest(&[*content, styles, volume_level as u64, space.digest()]),
+                        digest(&[
+                            *content,
+                            styles,
+                            ladder.base as u64,
+                            ladder.count as u64,
+                            space.digest(),
+                        ]),
                     );
                 }
             }
@@ -573,8 +593,7 @@ impl Renderer {
                     target: target.scene.color(),
                     region: volume_region,
                     scene: scene_group,
-                    level: volume_table.group(),
-                    fallback: volume_fallback.group(),
+                    level: level_group,
                     atlas: atlas.group(),
                     depth_group: target.scene.depth_group(),
                     shadow: shadow_group,
@@ -587,8 +606,7 @@ impl Renderer {
                     target: target.scene.color(),
                     region: section_region,
                     scene: scene_group,
-                    level: section_table.group(),
-                    fallback: section_fallback.group(),
+                    level: level_group,
                     atlas: atlas.group(),
                 },
             );
@@ -618,20 +636,21 @@ impl Renderer {
             && let Some(feedback) = feedback.as_mut()
             && let Some(slot) = feedback.reserve()
         {
-            feedback.stage(&mut encoder, slot, 0, planner.volume.buffer(), *view_bytes);
+            for band in 0..BAND {
+                feedback.stage(
+                    &mut encoder,
+                    slot,
+                    band as u64 * *view_bytes,
+                    planner.bands[band].buffer(),
+                    *view_bytes,
+                );
+            }
             feedback.stage(
                 &mut encoder,
                 slot,
-                *view_bytes,
+                BAND as u64 * *view_bytes,
                 planner.section.buffer(),
                 *view_bytes,
-            );
-            feedback.stage(
-                &mut encoder,
-                slot,
-                2 * *view_bytes,
-                census.counts(),
-                CENSUS_BYTES,
             );
             frames[slot] = Some(residency);
         }
@@ -640,7 +659,7 @@ impl Renderer {
             feedback.register();
         }
         oit_readback.register();
-        info.volume.level = volume_level;
+        info.volume.level = ladder.base;
         info.section.level = section_level;
         info.bytes = atlas.bytes();
         info.geometry = meshes.bytes();

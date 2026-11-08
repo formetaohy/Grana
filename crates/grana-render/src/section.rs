@@ -28,7 +28,6 @@ pub(crate) struct SectionFrame<'a> {
     pub region: [u32; 4],
     pub scene: &'a BindGroup,
     pub level: &'a BindGroup,
-    pub fallback: &'a BindGroup,
     pub atlas: &'a BindGroup,
 }
 
@@ -96,7 +95,6 @@ impl SectionPass {
         pass.set_bind_group(0, frame.scene, &[]);
         pass.set_bind_group(1, frame.level, &[]);
         pass.set_bind_group(2, frame.atlas, &[]);
-        pass.set_bind_group(3, frame.fallback, &[]);
         pass.draw(0..3, 0..1);
     }
 }

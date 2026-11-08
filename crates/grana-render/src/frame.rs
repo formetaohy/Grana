@@ -3,6 +3,7 @@ use glam::Mat4;
 use grana_volume::{Clip, Region};
 
 use crate::brick::BrickTable;
+use crate::planner::{BAND, Ladder};
 use crate::shadow::ShadowSpace;
 use grana_display::Shading;
 use grana_display::{Camera, SectionCamera};
@@ -21,8 +22,6 @@ pub(crate) struct FrameData {
     pub box_size: [f32; 4],
     pub region_min: [f32; 4],
     pub region_max: [f32; 4],
-    pub dims: [f32; 4],
-    pub grid: [u32; 4],
     pub atlas: [u32; 4],
     pub shading: [f32; 4],
     pub march: [f32; 4],
@@ -35,10 +34,13 @@ pub(crate) struct FrameData {
     pub oit: [u32; 4],
     pub clip: [f32; 4],
     pub tag: [u32; 4],
-    pub fallback_dims: [f32; 4],
-    pub fallback_grid: [u32; 4],
-    pub fallback_min: [f32; 4],
-    pub fallback_size: [f32; 4],
+    pub dims: [[f32; 4]; BAND],
+    pub grids: [[u32; 4]; BAND],
+    pub mins: [[f32; 4]; BAND],
+    pub sizes: [[f32; 4]; BAND],
+    pub bases: [u32; 4],
+    pub bands: [u32; 4],
+    pub edge: [f32; 4],
 }
 
 #[repr(C)]
@@ -55,6 +57,7 @@ pub(crate) struct SectionData {
     pub grid: [u32; 4],
     pub atlas: [u32; 4],
     pub axes: [u32; 4],
+    pub bases: [u32; 4],
     pub fallback_dims: [f32; 4],
     pub fallback_grid: [u32; 4],
     pub fallback_min: [f32; 4],
@@ -65,7 +68,7 @@ pub(crate) struct SectionData {
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub(crate) struct ScheduleData {
     pub time: u32,
-    pub level: u32,
+    pub band: u32,
     pub capacity: u32,
     pub layer: u32,
     pub u0: u32,
@@ -73,16 +76,22 @@ pub(crate) struct ScheduleData {
     pub u_count: u32,
     pub v_count: u32,
     pub bucket_scale: f32,
-    pub reserved: [u32; 3],
+    pub base: u32,
+    pub reserved: [u32; 2],
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 736);
-    assert!(std::mem::offset_of!(FrameData, planes) == 384);
-    assert!(std::mem::offset_of!(FrameData, light_view) == 480);
-    assert!(size_of::<SectionData>() == 240);
+    assert!(size_of::<FrameData>() == 944);
+    assert!(std::mem::offset_of!(FrameData, planes) == 352);
+    assert!(std::mem::offset_of!(FrameData, light_view) == 448);
+    assert!(std::mem::offset_of!(FrameData, dims) == 640);
+    assert!(std::mem::offset_of!(FrameData, bases) == 896);
+    assert!(std::mem::offset_of!(FrameData, bands) == 912);
+    assert!(std::mem::offset_of!(FrameData, edge) == 928);
+    assert!(size_of::<SectionData>() == 256);
     assert!(size_of::<ScheduleData>() == 48);
 };
+
 pub(crate) struct VolumeView<'a> {
     pub camera: &'a Camera,
     pub region: Region,
@@ -92,16 +101,23 @@ pub(crate) struct VolumeView<'a> {
     pub time: u32,
 }
 
+const UNREACHED: f32 = 1.0e19;
+
 impl FrameData {
     pub fn new(
         view: VolumeView<'_>,
-        table: &BrickTable,
-        fallback: Option<&BrickTable>,
+        ladder: Ladder,
+        tables: &[&BrickTable],
         shading: Shading,
         step_scale: f32,
         channels: usize,
         space: ShadowSpace,
     ) -> Self {
+        assert_eq!(
+            tables.len(),
+            ladder.count,
+            "the ladder carries one table per band"
+        );
         let VolumeView {
             camera,
             region,
@@ -110,16 +126,29 @@ impl FrameData {
             height,
             time,
         } = view;
-        let view_projection = camera.view_projection(aspect, 0.5 * table.world.length());
-        let world = table.world;
-        let origin = table.origin;
-        let grid = table.grid.counts();
-        let step = step_length(camera, table, step_scale, height as f32);
+        let first = tables[0];
+        let view_projection = camera.view_projection(aspect, 0.5 * first.world.length());
+        let step = step_length(camera, first, step_scale);
         let pixel_scale = 0.5 * height as f32 / (0.5 * camera.fov_y()).tan();
         let eye = camera.eye();
         let light = shading.light();
-        let fallback = fallback.filter(|fallback| fallback.level() != table.level());
-        let support = fallback.unwrap_or(table);
+        let mut dims = [[0.0; 4]; BAND];
+        let mut grids = [[0; 4]; BAND];
+        let mut mins = [[0.0; 4]; BAND];
+        let mut sizes = [[0.0; 4]; BAND];
+        let mut bases = [0; 4];
+        let mut edge = [UNREACHED; 4];
+        for (band, table) in tables.iter().enumerate() {
+            let counts = table.grid.counts();
+            dims[band] = [table.dims.x, table.dims.y, table.dims.z, 0.0];
+            grids[band] = [counts[0], counts[1], counts[2], 0];
+            mins[band] = [table.origin.x, table.origin.y, table.origin.z, 0.0];
+            sizes[band] = [table.world.x, table.world.y, table.world.z, 0.0];
+            bases[band] = table.record_base();
+            if band > 0 {
+                edge[band - 1] = table.voxel.min_element() * pixel_scale;
+            }
+        }
         Self {
             view_projection: view_projection.to_cols_array_2d(),
             inv_view_projection: view_projection.inverse().to_cols_array_2d(),
@@ -128,8 +157,8 @@ impl FrameData {
             right: camera.right().extend(0.0).to_array(),
             up: camera.up().extend(0.0).to_array(),
             forward: camera.forward().extend(0.0).to_array(),
-            box_min: [origin.x, origin.y, origin.z, 0.0],
-            box_size: [world.x, world.y, world.z, 0.0],
+            box_min: [first.origin.x, first.origin.y, first.origin.z, 0.0],
+            box_size: [first.world.x, first.world.y, first.world.z, 0.0],
             region_min: [
                 region.min().x,
                 region.min().y,
@@ -137,9 +166,7 @@ impl FrameData {
                 if region.enabled() { 1.0 } else { 0.0 },
             ],
             region_max: [region.max().x, region.max().y, region.max().z, 0.0],
-            dims: [table.dims.x, table.dims.y, table.dims.z, 0.0],
-            grid: [grid[0], grid[1], grid[2], 0],
-            atlas: [table.atlas[0], table.atlas[1], table.atlas[2], 0],
+            atlas: [first.atlas[0], first.atlas[1], first.atlas[2], 0],
             shading: [
                 shading.ambient,
                 shading.diffuse,
@@ -159,15 +186,13 @@ impl FrameData {
                 [normal[0], normal[1], normal[2], offset]
             },
             tag: [time, 0, 0, 0],
-            fallback_dims: [support.dims.x, support.dims.y, support.dims.z, 0.0],
-            fallback_grid: [
-                support.grid.counts()[0],
-                support.grid.counts()[1],
-                support.grid.counts()[2],
-                u32::from(fallback.is_some()),
-            ],
-            fallback_min: [support.origin.x, support.origin.y, support.origin.z, 0.0],
-            fallback_size: [support.world.x, support.world.y, support.world.z, 0.0],
+            dims,
+            grids,
+            mins,
+            sizes,
+            bases,
+            bands: [ladder.count as u32, 0, 0, 0],
+            edge,
         }
     }
 }
@@ -226,6 +251,7 @@ impl SectionData {
             grid: [grid[0], grid[1], grid[2], 0],
             atlas: [table.atlas[0], table.atlas[1], table.atlas[2], 0],
             axes: [channels as u32, 0, 0, 0],
+            bases: [table.record_base(), support.record_base(), 0, 0],
             fallback_dims: [support.dims.x, support.dims.y, support.dims.z, 0.0],
             fallback_grid: [
                 support_grid[0],
@@ -239,8 +265,7 @@ impl SectionData {
     }
 }
 
-fn step_length(camera: &Camera, table: &BrickTable, step_scale: f32, height: f32) -> f32 {
-    let pixel_world = 2.0 * camera.distance() * (camera.fov_y() * 0.5).tan() / height.max(1.0);
+fn step_length(camera: &Camera, table: &BrickTable, step_scale: f32) -> f32 {
     let direction = camera.forward() / table.world;
     let mut voxel_world = f32::INFINITY;
     for axis in 0..3 {
@@ -254,9 +279,7 @@ fn step_length(camera: &Camera, table: &BrickTable, step_scale: f32, height: f32
     } else {
         table.voxel.min_element()
     };
-    (pixel_world * 0.5)
-        .max(voxel_world * step_scale.max(1.0e-3))
-        .max(1.0e-7)
+    (voxel_world * step_scale.max(1.0e-3)).max(1.0e-7)
 }
 
 fn planes(view_projection: Mat4) -> [[f32; 4]; 6] {

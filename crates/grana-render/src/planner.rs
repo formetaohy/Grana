@@ -8,22 +8,30 @@ use wgpu::{
 };
 
 use crate::ViewInfo;
-use crate::brick::BrickTable;
+use crate::brick::BrickArena;
 use crate::frame::ScheduleData;
 use crate::layout::Layouts;
 use grana_display::{Camera, SectionCamera};
 use grana_volume::BrickRequest;
 
-pub(crate) const BUCKETS: usize = 128;
+pub(crate) const BAND: usize = 4;
+
+pub(crate) const BUCKET_COUNT: usize = 128;
 const LEVEL_HYSTERESIS: f32 = 1.2;
 const HEADER_WORDS: usize = 4;
-const DEMAND_BASE: usize = HEADER_WORDS + 3 * BUCKETS;
+const VISIBLE_BASE: usize = HEADER_WORDS;
+const BASE_BASE: usize = VISIBLE_BASE + BUCKET_COUNT;
+const FILL_BASE: usize = BASE_BASE + BUCKET_COUNT;
+const DEMAND_BASE: usize = FILL_BASE + BUCKET_COUNT;
 const MISSING: u32 = 0x8000_0000;
+const EXCLUDED: u32 = u32::MAX;
 const WORKGROUP: u32 = 64;
 const CULL_SHADER: &str = concat!(
     include_str!("shader/scene.wgsl"),
     "\n",
     include_str!("shader/brick.wgsl"),
+    "\n",
+    include_str!("shader/band.wgsl"),
     "\n",
     include_str!("shader/frustum.wgsl"),
     "\n",
@@ -39,6 +47,23 @@ const PLAN_SHADER: &str = concat!(
 
 pub(crate) fn plan_words(capacity: usize) -> usize {
     DEMAND_BASE + capacity
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Ladder {
+    pub base: usize,
+    pub count: usize,
+}
+
+impl Ladder {
+    pub fn level(&self, band: usize) -> usize {
+        assert!(band < self.count, "a ladder names one of its bands");
+        self.base + band
+    }
+
+    pub fn levels(&self) -> impl Iterator<Item = usize> + '_ {
+        self.base..self.base + self.count
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -59,18 +84,40 @@ impl SectionRange {
 #[derive(Clone, Copy)]
 pub(crate) struct Schedule {
     pub time: u32,
-    pub level: usize,
+    pub band: u32,
     pub capacity: u32,
     pub layer: u32,
     pub range: SectionRange,
     pub dispatch: u32,
     pub bucket_scale: f32,
+    pub base: u32,
 }
 
+#[derive(Default)]
 pub(crate) struct Demand {
     pub info: ViewInfo,
     pub requests: Vec<BrickRequest>,
+    pub buckets: Vec<u32>,
     pub indices: Vec<u32>,
+}
+
+impl Demand {
+    pub fn merge(&mut self, other: Self) {
+        self.info.visible += other.info.visible;
+        self.info.demand += other.info.demand;
+        self.info.resident += other.info.resident;
+        let mut requests = std::mem::take(&mut self.requests)
+            .into_iter()
+            .zip(std::mem::take(&mut self.buckets))
+            .chain(other.requests.into_iter().zip(other.buckets))
+            .collect::<Vec<_>>();
+        requests.sort_by_key(|(_, bucket)| *bucket);
+        for (request, bucket) in requests {
+            self.requests.push(request);
+            self.buckets.push(bucket);
+        }
+        self.indices.extend(other.indices);
+    }
 }
 
 pub(crate) struct Plan {
@@ -79,7 +126,7 @@ pub(crate) struct Plan {
     uniform: Buffer,
     storage_group: BindGroup,
     data_group: BindGroup,
-    level_group: Option<(usize, BindGroup)>,
+    write_group: Option<BindGroup>,
     dispatch: u32,
 }
 
@@ -125,7 +172,7 @@ impl Plan {
             uniform,
             storage_group,
             data_group,
-            level_group: None,
+            write_group: None,
             dispatch: 0,
         }
     }
@@ -150,18 +197,17 @@ impl Plan {
         &self.data_group
     }
 
-    fn level_group(&self) -> &BindGroup {
-        self.level_group
+    fn write_group(&self) -> &BindGroup {
+        self.write_group
             .as_ref()
-            .map(|(_, group)| group)
-            .expect("the plan binds a brick table before it encodes")
+            .expect("the plan binds the brick arena before it encodes")
     }
 
     pub fn prepare(&mut self, queue: &Queue, schedule: Schedule) {
         self.dispatch = schedule.dispatch;
         let data = ScheduleData {
             time: schedule.time,
-            level: schedule.level as u32,
+            band: schedule.band,
             capacity: schedule.capacity.min(self.capacity as u32),
             layer: schedule.layer,
             u0: schedule.range.u0,
@@ -169,35 +215,32 @@ impl Plan {
             u_count: schedule.range.u_count,
             v_count: schedule.range.v_count,
             bucket_scale: schedule.bucket_scale,
-            reserved: [0; 3],
+            base: schedule.base,
+            reserved: [0; 2],
         };
         queue.write_buffer(&self.uniform, 0, bytes_of(&data));
-        let header = [0u32; HEADER_WORDS + BUCKETS];
+        let header = [0u32; HEADER_WORDS + BUCKET_COUNT];
         queue.write_buffer(&self.buffer, 0, cast_slice(&header));
     }
 
-    pub fn bind_level(&mut self, device: &Device, layouts: &Layouts, table: &BrickTable) {
-        let stale = self
-            .level_group
-            .as_ref()
-            .is_none_or(|(level, _)| *level != table.level());
-        if stale {
-            let group = device.create_bind_group(&BindGroupDescriptor {
-                label: Some("grana.level.write.group"),
-                layout: &layouts.level_write,
-                entries: &[
-                    BindGroupEntry {
-                        binding: 0,
-                        resource: table.buffer().as_entire_binding(),
-                    },
-                    BindGroupEntry {
-                        binding: 1,
-                        resource: self.uniform.as_entire_binding(),
-                    },
-                ],
-            });
-            self.level_group = Some((table.level(), group));
+    pub fn bind_arena(&mut self, device: &Device, layouts: &Layouts, arena: &BrickArena) {
+        if self.write_group.is_some() {
+            return;
         }
+        self.write_group = Some(device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.arena.write.group"),
+            layout: &layouts.level_write,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: arena.buffer().as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: self.uniform.as_entire_binding(),
+                },
+            ],
+        }));
     }
 }
 
@@ -207,7 +250,7 @@ pub(crate) struct Planner {
     volume_scatter: ComputePipeline,
     section_count: ComputePipeline,
     section_scatter: ComputePipeline,
-    pub volume: Plan,
+    pub bands: [Plan; BAND],
     pub section: Plan,
 }
 
@@ -245,26 +288,32 @@ impl Planner {
             volume_scatter: pipeline("grana.volume.scatter", &cull, "volume_scatter"),
             section_count: pipeline("grana.section.count", &cull, "section_count"),
             section_scatter: pipeline("grana.section.scatter", &cull, "section_scatter"),
-            volume: Plan::new(device, layouts, "grana.volume.plan", capacity),
+            bands: std::array::from_fn(|_| Plan::new(device, layouts, "grana.band.plan", capacity)),
             section: Plan::new(device, layouts, "grana.section.plan", capacity),
         }
     }
 
-    pub fn encode(
-        &self,
-        encoder: &mut CommandEncoder,
-        scene: &BindGroup,
-        volume: &Plan,
-        section: &Plan,
-    ) {
+    pub fn bind_arena(&mut self, device: &Device, layouts: &Layouts, arena: &BrickArena) {
+        for plan in self
+            .bands
+            .iter_mut()
+            .chain(std::iter::once(&mut self.section))
+        {
+            plan.bind_arena(device, layouts, arena);
+        }
+    }
+
+    pub fn encode(&self, encoder: &mut CommandEncoder, scene: &BindGroup) {
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("grana.plan.count"),
                 timestamp_writes: None,
             });
             pass.set_bind_group(0, scene, &[]);
-            dispatch(&mut pass, &self.volume_count, volume);
-            dispatch(&mut pass, &self.section_count, section);
+            for plan in &self.bands {
+                dispatch(&mut pass, &self.volume_count, plan);
+            }
+            dispatch(&mut pass, &self.section_count, &self.section);
         }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -272,7 +321,7 @@ impl Planner {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.plan);
-            for plan in [volume, section] {
+            for plan in self.bands.iter().chain(std::iter::once(&self.section)) {
                 pass.set_bind_group(0, plan.data_group(), &[]);
                 pass.dispatch_workgroups(1, 1, 1);
             }
@@ -283,8 +332,10 @@ impl Planner {
                 timestamp_writes: None,
             });
             pass.set_bind_group(0, scene, &[]);
-            dispatch(&mut pass, &self.volume_scatter, volume);
-            dispatch(&mut pass, &self.section_scatter, section);
+            for plan in &self.bands {
+                dispatch(&mut pass, &self.volume_scatter, plan);
+            }
+            dispatch(&mut pass, &self.section_scatter, &self.section);
         }
     }
 }
@@ -294,7 +345,7 @@ fn dispatch(pass: &mut ComputePass<'_>, pipeline: &ComputePipeline, plan: &Plan)
         return;
     }
     pass.set_pipeline(pipeline);
-    pass.set_bind_group(1, plan.level_group(), &[]);
+    pass.set_bind_group(1, plan.write_group(), &[]);
     pass.set_bind_group(2, plan.storage_group(), &[]);
     pass.dispatch_workgroups(plan.dispatch().div_ceil(WORKGROUP), 1, 1);
 }
@@ -313,13 +364,28 @@ pub(crate) fn decode_plan(
     let demand = (words[1] as usize)
         .min(capacity)
         .min(words.len().saturating_sub(DEMAND_BASE));
+    let mut bucket_of = vec![0u32; demand];
+    for bucket in 0..BUCKET_COUNT {
+        let base = words[BASE_BASE + bucket];
+        let fill = words[FILL_BASE + bucket] as usize;
+        if base == EXCLUDED || fill == 0 {
+            continue;
+        }
+        let start = (base as usize).min(demand);
+        let end = (start + fill).min(demand);
+        for entry in &mut bucket_of[start..end] {
+            *entry = bucket as u32;
+        }
+    }
     let grid = BrickGrid::new(pyramid.level(level).extent());
     let mut requests = Vec::new();
+    let mut buckets = Vec::new();
     let mut indices = Vec::with_capacity(demand);
-    for entry in &words[DEMAND_BASE..DEMAND_BASE + demand] {
+    for (position, entry) in words[DEMAND_BASE..DEMAND_BASE + demand].iter().enumerate() {
         let index = entry & !MISSING;
         indices.push(index);
         if entry & MISSING != 0 {
+            buckets.push(bucket_of[position]);
             requests.push(BrickRequest {
                 time,
                 level,
@@ -335,8 +401,42 @@ pub(crate) fn decode_plan(
             resident: demand - requests.len(),
         },
         requests,
+        buckets,
         indices,
     })
+}
+
+pub(crate) fn capacities(budget: usize, wanted: &[usize; BAND], count: usize) -> [usize; BAND] {
+    assert!(
+        budget > 0 && count > 0 && count <= BAND,
+        "a ladder divides a budget"
+    );
+    let mut weights = [1usize; BAND];
+    for band in 0..count {
+        weights[band] = wanted[band].max(1);
+    }
+    let total: usize = weights[..count].iter().sum();
+    let mut caps = [0usize; BAND];
+    for band in 0..count {
+        let share = (budget as u128 * weights[band] as u128 / total as u128) as usize;
+        caps[band] = share.max(1);
+    }
+    let mut sum: usize = caps[..count].iter().sum();
+    while sum > budget {
+        let band = (0..count)
+            .max_by_key(|band| caps[*band])
+            .expect("a ladder holds a band");
+        if caps[band] == 0 {
+            break;
+        }
+        caps[band] -= 1;
+        sum -= 1;
+    }
+    assert!(
+        caps[..count].iter().any(|cap| *cap > 0),
+        "a ladder reserves at least one brick"
+    );
+    caps
 }
 
 pub(crate) fn bucket_scale(camera: &Camera, origin: [f32; 3], world: [f32; 3]) -> f32 {
@@ -350,7 +450,7 @@ pub(crate) fn bucket_scale(camera: &Camera, origin: [f32; 3], world: [f32; 3]) -
         );
         far = far.max((corner - eye).length());
     }
-    BUCKETS as f32 / far.max(1.0e-6)
+    BUCKET_COUNT as f32 / far.max(1.0e-6)
 }
 
 pub(crate) fn section_range(
@@ -418,33 +518,47 @@ pub(crate) fn section_range(
     }
 }
 
-pub(crate) fn volume_dispatch(table: &BrickTable) -> u32 {
+pub(crate) fn volume_dispatch(table: &crate::brick::BrickTable) -> u32 {
     table.grid.count() as u32
 }
 
-pub(crate) fn select_volume_level(
+pub(crate) fn volume_ladder(
     pyramid: &Pyramid,
     camera: &Camera,
     height: f32,
     current: Option<usize>,
-) -> usize {
-    let pixel_world = 2.0 * camera.distance() * (camera.fov_y() * 0.5).tan() / height.max(1.0);
-    let mut level = 0;
-    for index in 0..pyramid.level_count() {
-        let voxel = minimum_spacing(pyramid, index);
-        if voxel <= pixel_world {
-            level = index;
+    first: usize,
+    previous_visible: usize,
+    capacity: usize,
+) -> Ladder {
+    let levels = pyramid.level_count();
+    let nearest = nearest_distance(pyramid.level(0), camera.eye());
+    let mut pixel_world = 2.0 * nearest * (camera.fov_y() * 0.5).tan() / height.max(1.0);
+    if previous_visible > capacity {
+        pixel_world *= 2.0;
+    }
+    let mut target = first;
+    for index in first..levels {
+        if minimum_spacing(pyramid, index) <= pixel_world {
+            target = index;
         } else {
             break;
         }
     }
-    hold_level(
-        pyramid.level_count(),
-        level,
-        current,
-        pixel_world,
-        |index| minimum_spacing(pyramid, index),
-    )
+    let base = hold_level(levels, target, current, pixel_world, |index| {
+        minimum_spacing(pyramid, index)
+    })
+    .max(first);
+    let count = BAND.min(levels - base);
+    Ladder { base, count }
+}
+
+fn nearest_distance(level: grana_volume::Level, eye: Vec3) -> f32 {
+    let origin = Vec3::from(level.origin());
+    let corner = origin + Vec3::from(level.world_extent());
+    let low = origin.min(corner);
+    let high = origin.max(corner);
+    (eye.clamp(low, high) - eye).length()
 }
 
 pub(crate) fn select_section_level(
@@ -452,10 +566,11 @@ pub(crate) fn select_section_level(
     section: &SectionCamera,
     height: f32,
     current: Option<usize>,
+    first: usize,
 ) -> usize {
     let pixel_world = section.span() / height.max(1.0);
-    let mut level = 0;
-    for index in 0..pyramid.level_count() {
+    let mut level = first;
+    for index in first..pyramid.level_count() {
         if section_spacing(pyramid, index, section.axis()) <= pixel_world {
             level = index;
         } else {
@@ -469,6 +584,7 @@ pub(crate) fn select_section_level(
         pixel_world,
         |index| section_spacing(pyramid, index, section.axis()),
     )
+    .max(first)
 }
 
 fn hold_level(
@@ -509,19 +625,6 @@ pub(crate) fn resolve_section_level(
         }
         level += 1;
     }
-}
-
-pub(crate) fn resolve_volume_level(
-    target: usize,
-    levels: usize,
-    capacity: usize,
-    counts: &[u32],
-) -> usize {
-    let mut level = target.min(levels - 1);
-    while level + 1 < levels && counts.get(level).copied().unwrap_or(0) as usize > capacity {
-        level += 1;
-    }
-    level
 }
 
 fn minimum_spacing(pyramid: &Pyramid, level: usize) -> f32 {

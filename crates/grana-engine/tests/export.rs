@@ -471,7 +471,7 @@ fn run(
             };
             for request in requests.volume.iter().chain(&requests.section) {
                 let brick = volume.brick(&grid, request.coord);
-                engine.upload(device, queue, *request, &brick);
+                engine.upload(queue, *request, &brick);
             }
         }
     }

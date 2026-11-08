@@ -25,7 +25,6 @@ pub(crate) struct Layouts {
     pub commands: BindGroupLayout,
     pub marker_cull: BindGroupLayout,
     pub marker_render: BindGroupLayout,
-    pub census_level: BindGroupLayout,
     pub oit_write: BindGroupLayout,
     pub oit_coverage: BindGroupLayout,
     pub oit_read: BindGroupLayout,
@@ -39,7 +38,6 @@ pub(crate) struct Layouts {
     pub marker_tail: PipelineLayout,
     pub marker_section: PipelineLayout,
     pub marker_cull_pipeline: PipelineLayout,
-    pub census: PipelineLayout,
     pub shadow_pipeline: PipelineLayout,
 }
 
@@ -82,13 +80,6 @@ impl Layouts {
         });
         let plan_data = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("grana.plan.data.layout"),
-            entries: &[
-                uniform(0, ShaderStages::COMPUTE),
-                storage(1, ShaderStages::COMPUTE, false),
-            ],
-        });
-        let census_level = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.census.level.layout"),
             entries: &[
                 uniform(0, ShaderStages::COMPUTE),
                 storage(1, ShaderStages::COMPUTE, false),
@@ -259,13 +250,9 @@ impl Layouts {
         let volume = pipeline_layout(
             device,
             "grana.volume.layout",
-            &[&scene, &level, &atlas, &depth, &shadow, &oit_read, &level],
+            &[&scene, &level, &atlas, &depth, &shadow, &oit_read],
         );
-        let section = pipeline_layout(
-            device,
-            "grana.section.layout",
-            &[&scene, &level, &atlas, &level],
-        );
+        let section = pipeline_layout(device, "grana.section.layout", &[&scene, &level, &atlas]);
         let cull = pipeline_layout(
             device,
             "grana.cull.layout",
@@ -313,7 +300,6 @@ impl Layouts {
             "grana.marker.cull.pipeline.layout",
             &[&scene, &marker_cull],
         );
-        let census = pipeline_layout(device, "grana.census.layout", &[&scene, &census_level]);
         let shadow_pipeline = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.shadow.pipeline.layout"),
             bind_group_layouts: &[
@@ -321,9 +307,6 @@ impl Layouts {
                 Some(&level),
                 Some(&atlas),
                 Some(&shadow_write),
-                None,
-                None,
-                Some(&level),
             ],
             immediate_size: 0,
         });
@@ -343,7 +326,6 @@ impl Layouts {
             commands,
             marker_cull,
             marker_render,
-            census_level,
             oit_write,
             oit_coverage,
             oit_read,
@@ -357,7 +339,6 @@ impl Layouts {
             marker_tail,
             marker_section,
             marker_cull_pipeline,
-            census,
             shadow_pipeline,
         }
     }

@@ -2,13 +2,13 @@
 @group(1) @binding(1) var<uniform> schedule: ScheduleData;
 @group(2) @binding(0) var<storage, read_write> plan: array<atomic<u32>>;
 
-fn brick_opacity(index: u32) -> u32 {
+fn brick_opacity(at: u32) -> u32 {
     let channels_count = u32(frame.march.z);
     for (var channel = 0u; channel < channels_count; channel += 1u) {
         if (channels[channel].opacity <= 0.0) {
             continue;
         }
-        let maximum = bricks[index].maxima[channel / 4u][channel % 4u];
+        let maximum = bricks[at].maxima[channel / 4u][channel % 4u];
         if (channel_sample(channel, maximum).a > 0.004) {
             return 1u;
         }
@@ -16,12 +16,28 @@ fn brick_opacity(index: u32) -> u32 {
     return 0u;
 }
 
+fn level_dims() -> vec3<f32> {
+    return frame.dims[schedule.band].xyz;
+}
+
+fn level_grid() -> vec3<u32> {
+    return frame.grids[schedule.band].xyz;
+}
+
+fn level_min() -> vec3<f32> {
+    return frame.mins[schedule.band].xyz;
+}
+
+fn level_size() -> vec3<f32> {
+    return frame.sizes[schedule.band].xyz;
+}
+
 fn brick_box(cell: vec3<u32>) -> array<vec3<f32>, 2> {
-    let dims = vec3<u32>(frame.dims.xyz);
+    let dims = vec3<u32>(level_dims());
     let origin = cell * 32u;
     let size = min(vec3<u32>(32u), dims - origin);
-    let voxel = frame.box_size.xyz / frame.dims.xyz;
-    let low = frame.box_min.xyz + vec3<f32>(origin) * voxel;
+    let voxel = level_size() / level_dims();
+    let low = level_min() + vec3<f32>(origin) * voxel;
     let high = low + vec3<f32>(size) * voxel;
     return array<vec3<f32>, 2>(low, high);
 }
@@ -34,6 +50,18 @@ fn section_brick_box(cell: vec3<u32>) -> array<vec3<f32>, 2> {
     let low = section.box_min.xyz + vec3<f32>(origin) * voxel;
     let high = low + vec3<f32>(size) * voxel;
     return array<vec3<f32>, 2>(low, high);
+}
+
+fn reach(low: vec3<f32>, high: vec3<f32>) -> vec2<f32> {
+    let eye = frame.eye.xyz;
+    let near = length(clamp(eye, low, high) - eye);
+    let far = length(max(abs(eye - low), abs(eye - high)));
+    return vec2<f32>(near, far);
+}
+
+fn band_holds(low: vec3<f32>, high: vec3<f32>) -> bool {
+    let span = reach(low, high);
+    return span.y >= band_lower(schedule.band) && span.x < band_upper(schedule.band);
 }
 
 fn volume_bucket(center: vec3<f32>) -> u32 {
@@ -49,7 +77,7 @@ fn section_bucket(center: vec3<f32>) -> u32 {
 }
 
 fn volume_cell(index: u32) -> vec3<u32> {
-    let grid = vec3<u32>(frame.grid.xyz);
+    let grid = level_grid();
     return vec3<u32>(
         index % grid.x,
         (index / grid.x) % grid.y,
@@ -66,7 +94,7 @@ fn section_cell(index: u32) -> vec3<u32> {
 }
 
 fn emit(bucket: u32, index: u32) {
-    let record = bricks[index];
+    let record = bricks[schedule.base + index];
     if (brick_hollow(record)) {
         return;
     }
@@ -84,35 +112,41 @@ fn emit(bucket: u32, index: u32) {
 
 @compute @workgroup_size(64)
 fn volume_count(@builtin(global_invocation_id) id: vec3<u32>) {
-    let grid = vec3<u32>(frame.grid.xyz);
+    let grid = level_grid();
     let index = id.x;
     if (index >= grid.x * grid.y * grid.z) {
         return;
     }
-    if (brick_hollow(bricks[index])) {
+    if (brick_hollow(bricks[schedule.base + index])) {
         return;
     }
     let bounds = brick_box(volume_cell(index));
     if (outside_frustum(bounds[0], bounds[1]) || outside_region_bounds(bounds[0], bounds[1])) {
+        return;
+    }
+    if (!band_holds(bounds[0], bounds[1])) {
         return;
     }
     let bucket = volume_bucket(0.5 * (bounds[0] + bounds[1]));
     atomicAdd(&plan[0], 1u);
     atomicAdd(&plan[VISIBLE_BASE + bucket], 1u);
-    if (brick_slot(bricks[index]) != 0u) {
-        bricks[index].flags = brick_opacity(index);
+    if (brick_slot(bricks[schedule.base + index]) != 0u) {
+        bricks[schedule.base + index].flags = brick_opacity(schedule.base + index);
     }
 }
 
 @compute @workgroup_size(64)
 fn volume_scatter(@builtin(global_invocation_id) id: vec3<u32>) {
-    let grid = vec3<u32>(frame.grid.xyz);
+    let grid = level_grid();
     let index = id.x;
     if (index >= grid.x * grid.y * grid.z) {
         return;
     }
     let bounds = brick_box(volume_cell(index));
     if (outside_frustum(bounds[0], bounds[1]) || outside_region_bounds(bounds[0], bounds[1])) {
+        return;
+    }
+    if (!band_holds(bounds[0], bounds[1])) {
         return;
     }
     emit(volume_bucket(0.5 * (bounds[0] + bounds[1])), index);
@@ -134,7 +168,7 @@ fn section_count(@builtin(global_invocation_id) id: vec3<u32>) {
     if (outside_region_bounds(bounds[0], bounds[1])) {
         return;
     }
-    let brick = cell.x + grid.x * (cell.y + grid.y * cell.z);
+    let brick = schedule.base + cell.x + grid.x * (cell.y + grid.y * cell.z);
     if (brick_hollow(bricks[brick])) {
         return;
     }

@@ -17,6 +17,8 @@ const SHADER: &str = concat!(
     "\n",
     include_str!("shader/brick.wgsl"),
     "\n",
+    include_str!("shader/band.wgsl"),
+    "\n",
     include_str!("shader/volume_sample.wgsl"),
     "\n",
     include_str!("shader/tau_codec.wgsl"),
@@ -48,7 +50,6 @@ pub(crate) struct VolumeFrame<'a> {
     pub region: [u32; 4],
     pub scene: &'a BindGroup,
     pub level: &'a BindGroup,
-    pub fallback: &'a BindGroup,
     pub atlas: &'a BindGroup,
     pub depth_group: &'a BindGroup,
     pub shadow: &'a BindGroup,
@@ -122,7 +123,6 @@ impl VolumePass {
         pass.set_bind_group(3, frame.depth_group, &[]);
         pass.set_bind_group(4, frame.shadow, &[]);
         pass.set_bind_group(5, frame.oit, &[]);
-        pass.set_bind_group(6, frame.fallback, &[]);
         pass.draw(0..3, 0..1);
     }
 }

@@ -288,7 +288,7 @@ fn prefetches_the_next_frame() {
             .chain(&requests.prefetch)
         {
             let brick = source(*request);
-            let _ = renderer.upload(&device, &queue, *request, &brick);
+            let _ = renderer.upload(&queue, *request, &brick);
         }
     }
     assert!(prefetched > 0, "playback issued no prefetch");
@@ -1789,7 +1789,7 @@ fn keeps_hollow_bricks_out_of_the_cache() {
         };
         for request in requests.volume.iter().chain(&requests.section) {
             let brick = volume.brick(&grid, request.coord);
-            let _ = renderer.upload(&device, &queue, *request, &brick);
+            let _ = renderer.upload(&queue, *request, &brick);
         }
     }
     let pixels = read_pixels(&device, &queue, &texture, SIDE);
@@ -1894,7 +1894,11 @@ fn switches_levels() {
     .volume_view;
     assert!(
         fitted.level > 0,
-        "the fitted view must coarsen to fit the cache"
+        "a cache too small for the finest level coarsens the band"
+    );
+    assert_eq!(
+        fitted.resident, fitted.demand,
+        "the fitted view streams every visible brick: {fitted:?}"
     );
     for _ in 0..10 {
         camera.zoom(1.0);
@@ -1917,7 +1921,7 @@ fn switches_levels() {
     )
     .volume_view;
     assert_eq!(close.level, 0, "zooming in must resolve the finest level");
-    for _ in 0..10 {
+    for _ in 0..20 {
         camera.zoom(-1.0);
     }
     let far = settle(
@@ -2049,9 +2053,13 @@ fn keeps_the_neighbour_level_visible_while_the_finer_level_loads() {
         info = renderer.draw(&device, &queue, common::frame(&session));
     }
     assert_eq!(info.volume.level, 0, "zooming in resolves the finest level");
-    assert_eq!(
-        info.volume.resident, 0,
-        "no brick of the finest level is resident yet"
+    assert!(
+        info.volume.resident > 0,
+        "the neighbour level is resident while the finest level loads"
+    );
+    assert!(
+        info.volume.resident < info.volume.demand,
+        "the finest level has not arrived yet"
     );
     let fallback = bright(&read_pixels(&device, &queue, &texture, SIDE));
     assert!(
