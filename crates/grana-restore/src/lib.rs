@@ -6,6 +6,13 @@ use std::sync::OnceLock;
 
 use grana_optics::KernelBank;
 
+pub struct Job<'a> {
+    pub dims: [u32; 3],
+    pub source: &'a [f32],
+    pub first_plane: u32,
+    pub iterations: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
     Graphics,
@@ -62,21 +69,47 @@ impl Restorer {
         first_plane: u32,
         iterations: u32,
     ) -> Vec<f32> {
-        assert!(
-            iterations > 0 && iterations <= 1000,
-            "richardson-lucy runs a bounded number of iterations"
-        );
-        assert!(
-            dims.iter().all(|extent| *extent > 0),
-            "a restored volume carries voxels"
-        );
+        let jobs = [Job {
+            dims,
+            source,
+            first_plane,
+            iterations,
+        }];
+        let mut restored = self.restore_batch(bank, &jobs);
+        restored.pop().expect("one job restores one volume")
+    }
+
+    pub fn restore_batch(&self, bank: &KernelBank, jobs: &[Job<'_>]) -> Vec<Vec<f32>> {
+        for job in jobs {
+            assert!(
+                job.iterations > 0 && job.iterations <= 1000,
+                "richardson-lucy runs a bounded number of iterations"
+            );
+            assert!(
+                job.dims.iter().all(|extent| *extent > 0),
+                "a restored volume carries voxels"
+            );
+            assert_eq!(
+                job.source.len(),
+                (job.dims[0] * job.dims[1] * job.dims[2]) as usize,
+                "a restored volume holds every requested voxel"
+            );
+        }
+        if jobs.is_empty() {
+            return Vec::new();
+        }
         let mut held = self
             .graphics
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         match held.as_mut() {
-            Some(gpu) => gpu.restore(dims, source, bank, first_plane, iterations),
-            None => cpu::restore(dims, source, bank, first_plane, iterations),
+            Some(gpu) => gpu.restore_batch(bank, jobs),
+            None => jobs
+                .iter()
+                .map(|job| {
+                    cpu::restore(job.dims, job.source, bank, job.first_plane, job.iterations)
+                })
+                .collect(),
         }
     }
 }

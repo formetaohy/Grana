@@ -8,20 +8,23 @@ use std::sync::{Arc, Condvar, Mutex, RwLock};
 use grana_image::{Format, Image, Series, Source};
 use grana_pipeline::Channels;
 use grana_scene::Drift;
-use grana_volume::{BrickData, BrickRequest, CHANNEL_LIMIT, Pyramid, VolumeSeries};
+use grana_volume::{BrickData, BrickRequest, CHANNEL_LIMIT, Fingerprint, Pyramid, VolumeSeries};
 
 const ATTEMPTS: u8 = 3;
 const WORKER_LIMIT: usize = 8;
 const RETRY_PRIORITY: u64 = 0;
 
+pub struct Opened {
+    pub name: String,
+    pub pyramid: Pyramid,
+    pub format: Option<Format>,
+    pub series: Vec<Series>,
+    pub selected: usize,
+    pub fingerprint: Fingerprint,
+}
+
 pub enum Event {
-    Opened {
-        name: String,
-        pyramid: Pyramid,
-        format: Format,
-        series: Vec<Series>,
-        selected: usize,
-    },
+    Opened(Opened),
     Brick {
         request: BrickRequest,
         data: BrickData,
@@ -189,12 +192,20 @@ impl Queue {
 }
 
 impl Loader {
-    pub fn memory(series: VolumeSeries) -> (Self, Pyramid) {
+    pub fn memory(series: VolumeSeries) -> (Self, Opened) {
         let source = Source::memory(series);
-        let channels = Channels::stored(Arc::new(
-            Image::open(&source).expect("an in-memory volume opens"),
-        ));
-        let pyramid = channels.pyramid().clone();
+        let image = Image::open(&source).expect("an in-memory volume opens");
+        let opened = Opened {
+            name: image.name().to_string(),
+            pyramid: image.pyramid().clone(),
+            format: None,
+            series: image.series().to_vec(),
+            selected: image.selected(),
+            fingerprint: image
+                .fingerprint()
+                .expect("an in-memory volume fingerprints"),
+        };
+        let channels = Channels::stored(Arc::new(image));
         let (sender, events) = mpsc::channel();
         let queue = Arc::new(Queue::new());
         let time = Arc::new(AtomicU32::new(0));
@@ -210,7 +221,7 @@ impl Loader {
                 channels: resident,
                 source,
             },
-            pyramid,
+            opened,
         )
     }
 
@@ -255,13 +266,24 @@ impl Loader {
                 return;
             }
             let format = reader.format().expect("a file image declares its format");
-            let opened = Event::Opened {
+            let fingerprint = match reader.fingerprint() {
+                Ok(fingerprint) => fingerprint,
+                Err(detail) => {
+                    let _ = opening_sender.send(Event::Failed(format!(
+                        "the dataset cannot be fingerprinted: {detail}"
+                    )));
+                    opening_queue.close();
+                    return;
+                }
+            };
+            let opened = Event::Opened(Opened {
                 name: reader.name().to_string(),
                 pyramid: reader.pyramid().clone(),
-                format,
+                format: Some(format),
                 series: reader.series().to_vec(),
                 selected: reader.selected(),
-            };
+                fingerprint,
+            });
             let channels = Arc::new(Channels::stored(Arc::new(reader)));
             *opening_channels
                 .write()

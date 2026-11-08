@@ -8,13 +8,14 @@ use grana_animation::Timeline;
 use grana_display::{CameraState, SectionState};
 use grana_geometry::GeometryStore;
 use grana_scene::{Dataset, DerivedSpec, Measure, MeasureState, ObjectFrame, Scene, SceneState};
+use grana_volume::Fingerprint;
 
 use grana_codec::Encoder;
 
 use crate::codec::{Decode, Encode, Reader};
 use crate::error::Error;
 
-const MAGIC: &[u8; 11] = b"granaproj39";
+const MAGIC: &[u8; 11] = b"granaproj40";
 const LENGTH: usize = size_of::<u64>();
 const STEPS: usize = size_of::<u32>();
 const HEADER: usize = MAGIC.len() + LENGTH + STEPS;
@@ -26,6 +27,7 @@ const STALE_AGE: Duration = Duration::from_secs(3600);
 pub struct Project {
     pub shape: Shape,
     pub source: Source,
+    pub fingerprint: Fingerprint,
     pub scene: SceneState,
     pub masks: Vec<DerivedSpec>,
     pub measure: MeasureState,
@@ -36,6 +38,12 @@ pub struct Project {
 pub struct Shape {
     pub extent: [u32; 3],
     pub spacing: [f32; 3],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mismatch {
+    Dataset,
+    Shape,
 }
 
 #[derive(Debug, PartialEq)]
@@ -81,7 +89,13 @@ impl Export {
 }
 
 impl Project {
-    pub fn capture(scene: &Scene, measure: &Measure, source: Source, view: ViewState) -> Self {
+    pub fn capture(
+        scene: &Scene,
+        measure: &Measure,
+        source: Source,
+        view: ViewState,
+        fingerprint: Fingerprint,
+    ) -> Self {
         let extent = scene.dataset.extent();
         let spacing = scene.dataset.spacing();
         Self {
@@ -90,6 +104,7 @@ impl Project {
                 spacing: [spacing.x(), spacing.y(), spacing.z()],
             },
             source,
+            fingerprint,
             scene: scene.state(),
             masks: scene.derived_specs(),
             measure: measure.state(),
@@ -97,15 +112,22 @@ impl Project {
         }
     }
 
-    pub fn matches(&self, dataset: &Dataset) -> bool {
+    pub fn matches(&self, dataset: &Dataset, fingerprint: Fingerprint) -> Result<(), Mismatch> {
+        if self.fingerprint != fingerprint {
+            return Err(Mismatch::Dataset);
+        }
         let extent = dataset.extent();
         let spacing = dataset.spacing();
-        self.masks.len() <= dataset.channels().len()
-            && self.shape.extent == [extent.x(), extent.y(), extent.z()]
-            && self.shape.spacing == [spacing.x(), spacing.y(), spacing.z()]
+        let shape = self.shape.extent == [extent.x(), extent.y(), extent.z()]
+            && self.shape.spacing == [spacing.x(), spacing.y(), spacing.z()];
+        let channels = self.masks.len() <= dataset.channels().len()
             && self
                 .scene
-                .matches(dataset.channels().len(), dataset.frame_count())
+                .matches(dataset.channels().len(), dataset.frame_count());
+        if !shape || !channels {
+            return Err(Mismatch::Shape);
+        }
+        Ok(())
     }
 
     pub fn write(

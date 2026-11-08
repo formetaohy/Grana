@@ -19,15 +19,53 @@ use grana_object::{
     TrackNode, TrackSet,
 };
 use grana_object::{SpotParams, SurfaceFilter, SurfaceParams};
-use grana_project::{Export, Project, Source, ViewState};
+use grana_project::{Export, Mismatch, Project, Source, ViewState};
 use grana_scene::{
     Criteria, Dataset, Drift, FilterRange, Item, MaskFilter, Measure, ObjectColor, ObjectFrame,
     ObjectKind, ObjectParams, Scene, SegmentModel, SegmentParams, Selection, SurfaceEdit,
     TrackColor, Visibility,
 };
-use grana_volume::{Axis, Channel, Clip, Extent, Spacing, Volume, VolumeSeries, VoxelData};
+use grana_volume::{
+    Axis, Channel, Clip, Extent, Fingerprint, Spacing, Volume, VolumeSeries, VoxelData,
+};
 
 const EXTENT: Extent = Extent::new(8, 8, 4);
+
+#[test]
+fn binds_a_project_to_the_dataset_it_was_saved_from() {
+    let scene = fixture();
+    let view = ViewState {
+        camera: CameraState {
+            pivot: [0.0; 3],
+            yaw: 0.0,
+            pitch: 0.0,
+            distance: 10.0,
+            fov_y: 0.6,
+        },
+        section: SectionState {
+            axis: Axis::Z,
+            span: 20.0,
+        },
+        split: 0.5,
+        timeline: Timeline::default(),
+        export: Export::NATIVE,
+    };
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "fixture".to_string(),
+        },
+        view,
+        fingerprint(),
+    );
+    assert_eq!(project.matches(&scene.dataset, fingerprint()), Ok(()));
+    assert_eq!(
+        project.matches(&scene.dataset, Fingerprint::new([9; 32])),
+        Err(Mismatch::Dataset),
+        "a project never applies to another dataset"
+    );
+}
 
 #[test]
 fn round_trips_a_project() {
@@ -147,7 +185,7 @@ fn round_trips_a_project() {
     let source = Source::Synthetic {
         name: "fixture".to_string(),
     };
-    let project = Project::capture(&scene, &measure, source, view);
+    let project = Project::capture(&scene, &measure, source, view, fingerprint());
     let path = std::env::temp_dir().join(format!("grana-project-{}.grana", std::process::id()));
     let mut steps = Vec::new();
     let mut record = |done: usize, total: usize| steps.push((done, total));
@@ -317,6 +355,7 @@ fn round_trips_an_analysis_mask_filter() {
             name: "fixture".to_string(),
         },
         view,
+        fingerprint(),
     );
     assert_eq!(project.scene.mask_filter, Some(filter));
     let path = std::env::temp_dir().join(format!("grana-mask-{}.grana", std::process::id()));
@@ -382,6 +421,7 @@ fn round_trips_an_imported_label_image() {
             name: "fixture".to_string(),
         },
         view,
+        fingerprint(),
     );
     assert_eq!(
         project.scene.sets[0].provenance.label(),
@@ -444,6 +484,7 @@ fn round_trips_a_segmentation_provenance() {
             name: "fixture".to_string(),
         },
         view,
+        fingerprint(),
     );
     assert_eq!(project.scene.sets[0].provenance.segment(), Some(&params));
     let path = std::env::temp_dir().join(format!("grana-segment-{}.grana", std::process::id()));
@@ -516,6 +557,7 @@ fn round_trips_the_manual_edits_of_a_project() {
             timeline: Timeline::default(),
             export: Export::NATIVE,
         },
+        fingerprint(),
     );
     let path = std::env::temp_dir().join(format!("grana-curation-{}.grana", std::process::id()));
     project
@@ -573,6 +615,7 @@ fn round_trips_object_set_order() {
             timeline: Timeline::default(),
             export: Export::NATIVE,
         },
+        fingerprint(),
     );
     let path = std::env::temp_dir().join(format!("grana-order-{}.grana", std::process::id()));
     project
@@ -643,6 +686,7 @@ fn round_trips_the_provenance_of_derived_sets() {
             timeline: Timeline::default(),
             export: Export::NATIVE,
         },
+        fingerprint(),
     );
     let path = std::env::temp_dir().join(format!("grana-derived-{}.grana", std::process::id()));
     project
@@ -698,6 +742,7 @@ fn rejects_damaged_projects() {
             timeline: Timeline::default(),
             export: Export::NATIVE,
         },
+        fingerprint(),
     );
     let path = std::env::temp_dir().join(format!("grana-damaged-{}.grana", std::process::id()));
     project
@@ -760,6 +805,10 @@ fn timeline() -> Timeline {
         },
     });
     timeline
+}
+
+fn fingerprint() -> Fingerprint {
+    Fingerprint::new([7; 32])
 }
 
 fn fixture() -> Scene {
@@ -991,6 +1040,7 @@ fn round_trips_the_surface_topology() {
             timeline: Timeline::default(),
             export: Export::NATIVE,
         },
+        fingerprint(),
     );
     let path = std::env::temp_dir().join(format!("grana-topology-{}.grana", std::process::id()));
     let mut written = Vec::new();
@@ -1089,6 +1139,7 @@ fn round_trips_the_surface_edits_of_a_derived_set() {
             timeline: Timeline::default(),
             export: Export::NATIVE,
         },
+        fingerprint(),
     );
     let path = std::env::temp_dir().join(format!("grana-edits-{}.grana", std::process::id()));
     project
@@ -1165,6 +1216,7 @@ fn round_trips_the_objects_a_user_deleted() {
             timeline: Timeline::default(),
             export: Export::NATIVE,
         },
+        fingerprint(),
     );
     let path = std::env::temp_dir().join(format!("grana-deleted-{}.grana", std::process::id()));
     project
@@ -1234,6 +1286,7 @@ fn round_trips_the_seed_source_of_a_surface() {
             timeline: Timeline::default(),
             export: Export::NATIVE,
         },
+        fingerprint(),
     );
     let path = std::env::temp_dir().join(format!("grana-seeded-{}.grana", std::process::id()));
     project
@@ -1328,6 +1381,7 @@ fn round_trips_a_child_color() {
             timeline: Timeline::default(),
             export: Export::NATIVE,
         },
+        fingerprint(),
     );
     let path = std::env::temp_dir().join(format!("grana-child-{}.grana", std::process::id()));
     project
@@ -1522,6 +1576,7 @@ fn round_trips_a_classifier() {
             name: "fixture".to_string(),
         },
         view,
+        fingerprint(),
     );
     let path = std::env::temp_dir().join(format!("grana-classifier-{}.grana", std::process::id()));
     project

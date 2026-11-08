@@ -291,6 +291,10 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             index: task.index,
             label: format!("writing the project of {}", reader.name()),
         });
+        let fingerprint = channels
+            .image()
+            .fingerprint()
+            .map_err(|error| format!("the dataset cannot be fingerprinted: {error}"))?;
         let project = Project::capture(
             &scene,
             &measure,
@@ -300,6 +304,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 series: dataset.scene(),
             },
             view_state(task.protocol, &scene),
+            fingerprint,
         );
         let file = format!("{}.granaproj", slug(&name));
         let mut progress = |done: usize, total: usize| {

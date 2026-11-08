@@ -1,6 +1,7 @@
 mod align;
 mod cache;
 mod error;
+mod fingerprint;
 mod image;
 mod level;
 mod region;

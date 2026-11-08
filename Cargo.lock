@@ -3517,6 +3517,7 @@ dependencies = [
  "grana-tiff",
  "grana-volume",
  "grana-zarr",
+ "sha2",
  "thiserror 2.0.21",
 ]
 

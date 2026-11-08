@@ -27,7 +27,7 @@ use grana_scene::{
     SelectionState, SetState, SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor, TrackEdit,
     TrackStyle, Visibility,
 };
-use grana_volume::{Axis, Clip, Intensity, Region};
+use grana_volume::{Axis, Clip, Fingerprint, Intensity, Region};
 
 use crate::codec::{Decode, Reader};
 use crate::encode::{TAG_FILAMENTS, TAG_SPOTS, TAG_SURFACES};
@@ -44,6 +44,7 @@ impl Decode for Project {
         let project = Self {
             shape: Shape::decode(reader)?,
             source: Source::decode(reader)?,
+            fingerprint: Fingerprint::decode(reader)?,
             scene: SceneState::decode(reader)?,
             masks: Vec::<DerivedSpec>::decode(reader)?,
             measure: MeasureState::decode(reader)?,
@@ -123,6 +124,16 @@ impl Decode for RestoreSpec {
             PsfParams::new(params[0], params[1], params[2], params[3], params[4]),
             iterations,
         ))
+    }
+}
+
+impl Decode for Fingerprint {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let mut bytes = [0u8; 32];
+        for byte in &mut bytes {
+            *byte = reader.u8()?;
+        }
+        Ok(Fingerprint::new(bytes))
     }
 }
 

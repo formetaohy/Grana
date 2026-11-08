@@ -3,6 +3,7 @@ mod brick;
 mod channel;
 mod clip;
 mod extent;
+mod fingerprint;
 mod intensity;
 mod level;
 mod pyramid;
@@ -20,6 +21,7 @@ pub use brick::{
 pub use channel::ChannelInfo;
 pub use clip::Clip;
 pub use extent::Extent;
+pub use fingerprint::Fingerprint;
 pub use intensity::Intensity;
 pub use level::Level;
 pub use pyramid::Pyramid;

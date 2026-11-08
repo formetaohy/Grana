@@ -10,7 +10,7 @@ use grana_volume::{
 };
 
 const EXTENT: Extent = Extent::new(24, 24, 8);
-const ITERATIONS: u32 = 4;
+const ITERATIONS: u32 = 16;
 
 fn series() -> VolumeSeries {
     let mut data = vec![0u16; EXTENT.voxel_count() as usize];
@@ -225,7 +225,7 @@ fn a_restored_channel_blends_its_tiles() {
         .map(|(tiled, whole)| (tiled - whole).abs())
         .fold(0.0f32, f32::max);
     assert!(
-        deviation <= peak * 0.01,
+        deviation <= peak * 0.001,
         "the stitched tiles approach a whole volume restoration by {deviation} of {peak}"
     );
 }

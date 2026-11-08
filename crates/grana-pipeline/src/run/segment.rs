@@ -5,13 +5,16 @@ use grana_analysis::{LabelBuilder, LabelSlab};
 use grana_object::{Mask, Roi, SurfaceSet};
 use grana_scene::{Drift, ObjectFrame, SegmentParams};
 use grana_segment::{Segmenter, Settings, assemble};
-use grana_volume::{Intensity, Level, Region, VoxelData};
+use grana_volume::{Level, Region};
 
 use crate::channels::Channels;
 use crate::event::Event;
 
+mod level;
+
+use level::Leveling;
+
 const LABEL_SLAB: u32 = 32;
-const PERCENTILE_SAMPLES: usize = 1 << 16;
 
 pub struct SegmentRequest {
     channel: usize,
@@ -104,6 +107,7 @@ pub fn segment(
         };
         let width = ranges[0].end - ranges[0].start;
         let height = ranges[1].end - ranges[1].start;
+        let leveling = Leveling::of(reader, time, request.channel, &ranges, mask.as_ref(), shift)?;
         let mut slices = Vec::with_capacity(depth as usize);
         for (offset, z) in ranges[2].clone().enumerate() {
             if cancel.load(Ordering::Relaxed) {
@@ -113,10 +117,7 @@ pub fn segment(
             let values = reader
                 .read_region(time, 0, request.channel, &slice, shift)
                 .map_err(|error| error.to_string())?;
-            let mut plane = normalized(
-                &values,
-                reader.pyramid().channels()[request.channel].intensity(),
-            );
+            let mut plane = leveling.apply(&values);
             let kept = match mask.as_ref() {
                 Some(mask) => keep_plane(&mut plane, mask, &ranges, z),
                 None => true,
@@ -245,58 +246,4 @@ fn surfaces(
         z += core;
     }
     Ok(builder.finish())
-}
-
-fn normalized(values: &VoxelData, intensity: Intensity) -> Vec<f32> {
-    let count = values.voxel_count();
-    let mut plane = vec![0.0f32; count];
-    values.write_values(&mut plane);
-    let (low, high) = match intensity.span() {
-        span if span > 0.0 => (intensity.min(), intensity.max()),
-        _ => {
-            let mut low = f32::INFINITY;
-            let mut high = f32::NEG_INFINITY;
-            for value in &plane {
-                if value.is_finite() {
-                    low = low.min(*value);
-                    high = high.max(*value);
-                }
-            }
-            (low, high)
-        }
-    };
-    if !(low.is_finite() && high.is_finite() && high > low) {
-        plane.fill(0.0);
-        return plane;
-    }
-    let span = high - low;
-    for value in &mut plane {
-        *value = ((*value - low) / span).clamp(0.0, 1.0);
-    }
-    let (first, last) = percentiles(&plane);
-    if last <= first {
-        plane.fill(0.0);
-        return plane;
-    }
-    let span = last - first;
-    for value in &mut plane {
-        *value = ((*value - first) / span).clamp(0.0, 1.0);
-    }
-    plane
-}
-
-fn percentiles(plane: &[f32]) -> (f32, f32) {
-    let stride = (plane.len() / PERCENTILE_SAMPLES).max(1);
-    let mut samples = plane
-        .iter()
-        .step_by(stride)
-        .copied()
-        .filter(|value| value.is_finite())
-        .collect::<Vec<_>>();
-    if samples.is_empty() {
-        return (0.0, 0.0);
-    }
-    samples.sort_unstable_by(f32::total_cmp);
-    let last = samples.len() - 1;
-    (samples[last / 100], samples[last - last / 100])
 }

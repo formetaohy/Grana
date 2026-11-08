@@ -23,12 +23,12 @@ use grana_measure::{ColocPair, ColocThresholds, Group, Scope};
 use grana_object::SurfaceCut;
 use grana_object::TrackSet;
 use grana_optics::PsfParams;
-use grana_project::{Project, Source as ProjectSource, ViewState};
+use grana_project::{Mismatch, Project, Source as ProjectSource, ViewState};
 use grana_scene::{
     Criteria, Dataset, FilterRange, Item, Job, LassoPath, Measure, ObjectFrame, ObjectParams,
     ObjectSetId, Origin, Progress, RestoreSpec, Scene,
 };
-use grana_volume::{BrickData, BrickRequest, Region};
+use grana_volume::{BrickData, BrickRequest, Fingerprint, Region};
 
 use crate::command::{Edit, Export};
 use crate::document::{self, Document};
@@ -116,6 +116,7 @@ pub struct Session {
     snapshotter: Option<SnapshotFactory>,
     series: Vec<Series>,
     series_index: usize,
+    fingerprint: Option<Fingerprint>,
     mask_stamp: Option<(u32, u64)>,
 }
 
@@ -174,6 +175,7 @@ impl Session {
             snapshotter: None,
             series: Vec::new(),
             series_index: 0,
+            fingerprint: None,
             mask_stamp: None,
         }
     }

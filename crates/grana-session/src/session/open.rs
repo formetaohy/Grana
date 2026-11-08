@@ -2,11 +2,12 @@ use super::*;
 
 impl Session {
     pub fn open_series(&mut self, name: &str, series: grana_volume::VolumeSeries) {
-        let (source, pyramid) = Loader::memory(series);
-        self.series = vec![Series::of(&pyramid)];
-        self.series_index = 0;
+        let (source, opened) = Loader::memory(series);
+        self.series = opened.series;
+        self.series_index = opened.selected;
         self.source = Some(source);
-        self.scene = Some(Scene::new(Dataset::synthetic(name, pyramid)));
+        self.scene = Some(Scene::new(Dataset::synthetic(name, opened.pyramid)));
+        self.fingerprint = Some(opened.fingerprint);
         self.timeline = Timeline::new(30, self.frame_duration());
         self.message = None;
         self.loading = None;
@@ -92,10 +93,19 @@ impl Session {
         if self.reject_transfer() {
             return;
         }
-        let (Some(scene), Some(source)) = (self.scene.as_ref(), self.source_ref()) else {
+        let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        let project = Project::capture(scene, &self.measure, source, view);
+        let Some(source) = self.source_ref() else {
+            return;
+        };
+        let Some(fingerprint) = self.fingerprint else {
+            self.message = Some(Message::error(
+                "the loaded dataset carries no fingerprint for a project",
+            ));
+            return;
+        };
+        let project = Project::capture(scene, &self.measure, source, view, fingerprint);
         let hash = self.document_hash();
         self.document = Some(Document::save(project, path, hash));
         self.message = None;
@@ -133,7 +143,7 @@ impl Session {
         match &project.source {
             ProjectSource::Synthetic { name } => {
                 let name = name.clone();
-                let (source, pyramid) = Loader::memory(sample::series());
+                let (source, opened) = Loader::memory(sample::series());
                 self.source = Some(source);
                 self.loading = None;
                 self.pending = Some(Pending {
@@ -143,7 +153,7 @@ impl Session {
                 self.project = None;
                 self.saved = None;
                 self.reset();
-                self.open_dataset(Dataset::synthetic(name, pyramid));
+                self.open_dataset(Dataset::synthetic(name, opened.pyramid), opened.fingerprint);
             }
             ProjectSource::File {
                 path: data, series, ..
@@ -259,10 +269,11 @@ impl Session {
         self.view = None;
         self.history.clear();
         self.label_images.clear();
+        self.fingerprint = None;
         self.mask_stamp = None;
     }
 
-    pub(super) fn open_dataset(&mut self, dataset: Dataset) {
+    pub(super) fn open_dataset(&mut self, dataset: Dataset, fingerprint: Fingerprint) {
         let mut scene = Scene::new(dataset);
         self.loading = None;
         self.message = None;
@@ -304,26 +315,35 @@ impl Session {
             }
         }
         if let Some(pending) = self.pending.take() {
-            if pending.project.matches(&scene.dataset) {
-                scene.restore(pending.project.scene);
-                if let Err(detail) = scene.bind_derived(derived) {
-                    self.message = Some(Message::error(detail));
+            match pending.project.matches(&scene.dataset, fingerprint) {
+                Ok(()) => {
+                    scene.restore(pending.project.scene);
+                    if let Err(detail) = scene.bind_derived(derived) {
+                        self.message = Some(Message::error(detail));
+                    }
+                    self.measure.restore(pending.project.measure, &scene);
+                    self.export = pending.project.view.export;
+                    self.view = Some(pending.project.view);
+                    self.project = Some(pending.path);
+                    self.saved = Some(
+                        scene.document_hash()
+                            ^ self.measure.document_hash()
+                            ^ self.timeline.document(),
+                    );
                 }
-                self.measure.restore(pending.project.measure, &scene);
-                self.export = pending.project.view.export;
-                self.view = Some(pending.project.view);
-                self.project = Some(pending.path);
-                self.saved = Some(
-                    scene.document_hash() ^ self.measure.document_hash() ^ self.timeline.document(),
-                );
-            } else {
-                let _ = scene.set_derived_layout(Vec::new());
-                self.message = Some(Message::error(
-                    "the project was saved from a dataset with a different shape, channels or duration",
-                ));
+                Err(mismatch) => {
+                    let _ = scene.set_derived_layout(Vec::new());
+                    self.message = Some(Message::error(match mismatch {
+                        Mismatch::Dataset => "the project was saved from a different dataset",
+                        Mismatch::Shape => {
+                            "the project was saved from a dataset with a different shape, channels or duration"
+                        }
+                    }));
+                }
             }
         }
         self.scene = Some(scene);
+        self.fingerprint = Some(fingerprint);
         self.generation += 1;
         self.mask_stamp = None;
         self.refresh_labels();
@@ -372,23 +392,18 @@ impl Session {
             processed += 1;
             repaint = true;
             match event {
-                LoaderEvent::Opened {
-                    name,
-                    pyramid,
-                    format,
-                    series,
-                    selected,
-                } => {
-                    self.series = series;
-                    self.series_index = selected;
-                    let dataset = match format {
-                        Format::Zarr => Dataset::zarr(name, pyramid),
-                        Format::Tiff => Dataset::tiff(name, pyramid),
-                        Format::Czi => Dataset::czi(name, pyramid),
-                        Format::Nikon => Dataset::nikon(name, pyramid),
-                        Format::Leica => Dataset::leica(name, pyramid),
+                LoaderEvent::Opened(opened) => {
+                    self.series = opened.series;
+                    self.series_index = opened.selected;
+                    let dataset = match opened.format {
+                        Some(Format::Zarr) => Dataset::zarr(opened.name, opened.pyramid),
+                        Some(Format::Tiff) => Dataset::tiff(opened.name, opened.pyramid),
+                        Some(Format::Czi) => Dataset::czi(opened.name, opened.pyramid),
+                        Some(Format::Nikon) => Dataset::nikon(opened.name, opened.pyramid),
+                        Some(Format::Leica) => Dataset::leica(opened.name, opened.pyramid),
+                        None => Dataset::synthetic(opened.name, opened.pyramid),
                     };
-                    self.open_dataset(dataset);
+                    self.open_dataset(dataset, opened.fingerprint);
                 }
                 LoaderEvent::Brick { request, data } => {
                     self.in_flight.remove(&request);

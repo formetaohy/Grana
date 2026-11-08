@@ -19,7 +19,7 @@ use grana_scene::{
     RestoreSpec, SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit,
     TrackStyle, Visibility,
 };
-use grana_volume::{Clip, Intensity, Region};
+use grana_volume::{Clip, Fingerprint, Intensity, Region};
 
 use grana_codec::Encoder;
 
@@ -34,10 +34,19 @@ impl Encode for Project {
     fn encode(&self, writer: &mut Encoder<'_>) {
         self.shape.encode(writer);
         self.source.encode(writer);
+        self.fingerprint.encode(writer);
         self.scene.encode(writer);
         self.masks.encode(writer);
         self.measure.encode(writer);
         self.view.encode(writer);
+    }
+}
+
+impl Encode for Fingerprint {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        for byte in self.bytes() {
+            writer.u8(byte);
+        }
     }
 }
 
