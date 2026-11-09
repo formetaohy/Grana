@@ -24,6 +24,7 @@ impl Renderer {
             samples,
             scene,
             prefetch,
+            level_cap: _,
         } = frame;
         assert!(
             inside(volume_region, size) && inside(section_region, size),
@@ -59,6 +60,7 @@ impl Renderer {
             channels,
             volume_level: volume_rendered,
             section_level: section_rendered,
+            level_cap,
             feedback,
             frames,
             view_bytes,
@@ -119,12 +121,17 @@ impl Renderer {
         let slots = atlas.slots();
         let level_count = pyramid.level_count();
         let first = arena.first();
+        let ceiling = level_cap
+            .unwrap_or(level_count - 1)
+            .max(first)
+            .min(level_count - 1);
+        let limits = Limits { first, ceiling };
         let section_target_level = select_section_level(
             pyramid,
             section,
             section_height as f32,
             *section_rendered,
-            first,
+            limits,
         );
         let (section_level, section_count) = resolve_section_level(
             pyramid,
@@ -133,6 +140,7 @@ impl Renderer {
             section_target_level,
             (slots / SECTION_BUDGET_DIVISOR).max(1),
             region,
+            limits,
         );
         let section_capacity = section_count.clamp(1, slots.saturating_sub(1).max(1));
         let volume_capacity = slots.saturating_sub(section_capacity).max(1);
@@ -141,7 +149,7 @@ impl Renderer {
             camera,
             volume_height as f32,
             *volume_rendered,
-            first,
+            limits,
             info.volume.visible,
             volume_capacity,
         );
@@ -150,7 +158,8 @@ impl Renderer {
             ladder,
             capacity,
             section: section_level,
-            section_fallback: neighbour(*section_rendered, section_level, level_count).max(first),
+            section_fallback: neighbour(*section_rendered, section_level, level_count)
+                .clamp(first, ceiling),
             section_capacity,
         };
         *volume_rendered = Some(ladder.base);

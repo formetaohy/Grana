@@ -2,6 +2,7 @@ mod app;
 mod cli;
 mod clipboard;
 mod snapshot;
+pub mod stream;
 
 pub use app::App;
 pub use cli::{batch, clear_cache, gui};

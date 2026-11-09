@@ -108,16 +108,16 @@ pub(super) fn view<'a>(
     elements
 }
 
-pub(super) fn remote<'a>(
+pub(crate) fn remote<'a>(
     ctx: &mut BuildContext<'_, Message>,
-    layout: &Layout,
-    state: &'a View<'a>,
+    stage: Rect,
+    open: bool,
 ) -> Vec<Element<'a, Message>> {
-    if !state.workspace.remote_open {
+    if !open {
         return Vec::new();
     }
     let palette = ctx.theme().palette;
-    let width = (layout.stage.width() - 40.0).min(520.0);
+    let width = (stage.width() - 40.0).min(520.0);
     let title = crate::view::card_title(
         ctx,
         Icon::Globe,
@@ -142,10 +142,7 @@ pub(super) fn remote<'a>(
         .glass(GlassStyle::sheet())
         .children([title, tip, field, hint]);
     let rect = Rect::from_min_size(
-        Vec2::new(
-            layout.stage.center().x - width * 0.5,
-            layout.stage.min.y + 96.0,
-        ),
+        Vec2::new(stage.center().x - width * 0.5, stage.min.y + 96.0),
         Vec2::new(width, 158.0),
     );
     vec![sheet.at(rect).layer(Layer::Popup)]

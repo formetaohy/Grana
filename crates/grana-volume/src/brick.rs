@@ -166,6 +166,17 @@ impl BrickData {
     pub fn channels(&self) -> &[VoxelData] {
         &self.channels
     }
+
+    pub fn bytes(&self) -> u64 {
+        self.channels
+            .iter()
+            .map(|channel| match channel {
+                VoxelData::U8(data) => data.len() as u64,
+                VoxelData::U16(data) => 2 * data.len() as u64,
+                VoxelData::F32(data) => 4 * data.len() as u64,
+            })
+            .sum()
+    }
 }
 
 pub fn pad_brick(

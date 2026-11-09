@@ -614,16 +614,32 @@ pub(crate) fn volume_dispatch(table: &crate::brick::BrickTable) -> u32 {
     table.grid.count() as u32
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct Limits {
+    pub(crate) first: usize,
+    pub(crate) ceiling: usize,
+}
+
+impl Limits {
+    fn levels(self, pyramid: &Pyramid) -> usize {
+        pyramid
+            .level_count()
+            .min(self.ceiling + 1)
+            .max(self.first + 1)
+    }
+}
+
 pub(crate) fn volume_ladder(
     pyramid: &Pyramid,
     camera: &Camera,
     height: f32,
     current: Option<usize>,
-    first: usize,
+    limits: Limits,
     previous_visible: usize,
     capacity: usize,
 ) -> Ladder {
-    let levels = pyramid.level_count();
+    let first = limits.first;
+    let levels = limits.levels(pyramid);
     let nearest = nearest_distance(pyramid.level(0), camera.eye());
     let mut pixel_world = 2.0 * nearest * (camera.fov_y() * 0.5).tan() / height.max(1.0);
     if previous_visible > capacity {
@@ -658,25 +674,24 @@ pub(crate) fn select_section_level(
     section: &SectionCamera,
     height: f32,
     current: Option<usize>,
-    first: usize,
+    limits: Limits,
 ) -> usize {
+    let first = limits.first;
+    let levels = limits.levels(pyramid);
     let pixel_world = section.span() / height.max(1.0);
     let mut level = first;
-    for index in first..pyramid.level_count() {
+    for index in first..levels {
         if section_spacing(pyramid, index, section) <= pixel_world {
             level = index;
         } else {
             break;
         }
     }
-    hold_level(
-        pyramid.level_count(),
-        level,
-        current,
-        pixel_world,
-        |index| section_spacing(pyramid, index, section),
-    )
+    hold_level(levels, level, current, pixel_world, |index| {
+        section_spacing(pyramid, index, section)
+    })
     .max(first)
+    .min(levels - 1)
 }
 
 fn hold_level(
@@ -705,8 +720,9 @@ pub(crate) fn resolve_section_level(
     target: usize,
     capacity: usize,
     region: Region,
+    limits: Limits,
 ) -> (usize, usize) {
-    let levels = pyramid.level_count();
+    let levels = limits.levels(pyramid);
     let mut level = target.min(levels - 1);
     loop {
         let count = section_brick_count(pyramid, level, section, aspect, region);

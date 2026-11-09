@@ -34,7 +34,7 @@ use crate::mesh::MeshPasses;
 use crate::oit::Oit;
 use crate::pick::{self, PICK_ROW, PickId, PickPane, PickTarget};
 use crate::planner::{
-    self, BAND, Demand, Ladder, Planner, Schedule, SectionRange, bucket_scale, capacities,
+    self, BAND, Demand, Ladder, Limits, Planner, Schedule, SectionRange, bucket_scale, capacities,
     decode_plan, resolve_section_level, section_range, select_section_level, volume_dispatch,
     volume_ladder,
 };
@@ -134,6 +134,7 @@ pub struct Frame<'a, 'b> {
     pub samples: u32,
     pub scene: &'a SceneFrame<'b>,
     pub prefetch: bool,
+    pub level_cap: usize,
 }
 
 pub struct Renderer {
@@ -162,6 +163,7 @@ pub struct Renderer {
     time: u32,
     volume_level: Option<usize>,
     section_level: Option<usize>,
+    level_cap: Option<usize>,
     budget: u64,
     feedback: Option<Readback>,
     frames: Vec<Option<Residency>>,
@@ -233,6 +235,7 @@ impl Renderer {
             time: 0,
             volume_level: None,
             section_level: None,
+            level_cap: None,
             budget,
             feedback: None,
             frames: vec![None; FEEDBACK_SLOTS],
@@ -276,6 +279,7 @@ impl Renderer {
         self.settled = None;
         self.exporting = true;
         self.fade = None;
+        self.level_cap = None;
     }
 
     pub fn set_exporting(&mut self, exporting: bool) {
@@ -510,6 +514,7 @@ impl Renderer {
             self.settled = None;
         }
         let mut target = self.target.take().expect("the frame target is ready");
+        self.level_cap = Some(frame.level_cap);
         let info = self.render(device, queue, &mut target, frame);
         self.target = Some(target);
         info

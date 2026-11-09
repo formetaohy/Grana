@@ -7,6 +7,7 @@ mod recipe;
 mod sample;
 mod session;
 mod task;
+mod transfer;
 mod view;
 
 pub use command::{Action, Command};

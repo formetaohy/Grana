@@ -117,6 +117,20 @@ impl Pyramid {
         self.frames
     }
 
+    pub fn brick_bytes(&self) -> u64 {
+        let voxels = u64::from(crate::PADDED_SIDE).pow(3);
+        let channel: u64 = self
+            .channels
+            .iter()
+            .map(|info| match info.format() {
+                crate::VoxelFormat::U8 => 1,
+                crate::VoxelFormat::U16 => 2,
+                crate::VoxelFormat::F32 => 4,
+            })
+            .sum();
+        voxels * channel
+    }
+
     pub fn frame_interval(&self) -> f32 {
         self.frame_interval
     }

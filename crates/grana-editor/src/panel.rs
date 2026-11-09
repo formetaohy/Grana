@@ -15,6 +15,8 @@ mod header;
 mod stage;
 mod timeline;
 
+pub(crate) use stage::remote;
+
 pub const MARGIN: f32 = 16.0;
 pub const GAP: f32 = 12.0;
 pub const FORM_LABEL: f32 = 72.0;
@@ -76,15 +78,23 @@ pub fn build(
     if let Some(panel) = workspace.panel {
         workspace.last_panel = panel;
     }
+    let full = Rect::from_min_size(Vec2::ZERO, ui.size());
+    let Some(scene) = view.scene else {
+        let elements = {
+            let mut ctx = ui.build();
+            crate::shell::view(&mut ctx, view, workspace, full)
+        };
+        ui.present(grana_ui::place(full, elements));
+        return commands;
+    };
     if workspace.panel == Some(Panel::Statistics)
         && view.measure.set().is_none()
-        && let Some(set) = view.scene.objects.iter().find(|set| set.detected() > 0)
+        && let Some(set) = scene.objects.iter().find(|set| set.detected() > 0)
     {
         commands.push(Command::SetMeasureSet(Some(set.id())));
     }
-    let full = Rect::from_min_size(Vec2::ZERO, ui.size());
     let state = View {
-        scene: view.scene,
+        scene,
         measure: view.measure,
         timeline: view.timeline,
         jobs: view.jobs,
@@ -127,7 +137,11 @@ fn view_elements<'a>(
         elements.push(dock(ctx, rect, state));
     }
     elements.extend(stage::toast(ctx, layout, state));
-    elements.extend(stage::remote(ctx, layout, state));
+    elements.extend(crate::panel::remote(
+        ctx,
+        layout.stage,
+        state.workspace.remote_open,
+    ));
     elements
 }
 
@@ -534,19 +548,23 @@ pub fn apply(
             Message::SetSectionPreset(index) => {
                 let (azimuth, elevation) = crate::section_preset(index);
                 viewport.section_mut().set_orientation(azimuth, elevation);
-                crate::fitting::fit_section(view.scene, viewport, stage);
+                if let Some(scene) = view.scene {
+                    crate::fitting::fit_section(scene, viewport, stage);
+                }
             }
             Message::SetSectionOrientation { azimuth, elevation } => {
                 viewport.section_mut().set_orientation(azimuth, elevation);
             }
             Message::SetSectionDepth(position) => {
-                let world = view.scene.dataset.world_size();
-                let section = viewport.section_mut();
-                let normal = section.normal();
-                let extent = world.abs().dot(normal.abs());
-                let target = position.clamp(0.0, extent) - 0.5 * extent;
-                let center = section.center();
-                section.set_center(center + normal * (target - center.dot(normal)));
+                if let Some(scene) = view.scene {
+                    let world = scene.dataset.world_size();
+                    let section = viewport.section_mut();
+                    let normal = section.normal();
+                    let extent = world.abs().dot(normal.abs());
+                    let target = position.clamp(0.0, extent) - 0.5 * extent;
+                    let center = section.center();
+                    section.set_center(center + normal * (target - center.dot(normal)));
+                }
             }
             Message::SetPsfThreshold(value) => {
                 workspace.psf_threshold = value.clamp(1.0, 64.0);
@@ -563,16 +581,33 @@ pub fn apply(
                 workspace.export = export;
                 commands.push(Command::SetExport(export));
             }
-            Message::FitVolume => crate::fitting::fit_volume(view.scene, viewport, stage),
-            Message::FitSection => crate::fitting::fit_section(view.scene, viewport, stage),
-            Message::Plot(event) => {
-                crate::plot::apply(event, view.scene, view.measure, workspace, commands)
+            Message::FitVolume => {
+                if let Some(scene) = view.scene {
+                    crate::fitting::fit_volume(scene, viewport, stage);
+                }
             }
-            Message::Locate(row) => crate::plot::locate(view.scene, view.measure, row, commands),
+            Message::FitSection => {
+                if let Some(scene) = view.scene {
+                    crate::fitting::fit_section(scene, viewport, stage);
+                }
+            }
+            Message::Plot(event) => {
+                if let Some(scene) = view.scene {
+                    crate::plot::apply(event, scene, view.measure, workspace, commands);
+                }
+            }
+            Message::Locate(row) => {
+                if let Some(scene) = view.scene {
+                    crate::plot::locate(scene, view.measure, row, commands);
+                }
+            }
             Message::ClearGates => crate::plot::clear_gates(view.measure, commands),
             Message::Region { axis, side, delta } => {
-                let current = view.scene.region;
-                let world = view.scene.dataset.world_size();
+                let Some(scene) = view.scene else {
+                    continue;
+                };
+                let current = scene.region;
+                let world = scene.dataset.world_size();
                 let minimum = (1.0e-3 * world.min_element()).max(1.0e-5);
                 let direction = if side == 0 { -1.0 } else { 1.0 };
                 let half = current.half();

@@ -19,6 +19,7 @@ pub struct ViewportFrame<'a> {
     pub volume_region: [u32; 4],
     pub section_region: [u32; 4],
     pub prefetch: bool,
+    pub level_cap: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,8 +68,8 @@ impl Engine {
         self.renderer.poll_requests(device)
     }
 
-    pub fn upload(&mut self, queue: &Queue, request: BrickRequest, data: &BrickData) {
-        self.renderer.upload(queue, request, data);
+    pub fn upload(&mut self, queue: &Queue, request: BrickRequest, data: &BrickData) -> bool {
+        self.renderer.upload(queue, request, data)
     }
 
     pub fn draw_viewport(
@@ -94,6 +95,7 @@ impl Engine {
                 samples: SAMPLE_LIMIT,
                 prefetch: frame.prefetch,
                 transparent: false,
+                level_cap: frame.level_cap,
             },
             &rendered,
         );

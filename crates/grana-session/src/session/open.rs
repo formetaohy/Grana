@@ -1,5 +1,7 @@
 use super::*;
 
+use std::time::Instant;
+
 impl Session {
     pub fn open_series(&mut self, name: &str, series: grana_volume::VolumeSeries) {
         let (source, opened) = Loader::memory(series);
@@ -310,6 +312,7 @@ impl Session {
         self.label_images.clear();
         self.fingerprint = None;
         self.mask_stamp = None;
+        self.transfer.reset();
     }
 
     pub(super) fn open_dataset(&mut self, dataset: Dataset, fingerprint: Fingerprint) {
@@ -385,6 +388,7 @@ impl Session {
         self.fingerprint = Some(fingerprint);
         self.generation += 1;
         self.mask_stamp = None;
+        self.transfer.reset();
         if let Some(source) = &self.source {
             source.set_time(0);
             if let Some(scene) = self.scene.as_ref() {
@@ -437,6 +441,7 @@ impl Session {
                 }
                 LoaderEvent::Brick { request, data } => {
                     self.in_flight.remove(&request);
+                    self.transfer.record(data.bytes(), Instant::now());
                     self.bricks.push((request, data));
                 }
                 LoaderEvent::ReadFailed { request, detail } => {
@@ -455,6 +460,7 @@ impl Session {
                     self.in_flight.clear();
                     self.project = None;
                     self.saved = None;
+                    self.transfer.reset();
                 }
             }
         }

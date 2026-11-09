@@ -37,6 +37,7 @@ use crate::loader::{Event as LoaderEvent, Loader};
 use crate::recipe::Recipe;
 use crate::sample;
 use crate::task::Poll;
+use crate::transfer::Transfer;
 use crate::view::{
     BatchComparison, BatchDataset, BatchView, HistoryView, IoView, Message, SeriesView, StoreView,
 };
@@ -118,6 +119,8 @@ pub struct Session {
     series_index: usize,
     fingerprint: Option<Fingerprint>,
     mask_stamp: Option<(u32, u64)>,
+    revision: u64,
+    transfer: Transfer,
 }
 
 impl Default for Session {
@@ -177,6 +180,8 @@ impl Session {
             series_index: 0,
             fingerprint: None,
             mask_stamp: None,
+            revision: 0,
+            transfer: Transfer::default(),
         }
     }
     pub fn insert_keyframe(&mut self, key: Keyframe) -> usize {
@@ -189,6 +194,7 @@ impl Session {
         if let Some(snapshot) = snapshot {
             self.history.record(Edit::new(Action::Keyframe), snapshot);
         }
+        self.touch();
         index
     }
     pub fn scene(&self) -> Option<&Scene> {
@@ -211,6 +217,28 @@ impl Session {
     }
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn remote(&self) -> bool {
+        self.scene
+            .as_ref()
+            .is_some_and(|scene| scene.dataset.origin() == Origin::Remote)
+    }
+
+    pub fn throughput(&self) -> Option<f32> {
+        if self.remote() {
+            self.transfer.rate()
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn touch(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn reload(&self) -> u64 {
@@ -326,10 +354,11 @@ impl Session {
         }
     }
     pub fn apply_measure(&mut self) {
-        if self.measure.take_dirty()
-            && let Some(scene) = self.scene.as_mut()
-        {
-            self.measure.apply(scene);
+        if self.measure.take_dirty() {
+            self.touch();
+            if let Some(scene) = self.scene.as_mut() {
+                self.measure.apply(scene);
+            }
         }
     }
     pub fn poll(&mut self) -> bool {
@@ -340,6 +369,9 @@ impl Session {
         repaint |= self.poll_labels();
         repaint |= self.poll_dataset();
         repaint |= self.refresh_masks();
+        if repaint {
+            self.touch();
+        }
         repaint
     }
 
@@ -398,6 +430,7 @@ impl Session {
         if let Some(source) = &self.source {
             source.set_time(time);
         }
+        self.touch();
     }
 }
 

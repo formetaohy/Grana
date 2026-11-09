@@ -25,6 +25,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
 use crate::clipboard::SystemClipboard;
+use crate::stream::{Stream, View as StreamView};
 
 const STREAM_POLL: Duration = Duration::from_millis(16);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
@@ -65,7 +66,8 @@ pub struct App {
     resume: Option<(u32, f32)>,
     ime: bool,
     ime_area: Option<(i32, i32, u32, u32)>,
-    scene_changed: bool,
+    uploads: u64,
+    stream: Stream,
     pick_toggle: bool,
 }
 
@@ -99,7 +101,8 @@ impl App {
             resume: None,
             ime: false,
             ime_area: None,
-            scene_changed: true,
+            uploads: 0,
+            stream: Stream::new(),
             pick_toggle: false,
         }
     }
@@ -147,9 +150,7 @@ impl App {
     }
 
     fn redraw(&mut self) {
-        if self.session.poll() {
-            self.scene_changed = true;
-        }
+        self.session.poll();
         if let Some(set) = self.workspace.seed
             && self
                 .session
@@ -165,7 +166,6 @@ impl App {
         self.sync_ime();
         self.interact_viewport();
         if self.apply(commands) {
-            self.scene_changed = true;
             return;
         }
         self.session.apply_measure();
@@ -183,7 +183,9 @@ impl App {
             delay = Duration::ZERO;
         } else if self.workspace.playback.previewing {
             delay = delay.min(ANIMATION_INTERVAL);
-        } else if self.info.samples < SAMPLE_LIMIT || self.info.fading {
+        } else if self.session.scene().is_some()
+            && (self.info.samples < SAMPLE_LIMIT || self.info.fading)
+        {
             delay = Duration::ZERO;
         }
         if self.streaming() {
@@ -201,7 +203,7 @@ impl App {
             engine,
             session,
             info,
-            scene_changed,
+            uploads,
             ..
         } = self;
         let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_mut()) else {
@@ -224,12 +226,12 @@ impl App {
             }
         }
         for (request, data) in session.take_bricks() {
-            engine.upload(&surface.gpu.queue, request, &data);
-            *scene_changed = true;
+            if engine.upload(&surface.gpu.queue, request, &data) {
+                *uploads += 1;
+            }
         }
         if session.generation() != self.generation {
             self.generation = session.generation();
-            *scene_changed = true;
             if let Some(scene) = session.scene() {
                 engine.set_dataset(&surface.gpu.device, scene.dataset.pyramid());
             }
@@ -245,14 +247,12 @@ impl App {
         let reload = session.reload();
         if reload != self.reload {
             self.reload = reload;
-            *scene_changed = true;
             if let Some(scene) = session.scene() {
                 engine.set_dataset(&surface.gpu.device, scene.dataset.pyramid());
             }
             *info = FrameInfo::default();
         }
         if let Some(view) = view {
-            *scene_changed = true;
             self.apply_view(&view);
         }
     }
@@ -280,13 +280,11 @@ impl App {
         if self.fit_section && sized {
             self.viewport.fit_section(world, voxel, section_aspect);
             self.fit_section = false;
-            self.scene_changed = true;
         }
         if self.needs_fit && sized {
             self.viewport
                 .fit(world, voxel, volume_aspect, section_aspect);
             self.needs_fit = false;
-            self.scene_changed = true;
         }
     }
 
@@ -295,13 +293,11 @@ impl App {
         let loaded = self.session.scene().is_some();
         let streamed = self.info.volume.resident >= self.info.volume.demand
             && self.info.section.resident >= self.info.section.demand;
+        let settled = loaded && streamed && self.info.samples >= SAMPLE_LIMIT && !self.info.fading;
+        let occupied = self.streaming();
         if let Some(path) = self.capture.clone()
-            && loaded
-            && ((self.elapsed_frames > 30
-                && streamed
-                && self.info.samples >= SAMPLE_LIMIT
-                && !self.info.fading)
-                || self.start.elapsed() > CAPTURE_BUDGET)
+            && self.elapsed_frames > 30
+            && (settled || (!occupied && !loaded) || self.start.elapsed() > CAPTURE_BUDGET)
         {
             self.capture = None;
             self.write_capture(&path);
@@ -338,6 +334,14 @@ impl App {
     }
 
     fn interact_viewport(&mut self) {
+        if self.session.scene().is_none() {
+            if let Some(surface) = self.surface.as_mut() {
+                surface
+                    .window
+                    .set_cursor(interface_cursor(surface.ui.cursor()));
+            }
+            return;
+        }
         let (interaction, hovered) = {
             let App {
                 surface,
@@ -398,7 +402,6 @@ impl App {
         if let Some(grab) = interaction.grab {
             self.drag_annotation(grab);
         }
-        let picking = interaction.pick.is_some();
         if let Some((pane, point)) = interaction.pick {
             match self.workspace.seed.filter(|_| pane == Pane::Volume) {
                 Some(set) => self.place_seed(set, point, interaction.modifiers.alt),
@@ -408,10 +411,6 @@ impl App {
                 }
             }
             self.request_redraw();
-        }
-        if interaction.camera || interaction.tool.is_some() || interaction.grab.is_some() || picking
-        {
-            self.scene_changed = true;
         }
     }
 
@@ -428,7 +427,6 @@ impl App {
                 self.place_annotation(tool, drag.pane, drag.position);
             }
         }
-        self.scene_changed = true;
     }
 
     fn draw_region(&mut self, drag: ToolDrag) {
@@ -786,9 +784,6 @@ impl App {
         let Some(engine) = engine.as_mut() else {
             return (Vec::new(), false);
         };
-        let Some(scene) = session.scene() else {
-            return (Vec::new(), false);
-        };
         let scale = surface.window.scale_factor() as f32;
         let size = surface.gpu.size();
         let points = UiVec2::new(size[0] as f32 / scale, size[1] as f32 / scale);
@@ -800,7 +795,7 @@ impl App {
         let export = engine.progress();
         let export_message = engine.output_message();
         let view = SessionView {
-            scene,
+            scene: session.scene(),
             measure: session.measure(),
             timeline: session.timeline(),
             jobs: session.progress(),
@@ -864,53 +859,65 @@ impl App {
         let scale = self.surface.as_ref()?.window.scale_factor() as f32;
         let panes = self.panels().screen(scale, size);
         let playing = self.workspace.playback.playing;
+        let cap = self.level_cap();
         let App {
             surface,
             engine,
             session,
             viewport,
-            scene_changed,
             ..
         } = self;
-        let surface = surface.as_mut()?;
-        let engine = engine.as_mut()?;
-        let scene = session.scene()?;
-        let frame = surface.gpu.acquire()?;
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let info = match engine.draw_viewport(
-            &surface.gpu.device,
-            &surface.gpu.queue,
-            grana_engine::ViewportFrame {
-                target: surface.ui.scene_view(),
-                scene,
-                viewport,
-                size,
-                volume_region: panes.volume,
-                section_region: panes.section,
-                prefetch: playing,
-            },
-        ) {
-            Ok(info) => info,
-            Err(detail) => {
-                engine.set_output_message(Some(detail));
-                return Some(Duration::ZERO);
-            }
+        let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_mut()) else {
+            return None;
         };
-        let mut encoder =
-            surface
-                .gpu
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("grana.ui.paint"),
-                });
-        surface.ui.set_scene_changed(std::mem::take(scene_changed));
-        surface.ui.render(&mut encoder, &view);
-        surface.gpu.queue.submit([encoder.finish()]);
-        surface.gpu.queue.present(frame);
-        self.info = info;
+        if let Some(scene) = session.scene() {
+            let info = match engine.draw_viewport(
+                &surface.gpu.device,
+                &surface.gpu.queue,
+                grana_engine::ViewportFrame {
+                    target: surface.ui.scene_view(),
+                    scene,
+                    viewport,
+                    size,
+                    volume_region: panes.volume,
+                    section_region: panes.section,
+                    prefetch: playing,
+                    level_cap: cap,
+                },
+            ) {
+                Ok(info) => info,
+                Err(detail) => {
+                    engine.set_output_message(Some(detail));
+                    return Some(Duration::ZERO);
+                }
+            };
+            self.info = info;
+        } else {
+            self.info = FrameInfo::default();
+        }
+        self.present_ui();
         Some(Duration::MAX)
+    }
+
+    fn level_cap(&mut self) -> usize {
+        let Some((levels, brick_bytes)) = self.session.scene().map(|scene| {
+            (
+                scene.dataset.level_count(),
+                scene.dataset.pyramid().brick_bytes(),
+            )
+        }) else {
+            return 0;
+        };
+        let view = StreamView {
+            remote: self.session.remote(),
+            levels,
+            rate: self.session.throughput(),
+            bricks: self.info.volume.demand + self.info.section.demand,
+            rendered: self.info.section.level.max(self.info.volume.level),
+            brick_bytes,
+            now: Instant::now(),
+        };
+        self.stream.cap(view)
     }
 
     fn panels(&self) -> Panels {
@@ -991,7 +998,6 @@ impl App {
         if let Some((time, position)) = self.resume.take() {
             self.restore_time(time, position);
         }
-        self.scene_changed = true;
         self.repaint_at = Some(Instant::now());
     }
 
@@ -1152,6 +1158,16 @@ impl App {
     }
 
     fn present_ui(&mut self) {
+        let scale = self
+            .surface
+            .as_ref()
+            .map_or(1.0, |surface| surface.window.scale_factor() as f32);
+        let size = self
+            .surface
+            .as_ref()
+            .map_or([1, 1], |surface| surface.gpu.size());
+        let panes = self.panels().screen(scale, size);
+        let revision = self.frame_revision(&panes);
         let Some(surface) = self.surface.as_mut() else {
             return;
         };
@@ -1168,11 +1184,54 @@ impl App {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("grana.ui.present"),
                 });
-        let changed = std::mem::take(&mut self.scene_changed);
-        surface.ui.set_scene_changed(changed);
+        surface.ui.set_scene_revision(revision);
         surface.ui.render(&mut encoder, &view);
         surface.gpu.queue.submit([encoder.finish()]);
         surface.gpu.queue.present(frame);
+    }
+
+    fn frame_revision(&self, panes: &grana_engine::Panes) -> u64 {
+        let camera = self.viewport.camera_state();
+        let section = self.viewport.section_state();
+        let mut stamp = Stamp::new();
+        stamp.u64(self.session.revision());
+        stamp.u64(self.uploads);
+        stamp.u64(u64::from(self.viewport.split().to_bits()));
+        for value in camera.pivot.into_iter().chain([
+            camera.yaw,
+            camera.pitch,
+            camera.distance,
+            camera.fov_y,
+        ]) {
+            stamp.f32(value);
+        }
+        for value in
+            section
+                .center
+                .into_iter()
+                .chain([section.azimuth, section.elevation, section.span])
+        {
+            stamp.f32(value);
+        }
+        for value in panes.volume.into_iter().chain(panes.section) {
+            stamp.u64(u64::from(value));
+        }
+        let info = self.info;
+        stamp.u64(u64::from(info.samples));
+        stamp.u64(u64::from(u8::from(info.settled)) << 1 | u64::from(u8::from(info.fading)));
+        for view in [info.volume, info.section] {
+            for value in [view.level, view.visible, view.demand, view.resident] {
+                stamp.u64(value as u64);
+            }
+        }
+        for value in [info.bytes, info.geometry, info.fragments, info.cut.indices] {
+            stamp.u64(value);
+        }
+        stamp.u64(u64::from(info.oit.layers) << 32 | u64::from(info.oit.dropped));
+        if let Some(scene) = self.session.scene() {
+            stamp.u64(scene.time() as u64);
+        }
+        stamp.0
     }
 
     fn streaming(&self) -> bool {
@@ -1270,7 +1329,6 @@ impl App {
             Picked::Seed => return,
             Picked::Miss => None,
         };
-        self.scene_changed = true;
         match (selection, std::mem::take(&mut self.pick_toggle)) {
             (Some(selection), true) => {
                 self.apply(vec![Command::ToggleSelect(selection)]);
@@ -1323,7 +1381,6 @@ impl App {
         }
         let next = (scene.time() + 1) % scene.frame_count();
         self.session.set_time(next);
-        self.scene_changed = true;
         self.workspace.playback.previewing = false;
         self.last_advance = Some(now);
     }
@@ -1340,7 +1397,6 @@ impl App {
                 (self.workspace.playback.position + elapsed) % duration;
         }
         self.pose_animation();
-        self.scene_changed = true;
     }
 
     fn pose_animation(&mut self) {
@@ -1381,7 +1437,6 @@ impl App {
         self.last_advance = None;
         self.last_animation = None;
         self.session.set_time(time);
-        self.scene_changed = true;
     }
 
     fn pick_folder() -> Option<PathBuf> {
@@ -1620,6 +1675,22 @@ fn view_stats(info: grana_render::ViewInfo) -> ViewStats {
         visible: info.visible,
         demand: info.demand,
         resident: info.resident,
+    }
+}
+
+struct Stamp(u64);
+
+impl Stamp {
+    fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn u64(&mut self, value: u64) {
+        self.0 = (self.0 ^ value).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+
+    fn f32(&mut self, value: f32) {
+        self.u64(u64::from(value.to_bits()));
     }
 }
 

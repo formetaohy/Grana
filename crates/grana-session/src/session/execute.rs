@@ -605,6 +605,7 @@ impl Session {
         if let Some(recording) = recording {
             self.commit_edit(recording);
         }
+        self.touch();
         effects
     }
 
@@ -653,6 +654,7 @@ impl Session {
         };
         self.abandon(edit);
         self.restore(snapshot);
+        self.touch();
         Effects {
             repaint: true,
             ..Effects::default()
@@ -671,6 +673,7 @@ impl Session {
         };
         self.abandon(edit);
         self.restore(snapshot);
+        self.touch();
         Effects {
             repaint: true,
             ..Effects::default()

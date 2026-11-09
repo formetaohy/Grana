@@ -82,6 +82,7 @@ pub struct Ui<A = ()> {
     pub(crate) tooltip: Option<(NodeId, String)>,
     pub(crate) clipboard: Box<dyn Clipboard>,
     pub(crate) theme_stamp: Appearance,
+    pub(crate) scene_revision: Option<u64>,
 }
 
 impl<A: Clone> Ui<A> {
@@ -130,6 +131,7 @@ impl<A: Clone> Ui<A> {
             tooltip: None,
             clipboard: Box::new(NullClipboard),
             theme_stamp: appearance(Theme::dark()),
+            scene_revision: None,
         }
     }
 
@@ -212,10 +214,12 @@ impl<A: Clone> Ui<A> {
         self.renderer.scene_view()
     }
 
-    pub fn set_scene_changed(&mut self, changed: bool) {
-        if changed {
-            self.change.base = true;
+    pub fn set_scene_revision(&mut self, revision: u64) {
+        if self.scene_revision == Some(revision) {
+            return;
         }
+        self.scene_revision = Some(revision);
+        self.change.base = true;
     }
 
     pub fn pointer_over_widget(&self) -> bool {

@@ -40,6 +40,7 @@ fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
         samples: SAMPLES,
         scene: view.scene,
         prefetch: false,
+        level_cap: usize::MAX,
     }
 }
 

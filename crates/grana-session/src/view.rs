@@ -94,7 +94,7 @@ pub struct SeriesView<'a> {
 }
 
 pub struct SessionView<'a> {
-    pub scene: &'a Scene,
+    pub scene: Option<&'a Scene>,
     pub measure: &'a Measure,
     pub timeline: &'a Timeline,
     pub jobs: &'a [Progress],
