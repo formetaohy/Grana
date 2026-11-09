@@ -6,6 +6,7 @@ use grana_glass::{Animated, ContainerId, GlassId, Scene as GlassScene};
 use crate::clipboard::{Clipboard, NullClipboard};
 use crate::element::{CanvasPaint, Element, Key, Layer};
 use crate::geometry::{Corners, Rect};
+use crate::image::ImageAtlas;
 use crate::input::{Cursor, Input};
 use crate::layout::LayoutEngine;
 use crate::motion::Motion;
@@ -41,6 +42,7 @@ pub(crate) struct LayerChange {
 pub struct Ui<A = ()> {
     pub(crate) renderer: Renderer,
     pub(crate) text: Text,
+    pub(crate) images: ImageAtlas,
     pub(crate) theme: Theme,
     pub(crate) input: Input,
     pub(crate) tree: Tree<A>,
@@ -90,6 +92,7 @@ impl<A: Clone> Ui<A> {
         Self {
             renderer: Renderer::new(device, queue, format),
             text: Text::new(device),
+            images: ImageAtlas::new(device),
             theme: Theme::dark(),
             input: Input::new(),
             tree: Tree::new(),
@@ -195,12 +198,19 @@ impl<A: Clone> Ui<A> {
         &mut self.renderer
     }
 
-    pub fn renderer_and_atlas(&mut self) -> (&mut Renderer, &crate::atlas::Atlas) {
-        (&mut self.renderer, self.text.atlas())
+    pub fn renderer_and_atlas(
+        &mut self,
+    ) -> (
+        &mut Renderer,
+        &crate::atlas::Atlas,
+        &crate::image::ImageAtlas,
+    ) {
+        (&mut self.renderer, self.text.atlas(), &self.images)
     }
 
     pub fn flush(&mut self, queue: &wgpu::Queue) {
         self.text.flush(queue);
+        self.images.flush(queue);
     }
 
     pub fn resize(&mut self, size: [u32; 2]) {
@@ -316,6 +326,7 @@ impl<A: Clone> Ui<A> {
         let glass_changed = self.scene.take_dirty();
         self.retire_popup_anchors();
         self.text.flush(self.renderer.queue());
+        self.images.flush(self.renderer.queue());
         self.renderer.write_uniforms(self.scale);
         self.measure_layers(glass_changed);
         self.animating || animating_glass || !self.popup_retire.is_empty()
@@ -328,6 +339,7 @@ impl<A: Clone> Ui<A> {
             let Self {
                 renderer,
                 text,
+                images,
                 layers,
                 scene,
                 theme,
@@ -337,7 +349,10 @@ impl<A: Clone> Ui<A> {
                 encoder,
                 PaintFrame {
                     target,
-                    atlas: text.atlas(),
+                    atlases: crate::render::Atlases {
+                        glyphs: text.atlas(),
+                        images,
+                    },
                     content: &layers[Layer::Content.index()].material,
                     chrome: &layers[Layer::Chrome.index()],
                     labels: &layers[Layer::Labels.index()],
@@ -369,7 +384,14 @@ impl<A: Clone> Ui<A> {
         let dark = self.theme.dark;
         let mut instances = LayerInstances::default();
         {
-            let mut painter = Painter::new(&mut instances, &mut self.text, clip, dark, false);
+            let mut painter = Painter::new(
+                &mut instances,
+                &mut self.text,
+                &mut self.images,
+                clip,
+                dark,
+                false,
+            );
             content(&mut painter);
         }
         self.text.begin(self.scale);

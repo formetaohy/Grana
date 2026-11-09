@@ -1,16 +1,22 @@
+use glam::Vec2;
 use grana_session::{Command, PlateView, Well};
 use grana_ui::{
-    Align, BuildContext, Corners, Element, Fill, Icon, Length, Level, Role, Shadow, TextStyle,
+    Align, BuildContext, Color, Corners, Element, Fill, Icon, Length, Level, Rect, Role, Shadow,
+    TextStyle,
 };
 
 use crate::message::Message;
 use crate::state::View;
 use crate::view;
 
-const GAP: f32 = 5.0;
+const GAP: f32 = 6.0;
 const PER_ROW: usize = 6;
 
-pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
+pub fn view<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+    width: f32,
+) -> Element<'a, Message> {
     let Some(plate) = state.plate.as_ref() else {
         return view::empty_state(
             ctx,
@@ -20,7 +26,7 @@ pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         );
     };
     let mut children = vec![summary(ctx, plate)];
-    children.push(grid(ctx, plate));
+    children.push(grid(ctx, plate, width));
     if let Some(well) = plate.selected_well() {
         children.push(fields(ctx, plate, well));
     }
@@ -34,33 +40,46 @@ fn summary<'a>(ctx: &mut BuildContext<'_, Message>, view: &PlateView<'_>) -> Ele
     let plate = view.plate;
     let fields = plate.len();
     let wells = plate.wells().len();
+    let previews = if view.previews == 0 || view.previews == fields {
+        format!("{fields} fields")
+    } else {
+        format!("{fields} fields · {} previews", view.previews)
+    };
     let title = view::card_title(
         ctx,
         Icon::Grid,
         plate.name(),
         Some(&format!(
-            "{} × {} wells · {wells} wells · {fields} fields",
+            "{} × {} wells · {wells} wells · {previews}",
             plate.rows(),
             plate.columns()
         )),
     );
     let hint = view::weak(
         ctx,
-        "Choose a well to open its first field of view; the fields of the selected well are listed below.",
+        "Every well shows the projection of its first field of view; choose a well to open it.",
     );
-    view::card(ctx, 6.0, vec![title, hint])
+    let export = view::button(ctx, "Export Montage", grana_ui::Role::Control)
+        .named("plate.export")
+        .press(Message::Command(Command::ExportPlate));
+    view::card(ctx, 8.0, vec![title, hint, export])
 }
 
-fn grid<'a>(ctx: &mut BuildContext<'_, Message>, view: &PlateView<'_>) -> Element<'a, Message> {
+fn grid<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    view: &PlateView<'_>,
+    width: f32,
+) -> Element<'a, Message> {
     let plate = view.plate;
     let selected = view.selected_well();
-    let side = cell_side(plate.columns());
+    let side = cell_side(plate.columns(), width);
     let mut rows = Vec::with_capacity(plate.rows());
     for row in 0..plate.rows() {
         let mut cells = Vec::with_capacity(plate.columns());
         for column in 0..plate.columns() {
             cells.push(cell(
                 ctx,
+                view,
                 plate.well(row, column),
                 selected,
                 row,
@@ -80,6 +99,7 @@ fn grid<'a>(ctx: &mut BuildContext<'_, Message>, view: &PlateView<'_>) -> Elemen
 
 fn cell<'a>(
     ctx: &mut BuildContext<'_, Message>,
+    view: &PlateView<'_>,
     well: Option<&Well>,
     selected: Option<&Well>,
     row: usize,
@@ -93,9 +113,20 @@ fn cell<'a>(
     let label = well.map_or_else(String::new, |well| well.label().to_string());
     let drawn = label.clone();
     let font = theme.font(Level::Micro);
+    let thumbnail = well
+        .and_then(|well| well.fields().first())
+        .and_then(|field| view.thumbnail(field.series()))
+        .cloned();
+    let lit = thumbnail.is_some();
     let element = grana_ui::canvas(Length::Fixed(side), side, move |painter, info| {
         let rect = info.rect;
         let engaged = info.hover.max(info.press);
+        let corners = Corners::all(8.0);
+        let border = if active {
+            palette.accent.with_alpha(0.95)
+        } else {
+            palette.material_border.amplify(0.25 + 0.55 * engaged)
+        };
         if present {
             let fill = if active {
                 palette.accent.with_alpha(0.24)
@@ -104,35 +135,11 @@ fn cell<'a>(
                     .material_fill
                     .lerp(palette.accent.with_alpha(0.14), 0.6 * engaged)
             };
-            let border = if active {
-                palette.accent.with_alpha(0.9)
-            } else {
-                palette.material_border.amplify(0.4 * engaged)
-            };
-            painter.outlined(
-                rect,
-                Corners::all(8.0),
-                Fill::Solid(fill),
-                grana_ui::Border {
-                    width: 1.0,
-                    color: border,
-                },
-                Shadow::NONE,
-            );
-            painter.text_in(
-                rect,
-                &drawn,
-                TextStyle::new(
-                    font,
-                    palette.text_secondary.lerp(palette.text_primary, engaged),
-                )
-                .aligned(Align::Center),
-                Align::Center,
-            );
+            painter.rect(rect, corners, fill);
         } else {
             painter.outlined(
                 rect,
-                Corners::all(8.0),
+                corners,
                 Fill::Solid(palette.card.with_alpha(0.35)),
                 grana_ui::Border {
                     width: 1.0,
@@ -140,6 +147,42 @@ fn cell<'a>(
                 },
                 Shadow::NONE,
             );
+        }
+        if let Some(bitmap) = &thumbnail {
+            painter.bitmap(rect, corners, bitmap);
+        }
+        if present {
+            painter.outlined(
+                rect,
+                corners,
+                Fill::None,
+                grana_ui::Border {
+                    width: if active { 1.5 } else { 1.0 },
+                    color: border,
+                },
+                Shadow::NONE,
+            );
+        }
+        if present {
+            let tint = if lit {
+                Color::white_alpha(0.92)
+            } else {
+                palette.text_secondary.lerp(palette.text_primary, engaged)
+            };
+            let style = TextStyle::new(font, tint).aligned(Align::Center);
+            let ink = painter.measure(&drawn, style);
+            let pill = if lit {
+                Rect::from_min_size(
+                    Vec2::new(rect.min.x + 5.0, rect.max.y - 19.0),
+                    Vec2::new(ink.x + 10.0, 14.0),
+                )
+            } else {
+                Rect::from_center_size(rect.center(), Vec2::new(ink.x + 16.0, 18.0))
+            };
+            if lit {
+                painter.rect(pill, Corners::capsule(), Color::black_alpha(0.55));
+            }
+            painter.text_in(pill, &drawn, style, Align::Center);
         }
     })
     .named(&format!("plate.{row}.{column}"));
@@ -207,12 +250,8 @@ fn fields<'a>(
     view::card(ctx, 8.0, children)
 }
 
-fn cell_side(columns: usize) -> f32 {
-    match columns {
-        0..=8 => 52.0,
-        9..=12 => 44.0,
-        13..=16 => 38.0,
-        17..=24 => 32.0,
-        _ => 26.0,
-    }
+fn cell_side(columns: usize, width: f32) -> f32 {
+    let count = columns.max(1) as f32;
+    let span = (width - 24.0 - GAP * (count - 1.0)).max(0.0) / count;
+    span.clamp(24.0, 116.0)
 }

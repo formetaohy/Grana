@@ -29,6 +29,7 @@ impl Session {
         self.mask_stamp = None;
         self.plate = None;
         self.field = 0;
+        self.clear_plate();
         self.set_time(0);
         self.install_channels();
         if let Some(scene) = self.scene.as_ref() {
@@ -62,6 +63,7 @@ impl Session {
         self.saved = None;
         self.plate = None;
         self.field = 0;
+        self.clear_plate();
         self.reset();
     }
 
@@ -82,6 +84,7 @@ impl Session {
         self.saved = None;
         self.plate = None;
         self.field = 0;
+        self.clear_plate();
         self.reset();
     }
 
@@ -105,6 +108,7 @@ impl Session {
         self.pending = None;
         self.project = None;
         self.saved = None;
+        self.clear_plate();
         self.reset();
         true
     }
@@ -149,6 +153,7 @@ impl Session {
         }
         self.plate = None;
         self.field = 0;
+        self.clear_plate();
         self.document = Some(Document::open(path, Arc::clone(&self.store)));
         self.message = None;
     }
@@ -460,6 +465,7 @@ impl Session {
                         (false, None) => Dataset::synthetic(opened.name, opened.pyramid),
                     };
                     self.open_dataset(dataset, opened.fingerprint);
+                    self.start_previews();
                     if let Some(detail) = opened.labels_error {
                         self.message = Some(Message::error(detail));
                     }

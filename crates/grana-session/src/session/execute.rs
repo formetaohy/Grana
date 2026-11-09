@@ -614,6 +614,7 @@ impl Session {
             Command::ExportLabels(set) => self.export_labels(set),
             Command::ExportAllLabels => self.export_all_labels(),
             Command::ExportDataset => self.export_dataset(),
+            Command::ExportPlate => self.export_plate(),
             Command::ExportTracks(set) => self.choose_export_tracks(set),
             Command::ExportGeff(set) => self.choose_export_geff(set),
             Command::CaptureProtocol => self.capture_protocol(),

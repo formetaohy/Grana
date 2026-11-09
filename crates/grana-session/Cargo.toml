@@ -20,9 +20,12 @@ grana-mesh = { workspace = true }
 grana-object = { workspace = true }
 grana-optics = { workspace = true }
 grana-pipeline = { workspace = true }
+grana-preview = { workspace = true }
 grana-project = { workspace = true }
 grana-protocol = { workspace = true }
+grana-raster = { workspace = true }
 grana-scene = { workspace = true }
+grana-text = { workspace = true }
 grana-volume = { workspace = true }
 grana-zarr = { workspace = true }
 rfd = { workspace = true }

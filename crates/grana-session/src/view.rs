@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use grana_animation::Timeline;
 use grana_image::{Plate, Series, Well};
 use grana_project::NamedView;
@@ -98,11 +100,17 @@ pub struct SeriesView<'a> {
 pub struct PlateView<'a> {
     pub plate: &'a Plate,
     pub selected: usize,
+    pub thumbs: Option<&'a HashMap<usize, grana_raster::Bitmap>>,
+    pub previews: usize,
 }
 
-impl PlateView<'_> {
+impl<'a> PlateView<'a> {
     pub fn selected_well(&self) -> Option<&Well> {
         self.plate.well_of(self.selected)
+    }
+
+    pub fn thumbnail(&self, series: usize) -> Option<&'a grana_raster::Bitmap> {
+        self.thumbs.and_then(|thumbs| thumbs.get(&series))
     }
 }
 

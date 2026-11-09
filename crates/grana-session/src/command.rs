@@ -347,6 +347,7 @@ pub enum Command {
     ExportLabels(ObjectSetId),
     ExportAllLabels,
     ExportDataset,
+    ExportPlate,
     CaptureProtocol,
     ApplyProtocol,
     LoadProtocol,

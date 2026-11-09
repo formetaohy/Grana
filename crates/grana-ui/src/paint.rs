@@ -1,8 +1,10 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Vec2;
+use grana_raster::Bitmap;
 
 use crate::color::Color;
 use crate::geometry::{Corners, Rect};
+use crate::image::ImageAtlas;
 use crate::style::{Border, Fill, Shadow};
 use crate::text::{Align, Text, TextLayout, TextStyle};
 
@@ -13,6 +15,7 @@ pub const KIND_SCENE: u32 = 3;
 pub const KIND_SEGMENT: u32 = 4;
 pub const KIND_RING: u32 = 5;
 pub const KIND_TRIANGLE: u32 = 6;
+pub const KIND_IMAGE: u32 = 7;
 
 pub const FLAG_GRADIENT: u32 = 1 << 0;
 pub const FLAG_BORDER: u32 = 1 << 1;
@@ -125,6 +128,7 @@ impl LayerInstances {
 pub struct Painter<'a> {
     instances: &'a mut LayerInstances,
     text: &'a mut Text,
+    images: &'a mut ImageAtlas,
     clip: Clip,
     gamma: f32,
     vibrancy: bool,
@@ -134,6 +138,7 @@ impl<'a> Painter<'a> {
     pub(crate) fn new(
         instances: &'a mut LayerInstances,
         text: &'a mut Text,
+        images: &'a mut ImageAtlas,
         clip: Clip,
         dark: bool,
         vibrancy: bool,
@@ -141,6 +146,7 @@ impl<'a> Painter<'a> {
         Self {
             instances,
             text,
+            images,
             clip,
             gamma: if dark { 0.86 } else { 1.0 },
             vibrancy,
@@ -261,6 +267,20 @@ impl<'a> Painter<'a> {
         self.push(instance);
     }
 
+    pub fn bitmap(&mut self, rect: Rect, corners: Corners, bitmap: &Bitmap) {
+        if rect.is_empty() || !self.clip.rect.intersects(rect) {
+            return;
+        }
+        let Some(uv) = self.images.slot(bitmap) else {
+            return;
+        };
+        let mut instance = Instance::blank(KIND_IMAGE);
+        instance.rect = [rect.min.x, rect.min.y, rect.width(), rect.height()];
+        instance.corners = corners_array(corners.resolved(rect.size()));
+        instance.uv = uv;
+        self.push(instance);
+    }
+
     pub fn triangle(&mut self, a: Vec2, b: Vec2, c: Vec2, color: Color) {
         if color.alpha <= 0.0 {
             return;
@@ -321,6 +341,7 @@ impl<'a> Painter<'a> {
             clip,
             gamma,
             vibrancy,
+            ..
         } = self;
         let clip = *clip;
         let gamma = *gamma;

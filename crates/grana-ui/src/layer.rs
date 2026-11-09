@@ -66,6 +66,7 @@ impl<A: Clone> Ui<A> {
             let mut painter = Painter::new(
                 &mut instances,
                 &mut self.text,
+                &mut self.images,
                 Clip::new(clip, clip_corners),
                 dark,
                 vibrancy,

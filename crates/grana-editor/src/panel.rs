@@ -413,7 +413,7 @@ fn dock<'a>(
                 Panel::Colocalization => crate::coloc_panel::view(ctx, state),
                 Panel::Relations => crate::relation_panel::view(ctx, state),
                 Panel::Annotations => crate::annotation_panel::view(ctx, state),
-                Panel::Plate => crate::plate_panel::view(ctx, state),
+                Panel::Plate => crate::plate_panel::view(ctx, state, content.width()),
                 Panel::Batch => crate::batch_panel::view(ctx, state),
                 Panel::Animation => crate::animation_panel::view(ctx, state),
                 Panel::Statistics | Panel::Tracks => {

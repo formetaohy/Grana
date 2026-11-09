@@ -1,3 +1,4 @@
+mod bitmap;
 mod codec;
 mod error;
 mod plot;
@@ -5,6 +6,7 @@ mod raster;
 mod sheet;
 mod text;
 
+pub use bitmap::Bitmap;
 pub use codec::{encode, read, write};
 pub use error::Error;
 pub use plot::{Axis, Joint, joint_plot};

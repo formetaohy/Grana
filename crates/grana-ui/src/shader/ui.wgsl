@@ -22,6 +22,8 @@ struct Instance {
 @group(0) @binding(3) var scene_sampler: sampler;
 @group(0) @binding(4) var atlas: texture_2d<f32>;
 @group(0) @binding(5) var atlas_sampler: sampler;
+@group(0) @binding(6) var images: texture_2d<f32>;
+@group(0) @binding(7) var images_sampler: sampler;
 
 const KIND_SURFACE: u32 = 0u;
 const KIND_SHADOW: u32 = 1u;
@@ -30,6 +32,7 @@ const KIND_SCENE: u32 = 3u;
 const KIND_SEGMENT: u32 = 4u;
 const KIND_RING: u32 = 5u;
 const KIND_TRIANGLE: u32 = 6u;
+const KIND_IMAGE: u32 = 7u;
 
 const FLAG_GRADIENT: u32 = 1u;
 const FLAG_BORDER: u32 = 2u;
@@ -241,6 +244,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     if (kind == KIND_SCENE) {
         let color = textureSampleLevel(scene, scene_sampler, in.uv, 0.0);
         return vec4<f32>(color.rgb * mask, mask);
+    }
+
+    if (kind == KIND_IMAGE) {
+        let color = textureSampleLevel(images, images_sampler, in.uv, 0.0);
+        let alpha = color.a * instance.color.a * mask;
+        return vec4<f32>(color.rgb * alpha, alpha);
     }
 
     var color = instance.color;

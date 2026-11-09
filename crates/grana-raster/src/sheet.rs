@@ -50,7 +50,13 @@ pub struct Group<'a> {
 
 pub struct Sheet {
     tile: [u32; 2],
-    max_columns: u32,
+    columns: Span,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Span {
+    Automatic { maximum: u32 },
+    Fixed(u32),
 }
 
 impl Sheet {
@@ -63,13 +69,35 @@ impl Sheet {
             max_columns > 0,
             "a quality sheet lays out at least one column"
         );
-        Self { tile, max_columns }
+        Self {
+            tile,
+            columns: Span::Automatic {
+                maximum: max_columns,
+            },
+        }
+    }
+
+    pub fn grid(tile: [u32; 2], columns: u32) -> Self {
+        assert!(
+            tile[0] > 0 && tile[1] > 0,
+            "a quality sheet holds at least one pixel per tile"
+        );
+        assert!(columns > 0, "a grid lays out at least one column");
+        Self {
+            tile,
+            columns: Span::Fixed(columns),
+        }
     }
 
     fn columns(&self, groups: &[Group<'_>]) -> u32 {
-        let cells = groups.iter().map(|group| group.cells.len()).sum::<usize>();
-        let columns = (cells as f64).sqrt().ceil() as u32;
-        columns.clamp(1, self.max_columns)
+        match self.columns {
+            Span::Fixed(columns) => columns,
+            Span::Automatic { maximum } => {
+                let cells = groups.iter().map(|group| group.cells.len()).sum::<usize>();
+                let columns = (cells as f64).sqrt().ceil() as u32;
+                columns.clamp(1, maximum)
+            }
+        }
     }
 
     fn rows(&self, columns: u32, count: usize) -> u32 {

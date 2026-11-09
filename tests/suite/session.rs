@@ -659,6 +659,36 @@ fn navigates_a_plate_field_by_field() {
             "A2"
         );
     }
+    let first = preview(&mut session, 0);
+    assert_eq!(
+        first.size(),
+        [8, 6],
+        "a preview never stretches past its level"
+    );
+    assert!(
+        first.pixels().chunks(4).any(|pixel| pixel[2] > pixel[0]),
+        "the preview carries the blue channel tint"
+    );
+    session.execute(Command::SelectField(0));
+    open_field(&mut session, Extent::new(8, 6, 4));
+    assert_eq!(
+        preview(&mut session, 1).size(),
+        [12, 10],
+        "switching fields keeps the plate previews"
+    );
+    let montage = temp.path().join("plate.png");
+    assert!(session.export_plate_montage(montage.clone()));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while session.writing() {
+        assert!(Instant::now() < deadline, "the montage never finished");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let sheet = grana_raster::read(&montage).expect("the montage reads back");
+    assert!(
+        sheet.width() > 2 * 192 && sheet.height() > 144,
+        "the montage lays the two wells side by side"
+    );
 }
 
 #[test]
@@ -812,6 +842,22 @@ fn open_field(session: &mut Session, extent: Extent) {
             return;
         }
         assert!(Instant::now() < deadline, "the field never opened");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn preview(session: &mut Session, series: usize) -> grana_raster::Bitmap {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        session.poll();
+        if let Some(bitmap) = session
+            .plate()
+            .and_then(|plate| plate.thumbnail(series))
+            .cloned()
+        {
+            return bitmap;
+        }
+        assert!(Instant::now() < deadline, "the plate preview never arrived");
         std::thread::sleep(Duration::from_millis(2));
     }
 }

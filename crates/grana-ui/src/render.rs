@@ -15,6 +15,7 @@ use wgpu::{
 
 use crate::atlas::Atlas;
 use crate::glass::{HUD, MENU, OVERLAY};
+use crate::image::ImageAtlas;
 use crate::paint::{Instance, LayerInstances};
 use grana_gpu::Target;
 use grana_gpu::layout;
@@ -134,9 +135,22 @@ impl Slot {
     }
 }
 
+pub struct Figure<'a> {
+    pub target: &'a TextureView,
+    pub size: [u32; 2],
+    pub scale: f32,
+    pub instances: &'a [Instance],
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Atlases<'a> {
+    pub glyphs: &'a Atlas,
+    pub images: &'a ImageAtlas,
+}
+
 pub(crate) struct PaintFrame<'a> {
     pub target: &'a TextureView,
-    pub atlas: &'a Atlas,
+    pub atlases: Atlases<'a>,
     pub content: &'a [Instance],
     pub chrome: &'a LayerInstances,
     pub labels: &'a LayerInstances,
@@ -304,6 +318,8 @@ impl Renderer {
                 sampler_entry(3),
                 texture_entry(4),
                 sampler_entry(5),
+                texture_entry(6),
+                sampler_entry(7),
             ],
         });
         let blit_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -530,7 +546,7 @@ impl Renderer {
     pub(crate) fn paint(&mut self, encoder: &mut CommandEncoder, frame: PaintFrame<'_>) {
         let PaintFrame {
             target: target_view,
-            atlas,
+            atlases,
             content,
             chrome,
             labels,
@@ -590,7 +606,7 @@ impl Renderer {
         clear(encoder, &base_view);
         self.paint_material(
             encoder,
-            atlas,
+            atlases,
             &PaintTarget {
                 target: &base_view,
                 scene: &scene,
@@ -617,7 +633,7 @@ impl Renderer {
         );
         self.paint_layer(
             encoder,
-            atlas,
+            atlases,
             &PaintTarget {
                 target: &front_linear,
                 scene: &scene,
@@ -650,7 +666,7 @@ impl Renderer {
             let linear = slot_view(current.other(), &front_linear, &back_linear);
             self.paint_layer(
                 encoder,
-                atlas,
+                atlases,
                 &PaintTarget {
                     target: linear,
                     scene: &scene,
@@ -664,7 +680,7 @@ impl Renderer {
         } else {
             self.paint_layer(
                 encoder,
-                atlas,
+                atlases,
                 &PaintTarget {
                     target: &front_linear,
                     scene: &scene,
@@ -698,7 +714,7 @@ impl Renderer {
             let linear = slot_view(target_slot, &front_linear, &back_linear);
             self.paint_layer(
                 encoder,
-                atlas,
+                atlases,
                 &PaintTarget {
                     target: linear,
                     scene: &scene,
@@ -713,7 +729,7 @@ impl Renderer {
             let linear = slot_view(current, &front_linear, &back_linear);
             self.paint_layer(
                 encoder,
-                atlas,
+                atlases,
                 &PaintTarget {
                     target: linear,
                     scene: &scene,
@@ -747,7 +763,7 @@ impl Renderer {
             let linear = slot_view(target_slot, &front_linear, &back_linear);
             self.paint_layer(
                 encoder,
-                atlas,
+                atlases,
                 &PaintTarget {
                     target: linear,
                     scene: &scene,
@@ -762,7 +778,7 @@ impl Renderer {
             let linear = slot_view(current, &front_linear, &back_linear);
             self.paint_layer(
                 encoder,
-                atlas,
+                atlases,
                 &PaintTarget {
                     target: linear,
                     scene: &scene,
@@ -794,7 +810,7 @@ impl Renderer {
     fn paint_material(
         &self,
         encoder: &mut CommandEncoder,
-        atlas: &Atlas,
+        atlases: Atlases<'_>,
         target: &PaintTarget<'_>,
         buffer: &Buffer,
         count: usize,
@@ -802,7 +818,7 @@ impl Renderer {
         if count == 0 {
             return;
         }
-        let group = self.ui_group(atlas, target.scene, buffer, &self.uniforms);
+        let group = self.ui_group(atlases, target.scene, buffer, &self.uniforms);
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.ui.pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
@@ -824,7 +840,7 @@ impl Renderer {
     fn paint_layer(
         &self,
         encoder: &mut CommandEncoder,
-        atlas: &Atlas,
+        atlases: Atlases<'_>,
         target: &PaintTarget<'_>,
         buffers: &LayerBuffers,
         instances: &LayerInstances,
@@ -848,7 +864,7 @@ impl Renderer {
         });
         if !instances.material.is_empty() {
             let group = self.ui_group(
-                atlas,
+                atlases,
                 target.scene,
                 &buffers.material.buffer,
                 &self.uniforms,
@@ -858,7 +874,7 @@ impl Renderer {
             pass.draw(0..6, 0..instances.material.len() as u32);
         }
         if !instances.ink.is_empty() {
-            let group = self.ui_group(atlas, target.scene, &buffers.ink.buffer, &self.uniforms);
+            let group = self.ui_group(atlases, target.scene, &buffers.ink.buffer, &self.uniforms);
             pass.set_pipeline(match ink {
                 Ink::Light => &self.ui_add,
                 Ink::Dark => &self.ui_multiply,
@@ -871,12 +887,16 @@ impl Renderer {
     pub fn paint_figure(
         &mut self,
         encoder: &mut CommandEncoder,
-        target_view: &TextureView,
-        size: [u32; 2],
-        scale: f32,
+        figure: Figure<'_>,
         atlas: &Atlas,
-        instances: &[Instance],
+        images: &ImageAtlas,
     ) {
+        let Figure {
+            target: target_view,
+            size,
+            scale,
+            instances,
+        } = figure;
         if instances.is_empty() {
             return;
         }
@@ -901,7 +921,10 @@ impl Renderer {
         self.queue
             .write_buffer(&self.figure_uniforms, 0, bytemuck::bytes_of(&uniforms));
         let group = self.ui_group(
-            atlas,
+            Atlases {
+                glyphs: atlas,
+                images,
+            },
             &scene.view,
             &self.figure_instances,
             &self.figure_uniforms,
@@ -943,7 +966,7 @@ impl Renderer {
 
     fn ui_group(
         &self,
-        atlas: &Atlas,
+        atlases: Atlases<'_>,
         scene: &TextureView,
         instances: &Buffer,
         uniforms: &Buffer,
@@ -970,11 +993,19 @@ impl Renderer {
                 },
                 BindGroupEntry {
                     binding: 4,
-                    resource: BindingResource::TextureView(atlas.view()),
+                    resource: BindingResource::TextureView(atlases.glyphs.view()),
                 },
                 BindGroupEntry {
                     binding: 5,
-                    resource: BindingResource::Sampler(atlas.sampler()),
+                    resource: BindingResource::Sampler(atlases.glyphs.sampler()),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: BindingResource::TextureView(atlases.images.view()),
+                },
+                BindGroupEntry {
+                    binding: 7,
+                    resource: BindingResource::Sampler(atlases.images.sampler()),
                 },
             ],
         })

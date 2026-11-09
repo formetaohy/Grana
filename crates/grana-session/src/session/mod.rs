@@ -9,7 +9,10 @@ mod import;
 mod interop;
 mod label;
 mod mask;
+mod montage;
 mod open;
+mod plate;
+mod preview;
 mod replay;
 mod seed;
 use std::collections::HashSet;
@@ -125,6 +128,8 @@ pub struct Session {
     series_index: usize,
     plate: Option<Plate>,
     field: usize,
+    previews: Option<preview::Previews>,
+    montage: Option<montage::Montage>,
     fingerprint: Option<Fingerprint>,
     mask_stamp: Option<(u32, u64)>,
     revision: u64,
@@ -191,6 +196,8 @@ impl Session {
             series_index: 0,
             plate: None,
             field: 0,
+            previews: None,
+            montage: None,
             fingerprint: None,
             mask_stamp: None,
             revision: 0,
@@ -308,6 +315,8 @@ impl Session {
         Some(PlateView {
             plate: self.plate.as_ref()?,
             selected: self.field,
+            thumbs: self.previews.as_ref().map(preview::Previews::thumbs),
+            previews: self.previews.as_ref().map_or(0, preview::Previews::done),
         })
     }
     pub fn label_images(&self) -> &[String] {
@@ -430,6 +439,7 @@ impl Session {
         repaint |= self.poll_analysis();
         repaint |= self.poll_batch();
         repaint |= self.poll_labels();
+        repaint |= self.poll_plate();
         repaint |= self.poll_dataset();
         repaint |= self.refresh_masks();
         if repaint {
@@ -438,8 +448,14 @@ impl Session {
         repaint
     }
 
+    pub fn previewing(&self) -> bool {
+        self.previews
+            .as_ref()
+            .is_some_and(|previews| !previews.closed())
+    }
+
     pub fn writing(&self) -> bool {
-        self.labels.is_some() || self.dataset_export.is_some()
+        self.labels.is_some() || self.dataset_export.is_some() || self.montage.is_some()
     }
     pub fn analysing(&self) -> bool {
         !self.analysis.is_empty() || self.writing()
@@ -447,6 +463,9 @@ impl Session {
     pub fn write_progress(&self) -> Option<(&str, usize, usize)> {
         if let Some(labels) = self.labels.as_ref() {
             return Some((labels.label(), labels.progress().0, labels.progress().1));
+        }
+        if let Some(montage) = self.montage.as_ref() {
+            return Some(("Plate montage", montage.progress().0, montage.progress().1));
         }
         self.dataset_export
             .as_ref()

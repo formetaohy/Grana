@@ -54,6 +54,7 @@ grana-scene = { version = "0.1.1", path = "crates/grana-scene" }
 grana-project = { version = "0.1.1", path = "crates/grana-project" }
 grana-protocol = { version = "0.1.1", path = "crates/grana-protocol" }
 grana-pipeline = { version = "0.1.1", path = "crates/grana-pipeline" }
+grana-preview = { version = "0.1.1", path = "crates/grana-preview" }
 grana-raster = { version = "0.1.1", path = "crates/grana-raster" }
 grana-text = { version = "0.1.1", path = "crates/grana-text" }
 grana-ui = { version = "0.1.1", path = "crates/grana-ui" }
@@ -118,6 +119,7 @@ grana-optics = { workspace = true }
 grana-pipeline = { workspace = true }
 grana-project = { workspace = true }
 grana-protocol = { workspace = true }
+grana-raster = { workspace = true }
 grana-render = { workspace = true }
 grana-restore = { workspace = true }
 grana-scene = { workspace = true }

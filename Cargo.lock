@@ -3369,6 +3369,7 @@ dependencies = [
  "grana-pipeline",
  "grana-project",
  "grana-protocol",
+ "grana-raster",
  "grana-render",
  "grana-restore",
  "grana-scene",
@@ -3642,6 +3643,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-preview"
+version = "0.1.1"
+dependencies = [
+ "grana-display",
+ "grana-image",
+ "grana-raster",
+ "grana-volume",
+]
+
+[[package]]
 name = "grana-project"
 version = "0.1.1"
 dependencies = [
@@ -3764,9 +3775,12 @@ dependencies = [
  "grana-object",
  "grana-optics",
  "grana-pipeline",
+ "grana-preview",
  "grana-project",
  "grana-protocol",
+ "grana-raster",
  "grana-scene",
+ "grana-text",
  "grana-volume",
  "grana-zarr",
  "rfd",
@@ -3797,6 +3811,7 @@ dependencies = [
  "glam",
  "grana-glass",
  "grana-gpu",
+ "grana-raster",
  "grana-text",
  "slotmap",
  "wgpu",

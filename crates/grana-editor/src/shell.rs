@@ -160,7 +160,7 @@ fn status(view: &SessionView<'_>) -> Status {
     if let Some((label, done, total)) = view.io.label {
         return Status {
             text: format!("Writing {label}"),
-            detail: format!("{done} of {total} planes stored."),
+            detail: format!("{done} of {total} steps stored."),
             busy: true,
             error: false,
         };

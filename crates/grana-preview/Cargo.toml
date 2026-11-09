@@ -1,0 +1,16 @@
+[package]
+name = "grana-preview"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+grana-display = { workspace = true }
+grana-image = { workspace = true }
+grana-raster = { workspace = true }
+grana-volume = { workspace = true }
+
+[lints]
+workspace = true

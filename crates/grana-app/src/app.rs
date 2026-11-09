@@ -6,8 +6,8 @@ use glam::{Vec2, Vec3};
 use grana_animation::Keyframe;
 use grana_display::Viewport;
 use grana_editor::{
-    AnnotationTool, FrameStats, GrabDrag, MaskBrush, PaintDrag, Pane, Stage, ToolDrag, ViewStats,
-    Workspace,
+    AnnotationTool, FrameStats, GrabDrag, MaskBrush, PaintDrag, Pane, Panel, Stage, ToolDrag,
+    ViewStats, Workspace,
 };
 use grana_engine::{Destination, Engine, Outcome, Panels, Picked, Plan, Pose, SAMPLE_LIMIT};
 use grana_gpu::Gpu;
@@ -73,6 +73,7 @@ pub struct App {
     stream: Stream,
     pick_toggle: bool,
     mask_path: Vec<[f32; 3]>,
+    plate: Option<(String, usize)>,
 }
 
 impl App {
@@ -109,6 +110,7 @@ impl App {
             stream: Stream::new(),
             pick_toggle: false,
             mask_path: Vec::new(),
+            plate: None,
         }
     }
 
@@ -156,6 +158,7 @@ impl App {
 
     fn redraw(&mut self) {
         self.session.poll();
+        self.sync_plate_panel();
         if let Some(set) = self.workspace.seed
             && self
                 .session
@@ -210,6 +213,22 @@ impl App {
             delay = delay.min(PLAYBACK_INTERVAL);
         }
         self.schedule(delay);
+    }
+
+    fn sync_plate_panel(&mut self) {
+        let identity = self
+            .session
+            .plate()
+            .map(|view| (view.plate.name().to_string(), view.plate.len()));
+        if identity == self.plate {
+            return;
+        }
+        self.plate = identity;
+        if self.plate.is_some() && self.workspace.panel.is_none() {
+            self.workspace.panel = Some(Panel::Plate);
+            self.workspace.last_panel = Panel::Plate;
+            self.workspace.dock_height = self.workspace.dock_height.max(600.0);
+        }
     }
 
     fn exchange_bricks(&mut self) {
@@ -307,7 +326,11 @@ impl App {
         let loaded = self.session.scene().is_some();
         let streamed = self.info.volume.resident >= self.info.volume.demand
             && self.info.section.resident >= self.info.section.demand;
-        let settled = loaded && streamed && self.info.samples >= SAMPLE_LIMIT && !self.info.fading;
+        let settled = loaded
+            && streamed
+            && self.info.samples >= SAMPLE_LIMIT
+            && !self.info.fading
+            && !self.session.previewing();
         let occupied = self.streaming();
         if let Some(path) = self.capture.clone()
             && self.elapsed_frames > 30
@@ -1395,6 +1418,7 @@ impl App {
         self.session.batch().is_some_and(|batch| batch.running)
             || self.workspace.playback.playing
             || self.session.loading().is_some()
+            || self.session.previewing()
             || self.session.transferring()
             || self.session.writing()
             || !self.session.progress().is_empty()

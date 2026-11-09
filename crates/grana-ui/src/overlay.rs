@@ -45,7 +45,14 @@ impl<A: Clone> Ui<A> {
         let mut tooltip_rect = None;
         {
             let clip = Clip::new(Rect::from_min_size(Vec2::ZERO, size), Corners::ZERO);
-            let mut painter = Painter::new(&mut instances, &mut self.text, clip, dark, true);
+            let mut painter = Painter::new(
+                &mut instances,
+                &mut self.text,
+                &mut self.images,
+                clip,
+                dark,
+                true,
+            );
             if focus_visible
                 && let Some(node) = focus
                 && self.tree.nodes[node].visible
