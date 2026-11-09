@@ -31,9 +31,11 @@ fn digest_pyramid(hasher: &mut Sha256, pyramid: &Pyramid) {
         for value in [extent.x(), extent.y(), extent.z()] {
             integer(hasher, u64::from(value));
         }
-        let spacing = level.spacing();
-        for value in [spacing.x(), spacing.y(), spacing.z()] {
-            integer(hasher, u64::from(value.to_bits()));
+        let spacing = level.basis();
+        for axis in 0..3 {
+            for value in spacing.column(axis) {
+                integer(hasher, u64::from(value.to_bits()));
+            }
         }
         for value in level.origin() {
             integer(hasher, u64::from(value.to_bits()));

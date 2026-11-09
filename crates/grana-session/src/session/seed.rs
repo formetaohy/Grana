@@ -25,9 +25,7 @@ impl Session {
         let mut values = vec![0.0f32; data.voxel_count()];
         data.write_values(&mut values);
         let intensity = pyramid.channels()[channel].intensity();
-        let low = Vec3::from(info.origin());
-        let high = low + Vec3::from(info.world_extent());
-        let (entry, exit) = ray_box(origin, direction, low, high)?;
+        let (entry, exit) = info.interval(origin.to_array(), direction.to_array())?;
         let voxel = info.voxel();
         let step = (PICK_STRIDE
             * voxel
@@ -67,23 +65,4 @@ fn pick_level(pyramid: &grana_volume::Pyramid) -> usize {
         }
     }
     level
-}
-
-fn ray_box(origin: Vec3, direction: Vec3, low: Vec3, high: Vec3) -> Option<(f32, f32)> {
-    let mut entry = f32::NEG_INFINITY;
-    let mut exit = f32::INFINITY;
-    for axis in 0..3 {
-        if direction[axis].abs() < 1.0e-9 {
-            if origin[axis] < low[axis] || origin[axis] > high[axis] {
-                return None;
-            }
-            continue;
-        }
-        let inverse = 1.0 / direction[axis];
-        let first = (low[axis] - origin[axis]) * inverse;
-        let second = (high[axis] - origin[axis]) * inverse;
-        entry = entry.max(first.min(second));
-        exit = exit.min(first.max(second));
-    }
-    (entry <= exit && exit >= 0.0).then_some((entry, exit))
 }

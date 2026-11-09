@@ -71,6 +71,16 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         None => Source::file_series(dataset.path().to_path_buf(), dataset.scene()),
     };
     let reader = Arc::new(Image::open(&source)?);
+    if reader
+        .pyramid()
+        .levels()
+        .iter()
+        .any(|level| level.basis().diagonal_spacing().is_none())
+    {
+        return Err(
+            "the dataset is placed with a transform that analysis does not measure yet".to_string(),
+        );
+    }
     let store = GeometryStore::temporary(DEFAULT_BUDGET)
         .map_err(|error| format!("the dataset cannot page its geometry: {error}"))?;
     let name = dataset.title();

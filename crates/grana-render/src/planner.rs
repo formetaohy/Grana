@@ -483,8 +483,9 @@ fn section_cells(
 ) -> Option<([u32; 3], [u32; 3])> {
     let level = pyramid.level(level_index);
     let extent = level.extent();
-    let box_low = Vec3::from(level.origin());
-    let box_high = box_low + Vec3::from(level.world_extent());
+    let (box_low, box_high) = level.bounds();
+    let box_low = Vec3::from(box_low);
+    let box_high = Vec3::from(box_high);
     let (mut low, mut high) = section_bounds(section, aspect);
     low = low.max(box_low);
     high = high.min(box_high);
@@ -498,31 +499,23 @@ fn section_cells(
     }
     let counts = BrickGrid::new(extent).counts();
     let dims = [extent.x() as f32, extent.y() as f32, extent.z() as f32];
-    let world = [
-        box_high.x - box_low.x,
-        box_high.y - box_low.y,
-        box_high.z - box_low.z,
-    ];
-    let number = |point: Vec3, axis: usize, lowest: bool| {
-        let unit = ((point[axis] - box_low[axis]) / world[axis]).clamp(0.0, 1.0);
-        let voxel = (unit * dims[axis]).clamp(0.0, dims[axis]);
-        let voxel = if lowest {
-            voxel
-        } else {
-            (voxel - 1.0).max(0.0)
-        };
-        (voxel / BRICK_SIDE as f32)
-            .floor()
-            .clamp(0.0, (counts[axis] - 1) as f32) as u32
-    };
-    let first = [0, 1, 2].map(|axis| number(low, axis, true));
-    let last = [0, 1, 2].map(|axis| {
-        if high[axis] <= low[axis] {
-            number(low, axis, true)
-        } else {
-            number(high, axis, false)
+    let mut first = [u32::MAX; 3];
+    let mut last = [0u32; 3];
+    for corner in 0..8u32 {
+        let point = Vec3::new(
+            if corner & 1 == 0 { low.x } else { high.x },
+            if corner & 2 == 0 { low.y } else { high.y },
+            if corner & 4 == 0 { low.z } else { high.z },
+        );
+        let voxel = level.voxel_of(point.to_array());
+        for axis in 0..3 {
+            let cell = (voxel[axis].clamp(0.0, dims[axis]) / BRICK_SIDE as f32)
+                .floor()
+                .clamp(0.0, (counts[axis] - 1) as f32) as u32;
+            first[axis] = first[axis].min(cell);
+            last[axis] = last[axis].max(cell);
         }
-    });
+    }
     Some((first, last))
 }
 
@@ -554,8 +547,6 @@ fn section_brick_count(
     let level = pyramid.level(level_index);
     let extent = level.extent();
     let dims = [extent.x() as f32, extent.y() as f32, extent.z() as f32];
-    let origin = Vec3::from(level.origin());
-    let voxel = Vec3::from(level.world_extent()) / Vec3::from(dims);
     let normal = section.normal();
     let offset = section.center().dot(normal);
     let across = section.right();
@@ -571,8 +562,7 @@ fn section_brick_count(
             for x in first[0]..=last[0] {
                 let cell = Vec3::new(x as f32, y as f32, z as f32) * BRICK_SIDE as f32;
                 let size = (Vec3::from(dims) - cell).min(Vec3::splat(BRICK_SIDE as f32));
-                let low = origin + cell * voxel;
-                let high = low + size * voxel;
+                let (low, high) = brick_bounds(level, cell, size);
                 if region.enabled()
                     && (high.cmplt(region_low).any() || low.cmpgt(region_high).any())
                 {
@@ -608,6 +598,20 @@ fn interval(low: Vec3, high: Vec3, direction: Vec3) -> (f32, f32) {
     let low = near.min(far);
     let high = near.max(far);
     (low.x + low.y + low.z, high.x + high.y + high.z)
+}
+
+fn brick_bounds(level: grana_volume::Level, low: Vec3, size: Vec3) -> (Vec3, Vec3) {
+    let basis = level.basis();
+    let mut low_world = Vec3::from(level.origin());
+    let mut high_world = low_world;
+    for axis in 0..3 {
+        let column = Vec3::from(basis.column(axis));
+        let first = column * low[axis];
+        let second = column * (low[axis] + size[axis]);
+        low_world += first.min(second);
+        high_world += first.max(second);
+    }
+    (low_world, high_world)
 }
 
 pub(crate) fn volume_dispatch(table: &crate::brick::BrickTable) -> u32 {
@@ -676,10 +680,9 @@ pub(crate) fn volume_ladder(view: LadderView<'_>) -> Ladder {
 }
 
 fn nearest_distance(level: grana_volume::Level, eye: Vec3) -> f32 {
-    let origin = Vec3::from(level.origin());
-    let corner = origin + Vec3::from(level.world_extent());
-    let low = origin.min(corner);
-    let high = origin.max(corner);
+    let (low, high) = level.bounds();
+    let low = Vec3::from(low);
+    let high = Vec3::from(high);
     (eye.clamp(low, high) - eye).length()
 }
 
@@ -754,9 +757,14 @@ fn minimum_spacing(pyramid: &Pyramid, level: usize) -> f32 {
 }
 
 fn section_spacing(pyramid: &Pyramid, level: usize, section: &SectionCamera) -> f32 {
-    let spacing = pyramid.level(level).spacing();
-    let spacing = Vec3::new(spacing.x(), spacing.y(), spacing.z());
-    let across = section.right().abs().dot(spacing);
-    let down = section.up().abs().dot(spacing);
+    let basis = pyramid.level(level).basis();
+    let projection = |direction: Vec3| {
+        let direction = direction.abs();
+        (0..3)
+            .map(|axis| direction.dot(Vec3::from(basis.column(axis)).abs()))
+            .sum::<f32>()
+    };
+    let across = projection(section.right());
+    let down = projection(section.up());
     across.max(down)
 }

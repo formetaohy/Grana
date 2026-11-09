@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use grana_image::{Format, Image, Source};
-use grana_volume::{Extent, Intensity, Level, Spacing, VoxelData};
+use grana_volume::{Basis, Extent, Intensity, Level, Spacing, VoxelData};
 use grana_zarr::{ImageSpec, WriteChannel, write_image};
 
 use crate::support::Temp;
@@ -107,6 +107,93 @@ fn writes_and_reads_a_tiny_ome_zarr() {
             }
         }
     }
+}
+
+#[test]
+fn round_trips_a_rotated_placement() {
+    let temp = Temp::new("suite-zarr-rotated");
+    let path = temp.path().join("rotated.ome.zarr");
+    let level = Level::of(
+        Extent::new(16, 12, 6),
+        Basis::new([[0.0, 0.5, 0.0], [-0.5, 0.0, 0.0], [0.0, 0.0, 1.0]]),
+    );
+    let channels = [WriteChannel {
+        name: "DAPI",
+        tint: [0.0, 0.0, 1.0],
+        range: Intensity::new(0.0, 255.0),
+    }];
+    let mut fill = |_level: usize,
+                    _frame: u32,
+                    _channel: usize,
+                    _origin: [u32; 3],
+                    _extent: [u32; 3],
+                    data: &mut [f32]|
+     -> Result<(), String> {
+        data.fill(200.0);
+        Ok(())
+    };
+    let mut progress = |_, _| {};
+    write_image(
+        &path,
+        ImageSpec {
+            name: "rotated",
+            channels: &channels,
+            levels: &[level],
+            placement: [0.0; 3],
+            frames: 1,
+            interval: 1.0,
+            fill: &mut fill,
+            progress: &mut progress,
+        },
+    )
+    .expect("the rotated image writes");
+    let image = grana_zarr::Image::open(&path).expect("the rotated image opens");
+    let read = image.pyramid().level(0);
+    for axis in 0..3 {
+        for component in 0..3 {
+            let expected = level.basis().column(axis)[component];
+            let written = read.basis().column(axis)[component];
+            assert!(
+                (expected - written).abs() <= 1.0e-5,
+                "the placement lost its axis {axis} component {component}: {expected} against {written}"
+            );
+        }
+    }
+    for (expected, written) in level.center().into_iter().zip(read.center()) {
+        assert!(
+            (expected - written).abs() <= 1.0e-4,
+            "the placement lost its centre: {expected} against {written}"
+        );
+    }
+    let sheared = Level::of(
+        Extent::new(8, 8, 4),
+        Basis::new([[0.5, 0.0, 0.0], [0.25, 0.5, 0.0], [0.0, 0.0, 1.0]]),
+    );
+    let mut fill = |_: usize,
+                    _: u32,
+                    _: usize,
+                    _: [u32; 3],
+                    _: [u32; 3],
+                    _: &mut [f32]|
+     -> Result<(), String> { Ok(()) };
+    let mut progress = |_, _| {};
+    let rejected = write_image(
+        temp.path().join("sheared.ome.zarr").as_path(),
+        ImageSpec {
+            name: "sheared",
+            channels: &channels,
+            levels: &[sheared],
+            placement: [0.0; 3],
+            frames: 1,
+            interval: 1.0,
+            fill: &mut fill,
+            progress: &mut progress,
+        },
+    );
+    assert!(
+        rejected.is_err(),
+        "a sheared placement is refused instead of written"
+    );
 }
 
 #[test]

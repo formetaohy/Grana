@@ -4,7 +4,9 @@ use glam::Vec3;
 use grana_display::{Camera, SectionCamera, Shading, TransferFunction};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_render::{Frame, Layer, LayerKey, Renderer, Requests, SceneFrame, Style};
-use grana_volume::{BrickGrid, Channel, Clip, Extent, Pyramid, Region, Spacing, Volume, VoxelData};
+use grana_volume::{
+    Basis, BrickGrid, Channel, Clip, Extent, Level, Pyramid, Region, Spacing, Volume, VoxelData,
+};
 
 use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, spheres};
 
@@ -298,6 +300,109 @@ fn streams_and_shades_two_channels() {
         assert!(profile.measured(), "the frame is not timed");
         assert!(profile.stage(grana_render::Stage::Volume) > 0.0);
     }
+}
+
+#[test]
+fn renders_a_rotated_placement() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let aligned = volume.pyramid();
+    let level = Level::of(
+        aligned.level(0).extent(),
+        Basis::new([[0.0, 0.1, 0.0], [-0.1, 0.0, 0.0], [0.0, 0.0, 0.2]]),
+    );
+    let pyramid = Pyramid::placed(
+        vec![level],
+        1,
+        aligned.channels().to_vec(),
+        1,
+        1.0,
+        [0.0; 3],
+    );
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = pyramid
+        .channels()
+        .iter()
+        .zip(&transfers)
+        .map(|(channel, transfer)| grana_render::ChannelRow {
+            visible: true,
+            opacity: 1.0,
+            window: grana_volume::Intensity::new(
+                channel.window().min(),
+                channel.window().max() * 2.0,
+            ),
+            transfer,
+        })
+        .collect::<Vec<_>>();
+    let world = Vec3::from(level.world_extent());
+    let voxel = Vec3::from(level.voxel());
+    let mut camera = Camera::new(35.0);
+    camera.fit(world, 1.0);
+    let mut section = SectionCamera::new();
+    section.fit(world, voxel, 0.5);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        section: &section,
+        region: Region::none(),
+        scene: &scene,
+        volume_region: [0, 0, SIDE / 2, SIDE],
+        section_region: [SIDE / 2, 0, SIDE / 2, SIDE],
+    };
+    let requests = settle(&gpu, &mut renderer, &view, &volume);
+    assert!(
+        requests.volume_view.visible > 0,
+        "the rotated volume sees no brick"
+    );
+    let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
+    assert!(
+        shot.painted(shot.left()) > (SIDE * SIDE / 64) as usize,
+        "the rotated volume barely rendered: {} painted pixels",
+        shot.painted(shot.left())
+    );
+    assert!(
+        shot.painted(shot.right()) > (SIDE * SIDE / 64) as usize,
+        "the rotated section barely rendered: {} painted pixels",
+        shot.painted(shot.right())
+    );
+    let mut aligned_renderer = build_renderer(&gpu, &aligned);
+    let aligned_target = texture(&gpu, SIDE);
+    let aligned_texture = aligned_target.create_view(&Default::default());
+    let aligned_view = View {
+        target: &aligned_texture,
+        camera: &camera,
+        section: &section,
+        region: Region::none(),
+        scene: &scene,
+        volume_region: [0, 0, SIDE / 2, SIDE],
+        section_region: [SIDE / 2, 0, SIDE / 2, SIDE],
+    };
+    let aligned_shot = snapshot(
+        &gpu,
+        &mut aligned_renderer,
+        &aligned_view,
+        &aligned_target,
+        &volume,
+    );
+    let rotated = shot.painted(shot.all());
+    let reference = aligned_shot.painted(aligned_shot.all());
+    assert!(
+        rotated * 10 > reference * 9 && rotated * 9 < reference * 10,
+        "the quarter turn changed the sphere: {rotated} against {reference} painted pixels"
+    );
 }
 
 #[test]

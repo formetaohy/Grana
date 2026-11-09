@@ -177,15 +177,19 @@ impl Region {
         if !self.enabled {
             return Some([0..dims[0], 0..dims[1], 0..dims[2]]);
         }
-        let (low, high) = self.bounds();
-        let step = level.voxel();
-        let origin = level.origin();
+        let mut low = [f32::INFINITY; 3];
+        let mut high = [f32::NEG_INFINITY; 3];
+        for corner in 0..8 {
+            let voxel = level.voxel_of(self.corner(corner).to_array());
+            for axis in 0..3 {
+                low[axis] = low[axis].min(voxel[axis]);
+                high[axis] = high[axis].max(voxel[axis]);
+            }
+        }
         let mut ranges = [0..0, 0..0, 0..0];
         for axis in 0..3 {
-            let first = (low[axis] - origin[axis]) / step[axis];
-            let last = (high[axis] - origin[axis]) / step[axis];
-            let start = first.floor().max(0.0);
-            let end = (last.ceil() - 1.0).min((dims[axis] - 1) as f32);
+            let start = low[axis].floor().max(0.0);
+            let end = (high[axis].ceil() - 1.0).min((dims[axis] - 1) as f32);
             if start > end {
                 return None;
             }

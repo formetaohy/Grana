@@ -104,6 +104,12 @@ pub fn write_image(path: &Path, mut spec: ImageSpec<'_>) -> Result<ImageWritten,
             detail: "the destination is a file".to_string(),
         });
     }
+    if spec.levels.iter().any(|level| !level.basis().orthogonal()) {
+        return Err(Error::Write {
+            path: path.display().to_string(),
+            detail: "a sheared placement cannot be written to OME-Zarr".to_string(),
+        });
+    }
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent).map_err(|error| Error::Write {
         path: path.display().to_string(),
@@ -319,19 +325,31 @@ fn shape(level: Level, spec: &ImageSpec<'_>) -> Vec<u64> {
 
 fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
     let axes = crate::schema::axes();
+    let matrix = crate::schema::rotation(spec.levels[0]);
+    let display = crate::schema::rotated(spec.levels[0]);
     let datasets = spec
         .levels
         .iter()
         .enumerate()
         .map(|(level, value)| {
-            let spacing = value.spacing();
-            let origin = value.origin();
-            let scale = [spacing.x(), spacing.y(), spacing.z()].map(f64::from);
-            let translation = [0, 1, 2].map(|axis| {
-                f64::from(spec.placement[axis]) + f64::from(origin[axis]) + 0.5 * scale[axis]
+            let basis = value.basis();
+            let spacing = [basis.step(0), basis.step(1), basis.step(2)].map(f64::from);
+            let center = value.voxel_center([0.0, 0.0, 0.0]);
+            let point =
+                [0, 1, 2].map(|axis| f64::from(spec.placement[axis]) + f64::from(center[axis]));
+            let translation = [0, 1, 2].map(|row| {
+                (0..3)
+                    .map(|column| matrix[column][row] * point[column])
+                    .sum::<f64>()
             });
-            let scale = [f64::from(spec.interval), 1.0, scale[2], scale[1], scale[0]];
-            let translation = [0.0, 0.0, translation[2], translation[1], translation[0]];
+            let scale = [
+                f64::from(spec.interval),
+                1.0,
+                spacing[2],
+                spacing[1],
+                spacing[0],
+            ];
+            let translation = [0.0, 0.0, translation[0], translation[1], translation[2]];
             crate::schema::dataset(&level.to_string(), &scale, &translation)
         })
         .collect::<Vec<_>>();
@@ -359,7 +377,12 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
         .collect::<Vec<_>>();
     let ome = json!({
         "version": crate::schema::VERSION,
-        "multiscales": crate::schema::multiscales(spec.name, &axes, datasets),
+        "multiscales": crate::schema::multiscales(
+            spec.name,
+            &axes,
+            datasets,
+            display.then_some(matrix),
+        ),
         "omero": { "channels": channels },
     });
     let mut attributes = serde_json::Map::new();

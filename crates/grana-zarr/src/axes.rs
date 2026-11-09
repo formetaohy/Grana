@@ -1,15 +1,8 @@
 use std::ops::Range;
 
-use grana_volume::{Extent, Spacing};
+use grana_volume::Extent;
 
-use crate::metadata::{Axis, AxisKind};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
-    Time,
-    Channel,
-    Space,
-}
+use crate::metadata::{Axis, AxisKind, Dataset};
 
 #[derive(Clone, Debug)]
 pub struct Layout {
@@ -18,8 +11,8 @@ pub struct Layout {
     channel: Option<usize>,
     space_count: usize,
     pub extent: Extent,
-    pub spacing: Spacing,
-    pub translation: [f64; 3],
+    pub columns: [[f64; 3]; 3],
+    pub origin: [f64; 3],
     frames: u32,
     frame_interval: f32,
 }
@@ -35,6 +28,16 @@ impl Layout {
 
     pub fn frame_interval(&self) -> f32 {
         self.frame_interval
+    }
+
+    pub fn voxel(&self) -> [f64; 3] {
+        [0, 1, 2].map(|axis| {
+            self.columns[axis]
+                .iter()
+                .map(|value| value * value)
+                .sum::<f64>()
+                .sqrt()
+        })
     }
 
     pub fn ranges(
@@ -70,12 +73,7 @@ impl Layout {
     }
 }
 
-pub fn layout(
-    axes: &[Axis],
-    shape: &[u64],
-    scale: &[f64],
-    translation: &[f64],
-) -> Result<Layout, String> {
+pub fn layout(axes: &[Axis], shape: &[u64], dataset: &Dataset) -> Result<Layout, String> {
     if axes.len() != shape.len() {
         return Err(format!(
             "{} axes describe an array of {} dimensions",
@@ -83,22 +81,18 @@ pub fn layout(
             shape.len()
         ));
     }
-    if scale.len() != axes.len() || translation.len() != axes.len() {
-        return Err(format!(
-            "the coordinate transformation of {} components does not describe {} axes",
-            scale.len(),
-            axes.len()
-        ));
-    }
     let kinds = axes.iter().map(kind).collect::<Vec<_>>();
-    let space_count = kinds.iter().filter(|kind| **kind == Kind::Space).count();
+    let space_count = kinds
+        .iter()
+        .filter(|kind| **kind == AxisKind::Space)
+        .count();
     if !(2..=3).contains(&space_count) {
         return Err(format!(
             "a spatial image needs two or three space axes, found {space_count}"
         ));
     }
-    let time = single(&kinds, Kind::Time, "time")?;
-    let channel = single(&kinds, Kind::Channel, "channel")?;
+    let time = single(&kinds, AxisKind::Time, "time")?;
+    let channel = single(&kinds, AxisKind::Channel, "channel")?;
     let first_space = axes.len() - space_count;
     let mut expected = 0;
     if time.is_some() {
@@ -116,7 +110,10 @@ pub fn layout(
     if first_space != expected {
         return Err("time and channel axes must precede the space axes".to_string());
     }
-    if !kinds[first_space..].iter().all(|kind| *kind == Kind::Space) {
+    if !kinds[first_space..]
+        .iter()
+        .all(|kind| *kind == AxisKind::Space)
+    {
         return Err("the space axes must be the trailing axes".to_string());
     }
 
@@ -147,18 +144,6 @@ pub fn layout(
         },
     );
 
-    let spacing_x = spacing(&axes[x], scale[x])?;
-    let spacing_y = spacing(&axes[y], scale[y])?;
-    let spacing_z = match z {
-        Some(z) => spacing(&axes[z], scale[z])?,
-        None => spacing_x.min(spacing_y),
-    };
-    let translation_x = length(&axes[x], translation[x])?;
-    let translation_y = length(&axes[y], translation[y])?;
-    let translation_z = match z {
-        Some(z) => length(&axes[z], translation[z])?,
-        None => 0.0,
-    };
     let frames = match time {
         Some(time) => dimension(shape[time])?,
         None => 1,
@@ -170,22 +155,18 @@ pub fn layout(
         channel,
         space_count,
         extent,
-        spacing: Spacing::new(spacing_x, spacing_y, spacing_z),
-        translation: [translation_x, translation_y, translation_z],
+        columns: dataset.columns,
+        origin: dataset.origin,
         frames,
-        frame_interval: frame_interval(scale, time)?,
+        frame_interval: frame_interval(axes, dataset, time)?,
     })
 }
 
-fn kind(axis: &Axis) -> Kind {
-    match axis.kind() {
-        AxisKind::Space => Kind::Space,
-        AxisKind::Time => Kind::Time,
-        AxisKind::Channel => Kind::Channel,
-    }
+fn kind(axis: &Axis) -> AxisKind {
+    axis.kind()
 }
 
-fn single(kinds: &[Kind], kind: Kind, name: &str) -> Result<Option<usize>, String> {
+fn single(kinds: &[AxisKind], kind: AxisKind, name: &str) -> Result<Option<usize>, String> {
     let matches = kinds
         .iter()
         .enumerate()
@@ -206,38 +187,11 @@ fn dimension(length: u64) -> Result<u32, String> {
         .ok_or_else(|| format!("the axis length {length} is outside the supported range"))
 }
 
-fn spacing(axis: &Axis, scale: f64) -> Result<f32, String> {
-    if !scale.is_finite() || scale <= 0.0 {
-        return Err(format!(
-            "the scale of the axis `{}` is not a positive length",
-            axis.name()
-        ));
-    }
-    let value = scale as f32;
-    if !value.is_finite() || value <= 0.0 {
-        return Err(format!(
-            "the scale of the axis `{}` is outside the supported range",
-            axis.name()
-        ));
-    }
-    Ok(value)
-}
-
-fn length(axis: &Axis, translation: f64) -> Result<f64, String> {
-    if !translation.is_finite() {
-        return Err(format!(
-            "the translation of the axis `{}` is outside the supported range",
-            axis.name()
-        ));
-    }
-    Ok(translation)
-}
-
-fn frame_interval(scale: &[f64], time: Option<usize>) -> Result<f32, String> {
+fn frame_interval(axes: &[Axis], dataset: &Dataset, time: Option<usize>) -> Result<f32, String> {
     let Some(time) = time else {
         return Ok(1.0);
     };
-    let value = scale[time];
+    let value = dataset.scale[time] * axes[time].factor();
     if !value.is_finite() || value <= 0.0 {
         return Err("the scale of the time axis is not a positive duration".to_string());
     }

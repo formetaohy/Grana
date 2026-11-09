@@ -9,7 +9,11 @@ fn occlusion_main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let uvw = (vec3<f32>(id) + vec3<f32>(0.5)) / vec3<f32>(dims);
-    let reach = AMBIENT_REACH * length(frame.box_size.xyz) / frame.box_size.xyz;
+    let reach = AMBIENT_REACH * length(level_extent(0u)) / (frame.dims[0].xyz * vec3<f32>(
+        length(level_axis(0u, 0u)),
+        length(level_axis(0u, 1u)),
+        length(level_axis(0u, 2u)),
+    ));
     let offsets = array<vec3<f32>, 6>(
         vec3<f32>(1.0, 0.0, 0.0),
         vec3<f32>(-1.0, 0.0, 0.0),

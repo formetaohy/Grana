@@ -135,9 +135,12 @@ impl BrickArena {
 pub(crate) struct BrickTable {
     pub grid: BrickGrid,
     pub origin: Vec3,
+    pub bounds: (Vec3, Vec3),
     pub world: Vec3,
     pub dims: Vec3,
     pub voxel: Vec3,
+    pub axes: [Vec3; 3],
+    pub inverses: [Vec3; 3],
     pub atlas: [u32; 3],
     level: usize,
     base: u32,
@@ -149,17 +152,27 @@ pub(crate) struct BrickTable {
 impl BrickTable {
     pub fn new(level: usize, source: Level, atlas: [u32; 3], base: u32) -> Self {
         let grid = BrickGrid::new(source.extent());
-        let world = Vec3::from(source.world_extent());
+        let (low, high) = source.bounds();
+        let bounds = (Vec3::from(low), Vec3::from(high));
+        let world = bounds.1 - bounds.0;
         let origin = Vec3::from(source.origin());
         let extent = source.extent();
         let dims = Vec3::new(extent.x() as f32, extent.y() as f32, extent.z() as f32);
-        let voxel = world / dims;
+        let basis = source.basis();
+        let matrix = basis.matrix();
+        let inverse = basis.inverse();
+        let axes = [matrix.col(0), matrix.col(1), matrix.col(2)];
+        let inverses = [inverse.row(0), inverse.row(1), inverse.row(2)];
+        let voxel = Vec3::new(basis.step(0), basis.step(1), basis.step(2));
         Self {
             grid,
             origin,
+            bounds,
             world,
             dims,
             voxel,
+            axes,
+            inverses,
             atlas,
             level,
             base,
@@ -167,6 +180,14 @@ impl BrickTable {
             records: vec![BrickRecord::MISSING; grid.count()],
             live: HashSet::new(),
         }
+    }
+
+    pub fn rate(&self, direction: Vec3) -> Vec3 {
+        Vec3::new(
+            self.inverses[0].dot(direction),
+            self.inverses[1].dot(direction),
+            self.inverses[2].dot(direction),
+        )
     }
 
     pub fn level(&self) -> usize {

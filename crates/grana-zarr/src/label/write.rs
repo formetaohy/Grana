@@ -190,7 +190,10 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
         })
         .collect::<Result<Vec<_>, Error>>()?;
     let multiscales = if image.modern() {
-        crate::schema::multiscales(spec.name, &axes_json, datasets)
+        let level = image.pyramid().level(0);
+        let matrix = crate::schema::rotation(level);
+        let display = crate::schema::rotated(level);
+        crate::schema::multiscales(spec.name, &axes_json, datasets, display.then_some(matrix))
     } else {
         json!([{
             "name": spec.name,

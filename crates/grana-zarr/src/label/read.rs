@@ -306,15 +306,11 @@ fn image(
             detail: error.to_string(),
         })?;
         let kind = kind(&origin, &array)?;
-        let layout = axes::layout(
-            &metadata.axes,
-            array.shape(),
-            &dataset.scale,
-            &dataset.translation,
-        )
-        .map_err(|detail| Error::Metadata {
-            path: origin.clone(),
-            detail,
+        let layout = axes::layout(&metadata.axes, array.shape(), dataset).map_err(|detail| {
+            Error::Metadata {
+                path: origin.clone(),
+                detail,
+            }
         })?;
         if layout.channel_count() != 1 {
             return Err(Error::Unsupported {
@@ -356,7 +352,11 @@ fn image(
             .iter()
             .map(|level| level.layout.clone())
             .collect::<Vec<_>>(),
-    );
+    )
+    .map_err(|detail| Error::Unsupported {
+        path: origin.clone(),
+        detail,
+    })?;
     Ok(Label {
         origin,
         name: name.to_string(),
@@ -371,13 +371,13 @@ fn ordered(levels: &[LevelArray]) -> bool {
         let fine = &pair[0].layout;
         let coarse = &pair[1].layout;
         let (fine_extent, coarse_extent) = (fine.extent, coarse.extent);
-        let (fine_spacing, coarse_spacing) = (fine.spacing, coarse.spacing);
+        let (fine_spacing, coarse_spacing) = (fine.voxel(), coarse.voxel());
         fine_extent.x() >= coarse_extent.x()
             && fine_extent.y() >= coarse_extent.y()
             && fine_extent.z() >= coarse_extent.z()
-            && fine_spacing.x() <= coarse_spacing.x()
-            && fine_spacing.y() <= coarse_spacing.y()
-            && fine_spacing.z() <= coarse_spacing.z()
+            && fine_spacing[0] <= coarse_spacing[0]
+            && fine_spacing[1] <= coarse_spacing[1]
+            && fine_spacing[2] <= coarse_spacing[2]
     })
 }
 

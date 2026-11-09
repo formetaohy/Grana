@@ -7,6 +7,7 @@ mod label;
 mod metadata;
 mod root;
 mod schema;
+mod transform;
 mod write;
 
 pub use error::Error;

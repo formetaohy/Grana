@@ -6,6 +6,26 @@ use grana_pipeline::run::SegmentRequest;
 const CALIBRATION_ITERATIONS: u32 = 10;
 
 impl Session {
+    pub(super) fn analysable(&mut self) -> bool {
+        let Some(scene) = self.scene.as_ref() else {
+            self.message = Some(Message::error("open a dataset before analysing it"));
+            return false;
+        };
+        let placed = scene
+            .dataset
+            .pyramid()
+            .levels()
+            .iter()
+            .any(|level| level.basis().diagonal_spacing().is_none());
+        if placed {
+            self.message = Some(Message::error(
+                "the dataset is placed with a transform that analysis does not measure yet",
+            ));
+            return false;
+        }
+        true
+    }
+
     pub(super) fn poll_analysis(&mut self) -> bool {
         enum Update {
             Progress(u32, usize, usize),
@@ -533,6 +553,9 @@ impl Session {
     }
 
     pub(super) fn begin_calibration(&mut self, source: usize, threshold: f32, separation: f32) {
+        if !self.analysable() {
+            return;
+        }
         if self.recipe.is_some() {
             self.message = Some(Message::error(
                 "a protocol replay calibrates the point spread function it records",
@@ -616,6 +639,9 @@ impl Session {
     }
 
     pub(super) fn start_detect(&mut self, set: ObjectSetId) {
+        if !self.analysable() {
+            return;
+        }
         if self.loading.is_some() {
             return;
         }
@@ -881,6 +907,9 @@ impl Session {
     }
 
     pub(super) fn start_tracks(&mut self, set: ObjectSetId) {
+        if !self.analysable() {
+            return;
+        }
         if self.loading.is_some() {
             return;
         }
@@ -926,6 +955,9 @@ impl Session {
     }
 
     pub(super) fn start_coloc(&mut self) {
+        if !self.analysable() {
+            return;
+        }
         if self.loading.is_some()
             || self
                 .analysis
@@ -1014,6 +1046,9 @@ impl Session {
     }
 
     pub(super) fn start_drift(&mut self) {
+        if !self.analysable() {
+            return;
+        }
         let Some(scene) = self.scene.as_ref() else {
             return;
         };

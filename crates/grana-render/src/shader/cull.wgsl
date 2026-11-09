@@ -24,32 +24,49 @@ fn level_grid() -> vec3<u32> {
     return frame.grids[schedule.band].xyz;
 }
 
-fn level_min() -> vec3<f32> {
-    return frame.mins[schedule.band].xyz;
-}
-
-fn level_size() -> vec3<f32> {
-    return frame.sizes[schedule.band].xyz;
+fn box_bounds(
+    origin: vec3<f32>,
+    axes: array<vec3<f32>, 3>,
+    low: vec3<f32>,
+    high: vec3<f32>,
+) -> array<vec3<f32>, 2> {
+    var world_low = origin;
+    var world_high = origin;
+    for (var axis = 0u; axis < 3u; axis += 1u) {
+        let first = axes[axis] * low[axis];
+        let second = axes[axis] * high[axis];
+        world_low += min(first, second);
+        world_high += max(first, second);
+    }
+    return array<vec3<f32>, 2>(world_low, world_high);
 }
 
 fn brick_box(cell: vec3<u32>) -> array<vec3<f32>, 2> {
-    let dims = vec3<u32>(level_dims());
-    let origin = cell * 32u;
-    let size = min(vec3<u32>(32u), dims - origin);
-    let voxel = level_size() / level_dims();
-    let low = level_min() + vec3<f32>(origin) * voxel;
-    let high = low + vec3<f32>(size) * voxel;
-    return array<vec3<f32>, 2>(low, high);
+    let dims = vec3<f32>(vec3<u32>(level_dims()));
+    let low = vec3<f32>(cell * 32u);
+    let high = min(low + vec3<f32>(32.0), dims);
+    return box_bounds(
+        level_origin(schedule.band),
+        array<vec3<f32>, 3>(
+            level_axis(schedule.band, 0u),
+            level_axis(schedule.band, 1u),
+            level_axis(schedule.band, 2u),
+        ),
+        low,
+        high,
+    );
 }
 
 fn section_brick_box(cell: vec3<u32>) -> array<vec3<f32>, 2> {
-    let dims = vec3<u32>(section.dims.xyz);
-    let origin = cell * 32u;
-    let size = min(vec3<u32>(32u), dims - origin);
-    let voxel = section.world.xyz / section.dims.xyz;
-    let low = section.box_min.xyz + vec3<f32>(origin) * voxel;
-    let high = low + vec3<f32>(size) * voxel;
-    return array<vec3<f32>, 2>(low, high);
+    let dims = vec3<f32>(vec3<u32>(section.dims.xyz));
+    let low = vec3<f32>(cell * 32u);
+    let high = min(low + vec3<f32>(32.0), dims);
+    return box_bounds(
+        section.origin.xyz,
+        array<vec3<f32>, 3>(section.axes[0].xyz, section.axes[1].xyz, section.axes[2].xyz),
+        low,
+        high,
+    );
 }
 
 fn reach(low: vec3<f32>, high: vec3<f32>) -> vec2<f32> {

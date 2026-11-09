@@ -1,32 +1,77 @@
-use grana_volume::Level;
+use grana_volume::{Basis, Level};
 
 use crate::axes::Layout;
 
-pub(crate) fn levels(layouts: &[Layout]) -> (Vec<Level>, [f32; 3]) {
-    let first = layouts.first().expect("a multiscale image holds a level");
-    let world = first.spacing.world_extent(first.extent);
-    let first_voxel = voxel(first);
-    let center = [0, 1, 2].map(|axis| -0.5 * f64::from(world[axis]) + 0.5 * first_voxel[axis]);
-    let placement = [0, 1, 2].map(|axis| (first.translation[axis] - center[axis]) as f32);
+const INVERTIBLE: f64 = 1.0e-12;
+
+pub(crate) fn levels(layouts: &[Layout]) -> Result<(Vec<Level>, [f32; 3]), String> {
+    let first = layouts
+        .first()
+        .ok_or_else(|| "a multiscale image holds no level".to_string())?;
+    let dims = [
+        f64::from(first.extent.x()),
+        f64::from(first.extent.y()),
+        f64::from(first.extent.z()),
+    ];
+    let mut placement = first.origin;
+    for (axis, column) in first.columns.iter().enumerate() {
+        let weight = 0.5 * (dims[axis] - 1.0);
+        for (component, value) in column.iter().enumerate() {
+            placement[component] += weight * value;
+        }
+    }
+    let placement = placement.map(|value| value as f32);
+    if !placement.iter().all(|value| value.is_finite()) {
+        return Err("the image placement is outside the supported range".to_string());
+    }
     let levels = layouts
         .iter()
-        .map(|layout| {
-            let voxel = voxel(layout);
-            let origin = [0, 1, 2].map(|axis| {
-                let center = layout.translation[axis] - f64::from(placement[axis]);
-                (center - 0.5 * voxel[axis]) as f32
-            });
-            Level::placed(layout.extent, layout.spacing, origin)
-        })
-        .collect();
-    (levels, placement)
+        .map(|layout| level(layout, placement))
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((levels, placement))
 }
 
-fn voxel(layout: &Layout) -> [f64; 3] {
-    let spacing = layout.spacing;
-    [
-        f64::from(spacing.x()),
-        f64::from(spacing.y()),
-        f64::from(spacing.z()),
-    ]
+fn level(layout: &Layout, placement: [f32; 3]) -> Result<Level, String> {
+    let mut corner = layout.origin;
+    for (component, slot) in corner.iter_mut().enumerate() {
+        let mut shift = f64::from(placement[component]);
+        for column in &layout.columns {
+            shift += 0.5 * column[component];
+        }
+        *slot -= shift;
+    }
+    let determinant = determinant(&layout.columns);
+    let volume = (0..3)
+        .map(|axis| length(&layout.columns[axis]))
+        .product::<f64>();
+    if !determinant.is_finite() || determinant.abs() <= INVERTIBLE * volume || volume <= 0.0 {
+        return Err("an image level holds a singular placement".to_string());
+    }
+    let mut columns = [[0.0f32; 3]; 3];
+    for (axis, column) in layout.columns.iter().enumerate() {
+        for (component, value) in column.iter().enumerate() {
+            let value = *value as f32;
+            if !value.is_finite() {
+                return Err(
+                    "an image level holds a placement outside the supported range".to_string(),
+                );
+            }
+            columns[axis][component] = value;
+        }
+    }
+    let corner = corner.map(|value| value as f32);
+    if !corner.iter().all(|value| value.is_finite()) {
+        return Err("an image level holds an origin outside the supported range".to_string());
+    }
+    Ok(Level::placed(layout.extent, Basis::new(columns), corner))
+}
+
+fn determinant(columns: &[[f64; 3]; 3]) -> f64 {
+    let [x, y, z] = columns;
+    x[0] * (y[1] * z[2] - y[2] * z[1]) - y[0] * (x[1] * z[2] - x[2] * z[1])
+        + z[0] * (x[1] * y[2] - x[2] * y[1])
+}
+
+fn length(vector: &[f64; 3]) -> f64 {
+    vector.iter().map(|value| value * value).sum::<f64>().sqrt()
 }

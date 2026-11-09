@@ -6,8 +6,6 @@ struct FrameData {
     right: vec4<f32>,
     up: vec4<f32>,
     forward: vec4<f32>,
-    box_min: vec4<f32>,
-    box_size: vec4<f32>,
     region_center: vec4<f32>,
     region_axis: array<vec4<f32>, 3>,
     atlas: vec4<u32>,
@@ -24,8 +22,9 @@ struct FrameData {
     tag: vec4<u32>,
     dims: array<vec4<f32>, 4>,
     grids: array<vec4<u32>, 4>,
-    mins: array<vec4<f32>, 4>,
-    sizes: array<vec4<f32>, 4>,
+    origins: array<vec4<f32>, 4>,
+    axes: array<vec4<f32>, 12>,
+    inverses: array<vec4<f32>, 12>,
     bases: vec4<u32>,
     bands: vec4<u32>,
     edge: vec4<f32>,
@@ -37,17 +36,19 @@ struct SectionData {
     right: vec4<f32>,
     up: vec4<f32>,
     jitter: vec4<f32>,
-    box_min: vec4<f32>,
-    world: vec4<f32>,
+    origin: vec4<f32>,
+    axes: array<vec4<f32>, 3>,
+    inverses: array<vec4<f32>, 3>,
     dims: vec4<f32>,
     grid: vec4<u32>,
     atlas: vec4<u32>,
-    axes: vec4<u32>,
+    channels: vec4<u32>,
     bases: vec4<u32>,
+    fallback_origin: vec4<f32>,
+    fallback_axes: array<vec4<f32>, 3>,
+    fallback_inverses: array<vec4<f32>, 3>,
     fallback_dims: vec4<f32>,
     fallback_grid: vec4<u32>,
-    fallback_min: vec4<f32>,
-    fallback_world: vec4<f32>,
 }
 
 struct ChannelData {
@@ -67,6 +68,83 @@ struct ChannelData {
 @group(0) @binding(6) var section_lut: texture_2d<f32>;
 
 const SHADING_TAU: f32 = 0.020203;
+
+fn level_origin(band: u32) -> vec3<f32> {
+    return frame.origins[band].xyz;
+}
+
+fn level_axis(band: u32, axis: u32) -> vec3<f32> {
+    return frame.axes[band * 3u + axis].xyz;
+}
+
+fn level_inverse(band: u32, axis: u32) -> vec3<f32> {
+    return frame.inverses[band * 3u + axis].xyz;
+}
+
+fn level_world(band: u32, uvw: vec3<f32>) -> vec3<f32> {
+    let dims = frame.dims[band].xyz;
+    return level_origin(band)
+        + level_axis(band, 0u) * (uvw.x * dims.x)
+        + level_axis(band, 1u) * (uvw.y * dims.y)
+        + level_axis(band, 2u) * (uvw.z * dims.z);
+}
+
+fn level_local(band: u32, point: vec3<f32>) -> vec3<f32> {
+    let offset = point - level_origin(band);
+    let voxel = vec3<f32>(
+        dot(level_inverse(band, 0u), offset),
+        dot(level_inverse(band, 1u), offset),
+        dot(level_inverse(band, 2u), offset),
+    );
+    return voxel / frame.dims[band].xyz;
+}
+
+fn level_rate(band: u32, direction: vec3<f32>) -> vec3<f32> {
+    let voxel = vec3<f32>(
+        dot(level_inverse(band, 0u), direction),
+        dot(level_inverse(band, 1u), direction),
+        dot(level_inverse(band, 2u), direction),
+    );
+    return voxel / frame.dims[band].xyz;
+}
+
+fn level_gradient(band: u32, gradient: vec3<f32>) -> vec3<f32> {
+    return gradient.x * level_inverse(band, 0u)
+        + gradient.y * level_inverse(band, 1u)
+        + gradient.z * level_inverse(band, 2u);
+}
+
+fn level_extent(band: u32) -> vec3<f32> {
+    let dims = frame.dims[band].xyz;
+    return abs(level_axis(band, 0u)) * dims.x
+        + abs(level_axis(band, 1u)) * dims.y
+        + abs(level_axis(band, 2u)) * dims.z;
+}
+
+fn section_local(point: vec3<f32>) -> vec3<f32> {
+    let offset = point - section.origin.xyz;
+    return vec3<f32>(
+        dot(section.inverses[0].xyz, offset),
+        dot(section.inverses[1].xyz, offset),
+        dot(section.inverses[2].xyz, offset),
+    ) / section.dims.xyz;
+}
+
+fn section_world(local: vec3<f32>) -> vec3<f32> {
+    return section.origin.xyz
+        + section.axes[0].xyz * local.x
+        + section.axes[1].xyz * local.y
+        + section.axes[2].xyz * local.z;
+}
+
+fn fallback_local(point: vec3<f32>) -> vec3<f32> {
+    let offset = point - section.fallback_origin.xyz;
+    return vec3<f32>(
+        dot(section.fallback_inverses[0].xyz, offset),
+        dot(section.fallback_inverses[1].xyz, offset),
+        dot(section.fallback_inverses[2].xyz, offset),
+    ) / section.fallback_dims.xyz;
+}
 
 fn section_point(ndc: vec2<f32>) -> vec3<f32> {
     let across = section.center.x + ndc.x * section.right.w;

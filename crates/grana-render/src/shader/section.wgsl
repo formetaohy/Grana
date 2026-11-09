@@ -37,7 +37,7 @@ fn locate(uvw: vec3<f32>, point: vec3<f32>) -> SectionHit {
     if (brick_hollow(record) || section.fallback_grid.w == 0u) {
         return SectionHit(0u, uvw, section.grid.xyz, section.dims.xyz);
     }
-    let local = (point - section.fallback_min.xyz) / section.fallback_world.xyz;
+    let local = fallback_local(point);
     let other = brick_cell(section.fallback_grid.xyz, section.fallback_dims.xyz, local);
     let fallback = brick_slot(bricks[section.bases.y + brick_index(section.fallback_grid.xyz, other)]);
     return SectionHit(fallback, local, section.fallback_grid.xyz, section.fallback_dims.xyz);
@@ -61,7 +61,7 @@ fn sample_section_pack(pack: u32, uvw: vec3<f32>, point: vec3<f32>) -> vec4<f32>
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let point = section_point(input.ndc + section.jitter.xy);
-    let uvw = (point - section.box_min.xyz) / section.world.xyz;
+    let uvw = section_local(point);
     if (any(uvw < vec3<f32>(0.0)) || any(uvw > vec3<f32>(1.0))) {
         return vec4<f32>(0.0);
     }
@@ -69,7 +69,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
     var color = vec4<f32>(0.0);
-    let count = section.axes.x;
+    let count = section.channels.x;
     let packs = (count + PACK - 1u) / PACK;
     for (var pack = 0u; pack < packs; pack += 1u) {
         if (!pack_active(pack, count)) {

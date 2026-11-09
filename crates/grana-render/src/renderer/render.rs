@@ -377,7 +377,7 @@ impl Renderer {
         if replan {
             let scale = bucket_scale(
                 camera,
-                tables[0].origin.to_array(),
+                tables[0].bounds.0.to_array(),
                 tables[0].world.to_array(),
             );
             for band in 0..BAND {

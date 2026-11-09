@@ -13,16 +13,14 @@ const UNIT: f32 = 65535.0;
 struct LevelFrame {
     dims: vec3<f32>,
     grid: vec3<u32>,
-    box_min: vec3<f32>,
-    box_size: vec3<f32>,
+    origin: vec3<f32>,
 }
 
 fn level_frame(band: u32) -> LevelFrame {
     return LevelFrame(
         frame.dims[band].xyz,
         frame.grids[band].xyz,
-        frame.mins[band].xyz,
-        frame.sizes[band].xyz,
+        frame.origins[band].xyz,
     );
 }
 
@@ -44,8 +42,7 @@ fn band_uvw(band: u32, uvw: vec3<f32>) -> vec3<f32> {
     if (band == 0u) {
         return uvw;
     }
-    let world = frame.box_min.xyz + uvw * frame.box_size.xyz;
-    return (world - frame.mins[band].xyz) / frame.sizes[band].xyz;
+    return level_local(band, level_world(0u, uvw));
 }
 
 fn cell_voxel(band: u32, uvw: vec3<f32>, brick: vec3<u32>) -> vec3<f32> {
@@ -122,7 +119,7 @@ fn sample_volume(band: u32, channel: u32, uvw: vec3<f32>) -> f32 {
 
 fn level_voxels_per_world(band: u32, direction: vec3<f32>) -> f32 {
     let g = level_frame(band);
-    return length(direction / (g.box_size / g.dims));
+    return length(level_rate(band, direction) * g.dims);
 }
 
 fn channel_alpha(band: u32, uvw: vec3<f32>) -> f32 {
@@ -177,8 +174,7 @@ fn channel_extinction(band: u32, uvw: vec3<f32>) -> f32 {
 }
 
 fn ray_uvw(band: u32, t: f32, direction: vec3<f32>) -> vec3<f32> {
-    let g = level_frame(band);
-    return (frame.eye.xyz + direction * t - g.box_min) / g.box_size;
+    return level_local(band, frame.eye.xyz + direction * t);
 }
 
 fn boundary_delta(band: u32, uvw: vec3<f32>, direction: vec3<f32>, minimum: f32) -> f32 {
@@ -214,8 +210,8 @@ fn pack_gradient(
     );
 }
 
-fn shaded_normal(gradient: vec3<f32>, voxel: vec3<f32>) -> vec3<f32> {
-    var normal = -gradient / voxel;
+fn shaded_normal(gradient: vec3<f32>, band: u32) -> vec3<f32> {
+    var normal = -level_gradient(band, gradient);
     if (length(normal) < GRADIENT_EPSILON) {
         return vec3<f32>(0.0);
     }

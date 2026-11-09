@@ -523,9 +523,11 @@ fn geometry(pyramid: &Pyramid) -> Vec<u8> {
         for value in [extent.x(), extent.y(), extent.z()] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
-        let spacing = level.spacing();
-        for value in [spacing.x(), spacing.y(), spacing.z()] {
-            bytes.extend_from_slice(&value.to_bits().to_le_bytes());
+        let basis = level.basis();
+        for axis in 0..3 {
+            for value in basis.column(axis) {
+                bytes.extend_from_slice(&value.to_bits().to_le_bytes());
+            }
         }
         for value in level.origin() {
             bytes.extend_from_slice(&value.to_bits().to_le_bytes());

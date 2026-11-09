@@ -18,8 +18,6 @@ pub(crate) struct FrameData {
     pub right: [f32; 4],
     pub up: [f32; 4],
     pub forward: [f32; 4],
-    pub box_min: [f32; 4],
-    pub box_size: [f32; 4],
     pub region_center: [f32; 4],
     pub region_axis: [[f32; 4]; 3],
     pub atlas: [u32; 4],
@@ -36,8 +34,9 @@ pub(crate) struct FrameData {
     pub tag: [u32; 4],
     pub dims: [[f32; 4]; BAND],
     pub grids: [[u32; 4]; BAND],
-    pub mins: [[f32; 4]; BAND],
-    pub sizes: [[f32; 4]; BAND],
+    pub origins: [[f32; 4]; BAND],
+    pub axes: [[f32; 4]; BAND * 3],
+    pub inverses: [[f32; 4]; BAND * 3],
     pub bases: [u32; 4],
     pub bands: [u32; 4],
     pub edge: [f32; 4],
@@ -51,17 +50,19 @@ pub(crate) struct SectionData {
     pub right: [f32; 4],
     pub up: [f32; 4],
     pub jitter: [f32; 4],
-    pub box_min: [f32; 4],
-    pub world: [f32; 4],
+    pub origin: [f32; 4],
+    pub axes: [[f32; 4]; 3],
+    pub inverses: [[f32; 4]; 3],
     pub dims: [f32; 4],
     pub grid: [u32; 4],
     pub atlas: [u32; 4],
-    pub axes: [u32; 4],
+    pub channels: [u32; 4],
     pub bases: [u32; 4],
+    pub fallback_origin: [f32; 4],
+    pub fallback_axes: [[f32; 4]; 3],
+    pub fallback_inverses: [[f32; 4]; 3],
     pub fallback_dims: [f32; 4],
     pub fallback_grid: [u32; 4],
-    pub fallback_min: [f32; 4],
-    pub fallback_world: [f32; 4],
 }
 
 #[repr(C)]
@@ -82,15 +83,18 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 976);
-    assert!(std::mem::offset_of!(FrameData, region_axis) == 256);
-    assert!(std::mem::offset_of!(FrameData, planes) == 384);
-    assert!(std::mem::offset_of!(FrameData, light_view) == 480);
-    assert!(std::mem::offset_of!(FrameData, dims) == 672);
-    assert!(std::mem::offset_of!(FrameData, bases) == 928);
-    assert!(std::mem::offset_of!(FrameData, bands) == 944);
-    assert!(std::mem::offset_of!(FrameData, edge) == 960);
-    assert!(size_of::<SectionData>() == 256);
+    assert!(size_of::<FrameData>() == 1264);
+    assert!(std::mem::offset_of!(FrameData, region_axis) == 224);
+    assert!(std::mem::offset_of!(FrameData, planes) == 352);
+    assert!(std::mem::offset_of!(FrameData, light_view) == 448);
+    assert!(std::mem::offset_of!(FrameData, dims) == 640);
+    assert!(std::mem::offset_of!(FrameData, origins) == 768);
+    assert!(std::mem::offset_of!(FrameData, axes) == 832);
+    assert!(std::mem::offset_of!(FrameData, inverses) == 1024);
+    assert!(std::mem::offset_of!(FrameData, bases) == 1216);
+    assert!(std::mem::offset_of!(FrameData, bands) == 1232);
+    assert!(std::mem::offset_of!(FrameData, edge) == 1248);
+    assert!(size_of::<SectionData>() == 416);
     assert!(size_of::<ScheduleData>() == 48);
 };
 
@@ -136,16 +140,20 @@ impl FrameData {
         let light = shading.light();
         let mut dims = [[0.0; 4]; BAND];
         let mut grids = [[0; 4]; BAND];
-        let mut mins = [[0.0; 4]; BAND];
-        let mut sizes = [[0.0; 4]; BAND];
+        let mut origins = [[0.0; 4]; BAND];
+        let mut axes = [[0.0; 4]; BAND * 3];
+        let mut inverses = [[0.0; 4]; BAND * 3];
         let mut bases = [0; 4];
         let mut edge = [UNREACHED; 4];
         for (band, table) in tables.iter().enumerate() {
             let counts = table.grid.counts();
             dims[band] = [table.dims.x, table.dims.y, table.dims.z, 0.0];
             grids[band] = [counts[0], counts[1], counts[2], 0];
-            mins[band] = [table.origin.x, table.origin.y, table.origin.z, 0.0];
-            sizes[band] = [table.world.x, table.world.y, table.world.z, 0.0];
+            origins[band] = [table.origin.x, table.origin.y, table.origin.z, 0.0];
+            for axis in 0..3 {
+                axes[band * 3 + axis] = table.axes[axis].extend(0.0).to_array();
+                inverses[band * 3 + axis] = table.inverses[axis].extend(0.0).to_array();
+            }
             bases[band] = table.record_base();
             if band > 0 {
                 edge[band - 1] = table.voxel.min_element() * pixel_scale;
@@ -159,8 +167,6 @@ impl FrameData {
             right: camera.right().extend(0.0).to_array(),
             up: camera.up().extend(0.0).to_array(),
             forward: camera.forward().extend(0.0).to_array(),
-            box_min: [first.origin.x, first.origin.y, first.origin.z, 0.0],
-            box_size: [first.world.x, first.world.y, first.world.z, 0.0],
             region_center: [
                 region.center().x,
                 region.center().y,
@@ -193,8 +199,9 @@ impl FrameData {
             tag: [time, 0, 0, 0],
             dims,
             grids,
-            mins,
-            sizes,
+            origins,
+            axes,
+            inverses,
             bases,
             bands: [ladder.count as u32, 0, 0, 0],
             edge,
@@ -211,8 +218,6 @@ impl SectionData {
         channels: usize,
     ) -> Self {
         assert!(aspect > 0.0, "a section pane has a positive aspect");
-        let world = table.world;
-        let origin = table.origin;
         let dims = table.dims;
         let center = section.center();
         let normal = section.normal();
@@ -228,13 +233,19 @@ impl SectionData {
             right: [right.x, right.y, right.z, 0.5 * section.span() * aspect],
             up: [up.x, up.y, up.z, 0.5 * section.span()],
             jitter: [0.0; 4],
-            box_min: [origin.x, origin.y, origin.z, 0.0],
-            world: [world.x, world.y, world.z, 0.0],
+            origin: [table.origin.x, table.origin.y, table.origin.z, 0.0],
+            axes: std::array::from_fn(|axis| table.axes[axis].extend(0.0).to_array()),
+            inverses: std::array::from_fn(|axis| table.inverses[axis].extend(0.0).to_array()),
             dims: [dims.x, dims.y, dims.z, 0.0],
             grid: [grid[0], grid[1], grid[2], 0],
             atlas: [table.atlas[0], table.atlas[1], table.atlas[2], 0],
-            axes: [channels as u32, 0, 0, 0],
+            channels: [channels as u32, 0, 0, 0],
             bases: [table.record_base(), support.record_base(), 0, 0],
+            fallback_origin: [support.origin.x, support.origin.y, support.origin.z, 0.0],
+            fallback_axes: std::array::from_fn(|axis| support.axes[axis].extend(0.0).to_array()),
+            fallback_inverses: std::array::from_fn(|axis| {
+                support.inverses[axis].extend(0.0).to_array()
+            }),
             fallback_dims: [support.dims.x, support.dims.y, support.dims.z, 0.0],
             fallback_grid: [
                 support_grid[0],
@@ -242,17 +253,15 @@ impl SectionData {
                 support_grid[2],
                 u32::from(fallback.is_some()),
             ],
-            fallback_min: [support.origin.x, support.origin.y, support.origin.z, 0.0],
-            fallback_world: [support.world.x, support.world.y, support.world.z, 0.0],
         }
     }
 }
 
 fn step_length(camera: &Camera, table: &BrickTable, step_scale: f32) -> f32 {
-    let direction = camera.forward() / table.world;
+    let rate = table.rate(camera.forward());
     let mut voxel_world = f32::INFINITY;
     for axis in 0..3 {
-        let rate = direction[axis].abs();
+        let rate = rate[axis].abs();
         if rate > 1.0e-6 {
             voxel_world = voxel_world.min((1.0 / table.dims[axis]) / rate);
         }

@@ -90,8 +90,7 @@ fn lighting(band: u32, uvw: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
     if (strength <= 0.0) {
         return vec2<f32>(1.0, occlusion);
     }
-    let g = level_frame(band);
-    let world = g.box_min + uvw * g.box_size;
+    let world = level_world(band, uvw);
     let coordinate = shadow_coordinate(frame.light_view, world);
     let sun = sun_transmittance(
         coordinate,
@@ -118,7 +117,6 @@ fn shade_channel(
     color: vec3<f32>,
     uvw: vec3<f32>,
     direction: vec3<f32>,
-    voxel: vec3<f32>,
 ) -> vec3<f32> {
     let magnitude = length(gradient);
     if (magnitude < GRADIENT_EPSILON) {
@@ -132,7 +130,7 @@ fn shade_channel(
     if (weight <= 0.0) {
         return color;
     }
-    let normal = shaded_normal(gradient, voxel);
+    let normal = shaded_normal(gradient, band);
     return mix(color, lit(color, normal, direction, lighting(band, uvw, normal)), weight);
 }
 
@@ -262,19 +260,18 @@ fn march(begin: f32, finish: f32, direction: vec3<f32>, dither: f32) -> vec4<f32
         if (!found.usable) {
             let skip = ray_uvw(band, t, direction);
             let g = level_frame(band);
-            let edge = boundary_delta(band, skip, direction / g.box_size, local_step(t) * 0.25);
+            let edge = boundary_delta(band, skip, level_rate(band, direction), local_step(t) * 0.25);
             t = min(t + edge, finish);
             continue;
         }
         let g = level_frame(band);
-        let direction_uvw = direction / g.box_size;
+        let direction_uvw = level_rate(band, direction);
         let brick = found.cell;
         let uvw = found.uvw;
         let boundary = min(t + boundary_delta(band, uvw, direction_uvw, local_step(t) * 0.25), finish);
         let record = level_record(band, brick_index(g.grid, brick));
         let slot = brick_slot(record) - 1u;
-        let voxel = g.box_size / g.dims;
-        let voxels_per_world = length(direction / voxel);
+        let voxels_per_world = length(direction_uvw * g.dims);
         let gradient_step = vec3<f32>(1.0) / g.dims;
         let texel_rate = direction_uvw * g.dims / atlas_extent;
         var texel =
@@ -348,7 +345,6 @@ fn march(begin: f32, finish: f32, direction: vec3<f32>, dither: f32) -> vec4<f32
                                 color[component],
                                 position,
                                 direction,
-                                voxel,
                             );
                         }
                     }
@@ -393,12 +389,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let ndc = input.ndc + frame.jitter.xy;
     let pixel = vec2<i32>(input.clip_position.xy);
     let direction = normalize(unproject(vec3<f32>(ndc, 1.0)) - eye);
-    let box_min = frame.box_min.xyz;
-    let box_max = box_min + frame.box_size.xyz;
+    let local_eye = level_local(0u, eye);
+    let local_direction = level_rate(0u, direction);
 
-    let inverse_direction = vec3<f32>(1.0) / direction;
-    let near_t = (box_min - eye) * inverse_direction;
-    let far_t = (box_max - eye) * inverse_direction;
+    let inverse_direction = vec3<f32>(1.0) / local_direction;
+    let near_t = (vec3<f32>(0.0) - local_eye) * inverse_direction;
+    let far_t = (vec3<f32>(1.0) - local_eye) * inverse_direction;
     let lowest_t = min(near_t, far_t);
     let highest_t = max(near_t, far_t);
     let entry = max(max(lowest_t.x, lowest_t.y), lowest_t.z);

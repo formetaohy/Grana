@@ -8,6 +8,9 @@ impl Session {
         if self.loading.is_some() {
             return;
         }
+        if !self.analysable() {
+            return;
+        }
         if !self.label_images.iter().any(|name| name == label) {
             self.message = Some(Message::error(format!(
                 "the dataset holds no label image named {label}"

@@ -14,7 +14,7 @@ fn tau_main(@builtin(global_invocation_id) id: vec3<u32>) {
     for (var layer = 0u; layer < dims.z; layer += 1u) {
         let w = (f32(layer) + 0.5) * step;
         let world = (frame.light_inverse * vec4<f32>(uv, w, 1.0)).xyz;
-        let uvw = (world - frame.box_min.xyz) / frame.box_size.xyz;
+        let uvw = level_local(band, world);
         if (all(uvw >= vec3<f32>(-1.0e-5)) && all(uvw <= vec3<f32>(1.0 + 1.0e-5))) {
             tau += channel_extinction(band, uvw) * level_voxels_per_world(band, frame.light.xyz) * slice;
         }

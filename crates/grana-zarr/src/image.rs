@@ -94,16 +94,13 @@ impl Image {
                 }
                 Some(_) => {}
             }
-            let layout = axes::layout(
-                &metadata.axes,
-                array.shape(),
-                &dataset.scale,
-                &dataset.translation,
-            )
-            .map_err(|detail| Error::Unsupported {
-                path: tag.clone(),
-                detail,
-            })?;
+            let layout =
+                axes::layout(&metadata.axes, array.shape(), dataset).map_err(|detail| {
+                    Error::Unsupported {
+                        path: tag.clone(),
+                        detail,
+                    }
+                })?;
             let count = u32::try_from(layout.channel_count()).map_err(|_| Error::Unsupported {
                 path: tag.clone(),
                 detail: "the channel axis is too long".to_string(),
@@ -172,7 +169,11 @@ impl Image {
                 .iter()
                 .map(|level| level.layout.clone())
                 .collect::<Vec<_>>(),
-        );
+        )
+        .map_err(|detail| Error::Unsupported {
+            path: root.tag(group),
+            detail,
+        })?;
         let stored = level_metadata.len();
         Ok(Self {
             root,
@@ -362,13 +363,13 @@ fn levels_ordered(levels: &[LevelArray]) -> bool {
         let fine = &pair[0].layout;
         let coarse = &pair[1].layout;
         let (fine_extent, coarse_extent) = (fine.extent, coarse.extent);
-        let (fine_spacing, coarse_spacing) = (fine.spacing, coarse.spacing);
+        let (fine_spacing, coarse_spacing) = (fine.voxel(), coarse.voxel());
         fine_extent.x() >= coarse_extent.x()
             && fine_extent.y() >= coarse_extent.y()
             && fine_extent.z() >= coarse_extent.z()
-            && fine_spacing.x() <= coarse_spacing.x()
-            && fine_spacing.y() <= coarse_spacing.y()
-            && fine_spacing.z() <= coarse_spacing.z()
+            && fine_spacing[0] <= coarse_spacing[0]
+            && fine_spacing[1] <= coarse_spacing[1]
+            && fine_spacing[2] <= coarse_spacing[2]
     })
 }
 
