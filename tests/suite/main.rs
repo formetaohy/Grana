@@ -5,6 +5,7 @@ mod geometry;
 mod measure;
 mod mesh;
 mod render;
+mod restore;
 mod segment;
 mod session;
 mod stream;

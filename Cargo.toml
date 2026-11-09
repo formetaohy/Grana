@@ -114,9 +114,11 @@ grana-image = { workspace = true }
 grana-measure = { workspace = true }
 grana-mesh = { workspace = true }
 grana-object = { workspace = true }
+grana-optics = { workspace = true }
 grana-project = { workspace = true }
 grana-protocol = { workspace = true }
 grana-render = { workspace = true }
+grana-restore = { workspace = true }
 grana-scene = { workspace = true }
 grana-segment = { workspace = true }
 grana-session = { workspace = true }

@@ -79,19 +79,18 @@ pub fn restore(
         .collect::<Vec<f32>>();
     let mut estimate = measured.clone();
     let mut blurred = vec![0.0f32; voxels];
+    let mut ratio = vec![0.0f32; voxels];
     let mut updated = vec![0.0f32; voxels];
     let grid = Grid::of(dims, bank.dims());
     for _ in 0..iterations {
         blur(&grid, bank, first_plane, &estimate, &mut blurred);
-        correct(
-            &grid,
-            bank,
-            first_plane,
-            &measured,
-            &blurred,
-            &estimate,
-            &mut updated,
-        );
+        ratio
+            .par_iter_mut()
+            .zip(measured.par_iter().zip(&blurred))
+            .for_each(|(ratio, (measured, blurred))| {
+                *ratio = measured / blurred.max(FLOOR);
+            });
+        correct(&grid, bank, first_plane, &ratio, &estimate, &mut updated);
         std::mem::swap(&mut estimate, &mut updated);
     }
     estimate
@@ -127,8 +126,7 @@ fn correct(
     grid: &Grid,
     bank: &KernelBank,
     first_plane: u32,
-    measured: &[f32],
-    blurred: &[f32],
+    ratio: &[f32],
     estimate: &[f32],
     out: &mut [f32],
 ) {
@@ -146,8 +144,7 @@ fn correct(
                         for tap_y in 0..grid.taps[1] {
                             for tap_x in 0..grid.taps[0] {
                                 let tap = [tap_x, tap_y, tap_z];
-                                let source = grid.source(position, tap);
-                                sum += measured[source] / blurred[source].max(FLOOR)
+                                sum += ratio[grid.source(position, tap)]
                                     * taps[grid.weight(tap, true)];
                             }
                         }
