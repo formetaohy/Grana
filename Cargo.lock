@@ -3584,6 +3584,7 @@ dependencies = [
 name = "grana-mesh"
 version = "0.1.1"
 dependencies = [
+ "grana-display",
  "grana-geometry",
  "serde",
  "serde_json",
@@ -3709,6 +3710,7 @@ version = "0.1.1"
 dependencies = [
  "grana-volume",
  "openreadout-core",
+ "openreadout-hdf5",
  "openreadout-lif",
  "openreadout-nd2",
  "thiserror 2.0.21",
@@ -3922,6 +3924,16 @@ dependencies = [
  "foldhash 0.2.0",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "hdf5-pure"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18a2ed6aa54b01776adf71049f7f776284c22d6febe772155ac040105ffbd126"
+dependencies = [
+ "byteorder",
+ "flate2",
 ]
 
 [[package]]
@@ -5821,6 +5833,21 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "openreadout-hdf5"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7df146e8608f4aa6e72155abed7a9660d88f767203d1aad12477b790072f62dc"
+dependencies = [
+ "hdf5-pure",
+ "openreadout-codecs",
+ "openreadout-core",
+ "schemars",
+ "serde",
+ "serde_json",
  "xxhash-rust",
 ]
 

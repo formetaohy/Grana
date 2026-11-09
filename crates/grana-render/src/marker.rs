@@ -24,6 +24,9 @@ const CULL_SHADER: &str = concat!(
 );
 const VOLUME_SHADER: &str = concat!(
     include_str!("shader/scene.wgsl"),
+    "
+",
+    include_str!("shader/brdf.wgsl"),
     "\n",
     include_str!("shader/oit.wgsl"),
     "\n",

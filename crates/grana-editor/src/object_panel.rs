@@ -330,6 +330,35 @@ fn appearance_fields<'a>(
             opacity: value.clamp(0.0, 1.0),
         },
     ));
+    let material = set.material();
+    let roughness = format!("{:.2}", material.roughness());
+    children.push(view::slider_readout(
+        ctx,
+        &format!("object.{raw}.roughness"),
+        Some("Roughness"),
+        material.roughness(),
+        0.0..=1.0,
+        false,
+        &roughness,
+        move |value| Command::SetObjectMaterial {
+            set: id,
+            material: material.with_roughness(value.clamp(0.0, 1.0)),
+        },
+    ));
+    let metallic = format!("{:.2}", material.metallic());
+    children.push(view::slider_readout(
+        ctx,
+        &format!("object.{raw}.metallic"),
+        Some("Metallic"),
+        material.metallic(),
+        0.0..=1.0,
+        false,
+        &metallic,
+        move |value| Command::SetObjectMaterial {
+            set: id,
+            material: material.with_metallic(value.clamp(0.0, 1.0)),
+        },
+    ));
     children.push(
         grana_ui::widget::toggle_row(&theme, "Object Labels", labels)
             .named(&format!("object.{raw}.labels"))

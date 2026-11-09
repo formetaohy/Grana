@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::marker::Marker;
-use grana_display::{Shading, TransferFunction};
+use grana_display::{Material, Shading, TransferFunction};
 use grana_geometry::PackedMesh;
 use grana_volume::Intensity;
 
@@ -42,6 +42,8 @@ pub struct Style {
     visible: bool,
     selected: bool,
     opacity: f32,
+    roughness: f32,
+    metallic: f32,
 }
 
 impl Style {
@@ -59,6 +61,8 @@ impl Style {
             visible,
             selected,
             opacity,
+            roughness: Material::DEFAULT.roughness(),
+            metallic: Material::DEFAULT.metallic(),
         }
     }
 
@@ -80,6 +84,22 @@ impl Style {
 
     pub fn selected(self) -> bool {
         self.selected
+    }
+
+    pub fn roughness(self) -> f32 {
+        self.roughness
+    }
+
+    pub fn metallic(self) -> f32 {
+        self.metallic
+    }
+
+    pub fn with_material(self, material: Material) -> Self {
+        Self {
+            roughness: material.roughness(),
+            metallic: material.metallic(),
+            ..self
+        }
     }
 }
 

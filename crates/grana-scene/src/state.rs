@@ -1,4 +1,4 @@
-use std::sync::Arc;
+﻿use std::sync::Arc;
 
 use grana_display::{Shading, TransferFunction};
 use grana_measure::ObjectColoc;
@@ -22,7 +22,7 @@ use crate::scene::{Item, Scene, Selection};
 use crate::seed::Seeds;
 use crate::track_color::TrackColor;
 use crate::validate::SceneShape;
-use grana_display::ColorState;
+use grana_display::{ColorState, Material};
 
 pub(crate) const HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -89,6 +89,7 @@ pub struct SetState {
     pub label: Option<ObjectColor>,
     pub hidden: Vec<Vec<bool>>,
     pub opacity: f32,
+    pub material: Material,
     pub params: ObjectParams,
     pub track_style: Option<TrackStyle>,
     pub tracks: Option<Arc<TrackSet>>,
@@ -310,8 +311,6 @@ impl Scene {
         for value in [
             self.shading.ambient,
             self.shading.diffuse,
-            self.shading.specular,
-            self.shading.shininess,
             self.shading.shadows,
             self.shading.azimuth,
             self.shading.elevation,
@@ -343,6 +342,8 @@ impl Scene {
         }
         for set in self.objects.iter() {
             hash = mix(hash, set.id().raw());
+            hash = mix(hash, u64::from(set.material().roughness().to_bits()));
+            hash = mix(hash, u64::from(set.material().metallic().to_bits()));
             hash = mix(hash, set.kind().index() as u64);
             hash = mix(hash, set.document().raw());
             hash = mix(hash, set.seed_source().map_or(0, ObjectSetId::raw));

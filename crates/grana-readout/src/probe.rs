@@ -19,7 +19,7 @@ pub(crate) fn intensities(
     let depth = (info.size_z / 2).max(1) - 1;
     let mut ranges = Vec::with_capacity(views.len());
     for view in views {
-        let key = (0, view.channel, depth);
+        let key = (0, 0, view.channel, depth);
         let plane = match cache.get(&key) {
             Some(plane) => plane,
             None => {

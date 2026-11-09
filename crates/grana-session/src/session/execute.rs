@@ -361,6 +361,11 @@ impl Session {
                     target.set_opacity(opacity);
                 }
             }
+            Command::SetObjectMaterial { set, material } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_object_material(set, material);
+                }
+            }
             Command::SetObjectParams { set, params } => {
                 let root = self.detection_root(set).unwrap_or(set);
                 let imported = self

@@ -1630,11 +1630,14 @@ impl App {
             .set_title("Open a microscopy image")
             .add_filter(
                 "Microscopy image",
-                &["czi", "nd2", "lif", "ome.tif", "ome.tiff", "tif", "tiff"],
+                &[
+                    "czi", "nd2", "lif", "ims", "ome.tif", "ome.tiff", "tif", "tiff",
+                ],
             )
             .add_filter("ZEISS CZI", &["czi"])
             .add_filter("Nikon ND2", &["nd2"])
             .add_filter("Leica LIF", &["lif"])
+            .add_filter("Imaris IMS", &["ims"])
             .add_filter("OME-TIFF", &["ome.tif", "ome.tiff", "tif", "tiff"])
             .pick_file()
     }

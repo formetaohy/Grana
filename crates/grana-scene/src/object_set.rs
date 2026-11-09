@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+﻿use std::sync::{Arc, Mutex, MutexGuard};
 
 use grana_measure::{
     ChildField, ChildMetric, Classifier, Measurement, ObjectColoc, RelationField, TrackMeasurement,
@@ -20,7 +20,7 @@ use crate::seed::Seeds;
 use crate::state::{RelationState, SetState};
 use crate::track_color::TrackColor;
 use crate::track_layer::TrackLayer;
-use grana_display::{ColorState, Coloring, Extent};
+use grana_display::{ColorState, Coloring, Extent, Material};
 
 const MIN_THICKNESS: f32 = 0.25;
 const MAX_THICKNESS: f32 = 40.0;
@@ -84,6 +84,7 @@ pub struct ObjectSet {
     label: Option<ObjectColor>,
     hidden: Vec<Vec<bool>>,
     opacity: f32,
+    material: Material,
     voxel: f32,
     params: ObjectParams,
     track_style: Option<TrackStyle>,
@@ -133,6 +134,7 @@ impl ObjectSet {
             label: None,
             hidden: Vec::new(),
             opacity: 1.0,
+            material: Material::DEFAULT,
             voxel,
             params,
             track_style,
@@ -283,6 +285,17 @@ impl ObjectSet {
         self.opacity
     }
 
+    pub fn material(&self) -> Material {
+        self.material
+    }
+
+    pub fn set_material(&mut self, material: Material) {
+        if self.material == material {
+            return;
+        }
+        self.material = material;
+        self.document = self.document.next();
+    }
     pub fn set_opacity(&mut self, opacity: f32) {
         let opacity = opacity.clamp(0.0, 1.0);
         if self.opacity == opacity {
@@ -939,6 +952,7 @@ impl ObjectSet {
             label: self.label,
             hidden: self.hidden.clone(),
             opacity: self.opacity,
+            material: self.material,
             params: self.params,
             track_style: self.track_style,
             tracks: self.tracks.as_ref().map(TrackLayer::shared_set),
@@ -979,6 +993,7 @@ impl ObjectSet {
             label,
             hidden,
             opacity,
+            material,
             params,
             track_style,
             tracks,
@@ -1024,6 +1039,7 @@ impl ObjectSet {
             label,
             hidden: Vec::new(),
             opacity,
+            material,
             voxel: dataset.voxel_size().min_element(),
             params,
             track_style,
@@ -1635,6 +1651,7 @@ impl ObjectSet {
             label,
             hidden: self.hidden.clone(),
             opacity: self.opacity,
+            material: self.material,
             voxel: self.voxel,
             params: self.params,
             track_style: self.track_style,
@@ -1783,6 +1800,7 @@ impl ObjectSet {
             label,
             hidden,
             opacity: self.opacity,
+            material: self.material,
             voxel: self.voxel,
             params: self.params,
             track_style: self.track_style.or(other.track_style),

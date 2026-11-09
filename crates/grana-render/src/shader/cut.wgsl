@@ -1,6 +1,7 @@
 struct Style {
     color: vec4<f32>,
     flags: vec4<f32>,
+    surface: vec4<f32>,
 }
 
 @group(0) @binding(0) var layer: texture_2d<f32>;

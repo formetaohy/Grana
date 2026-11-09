@@ -18,9 +18,11 @@ const STRIDE_LIMIT: f32 = 8.0;
 const SAMPLING_ERROR: f32 = 0.02;
 const MINIMUM_TRANSMITTANCE: f32 = 0.003;
 const MINIMUM_TAU: f32 = 1.0e-4;
-const AMBIENT_OCCLUSION: f32 = 0.55;
+const OCCLUSION_STRENGTH: f32 = 0.55;
 const SHADING_FLOOR: f32 = 0.02;
 const SHADING_CEIL: f32 = 0.10;
+const VOLUME_ROUGHNESS: f32 = 0.85;
+const VOLUME_METALLIC: f32 = 0.0;
 const EMPTY_DISTANCE: f32 = 1.0e19;
 const MAXIMUM_ENTRIES: u32 = 9u;
 
@@ -104,11 +106,17 @@ fn lit(color: vec3<f32>, normal: vec3<f32>, direction: vec3<f32>, light: vec2<f3
         return color;
     }
     let facing = select(normal, -normal, dot(normal, direction) > 0.0);
-    let half_vector = normalize(frame.light.xyz - direction);
-    let diffuse = max(dot(normal, frame.light.xyz), 0.0) * light.x;
-    let specular = pow(max(dot(facing, half_vector), 0.0), frame.shading.w) * light.x;
-    let ambient = frame.shading.x * (1.0 - AMBIENT_OCCLUSION * light.y);
-    return color * (ambient + frame.shading.y * diffuse) + vec3<f32>(frame.shading.z * specular);
+    return shade_surface(
+        color,
+        VOLUME_ROUGHNESS,
+        VOLUME_METALLIC,
+        facing,
+        -direction,
+        frame.light.xyz,
+        light.x,
+        frame.shading.x,
+        frame.shading.y,
+    ) * (1.0 - OCCLUSION_STRENGTH * (1.0 - light.y));
 }
 
 fn shade_channel(

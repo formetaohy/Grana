@@ -1125,6 +1125,7 @@ fn dataset_of(format: Option<Format>, name: &str, pyramid: &Pyramid) -> Dataset 
         Some(Format::Czi) => Dataset::czi(name, pyramid),
         Some(Format::Nikon) => Dataset::nikon(name, pyramid),
         Some(Format::Leica) => Dataset::leica(name, pyramid),
+        Some(Format::Imaris) => Dataset::imaris(name, pyramid),
         None => Dataset::synthetic(name, pyramid),
     }
 }

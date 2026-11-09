@@ -334,8 +334,6 @@ impl Encode for Shading {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.f32(self.ambient);
         writer.f32(self.diffuse);
-        writer.f32(self.specular);
-        writer.f32(self.shininess);
         writer.f32(self.shadows);
         writer.f32(self.azimuth);
         writer.f32(self.elevation);
@@ -419,6 +417,8 @@ impl Encode for SetState {
             }
         }
         writer.f32(self.opacity);
+        writer.f32(self.material.roughness());
+        writer.f32(self.material.metallic());
         self.params.encode(writer);
         self.track_style.encode(writer);
         self.tracks.encode(writer);

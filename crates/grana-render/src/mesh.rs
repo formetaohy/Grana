@@ -26,6 +26,9 @@ const CULL_SHADER: &str = concat!(
     include_str!("shader/mesh_cull.wgsl")
 );
 const VOLUME_SHADER: &str = concat!(
+    include_str!("shader/brdf.wgsl"),
+    "
+",
     include_str!("shader/tau_codec.wgsl"),
     "\n",
     include_str!("shader/shadow_sample.wgsl"),
@@ -72,6 +75,7 @@ struct ObjectData {
 pub(crate) struct StyleData {
     color: [f32; 4],
     flags: [f32; 4],
+    surface: [f32; 4],
 }
 
 #[repr(C)]
@@ -95,7 +99,7 @@ struct MeshUniforms {
 const _: () = {
     assert!(size_of::<PointData>() == 16);
     assert!(size_of::<ObjectData>() == 80);
-    assert!(size_of::<StyleData>() == 32);
+    assert!(size_of::<StyleData>() == 48);
     assert!(size_of::<MeshUniforms>() == 336);
 };
 
@@ -456,12 +460,7 @@ impl MeshPasses {
             view_projection: frame.view_projection,
             eye: frame.eye,
             light: frame.light,
-            shading: [
-                shading.ambient,
-                shading.diffuse,
-                shading.specular,
-                shading.shininess,
-            ],
+            shading: [shading.ambient, shading.diffuse, 0.0, 0.0],
             region_center: frame.region_center,
             region_axis: frame.region_axis,
             jitter: frame.jitter,
@@ -870,6 +869,7 @@ pub(crate) fn style_data(style: Style) -> StyleData {
             if style.transparent() { 0.0 } else { 1.0 },
             0.0,
         ],
+        surface: [style.roughness(), style.metallic(), 0.0, 0.0],
     }
 }
 

@@ -1,4 +1,4 @@
-use grana_display::{Coloring, Shading, TransferFunction};
+use grana_display::{Coloring, Material, Shading, TransferFunction};
 use grana_measure::{
     Aggregate, ColocPair, ColocSettings, ColocThresholds, Filter, Group, Lasso, MeasureView,
     Measurement, PlotAxis, Scope,
@@ -211,6 +211,10 @@ pub enum Command {
         set: ObjectSetId,
         opacity: f32,
     },
+    SetObjectMaterial {
+        set: ObjectSetId,
+        material: Material,
+    },
     SetObjectParams {
         set: ObjectSetId,
         params: ObjectParams,
@@ -420,6 +424,7 @@ pub enum Action {
     ObjectHidden,
     ObjectColor,
     ObjectOpacity,
+    ObjectMaterial,
     ObjectParameters,
     ObjectColoring,
     Mask,
@@ -497,6 +502,7 @@ impl Action {
             Self::ObjectHidden => "hidden objects",
             Self::ObjectColor => "object color",
             Self::ObjectOpacity => "object opacity",
+            Self::ObjectMaterial => "object material",
             Self::ObjectParameters => "object parameters",
             Self::ObjectColoring => "object colors",
             Self::Mask => "analysis mask",
@@ -547,6 +553,7 @@ impl Action {
                 | Self::Transfer
                 | Self::ObjectColor
                 | Self::ObjectOpacity
+                | Self::ObjectMaterial
                 | Self::ObjectParameters
                 | Self::ObjectColoring
                 | Self::MaskEdit
@@ -672,6 +679,9 @@ impl Command {
             }
             Self::SetObjectColor { set, .. } => Edit::targeted(Action::ObjectColor, set.raw()),
             Self::SetObjectOpacity { set, .. } => Edit::targeted(Action::ObjectOpacity, set.raw()),
+            Self::SetObjectMaterial { set, .. } => {
+                Edit::targeted(Action::ObjectMaterial, set.raw())
+            }
             Self::SetObjectParams { set, .. } => {
                 Edit::targeted(Action::ObjectParameters, set.raw())
             }

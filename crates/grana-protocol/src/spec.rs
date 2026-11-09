@@ -1,6 +1,8 @@
 use glam::Vec3;
 use grana_animation::{Keyframe, Timeline};
-use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
+use grana_display::{
+    CameraState, Material, Palette, SectionState, Shading, Stop, TransferFunction,
+};
 use grana_measure::{
     Aggregate, ChildField, ColocMetric, Filter, Group, MeasureView, RelationField, Scope,
     Statistic, Table,
@@ -68,11 +70,16 @@ pub struct ClipSpec {
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct MaterialSpec {
+    pub roughness: f32,
+    pub metallic: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ShadingSpec {
     pub ambient: f32,
     pub diffuse: f32,
-    pub specular: f32,
-    pub shininess: f32,
     pub shadows: f32,
     #[serde(default = "default_azimuth")]
     pub azimuth: f32,
@@ -716,6 +723,8 @@ pub struct SetSpec {
     pub label: Option<MetricSpec>,
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub opacity: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<MaterialSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_by: Option<ColorSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2056,8 +2065,6 @@ impl RenderSpec {
             shading: ShadingSpec {
                 ambient: shading.ambient,
                 diffuse: shading.diffuse,
-                specular: shading.specular,
-                shininess: shading.shininess,
                 shadows: shading.shadows,
                 azimuth: shading.azimuth,
                 elevation: shading.elevation,
@@ -2076,8 +2083,6 @@ impl RenderSpec {
         Shading {
             ambient: self.shading.ambient,
             diffuse: self.shading.diffuse,
-            specular: self.shading.specular,
-            shininess: self.shading.shininess,
             shadows: self.shading.shadows,
             azimuth: self.shading.azimuth,
             elevation: self.shading.elevation,
@@ -2094,13 +2099,10 @@ impl RenderSpec {
             return invalid("samples the volume at a positive step".to_string());
         }
         let shading = self.shading;
-        for value in [shading.ambient, shading.diffuse, shading.specular] {
+        for value in [shading.ambient, shading.diffuse] {
             if !value.is_finite() || !(0.0..=1.0).contains(&value) {
                 return invalid("carries unit lighting weights".to_string());
             }
-        }
-        if !shading.shininess.is_finite() || shading.shininess <= 0.0 {
-            return invalid("carries a positive shininess".to_string());
         }
         if !shading.shadows.is_finite() || !(0.0..=1.0).contains(&shading.shadows) {
             return invalid("carries a unit shadow strength".to_string());
@@ -2184,6 +2186,33 @@ impl RegionSpec {
     }
 }
 
+impl MaterialSpec {
+    pub fn of(material: Material) -> Option<Self> {
+        if material == Material::DEFAULT {
+            return None;
+        }
+        Some(Self {
+            roughness: material.roughness(),
+            metallic: material.metallic(),
+        })
+    }
+
+    pub fn material(self) -> Material {
+        Material::new(self.roughness, self.metallic)
+    }
+
+    pub(super) fn checked(self, name: &str) -> Result<(), ProtocolError> {
+        for value in [self.roughness, self.metallic] {
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                return Err(ProtocolError::Invalid(format!(
+                    "{name} carries unit material weights"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl SetSpec {
     pub fn mask(&self) -> Option<&str> {
         self.mask.as_deref()
@@ -2214,6 +2243,11 @@ impl SetSpec {
 
     pub fn measure(&self) -> Option<&MeasureSpec> {
         self.measure.as_ref()
+    }
+
+    pub fn material(&self) -> Material {
+        self.material
+            .map_or(Material::DEFAULT, MaterialSpec::material)
     }
 
     pub fn group(&self) -> Group {

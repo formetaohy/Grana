@@ -27,6 +27,7 @@ pub enum Format {
     Czi,
     Nikon,
     Leica,
+    Imaris,
 }
 
 enum Inner {
@@ -136,6 +137,7 @@ impl Image {
             Inner::Readout(image) => Some(match image.family() {
                 grana_readout::Family::Nikon => Format::Nikon,
                 grana_readout::Family::Leica => Format::Leica,
+                grana_readout::Family::Imaris => Format::Imaris,
             }),
         }
     }
@@ -777,6 +779,11 @@ impl Inner {
                 .collect();
             return Ok((Self::Czi(image), scenes));
         }
+        if is_tiff(path)? {
+            let image = grana_tiff::Image::open(path)?;
+            let series = single_series(image.pyramid(), path, series)?;
+            return Ok((Self::Tiff(image), series));
+        }
         if grana_readout::is_supported(path) {
             let image = grana_readout::Image::open(path, series)?;
             let scenes = image
@@ -793,15 +800,10 @@ impl Inner {
                 .collect();
             return Ok((Self::Readout(image), scenes));
         }
-        if !is_tiff(path)? {
-            return Err(Error::Unsupported {
-                path: path.to_path_buf(),
-                detail: "the file is not an OME-TIFF, a CZI, an ND2 or a LIF image".to_string(),
-            });
-        }
-        let image = grana_tiff::Image::open(path)?;
-        let series = single_series(image.pyramid(), path, series)?;
-        Ok((Self::Tiff(image), series))
+        Err(Error::Unsupported {
+            path: path.to_path_buf(),
+            detail: "the file is not an OME-TIFF, a CZI, an ND2, a LIF or an IMS image".to_string(),
+        })
     }
 
     fn open_remote(

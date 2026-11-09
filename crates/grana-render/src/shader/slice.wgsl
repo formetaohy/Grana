@@ -1,6 +1,7 @@
 struct Style {
     color: vec4<f32>,
     flags: vec4<f32>,
+    surface: vec4<f32>,
 }
 
 @group(1) @binding(0) var<storage, read> styles: array<Style>;
@@ -39,16 +40,24 @@ fn cut_normal() -> vec3<f32> {
     return section.plane.xyz;
 }
 
-fn lit(color: vec3<f32>) -> vec3<f32> {
+fn lit(albedo: vec3<f32>, roughness: f32, metallic: f32, point: vec3<f32>) -> vec3<f32> {
     var normal = cut_normal();
-    if (dot(normal, frame.light.xyz) < 0.0) {
+    let toward = frame.eye.xyz - point;
+    if (dot(normal, toward) < 0.0) {
         normal = -normal;
     }
-    let diffuse = max(dot(normal, frame.light.xyz), 0.0);
-    let half_vector = normalize(frame.light.xyz + normal);
-    let specular = pow(max(dot(normal, half_vector), 0.0), frame.shading.w);
-    return color * (frame.shading.x + frame.shading.y * diffuse)
-        + vec3<f32>(frame.shading.z * specular);
+    let view = normalize(toward);
+    return shade_surface(
+        albedo,
+        roughness,
+        metallic,
+        normal,
+        view,
+        frame.light.xyz,
+        1.0,
+        frame.shading.x,
+        frame.shading.y,
+    );
 }
 
 fn plane_point(uv: vec2<f32>) -> vec3<f32> {
@@ -75,17 +84,21 @@ fn vs_main(input: FaceInput) -> FaceOutput {
 fn fs_main(input: FaceOutput) -> FaceFragment {
     var fragment: FaceFragment;
     let style = styles[input.style];
-    var color = lit(style.color.rgb);
-    var alpha = FILL_ALPHA;
-    if (style.flags.y > 0.5) {
-        color = mix(color, lit(SELECTED), SELECTED_MIX);
-        alpha = SELECTED_ALPHA;
-    }
     let point = plane_point(input.uv);
     if (outside_region(point) || outside_clip(point)) {
         fragment.color = vec4<f32>(0.0);
         fragment.identity = vec4<f32>(0.0);
         return fragment;
+    }
+    var color = lit(style.color.rgb, style.surface.x, style.surface.y, point);
+    var alpha = FILL_ALPHA;
+    if (style.flags.y > 0.5) {
+        color = mix(
+            color,
+            lit(SELECTED, style.surface.x, style.surface.y, point),
+            SELECTED_MIX,
+        );
+        alpha = SELECTED_ALPHA;
     }
     fragment.color = vec4<f32>(color * alpha, alpha);
     fragment.identity = encode_identity(input.style + 1u);

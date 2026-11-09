@@ -318,6 +318,7 @@ impl Protocol {
                     .expect("the staged object set exists");
                 set.set_color(spec.color);
                 set.set_opacity(spec.opacity);
+                set.set_material(spec.material());
                 set.set_visible(spec.visible);
                 set.set_labels(spec.labels);
             }

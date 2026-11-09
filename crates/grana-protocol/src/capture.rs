@@ -9,10 +9,10 @@ use grana_scene::{
 use crate::{
     AnnotationSpec, BackgroundSpec, ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec,
     ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec, LassoSpec,
-    MaskEditSpec, MaskFilterSpec, MaskSpec, MeasureSpec, MeasuredSpec, MetricSpec, NamedViewSpec,
-    PairSpec, PartSpec, Protocol, ProtocolError, RatioSpec, RegionSpec, RelationSpec, RenderSpec,
-    RestoreSpec, SetSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, SurfaceEditSpec,
-    TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec, MeasureSpec, MeasuredSpec, MetricSpec,
+    NamedViewSpec, PairSpec, PartSpec, Protocol, ProtocolError, RatioSpec, RegionSpec,
+    RelationSpec, RenderSpec, RestoreSpec, SetSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec,
+    SurfaceEditSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -168,6 +168,7 @@ impl Protocol {
                         .label_metric()
                         .and_then(|metric| MetricSpec::of(metric, scene, &keys)),
                     opacity: set.opacity(),
+                    material: MaterialSpec::of(set.material()),
                     color_by: object_color(set.object_coloring(), scene, &channels, &keys),
                     track_by: track_color(set.track_coloring(), scene),
                     classifier: set

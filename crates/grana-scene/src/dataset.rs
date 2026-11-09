@@ -9,6 +9,7 @@ pub enum Origin {
     Czi,
     Nikon,
     Leica,
+    Imaris,
     Remote,
 }
 
@@ -65,6 +66,14 @@ impl Dataset {
             name: name.into(),
             pyramid,
             origin: Origin::Leica,
+        }
+    }
+
+    pub fn imaris(name: impl Into<String>, pyramid: Pyramid) -> Self {
+        Self {
+            name: name.into(),
+            pyramid,
+            origin: Origin::Imaris,
         }
     }
 

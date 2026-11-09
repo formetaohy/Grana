@@ -97,12 +97,15 @@ pub fn frame(scene: &Scene, lens: Option<Lens<'_>>) -> Result<RenderedScene, Str
         {
             let start = styles.len();
             for index in 0..frame.object_count() {
-                styles.push(Style::new(
-                    color(index),
-                    set.visible_object(scene.time(), index),
-                    scene.object_selected(set.id(), index),
-                    set.opacity(),
-                ));
+                styles.push(
+                    Style::new(
+                        color(index),
+                        set.visible_object(scene.time(), index),
+                        scene.object_selected(set.id(), index),
+                        set.opacity(),
+                    )
+                    .with_material(set.material()),
+                );
                 style_ids.push(Selection {
                     set: set.id(),
                     item: Item::Object(index),
@@ -127,12 +130,15 @@ pub fn frame(scene: &Scene, lens: Option<Lens<'_>>) -> Result<RenderedScene, Str
             let visible = set.track_visible();
             let start = styles.len();
             for index in 0..tracks.set().len() {
-                styles.push(Style::new(
-                    set.track_color(index),
-                    visible && set.visible_track(index),
-                    scene.track_selected(set.id(), index),
-                    set.opacity(),
-                ));
+                styles.push(
+                    Style::new(
+                        set.track_color(index),
+                        visible && set.visible_track(index),
+                        scene.track_selected(set.id(), index),
+                        set.opacity(),
+                    )
+                    .with_material(set.material()),
+                );
                 style_ids.push(Selection {
                     set: set.id(),
                     item: Item::Track(index),

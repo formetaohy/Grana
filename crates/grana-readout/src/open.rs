@@ -16,6 +16,7 @@ pub(crate) fn registry() -> Registry {
     Registry::new()
         .with(Box::new(openreadout_nd2::Nd2Reader))
         .with(Box::new(openreadout_lif::LifReader))
+        .with(Box::new(openreadout_hdf5::ImsReader))
 }
 
 pub(crate) fn open(path: &Path) -> Result<Document, Error> {

@@ -28,6 +28,7 @@ struct ObjectData {
 struct Style {
     color: vec4<f32>,
     flags: vec4<f32>,
+    surface: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> mesh: MeshUniforms;
@@ -142,12 +143,18 @@ fn shade(input: VertexOutput) -> vec4<f32> {
         shadow_bias(mesh.light_reach, lit_normal, mesh.light.xyz),
     );
     let strength = clamp(mesh.shadow.x, 0.0, 1.0);
-    let direct = mix(1.0, sun, strength);
-    let half_vector = normalize(mesh.light.xyz + view);
-    let diffuse = max(dot(lit_normal, mesh.light.xyz), 0.0) * direct;
-    let specular = pow(max(dot(facing_normal, half_vector), 0.0), mesh.shading.w) * direct;
-    var color = style.color.rgb * (mesh.shading.x + mesh.shading.y * diffuse)
-        + vec3<f32>(mesh.shading.z * specular);
+    let visibility = mix(1.0, sun, strength);
+    var color = shade_surface(
+        style.color.rgb,
+        style.surface.x,
+        style.surface.y,
+        facing_normal,
+        view,
+        mesh.light.xyz,
+        visibility,
+        mesh.shading.x,
+        mesh.shading.y,
+    );
     if (style.flags.y > 0.5) {
         color = mix(color, vec3<f32>(1.0, 0.86, 0.45), 0.55);
     }

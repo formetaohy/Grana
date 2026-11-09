@@ -179,12 +179,7 @@ impl FrameData {
                 [axis.x, axis.y, axis.z, region.half()[index]]
             }),
             atlas: [first.atlas[0], first.atlas[1], first.atlas[2], 0],
-            shading: [
-                shading.ambient,
-                shading.diffuse,
-                shading.specular,
-                shading.shininess,
-            ],
+            shading: [shading.ambient, shading.diffuse, 0.0, 0.0],
             march: [step, shading.shadows, channels as f32, pixel_scale],
             viewport: [0.0; 4],
             jitter: [0.0; 4],

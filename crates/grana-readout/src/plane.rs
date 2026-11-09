@@ -5,7 +5,7 @@ use std::sync::Arc;
 use grana_volume::{VoxelData, VoxelFormat};
 use openreadout_core::{PixelType, Plane};
 
-pub(crate) type Key = (u32, u32, u32);
+pub(crate) type Key = (u32, u32, u32, u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct View {

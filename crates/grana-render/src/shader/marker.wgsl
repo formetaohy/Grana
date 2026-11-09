@@ -6,6 +6,9 @@ struct MarkerInstance {
 @group(1) @binding(0) var<storage, read> markers: array<MarkerInstance>;
 @group(1) @binding(1) var<storage, read> order: array<u32>;
 
+const MARKER_ROUGHNESS: f32 = 0.30;
+const MARKER_METALLIC: f32 = 0.0;
+
 struct MarkerOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) @interpolate(flat) center_radius: vec4<f32>,
@@ -86,11 +89,17 @@ fn shade(input: MarkerOutput) -> Shaded {
         frame.right.xyz * local.x + frame.up.xyz * local.y - frame.forward.xyz * depth,
     );
     let view = normalize(frame.eye.xyz - surface);
-    let half_vector = normalize(frame.light.xyz + view);
-    let diffuse = max(dot(normal, frame.light.xyz), 0.0);
-    let specular = pow(max(dot(normal, half_vector), 0.0), frame.shading.w);
-    let color = input.color_alpha.rgb * (frame.shading.x + frame.shading.y * diffuse)
-        + vec3<f32>(frame.shading.z * specular);
+    let color = shade_surface(
+        input.color_alpha.rgb,
+        MARKER_ROUGHNESS,
+        MARKER_METALLIC,
+        normal,
+        view,
+        frame.light.xyz,
+        1.0,
+        frame.shading.x,
+        frame.shading.y,
+    );
     let pixel = max(fwidth(local.x), fwidth(local.y));
     let coverage = clamp((1.0 - sqrt(squared)) / max(pixel, 1.0e-6) + 0.5, 0.0, 1.0);
     let clip = frame.view_projection * vec4<f32>(surface, 1.0);

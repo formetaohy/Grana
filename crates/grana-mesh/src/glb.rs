@@ -145,8 +145,8 @@ fn material_json(key: &str, index: usize, material: Material) -> Value {
         "name": format!("{key}_{index:06}"),
         "pbrMetallicRoughness": {
             "baseColorFactor": [red, green, blue, opacity],
-            "metallicFactor": 0.0,
-            "roughnessFactor": 0.65,
+            "metallicFactor": material.surface().metallic(),
+            "roughnessFactor": material.surface().roughness(),
         },
         "alphaMode": if opacity < 1.0 { "BLEND" } else { "OPAQUE" },
         "doubleSided": true,

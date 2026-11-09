@@ -1659,38 +1659,6 @@ fn rendering<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
                     })
                 },
             ));
-            let specular = format!("{:.2}", shading.specular);
-            light.push(view::slider_readout(
-                ctx,
-                "lighting.specular",
-                Some("Specular"),
-                shading.specular,
-                0.0..=1.0,
-                false,
-                &specular,
-                move |value| {
-                    Command::SetShading(grana_display::Shading {
-                        specular: value,
-                        ..shading
-                    })
-                },
-            ));
-            let shininess = format!("{:.0}", shading.shininess);
-            light.push(view::slider_readout(
-                ctx,
-                "lighting.shininess",
-                Some("Shininess"),
-                shading.shininess,
-                1.0..=128.0,
-                true,
-                &shininess,
-                move |value| {
-                    Command::SetShading(grana_display::Shading {
-                        shininess: value,
-                        ..shading
-                    })
-                },
-            ));
         }
         children.push(disclosure(
             ctx,

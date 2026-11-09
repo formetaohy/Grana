@@ -46,7 +46,7 @@ fn writes_obj_stl_and_glb_in_world_coordinates() {
     assert_eq!(real(&stl, 108), 2.0, "the stl keeps world coordinates");
 
     let mut glb = Vec::new();
-    let material = Material::new([0.8, 0.2, 0.4], 0.5);
+    let material = Material::new([0.8, 0.2, 0.4], 0.5, grana_display::Material::new(0.3, 0.6));
     write_glb(&mut glb, &mesh, "cells", &[material]).expect("the glb stream writes");
     assert_eq!(&glb[0..4], b"glTF", "the glb names its magic");
     assert_eq!(word(&glb, 4), 2, "the glb states its version");
@@ -69,6 +69,9 @@ fn writes_obj_stl_and_glb_in_world_coordinates() {
     assert!((base[0].as_f64().expect("a channel") - 0.8).abs() < 1.0e-6);
     assert!((base[3].as_f64().expect("a channel") - 0.5).abs() < 1.0e-6);
     assert_eq!(json["materials"][0]["alphaMode"], "BLEND");
+    let surface = &json["materials"][0]["pbrMetallicRoughness"];
+    assert!((surface["roughnessFactor"].as_f64().expect("a roughness") - 0.3).abs() < 1.0e-6);
+    assert!((surface["metallicFactor"].as_f64().expect("a metallic") - 0.6).abs() < 1.0e-6);
     let binary = 20 + json_length + 8;
     assert_eq!(
         json["buffers"][0]["byteLength"].as_u64().expect("a length") as usize,

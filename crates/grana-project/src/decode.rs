@@ -483,8 +483,6 @@ impl Decode for Shading {
         Ok(Self {
             ambient: unit(reader.f32()?)?,
             diffuse: unit(reader.f32()?)?,
-            specular: unit(reader.f32()?)?,
-            shininess: positive(reader.f32()?)?,
             shadows: unit(reader.f32()?)?,
             azimuth: degrees(reader.f32()?, grana_display::AZIMUTH_LIMIT)?,
             elevation: degrees(reader.f32()?, grana_display::ELEVATION_LIMIT)?,
@@ -598,6 +596,7 @@ impl Decode for SetState {
             hidden
         };
         let opacity = unit(reader.f32()?)?;
+        let material = grana_display::Material::new(unit(reader.f32()?)?, unit(reader.f32()?)?);
         let params = ObjectParams::decode(reader)?;
         let track_style = Option::<TrackStyle>::decode(reader)?;
         let tracks = Option::<Arc<TrackSet>>::decode(reader)?;
@@ -621,6 +620,7 @@ impl Decode for SetState {
             label,
             hidden,
             opacity,
+            material,
             params,
             track_style,
             tracks,

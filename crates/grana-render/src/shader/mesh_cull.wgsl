@@ -12,6 +12,7 @@ struct ObjectData {
 struct StyleData {
     color: vec4<f32>,
     flags: vec4<f32>,
+    surface: vec4<f32>,
 }
 
 struct IndexedArgs {

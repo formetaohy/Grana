@@ -6,6 +6,7 @@ use grana_volume::{
     BrickCoord, BrickData, BrickGrid, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing,
     VoxelData, VoxelFormat, pad_brick,
 };
+use openreadout_core::region::{self, ResolutionLevel};
 use openreadout_core::{Dataset, ImageInfo, PixelType, Plane, PlaneIndex};
 
 use crate::error::Error;
@@ -39,7 +40,6 @@ pub struct Image {
     name: String,
     index: u32,
     scenes: Vec<Scene>,
-    extent: Extent,
     frames: u32,
     pixel: PixelType,
     samples: u32,
@@ -68,9 +68,8 @@ impl Image {
             Error::unsupported(path, "the image stores a sample type grana cannot read")
         })?;
         let views = views(image, format);
-        let extent = scene.extent();
+        let levels = levels(path, image)?;
         let frames = scene.frames();
-        let spacing = spacing(image);
         let interval = interval(image);
         let mut dataset = document.dataset;
         let mut cache = plane::Cache::new(CACHE_BYTES);
@@ -80,13 +79,8 @@ impl Image {
             .enumerate()
             .map(|(index, view)| channel(image, *view, index, probes[index]))
             .collect();
-        let pyramid = Pyramid::new(
-            vec![Level::new(extent, spacing)],
-            1,
-            channels,
-            frames,
-            interval,
-        );
+        let stored = levels.len();
+        let pyramid = Pyramid::new(levels, stored, channels, frames, interval);
         Ok(Self {
             path: path.to_path_buf(),
             family: document.family,
@@ -96,7 +90,6 @@ impl Image {
                 .unwrap_or_else(|| scene::dataset_name(path)),
             index: image.index,
             scenes,
-            extent,
             frames,
             pixel: image.pixel_type,
             samples,
@@ -132,12 +125,7 @@ impl Image {
         y: Range<u32>,
         z: Range<u32>,
     ) -> Result<VoxelData, Error> {
-        if level != 0 {
-            return Err(Error::unsupported(
-                &self.path,
-                "the microscope image stores a single resolution level",
-            ));
-        }
+        let extent = self.extent(level)?;
         if time >= self.frames {
             return Err(Error::region(
                 &self.path,
@@ -147,7 +135,7 @@ impl Image {
         let view = *self.views.get(channel).ok_or_else(|| {
             Error::region(&self.path, "the requested channel lies outside the image")
         })?;
-        self.clamp(&x, &y, &z)?;
+        self.clamp(&x, &y, &z, extent)?;
         let width = (x.end - x.start) as usize;
         let height = (y.end - y.start) as usize;
         let depth = (z.end - z.start) as usize;
@@ -155,7 +143,7 @@ impl Image {
         let slice = width * height;
         for index in 0..depth {
             let position = z.start + index as u32;
-            let plane = self.plane(time, view, position)?;
+            let plane = self.plane(time, level, view, position)?;
             plane::copy(&plane, view.sample, &x, &y, index * slice, &mut data);
         }
         Ok(data)
@@ -167,13 +155,8 @@ impl Image {
         level: usize,
         coord: BrickCoord,
     ) -> Result<BrickData, Error> {
-        if level != 0 {
-            return Err(Error::unsupported(
-                &self.path,
-                "the microscope image stores a single resolution level",
-            ));
-        }
-        let grid = BrickGrid::new(self.extent);
+        let extent = self.extent(level)?;
+        let grid = BrickGrid::new(extent);
         let counts = grid.counts();
         if coord.x() >= counts[0] || coord.y() >= counts[1] || coord.z() >= counts[2] {
             return Err(Error::region(
@@ -203,17 +186,39 @@ impl Image {
                 origin,
                 covered,
                 grid.origin(coord),
-                self.extent,
+                extent,
             ));
         }
         Ok(BrickData::new(bricks))
     }
 
-    fn clamp(&self, x: &Range<u32>, y: &Range<u32>, z: &Range<u32>) -> Result<(), Error> {
+    fn extent(&self, level: usize) -> Result<Extent, Error> {
+        self.pyramid
+            .levels()
+            .get(level)
+            .map(|level| level.extent())
+            .ok_or_else(|| {
+                Error::unsupported(
+                    &self.path,
+                    format!(
+                        "the microscope image stores {} resolution levels but level {level} was requested",
+                        self.pyramid.level_count()
+                    ),
+                )
+            })
+    }
+
+    fn clamp(
+        &self,
+        x: &Range<u32>,
+        y: &Range<u32>,
+        z: &Range<u32>,
+        extent: Extent,
+    ) -> Result<(), Error> {
         if x.end <= x.start || y.end <= y.start || z.end <= z.start {
             return Err(Error::region(&self.path, "a requested region is empty"));
         }
-        if x.end > self.extent.x() || y.end > self.extent.y() || z.end > self.extent.z() {
+        if x.end > extent.x() || y.end > extent.y() || z.end > extent.z() {
             return Err(Error::region(
                 &self.path,
                 "the requested region leaves the image",
@@ -222,8 +227,13 @@ impl Image {
         Ok(())
     }
 
-    fn plane(&self, time: u32, view: View, z: u32) -> Result<Arc<Plane>, Error> {
-        let key = (time, view.channel, z);
+    fn plane(&self, time: u32, level: usize, view: View, z: u32) -> Result<Arc<Plane>, Error> {
+        let key = (
+            u32::try_from(level).expect("a pyramid holds fewer than 4G levels"),
+            time,
+            view.channel,
+            z,
+        );
         let cached = self
             .cache
             .lock()
@@ -232,19 +242,21 @@ impl Image {
         if let Some(plane) = cached {
             return Ok(plane);
         }
+        let extent = self.extent(level)?;
         let plane = {
             let mut dataset = self
                 .dataset
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             dataset
-                .read_plane(
+                .read_plane_level(
                     self.index,
                     PlaneIndex {
                         c: view.channel,
                         z,
                         t: time,
                     },
+                    key.0,
                 )
                 .map_err(|error| Error::read(&self.path, error.to_string()))?
         };
@@ -254,7 +266,7 @@ impl Image {
                 "a plane disagrees with the declared sample type",
             ));
         }
-        if plane.width != self.extent.x() || plane.height != self.extent.y() {
+        if plane.width != extent.x() || plane.height != extent.y() {
             return Err(Error::read(
                 &self.path,
                 "a plane disagrees with the declared extent",
@@ -270,6 +282,37 @@ impl Image {
             .put(key, Arc::clone(&plane), plane.data.len());
         Ok(plane)
     }
+}
+
+fn levels(path: &Path, image: &ImageInfo) -> Result<Vec<Level>, Error> {
+    let base = Extent::new(image.size_x, image.size_y, image.size_z);
+    let unit = spacing(image);
+    region::levels_of(image)
+        .iter()
+        .map(|level| {
+            let extent = level_extent(path, level, base)?;
+            let scale = |axis: u32, finest: u32| finest as f32 / axis as f32;
+            Ok(Level::new(
+                extent,
+                Spacing::new(
+                    unit.x() * scale(extent.x(), base.x()),
+                    unit.y() * scale(extent.y(), base.y()),
+                    unit.z() * scale(extent.z(), base.z()),
+                ),
+            ))
+        })
+        .collect()
+}
+
+fn level_extent(path: &Path, level: &ResolutionLevel, base: Extent) -> Result<Extent, Error> {
+    let size = [level.size_x, level.size_y, level.size_z.unwrap_or(base.z())];
+    if size.contains(&0) {
+        return Err(Error::unsupported(
+            path,
+            format!("resolution level {} declares an empty extent", level.level),
+        ));
+    }
+    Ok(Extent::new(size[0], size[1], size[2]))
 }
 
 fn views(image: &ImageInfo, format: VoxelFormat) -> Vec<View> {

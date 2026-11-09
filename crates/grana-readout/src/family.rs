@@ -2,6 +2,7 @@
 pub enum Family {
     Nikon,
     Leica,
+    Imaris,
 }
 
 impl Family {
@@ -9,6 +10,7 @@ impl Family {
         match id {
             openreadout_nd2::FORMAT_ID => Some(Self::Nikon),
             openreadout_lif::FORMAT_ID => Some(Self::Leica),
+            openreadout_hdf5::IMS_FORMAT_ID => Some(Self::Imaris),
             _ => None,
         }
     }

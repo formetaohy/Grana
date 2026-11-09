@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_display::{Coloring, Extent, Shading, TransferFunction};
+use grana_display::{Coloring, Extent, Material, Shading, TransferFunction};
 use grana_geometry::ray_hit;
 use grana_measure::{
     Aggregate, Classifier, ColocMetric, Frame, Group, Measurement, ObjectColoc, RelationRow, Table,
@@ -1075,6 +1075,14 @@ impl Scene {
 
     pub fn set_label_metric(&mut self, id: ObjectSetId, metric: Option<ObjectColor>) -> bool {
         self.objects.set_label_metric(id, metric)
+    }
+
+    pub fn set_object_material(&mut self, id: ObjectSetId, material: Material) -> bool {
+        self.objects.get_mut(id).is_some_and(|set| {
+            let previous = set.material();
+            set.set_material(material);
+            set.material() != previous
+        })
     }
 
     pub fn set_object_coloring(

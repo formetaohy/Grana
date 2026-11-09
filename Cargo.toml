@@ -31,6 +31,7 @@ ome_zarr_metadata = "0.3"
 openh264 = "0.9"
 burn = { version = "0.22.1", default-features = false, features = ["std", "wgpu", "cubecl", "pytorch"] }
 openreadout-core = "0.4"
+openreadout-hdf5 = "0.4"
 openreadout-jpegxr = "0.4"
 openreadout-lif = "0.4"
 openreadout-nd2 = "0.4"

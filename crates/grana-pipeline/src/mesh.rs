@@ -69,7 +69,11 @@ pub fn materials(scene: &Scene, object: &ObjectSet, objects: usize) -> Vec<Mater
                 .as_ref()
                 .and_then(|colors| colors.get(index).copied())
                 .unwrap_or_else(|| object.color());
-            Material::new(grana_display::srgb_to_linear(color), object.opacity())
+            Material::new(
+                grana_display::srgb_to_linear(color),
+                object.opacity(),
+                object.material(),
+            )
         })
         .collect()
 }

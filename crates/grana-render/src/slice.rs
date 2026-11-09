@@ -26,6 +26,9 @@ use crate::target::{CUT_ID_FORMAT, PICK_FORMAT, SCENE_FORMAT};
 
 const SHADER: &str = concat!(
     include_str!("shader/scene.wgsl"),
+    "
+",
+    include_str!("shader/brdf.wgsl"),
     "\n",
     include_str!("shader/slice.wgsl")
 );

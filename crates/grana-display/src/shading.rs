@@ -9,8 +9,6 @@ pub const DEFAULT_ELEVATION: f32 = 48.0;
 pub struct Shading {
     pub ambient: f32,
     pub diffuse: f32,
-    pub specular: f32,
-    pub shininess: f32,
     pub shadows: f32,
     pub azimuth: f32,
     pub elevation: f32,
@@ -41,8 +39,6 @@ impl Default for Shading {
         Self {
             ambient: 0.35,
             diffuse: 0.75,
-            specular: 0.30,
-            shininess: 28.0,
             shadows: 0.7,
             azimuth: DEFAULT_AZIMUTH,
             elevation: DEFAULT_ELEVATION,

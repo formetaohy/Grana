@@ -6,8 +6,8 @@ use openreadout_core::FileInfo;
 use crate::error::Error;
 use crate::open;
 
-const EXTENSIONS: [&str; 8] = [
-    "nd2", "lif", "lifext", "lof", "xlif", "xlef", "xlcf", "xllf",
+const EXTENSIONS: [&str; 9] = [
+    "nd2", "lif", "lifext", "lof", "xlif", "xlef", "xlcf", "xllf", "ims",
 ];
 
 const RGB_SAMPLES: u32 = 3;

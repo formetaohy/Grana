@@ -162,6 +162,9 @@ impl Protocol {
         }
         for set in &self.sets {
             validate(&set.name, "a set name")?;
+            if let Some(material) = set.material {
+                material.checked(&set.name)?;
+            }
             if ObjectSetKey::parse(&set.key).is_none() {
                 return Err(ProtocolError::Invalid(format!(
                     "the set {} carries an invalid key {}",

@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 grana-volume = { workspace = true }
 openreadout-core = { workspace = true }
+openreadout-hdf5 = { workspace = true }
 openreadout-lif = { workspace = true }
 openreadout-nd2 = { workspace = true }
 thiserror = { workspace = true }
