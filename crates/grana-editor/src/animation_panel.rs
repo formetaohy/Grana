@@ -298,12 +298,13 @@ fn keyframe_list<'a>(
 }
 
 fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
-    let width = state.workspace.playback.width;
+    let export = state.export;
+    let width = export.movie;
     let fps = state.timeline.fps();
     let duration = state.timeline.duration();
     let frames = state.io.frames;
     let interval = state.io.frame_interval;
-    let export = state.io.export;
+    let running = state.io.exporting;
     let theme = *ctx.theme();
     let stage_width = (state.stage.section_rect().max.x - state.stage.volume_rect().min.x).max(1.0);
     let stage_height = (state.stage.volume_rect().max.y - state.stage.volume_rect().min.y).max(1.0);
@@ -323,7 +324,10 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         selected,
         &labels,
         move |index| match WIDTHS.get(index) {
-            Some(value) => Message::SetPlaybackWidth(*value),
+            Some(value) => Message::SetExport(Export {
+                movie: *value,
+                ..export
+            }),
             None => Message::Noop,
         },
     );
@@ -359,7 +363,7 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         view::form_row(ctx, "Duration", duration_row),
         view::divider(ctx),
     ];
-    match export {
+    match running {
         Some((frame, total)) => {
             let fraction = frame as f32 / total.max(1) as f32;
             children.push(grana_ui::widget::progress(fraction, 240.0));
@@ -392,16 +396,14 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
             children.push(if empty {
                 mp4
             } else {
-                mp4.press(Message::Command(Command::ExportMovie(Export::new(
-                    width, false,
-                ))))
+                mp4.press(Message::Command(Command::ExportMovie {
+                    transparent: false,
+                }))
             });
             children.push(if empty {
                 mov
             } else {
-                mov.press(Message::Command(Command::ExportMovie(Export::new(
-                    width, true,
-                ))))
+                mov.press(Message::Command(Command::ExportMovie { transparent: true }))
             });
         }
     }
@@ -410,9 +412,10 @@ fn movie<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
 
 fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let theme = *ctx.theme();
-    let image_width = state.workspace.export.width;
-    let transparent = state.workspace.export.transparent;
-    let export = state.io.export;
+    let export = state.export;
+    let image_width = export.image;
+    let transparent = export.transparent;
+    let running = state.io.exporting;
     let frames = state.io.frames;
     let message = state.io.export_message.clone();
     let stage_width = (state.stage.section_rect().max.x - state.stage.volume_rect().min.x).max(1.0);
@@ -436,14 +439,22 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         selected,
         &labels,
         move |index| match IMAGE_WIDTHS.get(index) {
-            Some(value) => Message::SetExport(Export::new(*value, transparent)),
+            Some(value) => Message::SetExport(Export {
+                image: *value,
+                ..export
+            }),
             None => Message::Noop,
         },
     );
     let transparent_row =
         grana_ui::widget::toggle_row(&theme, "Transparent Background", transparent)
             .named("animation.transparent")
-            .on_toggle(move |value| Message::SetExport(Export::new(image_width, value)));
+            .on_toggle(move |value| {
+                Message::SetExport(Export {
+                    transparent: value,
+                    ..export
+                })
+            });
     let mut children = vec![
         view::card_title(
             ctx,
@@ -456,7 +467,7 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
         view::labelled(ctx, "Sequence", &format!("{frames} PNG frames")),
         view::divider(ctx),
     ];
-    let idle = export.is_none();
+    let idle = running.is_none();
     let save = grana_ui::widget::button_enabled(
         &theme,
         "Save Image (PNG)",
@@ -479,10 +490,7 @@ fn still<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elemen
     )
     .named("animation.export.sequence");
     children.push(if idle && frames > 0 {
-        sequence.press(Message::Command(Command::ExportSequence(Export::new(
-            image_width,
-            transparent,
-        ))))
+        sequence.press(Message::Command(Command::ExportSequence))
     } else {
         sequence
     });

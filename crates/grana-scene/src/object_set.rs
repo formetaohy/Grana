@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use grana_measure::{
     ChildField, ChildMetric, Classifier, Measurement, ObjectColoc, RelationField, TrackMeasurement,
@@ -19,7 +19,7 @@ use crate::seed::Seeds;
 use crate::state::{RelationState, SetState};
 use crate::track_color::TrackColor;
 use crate::track_layer::TrackLayer;
-use grana_display::{ColorState, Coloring, Extent, merged};
+use grana_display::{ColorState, Coloring, Extent};
 
 const MIN_THICKNESS: f32 = 0.25;
 const MAX_THICKNESS: f32 = 40.0;
@@ -63,6 +63,13 @@ impl FrameSlot {
     }
 }
 
+#[derive(Clone, Copy)]
+struct TrackBounds {
+    revision: u64,
+    metric: TrackColor,
+    extent: Option<Extent>,
+}
+
 pub struct ObjectSet {
     id: ObjectSetId,
     key: ObjectSetKey,
@@ -80,13 +87,12 @@ pub struct ObjectSet {
     params: ObjectParams,
     track_style: Option<TrackStyle>,
     frames: Vec<FrameSlot>,
-    frame_bounds: Vec<Option<Extent>>,
     object_coloring: Coloring<ObjectColor>,
     track_coloring: Coloring<TrackColor>,
     classifier: Option<Classifier>,
     object_coloc: Option<ObjectColoc>,
     label_export: Option<LabelExport>,
-    track_bounds: Option<Extent>,
+    track_bounds: Mutex<Option<TrackBounds>>,
     revision: u64,
     document: u64,
     visibility: Visibility,
@@ -129,14 +135,13 @@ impl ObjectSet {
             voxel,
             params,
             track_style,
-            frame_bounds: vec![None; frames.len()],
             frames,
             object_coloring: Coloring::new(),
             track_coloring: Coloring::new(),
             classifier: None,
             object_coloc: None,
             label_export: None,
-            track_bounds: None,
+            track_bounds: Mutex::new(None),
             revision: 1,
             document: 1,
             visibility: Visibility::All,
@@ -411,19 +416,6 @@ impl ObjectSet {
         true
     }
 
-    pub fn object_extent(&self) -> Option<Extent> {
-        self.object_coloring.metric()?;
-        self.object_coloring
-            .manual()
-            .or_else(|| merged(self.frame_bounds.iter().flatten().copied()))
-    }
-
-    pub(crate) fn set_frame_bound(&mut self, time: u32, bound: Option<Extent>) {
-        if let Some(slot) = self.frame_bounds.get_mut(time as usize) {
-            *slot = bound;
-        }
-    }
-
     pub fn track_coloring(&self) -> &Coloring<TrackColor> {
         &self.track_coloring
     }
@@ -471,18 +463,29 @@ impl ObjectSet {
         if self.track_coloring == coloring {
             return false;
         }
-        let metric_changed = self.track_coloring.metric() != coloring.metric();
         self.track_coloring = coloring;
-        if metric_changed {
-            self.rebuild_track_bounds();
-        }
         self.document += 1;
         true
     }
 
     pub fn track_extent(&self) -> Option<Extent> {
-        self.track_coloring.metric()?;
-        self.track_coloring.manual().or(self.track_bounds)
+        let metric = self.track_coloring.metric()?;
+        if let Some(manual) = self.track_coloring.manual() {
+            return Some(manual);
+        }
+        if let Some(cached) = self.cached_track_bounds()
+            && cached.revision == self.revision
+            && cached.metric == metric
+        {
+            return cached.extent;
+        }
+        let extent = self.track_bounds_of(metric);
+        *self.lock_track_bounds() = Some(TrackBounds {
+            revision: self.revision,
+            metric,
+            extent,
+        });
+        extent
     }
 
     pub fn track_color(&self, track: usize) -> [f32; 3] {
@@ -793,7 +796,6 @@ impl ObjectSet {
                 aggregate,
                 shift: to,
             }));
-            self.rebuild_track_bounds();
         }
         self.revision = stamp;
         self.document += 1;
@@ -819,7 +821,6 @@ impl ObjectSet {
         }
         if self.track_coloring.metric().and_then(TrackColor::relation) == Some((target, shift)) {
             self.track_coloring.set_metric(None);
-            self.rebuild_track_bounds();
         }
         self.revision = stamp;
         self.document += 1;
@@ -838,7 +839,6 @@ impl ObjectSet {
         }
         if self.track_coloring.metric().and_then(TrackColor::target) == Some(target) {
             self.track_coloring.set_metric(None);
-            self.rebuild_track_bounds();
         }
         self.revision = stamp;
         self.document += 1;
@@ -862,9 +862,6 @@ impl ObjectSet {
         };
         if !relation.install(time, frame) {
             return;
-        }
-        if self.track_coloring.metric().and_then(TrackColor::target) == Some(target) {
-            self.rebuild_track_bounds();
         }
         self.revision = stamp;
         self.document += 1;
@@ -890,7 +887,6 @@ impl ObjectSet {
             .is_some()
         {
             self.track_coloring.set_metric(None);
-            self.rebuild_track_bounds();
         }
         self.revision = stamp;
         self.document += 1;
@@ -1016,7 +1012,6 @@ impl ObjectSet {
             voxel: dataset.voxel_size().min_element(),
             params,
             track_style,
-            frame_bounds: vec![None; frame_count],
             frames: (0..frame_count).map(|_| FrameSlot::new()).collect(),
             object_coloring: Coloring::new(),
             track_coloring: Coloring::new(),
@@ -1026,8 +1021,8 @@ impl ObjectSet {
                 .expect("a restored classifier keeps its coefficients"),
             object_coloc: None,
             label_export,
-            track_bounds: None,
-            revision: 1,
+            track_bounds: Mutex::new(None),
+            revision: take_stamp(stamp),
             document: 1,
             visibility: Visibility::All,
             seeds: Seeds::points(frame_count),
@@ -1175,7 +1170,6 @@ impl ObjectSet {
             }
         }
         self.track_coloring = track;
-        self.rebuild_track_bounds();
     }
 
     pub fn set_visibility(&mut self, visibility: Visibility) {
@@ -1483,14 +1477,12 @@ impl ObjectSet {
             };
             if !done {
                 let dropped = self.curation.forget_edits();
-                self.rebuild_track_bounds();
                 self.document += 1;
                 return dropped;
             }
             applied += 1;
         }
         if applied > 0 {
-            self.rebuild_track_bounds();
             self.document += 1;
         }
         0
@@ -1534,7 +1526,6 @@ impl ObjectSet {
         self.revision = stamp;
         self.document += 1;
         self.visibility = Visibility::All;
-        self.rebuild_track_bounds();
         true
     }
 
@@ -1587,7 +1578,6 @@ impl ObjectSet {
         self.revision = stamp;
         self.document += 1;
         self.visibility = visibility;
-        self.rebuild_track_bounds();
     }
 
     pub(crate) fn duplicate(
@@ -1641,13 +1631,12 @@ impl ObjectSet {
                     data: slot.data.clone(),
                 })
                 .collect(),
-            frame_bounds: vec![None; self.frames.len()],
             object_coloring,
             track_coloring: self.track_coloring.clone(),
             classifier: self.classifier.clone(),
             object_coloc: None,
             label_export: None,
-            track_bounds: None,
+            track_bounds: Mutex::new(None),
             revision: 1,
             document: 1,
             visibility: Visibility::All,
@@ -1657,7 +1646,6 @@ impl ObjectSet {
             provenance,
             curation: Curation::default(),
         };
-        duplicate.rebuild_track_bounds();
         if duplicate
             .hidden
             .iter()
@@ -1767,7 +1755,7 @@ impl ObjectSet {
         let label = self
             .label
             .filter(|metric| !matches!(metric, ObjectColor::Coloc { .. }));
-        let mut merged = Self {
+        let merged = Self {
             id: self.id,
             key: self.key.clone(),
             kind: self.kind,
@@ -1784,13 +1772,12 @@ impl ObjectSet {
             params: self.params,
             track_style: self.track_style.or(other.track_style),
             frames,
-            frame_bounds: vec![None; self.frames.len()],
             object_coloring,
             track_coloring,
             classifier: self.classifier.clone(),
             object_coloc: None,
             label_export: None,
-            track_bounds: None,
+            track_bounds: Mutex::new(None),
             revision: stamp,
             document: self.document + 1,
             visibility: Visibility::All,
@@ -1800,7 +1787,6 @@ impl ObjectSet {
             provenance: self.provenance.clone(),
             curation: self.curation.combined(&other.curation),
         };
-        merged.rebuild_track_bounds();
         Ok(merged)
     }
 
@@ -1856,9 +1842,6 @@ impl ObjectSet {
         if !cleared {
             return false;
         }
-        if self.track_coloring.metric().and_then(TrackColor::target) == Some(target) {
-            self.rebuild_track_bounds();
-        }
         self.revision = stamp;
         self.document += 1;
         true
@@ -1877,14 +1860,6 @@ impl ObjectSet {
         }
         if !cleared {
             return false;
-        }
-        if self
-            .track_coloring
-            .metric()
-            .and_then(TrackColor::target)
-            .is_some()
-        {
-            self.rebuild_track_bounds();
         }
         self.revision = stamp;
         self.document += 1;
@@ -1947,9 +1922,7 @@ impl ObjectSet {
         for slot in &mut self.frames {
             slot.data = None;
         }
-        self.frame_bounds.fill(None);
         self.hidden.clear();
-        self.track_bounds = None;
         self.revision = stamp;
         self.document += 1;
         self.visibility = Visibility::All;
@@ -2009,7 +1982,6 @@ impl ObjectSet {
             .track_thickness()
             .expect("only trackable objects install tracks");
         self.tracks = Some(TrackLayer::new(set, thickness, stamp));
-        self.rebuild_track_bounds();
         self.revision = stamp;
         self.document += 1;
         self.visibility = Visibility::All;
@@ -2021,7 +1993,6 @@ impl ObjectSet {
         self.document += 1;
         self.visibility = Visibility::All;
         self.tracks = None;
-        self.track_bounds = None;
     }
 
     pub(crate) fn cut_track(&mut self, time: u32, object: usize, stamp: u64) -> bool {
@@ -2061,12 +2032,14 @@ impl ObjectSet {
         Some(anchors.get(object)?.position())
     }
 
-    fn rebuild_track_bounds(&mut self) {
-        let bounds = self
-            .track_coloring
-            .metric()
-            .and_then(|metric| self.track_bounds_of(metric));
-        self.track_bounds = bounds;
+    fn cached_track_bounds(&self) -> Option<TrackBounds> {
+        *self.lock_track_bounds()
+    }
+
+    fn lock_track_bounds(&self) -> MutexGuard<'_, Option<TrackBounds>> {
+        self.track_bounds
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
     }
 
     fn track_bounds_of(&self, metric: TrackColor) -> Option<Extent> {

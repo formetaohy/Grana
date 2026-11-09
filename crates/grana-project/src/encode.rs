@@ -166,7 +166,8 @@ impl Encode for ViewState {
 
 impl Encode for Export {
     fn encode(&self, writer: &mut Encoder<'_>) {
-        writer.u32(self.width);
+        writer.u32(self.image);
+        writer.u32(self.movie);
         writer.bool(self.transparent);
     }
 }

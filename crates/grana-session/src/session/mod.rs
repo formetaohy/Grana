@@ -71,9 +71,9 @@ pub struct Effects {
     pub open_image: bool,
     pub open_project: bool,
     pub save_project: Option<bool>,
-    pub snapshot: Option<Export>,
-    pub movie: Option<Export>,
-    pub sequence: Option<Export>,
+    pub snapshot: bool,
+    pub movie: Option<bool>,
+    pub sequence: bool,
     pub cancel_export: bool,
     pub keyframe: bool,
     pub repaint: bool,
@@ -338,7 +338,7 @@ impl Session {
     pub fn io<'a>(
         &'a self,
         adapter: &'a str,
-        export: Option<(u32, u32)>,
+        exporting: Option<(u32, u32)>,
         export_message: Option<String>,
     ) -> IoView<'a> {
         let frames = self.scene.as_ref().map_or(0, |scene| scene.frame_count());
@@ -364,7 +364,7 @@ impl Session {
             pending: self.in_flight.len(),
             frames,
             frame_interval: interval,
-            export,
+            exporting,
             export_message,
             label: self.write_progress(),
             store: StoreView {

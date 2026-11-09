@@ -268,7 +268,8 @@ impl Decode for ViewState {
 impl Decode for Export {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         Ok(Self {
-            width: reader.u32()?,
+            image: reader.u32()?,
+            movie: reader.u32()?,
             transparent: reader.bool()?,
         })
     }

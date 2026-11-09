@@ -14,9 +14,7 @@ use grana_gpu::Gpu;
 use grana_project::ViewState;
 use grana_render::{FrameInfo, PickPane};
 use grana_scene::{ObjectFrame, ObjectSetId};
-use grana_session::{
-    Command, Effects, Export, MaskMode, MaskTool, ObjectAnchor, Session, SessionView,
-};
+use grana_session::{Command, Effects, MaskMode, MaskTool, ObjectAnchor, Session, SessionView};
 use grana_ui::{
     Button as UiButton, Event as UiEvent, Modifiers as UiModifiers, Ui, Vec2 as UiVec2,
 };
@@ -894,14 +892,14 @@ impl App {
                 self.session.save_project(path, view);
             }
         }
-        if let Some(export) = effects.snapshot {
-            self.begin_snapshot(export);
+        if effects.snapshot {
+            self.begin_snapshot();
         }
-        if let Some(export) = effects.movie {
-            self.begin_movie(export);
+        if let Some(transparent) = effects.movie {
+            self.begin_movie(transparent);
         }
-        if let Some(export) = effects.sequence {
-            self.begin_sequence(export);
+        if effects.sequence {
+            self.begin_sequence();
         }
         if effects.cancel_export {
             self.cancel_export();
@@ -951,20 +949,21 @@ impl App {
             .ui
             .update(points, scale, self.start.elapsed().as_secs_f64());
         let adapter = surface.gpu.adapter.clone();
-        let export = engine.progress();
+        let exporting = engine.progress();
         let export_message = engine.output_message();
         let view = SessionView {
             scene: session.scene(),
             measure: session.measure(),
             timeline: session.timeline(),
             jobs: session.progress(),
-            io: session.io(&adapter, export, export_message),
+            io: session.io(&adapter, exporting, export_message),
             batch: session.batch(),
             history: session.history(),
             series: session.series(),
             plate: session.plate(),
             labels: session.label_images(),
             views: session.views(),
+            export: session.export(),
         };
         let frame = frame_stats(*info);
         let commands = grana_editor::build(
@@ -1178,22 +1177,23 @@ impl App {
         self.repaint_at = Some(Instant::now());
     }
 
-    fn begin_snapshot(&mut self, export: Export) {
+    fn begin_snapshot(&mut self) {
         if !self.export_ready() {
             return;
         }
         let Some(scene) = self.session.scene() else {
             return;
         };
+        let export = self.session.export();
         let slug = grana_session::slug(scene.dataset.name());
         let Some(surface) = self.surface.as_ref() else {
             return;
         };
         let scale = surface.window.scale_factor() as f32;
-        let width = if export.width == 0 {
+        let width = if export.image == 0 {
             self.panels().native_width(scale)
         } else {
-            export.width
+            export.image
         };
         let suggested = format!("{slug}-image.png");
         let Some(path) = rfd::FileDialog::new()
@@ -1216,7 +1216,7 @@ impl App {
         });
     }
 
-    fn begin_movie(&mut self, export: Export) {
+    fn begin_movie(&mut self, transparent: bool) {
         if !self.export_ready() {
             return;
         }
@@ -1227,8 +1227,9 @@ impl App {
         let Some(scene) = self.session.scene() else {
             return;
         };
+        let width = self.session.export().movie;
         let slug = grana_session::slug(scene.dataset.name());
-        let (suggested, title, filter, extensions) = if export.transparent {
+        let (suggested, title, filter, extensions) = if transparent {
             (
                 format!("{slug}-movie.mov"),
                 "Save a transparent movie",
@@ -1257,20 +1258,21 @@ impl App {
         self.start_export(Plan {
             destination: Destination::Movie { path },
             panels,
-            width: export.width,
-            transparent: export.transparent,
+            width,
+            transparent,
             poses,
             fps,
         });
     }
 
-    fn begin_sequence(&mut self, export: Export) {
+    fn begin_sequence(&mut self) {
         if !self.export_ready() {
             return;
         }
         let Some(scene) = self.session.scene() else {
             return;
         };
+        let export = self.session.export();
         let frames = scene.frame_count();
         if frames == 0 {
             self.set_output_message("the dataset has no time point to export");
@@ -1289,10 +1291,10 @@ impl App {
             return;
         };
         let scale = surface.window.scale_factor() as f32;
-        let width = if export.width == 0 {
+        let width = if export.image == 0 {
             self.panels().native_width(scale)
         } else {
-            export.width
+            export.image
         };
         let directory = parent.join(format!("{stem}-sequence"));
         let poses = (0..frames)

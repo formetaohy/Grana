@@ -147,7 +147,8 @@ pub struct ViewSpec {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExportSpec {
-    pub width: u32,
+    pub image: u32,
+    pub movie: u32,
     pub transparent: bool,
 }
 
@@ -1793,7 +1794,7 @@ impl SnapshotSpec {
 
     pub fn of(export: Option<Export>, views: Vec<String>) -> Self {
         let (width, transparent) = match export {
-            Some(export) if export.width >= Self::MIN => (export.width, export.transparent),
+            Some(export) if export.image >= Self::MIN => (export.image, export.transparent),
             _ => (Self::WIDTH, false),
         };
         Self {
@@ -1814,10 +1815,10 @@ impl SnapshotSpec {
 
     pub fn size_for(&self, export: Option<Export>) -> [u32; 2] {
         match export {
-            Some(export) if (Self::MIN..=Self::MAX).contains(&export.width) => {
-                let height = (u64::from(export.width) * u64::from(self.height)
+            Some(export) if (Self::MIN..=Self::MAX).contains(&export.image) => {
+                let height = (u64::from(export.image) * u64::from(self.height)
                     / u64::from(self.width.max(1))) as u32;
-                [export.width, height.clamp(Self::MIN, Self::MAX)]
+                [export.image, height.clamp(Self::MIN, Self::MAX)]
             }
             _ => [self.width, self.height],
         }
@@ -1852,13 +1853,14 @@ impl SnapshotSpec {
 impl ExportSpec {
     pub fn of(export: Export) -> Self {
         Self {
-            width: export.width,
+            image: export.image,
+            movie: export.movie,
             transparent: export.transparent,
         }
     }
 
     pub fn export(self) -> Export {
-        Export::new(self.width, self.transparent)
+        Export::new(self.image, self.movie, self.transparent)
     }
 }
 

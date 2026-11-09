@@ -439,7 +439,7 @@ pub fn legends(scene: &Scene) -> Vec<Legend> {
         }
         if set.detected() > 0
             && let Some(metric) = set.object_coloring().metric()
-            && let Some(extent) = set.object_extent()
+            && let Some(extent) = scene.object_extent(set)
         {
             legends.push(Legend {
                 title: format!("{} · {}", set.name(), metric_label(scene, metric, &names)),

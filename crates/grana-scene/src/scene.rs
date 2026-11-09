@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_display::{Coloring, Shading, TransferFunction};
+use grana_display::{Coloring, Extent, Shading, TransferFunction};
 use grana_geometry::ray_hit;
 use grana_measure::{
     Aggregate, Classifier, ColocMetric, Frame, Group, Measurement, ObjectColoc, RelationRow, Table,
@@ -1093,7 +1093,7 @@ impl Scene {
 
     pub fn object_colors(&self, set: &ObjectSet) -> Option<Vec<[f32; 3]>> {
         let metric = set.object_coloring().metric()?;
-        let extent = set.object_extent()?;
+        let extent = self.objects.object_extent(set.id())?;
         let values = self.objects.metric_values(set.id(), metric, self.time)?;
         let coloring = set.object_coloring();
         Some(
@@ -1110,7 +1110,11 @@ impl Scene {
         )
     }
 
-    pub fn label_values(&self, set: &ObjectSet) -> Option<Vec<f32>> {
+    pub fn object_extent(&self, set: &ObjectSet) -> Option<Extent> {
+        self.objects.object_extent(set.id())
+    }
+
+    pub fn label_values(&self, set: &ObjectSet) -> Option<Arc<Vec<f32>>> {
         let metric = set.label_metric()?;
         self.objects.metric_values(set.id(), metric, self.time)
     }

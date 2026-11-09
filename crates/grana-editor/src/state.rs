@@ -68,7 +68,6 @@ pub struct Playback {
     pub position: f32,
     pub previewing: bool,
     pub selected: Option<usize>,
-    pub width: u32,
 }
 
 impl Default for Playback {
@@ -78,7 +77,6 @@ impl Default for Playback {
             position: 0.0,
             previewing: false,
             selected: None,
-            width: 1920,
         }
     }
 }
@@ -256,7 +254,6 @@ pub struct Workspace {
     pub sidebar_tab: usize,
     pub dock_height: f32,
     pub playback: Playback,
-    pub export: Export,
     pub column_widths: HashMap<usize, f32>,
     pub track_set: Option<ObjectSetId>,
     pub join: Option<(u32, usize)>,
@@ -291,7 +288,6 @@ impl Default for Workspace {
             sidebar_tab: 0,
             dock_height: Self::default_height(),
             playback: Playback::default(),
-            export: Export::NATIVE,
             column_widths: HashMap::new(),
             track_set: None,
             join: None,
@@ -351,6 +347,7 @@ pub struct View<'a> {
     pub viewport: &'a Viewport,
     pub stage: &'a Stage,
     pub workspace: &'a Workspace,
+    pub export: Export,
     pub frame: FrameStats,
 }
 

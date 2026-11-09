@@ -118,6 +118,7 @@ pub fn build(
         viewport: &*viewport,
         stage: &*stage,
         workspace: &*workspace,
+        export: view.export,
         frame,
     };
     let (volume, section, elements) = {
@@ -607,7 +608,6 @@ pub fn apply(
                 }
             }
             Message::SetPlaybackPosition(position) => workspace.playback.position = position,
-            Message::SetPlaybackWidth(width) => workspace.playback.width = width,
             Message::SetPlaybackSelected(selected) => workspace.playback.selected = selected,
             Message::SetTrackSet(set) => {
                 workspace.track_set = set;
@@ -708,12 +708,6 @@ pub fn apply(
                 workspace.psf_separation = value.clamp(0.1, 50.0);
             }
             Message::SetExport(export) => {
-                workspace.playback.width = if export.width == 0 {
-                    workspace.playback.width
-                } else {
-                    export.width
-                };
-                workspace.export = export;
                 commands.push(Command::SetExport(export));
             }
             Message::FitVolume => {

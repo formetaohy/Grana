@@ -1581,7 +1581,7 @@ fn appearance<'a>(
     if set.classifier().is_some() {
         metrics.push((ObjectColor::Score, "Classifier score".to_string()));
     }
-    let extent = set.object_extent();
+    let extent = state.scene.object_extent(set);
     let coloring = set.object_coloring().clone();
     let salt = format!("object.{}.coloring", id.raw());
     let key = Key::new(&salt);

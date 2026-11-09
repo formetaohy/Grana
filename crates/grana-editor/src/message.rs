@@ -41,7 +41,6 @@ pub enum Message {
     SetPlaying(bool),
     SetPreviewing(bool),
     SetPlaybackPosition(f32),
-    SetPlaybackWidth(u32),
     SetPlaybackSelected(Option<usize>),
     SetTrackSet(Option<ObjectSetId>),
     SetJoin(Option<(u32, usize)>),

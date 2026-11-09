@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use grana_animation::Timeline;
 use grana_image::{Plate, Series, Well};
-use grana_project::NamedView;
+use grana_project::{Export, NamedView};
 use grana_scene::{Measure, Progress, Scene};
 
 use crate::command::Action;
@@ -88,7 +88,7 @@ pub struct IoView<'a> {
     pub pending: usize,
     pub frames: u32,
     pub frame_interval: f32,
-    pub export: Option<(u32, u32)>,
+    pub exporting: Option<(u32, u32)>,
     pub export_message: Option<String>,
     pub label: Option<(&'a str, usize, usize)>,
     pub store: StoreView,
@@ -135,4 +135,5 @@ pub struct SessionView<'a> {
     pub plate: Option<PlateView<'a>>,
     pub labels: &'a [String],
     pub views: &'a [NamedView],
+    pub export: Export,
 }

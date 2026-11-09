@@ -374,9 +374,11 @@ pub enum Command {
     DeleteKeyframe(usize),
     SetTimelineFps(u32),
     SetTimelineDuration(f32),
-    ExportMovie(Export),
+    ExportMovie {
+        transparent: bool,
+    },
     SetExport(Export),
-    ExportSequence(Export),
+    ExportSequence,
     CancelExport,
     Undo,
     Redo,

@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use grana_display::Extent;
 use grana_measure::{Child, ObjectColoc, RelationField, UNASSIGNED};
@@ -31,6 +32,17 @@ pub struct Objects {
     next_id: u64,
     ordinals: [u64; 3],
     stamp: u64,
+    extents: Mutex<HashMap<ObjectSetId, ExtentEntry>>,
+    values: Mutex<HashMap<(ObjectSetId, ObjectColor), Values>>,
+}
+
+type ExtentEntry = (u64, ObjectColor, Option<Extent>);
+
+#[derive(Clone)]
+struct Values {
+    revision: u64,
+    time: u32,
+    values: Arc<Vec<f32>>,
 }
 
 impl Default for Objects {
@@ -46,6 +58,8 @@ impl Objects {
             next_id: 1,
             ordinals: [0; 3],
             stamp: 0,
+            extents: Mutex::new(HashMap::new()),
+            values: Mutex::new(HashMap::new()),
         }
     }
 
@@ -217,6 +231,7 @@ impl Objects {
         for dependency in doomed {
             self.clear_relations(dependency);
         }
+        self.forget_caches();
         self.prune_children();
     }
 
@@ -274,20 +289,11 @@ impl Objects {
             })
             .map(ObjectSet::id)
             .collect::<Vec<_>>();
-        let mut changed = Vec::new();
         for target in targets {
             let stamp = take_stamp(&mut self.stamp);
-            if let Some(set) = self.get_mut(target)
-                && set.invalidate_relation(id, time, stamp)
-            {
-                changed.push(target);
+            if let Some(set) = self.get_mut(target) {
+                set.invalidate_relation(id, time, stamp);
             }
-        }
-        self.refresh_bounds(id, Some(time));
-        self.refresh_child_bounds(id, Some(time));
-        for target in changed {
-            self.refresh_bounds(target, Some(time));
-            self.refresh_child_bounds(target, Some(time));
         }
         Ok(true)
     }
@@ -334,7 +340,6 @@ impl Objects {
         self.next_id += 1;
         self.sets.insert(position + 1, copy);
         self.prune_children();
-        self.refresh_bounds(derived, None);
         Some(derived)
     }
 
@@ -486,8 +491,6 @@ impl Objects {
             set.forget_copies(&[source]);
         }
         self.clear_relations(source);
-        self.refresh_bounds(target, None);
-        self.refresh_child_bounds(target, None);
         Ok(())
     }
 
@@ -524,7 +527,7 @@ impl Objects {
             .get_mut(id)
             .is_some_and(|set| set.add_relation(target, shift, stamp));
         if added {
-            self.settle_relation_change(id);
+            self.settle_relation_change();
         }
         added
     }
@@ -541,7 +544,7 @@ impl Objects {
             .get_mut(id)
             .is_some_and(|set| set.add_relation_with_key(target, shift, key, stamp));
         if added {
-            self.settle_relation_change(id);
+            self.settle_relation_change();
         }
         added
     }
@@ -558,7 +561,7 @@ impl Objects {
             .get_mut(id)
             .is_some_and(|set| set.move_relation(target, from, to, stamp));
         if moved {
-            self.settle_relation_change(id);
+            self.settle_relation_change();
         }
         moved
     }
@@ -569,7 +572,7 @@ impl Objects {
             .get_mut(id)
             .is_some_and(|set| set.remove_relation(target, shift, stamp));
         if removed {
-            self.settle_relation_change(id);
+            self.settle_relation_change();
         }
         removed
     }
@@ -587,27 +590,19 @@ impl Objects {
             return false;
         };
         set.install_relation(target, shift, time, frame, stamp);
-        self.refresh_bounds(id, Some(time));
-        self.refresh_child_bounds(id, Some(time));
         true
     }
 
     pub fn clear_relations(&mut self, id: ObjectSetId) {
         let stamp = take_stamp(&mut self.stamp);
-        let mut changed = Vec::new();
         for set in &mut self.sets {
             if set.id() == id {
                 set.clear_relations(stamp);
-                changed.push(set.id());
-            } else if set.remove_relations_to(id, stamp) {
-                changed.push(set.id());
+            } else {
+                set.remove_relations_to(id, stamp);
             }
         }
         self.prune_children();
-        for set in changed {
-            self.refresh_bounds(set, None);
-            self.refresh_child_bounds(set, None);
-        }
     }
 
     pub fn install(&mut self, id: ObjectSetId, time: u32, frame: ObjectFrame) -> bool {
@@ -616,7 +611,7 @@ impl Objects {
             return false;
         };
         set.install(time, frame, stamp);
-        self.settle_frame(id, time);
+        self.invalidate_relations(id, time);
         true
     }
 
@@ -626,7 +621,7 @@ impl Objects {
             return false;
         };
         set.install_shared(time, frame, stamp);
-        self.settle_frame(id, time);
+        self.invalidate_relations(id, time);
         true
     }
 
@@ -641,41 +636,24 @@ impl Objects {
             return false;
         };
         set.install_optional(time, frame, stamp);
-        self.settle_frame(id, time);
+        self.invalidate_relations(id, time);
         true
     }
 
-    fn settle_frame(&mut self, id: ObjectSetId, time: u32) {
-        let changed = self.invalidate_relations(id, time);
-        for set in changed {
-            self.refresh_bounds(set, Some(time));
-            self.refresh_child_bounds(set, Some(time));
-        }
-        self.refresh_bounds(id, Some(time));
-        self.refresh_child_bounds(id, Some(time));
-    }
-
-    fn settle_relation_change(&mut self, id: ObjectSetId) {
+    fn settle_relation_change(&mut self) {
         self.prune_children();
-        self.refresh_bounds(id, None);
-        self.refresh_child_bounds(id, None);
     }
 
-    fn invalidate_relations(&mut self, id: ObjectSetId, time: u32) -> Vec<ObjectSetId> {
-        let mut changed = Vec::new();
+    fn invalidate_relations(&mut self, id: ObjectSetId, time: u32) {
         for index in 0..self.sets.len() {
             let stamp = take_stamp(&mut self.stamp);
             let set = &mut self.sets[index];
-            let invalidated = if set.id() == id {
-                set.invalidate_relations(time, stamp)
+            if set.id() == id {
+                set.invalidate_relations(time, stamp);
             } else {
-                set.invalidate_relation(id, time, stamp)
-            };
-            if invalidated {
-                changed.push(set.id());
+                set.invalidate_relation(id, time, stamp);
             }
         }
-        changed
     }
 
     pub fn clear(&mut self, id: ObjectSetId) {
@@ -683,8 +661,6 @@ impl Objects {
         if let Some(set) = self.get_mut(id) {
             set.clear(stamp);
         }
-        self.refresh_bounds(id, None);
-        self.refresh_child_bounds(id, None);
     }
 
     pub fn install_tracks(&mut self, id: ObjectSetId, tracks: TrackSet) -> bool {
@@ -705,12 +681,7 @@ impl Objects {
 
     pub fn apply_curation(&mut self, id: ObjectSetId) -> usize {
         let stamp = take_stamp(&mut self.stamp);
-        let applied = self.get_mut(id).map_or(0, |set| set.apply_curation(stamp));
-        if applied > 0 {
-            self.refresh_bounds(id, None);
-            self.refresh_child_bounds(id, None);
-        }
-        applied
+        self.get_mut(id).map_or(0, |set| set.apply_curation(stamp))
     }
 
     pub fn reapply_hidden(&mut self, id: ObjectSetId) -> usize {
@@ -724,14 +695,8 @@ impl Objects {
 
     pub fn cut_track(&mut self, id: ObjectSetId, time: u32, object: usize) -> bool {
         let stamp = take_stamp(&mut self.stamp);
-        let cut = self
-            .get_mut(id)
-            .is_some_and(|set| set.cut_track(time, object, stamp));
-        if cut {
-            self.refresh_bounds(id, None);
-            self.refresh_child_bounds(id, None);
-        }
-        cut
+        self.get_mut(id)
+            .is_some_and(|set| set.cut_track(time, object, stamp))
     }
 
     pub fn add_seed(&mut self, id: ObjectSetId, time: u32, position: [f32; 3]) -> bool {
@@ -770,14 +735,8 @@ impl Objects {
         target: (u32, usize),
     ) -> bool {
         let stamp = take_stamp(&mut self.stamp);
-        let joined = self
-            .get_mut(id)
-            .is_some_and(|set| set.join_tracks(source, target, stamp));
-        if joined {
-            self.refresh_bounds(id, None);
-            self.refresh_child_bounds(id, None);
-        }
-        joined
+        self.get_mut(id)
+            .is_some_and(|set| set.join_tracks(source, target, stamp))
     }
 
     pub fn set_track_thickness(&mut self, id: ObjectSetId, thickness: f32) {
@@ -802,6 +761,7 @@ impl Objects {
         self.sets.clear();
         self.next_id = 1;
         self.ordinals = [0; 3];
+        self.forget_caches();
         for state in states {
             assert!(state.id > 0, "an object set id is positive");
             assert!(
@@ -871,9 +831,6 @@ impl Objects {
             self.check_object_metric(*id, set.object_coloring().metric());
             self.check_object_metric(*id, set.label_metric());
         }
-        for id in ids {
-            self.refresh_bounds(id, None);
-        }
     }
 
     pub fn child_sets(&self, parent: ObjectSetId) -> Vec<ObjectSetId> {
@@ -919,7 +876,27 @@ impl Objects {
         id: ObjectSetId,
         metric: ObjectColor,
         time: u32,
-    ) -> Option<Vec<f32>> {
+    ) -> Option<Arc<Vec<f32>>> {
+        let revision = self.cache_revision(id, metric)?;
+        if let Some(entry) = self.cached_values(id, metric)
+            && entry.revision == revision
+            && entry.time == time
+        {
+            return Some(entry.values);
+        }
+        let values = Arc::new(self.compute_values(id, metric, time)?);
+        self.lock_values().insert(
+            (id, metric),
+            Values {
+                revision,
+                time,
+                values: Arc::clone(&values),
+            },
+        );
+        Some(values)
+    }
+
+    fn compute_values(&self, id: ObjectSetId, metric: ObjectColor, time: u32) -> Option<Vec<f32>> {
         let set = self.get(id)?;
         let frame = set.frame(time)?;
         match metric {
@@ -978,11 +955,7 @@ impl Objects {
         let Some(set) = self.get_mut(id) else {
             return false;
         };
-        let changed = set.set_classifier(classifier, stamp);
-        if changed {
-            self.refresh_bounds(id, None);
-        }
-        changed
+        set.set_classifier(classifier, stamp)
     }
 
     pub(crate) fn set_object_coloc(&mut self, id: ObjectSetId, coloc: Option<ObjectColoc>) -> bool {
@@ -990,11 +963,7 @@ impl Objects {
         let Some(set) = self.get_mut(id) else {
             return false;
         };
-        let changed = set.set_object_coloc(coloc, stamp);
-        if changed {
-            self.refresh_bounds(id, None);
-        }
-        changed
+        set.set_object_coloc(coloc, stamp)
     }
 
     pub fn set_object_coloring(
@@ -1003,13 +972,8 @@ impl Objects {
         coloring: grana_display::Coloring<ObjectColor>,
     ) -> bool {
         self.check_object_metric(id, coloring.metric());
-        let changed = self
-            .get_mut(id)
-            .is_some_and(|set| set.set_object_coloring(coloring));
-        if changed {
-            self.refresh_bounds(id, None);
-        }
-        changed
+        self.get_mut(id)
+            .is_some_and(|set| set.set_object_coloring(coloring))
     }
 
     pub fn set_label_metric(&mut self, id: ObjectSetId, metric: Option<ObjectColor>) -> bool {
@@ -1112,23 +1076,52 @@ impl Objects {
         }
     }
 
-    fn bounds_of(&self, id: ObjectSetId, time: u32) -> Option<Extent> {
+    pub fn object_extent(&self, id: ObjectSetId) -> Option<Extent> {
         let set = self.get(id)?;
         let metric = set.object_coloring().metric()?;
+        if let Some(manual) = set.object_coloring().manual() {
+            return Some(manual);
+        }
+        let revision = self.cache_revision(id, metric)?;
+        if let Some((cached_revision, cached_metric, extent)) = self.cached_extent(id)
+            && cached_revision == revision
+            && cached_metric == metric
+        {
+            return extent;
+        }
+        let extent = self.merged_extent(id, metric);
+        self.lock_extents().insert(id, (revision, metric, extent));
+        extent
+    }
+
+    fn cache_revision(&self, id: ObjectSetId, metric: ObjectColor) -> Option<u64> {
+        let revision = self.get(id)?.revision();
+        match metric {
+            ObjectColor::Child { target, .. } => {
+                Some(crate::state::mix(revision, self.get(target)?.revision()))
+            }
+            _ => Some(revision),
+        }
+    }
+
+    fn merged_extent(&self, id: ObjectSetId, metric: ObjectColor) -> Option<Extent> {
+        let frames = self.get(id)?.frame_count();
+        (0..frames).fold(None, |accumulated, time| {
+            let bound = self.extent_at(id, time, metric);
+            merge(accumulated, bound)
+        })
+    }
+
+    fn extent_at(&self, id: ObjectSetId, time: u32, metric: ObjectColor) -> Option<Extent> {
+        let set = self.get(id)?;
         match metric {
             ObjectColor::Child { target, field } => {
                 let parents = set.frame(time)?.object_count();
                 let values = self.child(id, target, time)?.values(parents, field);
-                extent_of(values)
+                extent_of(&values)
             }
-            ObjectColor::Coloc { .. } => extent_of(self.metric_values(id, metric, time)?),
-            ObjectColor::Score => {
-                let classifier = set.classifier()?;
-                let frame = set.frame(time)?;
-                let values = (0..frame.object_count())
-                    .map(|object| classifier.score(frame.objects(), object))
-                    .collect();
-                extent_of(values)
+            ObjectColor::Coloc { .. } | ObjectColor::Score => {
+                extent_of(self.metric_values(id, metric, time)?.as_slice())
             }
             _ => {
                 let frame = set.frame(time)?;
@@ -1141,41 +1134,29 @@ impl Objects {
         }
     }
 
-    fn refresh_bounds(&mut self, id: ObjectSetId, time: Option<u32>) {
-        let Some(set) = self.get(id) else {
-            return;
-        };
-        let times = match time {
-            Some(time) => vec![time],
-            None => (0..set.frame_count()).collect(),
-        };
-        let updates = times
-            .iter()
-            .map(|time| (*time, self.bounds_of(id, *time)))
-            .collect::<Vec<_>>();
-        if let Some(set) = self.get_mut(id) {
-            for (time, bound) in updates {
-                set.set_frame_bound(time, bound);
-            }
-        }
+    fn cached_extent(&self, id: ObjectSetId) -> Option<ExtentEntry> {
+        self.lock_extents().get(&id).copied()
     }
 
-    fn refresh_child_bounds(&mut self, child: ObjectSetId, time: Option<u32>) {
-        let parents = self
-            .sets
-            .iter()
-            .filter(|set| {
-                set.id() != child
-                    && matches!(
-                        set.object_coloring().metric(),
-                        Some(ObjectColor::Child { target, .. }) if target == child
-                    )
-            })
-            .map(ObjectSet::id)
-            .collect::<Vec<_>>();
-        for parent in parents {
-            self.refresh_bounds(parent, time);
-        }
+    fn lock_extents(&self) -> MutexGuard<'_, HashMap<ObjectSetId, ExtentEntry>> {
+        self.extents
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn cached_values(&self, id: ObjectSetId, metric: ObjectColor) -> Option<Values> {
+        self.lock_values().get(&(id, metric)).cloned()
+    }
+
+    fn lock_values(&self) -> MutexGuard<'_, HashMap<(ObjectSetId, ObjectColor), Values>> {
+        self.values
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn forget_caches(&mut self) {
+        self.lock_extents().clear();
+        self.lock_values().clear();
     }
 
     pub fn get(&self, id: ObjectSetId) -> Option<&ObjectSet> {
@@ -1211,9 +1192,10 @@ fn members_of(relation: &RelationFrame) -> Vec<u32> {
         .collect()
 }
 
-fn extent_of(values: Vec<f32>) -> Option<Extent> {
+fn extent_of(values: &[f32]) -> Option<Extent> {
     values
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|value| value.is_finite())
         .fold(None, |accumulated, value| {
             Some(match accumulated {
@@ -1221,6 +1203,16 @@ fn extent_of(values: Vec<f32>) -> Option<Extent> {
                 Some((minimum, maximum)) => (minimum.min(value), maximum.max(value)),
             })
         })
+}
+
+fn merge(accumulated: Option<Extent>, bound: Option<Extent>) -> Option<Extent> {
+    match (accumulated, bound) {
+        (None, bound) => bound,
+        (accumulated, None) => accumulated,
+        (Some((low, high)), Some((minimum, maximum))) => {
+            Some((low.min(minimum), high.max(maximum)))
+        }
+    }
 }
 
 fn stem(file: &str) -> String {

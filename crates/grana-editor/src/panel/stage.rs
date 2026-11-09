@@ -237,7 +237,7 @@ fn geometry(layout: &Layout, state: &View<'_>) -> Geometry {
         volume_safe: layout.volume.shrink(STAGE_INSET),
         section_safe: layout.section.shrink(STAGE_INSET),
         world: state.scene.dataset.world_size(),
-        recording: state.io.export,
+        recording: state.io.exporting,
     }
 }
 

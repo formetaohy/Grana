@@ -28,7 +28,7 @@ impl Session {
             Command::OpenProject => effects.open_project = true,
             Command::SaveProject => effects.save_project = Some(false),
             Command::SaveProjectAs => effects.save_project = Some(true),
-            Command::SaveSnapshot => effects.snapshot = Some(self.export),
+            Command::SaveSnapshot => effects.snapshot = true,
             Command::ClearCache => self.clear_cache(),
             Command::SetTime(time) => self.set_time(time),
             Command::SelectSeries(index) => {
@@ -667,12 +667,9 @@ impl Session {
             }
             Command::SetTimelineFps(fps) => self.timeline.set_fps(fps),
             Command::SetTimelineDuration(duration) => self.timeline.set_duration(duration),
-            Command::ExportMovie(export) => effects.movie = Some(export),
+            Command::ExportMovie { transparent } => effects.movie = Some(transparent),
             Command::SetExport(export) => self.export = export,
-            Command::ExportSequence(export) => {
-                self.export = export;
-                effects.sequence = Some(export);
-            }
+            Command::ExportSequence => effects.sequence = true,
             Command::CancelExport => effects.cancel_export = true,
             Command::Undo | Command::Redo => {
                 unreachable!("undo and redo run before the document commands")

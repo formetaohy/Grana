@@ -15,7 +15,7 @@ use grana_codec::Encoder;
 use crate::codec::{Decode, Encode, Reader};
 use crate::error::Error;
 
-const MAGIC: &[u8; 11] = b"granaproj49";
+const MAGIC: &[u8; 11] = b"granaproj50";
 const LENGTH: usize = size_of::<u64>();
 const STEPS: usize = size_of::<u32>();
 const HEADER: usize = MAGIC.len() + LENGTH + STEPS;
@@ -94,22 +94,29 @@ pub struct ViewState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Export {
-    pub width: u32,
+    pub image: u32,
+    pub movie: u32,
     pub transparent: bool,
 }
 
 impl Export {
     pub const NATIVE: Self = Self {
-        width: 0,
+        image: 0,
+        movie: 1920,
         transparent: false,
     };
 
-    pub const fn new(width: u32, transparent: bool) -> Self {
-        Self { width, transparent }
+    pub const fn new(image: u32, movie: u32, transparent: bool) -> Self {
+        Self {
+            image,
+            movie,
+            transparent,
+        }
     }
 
     pub fn matches(&self) -> bool {
-        self.width == 0 || (64..=16384).contains(&self.width)
+        (self.image == 0 || (64..=16384).contains(&self.image))
+            && (64..=16384).contains(&self.movie)
     }
 }
 
