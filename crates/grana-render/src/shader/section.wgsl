@@ -85,7 +85,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             if (opacity <= 0.0) {
                 continue;
             }
-            let sample = channel_sample(channel, values[component]);
+            let sample = channel_coverage(channel, values[component]);
             let alpha = sample.a * opacity;
             if (alpha > 0.0) {
                 color = vec4<f32>(

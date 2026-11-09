@@ -2,6 +2,7 @@ mod feedback;
 mod render;
 mod residency;
 mod signature;
+mod upload;
 
 use residency::{FrameTarget, LevelKey, Levels, Regions, Residency};
 use signature::Signature;
@@ -13,8 +14,7 @@ use bytemuck::cast_slice;
 use glam::Vec3;
 use grana_gpu::Readback;
 use grana_volume::{
-    BRICK_SIDE, BrickCoord, BrickData, BrickGrid, BrickRequest, Clip, Level, PADDED_SIDE, Pyramid,
-    Region,
+    BRICK_SIDE, BrickCoord, BrickGrid, BrickRequest, Clip, Level, PADDED_SIDE, Pyramid, Region,
 };
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, CommandEncoder, Device, LoadOp, Operations,
@@ -24,8 +24,8 @@ use wgpu::{
     TextureViewDescriptor,
 };
 
-use crate::atlas::{Atlas, PACK, ResidentBrick, pack_components, pack_texels};
-use crate::brick::{BrickArena, BrickRecord, BrickTable};
+use crate::atlas::{Atlas, PACK, pack_components, pack_texels};
+use crate::brick::{BrickArena, BrickTable};
 use crate::cut::CutLayer;
 use crate::frame::{FrameData, SectionData, VolumeView};
 use crate::layout::Layouts;
@@ -148,6 +148,7 @@ pub struct Renderer {
     scene: Option<crate::table::SceneTable>,
     atlas: Option<Atlas>,
     summary: Option<Summary>,
+    staging: upload::UploadScratch,
     arena: Option<BrickArena>,
     level_group: Option<BindGroup>,
     bricks: Vec<Option<BrickTable>>,
@@ -223,6 +224,7 @@ impl Renderer {
             scene: None,
             atlas: None,
             summary: None,
+            staging: upload::UploadScratch::new(),
             arena: None,
             level_group: None,
             bricks: Vec::new(),
@@ -403,111 +405,6 @@ impl Renderer {
         self.exporting = false;
         self.fade = None;
         self.info = FrameInfo::default();
-    }
-
-    pub fn upload(&mut self, queue: &Queue, request: BrickRequest, data: &BrickData) -> bool {
-        let Self {
-            bricks,
-            atlas,
-            summary,
-            arena,
-            pyramid,
-            channels,
-            time: now,
-            content,
-            pin,
-            prefetched,
-            ..
-        } = self;
-        let (Some(pyramid), Some(atlas), Some(summary), Some(arena)) = (
-            pyramid.as_ref(),
-            atlas.as_mut(),
-            summary.as_ref(),
-            arena.as_ref(),
-        ) else {
-            return false;
-        };
-        let BrickRequest { time, level, coord } = request;
-        if level >= pyramid.level_count()
-            || level < arena.first()
-            || time >= pyramid.frame_count()
-            || data.channels().len() != *channels
-        {
-            return false;
-        }
-        let extent = pyramid.level(level).extent();
-        if coord.x() >= extent.x().div_ceil(BRICK_SIDE)
-            || coord.y() >= extent.y().div_ceil(BRICK_SIDE)
-            || coord.z() >= extent.z().div_ceil(BRICK_SIDE)
-        {
-            return false;
-        }
-        let grid = BrickGrid::new(extent);
-        let index = grid.index(coord);
-        if atlas.slot(time, level, index).is_some() || atlas.is_hollow(time, level, index) {
-            return true;
-        }
-        let mut maxima = [[0.0f32; 4]; CHANNEL_LIMIT / 4];
-        let mut cells = Vec::with_capacity(*channels);
-        for channel in 0..*channels {
-            let intensity = pyramid.channels()[channel].intensity();
-            maxima[channel / 4][channel % 4] = data.channels()[channel].unit_max(intensity);
-            cells.push(data.channels()[channel].cell_unit_maxima(intensity));
-        }
-        if maxima.iter().flatten().all(|maximum| *maximum <= 0.0) {
-            atlas.assign_hollow(time, level, index);
-            if let Some(table) = bricks[level].as_mut() {
-                table.set_record(queue, arena, index, BrickRecord::hollow(time));
-            }
-            *content += 1;
-            return true;
-        }
-        let slot_grid = atlas.slot_grid();
-        ensure_brick(bricks, pyramid.level(level), level, slot_grid, arena);
-        let demand = !prefetched.contains(&request);
-        let Some((slot, evicted)) = atlas.allocate(*pin, *now, time, demand) else {
-            return false;
-        };
-        if let Some(brick) = evicted
-            && let Some(other) = bricks.get_mut(brick.level).and_then(Option::as_mut)
-        {
-            other.drop_record(queue, arena, brick.index, brick.time);
-        }
-        let voxels = data.channels()[0].voxel_count();
-        for pack in 0..(*channels).div_ceil(PACK) {
-            let components = pack_components(*channels, pack);
-            let texels = pack_texels(components);
-            let mut units = vec![0u16; voxels * texels];
-            for component in 0..components {
-                let channel = pack * PACK + component;
-                let intensity = pyramid.channels()[channel].intensity();
-                data.channels()[channel]
-                    .write_units_strided(intensity, &mut units, texels, component);
-            }
-            atlas.write(queue, pack, slot, &units);
-        }
-        summary.write(queue, slot, &cells);
-        atlas.assign(
-            slot,
-            ResidentBrick {
-                time,
-                level,
-                index,
-                maxima,
-            },
-            *pin,
-            demand,
-        );
-        if let Some(table) = bricks[level].as_mut() {
-            table.set_record(
-                queue,
-                arena,
-                index,
-                BrickRecord::new(slot + 1, time, maxima),
-            );
-        }
-        *content += 1;
-        true
     }
 
     pub fn draw(&mut self, device: &Device, queue: &Queue, frame: Frame<'_, '_>) -> FrameInfo {

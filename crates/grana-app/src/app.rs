@@ -225,10 +225,9 @@ impl App {
                 session.request(requests.time, &bricks);
             }
         }
-        for (request, data) in session.take_bricks() {
-            if engine.upload(&surface.gpu.queue, request, &data) {
-                *uploads += 1;
-            }
+        let bricks = session.take_bricks();
+        if !bricks.is_empty() {
+            *uploads += engine.upload(&surface.gpu.queue, &bricks) as u64;
         }
         if session.generation() != self.generation {
             self.generation = session.generation();

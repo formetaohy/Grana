@@ -68,8 +68,8 @@ impl Engine {
         self.renderer.poll_requests(device)
     }
 
-    pub fn upload(&mut self, queue: &Queue, request: BrickRequest, data: &BrickData) -> bool {
-        self.renderer.upload(queue, request, data)
+    pub fn upload(&mut self, queue: &Queue, bricks: &[(BrickRequest, BrickData)]) -> usize {
+        self.renderer.upload(queue, bricks)
     }
 
     pub fn draw_viewport(

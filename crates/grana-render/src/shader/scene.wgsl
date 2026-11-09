@@ -64,6 +64,7 @@ struct ChannelData {
 @group(0) @binding(3) var lut: texture_2d<f32>;
 @group(0) @binding(4) var lut_sampler: sampler;
 @group(0) @binding(5) var extinction_lut: texture_2d<f32>;
+@group(0) @binding(6) var section_lut: texture_2d<f32>;
 
 const SHADING_TAU: f32 = 0.020203;
 
@@ -112,6 +113,15 @@ fn channel_sample(index: u32, unit: f32) -> vec4<f32> {
 fn channel_tau(index: u32, unit: f32) -> vec4<f32> {
     return textureSampleLevel(
         extinction_lut,
+        lut_sampler,
+        vec2<f32>(channel_position(index, unit), channels[index].lut_row),
+        0.0,
+    );
+}
+
+fn channel_coverage(index: u32, unit: f32) -> vec4<f32> {
+    return textureSampleLevel(
+        section_lut,
         lut_sampler,
         vec2<f32>(channel_position(index, unit), channels[index].lut_row),
         0.0,

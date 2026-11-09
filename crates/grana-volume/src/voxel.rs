@@ -53,47 +53,14 @@ impl VoxelData {
         Intensity::new(min, max)
     }
 
-    pub fn unit_max(&self, intensity: Intensity) -> f32 {
-        let mut max = 0.0f32;
-        self.for_each_value(|value| {
-            let unit = intensity.unit(value);
-            if unit > max {
-                max = unit;
-            }
-        });
-        max
-    }
-
-    pub fn cell_unit_maxima(&self, intensity: Intensity) -> Vec<f32> {
-        let side = PADDED_SIDE as usize;
-        let mut maxima = vec![0.0f32; CELL_COUNT];
-        self.for_each_indexed_value(|index, value| {
-            let voxel = [index % side, (index / side) % side, index / (side * side)];
-            let mut cell = 0usize;
-            let mut stride = 1usize;
-            for coordinate in voxel {
-                let inner = coordinate as u32;
-                if !(BRICK_APRON..BRICK_APRON + BRICK_SIDE).contains(&inner) {
-                    return;
-                }
-                cell += ((inner - BRICK_APRON) / CELL_SIDE) as usize * stride;
-                stride *= CELL_AXIS;
-            }
-            let unit = intensity.unit(value);
-            if unit > maxima[cell] {
-                maxima[cell] = unit;
-            }
-        });
-        maxima
-    }
-
-    pub fn write_units_strided(
+    pub fn pack_units(
         &self,
         intensity: Intensity,
         out: &mut [u16],
         stride: usize,
         offset: usize,
-    ) {
+        cells: &mut [f32],
+    ) -> f32 {
         assert!(stride > 0, "a unit stride visits at least one slot");
         assert!(offset < stride, "a unit offset lies inside the stride");
         assert_eq!(
@@ -101,22 +68,41 @@ impl VoxelData {
             self.voxel_count() * stride,
             "the destination must hold every voxel at the stride"
         );
-        let span = intensity.span();
-        let scale = if span > 0.0 {
-            f32::from(u16::MAX) / span
-        } else {
-            0.0
-        };
-        let mut index = 0;
-        self.for_each_value(|value| {
-            let unit = if span > 0.0 && value.is_finite() {
-                ((value - intensity.min()) * scale).clamp(0.0, f32::from(u16::MAX))
-            } else {
-                0.0
-            };
-            out[offset + index * stride] = unit.round() as u16;
-            index += 1;
-        });
+        assert_eq!(
+            cells.len(),
+            CELL_COUNT,
+            "a packed brick summarizes one cell maximum per cell"
+        );
+        cells.fill(0.0);
+        match self {
+            Self::U8(data) => pack(
+                data.iter().copied(),
+                f32::from,
+                intensity,
+                out,
+                stride,
+                offset,
+                cells,
+            ),
+            Self::U16(data) => pack(
+                data.iter().copied(),
+                f32::from,
+                intensity,
+                out,
+                stride,
+                offset,
+                cells,
+            ),
+            Self::F32(data) => pack(
+                data.iter().copied(),
+                |value| value,
+                intensity,
+                out,
+                stride,
+                offset,
+                cells,
+            ),
+        }
     }
 
     pub fn write_values(&self, out: &mut [f32]) {
@@ -170,25 +156,68 @@ impl VoxelData {
     }
 
     fn for_each_value(&self, mut visit: impl FnMut(f32)) {
-        self.for_each_indexed_value(|_, value| visit(value));
-    }
-
-    fn for_each_indexed_value(&self, mut visit: impl FnMut(usize, f32)) {
         match self {
-            Self::U8(data) => data
-                .iter()
-                .enumerate()
-                .for_each(|(index, &value)| visit(index, f32::from(value))),
-            Self::U16(data) => data
-                .iter()
-                .enumerate()
-                .for_each(|(index, &value)| visit(index, f32::from(value))),
-            Self::F32(data) => data
-                .iter()
-                .enumerate()
-                .for_each(|(index, &value)| visit(index, value)),
+            Self::U8(data) => data.iter().for_each(|&value| visit(f32::from(value))),
+            Self::U16(data) => data.iter().for_each(|&value| visit(f32::from(value))),
+            Self::F32(data) => data.iter().for_each(|&value| visit(value)),
         }
     }
+}
+
+const UNIT_MAXIMUM: f32 = 65535.0;
+
+fn pack<T>(
+    values: impl Iterator<Item = T>,
+    convert: impl Fn(T) -> f32,
+    intensity: Intensity,
+    out: &mut [u16],
+    stride: usize,
+    offset: usize,
+    cells: &mut [f32],
+) -> f32 {
+    let side = PADDED_SIDE as usize;
+    let inner_start = BRICK_APRON as usize;
+    let inner_end = (BRICK_APRON + BRICK_SIDE) as usize;
+    let cell_side = CELL_SIDE as usize;
+    let span = intensity.span();
+    let minimum = intensity.min();
+    let scale = if span > 0.0 { UNIT_MAXIMUM / span } else { 0.0 };
+    let mut maximum = 0.0f32;
+    let (mut x, mut y, mut z) = (0usize, 0usize, 0usize);
+    for (index, raw) in values.enumerate() {
+        let value = convert(raw);
+        let scaled = if span > 0.0 && value.is_finite() {
+            ((value - minimum) * scale).clamp(0.0, UNIT_MAXIMUM)
+        } else {
+            0.0
+        };
+        out[offset + index * stride] = scaled.round() as u16;
+        let unit = scaled / UNIT_MAXIMUM;
+        if unit > maximum {
+            maximum = unit;
+        }
+        if (inner_start..inner_end).contains(&x)
+            && (inner_start..inner_end).contains(&y)
+            && (inner_start..inner_end).contains(&z)
+        {
+            let cell = (x - inner_start) / cell_side
+                + ((y - inner_start) / cell_side) * CELL_AXIS
+                + ((z - inner_start) / cell_side) * CELL_AXIS * CELL_AXIS;
+            if unit > cells[cell] {
+                cells[cell] = unit;
+            }
+        }
+        x += 1;
+        if x == side {
+            x = 0;
+            y += 1;
+            if y == side {
+                y = 0;
+                z += 1;
+            }
+        }
+    }
+    maximum
 }
 
 fn extract<T: Copy>(

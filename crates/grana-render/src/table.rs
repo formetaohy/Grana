@@ -38,6 +38,7 @@ pub(crate) struct SceneTable {
     channels: Table<ChannelData>,
     lut: Texture,
     extinction: Texture,
+    section: Texture,
     transfers: Vec<Option<TransferFunction>>,
     thresholds: Vec<Option<f32>>,
     group: BindGroup,
@@ -66,12 +67,17 @@ impl SceneTable {
         let table = Table::with_capacity(device, "grana.channels", CHANNEL_LIMIT);
         let lut = transfer_texture(device, "grana.transfer.lut", channels);
         let extinction = transfer_texture(device, "grana.transfer.extinction", channels);
+        let section = transfer_texture(device, "grana.transfer.section", channels);
         let lut_view = lut.create_view(&TextureViewDescriptor {
             label: Some("grana.transfer.lut.view"),
             ..Default::default()
         });
         let extinction_view = extinction.create_view(&TextureViewDescriptor {
             label: Some("grana.transfer.extinction.view"),
+            ..Default::default()
+        });
+        let section_view = section.create_view(&TextureViewDescriptor {
+            label: Some("grana.transfer.section.view"),
             ..Default::default()
         });
         let lut_sampler = device.create_sampler(&SamplerDescriptor {
@@ -111,6 +117,10 @@ impl SceneTable {
                     binding: 5,
                     resource: BindingResource::TextureView(&extinction_view),
                 },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: BindingResource::TextureView(&section_view),
+                },
             ],
         });
         Self {
@@ -119,6 +129,7 @@ impl SceneTable {
             channels: table,
             lut,
             extinction,
+            section,
             transfers: vec![None; channels],
             thresholds: vec![None; channels],
             group,
@@ -177,9 +188,15 @@ impl SceneTable {
 
     fn write_transfer(&mut self, queue: &Queue, row: usize, transfer: &TransferFunction) {
         let lut = transfer.lut(LUT_SIZE);
+        let section = transfer.section_lut(LUT_SIZE);
         let mut straight = Vec::with_capacity(lut.len() * 4);
         let mut extinction = Vec::with_capacity(lut.len() * 4);
-        for [red, green, blue, alpha] in &lut {
+        let mut coverage = Vec::with_capacity(lut.len() * 4);
+        for (
+            [red, green, blue, alpha],
+            [section_red, section_green, section_blue, section_alpha],
+        ) in lut.iter().zip(&section)
+        {
             for channel in [*red, *green, *blue, *alpha] {
                 straight.push(f16::from_f32(channel).to_bits());
             }
@@ -187,9 +204,13 @@ impl SceneTable {
             for channel in [*red, *green, *blue, -(1.0 - opacity).ln()] {
                 extinction.push(f16::from_f32(channel).to_bits());
             }
+            for channel in [*section_red, *section_green, *section_blue, *section_alpha] {
+                coverage.push(f16::from_f32(channel).to_bits());
+            }
         }
         write_row(queue, &self.lut, row, &straight);
         write_row(queue, &self.extinction, row, &extinction);
+        write_row(queue, &self.section, row, &coverage);
         self.thresholds[row] = lut
             .iter()
             .position(|stop| stop[3] > MINIMUM_ALPHA)

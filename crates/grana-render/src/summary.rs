@@ -13,6 +13,7 @@ const UNIT: f32 = 65535.0;
 pub(crate) struct Summary {
     buffer: Buffer,
     slots: usize,
+    words: Vec<u32>,
 }
 
 impl Summary {
@@ -24,36 +25,47 @@ impl Summary {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Self { buffer, slots }
+        Self {
+            buffer,
+            slots,
+            words: vec![0; WORDS_PER_SLOT],
+        }
     }
 
     pub fn buffer(&self) -> &Buffer {
         &self.buffer
     }
 
-    pub fn write(&self, queue: &Queue, slot: u32, cells: &[Vec<f32>]) {
+    pub fn write(&mut self, queue: &Queue, slot: u32, cells: &[f32]) {
         assert!(
             (slot as usize) < self.slots,
             "a summary cell block belongs to a brick slot"
         );
         assert!(
-            cells.len() <= CHANNEL_LIMIT && cells.iter().all(|maxima| maxima.len() == CELL_COUNT),
+            !cells.is_empty() && cells.len() / CELL_COUNT <= CHANNEL_LIMIT,
             "a summary carries one cell maximum per channel"
         );
-        let mut words = vec![0u32; WORDS_PER_SLOT];
-        for (channel, maxima) in cells.iter().enumerate() {
+        assert_eq!(
+            cells.len() % CELL_COUNT,
+            0,
+            "a summary cell block covers whole channels"
+        );
+        self.words.fill(0);
+        let channels = cells.len() / CELL_COUNT;
+        for channel in 0..channels {
             let plane = channel / 4;
             let component = channel % 4;
+            let maxima = &cells[channel * CELL_COUNT..(channel + 1) * CELL_COUNT];
             for (cell, value) in maxima.iter().enumerate() {
                 let base = (cell * PACKS + plane) * WORDS_PER_PLANE;
                 let unit = (value.clamp(0.0, 1.0) * UNIT).round() as u32;
-                words[base + component / 2] |= unit << (16 * (component % 2));
+                self.words[base + component / 2] |= unit << (16 * (component % 2));
             }
         }
         queue.write_buffer(
             &self.buffer,
             slot as u64 * WORDS_PER_SLOT as u64 * size_of::<u32>() as u64,
-            cast_slice(&words),
+            cast_slice(&self.words),
         );
     }
 }

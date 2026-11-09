@@ -6,7 +6,7 @@ use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_render::{Frame, Layer, LayerKey, Renderer, Requests, SceneFrame, Style};
 use grana_volume::{BrickGrid, Channel, Clip, Extent, Pyramid, Region, Spacing, Volume, VoxelData};
 
-use crate::support::{Gpu, blue, gpu, green, lit, read_pixels, red, spheres};
+use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, spheres};
 
 const SIDE: u32 = 128;
 const SAMPLES: u32 = 4;
@@ -136,10 +136,13 @@ fn settle(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>, volume: &Volume) 
         }
         if let Some(requests) = next_demand(gpu, renderer) {
             let grid = BrickGrid::new(volume.extent());
-            for request in requests.volume.iter().chain(&requests.section) {
-                let brick = volume.brick(&grid, request.coord);
-                let _ = renderer.upload(gpu.queue(), *request, &brick);
-            }
+            let bricks = requests
+                .volume
+                .iter()
+                .chain(&requests.section)
+                .map(|request| (*request, volume.brick(&grid, request.coord)))
+                .collect::<Vec<_>>();
+            renderer.upload(gpu.queue(), &bricks);
             latest = requests;
         }
     }
@@ -158,6 +161,58 @@ fn next_demand(gpu: &Gpu, renderer: &mut Renderer) -> Option<Requests> {
         }
     }
     None
+}
+
+fn background(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    view: &View<'_>,
+    texture: &wgpu::Texture,
+    volume: &Volume,
+) -> Vec<[u8; 4]> {
+    let rows = view
+        .scene
+        .channels
+        .iter()
+        .map(|row| grana_render::ChannelRow {
+            visible: false,
+            opacity: row.opacity,
+            window: row.window,
+            transfer: row.transfer,
+        })
+        .collect::<Vec<_>>();
+    let scene = SceneFrame {
+        channels: &rows,
+        shading: view.scene.shading,
+        step_scale: view.scene.step_scale,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let blank = View {
+        target: view.target,
+        camera: view.camera,
+        section: view.section,
+        region: view.region,
+        scene: &scene,
+        volume_region: view.volume_region,
+        section_region: view.section_region,
+    };
+    settle(gpu, renderer, &blank, volume);
+    read_pixels(gpu, texture, [SIDE, SIDE])
+}
+
+fn snapshot(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    view: &View<'_>,
+    texture: &wgpu::Texture,
+    volume: &Volume,
+) -> Snapshot {
+    let reference = background(gpu, renderer, view, texture, volume);
+    settle(gpu, renderer, view, volume);
+    let image = read_pixels(gpu, texture, [SIDE, SIDE]);
+    Snapshot::new([SIDE, SIDE], reference, image)
 }
 
 fn profile(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>) -> grana_render::FrameProfile {
@@ -218,14 +273,24 @@ fn streams_and_shades_two_channels() {
         requests.volume_view.resident, requests.volume_view.demand,
         "the stream never completed"
     );
-    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
     assert!(
-        lit(&pixels) > (SIDE * SIDE / 20) as usize,
-        "the volume barely rendered: {} lit pixels",
-        lit(&pixels)
+        shot.painted(shot.all()) > (SIDE * SIDE / 32) as usize,
+        "the volume barely rendered: {} painted pixels",
+        shot.painted(shot.all())
     );
-    assert!(blue(&pixels) > 100, "the blue channel barely rendered");
-    assert!(green(&pixels) > 100, "the green channel barely rendered");
+    assert!(
+        shot.painted(shot.middle()) * 2 > shot.painted(shot.all()),
+        "the volume lands outside its pane"
+    );
+    assert!(
+        shot.hue(shot.all(), Hue::Blue) > 100,
+        "the blue channel barely rendered"
+    );
+    assert!(
+        shot.hue(shot.all(), Hue::Green) > 100,
+        "the green channel barely rendered"
+    );
     let profile = profile(&gpu, &mut renderer, &view);
     assert!(profile.target > 0.0, "the frame carries no budget");
     assert!(profile.penalty >= 1.0, "the sampling is finer than asked");
@@ -260,7 +325,20 @@ fn reveals_a_section_plane() {
     let volume = sphere_volume();
     let pyramid = volume.pyramid();
     let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
-    let channels = channels(&pyramid, &transfers);
+    let channels = pyramid
+        .channels()
+        .iter()
+        .zip(&transfers)
+        .map(|(channel, transfer)| grana_render::ChannelRow {
+            visible: true,
+            opacity: 1.0,
+            window: grana_volume::Intensity::new(
+                channel.window().min(),
+                channel.window().max() * 2.0,
+            ),
+            transfer,
+        })
+        .collect::<Vec<_>>();
     let world = Vec3::from(volume.world_extent());
     let voxel = Vec3::new(
         volume.spacing().x(),
@@ -296,8 +374,22 @@ fn reveals_a_section_plane() {
         requests.section_view.visible > 0,
         "the section sees no brick"
     );
-    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
-    assert!(lit(&pixels) > 500, "the section barely rendered");
+    let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
+    assert!(
+        shot.coverage(shot.middle()) > 0.3,
+        "the section barely covers its centre: {:.2}",
+        shot.coverage(shot.middle())
+    );
+    assert!(
+        shot.contrast(shot.middle()) > 30.0,
+        "the section transfer is not calibrated: {:.1}",
+        shot.contrast(shot.middle())
+    );
+    assert_eq!(
+        shot.painted([0, 0, SIDE / 8, SIDE / 8]),
+        1,
+        "the section spills outside its disc"
+    );
 }
 
 #[test]
@@ -345,11 +437,16 @@ fn reveals_an_oblique_section_plane() {
         requests.section_view.visible > 0,
         "the oblique section sees no brick"
     );
-    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
     assert!(
-        lit(&pixels) > 500,
-        "the oblique section barely rendered: {} lit pixels",
-        lit(&pixels)
+        shot.painted(shot.all()) > 500,
+        "the oblique section barely rendered: {} painted pixels",
+        shot.painted(shot.all())
+    );
+    assert!(
+        shot.coverage(shot.middle()) > 0.15,
+        "the oblique section lands outside its centre: {:.2}",
+        shot.coverage(shot.middle())
     );
 }
 
@@ -401,12 +498,16 @@ fn composites_a_mesh_layer() {
         volume_region: WHOLE,
         section_region: CORNER,
     };
-    settle(&gpu, &mut renderer, &view, &volume);
-    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
     assert!(
-        red(&pixels) > 1_000,
+        shot.hue(shot.all(), Hue::Red) > 1_000,
         "the mesh barely rendered: {} red pixels",
-        red(&pixels)
+        shot.hue(shot.all(), Hue::Red)
+    );
+    assert_eq!(
+        shot.painted([0, 0, SIDE / 8, SIDE / 8]),
+        0,
+        "the mesh spilled into the corner"
     );
 }
 
@@ -461,10 +562,15 @@ fn clips_an_oriented_region() {
         volume_region: WHOLE,
         section_region: CORNER,
     };
-    settle(&gpu, &mut renderer, &open, &volume);
-    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
-    assert!(blue(&pixels) > 100, "the left ball barely rendered");
-    assert!(green(&pixels) > 100, "the right ball barely rendered");
+    let shot = snapshot(&gpu, &mut renderer, &open, &target, &volume);
+    assert!(
+        shot.hue(shot.left(), Hue::Blue) > shot.hue(shot.right(), Hue::Blue),
+        "the left ball does not land on the left"
+    );
+    assert!(
+        shot.hue(shot.right(), Hue::Green) > shot.hue(shot.left(), Hue::Green),
+        "the right ball does not land on the right"
+    );
     let across = Vec3::new(1.0, 0.0, 2.0).normalize();
     let down = Vec3::new(-2.0, 0.0, 1.0).normalize();
     let region = Region::new(
@@ -478,16 +584,15 @@ fn clips_an_oriented_region() {
         section_region: CORNER,
         ..open
     };
-    settle(&gpu, &mut renderer, &clipped, &volume);
-    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let shot = snapshot(&gpu, &mut renderer, &clipped, &target, &volume);
     assert!(
-        blue(&pixels) > 50,
+        shot.hue(shot.left(), Hue::Blue) > 50,
         "the oriented region hid the kept ball: {} pixels",
-        blue(&pixels)
+        shot.hue(shot.left(), Hue::Blue)
     );
     assert!(
-        green(&pixels) < 20,
+        shot.hue(shot.right(), Hue::Green) < 20,
         "the oriented region kept the dropped ball: {} pixels",
-        green(&pixels)
+        shot.hue(shot.right(), Hue::Green)
     );
 }

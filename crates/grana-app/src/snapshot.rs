@@ -157,6 +157,9 @@ fn pump(
     let Some(requests) = engine.poll_requests(&gpu.device) else {
         return Ok(());
     };
+    let mut bricks = Vec::with_capacity(
+        requests.volume.len() + requests.section.len() + requests.prefetch.len(),
+    );
     for request in requests
         .volume
         .iter()
@@ -171,7 +174,8 @@ fn pump(
                 drift.offset(request.time),
             )
             .map_err(|error| error.to_string())?;
-        engine.upload(&gpu.queue, *request, &data);
+        bricks.push((*request, data));
     }
+    engine.upload(&gpu.queue, &bricks);
     Ok(())
 }

@@ -58,6 +58,7 @@ impl Layouts {
                 texture(3, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
                 sampler(4, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
                 texture(5, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
+                texture(6, ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE)),
             ],
         });
         let level = device.create_bind_group_layout(&BindGroupLayoutDescriptor {

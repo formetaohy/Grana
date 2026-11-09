@@ -156,41 +156,126 @@ pub fn read_pixels(gpu: &Gpu, texture: &wgpu::Texture, size: [u32; 2]) -> Vec<[u
     pixels
 }
 
-pub fn lit(pixels: &[[u8; 4]]) -> usize {
-    pixels
-        .iter()
-        .filter(|pixel| pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32 > 120)
-        .count()
+const CONTRAST: i32 = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hue {
+    Blue,
+    Green,
+    Red,
 }
 
-pub fn blue(pixels: &[[u8; 4]]) -> usize {
-    pixels
-        .iter()
-        .filter(|pixel| {
-            u32::from(pixel[2]) > u32::from(pixel[0]) + 20
-                && u32::from(pixel[2]) > u32::from(pixel[1]) + 20
-                && pixel[2] > 40
-        })
-        .count()
+impl Hue {
+    fn channel(self) -> usize {
+        match self {
+            Self::Blue => 2,
+            Self::Green => 1,
+            Self::Red => 0,
+        }
+    }
 }
 
-pub fn green(pixels: &[[u8; 4]]) -> usize {
-    pixels
-        .iter()
-        .filter(|pixel| {
-            u32::from(pixel[1]) > u32::from(pixel[0]) + 20
-                && u32::from(pixel[1]) > u32::from(pixel[2]) + 20
-                && pixel[1] > 40
-        })
-        .count()
+pub struct Snapshot {
+    size: [u32; 2],
+    background: Vec<[u8; 4]>,
+    image: Vec<[u8; 4]>,
 }
 
-pub fn red(pixels: &[[u8; 4]]) -> usize {
-    pixels
-        .iter()
-        .filter(|pixel| {
-            u32::from(pixel[0]) > u32::from(pixel[1]) + 40
-                && u32::from(pixel[0]) > u32::from(pixel[2]) + 40
+impl Snapshot {
+    pub fn new(size: [u32; 2], background: Vec<[u8; 4]>, image: Vec<[u8; 4]>) -> Self {
+        assert!(
+            background.len() == (size[0] * size[1]) as usize && image.len() == background.len(),
+            "a snapshot covers every pixel of its target"
+        );
+        Self {
+            size,
+            background,
+            image,
+        }
+    }
+
+    pub fn all(&self) -> [u32; 4] {
+        [0, 0, self.size[0], self.size[1]]
+    }
+
+    pub fn left(&self) -> [u32; 4] {
+        [0, 0, self.size[0] / 2, self.size[1]]
+    }
+
+    pub fn right(&self) -> [u32; 4] {
+        [self.size[0] / 2, 0, self.size[0], self.size[1]]
+    }
+
+    pub fn middle(&self) -> [u32; 4] {
+        [
+            self.size[0] / 4,
+            self.size[1] / 4,
+            3 * self.size[0] / 4,
+            3 * self.size[1] / 4,
+        ]
+    }
+
+    pub fn painted(&self, rect: [u32; 4]) -> usize {
+        self.count(rect, |delta| delta.iter().any(|value| *value >= CONTRAST))
+    }
+
+    pub fn hue(&self, rect: [u32; 4], hue: Hue) -> usize {
+        let channel = hue.channel();
+        self.count(rect, |delta| {
+            delta[channel] >= CONTRAST
+                && (0..3).all(|other| other == channel || delta[other] < delta[channel])
         })
-        .count()
+    }
+
+    pub fn coverage(&self, rect: [u32; 4]) -> f32 {
+        self.painted(rect) as f32 / self.area(rect) as f32
+    }
+
+    pub fn contrast(&self, rect: [u32; 4]) -> f32 {
+        let [left, top, right, bottom] = rect;
+        let area = self.area(rect);
+        let mut sum = 0.0;
+        for y in top..bottom {
+            for x in left..right {
+                let index = (y * self.size[0] + x) as usize;
+                let background = self.background[index];
+                let pixel = self.image[index];
+                let delta = (0..3)
+                    .map(|channel| i32::from(pixel[channel]) - i32::from(background[channel]))
+                    .max()
+                    .unwrap_or(0)
+                    .max(0);
+                sum += delta as f32;
+            }
+        }
+        sum / area as f32
+    }
+
+    fn area(&self, rect: [u32; 4]) -> usize {
+        let [left, top, right, bottom] = rect;
+        assert!(
+            left < right && top < bottom && right <= self.size[0] && bottom <= self.size[1],
+            "a probe region lies inside the snapshot"
+        );
+        ((right - left) * (bottom - top)) as usize
+    }
+
+    fn count(&self, rect: [u32; 4], visit: impl Fn([i32; 3]) -> bool) -> usize {
+        self.area(rect);
+        let [left, top, right, bottom] = rect;
+        let mut count = 0;
+        for y in top..bottom {
+            for x in left..right {
+                let index = (y * self.size[0] + x) as usize;
+                let background = self.background[index];
+                let pixel = self.image[index];
+                let delta = [0, 1, 2]
+                    .map(|channel| i32::from(pixel[channel]) - i32::from(background[channel]));
+                if visit(delta) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
 }
