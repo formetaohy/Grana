@@ -60,11 +60,11 @@ fn sample_section_pack(pack: u32, uvw: vec3<f32>, point: vec3<f32>) -> vec4<f32>
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let uvw = (section_point(input.ndc) - section.box_min.xyz) / section.world.xyz;
+    let point = section_point(input.ndc + section.jitter.xy);
+    let uvw = (point - section.box_min.xyz) / section.world.xyz;
     if (any(uvw < vec3<f32>(0.0)) || any(uvw > vec3<f32>(1.0))) {
         return vec4<f32>(0.0);
     }
-    let point = section_point(input.ndc);
     if (outside_region(point) || outside_clip(point)) {
         return vec4<f32>(0.0);
     }

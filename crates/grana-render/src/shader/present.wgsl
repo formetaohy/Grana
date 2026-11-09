@@ -54,8 +54,9 @@ fn fs_present(input: VertexOutput) -> @location(0) vec4<f32> {
         let encoded = clamp(straight + vec3<f32>(noise), vec3<f32>(0.0), vec3<f32>(1.0));
         return vec4<f32>(select(srgb_decode(encoded), encoded, screen.flags.x > 0.5), coverage);
     }
+    let straight = accumulated.rgb / max(accumulated.a, 1.0e-4);
     let mapped =
-        aces(accumulated.rgb * screen.flags.y) + aces(background(input.ndc)) * (1.0 - coverage);
+        aces(straight * screen.flags.y) * coverage + aces(background(input.ndc)) * (1.0 - coverage);
     let encoded = clamp(srgb_encode(mapped) + vec3<f32>(noise), vec3<f32>(0.0), vec3<f32>(1.0));
     return vec4<f32>(select(srgb_decode(encoded), encoded, screen.flags.x > 0.5), 1.0);
 }

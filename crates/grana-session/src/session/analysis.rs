@@ -748,6 +748,14 @@ impl Session {
             self.message = Some(Message::error("the region does not overlap the dataset"));
             return;
         }
+        if segment.is_some()
+            && (seed_source.is_some() || seeds.iter().any(|frame| !frame.is_empty()))
+        {
+            self.message = Some(Message::error(
+                "the flow model segments every object and ignores seed points; clear the seeds and their source before detecting",
+            ));
+            return;
+        }
         self.message = None;
         self.record_progress(Job::Detect(set), 0, 0, 0);
         if let Some(params) = segment {
