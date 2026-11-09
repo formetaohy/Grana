@@ -23,6 +23,7 @@ mod slug;
 mod state;
 mod track_color;
 mod track_layer;
+mod validate;
 
 pub use annotation::{Annotation, AnnotationKind, AnnotationState, AnnotationTag, Annotations};
 pub use channel::Channel;
@@ -55,3 +56,4 @@ pub use slug::slug;
 pub use state::{ChannelState, ItemState, RelationState, SceneState, SelectionState, SetState};
 pub use track_color::TrackColor;
 pub use track_layer::TrackLayer;
+pub use validate::{SceneFault, SceneShape};

@@ -2,7 +2,6 @@ use grana_measure::{
     ColocCost, ColocPair, ColocSeries, ColocSeriesInfo, ColocSettings, ColocStatistics,
     ColocThresholdRange, ColocThresholds,
 };
-use grana_volume::Region;
 
 use crate::mask::MaskFilter;
 use crate::object_set::ObjectSetId;
@@ -120,43 +119,35 @@ pub struct ColocState {
     pub pair: Option<ColocPair>,
     pub results: Vec<ColocResult>,
     pub settings: ColocSettings,
-    pub document: u64,
+    pub revision: u64,
 }
 
 pub struct Coloc {
-    channels: usize,
     pair: Option<ColocPair>,
     results: Vec<ColocResult>,
     settings: ColocSettings,
-    region: Region,
     mask: Option<MaskKey>,
     revision: u64,
 }
 
 impl Coloc {
-    pub fn new(channels: usize, region: Region) -> Self {
+    pub fn new(channels: usize) -> Self {
         Self {
-            channels,
             pair: (channels >= 2).then(|| ColocPair::new(0, 1)),
             results: Vec::new(),
             settings: ColocSettings::default(),
-            region,
             mask: None,
             revision: 1,
         }
-    }
-
-    pub fn channels(&self) -> usize {
-        self.channels
     }
 
     pub fn pair(&self) -> Option<ColocPair> {
         self.pair
     }
 
-    pub fn set_pair(&mut self, pair: ColocPair) {
+    pub fn set_pair(&mut self, pair: ColocPair, channels: usize) {
         assert!(
-            pair.a() < self.channels && pair.b() < self.channels,
+            pair.a() < channels && pair.b() < channels,
             "a colocalization pair names two channels of the dataset"
         );
         if self.pair == Some(pair) {
@@ -211,7 +202,7 @@ impl Coloc {
             return;
         }
         self.settings = settings;
-        self.clear_results();
+        self.results.clear();
         self.revision += 1;
     }
 
@@ -253,16 +244,12 @@ impl Coloc {
         self.revision += 1;
     }
 
-    pub fn set_inputs(&mut self, region: Region, mask: Option<MaskKey>) {
-        if self.region == region && self.mask == mask {
+    pub fn set_mask(&mut self, mask: Option<MaskKey>) {
+        if self.mask == mask {
             return;
         }
-        self.region = region;
         self.mask = mask;
-        if !self.results.is_empty() {
-            self.clear_results();
-            self.revision += 1;
-        }
+        self.clear();
     }
 
     pub fn state(&self) -> ColocState {
@@ -270,7 +257,7 @@ impl Coloc {
             pair: self.pair,
             results: self.results.clone(),
             settings: self.settings,
-            document: self.revision,
+            revision: self.revision,
         }
     }
 
@@ -279,20 +266,19 @@ impl Coloc {
         state: ColocState,
         channels: usize,
         frames: u32,
-        region: Region,
         mask: Option<MaskKey>,
     ) {
         let ColocState {
             pair,
             results,
             settings,
-            document,
+            revision,
         } = state;
         assert!(
             pair.is_none_or(|pair| pair.a() < channels && pair.b() < channels),
             "a colocalization state names two channels of the dataset"
         );
-        assert!(document > 0, "a colocalization state carries a document");
+        assert!(revision > 0, "a colocalization state carries a document");
         for (index, result) in results.iter().enumerate() {
             let pair = result.pair();
             assert!(
@@ -315,47 +301,37 @@ impl Coloc {
                 "a colocalization state measures a channel pair once"
             );
         }
-        self.channels = channels;
         self.pair = pair;
         self.results = results;
         self.settings = settings;
-        self.region = region;
         self.mask = mask;
-        self.revision = document;
+        self.revision = revision;
     }
 
-    pub fn document(&self) -> u64 {
+    pub fn revision(&self) -> u64 {
         self.revision
     }
 
-    pub fn set_channel_count(&mut self, channels: usize) {
-        if self.channels == channels {
-            return;
+    pub fn grow_channel(&mut self, channels: usize) {
+        if self.pair.is_none() && channels >= 2 {
+            self.pair = Some(ColocPair::new(0, 1));
+            self.revision += 1;
         }
-        let grown = channels > self.channels;
-        self.channels = channels;
-        if self
+    }
+
+    pub fn rebuild_channels(&mut self, channels: usize) {
+        let pair = self
             .pair
-            .is_some_and(|pair| pair.a() >= channels || pair.b() >= channels)
-        {
-            self.pair = (channels >= 2).then(|| ColocPair::new(0, 1));
-        }
-        if !grown {
-            self.results.clear();
-        }
+            .filter(|pair| pair.a() < channels && pair.b() < channels);
+        self.pair = pair.or_else(|| (channels >= 2).then(|| ColocPair::new(0, 1)));
+        self.results.clear();
         self.revision += 1;
     }
 
     pub fn remove_channel(&mut self, index: usize) {
-        if index >= self.channels {
-            return;
-        }
-        self.channels -= 1;
         self.results.clear();
         self.pair = match self.pair {
-            None => {
-                return self.revision += 1;
-            }
+            None => None,
             Some(pair) if pair.a() == index || pair.b() == index => None,
             Some(pair) => {
                 let a = if pair.a() > index {
@@ -377,9 +353,5 @@ impl Coloc {
     fn result_mut(&mut self) -> Option<&mut ColocResult> {
         let pair = self.pair?;
         self.results.iter_mut().find(|result| result.pair() == pair)
-    }
-
-    fn clear_results(&mut self) {
-        self.results.clear();
     }
 }

@@ -368,155 +368,7 @@ impl Decode for SceneState {
             drift: Drift::decode(reader)?,
             annotations: AnnotationState::decode(reader)?,
         };
-        if state.selections.len() > 1 && state.selections.windows(2).any(|pair| pair[0] == pair[1])
-        {
-            return Err(FAULT_SHAPE);
-        }
-        let channels = state.channels.len();
-        let Some(base) = channels.checked_sub(state.derived.len()) else {
-            return Err(FAULT_SHAPE);
-        };
-        let mut names = state
-            .derived
-            .iter()
-            .map(|spec| spec.name())
-            .collect::<Vec<_>>();
-        names.sort_unstable();
-        if names.windows(2).any(|pair| pair[0] == pair[1])
-            || state.derived.iter().enumerate().any(|(index, spec)| {
-                let channel = base + index;
-                spec.source() >= channel
-                    || spec.ratio_denominator().is_some_and(|denominator| {
-                        denominator >= channel || denominator == spec.source()
-                    })
-                    || spec.mask().is_some_and(|set| {
-                        !state.sets.iter().any(|candidate| candidate.id == set.raw())
-                    })
-            })
-        {
-            return Err(FAULT_SHAPE);
-        }
-        if state.selected >= channels {
-            return Err(FAULT_VALUE);
-        }
-        let mut ids = state.sets.iter().map(|set| set.id).collect::<Vec<_>>();
-        ids.sort_unstable();
-        if ids.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(FAULT_SHAPE);
-        }
-        let mut keys = state
-            .sets
-            .iter()
-            .map(|set| set.key.as_str())
-            .collect::<Vec<_>>();
-        keys.sort_unstable();
-        if keys.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(FAULT_SHAPE);
-        }
-        if state.sets.iter().any(|set| {
-            set.channel >= channels
-                || (!set.kind.trackable() && set.track_color.metric.is_some())
-                || set
-                    .object_color
-                    .metric
-                    .is_some_and(|metric| !color_applies(&state.sets, set, channels, metric))
-                || set
-                    .label
-                    .is_some_and(|metric| !color_applies(&state.sets, set, channels, metric))
-                || set
-                    .track_color
-                    .metric
-                    .is_some_and(|metric| !track_color_applies(set, metric))
-                || set.object_coloc.as_ref().is_some_and(|coloc| {
-                    coloc.pair().a() >= channels
-                        || coloc.pair().b() >= channels
-                        || coloc.frames().len() != set.frames.len()
-                        || coloc
-                            .frames()
-                            .iter()
-                            .zip(&set.frames)
-                            .any(|(values, frame)| {
-                                values.len()
-                                    != frame.as_deref().map_or(0, ObjectFrame::object_count)
-                            })
-                })
-        }) {
-            return Err(FAULT_SHAPE);
-        }
-        if !provenance_acyclic(&state.sets)
-            || state.sets.iter().any(|set| {
-                set.provenance.sources().iter().any(|source| {
-                    !state
-                        .sets
-                        .iter()
-                        .any(|candidate| candidate.id == source.raw())
-                }) || set
-                    .provenance
-                    .parts()
-                    .iter()
-                    .any(|part| part.channel() >= channels)
-                    || match &set.seeds {
-                        Seeds::Points(_) => false,
-                        Seeds::Source(source) => !state
-                            .sets
-                            .iter()
-                            .any(|candidate| candidate.id == source.raw()),
-                    }
-            })
-        {
-            return Err(FAULT_SHAPE);
-        }
-        if state
-            .coloc
-            .pair
-            .is_some_and(|pair| pair.a() >= channels || pair.b() >= channels)
-            || state.coloc.results.iter().any(|result| {
-                let pair = result.pair();
-                pair.a() >= channels
-                    || pair.b() >= channels
-                    || result
-                        .mask()
-                        .is_some_and(|mask| !state.sets.iter().any(|set| set.id == mask))
-            })
-        {
-            return Err(FAULT_SHAPE);
-        }
-        if let Some(filter) = state.mask_filter {
-            let Some(mask) = state.mask else {
-                return Err(FAULT_SHAPE);
-            };
-            let Some(set) = state.sets.iter().find(|set| set.id == mask) else {
-                return Err(FAULT_SHAPE);
-            };
-            let related = set.relations.iter().any(|relation| {
-                relation.target == filter.target().raw() && relation.shift == filter.shift()
-            });
-            if !related
-                || !state
-                    .sets
-                    .iter()
-                    .any(|candidate| candidate.id == filter.target().raw())
-            {
-                return Err(FAULT_SHAPE);
-            }
-        }
-        if state.selections.iter().any(|selection| {
-            let Some(set) = state.sets.iter().find(|set| set.id == selection.set) else {
-                return true;
-            };
-            match selection.item {
-                ItemState::Object(index) => !set.frames.iter().any(|frame| {
-                    frame
-                        .as_deref()
-                        .is_some_and(|frame| index < frame.object_count())
-                }),
-                ItemState::Track(index) => {
-                    !set.tracks.as_ref().is_some_and(|set| index < set.len())
-                }
-            }
-        }) {
-            return Err(FAULT_SHAPE);
-        }
+        state.check().map_err(|_| FAULT_SHAPE)?;
         Ok(state)
     }
 }
@@ -746,9 +598,6 @@ impl Decode for SetState {
         };
         let opacity = unit(reader.f32()?)?;
         let params = ObjectParams::decode(reader)?;
-        if params.kind() != kind {
-            return Err(FAULT_SHAPE);
-        }
         let track_style = Option::<TrackStyle>::decode(reader)?;
         let tracks = Option::<Arc<TrackSet>>::decode(reader)?;
         let object_color = ColorState::<ObjectColor>::decode(reader)?;
@@ -759,21 +608,6 @@ impl Decode for SetState {
         let visibility = Visibility::decode(reader)?;
         let seeds = decode_seeds(reader)?;
         let frames = Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?;
-        match &seeds {
-            Seeds::Points(seeded) => {
-                if seeded.len() != frames.len()
-                    || (kind != ObjectKind::Surfaces
-                        && seeded.iter().any(|frame| !frame.is_empty()))
-                {
-                    return Err(FAULT_SHAPE);
-                }
-            }
-            Seeds::Source(source) => {
-                if kind != ObjectKind::Surfaces || source.raw() == id {
-                    return Err(FAULT_SHAPE);
-                }
-            }
-        }
         let state = Self {
             id,
             key,
@@ -802,70 +636,6 @@ impl Decode for SetState {
             curation: Curation::decode(reader)?,
             document: reader.u64()?,
         };
-        if state.document == 0 {
-            return Err(FAULT_VALUE);
-        }
-        if !state.curation.is_empty() && state.curation.expected().len() != state.frames.len() {
-            return Err(FAULT_SHAPE);
-        }
-        if !state.hidden.is_empty()
-            && (state.hidden.len() != state.frames.len()
-                || state.hidden.iter().zip(&state.frames).any(|(mask, frame)| {
-                    mask.len() != frame.as_deref().map_or(0, ObjectFrame::object_count)
-                }))
-        {
-            return Err(FAULT_SHAPE);
-        }
-        if kind.trackable() != state.track_style.is_some()
-            || state
-                .frames
-                .iter()
-                .flatten()
-                .any(|frame| frame.kind() != kind)
-        {
-            return Err(FAULT_SHAPE);
-        }
-        let mut seen = std::collections::BTreeSet::new();
-        let mut keys = std::collections::BTreeSet::new();
-        for relation in &state.relations {
-            if !seen.insert((relation.target, relation.shift))
-                || !keys.insert(relation.key.as_str())
-                || relation.frames.len() != state.frames.len()
-                || (relation.shift.unsigned_abs() as usize) >= state.frames.len()
-            {
-                return Err(FAULT_SHAPE);
-            }
-            for (frame, relation) in state.frames.iter().zip(&relation.frames) {
-                let objects = frame.as_deref().map_or(0, ObjectFrame::object_count);
-                if relation
-                    .as_deref()
-                    .is_some_and(|relation| relation.objects() != objects)
-                {
-                    return Err(FAULT_SHAPE);
-                }
-            }
-        }
-        if state
-            .provenance
-            .sources()
-            .iter()
-            .any(|source| source.raw() == id)
-            || state.provenance.parts().iter().any(|part| {
-                part.kind() != kind
-                    || match part.seeds() {
-                        Seeds::Points(frames) => {
-                            (part.kind() == ObjectKind::Surfaces
-                                && !frames.is_empty()
-                                && frames.len() != state.frames.len())
-                                || (part.kind() != ObjectKind::Surfaces
-                                    && frames.iter().any(|frame| !frame.is_empty()))
-                        }
-                        Seeds::Source(_) => part.kind() != ObjectKind::Surfaces,
-                    }
-            })
-        {
-            return Err(FAULT_SHAPE);
-        }
         Ok(state)
     }
 }
@@ -1968,9 +1738,9 @@ impl Decode for ColocState {
             pair: Option::<ColocPair>::decode(reader)?,
             results: Vec::<ColocResult>::decode(reader)?,
             settings: ColocSettings::decode(reader)?,
-            document: reader.u64()?,
+            revision: reader.u64()?,
         };
-        if state.document == 0 {
+        if state.revision == 0 {
             return Err(FAULT_VALUE);
         }
         for (index, result) in state.results.iter().enumerate() {
@@ -2164,97 +1934,6 @@ impl<T: Decode> Decode for Option<T> {
         match reader.bool()? {
             true => Ok(Some(T::decode(reader)?)),
             false => Ok(None),
-        }
-    }
-}
-
-fn provenance_acyclic(sets: &[SetState]) -> bool {
-    let mut remaining = sets
-        .iter()
-        .map(|set| {
-            (
-                set.id,
-                set.provenance
-                    .sources()
-                    .into_iter()
-                    .map(ObjectSetId::raw)
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .collect::<Vec<_>>();
-    while !remaining.is_empty() {
-        let removable = remaining
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, sources))| {
-                sources
-                    .iter()
-                    .all(|source| !remaining.iter().any(|(id, _)| id == source))
-            })
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        if removable.is_empty() {
-            return false;
-        }
-        for index in removable.into_iter().rev() {
-            remaining.remove(index);
-        }
-    }
-    true
-}
-
-fn color_applies(sets: &[SetState], set: &SetState, channels: usize, metric: ObjectColor) -> bool {
-    match metric {
-        ObjectColor::Measurement(measurement) => {
-            measurement.colorable() && set.kind.measurements(channels).contains(&measurement)
-        }
-        ObjectColor::Relation {
-            target,
-            field,
-            shift,
-        } => {
-            RelationField::CONTINUOUS.contains(&field)
-                && set
-                    .relations
-                    .iter()
-                    .any(|relation| relation.target == target.raw() && relation.shift == shift)
-        }
-        ObjectColor::Score => set.classifier.is_some(),
-        ObjectColor::Coloc { pair, .. } => pair.a() < channels && pair.b() < channels,
-        ObjectColor::Child { target, field } => {
-            let Some(child) = sets.iter().find(|candidate| candidate.id == target.raw()) else {
-                return false;
-            };
-            let metrics = child
-                .kind
-                .measurements(channels)
-                .into_iter()
-                .filter_map(ChildMetric::of)
-                .collect::<Vec<_>>();
-            child.id != set.id
-                && child
-                    .relations
-                    .iter()
-                    .any(|relation| relation.target == set.id && relation.shift == 0)
-                && ChildField::fields(&metrics).contains(&field)
-        }
-    }
-}
-
-fn track_color_applies(set: &SetState, metric: TrackColor) -> bool {
-    match metric {
-        TrackColor::Measurement(measurement) => measurement.colorable(),
-        TrackColor::Relation {
-            target,
-            field,
-            shift,
-            ..
-        } => {
-            RelationField::CONTINUOUS.contains(&field)
-                && set
-                    .relations
-                    .iter()
-                    .any(|relation| relation.target == target.raw() && relation.shift == shift)
         }
     }
 }

@@ -1114,7 +1114,7 @@ impl Encode for ColocState {
         self.pair.encode(writer);
         self.results.encode(writer);
         self.settings.encode(writer);
-        writer.u64(self.document);
+        writer.u64(self.revision);
     }
 }
 

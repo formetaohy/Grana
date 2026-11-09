@@ -7,7 +7,7 @@ use std::time::Duration;
 use grana_animation::Timeline;
 use grana_display::{CameraState, SectionState};
 use grana_geometry::GeometryStore;
-use grana_scene::{Dataset, Measure, MeasureState, ObjectFrame, Scene, SceneState};
+use grana_scene::{Dataset, Measure, MeasureState, ObjectFrame, Scene, SceneShape, SceneState};
 use grana_volume::Fingerprint;
 
 use grana_codec::Encoder;
@@ -146,10 +146,14 @@ impl Project {
         let spacing = dataset.spacing();
         let shape = self.shape.extent == [extent.x(), extent.y(), extent.z()]
             && self.shape.spacing == [spacing.x(), spacing.y(), spacing.z()];
-        let channels = self
+        let scene = self
             .scene
-            .matches(dataset.channels().len(), dataset.frame_count());
-        if !shape || !channels {
+            .validate(SceneShape::new(
+                dataset.channels().len(),
+                dataset.frame_count(),
+            ))
+            .is_ok();
+        if !shape || !scene {
             return Err(Mismatch::Shape);
         }
         Ok(())

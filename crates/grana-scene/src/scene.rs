@@ -209,7 +209,7 @@ impl Scene {
             annotations: Annotations::new(),
             drift: Drift::default(),
             objects: Objects::new(),
-            coloc: Coloc::new(channel_count, region),
+            coloc: Coloc::new(channel_count),
             derived: Vec::new(),
             base_channels: channel_count,
             time: 0,
@@ -264,7 +264,7 @@ impl Scene {
             })
             .collect();
         self.derived.clear();
-        self.coloc.set_channel_count(self.channels.len());
+        self.coloc.rebuild_channels(self.channels.len());
         self.clear_object_coloc_from(self.channels.len());
         if self.selected >= self.channels.len() {
             self.selected = 0;
@@ -427,7 +427,7 @@ impl Scene {
             info.window(),
             TransferFunction::tinted(info.tint()),
         ));
-        self.coloc.set_channel_count(self.channels.len());
+        self.coloc.grow_channel(self.channels.len());
         self.derived.push(entry);
         Ok(self.channels.len() - 1)
     }
@@ -703,7 +703,7 @@ impl Scene {
             self.mask = None;
         }
         self.prune_mask_filter();
-        self.sync_coloc_inputs();
+        self.sync_coloc_mask();
         self.retain_masks(id);
     }
 
@@ -726,7 +726,7 @@ impl Scene {
         self.selections.clear();
         let _ = self.set_derived_layout(Vec::new());
         self.coloc.clear();
-        self.sync_coloc_inputs();
+        self.sync_coloc_mask();
     }
 
     pub fn reorder_object(&mut self, id: ObjectSetId, index: usize) -> bool {
@@ -802,7 +802,7 @@ impl Scene {
                 None => false,
             }
         });
-        self.sync_coloc_inputs();
+        self.sync_coloc_mask();
         self.sync_masks();
         Ok(true)
     }
@@ -862,7 +862,7 @@ impl Scene {
     ) -> Option<ObjectSetId> {
         let masked = self.objects.masked(source, suffix, strokes)?;
         self.selections.clear();
-        self.sync_coloc_inputs();
+        self.sync_coloc_mask();
         self.sync_masks();
         Some(masked)
     }
@@ -956,7 +956,7 @@ impl Scene {
         }
         self.selections.retain(|selection| selection.set != source);
         self.prune_mask_filter();
-        self.sync_coloc_inputs();
+        self.sync_coloc_mask();
         self.sync_masks();
         Ok(())
     }
@@ -969,7 +969,7 @@ impl Scene {
     ) -> Option<ObjectSetId> {
         let edited = self.objects.edited(source, suffix, edits)?;
         self.selections.clear();
-        self.sync_coloc_inputs();
+        self.sync_coloc_mask();
         self.sync_masks();
         Some(edited)
     }
@@ -993,7 +993,7 @@ impl Scene {
             self.mask_filter = None;
         }
         self.mask = source;
-        self.sync_coloc_inputs();
+        self.sync_coloc_mask();
     }
 
     pub fn set_mask_filter(&mut self, filter: Option<MaskFilter>) -> bool {
@@ -1022,7 +1022,7 @@ impl Scene {
                 self.mask_filter = None;
             }
         }
-        self.sync_coloc_inputs();
+        self.sync_coloc_mask();
         true
     }
 
@@ -1047,7 +1047,7 @@ impl Scene {
             return false;
         }
         self.mask_radius = radius;
-        self.sync_coloc_inputs();
+        self.sync_coloc_mask();
         true
     }
 
@@ -1138,7 +1138,7 @@ impl Scene {
             return;
         }
         self.region = region;
-        self.sync_coloc_inputs();
+        self.coloc.clear();
         self.clear_object_coloc_all();
     }
 
@@ -1324,7 +1324,7 @@ impl Scene {
                 self.mask_filter = None;
             }
             self.prune_mask_filter();
-            self.sync_coloc_inputs();
+            self.sync_coloc_mask();
         }
         removed
     }
@@ -1344,7 +1344,7 @@ impl Scene {
     pub fn clear_relations(&mut self, id: ObjectSetId) {
         self.objects.clear_relations(id);
         self.prune_mask_filter();
-        self.sync_coloc_inputs();
+        self.sync_coloc_mask();
     }
 
     pub fn relation_rows(&self, id: ObjectSetId, time: u32) -> Vec<RelationRow<'_>> {
@@ -1541,7 +1541,7 @@ impl Scene {
                 !(selection.set == id && matches!(selection.item, Item::Object(_)))
             });
         }
-        self.sync_coloc_inputs();
+        self.sync_coloc_mask();
         self.sync_masks();
     }
 
@@ -1549,7 +1549,7 @@ impl Scene {
         self.objects.clear(id);
         self.objects.clear_relations(id);
         self.selections.retain(|selection| selection.set != id);
-        self.sync_coloc_inputs();
+        self.sync_coloc_mask();
     }
 
     pub fn install_tracks(&mut self, id: ObjectSetId, set: TrackSet) {
@@ -1895,9 +1895,9 @@ impl Scene {
         ))
     }
 
-    fn sync_coloc_inputs(&mut self) {
+    fn sync_coloc_mask(&mut self) {
         let mask = self.mask_key();
-        self.coloc.set_inputs(self.region, mask);
+        self.coloc.set_mask(mask);
     }
 
     fn clear_object_coloc_all(&mut self) {

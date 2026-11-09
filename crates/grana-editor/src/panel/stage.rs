@@ -7,7 +7,7 @@ use grana_ui::{
 };
 
 use crate::message::Message;
-use crate::panel::{GAP, Layout, MARGIN};
+use crate::panel::{Layout, STAGE_INSET};
 use crate::state::View;
 use crate::view::scene_uv;
 
@@ -51,19 +51,16 @@ pub(super) fn view<'a>(
     elements.push(content);
     elements.push(overlay_view(state, geometry, full));
     elements.extend(region_handles(state, geometry));
-    let top = layout.toolbar_left.max.y + GAP;
     elements.push(pane_fit(
         ctx,
-        layout.volume,
-        top,
+        geometry.volume_safe,
         "volume.fit",
         "Fit volume",
         Message::FitVolume,
     ));
     elements.push(pane_fit(
         ctx,
-        layout.section,
-        top,
+        geometry.section_safe,
         "section.fit",
         "Fit section",
         Message::FitSection,
@@ -114,13 +111,12 @@ pub(super) fn view<'a>(
             RECORD,
         ));
     }
-    elements.extend(mask_bar(ctx, layout, state, geometry));
+    elements.extend(mask_bar(ctx, state, geometry));
     elements
 }
 
 fn mask_bar<'a>(
     ctx: &mut BuildContext<'_, Message>,
-    layout: &Layout,
     state: &'a View<'a>,
     geometry: Geometry,
 ) -> Vec<Element<'a, Message>> {
@@ -175,12 +171,7 @@ fn mask_bar<'a>(
     );
     let width = 240.0;
     let height = 34.0 + 30.0 + 34.0 + 6.0 + 30.0 + 12.0;
-    let floor = layout
-        .dock
-        .or(layout.transport)
-        .map_or(layout.stage.max.y - MARGIN, |rect| {
-            rect.min.y - crate::panel::GAP
-        });
+    let floor = geometry.section_safe.max.y;
     let rect = Rect::from_min_size(
         Vec2::new(
             geometry.section_safe.min.x,
@@ -240,31 +231,12 @@ pub(crate) fn remote<'a>(
 }
 
 fn geometry(layout: &Layout, state: &View<'_>) -> Geometry {
-    let world = state.scene.dataset.world_size();
-    let safe_left = if layout.sidebar_visible {
-        layout.sidebar.max.x.max(layout.stage.min.x) + GAP
-    } else {
-        layout.stage.min.x + MARGIN
-    };
-    let safe_top = layout.toolbar_left.max.y + GAP;
-    let safe_bottom = layout
-        .dock
-        .or(layout.transport)
-        .map_or(layout.stage.max.y - MARGIN, |rect| rect.min.y - GAP);
-    let volume_safe = Rect::from_min_max(
-        Vec2::new(safe_left, safe_top),
-        Vec2::new(layout.volume.max.x - MARGIN, safe_bottom),
-    );
-    let section_safe = Rect::from_min_max(
-        Vec2::new(layout.section.min.x + MARGIN, safe_top),
-        Vec2::new(layout.section.max.x - MARGIN, safe_bottom),
-    );
     Geometry {
         volume_rect: layout.volume,
         section_rect: layout.section,
-        volume_safe,
-        section_safe,
-        world,
+        volume_safe: layout.volume.shrink(STAGE_INSET),
+        section_safe: layout.section.shrink(STAGE_INSET),
+        world: state.scene.dataset.world_size(),
         recording: state.io.export,
     }
 }
@@ -352,14 +324,13 @@ fn region_handle<'a>(handle: Handle) -> Element<'a, Message> {
 
 fn pane_fit<'a>(
     ctx: &mut BuildContext<'_, Message>,
-    pane: Rect,
-    top: f32,
+    safe: Rect,
     key: &str,
     tooltip: &str,
     message: Message,
 ) -> Element<'a, Message> {
     let rect = Rect::from_min_size(
-        Vec2::new(pane.max.x - PANE_CONTROL - MARGIN, top),
+        Vec2::new((safe.max.x - PANE_CONTROL).max(safe.min.x), safe.min.y),
         Vec2::splat(PANE_CONTROL),
     );
     crate::view::glass_icon_button(
@@ -478,10 +449,7 @@ pub(super) fn toast<'a>(
     };
     let palette = ctx.theme().palette;
     let stage = layout.stage;
-    let ceiling = layout
-        .dock
-        .or(layout.transport)
-        .map_or(stage.max.y - 24.0, |rect| rect.min.y - 14.0);
+    let ceiling = stage.max.y - 24.0;
     let width = (stage.width() - 32.0).min(420.0);
     let style = TextStyle::new(
         ctx.theme().font(grana_ui::Level::Callout),

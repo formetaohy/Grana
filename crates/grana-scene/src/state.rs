@@ -3,7 +3,7 @@ use std::sync::Arc;
 use grana_display::{Shading, TransferFunction};
 use grana_measure::ObjectColoc;
 use grana_object::{RelationFrame, TrackSet};
-use grana_volume::{CHANNEL_LIMIT, Clip, Intensity, Region};
+use grana_volume::{Clip, Intensity, Region};
 
 use crate::annotation::AnnotationState;
 use crate::coloc::{ColocState, MaskKey};
@@ -20,6 +20,7 @@ use crate::provenance::Provenance;
 use crate::scene::{Item, Scene, Selection};
 use crate::seed::Seeds;
 use crate::track_color::TrackColor;
+use crate::validate::SceneShape;
 use grana_display::ColorState;
 
 pub(crate) const HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -104,118 +105,6 @@ pub struct SetState {
     pub document: u64,
 }
 
-impl SceneState {
-    pub fn matches(&self, base_channels: usize, frame_count: u32) -> bool {
-        let channel_count = base_channels + self.derived.len();
-        self.channels.len() == channel_count
-            && channel_count <= CHANNEL_LIMIT
-            && self.derived.iter().enumerate().all(|(index, spec)| {
-                let channel = base_channels + index;
-                spec.source() < channel
-                    && spec.ratio_denominator().is_none_or(|denominator| {
-                        denominator < channel && denominator != spec.source()
-                    })
-                    && spec
-                        .mask()
-                        .is_none_or(|set| self.sets.iter().any(|entry| entry.id == set.raw()))
-            })
-            && self.selected < channel_count
-            && self.time < frame_count
-            && (self.drift.is_empty()
-                || (self.drift.frames() == frame_count
-                    && self.drift.channel() < channel_count
-                    && self.drift.reference() < frame_count))
-            && self.mask_radius.is_finite()
-            && self.mask_radius >= 0.0
-            && self
-                .annotations
-                .selected
-                .is_none_or(|index| index < self.annotations.entries.len())
-            && self
-                .annotations
-                .entries
-                .iter()
-                .all(|entry| entry.frame().is_none_or(|frame| frame < frame_count))
-            && self.mask_filter.is_none_or(|filter| {
-                self.mask.is_some_and(|mask| {
-                    self.sets.iter().any(|set| {
-                        set.id == mask
-                            && set.relations.iter().any(|relation| {
-                                relation.target == filter.target().raw()
-                                    && relation.shift == filter.shift()
-                            })
-                    })
-                }) && self.sets.iter().any(|set| set.id == filter.target().raw())
-            })
-            && self.sets.iter().all(|set| {
-                set.classifier.as_ref().is_none_or(|classifier| {
-                    classifier.features.iter().all(|feature| {
-                        set.kind.measurements(channel_count).contains(feature)
-                            && match feature {
-                                grana_measure::Measurement::Intensity { channel, .. } => {
-                                    *channel < channel_count
-                                }
-                                _ => true,
-                            }
-                    })
-                })
-            })
-            && self.sets.iter().all(|set| {
-                set.object_coloc.as_ref().is_none_or(|coloc| {
-                    coloc.pair().a() < channel_count
-                        && coloc.pair().b() < channel_count
-                        && coloc.frames().len() == frame_count as usize
-                        && coloc
-                            .frames()
-                            .iter()
-                            .zip(&set.frames)
-                            .all(|(values, frame)| {
-                                values.len()
-                                    == frame.as_ref().map_or(0, |frame| frame.object_count())
-                            })
-                })
-            })
-            && self
-                .sets
-                .iter()
-                .all(|set| set.channel < channel_count && set.frames.len() == frame_count as usize)
-            && self.sets.iter().all(|set| match &set.seeds {
-                Seeds::Points(frames) => frames.len() == frame_count as usize,
-                Seeds::Source(source) => source.raw() > 0 && source.raw() != set.id,
-            })
-            && self.sets.iter().all(|set| {
-                set.hidden.is_empty()
-                    || (set.hidden.len() == set.frames.len()
-                        && set.hidden.iter().zip(&set.frames).all(|(mask, frame)| {
-                            mask.len() == frame.as_ref().map_or(0, |frame| frame.object_count())
-                        }))
-            })
-            && self
-                .coloc
-                .pair
-                .is_none_or(|pair| pair.a() < channel_count && pair.b() < channel_count)
-            && self.coloc.results.iter().all(|result| {
-                let pair = result.pair();
-                pair.a() < channel_count
-                    && pair.b() < channel_count
-                    && result.series().frames().len() == frame_count as usize
-                    && result
-                        .mask()
-                        .is_none_or(|mask| self.sets.iter().any(|set| set.id == mask))
-            })
-            && self
-                .coloc
-                .results
-                .iter()
-                .enumerate()
-                .all(|(index, result)| {
-                    self.coloc.results[index + 1..]
-                        .iter()
-                        .all(|other| other.pair() != result.pair())
-                })
-    }
-}
-
 impl Scene {
     pub fn state(&self) -> SceneState {
         SceneState {
@@ -259,10 +148,13 @@ impl Scene {
     }
 
     pub fn restore(&mut self, state: SceneState) {
-        assert!(
-            state.matches(self.base_channels(), self.frame_count()),
-            "a scene state matches the dataset it was captured from"
-        );
+        let shape = SceneShape::new(self.base_channels(), self.frame_count());
+        if let Err(fault) = state.validate(shape) {
+            panic!(
+                "a scene state matches the dataset it was captured from: {}",
+                fault.detail()
+            );
+        }
         let derived = state.derived != self.derived_shared();
         if derived {
             let specs = state
@@ -323,13 +215,8 @@ impl Scene {
                 self.mask_filter,
             )
         });
-        self.coloc.restore(
-            state.coloc,
-            self.channels.len(),
-            self.frame_count(),
-            state.region,
-            mask,
-        );
+        self.coloc
+            .restore(state.coloc, self.channels.len(), self.frame_count(), mask);
         self.set_time(state.time);
         self.select_many(
             state
@@ -485,7 +372,7 @@ impl Scene {
                 hash = mix(hash, u64::from(value.to_bits()));
             }
         }
-        hash = mix(hash, self.coloc.document());
+        hash = mix(hash, self.coloc.revision());
         hash
     }
 

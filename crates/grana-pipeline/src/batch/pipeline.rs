@@ -934,7 +934,7 @@ impl Run<'_, '_> {
         self.scene.set_mask_radius(mask_radius);
         self.scene.set_mask_filter(filter);
         self.scene.coloc.set_settings(settings);
-        self.scene.coloc.set_pair(pair);
+        self.scene.coloc.set_pair(pair, self.scene.channels.len());
         let roi = match self.scene.mask {
             None => None,
             Some(mask) => {

@@ -571,7 +571,7 @@ impl Session {
             Command::ToggleSort(index) => self.measure.toggle_sort(index),
             Command::SetColocPair(pair) => {
                 if let Some(scene) = self.scene.as_mut() {
-                    scene.coloc.set_pair(pair);
+                    scene.coloc.set_pair(pair, scene.channels.len());
                 }
             }
             Command::SetColocThresholds(thresholds) => {

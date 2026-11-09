@@ -31,6 +31,14 @@ const CAPTION_MARGIN: f32 = 16.0;
 const CAPTION_TITLE: Color = Color::rgba(1.0, 1.0, 1.0, 0.95);
 const CAPTION_DETAIL: Color = Color::rgba(1.0, 1.0, 1.0, 0.60);
 const CAPTION_LINE: Color = Color::rgba(1.0, 1.0, 1.0, 0.82);
+const AXIS: [Color; 3] = [
+    Color::rgba(1.00, 0.42, 0.42, 0.95),
+    Color::rgba(0.44, 0.90, 0.52, 0.95),
+    Color::rgba(0.46, 0.62, 1.00, 0.95),
+];
+const AXIS_NAMES: [&str; 3] = ["X", "Y", "Z"];
+const AXIS_RADIUS: f32 = 19.0;
+const AXIS_MARGIN: f32 = 36.0;
 
 const REGION_EDGES: [(usize, usize); 12] = [
     (0, 1),
@@ -190,6 +198,7 @@ fn paint_volume(painter: &mut Painter, overlay: &Overlay<'_>) {
         None,
         true,
     );
+    orientation(painter, overlay.volume_safe, overlay.camera);
     if !overlay.labels.is_empty() {
         let placed =
             labels::volume_labels(overlay.labels, view_projection, overlay.camera.eye(), rect);
@@ -677,6 +686,29 @@ fn scale_bar(painter: &mut Painter, rect: Rect, world_per_point: f32, backdrop: 
         &format_length(length),
         caption_style(),
     );
+}
+
+fn orientation(painter: &mut Painter, rect: Rect, camera: &Camera) {
+    if rect.width() < 240.0 || rect.height() < 200.0 {
+        return;
+    }
+    let center = Vec2::new(rect.max.x - AXIS_MARGIN, rect.max.y - AXIS_MARGIN);
+    let right = camera.right();
+    let up = camera.up();
+    let forward = camera.forward();
+    for (index, axis) in [Vec3::X, Vec3::Y, Vec3::Z].into_iter().enumerate() {
+        let direction = Vec2::new(axis.dot(right), -axis.dot(up));
+        let behind = axis.dot(forward) > 0.0;
+        let tint = AXIS[index].with_alpha(if behind { 0.32 } else { 0.95 });
+        let tip = center + direction * AXIS_RADIUS;
+        painter.segment(center, tip, 1.6, tint);
+        let style = TextStyle::new(TypeStyle::new(10.5, 600.0, 13.0), tint);
+        painter.text_at(
+            tip + direction * 5.0 - Vec2::new(3.0, 5.5),
+            AXIS_NAMES[index],
+            style,
+        );
+    }
 }
 
 fn paint_legends(painter: &mut Painter, rect: Rect, legends: &[Legend], backdrop: bool) {

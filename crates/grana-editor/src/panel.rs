@@ -32,6 +32,9 @@ pub const DOCK_MINIMUM: f32 = 220.0;
 pub const ANALYSIS_WIDTH: f32 = 114.0;
 pub const TOOLBAR_LEFT: f32 = 320.0;
 pub const TOOLBAR_RIGHT: f32 = 124.0;
+pub const STAGE_INSET: f32 = 12.0;
+const MINIMUM_STAGE_WIDTH: f32 = 240.0;
+const MINIMUM_STAGE_HEIGHT: f32 = 160.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
@@ -183,14 +186,10 @@ impl Layout {
             Vec2::new(analysis.min.x - 8.0 - TOOLBAR_RIGHT, top),
             Vec2::new(TOOLBAR_RIGHT, TOOLBAR_HEIGHT),
         );
-        let sidebar_target = if state.workspace.sidebar_hidden {
-            0.0
-        } else {
-            1.0
-        };
+        let sidebar_open = !state.workspace.sidebar_hidden;
         let sidebar_t = ctx.animate(
             Key::new("sidebar.open").id(),
-            sidebar_target,
+            if sidebar_open { 1.0 } else { 0.0 },
             Motion::snappy(),
         );
         let sidebar_visible = sidebar_t > 0.005;
@@ -209,7 +208,13 @@ impl Layout {
         } else {
             Rect::ZERO
         };
-        let left = full.min.x + MARGIN + (SIDEBAR_WIDTH + GAP) * sidebar_t.clamp(0.0, 1.0);
+        let left = full.min.x
+            + MARGIN
+            + if sidebar_open {
+                SIDEBAR_WIDTH + GAP
+            } else {
+                0.0
+            };
         let right = full.max.x - MARGIN;
         let transport_height = if state.scene.frame_count() > 1 {
             TRANSPORT_HEIGHT
@@ -223,24 +228,24 @@ impl Layout {
             )
         });
         let dock_bottom = transport.map_or(full.max.y - MARGIN, |rect| rect.min.y - GAP);
-        let dock_target = if state.workspace.panel.is_some() {
-            1.0
+        let dock_open = state.workspace.panel.is_some();
+        let dock_t = ctx.animate(
+            Key::new("dock.open").id(),
+            if dock_open { 1.0 } else { 0.0 },
+            Motion::snappy(),
+        );
+        let dock_top = toolbar_left.max.y + GAP + 120.0;
+        let dock_available = (dock_bottom - dock_top).max(DOCK_MINIMUM);
+        let dock_stored = if state.workspace.dock_height > 0.0 {
+            state.workspace.dock_height
         } else {
-            0.0
+            DOCK_DEFAULT
         };
-        let dock_t = ctx.animate(Key::new("dock.open").id(), dock_target, Motion::snappy());
+        let dock_height = dock_stored.clamp(DOCK_MINIMUM, dock_available);
         let dock = (dock_t > 0.005).then(|| {
-            let top = toolbar_left.max.y + GAP + 120.0;
-            let available = (dock_bottom - top).max(DOCK_MINIMUM);
-            let stored = if state.workspace.dock_height > 0.0 {
-                state.workspace.dock_height
-            } else {
-                DOCK_DEFAULT
-            };
-            let clamped = stored.clamp(DOCK_MINIMUM, available);
             let height = ctx.animate(
                 Key::new("dock.height.spring").id(),
-                clamped,
+                dock_height,
                 Motion::response(0.20, 0.08),
             );
             let slide = (1.0 - dock_t) * (height + MARGIN + GAP * 2.0);
@@ -249,20 +254,32 @@ impl Layout {
                 Vec2::new(right, dock_bottom + slide),
             )
         });
+        let stage_bottom = if dock_open {
+            dock_bottom - dock_height - GAP
+        } else {
+            dock_bottom
+        };
+        let stage = Rect::from_min_max(
+            Vec2::new(left, toolbar_left.max.y + GAP),
+            Vec2::new(
+                right.max(left + MINIMUM_STAGE_WIDTH),
+                stage_bottom.max(toolbar_left.max.y + GAP + MINIMUM_STAGE_HEIGHT),
+            ),
+        );
         let split_ratio = ctx.animate(
             Key::new("viewport.split.spring").id(),
             state.viewport.split(),
             Motion::response(0.18, 0.06),
         );
-        let split = (full.width() * split_ratio).round();
-        let volume = Rect::from_min_max(full.min, Vec2::new(split, full.max.y));
-        let section = Rect::from_min_max(Vec2::new(split, full.min.y), full.max);
+        let split = (stage.min.x + stage.width() * split_ratio).round();
+        let volume = Rect::from_min_max(stage.min, Vec2::new(split, stage.max.y));
+        let section = Rect::from_min_max(Vec2::new(split, stage.min.y), stage.max);
         Self {
             toolbar_left,
             toolbar_right,
             analysis,
             sidebar,
-            stage: full,
+            stage,
             volume,
             section,
             transport,

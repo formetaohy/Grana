@@ -174,7 +174,7 @@ impl Session {
                     self.coloc_thresholds = Some((pair, thresholds));
                     if let Some(scene) = self.scene.as_mut() {
                         scene.coloc.set_settings(settings);
-                        scene.coloc.set_pair(pair);
+                        scene.coloc.set_pair(pair, scene.channels.len());
                         scene.set_mask(mask);
                         scene.set_mask_radius(mask_radius);
                         scene.set_mask_filter(filter);
@@ -183,7 +183,7 @@ impl Session {
                 }
                 Step::ObjectColoc { set, pair } => {
                     if let Some(scene) = self.scene.as_mut() {
-                        scene.coloc.set_pair(pair);
+                        scene.coloc.set_pair(pair, scene.channels.len());
                     }
                     self.start_object_coloc(set);
                 }
