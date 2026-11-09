@@ -49,7 +49,7 @@ impl Encoder {
             .complexity(Complexity::High)
             .intra_frame_period(IntraFramePeriod::from_num_frames(fps * KEYFRAME_SECONDS))
             .vui(VuiConfig::bt709())
-            .num_threads(0);
+            .num_threads(1);
         let inner = OpenH264Encoder::with_api_config(OpenH264API::from_source(), config)
             .map_err(|error| Error::Encode(error.to_string()))?;
         let width = size[0] as usize;

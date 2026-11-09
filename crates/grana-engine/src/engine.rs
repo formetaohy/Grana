@@ -102,6 +102,8 @@ impl Engine {
                 prefetch: frame.prefetch,
                 transparent: false,
                 level_cap: frame.level_cap,
+                assured: false,
+                coarsen: 0,
             },
             &rendered,
         );
@@ -197,6 +199,7 @@ impl Engine {
                 detail: "the export disappeared".to_string(),
             };
         };
+        renderer.set_exporting(true);
         match job.render(renderer, device, queue, ui, scene) {
             Outcome::Running => Outcome::Running,
             Outcome::Complete { path } => {

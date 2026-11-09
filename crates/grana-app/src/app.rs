@@ -166,14 +166,24 @@ impl App {
         }
         self.exchange_bricks();
         self.poll_pick();
-        self.session.sync_measure();
-        let (commands, animating) = self.run_ui();
+        let exporting = self.engine.as_ref().is_some_and(Engine::exporting);
+        if !exporting {
+            self.session.sync_measure();
+        }
+        let (mut commands, animating) = self.run_ui();
+        if exporting {
+            commands.retain(|command| matches!(command, grana_session::Command::CancelExport));
+        }
         self.sync_ime();
-        self.interact_viewport();
+        if !exporting {
+            self.interact_viewport();
+        }
         if self.apply(commands) {
             return;
         }
-        self.session.apply_measure();
+        if !exporting {
+            self.session.apply_measure();
+        }
         self.sync_title();
         self.advance_playback();
         self.advance_animation();
@@ -1096,6 +1106,21 @@ impl App {
         Some(Duration::ZERO)
     }
 
+    fn export_ready(&mut self) -> bool {
+        if self.engine.as_ref().is_some_and(Engine::exporting) {
+            return false;
+        }
+        if self.session.loading().is_some() {
+            self.set_output_message("the dataset is still opening");
+            return false;
+        }
+        if self.session.analysing() {
+            self.set_output_message("wait for the running analysis before exporting");
+            return false;
+        }
+        true
+    }
+
     fn start_export(&mut self, plan: Plan) {
         let Some(surface) = self.surface.as_ref() else {
             return;
@@ -1129,7 +1154,7 @@ impl App {
     }
 
     fn begin_snapshot(&mut self, export: Export) {
-        if self.engine.as_ref().is_some_and(Engine::exporting) || self.session.loading().is_some() {
+        if !self.export_ready() {
             return;
         }
         let Some(scene) = self.session.scene() else {
@@ -1167,7 +1192,7 @@ impl App {
     }
 
     fn begin_movie(&mut self, export: Export) {
-        if self.engine.as_ref().is_some_and(Engine::exporting) || self.session.loading().is_some() {
+        if !self.export_ready() {
             return;
         }
         if self.session.timeline().is_empty() {
@@ -1215,7 +1240,7 @@ impl App {
     }
 
     fn begin_sequence(&mut self, export: Export) {
-        if self.engine.as_ref().is_some_and(Engine::exporting) || self.session.loading().is_some() {
+        if !self.export_ready() {
             return;
         }
         let Some(scene) = self.session.scene() else {

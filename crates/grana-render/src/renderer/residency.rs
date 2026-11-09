@@ -21,6 +21,7 @@ pub(super) struct Residency {
     pub(super) content: u64,
     pub(super) style: u64,
     pub(super) prefetch: bool,
+    pub(super) assured: bool,
     pub(super) time: u32,
     pub(super) eye: [f32; 3],
     pub(super) focus: [f32; 3],
@@ -33,6 +34,12 @@ pub(super) struct Residency {
     pub(super) section: [u32; 2],
     pub(super) region: Region,
     pub(super) levels: Levels,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct Mode {
+    pub(super) prefetch: bool,
+    pub(super) assured: bool,
 }
 
 pub(super) struct ResidencyView<'a> {
@@ -48,7 +55,7 @@ impl Residency {
         epoch: u64,
         content: u64,
         style: u64,
-        prefetch: bool,
+        mode: Mode,
         time: u32,
         view: ResidencyView<'_>,
         levels: Levels,
@@ -57,7 +64,8 @@ impl Residency {
             epoch,
             content,
             style,
-            prefetch,
+            prefetch: mode.prefetch,
+            assured: mode.assured,
             time,
             eye: view.camera.eye().to_array(),
             focus: view.camera.focus().to_array(),

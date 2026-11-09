@@ -25,6 +25,7 @@ struct View<'a> {
     scene: &'a SceneFrame<'a>,
     volume_region: [u32; 4],
     section_region: [u32; 4],
+    assured: bool,
 }
 
 fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
@@ -43,6 +44,8 @@ fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
         scene: view.scene,
         prefetch: false,
         level_cap: usize::MAX,
+        assured: view.assured,
+        coarsen: 0,
     }
 }
 
@@ -199,6 +202,7 @@ fn background(
         scene: &scene,
         volume_region: view.volume_region,
         section_region: view.section_region,
+        assured: view.assured,
     };
     settle(gpu, renderer, &blank, volume);
     read_pixels(gpu, texture, [SIDE, SIDE])
@@ -268,6 +272,7 @@ fn streams_and_shades_two_channels() {
         scene: &scene,
         volume_region: WHOLE,
         section_region: CORNER,
+        assured: false,
     };
     let requests = settle(&gpu, &mut renderer, &view, &volume);
     assert!(requests.volume_view.visible > 0, "the view sees no brick");
@@ -361,6 +366,7 @@ fn renders_a_rotated_placement() {
         scene: &scene,
         volume_region: [0, 0, SIDE / 2, SIDE],
         section_region: [SIDE / 2, 0, SIDE / 2, SIDE],
+        assured: false,
     };
     let requests = settle(&gpu, &mut renderer, &view, &volume);
     assert!(
@@ -389,6 +395,7 @@ fn renders_a_rotated_placement() {
         scene: &scene,
         volume_region: [0, 0, SIDE / 2, SIDE],
         section_region: [SIDE / 2, 0, SIDE / 2, SIDE],
+        assured: false,
     };
     let aligned_shot = snapshot(
         &gpu,
@@ -473,6 +480,7 @@ fn reveals_a_section_plane() {
         scene: &scene,
         volume_region: CORNER,
         section_region: WHOLE,
+        assured: false,
     };
     let requests = settle(&gpu, &mut renderer, &view, &volume);
     assert!(
@@ -536,6 +544,7 @@ fn reveals_an_oblique_section_plane() {
         scene: &scene,
         volume_region: CORNER,
         section_region: WHOLE,
+        assured: false,
     };
     let requests = settle(&gpu, &mut renderer, &view, &volume);
     assert!(
@@ -602,6 +611,7 @@ fn composites_a_mesh_layer() {
         scene: &scene,
         volume_region: WHOLE,
         section_region: CORNER,
+        assured: false,
     };
     let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
     assert!(
@@ -666,6 +676,7 @@ fn clips_an_oriented_region() {
         scene: &scene,
         volume_region: WHOLE,
         section_region: CORNER,
+        assured: false,
     };
     let shot = snapshot(&gpu, &mut renderer, &open, &target, &volume);
     assert!(
@@ -699,5 +710,109 @@ fn clips_an_oriented_region() {
         shot.hue(shot.right(), Hue::Green) < 20,
         "the oriented region kept the dropped ball: {} pixels",
         shot.hue(shot.right(), Hue::Green)
+    );
+}
+
+fn assure(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    view: &View<'_>,
+    volume: &Volume,
+    grid: &BrickGrid,
+) -> grana_render::FrameInfo {
+    let mut info = renderer.draw(gpu.device(), gpu.queue(), frame(view));
+    for _ in 0..512 {
+        if info.samples >= SAMPLES && info.settled {
+            assert!(
+                !info.truncated,
+                "a complete assured frame lost bricks to the budget"
+            );
+            return info;
+        }
+        gpu.device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("failed to wait for the gpu");
+        if let Some(requests) = next_demand(gpu, renderer) {
+            let bricks = requests
+                .volume
+                .iter()
+                .chain(&requests.section)
+                .map(|request| (*request, volume.brick(grid, request.coord)))
+                .collect::<Vec<_>>();
+            renderer.upload(gpu.queue(), &bricks);
+        }
+        info = renderer.draw(gpu.device(), gpu.queue(), frame(view));
+    }
+    panic!("the assured frame never settled");
+}
+
+fn assured_pixels(
+    gpu: &Gpu,
+    pyramid: &Pyramid,
+    volume: &Volume,
+    channels: &[grana_render::ChannelRow<'_>],
+    camera: &Camera,
+    section: &SectionCamera,
+) -> Vec<[u8; 4]> {
+    let scene = SceneFrame {
+        channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = build_renderer(gpu, pyramid);
+    let target = texture(gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = View {
+        target: &view_texture,
+        camera,
+        section,
+        region: Region::none(),
+        scene: &scene,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        assured: true,
+    };
+    for _ in 0..4 {
+        let info = renderer.draw(gpu.device(), gpu.queue(), frame(&view));
+        assert_eq!(
+            info.samples, 0,
+            "an assured frame consumed samples before its bricks arrived"
+        );
+    }
+    let grid = BrickGrid::new(volume.extent());
+    let info = assure(gpu, &mut renderer, &view, volume, &grid);
+    assert_eq!(info.samples, SAMPLES, "the assured frame stopped short");
+    read_pixels(gpu, &target, [SIDE, SIDE])
+}
+
+#[test]
+fn assures_complete_reproducible_frames() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new();
+    let first = assured_pixels(&gpu, &pyramid, &volume, &channels, &camera, &section);
+    let second = assured_pixels(&gpu, &pyramid, &volume, &channels, &camera, &section);
+    assert_eq!(first, second, "two assured exports of one pose diverge");
+    let lit = first
+        .iter()
+        .filter(|pixel| pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32 > 24)
+        .count();
+    assert!(
+        lit > (SIDE * SIDE / 32) as usize,
+        "the assured frame is empty"
     );
 }

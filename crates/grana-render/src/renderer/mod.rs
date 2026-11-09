@@ -4,7 +4,7 @@ mod residency;
 mod signature;
 mod upload;
 
-use residency::{FrameTarget, LevelKey, Levels, Regions, Residency};
+use residency::{FrameTarget, LevelKey, Levels, Mode, Regions, Residency};
 use signature::Signature;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -110,6 +110,7 @@ pub struct FrameInfo {
     pub fragments: u64,
     pub samples: u32,
     pub settled: bool,
+    pub truncated: bool,
     pub fading: bool,
     pub profile: FrameProfile,
 }
@@ -139,6 +140,8 @@ pub struct Frame<'a, 'b> {
     pub scene: &'a SceneFrame<'b>,
     pub prefetch: bool,
     pub level_cap: usize,
+    pub assured: bool,
+    pub coarsen: usize,
 }
 
 pub struct Renderer {
@@ -183,6 +186,7 @@ pub struct Renderer {
     prefetch_issued: Vec<BrickRequest>,
     prefetch_rate: f32,
     wanted: [usize; BAND],
+    wanted_level: Option<usize>,
     transparent: bool,
     exporting: bool,
     fade: Option<Fade>,
@@ -260,6 +264,7 @@ impl Renderer {
             prefetch_issued: Vec::new(),
             prefetch_rate: 1.0,
             wanted: [0; BAND],
+            wanted_level: None,
             transparent: false,
             exporting: false,
             fade: None,
@@ -298,6 +303,18 @@ impl Renderer {
         self.exporting = true;
         self.fade = None;
         self.level_cap = None;
+        self.volume_level = None;
+        self.section_level = None;
+        self.wanted = [0; BAND];
+        self.wanted_level = None;
+        self.planned = None;
+        self.prefetched.clear();
+        self.prefetch_key = None;
+        self.prefetch_issued.clear();
+        self.prefetch_rate = 1.0;
+        self.sampled = false;
+        self.frames.fill(None);
+        self.info = FrameInfo::default();
     }
 
     pub fn set_exporting(&mut self, exporting: bool) {
@@ -400,6 +417,7 @@ impl Renderer {
         self.prefetch_issued.clear();
         self.prefetch_rate = 1.0;
         self.wanted = [0; BAND];
+        self.wanted_level = None;
         self.settled = None;
         self.planned = None;
         self.exporting = false;

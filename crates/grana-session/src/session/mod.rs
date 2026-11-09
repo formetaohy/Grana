@@ -393,6 +393,9 @@ impl Session {
     pub fn writing(&self) -> bool {
         self.labels.is_some() || self.dataset_export.is_some()
     }
+    pub fn analysing(&self) -> bool {
+        !self.analysis.is_empty() || self.writing()
+    }
     pub fn write_progress(&self) -> Option<(&str, usize, usize)> {
         if let Some(labels) = self.labels.as_ref() {
             return Some((labels.label(), labels.progress().0, labels.progress().1));

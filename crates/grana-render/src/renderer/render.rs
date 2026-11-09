@@ -25,6 +25,8 @@ impl Renderer {
             scene,
             prefetch,
             level_cap: _,
+            assured,
+            coarsen,
         } = frame;
         assert!(
             inside(volume_region, size) && inside(section_region, size),
@@ -82,6 +84,7 @@ impl Renderer {
             oit_readback,
             dropped,
             wanted,
+            wanted_level,
             ..
         } = self;
         let (
@@ -129,7 +132,8 @@ impl Renderer {
             .max(first)
             .min(level_count - 1);
         let limits = Limits { first, ceiling };
-        let penalty = if *exporting {
+        let allowed = limits.count(pyramid);
+        let penalty = if *exporting || assured {
             1.0
         } else {
             frame_budget.penalty()
@@ -138,7 +142,7 @@ impl Renderer {
             pyramid,
             section,
             section_height as f32,
-            *section_rendered,
+            if assured { None } else { *section_rendered },
             limits,
             penalty,
         );
@@ -151,19 +155,36 @@ impl Renderer {
             region,
             limits,
         );
+        let section_level = (section_level + coarsen).min(allowed - 1);
         let section_capacity = section_count.clamp(1, slots.saturating_sub(1).max(1));
         let volume_capacity = slots.saturating_sub(section_capacity).max(1);
         let ladder = volume_ladder(LadderView {
             pyramid,
             camera,
             height: volume_height as f32,
-            current: *volume_rendered,
+            current: if assured { None } else { *volume_rendered },
             limits,
-            previous_visible: info.volume.visible,
+            previous_visible: if assured { 0 } else { info.volume.visible },
             capacity: volume_capacity,
             penalty,
         });
-        let capacity = capacities(volume_capacity, wanted, ladder.count);
+        let base = (ladder.base + coarsen).min(allowed - 1);
+        let ladder = Ladder {
+            base,
+            count: BAND.min(allowed - base),
+        };
+        let exact = *wanted_level == Some(ladder.base);
+        let capacity = if assured && !exact {
+            capacities(volume_capacity, &[1; BAND], ladder.count)
+        } else if wanted[..ladder.count].iter().sum::<usize>() <= volume_capacity {
+            let mut caps = [0usize; BAND];
+            for (band, want) in wanted[..ladder.count].iter().enumerate() {
+                caps[band] = (*want).max(1);
+            }
+            caps
+        } else {
+            capacities(volume_capacity, wanted, ladder.count)
+        };
         let levels = Levels {
             ladder,
             capacity,
@@ -178,7 +199,7 @@ impl Renderer {
             *epoch,
             *content,
             channel_style(scene.channels),
-            prefetch,
+            super::Mode { prefetch, assured },
             time,
             ResidencyView {
                 camera,
@@ -191,6 +212,12 @@ impl Renderer {
         );
         let replan = *settled != Some(residency) || planned.as_ref() != Some(&residency);
         info.settled = !replan;
+        let decoded = info.volume.level == ladder.base && info.section.level == section_level;
+        info.truncated = decoded
+            && (!assured || exact)
+            && (info.volume.visible > info.volume.demand
+                || info.section.visible > info.section.demand);
+        let ready = !assured || (info.settled && !info.truncated);
         let slot_grid = atlas.slot_grid();
         let mut prepared = [usize::MAX; BAND + 2];
         let mut count = 0;
@@ -308,6 +335,7 @@ impl Renderer {
         if target.levels.is_some_and(|previous| previous != key)
             && !moved
             && !*exporting
+            && !assured
             && samples > 1
             && target.samples > 0
         {
@@ -427,7 +455,7 @@ impl Renderer {
             planner.encode(&mut encoder, scene_group);
             *planned = Some(residency);
         }
-        if target.samples < samples {
+        if target.samples < samples && ready {
             target.samples += 1;
             info.samples = target.samples;
             *sampled = true;
@@ -674,22 +702,27 @@ impl Renderer {
                 &target.accumulate_group,
                 reset,
             );
+        } else if !ready {
+            target.samples = 0;
+            info.samples = 0;
         }
-        if let Some(active) = fade.as_mut() {
-            active.weight = (active.weight + 1.0 / FADE_DRAWS).min(1.0);
-        }
-        let blend = fade.as_ref().map(|fade| (fade.weight, fade.samples));
-        present.write(queue, exposure, target.samples, *transparent, blend);
-        if fade.is_some() {
-            let group = target.fade_group(device, present);
-            present.present(&mut encoder, surface, group);
-            if fade.as_ref().is_some_and(|active| active.weight >= 1.0) {
-                *fade = None;
+        if ready {
+            if let Some(active) = fade.as_mut() {
+                active.weight = (active.weight + 1.0 / FADE_DRAWS).min(1.0);
             }
-        } else {
-            present.present(&mut encoder, surface, &target.present_group);
+            let blend = fade.as_ref().map(|fade| (fade.weight, fade.samples));
+            present.write(queue, exposure, target.samples, *transparent, blend);
+            if fade.is_some() {
+                let group = target.fade_group(device, present);
+                present.present(&mut encoder, surface, group);
+                if fade.as_ref().is_some_and(|active| active.weight >= 1.0) {
+                    *fade = None;
+                }
+            } else {
+                present.present(&mut encoder, surface, &target.present_group);
+            }
         }
-        info.fading = fade.is_some();
+        info.fading = ready && fade.is_some();
         if replan
             && let Some(feedback) = feedback.as_mut()
             && let Some(slot) = feedback.reserve()

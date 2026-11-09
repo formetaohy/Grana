@@ -625,7 +625,7 @@ pub(crate) struct Limits {
 }
 
 impl Limits {
-    fn levels(self, pyramid: &Pyramid) -> usize {
+    pub(crate) fn count(self, pyramid: &Pyramid) -> usize {
         pyramid
             .level_count()
             .min(self.ceiling + 1)
@@ -656,7 +656,7 @@ pub(crate) fn volume_ladder(view: LadderView<'_>) -> Ladder {
         penalty,
     } = view;
     let first = limits.first;
-    let levels = limits.levels(pyramid);
+    let levels = limits.count(pyramid);
     let nearest = nearest_distance(pyramid.level(0), camera.eye());
     let mut pixel_world = 2.0 * nearest * (camera.fov_y() * 0.5).tan() / height.max(1.0);
     if previous_visible > capacity {
@@ -695,7 +695,7 @@ pub(crate) fn select_section_level(
     penalty: f32,
 ) -> usize {
     let first = limits.first;
-    let levels = limits.levels(pyramid);
+    let levels = limits.count(pyramid);
     let pixel_world = section.span() / height.max(1.0) * penalty;
     let mut level = first;
     for index in first..levels {
@@ -740,7 +740,7 @@ pub(crate) fn resolve_section_level(
     region: Region,
     limits: Limits,
 ) -> (usize, usize) {
-    let levels = limits.levels(pyramid);
+    let levels = limits.count(pyramid);
     let mut level = target.min(levels - 1);
     loop {
         let count = section_brick_count(pyramid, level, section, aspect, region);

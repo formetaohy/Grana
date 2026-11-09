@@ -18,7 +18,7 @@ use crate::panels::{Panels, Panes};
 
 pub const IMAGE_SAMPLES: u32 = 8;
 pub const MOVIE_SAMPLES: u32 = 16;
-const IMAGE_ATTEMPTS: u32 = 512;
+const IMAGE_ATTEMPTS: u32 = 4096;
 const MOVIE_ATTEMPTS: u32 = 4096;
 
 #[derive(Clone, Copy, Debug)]
@@ -88,6 +88,8 @@ pub struct Export {
     frame: usize,
     attempts: u32,
     samples: u32,
+    coarsen: usize,
+    truncated: bool,
     panes: Panes,
     transparent: bool,
     format: TextureFormat,
@@ -152,6 +154,8 @@ impl Export {
             frame: 0,
             attempts: 0,
             samples,
+            coarsen: 0,
+            truncated: false,
             panes,
             transparent,
             format,
@@ -200,11 +204,17 @@ impl Export {
                 prefetch: false,
                 transparent: self.transparent,
                 level_cap: usize::MAX,
+                assured: true,
+                coarsen: self.coarsen,
             },
             &rendered,
         );
         self.attempts += 1;
-        if info.samples < self.samples {
+        if info.truncated && !self.truncated {
+            self.coarsen += 1;
+        }
+        self.truncated = info.truncated;
+        if info.samples < self.samples || !info.settled {
             if self.attempts > self.attempts_limit() {
                 return Outcome::Failed {
                     detail: "the export could not resolve the volume being streamed".to_string(),
@@ -266,6 +276,8 @@ impl Export {
         sink.push(pose.time, size, &pixels)?;
         self.frame += 1;
         self.attempts = 0;
+        self.coarsen = 0;
+        self.truncated = false;
         if self.frame < self.poses.len() {
             self.sink = Some(sink);
             return Ok(None);

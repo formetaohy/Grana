@@ -52,6 +52,7 @@ impl Renderer {
             prefetch_issued,
             prefetch_rate,
             wanted,
+            wanted_level,
             ..
         } = self;
         let pyramid = pyramid.as_ref()?;
@@ -92,6 +93,7 @@ impl Renderer {
             wanted[band] = demand.info.visible;
         }
         wanted[ladder.count..].fill(0);
+        *wanted_level = Some(ladder.base);
         atlas.touch(
             meta.time,
             meta.levels.section,
@@ -99,13 +101,6 @@ impl Renderer {
             *pin,
         );
         info.section = section.info;
-        let settled_now = demands.iter().all(|demand| demand.requests.is_empty())
-            && section.requests.is_empty()
-            && demands
-                .iter()
-                .all(|demand| demand.info.resident == demand.info.demand)
-            && section.info.resident == section.info.demand;
-        *settled = settled_now.then_some(meta);
         let mut demanded = HashSet::new();
         for (band, demand) in demands.iter().enumerate() {
             let level = ladder.level(band);
@@ -156,6 +151,15 @@ impl Renderer {
             prefetched,
         );
         prefetch_issued.extend_from_slice(&issued);
+        let complete = demands.iter().all(|demand| {
+            demand.requests.is_empty()
+                && demand.info.resident == demand.info.demand
+                && demand.info.visible == demand.info.demand
+        }) && section.requests.is_empty()
+            && section.info.resident == section.info.demand
+            && section.info.visible == section.info.demand;
+        let settled_now = complete && (!meta.assured || issued.is_empty());
+        *settled = settled_now.then_some(meta);
         let mut merged = Demand::default();
         for demand in demands {
             merged.merge(demand);
@@ -186,6 +190,7 @@ pub(super) fn view_key(meta: &Residency) -> u64 {
     meta.epoch.hash(&mut hasher);
     meta.style.hash(&mut hasher);
     meta.prefetch.hash(&mut hasher);
+    meta.assured.hash(&mut hasher);
     meta.time.hash(&mut hasher);
     meta.eye.map(f32::to_bits).hash(&mut hasher);
     meta.focus.map(f32::to_bits).hash(&mut hasher);
