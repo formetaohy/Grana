@@ -118,11 +118,12 @@ pub fn frame(scene: &Scene, lens: Option<Lens<'_>>) -> Result<RenderedScene, Str
         if let Some(tracks) = set.tracks()
             && !tracks.set().is_empty()
         {
+            let visible = set.track_visible();
             let start = styles.len();
             for index in 0..tracks.set().len() {
                 styles.push(Style::new(
                     set.track_color(index),
-                    tracks.visible() && set.visible_track(index),
+                    visible && set.visible_track(index),
                     scene.track_selected(set.id(), index),
                     set.opacity(),
                 ));

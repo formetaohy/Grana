@@ -931,8 +931,6 @@ impl ObjectSet {
             params: self.params,
             track_style: self.track_style,
             tracks: self.tracks.as_ref().map(TrackLayer::shared_set),
-            track_thickness: self.tracks.as_ref().map(TrackLayer::thickness),
-            track_visible: self.tracks.as_ref().map(TrackLayer::visible),
             object_color: self.object_coloring.state(),
             track_color: self.track_coloring.state(),
             classifier: self.classifier.as_ref().map(Classifier::state),
@@ -973,8 +971,6 @@ impl ObjectSet {
             params,
             track_style,
             tracks,
-            track_thickness,
-            track_visible,
             object_color,
             track_color,
             classifier,
@@ -998,10 +994,9 @@ impl ObjectSet {
             track_style.is_some(),
             "only trackable object sets carry track parameters"
         );
-        assert_eq!(
-            tracks.is_some(),
-            track_thickness.is_some() && track_visible.is_some(),
-            "a restored track layer carries its thickness and visibility"
+        assert!(
+            tracks.is_none() || track_style.is_some(),
+            "a restored track layer carries track parameters"
         );
         let frame_count = frames.len();
         let applied = curation.applied();
@@ -1134,14 +1129,11 @@ impl ObjectSet {
             ));
         }
         if let Some(tracks) = tracks {
-            let thickness = track_thickness.expect("a restored track layer carries a thickness");
-            let visible = track_visible.expect("a restored track layer carries visibility");
-            let mut layer = TrackLayer::shared(tracks, thickness, take_stamp(stamp));
-            layer.set_visible(visible);
-            set.tracks = Some(layer);
-            if let Some(style) = set.track_style.as_mut() {
-                style.set_visible(visible);
-            }
+            let thickness = set
+                .track_style
+                .expect("a restored track layer carries track parameters")
+                .thickness();
+            set.tracks = Some(TrackLayer::shared(tracks, thickness, take_stamp(stamp)));
         }
         set.restore_coloring(object_color, track_color);
         set.set_visibility(visibility);
@@ -1473,15 +1465,19 @@ impl ObjectSet {
             resolved.push(edit);
         }
         let mut applied = 0usize;
+        let Some(thickness) = self.track_thickness() else {
+            return 0;
+        };
         for edit in resolved {
             let Some(layer) = self.tracks.as_mut() else {
                 break;
             };
             let done = match edit {
-                TrackEdit::Cut(node) => layer.cut(node.time(), node.object(), stamp),
+                TrackEdit::Cut(node) => layer.cut(node.time(), node.object(), thickness, stamp),
                 TrackEdit::Join { source, target } => layer.join(
                     (source.time(), source.object()),
                     (target.time(), target.object()),
+                    thickness,
                     stamp,
                 ),
             };
@@ -1516,14 +1512,18 @@ impl ObjectSet {
     }
 
     pub(crate) fn edit_track(&mut self, edit: TrackEdit, stamp: u64) -> bool {
+        let Some(thickness) = self.track_thickness() else {
+            return false;
+        };
         let Some(layer) = self.tracks.as_mut() else {
             return false;
         };
         let done = match edit {
-            TrackEdit::Cut(node) => layer.cut(node.time(), node.object(), stamp),
+            TrackEdit::Cut(node) => layer.cut(node.time(), node.object(), thickness, stamp),
             TrackEdit::Join { source, target } => layer.join(
                 (source.time(), source.object()),
                 (target.time(), target.object()),
+                thickness,
                 stamp,
             ),
         };
@@ -1558,13 +1558,10 @@ impl ObjectSet {
             }
             Visibility::Track(tracks) => Visibility::Track(Arc::clone(tracks)),
         };
-        let pruned_tracks = self.tracks.as_ref().map(|layer| {
-            (
-                layer.thickness(),
-                layer.visible(),
-                layer.set().without_objects(time, objects),
-            )
-        });
+        let pruned_tracks = self
+            .tracks
+            .as_ref()
+            .map(|layer| layer.set().without_objects(time, objects));
         let slot = self
             .frames
             .get_mut(time as usize)
@@ -1574,14 +1571,8 @@ impl ObjectSet {
         if let Some(mask) = self.hidden.get_mut(time as usize) {
             *mask = retained(mask, objects);
         }
-        if let Some((thickness, visible, pruned)) = pruned_tracks
-            && let Some(set) = pruned
-        {
-            self.tracks = (!set.is_empty()).then(|| {
-                let mut layer = TrackLayer::new(set, thickness, stamp);
-                layer.set_visible(visible);
-                layer
-            });
+        if let Some((thickness, pruned)) = self.track_thickness().zip(pruned_tracks.flatten()) {
+            self.tracks = (!pruned.is_empty()).then(|| TrackLayer::new(pruned, thickness, stamp));
             visibility = Visibility::All;
         }
         let id = self.id;
@@ -1716,23 +1707,16 @@ impl ObjectSet {
             .collect::<Vec<_>>();
         let tracks = match (&self.tracks, &other.tracks) {
             (None, None) => None,
-            (Some(layer), None) => Some((layer.set().clone(), layer.thickness(), layer.visible())),
-            (None, Some(layer)) => Some((
-                layer.set().shift(&offsets),
-                layer.thickness(),
-                layer.visible(),
-            )),
-            (Some(layer), Some(absorbed)) => Some((
-                layer.set().append(&absorbed.set().shift(&offsets)),
-                layer.thickness(),
-                layer.visible(),
-            )),
+            (Some(layer), None) => Some(layer.set().clone()),
+            (None, Some(layer)) => Some(layer.set().shift(&offsets)),
+            (Some(layer), Some(absorbed)) => {
+                Some(layer.set().append(&absorbed.set().shift(&offsets)))
+            }
         };
-        let tracks = tracks.map(|(set, thickness, visible)| {
-            let mut layer = TrackLayer::new(set, thickness, stamp);
-            layer.set_visible(visible);
-            layer
-        });
+        let tracks = self
+            .track_thickness()
+            .zip(tracks)
+            .map(|(thickness, set)| TrackLayer::new(set, thickness, stamp));
         let mut object_coloring = self.object_coloring.clone();
         if object_coloring.metric().and_then(ObjectColor::target) == Some(other.id)
             || matches!(object_coloring.metric(), Some(ObjectColor::Coloc { .. }))
@@ -1980,11 +1964,21 @@ impl ObjectSet {
         self.track_style
     }
 
+    fn track_thickness(&self) -> Option<f32> {
+        self.track_style.map(TrackStyle::thickness)
+    }
+
+    fn styled(params: TrackParams, thickness: f32, visible: bool) -> TrackStyle {
+        let mut style = TrackStyle::new(params, thickness);
+        style.set_visible(visible);
+        style
+    }
+
     pub fn set_track_params(&mut self, params: TrackParams) {
         if let Some(style) = self.track_style
             && style.params() != params
         {
-            self.track_style = Some(TrackStyle::new(params, style.thickness()));
+            self.track_style = Some(Self::styled(params, style.thickness(), style.visible()));
             self.document += 1;
         }
     }
@@ -1993,9 +1987,10 @@ impl ObjectSet {
         let Some(style) = self.track_style else {
             return false;
         };
-        let next = TrackStyle::new(
+        let next = Self::styled(
             params,
             thickness.clamp(self.min_thickness(), self.max_thickness()),
+            style.visible(),
         );
         if style == next {
             return false;
@@ -2010,16 +2005,10 @@ impl ObjectSet {
     }
 
     pub(crate) fn install_tracks(&mut self, set: TrackSet, stamp: u64) {
-        let style = self
-            .track_style
-            .expect("only trackable objects install tracks");
         let thickness = self
-            .tracks
-            .as_ref()
-            .map_or(style.thickness(), TrackLayer::thickness);
-        let mut layer = TrackLayer::new(set, thickness, stamp);
-        layer.set_visible(style.visible());
-        self.tracks = Some(layer);
+            .track_thickness()
+            .expect("only trackable objects install tracks");
+        self.tracks = Some(TrackLayer::new(set, thickness, stamp));
         self.rebuild_track_bounds();
         self.revision = stamp;
         self.document += 1;
@@ -2096,37 +2085,36 @@ impl ObjectSet {
     }
 
     pub(crate) fn set_track_thickness(&mut self, thickness: f32, stamp: u64) {
-        let thickness = thickness.clamp(self.min_thickness(), self.max_thickness());
-        if let Some(layer) = self.tracks.as_mut() {
-            let previous = layer.thickness();
-            layer.set_thickness(thickness, stamp);
-            if layer.thickness() != previous {
-                self.document += 1;
-                self.revision = stamp;
-            }
+        let Some(style) = self.track_style else {
+            return;
+        };
+        let next = Self::styled(
+            style.params(),
+            thickness.clamp(self.min_thickness(), self.max_thickness()),
+            style.visible(),
+        );
+        if style == next {
+            return;
         }
+        self.track_style = Some(next);
+        if let Some(layer) = self.tracks.as_mut() {
+            layer.set_thickness(next.thickness(), stamp);
+        }
+        self.revision = stamp;
+        self.document += 1;
     }
 
     pub fn track_visible(&self) -> bool {
-        match &self.tracks {
-            Some(layer) => layer.visible(),
-            None => self.track_style.is_none_or(TrackStyle::visible),
-        }
+        self.track_style.is_none_or(TrackStyle::visible)
     }
 
     pub fn set_track_visible(&mut self, visible: bool) {
-        let mut changed = false;
-        if let Some(style) = self.track_style.as_mut() {
-            let previous = style.visible();
-            style.set_visible(visible);
-            changed |= style.visible() != previous;
-        }
-        if let Some(layer) = self.tracks.as_mut() {
-            let previous = layer.visible();
-            layer.set_visible(visible);
-            changed |= layer.visible() != previous;
-        }
-        if changed {
+        let Some(style) = self.track_style.as_mut() else {
+            return;
+        };
+        let previous = style.visible();
+        style.set_visible(visible);
+        if style.visible() != previous {
             self.document += 1;
         }
     }

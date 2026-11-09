@@ -362,6 +362,7 @@ impl Session {
         self.label_images.clear();
         self.fingerprint = None;
         self.mask_stamp = None;
+        self.channels = None;
         self.transfer.reset();
     }
 
@@ -481,6 +482,7 @@ impl Session {
                     self.analysis.clear();
                     self.progress.clear();
                     self.source = None;
+                    self.channels = None;
                     self.in_flight.clear();
                     self.project = None;
                     self.saved = None;

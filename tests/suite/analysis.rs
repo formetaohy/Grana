@@ -1,4 +1,5 @@
 use std::f64::consts::PI;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use grana_analysis::{
@@ -6,13 +7,17 @@ use grana_analysis::{
     SurfaceBuilder, TrackBuilder, coloc_levels, drift_shift,
 };
 use grana_geometry::GeometryStore;
+use grana_image::Source;
 use grana_measure::{ColocPair, ColocSeries, ColocSettings, ColocThresholds};
 use grana_object::{
     FilamentParams, Shape, Spot, SpotParams, SurfaceFilter, SurfaceParams, SurfaceSet, TrackParams,
 };
+use grana_pipeline::Channels;
+use grana_scene::{Dataset, Drift, ObjectFrame, ObjectParams, Scene};
 use grana_volume::{
     Basis, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, VoxelData, VoxelFormat,
 };
+use grana_zarr::{ImageSpec, WriteChannel, write_image};
 
 use crate::support;
 
@@ -713,4 +718,150 @@ fn links_motion_and_splits_lineages() {
     assert_eq!(set.len(), 3);
     assert_eq!(set.divisions(), 1);
     assert_eq!(set.children(0).count(), 2);
+}
+
+#[test]
+fn measures_a_sheared_placement_on_a_metric_grid() {
+    let temp = support::Temp::new("suite-sheared");
+    let path = temp.path().join("sheared.ome.zarr");
+    let extent = Extent::new(40, 32, 16);
+    let spacing = Spacing::new(0.25, 0.25, 0.5);
+    let angle = 0.35f32;
+    let written = Basis::new([
+        [spacing.x() * angle.cos(), spacing.x() * angle.sin(), 0.0],
+        [-spacing.y() * angle.sin(), spacing.y() * angle.cos(), 0.0],
+        [0.0, 0.0, spacing.z()],
+    ]);
+    let level = Level::of(extent, written);
+    let balls = [[14.0f32, 12.0, 8.0], [26.0, 20.0, 8.0]];
+    let channels = [WriteChannel {
+        name: "signal",
+        tint: [0.2, 0.4, 1.0],
+        range: Intensity::new(0.0, 50_000.0),
+    }];
+    let mut fill = |_level: usize,
+                    _frame: u32,
+                    _channel: usize,
+                    origin: [u32; 3],
+                    length: [u32; 3],
+                    data: &mut [f32]|
+     -> Result<(), String> {
+        for z in 0..length[2] {
+            for y in 0..length[1] {
+                for x in 0..length[0] {
+                    let index = x as usize
+                        + length[0] as usize * (y as usize + length[1] as usize * z as usize);
+                    let position = [
+                        (origin[0] + x) as f32,
+                        (origin[1] + y) as f32,
+                        (origin[2] + z) as f32,
+                    ];
+                    let mut value = 100.0f32;
+                    for ball in balls {
+                        let squared = (0..3)
+                            .map(|axis| (position[axis] - ball[axis]).powi(2))
+                            .sum::<f32>();
+                        value += 40_000.0 * (-squared / (2.0 * 1.2 * 1.2)).exp();
+                    }
+                    data[index] = value;
+                }
+            }
+        }
+        Ok(())
+    };
+    let mut progress = |_, _| {};
+    write_image(
+        &path,
+        ImageSpec {
+            name: "sheared",
+            channels: &channels,
+            levels: &[level],
+            placement: [0.0; 3],
+            frames: 1,
+            interval: 1.0,
+            fill: &mut fill,
+            progress: &mut progress,
+        },
+    )
+    .expect("the placed field writes");
+    shear(&path);
+    let image =
+        grana_image::Image::open(&Source::file_series(path, 0)).expect("the sheared field opens");
+    let source = image.pyramid().level(0);
+    assert!(
+        !source.basis().orthogonal(),
+        "the opened field carries a sheared placement"
+    );
+    let scene = Scene::new(Dataset::zarr("sheared", image.pyramid().clone()));
+    let image = Arc::new(image);
+    let render = Channels::render(Arc::clone(&image), &scene);
+    assert_eq!(
+        render.pyramid().level(0),
+        source,
+        "the renderer keeps the source lattice"
+    );
+    let channels = Channels::analysis(Arc::clone(&image), &scene);
+    assert!(
+        channels.pyramid().level(0).basis().orthogonal(),
+        "analysis reads an orthonormal grid"
+    );
+    let centres = balls.map(|ball| source.voxel_center(ball));
+    let spots = spots_of(&channels);
+    assert_eq!(spots.len(), 2, "each ball is one spot");
+    for centre in centres {
+        let nearest = spots
+            .iter()
+            .map(|spot| {
+                (0..3)
+                    .map(|axis| (spot.center()[axis] - centre[axis]).powi(2))
+                    .sum::<f32>()
+                    .sqrt()
+            })
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            nearest < 0.6,
+            "the ball at {centre:?} landed {nearest:.3} away"
+        );
+    }
+}
+
+fn spots_of(channels: &Channels) -> Vec<Spot> {
+    let request = grana_pipeline::run::DetectRequest::new(
+        0,
+        ObjectParams::Spots(SpotParams::new(1.5, 0.01)),
+        Region::none(),
+        None,
+        Drift::default(),
+        1,
+        GeometryStore::temporary(256 << 20).expect("the geometry store opens"),
+    );
+    let mut spots = Vec::new();
+    let mut sink = |event: grana_pipeline::Event| {
+        if let grana_pipeline::Event::Frame {
+            frame: ObjectFrame::Spots(set),
+            ..
+        } = event
+        {
+            spots.extend_from_slice(set.spots());
+        }
+    };
+    grana_pipeline::run::detect(channels, request, &AtomicBool::new(false), &mut sink)
+        .expect("the detection completes");
+    spots
+}
+
+fn shear(path: &std::path::Path) {
+    let store = Arc::new(zarrs::filesystem::FilesystemStore::new(path).expect("the store opens"));
+    let group = zarrs::group::Group::open(store.clone(), "/").expect("the root opens");
+    let mut attributes = group.attributes().clone();
+    attributes["ome"]["multiscales"][0]["coordinateTransformations"][0]["transformations"][1]["affine"] =
+        serde_json::json!([
+            [0.0, 0.4, 1.0, 0.0],
+            [0.0, 0.916_515_1, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+        ]);
+    let mut builder = zarrs::group::GroupBuilder::new();
+    builder.attributes(attributes);
+    let group = builder.build(store, "/").expect("the root rebuilds");
+    group.store_metadata().expect("the sheared metadata stores");
 }

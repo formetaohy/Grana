@@ -80,6 +80,7 @@ pub struct Session {
     measure: Measure,
     timeline: Timeline,
     source: Option<Loader>,
+    channels: Option<Arc<grana_pipeline::Channels>>,
     analysis: Vec<Analysis>,
     progress: Vec<Progress>,
     in_flight: HashSet<BrickRequest>,
@@ -145,6 +146,7 @@ impl Session {
             measure: Measure::new(),
             timeline: Timeline::new(30, 1.0),
             source: None,
+            channels: None,
             analysis: Vec::new(),
             progress: Vec::new(),
             in_flight: HashSet::new(),
@@ -210,6 +212,9 @@ impl Session {
     }
     pub fn scene(&self) -> Option<&Scene> {
         self.scene.as_ref()
+    }
+    pub(super) fn analysis_channels(&self) -> Option<Arc<grana_pipeline::Channels>> {
+        self.channels.clone()
     }
     pub fn measure(&self) -> &Measure {
         &self.measure

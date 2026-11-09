@@ -74,17 +74,6 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         None => Source::file_series(dataset.path().to_path_buf(), dataset.scene()),
     };
     let reader = Arc::new(Image::open(&source)?);
-    if reader
-        .pyramid()
-        .levels()
-        .iter()
-        .any(|level| !level.basis().orthogonal())
-    {
-        return Err(
-            "the dataset is placed with a sheared transform that analysis cannot measure yet"
-                .to_string(),
-        );
-    }
     let store = GeometryStore::temporary(DEFAULT_BUDGET)
         .map_err(|error| format!("the dataset cannot page its geometry: {error}"))?;
     let name = dataset.title();
@@ -104,7 +93,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         .derived_specs(&scene, &staged)
         .map_err(|error| error.to_string())?;
     scene.bind_derived(derived)?;
-    let channels = Channels::new(Arc::clone(&reader), &scene);
+    let channels = Channels::analysis(Arc::clone(&reader), &scene);
     let mut run = Run {
         task,
         dataset,
@@ -337,6 +326,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         let snapshotter = task.snapshot.ok_or_else(|| {
             "the protocol requests quality snapshots but this run carries no renderer".to_string()
         })?;
+        let render = Channels::render(Arc::clone(&reader), &scene);
         let time = task.protocol.view().map_or(scene.time(), |view| view.time);
         scene.set_time(time.min(scene.frame_count() - 1));
         if spec.views().is_empty() {
@@ -353,7 +343,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 transparent: spec.transparent,
                 time: scene.time(),
             };
-            snapshotter.snapshot(&channels, &scene, &request, &folder.join(SNAPSHOT))?;
+            snapshotter.snapshot(&render, &scene, &request, &folder.join(SNAPSHOT))?;
         } else {
             for (name, file) in spec.views().iter().zip(snapshot_files(task.protocol)) {
                 let named = task
@@ -372,7 +362,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                     transparent: spec.transparent,
                     time: scene.time(),
                 };
-                snapshotter.snapshot(&channels, &scene, &request, &folder.join(file))?;
+                snapshotter.snapshot(&render, &scene, &request, &folder.join(file))?;
             }
             scene.set_time(time.min(scene.frame_count() - 1));
         }

@@ -823,10 +823,8 @@ fn parameter_rows<'a>(
     let params = style.params();
     let voxel = state.scene.dataset.voxel_size().min_element();
     let world = state.scene.dataset.world_size().max_element();
-    let visible = object.tracks().is_none_or(|layer| layer.visible());
-    let thickness = object
-        .tracks()
-        .map_or_else(|| style.thickness(), |layer| layer.thickness());
+    let visible = style.visible();
+    let thickness = style.thickness();
     let min_thickness = object.min_thickness();
     let max_thickness = object.max_thickness();
     let step = params.max_step();

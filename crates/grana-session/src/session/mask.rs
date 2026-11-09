@@ -17,9 +17,10 @@ impl Session {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        let channels = Channels::new(image, scene);
+        let render = Channels::render(Arc::clone(&image), scene);
+        self.channels = Some(Arc::new(Channels::analysis(image, scene)));
         if let Some(loader) = self.source.as_ref() {
-            loader.set_channels(channels);
+            loader.set_channels(render);
         }
     }
 

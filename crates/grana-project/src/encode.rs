@@ -421,8 +421,6 @@ impl Encode for SetState {
         self.params.encode(writer);
         self.track_style.encode(writer);
         self.tracks.encode(writer);
-        self.track_thickness.encode(writer);
-        self.track_visible.encode(writer);
         self.object_color.encode(writer);
         self.track_color.encode(writer);
         self.classifier.encode(writer);

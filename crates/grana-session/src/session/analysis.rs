@@ -7,20 +7,8 @@ const CALIBRATION_ITERATIONS: u32 = 10;
 
 impl Session {
     pub(super) fn analysable(&mut self) -> bool {
-        let Some(scene) = self.scene.as_ref() else {
+        if self.scene.is_none() {
             self.message = Some(Message::error("open a dataset before analysing it"));
-            return false;
-        };
-        let placed = scene
-            .dataset
-            .pyramid()
-            .levels()
-            .iter()
-            .any(|level| !level.basis().orthogonal());
-        if placed {
-            self.message = Some(Message::error(
-                "the dataset is placed with a sheared transform that analysis cannot measure yet",
-            ));
             return false;
         }
         true
@@ -579,7 +567,7 @@ impl Session {
         if self.loading.is_some() {
             return;
         }
-        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
+        let Some(channels) = self.analysis_channels() else {
             self.message = Some(Message::error("open a dataset before calibrating it"));
             return;
         };
@@ -689,7 +677,7 @@ impl Session {
         if let Some(scene) = self.scene.as_mut() {
             scene.clear_tracks(set);
         }
-        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
+        let Some(channels) = self.analysis_channels() else {
             self.message = Some(Message::error("the dataset is still opening"));
             return;
         };
@@ -777,11 +765,7 @@ impl Session {
             ));
             return;
         }
-        if region.enabled()
-            && region
-                .voxel_range(scene.dataset.pyramid().level(0))
-                .is_none()
-        {
+        if region.enabled() && region.voxel_range(channels.pyramid().level(0)).is_none() {
             self.message = Some(Message::error("the region does not overlap the dataset"));
             return;
         }
@@ -977,7 +961,7 @@ impl Session {
         {
             return;
         }
-        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
+        let Some(channels) = self.analysis_channels() else {
             self.message = Some(Message::error("the dataset is still opening"));
             return;
         };
@@ -1000,11 +984,7 @@ impl Session {
             return;
         }
         let region = scene.region;
-        if region.enabled()
-            && region
-                .voxel_range(scene.dataset.pyramid().level(0))
-                .is_none()
-        {
+        if region.enabled() && region.voxel_range(channels.pyramid().level(0)).is_none() {
             self.message = Some(Message::error("the region does not overlap the dataset"));
             return;
         }
@@ -1067,7 +1047,7 @@ impl Session {
         {
             return;
         }
-        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
+        let Some(channels) = self.analysis_channels() else {
             self.message = Some(Message::error("the dataset is still opening"));
             return;
         };
@@ -1100,11 +1080,7 @@ impl Session {
             return;
         }
         let region = scene.region;
-        if region.enabled()
-            && region
-                .voxel_range(scene.dataset.pyramid().level(0))
-                .is_none()
-        {
+        if region.enabled() && region.voxel_range(channels.pyramid().level(0)).is_none() {
             self.message = Some(Message::error("the region does not overlap the dataset"));
             return;
         }

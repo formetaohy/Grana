@@ -472,7 +472,7 @@ impl Session {
                 grana_pipeline::run::edit(&frames, &edits, voxel, Some(&self.store))?
             }
             Some(Provenance::Masked { strokes, .. }) => {
-                let Some(reader) = self.source.as_ref().and_then(Loader::channels) else {
+                let Some(reader) = self.analysis_channels() else {
                     return Err("open a dataset before painting a mask".to_string());
                 };
                 let level = frames

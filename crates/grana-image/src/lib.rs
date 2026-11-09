@@ -4,6 +4,7 @@ mod error;
 mod fingerprint;
 mod image;
 mod level;
+mod metric;
 mod region;
 mod series;
 mod source;
@@ -15,6 +16,7 @@ pub use image::{
     Format, Image, dataset_name, is_image, is_remote, plate, plate_at, remote_series_group,
     resolve_series, series_count, series_group, series_names,
 };
+pub use metric::Metric;
 pub use series::Series;
 pub use source::Source;
 

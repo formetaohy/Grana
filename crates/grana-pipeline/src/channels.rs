@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
-use grana_image::{Format, Image, Labels};
+use grana_image::{Format, Image, Labels, Metric};
 use grana_object::Mask;
 use grana_optics::{KernelBank, Psf};
 use grana_restore::{Job as RestoreJob, Restorer};
@@ -96,47 +96,41 @@ pub struct Channels {
     reader: Arc<Image>,
     derived: Vec<Node>,
     pyramid: Pyramid,
+    metric: Option<Metric>,
 }
 
 impl Channels {
-    pub fn new(reader: Arc<Image>, scene: &Scene) -> Self {
-        let derived = scene
-            .derived()
-            .iter()
-            .map(|entry| {
-                let spec = entry.spec().clone();
-                let kind = match spec.operation() {
-                    Operation::Mask { .. } => Kind::Mask(
-                        entry
-                            .mask()
-                            .expect("a bound mask channel carries its object frames")
-                            .clone(),
-                    ),
-                    Operation::Restore(restore) => Kind::Restore(RestoreChannel::new(
-                        spec.source(),
-                        restore.psf().clone(),
-                        restore.iterations(),
-                    )),
-                    Operation::Smooth(_) | Operation::Background(_) | Operation::Ratio(_) => {
-                        Kind::Operator
-                    }
-                };
-                Node { spec, kind }
-            })
-            .collect();
+    pub fn analysis(reader: Arc<Image>, scene: &Scene) -> Self {
+        let metric = Metric::of(scene.dataset.pyramid());
+        let pyramid = metric.as_ref().map_or_else(
+            || scene.dataset.pyramid().clone(),
+            |metric| metric.pyramid().clone(),
+        );
+        let derived = derived(scene);
+        Self {
+            pyramid,
+            reader,
+            derived,
+            metric,
+        }
+    }
+
+    pub fn render(reader: Arc<Image>, scene: &Scene) -> Self {
         Self {
             pyramid: scene.dataset.pyramid().clone(),
             reader,
-            derived,
+            derived: derived(scene),
+            metric: None,
         }
     }
 
     pub fn stored(reader: Arc<Image>) -> Self {
         let pyramid = reader.pyramid().clone();
         Self {
+            pyramid,
             reader,
             derived: Vec::new(),
-            pyramid,
+            metric: None,
         }
     }
 
@@ -273,10 +267,15 @@ impl Channels {
     ) -> Result<VoxelData, ChannelsError> {
         let stored = self.stored_channels();
         if channel < stored {
-            return self
-                .reader
-                .read_region(time, level, channel, ranges, shift)
-                .map_err(ChannelsError::Image);
+            return match &self.metric {
+                Some(metric) => metric
+                    .read_region(&self.reader, time, level, channel, ranges, shift)
+                    .map_err(ChannelsError::Image),
+                None => self
+                    .reader
+                    .read_region(time, level, channel, ranges, shift)
+                    .map_err(ChannelsError::Image),
+            };
         }
         let node = self
             .derived
@@ -322,6 +321,10 @@ impl Channels {
         coord: BrickCoord,
         shift: [f32; 3],
     ) -> Result<BrickData, ChannelsError> {
+        assert!(
+            self.metric.is_none(),
+            "a brick belongs to the source grid the renderer streams"
+        );
         let data = self
             .reader
             .read_brick(time, level, coord, shift)
@@ -352,6 +355,33 @@ impl Channels {
         }
         Ok(BrickData::new(channels))
     }
+}
+
+fn derived(scene: &Scene) -> Vec<Node> {
+    scene
+        .derived()
+        .iter()
+        .map(|entry| {
+            let spec = entry.spec().clone();
+            let kind = match spec.operation() {
+                Operation::Mask { .. } => Kind::Mask(
+                    entry
+                        .mask()
+                        .expect("a bound mask channel carries its object frames")
+                        .clone(),
+                ),
+                Operation::Restore(restore) => Kind::Restore(RestoreChannel::new(
+                    spec.source(),
+                    restore.psf().clone(),
+                    restore.iterations(),
+                )),
+                Operation::Smooth(_) | Operation::Background(_) | Operation::Ratio(_) => {
+                    Kind::Operator
+                }
+            };
+            Node { spec, kind }
+        })
+        .collect()
 }
 
 struct ChannelSource<'a> {

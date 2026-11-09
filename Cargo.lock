@@ -3545,6 +3545,7 @@ dependencies = [
 name = "grana-image"
 version = "0.1.1"
 dependencies = [
+ "glam",
  "grana-czi",
  "grana-readout",
  "grana-tiff",

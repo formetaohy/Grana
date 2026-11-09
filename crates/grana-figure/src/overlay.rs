@@ -442,7 +442,7 @@ pub fn legends(scene: &Scene) -> Vec<Legend> {
             });
         }
         if let Some(metric) = set.track_coloring().metric()
-            && set.tracks().is_some_and(|layer| layer.visible())
+            && set.track_visible()
             && let Some(extent) = set.track_extent()
         {
             legends.push(Legend {

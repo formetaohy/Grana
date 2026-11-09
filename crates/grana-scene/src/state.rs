@@ -90,8 +90,6 @@ pub struct SetState {
     pub params: ObjectParams,
     pub track_style: Option<TrackStyle>,
     pub tracks: Option<Arc<TrackSet>>,
-    pub track_thickness: Option<f32>,
-    pub track_visible: Option<bool>,
     pub object_color: ColorState<ObjectColor>,
     pub track_color: ColorState<TrackColor>,
     pub classifier: Option<grana_measure::ClassifierState>,

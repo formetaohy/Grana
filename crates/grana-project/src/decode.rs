@@ -751,8 +751,6 @@ impl Decode for SetState {
         }
         let track_style = Option::<TrackStyle>::decode(reader)?;
         let tracks = Option::<Arc<TrackSet>>::decode(reader)?;
-        let track_thickness = Option::<f32>::decode(reader)?.map(positive).transpose()?;
-        let track_visible = Option::<bool>::decode(reader)?;
         let object_color = ColorState::<ObjectColor>::decode(reader)?;
         let track_color = ColorState::<TrackColor>::decode(reader)?;
         let classifier = Option::<ClassifierState>::decode(reader)?;
@@ -791,8 +789,6 @@ impl Decode for SetState {
             params,
             track_style,
             tracks,
-            track_thickness,
-            track_visible,
             object_color,
             track_color,
             classifier,
@@ -821,8 +817,6 @@ impl Decode for SetState {
             return Err(FAULT_SHAPE);
         }
         if kind.trackable() != state.track_style.is_some()
-            || state.tracks.is_some() != state.track_thickness.is_some()
-            || state.tracks.is_some() != state.track_visible.is_some()
             || state
                 .frames
                 .iter()
