@@ -79,7 +79,13 @@ impl Engine {
         frame: ViewportFrame<'_>,
     ) -> Result<FrameInfo, String> {
         self.renderer.set_exporting(false);
-        let rendered = crate::view::frame(frame.scene)?;
+        let rendered = crate::view::frame(
+            frame.scene,
+            Some(crate::view::Lens {
+                camera: frame.viewport.camera(),
+                height: frame.volume_region[3],
+            }),
+        )?;
         let info = frame::draw(
             &mut self.renderer,
             device,

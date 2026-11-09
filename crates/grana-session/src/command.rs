@@ -3,6 +3,7 @@ use grana_measure::{
     Aggregate, ColocPair, ColocSettings, ColocThresholds, Filter, Group, Lasso, MeasureView,
     Measurement, PlotAxis, Scope,
 };
+use grana_mesh::Format as MeshFormat;
 use grana_object::TrackParams;
 use grana_optics::Psf;
 
@@ -295,7 +296,10 @@ pub enum Command {
     },
     ExportColoc,
     ExportMeasure,
-    ExportMesh(ObjectSetId),
+    ExportMesh {
+        set: ObjectSetId,
+        format: MeshFormat,
+    },
     ExportLabels(ObjectSetId),
     ExportDataset,
     CaptureProtocol,

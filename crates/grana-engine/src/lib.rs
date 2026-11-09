@@ -8,4 +8,4 @@ mod view;
 pub use engine::{Engine, Picked, SAMPLE_LIMIT, ViewportFrame};
 pub use output::{Destination, Outcome, Plan, Pose};
 pub use panels::{Panels, Panes};
-pub use view::{RenderedScene, frame};
+pub use view::{Lens, RenderedScene, frame};

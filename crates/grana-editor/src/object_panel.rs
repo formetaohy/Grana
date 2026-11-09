@@ -4,7 +4,7 @@ use grana_scene::{
     Item, Job, ObjectColor, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, ParamField,
     ParamScale, Provenance, RelationField, SEGMENT_FIELDS, Scene,
 };
-use grana_session::Command;
+use grana_session::{Command, MeshFormat};
 use grana_ui::{
     Align, Border, BuildContext, Color, Corners, Edges, Element, Fill, Icon, Key, Length, Level,
     Motion, Rect, Role, Shadow, TextStyle, TypeStyle, icon,
@@ -618,10 +618,33 @@ fn object_menu<'a>(
     if kind != ObjectKind::Spots {
         rows.push(action_row(
             ctx,
-            &format!("object.{}.menu.export", id.raw()),
+            &format!("object.{}.menu.export.obj", id.raw()),
             Icon::Export,
-            "Export Mesh…",
-            Message::Command(Command::ExportMesh(id)),
+            "Export Mesh OBJ…",
+            Message::Command(Command::ExportMesh {
+                set: id,
+                format: MeshFormat::Obj,
+            }),
+        ));
+        rows.push(action_row(
+            ctx,
+            &format!("object.{}.menu.export.stl", id.raw()),
+            Icon::Export,
+            "Export Mesh STL…",
+            Message::Command(Command::ExportMesh {
+                set: id,
+                format: MeshFormat::Stl,
+            }),
+        ));
+        rows.push(action_row(
+            ctx,
+            &format!("object.{}.menu.export.glb", id.raw()),
+            Icon::Export,
+            "Export Mesh GLB…",
+            Message::Command(Command::ExportMesh {
+                set: id,
+                format: MeshFormat::Glb,
+            }),
         ));
     }
     rows.push(action_row(

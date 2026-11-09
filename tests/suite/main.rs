@@ -3,6 +3,7 @@ mod core;
 mod format;
 mod geometry;
 mod measure;
+mod mesh;
 mod render;
 mod segment;
 mod session;

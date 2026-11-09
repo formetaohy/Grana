@@ -6,8 +6,8 @@ use glam::Vec3;
 
 use grana_codec::{Decoder, Encoder, FAULT_TAG, FAULT_VALUE, Fault};
 
-use crate::Mesh;
 use crate::store::{Decode, Payload};
+use crate::{Mesh, MeshVertex};
 
 const UNIT: f32 = 65535.0;
 const NARROW_LIMIT: usize = u16::MAX as usize;
@@ -625,6 +625,32 @@ impl PackedMesh {
             "the vertex lies inside its packed object"
         );
         self.dequantize(group, vertex as u32)
+    }
+
+    pub fn to_mesh(&self) -> Mesh {
+        let mut vertices = Vec::with_capacity(self.vertices.len());
+        let mut indices = Vec::with_capacity(
+            self.groups
+                .iter()
+                .map(|group| group.index_count as usize)
+                .sum(),
+        );
+        for (object, group) in self.groups.iter().enumerate() {
+            let base = vertices.len() as u32;
+            for vertex in 0..group.vertex_count as usize {
+                vertices.push(MeshVertex::new(
+                    self.position(object, vertex),
+                    self.normal(object, vertex),
+                    object as u32,
+                ));
+            }
+            for triangle in 0..group.index_count as usize / 3 {
+                for corner in self.triangle_vertices(object, triangle) {
+                    indices.push(base + corner);
+                }
+            }
+        }
+        Mesh::new(vertices, indices)
     }
 
     pub fn normal(&self, object: usize, vertex: usize) -> [f32; 3] {

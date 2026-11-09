@@ -3363,6 +3363,7 @@ dependencies = [
  "grana-gpu",
  "grana-image",
  "grana-measure",
+ "grana-mesh",
  "grana-object",
  "grana-project",
  "grana-protocol",
@@ -3373,6 +3374,7 @@ dependencies = [
  "grana-tiff",
  "grana-volume",
  "grana-zarr",
+ "serde_json",
  "wgpu",
 ]
 
@@ -3568,19 +3570,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-mesh"
+version = "0.1.1"
+dependencies = [
+ "grana-geometry",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "grana-net"
 version = "0.1.1"
 dependencies = [
  "thiserror 2.0.21",
  "ureq 3.5.1",
-]
-
-[[package]]
-name = "grana-obj"
-version = "0.1.1"
-dependencies = [
- "grana-geometry",
- "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3749,7 +3752,7 @@ dependencies = [
  "grana-image",
  "grana-interop",
  "grana-measure",
- "grana-obj",
+ "grana-mesh",
  "grana-object",
  "grana-optics",
  "grana-pipeline",

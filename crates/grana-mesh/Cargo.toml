@@ -1,5 +1,5 @@
 [package]
-name = "grana-obj"
+name = "grana-mesh"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 grana-geometry = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

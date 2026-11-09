@@ -1,12 +1,21 @@
-use grana_display::Shading;
+use glam::Vec3;
+use grana_display::{Camera, Shading};
 use grana_object::Spot;
 use grana_render::{ChannelRow, Layer, LayerKey, Marker, SceneFrame, Style};
-use grana_scene::{Item, ObjectSet, Scene, Selection};
+use grana_scene::{Item, ObjectFrame, ObjectSet, Scene, Selection};
 
 const SELECTED_COLOR: [f32; 3] = [1.00, 0.93, 0.62];
 const SELECTED_SCALE: f32 = 1.3;
 const SEED_COLOR: [f32; 3] = [1.00, 0.97, 0.90];
 const SEED_SCALE: f32 = 2.0;
+const PIXEL_TRIANGLE_AREA: f32 = 4.0;
+const MINIMUM_TARGET: f32 = 512.0;
+
+#[derive(Clone, Copy)]
+pub struct Lens<'a> {
+    pub camera: &'a Camera,
+    pub height: u32,
+}
 
 pub struct RenderedScene<'a> {
     pub channels: Vec<ChannelRow<'a>>,
@@ -32,7 +41,7 @@ impl RenderedScene<'_> {
     }
 }
 
-pub fn frame(scene: &Scene) -> Result<RenderedScene<'_>, String> {
+pub fn frame<'a>(scene: &'a Scene, lens: Option<Lens<'_>>) -> Result<RenderedScene<'a>, String> {
     let mut styles = Vec::new();
     let mut layers = Vec::new();
     let mut markers = Vec::new();
@@ -69,7 +78,20 @@ pub fn frame(scene: &Scene) -> Result<RenderedScene<'_>, String> {
                 }));
             }
         }
-        let geometry = frame.geometry().map_err(|error| error.to_string())?;
+        let wanted = match (frame, lens) {
+            (ObjectFrame::Surfaces(surfaces), Some(lens)) => {
+                surfaces.select_detail(triangle_target(surfaces, lens))
+            }
+            _ => 0,
+        };
+        let (geometry, detail) = match frame {
+            ObjectFrame::Surfaces(surfaces) => {
+                let (mesh, available) =
+                    surfaces.detail(wanted).map_err(|error| error.to_string())?;
+                (Some(mesh), available)
+            }
+            _ => (frame.geometry().map_err(|error| error.to_string())?, 0),
+        };
         if let (Some(mesh), Some(stamp)) = (geometry, set.frame_stamp(scene.time()))
             && !mesh.is_empty()
         {
@@ -87,7 +109,7 @@ pub fn frame(scene: &Scene) -> Result<RenderedScene<'_>, String> {
                 });
             }
             layers.push(Layer {
-                key: LayerKey::at_frame(set.id().raw(), 0, scene.time(), stamp),
+                key: LayerKey::at_frame(set.id().raw(), 0, scene.time(), stamp, detail as u16),
                 mesh,
                 style_start: start,
                 style_count: frame.object_count(),
@@ -150,4 +172,19 @@ fn marker(scene: &Scene, set: &ObjectSet, index: usize, spot: Spot, color: [f32;
     } else {
         Marker::new(spot.center(), spot.radius(), color, set.opacity())
     }
+}
+
+fn triangle_target(surfaces: &grana_object::SurfaceSet, lens: Lens<'_>) -> usize {
+    let focal = 0.5 * lens.height as f32 / (0.5 * lens.camera.fov_y()).tan();
+    let eye = lens.camera.eye();
+    let mut area = 0.0f64;
+    for object in surfaces.objects() {
+        let bounds = object.bounds();
+        let radius = 0.5 * Vec3::from(bounds.size()).length();
+        let center = Vec3::from(bounds.center());
+        let distance = (eye - center).length().max(0.5 * radius).max(1.0e-6);
+        let pixels = f64::from(radius * focal / distance);
+        area += std::f64::consts::PI * pixels * pixels / f64::from(PIXEL_TRIANGLE_AREA);
+    }
+    area.max(f64::from(MINIMUM_TARGET)) as usize
 }

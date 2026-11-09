@@ -1,7 +1,133 @@
 use glam::Vec3;
-use grana_geometry::{Mesh, MeshVertex, PackedMesh, SectionCutter, SectionPlane};
-use grana_object::Mask;
+use grana_geometry::{Bounds, Mesh, MeshVertex, PackedMesh, SectionCutter, SectionPlane, simplify};
+use grana_object::{IntensityTable, Mask, SampleStatistics, SurfaceSet, SurfaceStatistics};
 use grana_volume::{Extent, Level, Region, Spacing};
+
+fn torus(object: u32, major: u32, minor: u32, offset: f32) -> Mesh {
+    let vertex = |u: u32, v: u32| {
+        let around = std::f32::consts::TAU * u as f32 / major as f32;
+        let across = std::f32::consts::TAU * v as f32 / minor as f32;
+        let reach = 5.0 + 1.5 * across.cos();
+        [
+            offset + reach * around.cos(),
+            reach * around.sin(),
+            1.5 * across.sin(),
+        ]
+    };
+    let mut vertices = Vec::with_capacity((major * minor) as usize);
+    for u in 0..major {
+        for v in 0..minor {
+            let at = vertex(u, v);
+            let next_u = Vec3::from(vertex((u + 1) % major, v));
+            let next_v = Vec3::from(vertex(u, (v + 1) % minor));
+            let normal = (next_u - Vec3::from(at)).cross(next_v - Vec3::from(at));
+            vertices.push(MeshVertex::new(at, normal.normalize().to_array(), object));
+        }
+    }
+    let mut indices = Vec::new();
+    for u in 0..major {
+        for v in 0..minor {
+            let corner = |du: u32, dv: u32| ((u + du) % major) * minor + (v + dv) % minor;
+            indices.extend([corner(0, 0), corner(1, 0), corner(0, 1)]);
+            indices.extend([corner(1, 0), corner(1, 1), corner(0, 1)]);
+        }
+    }
+    Mesh::new(vertices, indices)
+}
+
+fn torus_gap(point: [f32; 3]) -> f32 {
+    let point = Vec3::from(point);
+    (((point.x * point.x + point.y * point.y).sqrt() - 5.0).powi(2) + point.z * point.z).sqrt()
+        - 1.5
+}
+
+#[test]
+fn builds_coarse_surface_details_in_the_background() {
+    let mesh = torus(0, 192, 96, 0.0);
+    let triangles = mesh.triangle_count();
+    let statistics = SurfaceStatistics::new(
+        1,
+        1.0,
+        1.0,
+        [0.0; 3],
+        Bounds::new([-6.5, -6.5, -1.5], [6.5, 6.5, 1.5]),
+    );
+    let intensities = IntensityTable::new(1, vec![SampleStatistics::new(1.0, 1.0, 1.0, 0.0, 1.0)]);
+    let set = SurfaceSet::new(0, mesh, vec![statistics], intensities);
+    let level = set.select_detail(triangles / 8);
+    assert!(level >= 2, "a distant surface asks for a coarse detail");
+    let (base, _) = set.detail(level).expect("the base surface loads");
+    assert_eq!(base.object_count(), 1, "the detail keeps its object");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let (mesh, available) = set.detail(level).expect("a surface detail loads");
+        if mesh.triangle_count() <= triangles / 4 {
+            assert_eq!(mesh.object_count(), 1, "the coarse detail keeps its object");
+            assert!(available >= 2, "the ladder reports the built level");
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the detail ladder never built"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn simplifies_a_dense_torus_without_losing_its_shape() {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for part in [torus(0, 96, 48, 0.0), torus(1, 96, 48, 20.0)] {
+        let base = vertices.len() as u32;
+        vertices.extend_from_slice(part.vertices());
+        indices.extend(part.indices().iter().map(|index| index + base));
+    }
+    let mesh = Mesh::new(vertices, indices);
+    let before = mesh.triangle_count();
+    let reduced = simplify(&mesh, before / 8);
+    let after = reduced.triangle_count();
+    assert!(
+        after < before / 4,
+        "the mesh barely simplified: {after} of {before}"
+    );
+    assert!(
+        after > before / 32,
+        "the mesh collapsed too far: {after} of {before}"
+    );
+    let objects = reduced
+        .vertices()
+        .iter()
+        .map(|vertex| vertex.object())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(objects.len(), 2, "an object vanished in simplification");
+    let mut low = [f32::INFINITY; 3];
+    let mut high = [f32::NEG_INFINITY; 3];
+    for vertex in reduced.vertices() {
+        let point = vertex.position();
+        assert!(point.iter().all(|value| value.is_finite()));
+        let gap = torus_gap(point)
+            .abs()
+            .min(torus_gap([point[0] - 20.0, point[1], point[2]]).abs());
+        assert!(
+            gap < 0.6,
+            "a simplified vertex leaves the torus by {gap} at {point:?}"
+        );
+        for axis in 0..3 {
+            low[axis] = low[axis].min(point[axis]);
+            high[axis] = high[axis].max(point[axis]);
+        }
+    }
+    assert!(
+        (high[0] - low[0] - 33.0).abs() < 1.0,
+        "the major extent changed: {}",
+        high[0] - low[0]
+    );
+    assert!(
+        reduced.triangle_count() * 3 == reduced.indices().len(),
+        "the simplified mesh holds whole triangles"
+    );
+}
 
 fn cube(half: f32) -> Mesh {
     let corners = [

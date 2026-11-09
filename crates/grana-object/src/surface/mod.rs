@@ -1,3 +1,4 @@
+mod detail;
 mod edit;
 mod topology;
 
@@ -9,6 +10,8 @@ use crate::IntensityTable;
 
 pub use edit::{SurfaceEdit, SurfaceEditKind};
 pub use topology::{Basin, Seam, SurfacePatches, SurfaceTopology, TopologyInfo};
+
+use detail::Details;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceStatistics {
@@ -87,6 +90,8 @@ pub struct SurfaceSet {
     topology: Option<Geometry<SurfaceTopology>>,
     leaves: Vec<Vec<u32>>,
     removed: Vec<u32>,
+    triangles: usize,
+    details: Arc<Details>,
 }
 
 impl SurfaceSet {
@@ -96,6 +101,7 @@ impl SurfaceSet {
         objects: Vec<SurfaceStatistics>,
         intensities: IntensityTable,
     ) -> Self {
+        let triangles = mesh.triangle_count();
         let geometry = PackedMesh::new(mesh);
         assert!(
             agrees(&geometry, &objects, &intensities),
@@ -109,6 +115,8 @@ impl SurfaceSet {
             topology: None,
             leaves: Vec::new(),
             removed: Vec::new(),
+            triangles,
+            details: Arc::new(Details::new()),
         }
     }
 
@@ -119,6 +127,7 @@ impl SurfaceSet {
         objects: Vec<SurfaceStatistics>,
         intensities: IntensityTable,
     ) -> Result<Self, grana_geometry::Error> {
+        let triangles = mesh.triangle_count();
         let geometry = PackedMesh::new(mesh);
         assert!(
             agrees(&geometry, &objects, &intensities),
@@ -132,6 +141,8 @@ impl SurfaceSet {
             topology: None,
             leaves: Vec::new(),
             removed: Vec::new(),
+            triangles,
+            details: Arc::new(Details::new()),
         })
     }
 
@@ -145,6 +156,7 @@ impl SurfaceSet {
         if !agrees(&packed, &objects, &intensities) {
             return Ok(None);
         }
+        let triangles = packed.triangle_count();
         Ok(Some(Self {
             level,
             geometry,
@@ -153,6 +165,8 @@ impl SurfaceSet {
             topology: None,
             leaves: Vec::new(),
             removed: Vec::new(),
+            triangles,
+            details: Arc::new(Details::new()),
         }))
     }
 
@@ -217,8 +231,32 @@ impl SurfaceSet {
         self.geometry.load()
     }
 
+    pub fn triangles(&self) -> usize {
+        self.triangles
+    }
+
+    pub fn select_detail(&self, target: usize) -> usize {
+        self.details.select(self.triangles, target)
+    }
+
+    pub fn detail(&self, level: usize) -> Result<(Arc<PackedMesh>, usize), grana_geometry::Error> {
+        let (mesh, available, start) = self.details.level(level, &self.geometry)?;
+        if start {
+            let details = Arc::clone(&self.details);
+            let base = self.geometry.clone();
+            let spawned = std::thread::Builder::new()
+                .name("grana-surface-detail".to_string())
+                .spawn(move || detail::build(details, base));
+            if spawned.is_err() {
+                self.details.cancel();
+            }
+        }
+        Ok((mesh, available))
+    }
+
     pub fn bytes(&self) -> u64 {
         self.geometry.bytes()
+            + self.details.bytes()
             + self
                 .topology
                 .as_ref()
@@ -249,6 +287,11 @@ impl SurfaceSet {
         if object >= self.objects.len() {
             return Ok(None);
         }
+        let packed = self.geometry.load()?;
+        let dropped = packed
+            .groups()
+            .get(object)
+            .map_or(0, |group| group.index_count() as usize / 3);
         let Some(geometry) = self.geometry.without(object)? else {
             return Ok(None);
         };
@@ -270,6 +313,8 @@ impl SurfaceSet {
             topology: self.topology.clone(),
             leaves,
             removed,
+            triangles: self.triangles.saturating_sub(dropped),
+            details: Arc::new(Details::new()),
         }))
     }
 
@@ -279,6 +324,14 @@ impl SurfaceSet {
             self.objects.len(),
             "the kept objects cover every surface"
         );
+        let packed = self.geometry.load()?;
+        let triangles = keep
+            .iter()
+            .enumerate()
+            .filter(|(_, kept)| **kept)
+            .filter_map(|(object, _)| packed.groups().get(object))
+            .map(|group| group.index_count() as usize / 3)
+            .sum();
         let geometry = self.geometry.retain(keep)?;
         let carries = self.leaves.len() == self.objects.len();
         let kept_count = keep.iter().filter(|kept| **kept).count();
@@ -307,6 +360,8 @@ impl SurfaceSet {
             topology: self.topology.clone(),
             leaves,
             removed,
+            triangles,
+            details: Arc::new(Details::new()),
         })
     }
 
@@ -360,6 +415,8 @@ impl SurfaceSet {
             topology,
             leaves,
             removed,
+            triangles: self.triangles + other.triangles,
+            details: Arc::new(Details::new()),
         })
     }
 }

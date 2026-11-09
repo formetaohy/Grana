@@ -551,7 +551,7 @@ impl Session {
             Command::SetDriftOffset { time, offset } => self.set_drift_offset(time, offset),
             Command::ExportColoc => self.export_coloc(),
             Command::ExportMeasure => self.export_measure(),
-            Command::ExportMesh(set) => self.export_mesh(set),
+            Command::ExportMesh { set, format } => self.export_mesh(set, format),
             Command::ExportLabels(set) => self.export_labels(set),
             Command::ExportDataset => self.export_dataset(),
             Command::ExportTracks(set) => self.choose_export_tracks(set),

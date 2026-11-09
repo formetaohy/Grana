@@ -11,15 +11,17 @@ pub struct LayerKey {
     part: u32,
     frame: Option<u32>,
     revision: u64,
+    detail: u16,
 }
 
 impl LayerKey {
-    pub fn at_frame(owner: u64, part: u32, frame: u32, revision: u64) -> Self {
+    pub fn at_frame(owner: u64, part: u32, frame: u32, revision: u64, detail: u16) -> Self {
         Self {
             owner,
             part,
             frame: Some(frame),
             revision,
+            detail,
         }
     }
 
@@ -29,6 +31,7 @@ impl LayerKey {
             part,
             frame: None,
             revision,
+            detail: 0,
         }
     }
 }

@@ -12,6 +12,7 @@ mod view;
 
 pub use command::{Action, Command};
 pub use grana_image::{Image, Series, Source, is_image, is_remote};
+pub use grana_mesh::Format as MeshFormat;
 pub use grana_project::Export;
 pub use grana_scene::slug;
 pub use job::{
