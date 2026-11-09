@@ -197,6 +197,21 @@ impl Protocol {
                     }
                 }
             }
+            SourceSpec::Masked { source, edits } => {
+                if !self.sets.iter().any(|set| set.key == *source) {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{source} is not an object set of the protocol"
+                    )));
+                }
+                for edit in edits {
+                    if edit.frame() >= frames {
+                        return Err(ProtocolError::Invalid(format!(
+                            "the mask edits name frame {} of {frames}",
+                            edit.frame()
+                        )));
+                    }
+                }
+            }
             SourceSpec::Labels { label } => {
                 if label.trim().is_empty() {
                     return Err(ProtocolError::Invalid(
@@ -516,6 +531,29 @@ impl Builder<'_> {
                     .ok_or_else(|| {
                         ProtocolError::Invalid(format!(
                             "{name} edits an object set that left the scene"
+                        ))
+                    })?;
+                self.rename(id, name, named)?;
+                self.apply_track(id, track);
+                self.steps.push(Step::Edit { set: id, source });
+                Ok(id)
+            }
+            SourceSpec::Masked {
+                source: reference,
+                edits,
+            } => {
+                let source = self.reference(reference)?;
+                let strokes = edits
+                    .iter()
+                    .map(|edit| edit.clone().edit())
+                    .collect::<Result<Vec<_>, String>>()
+                    .map_err(ProtocolError::Invalid)?;
+                let id = self
+                    .scene
+                    .masked_object(source, "masked", strokes)
+                    .ok_or_else(|| {
+                        ProtocolError::Invalid(format!(
+                            "{name} paints an object set that left the scene"
                         ))
                     })?;
                 self.rename(id, name, named)?;

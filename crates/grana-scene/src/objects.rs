@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use grana_display::Extent;
 use grana_measure::{Child, RelationField, UNASSIGNED};
-use grana_object::{RelationFrame, SurfaceEdit, TrackSet};
+use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackSet};
 
 use crate::color::ObjectColor;
 use crate::curation::Curation;
@@ -379,6 +379,50 @@ impl Objects {
             .collect()
     }
 
+    pub fn masked(
+        &mut self,
+        id: ObjectSetId,
+        suffix: &str,
+        strokes: Vec<MaskEdit>,
+    ) -> Option<ObjectSetId> {
+        if strokes.is_empty() {
+            return None;
+        }
+        self.derive(id, suffix, || Provenance::Masked {
+            source: id,
+            strokes,
+        })
+    }
+
+    pub fn replan_masked(&mut self, id: ObjectSetId, strokes: Vec<MaskEdit>) -> bool {
+        if strokes.is_empty() {
+            return false;
+        }
+        let Some(source) = self
+            .get(id)
+            .and_then(|set| set.provenance().masking())
+            .map(|(source, _)| source)
+        else {
+            return false;
+        };
+        self.get_mut(id).is_some_and(|set| {
+            set.set_provenance(Provenance::Masked { source, strokes });
+            true
+        })
+    }
+
+    pub fn masked_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
+        self.sets
+            .iter()
+            .filter(|set| {
+                set.provenance()
+                    .masking()
+                    .is_some_and(|(source, _)| source == id)
+            })
+            .map(ObjectSet::id)
+            .collect()
+    }
+
     pub fn merge(&mut self, source: ObjectSetId, target: ObjectSetId) -> Result<(), String> {
         if source == target {
             return Err("an object set merges into another object set".to_string());
@@ -421,7 +465,8 @@ impl Objects {
             | Provenance::Interop { .. }
             | Provenance::Filtered { .. }
             | Provenance::Copied { .. }
-            | Provenance::Edited { .. } => {
+            | Provenance::Edited { .. }
+            | Provenance::Masked { .. } => {
                 vec![self.sets[target_index].recipe()]
             }
         };

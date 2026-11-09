@@ -505,7 +505,8 @@ impl Protocol {
             | SourceSpec::Tracks { .. } => Ok(()),
             SourceSpec::Filtered { source, .. }
             | SourceSpec::Copy { source }
-            | SourceSpec::Edited { source, .. } => {
+            | SourceSpec::Edited { source, .. }
+            | SourceSpec::Masked { source, .. } => {
                 if !earlier.contains(source) {
                     return Err(ProtocolError::Invalid(format!(
                         "{set} derives from {source}, which does not run before it"

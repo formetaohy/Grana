@@ -673,6 +673,13 @@ pub fn plate(source: &Source) -> Result<Option<Plate>, Error> {
     }
 }
 
+pub fn plate_at(path: &std::path::Path) -> Result<Option<Plate>, Error> {
+    if !path.is_dir() || !is_zarr(path) {
+        return Ok(None);
+    }
+    plate_of_root(&grana_zarr::Root::local(path)?)
+}
+
 fn plate_of_root(root: &grana_zarr::Root) -> Result<Option<Plate>, Error> {
     if grana_zarr::group_kind(root)? != grana_zarr::GroupKind::Plate {
         return Ok(None);

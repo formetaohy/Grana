@@ -11,6 +11,9 @@ pub struct Field {
     path: String,
     name: String,
     series: usize,
+    row: usize,
+    column: usize,
+    index: usize,
 }
 
 impl Field {
@@ -24,6 +27,18 @@ impl Field {
 
     pub fn series(&self) -> usize {
         self.series
+    }
+
+    pub fn row(&self) -> usize {
+        self.row
+    }
+
+    pub fn column(&self) -> usize {
+        self.column
+    }
+
+    pub fn index(&self) -> usize {
+        self.index
     }
 }
 
@@ -60,8 +75,8 @@ impl Well {
 #[derive(Clone, Debug)]
 pub struct Plate {
     name: String,
-    rows: usize,
-    columns: usize,
+    rows: Vec<String>,
+    columns: Vec<String>,
     wells: Vec<Well>,
     cells: Vec<Option<usize>>,
     fields: Vec<Field>,
@@ -73,11 +88,19 @@ impl Plate {
     }
 
     pub fn rows(&self) -> usize {
-        self.rows
+        self.rows.len()
     }
 
     pub fn columns(&self) -> usize {
-        self.columns
+        self.columns.len()
+    }
+
+    pub fn row_name(&self, row: usize) -> Option<&str> {
+        self.rows.get(row).map(String::as_str)
+    }
+
+    pub fn column_name(&self, column: usize) -> Option<&str> {
+        self.columns.get(column).map(String::as_str)
     }
 
     pub fn wells(&self) -> &[Well] {
@@ -85,10 +108,10 @@ impl Plate {
     }
 
     pub fn well(&self, row: usize, column: usize) -> Option<&Well> {
-        if row >= self.rows || column >= self.columns {
+        if row >= self.rows.len() || column >= self.columns.len() {
             return None;
         }
-        self.cells[row * self.columns + column].map(|index| &self.wells[index])
+        self.cells[row * self.columns.len() + column].map(|index| &self.wells[index])
     }
 
     pub fn fields(&self) -> &[Field] {
@@ -100,9 +123,8 @@ impl Plate {
     }
 
     pub fn well_of(&self, series: usize) -> Option<&Well> {
-        self.wells
-            .iter()
-            .find(|well| well.fields.iter().any(|field| field.series == series))
+        let field = self.fields.get(series)?;
+        self.well(field.row, field.column)
     }
 
     pub fn len(&self) -> usize {
@@ -196,9 +218,10 @@ pub fn open(root: &Root) -> Result<Plate, Error> {
     for spec in &wells {
         let label = format!("{}{}", rows[spec.row], columns[spec.column]);
         let mut fields = well_fields(root, spec, &label)?;
-        fields.sort_by(|left, right| left.path.cmp(&right.path));
-        for field in &mut fields {
+        fields.sort_by(|left, right| natural(&left.path, &right.path));
+        for (index, field) in fields.iter_mut().enumerate() {
             field.series = flat.len();
+            field.index = index;
             flat.push(field.clone());
         }
         collected.push(Well {
@@ -219,8 +242,8 @@ pub fn open(root: &Root) -> Result<Plate, Error> {
             .filter(|name| !name.is_empty())
             .map(str::to_owned)
             .unwrap_or_else(|| root.name()),
-        rows: rows.len(),
-        columns: columns.len(),
+        rows,
+        columns,
         wells: collected,
         cells,
         fields: flat,
@@ -265,9 +288,57 @@ fn well_fields(root: &Root, well: &WellSpec, label: &str) -> Result<Vec<Field>, 
                 name: field_name(label, &field),
                 path: group_path(&joined),
                 series: 0,
+                row: well.row,
+                column: well.column,
+                index: 0,
             }
         })
         .collect())
+}
+
+fn natural(left: &str, right: &str) -> std::cmp::Ordering {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    let mut left_at = 0;
+    let mut right_at = 0;
+    while left_at < left.len() && right_at < right.len() {
+        if left[left_at].is_ascii_digit() && right[right_at].is_ascii_digit() {
+            let left_end = (left_at..left.len())
+                .find(|index| !left[*index].is_ascii_digit())
+                .unwrap_or(left.len());
+            let right_end = (right_at..right.len())
+                .find(|index| !right[*index].is_ascii_digit())
+                .unwrap_or(right.len());
+            let left_number = &left[left_at..left_end];
+            let right_number = &right[right_at..right_end];
+            let left_digits = left_number
+                .iter()
+                .position(|digit| *digit != b'0')
+                .map_or(left_number, |offset| &left_number[offset..]);
+            let right_digits = right_number
+                .iter()
+                .position(|digit| *digit != b'0')
+                .map_or(right_number, |offset| &right_number[offset..]);
+            let order = left_digits
+                .len()
+                .cmp(&right_digits.len())
+                .then_with(|| left_digits.cmp(right_digits));
+            if order != std::cmp::Ordering::Equal {
+                return order;
+            }
+            left_at = left_end;
+            right_at = right_end;
+            continue;
+        }
+        match left[left_at].cmp(&right[right_at]) {
+            std::cmp::Ordering::Equal => {
+                left_at += 1;
+                right_at += 1;
+            }
+            order => return order,
+        }
+    }
+    (left.len() - left_at).cmp(&(right.len() - right_at))
 }
 
 fn names(plate: &Map<String, Value>, key: &str, origin: &str) -> Result<Vec<String>, Error> {

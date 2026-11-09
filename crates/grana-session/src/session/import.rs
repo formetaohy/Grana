@@ -70,6 +70,7 @@ impl Session {
             | Provenance::Filtered { .. }
             | Provenance::Copied { .. }
             | Provenance::Edited { .. }
+            | Provenance::Masked { .. }
             | Provenance::Merged { .. } => {
                 self.message = Some(Message::error(
                     "only an imported object set reads a label image or a track file",

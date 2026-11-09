@@ -41,6 +41,153 @@ impl Mask {
         area.finish()
     }
 
+    pub fn block(level: Level, origin: [u32; 3], extent: [u32; 3]) -> Self {
+        let extent_of = level.extent();
+        let limit = [extent_of.x(), extent_of.y(), extent_of.z()];
+        assert!(
+            (0..3).all(|axis| {
+                u64::from(origin[axis]) + u64::from(extent[axis]) <= u64::from(limit[axis])
+            }),
+            "a mask block lies inside the level it holds"
+        );
+        let limit = [0, 1, 2].map(|axis| i64::from(origin[axis] + extent[axis]));
+        let origin = origin.map(i64::from);
+        Area::new(origin, limit, level).finish()
+    }
+
+    pub fn origin(&self) -> [u32; 3] {
+        assert!(
+            self.origin.iter().all(|value| *value >= 0),
+            "a mask block starts at a positive voxel"
+        );
+        self.origin.map(|value| value as u32)
+    }
+
+    pub fn extent(&self) -> [u32; 3] {
+        self.extent
+    }
+
+    pub fn extended(&self, origin: [u32; 3], extent: [u32; 3]) -> Mask {
+        let limit = [0, 1, 2].map(|axis| i64::from(origin[axis] + extent[axis]));
+        assert!(
+            (0..3).all(|axis| {
+                self.origin[axis] >= i64::from(origin[axis])
+                    && self.origin[axis] + i64::from(self.extent[axis]) <= limit[axis]
+            }),
+            "a mask block holds the mask it extends"
+        );
+        let mut extended = Mask::block(self.level, origin, extent);
+        for cell in self.cells() {
+            extended.set(cell);
+        }
+        extended
+    }
+
+    pub fn filled(&mut self, center: [f32; 3], radius: f32) {
+        self.sphere(center, radius, true);
+    }
+
+    pub fn cleared(&mut self, center: [f32; 3], radius: f32) {
+        self.sphere(center, radius, false);
+    }
+
+    pub fn united(&mut self, other: &Mask) {
+        assert_eq!(
+            self.level, other.level,
+            "a mask meets a mask of the same level"
+        );
+        for cell in other.cells() {
+            self.set(cell);
+        }
+    }
+
+    pub fn subtracting(&mut self, other: &Mask) {
+        assert_eq!(
+            self.level, other.level,
+            "a mask meets a mask of the same level"
+        );
+        for cell in other.cells() {
+            self.clear(cell);
+        }
+    }
+
+    pub fn cells(&self) -> Cells<'_> {
+        Cells {
+            mask: self,
+            word: 0,
+            bits: self.bits.first().copied().unwrap_or(0),
+        }
+    }
+
+    fn sphere(&mut self, center: [f32; 3], radius: f32, fill: bool) {
+        assert!(
+            radius.is_finite() && radius > 0.0,
+            "a mask brush paints a positive radius"
+        );
+        let continuous = self.level.voxel_of(center);
+        if continuous.iter().any(|value| !value.is_finite()) {
+            return;
+        }
+        let spacing = self.level.voxel();
+        let mut low = [0i64; 3];
+        let mut high = [0i64; 3];
+        for axis in 0..3 {
+            let reach = radius / spacing[axis];
+            let limit = self.origin[axis] + i64::from(self.extent[axis]);
+            low[axis] = (continuous[axis] - reach)
+                .floor()
+                .clamp(self.origin[axis] as f32, limit as f32) as i64;
+            high[axis] =
+                ((continuous[axis] + reach).ceil() as i64 + 1).clamp(self.origin[axis], limit);
+            if high[axis] <= low[axis] {
+                return;
+            }
+        }
+        let mut cell = low;
+        while cell[2] < high[2] {
+            cell[1] = low[1];
+            while cell[1] < high[1] {
+                cell[0] = low[0];
+                while cell[0] < high[0] {
+                    let offset =
+                        Vec3::from(self.level.voxel_center(cell.map(|value| value as f32)))
+                            - Vec3::from(center);
+                    if offset.length_squared() <= radius * radius {
+                        if fill {
+                            self.set(cell.map(|value| value as u32));
+                        } else {
+                            self.clear(cell.map(|value| value as u32));
+                        }
+                    }
+                    cell[0] += 1;
+                }
+                cell[1] += 1;
+            }
+            cell[2] += 1;
+        }
+    }
+
+    pub fn set(&mut self, cell: [u32; 3]) {
+        let index = self.local(&cell.map(i64::from));
+        if let Some(index) = index {
+            self.bits[index / WORD] |= 1 << (index % WORD);
+        }
+    }
+
+    pub fn clear(&mut self, cell: [u32; 3]) {
+        let index = self.local(&cell.map(i64::from));
+        if let Some(index) = index {
+            self.bits[index / WORD] &= !(1 << (index % WORD));
+        }
+    }
+
+    fn local(&self, cell: &[i64; 3]) -> Option<usize> {
+        if !self.inside(cell) {
+            return None;
+        }
+        Some(self.index(cell))
+    }
+
     pub fn intersected(&self, other: &Mask) -> Mask {
         assert_eq!(
             self.level, other.level,
@@ -181,6 +328,38 @@ impl Mask {
     fn index(&self, cell: &[i64; 3]) -> usize {
         let local = [0, 1, 2].map(|axis| (cell[axis] - self.origin[axis]) as usize);
         local[0] + self.extent[0] as usize * (local[1] + self.extent[1] as usize * local[2])
+    }
+}
+
+pub struct Cells<'a> {
+    mask: &'a Mask,
+    word: usize,
+    bits: u64,
+}
+
+impl Iterator for Cells<'_> {
+    type Item = [u32; 3];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.bits != 0 {
+                let slot = self.word * WORD + self.bits.trailing_zeros() as usize;
+                self.bits &= self.bits - 1;
+                let extent = self.mask.extent;
+                let width = extent[0] as usize;
+                let height = extent[1] as usize;
+                let x = slot % width;
+                let y = (slot / width) % height;
+                let z = slot / (width * height);
+                return Some([
+                    self.mask.origin[0] as u32 + x as u32,
+                    self.mask.origin[1] as u32 + y as u32,
+                    self.mask.origin[2] as u32 + z as u32,
+                ]);
+            }
+            self.word += 1;
+            self.bits = *self.mask.bits.get(self.word)?;
+        }
     }
 }
 

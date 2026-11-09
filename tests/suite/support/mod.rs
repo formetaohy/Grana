@@ -314,6 +314,42 @@ pub fn plate(root: &Path) {
     field(&root.join("A/2/1"), Extent::new(12, 10, 6));
 }
 
+pub fn plate_fields(root: &Path, fields: &[&str]) {
+    std::fs::create_dir_all(root).expect("the plate directory is created");
+    group(
+        root,
+        "/",
+        serde_json::json!({
+            "ome": {
+                "plate": {
+                    "name": "ordered",
+                    "rows": [{"name": "A"}],
+                    "columns": [{"name": "1"}],
+                    "wells": [{"path": "A/1", "rowIndex": 0, "columnIndex": 0}]
+                }
+            }
+        }),
+    );
+    group(root, "/A", serde_json::json!({}));
+    group(
+        root,
+        "/A/1",
+        serde_json::json!({
+            "ome": {
+                "well": {
+                    "images": fields
+                        .iter()
+                        .map(|name| serde_json::json!({"path": name}))
+                        .collect::<Vec<_>>()
+                }
+            }
+        }),
+    );
+    for name in fields {
+        field(&root.join("A/1").join(name), Extent::new(8, 6, 4));
+    }
+}
+
 fn group(root: &Path, path: &str, attributes: serde_json::Value) {
     let store =
         Arc::new(zarrs::filesystem::FilesystemStore::new(root).expect("the plate store opens"));

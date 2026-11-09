@@ -46,6 +46,11 @@ pub enum Message {
     SetTrackSet(Option<ObjectSetId>),
     SetJoin(Option<(u32, usize)>),
     SetSeed(Option<ObjectSetId>),
+    ArmMask(ObjectSetId),
+    DisarmMask,
+    SetMaskTool(usize),
+    SetMaskRadius(f32),
+    SetMaskTolerance(f32),
     SetAnnotationTool(Option<AnnotationTool>),
     SetClassifierFeatures {
         set: ObjectSetId,

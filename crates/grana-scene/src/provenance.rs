@@ -1,5 +1,5 @@
 use grana_measure::{Filter, Group, Lasso, Table};
-use grana_object::{SurfaceEdit, TrackSet};
+use grana_object::{MaskEdit, SurfaceEdit, TrackSet};
 
 use crate::curation::Curation;
 use crate::object::{ObjectKind, ObjectParams};
@@ -209,6 +209,10 @@ pub enum Provenance {
         source: ObjectSetId,
         edits: Vec<SurfaceEdit>,
     },
+    Masked {
+        source: ObjectSetId,
+        strokes: Vec<MaskEdit>,
+    },
     Merged {
         parts: Vec<Recipe>,
     },
@@ -289,6 +293,21 @@ impl Provenance {
             | Self::Interop { .. }
             | Self::Filtered { .. }
             | Self::Copied { .. }
+            | Self::Masked { .. }
+            | Self::Merged { .. } => &[],
+        }
+    }
+
+    pub fn strokes(&self) -> &[MaskEdit] {
+        match self {
+            Self::Masked { strokes, .. } => strokes,
+            Self::Detection
+            | Self::Segmented { .. }
+            | Self::Imported { .. }
+            | Self::Interop { .. }
+            | Self::Filtered { .. }
+            | Self::Copied { .. }
+            | Self::Edited { .. }
             | Self::Merged { .. } => &[],
         }
     }
@@ -302,6 +321,21 @@ impl Provenance {
             | Self::Interop { .. }
             | Self::Filtered { .. }
             | Self::Copied { .. }
+            | Self::Masked { .. }
+            | Self::Merged { .. } => None,
+        }
+    }
+
+    pub fn masking(&self) -> Option<(ObjectSetId, &[MaskEdit])> {
+        match self {
+            Self::Masked { source, strokes } => Some((*source, strokes)),
+            Self::Detection
+            | Self::Segmented { .. }
+            | Self::Imported { .. }
+            | Self::Interop { .. }
+            | Self::Filtered { .. }
+            | Self::Copied { .. }
+            | Self::Edited { .. }
             | Self::Merged { .. } => None,
         }
     }
@@ -310,7 +344,8 @@ impl Provenance {
         match self {
             Self::Filtered { source, .. }
             | Self::Copied { source }
-            | Self::Edited { source, .. } => Some(*source),
+            | Self::Edited { source, .. }
+            | Self::Masked { source, .. } => Some(*source),
             Self::Detection
             | Self::Segmented { .. }
             | Self::Imported { .. }
@@ -328,6 +363,7 @@ impl Provenance {
             | Self::Interop { .. }
             | Self::Copied { .. }
             | Self::Edited { .. }
+            | Self::Masked { .. }
             | Self::Merged { .. } => None,
         }
     }
@@ -341,7 +377,8 @@ impl Provenance {
             | Self::Interop { .. }
             | Self::Filtered { .. }
             | Self::Copied { .. }
-            | Self::Edited { .. } => &[],
+            | Self::Edited { .. }
+            | Self::Masked { .. } => &[],
         }
     }
 
@@ -353,7 +390,8 @@ impl Provenance {
             | Self::Interop { .. } => false,
             Self::Filtered { source, .. }
             | Self::Copied { source }
-            | Self::Edited { source, .. } => *source == set,
+            | Self::Edited { source, .. }
+            | Self::Masked { source, .. } => *source == set,
             Self::Merged { parts } => parts.iter().any(|part| part.provenance().references(set)),
         }
     }
@@ -365,7 +403,9 @@ impl Provenance {
             | Self::Imported { .. }
             | Self::Interop { .. }
             | Self::Copied { .. } => false,
-            Self::Filtered { source, .. } | Self::Edited { source, .. } => *source == set,
+            Self::Filtered { source, .. }
+            | Self::Edited { source, .. }
+            | Self::Masked { source, .. } => *source == set,
             Self::Merged { parts } => parts.iter().any(|part| part.provenance().depends_on(set)),
         }
     }
@@ -374,6 +414,7 @@ impl Provenance {
         match self {
             Self::Copied { source } if removed.contains(source) => *self = Self::Detection,
             Self::Edited { source, .. } if removed.contains(source) => *self = Self::Detection,
+            Self::Masked { source, .. } if removed.contains(source) => *self = Self::Detection,
             Self::Merged { parts } => {
                 for part in parts {
                     part.provenance.forget_copied(removed);
@@ -385,7 +426,8 @@ impl Provenance {
             | Self::Interop { .. }
             | Self::Filtered { .. }
             | Self::Copied { .. }
-            | Self::Edited { .. } => {}
+            | Self::Edited { .. }
+            | Self::Masked { .. } => {}
         }
     }
 
@@ -403,7 +445,8 @@ impl Provenance {
             | Self::Interop { .. } => {}
             Self::Filtered { source, .. }
             | Self::Copied { source }
-            | Self::Edited { source, .. } => sources.push(*source),
+            | Self::Edited { source, .. }
+            | Self::Masked { source, .. } => sources.push(*source),
             Self::Merged { parts } => {
                 for part in parts {
                     part.provenance().collect_sources(sources);

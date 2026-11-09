@@ -3366,6 +3366,7 @@ dependencies = [
  "grana-mesh",
  "grana-object",
  "grana-optics",
+ "grana-pipeline",
  "grana-project",
  "grana-protocol",
  "grana-render",

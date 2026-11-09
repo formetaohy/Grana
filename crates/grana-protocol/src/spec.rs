@@ -639,6 +639,10 @@ pub enum SourceSpec {
         source: String,
         edits: Vec<SurfaceEditSpec>,
     },
+    Masked {
+        source: String,
+        edits: Vec<MaskEditSpec>,
+    },
     Merged {
         parts: Vec<PartSpec>,
     },
@@ -938,6 +942,100 @@ impl SurfaceEditSpec {
                 vec![anchor.anchor()],
             ),
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum MaskEditSpec {
+    Brush {
+        frame: u32,
+        anchor: AnchorSpec,
+        mode: String,
+        radius: f32,
+        points: Vec<[f32; 3]>,
+    },
+    Wand {
+        frame: u32,
+        anchor: AnchorSpec,
+        mode: String,
+        tolerance: f32,
+        at: [f32; 3],
+    },
+}
+
+impl MaskEditSpec {
+    pub fn frame(&self) -> u32 {
+        match self {
+            Self::Brush { frame, .. } | Self::Wand { frame, .. } => *frame,
+        }
+    }
+
+    pub(super) fn of(edit: &grana_object::MaskEdit) -> Self {
+        let anchor = AnchorSpec::of(edit.anchor());
+        let mode = mask_mode(edit.mode()).to_string();
+        match edit.tool() {
+            grana_object::MaskTool::Brush => Self::Brush {
+                frame: edit.frame(),
+                anchor,
+                mode,
+                radius: edit.radius(),
+                points: edit.points().to_vec(),
+            },
+            grana_object::MaskTool::Wand => Self::Wand {
+                frame: edit.frame(),
+                anchor,
+                mode,
+                tolerance: edit.tolerance(),
+                at: edit.points()[0],
+            },
+        }
+    }
+
+    pub(super) fn edit(self) -> Result<grana_object::MaskEdit, String> {
+        match self {
+            Self::Brush {
+                frame,
+                anchor,
+                mode,
+                radius,
+                points,
+            } => grana_object::MaskEdit::brush(
+                frame,
+                anchor.anchor(),
+                mask_mode_of(&mode)?,
+                radius,
+                points,
+            ),
+            Self::Wand {
+                frame,
+                anchor,
+                mode,
+                tolerance,
+                at,
+            } => grana_object::MaskEdit::wand(
+                frame,
+                anchor.anchor(),
+                mask_mode_of(&mode)?,
+                tolerance,
+                at,
+            ),
+        }
+    }
+}
+
+fn mask_mode(mode: grana_object::MaskMode) -> &'static str {
+    match mode {
+        grana_object::MaskMode::Add => "add",
+        grana_object::MaskMode::Remove => "remove",
+    }
+}
+
+fn mask_mode_of(mode: &str) -> Result<grana_object::MaskMode, String> {
+    match mode {
+        "add" => Ok(grana_object::MaskMode::Add),
+        "remove" => Ok(grana_object::MaskMode::Remove),
+        _ => Err(format!("the mask edit carries the unknown mode {mode}")),
     }
 }
 
@@ -1987,6 +2085,7 @@ impl SourceSpec {
             Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
+            | Self::Masked { .. }
             | Self::Merged { .. } => None,
         }
     }
@@ -2002,6 +2101,7 @@ impl SourceSpec {
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
+            | Self::Masked { .. }
             | Self::Merged { .. } => None,
         }
     }
@@ -2017,6 +2117,7 @@ impl SourceSpec {
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
+            | Self::Masked { .. }
             | Self::Merged { .. } => None,
         }
     }
@@ -2032,6 +2133,7 @@ impl SourceSpec {
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
+            | Self::Masked { .. }
             | Self::Merged { .. } => None,
         }
     }
@@ -2069,6 +2171,7 @@ impl SourceSpec {
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
+            | Self::Masked { .. }
             | Self::Merged { .. } => {
                 return None;
             }
@@ -2109,6 +2212,7 @@ impl SourceSpec {
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
+            | Self::Masked { .. }
             | Self::Merged { .. } => &[],
         }
     }
@@ -2125,6 +2229,7 @@ impl SourceSpec {
             | Self::Filtered { .. }
             | Self::Copy { .. }
             | Self::Edited { .. }
+            | Self::Masked { .. }
             | Self::Merged { .. } => None,
         }
     }
@@ -2304,6 +2409,20 @@ impl SourceSpec {
                     })?;
                 }
             }
+            Self::Masked { source, edits } => {
+                validate(source, &format!("the source of {set}"))?;
+                if source == set {
+                    return invalid("edits its own mask".to_string());
+                }
+                if edits.is_empty() {
+                    return invalid("paints at least one mask stroke".to_string());
+                }
+                for edit in edits {
+                    edit.clone().edit().map_err(|detail| {
+                        ProtocolError::Invalid(format!("the set {set} {detail}"))
+                    })?;
+                }
+            }
             Self::Merged { parts } => {
                 if parts.is_empty() {
                     return invalid("merges at least one part".to_string());
@@ -2396,7 +2515,8 @@ impl Protocol {
             | SourceSpec::Tracks { .. } => source.kind(),
             SourceSpec::Filtered { source, .. }
             | SourceSpec::Copy { source }
-            | SourceSpec::Edited { source, .. } => self.kind_of_key(source, depth + 1),
+            | SourceSpec::Edited { source, .. }
+            | SourceSpec::Masked { source, .. } => self.kind_of_key(source, depth + 1),
             SourceSpec::Merged { parts } => {
                 self.kind_of_source_at(&parts.first()?.source, depth + 1)
             }
@@ -2423,7 +2543,8 @@ impl Protocol {
             SourceSpec::Labels { .. } | SourceSpec::Tracks { .. } => None,
             SourceSpec::Filtered { source, .. }
             | SourceSpec::Copy { source }
-            | SourceSpec::Edited { source, .. } => self.channel_of_key(source, depth + 1),
+            | SourceSpec::Edited { source, .. }
+            | SourceSpec::Masked { source, .. } => self.channel_of_key(source, depth + 1),
             SourceSpec::Merged { parts } => {
                 self.channel_of_source_at(&parts.first()?.source, depth + 1)
             }

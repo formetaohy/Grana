@@ -12,8 +12,8 @@ pub use cache::default_root as cache_root;
 pub use error::Error;
 pub use grana_zarr::{Field, Label, Labels, Plate, Well};
 pub use image::{
-    Format, Image, dataset_name, is_image, is_remote, plate, remote_series_group, resolve_series,
-    series_count, series_group, series_names,
+    Format, Image, dataset_name, is_image, is_remote, plate, plate_at, remote_series_group,
+    resolve_series, series_count, series_group, series_names,
 };
 pub use series::Series;
 pub use source::Source;

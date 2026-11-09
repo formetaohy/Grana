@@ -4,7 +4,7 @@ use glam::Vec3;
 use grana_display::{Coloring, Shading, TransferFunction};
 use grana_geometry::ray_hit;
 use grana_measure::{Aggregate, Classifier, Frame, Group, Measurement, RelationRow, Table};
-use grana_object::{RelationFrame, SurfaceEdit, TrackSet};
+use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackSet};
 use grana_object::{Shape, TrackParams};
 use grana_optics::Psf;
 use grana_volume::{CHANNEL_LIMIT, ChannelInfo, Clip, Intensity, Region};
@@ -647,7 +647,9 @@ impl Scene {
         loop {
             let set = self.objects.get(current)?;
             match set.provenance() {
-                Provenance::Filtered { source, .. } | Provenance::Edited { source, .. } => {
+                Provenance::Filtered { source, .. }
+                | Provenance::Edited { source, .. }
+                | Provenance::Masked { source, .. } => {
                     current = *source;
                 }
                 Provenance::Detection
@@ -668,6 +670,27 @@ impl Scene {
 
     pub fn edited_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
         self.objects.edited_dependents(id)
+    }
+
+    pub fn masked_object(
+        &mut self,
+        source: ObjectSetId,
+        suffix: &str,
+        strokes: Vec<MaskEdit>,
+    ) -> Option<ObjectSetId> {
+        let masked = self.objects.masked(source, suffix, strokes)?;
+        self.selections.clear();
+        self.sync_coloc_inputs();
+        self.sync_masks();
+        Some(masked)
+    }
+
+    pub fn replan_masked(&mut self, id: ObjectSetId, strokes: Vec<MaskEdit>) -> bool {
+        self.objects.replan_masked(id, strokes)
+    }
+
+    pub fn masked_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
+        self.objects.masked_dependents(id)
     }
 
     pub fn refresh_filtered(&mut self, id: ObjectSetId) -> Result<bool, String> {

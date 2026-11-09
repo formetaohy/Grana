@@ -541,6 +541,25 @@ impl Encode for Provenance {
                 writer.u8(5);
                 writer.string(file);
             }
+            Self::Masked { source, strokes } => {
+                writer.u8(8);
+                writer.u64(source.raw());
+                writer.count(strokes.len());
+                for stroke in strokes {
+                    writer.u32(stroke.frame());
+                    encode_anchors(std::slice::from_ref(&stroke.anchor()), writer);
+                    writer.u8(stroke.tool().index() as u8);
+                    writer.u8(stroke.mode().index() as u8);
+                    writer.f32(stroke.radius());
+                    writer.f32(stroke.tolerance());
+                    writer.count(stroke.points().len());
+                    for point in stroke.points() {
+                        for value in point {
+                            writer.f32(*value);
+                        }
+                    }
+                }
+            }
         }
     }
 }

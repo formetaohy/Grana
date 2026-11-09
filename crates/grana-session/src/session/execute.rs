@@ -2,7 +2,7 @@ use super::*;
 
 use grana_scene::SegmentParams;
 
-use super::edit::SurfaceEditRequest;
+use super::edit::{MaskPaint, SurfaceEditRequest};
 
 pub(super) struct Recording {
     edit: Edit,
@@ -151,6 +151,30 @@ impl Session {
             }
             Command::SplitSurface { set, time, object } => {
                 self.edit_surfaces(set, time, SurfaceEditRequest::Split(object));
+            }
+            Command::PaintMask {
+                set,
+                frame,
+                anchor,
+                tool,
+                mode,
+                radius,
+                tolerance,
+                points,
+            } => {
+                self.paint_mask(MaskPaint {
+                    set,
+                    frame,
+                    anchor,
+                    tool,
+                    mode,
+                    radius,
+                    tolerance,
+                    points,
+                });
+            }
+            Command::ClearMask(set) => {
+                self.clear_mask(set);
             }
             Command::RemoveObject(set) => {
                 let masked = self.scene.as_ref().is_some_and(|scene| {

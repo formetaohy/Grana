@@ -8,10 +8,10 @@ use grana_scene::{
 
 use crate::{
     AnnotationSpec, ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec,
-    ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec, LassoSpec, MaskFilterSpec,
-    MaskSpec, MeasureSpec, MeasuredSpec, MetricSpec, PartSpec, Protocol, ProtocolError, RegionSpec,
-    RelationSpec, RenderSpec, RestoreSpec, SetSpec, SnapshotSpec, SortSpec, SourceSpec,
-    SurfaceEditSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec, LassoSpec, MaskEditSpec,
+    MaskFilterSpec, MaskSpec, MeasureSpec, MeasuredSpec, MetricSpec, PartSpec, Protocol,
+    ProtocolError, RegionSpec, RelationSpec, RenderSpec, RestoreSpec, SetSpec, SnapshotSpec,
+    SortSpec, SourceSpec, SurfaceEditSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -329,6 +329,18 @@ fn source(
                 edits: edits.iter().map(SurfaceEditSpec::of).collect(),
             })
         }
+        Provenance::Masked { source, strokes } => {
+            let reference = scene.objects.get(*source).ok_or_else(|| {
+                ProtocolError::Invalid(format!(
+                    "{} paints an object set that left the scene",
+                    set.name()
+                ))
+            })?;
+            Ok(SourceSpec::Masked {
+                source: reference.key().as_str().to_string(),
+                edits: strokes.iter().map(MaskEditSpec::of).collect(),
+            })
+        }
         Provenance::Merged { parts } => Ok(SourceSpec::Merged {
             parts: parts
                 .iter()
@@ -400,6 +412,18 @@ fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSp
             SourceSpec::Edited {
                 source: reference.key().as_str().to_string(),
                 edits: edits.iter().map(SurfaceEditSpec::of).collect(),
+            }
+        }
+        Provenance::Masked { source, strokes } => {
+            let reference = scene.objects.get(*source).ok_or_else(|| {
+                ProtocolError::Invalid(format!(
+                    "{} paints an object set that left the scene",
+                    part.name()
+                ))
+            })?;
+            SourceSpec::Masked {
+                source: reference.key().as_str().to_string(),
+                edits: strokes.iter().map(MaskEditSpec::of).collect(),
             }
         }
         Provenance::Merged { parts } => SourceSpec::Merged {
@@ -535,7 +559,8 @@ fn collect_dependencies(source: &SourceSpec, derived: &[DerivedSpec], names: &mu
         }
         SourceSpec::Filtered { source, .. }
         | SourceSpec::Copy { source }
-        | SourceSpec::Edited { source, .. } => {
+        | SourceSpec::Edited { source, .. }
+        | SourceSpec::Masked { source, .. } => {
             names.push(source.clone());
         }
         SourceSpec::Merged { parts } => {

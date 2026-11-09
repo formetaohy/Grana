@@ -142,6 +142,49 @@ impl AnnotationTool {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaskBrushTool {
+    Brush,
+    Erase,
+    Wand,
+}
+
+impl MaskBrushTool {
+    pub const ALL: [Self; 3] = [Self::Brush, Self::Erase, Self::Wand];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Brush => "Brush",
+            Self::Erase => "Erase",
+            Self::Wand => "Wand",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Brush => 0,
+            Self::Erase => 1,
+            Self::Wand => 2,
+        }
+    }
+
+    pub fn erase(self) -> bool {
+        self == Self::Erase
+    }
+
+    pub fn wand(self) -> bool {
+        self == Self::Wand
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MaskBrush {
+    pub set: ObjectSetId,
+    pub tool: MaskBrushTool,
+    pub radius: f32,
+    pub tolerance: f32,
+}
+
 pub struct Workspace {
     pub panel: Option<Panel>,
     pub last_panel: Panel,
@@ -154,6 +197,7 @@ pub struct Workspace {
     pub track_set: Option<ObjectSetId>,
     pub join: Option<(u32, usize)>,
     pub seed: Option<ObjectSetId>,
+    pub mask: Option<MaskBrush>,
     pub annotation_tool: Option<AnnotationTool>,
     pub annotation_pending: Option<[f32; 3]>,
     pub annotation_drag: Option<(usize, grana_figure::AnnotationPart)>,
@@ -181,6 +225,7 @@ impl Default for Workspace {
             track_set: None,
             join: None,
             seed: None,
+            mask: None,
             annotation_tool: None,
             annotation_pending: None,
             annotation_drag: None,

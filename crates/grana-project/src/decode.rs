@@ -14,9 +14,9 @@ use grana_measure::{
     ColocThresholds,
 };
 use grana_object::{
-    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, RelationFrame,
-    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, SurfaceTopology, Track,
-    TrackNode, TrackSet,
+    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, MaskEdit, MaskMode,
+    MaskTool, RelationFrame, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics,
+    SurfaceTopology, Track, TrackNode, TrackSet,
 };
 use grana_optics::{Kernel, MeasuredPsf, Psf, PsfParams};
 use grana_scene::{
@@ -897,6 +897,45 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
                 return Err(FAULT_VALUE);
             }
             Ok(Provenance::Edited { source, edits })
+        }
+        8 => {
+            let source = ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?;
+            let count = reader.count(22)?;
+            let mut strokes = Vec::with_capacity(count);
+            for _ in 0..count {
+                let frame = reader.u32()?;
+                let anchors = decode_anchors(reader)?;
+                if anchors.len() != 1 {
+                    return Err(FAULT_VALUE);
+                }
+                let tool = MaskTool::parse(reader.u8()? as usize).ok_or(FAULT_TAG)?;
+                let mode = MaskMode::parse(reader.u8()? as usize).ok_or(FAULT_TAG)?;
+                let radius = finite(reader.f32()?)?;
+                let tolerance = finite(reader.f32()?)?;
+                let points = reader.count(12)?;
+                let mut path = Vec::with_capacity(points);
+                for _ in 0..points {
+                    path.push([
+                        finite(reader.f32()?)?,
+                        finite(reader.f32()?)?,
+                        finite(reader.f32()?)?,
+                    ]);
+                }
+                let edit = match tool {
+                    MaskTool::Brush => MaskEdit::brush(frame, anchors[0], mode, radius, path)
+                        .map_err(|_| FAULT_VALUE)?,
+                    MaskTool::Wand => {
+                        let at = *path.first().ok_or(FAULT_VALUE)?;
+                        MaskEdit::wand(frame, anchors[0], mode, tolerance, at)
+                            .map_err(|_| FAULT_VALUE)?
+                    }
+                };
+                strokes.push(edit);
+            }
+            if strokes.is_empty() {
+                return Err(FAULT_VALUE);
+            }
+            Ok(Provenance::Masked { source, strokes })
         }
         3 => {
             let count = reader.count(1)?;

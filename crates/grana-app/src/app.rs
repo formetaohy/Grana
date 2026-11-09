@@ -6,14 +6,17 @@ use glam::{Vec2, Vec3};
 use grana_animation::Keyframe;
 use grana_display::Viewport;
 use grana_editor::{
-    AnnotationTool, FrameStats, GrabDrag, Pane, Stage, ToolDrag, ViewStats, Workspace,
+    AnnotationTool, FrameStats, GrabDrag, MaskBrush, PaintDrag, Pane, Stage, ToolDrag, ViewStats,
+    Workspace,
 };
 use grana_engine::{Destination, Engine, Outcome, Panels, Picked, Plan, Pose, SAMPLE_LIMIT};
 use grana_gpu::Gpu;
 use grana_project::ViewState;
 use grana_render::{FrameInfo, PickPane};
-use grana_scene::ObjectSetId;
-use grana_session::{Command, Effects, Export, Session, SessionView};
+use grana_scene::{ObjectFrame, ObjectSetId};
+use grana_session::{
+    Command, Effects, Export, MaskMode, MaskTool, ObjectAnchor, Session, SessionView,
+};
 use grana_ui::{
     Button as UiButton, Event as UiEvent, Modifiers as UiModifiers, Ui, Vec2 as UiVec2,
 };
@@ -69,6 +72,7 @@ pub struct App {
     uploads: u64,
     stream: Stream,
     pick_toggle: bool,
+    mask_path: Vec<[f32; 3]>,
 }
 
 impl App {
@@ -104,6 +108,7 @@ impl App {
             uploads: 0,
             stream: Stream::new(),
             pick_toggle: false,
+            mask_path: Vec::new(),
         }
     }
 
@@ -360,7 +365,8 @@ impl App {
                 });
             let tool = workspace
                 .annotation_tool
-                .filter(|_| workspace.seed.is_none());
+                .filter(|_| workspace.seed.is_none() && workspace.mask.is_none());
+            let paint = workspace.mask.is_some();
             let blocked = surface.ui.pointer_over_chrome()
                 || surface.ui.pointer_over_widget()
                 || surface.ui.pointer_captured();
@@ -369,14 +375,14 @@ impl App {
                 .flatten();
             let pressed = surface.ui.input().button(UiButton::Primary).pressed;
             let grabbed = hovered.is_some() && pressed;
-            let interaction = stage.input(&mut surface.ui, viewport, spacing, tool, grabbed);
+            let interaction = stage.input(&mut surface.ui, viewport, spacing, tool, paint, grabbed);
             if interaction.camera {
                 if let Some(scene) = session.scene() {
                     viewport.clamp_focus(0.5 * scene.dataset.world_size());
                 }
                 surface.window.request_redraw();
             }
-            let cursor = if workspace.seed.is_some() || tool.is_some() {
+            let cursor = if paint || workspace.seed.is_some() || tool.is_some() {
                 CursorIcon::Crosshair
             } else if interaction.grab.is_some() {
                 CursorIcon::Grabbing
@@ -400,6 +406,9 @@ impl App {
         }
         if let Some(grab) = interaction.grab {
             self.drag_annotation(grab);
+        }
+        if let Some(drag) = interaction.paint {
+            self.paint_mask(drag);
         }
         if let Some((pane, point)) = interaction.pick {
             match self.workspace.seed {
@@ -565,6 +574,107 @@ impl App {
         }
     }
 
+    fn paint_mask(&mut self, drag: PaintDrag) {
+        let Some(brush) = self.workspace.mask else {
+            return;
+        };
+        let Some(point) = self.annotation_point(drag.pane, drag.position) else {
+            self.mask_path.clear();
+            return;
+        };
+        let Some(scene) = self.session.scene() else {
+            return;
+        };
+        let voxel = scene.dataset.voxel_size().min_element();
+        let moved = self
+            .mask_path
+            .last()
+            .is_some_and(|last| (Vec3::from(point) - Vec3::from(*last)).length() > 0.5 * voxel);
+        if moved || self.mask_path.is_empty() {
+            self.mask_path.push(point);
+        }
+        if !drag.finished {
+            return;
+        }
+        let points = std::mem::take(&mut self.mask_path);
+        if points.is_empty() {
+            return;
+        }
+        let Some(anchor) = self.mask_anchor(brush.set, points[0]) else {
+            self.set_output_message("paint inside an object of the object set");
+            return;
+        };
+        let (tool, mode) = match brush.tool {
+            grana_editor::MaskBrushTool::Brush => (MaskTool::Brush, MaskMode::Add),
+            grana_editor::MaskBrushTool::Erase => (MaskTool::Brush, MaskMode::Remove),
+            grana_editor::MaskBrushTool::Wand => (MaskTool::Wand, MaskMode::Add),
+        };
+        let points = match tool {
+            MaskTool::Brush => points,
+            MaskTool::Wand => vec![point],
+        };
+        let time = scene.time();
+        self.apply(vec![Command::PaintMask {
+            set: brush.set,
+            frame: time,
+            anchor,
+            tool,
+            mode,
+            radius: brush.radius,
+            tolerance: brush.tolerance,
+            points,
+        }]);
+        self.retarget_mask();
+    }
+
+    fn mask_anchor(&self, set: ObjectSetId, point: [f32; 3]) -> Option<ObjectAnchor> {
+        let scene = self.session.scene()?;
+        let source = scene
+            .objects
+            .get(set)
+            .and_then(|object| object.provenance().source())
+            .unwrap_or(set);
+        let object = scene.objects.get(source)?;
+        let ObjectFrame::Surfaces(surfaces) = object.frame(scene.time())? else {
+            return None;
+        };
+        let anchors = surfaces
+            .objects()
+            .iter()
+            .map(|statistics| ObjectAnchor::new(statistics.centroid(), statistics.bounds()))
+            .collect::<Vec<_>>();
+        let voxel = scene.dataset.voxel_size().min_element();
+        grana_session::match_anchor(&anchors, point, voxel).map(|index| anchors[index])
+    }
+
+    fn retarget_mask(&mut self) {
+        let Some(brush) = self.workspace.mask else {
+            return;
+        };
+        let Some(scene) = self.session.scene() else {
+            return;
+        };
+        if scene
+            .objects
+            .get(brush.set)
+            .is_some_and(|object| object.provenance().masking().is_some())
+        {
+            return;
+        }
+        let Some(masked) = scene.objects.iter().find_map(|object| {
+            object
+                .provenance()
+                .masking()
+                .and_then(|(source, _)| (source == brush.set).then_some(object.id()))
+        }) else {
+            return;
+        };
+        self.workspace.mask = Some(MaskBrush {
+            set: masked,
+            ..brush
+        });
+    }
+
     fn place_seed(&mut self, set: ObjectSetId, pane: Pane, point: Vec2, remove: bool) {
         if self
             .session
@@ -719,6 +829,7 @@ impl App {
                 return true;
             }
         }
+        self.validate_mask();
         false
     }
 
@@ -766,6 +877,20 @@ impl App {
             self.set_keyframe();
         }
         false
+    }
+
+    fn validate_mask(&mut self) {
+        let Some(brush) = self.workspace.mask else {
+            return;
+        };
+        let held = self
+            .session
+            .scene()
+            .is_some_and(|scene| scene.objects.get(brush.set).is_some());
+        if !held {
+            self.workspace.mask = None;
+            self.mask_path.clear();
+        }
     }
 
     fn run_ui(&mut self) -> (Vec<Command>, bool) {

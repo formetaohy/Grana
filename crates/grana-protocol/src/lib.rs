@@ -14,10 +14,11 @@ use thiserror::Error;
 pub use spec::{
     AnchorSpec, AnnotationSpec, CameraSpec, ChannelSpec, ClassifierSpec, ColocPairSpec,
     ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec, EditSpec,
-    ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec, MaskFilterSpec, MaskSpec, MeasureSpec,
-    MeasuredSpec, MetricSpec, NodeSpec, PartSpec, RegionSpec, RelationSpec, RemovalSpec,
-    RenderSpec, RestoreSpec, SectionSpec, SetSpec, ShadingSpec, SnapshotSpec, SortSpec, SourceSpec,
-    StopSpec, SurfaceEditSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec, MaskEditSpec, MaskFilterSpec, MaskSpec,
+    MeasureSpec, MeasuredSpec, MetricSpec, NodeSpec, PartSpec, RegionSpec, RelationSpec,
+    RemovalSpec, RenderSpec, RestoreSpec, SectionSpec, SetSpec, ShadingSpec, SnapshotSpec,
+    SortSpec, SourceSpec, StopSpec, SurfaceEditSpec, TimelineSpec, TrackSpec, TransferSpec,
+    ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -185,6 +186,9 @@ impl Protocol {
                     }
                     SourceSpec::Edited { source, edits } => {
                         text = format!("{text} · {} surface edits of {source}", edits.len());
+                    }
+                    SourceSpec::Masked { source, edits } => {
+                        text = format!("{text} · {} mask strokes of {source}", edits.len());
                     }
                     SourceSpec::Merged { parts } => {
                         let names = parts

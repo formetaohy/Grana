@@ -6,7 +6,8 @@ use grana_animation::Timeline;
 use grana_display::{CameraState, SectionState};
 use grana_geometry::GeometryStore;
 use grana_object::{
-    IntensityTable, SampleStatistics, Spot, SpotParams, SpotSet, SurfaceFilter, SurfaceParams,
+    IntensityTable, MaskMode, MaskTool, ObjectAnchor, SampleStatistics, Spot, SpotParams, SpotSet,
+    SurfaceFilter, SurfaceParams,
 };
 use grana_project::{Export, Project, Source, ViewState};
 use grana_protocol::Protocol;
@@ -402,6 +403,145 @@ fn navigates_a_plate_field_by_field() {
             "A2"
         );
     }
+}
+
+#[test]
+fn paints_erases_and_undoes_a_voxel_mask() {
+    let mut session = Session::new();
+    session.open_series("masking", series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: ObjectParams::Surfaces(SurfaceParams::new(
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )),
+    });
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    assert_eq!(objects(&session, set), 2, "the two nuclei are detected");
+    let anchors = frame_anchors(&session, set);
+    let volume = frame_volume(&session, set);
+
+    session.execute(Command::PaintMask {
+        set,
+        frame: 0,
+        anchor: anchors[0],
+        tool: MaskTool::Brush,
+        mode: MaskMode::Remove,
+        radius: 0.25,
+        tolerance: 0.0,
+        points: vec![anchors[0].position()],
+    });
+    let masked = masked_set(&session, set);
+    assert!(
+        frame_volume(&session, masked) < volume,
+        "the eraser removes voxels from the painted surface"
+    );
+
+    session.execute(Command::PaintMask {
+        set: masked,
+        frame: 0,
+        anchor: anchors[1],
+        tool: MaskTool::Wand,
+        mode: MaskMode::Remove,
+        radius: 0.0,
+        tolerance: 0.05,
+        points: vec![anchors[1].position()],
+    });
+    assert_eq!(
+        objects(&session, masked),
+        1,
+        "the wand erases the connected surface it starts in"
+    );
+
+    session.execute(Command::Undo);
+    assert_eq!(
+        objects(&session, masked_set(&session, set)),
+        2,
+        "undo restores the erased surface"
+    );
+
+    session.execute(Command::CaptureProtocol);
+    let protocol = session.protocol().expect("the protocol captures");
+    assert!(
+        protocol.summary().contains("mask strokes"),
+        "the protocol records the painted strokes"
+    );
+
+    let scene = session.scene().expect("the series opens");
+    let project = Project::capture(
+        scene,
+        session.measure(),
+        Source::Synthetic {
+            name: "masking".to_string(),
+        },
+        view_state(),
+        Fingerprint::new([9; 32]),
+    );
+    let temp = Temp::new("suite-mask-project");
+    let path = temp.path().join("mask.grana");
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the mask project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the mask project reads");
+    assert_eq!(loaded, project, "the painted strokes survive a project");
+}
+
+fn frame_anchors(session: &Session, set: grana_scene::ObjectSetId) -> Vec<ObjectAnchor> {
+    let surfaces = surfaces_of(session, set);
+    surfaces
+        .objects()
+        .iter()
+        .map(|statistics| ObjectAnchor::new(statistics.centroid(), statistics.bounds()))
+        .collect()
+}
+
+fn frame_volume(session: &Session, set: grana_scene::ObjectSetId) -> u64 {
+    surfaces_of(session, set)
+        .objects()
+        .iter()
+        .map(|statistics| statistics.voxel_count())
+        .sum()
+}
+
+fn surfaces_of(session: &Session, set: grana_scene::ObjectSetId) -> grana_object::SurfaceSet {
+    let scene = session.scene().expect("the series opens");
+    let frame = scene
+        .objects
+        .get(set)
+        .and_then(|object| object.frame(0))
+        .expect("the object set holds a frame");
+    match frame {
+        ObjectFrame::Surfaces(surfaces) => surfaces.clone(),
+        _ => panic!("the object set holds surfaces"),
+    }
+}
+
+fn masked_set(session: &Session, source: grana_scene::ObjectSetId) -> grana_scene::ObjectSetId {
+    session
+        .scene()
+        .expect("the series opens")
+        .objects
+        .iter()
+        .find(|set| {
+            set.provenance()
+                .masking()
+                .is_some_and(|(masked, _)| masked == source)
+        })
+        .map(|set| set.id())
+        .expect("the mask edits derive an object set")
 }
 
 fn open_field(session: &mut Session, extent: Extent) {

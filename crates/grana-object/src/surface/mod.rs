@@ -4,7 +4,7 @@ mod topology;
 
 use std::sync::Arc;
 
-use grana_geometry::{Bounds, Geometry, GeometryStore, Mesh, PackedMesh, SurfaceShape};
+use grana_geometry::{Bounds, Geometry, GeometryStore, Mesh, MeshVertex, PackedMesh, SurfaceShape};
 
 use crate::IntensityTable;
 
@@ -370,6 +370,60 @@ impl SurfaceSet {
             triangles,
             details: Arc::new(Details::new()),
         })
+    }
+
+    pub fn replaced(
+        &self,
+        object: usize,
+        other: &Self,
+    ) -> Result<Option<Self>, grana_geometry::Error> {
+        if object >= self.objects.len() || other.object_count() != 1 {
+            return Ok(None);
+        }
+        assert_eq!(
+            self.level, other.level,
+            "a replaced surface holds the level of its object set"
+        );
+        let base = self.geometry.load()?;
+        let replacement = other.geometry.load()?;
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for group in 0..self.objects.len() {
+            let (source, source_object) = if group == object {
+                (&replacement, 0)
+            } else {
+                (&base, group)
+            };
+            let triangles = source.groups()[source_object].index_count() as usize / 3;
+            let mut mapped: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+            for triangle in 0..triangles {
+                for vertex in source.triangle_vertices(source_object, triangle) {
+                    let target = match mapped.get(&vertex) {
+                        Some(target) => *target,
+                        None => {
+                            let target = vertices.len() as u32;
+                            vertices.push(MeshVertex::new(
+                                source.position(source_object, vertex as usize),
+                                source.normal(source_object, vertex as usize),
+                                group as u32,
+                            ));
+                            mapped.insert(vertex, target);
+                            target
+                        }
+                    };
+                    indices.push(target);
+                }
+            }
+        }
+        let mut objects = self.objects.clone();
+        objects[object] = other.objects[0];
+        let intensities = self.intensities.replaced(object, &other.intensities);
+        Ok(Some(Self::new(
+            self.level,
+            Mesh::new(vertices, indices),
+            objects,
+            intensities,
+        )))
     }
 
     pub fn merge(&self, other: &Self) -> Result<Self, grana_geometry::Error> {

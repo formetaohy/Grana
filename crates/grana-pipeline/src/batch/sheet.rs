@@ -53,7 +53,7 @@ pub(super) fn write(
         entries.push(Entry {
             dataset: index,
             group: dataset.group().to_string(),
-            title: dataset.name(),
+            title: dataset.title(),
             detail: format!("{} · {}", dataset.scene_label(), row.status),
             accent: status_color(row.status),
             image,
@@ -91,15 +91,20 @@ pub(super) fn write(
     let sheet = Sheet::new(TILE, COLUMNS).compose(&mut fonts, &groups);
     grana_raster::write(&plan.output.join(SHEET), &sheet).map_err(String::from)?;
     let mut lines = vec![grana_measure::csv::line(&[
-        "cell", "group", "dataset", "scene", "status",
+        "cell", "group", "dataset", "well", "row", "column", "field", "scene", "status",
     ])];
-    for (index, dataset) in plan.datasets.iter().enumerate() {
-        let status = rows[index].as_ref().map_or("skipped", |row| row.status);
-        let cell = cells[index].map_or_else(String::new, |cell| cell.to_string());
+    let index = |value: Option<usize>| value.map_or_else(String::new, |value| value.to_string());
+    for (index_of, dataset) in plan.datasets.iter().enumerate() {
+        let status = rows[index_of].as_ref().map_or("skipped", |row| row.status);
+        let cell = cells[index_of].map_or_else(String::new, |cell| cell.to_string());
         lines.push(grana_measure::csv::line(&[
             &cell,
             dataset.group(),
-            &dataset.name(),
+            &dataset.title(),
+            dataset.plate_label().unwrap_or_default(),
+            &index(dataset.well_row()),
+            &index(dataset.well_column()),
+            &index(dataset.well_field()),
             &dataset.scene_label(),
             status,
         ]));

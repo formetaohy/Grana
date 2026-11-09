@@ -32,11 +32,19 @@ pub struct GrabDrag {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+pub struct PaintDrag {
+    pub pane: Pane,
+    pub position: Vec2,
+    pub finished: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Interaction {
     pub camera: bool,
     pub pick: Option<(Pane, Vec2)>,
     pub tool: Option<ToolDrag>,
     pub grab: Option<GrabDrag>,
+    pub paint: Option<PaintDrag>,
     pub modifiers: Modifiers,
 }
 
@@ -47,6 +55,7 @@ enum Drag {
     Section,
     Tool,
     Grab,
+    Paint,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -137,6 +146,7 @@ impl Stage {
         viewport: &mut Viewport,
         spacing: Spacing,
         tool: Option<AnnotationTool>,
+        paint: bool,
         grabbed: bool,
     ) -> Interaction {
         let mut interaction = Interaction::default();
@@ -193,6 +203,15 @@ impl Stage {
                         });
                     }
                 }
+                Drag::Paint => {
+                    if let Some(press) = self.press {
+                        interaction.paint = Some(PaintDrag {
+                            pane: press.pane,
+                            position: pointer,
+                            finished: false,
+                        });
+                    }
+                }
             }
             if let Some(press) = self.press.as_mut()
                 && (pointer - press.cursor).length() > CLICK_SLOP
@@ -215,7 +234,9 @@ impl Stage {
                 if !state.pressed {
                     continue;
                 }
-                let drag = if button == Button::Primary && tool.is_some() {
+                let drag = if button == Button::Primary && paint {
+                    Drag::Paint
+                } else if button == Button::Primary && tool.is_some() {
                     Drag::Tool
                 } else if button == Button::Primary && grabbed {
                     Drag::Grab
@@ -233,6 +254,13 @@ impl Stage {
                     cursor: pointer,
                     dragged: false,
                 });
+                if drag == Drag::Paint {
+                    interaction.paint = Some(PaintDrag {
+                        pane,
+                        position: pointer,
+                        finished: false,
+                    });
+                }
                 break;
             }
         }
@@ -264,6 +292,13 @@ impl Stage {
                             finished: true,
                         });
                     }
+                    (Drag::Paint, Some(press)) => {
+                        interaction.paint = Some(PaintDrag {
+                            pane: press.pane,
+                            position: pointer,
+                            finished: true,
+                        });
+                    }
                     (_, Some(press)) if !press.dragged && self.pane_at(press.cursor).is_some() => {
                         interaction.pick = Some((press.pane, press.cursor));
                     }
@@ -287,8 +322,10 @@ impl Stage {
             }
             interaction.camera = true;
         }
-        if self.hovered.is_some() && !blocked && tool.is_none() && !grabbed {
-            ui.set_cursor(if self.hovered == Some(Pane::Section) {
+        if self.hovered.is_some() && !blocked && (paint || tool.is_none()) && !grabbed {
+            ui.set_cursor(if paint {
+                Cursor::Crosshair
+            } else if self.hovered == Some(Pane::Section) {
                 Cursor::Move
             } else {
                 Cursor::Grab

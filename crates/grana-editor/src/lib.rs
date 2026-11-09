@@ -21,9 +21,10 @@ pub use grana_ui::widget;
 
 pub use message::{Message, PlotEvent};
 pub use panel::{Panel, build};
-pub use stage::{GrabDrag, Interaction, Pane, Stage, ToolDrag};
+pub use stage::{GrabDrag, Interaction, PaintDrag, Pane, Stage, ToolDrag};
 pub use state::{
-    AnnotationTool, FrameStats, Playback, ProfileStats, Sections, View, ViewStats, Workspace,
+    AnnotationTool, FrameStats, MaskBrush, MaskBrushTool, Playback, ProfileStats, Sections, View,
+    ViewStats, Workspace,
 };
 
 pub(crate) fn section_preset(index: usize) -> (f32, f32) {

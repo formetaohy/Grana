@@ -536,6 +536,39 @@ pub fn apply(
                 if seed.is_some() {
                     workspace.annotation_tool = None;
                     workspace.annotation_pending = None;
+                    workspace.mask = None;
+                }
+            }
+            Message::ArmMask(set) => {
+                let radius = view.scene.map_or(1.0, |scene| {
+                    (3.0 * scene.dataset.voxel_size().min_element()).max(0.1)
+                });
+                workspace.mask = Some(crate::state::MaskBrush {
+                    set,
+                    tool: crate::state::MaskBrushTool::Brush,
+                    radius,
+                    tolerance: 0.05,
+                });
+                workspace.seed = None;
+                workspace.annotation_tool = None;
+                workspace.annotation_pending = None;
+            }
+            Message::DisarmMask => workspace.mask = None,
+            Message::SetMaskTool(index) => {
+                if let Some(brush) = workspace.mask.as_mut()
+                    && let Some(tool) = crate::state::MaskBrushTool::ALL.get(index).copied()
+                {
+                    brush.tool = tool;
+                }
+            }
+            Message::SetMaskRadius(value) => {
+                if let Some(brush) = workspace.mask.as_mut() {
+                    brush.radius = value.clamp(0.05, 50.0);
+                }
+            }
+            Message::SetMaskTolerance(value) => {
+                if let Some(brush) = workspace.mask.as_mut() {
+                    brush.tolerance = value.clamp(0.0, 1.0);
                 }
             }
             Message::SetAnnotationTool(tool) => {
@@ -544,6 +577,7 @@ pub fn apply(
                     workspace.annotation_pending = None;
                     if tool.is_some() {
                         workspace.seed = None;
+                        workspace.mask = None;
                     }
                 }
             }

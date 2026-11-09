@@ -615,6 +615,24 @@ fn object_menu<'a>(
             Message::Command(Command::AddMaskChannel { set: id }),
         ));
     }
+    if kind == ObjectKind::Surfaces && set.detected() > 0 && set.provenance().editing().is_none() {
+        rows.push(action_row(
+            ctx,
+            &format!("object.{}.menu.paint", id.raw()),
+            Icon::Pencil,
+            "Paint Mask",
+            Message::ArmMask(id),
+        ));
+    }
+    if set.provenance().masking().is_some() {
+        rows.push(action_row(
+            ctx,
+            &format!("object.{}.menu.clear.mask", id.raw()),
+            Icon::Reset,
+            "Clear Mask Edits",
+            Message::Command(Command::ClearMask(id)),
+        ));
+    }
     if kind != ObjectKind::Spots {
         rows.push(action_row(
             ctx,
@@ -940,6 +958,9 @@ fn origin<'a>(
         Provenance::Copied { source } => format!("Copy of {}", name(*source)),
         Provenance::Edited { source, edits } => {
             format!("Edited from {} · {} edits", name(*source), edits.len())
+        }
+        Provenance::Masked { source, strokes } => {
+            format!("Painted from {} · {} strokes", name(*source), strokes.len())
         }
         Provenance::Merged { parts } => format!(
             "Merged from {}",

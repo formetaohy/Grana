@@ -244,19 +244,13 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
         }
     });
     let mut summary = vec![grana_measure::csv::line(&[
-        "dataset", "scene", "status", "objects", "detail",
+        "dataset", "group", "well", "row", "column", "field", "status", "objects", "detail",
     ])];
     let rows = lock(&rows);
     for (index, row) in rows.iter().enumerate() {
         if let Some(row) = row {
             let dataset = &plan.datasets[index];
-            summary.push(row_line(
-                &dataset.name(),
-                &dataset.scene_label(),
-                row.status,
-                row.objects,
-                &row.detail,
-            ));
+            summary.push(row_line(dataset, row));
         }
     }
     if let Err(error) = std::fs::write(plan.output.join("summary.csv"), summary.concat()) {
@@ -399,8 +393,19 @@ fn content_of(contents: &Contents, path: &std::path::Path) -> u64 {
     *cell.get_or_init(|| content(path))
 }
 
-fn row_line(dataset: &str, scene: &str, status: &str, objects: usize, detail: &str) -> String {
-    grana_measure::csv::line(&[dataset, scene, status, &objects.to_string(), detail])
+fn row_line(dataset: &DatasetEntry, row: &Row) -> String {
+    let index = |value: Option<usize>| value.map_or_else(String::new, |value| value.to_string());
+    grana_measure::csv::line(&[
+        &dataset.title(),
+        dataset.group(),
+        dataset.plate_label().unwrap_or_default(),
+        &index(dataset.well_row()),
+        &index(dataset.well_column()),
+        &index(dataset.well_field()),
+        row.status,
+        &row.objects.to_string(),
+        &row.detail,
+    ])
 }
 
 fn lock(rows: &Mutex<Vec<Option<Row>>>) -> MutexGuard<'_, Vec<Option<Row>>> {

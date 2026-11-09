@@ -502,6 +502,7 @@ impl Run<'_, '_> {
             | grana_scene::Provenance::Filtered { .. }
             | grana_scene::Provenance::Copied { .. }
             | grana_scene::Provenance::Edited { .. }
+            | grana_scene::Provenance::Masked { .. }
             | grana_scene::Provenance::Merged { .. } => {
                 return Err("the object set names no label image".to_string());
             }
@@ -595,17 +596,21 @@ impl Run<'_, '_> {
             index: self.task.index,
             label: format!("editing {name}"),
         });
-        let (source, plan, voxel) = self
+        let (source, provenance, voxel, channel) = self
             .scene
             .objects
             .get(id)
             .and_then(|object| {
-                object
-                    .provenance()
-                    .editing()
-                    .map(|(source, edits)| (source, edits.to_vec(), object.voxel()))
+                object.provenance().source().map(|source| {
+                    (
+                        source,
+                        object.provenance().clone(),
+                        object.voxel(),
+                        object.channel(),
+                    )
+                })
             })
-            .ok_or_else(|| format!("{name} carries no surface edits"))?;
+            .ok_or_else(|| format!("{name} carries no edits"))?;
         let frames = (0..self.scene.frame_count())
             .map(|time| {
                 self.scene
@@ -614,10 +619,35 @@ impl Run<'_, '_> {
                     .and_then(|object| object.frame_shared(time))
             })
             .collect::<Vec<_>>();
-        let edited = crate::run::edit(&frames, &plan, voxel, Some(self.store))?;
+        let edited = match &provenance {
+            grana_scene::Provenance::Edited { edits, .. } => {
+                crate::run::edit(&frames, edits, voxel, Some(self.store))?
+            }
+            grana_scene::Provenance::Masked { strokes, .. } => {
+                let level = frames
+                    .iter()
+                    .flatten()
+                    .find_map(|frame| match frame.as_ref() {
+                        ObjectFrame::Surfaces(set) => Some(set.level()),
+                        _ => None,
+                    });
+                let Some(level) = level else {
+                    return Err(format!("{name} carries no surface frame"));
+                };
+                let request = crate::run::MaskRequest {
+                    channel,
+                    level,
+                    strokes,
+                    drift: self.scene.drift(),
+                };
+                crate::run::mask(&self.channels, &frames, voxel, &request)?
+            }
+            _ => return Err(format!("{name} carries no edits")),
+        };
         for (time, frame) in edited.into_iter().enumerate() {
-            if let Some(frame) = frame {
-                self.scene.install_shared(id, time as u32, frame);
+            match frame {
+                Some(frame) => self.scene.install_shared(id, time as u32, frame),
+                None => self.scene.install_optional(id, time as u32, None),
             }
         }
         self.scene.clear_tracks(id);

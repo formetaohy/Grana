@@ -6,6 +6,27 @@ use super::DiscoverError;
 
 const DEFAULT_JOBS: usize = 4;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WellKey {
+    row: usize,
+    column: usize,
+    field: usize,
+}
+
+impl WellKey {
+    pub fn row(self) -> usize {
+        self.row
+    }
+
+    pub fn column(self) -> usize {
+        self.column
+    }
+
+    pub fn field(self) -> usize {
+        self.field
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DatasetEntry {
     path: PathBuf,
@@ -13,6 +34,8 @@ pub struct DatasetEntry {
     scene: usize,
     scenes: usize,
     scene_name: Option<String>,
+    well: Option<WellKey>,
+    plate_label: Option<String>,
 }
 
 impl DatasetEntry {
@@ -23,6 +46,8 @@ impl DatasetEntry {
             scene: 0,
             scenes: 1,
             scene_name: None,
+            well: None,
+            plate_label: None,
         }
     }
 
@@ -43,6 +68,20 @@ impl DatasetEntry {
             scene,
             scenes,
             scene_name,
+            well: None,
+            plate_label: None,
+        }
+    }
+
+    pub fn well(path: PathBuf, group: String, key: WellKey, field: String) -> Self {
+        Self {
+            path,
+            group,
+            scene: 0,
+            scenes: 1,
+            scene_name: None,
+            well: Some(key),
+            plate_label: Some(field),
         }
     }
 
@@ -68,6 +107,26 @@ impl DatasetEntry {
         }
     }
 
+    pub fn well_key(&self) -> Option<WellKey> {
+        self.well
+    }
+
+    pub fn well_row(&self) -> Option<usize> {
+        self.well.map(|well| well.row())
+    }
+
+    pub fn well_column(&self) -> Option<usize> {
+        self.well.map(|well| well.column())
+    }
+
+    pub fn well_field(&self) -> Option<usize> {
+        self.well.map(|well| well.field())
+    }
+
+    pub fn plate_label(&self) -> Option<&str> {
+        self.plate_label.as_deref()
+    }
+
     pub fn name(&self) -> String {
         dataset_name(&self.path)
     }
@@ -82,6 +141,9 @@ impl DatasetEntry {
     }
 
     pub fn title(&self) -> String {
+        if let Some(label) = self.plate_label.as_deref() {
+            return label.to_string();
+        }
         match self.scenes {
             1 => self.name(),
             _ => match &self.scene_name {
@@ -123,6 +185,12 @@ pub(super) fn dataset_workers(jobs: usize) -> usize {
 }
 
 pub fn discover(root: &Path) -> Result<Vec<DatasetEntry>, DiscoverError> {
+    if let Some(plate) = grana_image::plate_at(root).map_err(|error| DiscoverError::Read {
+        path: root.display().to_string(),
+        detail: error.to_string(),
+    })? {
+        return Ok(plate_entries(root, &plate));
+    }
     if grana_image::is_image(root) {
         return Ok(entries_of(root, ""));
     }
@@ -131,10 +199,39 @@ pub fn discover(root: &Path) -> Result<Vec<DatasetEntry>, DiscoverError> {
     datasets.sort_by(|left, right| {
         left.group
             .cmp(&right.group)
+            .then_with(|| left.well.cmp(&right.well))
             .then_with(|| left.path.cmp(&right.path))
             .then_with(|| left.scene.cmp(&right.scene))
     });
     Ok(datasets)
+}
+
+fn plate_entries(root: &Path, plate: &grana_image::Plate) -> Vec<DatasetEntry> {
+    let mut entries = Vec::with_capacity(plate.len());
+    for well in plate.wells() {
+        for field in well.fields() {
+            let segments = field
+                .path()
+                .trim_start_matches('/')
+                .split('/')
+                .filter(|segment| !segment.is_empty());
+            let mut path = root.to_path_buf();
+            for segment in segments {
+                path.push(segment);
+            }
+            entries.push(DatasetEntry::well(
+                path,
+                plate.name().to_string(),
+                WellKey {
+                    row: well.row(),
+                    column: well.column(),
+                    field: field.index(),
+                },
+                field.name().to_string(),
+            ));
+        }
+    }
+    entries
 }
 
 fn entries_of(path: &Path, group: &str) -> Vec<DatasetEntry> {

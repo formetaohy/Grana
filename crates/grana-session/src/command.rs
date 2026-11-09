@@ -4,7 +4,7 @@ use grana_measure::{
     Measurement, PlotAxis, Scope,
 };
 use grana_mesh::Format as MeshFormat;
-use grana_object::TrackParams;
+use grana_object::{MaskMode, MaskTool, ObjectAnchor, TrackParams};
 use grana_optics::Psf;
 
 use grana_scene::{
@@ -61,6 +61,17 @@ pub enum Command {
         time: u32,
         object: usize,
     },
+    PaintMask {
+        set: ObjectSetId,
+        frame: u32,
+        anchor: ObjectAnchor,
+        tool: MaskTool,
+        mode: MaskMode,
+        radius: f32,
+        tolerance: f32,
+        points: Vec<[f32; 3]>,
+    },
+    ClearMask(ObjectSetId),
     AddObject(ObjectKind),
     AddSegment,
     SetSegment {
@@ -343,6 +354,8 @@ pub enum Action {
     DuplicateObject,
     MergeObjects,
     EditObjects,
+    MaskEdit,
+    ClearMask,
     ClearObject,
     Seed,
     SeedSource,
@@ -416,6 +429,8 @@ impl Action {
             Self::DuplicateObject => "copy an object set",
             Self::MergeObjects => "merge object sets",
             Self::EditObjects => "edit surfaces",
+            Self::MaskEdit => "mask painting",
+            Self::ClearMask => "mask clearing",
             Self::ClearObject => "clear objects",
             Self::Seed => "seed points",
             Self::SeedSource => "seed source",
@@ -486,6 +501,7 @@ impl Action {
                 | Self::ObjectOpacity
                 | Self::ObjectParameters
                 | Self::ObjectColoring
+                | Self::MaskEdit
                 | Self::Annotation
                 | Self::TrackThickness
                 | Self::TrackColoring
@@ -559,6 +575,8 @@ impl Command {
             Self::MergeSurfaces { set, .. } | Self::SplitSurface { set, .. } => {
                 Edit::targeted(Action::EditObjects, set.raw())
             }
+            Self::PaintMask { set, .. } => Edit::targeted(Action::MaskEdit, set.raw()),
+            Self::ClearMask(set) => Edit::targeted(Action::ClearMask, set.raw()),
             Self::ClearObject(_) => Edit::new(Action::ClearObject),
             Self::AddSeed { set, .. } | Self::RemoveSeed { set, .. } | Self::ClearSeeds(set) => {
                 Edit::targeted(Action::Seed, set.raw())

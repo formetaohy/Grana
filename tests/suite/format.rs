@@ -269,10 +269,16 @@ fn browses_an_ome_zarr_plate() {
     let zarr = grana_zarr::Root::local(&root).expect("the plate opens");
     let plate = grana_zarr::open_plate(&zarr).expect("the plate metadata parses");
     assert_eq!((plate.rows(), plate.columns()), (1, 2));
+    assert_eq!(plate.row_name(0), Some("A"));
+    assert_eq!(plate.column_name(1), Some("2"));
     let well = plate.well(0, 1).expect("the second column holds a well");
     assert_eq!(well.label(), "A2");
     assert_eq!(well.fields().len(), 1);
     assert_eq!(plate.fields()[1].series(), 1);
+    assert_eq!(
+        (plate.fields()[1].row(), plate.fields()[1].column()),
+        (0, 1)
+    );
     assert_eq!(plate.well_of(1).map(grana_zarr::Well::label), Some("A2"));
     let browse = grana_image::plate(&Source::file(root.clone()))
         .expect("the image layer reads the plate")
@@ -284,4 +290,36 @@ fn browses_an_ome_zarr_plate() {
     assert_eq!(resolved.group(), Some("/A/2/1"));
     let image = Image::open(&resolved).expect("the second field opens");
     assert_eq!(image.pyramid().level(0).extent(), Extent::new(12, 10, 6));
+}
+
+#[test]
+fn orders_plate_fields_naturally() {
+    let temp = Temp::new("suite-plate-order");
+    let root = temp.path().join("ordered.ome.zarr");
+    support::plate_fields(&root, &["10", "2", "1"]);
+    let zarr = grana_zarr::Root::local(&root).expect("the plate opens");
+    let plate = grana_zarr::open_plate(&zarr).expect("the plate metadata parses");
+    assert_eq!(
+        plate
+            .fields()
+            .iter()
+            .map(|field| field.name().to_string())
+            .collect::<Vec<_>>(),
+        vec!["A1/1".to_string(), "A1/2".to_string(), "A1/10".to_string()]
+    );
+    assert_eq!(plate.fields()[2].index(), 2);
+    assert_eq!(plate.fields()[2].series(), 2);
+    assert_eq!(plate.field(0).map(grana_zarr::Field::series), Some(0));
+    let entries = grana_pipeline::discover(&root).expect("the plate discovers its fields");
+    assert_eq!(
+        entries
+            .iter()
+            .map(grana_pipeline::DatasetEntry::title)
+            .collect::<Vec<_>>(),
+        vec!["A1/1".to_string(), "A1/2".to_string(), "A1/10".to_string()]
+    );
+    assert_eq!(entries[2].group(), "ordered");
+    assert_eq!(entries[2].well_row(), Some(0));
+    assert_eq!(entries[2].well_column(), Some(0));
+    assert_eq!(entries[2].well_field(), Some(2));
 }

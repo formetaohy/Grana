@@ -1,9 +1,20 @@
 use super::*;
 
-use grana_object::ObjectAnchor;
-use grana_scene::{ObjectFrame, ObjectKind, ObjectSet, SurfaceEdit, SurfaceEditKind};
+use grana_object::{MaskEdit, MaskMode, MaskTool, ObjectAnchor};
+use grana_scene::{ObjectFrame, ObjectKind, ObjectSet, Provenance, SurfaceEdit, SurfaceEditKind};
 
 type Deletions = (ObjectSetId, Vec<(u32, Vec<usize>)>);
+
+pub(super) struct MaskPaint {
+    pub set: ObjectSetId,
+    pub frame: u32,
+    pub anchor: ObjectAnchor,
+    pub tool: MaskTool,
+    pub mode: MaskMode,
+    pub radius: f32,
+    pub tolerance: f32,
+    pub points: Vec<[f32; 3]>,
+}
 
 #[derive(Clone, Debug)]
 pub(super) enum SurfaceEditRequest {
@@ -363,7 +374,11 @@ impl Session {
             };
             (
                 scene.filtered_dependents(root),
-                scene.edited_dependents(root),
+                {
+                    let mut edited = scene.edited_dependents(root);
+                    edited.extend(scene.masked_dependents(root));
+                    edited
+                },
                 scene.seeded_dependents(root),
             )
         };
@@ -417,18 +432,22 @@ impl Session {
     }
 
     pub(super) fn apply_edit_plan(&mut self, set: ObjectSetId) -> Result<(), String> {
-        let Some((source, plan, voxel)) = self
+        let Some((source, voxel, channel)) = self
             .scene
             .as_ref()
             .and_then(|scene| scene.objects.get(set))
-            .and_then(|object| {
-                object
-                    .provenance()
-                    .editing()
-                    .map(|(source, edits)| (source, edits.to_vec(), object.voxel()))
+            .map(|object| {
+                (
+                    object.provenance().source(),
+                    object.voxel(),
+                    object.channel(),
+                )
             })
         else {
-            return Err("the object set carries no surface edits".to_string());
+            return Err("the object set left the scene".to_string());
+        };
+        let Some(source) = source else {
+            return Err("the object set carries no edits".to_string());
         };
         let frames = {
             let Some(scene) = self.scene.as_ref() else {
@@ -443,16 +462,195 @@ impl Session {
                 })
                 .collect::<Vec<_>>()
         };
-        let edited = grana_pipeline::run::edit(&frames, &plan, voxel, Some(&self.store))?;
+        let edited = match self
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.objects.get(set))
+            .map(|object| object.provenance().clone())
+        {
+            Some(Provenance::Edited { edits, .. }) => {
+                grana_pipeline::run::edit(&frames, &edits, voxel, Some(&self.store))?
+            }
+            Some(Provenance::Masked { strokes, .. }) => {
+                let Some(reader) = self.source.as_ref().and_then(Loader::channels) else {
+                    return Err("open a dataset before painting a mask".to_string());
+                };
+                let level = frames
+                    .iter()
+                    .flatten()
+                    .find_map(|frame| match frame.as_ref() {
+                        ObjectFrame::Surfaces(set) => Some(set.level()),
+                        _ => None,
+                    });
+                let Some(level) = level else {
+                    return Err("the painted object set carries no surface frame".to_string());
+                };
+                let drift = self
+                    .scene
+                    .as_ref()
+                    .map(|scene| scene.drift().clone())
+                    .unwrap_or_default();
+                grana_pipeline::run::mask(
+                    reader.as_ref(),
+                    &frames,
+                    voxel,
+                    &grana_pipeline::run::MaskRequest {
+                        channel,
+                        level,
+                        strokes: &strokes,
+                        drift: &drift,
+                    },
+                )?
+            }
+            _ => return Err("the object set carries no edits".to_string()),
+        };
         if let Some(scene) = self.scene.as_mut() {
             for (time, frame) in edited.into_iter().enumerate() {
-                if let Some(frame) = frame {
-                    scene.install_shared(set, time as u32, frame);
+                match frame {
+                    Some(frame) => scene.install_shared(set, time as u32, frame),
+                    None => scene.install_optional(set, time as u32, None),
                 }
             }
             scene.clear_tracks(set);
         }
         Ok(())
+    }
+
+    pub(super) fn paint_mask(&mut self, request: MaskPaint) -> bool {
+        if self.recipe.is_some() {
+            self.message = Some(Message::error("a protocol replay paints no masks"));
+            return false;
+        }
+        if self.busy(request.set) {
+            self.message = Some(Message::error("the object set is busy with an analysis"));
+            return false;
+        }
+        let stroke = match self.stroke(&request) {
+            Ok(stroke) => stroke,
+            Err(detail) => {
+                self.message = Some(Message::error(detail));
+                return false;
+            }
+        };
+        let mut created = false;
+        let mut previous = Vec::new();
+        let target = match self.target(request.set) {
+            Ok(target) => target,
+            Err(detail) => {
+                self.message = Some(Message::error(detail));
+                return false;
+            }
+        };
+        let target = match target {
+            Some(target) => target,
+            None => {
+                let Some(target) = self.scene.as_mut().and_then(|scene| {
+                    scene.masked_object(request.set, "masked", vec![stroke.clone()])
+                }) else {
+                    self.message = Some(Message::error("the object set derives no mask"));
+                    return false;
+                };
+                created = true;
+                target
+            }
+        };
+        if !created {
+            previous = self
+                .scene
+                .as_ref()
+                .and_then(|scene| scene.objects.get(target))
+                .map(|object| object.provenance().strokes().to_vec())
+                .unwrap_or_default();
+            let mut strokes = previous.clone();
+            strokes.push(stroke);
+            let replanned = self
+                .scene
+                .as_mut()
+                .is_some_and(|scene| scene.replan_masked(target, strokes));
+            if !replanned {
+                self.message = Some(Message::error("the object set carries no mask edits"));
+                return false;
+            }
+        }
+        if let Err(detail) = self.apply_edit_plan(target) {
+            if created {
+                self.remove_object(target);
+            } else if let Some(scene) = self.scene.as_mut() {
+                scene.replan_masked(target, previous);
+            }
+            self.message = Some(Message::error(detail));
+            return false;
+        }
+        let painted = self
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.objects.get(target))
+            .map_or(0, |object| object.provenance().strokes().len());
+        if let Some(source) = self.object_mut(request.set) {
+            source.set_visible(false);
+        }
+        self.defer_relations(target);
+        self.resume_relations(target);
+        self.start_tracks(target);
+        if let Some(scene) = self.scene.as_ref() {
+            self.measure.select(target, scene);
+        }
+        self.message = Some(Message::info(format!(
+            "painted {painted} mask strokes into a derived object set"
+        )));
+        true
+    }
+
+    fn target(&self, set: ObjectSetId) -> Result<Option<ObjectSetId>, String> {
+        let Some(scene) = self.scene.as_ref() else {
+            return Ok(None);
+        };
+        let Some(object) = scene.objects.get(set) else {
+            return Err("the object set left the scene".to_string());
+        };
+        match object.provenance() {
+            Provenance::Masked { .. } => Ok(Some(set)),
+            Provenance::Edited { .. } => Err("the object set carries surface edits".to_string()),
+            _ => Ok(None),
+        }
+    }
+
+    fn stroke(&self, request: &MaskPaint) -> Result<MaskEdit, String> {
+        match request.tool {
+            MaskTool::Brush => MaskEdit::brush(
+                request.frame,
+                request.anchor,
+                request.mode,
+                request.radius,
+                request.points.clone(),
+            ),
+            MaskTool::Wand => MaskEdit::wand(
+                request.frame,
+                request.anchor,
+                request.mode,
+                request.tolerance,
+                request.points.first().copied().unwrap_or([0.0; 3]),
+            ),
+        }
+    }
+
+    pub(super) fn clear_mask(&mut self, set: ObjectSetId) -> bool {
+        let source = self
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.objects.get(set))
+            .and_then(|object| object.provenance().masking())
+            .map(|(source, _)| source);
+        let Some(source) = source else {
+            self.message = Some(Message::error("the object set carries no mask edits"));
+            return false;
+        };
+        if let Some(source) = self.object_mut(source) {
+            source.set_visible(true);
+        }
+        self.remove_object(set);
+        self.message = None;
+        true
     }
 
     pub(super) fn edit_surfaces(

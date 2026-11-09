@@ -105,7 +105,89 @@ pub(super) fn view<'a>(
             RECORD,
         ));
     }
+    elements.extend(mask_bar(ctx, layout, state, geometry));
     elements
+}
+
+fn mask_bar<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    layout: &Layout,
+    state: &'a View<'a>,
+    geometry: Geometry,
+) -> Vec<Element<'a, Message>> {
+    let Some(brush) = state.workspace.mask else {
+        return Vec::new();
+    };
+    let Some(set) = state.scene.objects.get(brush.set) else {
+        return Vec::new();
+    };
+    let names = crate::state::MaskBrushTool::ALL.map(crate::state::MaskBrushTool::name);
+    let tools = crate::view::segmented(
+        ctx,
+        "mask.tool",
+        &names,
+        brush.tool.index(),
+        Message::SetMaskTool,
+    );
+    let title = crate::view::card_title(ctx, Icon::Pencil, "Paint Mask", Some(set.name()));
+    let mut rows = vec![title, tools];
+    if brush.tool.wand() {
+        rows.push(crate::view::slider_event(
+            ctx,
+            "mask.tolerance",
+            Some("Tolerance"),
+            brush.tolerance,
+            0.0..=0.5,
+            &format!("{:.02}", brush.tolerance),
+            Message::SetMaskTolerance,
+        ));
+    } else {
+        rows.push(crate::view::slider_event(
+            ctx,
+            "mask.radius",
+            Some("Radius"),
+            brush.radius,
+            0.1..=20.0,
+            &format!("{:.2} µm", brush.radius),
+            Message::SetMaskRadius,
+        ));
+    }
+    rows.push(
+        grana_ui::row().gap(6.0).children([
+            crate::view::button(ctx, "Clear", grana_ui::Role::Control)
+                .named("mask.clear")
+                .press(Message::Command(grana_session::Command::ClearMask(
+                    brush.set,
+                ))),
+            crate::view::button(ctx, "Done", grana_ui::Role::Tinted)
+                .named("mask.done")
+                .press(Message::DisarmMask),
+        ]),
+    );
+    let width = 240.0;
+    let height = 34.0 + 30.0 + 34.0 + 6.0 + 30.0 + 12.0;
+    let floor = layout
+        .dock
+        .or(layout.transport)
+        .map_or(layout.stage.max.y - MARGIN, |rect| {
+            rect.min.y - crate::panel::GAP
+        });
+    let rect = Rect::from_min_size(
+        Vec2::new(
+            geometry.section_safe.min.x,
+            (floor - height).max(geometry.section_safe.min.y),
+        ),
+        Vec2::new(width, height),
+    );
+    vec![
+        grana_ui::column()
+            .padding(Edges::all(12.0))
+            .gap(6.0)
+            .glass(GlassStyle::sheet())
+            .children(rows)
+            .at(rect)
+            .layer(Layer::Popup),
+    ]
 }
 
 pub(crate) fn remote<'a>(

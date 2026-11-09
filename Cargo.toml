@@ -115,6 +115,7 @@ grana-measure = { workspace = true }
 grana-mesh = { workspace = true }
 grana-object = { workspace = true }
 grana-optics = { workspace = true }
+grana-pipeline = { workspace = true }
 grana-project = { workspace = true }
 grana-protocol = { workspace = true }
 grana-render = { workspace = true }
