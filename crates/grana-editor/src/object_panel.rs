@@ -1684,6 +1684,19 @@ fn relation_row<'a>(
     }
     let caption = view::caption(ctx, &label);
     let count = view::caption(ctx, &format!("{done}/{total}"));
+    let matrix = view::icon_button(
+        ctx,
+        &format!("relation.{}.{}.{}.matrix", id.raw(), target.raw(), shift),
+        Icon::Grid,
+        22.0,
+        Role::Quiet,
+        "Open pair matrix",
+        Message::OpenRelation {
+            source: id,
+            target,
+            shift,
+        },
+    );
     let remove = view::icon_button(
         ctx,
         &format!("relation.{}.{}.{}.remove", id.raw(), target.raw(), shift),
@@ -1700,6 +1713,7 @@ fn relation_row<'a>(
     let mut children = vec![grana_ui::row().gap(6.0).align(Align::Center).children([
         crate::inspector::centered(22.0, caption),
         crate::inspector::centered(22.0, count),
+        matrix,
         remove,
     ])];
     if frames > 1 {

@@ -210,7 +210,7 @@ impl Renderer {
         assert!(budget > 0, "a renderer needs a residency budget");
         let layouts = Layouts::new(device);
         let dummy = dummy_texture(device, queue);
-        let dummy_oit = Oit::new(device, &layouts, [1, 1], [0, 0, 1, 1], 1);
+        let dummy_oit = Oit::new(device, &layouts, [1, 1], 1, 1);
         let atlas_sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("grana.atlas.sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,

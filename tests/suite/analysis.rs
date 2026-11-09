@@ -271,6 +271,11 @@ fn relates_objects_by_surface_centre_and_neighbours() {
     let neighbours =
         Reference::new(&Shape::mesh(mesh.clone())).relate(&Shape::mesh(mesh), 0.0, true);
     assert_eq!(neighbours.objects(), 2);
+    assert_eq!(
+        neighbours.pairs().len(),
+        2,
+        "each neighbour names its partner as a pair"
+    );
     for object in 0..2 {
         assert!(
             (neighbours.center(object) - 6.4).abs() < 0.3,
@@ -288,6 +293,28 @@ fn relates_objects_by_surface_centre_and_neighbours() {
             "the balls do not overlap"
         );
         assert_eq!(neighbours.partner(object), if object == 0 { 2 } else { 1 });
+        let pair = neighbours
+            .pairs()
+            .iter()
+            .find(|pair| pair.source() as usize == object)
+            .expect("the object keeps one pair");
+        assert_eq!(
+            pair.target(),
+            u32::from(object == 0),
+            "the pair points at the neighbour"
+        );
+        assert!(
+            (pair.distance() - 3.2).abs() < 0.3,
+            "the pair sits {} apart",
+            pair.distance()
+        );
+        assert!(
+            (pair.center() - 6.4).abs() < 0.3,
+            "the paired centres sit {} apart",
+            pair.center()
+        );
+        assert_eq!(pair.contact(), 0.0, "the pair shares no surface");
+        assert_eq!(pair.inside(), 0.0, "the pair holds no containment");
     }
 
     let first = relation_surfaces(&[([24.0, 32.0, 24.0], 8.0)]);
@@ -314,6 +341,23 @@ fn relates_objects_by_surface_centre_and_neighbours() {
         overlap.center(0)
     );
     assert_eq!(overlap.distance(0), 0.0, "an overlapping surface touches");
+    let pair = overlap.pairs().first().expect("the overlap keeps a pair");
+    assert_eq!(pair.target(), 0);
+    assert!(
+        (pair.inside() - overlap.inside(0)).abs() < 1.0e-6,
+        "the pair carries the containment of its object"
+    );
+    assert!(
+        pair.inside() > 0.3,
+        "only {} of the pair lies inside",
+        pair.inside()
+    );
+    assert_eq!(pair.distance(), 0.0, "the overlapping pair touches");
+    assert!(
+        pair.center() < 0.8,
+        "the paired centres sit {} apart",
+        pair.center()
+    );
 
     let far = relation_surfaces(&[([52.0, 32.0, 24.0], 8.0)]);
     let apart = Reference::new(&Shape::mesh(
@@ -331,6 +375,12 @@ fn relates_objects_by_surface_centre_and_neighbours() {
         apart.distance(0)
     );
     assert_eq!(apart.overlapping(0), 0);
+    let pair = apart.pairs().first().expect("the distance keeps a pair");
+    assert!(
+        (pair.distance() - 2.4).abs() < 0.3,
+        "the pair sits {} apart",
+        pair.distance()
+    );
 }
 
 fn relation_surfaces(balls: &[([f32; 3], f32)]) -> SurfaceSet {

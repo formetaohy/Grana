@@ -11,6 +11,7 @@ mod object_panel;
 mod panel;
 mod plate_panel;
 mod plot;
+mod relation_panel;
 mod shell;
 mod stage;
 mod state;
@@ -23,8 +24,8 @@ pub use message::{Message, PlotEvent};
 pub use panel::{Panel, build};
 pub use stage::{GrabDrag, Interaction, PaintDrag, Pane, Stage, ToolDrag};
 pub use state::{
-    AnnotationTool, FrameStats, MaskBrush, MaskBrushTool, Playback, ProfileStats, Sections, View,
-    ViewStats, Workspace,
+    AnnotationTool, FrameStats, MaskBrush, MaskBrushTool, Playback, ProfileStats, RelationMetric,
+    Sections, View, ViewStats, Workspace,
 };
 
 pub(crate) fn section_preset(index: usize) -> (f32, f32) {

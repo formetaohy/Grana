@@ -98,7 +98,7 @@ pub(crate) struct Oit {
     read_group: BindGroup,
     layers: u32,
     size: [u32; 2],
-    region: [u32; 4],
+    capacity: u64,
     tail_scale: u32,
     tail_size: [u32; 2],
 }
@@ -108,19 +108,22 @@ impl Oit {
         device: &Device,
         layouts: &Layouts,
         size: [u32; 2],
-        region: [u32; 4],
+        pixels: u64,
         budget: u64,
     ) -> Self {
         assert!(
-            region[2] > 0 && region[3] > 0 && size[0] > 0 && size[1] > 0,
+            pixels > 0 && size[0] > 0 && size[1] > 0,
             "a fragment store covers a non empty pane of a non empty surface"
         );
-        let pane = [region[2], region[3]];
-        let pixels = u64::from(pane[0]) * u64::from(pane[1]);
-        let tail_scale = tail_scale(pane);
-        let tail_size = [pane[0].div_ceil(tail_scale), pane[1].div_ceil(tail_scale)];
-        let capacity = pixels.div_ceil(PANE_PIXELS_STEP) * PANE_PIXELS_STEP;
-        let (layers, _) = allocation(pane, capacity, budget);
+        let capacity = pixels
+            .div_ceil(PANE_PIXELS_STEP)
+            .checked_mul(PANE_PIXELS_STEP)
+            .expect("a fragment store holds a finite pane");
+        let surface = u64::from(size[0]) * u64::from(size[1]);
+        let tail_scale = tail_scale(surface);
+        let tail_size = [size[0].div_ceil(tail_scale), size[1].div_ceil(tail_scale)];
+        let tail_pixels = u64::from(tail_size[0]) * u64::from(tail_size[1]);
+        let (layers, _) = allocation(tail_pixels, capacity, budget);
         let layers = layers as u32;
         let slots = capacity * u64::from(layers);
         let keys = device.create_buffer(&wgpu::BufferDescriptor {
@@ -225,14 +228,21 @@ impl Oit {
             read_group,
             layers,
             size,
-            region,
+            capacity,
             tail_scale,
             tail_size,
         }
     }
 
-    pub fn matches(&self, size: [u32; 2], region: [u32; 4]) -> bool {
-        self.size == size && self.region == region
+    pub fn fits(&self, size: [u32; 2], pixels: u64) -> bool {
+        self.size == size && pixels <= self.capacity
+    }
+
+    pub fn tail_pane(&self, region: [u32; 4]) -> [u32; 2] {
+        [
+            region[2].div_ceil(self.tail_scale),
+            region[3].div_ceil(self.tail_scale),
+        ]
     }
 
     pub fn layers(&self) -> u32 {
@@ -241,10 +251,6 @@ impl Oit {
 
     pub fn tail_scale(&self) -> u32 {
         self.tail_scale
-    }
-
-    pub fn tail_size(&self) -> [u32; 2] {
-        self.tail_size
     }
 
     pub fn dropped(&self) -> &Buffer {
@@ -294,8 +300,8 @@ impl Oit {
     }
 }
 
-fn allocation(size: [u32; 2], capacity: u64, budget: u64) -> (u64, u64) {
-    let tail_bytes = u64::from(size[0]) * u64::from(size[1]) * TAIL_BYTES;
+fn allocation(tail_pixels: u64, capacity: u64, budget: u64) -> (u64, u64) {
+    let tail_bytes = tail_pixels * TAIL_BYTES;
     let fixed = tail_bytes + capacity * COUNT_BYTES;
     let layer_bytes = capacity * (KEY_BYTES + COLOR_BYTES);
     let floor = fixed + MINIMUM_LAYERS * layer_bytes;
@@ -304,8 +310,7 @@ fn allocation(size: [u32; 2], capacity: u64, budget: u64) -> (u64, u64) {
     (layers, fixed + layers * layer_bytes)
 }
 
-fn tail_scale(pane: [u32; 2]) -> u32 {
-    let pixels = u64::from(pane[0]) * u64::from(pane[1]);
+fn tail_scale(pixels: u64) -> u32 {
     if pixels <= TAIL_PIXELS {
         1
     } else if pixels <= TAIL_PIXELS_COARSE {

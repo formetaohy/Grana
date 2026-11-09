@@ -1,3 +1,73 @@
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RelationPair {
+    source: u32,
+    target: u32,
+    contact: f32,
+    distance: f32,
+    inside: f32,
+    center: f32,
+}
+
+impl RelationPair {
+    pub fn new(
+        source: u32,
+        target: u32,
+        contact: f32,
+        distance: f32,
+        inside: f32,
+        center: f32,
+    ) -> Self {
+        assert!(
+            contact.is_finite() && contact >= 0.0,
+            "a pair contact is an area"
+        );
+        assert!(
+            distance.is_finite() && distance >= 0.0,
+            "a pair distance is a length"
+        );
+        assert!(
+            (0.0..=1.0).contains(&inside),
+            "a pair containment is a fraction"
+        );
+        assert!(
+            center.is_finite() && center >= 0.0,
+            "a pair centre distance is a length"
+        );
+        Self {
+            source,
+            target,
+            contact,
+            distance,
+            inside,
+            center,
+        }
+    }
+
+    pub fn source(self) -> u32 {
+        self.source
+    }
+
+    pub fn target(self) -> u32 {
+        self.target
+    }
+
+    pub fn contact(self) -> f32 {
+        self.contact
+    }
+
+    pub fn distance(self) -> f32 {
+        self.distance
+    }
+
+    pub fn inside(self) -> f32 {
+        self.inside
+    }
+
+    pub fn center(self) -> f32 {
+        self.center
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RelationFrame {
     distance: Vec<f32>,
@@ -6,6 +76,7 @@ pub struct RelationFrame {
     contact: Vec<f32>,
     overlapping: Vec<u32>,
     partner: Vec<u32>,
+    pairs: Vec<RelationPair>,
 }
 
 impl RelationFrame {
@@ -16,6 +87,7 @@ impl RelationFrame {
         contact: Vec<f32>,
         overlapping: Vec<u32>,
         partner: Vec<u32>,
+        pairs: Vec<RelationPair>,
     ) -> Self {
         let objects = distance.len();
         assert_eq!(
@@ -57,6 +129,16 @@ impl RelationFrame {
                 .all(|value| value.is_finite() && *value >= 0.0),
             "a relation contact is an area"
         );
+        assert!(
+            pairs.windows(2).all(|pair| {
+                (pair[0].source(), pair[0].target()) < (pair[1].source(), pair[1].target())
+            }),
+            "a relation frame lists each pair once in source and target order"
+        );
+        assert!(
+            pairs.iter().all(|pair| (pair.source() as usize) < objects),
+            "a relation pair names a source object of the frame"
+        );
         Self {
             distance,
             center,
@@ -64,6 +146,7 @@ impl RelationFrame {
             contact,
             overlapping,
             partner,
+            pairs,
         }
     }
 
@@ -75,6 +158,7 @@ impl RelationFrame {
             contact: vec![0.0; objects],
             overlapping: vec![0; objects],
             partner: vec![0; objects],
+            pairs: Vec::new(),
         }
     }
 
@@ -104,5 +188,9 @@ impl RelationFrame {
 
     pub fn partner(&self, object: usize) -> u32 {
         self.partner[object]
+    }
+
+    pub fn pairs(&self) -> &[RelationPair] {
+        &self.pairs
     }
 }

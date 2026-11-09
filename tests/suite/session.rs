@@ -6,8 +6,8 @@ use grana_animation::Timeline;
 use grana_display::{CameraState, SectionState};
 use grana_geometry::GeometryStore;
 use grana_object::{
-    IntensityTable, MaskMode, MaskTool, ObjectAnchor, RelationFrame, SampleStatistics, Spot,
-    SpotParams, SpotSet, SurfaceFilter, SurfaceParams,
+    IntensityTable, MaskMode, MaskTool, ObjectAnchor, RelationFrame, RelationPair,
+    SampleStatistics, Spot, SpotParams, SpotSet, SurfaceFilter, SurfaceParams,
 };
 use grana_project::{Export, Project, Source, ViewState};
 use grana_protocol::Protocol;
@@ -797,6 +797,10 @@ fn round_trips_a_surface_project() {
             vec![0.75],
             vec![1],
             vec![1],
+            vec![
+                RelationPair::new(0, 0, 0.75, 0.0, 0.25, 2.5),
+                RelationPair::new(0, 1, 0.0, 1.5, 0.0, 4.0),
+            ],
         ),
     );
     scene.set_label_export(

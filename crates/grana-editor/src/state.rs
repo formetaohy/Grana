@@ -185,6 +185,68 @@ pub struct MaskBrush {
     pub tolerance: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelationMetric {
+    Contact,
+    Distance,
+    Overlap,
+    Center,
+}
+
+impl RelationMetric {
+    pub const ALL: [Self; 4] = [Self::Contact, Self::Distance, Self::Overlap, Self::Center];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Contact => "Contact",
+            Self::Distance => "Distance",
+            Self::Overlap => "Overlap",
+            Self::Center => "Centre",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Contact => 0,
+            Self::Distance => 1,
+            Self::Overlap => 2,
+            Self::Center => 3,
+        }
+    }
+
+    pub fn unit(self) -> &'static str {
+        match self {
+            Self::Contact => "µm²",
+            Self::Distance | Self::Center => "µm",
+            Self::Overlap => "%",
+        }
+    }
+
+    pub fn decimals(self) -> usize {
+        match self {
+            Self::Contact | Self::Distance | Self::Center => 3,
+            Self::Overlap => 1,
+        }
+    }
+
+    pub fn format(self, value: f32) -> String {
+        format!("{value:.*} {}", self.decimals(), self.unit())
+    }
+
+    pub fn value(self, pair: grana_object::RelationPair) -> f32 {
+        match self {
+            Self::Contact => pair.contact(),
+            Self::Distance => pair.distance(),
+            Self::Overlap => 100.0 * pair.inside(),
+            Self::Center => pair.center(),
+        }
+    }
+
+    pub fn near(self) -> bool {
+        self == Self::Distance
+    }
+}
+
 pub struct Workspace {
     pub panel: Option<Panel>,
     pub last_panel: Panel,
@@ -208,6 +270,9 @@ pub struct Workspace {
     pub psf_threshold: f32,
     pub psf_separation: f32,
     pub classifier: HashMap<ObjectSetId, Vec<Measurement>>,
+    pub relation: Option<(ObjectSetId, ObjectSetId, i32)>,
+    pub relation_metric: RelationMetric,
+    pub relation_filter: f32,
     pub(crate) drag: PlotDrag,
 }
 
@@ -236,6 +301,9 @@ impl Default for Workspace {
             psf_threshold: 8.0,
             psf_separation: 1.5,
             classifier: HashMap::new(),
+            relation: None,
+            relation_metric: RelationMetric::Contact,
+            relation_filter: 0.0,
             drag: PlotDrag::default(),
         }
     }

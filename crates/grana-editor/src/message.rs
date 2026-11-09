@@ -52,6 +52,23 @@ pub enum Message {
     SetMaskRadius(f32),
     SetMaskTolerance(f32),
     SetAnnotationTool(Option<AnnotationTool>),
+    SetRelation {
+        source: ObjectSetId,
+        target: ObjectSetId,
+        shift: i32,
+    },
+    OpenRelation {
+        source: ObjectSetId,
+        target: ObjectSetId,
+        shift: i32,
+    },
+    SetRelationMetric(usize),
+    SetRelationFilter(f32),
+    SelectPair {
+        source: ObjectSetId,
+        target: ObjectSetId,
+        objects: (usize, usize),
+    },
     SetClassifierFeatures {
         set: ObjectSetId,
         features: Vec<grana_measure::Measurement>,

@@ -21,7 +21,7 @@ pub use mask_edit::{MaskEdit, MaskMode, MaskTool};
 pub use params::{
     FilamentParams, SpotParams, SurfaceCut, SurfaceFilter, SurfaceParams, TrackParams,
 };
-pub use relation::RelationFrame;
+pub use relation::{RelationFrame, RelationPair};
 pub use shape::Shape;
 pub use spot::{Spot, SpotSet};
 pub use surface::{

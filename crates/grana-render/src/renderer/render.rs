@@ -295,17 +295,18 @@ impl Renderer {
             volume_region[3] as f32,
         ];
         frame_data.oit = [u32::from(translucent), 0, 0, 0];
+        let pane_pixels = u64::from(volume_width) * u64::from(volume_height);
         if translucent
             && target
                 .oit
                 .as_ref()
-                .is_none_or(|oit| !oit.matches(size, volume_region))
+                .is_none_or(|oit| !oit.fits(size, pane_pixels))
         {
             target.oit = Some(Oit::new(
                 device,
                 layouts,
                 size,
-                volume_region,
+                pane_pixels,
                 *budget / FRAGMENT_BUDGET_DIVISOR,
             ));
         }
@@ -600,7 +601,7 @@ impl Renderer {
                     );
                 }
                 {
-                    let tail = oit.tail_size();
+                    let tail = oit.tail_pane(volume_region);
                     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                         label: Some("grana.oit.pass"),
                         color_attachments: &[

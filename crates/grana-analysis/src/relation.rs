@@ -3,13 +3,28 @@ use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
 use grana_geometry::{Bvh, PackedMesh, Primitive};
-use grana_object::RelationFrame;
-
-use grana_object::Shape;
+use grana_object::{RelationFrame, RelationPair, Shape};
 
 pub struct Reference {
     bvh: Bvh,
     centers: Vec<Vec3>,
+}
+
+#[derive(Default)]
+struct Touch {
+    contact: f32,
+    distance: f32,
+    inside: usize,
+}
+
+impl Touch {
+    fn new(reach: f32) -> Self {
+        Self {
+            contact: 0.0,
+            distance: reach,
+            inside: 0,
+        }
+    }
 }
 
 impl Reference {
@@ -80,11 +95,17 @@ impl Reference {
         let mut contact = Vec::with_capacity(spots.len());
         let mut overlapping = Vec::with_capacity(spots.len());
         let mut partner = Vec::with_capacity(spots.len());
+        let mut pairs = Vec::with_capacity(spots.len());
         for (index, spot) in spots.iter().enumerate() {
             let point = Vec3::from(spot.center());
             let skipped = same.then_some(index as u32);
             let (reach, object, contained) = self.measure(point, skipped);
             let measured = reach.is_finite();
+            let touched = if contained {
+                0.0
+            } else {
+                cap(spot.radius(), reach, gate)
+            };
             distance.push(reach);
             center.push(if measured {
                 point.distance(self.centers[object as usize])
@@ -92,15 +113,29 @@ impl Reference {
                 f32::INFINITY
             });
             inside.push(if contained { 1.0 } else { 0.0 });
-            contact.push(if contained {
-                0.0
-            } else {
-                cap(spot.radius(), reach, gate)
-            });
+            contact.push(touched);
             overlapping.push(u32::from(contained));
             partner.push(if measured { object + 1 } else { 0 });
+            if measured {
+                pairs.push(RelationPair::new(
+                    index as u32,
+                    object,
+                    touched,
+                    reach,
+                    if contained { 1.0 } else { 0.0 },
+                    point.distance(self.centers[object as usize]),
+                ));
+            }
         }
-        RelationFrame::new(distance, center, inside, contact, overlapping, partner)
+        RelationFrame::new(
+            distance,
+            center,
+            inside,
+            contact,
+            overlapping,
+            partner,
+            pairs,
+        )
     }
 
     fn relate_mesh(&self, mesh: &PackedMesh, gate: f32, same: bool) -> RelationFrame {
@@ -110,14 +145,18 @@ impl Reference {
         let mut contact = Vec::with_capacity(mesh.object_count());
         let mut overlapping = Vec::with_capacity(mesh.object_count());
         let mut partner = Vec::with_capacity(mesh.object_count());
+        let mut pairs = Vec::new();
         let mut votes: HashMap<u32, u32> = HashMap::new();
+        let mut touches: HashMap<u32, Touch> = HashMap::new();
         let mut reaches: Vec<f32> = Vec::new();
+        let mut targets: Vec<u32> = Vec::new();
         let mut contained: Vec<bool> = Vec::new();
         for object in 0..mesh.object_count() {
             let group = mesh.groups()[object];
             let vertices = group.vertex_count() as usize;
             let triangles = group.index_count() as usize / 3;
             reaches.clear();
+            targets.clear();
             contained.clear();
             let skipped = same.then_some(object as u32);
             let mut sum = Vec3::ZERO;
@@ -125,15 +164,22 @@ impl Reference {
             let mut nearest: Option<u32> = None;
             let mut within = 0usize;
             votes.clear();
+            touches.clear();
             for vertex in 0..vertices {
                 let point = Vec3::from(mesh.position(object, vertex));
                 sum += point;
                 let (value, target, holds) = self.measure(point, skipped);
                 reaches.push(value);
+                targets.push(target);
                 contained.push(holds);
                 if holds {
                     within += 1;
                     *votes.entry(target).or_insert(0) += 1;
+                }
+                if value.is_finite() {
+                    let touch = touches.entry(target).or_insert_with(|| Touch::new(value));
+                    touch.distance = touch.distance.min(value);
+                    touch.inside += usize::from(holds);
                 }
                 if value < reach {
                     reach = value;
@@ -149,7 +195,17 @@ impl Reference {
                 {
                     continue;
                 }
-                area += area_of(mesh.triangle(object, triangle));
+                let owner = corners.iter().copied().min_by(|left, right| {
+                    reaches[*left as usize].total_cmp(&reaches[*right as usize])
+                });
+                let Some(owner) = owner else {
+                    continue;
+                };
+                let touched = area_of(mesh.triangle(object, triangle));
+                area += touched;
+                if let Some(touch) = touches.get_mut(&targets[owner as usize]) {
+                    touch.contact += touched as f32;
+                }
             }
             let containing = votes
                 .iter()
@@ -169,8 +225,28 @@ impl Reference {
             contact.push(area as f32);
             overlapping.push(votes.len() as u32);
             partner.push(chosen.map_or(0, |target| target + 1));
+            let start = pairs.len();
+            for (target, touch) in touches.drain() {
+                pairs.push(RelationPair::new(
+                    object as u32,
+                    target,
+                    touch.contact,
+                    touch.distance,
+                    touch.inside as f32 / vertices.max(1) as f32,
+                    centroid.distance(self.centers[target as usize]),
+                ));
+            }
+            pairs[start..].sort_by_key(|pair| pair.target());
         }
-        RelationFrame::new(distance, center, inside, contact, overlapping, partner)
+        RelationFrame::new(
+            distance,
+            center,
+            inside,
+            contact,
+            overlapping,
+            partner,
+            pairs,
+        )
     }
 
     fn measure(&self, point: Vec3, skipped: Option<u32>) -> (f32, u32, bool) {

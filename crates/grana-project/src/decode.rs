@@ -15,8 +15,8 @@ use grana_measure::{
 };
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, MaskEdit, MaskMode,
-    MaskTool, RelationFrame, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics,
-    SurfaceTopology, Track, TrackNode, TrackSet,
+    MaskTool, RelationFrame, RelationPair, SampleStatistics, Spot, SpotSet, SurfaceSet,
+    SurfaceStatistics, SurfaceTopology, Track, TrackNode, TrackSet,
 };
 use grana_optics::{Kernel, MeasuredPsf, Psf, PsfParams};
 use grana_scene::{
@@ -1207,6 +1207,33 @@ impl Decode for RelationFrame {
             overlapping.push(reader.u32()?);
             partner.push(reader.u32()?);
         }
+        let pairs = reader.count(24)?;
+        let mut rows: Vec<RelationPair> = Vec::with_capacity(pairs.min(1 << 16));
+        for _ in 0..pairs {
+            let source = reader.u32()?;
+            let target = reader.u32()?;
+            let contact = reader.f32()?;
+            let distance = reader.f32()?;
+            let inside = reader.f32()?;
+            let center = reader.f32()?;
+            if source as usize >= count
+                || rows.last().is_some_and(|previous| {
+                    (previous.source(), previous.target()) >= (source, target)
+                })
+                || !contact.is_finite()
+                || contact < 0.0
+                || !distance.is_finite()
+                || distance < 0.0
+                || !(0.0..=1.0).contains(&inside)
+                || !center.is_finite()
+                || center < 0.0
+            {
+                return Err(FAULT_VALUE);
+            }
+            rows.push(RelationPair::new(
+                source, target, contact, distance, inside, center,
+            ));
+        }
         Ok(Self::new(
             distance,
             center,
@@ -1214,6 +1241,7 @@ impl Decode for RelationFrame {
             contact,
             overlapping,
             partner,
+            rows,
         ))
     }
 }

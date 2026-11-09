@@ -1,5 +1,6 @@
 use glam::Vec2;
 use grana_display::Viewport;
+use grana_scene::{Item, Selection};
 use grana_session::{Command, SessionView};
 use grana_ui::glass::GlassStyle;
 use grana_ui::{
@@ -37,6 +38,7 @@ pub enum Panel {
     Statistics,
     Tracks,
     Colocalization,
+    Relations,
     Annotations,
     Plate,
     Batch,
@@ -44,10 +46,11 @@ pub enum Panel {
 }
 
 impl Panel {
-    pub const ALL: [Panel; 7] = [
+    pub const ALL: [Panel; 8] = [
         Panel::Statistics,
         Panel::Tracks,
         Panel::Colocalization,
+        Panel::Relations,
         Panel::Annotations,
         Panel::Plate,
         Panel::Batch,
@@ -59,6 +62,7 @@ impl Panel {
             Self::Statistics => "Statistics",
             Self::Tracks => "Tracks",
             Self::Colocalization => "Colocalization",
+            Self::Relations => "Relations",
             Self::Annotations => "Annotations",
             Self::Plate => "Plate",
             Self::Batch => "Batch",
@@ -406,6 +410,7 @@ fn dock<'a>(
         panel => {
             let body = match panel {
                 Panel::Colocalization => crate::coloc_panel::view(ctx, state),
+                Panel::Relations => crate::relation_panel::view(ctx, state),
                 Panel::Annotations => crate::annotation_panel::view(ctx, state),
                 Panel::Plate => crate::plate_panel::view(ctx, state),
                 Panel::Batch => crate::batch_panel::view(ctx, state),
@@ -502,6 +507,47 @@ pub fn apply(
             Message::RenameObject { set, name } => {
                 commands.push(Command::RenameObject { set, name });
                 workspace.renaming = None;
+            }
+            Message::SetRelation {
+                source,
+                target,
+                shift,
+            } => workspace.relation = Some((source, target, shift)),
+            Message::OpenRelation {
+                source,
+                target,
+                shift,
+            } => {
+                workspace.relation = Some((source, target, shift));
+                workspace.panel = Some(Panel::Relations);
+                workspace.last_panel = Panel::Relations;
+            }
+            Message::SetRelationMetric(index) => {
+                if let Some(metric) = crate::state::RelationMetric::ALL.get(index).copied() {
+                    workspace.relation_metric = metric;
+                    workspace.relation_filter = 0.0;
+                }
+            }
+            Message::SetRelationFilter(value) => {
+                workspace.relation_filter = value.clamp(0.0, 1.0);
+            }
+            Message::SelectPair {
+                source,
+                target,
+                objects,
+            } => {
+                let first = Selection {
+                    set: source,
+                    item: Item::Object(objects.0),
+                };
+                let second = Selection {
+                    set: target,
+                    item: Item::Object(objects.1),
+                };
+                commands.push(Command::Select(Some(first)));
+                if first != second {
+                    commands.push(Command::ToggleSelect(second));
+                }
             }
             Message::BeginRemote => workspace.remote_open = true,
             Message::CancelRemote => workspace.remote_open = false,

@@ -744,6 +744,76 @@ fn composites_a_mesh_layer() {
     );
 }
 
+#[test]
+fn keeps_a_translucent_layer_across_pane_layouts() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new();
+    let mesh = PackedMesh::new(quad(8.0));
+    let styles = [Style::new([1.0, 0.1, 0.1], true, false, 0.5)];
+    let layers = [Layer {
+        key: LayerKey::stable(1, 0, 1),
+        mesh: Arc::new(mesh),
+        style_start: 0,
+        style_count: 1,
+    }];
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &styles,
+        layers: &layers,
+        markers: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    for (index, region) in [WHOLE, [0, 0, SIDE, SIDE / 2], [0, 0, SIDE / 2, SIDE / 2]]
+        .into_iter()
+        .enumerate()
+    {
+        let view = View {
+            target: &view_texture,
+            camera: &camera,
+            section: &section,
+            region: Region::none(),
+            scene: &scene,
+            volume_region: region,
+            section_region: CORNER,
+            assured: false,
+        };
+        let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
+        let painted = shot.painted(region);
+        assert!(
+            painted > 400,
+            "the translucent layer faded at {region:?}: {painted} painted pixels"
+        );
+        let info = renderer.draw(gpu.device(), gpu.queue(), frame(&view));
+        assert!(
+            info.oit.layers > 0,
+            "the translucent layer does not reach the fragment store"
+        );
+        if index > 0 {
+            assert_eq!(
+                shot.painted([SIDE - 1, SIDE - 1, SIDE, SIDE]),
+                0,
+                "the translucent layer spilled outside its pane"
+            );
+        }
+    }
+}
+
 fn far_pair_volume() -> Volume {
     let extent = Extent::new(96, 48, 32);
     let spacing = Spacing::new(0.1, 0.1, 0.1);

@@ -654,6 +654,15 @@ impl Encode for RelationFrame {
             writer.u32(self.overlapping(object));
             writer.u32(self.partner(object));
         }
+        writer.count(self.pairs().len());
+        for pair in self.pairs() {
+            writer.u32(pair.source());
+            writer.u32(pair.target());
+            writer.f32(pair.contact());
+            writer.f32(pair.distance());
+            writer.f32(pair.inside());
+            writer.f32(pair.center());
+        }
     }
 }
 
