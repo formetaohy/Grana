@@ -11,6 +11,7 @@ mod label;
 mod mask;
 mod open;
 mod replay;
+mod seed;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

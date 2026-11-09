@@ -609,6 +609,10 @@ pub enum SourceSpec {
         slice_overlap: f32,
         #[serde(default = "default_segment_model")]
         model: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        seeds: Vec<Vec<[f32; 3]>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed_source: Option<String>,
     },
     Labels {
         label: String,
@@ -2094,10 +2098,9 @@ impl SourceSpec {
 
     pub fn seeds(&self) -> &[Vec<[f32; 3]>] {
         match self {
-            Self::Surfaces { seeds, .. } => seeds,
+            Self::Surfaces { seeds, .. } | Self::Segments { seeds, .. } => seeds,
             Self::Spots { .. }
             | Self::Filaments { .. }
-            | Self::Segments { .. }
             | Self::Labels { .. }
             | Self::Tracks { .. }
             | Self::Filtered { .. }
@@ -2109,10 +2112,11 @@ impl SourceSpec {
 
     pub fn seed_source(&self) -> Option<&str> {
         match self {
-            Self::Surfaces { seed_source, .. } => seed_source.as_deref(),
+            Self::Surfaces { seed_source, .. } | Self::Segments { seed_source, .. } => {
+                seed_source.as_deref()
+            }
             Self::Spots { .. }
             | Self::Filaments { .. }
-            | Self::Segments { .. }
             | Self::Labels { .. }
             | Self::Tracks { .. }
             | Self::Filtered { .. }
@@ -2215,6 +2219,8 @@ impl SourceSpec {
                 tile_overlap,
                 slice_overlap,
                 model,
+                seeds,
+                seed_source,
             } => {
                 validate(channel, &format!("the channel of {set}"))?;
                 if !(cellprob.is_finite() && (-10.0..=10.0).contains(cellprob)) {
@@ -2234,6 +2240,22 @@ impl SourceSpec {
                 }
                 if grana_scene::SegmentModel::from_name(model).is_none() {
                     return invalid("names an unknown segmentation model".to_string());
+                }
+                if seeds
+                    .iter()
+                    .flatten()
+                    .any(|point| point.iter().any(|value| !value.is_finite()))
+                {
+                    return invalid("seeds finite points".to_string());
+                }
+                if let Some(source) = seed_source {
+                    validate(source, "a seed source")?;
+                    if !seeds.is_empty() {
+                        return invalid("seeds from one source or from points".to_string());
+                    }
+                    if source == set {
+                        return invalid("seeds from itself".to_string());
+                    }
                 }
             }
             Self::Labels { label } => {

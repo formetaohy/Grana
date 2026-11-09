@@ -422,7 +422,7 @@ impl Run<'_, '_> {
             drift: self.scene.drift().clone(),
         };
         let frames = match segmented {
-            Some(params) => segment_frames(reading, params, &self.progress)?,
+            Some(params) => segment_frames(reading, params, seeds, &self.progress)?,
             None => detect(
                 task,
                 reading,
@@ -911,6 +911,7 @@ fn detect(
 fn segment_frames(
     reading: Reading<'_>,
     params: grana_scene::SegmentParams,
+    seeds: Vec<Vec<[f32; 3]>>,
     progress: &Progress<'_>,
 ) -> Result<Vec<Option<ObjectFrame>>, String> {
     let frames = reading.reader.pyramid().frame_count() as usize;
@@ -941,7 +942,8 @@ fn segment_frames(
             reading.region,
             reading.drift,
             reading.roi,
-        ),
+        )
+        .with_seeds(seeds),
         progress.cancel,
         &mut sink,
     )?;

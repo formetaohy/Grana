@@ -4,13 +4,14 @@ use std::sync::Arc;
 
 use crate::Result;
 use crate::cache;
-use crate::dynamics;
+use crate::dynamics::{self, Flow, Prompt};
 use crate::error::Error;
 use crate::model::Model;
 use crate::tile;
 
 const TILE_BATCH: usize = 4;
 const FLAT_EPSILON: f32 = 1.0e-6;
+const SEED_REACH: f32 = 6.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
@@ -91,11 +92,66 @@ impl Segmenter {
                 "the plane must contain finite values in the range 0..=1",
             ));
         }
-        let side = self.model.info().side();
         let settings = self.settings;
         if plane.iter().all(|&value| value == plane[0]) {
             return Ok(vec![0; length]);
         }
+        let flow = self.flow(plane, width, height)?;
+        let mut labels = flow.masks(settings.cellprob_threshold());
+        dynamics::remove_bad_flow_masks(&flow, &mut labels, settings.flow_threshold());
+        dynamics::remove_small_masks(&mut labels, settings.minimum_size());
+        dynamics::fill_holes(&mut labels, width as usize, height as usize);
+        dynamics::renumber(&mut labels);
+        Ok(labels)
+    }
+
+    pub fn seeded(
+        &self,
+        plane: &[f32],
+        width: u32,
+        height: u32,
+        seeds: &[[f32; 2]],
+    ) -> Result<Vec<u32>> {
+        let length = image_length(width, height)?;
+        if plane.len() != length {
+            return Err(Error::input(format!(
+                "the plane must contain {length} values, found {}",
+                plane.len()
+            )));
+        }
+        if plane
+            .iter()
+            .any(|&value| !value.is_finite() || value < 0.0 || value > 1.0)
+        {
+            return Err(Error::input(
+                "the plane must contain finite values in the range 0..=1",
+            ));
+        }
+        if plane.iter().all(|&value| value == plane[0]) {
+            return Ok(vec![0; length]);
+        }
+        let flow = self.flow(plane, width, height)?;
+        let settings = self.settings;
+        let mut labels = flow.seeded(Prompt::new(
+            seeds,
+            settings.cellprob_threshold(),
+            SEED_REACH,
+        ));
+        dynamics::remove_bad_flow_masks(&flow, &mut labels, settings.flow_threshold());
+        dynamics::remove_small_masks(&mut labels, settings.minimum_size());
+        dynamics::fill_holes(&mut labels, width as usize, height as usize);
+        dynamics::renumber(&mut labels);
+        Ok(labels)
+    }
+
+    pub fn side(&self) -> u32 {
+        self.model.info().side()
+    }
+
+    fn flow(&self, plane: &[f32], width: u32, height: u32) -> Result<Flow> {
+        let length = image_length(width, height)?;
+        let side = self.model.info().side();
+        let settings = self.settings;
 
         let (lead_x, trail_x) = tile::padding(width, side);
         let (lead_y, trail_y) = tile::padding(height, side);
@@ -186,13 +242,7 @@ impl Segmenter {
             }
         }
 
-        let flow = crate::dynamics::Flow::from_parts(width, height, dy, dx, cellprob);
-        let mut labels = flow.masks(settings.cellprob_threshold());
-        dynamics::remove_bad_flow_masks(&flow, &mut labels, settings.flow_threshold());
-        dynamics::remove_small_masks(&mut labels, settings.minimum_size());
-        dynamics::fill_holes(&mut labels, width_length, height_length);
-        dynamics::renumber(&mut labels);
-        Ok(labels)
+        Ok(Flow::from_parts(width, height, dy, dx, cellprob))
     }
 }
 

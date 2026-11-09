@@ -7,7 +7,7 @@ mod slice;
 mod tile;
 mod weights;
 
-pub use dynamics::Flow;
+pub use dynamics::{Flow, Prompt};
 pub use error::Error;
 pub use model::{Model, ModelInfo};
 pub use slice::{Segmenter, Settings, Volume, assemble};

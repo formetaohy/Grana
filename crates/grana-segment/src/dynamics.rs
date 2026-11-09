@@ -90,14 +90,7 @@ impl Flow {
 
         let scale_x = (width - 1) as f32;
         let scale_y = (height - 1) as f32;
-        let normalized_x = 2.0 / scale_x;
-        let normalized_y = 2.0 / scale_y;
-        let mut flow_y = vec![0f32; area];
-        let mut flow_x = vec![0f32; area];
-        for &index in &indices {
-            flow_y[index] = self.dy[index] / FLOW_TO_STEP * normalized_y;
-            flow_x[index] = self.dx[index] / FLOW_TO_STEP * normalized_x;
-        }
+        let (flow_x, flow_y) = self.field(&indices);
 
         let mut points_y: Vec<f32> = rows.iter().map(|&row| row / scale_y * 2.0 - 1.0).collect();
         let mut points_x: Vec<f32> = columns
@@ -105,33 +98,19 @@ impl Flow {
             .map(|&column| column / scale_x * 2.0 - 1.0)
             .collect();
 
-        for _ in 0..INTEGRATION_STEPS {
-            points_x
-                .par_iter_mut()
-                .zip(points_y.par_iter_mut())
-                .for_each(|(point_x, point_y)| {
-                    let step_x = sample_bilinear(&flow_x, width, height, *point_x, *point_y);
-                    let step_y = sample_bilinear(&flow_y, width, height, *point_x, *point_y);
-                    *point_x = (*point_x + step_x).clamp(-1.0, 1.0);
-                    *point_y = (*point_y + step_y).clamp(-1.0, 1.0);
-                });
-        }
+        integrate(
+            &mut points_x,
+            &mut points_y,
+            &flow_x,
+            &flow_y,
+            width,
+            height,
+        );
 
         let padded_width = width + 2 * ENDPOINT_PADDING;
         let padded_height = height + 2 * ENDPOINT_PADDING;
         let padded_area = padded_width * padded_height;
-        let mut end_y = Vec::with_capacity(indices.len());
-        let mut end_x = Vec::with_capacity(indices.len());
-        for point in 0..indices.len() {
-            let row = ((points_y[point] + 1.0) * 0.5 * scale_y).trunc() as isize;
-            let column = ((points_x[point] + 1.0) * 0.5 * scale_x).trunc() as isize;
-            end_y.push(
-                (row + ENDPOINT_PADDING as isize).clamp(0, padded_height as isize - 1) as usize,
-            );
-            end_x.push(
-                (column + ENDPOINT_PADDING as isize).clamp(0, padded_width as isize - 1) as usize,
-            );
-        }
+        let (end_x, end_y) = endpoints(&points_x, &points_y, width, height);
 
         let mut histogram = vec![0u32; padded_area];
         for point in 0..indices.len() {
@@ -243,6 +222,196 @@ impl Flow {
         renumber(&mut masks);
         masks
     }
+
+    pub fn seeded(&self, prompt: Prompt<'_>) -> Vec<u32> {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        let area = width * height;
+        if width < 2 || height < 2 {
+            return vec![0; area];
+        }
+        for seed in prompt.seeds() {
+            assert!(
+                seed[0] >= 0.0
+                    && seed[0] <= (width - 1) as f32
+                    && seed[1] >= 0.0
+                    && seed[1] <= (height - 1) as f32,
+                "a prompt seed lies inside its plane"
+            );
+        }
+        let mut indices = Vec::new();
+        let mut rows = Vec::new();
+        let mut columns = Vec::new();
+        for (index, &probability) in self.cellprob.iter().enumerate() {
+            if probability > prompt.threshold() {
+                indices.push(index);
+                rows.push((index / width) as f32);
+                columns.push((index % width) as f32);
+            }
+        }
+        if indices.is_empty() {
+            return vec![0; area];
+        }
+
+        let scale_x = (width - 1) as f32;
+        let scale_y = (height - 1) as f32;
+        let (flow_x, flow_y) = self.field(&indices);
+        let mut points_y: Vec<f32> = rows.iter().map(|&row| row / scale_y * 2.0 - 1.0).collect();
+        let mut points_x: Vec<f32> = columns
+            .iter()
+            .map(|&column| column / scale_x * 2.0 - 1.0)
+            .collect();
+        integrate(
+            &mut points_x,
+            &mut points_y,
+            &flow_x,
+            &flow_y,
+            width,
+            height,
+        );
+        let (end_x, end_y) = endpoints(&points_x, &points_y, width, height);
+
+        let mut prompt_x = Vec::with_capacity(prompt.seeds().len());
+        let mut prompt_y = Vec::with_capacity(prompt.seeds().len());
+        for (x, y) in prompt
+            .seeds()
+            .iter()
+            .map(|seed| (2.0 * seed[0] / scale_x - 1.0, 2.0 * seed[1] / scale_y - 1.0))
+        {
+            prompt_x.push(x);
+            prompt_y.push(y);
+        }
+        integrate(
+            &mut prompt_x,
+            &mut prompt_y,
+            &flow_x,
+            &flow_y,
+            width,
+            height,
+        );
+        let (prompt_end_x, prompt_end_y) = endpoints(&prompt_x, &prompt_y, width, height);
+
+        let reach = prompt.reach().max(1.0);
+        let limit = reach * reach;
+        let mut masks = vec![0u32; area];
+        for (point, &index) in indices.iter().enumerate() {
+            let mut nearest = 0u32;
+            let mut distance = limit;
+            for (rank, (&x, &y)) in prompt_end_x.iter().zip(&prompt_end_y).enumerate() {
+                let offset_x = end_x[point] as f32 - x as f32;
+                let offset_y = end_y[point] as f32 - y as f32;
+                let squared = offset_x * offset_x + offset_y * offset_y;
+                if squared <= distance {
+                    distance = squared;
+                    nearest = rank as u32 + 1;
+                }
+            }
+            masks[index] = nearest;
+        }
+        renumber(&mut masks);
+        masks
+    }
+
+    fn field(&self, indices: &[usize]) -> (Vec<f32>, Vec<f32>) {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        let scale_x = (width - 1) as f32;
+        let scale_y = (height - 1) as f32;
+        let mut flow_y = vec![0f32; width * height];
+        let mut flow_x = vec![0f32; width * height];
+        for &index in indices {
+            flow_y[index] = self.dy[index] / FLOW_TO_STEP * 2.0 / scale_y;
+            flow_x[index] = self.dx[index] / FLOW_TO_STEP * 2.0 / scale_x;
+        }
+        (flow_x, flow_y)
+    }
+}
+
+pub struct Prompt<'a> {
+    seeds: &'a [[f32; 2]],
+    threshold: f32,
+    reach: f32,
+}
+
+impl<'a> Prompt<'a> {
+    pub fn new(seeds: &'a [[f32; 2]], threshold: f32, reach: f32) -> Self {
+        assert!(!seeds.is_empty(), "a prompt names at least one seed point");
+        assert!(
+            seeds
+                .iter()
+                .all(|seed| seed.iter().all(|value| value.is_finite())),
+            "a prompt seed point is finite"
+        );
+        assert!(
+            threshold.is_finite(),
+            "a prompt cell probability threshold is finite"
+        );
+        assert!(
+            reach.is_finite() && reach >= 0.0,
+            "a prompt reach is a non negative distance"
+        );
+        Self {
+            seeds,
+            threshold,
+            reach,
+        }
+    }
+
+    pub fn seeds(&self) -> &[[f32; 2]] {
+        self.seeds
+    }
+
+    pub fn threshold(&self) -> f32 {
+        self.threshold
+    }
+
+    pub fn reach(&self) -> f32 {
+        self.reach
+    }
+}
+
+fn integrate(
+    points_x: &mut [f32],
+    points_y: &mut [f32],
+    flow_x: &[f32],
+    flow_y: &[f32],
+    width: usize,
+    height: usize,
+) {
+    for _ in 0..INTEGRATION_STEPS {
+        points_x
+            .par_iter_mut()
+            .zip(points_y.par_iter_mut())
+            .for_each(|(point_x, point_y)| {
+                let step_x = sample_bilinear(flow_x, width, height, *point_x, *point_y);
+                let step_y = sample_bilinear(flow_y, width, height, *point_x, *point_y);
+                *point_x = (*point_x + step_x).clamp(-1.0, 1.0);
+                *point_y = (*point_y + step_y).clamp(-1.0, 1.0);
+            });
+    }
+}
+
+fn endpoints(
+    points_x: &[f32],
+    points_y: &[f32],
+    width: usize,
+    height: usize,
+) -> (Vec<usize>, Vec<usize>) {
+    let scale_x = (width - 1) as f32;
+    let scale_y = (height - 1) as f32;
+    let padded_width = width + 2 * ENDPOINT_PADDING;
+    let padded_height = height + 2 * ENDPOINT_PADDING;
+    let mut end_x = Vec::with_capacity(points_x.len());
+    let mut end_y = Vec::with_capacity(points_x.len());
+    for point in 0..points_x.len() {
+        let row = ((points_y[point] + 1.0) * 0.5 * scale_y).trunc() as isize;
+        let column = ((points_x[point] + 1.0) * 0.5 * scale_x).trunc() as isize;
+        end_y.push((row + ENDPOINT_PADDING as isize).clamp(0, padded_height as isize - 1) as usize);
+        end_x.push(
+            (column + ENDPOINT_PADDING as isize).clamp(0, padded_width as isize - 1) as usize,
+        );
+    }
+    (end_x, end_y)
 }
 
 pub(crate) fn remove_bad_flow_masks(flow: &Flow, labels: &mut [u32], threshold: f32) {

@@ -480,7 +480,7 @@ impl Protocol {
             )));
         }
         match source {
-            SourceSpec::Surfaces { seed_source, .. } => {
+            SourceSpec::Surfaces { seed_source, .. } | SourceSpec::Segments { seed_source, .. } => {
                 if let Some(source) = seed_source
                     && !earlier.contains(source)
                 {
@@ -492,7 +492,6 @@ impl Protocol {
             }
             SourceSpec::Spots { .. }
             | SourceSpec::Filaments { .. }
-            | SourceSpec::Segments { .. }
             | SourceSpec::Labels { .. }
             | SourceSpec::Tracks { .. } => Ok(()),
             SourceSpec::Filtered { source, .. }

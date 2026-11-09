@@ -125,6 +125,27 @@ impl Protocol {
         Ok(())
     }
 
+    fn validate_seeds(
+        &self,
+        seeds: &[Vec<[f32; 3]>],
+        seed_source: &Option<String>,
+        frames: u32,
+    ) -> Result<(), ProtocolError> {
+        if !seeds.is_empty() && seeds.len() != frames as usize {
+            return Err(ProtocolError::Invalid(
+                "the seeds of an object set cover every frame of the dataset".to_string(),
+            ));
+        }
+        if let Some(source) = seed_source
+            && !self.sets.iter().any(|set| set.key == *source)
+        {
+            return Err(ProtocolError::Invalid(format!(
+                "the seed source {source} is not an object set of the protocol"
+            )));
+        }
+        Ok(())
+    }
+
     fn validate_source(
         &self,
         source: &SourceSpec,
@@ -133,9 +154,17 @@ impl Protocol {
     ) -> Result<(), ProtocolError> {
         match source {
             SourceSpec::Spots { channel: name, .. }
-            | SourceSpec::Filaments { channel: name, .. }
-            | SourceSpec::Segments { channel: name, .. } => {
+            | SourceSpec::Filaments { channel: name, .. } => {
                 channel(names, name)?;
+            }
+            SourceSpec::Segments {
+                channel: name,
+                seeds,
+                seed_source,
+                ..
+            } => {
+                channel(names, name)?;
+                self.validate_seeds(seeds, seed_source, frames)?;
             }
             SourceSpec::Surfaces {
                 channel: name,
@@ -144,18 +173,7 @@ impl Protocol {
                 ..
             } => {
                 channel(names, name)?;
-                if !seeds.is_empty() && seeds.len() != frames as usize {
-                    return Err(ProtocolError::Invalid(
-                        "the seeds of an object set cover every frame of the dataset".to_string(),
-                    ));
-                }
-                if let Some(source) = seed_source
-                    && !self.sets.iter().any(|set| set.key == *source)
-                {
-                    return Err(ProtocolError::Invalid(format!(
-                        "the seed source {source} is not an object set of the protocol"
-                    )));
-                }
+                self.validate_seeds(seeds, seed_source, frames)?;
             }
             SourceSpec::Filtered { source, .. } | SourceSpec::Copy { source } => {
                 if !self.sets.iter().any(|set| set.key == *source) {

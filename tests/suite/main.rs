@@ -4,6 +4,7 @@ mod format;
 mod geometry;
 mod measure;
 mod render;
+mod segment;
 mod session;
 mod stream;
 mod support;

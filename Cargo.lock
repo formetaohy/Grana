@@ -3368,6 +3368,7 @@ dependencies = [
  "grana-protocol",
  "grana-render",
  "grana-scene",
+ "grana-segment",
  "grana-session",
  "grana-tiff",
  "grana-volume",

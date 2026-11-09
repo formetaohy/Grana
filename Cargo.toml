@@ -116,6 +116,7 @@ grana-project = { workspace = true }
 grana-protocol = { workspace = true }
 grana-render = { workspace = true }
 grana-scene = { workspace = true }
+grana-segment = { workspace = true }
 grana-session = { workspace = true }
 grana-tiff = { workspace = true }
 grana-volume = { workspace = true }

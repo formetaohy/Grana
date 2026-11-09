@@ -272,7 +272,9 @@ fn source(
             set.params(),
             set.surface_seeds(),
         ),
-        Provenance::Segmented { params } => segments(&channels[set.channel()], params),
+        Provenance::Segmented { params } => {
+            segments(&channels[set.channel()], params, scene, set.surface_seeds())
+        }
         Provenance::Imported { label } => Ok(SourceSpec::Labels {
             label: label.clone(),
         }),
@@ -343,7 +345,9 @@ fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSp
             part.params(),
             part.seeds(),
         )?,
-        Provenance::Segmented { params } => segments(&channels[part.channel()], params)?,
+        Provenance::Segmented { params } => {
+            segments(&channels[part.channel()], params, scene, part.seeds())?
+        }
         Provenance::Imported { label } => SourceSpec::Labels {
             label: label.clone(),
         },
@@ -424,17 +428,7 @@ fn detection(
             contrast: params.threshold(),
         }),
         ObjectParams::Surfaces(params) => {
-            let (points, seed_source) = match seeds {
-                Seeds::Points(frames) => (frames.clone(), None),
-                Seeds::Source(source) => {
-                    let source = scene.objects.get(*source).ok_or_else(|| {
-                        ProtocolError::Invalid(
-                            "a surface seeds from an object set that left the scene".to_string(),
-                        )
-                    })?;
-                    (Vec::new(), Some(source.key().as_str().to_string()))
-                }
-            };
+            let seed = seed_spec(scene, seeds)?;
             Ok(SourceSpec::Surfaces {
                 channel: channel.to_string(),
                 threshold: params.threshold(),
@@ -445,8 +439,8 @@ fn detection(
                 closing: params.closing(),
                 min_sphericity: params.min_sphericity(),
                 min_mean_intensity: params.min_mean_intensity(),
-                seeds: points,
-                seed_source,
+                seeds: seed.points,
+                seed_source: seed.source,
             })
         }
         ObjectParams::Filaments(params) => Ok(SourceSpec::Filaments {
@@ -457,7 +451,38 @@ fn detection(
     }
 }
 
-fn segments(channel: &str, params: &SegmentParams) -> Result<SourceSpec, ProtocolError> {
+fn seed_spec(scene: &Scene, seeds: &Seeds) -> Result<SeedSpec, ProtocolError> {
+    match seeds {
+        Seeds::Points(frames) => Ok(SeedSpec {
+            points: frames.clone(),
+            source: None,
+        }),
+        Seeds::Source(source) => {
+            let source = scene.objects.get(*source).ok_or_else(|| {
+                ProtocolError::Invalid(
+                    "a detection seeds from an object set that left the scene".to_string(),
+                )
+            })?;
+            Ok(SeedSpec {
+                points: Vec::new(),
+                source: Some(source.key().as_str().to_string()),
+            })
+        }
+    }
+}
+
+struct SeedSpec {
+    points: Vec<Vec<[f32; 3]>>,
+    source: Option<String>,
+}
+
+fn segments(
+    channel: &str,
+    params: &SegmentParams,
+    scene: &Scene,
+    seeds: &Seeds,
+) -> Result<SourceSpec, ProtocolError> {
+    let seed = seed_spec(scene, seeds)?;
     Ok(SourceSpec::Segments {
         channel: channel.to_string(),
         cellprob: params.cellprob_threshold(),
@@ -466,6 +491,8 @@ fn segments(channel: &str, params: &SegmentParams) -> Result<SourceSpec, Protoco
         tile_overlap: params.tile_overlap(),
         slice_overlap: params.slice_overlap(),
         model: params.model().name().to_string(),
+        seeds: seed.points,
+        seed_source: seed.source,
     })
 }
 
@@ -502,7 +529,9 @@ fn collect_dependencies(source: &SourceSpec, derived: &[DerivedSpec], names: &mu
         names.push(set.to_string());
     }
     match source {
-        SourceSpec::Surfaces { seed_source, .. } => names.extend(seed_source.clone()),
+        SourceSpec::Surfaces { seed_source, .. } | SourceSpec::Segments { seed_source, .. } => {
+            names.extend(seed_source.clone())
+        }
         SourceSpec::Filtered { source, .. }
         | SourceSpec::Copy { source }
         | SourceSpec::Edited { source, .. } => {
@@ -515,7 +544,6 @@ fn collect_dependencies(source: &SourceSpec, derived: &[DerivedSpec], names: &mu
         }
         SourceSpec::Spots { .. }
         | SourceSpec::Filaments { .. }
-        | SourceSpec::Segments { .. }
         | SourceSpec::Labels { .. }
         | SourceSpec::Tracks { .. } => {}
     }

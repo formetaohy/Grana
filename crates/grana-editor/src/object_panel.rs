@@ -245,7 +245,7 @@ fn object<'a>(
             children.extend(importing(ctx, state, id, kind));
         } else if !merged && !imported_root {
             children.extend(params(ctx, state, id));
-            if kind == ObjectKind::Surfaces && set.provenance().segment().is_none() {
+            if kind == ObjectKind::Surfaces {
                 children.extend(seeds(ctx, state, id));
             }
             children.push(detect(ctx, state, id, kind, frames));
@@ -1234,7 +1234,7 @@ fn seeds<'a>(
     if armed {
         children.push(view::weak(
             ctx,
-            "Click a surface to place a seed · Alt-click to remove.",
+            "Click an object or the plane to place a seed · Alt-click to remove.",
         ));
     }
     children

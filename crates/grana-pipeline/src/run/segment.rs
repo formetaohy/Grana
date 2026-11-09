@@ -1,4 +1,4 @@
-﻿use std::ops::Range;
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{LabelBuilder, LabelSlab};
@@ -12,6 +12,7 @@ use crate::event::Event;
 use crate::run::domain::Domain;
 
 mod level;
+mod prompt;
 
 use level::Leveling;
 
@@ -23,6 +24,7 @@ pub struct SegmentRequest {
     region: Region,
     drift: Drift,
     roi: Option<Roi>,
+    seeds: Vec<Vec<[f32; 3]>>,
 }
 
 impl SegmentRequest {
@@ -39,8 +41,45 @@ impl SegmentRequest {
             region,
             drift,
             roi,
+            seeds: Vec::new(),
         }
     }
+
+    pub fn with_seeds(mut self, seeds: Vec<Vec<[f32; 3]>>) -> Self {
+        self.seeds = seeds;
+        self
+    }
+}
+
+pub(super) fn segmenter(
+    params: &SegmentParams,
+    cancel: &AtomicBool,
+    sink: &mut dyn FnMut(Event),
+) -> Result<Option<(Segmenter, Settings)>, String> {
+    let settings = Settings::new(
+        params.cellprob_threshold(),
+        params.flow_threshold(),
+        params.minimum_size(),
+        params.tile_overlap(),
+        params.slice_overlap(),
+    );
+    let version = match params.model() {
+        grana_scene::SegmentModel::Cpsam => grana_weight::ModelVersion::Cpsam,
+        grana_scene::SegmentModel::CpsamV2 => grana_weight::ModelVersion::CpsamV2,
+    };
+    let path = match grana_weight::weights(version, cancel, &mut |done, total| {
+        sink(Event::Progress {
+            time: 0,
+            done: done as usize,
+            total: total as usize,
+        });
+    }) {
+        Ok(path) => path,
+        Err(grana_weight::Error::Cancelled) => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let segmenter = Segmenter::open(&path, settings).map_err(|error| error.to_string())?;
+    Ok(Some((segmenter, settings)))
 }
 
 pub fn segment(
@@ -49,6 +88,9 @@ pub fn segment(
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
+    if request.seeds.iter().any(|frame| !frame.is_empty()) {
+        return prompt::segment(reader, request, cancel, sink);
+    }
     let info = reader.pyramid().level(0);
     let bounds = request
         .region
@@ -64,29 +106,9 @@ pub fn segment(
         );
     }
     let depth = bounds[2].end - bounds[2].start;
-    let settings = Settings::new(
-        request.params.cellprob_threshold(),
-        request.params.flow_threshold(),
-        request.params.minimum_size(),
-        request.params.tile_overlap(),
-        request.params.slice_overlap(),
-    );
-    let version = match request.params.model() {
-        grana_scene::SegmentModel::Cpsam => grana_weight::ModelVersion::Cpsam,
-        grana_scene::SegmentModel::CpsamV2 => grana_weight::ModelVersion::CpsamV2,
+    let Some((segmenter, _)) = segmenter(&request.params, cancel, sink)? else {
+        return Ok(());
     };
-    let path = match grana_weight::weights(version, cancel, &mut |done, total| {
-        sink(Event::Progress {
-            time: 0,
-            done: done as usize,
-            total: total as usize,
-        });
-    }) {
-        Ok(path) => path,
-        Err(grana_weight::Error::Cancelled) => return Ok(()),
-        Err(error) => return Err(error.to_string()),
-    };
-    let segmenter = Segmenter::open(&path, settings).map_err(|error| error.to_string())?;
     let domain = Domain::new(request.region, info);
     let frames = reader.pyramid().frame_count();
     let total = frames as usize * depth as usize;

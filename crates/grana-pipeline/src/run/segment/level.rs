@@ -1,13 +1,14 @@
 use std::ops::Range;
 
 use grana_object::Mask;
-use grana_volume::{Intensity, VoxelData};
+use grana_volume::{Intensity, Pyramid, Region, VoxelData};
 
 use crate::channels::Channels;
 
 const SAMPLE_PLANES: u32 = 8;
 const SAMPLE_VOXELS: usize = 1 << 18;
 const PERCENTILE: usize = 100;
+const COARSE_SIDE: u32 = 96;
 
 pub(super) struct Leveling {
     intensity: Intensity,
@@ -24,6 +25,34 @@ impl Leveling {
         mask: Option<&Mask>,
         shift: [f32; 3],
     ) -> Result<Self, String> {
+        Self::collect(reader, time, channel, 0, ranges, mask, shift)
+    }
+
+    pub(super) fn sampled(
+        reader: &Channels,
+        time: u32,
+        channel: usize,
+        region: Region,
+    ) -> Result<Self, String> {
+        let pyramid = reader.pyramid();
+        let level = coarse_level(pyramid);
+        let info = pyramid.level(level);
+        let ranges = region.voxel_range(info).unwrap_or_else(|| {
+            let extent = info.extent();
+            [0..extent.x(), 0..extent.y(), 0..extent.z()]
+        });
+        Self::collect(reader, time, channel, level, &ranges, None, [0.0; 3])
+    }
+
+    fn collect(
+        reader: &Channels,
+        time: u32,
+        channel: usize,
+        level: usize,
+        ranges: &[Range<u32>; 3],
+        mask: Option<&Mask>,
+        shift: [f32; 3],
+    ) -> Result<Self, String> {
         let intensity = reader.pyramid().channels()[channel].intensity();
         let width = (ranges[0].end - ranges[0].start) as usize;
         let plane = width * (ranges[1].end - ranges[1].start) as usize;
@@ -36,7 +65,7 @@ impl Leveling {
         while z < ranges[2].end {
             let slice = [ranges[0].clone(), ranges[1].clone(), z..z + 1];
             let values = reader
-                .read_region(time, 0, channel, &slice, shift)
+                .read_region(time, level, channel, &slice, shift)
                 .map_err(|error| error.to_string())?;
             let mut voxels = vec![0.0f32; values.voxel_count()];
             values.write_values(&mut voxels);
@@ -86,4 +115,14 @@ impl Leveling {
         }
         plane
     }
+}
+
+fn coarse_level(pyramid: &Pyramid) -> usize {
+    let mut level = 0;
+    for index in 0..pyramid.level_count() {
+        if pyramid.level(index).extent().max_dimension() >= COARSE_SIDE {
+            level = index;
+        }
+    }
+    level
 }

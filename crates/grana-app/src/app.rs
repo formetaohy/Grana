@@ -402,8 +402,8 @@ impl App {
             self.drag_annotation(grab);
         }
         if let Some((pane, point)) = interaction.pick {
-            match self.workspace.seed.filter(|_| pane == Pane::Volume) {
-                Some(set) => self.place_seed(set, point, interaction.modifiers.alt),
+            match self.workspace.seed {
+                Some(set) => self.place_seed(set, pane, point, interaction.modifiers.alt),
                 None => {
                     self.pick_toggle = interaction.modifiers.shift || interaction.modifiers.control;
                     self.pick(pane, point);
@@ -565,10 +565,7 @@ impl App {
         }
     }
 
-    fn place_seed(&mut self, set: ObjectSetId, point: Vec2, remove: bool) {
-        let Some(surface) = self.surface.as_ref() else {
-            return;
-        };
+    fn place_seed(&mut self, set: ObjectSetId, pane: Pane, point: Vec2, remove: bool) {
         if self
             .session
             .scene()
@@ -576,33 +573,49 @@ impl App {
         {
             return;
         }
-        let region = self.stage.volume_region();
-        if region[2] == 0 || region[3] == 0 {
-            return;
-        }
-        let scale = surface.window.scale_factor() as f32;
-        let x = point.x * scale;
-        let y = point.y * scale;
-        let ndc = Vec2::new(
-            2.0 * (x - region[0] as f32) / region[2] as f32 - 1.0,
-            1.0 - 2.0 * (y - region[1] as f32) / region[3] as f32,
-        );
-        let aspect = region[2] as f32 / region[3] as f32;
-        let ray = self.viewport.camera().ray(ndc, aspect);
+        let (position, radius) = match pane {
+            Pane::Section => {
+                let rect = self.stage.section_rect();
+                let Some(position) = self.annotation_point(Pane::Section, point) else {
+                    return;
+                };
+                let span = self.viewport.section().span();
+                (position, 6.0 * span / rect.height().max(1.0))
+            }
+            Pane::Volume => {
+                let Some((origin, direction)) = self.volume_ray(point) else {
+                    return;
+                };
+                let Some(scene) = self.session.scene() else {
+                    return;
+                };
+                let channel = scene.objects.get(set).map_or(0, |object| object.channel());
+                let position = match scene.surface_ray(set, origin, direction) {
+                    Ok(Some(hit)) => hit.to_array(),
+                    Ok(None) => match self.session.seed_peak(channel, origin, direction) {
+                        Some(peak) => peak,
+                        None => match self.annotation_point(Pane::Volume, point) {
+                            Some(position) => position,
+                            None => return,
+                        },
+                    },
+                    Err(detail) => {
+                        self.message = Some(detail);
+                        return;
+                    }
+                };
+                let voxel = scene.dataset.voxel_size().min_element();
+                (position, 3.0 * voxel)
+            }
+        };
         let Some(scene) = self.session.scene() else {
             return;
         };
-        let threshold = 3.0 * scene.dataset.voxel_size().min_element();
         if remove {
             let mut nearest: Option<(f32, usize)> = None;
             for (index, seed) in scene.seeds(set).iter().enumerate() {
-                let offset = Vec3::from(*seed) - ray.origin;
-                let along = offset.dot(ray.direction);
-                if along < 0.0 {
-                    continue;
-                }
-                let distance = (offset - ray.direction * along).length();
-                if distance <= threshold && nearest.is_none_or(|(best, _)| distance < best) {
+                let distance = (Vec3::from(*seed) - Vec3::from(position)).length();
+                if distance <= radius && nearest.is_none_or(|(best, _)| distance < best) {
                     nearest = Some((distance, index));
                 }
             }
@@ -611,18 +624,7 @@ impl App {
             }
             return;
         }
-        let hit = match scene.surface_ray(set, ray.origin, ray.direction) {
-            Ok(Some(hit)) => hit,
-            Ok(None) => return,
-            Err(detail) => {
-                self.message = Some(detail);
-                return;
-            }
-        };
-        self.apply(vec![Command::AddSeed {
-            set,
-            position: hit.to_array(),
-        }]);
+        self.apply(vec![Command::AddSeed { set, position }]);
     }
 
     fn volume_ray(&self, point: Vec2) -> Option<(Vec3, Vec3)> {

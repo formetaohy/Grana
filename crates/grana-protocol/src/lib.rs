@@ -197,13 +197,17 @@ impl Protocol {
                     SourceSpec::Surfaces {
                         seed_source: Some(source),
                         ..
+                    }
+                    | SourceSpec::Segments {
+                        seed_source: Some(source),
+                        ..
                     } => {
                         text = format!("{text} · seeded from {source}");
                     }
                     SourceSpec::Spots { .. }
                     | SourceSpec::Surfaces { .. }
-                    | SourceSpec::Filaments { .. }
                     | SourceSpec::Segments { .. }
+                    | SourceSpec::Filaments { .. }
                     | SourceSpec::Labels { .. }
                     | SourceSpec::Tracks { .. } => {}
                 }
