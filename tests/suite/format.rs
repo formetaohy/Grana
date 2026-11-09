@@ -293,6 +293,92 @@ fn browses_an_ome_zarr_plate() {
 }
 
 #[test]
+fn writes_and_reads_a_label_image() {
+    let temp = Temp::new("suite-zarr-label-write");
+    let path = temp.path().join("labelled.ome.zarr");
+    write_zarr(&path);
+    let mut fill = |_level: usize,
+                    _frame: u32,
+                    _origin: [u32; 3],
+                    _extent: [u32; 3],
+                    data: &mut [u16]|
+     -> Result<(), String> {
+        data.fill(3);
+        Ok(())
+    };
+    let mut progress = |_, _| {};
+    grana_zarr::write_group_labels(
+        &path,
+        "/",
+        grana_zarr::LabelSpec {
+            name: "cells",
+            frames: &[0, 1],
+            labels: 3,
+            color: [1.0, 0.0, 0.0],
+            opacity: 1.0,
+            properties: &[],
+            fill: &mut fill,
+            progress: &mut progress,
+        },
+    )
+    .expect("the labels write");
+    let image = grana_zarr::Image::open(&path).expect("the labelled image opens");
+    let labels = image.labels().expect("the labels read");
+    let label = labels.get("cells").expect("the written label exists");
+    assert_eq!(label.frames(), 2);
+    let data = label
+        .read(1, 0, &[0..2, 0..2, 0..1], [0, 0, 0])
+        .expect("the written label region reads");
+    assert_eq!(data.len(), 4);
+    assert!(data.iter().all(|value| *value == 3), "the labels hold 3");
+}
+
+#[test]
+fn opens_permuted_axes_and_inherits_label_placement() {
+    let temp = Temp::new("suite-zarr-axes");
+    let path = temp.path().join("ordered.ome.zarr");
+    support::ordered_field(&path);
+    let image = grana_zarr::Image::open(&path).expect("the ordered image opens");
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.level(0).extent(), Extent::new(4, 3, 2));
+    assert_eq!(pyramid.level(0).spacing(), Spacing::new(1.5, 0.5, 2.0));
+    assert_eq!(pyramid.channel_count(), 2);
+    assert_eq!(pyramid.frame_count(), 1);
+    let data = image
+        .read_region(0, 0, 1, 0..4, 0..3, 0..2)
+        .expect("the ordered region reads");
+    let VoxelData::U8(values) = data else {
+        panic!("the ordered image stores bytes");
+    };
+    for x in 0..4u32 {
+        for y in 0..3u32 {
+            for z in 0..2u32 {
+                let index = (x as usize * 3 + y as usize) * 2 + z as usize;
+                assert_eq!(
+                    u32::from(values[index]),
+                    100 + x * 10 + y + z * 5,
+                    "voxel {x},{y},{z}"
+                );
+            }
+        }
+    }
+    let labels = image.labels().expect("the ordered labels read");
+    let label = labels.get("cells").expect("the ordered label exists");
+    assert_eq!(label.level_count(), 1);
+    assert_eq!(label.frames(), 1);
+    let level = label.level(0).expect("the ordered label level exists");
+    let image_level = pyramid.level(0);
+    assert_eq!(level.extent(), image_level.extent());
+    assert!(level.basis().close(image_level.basis()));
+    for (left, right) in level.origin().into_iter().zip(image_level.origin()) {
+        assert!(
+            (left - right).abs() <= 1.0e-5,
+            "the label inherits the placement of its image: {left} against {right}"
+        );
+    }
+}
+
+#[test]
 fn orders_plate_fields_naturally() {
     let temp = Temp::new("suite-plate-order");
     let root = temp.path().join("ordered.ome.zarr");

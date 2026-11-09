@@ -193,10 +193,10 @@ impl Label {
 }
 
 pub fn read(path: &Path) -> Result<Labels, Error> {
-    read_at(&Root::local(path)?, "/")
+    read_at(&Root::local(path)?, "/", &[])
 }
 
-pub fn read_at(root: &Root, group: &str) -> Result<Labels, Error> {
+pub fn read_at(root: &Root, group: &str, parent: &[Layout]) -> Result<Labels, Error> {
     let labels_group = crate::hcs::join(group, "labels");
     let readable = root.readable();
     if !present(&readable, &labels_group)? {
@@ -216,6 +216,7 @@ pub fn read_at(root: &Root, group: &str) -> Result<Labels, Error> {
             &name,
             readable.clone(),
             cache_bytes,
+            parent,
         )?);
     }
     Ok(Labels { images })
@@ -285,6 +286,7 @@ fn image(
     name: &str,
     store: Arc<dyn ReadableStorageTraits>,
     cache_bytes: u64,
+    parent: &[Layout],
 ) -> Result<Label, Error> {
     let group_path = crate::hcs::join(labels_group, name);
     let origin = root.tag(&group_path);
@@ -299,19 +301,23 @@ fn image(
         })?;
     let mut frames = None;
     let mut levels = Vec::with_capacity(metadata.datasets.len());
-    for dataset in &metadata.datasets {
+    for (index, dataset) in metadata.datasets.iter().enumerate() {
         let opened = crate::hcs::join(&group_path, &dataset.path);
         let array = Array::open(store.clone(), &opened).map_err(|error| Error::Open {
             path: origin.clone(),
             detail: error.to_string(),
         })?;
         let kind = kind(&origin, &array)?;
-        let layout = axes::layout(&metadata.axes, array.shape(), dataset).map_err(|detail| {
-            Error::Metadata {
-                path: origin.clone(),
-                detail,
-            }
-        })?;
+        let mut layout =
+            axes::layout(&metadata.axes, array.shape(), dataset).map_err(|detail| {
+                Error::Metadata {
+                    path: origin.clone(),
+                    detail,
+                }
+            })?;
+        if !dataset.placed {
+            inherit(&mut layout, parent.get(index));
+        }
         if layout.channel_count() != 1 {
             return Err(Error::Unsupported {
                 path: origin.clone(),
@@ -364,6 +370,14 @@ fn image(
         levels,
         geometry,
     })
+}
+
+fn inherit(layout: &mut Layout, parent: Option<&Layout>) {
+    let Some(parent) = parent else {
+        return;
+    };
+    layout.columns = parent.columns;
+    layout.origin = parent.origin;
 }
 
 fn ordered(levels: &[LevelArray]) -> bool {

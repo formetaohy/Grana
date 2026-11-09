@@ -10,6 +10,7 @@ pub enum AxisKind {
     Space,
     Time,
     Channel,
+    Other,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -23,6 +24,7 @@ pub struct Axis {
     name: String,
     kind: AxisKind,
     unit: Option<AxisUnit>,
+    declared: Option<String>,
 }
 
 impl Axis {
@@ -46,6 +48,7 @@ impl Axis {
             AxisKind::Space => "space",
             AxisKind::Time => "time",
             AxisKind::Channel => "channel",
+            AxisKind::Other => self.declared.as_deref().unwrap_or("other"),
         };
         let unit = match self.unit {
             Some(AxisUnit::Space(_)) => Some("micrometer"),
@@ -79,6 +82,7 @@ pub struct Dataset {
     pub translation: Vec<f64>,
     pub columns: [[f64; 3]; 3],
     pub origin: [f64; 3],
+    pub placed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -188,10 +192,12 @@ fn direct(path: &str, multiscale: &Value) -> Result<(Vec<Axis>, Vec<Dataset>), E
         .map(|value| transforms(path, value, dimensions, dimensions))
         .transpose()?
         .unwrap_or_else(|| Affine::identity(dimensions));
+    let global_placed = multiscale.get("coordinateTransformations").is_some();
     let datasets = entries(path, multiscale)?
         .iter()
         .map(|entry| {
             let name = path_of(path, entry)?;
+            let transformed = entry.get("coordinateTransformations").is_some();
             let local = entry
                 .get("coordinateTransformations")
                 .map(|value| transforms(path, value, dimensions, dimensions))
@@ -203,7 +209,16 @@ fn direct(path: &str, multiscale: &Value) -> Result<(Vec<Axis>, Vec<Dataset>), E
                     format!("the transforms of `{name}` do not compose: {error}"),
                 )
             })?;
-            compose(path, name, &total, &axes, &axes, false, None)
+            compose(Placement {
+                path,
+                name,
+                total: &total,
+                source: &axes,
+                target: &axes,
+                display: false,
+                entry: None,
+                placed: global_placed || transformed,
+            })
         })
         .collect::<Result<Vec<_>, Error>>()?;
     Ok((axes, datasets))
@@ -261,24 +276,55 @@ fn named(path: &str, multiscale: &Value) -> Result<(Vec<Axis>, Vec<Dataset>), Er
                             format!("the transforms of `{name}` do not compose: {error}"),
                         )
                     })?;
-                    compose(path, name, &total, &axes, &target.axes, true, Some(entry))
+                    compose(Placement {
+                        path,
+                        name,
+                        total: &total,
+                        source: &axes,
+                        target: &target.axes,
+                        display: true,
+                        entry: Some(entry),
+                        placed: true,
+                    })
                 }
-                None => compose(path, name, &local, &axes, &axes, false, Some(entry)),
+                None => compose(Placement {
+                    path,
+                    name,
+                    total: &local,
+                    source: &axes,
+                    target: &axes,
+                    display: false,
+                    entry: Some(entry),
+                    placed: true,
+                }),
             }
         })
         .collect::<Result<Vec<_>, Error>>()?;
     Ok((axes, datasets))
 }
 
-fn compose(
-    path: &str,
-    name: &str,
-    total: &Affine,
-    source: &[Axis],
-    target: &[Axis],
+struct Placement<'a> {
+    path: &'a str,
+    name: &'a str,
+    total: &'a Affine,
+    source: &'a [Axis],
+    target: &'a [Axis],
     display: bool,
-    entry: Option<&Value>,
-) -> Result<Dataset, Error> {
+    entry: Option<&'a Value>,
+    placed: bool,
+}
+
+fn compose(placement: Placement<'_>) -> Result<Dataset, Error> {
+    let Placement {
+        path,
+        name,
+        total,
+        source,
+        target,
+        display,
+        entry,
+        placed,
+    } = placement;
     if total.columns() != source.len() {
         return Err(metadata_error(
             path,
@@ -363,6 +409,7 @@ fn compose(
         translation,
         columns,
         origin,
+        placed,
     })
 }
 
@@ -372,16 +419,8 @@ fn space_axes(path: &str, axes: &[Axis]) -> Result<[Option<usize>; 3], Error> {
         if axis.kind() != AxisKind::Space {
             continue;
         }
-        let index = match axis.name().to_ascii_lowercase().as_str() {
-            "x" => 0,
-            "y" => 1,
-            "z" => 2,
-            other => {
-                return Err(Error::Unsupported {
-                    path: path.to_string(),
-                    detail: format!("the spatial axis `{other}` is not named x, y or z"),
-                });
-            }
+        let Some(index) = crate::axes::component(axis.name()) else {
+            continue;
         };
         if found[index].is_some() {
             return Err(metadata_error(
@@ -623,36 +662,28 @@ fn axis_of(path: &str, value: &Value) -> Result<Axis, Error> {
         .and_then(Value::as_str)
         .filter(|name| !name.is_empty())
         .ok_or_else(|| metadata_error(path, "an axis names no dimension"))?;
-    let kind = match value.get("type").and_then(Value::as_str) {
+    let declared = value.get("type").and_then(Value::as_str).map(str::to_owned);
+    let kind = match declared.as_deref() {
         Some("space") => AxisKind::Space,
         Some("time") => AxisKind::Time,
         Some("channel") => AxisKind::Channel,
-        Some(other) => {
-            return Err(metadata_error(
-                path,
-                format!("the custom axis type `{other}` is not supported"),
-            ));
-        }
+        Some(_) => AxisKind::Other,
         None => match name {
             "x" | "y" | "z" => AxisKind::Space,
             "t" => AxisKind::Time,
             "c" => AxisKind::Channel,
-            other => {
-                return Err(metadata_error(
-                    path,
-                    format!("the axis `{other}` has no recognisable type"),
-                ));
-            }
+            _ => AxisKind::Other,
         },
     };
-    let unit = match value.get("unit").and_then(Value::as_str) {
-        Some(unit) => Some(unit_of(path, kind, unit)?),
-        None => None,
+    let unit = match (kind, value.get("unit").and_then(Value::as_str)) {
+        (AxisKind::Other, _) | (_, None) => None,
+        (kind, Some(unit)) => Some(unit_of(path, kind, unit)?),
     };
     Ok(Axis {
         name: name.to_string(),
         kind,
         unit,
+        declared,
     })
 }
 
@@ -667,6 +698,10 @@ fn unit_of(path: &str, kind: AxisKind, unit: &str) -> Result<AxisUnit, Error> {
         AxisKind::Channel => Err(metadata_error(
             path,
             format!("the channel axis carries the unit `{unit}`"),
+        )),
+        AxisKind::Other => Err(metadata_error(
+            path,
+            format!("the axis unit `{unit}` is not a space or time unit"),
         )),
     }
 }

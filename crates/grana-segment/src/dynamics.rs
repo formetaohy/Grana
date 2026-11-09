@@ -71,46 +71,15 @@ impl Flow {
         let width = self.width as usize;
         let height = self.height as usize;
         let area = width * height;
-        if width < 2 || height < 2 {
+        let Some(prepared) = self.prepared(cellprob_threshold) else {
             return vec![0; area];
-        }
-        let mut indices = Vec::new();
-        let mut rows = Vec::new();
-        let mut columns = Vec::new();
-        for (index, &probability) in self.cellprob.iter().enumerate() {
-            if probability > cellprob_threshold {
-                indices.push(index);
-                rows.push((index / width) as f32);
-                columns.push((index % width) as f32);
-            }
-        }
-        if indices.is_empty() {
-            return vec![0; area];
-        }
-
-        let scale_x = (width - 1) as f32;
-        let scale_y = (height - 1) as f32;
-        let (flow_x, flow_y) = self.field(&indices);
-
-        let mut points_y: Vec<f32> = rows.iter().map(|&row| row / scale_y * 2.0 - 1.0).collect();
-        let mut points_x: Vec<f32> = columns
-            .iter()
-            .map(|&column| column / scale_x * 2.0 - 1.0)
-            .collect();
-
-        integrate(
-            &mut points_x,
-            &mut points_y,
-            &flow_x,
-            &flow_y,
-            width,
-            height,
-        );
+        };
+        let indices = &prepared.indices;
+        let (end_x, end_y) = (&prepared.end_x, &prepared.end_y);
 
         let padded_width = width + 2 * ENDPOINT_PADDING;
         let padded_height = height + 2 * ENDPOINT_PADDING;
         let padded_area = padded_width * padded_height;
-        let (end_x, end_y) = endpoints(&points_x, &points_y, width, height);
 
         let mut histogram = vec![0u32; padded_area];
         for point in 0..indices.len() {
@@ -239,20 +208,71 @@ impl Flow {
                 "a prompt seed lies inside its plane"
             );
         }
+        let Some(prepared) = self.prepared(prompt.threshold()) else {
+            return vec![0; area];
+        };
+        let scale_x = (width - 1) as f32;
+        let scale_y = (height - 1) as f32;
+        let mut prompt_x = Vec::with_capacity(prompt.seeds().len());
+        let mut prompt_y = Vec::with_capacity(prompt.seeds().len());
+        for (x, y) in prompt
+            .seeds()
+            .iter()
+            .map(|seed| (2.0 * seed[0] / scale_x - 1.0, 2.0 * seed[1] / scale_y - 1.0))
+        {
+            prompt_x.push(x);
+            prompt_y.push(y);
+        }
+        integrate(
+            &mut prompt_x,
+            &mut prompt_y,
+            &prepared.flow_x,
+            &prepared.flow_y,
+            width,
+            height,
+        );
+        let (prompt_end_x, prompt_end_y) = endpoints(&prompt_x, &prompt_y, width, height);
+
+        let reach = prompt.reach().max(1.0);
+        let limit = reach * reach;
+        let mut masks = vec![0u32; area];
+        for (point, &index) in prepared.indices.iter().enumerate() {
+            let mut nearest = 0u32;
+            let mut distance = limit;
+            for (rank, (&x, &y)) in prompt_end_x.iter().zip(&prompt_end_y).enumerate() {
+                let offset_x = prepared.end_x[point] as f32 - x as f32;
+                let offset_y = prepared.end_y[point] as f32 - y as f32;
+                let squared = offset_x * offset_x + offset_y * offset_y;
+                if squared <= distance {
+                    distance = squared;
+                    nearest = rank as u32 + 1;
+                }
+            }
+            masks[index] = nearest;
+        }
+        renumber(&mut masks);
+        masks
+    }
+
+    fn prepared(&self, cellprob_threshold: f32) -> Option<Prepared> {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        if width < 2 || height < 2 {
+            return None;
+        }
         let mut indices = Vec::new();
         let mut rows = Vec::new();
         let mut columns = Vec::new();
         for (index, &probability) in self.cellprob.iter().enumerate() {
-            if probability > prompt.threshold() {
+            if probability > cellprob_threshold {
                 indices.push(index);
                 rows.push((index / width) as f32);
                 columns.push((index % width) as f32);
             }
         }
         if indices.is_empty() {
-            return vec![0; area];
+            return None;
         }
-
         let scale_x = (width - 1) as f32;
         let scale_y = (height - 1) as f32;
         let (flow_x, flow_y) = self.field(&indices);
@@ -270,46 +290,13 @@ impl Flow {
             height,
         );
         let (end_x, end_y) = endpoints(&points_x, &points_y, width, height);
-
-        let mut prompt_x = Vec::with_capacity(prompt.seeds().len());
-        let mut prompt_y = Vec::with_capacity(prompt.seeds().len());
-        for (x, y) in prompt
-            .seeds()
-            .iter()
-            .map(|seed| (2.0 * seed[0] / scale_x - 1.0, 2.0 * seed[1] / scale_y - 1.0))
-        {
-            prompt_x.push(x);
-            prompt_y.push(y);
-        }
-        integrate(
-            &mut prompt_x,
-            &mut prompt_y,
-            &flow_x,
-            &flow_y,
-            width,
-            height,
-        );
-        let (prompt_end_x, prompt_end_y) = endpoints(&prompt_x, &prompt_y, width, height);
-
-        let reach = prompt.reach().max(1.0);
-        let limit = reach * reach;
-        let mut masks = vec![0u32; area];
-        for (point, &index) in indices.iter().enumerate() {
-            let mut nearest = 0u32;
-            let mut distance = limit;
-            for (rank, (&x, &y)) in prompt_end_x.iter().zip(&prompt_end_y).enumerate() {
-                let offset_x = end_x[point] as f32 - x as f32;
-                let offset_y = end_y[point] as f32 - y as f32;
-                let squared = offset_x * offset_x + offset_y * offset_y;
-                if squared <= distance {
-                    distance = squared;
-                    nearest = rank as u32 + 1;
-                }
-            }
-            masks[index] = nearest;
-        }
-        renumber(&mut masks);
-        masks
+        Some(Prepared {
+            indices,
+            end_x,
+            end_y,
+            flow_x,
+            flow_y,
+        })
     }
 
     fn field(&self, indices: &[usize]) -> (Vec<f32>, Vec<f32>) {
@@ -327,12 +314,19 @@ impl Flow {
     }
 }
 
+struct Prepared {
+    indices: Vec<usize>,
+    end_x: Vec<usize>,
+    end_y: Vec<usize>,
+    flow_x: Vec<f32>,
+    flow_y: Vec<f32>,
+}
+
 pub struct Prompt<'a> {
     seeds: &'a [[f32; 2]],
     threshold: f32,
     reach: f32,
 }
-
 impl<'a> Prompt<'a> {
     pub fn new(seeds: &'a [[f32; 2]], threshold: f32, reach: f32) -> Self {
         assert!(!seeds.is_empty(), "a prompt names at least one seed point");

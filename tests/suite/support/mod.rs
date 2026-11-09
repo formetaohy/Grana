@@ -350,6 +350,126 @@ pub fn plate_fields(root: &Path, fields: &[&str]) {
     }
 }
 
+pub fn ordered_field(root: &Path) {
+    std::fs::create_dir_all(root).expect("the ordered directory is created");
+    let store =
+        Arc::new(zarrs::filesystem::FilesystemStore::new(root).expect("the ordered store opens"));
+    let axes = serde_json::json!([
+        {"name": "a", "type": "angle"},
+        {"name": "c", "type": "channel"},
+        {"name": "x", "type": "space", "unit": "micrometer"},
+        {"name": "y", "type": "space", "unit": "micrometer"},
+        {"name": "z", "type": "space", "unit": "micrometer"},
+    ]);
+    let multiscales = serde_json::json!([{
+        "version": "0.4",
+        "name": "ordered",
+        "axes": axes,
+        "datasets": [{
+            "path": "0",
+            "coordinateTransformations": [{"type": "scale", "scale": [1.0, 1.0, 1.5, 0.5, 2.0]}],
+        }],
+    }]);
+    attributes(
+        store.clone(),
+        "/",
+        serde_json::json!({"ome": {"version": "0.4", "multiscales": multiscales}}),
+    );
+    let names = ["a", "c", "x", "y", "z"].map(str::to_string).to_vec();
+    let array = zarrs::array::ArrayBuilder::new(
+        vec![1u64, 2, 4, 3, 2],
+        vec![1u64, 1, 4, 3, 2],
+        zarrs::array::data_type::uint8(),
+        0u8,
+    )
+    .dimension_names(Some(names.to_vec()))
+    .build(store.clone(), "/0")
+    .expect("the ordered array builds");
+    array
+        .store_metadata()
+        .expect("the ordered array stores its metadata");
+    for channel in 0..2u8 {
+        let mut data = vec![0u8; 4 * 3 * 2];
+        for x in 0..4u32 {
+            for y in 0..3u32 {
+                for z in 0..2u32 {
+                    let index = (x as usize * 3 + y as usize) * 2 + z as usize;
+                    data[index] = channel * 100 + (x * 10 + y + z * 5) as u8;
+                }
+            }
+        }
+        array
+            .store_chunk(&[0, u64::from(channel), 0, 0, 0], data)
+            .expect("the ordered channel stores its chunk");
+    }
+    let labels = serde_json::json!([{
+        "version": "0.4",
+        "name": "cells",
+        "axes": axes,
+        "datasets": [{"path": "0"}],
+    }]);
+    attributes(
+        store.clone(),
+        "/labels",
+        serde_json::json!({"ome": {"version": "0.4", "labels": ["cells"]}}),
+    );
+    attributes(
+        store.clone(),
+        "/labels/cells",
+        serde_json::json!({
+            "ome": {
+                "version": "0.4",
+                "multiscales": labels,
+                "image-label": {"source": {"image": "../../"}},
+            }
+        }),
+    );
+    let array = zarrs::array::ArrayBuilder::new(
+        vec![1u64, 1, 4, 3, 2],
+        vec![1u64, 1, 4, 3, 2],
+        zarrs::array::data_type::uint16(),
+        0u16,
+    )
+    .dimension_names(Some(names.to_vec()))
+    .build(store, "/labels/cells/0")
+    .expect("the ordered label array builds");
+    array
+        .store_metadata()
+        .expect("the ordered label array stores its metadata");
+    let mut data = vec![0u16; 4 * 3 * 2];
+    for x in 0..4u32 {
+        for y in 0..3u32 {
+            for z in 0..2u32 {
+                let index = (x as usize * 3 + y as usize) * 2 + z as usize;
+                data[index] = x as u16 + 1;
+            }
+        }
+    }
+    array
+        .store_chunk(&[0, 0, 0, 0, 0], data)
+        .expect("the ordered label chunk stores");
+}
+
+fn attributes(
+    store: Arc<zarrs::filesystem::FilesystemStore>,
+    path: &str,
+    attributes: serde_json::Value,
+) {
+    let mut builder = zarrs::group::GroupBuilder::new();
+    builder.attributes(
+        attributes
+            .as_object()
+            .expect("the group attributes are an object")
+            .clone(),
+    );
+    let group = builder
+        .build(store, path)
+        .expect("the ordered group builds");
+    group
+        .store_metadata()
+        .expect("the ordered group stores its metadata");
+}
+
 fn group(root: &Path, path: &str, attributes: serde_json::Value) {
     let store =
         Arc::new(zarrs::filesystem::FilesystemStore::new(root).expect("the plate store opens"));

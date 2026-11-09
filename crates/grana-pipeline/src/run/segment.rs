@@ -157,7 +157,7 @@ pub fn segment(
             let done = time as usize * depth as usize + offset + 1;
             sink(Event::Progress { time, done, total });
         }
-        let volume = assemble(&slices, width, height, request.params.slice_overlap())
+        let volume = assemble(&mut slices, width, height, request.params.slice_overlap())
             .map_err(|error| format!("the segmentation slices do not assemble: {error}"))?;
         if volume.count() == 0 {
             continue;

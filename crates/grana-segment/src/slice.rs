@@ -98,10 +98,7 @@ impl Segmenter {
         }
         let flow = self.flow(plane, width, height)?;
         let mut labels = flow.masks(settings.cellprob_threshold());
-        dynamics::remove_bad_flow_masks(&flow, &mut labels, settings.flow_threshold());
-        dynamics::remove_small_masks(&mut labels, settings.minimum_size());
-        dynamics::fill_holes(&mut labels, width as usize, height as usize);
-        dynamics::renumber(&mut labels);
+        self.finish(&flow, &mut labels, width, height);
         Ok(labels)
     }
 
@@ -137,11 +134,16 @@ impl Segmenter {
             settings.cellprob_threshold(),
             SEED_REACH,
         ));
-        dynamics::remove_bad_flow_masks(&flow, &mut labels, settings.flow_threshold());
-        dynamics::remove_small_masks(&mut labels, settings.minimum_size());
-        dynamics::fill_holes(&mut labels, width as usize, height as usize);
-        dynamics::renumber(&mut labels);
+        self.finish(&flow, &mut labels, width, height);
         Ok(labels)
+    }
+
+    fn finish(&self, flow: &Flow, labels: &mut [u32], width: u32, height: u32) {
+        let settings = self.settings;
+        dynamics::remove_bad_flow_masks(flow, labels, settings.flow_threshold());
+        dynamics::remove_small_masks(labels, settings.minimum_size());
+        dynamics::fill_holes(labels, width as usize, height as usize);
+        dynamics::renumber(labels);
     }
 
     pub fn side(&self) -> u32 {
@@ -307,7 +309,7 @@ impl Volume {
     }
 }
 
-pub fn assemble(slices: &[Vec<u32>], width: u32, height: u32, overlap: f32) -> Result<Volume> {
+pub fn assemble(slices: &mut [Vec<u32>], width: u32, height: u32, overlap: f32) -> Result<Volume> {
     let length = image_length(width, height)?;
     if slices.is_empty() {
         return Err(Error::input("a volume must contain at least one slice"));
@@ -327,20 +329,24 @@ pub fn assemble(slices: &[Vec<u32>], width: u32, height: u32, overlap: f32) -> R
     }
 
     let mut forest = UnionFind::new();
-    let mut nodes: Vec<HashMap<u32, u32>> = Vec::with_capacity(slices.len());
-    let mut areas: Vec<HashMap<u32, u32>> = Vec::with_capacity(slices.len());
-    for slice in slices {
-        let mut area_map = HashMap::new();
-        let mut node_map = HashMap::new();
-        for &label in slice {
-            if label == 0 {
-                continue;
+    let mut areas: Vec<Vec<u32>> = Vec::with_capacity(slices.len());
+    let mut nodes: Vec<Vec<u32>> = Vec::with_capacity(slices.len());
+    for slice in slices.iter_mut() {
+        let count = densify(slice);
+        let mut area = vec![0u32; count + 1];
+        for &label in slice.iter() {
+            if label > 0 {
+                area[label as usize] += 1;
             }
-            *area_map.entry(label).or_insert(0u32) += 1;
-            node_map.entry(label).or_insert_with(|| forest.add());
         }
-        nodes.push(node_map);
-        areas.push(area_map);
+        let mut node = vec![u32::MAX; count + 1];
+        for (label, slot) in node.iter_mut().enumerate().skip(1) {
+            if area[label] > 0 {
+                *slot = forest.add();
+            }
+        }
+        areas.push(area);
+        nodes.push(node);
     }
 
     for index in 0..slices.len() - 1 {
@@ -351,15 +357,33 @@ pub fn assemble(slices: &[Vec<u32>], width: u32, height: u32, overlap: f32) -> R
             }
         }
         for ((left, right), intersection) in intersections {
-            let left_area = areas[index][&left];
-            let right_area = areas[index + 1][&right];
-            let smaller = left_area.min(right_area);
+            let smaller = areas[index][left as usize].min(areas[index + 1][right as usize]);
             if smaller > 0 && intersection as f64 / smaller as f64 >= overlap as f64 {
-                let left_node = nodes[index][&left];
-                let right_node = nodes[index + 1][&right];
+                let left_node = nodes[index][left as usize];
+                let right_node = nodes[index + 1][right as usize];
                 forest.union(left_node, right_node);
             }
         }
+    }
+
+    let mut roots = vec![u32::MAX; forest.len()];
+    let mut numbering: Vec<Vec<u32>> = Vec::with_capacity(slices.len());
+    let mut count = 0u32;
+    for node in &nodes {
+        let mut dense = vec![0u32; node.len()];
+        for (label, &node) in node.iter().enumerate().skip(1) {
+            if node == u32::MAX {
+                continue;
+            }
+            let root = forest.find(node);
+            let slot = &mut roots[root as usize];
+            if *slot == u32::MAX {
+                count += 1;
+                *slot = count;
+            }
+            dense[label] = *slot;
+        }
+        numbering.push(dense);
     }
 
     let depth = slices.len();
@@ -367,25 +391,11 @@ pub fn assemble(slices: &[Vec<u32>], width: u32, height: u32, overlap: f32) -> R
         .checked_mul(depth)
         .ok_or_else(|| Error::input("the volume labels overflow the address space"))?;
     let mut labels = vec![0u32; label_count];
-    let mut numbering: HashMap<u32, u32> = HashMap::new();
-    let mut count = 0u32;
     for (index, slice) in slices.iter().enumerate() {
         let base = index * length;
+        let dense = &numbering[index];
         for (pixel, &label) in slice.iter().enumerate() {
-            if label == 0 {
-                continue;
-            }
-            let node = nodes[index][&label];
-            let root = forest.find(node);
-            let dense = match numbering.get(&root) {
-                Some(&dense) => dense,
-                None => {
-                    count += 1;
-                    numbering.insert(root, count);
-                    count
-                }
-            };
-            labels[base + pixel] = dense;
+            labels[base + pixel] = dense[label as usize];
         }
     }
 
@@ -396,6 +406,25 @@ pub fn assemble(slices: &[Vec<u32>], width: u32, height: u32, overlap: f32) -> R
         labels,
         count,
     })
+}
+
+fn densify(slice: &mut [u32]) -> usize {
+    let mut mapping: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    let mut count = 0u32;
+    for label in slice.iter_mut() {
+        if *label == 0 {
+            continue;
+        }
+        *label = match mapping.get(label) {
+            Some(&dense) => dense,
+            None => {
+                count += 1;
+                mapping.insert(*label, count);
+                count
+            }
+        };
+    }
+    count as usize
 }
 
 fn validate_settings(settings: Settings, side: u32) -> Result<()> {
@@ -440,6 +469,10 @@ impl UnionFind {
             parents: Vec::new(),
             sizes: Vec::new(),
         }
+    }
+
+    fn len(&self) -> usize {
+        self.parents.len()
     }
 
     fn add(&mut self) -> u32 {

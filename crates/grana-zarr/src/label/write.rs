@@ -149,6 +149,28 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
     let x = axes.len() - 1;
     let y = axes.len() - 2;
     let z = (space.len() == 3).then_some(axes.len() - 3);
+    let canonical = space
+        == match z {
+            Some(z) => vec![z, y, x],
+            None => vec![y, x],
+        }
+        && axes[x].name().eq_ignore_ascii_case("x")
+        && axes[y].name().eq_ignore_ascii_case("y")
+        && z.is_none_or(|z| axes[z].name().eq_ignore_ascii_case("z"));
+    if !canonical {
+        return Err(fail(
+            "label images are written into datasets whose space axes are ordered z, y, x"
+                .to_string(),
+        ));
+    }
+    if kinds.contains(&Kind::Other)
+        && image.modern()
+        && crate::schema::rotated(image.pyramid().level(0))
+    {
+        return Err(fail(
+            "label images cannot mirror a rotated placement that carries a custom axis".to_string(),
+        ));
+    }
     let levels = image.pyramid().level_count();
     if image.datasets().len() != levels {
         return Err(fail(
@@ -402,7 +424,7 @@ where
                     for (index, kind) in kinds.iter().enumerate() {
                         indices[index] = match kind {
                             Kind::Time => u64::from(frame),
-                            Kind::Channel => 0,
+                            Kind::Channel | Kind::Other => 0,
                             Kind::Space if index == x => cx,
                             Kind::Space if index == y => cy,
                             Kind::Space => cz,
@@ -505,6 +527,7 @@ fn shape(extent: grana_volume::Extent, frames: u32, kinds: &[Kind]) -> Vec<u64> 
         shape[index] = match kind {
             Kind::Time => u64::from(frames),
             Kind::Channel => 1,
+            Kind::Other => 1,
             Kind::Space if index == x => u64::from(spatial[0]),
             Kind::Space if index == y => u64::from(spatial[1]),
             Kind::Space => u64::from(spatial[2]),
@@ -518,6 +541,7 @@ enum Kind {
     Time,
     Channel,
     Space,
+    Other,
 }
 
 fn kind(axis: &Axis) -> Result<Kind, String> {
@@ -525,5 +549,6 @@ fn kind(axis: &Axis) -> Result<Kind, String> {
         AxisKind::Space => Ok(Kind::Space),
         AxisKind::Time => Ok(Kind::Time),
         AxisKind::Channel => Ok(Kind::Channel),
+        AxisKind::Other => Ok(Kind::Other),
     }
 }

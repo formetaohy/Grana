@@ -9,7 +9,7 @@ pub struct Layout {
     shape: Vec<u64>,
     time: Option<usize>,
     channel: Option<usize>,
-    space_count: usize,
+    space: [Option<usize>; 3],
     pub extent: Extent,
     pub columns: [[f64; 3]; 3],
     pub origin: [f64; 3],
@@ -52,21 +52,20 @@ impl Layout {
             time < u64::from(self.frames),
             "the frame lies inside the layout"
         );
-        let first_space = self.shape.len() - self.space_count;
-        let spatial = if self.space_count == 3 {
-            [z, y, x]
-        } else {
-            [y, x, 0..0]
-        };
+        let spatial = [x, y, z];
         (0..self.shape.len())
             .map(|axis| {
                 if Some(axis) == self.time {
                     time..time + 1
                 } else if Some(axis) == self.channel {
                     channel..channel + 1
-                } else {
-                    let range = &spatial[axis - first_space];
+                } else if let Some(index) =
+                    (0..3).find(|component| self.space[*component] == Some(axis))
+                {
+                    let range = &spatial[index];
                     u64::from(range.start)..u64::from(range.end)
+                } else {
+                    0..1
                 }
             })
             .collect()
@@ -81,79 +80,58 @@ pub fn layout(axes: &[Axis], shape: &[u64], dataset: &Dataset) -> Result<Layout,
             shape.len()
         ));
     }
-    let kinds = axes.iter().map(kind).collect::<Vec<_>>();
-    let space_count = kinds
-        .iter()
-        .filter(|kind| **kind == AxisKind::Space)
-        .count();
-    if !(2..=3).contains(&space_count) {
-        return Err(format!(
-            "a spatial image needs two or three space axes, found {space_count}"
-        ));
-    }
-    let time = single(&kinds, AxisKind::Time, "time")?;
-    let channel = single(&kinds, AxisKind::Channel, "channel")?;
-    let first_space = axes.len() - space_count;
-    let mut expected = 0;
-    if time.is_some() {
-        if time != Some(0) {
-            return Err("the time axis must precede the channel and space axes".to_string());
+    let mut time = None;
+    let mut channel = None;
+    let mut space = [None; 3];
+    for (index, axis) in axes.iter().enumerate() {
+        match axis.kind() {
+            AxisKind::Time => {
+                if time.replace(index).is_some() {
+                    return Err("the image declares more than one time axis".to_string());
+                }
+            }
+            AxisKind::Channel => {
+                if channel.replace(index).is_some() {
+                    return Err("the image declares more than one channel axis".to_string());
+                }
+            }
+            AxisKind::Space => match component(axis.name()) {
+                Some(slot) => {
+                    if space[slot].replace(index).is_some() {
+                        return Err(format!(
+                            "the image names the spatial axis `{}` twice",
+                            axis.name()
+                        ));
+                    }
+                }
+                None => fixed_axis(shape, index, axis)?,
+            },
+            AxisKind::Other => fixed_axis(shape, index, axis)?,
         }
-        expected = 1;
     }
-    if channel.is_some() {
-        if channel != Some(expected) {
-            return Err("the channel axis must follow the time axis".to_string());
-        }
-        expected += 1;
-    }
-    if first_space != expected {
-        return Err("time and channel axes must precede the space axes".to_string());
-    }
-    if !kinds[first_space..]
-        .iter()
-        .all(|kind| *kind == AxisKind::Space)
-    {
-        return Err("the space axes must be the trailing axes".to_string());
-    }
-
-    let x = axes.len() - 1;
-    let y = axes.len() - 2;
-    let z = (space_count == 3).then_some(axes.len() - 3);
-    let mut expected_names = vec!["y", "x"];
-    if z.is_some() {
-        expected_names.insert(0, "z");
-    }
-    let names = axes[first_space..]
-        .iter()
-        .map(|axis| axis.name().to_ascii_lowercase())
-        .collect::<Vec<_>>();
-    if names != expected_names {
-        return Err(format!(
-            "the space axes `{}` must be ordered z, y, x",
-            names.join(", ")
-        ));
-    }
-
+    let Some(x) = space[0] else {
+        return Err("the image names no spatial axis `x`".to_string());
+    };
+    let Some(y) = space[1] else {
+        return Err("the image names no spatial axis `y`".to_string());
+    };
     let extent = Extent::new(
         dimension(shape[x])?,
         dimension(shape[y])?,
-        match z {
+        match space[2] {
             Some(z) => dimension(shape[z])?,
             None => 1,
         },
     );
-
     let frames = match time {
         Some(time) => dimension(shape[time])?,
         None => 1,
     };
-
     Ok(Layout {
         shape: shape.to_vec(),
         time,
         channel,
-        space_count,
+        space,
         extent,
         columns: dataset.columns,
         origin: dataset.origin,
@@ -162,22 +140,24 @@ pub fn layout(axes: &[Axis], shape: &[u64], dataset: &Dataset) -> Result<Layout,
     })
 }
 
-fn kind(axis: &Axis) -> AxisKind {
-    axis.kind()
+pub fn component(name: &str) -> Option<usize> {
+    match name.to_ascii_lowercase().as_str() {
+        "x" => Some(0),
+        "y" => Some(1),
+        "z" => Some(2),
+        _ => None,
+    }
 }
 
-fn single(kinds: &[AxisKind], kind: AxisKind, name: &str) -> Result<Option<usize>, String> {
-    let matches = kinds
-        .iter()
-        .enumerate()
-        .filter(|(_, candidate)| **candidate == kind)
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
-    match matches.as_slice() {
-        [] => Ok(None),
-        [index] => Ok(Some(*index)),
-        _ => Err(format!("the image declares more than one {name} axis")),
+fn fixed_axis(shape: &[u64], index: usize, axis: &Axis) -> Result<(), String> {
+    if shape[index] != 1 {
+        return Err(format!(
+            "the axis `{}` of length {} is neither spatial, time nor channel",
+            axis.name(),
+            shape[index]
+        ));
     }
+    Ok(())
 }
 
 fn dimension(length: u64) -> Result<u32, String> {

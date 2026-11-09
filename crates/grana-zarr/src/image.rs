@@ -224,7 +224,12 @@ impl Image {
     }
 
     pub fn labels(&self) -> Result<crate::Labels, Error> {
-        crate::label::read_at(&self.root, &self.group)
+        let layouts = self
+            .levels
+            .iter()
+            .map(|level| level.layout.clone())
+            .collect::<Vec<_>>();
+        crate::label::read_at(&self.root, &self.group, &layouts)
     }
 
     pub fn pyramid(&self) -> &Pyramid {

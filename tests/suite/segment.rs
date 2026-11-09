@@ -36,6 +36,32 @@ fn basin_flow() -> Flow {
 }
 
 #[test]
+fn assembles_slices_by_overlap() {
+    let width = 4u32;
+    let height = 2u32;
+    let mut first = vec![0u32; 8];
+    let mut second = vec![0u32; 8];
+    for index in [0, 1, 4] {
+        first[index] = 1;
+        second[index] = 1;
+    }
+    second[2] = 2;
+    let volume = grana_segment::assemble(&mut [first, second], width, height, 0.5)
+        .expect("the slices assemble");
+    assert_eq!(volume.count(), 2, "the overlap joins one object only");
+    assert_eq!(
+        volume.labels()[0],
+        volume.labels()[8],
+        "the overlapping object keeps one label across slices"
+    );
+    assert_ne!(
+        volume.labels()[0],
+        volume.labels()[10],
+        "the unmatched object keeps its own label"
+    );
+}
+
+#[test]
 fn assigns_flow_basins_to_their_seeds() {
     let flow = basin_flow();
     let labels = flow.seeded(Prompt::new(&CENTERS, 0.0, 6.0));
@@ -51,4 +77,9 @@ fn assigns_flow_basins_to_their_seeds() {
         "the seeded basins are too small: {first} and {second}"
     );
     assert_eq!(first, second, "the symmetric basins keep their areas");
+    let automatic = flow.masks(0.0);
+    assert!(
+        automatic.contains(&2),
+        "the automatic pipeline finds both basins"
+    );
 }
