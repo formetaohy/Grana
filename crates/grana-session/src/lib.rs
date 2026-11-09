@@ -3,6 +3,7 @@ mod document;
 mod history;
 mod job;
 mod loader;
+mod recent;
 mod recipe;
 mod sample;
 mod session;
@@ -21,6 +22,7 @@ pub use job::{
     segment, track,
 };
 pub use loader::Loader;
+pub use recent::{Entry as RecentEntry, Kind as RecentKind, Recent};
 pub use session::{Effects, Session};
 pub use task::Poll;
 pub use view::{

@@ -635,7 +635,7 @@ impl Decode for SetState {
             relations: Vec::<RelationState>::decode(reader)?,
             provenance: Provenance::decode(reader)?,
             curation: Curation::decode(reader)?,
-            document: reader.u64()?,
+            document: grana_scene::Revision::from_raw(reader.u64()?),
         };
         Ok(state)
     }
@@ -1739,9 +1739,9 @@ impl Decode for ColocState {
             pair: Option::<ColocPair>::decode(reader)?,
             results: Vec::<ColocResult>::decode(reader)?,
             settings: ColocSettings::decode(reader)?,
-            revision: reader.u64()?,
+            revision: grana_scene::Revision::from_raw(reader.u64()?),
         };
-        if state.revision == 0 {
+        if state.revision.is_zero() {
             return Err(FAULT_VALUE);
         }
         for (index, result) in state.results.iter().enumerate() {

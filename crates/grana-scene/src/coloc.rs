@@ -5,6 +5,7 @@ use grana_measure::{
 
 use crate::mask::MaskFilter;
 use crate::object_set::ObjectSetId;
+use crate::revision::Revision;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MaskKey {
@@ -119,7 +120,7 @@ pub struct ColocState {
     pub pair: Option<ColocPair>,
     pub results: Vec<ColocResult>,
     pub settings: ColocSettings,
-    pub revision: u64,
+    pub revision: Revision,
 }
 
 pub struct Coloc {
@@ -127,7 +128,7 @@ pub struct Coloc {
     results: Vec<ColocResult>,
     settings: ColocSettings,
     mask: Option<MaskKey>,
-    revision: u64,
+    revision: Revision,
 }
 
 impl Coloc {
@@ -137,7 +138,7 @@ impl Coloc {
             results: Vec::new(),
             settings: ColocSettings::default(),
             mask: None,
-            revision: 1,
+            revision: Revision::FIRST,
         }
     }
 
@@ -154,7 +155,7 @@ impl Coloc {
             return;
         }
         self.pair = Some(pair);
-        self.revision += 1;
+        self.revision = self.revision.next();
     }
 
     pub fn results(&self) -> &[ColocResult] {
@@ -182,7 +183,7 @@ impl Coloc {
             return;
         }
         result.set_thresholds(thresholds);
-        self.revision += 1;
+        self.revision = self.revision.next();
     }
 
     pub fn series_statistics(&self) -> Option<ColocStatistics> {
@@ -203,14 +204,14 @@ impl Coloc {
         }
         self.settings = settings;
         self.results.clear();
-        self.revision += 1;
+        self.revision = self.revision.next();
     }
 
     pub fn remove_result(&mut self, pair: ColocPair) {
         let length = self.results.len();
         self.results.retain(|result| result.pair() != pair);
         if self.results.len() != length {
-            self.revision += 1;
+            self.revision = self.revision.next();
         }
     }
 
@@ -219,7 +220,7 @@ impl Coloc {
             return;
         }
         self.results.clear();
-        self.revision += 1;
+        self.revision = self.revision.next();
     }
 
     pub fn install(&mut self, series: ColocSeries) {
@@ -241,7 +242,7 @@ impl Coloc {
             Some(existing) => *existing = result,
             None => self.results.push(result),
         }
-        self.revision += 1;
+        self.revision = self.revision.next();
     }
 
     pub fn set_mask(&mut self, mask: Option<MaskKey>) {
@@ -278,7 +279,10 @@ impl Coloc {
             pair.is_none_or(|pair| pair.a() < channels && pair.b() < channels),
             "a colocalization state names two channels of the dataset"
         );
-        assert!(revision > 0, "a colocalization state carries a document");
+        assert!(
+            !revision.is_zero(),
+            "a colocalization state carries a document"
+        );
         for (index, result) in results.iter().enumerate() {
             let pair = result.pair();
             assert!(
@@ -308,14 +312,14 @@ impl Coloc {
         self.revision = revision;
     }
 
-    pub fn revision(&self) -> u64 {
+    pub fn revision(&self) -> Revision {
         self.revision
     }
 
     pub fn grow_channel(&mut self, channels: usize) {
         if self.pair.is_none() && channels >= 2 {
             self.pair = Some(ColocPair::new(0, 1));
-            self.revision += 1;
+            self.revision = self.revision.next();
         }
     }
 
@@ -325,7 +329,7 @@ impl Coloc {
             .filter(|pair| pair.a() < channels && pair.b() < channels);
         self.pair = pair.or_else(|| (channels >= 2).then(|| ColocPair::new(0, 1)));
         self.results.clear();
-        self.revision += 1;
+        self.revision = self.revision.next();
     }
 
     pub fn remove_channel(&mut self, index: usize) {
@@ -347,7 +351,7 @@ impl Coloc {
                 Some(ColocPair::new(a, b))
             }
         };
-        self.revision += 1;
+        self.revision = self.revision.next();
     }
 
     fn result_mut(&mut self) -> Option<&mut ColocResult> {

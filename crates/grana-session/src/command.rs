@@ -20,6 +20,7 @@ pub enum Command {
     OpenDataset,
     OpenImage,
     OpenRemote(String),
+    OpenRecent(usize),
     OpenDemo,
     OpenProject,
     SaveProject,

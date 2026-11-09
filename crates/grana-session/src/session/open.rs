@@ -13,7 +13,7 @@ impl Session {
         self.timeline = Timeline::new(30, self.frame_duration());
         self.message = None;
         self.loading = None;
-        self.generation += 1;
+        self.replace();
         self.project = None;
         self.saved = None;
         self.history.clear();
@@ -54,12 +54,16 @@ impl Session {
     }
 
     pub fn begin_load(&mut self, path: PathBuf) {
+        self.begin_load_series(path, 0);
+    }
+
+    pub fn begin_load_series(&mut self, path: PathBuf, series: usize) {
         self.batch_review_pending = None;
         if self.reject_transfer() {
             return;
         }
         self.loading = Some(file_name(&path));
-        self.source = Some(Loader::file(path));
+        self.source = Some(Loader::file_series(path, series));
         self.pending = None;
         self.project = None;
         self.saved = None;
@@ -71,6 +75,10 @@ impl Session {
     }
 
     pub fn begin_remote(&mut self, url: String) {
+        self.begin_remote_series(url, 0);
+    }
+
+    pub fn begin_remote_series(&mut self, url: String, series: usize) {
         if self.reject_transfer() {
             return;
         }
@@ -81,7 +89,7 @@ impl Session {
             return;
         }
         self.loading = Some(url.clone());
-        self.source = Some(Loader::remote(url));
+        self.source = Some(Loader::remote_series(url, series));
         self.pending = None;
         self.project = None;
         self.saved = None;
@@ -90,6 +98,23 @@ impl Session {
         self.fields.clear();
         self.clear_plate();
         self.reset();
+    }
+
+    pub fn open_recent(&mut self, index: usize) {
+        let Some(entry) = self.recent.entry(index).cloned() else {
+            return;
+        };
+        match entry.kind() {
+            crate::recent::Kind::Image => {
+                self.begin_load_series(PathBuf::from(entry.target()), entry.series());
+            }
+            crate::recent::Kind::Project => {
+                self.begin_project(PathBuf::from(entry.target()));
+            }
+            crate::recent::Kind::Remote => {
+                self.begin_remote_series(entry.target().to_string(), entry.series());
+            }
+        }
     }
 
     pub fn select_series(&mut self, index: usize) -> bool {
@@ -316,8 +341,12 @@ impl Session {
                 document::Outcome::Saved => {
                     self.project = Some(path.clone());
                     self.saved = hash;
+                    self.record_recent(RecentEntry::project(&path));
                 }
-                document::Outcome::Opened(project) => self.open_project(&path, *project),
+                document::Outcome::Opened(project) => {
+                    self.open_project(&path, *project);
+                    self.record_recent(RecentEntry::project(&path));
+                }
                 document::Outcome::Failed(detail) => {
                     self.message = Some(Message::error(detail));
                 }
@@ -435,7 +464,7 @@ impl Session {
             Recovered::Absent => {}
         }
         self.fingerprint = Some(fingerprint);
-        self.generation += 1;
+        self.replace();
         self.mask_stamp = None;
         self.transfer.reset();
         if let Some(source) = &self.source {
@@ -465,9 +494,12 @@ impl Session {
             };
             processed += 1;
             repaint = true;
+            let current = self.source.as_ref().map(Loader::source);
             match event {
                 LoaderEvent::Opened(opened) => {
                     let opened = *opened;
+                    let name = opened.name.clone();
+                    let selected = opened.selected;
                     self.series = opened.series;
                     self.series_index = opened.selected;
                     self.plate = opened.plate;
@@ -483,6 +515,7 @@ impl Session {
                         (false, None) => Dataset::synthetic(opened.name, opened.pyramid),
                     };
                     self.open_dataset(dataset, opened.fingerprint);
+                    self.remember_open(current.as_ref(), &name, selected);
                     if let Some((index, path, scene)) = self.batch_review_pending.clone() {
                         if scene >= self.series.len() {
                             self.batch_review_pending = None;
@@ -534,6 +567,15 @@ impl Session {
             }
         }
         repaint
+    }
+
+    fn remember_open(&mut self, source: Option<&Source>, name: &str, series: usize) {
+        let entry = match source {
+            Some(Source::File { path, .. }) => RecentEntry::image(path, name, series),
+            Some(Source::Remote { url, .. }) => RecentEntry::remote(url, name, series),
+            Some(Source::Memory(_)) | None => return,
+        };
+        self.record_recent(entry);
     }
 }
 

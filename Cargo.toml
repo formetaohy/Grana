@@ -50,6 +50,7 @@ grana-app = { version = "0.1.1", path = "crates/grana-app" }
 grana-codec = { version = "0.1.1", path = "crates/grana-codec" }
 grana-geometry = { version = "0.1.1", path = "crates/grana-geometry" }
 grana-display = { version = "0.1.1", path = "crates/grana-display" }
+grana-dir = { version = "0.1.1", path = "crates/grana-dir" }
 grana-scene = { version = "0.1.1", path = "crates/grana-scene" }
 grana-project = { version = "0.1.1", path = "crates/grana-project" }
 grana-protocol = { version = "0.1.1", path = "crates/grana-protocol" }

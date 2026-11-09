@@ -178,6 +178,15 @@ impl<A: Clone> Ui<A> {
         self.edit.is_some()
     }
 
+    pub fn editing_text(&self) -> Option<&str> {
+        let node = self.edit?;
+        self.tree.nodes[node]
+            .runtime
+            .edit
+            .as_ref()
+            .map(|edit| edit.text())
+    }
+
     pub fn edit_caret(&self) -> Option<Rect> {
         self.edit_caret
     }

@@ -433,7 +433,7 @@ impl Encode for SetState {
         self.relations.encode(writer);
         self.provenance.encode(writer);
         self.curation.encode(writer);
-        writer.u64(self.document);
+        writer.u64(self.document.raw());
     }
 }
 
@@ -1115,7 +1115,7 @@ impl Encode for ColocState {
         self.pair.encode(writer);
         self.results.encode(writer);
         self.settings.encode(writer);
-        writer.u64(self.revision);
+        writer.u64(self.revision.raw());
     }
 }
 

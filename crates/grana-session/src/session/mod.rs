@@ -32,7 +32,7 @@ use grana_optics::Psf;
 use grana_project::{Mismatch, NamedView, Project, Source as ProjectSource, ViewState};
 use grana_scene::{
     Criteria, Dataset, FilterRange, Item, Job, LassoPath, Measure, ObjectFrame, ObjectParams,
-    ObjectSetId, Origin, Progress, Scene,
+    ObjectSetId, Origin, Progress, Revision, Revisions, Scene,
 };
 use grana_volume::{BrickData, BrickRequest, Fingerprint, Region};
 
@@ -40,6 +40,7 @@ use crate::command::{Edit, Export};
 use crate::document::{self, Document};
 use crate::history::{History, Snapshot};
 use crate::loader::{Event as LoaderEvent, Loader};
+use crate::recent::{Entry as RecentEntry, Recent};
 use crate::recipe::Recipe;
 use crate::sample;
 use crate::task::Poll;
@@ -117,8 +118,10 @@ pub struct Session {
     batch_project: bool,
     batch_channels: bool,
     batch_message: Option<String>,
-    generation: u64,
-    reload: u64,
+    stamps: Revisions,
+    revision: Revision,
+    replaced: Revision,
+    content: Revision,
     view: Option<ViewState>,
     history: History,
     export: Export,
@@ -138,8 +141,8 @@ pub struct Session {
     montage: Option<montage::Montage>,
     fingerprint: Option<Fingerprint>,
     mask_stamp: Option<(u32, u64)>,
-    revision: u64,
     transfer: Transfer,
+    recent: Recent,
 }
 
 impl Default for Session {
@@ -189,8 +192,10 @@ impl Session {
             batch_project: false,
             batch_channels: false,
             batch_message: None,
-            generation: 0,
-            reload: 0,
+            stamps: Revisions::new(),
+            revision: Revision::ZERO,
+            replaced: Revision::ZERO,
+            content: Revision::ZERO,
             view: None,
             history: History::default(),
             export: Export::NATIVE,
@@ -210,8 +215,8 @@ impl Session {
             montage: None,
             fingerprint: None,
             mask_stamp: None,
-            revision: 0,
             transfer: Transfer::default(),
+            recent: Recent::default(),
         }
     }
     pub fn insert_keyframe(&mut self, key: Keyframe) -> usize {
@@ -248,12 +253,16 @@ impl Session {
     pub fn progress(&self) -> &[Progress] {
         &self.progress
     }
-    pub fn generation(&self) -> u64 {
-        self.generation
+    pub fn revision(&self) -> Revision {
+        self.revision
     }
 
-    pub fn revision(&self) -> u64 {
-        self.revision
+    pub fn replaced(&self) -> Revision {
+        self.replaced
+    }
+
+    pub fn content(&self) -> Revision {
+        self.content
     }
 
     pub fn remote(&self) -> bool {
@@ -270,13 +279,20 @@ impl Session {
         }
     }
 
-    pub(crate) fn touch(&mut self) {
-        self.revision = self.revision.wrapping_add(1);
+    pub(crate) fn touch(&mut self) -> Revision {
+        self.revision = self.stamps.mint();
+        self.revision
     }
 
-    pub fn reload(&self) -> u64 {
-        self.reload
+    pub(crate) fn replace(&mut self) {
+        self.replaced = self.touch();
+        self.content = self.replaced;
     }
+
+    pub(crate) fn reloaded(&mut self) {
+        self.content = self.touch();
+    }
+
     pub fn pending(&self) -> usize {
         self.in_flight.len()
     }
@@ -384,6 +400,19 @@ impl Session {
     }
     pub fn views(&self) -> &[NamedView] {
         &self.views
+    }
+    pub fn recent(&self) -> &[RecentEntry] {
+        self.recent.entries()
+    }
+    pub fn attach_recent_store(&mut self) {
+        self.recent = Recent::persistent();
+    }
+    pub(super) fn record_recent(&mut self, entry: RecentEntry) {
+        if let Err(error) = self.recent.record(entry) {
+            self.message = Some(Message::info(format!(
+                "the list of recent datasets could not be saved: {error}"
+            )));
+        }
     }
     pub(super) fn save_view(&mut self) -> bool {
         let Some(view) = self.current_view.clone() else {

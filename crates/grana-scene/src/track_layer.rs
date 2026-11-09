@@ -3,18 +3,20 @@ use std::sync::Arc;
 use grana_geometry::PackedMesh;
 use grana_object::TrackSet;
 
+use crate::revision::Revision;
+
 pub struct TrackLayer {
     set: Arc<TrackSet>,
     mesh: Arc<PackedMesh>,
-    revision: u64,
+    revision: Revision,
 }
 
 impl TrackLayer {
-    pub fn new(set: TrackSet, thickness: f32, revision: u64) -> Self {
+    pub fn new(set: TrackSet, thickness: f32, revision: Revision) -> Self {
         Self::shared(Arc::new(set), thickness, revision)
     }
 
-    pub fn shared(set: Arc<TrackSet>, thickness: f32, revision: u64) -> Self {
+    pub fn shared(set: Arc<TrackSet>, thickness: f32, revision: Revision) -> Self {
         let mesh = PackedMesh::new(set.mesh(thickness));
         Self {
             set,
@@ -35,16 +37,16 @@ impl TrackLayer {
         Arc::clone(&self.mesh)
     }
 
-    pub fn revision(&self) -> u64 {
+    pub fn revision(&self) -> Revision {
         self.revision
     }
 
-    pub fn set_thickness(&mut self, thickness: f32, revision: u64) {
+    pub fn set_thickness(&mut self, thickness: f32, revision: Revision) {
         self.mesh = Arc::new(PackedMesh::new(self.set.mesh(thickness)));
         self.revision = revision;
     }
 
-    pub fn cut(&mut self, time: u32, object: usize, thickness: f32, revision: u64) -> bool {
+    pub fn cut(&mut self, time: u32, object: usize, thickness: f32, revision: Revision) -> bool {
         let Some(set) = self.set.cut(time, object) else {
             return false;
         };
@@ -57,7 +59,7 @@ impl TrackLayer {
         source: (u32, usize),
         target: (u32, usize),
         thickness: f32,
-        revision: u64,
+        revision: Revision,
     ) -> bool {
         let Some(set) = self.set.join(source, target) else {
             return false;
@@ -66,7 +68,7 @@ impl TrackLayer {
         true
     }
 
-    fn install(&mut self, set: TrackSet, thickness: f32, revision: u64) {
+    fn install(&mut self, set: TrackSet, thickness: f32, revision: Revision) {
         self.set = Arc::new(set);
         self.mesh = Arc::new(PackedMesh::new(self.set.mesh(thickness)));
         self.revision = revision;

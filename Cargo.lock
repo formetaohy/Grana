@@ -3459,6 +3459,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-dir"
+version = "0.1.1"
+
+[[package]]
 name = "grana-display"
 version = "0.1.1"
 dependencies = [
@@ -3548,6 +3552,7 @@ version = "0.1.1"
 dependencies = [
  "glam",
  "grana-czi",
+ "grana-dir",
  "grana-readout",
  "grana-tiff",
  "grana-volume",
@@ -3766,6 +3771,7 @@ dependencies = [
  "grana-analysis",
  "grana-animation",
  "grana-calibration",
+ "grana-dir",
  "grana-display",
  "grana-geometry",
  "grana-image",
@@ -3784,6 +3790,8 @@ dependencies = [
  "grana-volume",
  "grana-zarr",
  "rfd",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3837,6 +3845,7 @@ dependencies = [
 name = "grana-weight"
 version = "0.1.1"
 dependencies = [
+ "grana-dir",
  "sha2",
  "thiserror 2.0.21",
  "ureq 3.5.1",

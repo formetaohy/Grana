@@ -109,7 +109,13 @@ pub fn frame(scene: &Scene, lens: Option<Lens<'_>>) -> Result<RenderedScene, Str
                 });
             }
             layers.push(Layer {
-                key: LayerKey::at_frame(set.id().raw(), 0, scene.time(), stamp, detail as u16),
+                key: LayerKey::at_frame(
+                    set.id().raw(),
+                    0,
+                    scene.time(),
+                    stamp.raw(),
+                    detail as u16,
+                ),
                 mesh,
                 style_start: start,
                 style_count: frame.object_count(),
@@ -133,7 +139,7 @@ pub fn frame(scene: &Scene, lens: Option<Lens<'_>>) -> Result<RenderedScene, Str
                 });
             }
             layers.push(Layer {
-                key: LayerKey::stable(set.id().raw(), 1, tracks.revision()),
+                key: LayerKey::stable(set.id().raw(), 1, tracks.revision().raw()),
                 mesh: tracks.mesh(),
                 style_start: start,
                 style_count: tracks.set().len(),

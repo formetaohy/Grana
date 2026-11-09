@@ -1239,7 +1239,7 @@ impl Scene {
     }
 
     fn gate_stamp(&self, set: &ObjectSet) -> u64 {
-        let mut stamp = mix(HASH_OFFSET, set.document());
+        let mut stamp = mix(HASH_OFFSET, set.document().raw());
         stamp = mix(stamp, u64::from(self.mask_radius.to_bits()));
         stamp = mix(stamp, filter_stamp(self.mask_filter));
         stamp
@@ -1893,7 +1893,7 @@ impl Scene {
         let set = self.objects.get(self.mask?)?;
         Some(MaskKey::new(
             set.id(),
-            set.document(),
+            set.document().raw(),
             self.mask_radius,
             self.mask_filter,
         ))

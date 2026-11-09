@@ -1,0 +1,12 @@
+[package]
+name = "grana-dir"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

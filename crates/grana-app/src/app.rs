@@ -13,7 +13,7 @@ use grana_engine::{Destination, Engine, Outcome, Panels, Picked, Plan, Pose, SAM
 use grana_gpu::Gpu;
 use grana_project::ViewState;
 use grana_render::{FrameInfo, PickPane};
-use grana_scene::{ObjectFrame, ObjectSetId};
+use grana_scene::{ObjectFrame, ObjectSetId, Revision};
 use grana_session::{Command, Effects, MaskMode, MaskTool, ObjectAnchor, Session, SessionView};
 use grana_ui::{
     Button as UiButton, Event as UiEvent, Modifiers as UiModifiers, Ui, Vec2 as UiVec2,
@@ -54,8 +54,8 @@ pub struct App {
     stage: Stage,
     workspace: Workspace,
     info: FrameInfo,
-    generation: u64,
-    reload: u64,
+    replaced: Revision,
+    content: Revision,
     needs_fit: bool,
     fit_section: bool,
     last_advance: Option<Instant>,
@@ -77,6 +77,7 @@ pub struct App {
 impl App {
     pub fn new(capture: Option<PathBuf>, startup: Option<String>) -> Self {
         let mut session = Session::new();
+        session.attach_recent_store();
         session.set_snapshot_factory(Arc::new(|| Arc::new(crate::snapshot::Snapshot::new())));
         Self {
             surface: None,
@@ -91,8 +92,8 @@ impl App {
             stage: Stage::new(),
             workspace: Workspace::default(),
             info: FrameInfo::default(),
-            generation: 0,
-            reload: 0,
+            replaced: Revision::ZERO,
+            content: Revision::ZERO,
             needs_fit: true,
             fit_section: false,
             last_advance: None,
@@ -149,7 +150,8 @@ impl App {
         if let Some(scene) = self.session.scene() {
             engine.set_dataset(&gpu.device, scene.dataset.pyramid());
         }
-        self.generation = self.session.generation();
+        self.replaced = self.session.replaced();
+        self.content = self.session.content();
         self.surface = Some(Surface { window, gpu, ui });
         self.engine = Some(engine);
     }
@@ -261,28 +263,25 @@ impl App {
         if !bricks.is_empty() {
             *uploads += engine.upload(&surface.gpu.queue, &bricks) as u64;
         }
-        if session.generation() != self.generation {
-            self.generation = session.generation();
+        let replaced = session.replaced() != self.replaced;
+        let reloaded = session.content() != self.content;
+        if replaced || reloaded {
+            self.replaced = session.replaced();
+            self.content = session.content();
             if let Some(scene) = session.scene() {
                 engine.set_dataset(&surface.gpu.device, scene.dataset.pyramid());
             }
+            *info = FrameInfo::default();
+        }
+        if replaced {
             self.needs_fit = true;
             self.fit_section = false;
             self.workspace.playback.playing = false;
             self.workspace.playback.previewing = false;
             self.last_advance = None;
             self.last_animation = None;
-            *info = FrameInfo::default();
         }
         let view = session.take_view();
-        let reload = session.reload();
-        if reload != self.reload {
-            self.reload = reload;
-            if let Some(scene) = session.scene() {
-                engine.set_dataset(&surface.gpu.device, scene.dataset.pyramid());
-            }
-            *info = FrameInfo::default();
-        }
         if let Some(view) = view {
             self.apply_view(&view);
         }
@@ -963,6 +962,7 @@ impl App {
             plate: session.plate(),
             labels: session.label_images(),
             views: session.views(),
+            recent: session.recent(),
             export: session.export(),
         };
         let frame = frame_stats(*info);
@@ -1115,7 +1115,7 @@ impl App {
                 &surface.gpu.queue,
                 &mut surface.ui,
                 scene,
-                session.revision(),
+                session.revision().raw(),
             )
         };
         self.present_ui();
@@ -1373,7 +1373,7 @@ impl App {
         let camera = self.viewport.camera_state();
         let section = self.viewport.section_state();
         let mut stamp = Stamp::new();
-        stamp.u64(self.session.revision());
+        stamp.u64(self.session.revision().raw());
         stamp.u64(self.uploads);
         stamp.u64(u64::from(self.viewport.split().to_bits()));
         for value in camera.pivot.into_iter().chain([
@@ -1690,26 +1690,18 @@ impl App {
             return;
         }
         if shortcut(self.modifiers) {
-            if let Key::Character(text) = &event.logical_key {
-                if text.as_str().eq_ignore_ascii_case("s") {
-                    let view = self.view_state();
-                    if let Some(path) = self.project_path(self.modifiers.shift_key()) {
-                        self.session.save_project(path, view);
-                    }
-                } else if text.as_str().eq_ignore_ascii_case("o")
-                    && let Some(path) = Self::pick_project()
-                {
-                    self.session.begin_project(path);
-                } else if text.as_str().eq_ignore_ascii_case("z") {
-                    let command = if self.modifiers.shift_key() {
-                        Command::Redo
-                    } else {
-                        Command::Undo
-                    };
-                    self.apply(vec![command]);
-                } else if text.as_str().eq_ignore_ascii_case("y") {
-                    self.apply(vec![Command::Redo]);
-                }
+            if let Key::Character(text) = &event.logical_key
+                && let Some(key) = text.chars().next()
+                && let Some(message) = grana_editor::shortcut(key, self.modifiers.shift_key())
+            {
+                self.dispatch(message);
+            }
+            self.request_redraw();
+            return;
+        }
+        if self.workspace.palette.is_some() {
+            if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
+                self.dispatch(grana_editor::Message::ClosePalette);
             }
             self.request_redraw();
             return;
@@ -1745,6 +1737,51 @@ impl App {
             _ => return,
         }
         self.request_redraw();
+    }
+
+    fn dispatch(&mut self, message: grana_editor::Message) -> bool {
+        let commands = {
+            let App {
+                surface,
+                engine,
+                session,
+                viewport,
+                stage,
+                workspace,
+                ..
+            } = self;
+            let (Some(surface), Some(engine)) = (surface.as_mut(), engine.as_mut()) else {
+                return false;
+            };
+            let adapter = surface.gpu.adapter.clone();
+            let view = SessionView {
+                scene: session.scene(),
+                measure: session.measure(),
+                timeline: session.timeline(),
+                jobs: session.progress(),
+                io: session.io(&adapter, engine.progress(), engine.output_message()),
+                batch: session.batch(),
+                history: session.history(),
+                series: session.series(),
+                plate: session.plate(),
+                labels: session.label_images(),
+                views: session.views(),
+                recent: session.recent(),
+                export: session.export(),
+            };
+            let mut commands = Vec::new();
+            grana_editor::apply(
+                &mut surface.ui,
+                vec![message],
+                &view,
+                viewport,
+                stage,
+                workspace,
+                &mut commands,
+            );
+            commands
+        };
+        self.apply(commands)
     }
 
     fn confirm_close(&self) -> bool {

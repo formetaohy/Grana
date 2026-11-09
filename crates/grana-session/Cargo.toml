@@ -12,6 +12,7 @@ grana-analysis = { workspace = true }
 grana-animation = { workspace = true }
 grana-calibration = { workspace = true }
 grana-display = { workspace = true }
+grana-dir = { workspace = true }
 grana-geometry = { workspace = true }
 grana-image = { workspace = true }
 grana-interop = { workspace = true }
@@ -29,6 +30,8 @@ grana-text = { workspace = true }
 grana-volume = { workspace = true }
 grana-zarr = { workspace = true }
 rfd = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

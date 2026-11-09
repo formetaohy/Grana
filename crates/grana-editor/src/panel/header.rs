@@ -8,13 +8,7 @@ use grana_ui::{
 use crate::message::Message;
 use crate::panel::Layout;
 use crate::state::View;
-use crate::view::{action_menu_row, menu, menu_separator};
-
-const COMMAND: &str = if cfg!(target_os = "macos") {
-    "⌘"
-} else {
-    "Ctrl "
-};
+use crate::view::{menu, menu_separator};
 
 pub(super) fn view<'a>(
     ctx: &mut BuildContext<'_, Message>,
@@ -53,7 +47,7 @@ fn navigation<'a>(
     let project = project_pill(ctx, state, group);
     let open = open_pill(ctx, group);
     let project_menu = project_menu(ctx);
-    let open_menu = open_menu(ctx);
+    let open_menu = open_menu(ctx, state);
     grana_ui::row()
         .at(layout.toolbar_left)
         .named("header.navigation")
@@ -284,6 +278,7 @@ fn actions<'a>(
     )
     .glass_group(group);
     let mut children = vec![
+        palette_button(ctx, group),
         undo_element,
         redo_element,
         diagnostics,
@@ -314,6 +309,23 @@ fn actions<'a>(
         .width(Length::Fill)
         .height(Length::Fill)
         .children(children)
+}
+
+fn palette_button<'a>(ctx: &mut BuildContext<'_, Message>, group: Key) -> Element<'a, Message> {
+    let shortcut = crate::command::spec("palette.open")
+        .and_then(|spec| spec.shortcut)
+        .map_or_else(String::new, |shortcut| shortcut.label());
+    let tooltip = format!("Search commands ({shortcut})");
+    crate::view::glass_icon_button(
+        ctx,
+        "header.palette",
+        Icon::Search,
+        36.0,
+        GlassStyle::button(),
+        &tooltip,
+        Message::OpenPalette,
+    )
+    .glass_group(group)
 }
 
 fn analysis<'a>(
@@ -368,46 +380,36 @@ fn analysis<'a>(
     .focus_ring(Corners::capsule())
 }
 
-fn open_menu<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
+fn open_menu<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let key = Key::new("open.menu");
     if !ctx.popup_open(key) {
         return grana_ui::popover::popup(key, 236.0, std::iter::empty());
     }
-    let shortcut = format!("{COMMAND}O");
-    let rows = vec![
-        action_menu_row(
-            ctx,
-            "open.image",
-            Icon::Cube,
-            "Open Image…",
-            None,
-            Command::OpenImage,
-        ),
-        action_menu_row(
-            ctx,
-            "open.folder",
-            Icon::Folder,
-            "Open OME-Zarr Folder…",
-            None,
-            Command::OpenDataset,
-        ),
-        crate::view::action_menu_message(
-            ctx,
-            "open.remote",
-            Icon::Globe,
-            "Open Remote OME-Zarr…",
-            Message::BeginRemote,
-        ),
+    let mut rows = vec![
+        command_row(ctx, "open.image"),
+        command_row(ctx, "open.folder"),
+        command_row(ctx, "open.remote"),
         menu_separator(ctx),
-        action_menu_row(
-            ctx,
-            "open.project",
-            Icon::Folder,
-            "Open Project…",
-            Some(&shortcut),
-            Command::OpenProject,
-        ),
+        command_row(ctx, "open.project"),
     ];
+    if !state.recent.is_empty() {
+        rows.push(menu_separator(ctx));
+        rows.push(crate::view::section_header(ctx, "Recent", None));
+        for (index, entry) in state.recent.iter().take(crate::RECENT_LIMIT).enumerate() {
+            rows.push(crate::view::action_menu_message(
+                ctx,
+                &format!("open.recent.{index}"),
+                match entry.kind() {
+                    grana_session::RecentKind::Image => Icon::Cube,
+                    grana_session::RecentKind::Project => Icon::Folder,
+                    grana_session::RecentKind::Remote => Icon::Globe,
+                },
+                entry.name(),
+                None,
+                Message::Command(Command::OpenRecent(index)),
+            ));
+        }
+    }
     menu(ctx, key, 236.0, rows)
 }
 
@@ -416,42 +418,27 @@ fn project_menu<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message>
     if !ctx.popup_open(key) {
         return grana_ui::popover::popup(key, 228.0, std::iter::empty());
     }
-    let mut rows = Vec::new();
-    let save = format!("{COMMAND}S");
-    rows.push(action_menu_row(
-        ctx,
-        "save.project",
-        Icon::Save,
-        "Save Project",
-        Some(&save),
-        Command::SaveProject,
-    ));
-    rows.push(action_menu_row(
-        ctx,
-        "save.as",
-        Icon::Save,
-        "Save Project As…",
-        None,
-        Command::SaveProjectAs,
-    ));
-    rows.push(menu_separator(ctx));
-    rows.push(action_menu_row(
-        ctx,
-        "snapshot",
-        Icon::Camera,
-        "Save Snapshot…",
-        None,
-        Command::SaveSnapshot,
-    ));
-    rows.push(action_menu_row(
-        ctx,
-        "labels",
-        Icon::Export,
-        "Export Labels Only…",
-        None,
-        Command::ExportAllLabels,
-    ));
+    let rows = vec![
+        command_row(ctx, "save.project"),
+        command_row(ctx, "save.as"),
+        menu_separator(ctx),
+        command_row(ctx, "snapshot"),
+        command_row(ctx, "labels"),
+    ];
     menu(ctx, key, 228.0, rows)
+}
+
+fn command_row<'a>(ctx: &mut BuildContext<'_, Message>, id: &str) -> Element<'a, Message> {
+    let spec = crate::command::spec(id).expect("a menu names a registered command");
+    let shortcut = spec.shortcut.map(|shortcut| shortcut.label());
+    crate::view::action_menu_message(
+        ctx,
+        id,
+        spec.symbol,
+        spec.title,
+        shortcut.as_deref(),
+        spec.action.message(),
+    )
 }
 
 fn diagnostics_menu<'a>(

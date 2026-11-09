@@ -15,6 +15,7 @@ use crate::label_export::LabelExport;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::provenance::{Provenance, Recipe};
 use crate::relation::Relation;
+use crate::revision::{Revision, Revisions};
 use crate::seed::Seeds;
 use crate::state::{RelationState, SetState};
 use crate::track_color::TrackColor;
@@ -50,14 +51,14 @@ pub enum Visibility {
 }
 
 struct FrameSlot {
-    stamp: u64,
+    stamp: Revision,
     data: Option<Arc<ObjectFrame>>,
 }
 
 impl FrameSlot {
     fn new() -> Self {
         Self {
-            stamp: 0,
+            stamp: Revision::ZERO,
             data: None,
         }
     }
@@ -65,7 +66,7 @@ impl FrameSlot {
 
 #[derive(Clone, Copy)]
 struct TrackBounds {
-    revision: u64,
+    revision: Revision,
     metric: TrackColor,
     extent: Option<Extent>,
 }
@@ -93,8 +94,8 @@ pub struct ObjectSet {
     object_coloc: Option<ObjectColoc>,
     label_export: Option<LabelExport>,
     track_bounds: Mutex<Option<TrackBounds>>,
-    revision: u64,
-    document: u64,
+    revision: Revision,
+    document: Revision,
     visibility: Visibility,
     seeds: Seeds,
     tracks: Option<TrackLayer>,
@@ -142,8 +143,8 @@ impl ObjectSet {
             object_coloc: None,
             label_export: None,
             track_bounds: Mutex::new(None),
-            revision: 1,
-            document: 1,
+            revision: Revision::FIRST,
+            document: Revision::FIRST,
             visibility: Visibility::All,
             seeds: Seeds::points(dataset.frame_count() as usize),
             tracks: None,
@@ -166,7 +167,7 @@ impl ObjectSet {
             return false;
         }
         self.key = key;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
@@ -185,7 +186,7 @@ impl ObjectSet {
             return false;
         }
         self.name = name.to_string();
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
@@ -210,7 +211,7 @@ impl ObjectSet {
             return;
         }
         self.provenance = provenance;
-        self.document += 1;
+        self.document = self.document.next();
     }
 
     pub(crate) fn recipe(&self) -> Recipe {
@@ -252,7 +253,7 @@ impl ObjectSet {
             return false;
         }
         self.seeds = seeds;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
@@ -275,7 +276,7 @@ impl ObjectSet {
             return;
         }
         self.color = color;
-        self.document += 1;
+        self.document = self.document.next();
     }
 
     pub fn opacity(&self) -> f32 {
@@ -288,7 +289,7 @@ impl ObjectSet {
             return;
         }
         self.opacity = opacity;
-        self.document += 1;
+        self.document = self.document.next();
     }
 
     pub fn classifier(&self) -> Option<&Classifier> {
@@ -308,11 +309,11 @@ impl ObjectSet {
             return false;
         }
         self.label_export = export;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
-    pub(crate) fn set_object_coloc(&mut self, coloc: Option<ObjectColoc>, stamp: u64) -> bool {
+    pub(crate) fn set_object_coloc(&mut self, coloc: Option<ObjectColoc>, stamp: Revision) -> bool {
         if self.object_coloc == coloc {
             return false;
         }
@@ -338,7 +339,7 @@ impl ObjectSet {
             }
         }
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
@@ -363,11 +364,15 @@ impl ObjectSet {
             return false;
         }
         self.clear_coloc_metrics();
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
-    pub(crate) fn set_classifier(&mut self, classifier: Option<Classifier>, stamp: u64) -> bool {
+    pub(crate) fn set_classifier(
+        &mut self,
+        classifier: Option<Classifier>,
+        stamp: Revision,
+    ) -> bool {
         if self.classifier == classifier {
             return false;
         }
@@ -381,7 +386,7 @@ impl ObjectSet {
             }
         }
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
@@ -412,7 +417,7 @@ impl ObjectSet {
             return false;
         }
         self.object_coloring = coloring;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
@@ -464,7 +469,7 @@ impl ObjectSet {
             return false;
         }
         self.track_coloring = coloring;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
@@ -530,7 +535,7 @@ impl ObjectSet {
             return;
         }
         self.labels = labels;
-        self.document += 1;
+        self.document = self.document.next();
     }
 
     pub(crate) fn set_label_metric(&mut self, metric: Option<ObjectColor>) -> bool {
@@ -538,7 +543,7 @@ impl ObjectSet {
             return false;
         }
         self.label = metric;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
@@ -594,7 +599,7 @@ impl ObjectSet {
             changed = true;
         }
         if changed {
-            self.document += 1;
+            self.document = self.document.next();
         }
         changed
     }
@@ -625,7 +630,7 @@ impl ObjectSet {
         }
         self.hidden.clear();
         self.curation.clear_hidden();
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
@@ -654,7 +659,7 @@ impl ObjectSet {
             return;
         }
         self.visible = visible;
-        self.document += 1;
+        self.document = self.document.next();
     }
 
     pub fn params(&self) -> ObjectParams {
@@ -669,7 +674,7 @@ impl ObjectSet {
             return false;
         }
         *held = params;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
@@ -683,7 +688,7 @@ impl ObjectSet {
             return;
         }
         self.params = params;
-        self.document += 1;
+        self.document = self.document.next();
     }
 
     pub fn frame(&self, time: u32) -> Option<&ObjectFrame> {
@@ -698,7 +703,7 @@ impl ObjectSet {
             .and_then(|slot| slot.data.clone())
     }
 
-    pub fn frame_stamp(&self, time: u32) -> Option<u64> {
+    pub fn frame_stamp(&self, time: u32) -> Option<Revision> {
         self.frames
             .get(time as usize)
             .and_then(|slot| slot.data.as_ref().map(|_| slot.stamp))
@@ -721,7 +726,12 @@ impl ObjectSet {
             .find(|relation| relation.target() == target && relation.shift() == shift)
     }
 
-    pub(crate) fn add_relation(&mut self, target: ObjectSetId, shift: i32, stamp: u64) -> bool {
+    pub(crate) fn add_relation(
+        &mut self,
+        target: ObjectSetId,
+        shift: i32,
+        stamp: Revision,
+    ) -> bool {
         self.add_relation_with_key(target, shift, crate::relation::key_of(target, shift), stamp)
     }
 
@@ -730,7 +740,7 @@ impl ObjectSet {
         target: ObjectSetId,
         shift: i32,
         key: String,
-        stamp: u64,
+        stamp: Revision,
     ) -> bool {
         if self.relation(target, shift).is_some()
             || self.relations.iter().any(|relation| relation.key() == key)
@@ -744,7 +754,7 @@ impl ObjectSet {
             vec![None; self.frame_count() as usize],
         ));
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
@@ -753,7 +763,7 @@ impl ObjectSet {
         target: ObjectSetId,
         from: i32,
         to: i32,
-        stamp: u64,
+        stamp: Revision,
     ) -> bool {
         if self.relation(target, to).is_some() {
             return false;
@@ -798,11 +808,16 @@ impl ObjectSet {
             }));
         }
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
-    pub(crate) fn remove_relation(&mut self, target: ObjectSetId, shift: i32, stamp: u64) -> bool {
+    pub(crate) fn remove_relation(
+        &mut self,
+        target: ObjectSetId,
+        shift: i32,
+        stamp: Revision,
+    ) -> bool {
         let Some(index) = self
             .relations
             .iter()
@@ -823,11 +838,11 @@ impl ObjectSet {
             self.track_coloring.set_metric(None);
         }
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
-    pub(crate) fn remove_relations_to(&mut self, target: ObjectSetId, stamp: u64) -> bool {
+    pub(crate) fn remove_relations_to(&mut self, target: ObjectSetId, stamp: Revision) -> bool {
         let count = self.relations.len();
         self.relations
             .retain(|relation| relation.target() != target);
@@ -841,7 +856,7 @@ impl ObjectSet {
             self.track_coloring.set_metric(None);
         }
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
@@ -851,7 +866,7 @@ impl ObjectSet {
         shift: i32,
         time: u32,
         frame: RelationFrame,
-        stamp: u64,
+        stamp: Revision,
     ) {
         let Some(relation) = self
             .relations
@@ -864,10 +879,10 @@ impl ObjectSet {
             return;
         }
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
     }
 
-    pub(crate) fn clear_relations(&mut self, stamp: u64) {
+    pub(crate) fn clear_relations(&mut self, stamp: Revision) {
         if self.relations.is_empty() {
             return;
         }
@@ -889,7 +904,7 @@ impl ObjectSet {
             self.track_coloring.set_metric(None);
         }
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
     }
 
     pub fn detected(&self) -> usize {
@@ -903,11 +918,11 @@ impl ObjectSet {
         self.frames.len() as u32
     }
 
-    pub fn revision(&self) -> u64 {
+    pub fn revision(&self) -> Revision {
         self.revision
     }
 
-    pub fn document(&self) -> u64 {
+    pub fn document(&self) -> Revision {
         self.document
     }
 
@@ -951,7 +966,7 @@ impl ObjectSet {
         }
     }
 
-    pub(crate) fn restore(state: SetState, dataset: &Dataset, stamp: &mut u64) -> Self {
+    pub(crate) fn restore(state: SetState, dataset: &Dataset, stamps: &mut Revisions) -> Self {
         let SetState {
             id,
             key,
@@ -1022,8 +1037,8 @@ impl ObjectSet {
             object_coloc: None,
             label_export,
             track_bounds: Mutex::new(None),
-            revision: take_stamp(stamp),
-            document: 1,
+            revision: stamps.mint(),
+            document: Revision::FIRST,
             visibility: Visibility::All,
             seeds: Seeds::points(frame_count),
             tracks: None,
@@ -1070,7 +1085,7 @@ impl ObjectSet {
         );
         for (time, frame) in frames.into_iter().enumerate() {
             if let Some(frame) = frame {
-                set.install_shared(time as u32, frame, take_stamp(stamp));
+                set.install_shared(time as u32, frame, stamps.mint());
             }
         }
         if let Some(coloc) = object_coloc {
@@ -1128,7 +1143,7 @@ impl ObjectSet {
                 .track_style
                 .expect("a restored track layer carries track parameters")
                 .thickness();
-            set.tracks = Some(TrackLayer::shared(tracks, thickness, take_stamp(stamp)));
+            set.tracks = Some(TrackLayer::shared(tracks, thickness, stamps.mint()));
         }
         set.restore_coloring(object_color, track_color);
         set.set_visibility(visibility);
@@ -1201,7 +1216,7 @@ impl ObjectSet {
             }
         }
         self.visibility = visibility;
-        self.document += 1;
+        self.document = self.document.next();
     }
 
     pub fn filtered(&self) -> bool {
@@ -1317,7 +1332,7 @@ impl ObjectSet {
             return false;
         }
         self.seeds = Seeds::Points(seeds);
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
@@ -1325,7 +1340,7 @@ impl ObjectSet {
         &mut self,
         time: u32,
         keep: &[bool],
-        stamp: u64,
+        stamp: Revision,
     ) -> Result<bool, String> {
         let Some(frame) = self
             .frames
@@ -1373,11 +1388,11 @@ impl ObjectSet {
             return false;
         }
         self.curation = curation;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
-    pub(crate) fn apply_curation(&mut self, stamp: u64) -> usize {
+    pub(crate) fn apply_curation(&mut self, stamp: Revision) -> usize {
         if self.curation.is_empty() || self.curation.applied() {
             return 0;
         }
@@ -1439,13 +1454,13 @@ impl ObjectSet {
         hidden
     }
 
-    pub(crate) fn apply_edits(&mut self, stamp: u64) -> usize {
+    pub(crate) fn apply_edits(&mut self, stamp: Revision) -> usize {
         if self.curation.edits().is_empty() {
             return 0;
         }
         if self.tracks.is_none() {
             let dropped = self.curation.forget_edits();
-            self.document += 1;
+            self.document = self.document.next();
             return dropped;
         }
         let edits = self.curation.edits().to_vec();
@@ -1453,7 +1468,7 @@ impl ObjectSet {
         for edit in &edits {
             let Some(edit) = self.resolve_edit(*edit) else {
                 let dropped = self.curation.forget_edits();
-                self.document += 1;
+                self.document = self.document.next();
                 return dropped;
             };
             resolved.push(edit);
@@ -1477,13 +1492,13 @@ impl ObjectSet {
             };
             if !done {
                 let dropped = self.curation.forget_edits();
-                self.document += 1;
+                self.document = self.document.next();
                 return dropped;
             }
             applied += 1;
         }
         if applied > 0 {
-            self.document += 1;
+            self.document = self.document.next();
         }
         0
     }
@@ -1503,7 +1518,7 @@ impl ObjectSet {
         }
     }
 
-    pub(crate) fn edit_track(&mut self, edit: TrackEdit, stamp: u64) -> bool {
+    pub(crate) fn edit_track(&mut self, edit: TrackEdit, stamp: Revision) -> bool {
         let Some(thickness) = self.track_thickness() else {
             return false;
         };
@@ -1524,7 +1539,7 @@ impl ObjectSet {
         }
         self.curation.record_edit(edit);
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         self.visibility = Visibility::All;
         true
     }
@@ -1534,7 +1549,7 @@ impl ObjectSet {
         time: u32,
         pruned: Option<ObjectFrame>,
         objects: &[usize],
-        stamp: u64,
+        stamp: Revision,
     ) {
         self.discard_object_coloc();
         let empty = pruned.as_ref().is_none_or(ObjectFrame::is_empty);
@@ -1576,7 +1591,7 @@ impl ObjectSet {
             }
         }
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         self.visibility = visibility;
     }
 
@@ -1627,7 +1642,7 @@ impl ObjectSet {
                 .frames
                 .iter()
                 .map(|slot| FrameSlot {
-                    stamp: 0,
+                    stamp: Revision::ZERO,
                     data: slot.data.clone(),
                 })
                 .collect(),
@@ -1637,8 +1652,8 @@ impl ObjectSet {
             object_coloc: None,
             label_export: None,
             track_bounds: Mutex::new(None),
-            revision: 1,
-            document: 1,
+            revision: Revision::FIRST,
+            document: Revision::FIRST,
             visibility: Visibility::All,
             seeds: self.seeds.clone(),
             tracks: None,
@@ -1658,7 +1673,7 @@ impl ObjectSet {
         duplicate
     }
 
-    pub(crate) fn merged(&self, other: &Self, stamp: u64) -> Result<Self, String> {
+    pub(crate) fn merged(&self, other: &Self, stamp: Revision) -> Result<Self, String> {
         assert_eq!(self.kind, other.kind, "a merge combines one object kind");
         assert_eq!(
             self.channels, other.channels,
@@ -1779,7 +1794,7 @@ impl ObjectSet {
             label_export: None,
             track_bounds: Mutex::new(None),
             revision: stamp,
-            document: self.document + 1,
+            document: self.document.next(),
             visibility: Visibility::All,
             seeds,
             tracks,
@@ -1826,7 +1841,7 @@ impl ObjectSet {
         &mut self,
         target: ObjectSetId,
         time: u32,
-        stamp: u64,
+        stamp: Revision,
     ) -> bool {
         let mut cleared = false;
         for relation in self
@@ -1843,11 +1858,11 @@ impl ObjectSet {
             return false;
         }
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
-    pub(crate) fn invalidate_relations(&mut self, time: u32, stamp: u64) -> bool {
+    pub(crate) fn invalidate_relations(&mut self, time: u32, stamp: Revision) -> bool {
         let id = self.id;
         let mut cleared = false;
         for relation in &mut self.relations {
@@ -1862,15 +1877,15 @@ impl ObjectSet {
             return false;
         }
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
-    pub(crate) fn install(&mut self, time: u32, frame: ObjectFrame, stamp: u64) {
+    pub(crate) fn install(&mut self, time: u32, frame: ObjectFrame, stamp: Revision) {
         self.install_shared(time, Arc::new(frame), stamp);
     }
 
-    pub(crate) fn install_shared(&mut self, time: u32, frame: Arc<ObjectFrame>, stamp: u64) {
+    pub(crate) fn install_shared(&mut self, time: u32, frame: Arc<ObjectFrame>, stamp: Revision) {
         assert_eq!(
             frame.kind(),
             self.kind,
@@ -1882,7 +1897,7 @@ impl ObjectSet {
             .get_mut(time as usize)
             .expect("the object frame lies inside the time series");
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         self.visibility = Visibility::All;
         self.hidden.clear();
         slot.stamp = stamp;
@@ -1894,7 +1909,7 @@ impl ObjectSet {
         &mut self,
         time: u32,
         frame: Option<Arc<ObjectFrame>>,
-        stamp: u64,
+        stamp: Revision,
     ) {
         if let Some(frame) = &frame {
             assert_eq!(
@@ -1909,7 +1924,7 @@ impl ObjectSet {
             .get_mut(time as usize)
             .expect("the object frame lies inside the time series");
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         self.visibility = Visibility::All;
         self.hidden.clear();
         slot.stamp = stamp;
@@ -1917,14 +1932,14 @@ impl ObjectSet {
         self.curation.set_produced(time);
     }
 
-    pub(crate) fn clear(&mut self, stamp: u64) {
+    pub(crate) fn clear(&mut self, stamp: Revision) {
         self.discard_object_coloc();
         for slot in &mut self.frames {
             slot.data = None;
         }
         self.hidden.clear();
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         self.visibility = Visibility::All;
         self.tracks = None;
     }
@@ -1952,11 +1967,16 @@ impl ObjectSet {
             && style.params() != params
         {
             self.track_style = Some(Self::styled(params, style.thickness(), style.visible()));
-            self.document += 1;
+            self.document = self.document.next();
         }
     }
 
-    pub fn set_track_style(&mut self, params: TrackParams, thickness: f32, stamp: u64) -> bool {
+    pub fn set_track_style(
+        &mut self,
+        params: TrackParams,
+        thickness: f32,
+        stamp: Revision,
+    ) -> bool {
         let Some(style) = self.track_style else {
             return false;
         };
@@ -1973,29 +1993,29 @@ impl ObjectSet {
             layer.set_thickness(next.thickness(), stamp);
         }
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         true
     }
 
-    pub(crate) fn install_tracks(&mut self, set: TrackSet, stamp: u64) {
+    pub(crate) fn install_tracks(&mut self, set: TrackSet, stamp: Revision) {
         let thickness = self
             .track_thickness()
             .expect("only trackable objects install tracks");
         self.tracks = Some(TrackLayer::new(set, thickness, stamp));
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         self.visibility = Visibility::All;
         self.apply_edits(stamp);
     }
 
-    pub(crate) fn clear_tracks(&mut self, stamp: u64) {
+    pub(crate) fn clear_tracks(&mut self, stamp: Revision) {
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
         self.visibility = Visibility::All;
         self.tracks = None;
     }
 
-    pub(crate) fn cut_track(&mut self, time: u32, object: usize, stamp: u64) -> bool {
+    pub(crate) fn cut_track(&mut self, time: u32, object: usize, stamp: Revision) -> bool {
         let Some(position) = self.anchor_at(time, object) else {
             return false;
         };
@@ -2009,7 +2029,7 @@ impl ObjectSet {
         &mut self,
         source: (u32, usize),
         target: (u32, usize),
-        stamp: u64,
+        stamp: Revision,
     ) -> bool {
         let (Some(source_position), Some(target_position)) = (
             self.anchor_at(source.0, source.1),
@@ -2057,7 +2077,7 @@ impl ObjectSet {
         MAX_THICKNESS * self.voxel
     }
 
-    pub(crate) fn set_track_thickness(&mut self, thickness: f32, stamp: u64) {
+    pub(crate) fn set_track_thickness(&mut self, thickness: f32, stamp: Revision) {
         let Some(style) = self.track_style else {
             return;
         };
@@ -2074,7 +2094,7 @@ impl ObjectSet {
             layer.set_thickness(next.thickness(), stamp);
         }
         self.revision = stamp;
-        self.document += 1;
+        self.document = self.document.next();
     }
 
     pub fn track_visible(&self) -> bool {
@@ -2088,7 +2108,7 @@ impl ObjectSet {
         let previous = style.visible();
         style.set_visible(visible);
         if style.visible() != previous {
-            self.document += 1;
+            self.document = self.document.next();
         }
     }
 
@@ -2113,9 +2133,4 @@ fn accumulate(accumulated: Option<Extent>, value: f32) -> Option<Extent> {
         None => (value, value),
         Some((minimum, maximum)) => (minimum.min(value), maximum.max(value)),
     })
-}
-
-pub(crate) fn take_stamp(stamp: &mut u64) -> u64 {
-    *stamp += 1;
-    *stamp
 }

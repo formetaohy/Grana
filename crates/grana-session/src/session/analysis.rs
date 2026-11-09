@@ -1212,6 +1212,6 @@ impl Session {
         }
         self.in_flight.clear();
         self.bricks.clear();
-        self.reload += 1;
+        self.reloaded();
     }
 }

@@ -8,6 +8,7 @@ use grana_scene::{Measure, ObjectSet, ObjectSetId, Progress, Scene};
 use grana_session::{BatchView, Export, HistoryView, IoView, PlateView, SeriesView};
 use grana_ui::Key;
 
+use crate::message::Message;
 use crate::panel::Panel;
 use crate::stage::Stage;
 
@@ -216,8 +217,8 @@ impl RelationMetric {
 
     pub fn unit(self) -> &'static str {
         match self {
-            Self::Contact => "碌m虏",
-            Self::Distance | Self::Center => "碌m",
+            Self::Contact => "µm²",
+            Self::Distance | Self::Center => "µm",
             Self::Overlap => "%",
         }
     }
@@ -245,6 +246,11 @@ impl RelationMetric {
     pub fn near(self) -> bool {
         self == Self::Distance
     }
+}
+
+#[derive(Default)]
+pub struct Palette {
+    pub selected: usize,
 }
 
 pub struct Workspace {
@@ -276,6 +282,8 @@ pub struct Workspace {
     pub comparison_group: Option<String>,
     pub comparison_key: Option<String>,
     pub comparison_open: Option<(String, String)>,
+    pub palette: Option<Palette>,
+    pub(crate) palette_actions: Vec<Message>,
     pub(crate) drag: PlotDrag,
 }
 
@@ -310,6 +318,8 @@ impl Default for Workspace {
             comparison_group: None,
             comparison_key: None,
             comparison_open: None,
+            palette: None,
+            palette_actions: Vec::new(),
             drag: PlotDrag::default(),
         }
     }
@@ -344,6 +354,8 @@ pub struct View<'a> {
     pub plate: Option<PlateView<'a>>,
     pub labels: &'a [String],
     pub views: &'a [grana_session::NamedView],
+    pub recent: &'a [grana_session::RecentEntry],
+    pub palette: Option<&'a crate::palette::PaletteView>,
     pub viewport: &'a Viewport,
     pub stage: &'a Stage,
     pub workspace: &'a Workspace,

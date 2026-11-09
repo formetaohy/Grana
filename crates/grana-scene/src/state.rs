@@ -17,6 +17,7 @@ use crate::mask::MaskFilter;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::{ObjectSetId, Visibility};
 use crate::provenance::Provenance;
+use crate::revision::Revision;
 use crate::scene::{Item, Scene, Selection};
 use crate::seed::Seeds;
 use crate::track_color::TrackColor;
@@ -102,7 +103,7 @@ pub struct SetState {
     pub relations: Vec<RelationState>,
     pub provenance: Provenance,
     pub curation: Curation,
-    pub document: u64,
+    pub document: Revision,
 }
 
 impl Scene {
@@ -210,7 +211,7 @@ impl Scene {
         let mask = self.mask.and_then(|set| self.objects.get(set)).map(|set| {
             MaskKey::new(
                 set.id(),
-                set.document(),
+                set.document().raw(),
                 state.mask_radius,
                 self.mask_filter,
             )
@@ -343,7 +344,7 @@ impl Scene {
         for set in self.objects.iter() {
             hash = mix(hash, set.id().raw());
             hash = mix(hash, set.kind().index() as u64);
-            hash = mix(hash, set.document());
+            hash = mix(hash, set.document().raw());
             hash = mix(hash, set.seed_source().map_or(0, ObjectSetId::raw));
             for time in 0..self.frame_count() {
                 for seed in set.seeds(time) {
@@ -372,7 +373,7 @@ impl Scene {
                 hash = mix(hash, u64::from(value.to_bits()));
             }
         }
-        hash = mix(hash, self.coloc.revision());
+        hash = mix(hash, self.coloc.revision().raw());
         hash
     }
 

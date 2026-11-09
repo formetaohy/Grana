@@ -135,5 +135,6 @@ pub struct SessionView<'a> {
     pub plate: Option<PlateView<'a>>,
     pub labels: &'a [String],
     pub views: &'a [NamedView],
+    pub recent: &'a [crate::RecentEntry],
     pub export: Export,
 }

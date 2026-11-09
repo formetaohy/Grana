@@ -348,7 +348,7 @@ impl Session {
         self.bricks.clear();
         self.mask_stamp = None;
         self.install_channels();
-        self.reload += 1;
+        self.reloaded();
     }
 
     pub(super) fn remove_derived_channel(&mut self, channel: usize) {
@@ -382,7 +382,7 @@ impl Session {
         self.bricks.clear();
         self.mask_stamp = None;
         self.install_channels();
-        self.reload += 1;
+        self.reloaded();
     }
 
     pub(super) fn refresh_masks(&mut self) -> bool {
@@ -400,7 +400,7 @@ impl Session {
         if changed {
             self.in_flight.clear();
             self.bricks.clear();
-            self.reload += 1;
+            self.reloaded();
         }
         changed
     }

@@ -24,6 +24,7 @@ impl Session {
             Command::OpenDataset => effects.open_dataset = true,
             Command::OpenImage => effects.open_image = true,
             Command::OpenRemote(url) => self.begin_remote(url),
+            Command::OpenRecent(index) => self.open_recent(index),
             Command::OpenDemo => self.open_sample(),
             Command::OpenProject => effects.open_project = true,
             Command::SaveProject => effects.save_project = Some(false),

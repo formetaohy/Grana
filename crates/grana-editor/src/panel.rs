@@ -31,7 +31,7 @@ pub const DOCK_DEFAULT: f32 = 340.0;
 pub const DOCK_MINIMUM: f32 = 220.0;
 pub const ANALYSIS_WIDTH: f32 = 114.0;
 pub const TOOLBAR_LEFT: f32 = 320.0;
-pub const TOOLBAR_RIGHT: f32 = 124.0;
+pub const TOOLBAR_RIGHT: f32 = 168.0;
 pub const STAGE_INSET: f32 = 12.0;
 const MINIMUM_STAGE_WIDTH: f32 = 240.0;
 const MINIMUM_STAGE_HEIGHT: f32 = 160.0;
@@ -90,9 +90,14 @@ pub fn build(
     }
     let full = Rect::from_min_size(Vec2::ZERO, ui.size());
     let Some(scene) = view.scene else {
+        let palette = crate::palette::resolve(ui, view, workspace);
         let elements = {
             let mut ctx = ui.build();
-            crate::shell::view(&mut ctx, view, workspace, full)
+            let mut elements = crate::shell::view(&mut ctx, view, workspace, full);
+            if let Some(palette) = palette.as_ref() {
+                elements.extend(crate::palette::view(&mut ctx, full, palette));
+            }
+            elements
         };
         ui.present(grana_ui::place(full, elements));
         return commands;
@@ -103,6 +108,7 @@ pub fn build(
     {
         commands.push(Command::SetMeasureSet(Some(set.id())));
     }
+    let palette = crate::palette::resolve(ui, view, workspace);
     let state = View {
         scene,
         measure: view.measure,
@@ -115,6 +121,8 @@ pub fn build(
         plate: view.plate,
         labels: view.labels,
         views: view.views,
+        recent: view.recent,
+        palette: palette.as_ref(),
         viewport: &*viewport,
         stage: &*stage,
         workspace: &*workspace,
@@ -155,6 +163,9 @@ fn view_elements<'a>(
         layout.stage,
         state.workspace.remote_open,
     ));
+    if let Some(palette) = state.palette {
+        elements.extend(crate::palette::view(ctx, full, palette));
+    }
     elements
 }
 
@@ -471,10 +482,42 @@ pub fn apply(
     workspace: &mut Workspace,
     commands: &mut Vec<Command>,
 ) {
-    for action in actions {
+    let mut queue = std::collections::VecDeque::from(actions);
+    while let Some(action) = queue.pop_front() {
         match action {
             Message::Noop => {}
             Message::Copy(text) => ui.copy(&text),
+            Message::OpenPalette => {
+                workspace.palette = match workspace.palette {
+                    Some(_) => None,
+                    None => Some(crate::state::Palette::default()),
+                };
+                workspace.palette_actions.clear();
+            }
+            Message::ClosePalette => {
+                workspace.palette = None;
+                workspace.palette_actions.clear();
+            }
+            Message::RunSelected => {
+                let selected = workspace
+                    .palette
+                    .as_ref()
+                    .map_or(0, |palette| palette.selected);
+                let chosen = workspace.palette_actions.get(selected).cloned();
+                workspace.palette = None;
+                workspace.palette_actions.clear();
+                if let Some(chosen) = chosen {
+                    queue.push_front(chosen);
+                }
+            }
+            Message::RunPaletteIndex(index) => {
+                let chosen = workspace.palette_actions.get(index).cloned();
+                workspace.palette = None;
+                workspace.palette_actions.clear();
+                if let Some(chosen) = chosen {
+                    queue.push_front(chosen);
+                }
+            }
             Message::Command(command) => {
                 let busy = view.io.loading.is_some()
                     && matches!(

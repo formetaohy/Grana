@@ -10,8 +10,9 @@ use crate::curation::Curation;
 use crate::dataset::Dataset;
 use crate::key::ObjectSetKey;
 use crate::object::{ObjectFrame, ObjectKind};
-use crate::object_set::{ObjectSet, ObjectSetId, take_stamp};
+use crate::object_set::{ObjectSet, ObjectSetId};
 use crate::provenance::{Criteria, Provenance};
+use crate::revision::Revisions;
 use crate::segment::SegmentParams;
 use crate::slug::slug;
 use crate::state::SetState;
@@ -31,7 +32,7 @@ pub struct Objects {
     sets: Vec<ObjectSet>,
     next_id: u64,
     ordinals: [u64; 3],
-    stamp: u64,
+    revisions: Revisions,
     extents: Mutex<HashMap<ObjectSetId, ExtentEntry>>,
     values: Mutex<HashMap<(ObjectSetId, ObjectColor), Values>>,
 }
@@ -57,7 +58,7 @@ impl Objects {
             sets: Vec::new(),
             next_id: 1,
             ordinals: [0; 3],
-            stamp: 0,
+            revisions: Revisions::new(),
             extents: Mutex::new(HashMap::new()),
             values: Mutex::new(HashMap::new()),
         }
@@ -269,7 +270,7 @@ impl Objects {
         time: u32,
         keep: &[bool],
     ) -> Result<bool, String> {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         let removed = match self.get_mut(id) {
             Some(set) => set.retain_objects(time, keep, stamp)?,
             None => false,
@@ -290,7 +291,7 @@ impl Objects {
             .map(ObjectSet::id)
             .collect::<Vec<_>>();
         for target in targets {
-            let stamp = take_stamp(&mut self.stamp);
+            let stamp = self.revisions.mint();
             if let Some(set) = self.get_mut(target) {
                 set.invalidate_relation(id, time, stamp);
             }
@@ -460,7 +461,7 @@ impl Objects {
                     .to_string(),
             );
         }
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         let mut merged = self.sets[target_index].merged(&self.sets[source_index], stamp)?;
         let mut parts = match merged.provenance() {
             Provenance::Merged { parts } => parts.clone(),
@@ -522,7 +523,7 @@ impl Objects {
     }
 
     pub fn add_relation(&mut self, id: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         let added = self
             .get_mut(id)
             .is_some_and(|set| set.add_relation(target, shift, stamp));
@@ -539,7 +540,7 @@ impl Objects {
         shift: i32,
         key: String,
     ) -> bool {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         let added = self
             .get_mut(id)
             .is_some_and(|set| set.add_relation_with_key(target, shift, key, stamp));
@@ -556,7 +557,7 @@ impl Objects {
         from: i32,
         to: i32,
     ) -> bool {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         let moved = self
             .get_mut(id)
             .is_some_and(|set| set.move_relation(target, from, to, stamp));
@@ -567,7 +568,7 @@ impl Objects {
     }
 
     pub fn remove_relation(&mut self, id: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         let removed = self
             .get_mut(id)
             .is_some_and(|set| set.remove_relation(target, shift, stamp));
@@ -585,7 +586,7 @@ impl Objects {
         time: u32,
         frame: RelationFrame,
     ) -> bool {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         let Some(set) = self.get_mut(id) else {
             return false;
         };
@@ -594,7 +595,7 @@ impl Objects {
     }
 
     pub fn clear_relations(&mut self, id: ObjectSetId) {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         for set in &mut self.sets {
             if set.id() == id {
                 set.clear_relations(stamp);
@@ -606,7 +607,7 @@ impl Objects {
     }
 
     pub fn install(&mut self, id: ObjectSetId, time: u32, frame: ObjectFrame) -> bool {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         let Some(set) = self.get_mut(id) else {
             return false;
         };
@@ -616,7 +617,7 @@ impl Objects {
     }
 
     pub fn install_shared(&mut self, id: ObjectSetId, time: u32, frame: Arc<ObjectFrame>) -> bool {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         let Some(set) = self.get_mut(id) else {
             return false;
         };
@@ -631,7 +632,7 @@ impl Objects {
         time: u32,
         frame: Option<Arc<ObjectFrame>>,
     ) -> bool {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         let Some(set) = self.get_mut(id) else {
             return false;
         };
@@ -646,7 +647,7 @@ impl Objects {
 
     fn invalidate_relations(&mut self, id: ObjectSetId, time: u32) {
         for index in 0..self.sets.len() {
-            let stamp = take_stamp(&mut self.stamp);
+            let stamp = self.revisions.mint();
             let set = &mut self.sets[index];
             if set.id() == id {
                 set.invalidate_relations(time, stamp);
@@ -657,14 +658,14 @@ impl Objects {
     }
 
     pub fn clear(&mut self, id: ObjectSetId) {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         if let Some(set) = self.get_mut(id) {
             set.clear(stamp);
         }
     }
 
     pub fn install_tracks(&mut self, id: ObjectSetId, tracks: TrackSet) -> bool {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         let Some(set) = self.get_mut(id) else {
             return false;
         };
@@ -673,14 +674,14 @@ impl Objects {
     }
 
     pub fn clear_tracks(&mut self, id: ObjectSetId) {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         if let Some(set) = self.get_mut(id) {
             set.clear_tracks(stamp);
         }
     }
 
     pub fn apply_curation(&mut self, id: ObjectSetId) -> usize {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         self.get_mut(id).map_or(0, |set| set.apply_curation(stamp))
     }
 
@@ -694,7 +695,7 @@ impl Objects {
     }
 
     pub fn cut_track(&mut self, id: ObjectSetId, time: u32, object: usize) -> bool {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         self.get_mut(id)
             .is_some_and(|set| set.cut_track(time, object, stamp))
     }
@@ -734,13 +735,13 @@ impl Objects {
         source: (u32, usize),
         target: (u32, usize),
     ) -> bool {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         self.get_mut(id)
             .is_some_and(|set| set.join_tracks(source, target, stamp))
     }
 
     pub fn set_track_thickness(&mut self, id: ObjectSetId, thickness: f32) {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         if let Some(set) = self.get_mut(id) {
             set.set_track_thickness(thickness, stamp);
         }
@@ -752,7 +753,7 @@ impl Objects {
         params: grana_object::TrackParams,
         thickness: f32,
     ) -> bool {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         self.get_mut(id)
             .is_some_and(|set| set.set_track_style(params, thickness, stamp))
     }
@@ -775,7 +776,7 @@ impl Objects {
             self.next_id = self.next_id.max(state.id + 1);
             self.ordinals[state.kind.index()] += 1;
             self.sets
-                .push(ObjectSet::restore(state, dataset, &mut self.stamp));
+                .push(ObjectSet::restore(state, dataset, &mut self.revisions));
         }
         for set in &self.sets {
             for relation in set.relations() {
@@ -862,10 +863,10 @@ impl Objects {
 
     pub fn table_revision(&self, id: ObjectSetId) -> Option<u64> {
         let set = self.get(id)?;
-        let mut revision = set.revision();
+        let mut revision = set.revision().raw();
         for child in self.child_sets(id) {
             if let Some(child) = self.get(child) {
-                revision = crate::state::mix(revision, child.revision());
+                revision = crate::state::mix(revision, child.revision().raw());
             }
         }
         Some(revision)
@@ -951,7 +952,7 @@ impl Objects {
         id: ObjectSetId,
         classifier: Option<grana_measure::Classifier>,
     ) -> bool {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         let Some(set) = self.get_mut(id) else {
             return false;
         };
@@ -959,7 +960,7 @@ impl Objects {
     }
 
     pub(crate) fn set_object_coloc(&mut self, id: ObjectSetId, coloc: Option<ObjectColoc>) -> bool {
-        let stamp = take_stamp(&mut self.stamp);
+        let stamp = self.revisions.mint();
         let Some(set) = self.get_mut(id) else {
             return false;
         };
@@ -1095,11 +1096,12 @@ impl Objects {
     }
 
     fn cache_revision(&self, id: ObjectSetId, metric: ObjectColor) -> Option<u64> {
-        let revision = self.get(id)?.revision();
+        let revision = self.get(id)?.revision().raw();
         match metric {
-            ObjectColor::Child { target, .. } => {
-                Some(crate::state::mix(revision, self.get(target)?.revision()))
-            }
+            ObjectColor::Child { target, .. } => Some(crate::state::mix(
+                revision,
+                self.get(target)?.revision().raw(),
+            )),
             _ => Some(revision),
         }
     }

@@ -245,29 +245,16 @@ pub fn menu<'a>(
     grana_ui::popover::popup(anchor, width, rows)
 }
 
-pub fn action_menu_row<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    key: &str,
-    symbol: Icon,
-    label: &str,
-    shortcut: Option<&str>,
-    command: Command,
-) -> View<'a> {
-    let theme = *ctx.theme();
-    action_row_widget(&theme, symbol, label, shortcut)
-        .named(key)
-        .press(Message::Command(command))
-}
-
 pub fn action_menu_message<'a>(
     ctx: &mut BuildContext<'_, Message>,
     key: &str,
     symbol: Icon,
     label: &str,
+    shortcut: Option<&str>,
     message: Message,
 ) -> View<'a> {
     let theme = *ctx.theme();
-    action_row_widget(&theme, symbol, label, None)
+    action_row_widget(&theme, symbol, label, shortcut)
         .named(key)
         .press(message)
 }

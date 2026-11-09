@@ -192,7 +192,7 @@ impl SceneState {
             if frames.is_some_and(|frames| set.frames.len() != frames) {
                 return Err(fault("the object sets cover another set of frames"));
             }
-            if set.document == 0 {
+            if set.document.is_zero() {
                 return Err(fault("an object set carries an impossible document"));
             }
             if set.params.kind() != set.kind {
@@ -423,7 +423,7 @@ impl SceneState {
                 "the colocalization pair names a channel the dataset does not hold",
             ));
         }
-        if self.coloc.revision == 0 {
+        if self.coloc.revision.is_zero() {
             return Err(fault(
                 "the colocalization state carries an impossible document",
             ));

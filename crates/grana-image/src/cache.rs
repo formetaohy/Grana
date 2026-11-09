@@ -398,7 +398,7 @@ pub fn default_root() -> Option<PathBuf> {
         let root = PathBuf::from(value);
         return (!root.as_os_str().is_empty()).then_some(root);
     }
-    base().map(|base| base.join("grana").join("pyramid"))
+    grana_dir::cache().map(|root| root.join("pyramid"))
 }
 
 fn accounting(root: &Path) -> Accounting {
@@ -571,23 +571,6 @@ fn mix(mut hash: u64, bytes: &[u8]) -> u64 {
         hash = (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME);
     }
     hash
-}
-
-#[cfg(target_os = "windows")]
-fn base() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
-}
-
-#[cfg(target_os = "macos")]
-fn base() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Library").join("Caches"))
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn base() -> Option<PathBuf> {
-    std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
 }
 
 fn size(data: &VoxelData) -> u64 {
