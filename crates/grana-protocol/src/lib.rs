@@ -15,10 +15,10 @@ pub use spec::{
     AnchorSpec, AnnotationSpec, BackgroundSpec, CameraSpec, ChannelSpec, ClassifierSpec,
     ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec,
     EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec, MaskEditSpec, MaskFilterSpec,
-    MaskSpec, MeasureSpec, MeasuredSpec, MetricSpec, NodeSpec, PairSpec, PartSpec, RatioSpec,
-    RegionSpec, RelationSpec, RemovalSpec, RenderSpec, RestoreSpec, SectionSpec, SetSpec,
-    ShadingSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec, SurfaceEditSpec,
-    TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    MaskSpec, MeasureSpec, MeasuredSpec, MetricSpec, NamedViewSpec, NodeSpec, PairSpec, PartSpec,
+    RatioSpec, RegionSpec, RelationSpec, RemovalSpec, RenderSpec, RestoreSpec, SectionSpec,
+    SetSpec, ShadingSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec,
+    SurfaceEditSpec, TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -51,6 +51,8 @@ pub struct Protocol {
     label_images: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     view: Option<ViewSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    views: Vec<NamedViewSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     snapshot: Option<SnapshotSpec>,
 }
@@ -127,8 +129,16 @@ impl Protocol {
         self.view.as_ref()
     }
 
+    pub fn views(&self) -> &[NamedViewSpec] {
+        &self.views
+    }
+
+    pub fn named_view(&self, name: &str) -> Option<&NamedViewSpec> {
+        self.views.iter().find(|view| view.name == name)
+    }
+
     pub fn snapshot(&self) -> Option<SnapshotSpec> {
-        self.snapshot
+        self.snapshot.clone()
     }
 
     pub fn to_json(&self) -> Result<String, ProtocolError> {
@@ -351,11 +361,23 @@ impl Protocol {
                 timeline.fps, timeline.duration
             ));
         }
-        if let Some(snapshot) = self.snapshot {
+        if !self.views.is_empty() {
+            let names = self
+                .views
+                .iter()
+                .map(|view| view.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            summary.push_str(&format!(" · views {names}"));
+        }
+        if let Some(snapshot) = self.snapshot.as_ref() {
             summary.push_str(&format!(
                 " · snapshot {}×{}",
                 snapshot.width, snapshot.height
             ));
+            if !snapshot.views.is_empty() {
+                summary.push_str(&format!(" over {} views", snapshot.views.len()));
+            }
         }
         summary
     }

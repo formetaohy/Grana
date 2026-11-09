@@ -10,7 +10,7 @@ use grana_object::{
     SampleStatistics, Spot, SpotParams, SpotSet, SurfaceFilter, SurfaceParams,
 };
 use grana_project::{Export, NamedView, Project, Source, ViewState};
-use grana_protocol::Protocol;
+use grana_protocol::{NamedViewSpec, Protocol, ViewSpec};
 use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene};
 use grana_session::{Command, Session};
 use grana_volume::{
@@ -586,11 +586,25 @@ fn replays_a_captured_protocol() {
         spots,
         Some(grana_scene::LabelExport::new("/fixture.ome.zarr", 1, 5)),
     );
-    let protocol = Protocol::capture(&scene, &Measure::new(), None).expect("the scene captures");
+    let view = ViewSpec::of(&view_state(), 0);
+    let named = NamedViewSpec::of("Overview", view.clone());
+    let protocol = Protocol::capture(&scene, &Measure::new(), Some(view), vec![named.clone()])
+        .expect("the scene captures");
     let text = protocol.to_json().expect("the protocol serializes");
     let restored = Protocol::from_json(&text).expect("the protocol parses");
     assert_eq!(restored, protocol);
     assert_eq!(restored.label_images().len(), 1);
+    assert_eq!(restored.views(), [named]);
+    assert_eq!(
+        restored.snapshot().expect("the protocol snapshots").views(),
+        ["Overview"]
+    );
+    let mut broken: serde_json::Value = serde_json::from_str(&text).expect("the protocol is json");
+    broken["snapshot"]["views"][0] = serde_json::Value::String("Missing".to_string());
+    assert!(
+        Protocol::from_json(&broken.to_string()).is_err(),
+        "a snapshot rejects a view the protocol does not carry"
+    );
     let mut staged_scene = Scene::new(Dataset::synthetic("fixture", volume.pyramid()));
     let staged = restored
         .stage(&mut staged_scene)

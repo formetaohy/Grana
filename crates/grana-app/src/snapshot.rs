@@ -107,7 +107,7 @@ fn render(
 ) -> Result<(), String> {
     for _ in 0..ATTEMPTS {
         pump(engine, gpu, channels, scene.drift())?;
-        match engine.render_export(&gpu.device, &gpu.queue, ui, scene) {
+        match engine.render_export(&gpu.device, &gpu.queue, ui, scene, 0) {
             Outcome::Running => {}
             Outcome::Complete { .. } => return Ok(()),
             Outcome::Failed { detail } => return Err(detail),

@@ -197,7 +197,7 @@ pub(super) fn scene_styles(scene: &SceneFrame<'_>) -> u64 {
     hasher.finish()
 }
 
-pub(super) fn channel_style(channels: &[crate::ChannelRow<'_>]) -> u64 {
+pub(super) fn channel_style(channels: &[crate::ChannelRow]) -> u64 {
     let mut key = channels.len() as u64;
     for channel in channels {
         let mut row = (channel.visible as u64) ^ ((channel.opacity.to_bits() as u64) << 1);

@@ -9,8 +9,8 @@ use grana_scene::{
 use crate::{
     AnnotationSpec, BackgroundSpec, ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec,
     ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec, LassoSpec,
-    MaskEditSpec, MaskFilterSpec, MaskSpec, MeasureSpec, MeasuredSpec, MetricSpec, PairSpec,
-    PartSpec, Protocol, ProtocolError, RatioSpec, RegionSpec, RelationSpec, RenderSpec,
+    MaskEditSpec, MaskFilterSpec, MaskSpec, MeasureSpec, MeasuredSpec, MetricSpec, NamedViewSpec,
+    PairSpec, PartSpec, Protocol, ProtocolError, RatioSpec, RegionSpec, RelationSpec, RenderSpec,
     RestoreSpec, SetSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, SurfaceEditSpec,
     TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
@@ -20,6 +20,7 @@ impl Protocol {
         scene: &Scene,
         measure: &Measure,
         view: Option<ViewSpec>,
+        views: Vec<NamedViewSpec>,
     ) -> Result<Self, ProtocolError> {
         let channels = scene
             .dataset
@@ -255,7 +256,10 @@ impl Protocol {
                 mask,
             })
         };
-        let snapshot = Some(SnapshotSpec::of(view.as_ref().and_then(ViewSpec::export)));
+        let snapshot = Some(SnapshotSpec::of(
+            view.as_ref().and_then(ViewSpec::export),
+            views.iter().map(|named| named.name.clone()).collect(),
+        ));
         let drift = (!scene.drift().is_empty()).then(|| DriftSpec {
             channel: channels[scene.drift().channel()].clone(),
             reference: scene.drift().reference(),
@@ -303,6 +307,7 @@ impl Protocol {
             coloc,
             label_images,
             view,
+            views,
             snapshot,
         }
         .checked()

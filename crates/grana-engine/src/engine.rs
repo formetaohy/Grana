@@ -7,6 +7,7 @@ use wgpu::{Device, Queue, TextureFormat, TextureView};
 
 use crate::frame::{self, View};
 use crate::output::{Export, Outcome, Plan, Pose};
+use crate::view::RenderedScene;
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
 pub const SAMPLE_LIMIT: u32 = 8;
@@ -35,12 +36,19 @@ struct Identities {
     markers: Vec<Option<Selection>>,
 }
 
+struct Prepared {
+    revision: u64,
+    time: u32,
+    rendered: RenderedScene,
+}
+
 pub struct Engine {
     renderer: Renderer,
     export: Option<Export>,
     output_message: Option<String>,
     identities: Identities,
     pending_pick: Option<Identities>,
+    prepared: Option<Prepared>,
 }
 
 impl Engine {
@@ -51,6 +59,7 @@ impl Engine {
             output_message: None,
             identities: Identities::default(),
             pending_pick: None,
+            prepared: None,
         }
     }
 
@@ -58,6 +67,7 @@ impl Engine {
         self.renderer.set_dataset(device, pyramid);
         self.identities = Identities::default();
         self.pending_pick = None;
+        self.prepared = None;
     }
 
     pub fn requests_pending(&self) -> bool {
@@ -187,11 +197,13 @@ impl Engine {
         queue: &Queue,
         ui: &mut Ui<A>,
         scene: &Scene,
+        revision: u64,
     ) -> Outcome {
         let Self {
             renderer,
             export,
             output_message,
+            prepared,
             ..
         } = self;
         let Some(job) = export.as_mut() else {
@@ -199,8 +211,31 @@ impl Engine {
                 detail: "the export disappeared".to_string(),
             };
         };
+        let time = scene.time();
+        if prepared
+            .as_ref()
+            .is_none_or(|held| held.revision != revision || held.time != time)
+        {
+            match crate::view::frame(scene, None) {
+                Ok(rendered) => {
+                    *prepared = Some(Prepared {
+                        revision,
+                        time,
+                        rendered,
+                    });
+                }
+                Err(detail) => {
+                    *output_message = Some(detail.clone());
+                    return Outcome::Failed { detail };
+                }
+            }
+        }
+        let rendered = &prepared
+            .as_ref()
+            .expect("the prepared scene is ready")
+            .rendered;
         renderer.set_exporting(true);
-        match job.render(renderer, device, queue, ui, scene) {
+        match job.render(renderer, device, queue, ui, scene, rendered) {
             Outcome::Running => Outcome::Running,
             Outcome::Complete { path } => {
                 *output_message = Some(format!("saved {}", crate::output::name(&path)));

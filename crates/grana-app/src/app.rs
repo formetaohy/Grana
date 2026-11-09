@@ -1093,6 +1093,7 @@ impl App {
                 &surface.gpu.queue,
                 &mut surface.ui,
                 scene,
+                session.revision(),
             )
         };
         self.present_ui();

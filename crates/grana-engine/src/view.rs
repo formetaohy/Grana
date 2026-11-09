@@ -17,8 +17,8 @@ pub struct Lens<'a> {
     pub height: u32,
 }
 
-pub struct RenderedScene<'a> {
-    pub channels: Vec<ChannelRow<'a>>,
+pub struct RenderedScene {
+    pub channels: Vec<ChannelRow>,
     pub styles: Vec<Style>,
     pub layers: Vec<Layer>,
     pub markers: Vec<Marker>,
@@ -28,7 +28,7 @@ pub struct RenderedScene<'a> {
     pub step_scale: f32,
 }
 
-impl RenderedScene<'_> {
+impl RenderedScene {
     pub fn frame(&self) -> SceneFrame<'_> {
         SceneFrame {
             channels: &self.channels,
@@ -41,7 +41,7 @@ impl RenderedScene<'_> {
     }
 }
 
-pub fn frame<'a>(scene: &'a Scene, lens: Option<Lens<'_>>) -> Result<RenderedScene<'a>, String> {
+pub fn frame(scene: &Scene, lens: Option<Lens<'_>>) -> Result<RenderedScene, String> {
     let mut styles = Vec::new();
     let mut layers = Vec::new();
     let mut markers = Vec::new();
@@ -146,7 +146,7 @@ pub fn frame<'a>(scene: &'a Scene, lens: Option<Lens<'_>>) -> Result<RenderedSce
             visible: channel.enabled,
             opacity: channel.opacity,
             window: channel.window,
-            transfer: channel.transfer(),
+            transfer: channel.transfer().clone(),
         })
         .collect();
     Ok(RenderedScene {

@@ -26,7 +26,7 @@ pub(crate) fn draw(
     device: &Device,
     queue: &Queue,
     frame: View<'_>,
-    rendered: &view::RenderedScene<'_>,
+    rendered: &view::RenderedScene,
 ) -> FrameInfo {
     renderer.set_transparent(frame.transparent);
     let scene = rendered.frame();

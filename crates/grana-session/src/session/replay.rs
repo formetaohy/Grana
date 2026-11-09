@@ -21,7 +21,12 @@ impl Session {
             .current_view
             .as_ref()
             .map(|view| ViewSpec::of(view, time));
-        match Protocol::capture(scene, &self.measure, view) {
+        let views = self
+            .views
+            .iter()
+            .map(|named| NamedViewSpec::of(named.name.clone(), ViewSpec::of(&named.view, time)))
+            .collect();
+        match Protocol::capture(scene, &self.measure, view, views) {
             Ok(protocol) => self.set_protocol(protocol),
             Err(error) => self.batch_message = Some(error.to_string()),
         }
@@ -337,6 +342,27 @@ impl Session {
                 timeline: self.timeline.clone(),
                 export: self.export,
             });
+        }
+        if !protocol.views().is_empty() {
+            self.views = protocol
+                .views()
+                .iter()
+                .map(|named| {
+                    NamedView::new(
+                        named.name.clone(),
+                        ViewState {
+                            camera: named.view().camera(),
+                            section: named.view().section(),
+                            split: named.view().split,
+                            timeline: named
+                                .view()
+                                .timeline()
+                                .unwrap_or_else(|| self.timeline.clone()),
+                            export: named.view().export().unwrap_or(self.export),
+                        },
+                    )
+                })
+                .collect();
         }
         let Some(scene) = self.scene.as_ref() else {
             return;

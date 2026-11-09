@@ -9,7 +9,7 @@ use grana_image::{Format, Image, Source};
 use grana_measure::{ColocPair, ColocSeries, Group, Lasso};
 use grana_mesh::Format as MeshFormat;
 use grana_object::Roi;
-use grana_project::{Export, Project, Source as ProjectSource, ViewState};
+use grana_project::{Export, NamedView, Project, Source as ProjectSource, ViewState};
 use grana_scene::{
     Dataset, MaskFilter, Measure, ObjectFrame, ObjectParams, ObjectSetId, Scene, slug,
 };
@@ -21,7 +21,7 @@ use crate::label::Labeling;
 use crate::mesh::{self, Export as MeshExport};
 use crate::run;
 use crate::snapshot::SnapshotRequest;
-use grana_protocol::{Protocol, ProtocolError, Step};
+use grana_protocol::{Protocol, ProtocolError, Step, ViewSpec};
 
 use super::channel;
 use super::quality::{self, Quality};
@@ -337,22 +337,45 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         let snapshotter = task.snapshot.ok_or_else(|| {
             "the protocol requests quality snapshots but this run carries no renderer".to_string()
         })?;
-        let _ = task.events.send(Event::Step {
-            index: task.index,
-            label: format!("rendering the quality snapshot of {}", reader.name()),
-        });
         let time = task.protocol.view().map_or(scene.time(), |view| view.time);
         scene.set_time(time.min(scene.frame_count() - 1));
-        let request = SnapshotRequest {
-            view: task
-                .protocol
-                .view()
-                .map(|_| view_state(task.protocol, &scene)),
-            size: spec.size(),
-            transparent: spec.transparent,
-            time: scene.time(),
-        };
-        snapshotter.snapshot(&channels, &scene, &request, &folder.join(SNAPSHOT))?;
+        if spec.views().is_empty() {
+            let _ = task.events.send(Event::Step {
+                index: task.index,
+                label: format!("rendering the quality snapshot of {}", reader.name()),
+            });
+            let request = SnapshotRequest {
+                view: task
+                    .protocol
+                    .view()
+                    .map(|view| view_state(Some(view), &scene)),
+                size: spec.size(),
+                transparent: spec.transparent,
+                time: scene.time(),
+            };
+            snapshotter.snapshot(&channels, &scene, &request, &folder.join(SNAPSHOT))?;
+        } else {
+            for (name, file) in spec.views().iter().zip(snapshot_files(task.protocol)) {
+                let named = task
+                    .protocol
+                    .named_view(name)
+                    .expect("a checked protocol names its views");
+                let time = named.view().time.min(scene.frame_count() - 1);
+                scene.set_time(time);
+                let _ = task.events.send(Event::Step {
+                    index: task.index,
+                    label: format!("rendering the view {name} of {}", reader.name()),
+                });
+                let request = SnapshotRequest {
+                    view: Some(view_state(Some(named.view()), &scene)),
+                    size: spec.size_for(named.view().export()),
+                    transparent: spec.transparent,
+                    time: scene.time(),
+                };
+                snapshotter.snapshot(&channels, &scene, &request, &folder.join(file))?;
+            }
+            scene.set_time(time.min(scene.frame_count() - 1));
+        }
     }
     if task.project {
         let _ = task.events.send(Event::Step {
@@ -371,8 +394,14 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 path: dataset.path().to_path_buf(),
                 series: dataset.scene(),
             },
-            view_state(task.protocol, &scene),
-            Vec::new(),
+            view_state(task.protocol.view(), &scene),
+            task.protocol
+                .views()
+                .iter()
+                .map(|named| {
+                    NamedView::new(named.name.clone(), view_state(Some(named.view()), &scene))
+                })
+                .collect(),
             fingerprint,
         );
         let file = format!("{}.granaproj", slug(&name));
@@ -1040,6 +1069,19 @@ fn frames_of(scene: &Scene, id: ObjectSetId) -> Vec<Option<Arc<ObjectFrame>>> {
         .collect()
 }
 
+pub(super) fn snapshot_files(protocol: &Protocol) -> Vec<String> {
+    match protocol.snapshot() {
+        Some(snapshot) if !snapshot.views.is_empty() => snapshot
+            .views
+            .iter()
+            .enumerate()
+            .map(|(index, name)| format!("snapshot-{:02}-{}.png", index + 1, slug(name)))
+            .collect(),
+        Some(_) => vec![SNAPSHOT.to_string()],
+        None => Vec::new(),
+    }
+}
+
 pub(super) fn artifacts(
     protocol: &Protocol,
     name: &str,
@@ -1069,7 +1111,7 @@ pub(super) fn artifacts(
         artifacts.push(format!("{}.ome.zarr", slug(name)));
     }
     if protocol.snapshot().is_some() {
-        artifacts.push(SNAPSHOT.to_string());
+        artifacts.extend(snapshot_files(protocol));
     }
     if project {
         artifacts.push(format!("{}.granaproj", slug(name)));
@@ -1089,11 +1131,11 @@ fn dataset_of(format: Option<Format>, name: &str, pyramid: &Pyramid) -> Dataset 
     }
 }
 
-fn view_state(protocol: &Protocol, scene: &Scene) -> ViewState {
+fn view_state(view: Option<&ViewSpec>, scene: &Scene) -> ViewState {
     let duration = (scene.frame_count() as f32 * scene.dataset.frame_interval())
         .clamp(1.0, Timeline::MAX_DURATION);
     let fitted = || Timeline::new(30, duration);
-    match protocol.view() {
+    match view {
         Some(view) => ViewState {
             camera: view.camera(),
             section: view.section(),

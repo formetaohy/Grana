@@ -146,7 +146,7 @@ impl SceneTable {
         device: &Device,
         queue: &Queue,
         pyramid: &Pyramid,
-        rows: &[ChannelRow<'_>],
+        rows: &[ChannelRow],
         frame: FrameData,
         section: SectionData,
     ) {
@@ -165,8 +165,8 @@ impl SceneTable {
             );
             let range = pyramid.channels()[index].intensity();
             let (start, inverse) = window(range, row.window);
-            if self.transfers[index].as_ref() != Some(row.transfer) {
-                self.write_transfer(queue, index, row.transfer);
+            if self.transfers[index].as_ref() != Some(&row.transfer) {
+                self.write_transfer(queue, index, &row.transfer);
                 self.transfers[index] = Some(row.transfer.clone());
             }
             let opaque = self.thresholds[index];

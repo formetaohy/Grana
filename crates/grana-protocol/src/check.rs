@@ -512,8 +512,27 @@ impl Protocol {
         if let Some(view) = &self.view {
             view.checked()?;
         }
-        if let Some(snapshot) = self.snapshot {
+        for (index, view) in self.views.iter().enumerate() {
+            view.checked()?;
+            if self.views[..index]
+                .iter()
+                .any(|other| other.name == view.name)
+            {
+                return Err(ProtocolError::Invalid(format!(
+                    "the named view {} appears twice",
+                    view.name
+                )));
+            }
+        }
+        if let Some(snapshot) = &self.snapshot {
             snapshot.checked()?;
+            for name in &snapshot.views {
+                if self.named_view(name).is_none() {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the snapshot renders the missing view {name}"
+                    )));
+                }
+            }
         }
         Ok(self)
     }

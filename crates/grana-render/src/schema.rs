@@ -84,11 +84,11 @@ impl Style {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ChannelRow<'a> {
+pub struct ChannelRow {
     pub visible: bool,
     pub opacity: f32,
     pub window: Intensity,
-    pub transfer: &'a TransferFunction,
+    pub transfer: TransferFunction,
 }
 
 #[derive(Clone)]
@@ -100,7 +100,7 @@ pub struct Layer {
 }
 
 pub struct SceneFrame<'a> {
-    pub channels: &'a [ChannelRow<'a>],
+    pub channels: &'a [ChannelRow],
     pub shading: Shading,
     pub step_scale: f32,
     pub styles: &'a [Style],

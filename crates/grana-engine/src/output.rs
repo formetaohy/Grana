@@ -180,14 +180,11 @@ impl Export {
         queue: &Queue,
         ui: &mut Ui<A>,
         scene: &Scene,
+        rendered: &crate::view::RenderedScene,
     ) -> Outcome {
         let pose = self.poses[self.frame];
         let camera = frame::restored_camera(&pose.camera);
         let section = frame::restored_section(&pose.section);
-        let rendered = match crate::view::frame(scene, None) {
-            Ok(rendered) => rendered,
-            Err(detail) => return Outcome::Failed { detail },
-        };
         let info = frame::draw(
             renderer,
             device,
@@ -207,7 +204,7 @@ impl Export {
                 assured: true,
                 coarsen: self.coarsen,
             },
-            &rendered,
+            rendered,
         );
         self.attempts += 1;
         if info.truncated && !self.truncated {

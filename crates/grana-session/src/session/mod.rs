@@ -49,7 +49,7 @@ use grana_pipeline::run::DetectRequest;
 use grana_pipeline::{
     Batch, BatchEvent, BatchPoll, Event, Outcome, Plan as BatchPlan, SnapshotFactory,
 };
-use grana_protocol::{Protocol, Step, ViewSpec};
+use grana_protocol::{NamedViewSpec, Protocol, Step, ViewSpec};
 
 const MAX_IN_FLIGHT: usize = 8192;
 

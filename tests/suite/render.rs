@@ -66,10 +66,7 @@ fn texture(gpu: &Gpu, side: u32) -> wgpu::Texture {
     })
 }
 
-fn channels<'a>(
-    pyramid: &Pyramid,
-    transfers: &'a [TransferFunction],
-) -> Vec<grana_render::ChannelRow<'a>> {
+fn channels(pyramid: &Pyramid, transfers: &[TransferFunction]) -> Vec<grana_render::ChannelRow> {
     pyramid
         .channels()
         .iter()
@@ -78,7 +75,7 @@ fn channels<'a>(
             visible: true,
             opacity: 1.0,
             window: channel.window(),
-            transfer,
+            transfer: transfer.clone(),
         })
         .collect()
 }
@@ -183,7 +180,7 @@ fn background(
             visible: false,
             opacity: row.opacity,
             window: row.window,
-            transfer: row.transfer,
+            transfer: row.transfer.clone(),
         })
         .collect::<Vec<_>>();
     let scene = SceneFrame {
@@ -338,7 +335,7 @@ fn renders_a_rotated_placement() {
                 channel.window().min(),
                 channel.window().max() * 2.0,
             ),
-            transfer,
+            transfer: transfer.clone(),
         })
         .collect::<Vec<_>>();
     let world = Vec3::from(level.world_extent());
@@ -448,7 +445,7 @@ fn reveals_a_section_plane() {
                 channel.window().min(),
                 channel.window().max() * 2.0,
             ),
-            transfer,
+            transfer: transfer.clone(),
         })
         .collect::<Vec<_>>();
     let world = Vec3::from(volume.world_extent());
@@ -590,7 +587,7 @@ fn projects_a_slab_through_the_section() {
                 channel.window().min(),
                 channel.window().max() * 2.0,
             ),
-            transfer,
+            transfer: transfer.clone(),
         })
         .collect::<Vec<_>>();
     let world = Vec3::from(volume.world_extent());
@@ -938,7 +935,7 @@ fn assured_pixels(
     gpu: &Gpu,
     pyramid: &Pyramid,
     volume: &Volume,
-    channels: &[grana_render::ChannelRow<'_>],
+    channels: &[grana_render::ChannelRow],
     camera: &Camera,
     section: &SectionCamera,
 ) -> Vec<[u8; 4]> {

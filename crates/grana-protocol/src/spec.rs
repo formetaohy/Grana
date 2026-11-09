@@ -125,6 +125,13 @@ pub struct ColorSpec {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct NamedViewSpec {
+    pub name: String,
+    pub view: ViewSpec,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ViewSpec {
     pub camera: CameraSpec,
     pub section: SectionSpec,
@@ -144,13 +151,15 @@ pub struct ExportSpec {
     pub transparent: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SnapshotSpec {
     pub width: u32,
     pub height: u32,
     #[serde(default)]
     pub transparent: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1750,12 +1759,39 @@ impl ViewSpec {
     }
 }
 
+impl NamedViewSpec {
+    pub fn of(name: impl Into<String>, view: ViewSpec) -> Self {
+        let name = name.into();
+        Self {
+            name: name.trim().to_string(),
+            view,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn view(&self) -> &ViewSpec {
+        &self.view
+    }
+
+    pub(super) fn checked(&self) -> Result<(), ProtocolError> {
+        if self.name.trim().is_empty() {
+            return Err(ProtocolError::Invalid(
+                "a named view carries a name".to_string(),
+            ));
+        }
+        self.view.checked()
+    }
+}
+
 impl SnapshotSpec {
     pub const WIDTH: u32 = 1600;
     pub const MIN: u32 = 64;
     pub const MAX: u32 = 16384;
 
-    pub fn of(export: Option<Export>) -> Self {
+    pub fn of(export: Option<Export>, views: Vec<String>) -> Self {
         let (width, transparent) = match export {
             Some(export) if export.width >= Self::MIN => (export.width, export.transparent),
             _ => (Self::WIDTH, false),
@@ -1764,14 +1800,30 @@ impl SnapshotSpec {
             width,
             height: (width * 5 / 8).max(Self::MIN),
             transparent,
+            views,
         }
     }
 
-    pub fn size(self) -> [u32; 2] {
+    pub fn size(&self) -> [u32; 2] {
         [self.width, self.height]
     }
 
-    pub(super) fn checked(self) -> Result<(), ProtocolError> {
+    pub fn views(&self) -> &[String] {
+        &self.views
+    }
+
+    pub fn size_for(&self, export: Option<Export>) -> [u32; 2] {
+        match export {
+            Some(export) if (Self::MIN..=Self::MAX).contains(&export.width) => {
+                let height = (u64::from(export.width) * u64::from(self.height)
+                    / u64::from(self.width.max(1))) as u32;
+                [export.width, height.clamp(Self::MIN, Self::MAX)]
+            }
+            _ => [self.width, self.height],
+        }
+    }
+
+    pub(super) fn checked(&self) -> Result<(), ProtocolError> {
         if !(Self::MIN..=Self::MAX).contains(&self.width)
             || !(Self::MIN..=Self::MAX).contains(&self.height)
         {
@@ -1780,6 +1832,18 @@ impl SnapshotSpec {
                 Self::MIN,
                 Self::MAX
             )));
+        }
+        for (index, view) in self.views.iter().enumerate() {
+            if view.trim().is_empty() {
+                return Err(ProtocolError::Invalid(
+                    "a snapshot names a non empty view".to_string(),
+                ));
+            }
+            if self.views[..index].iter().any(|other| other == view) {
+                return Err(ProtocolError::Invalid(format!(
+                    "the snapshot renders the view {view} twice"
+                )));
+            }
         }
         Ok(())
     }

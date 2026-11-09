@@ -4,7 +4,7 @@ use grana_raster::{Cell, Group, Raster, Row, Sheet, Table};
 use grana_text::Fonts;
 
 use super::quality::Comparison;
-use super::{Plan, Row as ResultRow, SNAPSHOT};
+use super::{Plan, Row as ResultRow};
 
 pub(super) const SHEET: &str = "sheet.png";
 
@@ -46,8 +46,13 @@ pub(super) fn write(
         };
         let dataset = &plan.datasets[index];
         let folder = plan.output.join(dataset.folder());
-        let path = folder.join(SNAPSHOT);
-        let Ok(image) = grana_raster::read(&path) else {
+        let Some(file) = super::pipeline::snapshot_files(&plan.protocol)
+            .into_iter()
+            .next()
+        else {
+            continue;
+        };
+        let Ok(image) = grana_raster::read(&folder.join(file)) else {
             continue;
         };
         entries.push(Entry {
