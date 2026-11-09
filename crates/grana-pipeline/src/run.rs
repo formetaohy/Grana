@@ -4,13 +4,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::channels::Channels;
 use grana_analysis::{
-    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, RelationRun, SeedPolicy, Sources,
-    SpotScanner, SurfaceBuilder, TrackBuilder, coloc_levels, filament_level, relate_frames,
-    spot_level, surface_level,
+    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, ObjectColocScan, RelationRun,
+    SeedPolicy, Sources, SpotScanner, SurfaceBuilder, TrackBuilder, coloc_levels, filament_level,
+    relate_frames, spot_level, surface_level,
 };
 use grana_geometry::GeometryStore;
-use grana_measure::{ColocPair, ColocSettings};
-use grana_object::Roi;
+use grana_measure::{ColocPair, ColocSettings, ObjectColoc, ObjectColocValue};
+use grana_object::{LabelRaster, Roi};
 use grana_scene::{Drift, ObjectFrame, ObjectParams};
 use grana_volume::VoxelData;
 
@@ -363,6 +363,139 @@ pub fn coloc(
     sink(Event::Coloc {
         series: Box::new(series),
         region,
+    });
+    sink(Event::Done);
+    Ok(())
+}
+
+pub struct ObjectColocRequest {
+    pair: ColocPair,
+    region: grana_volume::Region,
+    frames: Vec<Option<Arc<ObjectFrame>>>,
+    drift: Drift,
+    workers: usize,
+}
+
+impl ObjectColocRequest {
+    pub fn new(
+        pair: ColocPair,
+        region: grana_volume::Region,
+        frames: Vec<Option<Arc<ObjectFrame>>>,
+        drift: Drift,
+        workers: usize,
+    ) -> Self {
+        Self {
+            pair,
+            region,
+            frames,
+            drift,
+            workers,
+        }
+    }
+}
+
+pub fn object_coloc(
+    reader: &Channels,
+    request: ObjectColocRequest,
+    cancel: &AtomicBool,
+    sink: &mut dyn FnMut(Event),
+) -> Result<(), String> {
+    let ObjectColocRequest {
+        pair,
+        region,
+        frames,
+        drift,
+        workers,
+    } = request;
+    let pyramid = reader.pyramid();
+    let channels = pyramid.channel_count();
+    if pair.a() >= channels || pair.b() >= channels {
+        return Err(format!(
+            "the dataset has {channels} channels but the pair names {} and {}",
+            pair.a(),
+            pair.b()
+        ));
+    }
+    let intensities = [pair.a(), pair.b()].map(|channel| pyramid.channels()[channel].intensity());
+    if intensities.iter().any(|intensity| intensity.span() <= 0.0) {
+        return Err("the selected channels have no intensity range to colocalize".to_string());
+    }
+    if region.enabled() && region.voxel_range(pyramid.level(0)).is_none() {
+        return Err("the region does not overlap the dataset".to_string());
+    }
+    let totals = pyramid.frame_count();
+    if frames.len() != totals as usize {
+        return Err(format!(
+            "the object masks cover {} frames and the dataset holds {totals}",
+            frames.len()
+        ));
+    }
+    let level_index = grana_analysis::object_coloc_level(pyramid, totals, region, &|time| {
+        frames
+            .get(time as usize)
+            .and_then(Option::as_ref)
+            .map_or_else(Vec::new, |frame| frame.anchors())
+    });
+    let info = pyramid.level(level_index);
+    let workers = grana_analysis::workers(workers);
+    let window = frame_window(totals, workers, FRAME_WORKERS);
+    let share = (workers / window).max(1);
+    let mut collected: Vec<Option<Vec<ObjectColocValue>>> = vec![None; totals as usize];
+    let completed = pipeline(
+        totals,
+        window,
+        cancel,
+        || (),
+        |(), time, report| {
+            let Some(frame) = frames.get(time as usize).and_then(Option::as_ref) else {
+                return Ok(None);
+            };
+            let objects = frame.object_count();
+            if objects == 0 {
+                return Ok(None);
+            }
+            let anchors = frame.anchors();
+            let scan = ObjectColocScan::new(
+                pair,
+                level_index,
+                info,
+                region,
+                intensities,
+                objects,
+                &anchors,
+            );
+            let shape = frame.shape().map_err(|error| error.to_string())?;
+            let raster = LabelRaster::new(&shape, info);
+            let labels = |ranges: &[std::ops::Range<u32>; 3]| -> Result<Vec<u16>, String> {
+                Ok(raster.render(ranges[0].clone(), ranges[1].clone(), ranges[2].clone()))
+            };
+            let read = |time: u32, channel: usize, ranges: &[std::ops::Range<u32>; 3]| {
+                reader
+                    .read_region(time, level_index, channel, ranges, drift.offset(time))
+                    .map_err(String::from)
+            };
+            let mut notify = |done: usize, blocks: usize| report(done, blocks);
+            let values = scan.slice(share, cancel, &labels, &read, time, &mut notify)?;
+            Ok(values)
+        },
+        &mut |notice| match notice {
+            Notice::Progress { frame, done, total } => sink(Event::Progress {
+                time: frame,
+                done,
+                total,
+            }),
+            Notice::Frame { frame, value } => collected[frame as usize] = Some(value),
+        },
+    )?;
+    if !completed {
+        return Ok(());
+    }
+    let frames = collected
+        .into_iter()
+        .map(Option::unwrap_or_default)
+        .collect::<Vec<_>>();
+    sink(Event::ObjectColoc {
+        coloc: Box::new(ObjectColoc::new(pair, level_index, frames)),
     });
     sink(Event::Done);
     Ok(())

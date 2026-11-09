@@ -15,10 +15,10 @@ pub use spec::{
     AnchorSpec, AnnotationSpec, BackgroundSpec, CameraSpec, ChannelSpec, ClassifierSpec,
     ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec,
     EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec, MaskEditSpec, MaskFilterSpec,
-    MaskSpec, MeasureSpec, MeasuredSpec, MetricSpec, NodeSpec, PartSpec, RatioSpec, RegionSpec,
-    RelationSpec, RemovalSpec, RenderSpec, RestoreSpec, SectionSpec, SetSpec, ShadingSpec,
-    SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec, SurfaceEditSpec, TimelineSpec,
-    TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    MaskSpec, MeasureSpec, MeasuredSpec, MetricSpec, NodeSpec, PairSpec, PartSpec, RatioSpec,
+    RegionSpec, RelationSpec, RemovalSpec, RenderSpec, RestoreSpec, SectionSpec, SetSpec,
+    ShadingSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, StopSpec, SurfaceEditSpec,
+    TimelineSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;
@@ -233,6 +233,9 @@ impl Protocol {
                         "{text} · classifier on {} measurements",
                         classifier.features.len()
                     );
+                }
+                if let Some(pair) = &set.object_coloc {
+                    text = format!("{text} · colocalizes {} with {}", pair.a, pair.b);
                 }
                 if let Some(mask) = &set.mask {
                     text = format!("{text} within {}", self.name_of(mask).unwrap_or(mask));

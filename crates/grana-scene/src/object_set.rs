@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use grana_measure::{
-    ChildField, ChildMetric, Classifier, Measurement, RelationField, TrackMeasurement,
+    ChildField, ChildMetric, Classifier, Measurement, ObjectColoc, RelationField, TrackMeasurement,
 };
 use grana_object::TrackParams;
 use grana_object::match_anchor;
@@ -83,6 +83,7 @@ pub struct ObjectSet {
     object_coloring: Coloring<ObjectColor>,
     track_coloring: Coloring<TrackColor>,
     classifier: Option<Classifier>,
+    object_coloc: Option<ObjectColoc>,
     track_bounds: Option<Extent>,
     revision: u64,
     document: u64,
@@ -131,6 +132,7 @@ impl ObjectSet {
             object_coloring: Coloring::new(),
             track_coloring: Coloring::new(),
             classifier: None,
+            object_coloc: None,
             track_bounds: None,
             revision: 1,
             document: 1,
@@ -283,6 +285,65 @@ impl ObjectSet {
 
     pub fn classifier(&self) -> Option<&Classifier> {
         self.classifier.as_ref()
+    }
+
+    pub fn object_coloc(&self) -> Option<&ObjectColoc> {
+        self.object_coloc.as_ref()
+    }
+
+    pub(crate) fn set_object_coloc(&mut self, coloc: Option<ObjectColoc>, stamp: u64) -> bool {
+        if self.object_coloc == coloc {
+            return false;
+        }
+        let pair = coloc.as_ref().map(ObjectColoc::pair);
+        self.object_coloc = coloc;
+        match pair {
+            Some(pair) => {
+                if matches!(
+                    self.object_coloring.metric(),
+                    Some(ObjectColor::Coloc { pair: held, .. }) if held != pair
+                ) {
+                    self.object_coloring.set_metric(None);
+                }
+                if matches!(
+                    self.label,
+                    Some(ObjectColor::Coloc { pair: held, .. }) if held != pair
+                ) {
+                    self.label = None;
+                }
+            }
+            None => {
+                self.clear_coloc_metrics();
+            }
+        }
+        self.revision = stamp;
+        self.document += 1;
+        true
+    }
+
+    fn clear_coloc_metrics(&mut self) -> bool {
+        let mut cleared = false;
+        if matches!(
+            self.object_coloring.metric(),
+            Some(ObjectColor::Coloc { .. })
+        ) {
+            self.object_coloring.set_metric(None);
+            cleared = true;
+        }
+        if matches!(self.label, Some(ObjectColor::Coloc { .. })) {
+            self.label = None;
+            cleared = true;
+        }
+        cleared
+    }
+
+    fn discard_object_coloc(&mut self) -> bool {
+        if self.object_coloc.take().is_none() {
+            return false;
+        }
+        self.clear_coloc_metrics();
+        self.document += 1;
+        true
     }
 
     pub(crate) fn set_classifier(&mut self, classifier: Option<Classifier>, stamp: u64) -> bool {
@@ -859,6 +920,7 @@ impl ObjectSet {
             object_color: self.object_coloring.state(),
             track_color: self.track_coloring.state(),
             classifier: self.classifier.as_ref().map(Classifier::state),
+            object_coloc: self.object_coloc.clone(),
             visibility: self.visibility.clone(),
             seeds: self.seeds.clone(),
             frames: self.frames.iter().map(|slot| slot.data.clone()).collect(),
@@ -899,6 +961,7 @@ impl ObjectSet {
             object_color,
             track_color,
             classifier,
+            object_coloc,
             visibility,
             seeds,
             frames,
@@ -948,6 +1011,7 @@ impl ObjectSet {
                 .map(Classifier::restore)
                 .transpose()
                 .expect("a restored classifier keeps its coefficients"),
+            object_coloc: None,
             track_bounds: None,
             revision: 1,
             document: 1,
@@ -999,6 +1063,23 @@ impl ObjectSet {
             if let Some(frame) = frame {
                 set.install_shared(time as u32, frame, take_stamp(stamp));
             }
+        }
+        if let Some(coloc) = object_coloc {
+            assert_eq!(
+                coloc.frames().len(),
+                frame_count,
+                "an object colocalization state covers every frame of its set"
+            );
+            assert!(
+                coloc
+                    .frames()
+                    .iter()
+                    .zip(&set.frames)
+                    .all(|(values, slot)| values.len()
+                        == slot.data.as_deref().map_or(0, ObjectFrame::object_count)),
+                "an object colocalization state measures every object of its set"
+            );
+            set.object_coloc = Some(coloc);
         }
         set.restore_hidden(hidden);
         if applied {
@@ -1445,6 +1526,7 @@ impl ObjectSet {
         objects: &[usize],
         stamp: u64,
     ) {
+        self.discard_object_coloc();
         let empty = pruned.as_ref().is_none_or(ObjectFrame::is_empty);
         let mut visibility = match &self.visibility {
             Visibility::All => Visibility::All,
@@ -1518,6 +1600,13 @@ impl ObjectSet {
                 )
             })
             .collect::<Vec<_>>();
+        let mut object_coloring = self.object_coloring.clone();
+        if matches!(object_coloring.metric(), Some(ObjectColor::Coloc { .. })) {
+            object_coloring.set_metric(None);
+        }
+        let label = self
+            .label
+            .filter(|metric| !matches!(metric, ObjectColor::Coloc { .. }));
         let mut duplicate = Self {
             id,
             key,
@@ -1528,7 +1617,7 @@ impl ObjectSet {
             color,
             visible: self.visible,
             labels: self.labels,
-            label: self.label,
+            label,
             hidden: self.hidden.clone(),
             opacity: self.opacity,
             voxel: self.voxel,
@@ -1543,9 +1632,10 @@ impl ObjectSet {
                 })
                 .collect(),
             frame_bounds: vec![None; self.frames.len()],
-            object_coloring: self.object_coloring.clone(),
+            object_coloring,
             track_coloring: self.track_coloring.clone(),
             classifier: self.classifier.clone(),
+            object_coloc: None,
             track_bounds: None,
             revision: 1,
             document: 1,
@@ -1624,7 +1714,9 @@ impl ObjectSet {
             layer
         });
         let mut object_coloring = self.object_coloring.clone();
-        if object_coloring.metric().and_then(ObjectColor::target) == Some(other.id) {
+        if object_coloring.metric().and_then(ObjectColor::target) == Some(other.id)
+            || matches!(object_coloring.metric(), Some(ObjectColor::Coloc { .. }))
+        {
             object_coloring.set_metric(None);
         }
         let mut track_coloring = self.track_coloring.clone();
@@ -1668,6 +1760,9 @@ impl ObjectSet {
         }
         let seeds = self.seeds.clone();
         let hidden = self.combined_hidden(other, &offsets, &frames);
+        let label = self
+            .label
+            .filter(|metric| !matches!(metric, ObjectColor::Coloc { .. }));
         let mut merged = Self {
             id: self.id,
             key: self.key.clone(),
@@ -1678,7 +1773,7 @@ impl ObjectSet {
             color: self.color,
             visible: self.visible,
             labels: self.labels,
-            label: self.label,
+            label,
             hidden,
             opacity: self.opacity,
             voxel: self.voxel,
@@ -1689,6 +1784,7 @@ impl ObjectSet {
             object_coloring,
             track_coloring,
             classifier: self.classifier.clone(),
+            object_coloc: None,
             track_bounds: None,
             revision: stamp,
             document: self.document + 1,
@@ -1800,6 +1896,7 @@ impl ObjectSet {
             self.kind,
             "an object frame matches its object set"
         );
+        self.discard_object_coloc();
         let slot = self
             .frames
             .get_mut(time as usize)
@@ -1826,6 +1923,7 @@ impl ObjectSet {
                 "an object frame matches its object set"
             );
         }
+        self.discard_object_coloc();
         let slot = self
             .frames
             .get_mut(time as usize)
@@ -1840,6 +1938,7 @@ impl ObjectSet {
     }
 
     pub(crate) fn clear(&mut self, stamp: u64) {
+        self.discard_object_coloc();
         for slot in &mut self.frames {
             slot.data = None;
         }

@@ -6,7 +6,7 @@ use grana_measure::{
 };
 use grana_measure::{
     ColocCost, ColocFrame, ColocMoments, ColocPair, ColocSeries, ColocSeriesInfo, ColocSettings,
-    ColocSignificance, ColocThresholds,
+    ColocSignificance, ColocThresholds, ObjectColoc, ObjectColocValue,
 };
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, RelationFrame,
@@ -415,6 +415,7 @@ impl Encode for SetState {
         self.object_color.encode(writer);
         self.track_color.encode(writer);
         self.classifier.encode(writer);
+        self.object_coloc.encode(writer);
         self.visibility.encode(writer);
         self.seeds.encode(writer);
         self.frames.encode(writer);
@@ -781,6 +782,11 @@ impl Encode for ObjectColor {
                 field.encode(writer);
             }
             Self::Score => writer.u8(3),
+            Self::Coloc { pair, metric } => {
+                writer.u8(4);
+                pair.encode(writer);
+                writer.u8(metric.index());
+            }
         }
     }
 }
@@ -1164,6 +1170,23 @@ impl Encode for ColocMoments {
         for value in self.sums() {
             writer.f64(value);
         }
+    }
+}
+
+impl Encode for ObjectColocValue {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.u64(self.voxels());
+        for value in self.sums() {
+            writer.f64(value);
+        }
+    }
+}
+
+impl Encode for ObjectColoc {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        self.pair().encode(writer);
+        writer.count(self.level());
+        self.frames().encode(writer);
     }
 }
 

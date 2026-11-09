@@ -607,6 +607,7 @@ pub fn progress_caption(
         | grana_scene::Job::Recut(_)
         | grana_scene::Job::Relation { .. }
         | grana_scene::Job::Coloc
+        | grana_scene::Job::ObjectColoc(_)
         | grana_scene::Job::Drift => "frames",
         grana_scene::Job::Calibrate => "beads",
     };
@@ -620,6 +621,7 @@ pub fn progress_caption(
         | grana_scene::Job::Track(_)
         | grana_scene::Job::Relation { .. }
         | grana_scene::Job::Coloc
+        | grana_scene::Job::ObjectColoc(_)
         | grana_scene::Job::Drift
         | grana_scene::Job::Calibrate => String::new(),
     };

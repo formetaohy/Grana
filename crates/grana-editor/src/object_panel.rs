@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_measure::{Group, Measurement};
+use grana_measure::{ColocMetric, Group, Measurement};
 use grana_scene::{
     Item, Job, ObjectColor, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, ParamField,
     ParamScale, Provenance, RelationField, SEGMENT_FIELDS, Scene,
@@ -614,6 +614,31 @@ fn object_menu<'a>(
             "Mask Channel",
             Message::Command(Command::AddMaskChannel { set: id }),
         ));
+        rows.push(action_row(
+            ctx,
+            &format!("object.{}.menu.coloc", id.raw()),
+            Icon::Target,
+            "Colocalize Objects",
+            Message::Command(Command::ComputeObjectColoc(id)),
+        ));
+    }
+    if view::progress(state.jobs, Job::ObjectColoc(id)).is_some() {
+        rows.push(action_row(
+            ctx,
+            &format!("object.{}.menu.cancel.coloc", id.raw()),
+            Icon::Close,
+            "Cancel Object Colocalization",
+            Message::Command(Command::CancelObjectColoc(id)),
+        ));
+    }
+    if set.object_coloc().is_some() {
+        rows.push(action_row(
+            ctx,
+            &format!("object.{}.menu.clear.coloc", id.raw()),
+            Icon::Reset,
+            "Clear Object Colocalization",
+            Message::Command(Command::ClearObjectColoc(id)),
+        ));
     }
     if kind == ObjectKind::Surfaces && set.detected() > 0 && set.provenance().editing().is_none() {
         rows.push(action_row(
@@ -883,6 +908,28 @@ fn label_metrics(scene: &Scene, set: &ObjectSet) -> Vec<(Option<ObjectColor>, St
         options.push((Some(ObjectColor::Score), "Classifier score".to_string()));
     }
     options
+}
+
+fn coloc_metrics(set: &ObjectSet, channels: &[String]) -> Vec<(ObjectColor, String)> {
+    let Some(coloc) = set.object_coloc() else {
+        return Vec::new();
+    };
+    let pair = coloc.pair();
+    let name = |channel: usize| {
+        channels
+            .get(channel)
+            .map_or_else(|| channel.to_string(), Clone::clone)
+    };
+    let (a, b) = (name(pair.a()), name(pair.b()));
+    ColocMetric::ALL
+        .into_iter()
+        .map(|metric| {
+            (
+                ObjectColor::Coloc { pair, metric },
+                format!("{} {a}/{b}", metric.label()),
+            )
+        })
+        .collect()
 }
 
 fn child_metrics(scene: &Scene, set: &ObjectSet, names: &[String]) -> Vec<(ObjectColor, String)> {
@@ -1519,6 +1566,7 @@ fn appearance<'a>(
         }
     }
     metrics.extend(child_metrics(state.scene, set, &names));
+    metrics.extend(coloc_metrics(set, &names));
     if set.classifier().is_some() {
         metrics.push((ObjectColor::Score, "Classifier score".to_string()));
     }

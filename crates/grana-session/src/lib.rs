@@ -17,7 +17,8 @@ pub use grana_object::{MaskMode, MaskTool, ObjectAnchor, match_anchor};
 pub use grana_project::Export;
 pub use grana_scene::slug;
 pub use job::{
-    Analysis, calibration, coloc, detect, drift, import, interop, recut, relation, segment, track,
+    Analysis, calibration, coloc, detect, drift, import, interop, object_coloc, recut, relation,
+    segment, track,
 };
 pub use loader::Loader;
 pub use session::{Effects, Session};

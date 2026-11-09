@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use grana_display::Extent;
-use grana_measure::{Child, RelationField, UNASSIGNED};
+use grana_measure::{Child, ObjectColoc, RelationField, UNASSIGNED};
 use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackSet};
 
 use crate::color::ObjectColor;
@@ -683,6 +683,7 @@ impl Objects {
         if let Some(set) = self.get_mut(id) {
             set.clear(stamp);
         }
+        self.refresh_bounds(id, None);
         self.refresh_child_bounds(id, None);
     }
 
@@ -945,6 +946,18 @@ impl Objects {
                 let child = self.child(id, target, time)?;
                 Some(child.values(frame.object_count(), field))
             }
+            ObjectColor::Coloc { pair, metric } => {
+                let coloc = set.object_coloc().filter(|coloc| coloc.pair() == pair)?;
+                Some(
+                    (0..frame.object_count())
+                        .map(|object| {
+                            coloc
+                                .metric(time, object, metric)
+                                .map_or(f32::NAN, |value| value as f32)
+                        })
+                        .collect(),
+                )
+            }
             ObjectColor::Score => {
                 let classifier = set.classifier()?;
                 Some(
@@ -966,6 +979,18 @@ impl Objects {
             return false;
         };
         let changed = set.set_classifier(classifier, stamp);
+        if changed {
+            self.refresh_bounds(id, None);
+        }
+        changed
+    }
+
+    pub(crate) fn set_object_coloc(&mut self, id: ObjectSetId, coloc: Option<ObjectColoc>) -> bool {
+        let stamp = take_stamp(&mut self.stamp);
+        let Some(set) = self.get_mut(id) else {
+            return false;
+        };
+        let changed = set.set_object_coloc(coloc, stamp);
         if changed {
             self.refresh_bounds(id, None);
         }
@@ -1025,6 +1050,12 @@ impl Objects {
                 set.classifier().is_some(),
                 "a classifier score colors a classified object set"
             ),
+            Some(ObjectColor::Coloc { pair, .. }) => {
+                assert!(
+                    pair.a() < set.measured_channels() && pair.b() < set.measured_channels(),
+                    "an object colocalization names channels of its set"
+                );
+            }
             Some(ObjectColor::Child { target, field }) => {
                 assert_ne!(
                     target, id,
@@ -1090,6 +1121,7 @@ impl Objects {
                 let values = self.child(id, target, time)?.values(parents, field);
                 extent_of(values)
             }
+            ObjectColor::Coloc { .. } => extent_of(self.metric_values(id, metric, time)?),
             ObjectColor::Score => {
                 let classifier = set.classifier()?;
                 let frame = set.frame(time)?;

@@ -222,6 +222,42 @@ impl Protocol {
             if let Some(classifier) = &set.classifier {
                 classifier.checked(&set.name)?;
             }
+            if let Some(pair) = &set.object_coloc {
+                for name in [&pair.a, &pair.b] {
+                    validate(name, "an object colocalization channel")?;
+                    if !self.channels.is_empty()
+                        && !self.channels.iter().any(|channel| channel.name == *name)
+                    {
+                        return Err(ProtocolError::Invalid(format!(
+                            "{} colocalizes the missing channel {name}",
+                            set.name
+                        )));
+                    }
+                }
+                if pair.a == pair.b {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{} colocalizes one channel with itself",
+                        set.name
+                    )));
+                }
+            }
+            if let Some(color) = &set.color_by {
+                match (&color.pair, &set.object_coloc) {
+                    (Some(pair), Some(measured)) if pair != measured => {
+                        return Err(ProtocolError::Invalid(format!(
+                            "{} is colored by a colocalization it does not measure",
+                            set.name
+                        )));
+                    }
+                    (Some(_), None) => {
+                        return Err(ProtocolError::Invalid(format!(
+                            "{} is colored by an object colocalization it does not measure",
+                            set.name
+                        )));
+                    }
+                    _ => {}
+                }
+            }
             if let Some(color) = &set.color_by {
                 color.checked(&set.name)?;
                 if color.key.as_deref() == Some(grana_measure::SCORE_KEY)

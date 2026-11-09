@@ -715,6 +715,168 @@ fn round_trips_a_surface_project() {
     assert_eq!(loaded, project);
 }
 
+#[test]
+fn colocalizes_every_object_and_carries_it_through_project_and_protocol() {
+    let extent = Extent::new(24, 24, 8);
+    let spacing = Spacing::new(1.0, 1.0, 1.0);
+    let spheres = [([7.0, 12.0, 4.0], 3.0), ([17.0, 12.0, 4.0], 3.0)];
+    let mut values = vec![0u16; extent.voxel_count() as usize];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let point = [x as f32, y as f32, z as f32];
+                let inside = spheres.iter().any(|(centre, radius)| {
+                    (0..3)
+                        .map(|axis| (point[axis] - centre[axis]).powi(2))
+                        .sum::<f32>()
+                        <= radius * radius
+                });
+                if inside {
+                    values[extent.index(x, y, z) as usize] = HIGH / 2 + (x as u16) * 400;
+                }
+            }
+        }
+    }
+    let channel = |name: &str, tint: [f32; 3]| {
+        grana_volume::Channel::new(name, tint, VoxelData::U16(values.clone()))
+    };
+    let volume = grana_volume::Volume::new(
+        extent,
+        spacing,
+        vec![
+            channel("green", [0.0, 1.0, 0.0]),
+            channel("red", [1.0, 0.0, 0.0]),
+        ],
+    );
+    let mut session = Session::new();
+    session.open_series("coloc", VolumeSeries::new(vec![volume], 1.0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: ObjectParams::Surfaces(SurfaceParams::new(
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )),
+    });
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    assert_eq!(objects(&session, set), 2, "two nuclei are detected");
+    session.execute(Command::ComputeObjectColoc(set));
+    settle(&mut session);
+    let pair = grana_measure::ColocPair::new(0, 1);
+    let object = session
+        .scene()
+        .expect("the series opens")
+        .objects
+        .get(set)
+        .expect("the object set exists");
+    let coloc = object.object_coloc().expect("the objects colocalize");
+    assert_eq!(coloc.pair(), pair);
+    assert_eq!(
+        coloc.metric(0, 0, grana_measure::ColocMetric::Pearson),
+        Some(1.0),
+        "identical channels correlate perfectly inside an object"
+    );
+    let scene = session.scene().expect("the series opens");
+    let table = scene
+        .table(
+            set,
+            grana_measure::Group::Object,
+            grana_measure::Aggregate::Mean,
+        )
+        .expect("the measurement table builds");
+    let pearson = table
+        .column("pearson_green_red")
+        .expect("the table carries the pearson column");
+    let overlap = table
+        .column("overlap_green_red")
+        .expect("the table carries the overlap column");
+    let rows = table.matching(&[grana_measure::Filter::new(pearson, 0.5, 1.0)], None, None);
+    assert_eq!(rows.len(), table.rows(), "the filter keeps every object");
+    assert_eq!(table.value(rows[0], overlap), 1.0);
+
+    let mut coloring = grana_display::Coloring::new();
+    coloring.set_metric(Some(grana_scene::ObjectColor::Coloc {
+        pair,
+        metric: grana_measure::ColocMetric::Pearson,
+    }));
+    session.execute(Command::SetObjectColoring { set, coloring });
+    assert!(
+        session
+            .scene()
+            .expect("the series opens")
+            .object_colors(
+                session
+                    .scene()
+                    .expect("the series opens")
+                    .objects
+                    .get(set)
+                    .expect("the object set exists")
+            )
+            .is_some(),
+        "the objects color by their correlation"
+    );
+
+    let pyramid = session
+        .scene()
+        .expect("the series opens")
+        .dataset
+        .pyramid()
+        .clone();
+    let project = {
+        let scene = session.scene().expect("the series opens");
+        Project::capture(
+            scene,
+            session.measure(),
+            Source::Synthetic {
+                name: "coloc".to_string(),
+            },
+            view_state(),
+            Fingerprint::new([13; 32]),
+        )
+    };
+    let temp = Temp::new("suite-object-coloc");
+    let path = temp.path().join("coloc.grana");
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the colocalization project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the colocalization project reads");
+    assert_eq!(
+        loaded, project,
+        "the object colocalization survives a project"
+    );
+
+    session.execute(Command::CaptureProtocol);
+    let protocol = session.protocol().expect("the protocol captures");
+    assert!(
+        protocol.summary().contains("colocalizes green with red"),
+        "the protocol records the object colocalization"
+    );
+    let text = protocol.to_json().expect("the protocol serializes");
+    let parsed = Protocol::from_json(&text).expect("the protocol reads");
+    assert_eq!(&parsed, protocol);
+    let mut staged = Scene::new(Dataset::synthetic("coloc", pyramid));
+    let steps = parsed.stage(&mut staged).expect("the protocol stages");
+    assert!(
+        steps.steps().iter().any(|step| matches!(
+            step,
+            grana_protocol::Step::ObjectColoc { pair: staged_pair, .. }
+                if *staged_pair == pair
+        )),
+        "the protocol stages the object colocalization"
+    );
+}
+
 fn surface() -> grana_object::SurfaceSet {
     let corners = [
         [-1.0f32, -1.0, -1.0],

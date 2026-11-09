@@ -59,7 +59,8 @@ impl Recipe {
             | Step::Import { set }
             | Step::Filter { set, .. }
             | Step::Copy { set, .. }
-            | Step::Edit { set, .. } => {
+            | Step::Edit { set, .. }
+            | Step::ObjectColoc { set, .. } => {
                 vec![*set]
             }
             Step::Merge { set, part } => vec![*set, *part],
@@ -89,6 +90,7 @@ impl Recipe {
                 shift: *shift,
             }),
             Step::Coloc { .. } => Some(Job::Coloc),
+            Step::ObjectColoc { set, .. } => Some(Job::ObjectColoc(*set)),
             Step::Filter { .. }
             | Step::Copy { .. }
             | Step::Edit { .. }

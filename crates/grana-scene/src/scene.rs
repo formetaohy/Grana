@@ -3,7 +3,9 @@ use std::sync::Arc;
 use glam::Vec3;
 use grana_display::{Coloring, Shading, TransferFunction};
 use grana_geometry::ray_hit;
-use grana_measure::{Aggregate, Classifier, Frame, Group, Measurement, RelationRow, Table};
+use grana_measure::{
+    Aggregate, Classifier, ColocMetric, Frame, Group, Measurement, ObjectColoc, RelationRow, Table,
+};
 use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackSet};
 use grana_object::{Shape, TrackParams};
 use grana_optics::Psf;
@@ -70,6 +72,71 @@ fn aggregate_scores(
                     }
                 }
                 aggregate.apply(accumulator.statistics())
+            })
+            .collect(),
+    }
+}
+
+fn aggregate_coloc(
+    set: &ObjectSet,
+    coloc: &ObjectColoc,
+    metric: ColocMetric,
+    aggregate: Aggregate,
+    group: Group,
+) -> Vec<f32> {
+    match group {
+        Group::Object => Vec::new(),
+        Group::Track => {
+            let Some(tracks) = set.tracks().map(|layer| layer.set()) else {
+                return Vec::new();
+            };
+            let mut accumulators = vec![grana_object::SampleAccumulator::new(); tracks.len()];
+            let mut counts = vec![0u32; tracks.len()];
+            for (time, frame) in set.frames() {
+                let Some(values) = coloc.objects(time) else {
+                    continue;
+                };
+                for (index, value) in values.iter().enumerate().take(frame.object_count()) {
+                    let Some(value) = value.metric(metric) else {
+                        continue;
+                    };
+                    let Some(track) = tracks.track_at(time, index) else {
+                        continue;
+                    };
+                    accumulators[track].push(value as f32);
+                    counts[track] += 1;
+                }
+            }
+            accumulators
+                .iter()
+                .zip(&counts)
+                .map(|(accumulator, count)| {
+                    if *count == 0 {
+                        f32::NAN
+                    } else {
+                        aggregate.apply(accumulator.statistics())
+                    }
+                })
+                .collect()
+        }
+        Group::Timepoint => set
+            .frames()
+            .map(|(time, frame)| {
+                let mut accumulator = grana_object::SampleAccumulator::new();
+                let mut count = 0u32;
+                let values = coloc.objects(time).unwrap_or_default();
+                for value in values.iter().take(frame.object_count()) {
+                    let Some(value) = value.metric(metric) else {
+                        continue;
+                    };
+                    accumulator.push(value as f32);
+                    count += 1;
+                }
+                if count == 0 {
+                    f32::NAN
+                } else {
+                    aggregate.apply(accumulator.statistics())
+                }
             })
             .collect(),
     }
@@ -201,10 +268,26 @@ impl Scene {
             .collect();
         self.derived.clear();
         self.coloc.set_channel_count(self.channels.len());
+        self.clear_object_coloc_from(self.channels.len());
         if self.selected >= self.channels.len() {
             self.selected = 0;
         }
         Ok(())
+    }
+
+    fn clear_object_coloc_from(&mut self, channel: usize) {
+        let stale = self
+            .objects
+            .iter()
+            .filter(|set| {
+                set.object_coloc()
+                    .is_some_and(|coloc| coloc.pair().a() >= channel || coloc.pair().b() >= channel)
+            })
+            .map(|set| set.id())
+            .collect::<Vec<_>>();
+        for id in stale {
+            self.objects.set_object_coloc(id, None);
+        }
     }
 
     pub fn bind_derived(&mut self, specs: Vec<DerivedSpec>) -> Result<(), String> {
@@ -387,6 +470,7 @@ impl Scene {
             .collect::<Vec<_>>();
         self.dataset = self.dataset.with_channels(infos);
         self.coloc.remove_channel(channel);
+        self.clear_object_coloc_from(channel);
         if self.selected >= channel {
             self.selected = self.selected.saturating_sub(1);
         }
@@ -1052,6 +1136,7 @@ impl Scene {
         }
         self.region = region;
         self.sync_coloc_inputs();
+        self.clear_object_coloc_all();
     }
 
     pub fn region_scope(&self) -> Option<Region> {
@@ -1071,6 +1156,7 @@ impl Scene {
             return false;
         }
         self.drift = drift;
+        self.clear_object_coloc_all();
         true
     }
 
@@ -1322,6 +1408,7 @@ impl Scene {
             .iter()
             .map(|channel| channel.name().to_string())
             .collect::<Vec<_>>();
+        let keys = grana_measure::channel_keys(&channels);
         let tracks = object.tracks().map(|layer| layer.set());
         let mut table = Table::build(
             &frames,
@@ -1332,7 +1419,6 @@ impl Scene {
             aggregate,
         );
         if let Some(classifier) = object.classifier() {
-            let keys = grana_measure::channel_keys(&channels);
             let column = match group {
                 Group::Object => {
                     let scores = classifier.scores(&table, &keys);
@@ -1349,6 +1435,30 @@ impl Scene {
                 )),
             };
             if let Some((column, values)) = column {
+                table = table.with_column(column, values);
+            }
+        }
+        if let Some(coloc) = object.object_coloc() {
+            for metric in ColocMetric::ALL {
+                let column = metric.column(coloc.pair(), &channels, &keys);
+                let values = match group {
+                    Group::Object => (0..table.rows())
+                        .map(|row| {
+                            let observation = table.observation(row);
+                            let (Some(time), Some(object)) =
+                                (observation.time(), observation.object())
+                            else {
+                                return f32::NAN;
+                            };
+                            coloc
+                                .metric(time, object, metric)
+                                .map_or(f32::NAN, |value| value as f32)
+                        })
+                        .collect(),
+                    Group::Track | Group::Timepoint => {
+                        aggregate_coloc(object, coloc, metric, aggregate, group)
+                    }
+                };
                 table = table.with_column(column, values);
             }
         }
@@ -1394,6 +1504,14 @@ impl Scene {
 
     pub fn install_classifier(&mut self, id: ObjectSetId, classifier: Classifier) -> bool {
         self.objects.set_classifier(id, Some(classifier))
+    }
+
+    pub fn install_object_coloc(&mut self, id: ObjectSetId, coloc: ObjectColoc) -> bool {
+        self.objects.set_object_coloc(id, Some(coloc))
+    }
+
+    pub fn clear_object_coloc(&mut self, id: ObjectSetId) -> bool {
+        self.objects.set_object_coloc(id, None)
     }
 
     pub fn install(&mut self, id: ObjectSetId, time: u32, frame: ObjectFrame) {
@@ -1776,6 +1894,18 @@ impl Scene {
     fn sync_coloc_inputs(&mut self) {
         let mask = self.mask_key();
         self.coloc.set_inputs(self.region, mask);
+    }
+
+    fn clear_object_coloc_all(&mut self) {
+        let stale = self
+            .objects
+            .iter()
+            .filter(|set| set.object_coloc().is_some())
+            .map(|set| set.id())
+            .collect::<Vec<_>>();
+        for id in stale {
+            self.objects.set_object_coloc(id, None);
+        }
     }
 }
 

@@ -814,6 +814,8 @@ fn default_visibility(table: &Table) -> Vec<bool> {
                     || key.starts_with("max_diameter_um")
                     || key.starts_with("hull_volume_um3")
                     || key.contains("_intensity_mean")
+                    || key.starts_with("pearson_")
+                    || key.starts_with("overlap_")
                     || key.ends_with("_distance_um")
                     || key.ends_with("_inside")
                     || key.ends_with("_count")

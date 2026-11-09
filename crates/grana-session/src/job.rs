@@ -131,6 +131,16 @@ pub fn coloc(job: Job, channels: Arc<Channels>, request: ColocRequest) -> Analys
     })
 }
 
+pub fn object_coloc(
+    job: Job,
+    channels: Arc<Channels>,
+    request: grana_pipeline::run::ObjectColocRequest,
+) -> Analysis {
+    analyse(job, move |cancel, sink| {
+        run::object_coloc(&channels, request, cancel, sink)
+    })
+}
+
 pub fn drift(job: Job, channels: Arc<Channels>, request: DriftRequest) -> Analysis {
     analyse(job, move |cancel, sink| {
         run::drift(&channels, request, cancel, sink)

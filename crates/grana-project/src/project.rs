@@ -15,7 +15,7 @@ use grana_codec::Encoder;
 use crate::codec::{Decode, Encode, Reader};
 use crate::error::Error;
 
-const MAGIC: &[u8; 11] = b"granaproj44";
+const MAGIC: &[u8; 11] = b"granaproj45";
 const LENGTH: usize = size_of::<u64>();
 const STEPS: usize = size_of::<u32>();
 const HEADER: usize = MAGIC.len() + LENGTH + STEPS;

@@ -322,6 +322,9 @@ pub enum Command {
     RemoveColocResult(ColocPair),
     ComputeColoc,
     CancelColoc,
+    ComputeObjectColoc(ObjectSetId),
+    CancelObjectColoc(ObjectSetId),
+    ClearObjectColoc(ObjectSetId),
     ComputeDrift,
     CancelDrift,
     ClearDrift,
@@ -432,6 +435,7 @@ pub enum Action {
     ColocSettings,
     ColocResult,
     ComputeColoc,
+    ObjectColoc,
     ApplyProtocol,
     Drift,
     Keyframe,
@@ -507,6 +511,7 @@ impl Action {
             Self::ColocSettings => "colocalization settings",
             Self::ColocResult => "colocalization result",
             Self::ComputeColoc => "colocalization",
+            Self::ObjectColoc => "object colocalization",
             Self::ApplyProtocol => "protocol replay",
             Self::Drift => "drift correction",
             Self::Keyframe => "keyframes",
@@ -545,7 +550,11 @@ impl Action {
     fn asynchronous(self) -> bool {
         matches!(
             self,
-            Self::Detect | Self::Track | Self::ComputeColoc | Self::ApplyProtocol
+            Self::Detect
+                | Self::Track
+                | Self::ComputeColoc
+                | Self::ObjectColoc
+                | Self::ApplyProtocol
         )
     }
 }
@@ -687,6 +696,9 @@ impl Command {
             Self::SetColocSettings(_) => Edit::new(Action::ColocSettings),
             Self::RemoveColocResult(_) => Edit::new(Action::ColocResult),
             Self::ComputeColoc => Edit::new(Action::ComputeColoc),
+            Self::ComputeObjectColoc(set) | Self::ClearObjectColoc(set) => {
+                Edit::targeted(Action::ObjectColoc, set.raw())
+            }
             Self::ClearDrift | Self::SetDriftReference(_) | Self::SetDriftOffset { .. } => {
                 Edit::new(Action::Drift)
             }

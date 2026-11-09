@@ -9,10 +9,10 @@ use grana_scene::{
 use crate::{
     AnnotationSpec, BackgroundSpec, ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec,
     ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec, LassoSpec,
-    MaskEditSpec, MaskFilterSpec, MaskSpec, MeasureSpec, MeasuredSpec, MetricSpec, PartSpec,
-    Protocol, ProtocolError, RatioSpec, RegionSpec, RelationSpec, RenderSpec, RestoreSpec, SetSpec,
-    SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, SurfaceEditSpec, TrackSpec, TransferSpec,
-    ViewSpec, WindowSpec,
+    MaskEditSpec, MaskFilterSpec, MaskSpec, MeasureSpec, MeasuredSpec, MetricSpec, PairSpec,
+    PartSpec, Protocol, ProtocolError, RatioSpec, RegionSpec, RelationSpec, RenderSpec,
+    RestoreSpec, SetSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, SurfaceEditSpec,
+    TrackSpec, TransferSpec, ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -167,11 +167,14 @@ impl Protocol {
                         .label_metric()
                         .and_then(|metric| MetricSpec::of(metric, scene, &keys)),
                     opacity: set.opacity(),
-                    color_by: object_color(set.object_coloring(), scene, &keys),
+                    color_by: object_color(set.object_coloring(), scene, &channels, &keys),
                     track_by: track_color(set.track_coloring(), scene),
                     classifier: set
                         .classifier()
                         .map(|classifier| ClassifierSpec::of(classifier, &keys)),
+                    object_coloc: set
+                        .object_coloc()
+                        .and_then(|coloc| channel_pair(coloc.pair(), &channels)),
                     source: source(scene, &channels, set)?,
                     mask: None,
                     track: set.track_style().map(|style| TrackSpec {
@@ -620,9 +623,17 @@ fn mask_set<'a>(derived: &'a [DerivedSpec], channel: &str) -> Option<&'a str> {
     })
 }
 
+fn channel_pair(pair: grana_measure::ColocPair, channels: &[String]) -> Option<PairSpec> {
+    Some(PairSpec {
+        a: channels.get(pair.a())?.clone(),
+        b: channels.get(pair.b())?.clone(),
+    })
+}
+
 fn object_color(
     coloring: &Coloring<ObjectColor>,
     scene: &Scene,
+    channels: &[String],
     keys: &[String],
 ) -> Option<ColorSpec> {
     let metric = coloring.metric()?;
@@ -636,10 +647,16 @@ fn object_color(
         aggregate: None,
         child: false,
         shift: 0,
+        pair: None,
     };
     Some(match metric {
         ObjectColor::Score => ColorSpec {
             key: Some(grana_measure::SCORE_KEY.to_string()),
+            ..color
+        },
+        ObjectColor::Coloc { pair, metric } => ColorSpec {
+            key: Some(metric.name().to_string()),
+            pair: channel_pair(pair, channels),
             ..color
         },
         ObjectColor::Measurement(measurement) => ColorSpec {
@@ -681,6 +698,7 @@ fn track_color(coloring: &Coloring<TrackColor>, scene: &Scene) -> Option<ColorSp
         aggregate: None,
         child: false,
         shift: 0,
+        pair: None,
         palette: coloring.palette().name().to_ascii_lowercase(),
         reversed: coloring.reversed(),
         range: coloring.manual().map(|(low, high)| [low, high]),

@@ -10,8 +10,8 @@ use grana_measure::{
 };
 use grana_measure::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocCost, ColocFrame,
-    ColocMoments, ColocPair, ColocSeries, ColocSeriesInfo, ColocSettings, ColocSignificance,
-    ColocThresholds,
+    ColocMetric, ColocMoments, ColocPair, ColocSeries, ColocSeriesInfo, ColocSettings,
+    ColocSignificance, ColocThresholds, ObjectColoc, ObjectColocValue,
 };
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, MaskEdit, MaskMode,
@@ -364,6 +364,19 @@ impl Decode for SceneState {
                     .track_color
                     .metric
                     .is_some_and(|metric| !track_color_applies(set, metric))
+                || set.object_coloc.as_ref().is_some_and(|coloc| {
+                    coloc.pair().a() >= channels
+                        || coloc.pair().b() >= channels
+                        || coloc.frames().len() != set.frames.len()
+                        || coloc
+                            .frames()
+                            .iter()
+                            .zip(&set.frames)
+                            .any(|(values, frame)| {
+                                values.len()
+                                    != frame.as_deref().map_or(0, ObjectFrame::object_count)
+                            })
+                })
         }) {
             return Err(FAULT_SHAPE);
         }
@@ -663,6 +676,7 @@ impl Decode for SetState {
         let object_color = ColorState::<ObjectColor>::decode(reader)?;
         let track_color = ColorState::<TrackColor>::decode(reader)?;
         let classifier = Option::<ClassifierState>::decode(reader)?;
+        let object_coloc = Option::<ObjectColoc>::decode(reader)?;
         let visibility = Visibility::decode(reader)?;
         let seeds = decode_seeds(reader)?;
         let frames = Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?;
@@ -701,6 +715,7 @@ impl Decode for SetState {
             object_color,
             track_color,
             classifier,
+            object_coloc,
             visibility,
             seeds,
             frames,
@@ -1334,8 +1349,51 @@ impl Decode for ObjectColor {
                 })
             }
             3 => Ok(Self::Score),
+            4 => {
+                let pair = ColocPair::decode(reader)?;
+                let metric = ColocMetric::from_index(reader.u8()?).ok_or(FAULT_SHAPE)?;
+                Ok(Self::Coloc { pair, metric })
+            }
             _ => Err(FAULT_SHAPE),
         }
+    }
+}
+
+impl Decode for ObjectColocValue {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let voxels = reader.u64()?;
+        let mut sums = [0.0; 5];
+        for sum in &mut sums {
+            *sum = reader.f64()?;
+        }
+        if !sums.iter().all(|sum| sum.is_finite() && *sum >= 0.0) {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self::new(voxels, sums))
+    }
+}
+
+impl Decode for ObjectColoc {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let pair = ColocPair::decode(reader)?;
+        let level = reader.count(0)?;
+        let frames = reader.count(4)?;
+        if frames > 0 {
+            let mut values = Vec::with_capacity(frames.min(4096));
+            for _ in 0..frames {
+                let objects = reader.count(48)?;
+                if objects > usize::from(u16::MAX) {
+                    return Err(FAULT_SHAPE);
+                }
+                let mut frame = Vec::with_capacity(objects);
+                for _ in 0..objects {
+                    frame.push(ObjectColocValue::decode(reader)?);
+                }
+                values.push(frame);
+            }
+            return Ok(Self::new(pair, level, values));
+        }
+        Err(FAULT_SHAPE)
     }
 }
 
@@ -2032,6 +2090,7 @@ fn color_applies(sets: &[SetState], set: &SetState, channels: usize, metric: Obj
                     .any(|relation| relation.target == target.raw() && relation.shift == shift)
         }
         ObjectColor::Score => set.classifier.is_some(),
+        ObjectColor::Coloc { pair, .. } => pair.a() < channels && pair.b() < channels,
         ObjectColor::Child { target, field } => {
             let Some(child) = sets.iter().find(|candidate| candidate.id == target.raw()) else {
                 return false;

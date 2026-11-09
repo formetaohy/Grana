@@ -2,7 +2,8 @@ use glam::Vec3;
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
 use grana_measure::{
-    Aggregate, ChildField, Filter, Group, MeasureView, RelationField, Scope, Statistic, Table,
+    Aggregate, ChildField, ColocMetric, Filter, Group, MeasureView, RelationField, Scope,
+    Statistic, Table,
 };
 use grana_mesh::Format as MeshFormat;
 use grana_object::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
@@ -91,6 +92,13 @@ fn default_elevation() -> f32 {
     grana_display::DEFAULT_ELEVATION
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PairSpec {
+    pub a: String,
+    pub b: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ColorSpec {
@@ -106,6 +114,8 @@ pub struct ColorSpec {
     pub child: bool,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub shift: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pair: Option<PairSpec>,
     pub palette: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub reversed: bool,
@@ -694,6 +704,8 @@ pub struct SetSpec {
     pub track_by: Option<ColorSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub classifier: Option<ClassifierSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_coloc: Option<PairSpec>,
     pub source: SourceSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask: Option<String>,
@@ -1230,6 +1242,13 @@ impl ColorSpec {
         Aggregate::parse(aggregate)
     }
 
+    pub fn coloc_metric(&self) -> Option<ColocMetric> {
+        let key = self.key.as_deref()?;
+        ColocMetric::ALL
+            .into_iter()
+            .find(|metric| metric.name() == key)
+    }
+
     pub fn child_field(&self, set: &ObjectSet, keys: &[String]) -> Option<ChildField> {
         let key = self.key.as_deref()?;
         ChildField::parse(key, self.aggregate.as_deref(), keys)
@@ -1279,6 +1298,24 @@ impl ColorSpec {
                 return invalid("names an unknown child reduction".to_string());
             } else if self.aggregate.is_none() {
                 return invalid("names a child measurement without a reduction".to_string());
+            }
+        } else if let Some(pair) = &self.pair {
+            if self.target.is_some() || self.field.is_some() || self.aggregate.is_some() {
+                return invalid(
+                    "combines an object colocalization with another metric".to_string(),
+                );
+            }
+            if self.shift != 0 {
+                return invalid("shifts an object colocalization".to_string());
+            }
+            if pair.a.trim().is_empty() || pair.b.trim().is_empty() {
+                return invalid("names an empty object colocalization channel".to_string());
+            }
+            if pair.a == pair.b {
+                return invalid("colocalizes one channel with itself".to_string());
+            }
+            if self.coloc_metric().is_none() {
+                return invalid("names no object colocalization metric".to_string());
             }
         } else {
             match (&self.key, &self.target) {
@@ -1421,6 +1458,7 @@ impl ClassifierSpec {
 impl MetricSpec {
     pub fn of(metric: ObjectColor, scene: &Scene, keys: &[String]) -> Option<Self> {
         Some(match metric {
+            ObjectColor::Coloc { .. } => return None,
             ObjectColor::Score => Self {
                 key: Some(grana_measure::SCORE_KEY.to_string()),
                 target: None,

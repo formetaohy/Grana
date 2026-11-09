@@ -1,4 +1,4 @@
-use grana_measure::ColocSeries;
+use grana_measure::{ColocSeries, ObjectColoc};
 use grana_object::{RelationFrame, TrackSet};
 use grana_optics::MeasuredPsf;
 use grana_scene::{Drift, ObjectFrame};
@@ -22,6 +22,9 @@ pub enum Event {
     Coloc {
         series: Box<ColocSeries>,
         region: Region,
+    },
+    ObjectColoc {
+        coloc: Box<ObjectColoc>,
     },
     Drift(Drift),
     Calibration {

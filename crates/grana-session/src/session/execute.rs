@@ -591,6 +591,13 @@ impl Session {
             }
             Command::ComputeColoc => self.start_coloc(),
             Command::CancelColoc => self.cancel(Job::Coloc),
+            Command::ComputeObjectColoc(set) => self.start_object_coloc(set),
+            Command::CancelObjectColoc(set) => self.cancel(Job::ObjectColoc(set)),
+            Command::ClearObjectColoc(set) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.clear_object_coloc(set);
+                }
+            }
             Command::ComputeDrift => self.start_drift(),
             Command::CancelDrift => self.cancel(Job::Drift),
             Command::ClearDrift => self.clear_drift(),
@@ -741,6 +748,7 @@ impl Session {
                     self.cancel(Job::Track(set));
                 }
                 Action::Track => self.cancel(Job::Track(set)),
+                Action::ObjectColoc => self.cancel(Job::ObjectColoc(set)),
                 Action::Relation => {
                     self.analysis.retain(|analysis| {
                             !matches!(analysis.job(), Job::Relation { target, .. } if target == set)

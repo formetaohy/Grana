@@ -16,9 +16,9 @@ pub use child::{Child, ChildField, ChildMetric, UNASSIGNED};
 pub use classifier::{Classifier, ClassifierState, SCORE_KEY, SCORE_LABEL};
 pub use coloc::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_DEFAULT, COLOC_BLOCK_MAX,
-    COLOC_PERMUTATIONS_DEFAULT, COLOC_PERMUTATIONS_MAX, ColocCost, ColocFrame, ColocMoments,
-    ColocPair, ColocSeries, ColocSeriesInfo, ColocSettings, ColocSignificance, ColocStatistics,
-    ColocThresholdRange, ColocThresholds,
+    COLOC_PERMUTATIONS_DEFAULT, COLOC_PERMUTATIONS_MAX, ColocCost, ColocFrame, ColocMetric,
+    ColocMoments, ColocPair, ColocSeries, ColocSeriesInfo, ColocSettings, ColocSignificance,
+    ColocStatistics, ColocThresholdRange, ColocThresholds, ObjectColoc, ObjectColocValue,
 };
 pub use column::{Column, Unit};
 pub use filter::Filter;

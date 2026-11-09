@@ -12,6 +12,7 @@ pub enum Job {
         shift: i32,
     },
     Coloc,
+    ObjectColoc(ObjectSetId),
     Drift,
     Calibrate,
 }
@@ -19,7 +20,11 @@ pub enum Job {
 impl Job {
     pub fn streams(self, set: ObjectSetId) -> bool {
         match self {
-            Self::Detect(id) | Self::Import(id) | Self::Recut(id) | Self::Track(id) => id == set,
+            Self::Detect(id)
+            | Self::Import(id)
+            | Self::Recut(id)
+            | Self::Track(id)
+            | Self::ObjectColoc(id) => id == set,
             Self::Relation { source, .. } => source == set,
             Self::Coloc | Self::Drift | Self::Calibrate => false,
         }
@@ -28,13 +33,21 @@ impl Job {
     pub fn installs(self, set: ObjectSetId) -> bool {
         match self {
             Self::Detect(id) | Self::Import(id) | Self::Recut(id) | Self::Track(id) => id == set,
-            Self::Relation { .. } | Self::Coloc | Self::Drift | Self::Calibrate => false,
+            Self::Relation { .. }
+            | Self::Coloc
+            | Self::ObjectColoc(_)
+            | Self::Drift
+            | Self::Calibrate => false,
         }
     }
 
     pub fn involves(self, set: ObjectSetId) -> bool {
         match self {
-            Self::Detect(id) | Self::Import(id) | Self::Recut(id) | Self::Track(id) => id == set,
+            Self::Detect(id)
+            | Self::Import(id)
+            | Self::Recut(id)
+            | Self::Track(id)
+            | Self::ObjectColoc(id) => id == set,
             Self::Relation { source, target, .. } => source == set || target == set,
             Self::Coloc | Self::Drift | Self::Calibrate => false,
         }

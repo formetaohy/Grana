@@ -33,6 +33,7 @@ impl Session {
             Tracks(TrackSet),
             Relation(u32, grana_object::RelationFrame),
             Coloc(Box<grana_measure::ColocSeries>, Region),
+            ObjectColoc(Box<grana_measure::ObjectColoc>),
             Drift(grana_scene::Drift),
             Calibration {
                 source: usize,
@@ -63,6 +64,9 @@ impl Session {
                     }
                     Poll::Event(Event::Coloc { series, region }) => {
                         updates.push((index, job, Update::Coloc(series, region)));
+                    }
+                    Poll::Event(Event::ObjectColoc { coloc }) => {
+                        updates.push((index, job, Update::ObjectColoc(coloc)));
                     }
                     Poll::Event(Event::Drift(drift)) => {
                         updates.push((index, job, Update::Drift(drift)));
@@ -158,6 +162,11 @@ impl Session {
                         }
                     }
                 }
+                Update::ObjectColoc(coloc) => {
+                    if let (Job::ObjectColoc(set), Some(scene)) = (job, self.scene.as_mut()) {
+                        scene.install_object_coloc(set, *coloc);
+                    }
+                }
                 Update::Drift(drift) => {
                     if let (Job::Drift, Some(scene)) = (job, self.scene.as_mut()) {
                         scene.set_drift(drift);
@@ -189,7 +198,11 @@ impl Session {
                         Job::Detect(set) => detected.push(set),
                         Job::Import(set) => imported.push(set),
                         Job::Recut(set) => recutted.push(set),
-                        Job::Track(_) | Job::Relation { .. } | Job::Coloc | Job::Drift => {}
+                        Job::Track(_)
+                        | Job::Relation { .. }
+                        | Job::Coloc
+                        | Job::ObjectColoc(_)
+                        | Job::Drift => {}
                         Job::Calibrate => {}
                     }
                 }
@@ -1039,6 +1052,71 @@ impl Session {
                 drift,
                 0,
             ),
+        ));
+    }
+
+    pub(super) fn start_object_coloc(&mut self, set: ObjectSetId) {
+        if !self.analysable() {
+            return;
+        }
+        if self
+            .analysis
+            .iter()
+            .any(|analysis| analysis.job() == Job::ObjectColoc(set))
+        {
+            return;
+        }
+        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
+            self.message = Some(Message::error("the dataset is still opening"));
+            return;
+        };
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(object) = scene.objects.get(set) else {
+            return;
+        };
+        if object.detected() == 0 {
+            self.message = Some(Message::error(format!(
+                "{} holds no objects to colocalize",
+                object.name()
+            )));
+            return;
+        }
+        let Some(pair) = scene.coloc.pair() else {
+            self.message = Some(Message::error(
+                "the dataset needs two channels to colocalize",
+            ));
+            return;
+        };
+        if [pair.a(), pair.b()]
+            .iter()
+            .any(|channel| scene.dataset.channels()[*channel].intensity().span() <= 0.0)
+        {
+            self.message = Some(Message::error(
+                "the selected channels have no intensity range to colocalize",
+            ));
+            return;
+        }
+        let region = scene.region;
+        if region.enabled()
+            && region
+                .voxel_range(scene.dataset.pyramid().level(0))
+                .is_none()
+        {
+            self.message = Some(Message::error("the region does not overlap the dataset"));
+            return;
+        }
+        let frames = (0..scene.frame_count())
+            .map(|time| object.frame_shared(time))
+            .collect::<Vec<_>>();
+        let drift = scene.drift().clone();
+        self.message = None;
+        self.record_progress(Job::ObjectColoc(set), 0, 0, 0);
+        self.analysis.push(crate::object_coloc(
+            Job::ObjectColoc(set),
+            channels,
+            grana_pipeline::run::ObjectColocRequest::new(pair, region, frames, drift, 0),
         ));
     }
 

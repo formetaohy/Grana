@@ -1,5 +1,7 @@
 use grana_display::Extent;
-use grana_measure::{ChildField, Measurement, Objects, RelationField, Unit};
+use grana_measure::{
+    ChildField, ColocMetric, ColocPair, Measurement, Objects, RelationField, Unit,
+};
 use grana_object::RelationFrame;
 
 use crate::object::ObjectFrame;
@@ -18,6 +20,10 @@ pub enum ObjectColor {
         target: ObjectSetId,
         field: ChildField,
     },
+    Coloc {
+        pair: ColocPair,
+        metric: ColocMetric,
+    },
     Score,
 }
 
@@ -27,7 +33,7 @@ impl ObjectColor {
             Self::Measurement(measurement) => measurement.unit(),
             Self::Relation { field, .. } => field.unit(),
             Self::Child { field, .. } => field.unit(),
-            Self::Score => Unit::Count,
+            Self::Coloc { .. } | Self::Score => Unit::Count,
         }
     }
 
@@ -36,13 +42,14 @@ impl ObjectColor {
             Self::Measurement(measurement) => measurement.decimals(),
             Self::Relation { field, .. } => field.decimals(),
             Self::Child { field, .. } => field.decimals(),
+            Self::Coloc { .. } => 3,
             Self::Score => 3,
         }
     }
 
     pub fn relation(self) -> Option<(ObjectSetId, i32)> {
         match self {
-            Self::Measurement(_) | Self::Child { .. } | Self::Score => None,
+            Self::Measurement(_) | Self::Child { .. } | Self::Coloc { .. } | Self::Score => None,
             Self::Relation { target, shift, .. } => Some((target, shift)),
         }
     }
@@ -63,6 +70,9 @@ impl ObjectColor {
             Self::Child { .. } => {
                 panic!("a child aggregate is read from the objects of its parent set")
             }
+            Self::Coloc { .. } => {
+                panic!("an object colocalization is read from the colocalization of its set")
+            }
             Self::Score => panic!("a classifier score is read from the classifier of its set"),
         }
     }
@@ -72,7 +82,7 @@ impl ObjectColor {
         frame: &ObjectFrame,
         relation: Option<&RelationFrame>,
     ) -> Option<Extent> {
-        if self == Self::Score {
+        if matches!(self, Self::Score | Self::Coloc { .. }) {
             return None;
         }
         let objects = frame.objects();

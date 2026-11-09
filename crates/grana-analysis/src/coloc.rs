@@ -104,7 +104,7 @@ pub fn coloc_levels(pyramid: &Pyramid, region: Region, frames: u32) -> ColocLeve
     }
 }
 
-pub(super) fn unit(scale: [f32; 2], value: f32) -> f32 {
+pub(crate) fn unit(scale: [f32; 2], value: f32) -> f32 {
     if value.is_finite() {
         ((value - scale[0]) * scale[1]).clamp(0.0, 1.0)
     } else {
@@ -112,7 +112,7 @@ pub(super) fn unit(scale: [f32; 2], value: f32) -> f32 {
     }
 }
 
-pub(super) fn scale(intensity: Intensity) -> [f32; 2] {
+pub(crate) fn scale(intensity: Intensity) -> [f32; 2] {
     let span = intensity.span();
     if span > 0.0 {
         [intensity.min(), 1.0 / span]

@@ -176,6 +176,12 @@ impl Session {
                     }
                     self.start_coloc();
                 }
+                Step::ObjectColoc { set, pair } => {
+                    if let Some(scene) = self.scene.as_mut() {
+                        scene.coloc.set_pair(pair);
+                    }
+                    self.start_object_coloc(set);
+                }
                 Step::Filter { set, .. } => match self.reload_filtered(set) {
                     Ok(()) => {
                         self.derive_settled(set, true);

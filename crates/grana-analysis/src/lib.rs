@@ -6,6 +6,7 @@ mod hash;
 mod label;
 mod local;
 mod morphology;
+mod object_coloc;
 mod relation;
 mod scan;
 mod schedule;
@@ -22,6 +23,7 @@ pub use drift::{
 };
 pub use filament::{FilamentScan, filament_level};
 pub use label::{LabelBuilder, LabelSlab};
+pub use object_coloc::{LabelRead, ObjectColocScan, object_coloc_level};
 pub use relation::{Reference, RelationRun, relate_frames};
 pub use scan::{ChannelRead, SpotScan, SpotScanner, spot_level};
 pub use schedule::{parallel, receive, workers};

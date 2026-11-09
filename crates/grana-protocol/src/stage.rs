@@ -100,6 +100,16 @@ impl Protocol {
                     spec.name
                 )));
             }
+            if let Some(pair) = &spec.object_coloc {
+                channel(&names, &pair.a)?;
+                channel(&names, &pair.b)?;
+                if pair.a == pair.b {
+                    return Err(ProtocolError::Invalid(format!(
+                        "the object colocalization of {} names one channel twice",
+                        spec.name
+                    )));
+                }
+            }
         }
         for relation in &self.relations {
             if (i64::from(relation.shift).unsigned_abs() as usize) >= scene.frame_count() as usize {
@@ -322,6 +332,10 @@ impl Protocol {
             }
             if let Some(curation) = &spec.curation {
                 builder.apply_curation(id, Some(curation), &spec.name)?;
+            }
+            if let Some(pair) = &spec.object_coloc {
+                let pair = ColocPair::new(channel(&names, &pair.a)?, channel(&names, &pair.b)?);
+                builder.steps.push(Step::ObjectColoc { set: id, pair });
             }
             builder.ids.insert(spec.key.clone(), id);
             masks.push(mask);
@@ -803,6 +817,22 @@ fn object_coloring(
     if let Some([low, high]) = spec.range {
         coloring.set_manual(Some((low, high)));
     }
+    if let Some(pair) = &spec.pair {
+        let names = scene
+            .dataset
+            .channels()
+            .iter()
+            .map(|channel| channel.name().to_string())
+            .collect::<Vec<_>>();
+        let metric = spec.coloc_metric().ok_or_else(|| {
+            ProtocolError::Invalid("an object colocalization color names a measurement".to_string())
+        })?;
+        coloring.set_metric(Some(ObjectColor::Coloc {
+            pair: ColocPair::new(channel(&names, &pair.a)?, channel(&names, &pair.b)?),
+            metric,
+        }));
+        return Ok(coloring);
+    }
     let metric = if spec.child {
         let target = spec
             .target
@@ -1012,6 +1042,10 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
             Step::Relation { source, target, .. } => {
                 dependencies[index].push(settled(&ready, *source)?);
                 dependencies[index].push(settled(&ready, *target)?);
+            }
+            Step::ObjectColoc { set, .. } => {
+                dependencies[index].extend(drift);
+                dependencies[index].push(settled(&ready, *set)?);
             }
             Step::Coloc { mask, filter, .. } => {
                 dependencies[index].extend(drift);

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use grana_display::{Shading, TransferFunction};
+use grana_measure::ObjectColoc;
 use grana_object::{RelationFrame, TrackSet};
 use grana_volume::{Clip, Intensity, Region};
 
@@ -92,6 +93,7 @@ pub struct SetState {
     pub object_color: ColorState<ObjectColor>,
     pub track_color: ColorState<TrackColor>,
     pub classifier: Option<grana_measure::ClassifierState>,
+    pub object_coloc: Option<ObjectColoc>,
     pub visibility: Visibility,
     pub seeds: Seeds,
     pub frames: Vec<Option<Arc<ObjectFrame>>>,
@@ -143,6 +145,21 @@ impl SceneState {
                                 _ => true,
                             }
                     })
+                })
+            })
+            && self.sets.iter().all(|set| {
+                set.object_coloc.as_ref().is_none_or(|coloc| {
+                    coloc.pair().a() < channel_count
+                        && coloc.pair().b() < channel_count
+                        && coloc.frames().len() == frame_count as usize
+                        && coloc
+                            .frames()
+                            .iter()
+                            .zip(&set.frames)
+                            .all(|(values, frame)| {
+                                values.len()
+                                    == frame.as_ref().map_or(0, |frame| frame.object_count())
+                            })
                 })
             })
             && self

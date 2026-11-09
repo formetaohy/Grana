@@ -152,6 +152,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 mask_radius,
                 filter,
             } => run.colocalize(*pair, *mask, *mask_radius, *filter)?,
+            Step::ObjectColoc { set, pair } => run.object_coloc(*set, *pair)?,
             Step::Present => {
                 task.protocol
                     .present_measure(&run.sets, &mut measure, &run.scene);
@@ -530,6 +531,7 @@ impl Run<'_, '_> {
             RunEvent::Tracks(_)
             | RunEvent::Relation { .. }
             | RunEvent::Coloc { .. }
+            | RunEvent::ObjectColoc { .. }
             | RunEvent::Drift(_)
             | RunEvent::Calibration { .. }
             | RunEvent::Done => {}
@@ -844,6 +846,68 @@ impl Run<'_, '_> {
             ));
         Ok(())
     }
+    fn object_coloc(&mut self, set: ObjectSetId, pair: ColocPair) -> Result<(), String> {
+        let task = self.task;
+        let name = self.name(set);
+        if self
+            .scene
+            .objects
+            .get(set)
+            .is_none_or(|object| object.detected() == 0)
+        {
+            return Err(format!("{name} detected no objects to colocalize"));
+        }
+        let frames = frames_of(&self.scene, set);
+        let region = self.scene.region;
+        if region.enabled()
+            && region
+                .voxel_range(self.channels.pyramid().level(0))
+                .is_none()
+        {
+            return Err("the region does not overlap the dataset".to_string());
+        }
+        let _ = task.events.send(Event::Step {
+            index: task.index,
+            label: format!("colocalizing the objects of {name}"),
+        });
+        let progress = &self.progress;
+        let mut found: Option<Box<grana_measure::ObjectColoc>> = None;
+        let mut failure = None;
+        let mut sink = |event: RunEvent| match event {
+            RunEvent::ObjectColoc { coloc } => found = Some(coloc),
+            RunEvent::Failed(detail) => failure = Some(detail),
+            RunEvent::Progress { done, total, .. } if progress.hold() => {
+                let _ = progress.events.send(Event::Progress {
+                    index: progress.index,
+                    done,
+                    total,
+                });
+            }
+            _ => {}
+        };
+        crate::run::object_coloc(
+            &self.channels,
+            crate::run::ObjectColocRequest::new(
+                pair,
+                region,
+                frames,
+                self.scene.drift().clone(),
+                task.workers,
+            ),
+            task.cancel,
+            &mut sink,
+        )?;
+        if task.cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".to_string());
+        }
+        if let Some(detail) = failure {
+            return Err(detail);
+        }
+        let coloc = found
+            .ok_or_else(|| format!("the object colocalization of {name} produced no result"))?;
+        self.scene.install_object_coloc(set, *coloc);
+        Ok(())
+    }
 }
 
 fn frames_of(scene: &Scene, id: ObjectSetId) -> Vec<Option<Arc<ObjectFrame>>> {
@@ -955,6 +1019,7 @@ fn detect(
         RunEvent::Tracks(_)
         | RunEvent::Relation { .. }
         | RunEvent::Coloc { .. }
+        | RunEvent::ObjectColoc { .. }
         | RunEvent::Drift(_)
         | RunEvent::Calibration { .. }
         | RunEvent::Done
@@ -999,6 +1064,7 @@ fn segment_frames(
         RunEvent::Tracks(_)
         | RunEvent::Relation { .. }
         | RunEvent::Coloc { .. }
+        | RunEvent::ObjectColoc { .. }
         | RunEvent::Drift(_)
         | RunEvent::Calibration { .. }
         | RunEvent::Done

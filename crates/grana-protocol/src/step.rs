@@ -1,3 +1,4 @@
+use grana_measure::ColocPair;
 use grana_scene::{Criteria, MaskFilter, ObjectSetId};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -45,6 +46,10 @@ pub enum Step {
         mask_radius: f32,
         filter: Option<MaskFilter>,
     },
+    ObjectColoc {
+        set: ObjectSetId,
+        pair: ColocPair,
+    },
     Present,
 }
 
@@ -58,7 +63,10 @@ impl Step {
             | Self::Copy { set, .. }
             | Self::Edit { set, .. }
             | Self::Merge { set, .. } => Some(*set),
-            Self::Relation { .. } | Self::Coloc { .. } | Self::Present => None,
+            Self::Relation { .. }
+            | Self::Coloc { .. }
+            | Self::ObjectColoc { .. }
+            | Self::Present => None,
         }
     }
 }

@@ -1,3 +1,4 @@
+use crate::column::{Column, Unit};
 use crate::correlation::Pearson;
 
 mod threshold;
@@ -9,7 +10,7 @@ pub const COLOC_PERMUTATIONS_MAX: u32 = 2000;
 pub const COLOC_BLOCK_DEFAULT: u32 = 3;
 pub const COLOC_BLOCK_MAX: u32 = 32;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ColocPair {
     a: usize,
     b: usize,
@@ -654,6 +655,145 @@ impl ColocSeries {
             }
         }
         (counts_a, counts_b)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ColocMetric {
+    Pearson,
+    Overlap,
+}
+
+impl ColocMetric {
+    pub const ALL: [Self; 2] = [Self::Pearson, Self::Overlap];
+
+    pub fn index(self) -> u8 {
+        match self {
+            Self::Pearson => 0,
+            Self::Overlap => 1,
+        }
+    }
+
+    pub fn from_index(index: u8) -> Option<Self> {
+        Self::ALL.get(index as usize).copied()
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Pearson => "pearson",
+            Self::Overlap => "overlap",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pearson => "Pearson",
+            Self::Overlap => "Overlap",
+        }
+    }
+
+    pub fn column(self, pair: ColocPair, channels: &[String], keys: &[String]) -> Column {
+        let a = channels
+            .get(pair.a())
+            .map_or_else(|| pair.a().to_string(), Clone::clone);
+        let b = channels
+            .get(pair.b())
+            .map_or_else(|| pair.b().to_string(), Clone::clone);
+        let keys = (keys.get(pair.a()), keys.get(pair.b()));
+        let key = format!(
+            "{}_{}_{}",
+            self.name(),
+            keys.0.map_or("a", String::as_str),
+            keys.1.map_or("b", String::as_str)
+        );
+        Column::new(format!("{} {a}/{b}", self.label()), key, Unit::Count, 3)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ObjectColocValue {
+    moments: ColocMoments,
+}
+
+impl ObjectColocValue {
+    pub fn new(voxels: u64, sums: [f64; 5]) -> Self {
+        Self {
+            moments: ColocMoments::new(voxels, sums),
+        }
+    }
+
+    pub fn voxels(self) -> u64 {
+        self.moments.voxels()
+    }
+
+    pub fn sums(self) -> [f64; 5] {
+        self.moments.sums()
+    }
+
+    pub fn push(&mut self, a: f64, b: f64) {
+        self.moments.push(a, b);
+    }
+
+    pub fn merge(&mut self, other: &Self) {
+        self.moments.merge(&other.moments);
+    }
+
+    pub fn metric(self, metric: ColocMetric) -> Option<f64> {
+        match metric {
+            ColocMetric::Pearson => self.moments.pearson(),
+            ColocMetric::Overlap => self.moments.overlap(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ObjectColoc {
+    pair: ColocPair,
+    level: usize,
+    frames: Vec<Vec<ObjectColocValue>>,
+}
+
+impl ObjectColoc {
+    pub fn new(pair: ColocPair, level: usize, frames: Vec<Vec<ObjectColocValue>>) -> Self {
+        assert!(
+            !frames.is_empty(),
+            "an object colocalization covers at least one frame"
+        );
+        assert!(
+            frames
+                .iter()
+                .all(|values| values.len() <= usize::from(u16::MAX)),
+            "an object colocalization addresses its objects as labels"
+        );
+        Self {
+            pair,
+            level,
+            frames,
+        }
+    }
+
+    pub fn pair(&self) -> ColocPair {
+        self.pair
+    }
+
+    pub fn level(&self) -> usize {
+        self.level
+    }
+
+    pub fn frames(&self) -> &[Vec<ObjectColocValue>] {
+        &self.frames
+    }
+
+    pub fn objects(&self, time: u32) -> Option<&[ObjectColocValue]> {
+        self.frames.get(time as usize).map(Vec::as_slice)
+    }
+
+    pub fn value(&self, time: u32, object: usize) -> Option<ObjectColocValue> {
+        self.objects(time)?.get(object).copied()
+    }
+
+    pub fn metric(&self, time: u32, object: usize, metric: ColocMetric) -> Option<f64> {
+        self.value(time, object)?.metric(metric)
     }
 }
 

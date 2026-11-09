@@ -485,6 +485,14 @@ fn metric_label(scene: &Scene, metric: ObjectColor, channels: &[String]) -> Stri
             format!("{target} · {}", field.label(channels))
         }
         ObjectColor::Score => grana_measure::SCORE_LABEL.to_string(),
+        ObjectColor::Coloc { pair, metric } => {
+            let name = |channel: usize| {
+                channels
+                    .get(channel)
+                    .map_or_else(|| channel.to_string(), Clone::clone)
+            };
+            format!("{} {}/{}", metric.label(), name(pair.a()), name(pair.b()))
+        }
     }
 }
 
