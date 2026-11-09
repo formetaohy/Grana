@@ -444,6 +444,7 @@ impl Session {
                     scene.annotations.set_frame(index, frame);
                 }
             }
+            Command::SampleProfile { index } => self.sample_profile(index),
             Command::RemoveAnnotation(index) => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.annotations.remove(index);

@@ -2,6 +2,9 @@ use super::residency::ResidencyView;
 use super::signature::{channel_style, digest, scene_styles, shadow_bounds, shadow_geometry};
 use super::*;
 
+const AMBIENT_REACH: f32 = 40.0;
+const AMBIENT_STRENGTH: f32 = 0.9;
+
 impl Renderer {
     pub(super) fn render(
         &mut self,
@@ -81,6 +84,7 @@ impl Renderer {
             object_key,
             info,
             dummy_oit,
+            dummy_ao,
             budget,
             profile,
             frame_budget,
@@ -501,6 +505,50 @@ impl Renderer {
             info.samples = target.samples;
             *sampled = true;
             meshes.write_uniforms(queue, &frame_data, scene.shading);
+            let surfaces = !scene.layers.is_empty() || !scene.markers.is_empty();
+            if surfaces
+                && target
+                    .ao
+                    .as_ref()
+                    .is_none_or(|ao| ao.size() != [volume_width, volume_height])
+            {
+                target.ao = Some(crate::ao::Ao::new(
+                    device,
+                    layouts,
+                    [volume_width, volume_height],
+                ));
+            }
+            let ao_group: &BindGroup = target.ao.as_ref().map_or(dummy_ao, crate::ao::Ao::group);
+            if surfaces {
+                mark(profile, &mut encoder, Stage::Ambient, &mut marks);
+                let ao = target
+                    .ao
+                    .as_ref()
+                    .expect("the ambient occlusion target is ready");
+                ao.clear(&mut encoder);
+                meshes.draw_gbuffer(
+                    &mut encoder,
+                    ao.normal(),
+                    ao.depth(),
+                    volume_region,
+                    scene_group,
+                );
+                markers.draw_gbuffer(
+                    &mut encoder,
+                    ao.normal(),
+                    ao.depth(),
+                    volume_region,
+                    scene_group,
+                );
+                ao.evaluate(
+                    queue,
+                    &mut encoder,
+                    &frame_data,
+                    AMBIENT_REACH,
+                    AMBIENT_STRENGTH,
+                    sample_index,
+                );
+            }
             let styles = scene_styles(scene);
             mark(profile, &mut encoder, Stage::Shadow, &mut marks);
             if let Some(shadow) = shadow.as_mut() {
@@ -546,6 +594,7 @@ impl Renderer {
                 target.scene.depth(),
                 volume_region,
                 shadow_group,
+                ao_group,
             );
             markers.draw_volume(
                 &mut encoder,
@@ -553,6 +602,7 @@ impl Renderer {
                 target.scene.depth(),
                 volume_region,
                 scene_group,
+                ao_group,
             );
             if let Some(oit) = target.oit.as_ref().filter(|_| translucent) {
                 mark(profile, &mut encoder, Stage::Oit, &mut marks);
@@ -593,8 +643,8 @@ impl Renderer {
                         volume_width,
                         volume_height,
                     );
-                    meshes.draw_oit(&mut pass, shadow_group, oit.write_group());
-                    markers.draw_oit(&mut pass, scene_group, oit.write_group());
+                    meshes.draw_oit(&mut pass, shadow_group, oit.write_group(), ao_group);
+                    markers.draw_oit(&mut pass, scene_group, oit.write_group(), ao_group);
                 }
                 {
                     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -629,12 +679,14 @@ impl Renderer {
                         shadow_group,
                         oit.write_group(),
                         oit.coverage_group(),
+                        ao_group,
                     );
                     markers.draw_color(
                         &mut pass,
                         scene_group,
                         oit.write_group(),
                         oit.coverage_group(),
+                        ao_group,
                     );
                 }
                 {
@@ -685,12 +737,14 @@ impl Renderer {
                         shadow_group,
                         oit.write_group(),
                         oit.coverage_group(),
+                        ao_group,
                     );
                     markers.draw_tail(
                         &mut pass,
                         scene_group,
                         oit.write_group(),
                         oit.coverage_group(),
+                        ao_group,
                     );
                 }
                 if let Some(slot) = oit_readback.reserve() {

@@ -28,6 +28,8 @@ pub(crate) struct Layouts {
     pub oit_write: BindGroupLayout,
     pub oit_coverage: BindGroupLayout,
     pub oit_read: BindGroupLayout,
+    pub ao_read: BindGroupLayout,
+    pub ao_compute: BindGroupLayout,
     pub volume: PipelineLayout,
     pub section: PipelineLayout,
     pub cull: PipelineLayout,
@@ -39,6 +41,9 @@ pub(crate) struct Layouts {
     pub marker_section: PipelineLayout,
     pub marker_cull_pipeline: PipelineLayout,
     pub shadow_pipeline: PipelineLayout,
+    pub ao_pipeline: PipelineLayout,
+    pub ao_surface: PipelineLayout,
+    pub ao_marker: PipelineLayout,
 }
 
 impl Layouts {
@@ -248,6 +253,46 @@ impl Layouts {
                 texture(5, ShaderStages::FRAGMENT),
             ],
         });
+        let ao_read = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.ao.read.layout"),
+            entries: &[texture(0, ShaderStages::FRAGMENT)],
+        });
+        let ao_compute = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.ao.compute.layout"),
+            entries: &[
+                uniform(0, ShaderStages::COMPUTE),
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Depth,
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::Rgba8Unorm,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+            ],
+        });
         let volume = pipeline_layout(
             device,
             "grana.volume.layout",
@@ -265,14 +310,17 @@ impl Layouts {
             "grana.mesh.cull.layout",
             &[&scene, &objects, &styles, &commands],
         );
-        let marker_volume =
-            pipeline_layout(device, "grana.marker.layout", &[&scene, &marker_render]);
+        let marker_volume = pipeline_layout(
+            device,
+            "grana.marker.layout",
+            &[&scene, &marker_render, &ao_read],
+        );
         let marker_oit = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.marker.oit.layout"),
             bind_group_layouts: &[
                 Some(&scene),
                 Some(&marker_render),
-                None,
+                Some(&ao_read),
                 None,
                 Some(&oit_write),
             ],
@@ -283,7 +331,7 @@ impl Layouts {
             bind_group_layouts: &[
                 Some(&scene),
                 Some(&marker_render),
-                None,
+                Some(&ao_read),
                 None,
                 Some(&oit_write),
                 None,
@@ -311,6 +359,10 @@ impl Layouts {
             ],
             immediate_size: 0,
         });
+        let ao_pipeline = pipeline_layout(device, "grana.ao.pipeline.layout", &[&ao_compute]);
+        let ao_surface = pipeline_layout(device, "grana.ao.surface.layout", &[&scene, &objects]);
+        let ao_marker =
+            pipeline_layout(device, "grana.ao.marker.layout", &[&scene, &marker_render]);
         Self {
             scene,
             level,
@@ -330,6 +382,8 @@ impl Layouts {
             oit_write,
             oit_coverage,
             oit_read,
+            ao_read,
+            ao_compute,
             volume,
             section,
             cull,
@@ -341,6 +395,9 @@ impl Layouts {
             marker_section,
             marker_cull_pipeline,
             shadow_pipeline,
+            ao_pipeline,
+            ao_surface,
+            ao_marker,
         }
     }
 }

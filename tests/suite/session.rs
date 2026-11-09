@@ -204,6 +204,83 @@ fn derives_operator_channels_through_a_project() {
     assert_eq!(loaded, project, "the operator channels survive a project");
 }
 
+#[test]
+fn samples_an_intensity_profile_through_project_and_protocol() {
+    let mut session = Session::new();
+    session.open_series("nuclei", series());
+    session.execute(Command::AddSmoothChannel {
+        source: 0,
+        sigma: 0.2,
+    });
+    session.execute(Command::AddObject(ObjectKind::Spots));
+    session.execute(Command::AddDistance {
+        from: [-3.0, 0.05, 0.05],
+        to: [3.0, 0.05, 0.05],
+    });
+    session.execute(Command::SampleProfile { index: 0 });
+    let sample_count = {
+        let scene = session.scene().expect("the series opens");
+        let profile = scene
+            .annotations
+            .get(0)
+            .and_then(|annotation| annotation.profile())
+            .expect("the line carries a profile");
+        assert_eq!(profile.names().len(), 2);
+        assert_eq!(profile.names()[0], "signal");
+        assert!(profile.samples().len() > 50);
+        let peak = profile
+            .samples()
+            .iter()
+            .map(|sample| sample.values()[0])
+            .fold(0.0f32, f32::max);
+        assert!(peak > 60_000.0, "the profile misses the nuclei: {peak}");
+        let edges = [
+            profile.samples()[0].values()[0],
+            profile.samples().last().expect("a sample").values()[0],
+        ];
+        assert!(
+            edges.iter().all(|value| *value < 1_000.0),
+            "the profile starts outside the nuclei: {edges:?}"
+        );
+
+        let project = Project::capture(
+            scene,
+            session.measure(),
+            Source::Synthetic {
+                name: "profile".to_string(),
+            },
+            view_state(),
+            Vec::new(),
+            Fingerprint::new([11; 32]),
+        );
+        let temp = Temp::new("suite-profile");
+        let path = temp.path().join("profile.grana");
+        project
+            .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+            .expect("the profile project writes");
+        let loaded = Project::read(
+            &path,
+            GeometryStore::memory(),
+            &AtomicBool::new(false),
+            &mut |_, _| {},
+        )
+        .expect("the profile project reads");
+        let restored = loaded.scene.annotations.entries[0]
+            .profile()
+            .expect("the project carries the profile");
+        assert_eq!(restored.samples().len(), profile.samples().len());
+        profile.samples().len()
+    };
+
+    session.execute(Command::CaptureProtocol);
+    let protocol = session.protocol().expect("the protocol captures");
+    let spec = &protocol.annotations()[0];
+    let captured = spec.profile().expect("the protocol carries the profile");
+    assert_eq!(captured.channels.len(), 2);
+    assert_eq!(captured.channels[0], "signal");
+    assert_eq!(captured.samples.len(), sample_count);
+}
+
 fn series() -> VolumeSeries {
     let volume = support::spheres(
         Extent::new(64, 32, 32),

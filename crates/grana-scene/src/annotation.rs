@@ -1,5 +1,7 @@
 use std::fmt;
 
+use grana_profile::Profile;
+
 use crate::state::{HASH_OFFSET, mix};
 
 const LABELS: [&str; 2] = ["Point", "Distance"];
@@ -140,6 +142,7 @@ pub struct Annotation {
     visible: bool,
     frame: Option<u32>,
     kind: AnnotationKind,
+    profile: Option<Profile>,
 }
 
 impl Annotation {
@@ -154,6 +157,7 @@ impl Annotation {
             visible: true,
             frame,
             kind,
+            profile: None,
         }
     }
 
@@ -176,6 +180,30 @@ impl Annotation {
 
     pub fn kind(&self) -> AnnotationKind {
         self.kind
+    }
+
+    pub fn profile(&self) -> Option<&Profile> {
+        self.profile.as_ref()
+    }
+
+    pub fn set_profile(&mut self, profile: Option<Profile>) -> bool {
+        if let Some(profile) = &profile {
+            assert_eq!(
+                self.kind.tag(),
+                AnnotationTag::Distance,
+                "a profile follows a distance annotation"
+            );
+            assert!(
+                self.kind.anchor() == profile.line().from()
+                    && self.kind.end() == Some(profile.line().to()),
+                "a profile follows the line of its annotation"
+            );
+        }
+        if self.profile == profile {
+            return false;
+        }
+        self.profile = profile;
+        true
     }
 
     pub fn shown_at(&self, time: u32) -> bool {
@@ -302,6 +330,13 @@ impl Annotations {
         true
     }
 
+    pub fn set_profile(&mut self, index: usize, profile: Option<Profile>) -> bool {
+        let Some(entry) = self.entries.get_mut(index) else {
+            return false;
+        };
+        entry.set_profile(profile)
+    }
+
     pub fn set_kind(&mut self, index: usize, kind: AnnotationKind) -> bool {
         let Some(entry) = self.entries.get_mut(index) else {
             return false;
@@ -315,6 +350,7 @@ impl Annotations {
             return false;
         }
         entry.kind = kind;
+        entry.profile = None;
         true
     }
 
@@ -347,6 +383,22 @@ impl Annotations {
             if let Some(end) = entry.kind.end() {
                 for value in end {
                     hash = mix(hash, u64::from(value.to_bits()));
+                }
+            }
+            hash = mix(hash, u64::from(entry.profile.is_some()));
+            if let Some(profile) = &entry.profile {
+                hash = mix(hash, u64::from(profile.spacing().to_bits()));
+                for name in profile.names() {
+                    for byte in name.bytes() {
+                        hash = mix(hash, u64::from(byte));
+                    }
+                }
+                hash = mix(hash, profile.samples().len() as u64);
+                for sample in profile.samples() {
+                    hash = mix(hash, u64::from(sample.offset().to_bits()));
+                    for value in sample.values() {
+                        hash = mix(hash, u64::from(value.to_bits()));
+                    }
                 }
             }
         }

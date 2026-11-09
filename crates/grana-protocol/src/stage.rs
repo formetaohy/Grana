@@ -251,9 +251,14 @@ impl Protocol {
         for spec in &self.annotations {
             let kind = spec.kind();
             counts[kind.tag().index()] += 1;
-            entries.push(
-                Annotation::new(spec.name(), spec.frame(), kind).with_visible(spec.visible()),
-            );
+            let mut annotation =
+                Annotation::new(spec.name(), spec.frame(), kind).with_visible(spec.visible());
+            if let (Some(profile), Some(end)) = (spec.profile(), kind.end()) {
+                annotation.set_profile(Some(
+                    profile.profile(grana_profile::Line::new(kind.anchor(), end)),
+                ));
+            }
+            entries.push(annotation);
         }
         scene.annotations.restore(AnnotationState {
             entries,

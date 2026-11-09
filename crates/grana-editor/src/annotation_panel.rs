@@ -2,7 +2,7 @@ use glam::Vec2;
 use grana_scene::AnnotationTag;
 use grana_session::Command;
 use grana_ui::{
-    Align, BuildContext, Corners, Element, Icon, Key, Length, Rect, Role, TextStyle, icon,
+    Align, BuildContext, Color, Corners, Element, Icon, Key, Length, Rect, Role, TextStyle, icon,
 };
 
 use crate::message::Message;
@@ -16,6 +16,9 @@ pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
     let mut children = vec![tools_card(ctx, state), list_card(ctx, state)];
     if let Some(annotation) = selected_card(ctx, state) {
         children.push(annotation);
+    }
+    if let Some(profile) = profile_card(ctx, state) {
+        children.push(profile);
     }
     children.push(region_card(ctx, state));
     grana_ui::column()
@@ -296,6 +299,126 @@ fn selected_card<'a>(
             },
         ));
     }
+    Some(view::card(ctx, 8.0, children))
+}
+
+fn profile_card<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+) -> Option<Element<'a, Message>> {
+    let index = state.scene.annotations.selected()?;
+    let annotation = state.scene.annotations.get(index)?;
+    if annotation.kind().tag() != AnnotationTag::Distance {
+        return None;
+    }
+    let profile = annotation.profile();
+    let detail = profile.map(|profile| {
+        format!(
+            "{} samples · {} channels",
+            profile.samples().len(),
+            profile.names().len()
+        )
+    });
+    let title = view::card_title(ctx, Icon::Channel, "Intensity Profile", detail.as_deref());
+    let mut children = vec![title];
+    if let Some(profile) = profile {
+        let names = profile.names().to_vec();
+        let tints = state
+            .scene
+            .dataset
+            .channels()
+            .iter()
+            .map(|channel| channel.tint())
+            .collect::<Vec<_>>();
+        let samples = profile
+            .samples()
+            .iter()
+            .map(|sample| (sample.offset(), sample.values().to_vec()))
+            .collect::<Vec<_>>();
+        let span = profile.length().max(1.0e-6);
+        let spacing = profile.spacing();
+        let legend = names.join(" · ");
+        let theme = *ctx.theme();
+        let chart = grana_ui::canvas(Length::Fill, 148.0, move |painter, info| {
+            let palette = theme.palette;
+            let rect = info.rect.shrink2(Vec2::new(4.0, 4.0));
+            painter.rect(rect, Corners::all(8.0), palette.material_fill.amplify(0.4));
+            let plot = Rect::from_min_max(
+                Vec2::new(rect.left() + 10.0, rect.top() + 10.0),
+                Vec2::new(rect.right() - 10.0, rect.bottom() - 22.0),
+            );
+            painter.segment(
+                Vec2::new(plot.left(), plot.bottom()),
+                Vec2::new(plot.right(), plot.bottom()),
+                1.0,
+                palette.separator,
+            );
+            let stride = (samples.len() / 256).max(1);
+            for (channel, _) in names.iter().enumerate() {
+                let mut low = f32::INFINITY;
+                let mut high = f32::NEG_INFINITY;
+                for sample in samples.iter().step_by(stride) {
+                    if let Some(value) = sample.1.get(channel).copied()
+                        && value.is_finite()
+                    {
+                        low = low.min(value);
+                        high = high.max(value);
+                    }
+                }
+                if low > high {
+                    continue;
+                }
+                let range = (high - low).max(1.0e-6);
+                let tint = tints.get(channel).copied().unwrap_or([1.0, 1.0, 1.0]);
+                let color = Color::from_rgb_f32(tint);
+                let mut previous: Option<Vec2> = None;
+                for sample in samples.iter().step_by(stride) {
+                    let Some(value) = sample.1.get(channel).copied() else {
+                        previous = None;
+                        continue;
+                    };
+                    if !value.is_finite() {
+                        previous = None;
+                        continue;
+                    }
+                    let x = plot.left() + (sample.0 / span).clamp(0.0, 1.0) * plot.width();
+                    let y = plot.bottom() - ((value - low) / range) * plot.height();
+                    let point = Vec2::new(x, y);
+                    if let Some(previous) = previous {
+                        painter.segment(previous, point, 1.4, color);
+                    }
+                    previous = Some(point);
+                }
+            }
+            let caption = format!("0 – {span:.2} µm · every {spacing:.3} µm");
+            painter.text_in(
+                Rect::from_min_max(
+                    Vec2::new(rect.left() + 10.0, plot.bottom() + 4.0),
+                    Vec2::new(rect.right() - 10.0, rect.bottom() - 2.0),
+                ),
+                &caption,
+                TextStyle::new(theme.font(grana_ui::Level::Caption), palette.text_tertiary),
+                Align::Center,
+            );
+        });
+        children.push(chart);
+        children.push(view::weak(ctx, &legend));
+    } else {
+        children.push(view::weak(
+            ctx,
+            "Sample the line to draw its intensity profile.",
+        ));
+    }
+    let label = if profile.is_some() {
+        "Resample"
+    } else {
+        "Sample Profile"
+    };
+    children.push(
+        view::button_with(ctx, label, Role::Quiet, Length::Fill)
+            .named("annotation.profile.sample")
+            .press(Message::Command(Command::SampleProfile { index })),
+    );
     Some(view::card(ctx, 8.0, children))
 }
 

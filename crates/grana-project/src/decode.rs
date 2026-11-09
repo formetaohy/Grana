@@ -19,6 +19,7 @@ use grana_object::{
     SurfaceStatistics, SurfaceTopology, Track, TrackNode, TrackSet,
 };
 use grana_optics::{Kernel, MeasuredPsf, Psf, PsfParams};
+use grana_profile::{Line, Profile, Sample};
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, BackgroundSpec, ChannelState, ColocResult,
     ColocState, ColorState, Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState,
@@ -409,8 +410,56 @@ impl Decode for Annotation {
         }
         let visible = reader.bool()?;
         let frame = decode_frame(reader)?;
-        Ok(Self::new(name, frame, AnnotationKind::decode(reader)?).with_visible(visible))
+        let kind = AnnotationKind::decode(reader)?;
+        let profile = match reader.u8()? {
+            0 => None,
+            1 => Some(decode_profile(reader, kind)?),
+            _ => return Err(FAULT_TAG),
+        };
+        let mut annotation = Self::new(name, frame, kind).with_visible(visible);
+        annotation.set_profile(profile);
+        Ok(annotation)
     }
+}
+
+fn decode_profile(reader: &mut Reader<'_>, kind: AnnotationKind) -> Result<Profile, &'static str> {
+    let end = kind.end().ok_or(FAULT_SHAPE)?;
+    let line = Line::new(kind.anchor(), end);
+    let spacing = finite(reader.f32()?)?;
+    if spacing <= 0.0 {
+        return Err(FAULT_VALUE);
+    }
+    let names = reader.count(1)?;
+    if names == 0 {
+        return Err(FAULT_VALUE);
+    }
+    let mut channels = Vec::with_capacity(names);
+    for _ in 0..names {
+        let name = reader.string()?;
+        if name.trim().is_empty() {
+            return Err(FAULT_VALUE);
+        }
+        channels.push(name);
+    }
+    let count = reader.count(1)?;
+    if count == 0 {
+        return Err(FAULT_VALUE);
+    }
+    let mut samples = Vec::with_capacity(count);
+    let mut previous = 0.0f32;
+    for _ in 0..count {
+        let offset = finite(reader.f32()?)?;
+        if offset < 0.0 || offset < previous {
+            return Err(FAULT_VALUE);
+        }
+        previous = offset;
+        let mut values = Vec::with_capacity(channels.len());
+        for _ in 0..channels.len() {
+            values.push(reader.f32()?);
+        }
+        samples.push(Sample::new(offset, values));
+    }
+    Ok(Profile::new(line, spacing, channels, samples))
 }
 
 fn decode_frame(reader: &mut Reader<'_>) -> Result<Option<u32>, &'static str> {

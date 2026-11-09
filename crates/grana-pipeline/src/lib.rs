@@ -4,6 +4,7 @@ pub mod event;
 pub mod export;
 pub mod label;
 pub mod mesh;
+pub mod profile;
 pub mod run;
 pub mod snapshot;
 
@@ -17,5 +18,6 @@ pub use channels::{Channels, ChannelsError};
 pub use event::Event;
 pub use export::{ChannelLayer, DatasetSpec, LabelLayer, Summary as ExportSummary, write_dataset};
 pub use grana_analysis::SeedPolicy;
+pub use profile::ProfileSource;
 pub use run::{ColocRequest, DetectRequest, DriftRequest, ObjectColocRequest};
 pub use snapshot::{SnapshotFactory, SnapshotRequest, Snapshotter};

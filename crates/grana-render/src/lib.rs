@@ -1,3 +1,4 @@
+mod ao;
 mod atlas;
 mod brick;
 mod cut;

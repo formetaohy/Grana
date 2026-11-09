@@ -5,6 +5,16 @@ struct MarkerInstance {
 
 @group(1) @binding(0) var<storage, read> markers: array<MarkerInstance>;
 @group(1) @binding(1) var<storage, read> order: array<u32>;
+@group(2) @binding(0) var ao_map: texture_2d<f32>;
+
+fn ambient_occlusion(pixel: vec2<f32>) -> f32 {
+    let size = vec2<i32>(frame.viewport.zw);
+    let at = vec2<i32>(floor(pixel));
+    if (at.x < 0 || at.y < 0 || at.x >= size.x || at.y >= size.y) {
+        return 1.0;
+    }
+    return textureLoad(ao_map, at, 0).r;
+}
 
 const MARKER_ROUGHNESS: f32 = 0.30;
 const MARKER_METALLIC: f32 = 0.0;
@@ -72,7 +82,7 @@ fn kept(input: MarkerOutput) -> bool {
     return !outside_region(surface) && !outside_clip(surface);
 }
 
-fn shade(input: MarkerOutput) -> Shaded {
+fn shade(input: MarkerOutput, occlusion: f32) -> Shaded {
     let local = input.local;
     let squared = dot(local, local);
     if (squared > 1.0) {
@@ -99,6 +109,7 @@ fn shade(input: MarkerOutput) -> Shaded {
         1.0,
         frame.shading.x,
         frame.shading.y,
+        occlusion,
     );
     let pixel = max(fwidth(local.x), fwidth(local.y));
     let coverage = clamp((1.0 - sqrt(squared)) / max(pixel, 1.0e-6) + 0.5, 0.0, 1.0);
@@ -112,7 +123,10 @@ fn shade(input: MarkerOutput) -> Shaded {
 
 @fragment
 fn fs_main(input: MarkerOutput) -> MarkerFragment {
-    let shaded = shade(input);
+    let shaded = shade(
+        input,
+        ambient_occlusion(input.clip_position.xy - frame.viewport.xy),
+    );
     var output: MarkerFragment;
     output.color = shaded.color;
     output.depth = shaded.depth;
@@ -172,7 +186,10 @@ fn fs_oit_color(input: MarkerOutput) {
     if (slot < 0) {
         return;
     }
-    let shaded = shade(input);
+    let shaded = shade(
+        input,
+        ambient_occlusion(input.clip_position.xy - frame.viewport.xy),
+    );
     let premultiplied = vec4<f32>(shaded.color.rgb * shaded.color.a, shaded.color.a) * covered;
     oit_write(u32(index), frame.oit.y, u32(slot), premultiplied);
 }
@@ -202,7 +219,10 @@ fn fs_oit_tail(input: MarkerOutput) -> TailFragment {
     if (!oit_beyond(u32(index), frame.oit.y, oit_key(depth))) {
         discard;
     }
-    let shaded = shade(input);
+    let shaded = shade(
+        input,
+        ambient_occlusion(input.clip_position.xy * f32(scale)),
+    );
     let alpha = shaded.color.a * covered;
     let weight = oit_weight(depth, shaded.color.a);
     output.accumulate = vec4<f32>(shaded.color.rgb * alpha * weight, alpha * weight);
@@ -213,7 +233,7 @@ fn fs_oit_tail(input: MarkerOutput) -> TailFragment {
 
 @fragment
 fn fs_pick(input: MarkerOutput) -> PickFragment {
-    let shaded = shade(input);
+    let shaded = shade(input, 1.0);
     var output: PickFragment;
     output.id = vec2<u32>(2u, input.marker + 1u);
     output.depth = shaded.depth;

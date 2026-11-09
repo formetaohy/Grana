@@ -275,6 +275,24 @@ impl Encode for Annotation {
             None => writer.u8(0),
         }
         self.kind().encode(writer);
+        match self.profile() {
+            Some(profile) => {
+                writer.u8(1);
+                writer.f32(profile.spacing());
+                writer.count(profile.names().len());
+                for name in profile.names() {
+                    writer.string(name);
+                }
+                writer.count(profile.samples().len());
+                for sample in profile.samples() {
+                    writer.f32(sample.offset());
+                    for value in sample.values() {
+                        writer.f32(*value);
+                    }
+                }
+            }
+            None => writer.u8(0),
+        }
     }
 }
 

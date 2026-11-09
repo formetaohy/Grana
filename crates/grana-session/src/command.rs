@@ -246,6 +246,9 @@ pub enum Command {
         index: usize,
         frame: Option<u32>,
     },
+    SampleProfile {
+        index: usize,
+    },
     RemoveAnnotation(usize),
     ClearAnnotations,
     SetTrackParams {
@@ -699,6 +702,7 @@ impl Command {
             Self::SetAnnotationKind { index, .. } | Self::SetAnnotationFrame { index, .. } => {
                 Edit::targeted(Action::Annotation, *index as u64)
             }
+            Self::SampleProfile { index } => Edit::targeted(Action::Annotation, *index as u64),
             Self::SetTrackVisible { set, .. } => Edit::targeted(Action::TrackVisible, set.raw()),
             Self::SetTrackThickness { set, .. } => {
                 Edit::targeted(Action::TrackThickness, set.raw())

@@ -25,6 +25,7 @@ pub enum Stage {
     Cull,
     Shadow,
     Geometry,
+    Ambient,
     Oit,
     Volume,
     Section,
@@ -32,7 +33,7 @@ pub enum Stage {
     Present,
 }
 
-pub const STAGE_COUNT: usize = 9;
+pub const STAGE_COUNT: usize = 10;
 
 impl Stage {
     pub const ALL: [Stage; STAGE_COUNT] = [
@@ -40,6 +41,7 @@ impl Stage {
         Stage::Cull,
         Stage::Shadow,
         Stage::Geometry,
+        Stage::Ambient,
         Stage::Oit,
         Stage::Volume,
         Stage::Section,
@@ -53,6 +55,7 @@ impl Stage {
             Self::Cull => "Cull",
             Self::Shadow => "Shadow",
             Self::Geometry => "Geometry",
+            Self::Ambient => "Occlusion",
             Self::Oit => "Transparency",
             Self::Volume => "Volume",
             Self::Section => "Section",

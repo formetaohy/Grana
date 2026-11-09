@@ -43,6 +43,7 @@ grana-animation = { version = "0.1.1", path = "crates/grana-animation" }
 grana-calibration = { version = "0.1.1", path = "crates/grana-calibration" }
 grana-volume = { version = "0.1.1", path = "crates/grana-volume" }
 grana-object = { version = "0.1.1", path = "crates/grana-object" }
+grana-profile = { version = "0.1.1", path = "crates/grana-profile" }
 grana-gpu = { version = "0.1.1", path = "crates/grana-gpu" }
 grana-figure = { version = "0.1.1", path = "crates/grana-figure" }
 grana-glass = { version = "0.1.1", path = "crates/grana-glass" }

@@ -13,6 +13,7 @@ grana-geometry = { workspace = true }
 grana-measure = { workspace = true }
 grana-object = { workspace = true }
 grana-optics = { workspace = true }
+grana-profile = { workspace = true }
 grana-volume = { workspace = true }
 
 [lints]

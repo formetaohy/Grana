@@ -286,7 +286,77 @@ pub enum AnnotationSpec {
         frame: Option<u32>,
         from: [f32; 3],
         to: [f32; 3],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<ProfileSpec>,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileSpec {
+    pub spacing: f32,
+    pub channels: Vec<String>,
+    pub samples: Vec<ProfileSampleSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileSampleSpec {
+    pub offset: f32,
+    pub values: Vec<f32>,
+}
+
+impl ProfileSpec {
+    pub fn of(profile: &grana_profile::Profile) -> Self {
+        Self {
+            spacing: profile.spacing(),
+            channels: profile.names().to_vec(),
+            samples: profile
+                .samples()
+                .iter()
+                .map(|sample| ProfileSampleSpec {
+                    offset: sample.offset(),
+                    values: sample.values().to_vec(),
+                })
+                .collect(),
+        }
+    }
+
+    pub fn profile(&self, line: grana_profile::Line) -> grana_profile::Profile {
+        grana_profile::Profile::new(
+            line,
+            self.spacing,
+            self.channels.clone(),
+            self.samples
+                .iter()
+                .map(|sample| grana_profile::Sample::new(sample.offset, sample.values.clone()))
+                .collect(),
+        )
+    }
+
+    pub(super) fn checked(&self) -> Result<(), ProtocolError> {
+        let invalid = |detail: String| Err(ProtocolError::Invalid(format!("the profile {detail}")));
+        if !self.spacing.is_finite() || self.spacing <= 0.0 {
+            return invalid("samples at a positive spacing".to_string());
+        }
+        if self.channels.is_empty() || self.channels.iter().any(|name| name.trim().is_empty()) {
+            return invalid("names at least one channel".to_string());
+        }
+        if self.samples.is_empty() {
+            return invalid("carries at least one sample".to_string());
+        }
+        let mut previous = 0.0f32;
+        for sample in &self.samples {
+            if !sample.offset.is_finite() || sample.offset < 0.0 || sample.offset < previous {
+                return invalid("stands its samples in order along the line".to_string());
+            }
+            previous = sample.offset;
+            if sample.values.len() != self.channels.len() {
+                return invalid("measures every channel at every sample".to_string());
+            }
+        }
+        Ok(())
+    }
 }
 
 impl AnnotationSpec {
@@ -310,6 +380,7 @@ impl AnnotationSpec {
                     .kind()
                     .end()
                     .expect("a distance annotation names its end"),
+                profile: annotation.profile().map(ProfileSpec::of),
             },
         }
     }
@@ -329,6 +400,13 @@ impl AnnotationSpec {
     pub fn frame(&self) -> Option<u32> {
         match self {
             Self::Point { frame, .. } | Self::Distance { frame, .. } => *frame,
+        }
+    }
+
+    pub fn profile(&self) -> Option<&ProfileSpec> {
+        match self {
+            Self::Point { .. } => None,
+            Self::Distance { profile, .. } => profile.as_ref(),
         }
     }
 
@@ -361,6 +439,13 @@ impl AnnotationSpec {
                     ));
                 }
             }
+        }
+        if let Self::Distance {
+            profile: Some(profile),
+            ..
+        } = self
+        {
+            profile.checked()?;
         }
         Ok(())
     }

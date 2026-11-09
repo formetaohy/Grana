@@ -40,6 +40,16 @@ struct Style {
 @group(3) @binding(3) var shadow_objects: texture_depth_2d;
 @group(3) @binding(4) var shadow_compare: sampler_comparison;
 @group(5) @binding(0) var<storage, read> pick_ids: array<u32>;
+@group(7) @binding(0) var ao_map: texture_2d<f32>;
+
+fn ambient_occlusion(pixel: vec2<f32>) -> f32 {
+    let size = vec2<i32>(mesh.viewport.zw);
+    let at = vec2<i32>(floor(pixel));
+    if (at.x < 0 || at.y < 0 || at.x >= size.x || at.y >= size.y) {
+        return 1.0;
+    }
+    return textureLoad(ao_map, at, 0).r;
+}
 
 struct VertexInput {
     @location(0) position: vec4<f32>,
@@ -132,7 +142,7 @@ fn is_outside(input: VertexOutput) -> bool {
     return dot(mesh.clip.xyz, input.position) > mesh.clip.w;
 }
 
-fn shade(input: VertexOutput) -> vec4<f32> {
+fn shade(input: VertexOutput, occlusion: f32) -> vec4<f32> {
     let style = styles[input.object];
     let normal = normalize(input.normal);
     let view = normalize(mesh.eye.xyz - input.position);
@@ -154,6 +164,7 @@ fn shade(input: VertexOutput) -> vec4<f32> {
         visibility,
         mesh.shading.x,
         mesh.shading.y,
+        occlusion,
     );
     if (style.flags.y > 0.5) {
         color = mix(color, vec3<f32>(1.0, 0.86, 0.45), 0.55);
@@ -166,7 +177,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     if (is_outside(input)) {
         discard;
     }
-    return shade(input);
+    return shade(input, ambient_occlusion(input.clip_position.xy - mesh.viewport.xy));
 }
 
 @fragment
@@ -211,7 +222,7 @@ fn fs_oit_color(input: VertexOutput) {
     if (slot < 0) {
         return;
     }
-    let sample = shade(input);
+    let sample = shade(input, ambient_occlusion(input.clip_position.xy - mesh.viewport.xy));
     let premultiplied = vec4<f32>(sample.rgb * sample.a, sample.a) * covered;
     oit_write(u32(index), mesh.oit.y, u32(slot), premultiplied);
 }
@@ -241,7 +252,10 @@ fn fs_oit_tail(input: VertexOutput) -> TailFragment {
     if (!oit_beyond(u32(index), mesh.oit.y, key)) {
         discard;
     }
-    let sample = shade(input);
+    let sample = shade(
+        input,
+        ambient_occlusion(input.clip_position.xy * f32(scale)),
+    );
     let alpha = sample.a * covered;
     let weight = oit_weight(input.clip_position.z, sample.a);
     output.accumulate = vec4<f32>(sample.rgb * alpha * weight, alpha * weight);

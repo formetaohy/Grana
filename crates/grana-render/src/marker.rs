@@ -42,6 +42,11 @@ const SHADOW_SHADER: &str = concat!(
     "\n",
     include_str!("shader/marker_shadow.wgsl")
 );
+const AO_SHADER: &str = concat!(
+    include_str!("shader/scene.wgsl"),
+    "\n",
+    include_str!("shader/marker_ao.wgsl")
+);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -130,6 +135,7 @@ pub(crate) struct MarkerPasses {
     section_pick_pipeline: RenderPipeline,
     volume_pick_pipeline: RenderPipeline,
     shadow_pipeline: RenderPipeline,
+    ao_pipeline: RenderPipeline,
     count: u32,
 }
 
@@ -200,6 +206,38 @@ impl MarkerPasses {
         let shadow_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.marker.shadow"),
             source: ShaderSource::Wgsl(SHADOW_SHADER.into()),
+        });
+        let ao_module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("grana.marker.ao"),
+            source: ShaderSource::Wgsl(AO_SHADER.into()),
+        });
+        let ao_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("grana.marker.ao"),
+            layout: Some(&layouts.ao_marker),
+            vertex: VertexState {
+                module: &ao_module,
+                entry_point: Some("vs_ao"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(depth_state(true, CompareFunction::Less)),
+            multisample: MultisampleState::default(),
+            fragment: Some(FragmentState {
+                module: &ao_module,
+                entry_point: Some("fs_ao"),
+                compilation_options: Default::default(),
+                targets: &[Some(ColorTargetState {
+                    format: SCENE_FORMAT,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
         });
         let volume_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.marker"),
@@ -342,7 +380,7 @@ impl MarkerPasses {
         });
         let shadow_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.marker.shadow"),
-            layout: Some(&layouts.marker_volume),
+            layout: Some(&layouts.marker_section),
             vertex: VertexState {
                 module: &shadow_module,
                 entry_point: Some("vs_shadow"),
@@ -363,7 +401,7 @@ impl MarkerPasses {
         });
         let volume_pick_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.marker.pick.volume"),
-            layout: Some(&layouts.marker_volume),
+            layout: Some(&layouts.marker_section),
             vertex: VertexState {
                 module: &volume_module,
                 entry_point: Some("vs_main"),
@@ -444,6 +482,7 @@ impl MarkerPasses {
             section_pick_pipeline,
             volume_pick_pipeline,
             shadow_pipeline,
+            ao_pipeline,
             count: 0,
         }
     }
@@ -544,6 +583,48 @@ impl MarkerPasses {
         pass.dispatch_workgroups(self.count.div_ceil(64), 1, 1);
     }
 
+    pub fn draw_gbuffer(
+        &self,
+        encoder: &mut CommandEncoder,
+        normal: &TextureView,
+        depth: &TextureView,
+        region: [u32; 4],
+        scene: &BindGroup,
+    ) {
+        if self.count == 0 {
+            return;
+        }
+        let width = region[2].max(1);
+        let height = region[3].max(1);
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("grana.marker.ao.pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: normal,
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Load,
+                    store: StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(Operations {
+                    load: LoadOp::Load,
+                    store: StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+        pass.set_scissor_rect(0, 0, width, height);
+        pass.set_pipeline(&self.ao_pipeline);
+        pass.set_bind_group(0, scene, &[]);
+        pass.set_bind_group(1, &self.opaque_group, &[]);
+        pass.draw_indirect(self.opaque_args.buffer(), 0);
+    }
+
     pub fn draw_volume(
         &self,
         encoder: &mut CommandEncoder,
@@ -551,6 +632,7 @@ impl MarkerPasses {
         depth: &TextureView,
         region: [u32; 4],
         scene: &BindGroup,
+        ao: &BindGroup,
     ) {
         if self.count == 0 {
             return;
@@ -590,6 +672,7 @@ impl MarkerPasses {
         pass.set_pipeline(&self.volume_pipeline);
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.opaque_group, &[]);
+        pass.set_bind_group(2, ao, &[]);
         pass.draw_indirect(self.opaque_args.buffer(), 0);
     }
 
@@ -598,6 +681,7 @@ impl MarkerPasses {
         pass: &mut RenderPass<'a>,
         scene: &'a BindGroup,
         oit: &'a BindGroup,
+        ao: &'a BindGroup,
     ) {
         if self.count == 0 {
             return;
@@ -605,6 +689,7 @@ impl MarkerPasses {
         pass.set_pipeline(&self.oit_pipeline);
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.layer_group, &[]);
+        pass.set_bind_group(2, ao, &[]);
         pass.set_bind_group(4, oit, &[]);
         pass.draw_indirect(self.layer_args.buffer(), 0);
     }
@@ -615,6 +700,7 @@ impl MarkerPasses {
         scene: &'a BindGroup,
         oit: &'a BindGroup,
         coverage: &'a BindGroup,
+        ao: &'a BindGroup,
     ) {
         if self.count == 0 {
             return;
@@ -622,6 +708,7 @@ impl MarkerPasses {
         pass.set_pipeline(&self.color_pipeline);
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.layer_group, &[]);
+        pass.set_bind_group(2, ao, &[]);
         pass.set_bind_group(4, oit, &[]);
         pass.set_bind_group(6, coverage, &[]);
         pass.draw_indirect(self.layer_args.buffer(), 0);
@@ -633,6 +720,7 @@ impl MarkerPasses {
         scene: &'a BindGroup,
         oit: &'a BindGroup,
         coverage: &'a BindGroup,
+        ao: &'a BindGroup,
     ) {
         if self.count == 0 {
             return;
@@ -640,6 +728,7 @@ impl MarkerPasses {
         pass.set_pipeline(&self.tail_pipeline);
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(1, &self.layer_group, &[]);
+        pass.set_bind_group(2, ao, &[]);
         pass.set_bind_group(4, oit, &[]);
         pass.set_bind_group(6, coverage, &[]);
         pass.draw_indirect(self.layer_args.buffer(), 0);

@@ -57,6 +57,7 @@ fn lit(albedo: vec3<f32>, roughness: f32, metallic: f32, point: vec3<f32>) -> ve
         1.0,
         frame.shading.x,
         frame.shading.y,
+        1.0,
     );
 }
 

@@ -6,6 +6,47 @@ use grana_pipeline::run::SegmentRequest;
 const CALIBRATION_ITERATIONS: u32 = 10;
 
 impl Session {
+    pub(super) fn sample_profile(&mut self, index: usize) {
+        let prepared = self.scene.as_ref().and_then(|scene| {
+            let annotation = scene.annotations.get(index)?;
+            let end = annotation.kind().end()?;
+            let line = grana_profile::Line::new(annotation.kind().anchor(), end);
+            let names = scene
+                .dataset
+                .channels()
+                .iter()
+                .map(|channel| channel.name().to_string())
+                .collect::<Vec<_>>();
+            let spacing = scene.dataset.voxel_size().min_element().max(1.0e-4);
+            Some((line, names, spacing, scene.time()))
+        });
+        let Some((line, names, spacing, time)) = prepared else {
+            self.message = Some(Message::error(
+                "choose a distance annotation to sample a profile",
+            ));
+            return;
+        };
+        let Some(channels) = self.analysis_channels() else {
+            self.message = Some(Message::error("open a dataset before sampling a profile"));
+            return;
+        };
+        let source = grana_pipeline::ProfileSource::new(&channels, time);
+        match source.profile(line, spacing, &names) {
+            Ok(profile) => {
+                let samples = profile.samples().len();
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.annotations.set_profile(index, Some(profile));
+                    self.message = Some(Message::info(format!(
+                        "sampled {samples} points of {} channels along {:.2} µm",
+                        names.len(),
+                        line.length(),
+                    )));
+                }
+            }
+            Err(detail) => self.message = Some(Message::error(detail)),
+        }
+    }
+
     pub(super) fn analysable(&mut self) -> bool {
         if self.scene.is_none() {
             self.message = Some(Message::error("open a dataset before analysing it"));

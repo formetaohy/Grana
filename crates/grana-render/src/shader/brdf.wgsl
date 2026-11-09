@@ -45,6 +45,7 @@ fn shade_surface(
     visibility: f32,
     ambient: f32,
     diffuse: f32,
+    occlusion: f32,
 ) -> vec3<f32> {
     let r = clamp(roughness, BRDF_ROUGHNESS_FLOOR, 1.0);
     let m = clamp(metallic, 0.0, 1.0);
@@ -63,6 +64,7 @@ fn shade_surface(
     let mirror = reflect(-view, normal);
     let reflected = mix(scene_environment(normal), scene_environment(mirror), 1.0 - r);
     let environment = ambient
+        * clamp(occlusion, 0.0, 1.0)
         * (diffuse_weight * albedo * scene_environment(normal) + reflected * fresnel);
     return direct + environment;
 }

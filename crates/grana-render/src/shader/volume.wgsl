@@ -116,6 +116,7 @@ fn lit(color: vec3<f32>, normal: vec3<f32>, direction: vec3<f32>, light: vec2<f3
         light.x,
         frame.shading.x,
         frame.shading.y,
+        1.0,
     ) * (1.0 - OCCLUSION_STRENGTH * (1.0 - light.y));
 }
 

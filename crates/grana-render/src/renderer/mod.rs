@@ -164,6 +164,7 @@ pub struct Renderer {
     markers: MarkerPasses,
     dummy: TextureView,
     dummy_oit: Oit,
+    dummy_ao: BindGroup,
     atlas_sampler: Sampler,
     pyramid: Option<Pyramid>,
     channels: usize,
@@ -215,6 +216,7 @@ impl Renderer {
         let layouts = Layouts::new(device);
         let dummy = dummy_texture(device, queue);
         let dummy_oit = Oit::new(device, &layouts, [1, 1], 1, 1);
+        let dummy_ao = crate::ao::dummy(device, queue, &layouts);
         let atlas_sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("grana.atlas.sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -246,6 +248,7 @@ impl Renderer {
             layouts,
             dummy,
             dummy_oit,
+            dummy_ao,
             atlas_sampler,
             pyramid: None,
             channels: 0,
