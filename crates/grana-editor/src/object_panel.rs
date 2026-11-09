@@ -251,6 +251,17 @@ fn object<'a>(
             children.push(detect(ctx, state, id, kind, frames));
         }
         children.push(summary(ctx, kind, current, mean, detected, frames, time));
+        if let Some(export) = set.label_export() {
+            children.push(view::weak(
+                ctx,
+                &format!(
+                    "Labels written to {} · {} objects over {} frames.",
+                    export.path(),
+                    export.labels(),
+                    export.frames()
+                ),
+            ));
+        }
         children.extend(classifier(ctx, state, id, width));
         children.extend(appearance(ctx, state, id, width));
         children.extend(relations(ctx, state, id));
@@ -1625,7 +1636,7 @@ fn relations<'a>(
                 ctx, state, id, entry, frames, &relations, &targets,
             ));
         }
-        children.extend(unlinked(ctx, id, frames, &relations, &targets));
+        children.extend(unlinked(ctx, id, &relations, &targets));
     }
     vec![crate::inspector::disclosure(
         ctx,
@@ -1698,7 +1709,7 @@ fn relation_row<'a>(
             .filter(|candidate| candidate.target == target)
             .map(|candidate| candidate.shift)
             .collect::<Vec<_>>();
-        let free = free_offsets(target, id, limit, &taken);
+        let free = free_offsets(limit, &taken);
         let mut cell = Vec::new();
         if shift > -limit && !taken.contains(&(shift - 1)) {
             cell.push(view::icon_button(
@@ -1771,9 +1782,9 @@ fn relation_row<'a>(
     grana_ui::column().gap(6.0).children(children)
 }
 
-fn free_offsets(target: ObjectSetId, source: ObjectSetId, limit: i32, taken: &[i32]) -> Vec<i32> {
+fn free_offsets(limit: i32, taken: &[i32]) -> Vec<i32> {
     let mut free = (-limit..=limit)
-        .filter(|offset| !taken.contains(offset) && (target != source || *offset != 0))
+        .filter(|offset| !taken.contains(offset))
         .collect::<Vec<_>>();
     free.sort_by_key(|offset| (offset.abs(), *offset));
     free
@@ -1792,7 +1803,6 @@ fn shift_label(shift: i32) -> String {
 fn unlinked<'a>(
     ctx: &mut BuildContext<'_, Message>,
     id: ObjectSetId,
-    frames: u32,
     relations: &[RelationEntry],
     targets: &[(ObjectSetId, String)],
 ) -> Vec<Element<'a, Message>> {
@@ -1802,11 +1812,10 @@ fn unlinked<'a>(
             !relations
                 .iter()
                 .any(|candidate| candidate.target == *target)
-                && (*target != id || frames > 1)
         })
         .map(|(target, name)| {
             let label = if *target == id {
-                format!("{name} · Earlier frames")
+                format!("{name} · Nearest Neighbour")
             } else {
                 name.clone()
             };
@@ -1827,7 +1836,7 @@ fn unlinked<'a>(
             Some(Message::Command(Command::AddRelation {
                 source: id,
                 target: *target,
-                shift: if *target == id { -1 } else { 0 },
+                shift: 0,
             })),
         ));
     }

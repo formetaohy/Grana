@@ -12,6 +12,7 @@ use crate::curation::Curation;
 use crate::derived::Operation;
 use crate::drift::Drift;
 use crate::key::ObjectSetKey;
+use crate::label_export::LabelExport;
 use crate::mask::MaskFilter;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::object_set::{ObjectSetId, Visibility};
@@ -94,6 +95,7 @@ pub struct SetState {
     pub track_color: ColorState<TrackColor>,
     pub classifier: Option<grana_measure::ClassifierState>,
     pub object_coloc: Option<ObjectColoc>,
+    pub label_export: Option<LabelExport>,
     pub visibility: Visibility,
     pub seeds: Seeds,
     pub frames: Vec<Option<Arc<ObjectFrame>>>,

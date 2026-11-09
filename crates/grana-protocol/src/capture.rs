@@ -278,6 +278,12 @@ impl Protocol {
             .iter()
             .map(AnnotationSpec::of)
             .collect::<Vec<_>>();
+        let label_images = scene
+            .objects
+            .iter()
+            .filter(|set| set.label_export().is_some())
+            .map(|set| set.key().as_str().to_string())
+            .collect::<Vec<_>>();
         Protocol {
             region: RegionSpec::of(scene.region, scene.dataset.world_size()),
             render: Some(RenderSpec::of(
@@ -295,6 +301,7 @@ impl Protocol {
             sets,
             relations,
             coloc,
+            label_images,
             view,
             snapshot,
         }

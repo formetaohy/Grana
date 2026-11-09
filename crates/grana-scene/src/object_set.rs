@@ -11,6 +11,7 @@ use crate::color::ObjectColor;
 use crate::curation::{Curation, TrackAnchor, TrackEdit};
 use crate::dataset::Dataset;
 use crate::key::ObjectSetKey;
+use crate::label_export::LabelExport;
 use crate::object::{ObjectFrame, ObjectKind, ObjectParams, TrackStyle};
 use crate::provenance::{Provenance, Recipe};
 use crate::relation::Relation;
@@ -84,6 +85,7 @@ pub struct ObjectSet {
     track_coloring: Coloring<TrackColor>,
     classifier: Option<Classifier>,
     object_coloc: Option<ObjectColoc>,
+    label_export: Option<LabelExport>,
     track_bounds: Option<Extent>,
     revision: u64,
     document: u64,
@@ -133,6 +135,7 @@ impl ObjectSet {
             track_coloring: Coloring::new(),
             classifier: None,
             object_coloc: None,
+            label_export: None,
             track_bounds: None,
             revision: 1,
             document: 1,
@@ -289,6 +292,19 @@ impl ObjectSet {
 
     pub fn object_coloc(&self) -> Option<&ObjectColoc> {
         self.object_coloc.as_ref()
+    }
+
+    pub fn label_export(&self) -> Option<&LabelExport> {
+        self.label_export.as_ref()
+    }
+
+    pub(crate) fn set_label_export(&mut self, export: Option<LabelExport>) -> bool {
+        if self.label_export == export {
+            return false;
+        }
+        self.label_export = export;
+        self.document += 1;
+        true
     }
 
     pub(crate) fn set_object_coloc(&mut self, coloc: Option<ObjectColoc>, stamp: u64) -> bool {
@@ -921,6 +937,7 @@ impl ObjectSet {
             track_color: self.track_coloring.state(),
             classifier: self.classifier.as_ref().map(Classifier::state),
             object_coloc: self.object_coloc.clone(),
+            label_export: self.label_export.clone(),
             visibility: self.visibility.clone(),
             seeds: self.seeds.clone(),
             frames: self.frames.iter().map(|slot| slot.data.clone()).collect(),
@@ -962,6 +979,7 @@ impl ObjectSet {
             track_color,
             classifier,
             object_coloc,
+            label_export,
             visibility,
             seeds,
             frames,
@@ -1012,6 +1030,7 @@ impl ObjectSet {
                 .transpose()
                 .expect("a restored classifier keeps its coefficients"),
             object_coloc: None,
+            label_export,
             track_bounds: None,
             revision: 1,
             document: 1,
@@ -1636,6 +1655,7 @@ impl ObjectSet {
             track_coloring: self.track_coloring.clone(),
             classifier: self.classifier.clone(),
             object_coloc: None,
+            label_export: None,
             track_bounds: None,
             revision: 1,
             document: 1,
@@ -1785,6 +1805,7 @@ impl ObjectSet {
             track_coloring,
             classifier: self.classifier.clone(),
             object_coloc: None,
+            label_export: None,
             track_bounds: None,
             revision: stamp,
             document: self.document + 1,

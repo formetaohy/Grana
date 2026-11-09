@@ -113,6 +113,7 @@ pub struct Session {
     history: History,
     export: Export,
     labels: Option<label::Labels>,
+    labels_queue: Vec<ObjectSetId>,
     dataset_export: Option<dataset::DatasetExport>,
     label_images: Vec<String>,
     resume: Vec<(ObjectSetId, ObjectSetId, i32)>,
@@ -176,6 +177,7 @@ impl Session {
             history: History::default(),
             export: Export::NATIVE,
             labels: None,
+            labels_queue: Vec::new(),
             dataset_export: None,
             label_images: Vec::new(),
             resume: Vec::new(),
@@ -391,7 +393,6 @@ impl Session {
     pub fn writing(&self) -> bool {
         self.labels.is_some() || self.dataset_export.is_some()
     }
-
     pub fn write_progress(&self) -> Option<(&str, usize, usize)> {
         if let Some(labels) = self.labels.as_ref() {
             return Some((labels.label(), labels.progress().0, labels.progress().1));

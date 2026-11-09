@@ -447,6 +447,14 @@ impl Protocol {
                 });
             }
         }
+        for key in &self.label_images {
+            let set = builder.ids.get(key).copied().ok_or_else(|| {
+                ProtocolError::Invalid(format!(
+                    "the label image of {key} names an object set of the protocol"
+                ))
+            })?;
+            builder.steps.push(Step::Labels { set });
+        }
         builder.steps.push(Step::Present);
         let steps = ordered_steps(builder.steps, builder.scene)?;
         Ok(Staged { sets, pairs, steps })
@@ -1045,6 +1053,9 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
             }
             Step::ObjectColoc { set, .. } => {
                 dependencies[index].extend(drift);
+                dependencies[index].push(settled(&ready, *set)?);
+            }
+            Step::Labels { set } => {
                 dependencies[index].push(settled(&ready, *set)?);
             }
             Step::Coloc { mask, filter, .. } => {

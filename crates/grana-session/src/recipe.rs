@@ -65,6 +65,7 @@ impl Recipe {
             }
             Step::Merge { set, part } => vec![*set, *part],
             Step::Relation { source, target, .. } => vec![*source, *target],
+            Step::Labels { set } => vec![*set],
             Step::Coloc { .. } | Step::Present => Vec::new(),
         }
     }
@@ -95,6 +96,7 @@ impl Recipe {
             | Step::Copy { .. }
             | Step::Edit { .. }
             | Step::Merge { .. }
+            | Step::Labels { .. }
             | Step::Present => None,
         }
     }

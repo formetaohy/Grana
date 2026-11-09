@@ -50,6 +50,9 @@ pub enum Step {
         set: ObjectSetId,
         pair: ColocPair,
     },
+    Labels {
+        set: ObjectSetId,
+    },
     Present,
 }
 
@@ -66,6 +69,7 @@ impl Step {
             Self::Relation { .. }
             | Self::Coloc { .. }
             | Self::ObjectColoc { .. }
+            | Self::Labels { .. }
             | Self::Present => None,
         }
     }

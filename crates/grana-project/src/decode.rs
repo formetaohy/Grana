@@ -22,8 +22,8 @@ use grana_optics::{Kernel, MeasuredPsf, Psf, PsfParams};
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, BackgroundSpec, ChannelState, ColocResult,
     ColocState, ColorState, Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState,
-    LassoPath, MaskFilter, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind,
-    ObjectParams, ObjectSetId, ObjectSetKey, Operation, Provenance, RatioSpec, Recipe,
+    LabelExport, LassoPath, MaskFilter, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame,
+    ObjectKind, ObjectParams, ObjectSetId, ObjectSetKey, Operation, Provenance, RatioSpec, Recipe,
     RelationState, RestoreSpec, SceneState, Seeds, SelectionState, SetState, SmoothSpec,
     SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
 };
@@ -677,6 +677,7 @@ impl Decode for SetState {
         let track_color = ColorState::<TrackColor>::decode(reader)?;
         let classifier = Option::<ClassifierState>::decode(reader)?;
         let object_coloc = Option::<ObjectColoc>::decode(reader)?;
+        let label_export = Option::<LabelExport>::decode(reader)?;
         let visibility = Visibility::decode(reader)?;
         let seeds = decode_seeds(reader)?;
         let frames = Vec::<Option<Arc<ObjectFrame>>>::decode(reader)?;
@@ -716,6 +717,7 @@ impl Decode for SetState {
             track_color,
             classifier,
             object_coloc,
+            label_export,
             visibility,
             seeds,
             frames,
@@ -754,7 +756,6 @@ impl Decode for SetState {
         for relation in &state.relations {
             if !seen.insert((relation.target, relation.shift))
                 || !keys.insert(relation.key.as_str())
-                || (relation.target == id && relation.shift == 0)
                 || relation.frames.len() != state.frames.len()
                 || (relation.shift.unsigned_abs() as usize) >= state.frames.len()
             {
@@ -1085,6 +1086,18 @@ impl Decode for LassoPath {
     }
 }
 
+impl Decode for LabelExport {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let path = reader.string()?;
+        let frames = reader.u32()?;
+        let labels = reader.u32()?;
+        if path.trim().is_empty() || frames == 0 || labels == 0 {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self::new(path, frames, labels))
+    }
+}
+
 impl Decode for RelationState {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let target = reader.u64()?;
@@ -1109,8 +1122,10 @@ impl Decode for RelationFrame {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let count = reader.count(16)?;
         let mut distance = Vec::with_capacity(count.min(1 << 16));
+        let mut center = Vec::with_capacity(count.min(1 << 16));
         let mut inside = Vec::with_capacity(count.min(1 << 16));
         let mut contact = Vec::with_capacity(count.min(1 << 16));
+        let mut overlapping = Vec::with_capacity(count.min(1 << 16));
         let mut partner = Vec::with_capacity(count.min(1 << 16));
         for _ in 0..count {
             let reach = reader.f32()?;
@@ -1118,6 +1133,11 @@ impl Decode for RelationFrame {
                 return Err(FAULT_VALUE);
             }
             distance.push(reach);
+            let span = reader.f32()?;
+            if span.is_nan() || span < 0.0 {
+                return Err(FAULT_VALUE);
+            }
+            center.push(span);
             let within = reader.f32()?;
             if !(0.0..=1.0).contains(&within) {
                 return Err(FAULT_VALUE);
@@ -1128,9 +1148,17 @@ impl Decode for RelationFrame {
                 return Err(FAULT_VALUE);
             }
             contact.push(area);
+            overlapping.push(reader.u32()?);
             partner.push(reader.u32()?);
         }
-        Ok(Self::new(distance, inside, contact, partner))
+        Ok(Self::new(
+            distance,
+            center,
+            inside,
+            contact,
+            overlapping,
+            partner,
+        ))
     }
 }
 

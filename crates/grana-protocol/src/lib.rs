@@ -47,6 +47,8 @@ pub struct Protocol {
     relations: Vec<RelationSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     coloc: Option<ColocSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    label_images: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     view: Option<ViewSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -115,6 +117,10 @@ impl Protocol {
 
     pub fn coloc(&self) -> Option<&ColocSpec> {
         self.coloc.as_ref()
+    }
+
+    pub fn label_images(&self) -> &[String] {
+        &self.label_images
     }
 
     pub fn view(&self) -> Option<&ViewSpec> {

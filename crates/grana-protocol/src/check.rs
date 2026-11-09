@@ -344,6 +344,18 @@ impl Protocol {
                 "a protocol measures one object set".to_string(),
             ));
         }
+        for (index, key) in self.label_images.iter().enumerate() {
+            if !set_keys.contains(key) {
+                return Err(ProtocolError::Invalid(format!(
+                    "the label image {key} names an object set of the protocol"
+                )));
+            }
+            if self.label_images[..index].contains(key) {
+                return Err(ProtocolError::Invalid(format!(
+                    "the label image {key} is exported twice"
+                )));
+            }
+        }
         let mut relations = Vec::new();
         let mut keys: Vec<(String, String)> = Vec::new();
         for relation in &self.relations {
@@ -370,12 +382,6 @@ impl Protocol {
                 return Err(ProtocolError::Invalid(format!(
                     "the relation target {} is not an object set of the protocol",
                     relation.target
-                )));
-            }
-            if relation.source == relation.target && relation.shift == 0 {
-                return Err(ProtocolError::Invalid(format!(
-                    "{} cannot relate to itself without shifting in time",
-                    relation.source
                 )));
             }
             let key = (&relation.source, &relation.target, relation.shift);

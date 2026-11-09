@@ -1353,17 +1353,20 @@ fn mask<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element
 fn default_filter_range(field: RelationField, world: Vec3) -> [f32; 2] {
     let reach = (0.5 * world.length()).max(1.0);
     match field {
-        RelationField::Distance => [0.0, reach],
+        RelationField::Distance | RelationField::Center => [0.0, reach],
         RelationField::Inside => [0.0, 100.0],
         RelationField::Contact => [0.0, reach * reach],
-        RelationField::Partner => [0.0, 0.0],
+        RelationField::Partner | RelationField::Overlapping => [0.0, 0.0],
     }
 }
 
 fn unit_step(field: RelationField) -> f32 {
     match field {
-        RelationField::Distance => 0.1,
-        RelationField::Inside | RelationField::Contact | RelationField::Partner => 1.0,
+        RelationField::Distance | RelationField::Center => 0.1,
+        RelationField::Inside
+        | RelationField::Contact
+        | RelationField::Partner
+        | RelationField::Overlapping => 1.0,
     }
 }
 

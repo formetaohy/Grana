@@ -340,6 +340,7 @@ pub enum Command {
         format: MeshFormat,
     },
     ExportLabels(ObjectSetId),
+    ExportAllLabels,
     ExportDataset,
     CaptureProtocol,
     ApplyProtocol,

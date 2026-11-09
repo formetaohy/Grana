@@ -9,10 +9,17 @@ use grana_object::Shape;
 
 pub struct Reference {
     bvh: Bvh,
+    centers: Vec<Vec3>,
 }
 
 impl Reference {
     pub fn new(shape: &Shape) -> Self {
+        let centers = match shape {
+            Shape::Spots(spots) => spots.iter().map(|spot| Vec3::from(spot.center())).collect(),
+            Shape::Mesh(mesh) => (0..mesh.object_count())
+                .map(|object| Self::centroid(mesh, object))
+                .collect(),
+        };
         let bvh = match shape {
             Shape::Mesh(mesh) => Self::mesh(mesh),
             Shape::Spots(spots) => Bvh::new(spots.iter().enumerate().map(|(index, spot)| {
@@ -22,7 +29,18 @@ impl Reference {
                 )
             })),
         };
-        Self { bvh }
+        Self { bvh, centers }
+    }
+
+    fn centroid(mesh: &PackedMesh, object: usize) -> Vec3 {
+        let vertices = mesh.groups()[object].vertex_count() as usize;
+        if vertices == 0 {
+            return Vec3::ZERO;
+        }
+        let sum = (0..vertices).fold(Vec3::ZERO, |sum, vertex| {
+            sum + Vec3::from(mesh.position(object, vertex))
+        });
+        sum / vertices as f32
     }
 
     fn mesh(mesh: &PackedMesh) -> Bvh {
@@ -41,7 +59,7 @@ impl Reference {
         self.bvh.is_empty()
     }
 
-    pub fn relate(&self, source: &Shape, gate: f32) -> RelationFrame {
+    pub fn relate(&self, source: &Shape, gate: f32, same: bool) -> RelationFrame {
         assert!(
             gate.is_finite() && gate >= 0.0,
             "the contact gate of a relation is a length"
@@ -50,34 +68,47 @@ impl Reference {
             return RelationFrame::empty(sources(source));
         }
         match source {
-            Shape::Spots(spots) => self.relate_spots(spots, gate),
-            Shape::Mesh(mesh) => self.relate_mesh(mesh, gate),
+            Shape::Spots(spots) => self.relate_spots(spots, gate, same),
+            Shape::Mesh(mesh) => self.relate_mesh(mesh, gate, same),
         }
     }
 
-    fn relate_spots(&self, spots: &[grana_object::Spot], gate: f32) -> RelationFrame {
+    fn relate_spots(&self, spots: &[grana_object::Spot], gate: f32, same: bool) -> RelationFrame {
         let mut distance = Vec::with_capacity(spots.len());
+        let mut center = Vec::with_capacity(spots.len());
         let mut inside = Vec::with_capacity(spots.len());
         let mut contact = Vec::with_capacity(spots.len());
+        let mut overlapping = Vec::with_capacity(spots.len());
         let mut partner = Vec::with_capacity(spots.len());
-        for spot in spots {
-            let (reach, object, contained) = self.measure(Vec3::from(spot.center()));
+        for (index, spot) in spots.iter().enumerate() {
+            let point = Vec3::from(spot.center());
+            let skipped = same.then_some(index as u32);
+            let (reach, object, contained) = self.measure(point, skipped);
+            let measured = reach.is_finite();
             distance.push(reach);
+            center.push(if measured {
+                point.distance(self.centers[object as usize])
+            } else {
+                f32::INFINITY
+            });
             inside.push(if contained { 1.0 } else { 0.0 });
             contact.push(if contained {
                 0.0
             } else {
                 cap(spot.radius(), reach, gate)
             });
-            partner.push(object + 1);
+            overlapping.push(u32::from(contained));
+            partner.push(if measured { object + 1 } else { 0 });
         }
-        RelationFrame::new(distance, inside, contact, partner)
+        RelationFrame::new(distance, center, inside, contact, overlapping, partner)
     }
 
-    fn relate_mesh(&self, mesh: &PackedMesh, gate: f32) -> RelationFrame {
+    fn relate_mesh(&self, mesh: &PackedMesh, gate: f32, same: bool) -> RelationFrame {
         let mut distance = Vec::with_capacity(mesh.object_count());
+        let mut center = Vec::with_capacity(mesh.object_count());
         let mut inside = Vec::with_capacity(mesh.object_count());
         let mut contact = Vec::with_capacity(mesh.object_count());
+        let mut overlapping = Vec::with_capacity(mesh.object_count());
         let mut partner = Vec::with_capacity(mesh.object_count());
         let mut votes: HashMap<u32, u32> = HashMap::new();
         let mut reaches: Vec<f32> = Vec::new();
@@ -88,13 +119,16 @@ impl Reference {
             let triangles = group.index_count() as usize / 3;
             reaches.clear();
             contained.clear();
+            let skipped = same.then_some(object as u32);
+            let mut sum = Vec3::ZERO;
             let mut reach = f32::INFINITY;
-            let mut nearest = 0;
+            let mut nearest: Option<u32> = None;
             let mut within = 0usize;
             votes.clear();
             for vertex in 0..vertices {
                 let point = Vec3::from(mesh.position(object, vertex));
-                let (value, target, holds) = self.measure(point);
+                sum += point;
+                let (value, target, holds) = self.measure(point, skipped);
                 reaches.push(value);
                 contained.push(holds);
                 if holds {
@@ -103,7 +137,7 @@ impl Reference {
                 }
                 if value < reach {
                     reach = value;
-                    nearest = target;
+                    nearest = Some(target);
                 }
             }
             let mut area = 0.0f64;
@@ -121,23 +155,40 @@ impl Reference {
                 .iter()
                 .max_by(|left, right| left.1.cmp(right.1).then(right.0.cmp(left.0)))
                 .map(|(object, _)| *object);
+            let chosen = containing.or(nearest);
+            let centroid = if vertices == 0 {
+                Vec3::ZERO
+            } else {
+                sum / vertices as f32
+            };
             distance.push(reach);
-            inside.push(within as f32 / vertices as f32);
+            center.push(chosen.map_or(f32::INFINITY, |target| {
+                centroid.distance(self.centers[target as usize])
+            }));
+            inside.push(within as f32 / vertices.max(1) as f32);
             contact.push(area as f32);
-            partner.push(containing.unwrap_or(nearest) + 1);
+            overlapping.push(votes.len() as u32);
+            partner.push(chosen.map_or(0, |target| target + 1));
         }
-        RelationFrame::new(distance, inside, contact, partner)
+        RelationFrame::new(distance, center, inside, contact, overlapping, partner)
     }
 
-    fn measure(&self, point: Vec3) -> (f32, u32, bool) {
-        if let Some(object) = self.bvh.contains(point) {
+    fn measure(&self, point: Vec3, skipped: Option<u32>) -> (f32, u32, bool) {
+        let contained = match skipped {
+            Some(object) => self.bvh.contains_other(point, object),
+            None => self.bvh.contains(point),
+        };
+        if let Some(object) = contained {
             return (0.0, object, true);
         }
-        let (distance, object) = self
-            .bvh
-            .nearest(point)
-            .expect("a reference holds primitives");
-        (distance, object, false)
+        let nearest = match skipped {
+            Some(object) => self.bvh.nearest_other(point, object),
+            None => self.bvh.nearest(point),
+        };
+        match nearest {
+            Some((distance, object)) => (distance, object, false),
+            None => (f32::INFINITY, 0, false),
+        }
     }
 }
 
@@ -163,6 +214,7 @@ fn sources(shape: &Shape) -> usize {
 pub struct RelationRun<'a> {
     pub shift: i32,
     pub gate: f32,
+    pub same: bool,
     pub workers: usize,
     pub cancel: &'a AtomicBool,
     pub progress: &'a mut dyn FnMut(usize, usize),
@@ -177,6 +229,7 @@ pub fn relate_frames(
     let RelationRun {
         shift,
         gate,
+        same,
         workers,
         cancel,
         progress,
@@ -201,7 +254,8 @@ pub fn relate_frames(
             let shape = source(time)?;
             let reference = Reference::new(&place);
             drop(place);
-            Ok(shape.map(|shape| reference.relate(&shape, gate)))
+            let same = same && shift == 0;
+            Ok(shape.map(|shape| reference.relate(&shape, gate, same)))
         },
         |time, frame| {
             frames[time] = frame;

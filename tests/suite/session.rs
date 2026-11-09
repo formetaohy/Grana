@@ -6,8 +6,8 @@ use grana_animation::Timeline;
 use grana_display::{CameraState, SectionState};
 use grana_geometry::GeometryStore;
 use grana_object::{
-    IntensityTable, MaskMode, MaskTool, ObjectAnchor, SampleStatistics, Spot, SpotParams, SpotSet,
-    SurfaceFilter, SurfaceParams,
+    IntensityTable, MaskMode, MaskTool, ObjectAnchor, RelationFrame, SampleStatistics, Spot,
+    SpotParams, SpotSet, SurfaceFilter, SurfaceParams,
 };
 use grana_project::{Export, Project, Source, ViewState};
 use grana_protocol::Protocol;
@@ -473,14 +473,26 @@ fn replays_a_captured_protocol() {
     let set = scene.objects.get_mut(spots).expect("the set exists");
     set.set_params(ObjectParams::Spots(SpotParams::new(0.5, 0.1)));
     set.set_color([0.2, 0.4, 0.8]);
+    scene.set_label_export(
+        spots,
+        Some(grana_scene::LabelExport::new("/fixture.ome.zarr", 1, 5)),
+    );
     let protocol = Protocol::capture(&scene, &Measure::new(), None).expect("the scene captures");
     let text = protocol.to_json().expect("the protocol serializes");
     let restored = Protocol::from_json(&text).expect("the protocol parses");
     assert_eq!(restored, protocol);
+    assert_eq!(restored.label_images().len(), 1);
     let mut staged_scene = Scene::new(Dataset::synthetic("fixture", volume.pyramid()));
     let staged = restored
         .stage(&mut staged_scene)
         .expect("the protocol stages");
+    assert!(
+        staged
+            .steps()
+            .iter()
+            .any(|step| matches!(step, grana_protocol::Step::Labels { .. })),
+        "the protocol stages the label image export"
+    );
     assert_eq!(staged_scene.region, region);
     let staged = staged_scene
         .objects
@@ -691,6 +703,25 @@ fn round_trips_a_surface_project() {
     let mut scene = Scene::new(Dataset::synthetic("fixture", volume.pyramid()));
     let set = scene.add_object(ObjectKind::Surfaces, 0);
     scene.install(set, 0, ObjectFrame::Surfaces(surface()));
+    assert!(scene.add_relation(set, set, 0), "a set relates to itself");
+    scene.install_relation(
+        set,
+        set,
+        0,
+        0,
+        RelationFrame::new(
+            vec![1.5],
+            vec![2.5],
+            vec![0.25],
+            vec![0.75],
+            vec![1],
+            vec![1],
+        ),
+    );
+    scene.set_label_export(
+        set,
+        Some(grana_scene::LabelExport::new("/fixture.ome.zarr", 1, 12)),
+    );
     let project = Project::capture(
         &scene,
         &Measure::new(),

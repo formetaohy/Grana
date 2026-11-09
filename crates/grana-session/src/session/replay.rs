@@ -182,6 +182,16 @@ impl Session {
                     }
                     self.start_object_coloc(set);
                 }
+                Step::Labels { set } => {
+                    if self.labels.is_some() {
+                        return;
+                    }
+                    if let Err(detail) = self.begin_labels(set) {
+                        self.abort_recipe();
+                        self.message = Some(Message::error(detail));
+                    }
+                    return;
+                }
                 Step::Filter { set, .. } => match self.reload_filtered(set) {
                     Ok(()) => {
                         self.derive_settled(set, true);

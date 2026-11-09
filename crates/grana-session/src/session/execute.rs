@@ -607,6 +607,7 @@ impl Session {
             Command::ExportMeasure => self.export_measure(),
             Command::ExportMesh { set, format } => self.export_mesh(set, format),
             Command::ExportLabels(set) => self.export_labels(set),
+            Command::ExportAllLabels => self.export_all_labels(),
             Command::ExportDataset => self.export_dataset(),
             Command::ExportTracks(set) => self.choose_export_tracks(set),
             Command::ExportGeff(set) => self.choose_export_geff(set),

@@ -2,13 +2,13 @@ use std::f64::consts::PI;
 use std::sync::atomic::AtomicBool;
 
 use grana_analysis::{
-    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, Sources, SpotScan, SurfaceBuilder,
-    TrackBuilder, coloc_levels, drift_shift,
+    ColocPermutation, ColocScan, ColocScanConfig, FilamentScan, Reference, Sources, SpotScan,
+    SurfaceBuilder, TrackBuilder, coloc_levels, drift_shift,
 };
 use grana_geometry::GeometryStore;
 use grana_measure::{ColocPair, ColocSeries, ColocSettings, ColocThresholds};
 use grana_object::{
-    FilamentParams, Spot, SpotParams, SurfaceFilter, SurfaceParams, SurfaceSet, TrackParams,
+    FilamentParams, Shape, Spot, SpotParams, SurfaceFilter, SurfaceParams, SurfaceSet, TrackParams,
 };
 use grana_volume::{
     Basis, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, VoxelData, VoxelFormat,
@@ -261,6 +261,89 @@ fn extract_surfaces_at(
         )
         .expect("a surface frame is detected")
         .expect("surface detection completes")
+}
+
+#[test]
+fn relates_objects_by_surface_centre_and_neighbours() {
+    let pair = relation_surfaces(&[([20.0, 32.0, 24.0], 8.0), ([52.0, 32.0, 24.0], 8.0)]);
+    assert_eq!(pair.object_count(), 2, "each ball is one object");
+    let mesh = pair.geometry().expect("the pair carries geometry");
+    let neighbours =
+        Reference::new(&Shape::mesh(mesh.clone())).relate(&Shape::mesh(mesh), 0.0, true);
+    assert_eq!(neighbours.objects(), 2);
+    for object in 0..2 {
+        assert!(
+            (neighbours.center(object) - 6.4).abs() < 0.3,
+            "the neighbours sit {} apart",
+            neighbours.center(object)
+        );
+        assert!(
+            (neighbours.distance(object) - 3.2).abs() < 0.3,
+            "the surfaces sit {} apart",
+            neighbours.distance(object)
+        );
+        assert_eq!(
+            neighbours.overlapping(object),
+            0,
+            "the balls do not overlap"
+        );
+        assert_eq!(neighbours.partner(object), if object == 0 { 2 } else { 1 });
+    }
+
+    let first = relation_surfaces(&[([24.0, 32.0, 24.0], 8.0)]);
+    let second = relation_surfaces(&[([26.0, 32.0, 24.0], 8.0)]);
+    let source = Shape::mesh(first.geometry().expect("the source carries geometry"));
+    let overlap = Reference::new(&Shape::mesh(
+        second.geometry().expect("the target carries geometry"),
+    ))
+    .relate(&source, 0.0, false);
+    assert_eq!(
+        overlap.overlapping(0),
+        1,
+        "the source lies inside its partner"
+    );
+    assert_eq!(overlap.partner(0), 1);
+    assert!(
+        overlap.inside(0) > 0.3,
+        "only {} of the source lies inside",
+        overlap.inside(0)
+    );
+    assert!(
+        overlap.center(0) < 0.8,
+        "the overlapped centres sit {} apart",
+        overlap.center(0)
+    );
+    assert_eq!(overlap.distance(0), 0.0, "an overlapping surface touches");
+
+    let far = relation_surfaces(&[([52.0, 32.0, 24.0], 8.0)]);
+    let apart = Reference::new(&Shape::mesh(
+        far.geometry().expect("the distant ball carries geometry"),
+    ))
+    .relate(&source, 0.0, false);
+    assert!(
+        (apart.center(0) - 5.6).abs() < 0.3,
+        "the centres sit {} apart",
+        apart.center(0)
+    );
+    assert!(
+        (apart.distance(0) - 2.4).abs() < 0.3,
+        "the surfaces sit {} apart",
+        apart.distance(0)
+    );
+    assert_eq!(apart.overlapping(0), 0);
+}
+
+fn relation_surfaces(balls: &[([f32; 3], f32)]) -> SurfaceSet {
+    let volume = support::spheres(
+        Extent::new(64, 64, 48),
+        Spacing::new(0.2, 0.2, 0.2),
+        balls,
+        HIGH,
+    );
+    extract_surfaces(
+        &volume,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
+    )
 }
 
 #[test]

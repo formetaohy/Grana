@@ -443,6 +443,14 @@ fn project_menu<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message>
         None,
         Command::SaveSnapshot,
     ));
+    rows.push(action_menu_row(
+        ctx,
+        "labels",
+        Icon::Export,
+        "Export Labels Only…",
+        None,
+        Command::ExportAllLabels,
+    ));
     menu(ctx, key, 228.0, rows)
 }
 

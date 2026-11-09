@@ -160,6 +160,14 @@ impl Bvh {
     }
 
     pub fn nearest(&self, point: Vec3) -> Option<(f32, u32)> {
+        self.nearest_skipping(point, None)
+    }
+
+    pub fn nearest_other(&self, point: Vec3, skipped: u32) -> Option<(f32, u32)> {
+        self.nearest_skipping(point, Some(skipped))
+    }
+
+    fn nearest_skipping(&self, point: Vec3, skipped: Option<u32>) -> Option<(f32, u32)> {
         if self.nodes.is_empty() {
             return None;
         }
@@ -178,6 +186,9 @@ impl Bvh {
             if node.count > 0 {
                 for slot in node.start..node.start + node.count {
                     let entry = self.entries[self.order[slot as usize] as usize];
+                    if Some(entry.object) == skipped {
+                        continue;
+                    }
                     let distance = entry.primitive.distance(point);
                     if distance < best {
                         best = distance;
@@ -293,6 +304,14 @@ impl Bvh {
     }
 
     pub fn contains(&self, point: Vec3) -> Option<u32> {
+        self.contains_skipping(point, None)
+    }
+
+    pub fn contains_other(&self, point: Vec3, skipped: u32) -> Option<u32> {
+        self.contains_skipping(point, Some(skipped))
+    }
+
+    fn contains_skipping(&self, point: Vec3, skipped: Option<u32>) -> Option<u32> {
         let node = self.nodes.first()?;
         if (0..3).any(|axis| point[axis] < node.low[axis] || point[axis] > node.high[axis]) {
             return None;
@@ -313,6 +332,9 @@ impl Bvh {
             if node.count > 0 {
                 for slot in node.start..node.start + node.count {
                     let entry = self.entries[self.order[slot as usize] as usize];
+                    if Some(entry.object) == skipped {
+                        continue;
+                    }
                     let crossings = entry.primitive.crossings(point, direction);
                     if crossings == 0 {
                         continue;

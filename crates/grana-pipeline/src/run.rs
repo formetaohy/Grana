@@ -149,12 +149,18 @@ pub fn tracks(
     sink(Event::Done);
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct RelationRequest {
+    pub shift: i32,
+    pub same: bool,
+    pub gate: f32,
+    pub workers: usize,
+}
+
 pub fn relation(
     source: Vec<Option<Arc<ObjectFrame>>>,
     target: Vec<Option<Arc<ObjectFrame>>>,
-    shift: i32,
-    gate: f32,
-    workers: usize,
+    request: RelationRequest,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
 ) {
@@ -172,9 +178,10 @@ pub fn relation(
         |time| shape(source.get(time).and_then(Option::as_deref)),
         |time| shape(target.get(time).and_then(Option::as_deref)),
         RelationRun {
-            shift,
-            gate,
-            workers,
+            shift: request.shift,
+            gate: request.gate,
+            same: request.same,
+            workers: request.workers,
             cancel,
             progress: &mut |done, total| {
                 sink(Event::Progress {

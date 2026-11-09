@@ -14,9 +14,10 @@ use grana_object::{
 };
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, ChannelState, ColocResult, ColocState, ColorState,
-    Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState, LassoPath, MeasureState,
-    ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe, RelationState, SceneState, Seeds,
-    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
+    Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState, LabelExport, LassoPath,
+    MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe, RelationState,
+    SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle,
+    Visibility,
 };
 use grana_volume::{Clip, Fingerprint, Intensity, Region};
 
@@ -416,6 +417,7 @@ impl Encode for SetState {
         self.track_color.encode(writer);
         self.classifier.encode(writer);
         self.object_coloc.encode(writer);
+        self.label_export.encode(writer);
         self.visibility.encode(writer);
         self.seeds.encode(writer);
         self.frames.encode(writer);
@@ -423,6 +425,14 @@ impl Encode for SetState {
         self.provenance.encode(writer);
         self.curation.encode(writer);
         writer.u64(self.document);
+    }
+}
+
+impl Encode for LabelExport {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.string(self.path());
+        writer.u32(self.frames());
+        writer.u32(self.labels());
     }
 }
 
@@ -636,8 +646,10 @@ impl Encode for RelationFrame {
         writer.count(objects);
         for object in 0..objects {
             writer.f32(self.distance(object));
+            writer.f32(self.center(object));
             writer.f32(self.inside(object));
             writer.f32(self.contact(object));
+            writer.u32(self.overlapping(object));
             writer.u32(self.partner(object));
         }
     }

@@ -560,6 +560,7 @@ impl Session {
             source_frames,
             target_frames,
             shift,
+            source == target,
             gate,
             0,
         ));

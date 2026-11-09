@@ -8,12 +8,27 @@ pub enum RelationField {
     Inside,
     Partner,
     Contact,
+    Center,
+    Overlapping,
 }
 
 impl RelationField {
-    pub const ALL: [Self; 4] = [Self::Distance, Self::Inside, Self::Partner, Self::Contact];
+    pub const ALL: [Self; 6] = [
+        Self::Distance,
+        Self::Inside,
+        Self::Partner,
+        Self::Contact,
+        Self::Center,
+        Self::Overlapping,
+    ];
 
-    pub const CONTINUOUS: [Self; 3] = [Self::Distance, Self::Inside, Self::Contact];
+    pub const CONTINUOUS: [Self; 5] = [
+        Self::Distance,
+        Self::Inside,
+        Self::Contact,
+        Self::Center,
+        Self::Overlapping,
+    ];
 
     pub fn index(self) -> u8 {
         match self {
@@ -21,6 +36,8 @@ impl RelationField {
             Self::Inside => 1,
             Self::Partner => 2,
             Self::Contact => 3,
+            Self::Center => 4,
+            Self::Overlapping => 5,
         }
     }
 
@@ -31,35 +48,39 @@ impl RelationField {
     pub fn label(self) -> &'static str {
         match self {
             Self::Distance => "distance",
+            Self::Center => "center distance",
             Self::Inside => "inside",
             Self::Partner => "partner",
             Self::Contact => "contact",
+            Self::Overlapping => "partners",
         }
     }
 
     pub fn key(self) -> &'static str {
         match self {
             Self::Distance => "distance_um",
+            Self::Center => "center_um",
             Self::Inside => "inside",
             Self::Partner => "partner",
             Self::Contact => "contact_um2",
+            Self::Overlapping => "partners",
         }
     }
 
     pub fn unit(self) -> Unit {
         match self {
-            Self::Distance => Unit::Micrometer,
+            Self::Distance | Self::Center => Unit::Micrometer,
             Self::Inside => Unit::Percent,
-            Self::Partner => Unit::Count,
+            Self::Partner | Self::Overlapping => Unit::Count,
             Self::Contact => Unit::SquareMicrometer,
         }
     }
 
     pub fn decimals(self) -> u8 {
         match self {
-            Self::Distance => 3,
+            Self::Distance | Self::Center => 3,
             Self::Inside => 2,
-            Self::Partner => 0,
+            Self::Partner | Self::Overlapping => 0,
             Self::Contact => 3,
         }
     }
@@ -92,16 +113,18 @@ impl RelationField {
         );
         match self {
             Self::Distance => frame.distance(object),
+            Self::Center => frame.center(object),
             Self::Inside => 100.0 * frame.inside(object),
             Self::Partner => frame.partner(object) as f32,
             Self::Contact => frame.contact(object),
+            Self::Overlapping => frame.overlapping(object) as f32,
         }
     }
 
     fn missing(self) -> f32 {
         match self {
-            Self::Distance => f32::INFINITY,
-            Self::Inside | Self::Partner | Self::Contact => 0.0,
+            Self::Distance | Self::Center => f32::INFINITY,
+            Self::Inside | Self::Partner | Self::Contact | Self::Overlapping => 0.0,
         }
     }
 }

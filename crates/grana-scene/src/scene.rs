@@ -22,6 +22,7 @@ use crate::derived::{
 };
 use crate::drift::Drift;
 use crate::key::ObjectSetKey;
+use crate::label_export::LabelExport;
 use crate::mask::MaskFilter;
 use crate::object::{ObjectFrame, ObjectKind};
 use crate::object_set::{ObjectSet, ObjectSetId};
@@ -1088,6 +1089,12 @@ impl Scene {
         self.objects.set_object_coloring(id, coloring)
     }
 
+    pub fn set_label_export(&mut self, id: ObjectSetId, export: Option<LabelExport>) -> bool {
+        self.objects
+            .get_mut(id)
+            .is_some_and(|set| set.set_label_export(export))
+    }
+
     pub fn object_colors(&self, set: &ObjectSet) -> Option<Vec<[f32; 3]>> {
         let metric = set.object_coloring().metric()?;
         let extent = set.object_extent()?;
@@ -1268,9 +1275,6 @@ impl Scene {
         shift: i32,
         key: String,
     ) -> bool {
-        if source == target && shift == 0 {
-            return false;
-        }
         let valid = self.objects.get(source).is_some() && self.objects.get(target).is_some();
         if !valid {
             return false;

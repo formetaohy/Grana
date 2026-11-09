@@ -17,6 +17,7 @@ use grana_volume::{Pyramid, Region};
 
 use crate::channels::Channels;
 use crate::event::Event as RunEvent;
+use crate::label::Labeling;
 use crate::mesh::{self, Export as MeshExport};
 use crate::run;
 use crate::snapshot::SnapshotRequest;
@@ -106,6 +107,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
     let channels = Channels::new(Arc::clone(&reader), &scene);
     let mut run = Run {
         task,
+        dataset,
         channels,
         store: &store,
         scene,
@@ -153,6 +155,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 filter,
             } => run.colocalize(*pair, *mask, *mask_radius, *filter)?,
             Step::ObjectColoc { set, pair } => run.object_coloc(*set, *pair)?,
+            Step::Labels { set } => run.label(*set)?,
             Step::Present => {
                 task.protocol
                     .present_measure(&run.sets, &mut measure, &run.scene);
@@ -375,6 +378,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
 
 struct Run<'a, 'b> {
     task: &'b Task<'a>,
+    dataset: &'b DatasetEntry,
     channels: Channels,
     store: &'b Arc<GeometryStore>,
     scene: Scene,
@@ -749,9 +753,12 @@ impl Run<'_, '_> {
         run::relation(
             source_frames,
             target_frames,
-            shift,
-            gate,
-            task.workers,
+            run::RelationRequest {
+                shift,
+                same: source_id == target_id,
+                gate,
+                workers: task.workers,
+            },
             task.cancel,
             &mut sink,
         );
@@ -761,6 +768,98 @@ impl Run<'_, '_> {
         if task.cancel.load(Ordering::Relaxed) {
             return Err("cancelled".to_string());
         }
+        Ok(())
+    }
+
+    fn label(&mut self, set: ObjectSetId) -> Result<(), String> {
+        let task = self.task;
+        let dataset = self.dataset;
+        let object = self
+            .scene
+            .objects
+            .get(set)
+            .ok_or_else(|| "the labelled object set left the scene".to_string())?;
+        let name = object.name().to_string();
+        let _ = task.events.send(Event::Step {
+            index: task.index,
+            label: format!("writing the label image of {name}"),
+        });
+        if self.scene.dataset.origin() != grana_scene::Origin::Zarr {
+            return Err("label images are written into local OME-Zarr datasets".to_string());
+        }
+        let frames = (0..self.scene.frame_count())
+            .filter(|time| object.frame(*time).is_some())
+            .collect::<Vec<_>>();
+        let labels = frames
+            .iter()
+            .filter_map(|time| object.frame(*time).map(ObjectFrame::object_count))
+            .max()
+            .unwrap_or(0);
+        if labels == 0 {
+            return Err(format!("{name} holds no objects to label"));
+        }
+        if labels > u16::MAX as usize {
+            return Err(format!(
+                "a uint16 label image addresses at most {} objects",
+                u16::MAX
+            ));
+        }
+        let shapes = (0..self.scene.frame_count())
+            .map(|time| object.frame_shared(time))
+            .collect::<Vec<_>>();
+        let visible = (0..self.scene.frame_count())
+            .map(|time| {
+                object.frame(time).map_or_else(Vec::new, |frame| {
+                    (0..frame.object_count())
+                        .map(|index| object.visible_object(time, index))
+                        .collect()
+                })
+            })
+            .collect::<Vec<_>>();
+        let levels =
+            self.scene.dataset.pyramid().levels()[..self.scene.dataset.stored_levels()].to_vec();
+        if levels.is_empty() {
+            return Err("the dataset holds no stored resolution level".to_string());
+        }
+        let mut labeling = Labeling::new(shapes, visible, labels, levels, name.clone());
+        let properties = labeling.properties();
+        let cancel = task.cancel;
+        let mut fill =
+            |level: usize, time: u32, origin: [u32; 3], extent: [u32; 3], data: &mut [u16]| {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("cancelled".to_string());
+                }
+                labeling.fill(level, time, origin, extent, data)
+            };
+        let events = task.events;
+        let index = task.index;
+        let mut progress = move |done: usize, total: usize| {
+            let _ = events.send(Event::Progress { index, done, total });
+        };
+        let group = grana_zarr::group_path(Path::new(dataset.group()));
+        let written = grana_zarr::write_group_labels(
+            dataset.path(),
+            &group,
+            grana_zarr::LabelSpec {
+                name: &slug(&name),
+                frames: &frames,
+                labels,
+                color: object.color(),
+                opacity: object.opacity(),
+                properties: &properties,
+                fill: &mut fill,
+                progress: &mut progress,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        self.scene.set_label_export(
+            set,
+            Some(grana_scene::LabelExport::new(
+                written.path().display().to_string(),
+                written.frames() as u32,
+                written.labels() as u32,
+            )),
+        );
         Ok(())
     }
 
