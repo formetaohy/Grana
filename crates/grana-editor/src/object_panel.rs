@@ -1,8 +1,8 @@
 use glam::Vec2;
 use grana_measure::{ColocMetric, Group, Measurement};
 use grana_scene::{
-    Item, Job, ObjectColor, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId, ParamField,
-    ParamScale, Provenance, RelationField, SEGMENT_FIELDS, Scene,
+    IntensitySource, Item, Job, ObjectColor, ObjectFrame, ObjectKind, ObjectSet, ObjectSetId,
+    ParamField, ParamScale, Provenance, RelationField, SEGMENT_FIELDS, Scene,
 };
 use grana_session::{Command, MeshFormat};
 use grana_ui::{
@@ -236,6 +236,9 @@ fn object<'a>(
         children.push(view::divider(ctx));
         children.extend(appearance_fields(ctx, state, id, width));
         if let Some(element) = origin(ctx, state, id) {
+            children.push(element);
+        }
+        if let Some(element) = attached(ctx, state, id) {
             children.push(element);
         }
         if let Some(element) = curated(ctx, state, id) {
@@ -1041,7 +1044,7 @@ fn origin<'a>(
         }
         Provenance::Imported { label } => format!("Imported from {label}"),
         Provenance::Interop { file } => format!("Imported from {file}"),
-        Provenance::Attached { file } => format!("Attached from {file}"),
+        Provenance::Attached { file, .. } => format!("Attached from {file}"),
         Provenance::Filtered { source, .. } => format!("Filtered from {}", name(*source)),
         Provenance::Copied { source } => format!("Copy of {}", name(*source)),
         Provenance::Edited { source, edits } => {
@@ -1060,6 +1063,31 @@ fn origin<'a>(
         ),
     };
     Some(view::labelled(ctx, "Origin", &text))
+}
+
+fn attached<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+    id: ObjectSetId,
+) -> Option<Element<'a, Message>> {
+    let set = state.scene.objects.get(id)?;
+    let intensities = set.provenance().intensities()?;
+    let frames = (0..state.scene.frame_count())
+        .filter(|time| set.frame(*time).is_some())
+        .count();
+    let objects = (0..state.scene.frame_count())
+        .filter_map(|time| set.frame(time))
+        .map(ObjectFrame::object_count)
+        .sum::<usize>();
+    let text = match intensities {
+        IntensitySource::Statistics => {
+            format!("{frames} frames · {objects} objects · intensities from the file statistics")
+        }
+        IntensitySource::Sampled => format!(
+            "{frames} frames · {objects} objects · intensities sampled from the voxels inside"
+        ),
+    };
+    Some(view::labelled(ctx, "Import", &text))
 }
 
 fn curated<'a>(

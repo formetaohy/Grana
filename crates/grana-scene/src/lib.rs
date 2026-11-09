@@ -48,7 +48,7 @@ pub use measure::{Measure, MeasureState};
 pub use object::{ObjectFrame, ObjectKind, ObjectParams, ParamField, ParamScale, TrackStyle};
 pub use object_set::{ObjectSet, ObjectSetId, Visibility};
 pub use objects::Objects;
-pub use provenance::{Criteria, FilterRange, LassoPath, Provenance, Recipe};
+pub use provenance::{Criteria, FilterRange, IntensitySource, LassoPath, Provenance, Recipe};
 pub use relation::Relation;
 pub use revision::{Revision, Revisions};
 pub use scene::{Item, Scene, Selection};

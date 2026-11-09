@@ -186,6 +186,30 @@ impl Criteria {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IntensitySource {
+    #[default]
+    Statistics,
+    Sampled,
+}
+
+impl IntensitySource {
+    pub fn index(self) -> u8 {
+        match self {
+            Self::Statistics => 0,
+            Self::Sampled => 1,
+        }
+    }
+
+    pub fn from_index(index: u8) -> Option<Self> {
+        match index {
+            0 => Some(Self::Statistics),
+            1 => Some(Self::Sampled),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Provenance {
     Detection,
@@ -200,6 +224,7 @@ pub enum Provenance {
     },
     Attached {
         file: String,
+        intensities: IntensitySource,
     },
     Filtered {
         source: ObjectSetId,
@@ -242,9 +267,10 @@ impl Provenance {
         }
     }
 
-    pub fn attached(file: &str) -> Self {
+    pub fn attached(file: &str, intensities: IntensitySource) -> Self {
         Self::Attached {
             file: file.to_string(),
+            intensities,
         }
     }
 
@@ -291,7 +317,14 @@ impl Provenance {
 
     pub fn file(&self) -> Option<&str> {
         match self {
-            Self::Interop { file } | Self::Attached { file } => Some(file),
+            Self::Interop { file } | Self::Attached { file, .. } => Some(file),
+            _ => None,
+        }
+    }
+
+    pub fn intensities(&self) -> Option<IntensitySource> {
+        match self {
+            Self::Attached { intensities, .. } => Some(*intensities),
             _ => None,
         }
     }

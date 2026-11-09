@@ -7,6 +7,7 @@ mod execute;
 mod export;
 mod field;
 mod import;
+mod intensity;
 mod interop;
 mod label;
 mod mask;

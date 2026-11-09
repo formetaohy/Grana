@@ -12,5 +12,8 @@ sha2 = { workspace = true }
 thiserror = { workspace = true }
 ureq = { workspace = true }
 
+[features]
+commercial = []
+
 [lints]
 workspace = true

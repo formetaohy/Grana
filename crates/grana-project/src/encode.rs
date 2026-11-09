@@ -573,9 +573,10 @@ impl Encode for Provenance {
                 writer.u8(5);
                 writer.string(file);
             }
-            Self::Attached { file } => {
+            Self::Attached { file, intensities } => {
                 writer.u8(9);
                 writer.string(file);
+                writer.u8(intensities.index());
             }
             Self::Masked { source, strokes } => {
                 writer.u8(8);

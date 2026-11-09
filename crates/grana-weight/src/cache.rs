@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
 use crate::Error;
-use crate::source::ModelVersion;
+use crate::model::Asset;
 
-pub(crate) fn stored(version: ModelVersion) -> Result<PathBuf, Error> {
-    Ok(directory()?.join(version.file()))
+pub(crate) fn stored(asset: &Asset) -> Result<PathBuf, Error> {
+    Ok(directory()?.join(asset.version.file()))
 }
 
 fn directory() -> Result<PathBuf, Error> {

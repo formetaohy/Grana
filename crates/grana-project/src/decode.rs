@@ -873,7 +873,9 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
             if file.trim().is_empty() {
                 return Err(FAULT_VALUE);
             }
-            Ok(Provenance::Attached { file })
+            let intensities =
+                grana_scene::IntensitySource::from_index(reader.u8()?).ok_or(FAULT_TAG)?;
+            Ok(Provenance::Attached { file, intensities })
         }
         6 => {
             let cellprob = reader.f32()?;

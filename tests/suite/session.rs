@@ -322,6 +322,62 @@ fn settle(session: &mut Session) {
     }
 }
 
+#[test]
+fn measures_imported_objects_without_statistics() {
+    let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/imaris-no-statistics.ims");
+    let mut session = Session::new();
+    session.begin_load(fixture.clone());
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.scene().is_none() {
+        assert!(Instant::now() < deadline, "the Imaris fixture never opens");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let scene = session.scene().expect("the fixture opens");
+    let sets = scene.objects.iter().collect::<Vec<_>>();
+    assert_eq!(sets.len(), 2, "both Imaris objects are attached");
+    for set in &sets {
+        let frame = set.frame(0).expect("the object holds its first frame");
+        let intensities = frame.intensities();
+        assert_eq!(intensities.objects(), 1);
+        assert_eq!(intensities.channels(), 1);
+        assert_eq!(intensities.object(0, 0).mean(), 60_000.0);
+        assert!(
+            matches!(
+                set.provenance().intensities(),
+                Some(grana_scene::IntensitySource::Sampled)
+            ),
+            "the object without statistics is sampled from its voxels"
+        );
+    }
+    let project = Project::capture(
+        scene,
+        session.measure(),
+        Source::File {
+            name: "imaris-no-statistics.ims".to_string(),
+            path: fixture,
+            series: 0,
+        },
+        view_state(),
+        Vec::new(),
+        Fingerprint::new([9; 32]),
+    );
+    let temp = Temp::new("suite-imaris-import");
+    let path = temp.path().join("import.grana");
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the imported objects write a project");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the imported objects read back");
+    assert_eq!(loaded, project, "the sampled intensities survive a project");
+}
+
 fn view_state() -> ViewState {
     ViewState {
         camera: CameraState {

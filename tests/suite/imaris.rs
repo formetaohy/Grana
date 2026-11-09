@@ -9,7 +9,7 @@ fn fixture() -> PathBuf {
 #[test]
 fn reads_an_imaris_scene() {
     let imported = imported(&fixture()).expect("the Imaris fixture opens");
-    assert_eq!(imported.origin(), [0.0, 0.0, 0.0]);
+    assert_eq!(imported.center(), [2.0, 2.0, 2.0]);
     let objects = imported.objects();
     assert_eq!(objects.len(), 1);
     let object = &objects[0];
@@ -22,6 +22,8 @@ fn reads_an_imaris_scene() {
     };
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].vertices().len(), 3);
+    assert_eq!(first[0].vertices()[0], [-2.0, -2.0, -2.0]);
+    assert_eq!(first[0].vertices()[1], [0.0, -2.0, -2.0]);
     assert_eq!(first[0].triangles()[0], [0, 1, 2]);
     assert_eq!(first[0].normals()[1], [0.0, 1.0, 0.0]);
     let intensities = first[0].intensities().expect("statistics are attached");

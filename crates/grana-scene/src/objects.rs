@@ -144,6 +144,7 @@ impl Objects {
         kind: ObjectKind,
         name: &str,
         file: &str,
+        intensities: crate::IntensitySource,
         dataset: &Dataset,
     ) -> ObjectSetId {
         assert!(
@@ -166,7 +167,7 @@ impl Objects {
         let key = self.key_for(&label, None);
         let color = PALETTE[(id.raw() as usize - 1) % PALETTE.len()];
         let mut set = ObjectSet::new(id, key, kind, label, 0, color, dataset);
-        set.set_provenance(Provenance::attached(file));
+        set.set_provenance(Provenance::attached(file, intensities));
         self.sets.push(set);
         id
     }

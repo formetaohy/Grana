@@ -158,13 +158,13 @@ impl Object {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Imported {
-    origin: [f32; 3],
+    center: [f32; 3],
     objects: Vec<Object>,
 }
 
 impl Imported {
-    pub fn origin(&self) -> [f32; 3] {
-        self.origin
+    pub fn center(&self) -> [f32; 3] {
+        self.center
     }
 
     pub fn objects(&self) -> &[Object] {
@@ -178,7 +178,7 @@ impl Imported {
 
 pub fn imported(path: &Path) -> Result<Imported, Error> {
     let file = File::open(path).map_err(|error| Error::open(path, error.to_string()))?;
-    let origin = origin(&file);
+    let center = center(&file);
     let statistics = statistics(&file, path).unwrap_or_default();
     let candidates = content(&file, path)?;
     let mut objects = Vec::new();
@@ -205,9 +205,9 @@ pub fn imported(path: &Path) -> Result<Imported, Error> {
                 let normals = groups
                     .iter()
                     .find_map(|candidate| normals(&file, path, candidate));
-                surfaces(&file, path, &geometry, normals, origin)
+                surfaces(&file, path, &geometry, normals, center)
             }
-            Kind::Spots => spots(&file, path, &geometry, origin),
+            Kind::Spots => spots(&file, path, &geometry, center),
         };
         let Ok(frames) = frames else {
             continue;
@@ -223,22 +223,30 @@ pub fn imported(path: &Path) -> Result<Imported, Error> {
         });
     }
     objects.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(Imported { origin, objects })
+    Ok(Imported { center, objects })
 }
 
-fn origin(file: &File) -> [f32; 3] {
+fn center(file: &File) -> [f32; 3] {
     let Ok(group) = file.group("DataSetInfo/Image") else {
         return [0.0; 3];
     };
     let Ok(attrs) = group.attrs() else {
         return [0.0; 3];
     };
-    ["ExtMin0", "ExtMin1", "ExtMin2"].map(|key| {
-        attrs
-            .get(key)
-            .and_then(value)
-            .filter(|origin| origin.is_finite())
-            .map_or(0.0, |origin| origin as f32)
+    [0, 1, 2].map(|axis| {
+        let bound = |key: String| {
+            attrs
+                .get(&key)
+                .and_then(value)
+                .filter(|bound| bound.is_finite())
+        };
+        match (
+            bound(format!("ExtMin{axis}")),
+            bound(format!("ExtMax{axis}")),
+        ) {
+            (Some(minimum), Some(maximum)) => (0.5 * (minimum + maximum)) as f32,
+            _ => 0.0,
+        }
     })
 }
 
@@ -357,7 +365,7 @@ fn surfaces(
     path: &Path,
     geometry: &str,
     normals: Option<Table>,
-    origin: [f32; 3],
+    center: [f32; 3],
 ) -> Result<Vec<(u32, Frame)>, Error> {
     let counts = read_table(
         file,
@@ -383,9 +391,9 @@ fn surfaces(
                 .iter()
                 .map(|value| {
                     [
-                        value[0] as f32 - origin[0],
-                        value[1] as f32 - origin[1],
-                        value[2] as f32 - origin[2],
+                        value[0] as f32 - center[0],
+                        value[1] as f32 - center[1],
+                        value[2] as f32 - center[2],
                     ]
                 })
                 .collect(),
@@ -500,7 +508,7 @@ fn spots(
     file: &File,
     path: &Path,
     geometry: &str,
-    origin: [f32; 3],
+    center: [f32; 3],
 ) -> Result<Vec<(u32, Frame)>, Error> {
     let coords = read_table(file, path, &format!("{geometry}/CoordsXYZR"), 4)?;
     let times = read_table(file, path, &format!("{geometry}/Time"), 1)?;
@@ -529,9 +537,9 @@ fn spots(
             .or_default()
             .push(Spot {
                 center: [
-                    values[0] as f32 - origin[0],
-                    values[1] as f32 - origin[1],
-                    values[2] as f32 - origin[2],
+                    values[0] as f32 - center[0],
+                    values[1] as f32 - center[1],
+                    values[2] as f32 - center[2],
                 ],
                 radius: radius as f32,
                 intensities: None,

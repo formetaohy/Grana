@@ -4,51 +4,138 @@ use grana_object::{
     IntensityTable, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics,
 };
 use grana_readout::{
-    Imported, ImportedFrame, ImportedKind, ImportedObject, ImportedSample, ImportedSurface,
+    Imported, ImportedFrame, ImportedKind, ImportedObject, ImportedSample, ImportedSpot,
+    ImportedSurface,
 };
-use grana_scene::ObjectKind;
+use grana_scene::{IntensitySource, ObjectKind};
 
+use super::intensity::Sampler;
 use super::*;
+
+#[derive(Default)]
+struct Report {
+    unmeasured: usize,
+}
+
+struct Sampling<'a, 'b> {
+    sampler: &'a mut Option<Sampler<'b>>,
+    report: &'a mut Report,
+    sampled: &'a mut usize,
+}
+
+impl Sampling<'_, '_> {
+    fn surface(
+        &mut self,
+        time: u32,
+        surface: &ImportedSurface,
+    ) -> Result<Vec<SampleStatistics>, String> {
+        let Some(sampler) = self.sampler.as_mut() else {
+            return Err("the Imaris statistics do not measure every channel".to_string());
+        };
+        let measured = sampler.surface(time, surface)?;
+        *self.sampled += 1;
+        if !measured.measured {
+            self.report.unmeasured += 1;
+        }
+        Ok(measured.intensities)
+    }
+
+    fn spot(&mut self, time: u32, spot: &ImportedSpot) -> Result<Vec<SampleStatistics>, String> {
+        let Some(sampler) = self.sampler.as_mut() else {
+            return Err("the Imaris statistics do not measure every channel".to_string());
+        };
+        let measured = sampler.spot(time, spot)?;
+        *self.sampled += 1;
+        if !measured.measured {
+            self.report.unmeasured += 1;
+        }
+        Ok(measured.intensities)
+    }
+}
 
 impl Session {
     pub(super) fn import_scene(&mut self, imported: Imported, file: &str) {
+        let channels = self.channels.clone();
         let Some(scene) = self.scene.as_mut() else {
             return;
         };
-        let channels = scene.dataset.channels().len();
+        let count = scene.dataset.channels().len();
         let voxel = scene.dataset.voxel_size().min_element();
         let frames = scene.dataset.frame_count();
         let store = Arc::clone(&self.store);
+        let mut sampler = channels.as_deref().map(Sampler::new);
+        let mut report = Report::default();
+        let mut sampled = 0usize;
         let mut failed = Vec::new();
-        for object in imported.objects() {
-            let built = match object.kind() {
-                ImportedKind::Surfaces => surfaces(object, channels, voxel, frames, &store),
-                ImportedKind::Spots => spots(object, channels, frames),
+        {
+            let mut sampling = Sampling {
+                sampler: &mut sampler,
+                report: &mut report,
+                sampled: &mut sampled,
             };
-            let loaded = match built {
-                Ok(loaded) if !loaded.is_empty() => loaded,
-                Ok(_) => continue,
-                Err(detail) => {
-                    failed.push(format!("{}: {detail}", object.name()));
-                    continue;
+            for object in imported.objects() {
+                let mut sampled_here = 0usize;
+                let built = match object.kind() {
+                    ImportedKind::Surfaces => surfaces(
+                        object,
+                        count,
+                        voxel,
+                        frames,
+                        &store,
+                        &mut sampling,
+                        &mut sampled_here,
+                    ),
+                    ImportedKind::Spots => {
+                        spots(object, count, frames, &mut sampling, &mut sampled_here)
+                    }
+                };
+                let loaded = match built {
+                    Ok(loaded) if !loaded.is_empty() => loaded,
+                    Ok(_) => continue,
+                    Err(detail) => {
+                        failed.push(format!("{}: {detail}", object.name()));
+                        continue;
+                    }
+                };
+                let kind = match object.kind() {
+                    ImportedKind::Surfaces => ObjectKind::Surfaces,
+                    ImportedKind::Spots => ObjectKind::Spots,
+                };
+                let intensities = if sampled_here > 0 {
+                    IntensitySource::Sampled
+                } else {
+                    IntensitySource::Statistics
+                };
+                let set =
+                    scene
+                        .objects
+                        .attached(kind, object.name(), file, intensities, &scene.dataset);
+                for (time, frame) in loaded {
+                    scene.objects.install(set, time, frame);
                 }
-            };
-            let kind = match object.kind() {
-                ImportedKind::Surfaces => ObjectKind::Surfaces,
-                ImportedKind::Spots => ObjectKind::Spots,
-            };
-            let set = scene
-                .objects
-                .attached(kind, object.name(), file, &scene.dataset);
-            for (time, frame) in loaded {
-                scene.objects.install(set, time, frame);
             }
         }
+        let mut notes = Vec::new();
         if !failed.is_empty() {
-            self.message = Some(Message::info(format!(
+            notes.push(format!(
                 "the Imaris objects could not be read: {}",
                 failed.join(", ")
-            )));
+            ));
+        }
+        if sampled > 0 {
+            let mut text = format!(
+                "{sampled} Imaris objects held no statistics and were measured from the voxels inside them"
+            );
+            if report.unmeasured > 0 {
+                text.push_str(&format!(
+                    " · {} held no voxel inside and were sampled at their centre",
+                    report.unmeasured
+                ));
+            }
+            notes.push(text);
+        }
+        if !notes.is_empty() {
+            self.message = Some(Message::info(notes.join(" · ")));
         }
         self.touch();
     }
@@ -62,6 +149,8 @@ fn surfaces(
     voxel: f32,
     frames: u32,
     store: &Arc<GeometryStore>,
+    sampling: &mut Sampling<'_, '_>,
+    sampled: &mut usize,
 ) -> Result<Loaded, String> {
     let mut loaded = Vec::new();
     for (time, frame) in object.frames() {
@@ -77,10 +166,17 @@ fn surfaces(
         let mut intensities = Vec::new();
         for (index, surface) in surfaces.iter().enumerate() {
             let statistics = statistics_of(surface, voxel)?;
-            let samples = surface
-                .intensities()
-                .filter(|samples| samples.len() == channels)
-                .ok_or_else(|| "the Imaris statistics do not measure every channel".to_string())?;
+            let samples = match surface.intensities() {
+                Some(samples) if samples.len() == channels => samples
+                    .iter()
+                    .copied()
+                    .map(statistics_sample)
+                    .collect::<Vec<_>>(),
+                _ => {
+                    *sampled += 1;
+                    sampling.surface(*time, surface)?
+                }
+            };
             let base = u32::try_from(vertices.len())
                 .map_err(|_| "the surface holds more vertices than a mesh addresses".to_string())?;
             for (position, normal) in surface.vertices().iter().zip(surface.normals()) {
@@ -98,9 +194,7 @@ fn surfaces(
                 indices.extend(triangle.map(|slot| base + slot));
             }
             objects.push(statistics);
-            for sample in samples {
-                intensities.push(statistics_sample(*sample));
-            }
+            intensities.extend(samples);
         }
         if vertices.is_empty() || indices.is_empty() {
             continue;
@@ -114,7 +208,13 @@ fn surfaces(
     Ok(loaded)
 }
 
-fn spots(object: &ImportedObject, channels: usize, frames: u32) -> Result<Loaded, String> {
+fn spots(
+    object: &ImportedObject,
+    channels: usize,
+    frames: u32,
+    sampling: &mut Sampling<'_, '_>,
+    sampled: &mut usize,
+) -> Result<Loaded, String> {
     let mut loaded = Vec::new();
     for (time, frame) in object.frames() {
         if *time >= frames {
@@ -126,14 +226,19 @@ fn spots(object: &ImportedObject, channels: usize, frames: u32) -> Result<Loaded
         let mut held = Vec::with_capacity(spots.len());
         let mut intensities = Vec::new();
         for spot in spots {
-            let samples = spot
-                .intensities()
-                .filter(|samples| samples.len() == channels)
-                .ok_or_else(|| "the Imaris statistics do not measure every channel".to_string())?;
+            let samples = match spot.intensities() {
+                Some(samples) if samples.len() == channels => samples
+                    .iter()
+                    .copied()
+                    .map(statistics_sample)
+                    .collect::<Vec<_>>(),
+                _ => {
+                    *sampled += 1;
+                    sampling.spot(*time, spot)?
+                }
+            };
             held.push(Spot::new(spot.center(), spot.radius(), 0.0));
-            for sample in samples {
-                intensities.push(statistics_sample(*sample));
-            }
+            intensities.extend(samples);
         }
         if held.is_empty() {
             continue;

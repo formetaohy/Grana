@@ -132,9 +132,13 @@ grana-segment = { workspace = true }
 grana-session = { workspace = true }
 grana-tiff = { workspace = true }
 grana-volume = { workspace = true }
+grana-weight = { workspace = true }
 grana-zarr = { workspace = true }
 wgpu = { workspace = true }
 zarrs = { workspace = true }
+
+[features]
+commercial = ["grana-app/commercial"]
 
 [lints]
 workspace = true

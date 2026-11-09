@@ -3378,6 +3378,7 @@ dependencies = [
  "grana-session",
  "grana-tiff",
  "grana-volume",
+ "grana-weight",
  "grana-zarr",
  "serde_json",
  "wgpu",

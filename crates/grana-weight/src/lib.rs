@@ -5,21 +5,22 @@ mod archive;
 mod cache;
 mod download;
 mod error;
-mod source;
+mod integrity;
+mod model;
 
 pub use error::Error;
-pub use source::ModelVersion;
+pub use model::{License, ModelVersion, license};
 
 pub fn weights(
     version: ModelVersion,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<PathBuf, Error> {
-    let path = cache::stored(version)?;
-    if source::matches(version, &path) {
-        archive::normalize(&path)?;
+    let asset = model::asset(version).ok_or_else(|| Error::unavailable(version.file()))?;
+    let path = cache::stored(asset)?;
+    if integrity::checked(asset, &path, cancel)? {
         return Ok(path);
     }
-    download::fetch(version, &path, cancel, progress)?;
+    download::fetch(asset, &path, cancel, progress)?;
     Ok(path)
 }

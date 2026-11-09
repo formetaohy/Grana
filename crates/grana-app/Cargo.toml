@@ -29,5 +29,8 @@ rfd = { workspace = true }
 wgpu = { workspace = true }
 winit = { workspace = true }
 
+[features]
+commercial = ["grana-session/commercial"]
+
 [lints]
 workspace = true

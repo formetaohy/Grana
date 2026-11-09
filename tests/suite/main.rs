@@ -11,3 +11,4 @@ mod segment;
 mod session;
 mod stream;
 mod support;
+mod weights;
