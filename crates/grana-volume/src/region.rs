@@ -4,39 +4,69 @@ use glam::Vec3;
 
 use crate::Level;
 
-const VOXEL_EPSILON: f32 = 1.0e-4;
+const UNIT_TOLERANCE: f32 = 1.0e-3;
+const ORTHOGONAL_TOLERANCE: f32 = 1.0e-3;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Region {
-    min: Vec3,
-    max: Vec3,
+    center: Vec3,
+    axes: [Vec3; 3],
+    half: Vec3,
     enabled: bool,
 }
 
 impl Region {
-    pub fn new(min: Vec3, max: Vec3) -> Self {
-        assert!(min.is_finite() && max.is_finite(), "a region is finite");
-        assert!(
-            min.cmplt(max).all(),
-            "a region holds a positive extent on every axis"
-        );
-        Self {
-            min,
-            max,
-            enabled: true,
+    pub fn new(center: Vec3, axes: [Vec3; 3], half: Vec3) -> Self {
+        Self::checked(
+            center.to_array(),
+            axes.map(|axis: Vec3| axis.to_array()),
+            half.to_array(),
+        )
+        .expect("a region names an orthonormal box of positive extent")
+    }
+
+    pub fn checked(center: [f32; 3], axes: [[f32; 3]; 3], half: [f32; 3]) -> Option<Self> {
+        let center = Vec3::from(center);
+        let axes = axes.map(Vec3::from);
+        let half = Vec3::from(half);
+        let finite = center.is_finite() && axes.iter().all(|axis| axis.is_finite());
+        let unit = axes
+            .iter()
+            .all(|axis| (axis.length() - 1.0).abs() <= UNIT_TOLERANCE);
+        let orthogonal = (0..3).all(|left| {
+            (left + 1..3).all(|right| axes[left].dot(axes[right]).abs() <= ORTHOGONAL_TOLERANCE)
+        });
+        let positive = half.is_finite() && half.cmpgt(Vec3::ZERO).all();
+        if !(finite && unit && orthogonal && positive) {
+            return None;
         }
+        Some(Self {
+            center,
+            axes,
+            half,
+            enabled: true,
+        })
+    }
+
+    pub fn axis_aligned(min: Vec3, max: Vec3) -> Self {
+        Self::new(
+            Vec3::splat(0.5) * (min + max),
+            [Vec3::X, Vec3::Y, Vec3::Z],
+            Vec3::splat(0.5) * (max - min),
+        )
     }
 
     pub fn full(min: Vec3, max: Vec3) -> Self {
-        let mut region = Self::new(min, max);
+        let mut region = Self::axis_aligned(min, max);
         region.enabled = false;
         region
     }
 
     pub fn none() -> Self {
         Self {
-            min: Vec3::splat(-1.0),
-            max: Vec3::splat(1.0),
+            center: Vec3::ZERO,
+            axes: [Vec3::X, Vec3::Y, Vec3::Z],
+            half: Vec3::splat(0.5),
             enabled: false,
         }
     }
@@ -49,50 +79,92 @@ impl Region {
         self.enabled = enabled;
     }
 
-    pub fn min(self) -> Vec3 {
-        self.min
+    pub fn center(self) -> Vec3 {
+        self.center
     }
 
-    pub fn max(self) -> Vec3 {
-        self.max
+    pub fn axis(self, index: usize) -> Vec3 {
+        self.axes[index]
+    }
+
+    pub fn axes(self) -> [Vec3; 3] {
+        self.axes
+    }
+
+    pub fn half(self) -> Vec3 {
+        self.half
     }
 
     pub fn size(self) -> Vec3 {
-        self.max - self.min
+        2.0 * self.half
     }
 
-    pub fn set_bounds(&mut self, min: Vec3, max: Vec3) {
-        assert!(min.is_finite() && max.is_finite(), "a region is finite");
+    pub fn reach(self) -> Vec3 {
+        (0..3)
+            .map(|index| self.axes[index].abs() * self.half[index])
+            .sum()
+    }
+
+    pub fn bounds(self) -> (Vec3, Vec3) {
+        let reach = self.reach();
+        (self.center - reach, self.center + reach)
+    }
+
+    pub fn corner(self, index: usize) -> Vec3 {
+        let mut corner = self.center;
+        for axis in 0..3 {
+            let sign = if index & (1 << axis) == 0 { -1.0 } else { 1.0 };
+            corner += self.axes[axis] * (sign * self.half[axis]);
+        }
+        corner
+    }
+
+    pub fn set_center(&mut self, center: Vec3) {
+        assert!(center.is_finite(), "a region center is a finite point");
+        self.center = center;
+    }
+
+    pub fn set_half(&mut self, half: Vec3) {
         assert!(
-            min.cmplt(max).all(),
+            half.is_finite() && half.cmpgt(Vec3::ZERO).all(),
             "a region holds a positive extent on every axis"
         );
-        self.min = min;
-        self.max = max;
+        self.half = half;
     }
 
     pub fn contains(self, point: Vec3) -> bool {
-        !self.enabled || (point.cmpge(self.min).all() && point.cmple(self.max).all())
+        !self.enabled || self.local(point).abs().cmple(self.half).all()
+    }
+
+    pub fn local(self, point: Vec3) -> Vec3 {
+        let offset = point - self.center;
+        Vec3::new(
+            offset.dot(self.axes[0]),
+            offset.dot(self.axes[1]),
+            offset.dot(self.axes[2]),
+        )
     }
 
     pub fn interval(self, origin: Vec3, direction: Vec3) -> Option<(f32, f32)> {
         if !self.enabled {
             return Some((0.0, f32::INFINITY));
         }
+        let local = self.local(origin);
         let mut entry = 0.0f32;
         let mut exit = f32::INFINITY;
         for axis in 0..3 {
-            let origin = origin[axis];
-            let direction = direction[axis];
+            let origin = local[axis];
+            let direction = direction.dot(self.axes[axis]);
+            let half = self.half[axis];
             if direction.abs() < 1.0e-9 {
-                if origin < self.min[axis] || origin > self.max[axis] {
+                if origin < -half || origin > half {
                     return None;
                 }
                 continue;
             }
             let inverse = 1.0 / direction;
-            let near = (self.min[axis] - origin) * inverse;
-            let far = (self.max[axis] - origin) * inverse;
+            let near = (-half - origin) * inverse;
+            let far = (half - origin) * inverse;
             entry = entry.max(near.min(far));
             exit = exit.min(near.max(far));
         }
@@ -105,14 +177,15 @@ impl Region {
         if !self.enabled {
             return Some([0..dims[0], 0..dims[1], 0..dims[2]]);
         }
+        let (low, high) = self.bounds();
         let step = level.voxel();
         let origin = level.origin();
         let mut ranges = [0..0, 0..0, 0..0];
         for axis in 0..3 {
-            let first = (self.min[axis] - origin[axis]) / step[axis];
-            let last = (self.max[axis] - origin[axis]) / step[axis];
-            let start = (first - VOXEL_EPSILON).ceil().max(0.0);
-            let end = (last + VOXEL_EPSILON).floor().min((dims[axis] - 1) as f32);
+            let first = (low[axis] - origin[axis]) / step[axis];
+            let last = (high[axis] - origin[axis]) / step[axis];
+            let start = first.floor().max(0.0);
+            let end = (last.ceil() - 1.0).min((dims[axis] - 1) as f32);
             if start > end {
                 return None;
             }

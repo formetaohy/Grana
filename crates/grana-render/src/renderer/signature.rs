@@ -80,8 +80,10 @@ impl Signature<'_, '_> {
         view.elevation.to_bits().hash(&mut hasher);
         view.span.to_bits().hash(&mut hasher);
         data.light.map(f32::to_bits).hash(&mut hasher);
-        data.region_min.map(f32::to_bits).hash(&mut hasher);
-        data.region_max.map(f32::to_bits).hash(&mut hasher);
+        data.region_center.map(f32::to_bits).hash(&mut hasher);
+        for axis in data.region_axis {
+            axis.map(f32::to_bits).hash(&mut hasher);
+        }
         data.shading.map(f32::to_bits).hash(&mut hasher);
         for value in &data.march[1..] {
             value.to_bits().hash(&mut hasher);

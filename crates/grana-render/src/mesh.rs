@@ -81,8 +81,8 @@ struct MeshUniforms {
     eye: [f32; 4],
     light: [f32; 4],
     shading: [f32; 4],
-    region_min: [f32; 4],
-    region_max: [f32; 4],
+    region_center: [f32; 4],
+    region_axis: [[f32; 4]; 3],
     jitter: [f32; 4],
     light_view: [[f32; 4]; 4],
     light_reach: [f32; 4],
@@ -96,7 +96,7 @@ const _: () = {
     assert!(size_of::<PointData>() == 16);
     assert!(size_of::<ObjectData>() == 80);
     assert!(size_of::<StyleData>() == 32);
-    assert!(size_of::<MeshUniforms>() == 304);
+    assert!(size_of::<MeshUniforms>() == 336);
 };
 
 pub(crate) struct MeshPasses {
@@ -462,8 +462,8 @@ impl MeshPasses {
                 shading.specular,
                 shading.shininess,
             ],
-            region_min: frame.region_min,
-            region_max: frame.region_max,
+            region_center: frame.region_center,
+            region_axis: frame.region_axis,
             jitter: frame.jitter,
             light_view: frame.light_view,
             light_reach: frame.light_reach,

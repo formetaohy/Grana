@@ -355,9 +355,18 @@ impl Scene {
         ] {
             hash = mix(hash, u64::from(value.to_bits()));
         }
-        for axis in 0..3 {
-            hash = mix(hash, u64::from(self.region.min()[axis].to_bits()));
-            hash = mix(hash, u64::from(self.region.max()[axis].to_bits()));
+        for index in 0..3 {
+            let axis = self.region.axis(index);
+            for component in [axis.x, axis.y, axis.z, self.region.half()[index]] {
+                hash = mix(hash, u64::from(component.to_bits()));
+            }
+        }
+        for value in [
+            self.region.center().x,
+            self.region.center().y,
+            self.region.center().z,
+        ] {
+            hash = mix(hash, u64::from(value.to_bits()));
         }
         hash = mix(hash, u64::from(u8::from(self.region.enabled())));
         for value in self

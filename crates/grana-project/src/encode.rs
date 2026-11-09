@@ -345,10 +345,15 @@ impl Encode for Intensity {
 
 impl Encode for Region {
     fn encode(&self, writer: &mut Encoder<'_>) {
-        for value in self.min().to_array() {
+        for value in self.center().to_array() {
             writer.f32(value);
         }
-        for value in self.max().to_array() {
+        for index in 0..3 {
+            for value in self.axis(index).to_array() {
+                writer.f32(value);
+            }
+        }
+        for value in self.half().to_array() {
             writer.f32(value);
         }
         writer.bool(self.enabled());

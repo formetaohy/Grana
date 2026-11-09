@@ -1,4 +1,4 @@
-use std::ops::Range;
+﻿use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{LabelBuilder, LabelSlab};
@@ -9,6 +9,7 @@ use grana_volume::{Level, Region};
 
 use crate::channels::Channels;
 use crate::event::Event;
+use crate::run::domain::Domain;
 
 mod level;
 
@@ -49,20 +50,20 @@ pub fn segment(
     sink: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
     let info = reader.pyramid().level(0);
-    let region = request
+    let bounds = request
         .region
         .voxel_range(info)
         .ok_or_else(|| "the segmentation region overlaps no voxel".to_string())?;
-    let voxels = (region[0].end - region[0].start) as u64
-        * (region[1].end - region[1].start) as u64
-        * (region[2].end - region[2].start) as u64;
+    let voxels = (bounds[0].end - bounds[0].start) as u64
+        * (bounds[1].end - bounds[1].start) as u64
+        * (bounds[2].end - bounds[2].start) as u64;
     if voxels.saturating_mul(8) > 2 << 30 {
         return Err(
             "the segmentation region holds more than 2 GiB of slice labels; narrow the region"
                 .to_string(),
         );
     }
-    let depth = region[2].end - region[2].start;
+    let depth = bounds[2].end - bounds[2].start;
     let settings = Settings::new(
         request.params.cellprob_threshold(),
         request.params.flow_threshold(),
@@ -86,6 +87,7 @@ pub fn segment(
         Err(error) => return Err(error.to_string()),
     };
     let segmenter = Segmenter::open(&path, settings).map_err(|error| error.to_string())?;
+    let domain = Domain::new(request.region, info);
     let frames = reader.pyramid().frame_count();
     let total = frames as usize * depth as usize;
     sink(Event::Progress {
@@ -98,11 +100,8 @@ pub fn segment(
             return Ok(());
         }
         let shift = request.drift.offset(time);
-        let mask = match request.roi.as_ref() {
-            Some(roi) => Some(roi.mask(info, time)?),
-            None => None,
-        };
-        let Some(ranges) = clip(&region, mask.as_ref(), info) else {
+        let mask = domain.mask(request.roi.as_ref(), time)?;
+        let Some(ranges) = clip(&bounds, mask.as_ref(), info) else {
             continue;
         };
         let width = ranges[0].end - ranges[0].start;

@@ -333,8 +333,9 @@ impl AnnotationSpec {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegionSpec {
-    pub low: [f32; 3],
-    pub high: [f32; 3],
+    pub center: [f32; 3],
+    pub axes: [[f32; 3]; 3],
+    pub half: [f32; 3],
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1768,50 +1769,46 @@ impl RegionSpec {
             return None;
         }
         let half = 0.5 * world;
-        let axis =
-            |values: Vec3| [0, 1, 2].map(|index| (values[index] + half[index]) / world[index]);
+        let center = region.center();
         Some(Self {
-            low: axis(region.min()),
-            high: axis(region.max()),
+            center: [0, 1, 2].map(|index| (center[index] + half[index]) / world[index]),
+            axes: [0, 1, 2].map(|index| region.axis(index).to_array()),
+            half: region.half().to_array(),
         })
     }
 
     pub fn region(self, world: Vec3) -> grana_volume::Region {
         let half = 0.5 * world;
-        let axis = |values: [f32; 3]| {
-            Vec3::new(
-                values[0] * world.x - half.x,
-                values[1] * world.y - half.y,
-                values[2] * world.z - half.z,
-            )
-        };
-        grana_volume::Region::new(axis(self.low), axis(self.high))
+        let center = Vec3::new(
+            self.center[0] * world.x - half.x,
+            self.center[1] * world.y - half.y,
+            self.center[2] * world.z - half.z,
+        );
+        grana_volume::Region::checked(center.to_array(), self.axes, self.half)
+            .expect("a checked region spec describes an orthonormal box")
     }
 
-    pub fn percent(self) -> f32 {
-        let span = (0..3).fold(1.0f32, |product, axis| {
-            product * (self.high[axis] - self.low[axis]).max(0.0)
-        });
-        span * 100.0
+    pub fn size(self) -> Vec3 {
+        Vec3::from(self.half) * 2.0
     }
 
     pub(super) fn checked(self) -> Result<(), ProtocolError> {
-        for axis in 0..3 {
-            let low = self.low[axis];
-            let high = self.high[axis];
-            if !(low.is_finite() && high.is_finite()) {
-                return Err(ProtocolError::Invalid("a region box is finite".to_string()));
-            }
-            if !(0.0..=1.0).contains(&low) || !(0.0..=1.0).contains(&high) {
-                return Err(ProtocolError::Invalid(
-                    "a region box lies inside the dataset".to_string(),
-                ));
-            }
-            if low >= high {
-                return Err(ProtocolError::Invalid(
-                    "a region box holds a positive extent on every axis".to_string(),
-                ));
-            }
+        if self.center.iter().any(|value| !value.is_finite())
+            || self.center.iter().any(|value| !(0.0..=1.0).contains(value))
+        {
+            return Err(ProtocolError::Invalid(
+                "a region center lies inside the dataset".to_string(),
+            ));
+        }
+        if self.half.iter().any(|value| !value.is_finite()) || self.half.iter().any(|&v| v <= 0.0) {
+            return Err(ProtocolError::Invalid(
+                "a region box holds a positive extent on every axis".to_string(),
+            ));
+        }
+        if grana_volume::Region::checked(self.center, self.axes, self.half).is_none() {
+            return Err(ProtocolError::Invalid(
+                "a region box carries orthonormal axes".to_string(),
+            ));
         }
         Ok(())
     }

@@ -560,18 +560,21 @@ impl Decode for Intensity {
 
 impl Decode for Region {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let mut minimum = [0.0; 3];
-        for value in &mut minimum {
+        let mut center = [0.0; 3];
+        for value in &mut center {
             *value = finite(reader.f32()?)?;
         }
-        let mut maximum = [0.0; 3];
-        for value in &mut maximum {
+        let mut axes = [[0.0; 3]; 3];
+        for axis in &mut axes {
+            for value in axis {
+                *value = finite(reader.f32()?)?;
+            }
+        }
+        let mut half = [0.0; 3];
+        for value in &mut half {
             *value = finite(reader.f32()?)?;
         }
-        if !(0..3).all(|axis| minimum[axis] < maximum[axis]) {
-            return Err(FAULT_VALUE);
-        }
-        let mut region = Self::new(minimum.into(), maximum.into());
+        let mut region = Self::checked(center, axes, half).ok_or(FAULT_VALUE)?;
         region.set_enabled(reader.bool()?);
         Ok(region)
     }

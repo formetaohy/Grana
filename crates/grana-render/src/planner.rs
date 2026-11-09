@@ -489,8 +489,9 @@ fn section_cells(
     low = low.max(box_low);
     high = high.min(box_high);
     if region.enabled() {
-        low = low.max(region.min());
-        high = high.min(region.max());
+        let (region_low, region_high) = region.bounds();
+        low = low.max(region_low);
+        high = high.min(region_high);
     }
     if !(0..3).all(|axis| low[axis] <= high[axis]) {
         return None;
@@ -563,6 +564,7 @@ fn section_brick_count(
     let down_center = section.center().dot(down);
     let across_half = 0.5 * section.span() * aspect;
     let down_half = 0.5 * section.span();
+    let (region_low, region_high) = region.bounds();
     let mut count = 0;
     for z in first[2]..=last[2] {
         for y in first[1]..=last[1] {
@@ -572,7 +574,7 @@ fn section_brick_count(
                 let low = origin + cell * voxel;
                 let high = low + size * voxel;
                 if region.enabled()
-                    && (high.cmplt(region.min()).any() || low.cmpgt(region.max()).any())
+                    && (high.cmplt(region_low).any() || low.cmpgt(region_high).any())
                 {
                     continue;
                 }

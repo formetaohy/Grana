@@ -571,19 +571,23 @@ pub fn apply(
             Message::Locate(row) => crate::plot::locate(view.scene, view.measure, row, commands),
             Message::ClearGates => crate::plot::clear_gates(view.measure, commands),
             Message::Region { axis, side, delta } => {
-                let mut region = view.scene.region;
-                let mut low = region.min();
-                let mut high = region.max();
+                let current = view.scene.region;
                 let world = view.scene.dataset.world_size();
-                let half = 0.5 * world;
                 let minimum = (1.0e-3 * world.min_element()).max(1.0e-5);
-                if side == 0 {
-                    low[axis] = (low[axis] + delta).clamp(-half[axis], high[axis] - minimum);
-                } else {
-                    high[axis] = (high[axis] + delta).clamp(low[axis] + minimum, half[axis]);
+                let direction = if side == 0 { -1.0 } else { 1.0 };
+                let half = current.half();
+                let grown = (half[axis] + 0.5 * direction * delta)
+                    .clamp(0.5 * minimum, world.length().max(minimum));
+                if grown != half[axis] {
+                    let mut region = current;
+                    let mut sizes = half;
+                    sizes[axis] = grown;
+                    let center =
+                        current.center() + current.axis(axis) * (direction * (grown - half[axis]));
+                    region.set_center(center.clamp(-0.5 * world, 0.5 * world));
+                    region.set_half(sizes);
+                    commands.push(Command::SetRegion(region));
                 }
-                region.set_bounds(low, high);
-                commands.push(Command::SetRegion(region));
             }
         }
     }

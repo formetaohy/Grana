@@ -61,20 +61,22 @@ fn region_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
     if (!region_active()) {
         return vec2<f32>(-1.0e20, 1.0e20);
     }
+    let offset = origin - frame.region_center.xyz;
     var entry = -1.0e20;
     var exit = 1.0e20;
     for (var axis = 0u; axis < 3u; axis += 1u) {
-        let step = direction[axis];
-        let low = frame.region_min[axis];
-        let high = frame.region_max[axis];
+        let unit = frame.region_axis[axis].xyz;
+        let half = frame.region_axis[axis].w;
+        let start = dot(offset, unit);
+        let step = dot(direction, unit);
         if (abs(step) < 1.0e-9) {
-            if (origin[axis] < low || origin[axis] > high) {
+            if (abs(start) > half) {
                 return vec2<f32>(1.0, -1.0);
             }
         } else {
             let inverse = 1.0 / step;
-            let first = (low - origin[axis]) * inverse;
-            let second = (high - origin[axis]) * inverse;
+            let first = (-half - start) * inverse;
+            let second = (half - start) * inverse;
             entry = max(entry, min(first, second));
             exit = min(exit, max(first, second));
         }

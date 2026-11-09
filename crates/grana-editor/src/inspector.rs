@@ -768,8 +768,8 @@ fn section<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
 fn region<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let current = state.scene.region;
+    let size = current.size();
     let summary = if current.enabled() {
-        let size = current.size();
         format!("{:.1}×{:.1}×{:.1} µm", size.x, size.y, size.z)
     } else {
         "Whole volume".to_string()
@@ -780,6 +780,8 @@ fn region<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
     if open {
         let world = state.scene.dataset.world_size();
         let half = 0.5 * world;
+        let minimum = (0.001 * world.min_element()).max(1.0e-4);
+        let reach = world.length().max(minimum);
         children.push(
             grana_ui::widget::toggle_row(&theme, "Limit Analysis", current.enabled())
                 .named("region.enabled")
@@ -789,54 +791,62 @@ fn region<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
                     Message::Command(Command::SetRegion(region))
                 }),
         );
-        let minimum = (0.001 * world.min_element()).max(1.0e-4);
-        for (axis, name) in [
-            (Axis::X, "X Bounds"),
-            (Axis::Y, "Y Bounds"),
-            (Axis::Z, "Z Bounds"),
-        ] {
-            let index = axis.index();
-            let limit = half[index];
-            let speed = (0.01 * world[index]).max(minimum);
-            let start = current.min()[index];
-            let end = current.max()[index];
-            let decimals = 2;
-            let low = grana_ui::widget::drag_value(&theme, start, decimals)
-                .named(&format!("region.{index}.low"))
-                .on_drag_value(speed, move |value| {
-                    region_bounds(current, index, Some(value), Some(end), limit, minimum)
-                });
-            let high = grana_ui::widget::drag_value(&theme, end, decimals)
-                .named(&format!("region.{index}.high"))
-                .on_drag_value(speed, move |value| {
-                    region_bounds(current, index, Some(start), Some(value), limit, minimum)
-                });
-            let dash = view::caption(ctx, "–");
-            let bounds = grana_ui::row()
-                .gap(6.0)
-                .align(Align::Center)
-                .children([low, dash, high]);
-            children.push(view::form_row(ctx, name, bounds));
+        for (name, index) in [("Center X", 0), ("Center Y", 1), ("Center Z", 2)] {
+            let value = current.center()[index];
+            let readout = format!("{value:.2} µm");
             children.push(
-                grana_ui::widget::range_slider(
-                    start,
-                    end,
-                    -limit..=limit,
-                    &[Color::white_alpha(0.16), Color::white_alpha(0.16)],
+                grana_ui::widget::slider_readout(
+                    &theme,
+                    Some(name),
+                    value,
+                    -half[index]..=half[index],
+                    false,
+                    &readout,
                 )
-                .named(&format!("region.{index}.bounds"))
-                .on_range(move |low, high| {
-                    region_bounds(current, index, Some(low), Some(high), limit, minimum)
+                .named(&format!("region.center.{index}"))
+                .on_slide(move |value| {
+                    let mut region = current;
+                    let mut center = current.center();
+                    center[index] = value.clamp(-half[index], half[index]);
+                    region.set_center(center);
+                    Message::Command(Command::SetRegion(region))
                 }),
             );
         }
-        let reset = {
-            let mut region = current;
-            region.set_bounds(-half, half);
+        for (name, index) in [("Size X", 0), ("Size Y", 1), ("Size Z", 2)] {
+            let value = size[index];
+            let readout = format!("{value:.2} µm");
+            children.push(
+                grana_ui::widget::slider_readout(
+                    &theme,
+                    Some(name),
+                    value,
+                    minimum..=2.0 * reach,
+                    false,
+                    &readout,
+                )
+                .named(&format!("region.size.{index}"))
+                .on_slide(move |value| {
+                    let mut region = current;
+                    let mut extents = current.half();
+                    extents[index] = 0.5 * value.clamp(minimum, 2.0 * reach);
+                    region.set_half(extents);
+                    Message::Command(Command::SetRegion(region))
+                }),
+            );
+        }
+        let align = {
+            let section = state.viewport.section();
+            let axes = [section.right(), section.up(), section.normal()];
+            let region = grana_volume::Region::new(current.center(), axes, current.half());
             Message::Command(Command::SetRegion(region))
         };
-        children
-            .push(view::button_with(ctx, "Reset Bounds", Role::Control, Length::Fill).press(reset));
+        let fill = Message::Command(Command::SetRegion(grana_volume::Region::full(-half, half)));
+        let buttons = grana_ui::row().gap(8.0).children([
+            view::button_with(ctx, "Align to Section", Role::Control, Length::Fill).press(align),
+            view::button_with(ctx, "Fill Volume", Role::Control, Length::Fill).press(fill),
+        ]);
+        children.push(buttons);
     }
     view::disclosure_card(
         ctx,
@@ -847,27 +857,6 @@ fn region<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
         children,
         open,
     )
-}
-
-fn region_bounds(
-    current: grana_volume::Region,
-    index: usize,
-    start: Option<f32>,
-    end: Option<f32>,
-    limit: f32,
-    minimum: f32,
-) -> Message {
-    let mut low = current.min();
-    let mut high = current.max();
-    if let Some(start) = start {
-        low[index] = start.clamp(-limit, (high[index] - minimum).max(-limit));
-    }
-    if let Some(end) = end {
-        high[index] = end.clamp((low[index] + minimum).min(limit), limit);
-    }
-    let mut region = current;
-    region.set_bounds(low, high);
-    Message::Command(Command::SetRegion(region))
 }
 
 fn drift<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {

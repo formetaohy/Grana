@@ -210,23 +210,22 @@ pub fn handles(overlay: &Overlay<'_>) -> Vec<Handle> {
         .camera
         .view_projection(aspect, 0.5 * overlay.world.length());
     let minimum = (HANDLE_MINIMUM * overlay.world.min_element()).max(1.0e-5);
-    let low = overlay.region.min();
-    let high = overlay.region.max();
     let mut handles = Vec::new();
     if !overlay.region.enabled() {
         return handles;
     }
+    let half = overlay.region.half();
     for axis in 0..3 {
-        let step = (0.05 * overlay.world[axis]).max(minimum);
+        let unit = overlay.region.axis(axis);
+        let span = overlay.world.abs().dot(unit.abs());
+        let step = (0.05 * span).max(minimum);
         for side in 0..2 {
-            let mut point = 0.5 * (low + high);
-            point[axis] = if side == 0 { low[axis] } else { high[axis] };
+            let sign = if side == 0 { -1.0 } else { 1.0 };
+            let point = overlay.region.center() + unit * (sign * half[axis]);
             let Some(anchor) = project(view_projection, point, rect) else {
                 continue;
             };
-            let mut direction = Vec3::ZERO;
-            direction[axis] = step;
-            let Some(ahead) = project(view_projection, point + direction, rect) else {
+            let Some(ahead) = project(view_projection, point + unit * step, rect) else {
                 continue;
             };
             let screen = ahead - anchor;
@@ -299,12 +298,10 @@ fn region_outline(painter: &mut Painter, overlay: &Overlay<'_>, rect: Rect) {
     }
     let normal = overlay.section.normal();
     let offset = overlay.section.offset();
-    let low = region.min();
-    let high = region.max();
     let mut points: Vec<Vec2> = Vec::new();
     for (from, to) in REGION_EDGES {
-        let from = corner(low, high, from);
-        let to = corner(low, high, to);
+        let from = region.corner(from);
+        let to = region.corner(to);
         let start = normal.dot(from) - offset;
         let end = normal.dot(to) - offset;
         let crossing = if start == 0.0 {
@@ -337,14 +334,6 @@ fn region_outline(painter: &mut Painter, overlay: &Overlay<'_>, rect: Rect) {
         let to = points[(index + 1) % points.len()];
         painter.segment(points[index], to, 1.0, REGION);
     }
-}
-
-fn corner(low: Vec3, high: Vec3, index: usize) -> Vec3 {
-    Vec3::new(
-        if index & 1 == 0 { low.x } else { high.x },
-        if index & 2 == 0 { low.y } else { high.y },
-        if index & 4 == 0 { low.z } else { high.z },
-    )
 }
 
 pub(crate) fn figure(
@@ -526,16 +515,8 @@ fn region_box(painter: &mut Painter, view_projection: Mat4, region: Region, rect
     if !region.enabled() {
         return;
     }
-    let min = region.min();
-    let max = region.max();
-    let corners: [Vec3; 8] = std::array::from_fn(|index: usize| {
-        Vec3::new(
-            if index & 1 == 0 { min.x } else { max.x },
-            if index & 2 == 0 { min.y } else { max.y },
-            if index & 4 == 0 { min.z } else { max.z },
-        )
-    });
-    let projected = corners.map(|corner| project(view_projection, corner, rect));
+    let projected = (0..8).map(|index| project(view_projection, region.corner(index), rect));
+    let projected = projected.collect::<Vec<_>>();
     for (from, to) in REGION_EDGES {
         if let (Some(from), Some(to)) = (projected[from], projected[to]) {
             painter.segment(from, to, 1.0, REGION);

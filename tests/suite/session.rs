@@ -1,6 +1,7 @@
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
+use glam::Vec3;
 use grana_animation::Timeline;
 use grana_display::{CameraState, SectionState};
 use grana_geometry::GeometryStore;
@@ -12,7 +13,7 @@ use grana_protocol::Protocol;
 use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene};
 use grana_session::{Command, Session};
 use grana_volume::{
-    BrickCoord, BrickRequest, Extent, Fingerprint, Spacing, VolumeSeries, VoxelData,
+    BrickCoord, BrickRequest, Extent, Fingerprint, Region, Spacing, VolumeSeries, VoxelData,
 };
 
 use crate::support::{self, Temp};
@@ -120,6 +121,27 @@ fn settle(session: &mut Session) {
     }
 }
 
+fn view_state() -> ViewState {
+    ViewState {
+        camera: CameraState {
+            pivot: [0.0, 0.0, 0.0],
+            yaw: 0.0,
+            pitch: 0.0,
+            distance: 10.0,
+            fov_y: 0.6,
+        },
+        section: SectionState {
+            center: [0.0, 0.0, 0.0],
+            azimuth: 0.0,
+            elevation: 0.0,
+            span: 20.0,
+        },
+        split: 0.5,
+        timeline: Timeline::default(),
+        export: Export::NATIVE,
+    }
+}
+
 #[test]
 fn undoes_and_replays_object_edits() {
     let mut session = Session::new();
@@ -185,6 +207,87 @@ fn undoes_and_replays_object_edits() {
 }
 
 #[test]
+fn gates_detection_with_an_oriented_region() {
+    let mut session = Session::new();
+    session.open_series("region", series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: ObjectParams::Surfaces(SurfaceParams::new(
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )),
+    });
+    let across = Vec3::new(1.0, 0.0, 0.7).normalize();
+    let down = Vec3::new(-0.7, 0.0, 1.0).normalize();
+    let region = Region::new(
+        -0.515 * across,
+        [across, Vec3::Y, down],
+        Vec3::new(0.485, 2.0, 2.0),
+    );
+    session.execute(Command::SetRegion(region));
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    assert_eq!(
+        objects(&session, set),
+        1,
+        "the tilted region keeps only the ball it covers"
+    );
+}
+
+#[test]
+fn keeps_an_oriented_region_across_a_project() {
+    let volume = support::spheres(
+        Extent::new(24, 24, 16),
+        Spacing::new(0.5, 0.5, 0.5),
+        &[([12.0, 12.0, 8.0], 4.0)],
+        HIGH,
+    );
+    let mut scene = Scene::new(Dataset::synthetic("fixture", volume.pyramid()));
+    let region = oriented_region();
+    scene.set_region(region);
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "fixture".to_string(),
+        },
+        view_state(),
+        Fingerprint::new([7; 32]),
+    );
+    let temp = Temp::new("suite-region");
+    let path = temp.path().join("region.grana");
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the project reads");
+    assert_eq!(loaded, project);
+    assert_eq!(loaded.scene.region, region);
+}
+
+fn oriented_region() -> Region {
+    Region::new(
+        Vec3::new(0.5, -0.25, 0.75),
+        [
+            Vec3::new(1.0, 0.0, 1.0).normalize(),
+            Vec3::Y,
+            Vec3::new(-1.0, 0.0, 1.0).normalize(),
+        ],
+        Vec3::new(3.0, 2.5, 4.0),
+    )
+}
+#[test]
 fn round_trips_a_project() {
     let volume = support::spheres(
         Extent::new(16, 16, 8),
@@ -207,31 +310,13 @@ fn round_trips_a_project() {
         )),
     );
     scene.annotations.add_point([0.1, 0.2, 0.3], Some(0));
-    let view = ViewState {
-        camera: CameraState {
-            pivot: [0.0, 0.0, 0.0],
-            yaw: 0.0,
-            pitch: 0.0,
-            distance: 10.0,
-            fov_y: 0.6,
-        },
-        section: SectionState {
-            center: [0.0, 0.0, 0.0],
-            azimuth: 0.0,
-            elevation: 0.0,
-            span: 20.0,
-        },
-        split: 0.5,
-        timeline: Timeline::default(),
-        export: Export::NATIVE,
-    };
     let project = Project::capture(
         &scene,
         &Measure::new(),
         Source::Synthetic {
             name: "fixture".to_string(),
         },
-        view,
+        view_state(),
         Fingerprint::new([7; 32]),
     );
     let temp = Temp::new("suite-project");
@@ -260,6 +345,8 @@ fn replays_a_captured_protocol() {
         HIGH,
     );
     let mut scene = Scene::new(Dataset::synthetic("fixture", volume.pyramid()));
+    let region = oriented_region();
+    scene.set_region(region);
     let spots = scene.add_object(ObjectKind::Spots, 0);
     let set = scene.objects.get_mut(spots).expect("the set exists");
     set.set_params(ObjectParams::Spots(SpotParams::new(0.5, 0.1)));
@@ -272,6 +359,7 @@ fn replays_a_captured_protocol() {
     let staged = restored
         .stage(&mut staged_scene)
         .expect("the protocol stages");
+    assert_eq!(staged_scene.region, region);
     let staged = staged_scene
         .objects
         .get(staged.sets()[0])

@@ -255,7 +255,13 @@ impl Protocol {
             .collect::<Vec<_>>()
             .join(", ");
         let mut summary = match &self.region {
-            Some(region) => format!("{sets} · region {:.0}%", region.percent()),
+            Some(region) => {
+                let size = region.size();
+                format!(
+                    "{sets} · region {:.1}×{:.1}×{:.1} µm",
+                    size.x, size.y, size.z
+                )
+            }
             None => sets,
         };
         if let Some(drift) = &self.drift {

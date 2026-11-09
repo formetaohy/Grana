@@ -3,8 +3,8 @@ struct MeshUniforms {
     eye: vec4<f32>,
     light: vec4<f32>,
     shading: vec4<f32>,
-    region_min: vec4<f32>,
-    region_max: vec4<f32>,
+    region_center: vec4<f32>,
+    region_axis: array<vec4<f32>, 3>,
     jitter: vec4<f32>,
     light_view: mat4x4<f32>,
     light_reach: vec4<f32>,
@@ -107,9 +107,22 @@ fn vs_shadow(input: VertexInput) -> ShadowOutput {
     return output;
 }
 
+fn outside_region(point: vec3<f32>) -> bool {
+    if (mesh.region_center.w <= 0.5) {
+        return false;
+    }
+    let offset = point - mesh.region_center.xyz;
+    for (var axis = 0u; axis < 3u; axis += 1u) {
+        let local = dot(offset, mesh.region_axis[axis].xyz);
+        if (abs(local) > mesh.region_axis[axis].w) {
+            return true;
+        }
+    }
+    return false;
+}
+
 fn is_outside(input: VertexOutput) -> bool {
-    if (mesh.region_min.w > 0.5
-        && (any(input.position < mesh.region_min.xyz) || any(input.position > mesh.region_max.xyz))) {
+    if (outside_region(input.position)) {
         return true;
     }
     if (dot(mesh.clip.xyz, mesh.clip.xyz) <= 1.0e-6) {

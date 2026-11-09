@@ -20,8 +20,8 @@ pub(crate) struct FrameData {
     pub forward: [f32; 4],
     pub box_min: [f32; 4],
     pub box_size: [f32; 4],
-    pub region_min: [f32; 4],
-    pub region_max: [f32; 4],
+    pub region_center: [f32; 4],
+    pub region_axis: [[f32; 4]; 3],
     pub atlas: [u32; 4],
     pub shading: [f32; 4],
     pub march: [f32; 4],
@@ -82,13 +82,14 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 944);
-    assert!(std::mem::offset_of!(FrameData, planes) == 352);
-    assert!(std::mem::offset_of!(FrameData, light_view) == 448);
-    assert!(std::mem::offset_of!(FrameData, dims) == 640);
-    assert!(std::mem::offset_of!(FrameData, bases) == 896);
-    assert!(std::mem::offset_of!(FrameData, bands) == 912);
-    assert!(std::mem::offset_of!(FrameData, edge) == 928);
+    assert!(size_of::<FrameData>() == 976);
+    assert!(std::mem::offset_of!(FrameData, region_axis) == 256);
+    assert!(std::mem::offset_of!(FrameData, planes) == 384);
+    assert!(std::mem::offset_of!(FrameData, light_view) == 480);
+    assert!(std::mem::offset_of!(FrameData, dims) == 672);
+    assert!(std::mem::offset_of!(FrameData, bases) == 928);
+    assert!(std::mem::offset_of!(FrameData, bands) == 944);
+    assert!(std::mem::offset_of!(FrameData, edge) == 960);
     assert!(size_of::<SectionData>() == 256);
     assert!(size_of::<ScheduleData>() == 48);
 };
@@ -160,13 +161,16 @@ impl FrameData {
             forward: camera.forward().extend(0.0).to_array(),
             box_min: [first.origin.x, first.origin.y, first.origin.z, 0.0],
             box_size: [first.world.x, first.world.y, first.world.z, 0.0],
-            region_min: [
-                region.min().x,
-                region.min().y,
-                region.min().z,
+            region_center: [
+                region.center().x,
+                region.center().y,
+                region.center().z,
                 if region.enabled() { 1.0 } else { 0.0 },
             ],
-            region_max: [region.max().x, region.max().y, region.max().z, 0.0],
+            region_axis: std::array::from_fn(|index| {
+                let axis = region.axis(index);
+                [axis.x, axis.y, axis.z, region.half()[index]]
+            }),
             atlas: [first.atlas[0], first.atlas[1], first.atlas[2], 0],
             shading: [
                 shading.ambient,

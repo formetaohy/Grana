@@ -8,8 +8,8 @@ struct FrameData {
     forward: vec4<f32>,
     box_min: vec4<f32>,
     box_size: vec4<f32>,
-    region_min: vec4<f32>,
-    region_max: vec4<f32>,
+    region_center: vec4<f32>,
+    region_axis: array<vec4<f32>, 3>,
     atlas: vec4<u32>,
     shading: vec4<f32>,
     march: vec4<f32>,
@@ -133,29 +133,59 @@ fn pack_active(pack: u32, count: u32) -> bool {
 }
 
 fn region_active() -> bool {
-    return frame.region_min.w > 0.5;
+    return frame.region_center.w > 0.5;
+}
+
+fn region_half() -> vec3<f32> {
+    return vec3<f32>(
+        frame.region_axis[0].w,
+        frame.region_axis[1].w,
+        frame.region_axis[2].w,
+    );
+}
+
+fn region_local(point: vec3<f32>) -> vec3<f32> {
+    let offset = point - frame.region_center.xyz;
+    return vec3<f32>(
+        dot(offset, frame.region_axis[0].xyz),
+        dot(offset, frame.region_axis[1].xyz),
+        dot(offset, frame.region_axis[2].xyz),
+    );
 }
 
 fn outside_region(point: vec3<f32>) -> bool {
     if (!region_active()) {
         return false;
     }
-    return any(point < frame.region_min.xyz) || any(point > frame.region_max.xyz);
+    return any(abs(region_local(point)) > region_half());
 }
 
 fn outside_region_bounds(low: vec3<f32>, high: vec3<f32>) -> bool {
     if (!region_active()) {
         return false;
     }
-    return any(high < frame.region_min.xyz) || any(low > frame.region_max.xyz);
+    let half = region_half();
+    let middle = 0.5 * (low + high);
+    let extent = 0.5 * (high - low);
+    let offset = middle - frame.region_center.xyz;
+    for (var axis = 0u; axis < 3u; axis += 1u) {
+        let direction = frame.region_axis[axis].xyz;
+        let reach = dot(extent, abs(direction));
+        if (abs(dot(offset, direction)) > half[axis] + reach) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn outside_region_sphere(center: vec3<f32>, radius: f32) -> bool {
     if (!region_active()) {
         return false;
     }
-    let reach = vec3<f32>(radius);
-    return outside_region_bounds(center - reach, center + reach);
+    let local = region_local(center);
+    let half = region_half();
+    let clamped = clamp(local, -half, half);
+    return distance(local, clamped) > radius;
 }
 
 fn clip_active() -> bool {

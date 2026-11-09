@@ -17,6 +17,7 @@ use grana_volume::VoxelData;
 use crate::event::Event;
 
 mod calibration;
+mod domain;
 mod edit;
 mod frames;
 mod import;
@@ -24,6 +25,7 @@ mod interop;
 mod segment;
 
 pub use self::calibration::calibrate;
+use self::domain::Domain;
 pub use self::edit::edit;
 use self::frames::Notice;
 use self::frames::frames as pipeline;
@@ -289,6 +291,8 @@ pub fn coloc(
     let permutation_units = permutation.tile_count() * permutation_frames.len();
     let randomization_units = settings.permutations() as usize;
     let total = scan_units + permutation_units + randomization_units;
+    let scan_domain = Domain::new(region, scan_info);
+    let permutation_domain = Domain::new(region, permutation_info);
     let scanned = scan.scan(
         workers,
         cancel,
@@ -297,10 +301,7 @@ pub fn coloc(
                 .read_region(time, scan_level, channel, ranges, drift.offset(time))
                 .map_err(String::from)
         },
-        &|time| match &roi {
-            None => Ok(None),
-            Some(roi) => roi.mask(scan_info, time).map(Some),
-        },
+        &|time| scan_domain.mask(roi.as_ref(), time),
         &mut |done, _| {
             sink(Event::Progress {
                 time: 0,
@@ -324,10 +325,7 @@ pub fn coloc(
                 .read_region(time, permutation_level, channel, ranges, drift.offset(time))
                 .map_err(String::from)
         },
-        &|time| match &roi {
-            None => Ok(None),
-            Some(roi) => roi.mask(permutation_info, time).map(Some),
-        },
+        &|time| permutation_domain.mask(roi.as_ref(), time),
         &mut |done, _| {
             sink(Event::Progress {
                 time: 0,
@@ -398,6 +396,7 @@ fn spots(
     let level_index = spot_level(pyramid, region, params);
     let level = pyramid.level(level_index);
     let scanner = SpotScanner::new(level_index, level, span, params, region, channels, channel);
+    let domain = Domain::new(region, level);
     let totals = pyramid.frame_count();
     let window = frame_window(totals, workers, FRAME_WORKERS);
     let share = (workers / window).max(1);
@@ -407,7 +406,7 @@ fn spots(
         cancel,
         || (),
         |(), time, report| {
-            let mask = roi.as_ref().map(|roi| roi.mask(level, time)).transpose()?;
+            let mask = domain.mask(roi.as_ref(), time)?;
             let read = |measured: usize, ranges: &[Range<u32>; 3]| {
                 reader
                     .read_region(time, level_index, measured, ranges, drift.offset(time))
@@ -459,6 +458,7 @@ fn surfaces(
         "the dataset is too large to detect surfaces at any resolution level".to_string()
     })?;
     let level = pyramid.level(level_index);
+    let domain = Domain::new(region, level);
     let totals = pyramid.frame_count();
     let window = frame_window(totals, workers, FRAME_WORKERS);
     let share = (workers / window).max(1);
@@ -483,7 +483,7 @@ fn surfaces(
                 pyramid.channels()[channel].intensity(),
             )
             .with_seeds(frame_seeds, policy);
-            let mask = roi.as_ref().map(|roi| roi.mask(level, time)).transpose()?;
+            let mask = domain.mask(roi.as_ref(), time)?;
             let set = builder.scan(
                 share,
                 cancel,
@@ -544,6 +544,7 @@ fn filaments(
     })?;
     let channels = pyramid.channel_count();
     let info = pyramid.level(level);
+    let domain = Domain::new(region, info);
     let extent = info.extent();
     let voxels = u64::from(extent.x()) * u64::from(extent.y()) * u64::from(extent.z());
     let held = (FILAMENT_BYTES / (voxels * FILAMENT_VOXEL_BYTES).max(1)).max(1) as usize;
@@ -557,7 +558,7 @@ fn filaments(
         || FilamentScan::new(level, info, params, channels, channel, region, intensity),
         |scan, time, _report| {
             let detection = full_region(reader, pyramid, time, level, channel, drift.offset(time))?;
-            let mask = roi.as_ref().map(|roi| roi.mask(info, time)).transpose()?;
+            let mask = domain.mask(roi.as_ref(), time)?;
             let set = scan.frame(&detection, mask.as_ref(), &store, |measured| {
                 full_region(reader, pyramid, time, level, measured, drift.offset(time))
             })?;

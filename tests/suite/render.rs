@@ -19,6 +19,7 @@ struct View<'a> {
     target: &'a wgpu::TextureView,
     camera: &'a Camera,
     section: &'a SectionCamera,
+    region: Region,
     scene: &'a SceneFrame<'a>,
     volume_region: [u32; 4],
     section_region: [u32; 4],
@@ -33,7 +34,7 @@ fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
         time: 0,
         camera: view.camera,
         section: view.section,
-        region: Region::none(),
+        region: view.region,
         clip: Clip::none(),
         exposure: 1.0,
         samples: SAMPLES,
@@ -189,6 +190,7 @@ fn streams_and_shades_two_channels() {
         target: &view_texture,
         camera: &camera,
         section: &section,
+        region: Region::none(),
         scene: &scene,
         volume_region: WHOLE,
         section_region: CORNER,
@@ -243,6 +245,7 @@ fn reveals_a_section_plane() {
         target: &view_texture,
         camera: &camera,
         section: &section,
+        region: Region::none(),
         scene: &scene,
         volume_region: CORNER,
         section_region: WHOLE,
@@ -291,6 +294,7 @@ fn reveals_an_oblique_section_plane() {
         target: &view_texture,
         camera: &camera,
         section: &section,
+        region: Region::none(),
         scene: &scene,
         volume_region: CORNER,
         section_region: WHOLE,
@@ -351,6 +355,7 @@ fn composites_a_mesh_layer() {
         target: &view_texture,
         camera: &camera,
         section: &section,
+        region: Region::none(),
         scene: &scene,
         volume_region: WHOLE,
         section_region: CORNER,
@@ -361,5 +366,87 @@ fn composites_a_mesh_layer() {
         red(&pixels) > 1_000,
         "the mesh barely rendered: {} red pixels",
         red(&pixels)
+    );
+}
+
+fn far_pair_volume() -> Volume {
+    let extent = Extent::new(96, 48, 32);
+    let spacing = Spacing::new(0.1, 0.1, 0.1);
+    let left = spheres(extent, spacing, &[([20.0, 24.0, 16.0], 6.0)], 60_000);
+    let right = spheres(extent, spacing, &[([76.0, 24.0, 16.0], 6.0)], 60_000);
+    Volume::new(
+        extent,
+        spacing,
+        vec![
+            Channel::new("left", [0.2, 0.4, 1.0], left.channels()[0].data().clone()),
+            Channel::new("right", [0.2, 1.0, 0.3], right.channels()[0].data().clone()),
+        ],
+    )
+}
+
+#[test]
+fn clips_an_oriented_region() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = far_pair_volume();
+    let pyramid = volume.pyramid();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let section = SectionCamera::new();
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let open = View {
+        target: &view_texture,
+        camera: &camera,
+        section: &section,
+        region: Region::none(),
+        scene: &scene,
+        volume_region: WHOLE,
+        section_region: CORNER,
+    };
+    settle(&gpu, &mut renderer, &open, &volume);
+    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    assert!(blue(&pixels) > 100, "the left ball barely rendered");
+    assert!(green(&pixels) > 100, "the right ball barely rendered");
+    let across = Vec3::new(1.0, 0.0, 2.0).normalize();
+    let down = Vec3::new(-2.0, 0.0, 1.0).normalize();
+    let region = Region::new(
+        -1.1 * across,
+        [across, Vec3::Y, down],
+        Vec3::new(1.1, 2.4, 4.8),
+    );
+    let clipped = View {
+        region,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        ..open
+    };
+    settle(&gpu, &mut renderer, &clipped, &volume);
+    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    assert!(
+        blue(&pixels) > 50,
+        "the oriented region hid the kept ball: {} pixels",
+        blue(&pixels)
+    );
+    assert!(
+        green(&pixels) < 20,
+        "the oriented region kept the dropped ball: {} pixels",
+        green(&pixels)
     );
 }

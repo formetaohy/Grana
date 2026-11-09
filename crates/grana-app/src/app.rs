@@ -449,35 +449,23 @@ impl App {
                 let Some(scene) = self.session.scene() else {
                     return;
                 };
-                let half = 0.5 * scene.dataset.world_size();
                 let voxel = scene.dataset.voxel_size();
                 let section = self.viewport.section();
-                let normal = section.normal();
-                let mut min = Vec3::splat(f32::INFINITY);
-                let mut max = Vec3::splat(f32::NEG_INFINITY);
-                let reach = half.length();
-                for point in [from, to] {
-                    let point = Vec3::from(point);
-                    for side in [-1.0f32, 1.0] {
-                        let corner = point + normal * (side * reach);
-                        min = min.min(corner);
-                        max = max.max(corner);
-                    }
-                }
-                min = min.max(-half);
-                max = max.min(half);
-                for index in 0..3 {
-                    if max[index] - min[index] < voxel[index] {
-                        let centre = 0.5 * (min[index] + max[index]);
-                        min[index] = (centre - 0.5 * voxel[index]).max(-half[index]);
-                        max[index] = (centre + 0.5 * voxel[index]).min(half[index]);
-                    }
-                }
-                if min.cmplt(max).all() {
-                    self.apply(vec![Command::SetRegion(grana_volume::Region::new(
-                        min, max,
-                    ))]);
-                }
+                let axes = [section.right(), section.up(), section.normal()];
+                let from = Vec3::from(from);
+                let to = Vec3::from(to);
+                let span = to - from;
+                let minimum = voxel.min_element();
+                let half = Vec3::new(
+                    (0.5 * span.dot(axes[0])).abs().max(0.5 * minimum),
+                    (0.5 * span.dot(axes[1])).abs().max(0.5 * minimum),
+                    self.section_depth(scene, axes[2]),
+                );
+                self.apply(vec![Command::SetRegion(grana_volume::Region::new(
+                    0.5 * (from + to),
+                    axes,
+                    half,
+                ))]);
             }
             Pane::Volume => {
                 if !drag.finished {
@@ -486,6 +474,12 @@ impl App {
                 self.default_region(Pane::Volume, drag.start);
             }
         }
+    }
+
+    fn section_depth(&self, scene: &grana_scene::Scene, normal: Vec3) -> f32 {
+        let world = scene.dataset.world_size();
+        let voxel = scene.dataset.voxel_size().min_element();
+        (0.5 * world.abs().dot(normal.abs())).max(voxel)
     }
 
     fn default_region(&mut self, pane: Pane, point: Vec2) {
@@ -497,14 +491,14 @@ impl App {
         };
         let half = 0.5 * scene.dataset.world_size();
         let voxel = scene.dataset.voxel_size();
+        let section = self.viewport.section();
+        let axes = [section.right(), section.up(), section.normal()];
         let reach = (0.06 * half.min_element()).max(voxel.min_element());
-        let min = (Vec3::from(centre) - Vec3::splat(reach)).max(-half);
-        let max = (Vec3::from(centre) + Vec3::splat(reach)).min(half);
-        if min.cmplt(max).all() {
-            self.apply(vec![Command::SetRegion(grana_volume::Region::new(
-                min, max,
-            ))]);
-        }
+        let extent = Vec3::new(reach, reach, self.section_depth(scene, axes[2]));
+        let centre = Vec3::from(centre).clamp(-half, half);
+        self.apply(vec![Command::SetRegion(grana_volume::Region::new(
+            centre, axes, extent,
+        ))]);
     }
 
     fn drag_annotation(&mut self, drag: GrabDrag) {

@@ -1,5 +1,6 @@
+use glam::Vec3;
 use grana_geometry::PackedMesh;
-use grana_volume::Level;
+use grana_volume::{Level, Region};
 
 use crate::Shape;
 
@@ -26,6 +27,62 @@ impl Mask {
             extent: [0; 3],
             bits: Vec::new(),
             level,
+        }
+    }
+
+    pub fn boxed(region: Region, level: Level) -> Self {
+        let Some(ranges) = region.voxel_range(level) else {
+            return Self::empty(level);
+        };
+        let origin = [0, 1, 2].map(|axis| ranges[axis].start as i64);
+        let limit = [0, 1, 2].map(|axis| ranges[axis].end as i64);
+        let mut area = Area::new(origin, limit, level);
+        area.boxed(region);
+        area.finish()
+    }
+
+    pub fn intersected(&self, other: &Mask) -> Mask {
+        assert_eq!(
+            self.level, other.level,
+            "an analysis mask meets a mask of the same level"
+        );
+        let origin = [0, 1, 2].map(|axis| self.origin[axis].max(other.origin[axis]));
+        let limit = [0, 1, 2].map(|axis| {
+            (self.origin[axis] + i64::from(self.extent[axis]))
+                .min(other.origin[axis] + i64::from(other.extent[axis]))
+        });
+        if (0..3).any(|axis| limit[axis] <= origin[axis]) {
+            return Mask::empty(self.level);
+        }
+        let extent = [0, 1, 2].map(|axis| (limit[axis] - origin[axis]) as u32);
+        let cells = extent
+            .iter()
+            .map(|value| u64::from(*value))
+            .product::<u64>();
+        let mut bits = vec![0u64; cells.div_ceil(WORD as u64) as usize];
+        let mut cell = origin;
+        while cell[2] < limit[2] {
+            cell[1] = origin[1];
+            while cell[1] < limit[1] {
+                cell[0] = origin[0];
+                while cell[0] < limit[0] {
+                    if self.contains_cell_index(&cell) && other.contains_cell_index(&cell) {
+                        let local = [0, 1, 2].map(|axis| (cell[axis] - origin[axis]) as usize);
+                        let index = local[0]
+                            + extent[0] as usize * (local[1] + extent[1] as usize * local[2]);
+                        bits[index / WORD] |= 1 << (index % WORD);
+                    }
+                    cell[0] += 1;
+                }
+                cell[1] += 1;
+            }
+            cell[2] += 1;
+        }
+        Mask {
+            origin,
+            extent,
+            bits,
+            level: self.level,
         }
     }
 
@@ -276,6 +333,65 @@ impl Area {
         }
     }
 
+    fn boxed(&mut self, region: Region) {
+        if self.extent.contains(&0) {
+            return;
+        }
+        let spacing = self.level.voxel();
+        let origin = self.level.origin();
+        let corner = Vec3::new(
+            origin[0] + 0.5 * spacing[0],
+            origin[1] + 0.5 * spacing[1],
+            origin[2] + 0.5 * spacing[2],
+        );
+        let half = region.half();
+        let center = region.center();
+        let width = self.extent[0] as i64;
+        let height = self.extent[1] as i64;
+        let depth = self.extent[2] as i64;
+        let axes = region.axes();
+        for z in 0..depth {
+            for y in 0..height {
+                let row = corner
+                    + Vec3::new(
+                        0.0,
+                        (self.origin[1] + y) as f32 * spacing[1],
+                        (self.origin[2] + z) as f32 * spacing[2],
+                    );
+                let mut low = f32::NEG_INFINITY;
+                let mut high = f32::INFINITY;
+                for axis in 0..3 {
+                    let unit = axes[axis];
+                    let offset = (row - center).dot(unit);
+                    let slope = spacing[0] * unit.x;
+                    if slope.abs() < PARALLEL {
+                        if offset.abs() > half[axis] {
+                            low = 1.0;
+                            high = 0.0;
+                            break;
+                        }
+                        continue;
+                    }
+                    let first = (-half[axis] - offset) / slope;
+                    let last = (half[axis] - offset) / slope;
+                    low = low.max(first.min(last));
+                    high = high.min(first.max(last));
+                }
+                if low > high {
+                    continue;
+                }
+                let first = (low.ceil() as i64).max(self.origin[0]);
+                let last = (high.floor() as i64).min(self.origin[0] + width - 1);
+                if first > last {
+                    continue;
+                }
+                let base = (first - self.origin[0]) as usize
+                    + self.extent[0] as usize * (y as usize + height as usize * z as usize);
+                set_bits(&mut self.bits, base, (last - first + 1) as usize);
+            }
+        }
+    }
+
     fn set(&mut self, cell: [i64; 3]) {
         let local = [0, 1, 2].map(|axis| cell[axis] - self.origin[axis]);
         if (0..3).any(|axis| local[axis] < 0 || local[axis] >= i64::from(self.extent[axis])) {
@@ -450,6 +566,23 @@ fn dominant(triangles: &[Triangle]) -> (usize, usize, usize) {
         .max_by(|left, right| left.1.total_cmp(right.1))
         .map_or(0, |pair| pair.0);
     (plane, (plane + 1) % 3, (plane + 2) % 3)
+}
+
+fn set_bits(bits: &mut [u64], start: usize, count: usize) {
+    let end = start + count;
+    let mut index = start;
+    while index < end {
+        let word = index / WORD;
+        let offset = index % WORD;
+        let take = (WORD - offset).min(end - index);
+        let mask = if take == WORD {
+            u64::MAX
+        } else {
+            ((1u64 << take) - 1) << offset
+        };
+        bits[word] |= mask;
+        index += take;
+    }
 }
 
 fn transform(field: &mut [f32], dims: [usize; 3], axis: usize, weight: f32) {
