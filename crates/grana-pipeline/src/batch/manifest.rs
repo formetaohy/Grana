@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use grana_protocol::Protocol;
 
 use super::discover::{DatasetEntry, WellKey};
-use super::quality::{Comparison, Quality, comparison_of};
+use super::quality::{ComparisonReport, Quality, comparison_of};
 use super::resume;
+use super::significance;
 use super::{Plan, Row};
 
 pub(super) const RUN: &str = "run.json";
@@ -72,12 +73,14 @@ impl Run {
         &self.datasets
     }
 
-    pub fn comparison(&self) -> Vec<Comparison> {
-        comparison_of(
+    pub fn comparison(&self) -> ComparisonReport {
+        let groups = comparison_of(
             self.datasets
                 .iter()
                 .flat_map(|dataset| dataset.quality.iter()),
-        )
+        );
+        let tests = significance::tests(&groups);
+        ComparisonReport { groups, tests }
     }
 }
 

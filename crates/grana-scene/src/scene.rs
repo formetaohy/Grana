@@ -189,13 +189,7 @@ impl Scene {
         let channels = dataset
             .channels()
             .iter()
-            .map(|channel| {
-                Channel::new(
-                    channel.window(),
-                    channel.window(),
-                    TransferFunction::tinted(channel.tint()),
-                )
-            })
+            .map(|channel| Channel::new(channel.window(), TransferFunction::tinted(channel.tint())))
             .collect::<Vec<Channel>>();
         let half = 0.5 * dataset.world_size();
         let channel_count = channels.len();
@@ -264,11 +258,9 @@ impl Scene {
             .enumerate()
             .map(|(index, info)| match previous.next() {
                 Some(channel) if index < base => channel,
-                Some(_) | None => Channel::new(
-                    info.window(),
-                    info.window(),
-                    TransferFunction::tinted(info.tint()),
-                ),
+                Some(_) | None => {
+                    Channel::new(info.window(), TransferFunction::tinted(info.tint()))
+                }
             })
             .collect();
         self.derived.clear();
@@ -432,7 +424,6 @@ impl Scene {
         channels.push(info.clone());
         self.dataset = self.dataset.with_channels(channels);
         self.channels.push(Channel::new(
-            info.window(),
             info.window(),
             TransferFunction::tinted(info.tint()),
         ));
@@ -676,7 +667,8 @@ impl Scene {
     }
 
     pub fn reset_window(&mut self, index: usize) {
-        self.channels[index].window = self.channels[index].default_window;
+        let window = self.channel(index).window();
+        self.channels[index].window = window;
     }
 
     pub fn set_transfer(&mut self, index: usize, transfer: TransferFunction) {

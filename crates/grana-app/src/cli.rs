@@ -98,11 +98,27 @@ pub fn batch(
                 eprintln!("{detail}");
                 failures += 1;
             }
-            BatchEvent::Comparison(comparison) => {
-                for row in comparison {
+            BatchEvent::Comparison(report) => {
+                for row in &report.groups {
                     println!(
                         "  {} · {} ({}) over {} datasets",
                         row.group, row.name, row.kind, row.datasets
+                    );
+                }
+                for test in report.tests.iter().filter(|test| test.significant()) {
+                    println!(
+                        "  Welch {} vs {} · {} · {}: n={}/{} p={} q={} g={} {}",
+                        test.group_a,
+                        test.group_b,
+                        test.name,
+                        test.metric.name(),
+                        test.test.n_a(),
+                        test.test.n_b(),
+                        test.p_text(),
+                        test.q_text(),
+                        test.effect
+                            .map_or_else(|| "-".to_string(), |effect| format!("{effect:.2}")),
+                        test.mark()
                     );
                 }
             }

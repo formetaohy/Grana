@@ -3,10 +3,13 @@ use std::path::Path;
 use grana_raster::{Cell, Group, Raster, Row, Sheet, Table};
 use grana_text::Fonts;
 
-use super::quality::Comparison;
+use super::quality::{Comparison, ComparisonReport, Metric};
+use super::significance::Significance;
 use super::{Plan, Row as ResultRow};
 
 pub(super) const SHEET: &str = "sheet.png";
+
+pub(super) const SIGNIFICANCE: &str = "significance.png";
 
 pub(super) const MANIFEST: &str = "sheet.csv";
 
@@ -14,14 +17,7 @@ const TILE: [u32; 2] = [720, 450];
 
 const COLUMNS: u32 = 3;
 
-const METRICS: [&str; 6] = [
-    "datasets",
-    "objects",
-    "volume µm³",
-    "area µm²",
-    "size µm",
-    "intensity",
-];
+const SIGNIFICANCE_TILE: [u32; 2] = [960, 450];
 
 struct Entry {
     dataset: usize,
@@ -36,7 +32,7 @@ struct Entry {
 pub(super) fn write(
     plan: &Plan,
     rows: &[Option<ResultRow>],
-    comparison: &[Comparison],
+    comparison: &ComparisonReport,
 ) -> Result<(), String> {
     let mut entries = Vec::new();
     let mut cells = vec![None; plan.datasets.len()];
@@ -90,7 +86,7 @@ pub(super) fn write(
             .sum::<usize>();
         start = end;
     }
-    let tables = tables(comparison);
+    let tables = tables(&comparison.groups);
     let groups = groups(&entries, &tables);
     let mut fonts = Fonts::system();
     let sheet = Sheet::new(TILE, COLUMNS).compose(&mut fonts, &groups);
@@ -124,17 +120,18 @@ fn tables(comparison: &[Comparison]) -> Vec<(String, Table)> {
         let position = match tables.iter().position(|(group, _)| *group == entry.group) {
             Some(position) => position,
             None => {
+                let rows = std::iter::once("datasets".to_string())
+                    .chain(Metric::ALL.map(metric_label))
+                    .map(|label| Row {
+                        label,
+                        values: Vec::new(),
+                    })
+                    .collect();
                 tables.push((
                     entry.group.clone(),
                     Table {
                         columns: Vec::new(),
-                        rows: METRICS
-                            .iter()
-                            .map(|label| Row {
-                                label: (*label).to_string(),
-                                values: Vec::new(),
-                            })
-                            .collect(),
+                        rows,
                     },
                 ));
                 tables.len() - 1
@@ -142,18 +139,106 @@ fn tables(comparison: &[Comparison]) -> Vec<(String, Table)> {
         };
         let table = &mut tables[position].1;
         table.columns.push(entry.name.clone());
-        let values = [
-            entry.datasets.to_string(),
-            entry
-                .objects
-                .map_or_else(|| "-".to_string(), |value| format!("{value:.1}")),
-            deviated(entry.volume, entry.volume_deviation, 3),
-            deviated(entry.area, entry.area_deviation, 3),
-            deviated(entry.size, entry.size_deviation, 3),
-            deviated(entry.intensity, entry.intensity_deviation, 2),
-        ];
+        let mut values = vec![entry.datasets.to_string()];
+        values.extend(Metric::ALL.map(|metric| {
+            deviated(
+                metric.value(entry),
+                metric.deviation(entry),
+                metric.decimals(),
+            )
+        }));
         for (row, value) in table.rows.iter_mut().zip(values) {
             row.values.push(value);
+        }
+    }
+    tables
+}
+
+fn metric_label(metric: Metric) -> String {
+    match metric.unit() {
+        "" => metric.name().to_string(),
+        unit => format!("{} {unit}", metric.name()),
+    }
+}
+
+pub(super) fn significance(plan: &Plan, tests: &[Significance]) -> Result<(), String> {
+    let mut tables = significance_tables(tests);
+    if tables.is_empty() {
+        return Ok(());
+    }
+    for (_, table) in &mut tables {
+        for row in &mut table.rows {
+            while row.values.len() < table.columns.len() {
+                row.values.push("-".to_string());
+            }
+        }
+    }
+    let groups = tables
+        .iter()
+        .map(|(name, table)| Group {
+            name: name.clone(),
+            table: Some(table),
+            cells: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let mut fonts = Fonts::system();
+    let sheet = Sheet::grid(SIGNIFICANCE_TILE, 1).compose(&mut fonts, &groups);
+    grana_raster::write(&plan.output.join(SIGNIFICANCE), &sheet).map_err(String::from)
+}
+
+fn significance_tables(tests: &[Significance]) -> Vec<(String, Table)> {
+    let mut tables = Vec::<(String, Table)>::new();
+    for test in tests {
+        let name = if test.name == test.kind {
+            test.name.clone()
+        } else {
+            format!("{} · {}", test.name, test.kind)
+        };
+        let index = tables
+            .iter()
+            .position(|(other, _)| *other == name)
+            .unwrap_or_else(|| {
+                let rows = Metric::ALL
+                    .map(|metric| Row {
+                        label: metric_label(metric),
+                        values: Vec::new(),
+                    })
+                    .into_iter()
+                    .collect();
+                tables.push((
+                    name.clone(),
+                    Table {
+                        columns: Vec::new(),
+                        rows,
+                    },
+                ));
+                tables.len() - 1
+            });
+        let table = &mut tables[index].1;
+        let column = format!("{} vs {}", test.group_a, test.group_b);
+        let slot = match table.columns.iter().position(|other| *other == column) {
+            Some(slot) => slot,
+            None => {
+                table.columns.push(column);
+                table.columns.len() - 1
+            }
+        };
+        let row = test.metric.index();
+        let cell = format!(
+            "{} q={} g={}",
+            test.mark(),
+            test.q_text(),
+            test.effect
+                .map_or_else(|| "-".to_string(), |effect| format!("{effect:.2}"))
+        );
+        let values = &mut table.rows[row].values;
+        while values.len() < slot {
+            values.push(String::new());
+        }
+        if values.len() == slot {
+            values.push(cell);
+        } else {
+            values[slot] = cell;
         }
     }
     tables

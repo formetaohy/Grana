@@ -65,6 +65,37 @@ fn summarises_spots_and_exports_a_csv() {
     assert!(lines[0].starts_with("frame,time_s,objects"));
 }
 
+#[test]
+fn tests_group_significance() {
+    let a = [1.0, 2.0, 3.0];
+    let b = [4.0, 5.0, 6.0];
+    let welch = grana_measure::WelchTest::of(&a, &b).expect("two three-sample groups test");
+    assert_eq!(welch.n_a(), 3);
+    assert_eq!(welch.mean_a(), 2.0);
+    assert_eq!(welch.mean_b(), 5.0);
+    assert_eq!(welch.deviation_a(), 1.0);
+    assert_eq!(welch.difference(), -3.0);
+    assert!((welch.t() + 3.674_234_614_174_767_3).abs() < 1.0e-12);
+    assert!((welch.df() - 4.0).abs() < 1.0e-12);
+    assert!((welch.p() - 0.021_311_641_128_756_713).abs() < 1.0e-11);
+    assert!(
+        (grana_measure::hedges_g(&a, &b).expect("the pooled spread is positive") + 2.4).abs()
+            < 1.0e-12
+    );
+    assert!(grana_measure::WelchTest::of(&a[..1], &b).is_none());
+    assert!(
+        (grana_measure::student_two_sided(2.0, 10.0) - 0.073_388_034_770_740_37).abs() < 1.0e-11
+    );
+    assert_eq!(grana_measure::student_two_sided(0.0, 5.0), 1.0);
+    let corrected = grana_measure::benjamini_hochberg(&[0.001, 0.01, 0.04]);
+    assert!((corrected[0] - 0.003).abs() < 1.0e-12);
+    assert!((corrected[1] - 0.015).abs() < 1.0e-12);
+    assert!((corrected[2] - 0.04).abs() < 1.0e-12);
+    assert_eq!(grana_measure::stars(0.0009), "***");
+    assert_eq!(grana_measure::stars(0.02), "*");
+    assert_eq!(grana_measure::stars(0.2), "ns");
+}
+
 fn value(table: &Table, row: usize, key: &str) -> f32 {
     let column = table
         .columns()

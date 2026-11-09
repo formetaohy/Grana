@@ -5,17 +5,15 @@ pub struct Channel {
     pub enabled: bool,
     pub opacity: f32,
     pub window: Intensity,
-    pub default_window: Intensity,
     transfer: TransferFunction,
 }
 
 impl Channel {
-    pub fn new(window: Intensity, default_window: Intensity, transfer: TransferFunction) -> Self {
+    pub fn new(window: Intensity, transfer: TransferFunction) -> Self {
         Self {
             enabled: true,
             opacity: 1.0,
             window,
-            default_window,
             transfer,
         }
     }

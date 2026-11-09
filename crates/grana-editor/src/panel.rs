@@ -542,13 +542,14 @@ pub fn apply(
                 workspace.comparison_key = None;
             }
             Message::SetComparisonKey(key) => workspace.comparison_key = key,
-            Message::ToggleComparisonDetail(key) => {
-                workspace.comparison_open =
-                    if workspace.comparison_open.as_deref() == Some(key.as_str()) {
-                        None
-                    } else {
-                        Some(key)
-                    };
+            Message::ToggleComparisonDetail { group, key } => {
+                let selected = (group, key);
+                workspace.comparison_open = if workspace.comparison_open.as_ref() == Some(&selected)
+                {
+                    None
+                } else {
+                    Some(selected)
+                };
             }
             Message::SelectPair {
                 source,

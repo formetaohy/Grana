@@ -403,13 +403,24 @@ fn comparison<'a>(
     state: &'a View<'a>,
 ) -> Element<'a, Message> {
     let rows = state.batch_comparison();
+    let significant = state
+        .batch_significance()
+        .iter()
+        .filter(|test| test.significant())
+        .count();
+    let tests = state.batch_significance().len();
+    let detail = (!rows.is_empty()).then(|| {
+        if tests == 0 {
+            "no group test".to_string()
+        } else {
+            format!("{significant}/{tests} significant")
+        }
+    });
     let mut children = vec![view::card_title(
         ctx,
         Icon::Table,
         "Comparison",
-        (!rows.is_empty())
-            .then(|| format!("{} groups", rows.len()))
-            .as_deref(),
+        detail.as_deref(),
     )];
     if rows.is_empty() {
         children.push(view::weak(
@@ -495,6 +506,10 @@ fn comparison<'a>(
             .clipped()
             .children(entries),
     );
+    children.push(view::weak(
+        ctx,
+        "Welch's t on dataset means; q is the Benjamini–Hochberg correction over the run.",
+    ));
     view::card(ctx, 6.0, children)
 }
 
@@ -513,12 +528,27 @@ fn comparison_row<'a>(
     let title = format!("{} · {}", row.group, row.name);
     let kind = row.kind.clone();
     let mean = metric.value(row);
+    let tests = state
+        .batch_significance()
+        .iter()
+        .filter(|test| test.key == row.key && test.metric == metric && test.involves(&row.group))
+        .collect::<Vec<_>>();
+    let best = tests.iter().map(|test| test.adjusted).fold(1.0, f64::min);
+    let mark = if best < 0.05 {
+        grana_measure::stars(best)
+    } else {
+        ""
+    };
     let readout = match metric.value(row) {
         Some(mean) => match metric.deviation(row) {
             Some(deviation) => format!("{} ± {}", metric.format(mean), metric.format(deviation)),
             None => metric.format(mean),
         },
         None => "No value".to_string(),
+    };
+    let readout = match mark {
+        "" => readout,
+        mark => format!("{readout}   {mark}"),
     };
     let count = format!(
         "{} dataset{}",
@@ -532,8 +562,13 @@ fn comparison_row<'a>(
         .map(|value| (value / max).clamp(0.0, 1.0) as f32)
         .collect::<Vec<_>>();
     let fraction = mean.map(|mean| (mean / max).clamp(0.0, 1.0) as f32);
-    let open = state.workspace.comparison_open.as_deref() == Some(row.key.as_str());
+    let open = state
+        .workspace
+        .comparison_open
+        .as_ref()
+        .is_some_and(|(group, key)| group == &row.group && key == &row.key);
     let key = row.key.clone();
+    let group = row.group.clone();
     let canvas = grana_ui::canvas(Length::Fill, COMPARISON_ROW, move |painter, info| {
         let rect = info.rect;
         if info.hover > 0.01 {
@@ -601,7 +636,7 @@ fn comparison_row<'a>(
             Align::Center,
         );
     })
-    .press(Message::ToggleComparisonDetail(key.clone()))
+    .press(Message::ToggleComparisonDetail { group, key })
     .cursor(Cursor::Pointing)
     .focus_ring(Corners::all(8.0));
     let mut parts = vec![canvas];
@@ -610,6 +645,12 @@ fn comparison_row<'a>(
             sample_line(row, metric),
             TextStyle::new(caption, palette.text_secondary).wrapping(),
         ));
+        if !tests.is_empty() {
+            parts.push(grana_ui::text(
+                test_line(&row.group, &tests),
+                TextStyle::new(caption, palette.text_secondary).wrapping(),
+            ));
+        }
     }
     grana_ui::column().gap(4.0).children(parts)
 }
@@ -658,6 +699,27 @@ fn sample_line(row: &grana_session::BatchComparison, metric: ComparisonMetric) -
         parts.push(format!("{} more", row.samples.len() - LIMIT));
     }
     parts.join("   ·   ")
+}
+
+fn test_line(group: &str, tests: &[&grana_session::BatchSignificance]) -> String {
+    tests
+        .iter()
+        .map(|test| {
+            let effect = test
+                .effect
+                .map_or_else(|| "-".to_string(), |effect| format!("{effect:.2}"));
+            format!(
+                "Welch {} vs {}: p={} · q={} · g={} {}",
+                group,
+                test.other(group),
+                test.p_text(),
+                test.q_text(),
+                effect,
+                test.mark()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("   ·   ")
 }
 
 fn state_tint(state: &str, theme: &grana_ui::Theme) -> Color {

@@ -6,6 +6,7 @@ mod pipeline;
 mod quality;
 mod resume;
 mod sheet;
+mod significance;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -28,7 +29,8 @@ pub use discover::{DatasetEntry, dataset_name, default_jobs, discover};
 pub use manifest::{
     Run, RunDataset, clear as clear_correction, read as read_run, record as record_correction,
 };
-pub use quality::{Comparison, ComparisonSample, Quality};
+pub use quality::{Comparison, ComparisonReport, ComparisonSample, Metric, Quality};
+pub use significance::{Significance, table as significance_table};
 
 const RESULT: &str = "result.json";
 
@@ -68,7 +70,7 @@ pub enum Event {
         index: usize,
         outcome: Outcome,
     },
-    Comparison(Vec<Comparison>),
+    Comparison(ComparisonReport),
     Failed(String),
     Done {
         cancelled: bool,
@@ -286,15 +288,23 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
             "failed to write the batch quality report: {error}"
         )));
     }
-    let (comparison, csv) = quality::comparison(&rows);
+    let (report, csv) = quality::comparison(&rows);
     if let Err(error) = std::fs::write(plan.output.join("comparison.csv"), csv) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch comparison: {error}"
         )));
     }
     if let Err(error) = std::fs::write(
+        plan.output.join("comparison_significance.csv"),
+        significance::table(&report.tests),
+    ) {
+        let _ = events.send(Event::Failed(format!(
+            "failed to write the batch significance: {error}"
+        )));
+    }
+    if let Err(error) = std::fs::write(
         plan.output.join("samples.csv"),
-        quality::samples(&comparison),
+        quality::samples(&report.groups),
     ) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch comparison samples: {error}"
@@ -303,10 +313,13 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
     if let Err(detail) = manifest::write(&plan, &rows, &corrections) {
         let _ = events.send(Event::Failed(detail));
     }
-    if let Err(detail) = sheet::write(&plan, &rows, &comparison) {
+    if let Err(detail) = sheet::write(&plan, &rows, &report) {
         let _ = events.send(Event::Failed(detail));
     }
-    let _ = events.send(Event::Comparison(comparison));
+    if let Err(detail) = sheet::significance(&plan, &report.tests) {
+        let _ = events.send(Event::Failed(detail));
+    }
+    let _ = events.send(Event::Comparison(report));
     drop(rows);
     let _ = events.send(Event::Done {
         cancelled: cancel.load(Ordering::Relaxed),

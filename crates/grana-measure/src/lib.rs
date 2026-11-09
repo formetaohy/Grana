@@ -11,6 +11,7 @@ mod pair;
 mod plot;
 mod relation;
 mod scope;
+mod significance;
 mod table;
 
 pub use child::{Child, ChildField, ChildMetric, UNASSIGNED};
@@ -31,4 +32,5 @@ pub use plot::{
 };
 pub use relation::{RelationField, RelationRow, relation_keys};
 pub use scope::Scope;
+pub use significance::{WelchTest, benjamini_hochberg, hedges_g, stars, student_two_sided};
 pub use table::{Aggregate, Frame, Group, Objects, Observation, Table, channel_keys};

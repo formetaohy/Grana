@@ -1234,6 +1234,44 @@ fn surface() -> grana_object::SurfaceSet {
 #[test]
 fn reads_a_batch_run_record() {
     let temp = Temp::new("run-record");
+    let datasets = [
+        ("A1", "control", 12, 1.0, 120.0),
+        ("A2", "control", 14, 2.0, 130.0),
+        ("B1", "treated", 8, 10.0, 90.0),
+        ("B2", "treated", 10, 11.0, 80.0),
+    ]
+    .into_iter()
+    .map(|(title, group, objects, volume, intensity)| {
+        serde_json::json!({
+            "path": format!("E:\\data\\plate\\well-{title}.tif"),
+            "group": group,
+            "title": title,
+            "scene": 1,
+            "scenes": 3,
+            "scene_name": "second",
+            "well": {"row": 0, "column": 0, "field": 1},
+            "plate": "A1",
+            "folder": format!("{group}\\{title}"),
+            "status": "ok",
+            "objects": objects,
+            "detail": format!("Nuclei={objects}"),
+            "quality": [
+                {
+                    "dataset": title,
+                    "group": group,
+                    "key": "nuclei",
+                    "name": "Nuclei",
+                    "kind": "Surfaces",
+                    "objects": objects,
+                    "volume": volume,
+                    "area": 1.0,
+                    "size": 2.0,
+                    "intensity": intensity
+                }
+            ]
+        })
+    })
+    .collect::<Vec<_>>();
     let record = serde_json::json!({
         "format": 1,
         "build": "0.1.1/10",
@@ -1241,36 +1279,7 @@ fn reads_a_batch_run_record() {
         "jobs": 2,
         "project": true,
         "channels": false,
-        "datasets": [
-            {
-                "path": "E:\\data\\plate\\well-a1.tif",
-                "group": "control",
-                "title": "A1",
-                "scene": 1,
-                "scenes": 3,
-                "scene_name": "second",
-                "well": {"row": 0, "column": 0, "field": 1},
-                "plate": "A1",
-                "folder": "control\\a1",
-                "status": "ok",
-                "objects": 12,
-                "detail": "Nuclei=12",
-                "quality": [
-                    {
-                        "dataset": "A1",
-                        "group": "control",
-                        "key": "nuclei",
-                        "name": "Nuclei",
-                        "kind": "Surfaces",
-                        "objects": 12,
-                        "volume": 3.5,
-                        "area": 1.0,
-                        "size": 2.0,
-                        "intensity": 120.0
-                    }
-                ]
-            }
-        ]
+        "datasets": datasets
     });
     std::fs::write(temp.path().join("run.json"), record.to_string())
         .expect("the run record is written");
@@ -1285,11 +1294,39 @@ fn reads_a_batch_run_record() {
     assert_eq!(entry.scene(), 1);
     assert_eq!(entry.scenes(), 3);
     assert_eq!(entry.well_key().map(|well| well.field()), Some(1));
-    let comparison = run.comparison();
-    assert_eq!(comparison.len(), 1);
-    assert_eq!(comparison[0].datasets, 1);
-    assert_eq!(comparison[0].samples[0].dataset, "A1");
-    assert_eq!(comparison[0].samples[0].objects, 12);
+    let report = run.comparison();
+    assert_eq!(report.groups.len(), 2);
+    assert_eq!(report.groups[0].group, "control");
+    assert_eq!(report.groups[0].datasets, 2);
+    assert_eq!(report.groups[0].samples[0].dataset, "A1");
+    assert_eq!(
+        grana_pipeline::Metric::Objects.sample(&report.groups[0].samples[1]),
+        Some(14.0)
+    );
+    assert_eq!(report.tests.len(), 5);
+    assert!(
+        report
+            .tests
+            .iter()
+            .all(|test| test.test.n_a() == 2 && test.test.n_b() == 2)
+    );
+    assert!(
+        report
+            .tests
+            .iter()
+            .all(|test| test.adjusted >= test.p() && test.p() > 0.0)
+    );
+    assert!(
+        report
+            .tests
+            .iter()
+            .any(grana_pipeline::Significance::significant),
+        "a separated group tests significant"
+    );
+    assert!(
+        grana_pipeline::significance_table(&report.tests)
+            .starts_with("group_a,group_b,set_key,set,kind,metric,")
+    );
 }
 
 #[test]

@@ -52,10 +52,15 @@ pub type BatchComparison = grana_pipeline::Comparison;
 
 pub type BatchSample = grana_pipeline::ComparisonSample;
 
+pub type BatchMetric = grana_pipeline::Metric;
+
+pub type BatchSignificance = grana_pipeline::Significance;
+
 pub struct BatchView<'a> {
     pub protocol: Option<&'a str>,
     pub datasets: &'a [BatchDataset],
     pub comparison: &'a [BatchComparison],
+    pub significance: &'a [BatchSignificance],
     pub output: Option<String>,
     pub jobs: usize,
     pub project: bool,

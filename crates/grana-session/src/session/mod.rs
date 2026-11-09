@@ -45,8 +45,8 @@ use crate::sample;
 use crate::task::Poll;
 use crate::transfer::Transfer;
 use crate::view::{
-    BatchComparison, BatchDataset, BatchView, HistoryView, IoView, Message, PlateView, SeriesView,
-    StoreView,
+    BatchComparison, BatchDataset, BatchSignificance, BatchView, HistoryView, IoView, Message,
+    PlateView, SeriesView, StoreView,
 };
 use crate::{Action, Analysis, Command, Series, Source};
 use field::{Fields, Recovered};
@@ -107,6 +107,7 @@ pub struct Session {
     batch_datasets: Vec<grana_pipeline::DatasetEntry>,
     batch_rows: Vec<BatchDataset>,
     batch_comparison: Vec<BatchComparison>,
+    batch_significance: Vec<BatchSignificance>,
     batch_output: Option<PathBuf>,
     batch_running: bool,
     batch_paused: bool,
@@ -178,6 +179,7 @@ impl Session {
             batch_datasets: Vec::new(),
             batch_rows: Vec::new(),
             batch_comparison: Vec::new(),
+            batch_significance: Vec::new(),
             batch_output: None,
             batch_running: false,
             batch_paused: false,
@@ -301,6 +303,7 @@ impl Session {
             protocol: self.protocol_text.as_deref(),
             datasets: &self.batch_rows,
             comparison: &self.batch_comparison,
+            significance: &self.batch_significance,
             output: self
                 .batch_output
                 .as_ref()

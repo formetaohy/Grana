@@ -193,102 +193,7 @@ pub enum RelationMetric {
     Center,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ComparisonMetric {
-    #[default]
-    Objects,
-    Volume,
-    Area,
-    Size,
-    Intensity,
-}
-
-impl ComparisonMetric {
-    pub const ALL: [Self; 5] = [
-        Self::Objects,
-        Self::Volume,
-        Self::Area,
-        Self::Size,
-        Self::Intensity,
-    ];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Objects => "Objects",
-            Self::Volume => "Volume",
-            Self::Area => "Area",
-            Self::Size => "Size",
-            Self::Intensity => "Intensity",
-        }
-    }
-
-    pub fn index(self) -> usize {
-        match self {
-            Self::Objects => 0,
-            Self::Volume => 1,
-            Self::Area => 2,
-            Self::Size => 3,
-            Self::Intensity => 4,
-        }
-    }
-
-    pub fn value(self, row: &grana_session::BatchComparison) -> Option<f64> {
-        match self {
-            Self::Objects => row.objects,
-            Self::Volume => row.volume,
-            Self::Area => row.area,
-            Self::Size => row.size,
-            Self::Intensity => row.intensity,
-        }
-    }
-
-    pub fn deviation(self, row: &grana_session::BatchComparison) -> Option<f64> {
-        match self {
-            Self::Objects => None,
-            Self::Volume => row.volume_deviation,
-            Self::Area => row.area_deviation,
-            Self::Size => row.size_deviation,
-            Self::Intensity => row.intensity_deviation,
-        }
-    }
-
-    pub fn sample(self, sample: &grana_session::BatchSample) -> Option<f64> {
-        match self {
-            Self::Objects => Some(sample.objects as f64),
-            Self::Volume => sample.volume,
-            Self::Area => sample.area,
-            Self::Size => sample.size,
-            Self::Intensity => sample.intensity,
-        }
-    }
-
-    pub fn unit(self) -> &'static str {
-        match self {
-            Self::Objects | Self::Intensity => "",
-            Self::Volume => "µm³",
-            Self::Area => "µm²",
-            Self::Size => "µm",
-        }
-    }
-
-    pub fn decimals(self) -> usize {
-        match self {
-            Self::Objects => 0,
-            Self::Volume | Self::Area | Self::Size => 3,
-            Self::Intensity => 2,
-        }
-    }
-
-    pub fn format(self, value: f64) -> String {
-        let unit = self.unit();
-        let number = format!("{value:.*}", self.decimals());
-        if unit.is_empty() {
-            number
-        } else {
-            format!("{number} {unit}")
-        }
-    }
-}
+pub use grana_session::BatchMetric as ComparisonMetric;
 
 impl RelationMetric {
     pub const ALL: [Self; 4] = [Self::Contact, Self::Distance, Self::Overlap, Self::Center];
@@ -313,8 +218,8 @@ impl RelationMetric {
 
     pub fn unit(self) -> &'static str {
         match self {
-            Self::Contact => "µm²",
-            Self::Distance | Self::Center => "µm",
+            Self::Contact => "碌m虏",
+            Self::Distance | Self::Center => "碌m",
             Self::Overlap => "%",
         }
     }
@@ -373,7 +278,7 @@ pub struct Workspace {
     pub comparison_metric: ComparisonMetric,
     pub comparison_group: Option<String>,
     pub comparison_key: Option<String>,
-    pub comparison_open: Option<String>,
+    pub comparison_open: Option<(String, String)>,
     pub(crate) drag: PlotDrag,
 }
 
@@ -460,6 +365,10 @@ impl View<'_> {
 
     pub fn batch_comparison(&self) -> &[grana_session::BatchComparison] {
         self.batch.map_or(&[], |batch| batch.comparison)
+    }
+
+    pub fn batch_significance(&self) -> &[grana_session::BatchSignificance] {
+        self.batch.map_or(&[], |batch| batch.significance)
     }
 
     pub fn batch_output(&self) -> Option<&str> {
