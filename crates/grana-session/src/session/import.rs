@@ -67,6 +67,7 @@ impl Session {
             }
             Provenance::Detection
             | Provenance::Segmented { .. }
+            | Provenance::Attached { .. }
             | Provenance::Filtered { .. }
             | Provenance::Copied { .. }
             | Provenance::Edited { .. }

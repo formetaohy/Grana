@@ -2,6 +2,7 @@ mod analysis;
 mod core;
 mod format;
 mod geometry;
+mod imaris;
 mod measure;
 mod mesh;
 mod render;

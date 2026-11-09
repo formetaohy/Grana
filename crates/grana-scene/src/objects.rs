@@ -139,6 +139,38 @@ impl Objects {
         id
     }
 
+    pub fn attached(
+        &mut self,
+        kind: ObjectKind,
+        name: &str,
+        file: &str,
+        dataset: &Dataset,
+    ) -> ObjectSetId {
+        assert!(
+            !name.trim().is_empty(),
+            "an attached object set carries a name"
+        );
+        assert!(
+            !file.trim().is_empty(),
+            "an attached object set names its file"
+        );
+        let id = ObjectSetId::new(self.next_id);
+        self.next_id += 1;
+        let base = name.trim().to_string();
+        let mut label = base.clone();
+        let mut ordinal = 2;
+        while self.occupied(&label, None) {
+            label = format!("{base} {ordinal}");
+            ordinal += 1;
+        }
+        let key = self.key_for(&label, None);
+        let color = PALETTE[(id.raw() as usize - 1) % PALETTE.len()];
+        let mut set = ObjectSet::new(id, key, kind, label, 0, color, dataset);
+        set.set_provenance(Provenance::attached(file));
+        self.sets.push(set);
+        id
+    }
+
     pub fn import_tracks(&mut self, file: &str, channel: usize, dataset: &Dataset) -> ObjectSetId {
         assert!(
             !file.trim().is_empty(),
@@ -469,6 +501,7 @@ impl Objects {
             | Provenance::Segmented { .. }
             | Provenance::Imported { .. }
             | Provenance::Interop { .. }
+            | Provenance::Attached { .. }
             | Provenance::Filtered { .. }
             | Provenance::Copied { .. }
             | Provenance::Edited { .. }

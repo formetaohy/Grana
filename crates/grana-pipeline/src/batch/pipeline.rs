@@ -561,7 +561,7 @@ impl Run<'_, '_> {
             .ok_or_else(|| "the object set left the scene".to_string())?;
         let label = match provenance {
             grana_scene::Provenance::Imported { label } => label,
-            grana_scene::Provenance::Interop { .. } => {
+            grana_scene::Provenance::Interop { .. } | grana_scene::Provenance::Attached { .. } => {
                 return Err(
                     "imported tracks belong to a single dataset and cannot be batched".to_string(),
                 );

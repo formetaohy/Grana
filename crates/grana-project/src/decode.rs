@@ -868,6 +868,13 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
             }
             Ok(Provenance::Interop { file })
         }
+        9 => {
+            let file = reader.string()?;
+            if file.trim().is_empty() {
+                return Err(FAULT_VALUE);
+            }
+            Ok(Provenance::Attached { file })
+        }
         6 => {
             let cellprob = reader.f32()?;
             let flow = reader.f32()?;

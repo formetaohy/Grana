@@ -198,6 +198,9 @@ pub enum Provenance {
     Interop {
         file: String,
     },
+    Attached {
+        file: String,
+    },
     Filtered {
         source: ObjectSetId,
         criteria: Criteria,
@@ -239,6 +242,12 @@ impl Provenance {
         }
     }
 
+    pub fn attached(file: &str) -> Self {
+        Self::Attached {
+            file: file.to_string(),
+        }
+    }
+
     pub fn is_detection(&self) -> bool {
         matches!(self, Self::Detection | Self::Segmented { .. })
     }
@@ -262,8 +271,15 @@ impl Provenance {
         matches!(self, Self::Interop { .. })
     }
 
+    pub fn is_attached(&self) -> bool {
+        matches!(self, Self::Attached { .. })
+    }
+
     pub fn is_external(&self) -> bool {
-        matches!(self, Self::Imported { .. } | Self::Interop { .. })
+        matches!(
+            self,
+            Self::Imported { .. } | Self::Interop { .. } | Self::Attached { .. }
+        )
     }
 
     pub fn label(&self) -> Option<&str> {
@@ -275,7 +291,7 @@ impl Provenance {
 
     pub fn file(&self) -> Option<&str> {
         match self {
-            Self::Interop { file } => Some(file),
+            Self::Interop { file } | Self::Attached { file } => Some(file),
             _ => None,
         }
     }
@@ -291,6 +307,7 @@ impl Provenance {
             | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
+            | Self::Attached { .. }
             | Self::Filtered { .. }
             | Self::Copied { .. }
             | Self::Masked { .. }
@@ -305,6 +322,7 @@ impl Provenance {
             | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
+            | Self::Attached { .. }
             | Self::Filtered { .. }
             | Self::Copied { .. }
             | Self::Edited { .. }
@@ -319,6 +337,7 @@ impl Provenance {
             | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
+            | Self::Attached { .. }
             | Self::Filtered { .. }
             | Self::Copied { .. }
             | Self::Masked { .. }
@@ -333,6 +352,7 @@ impl Provenance {
             | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
+            | Self::Attached { .. }
             | Self::Filtered { .. }
             | Self::Copied { .. }
             | Self::Edited { .. }
@@ -350,6 +370,7 @@ impl Provenance {
             | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
+            | Self::Attached { .. }
             | Self::Merged { .. } => None,
         }
     }
@@ -361,6 +382,7 @@ impl Provenance {
             | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
+            | Self::Attached { .. }
             | Self::Copied { .. }
             | Self::Edited { .. }
             | Self::Masked { .. }
@@ -375,6 +397,7 @@ impl Provenance {
             | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
+            | Self::Attached { .. }
             | Self::Filtered { .. }
             | Self::Copied { .. }
             | Self::Edited { .. }
@@ -387,7 +410,8 @@ impl Provenance {
             Self::Detection
             | Self::Segmented { .. }
             | Self::Imported { .. }
-            | Self::Interop { .. } => false,
+            | Self::Interop { .. }
+            | Self::Attached { .. } => false,
             Self::Filtered { source, .. }
             | Self::Copied { source }
             | Self::Edited { source, .. }
@@ -402,6 +426,7 @@ impl Provenance {
             | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
+            | Self::Attached { .. }
             | Self::Copied { .. } => false,
             Self::Filtered { source, .. }
             | Self::Edited { source, .. }
@@ -424,6 +449,7 @@ impl Provenance {
             | Self::Segmented { .. }
             | Self::Imported { .. }
             | Self::Interop { .. }
+            | Self::Attached { .. }
             | Self::Filtered { .. }
             | Self::Copied { .. }
             | Self::Edited { .. }
@@ -442,7 +468,8 @@ impl Provenance {
             Self::Detection
             | Self::Segmented { .. }
             | Self::Imported { .. }
-            | Self::Interop { .. } => {}
+            | Self::Interop { .. }
+            | Self::Attached { .. } => {}
             Self::Filtered { source, .. }
             | Self::Copied { source }
             | Self::Edited { source, .. }

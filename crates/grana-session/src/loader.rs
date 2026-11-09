@@ -26,6 +26,7 @@ pub struct Opened {
     pub labels_error: Option<String>,
     pub plate: Option<Plate>,
     pub field: usize,
+    pub imports: grana_readout::Imported,
 }
 
 pub enum Event {
@@ -214,6 +215,7 @@ impl Loader {
             labels_error: None,
             plate: None,
             field: 0,
+            imports: grana_readout::Imported::default(),
         };
         let channels = Channels::stored(Arc::new(image));
         let (sender, events) = mpsc::channel();
@@ -316,6 +318,10 @@ impl Loader {
                 Ok(labels) => (labels.names().map(str::to_string).collect(), None),
                 Err(detail) => (Vec::new(), Some(detail.to_string())),
             };
+            let imports = match (format, opened.path()) {
+                (Format::Imaris, Some(path)) => grana_readout::imported(path).unwrap_or_default(),
+                _ => grana_readout::Imported::default(),
+            };
             let opened = Event::Opened(Box::new(Opened {
                 name: reader.name().to_string(),
                 pyramid: reader.pyramid().clone(),
@@ -328,6 +334,7 @@ impl Loader {
                 labels_error,
                 plate,
                 field,
+                imports,
             }));
             let channels = Arc::new(Channels::stored(Arc::new(reader)));
             *opening_channels

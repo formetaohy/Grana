@@ -157,6 +157,7 @@ impl Protocol {
         let mut sets = scene
             .objects
             .iter()
+            .filter(|set| !set.provenance().is_attached())
             .map(|set| {
                 Ok(SetSpec {
                     key: set.key().as_str().to_string(),
@@ -215,9 +216,13 @@ impl Protocol {
         let relations = scene
             .objects
             .iter()
+            .filter(|set| !set.provenance().is_attached())
             .flat_map(|set| {
                 set.relations().iter().filter_map(|relation| {
                     let target = scene.objects.get(relation.target())?;
+                    if target.provenance().is_attached() {
+                        return None;
+                    }
                     Some(RelationSpec {
                         source: set.key().as_str().to_string(),
                         target: target.key().as_str().to_string(),
@@ -334,6 +339,10 @@ fn source(
             label: label.clone(),
         }),
         Provenance::Interop { file } => Ok(SourceSpec::Tracks { file: file.clone() }),
+        Provenance::Attached { .. } => Err(ProtocolError::Invalid(format!(
+            "{} is attached to its file and does not belong to a protocol",
+            set.name()
+        ))),
         Provenance::Filtered { source, criteria } => {
             let reference = scene.objects.get(*source).ok_or_else(|| {
                 ProtocolError::Invalid(format!(
@@ -419,6 +428,12 @@ fn part_spec(scene: &Scene, channels: &[String], part: &Recipe) -> Result<PartSp
             label: label.clone(),
         },
         Provenance::Interop { file } => SourceSpec::Tracks { file: file.clone() },
+        Provenance::Attached { .. } => {
+            return Err(ProtocolError::Invalid(format!(
+                "{} is attached to its file and does not belong to a protocol",
+                part.name()
+            )));
+        }
         Provenance::Filtered { source, criteria } => {
             let reference = scene.objects.get(*source).ok_or_else(|| {
                 ProtocolError::Invalid(format!(

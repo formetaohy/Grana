@@ -1040,7 +1040,8 @@ fn origin<'a>(
             format!("Segmented with {}", params.model().label())
         }
         Provenance::Imported { label } => format!("Imported from {label}"),
-        Provenance::Interop { file } => format!("Imported tracks from {file}"),
+        Provenance::Interop { file } => format!("Imported from {file}"),
+        Provenance::Attached { file } => format!("Attached from {file}"),
         Provenance::Filtered { source, .. } => format!("Filtered from {}", name(*source)),
         Provenance::Copied { source } => format!("Copy of {}", name(*source)),
         Provenance::Edited { source, edits } => {

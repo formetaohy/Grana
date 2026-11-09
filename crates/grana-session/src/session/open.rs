@@ -503,6 +503,11 @@ impl Session {
                     let opened = *opened;
                     let name = opened.name.clone();
                     let selected = opened.selected;
+                    let restored = self.pending.is_some();
+                    let file = current
+                        .as_ref()
+                        .map(Source::label)
+                        .unwrap_or_else(|| name.clone());
                     self.series = opened.series;
                     self.series_index = opened.selected;
                     self.plate = opened.plate;
@@ -521,6 +526,9 @@ impl Session {
                         (false, None) => Dataset::synthetic(opened.name, opened.pyramid),
                     };
                     self.open_dataset(dataset, opened.fingerprint);
+                    if !restored {
+                        self.import_scene(opened.imports, &file);
+                    }
                     self.remember_open(current.as_ref(), &name, selected);
                     if let Some((index, path, scene)) = self.batch_review_pending.clone() {
                         if scene >= self.series.len() {

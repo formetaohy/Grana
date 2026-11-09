@@ -838,6 +838,7 @@ impl Scene {
                 | Provenance::Segmented { .. }
                 | Provenance::Imported { .. }
                 | Provenance::Interop { .. }
+                | Provenance::Attached { .. }
                 | Provenance::Copied { .. }
                 | Provenance::Merged { .. } => {
                     return Some(current);

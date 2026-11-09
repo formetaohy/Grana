@@ -3370,6 +3370,7 @@ dependencies = [
  "grana-project",
  "grana-protocol",
  "grana-raster",
+ "grana-readout",
  "grana-render",
  "grana-restore",
  "grana-scene",
@@ -3720,6 +3721,7 @@ name = "grana-readout"
 version = "0.1.1"
 dependencies = [
  "grana-volume",
+ "hdf5-pure",
  "openreadout-core",
  "openreadout-hdf5",
  "openreadout-lif",
@@ -3800,6 +3802,7 @@ dependencies = [
  "grana-project",
  "grana-protocol",
  "grana-raster",
+ "grana-readout",
  "grana-scene",
  "grana-text",
  "grana-volume",

@@ -15,6 +15,7 @@ mod open;
 mod plate;
 mod preview;
 mod replay;
+mod scene_import;
 mod seed;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
