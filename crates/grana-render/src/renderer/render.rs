@@ -128,7 +128,6 @@ impl Renderer {
         );
         let (section_level, section_count) = resolve_section_level(
             pyramid,
-            camera,
             section,
             section_aspect,
             section_target_level,
@@ -202,7 +201,6 @@ impl Renderer {
             .as_ref()
             .expect("the section fallback table exists");
         let mut section_data = SectionData::new(
-            camera,
             section,
             section_aspect,
             section_table,
@@ -343,14 +341,7 @@ impl Renderer {
         ];
         let cut_offset = sample::offset(sample_index, cut_size);
         section_data.jitter = [cut_offset.x, cut_offset.y, 0.0, 0.0];
-        let range = section_range(
-            pyramid,
-            section_level,
-            camera,
-            section,
-            section_aspect,
-            region,
-        );
+        let range = section_range(pyramid, section_level, section, section_aspect, region);
         scene_table.write(
             device,
             queue,
@@ -376,7 +367,6 @@ impl Renderer {
                             time,
                             band: band as u32,
                             capacity: capacity[band] as u32,
-                            layer: 0,
                             range: SectionRange::default(),
                             dispatch: volume_dispatch(table),
                             bucket_scale: scale,
@@ -390,7 +380,6 @@ impl Renderer {
                             time,
                             band: band as u32,
                             capacity: 0,
-                            layer: 0,
                             range: SectionRange::default(),
                             dispatch: 0,
                             bucket_scale: scale,
@@ -405,7 +394,6 @@ impl Renderer {
                     time,
                     band: 0,
                     capacity: section_capacity as u32,
-                    layer: range.layer,
                     range,
                     dispatch: range.dispatch(),
                     bucket_scale: 0.0,

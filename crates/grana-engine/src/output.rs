@@ -244,7 +244,6 @@ impl Export {
             labels: &labels,
             view_projection: camera.view_projection(aspect, 0.5 * world.length()),
             eye: camera.eye(),
-            focus: camera.focus(),
         };
         let instances = overlay::instances(
             ui,

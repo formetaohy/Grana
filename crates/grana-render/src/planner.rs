@@ -68,16 +68,17 @@ impl Ladder {
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct SectionRange {
-    pub layer: u32,
-    pub u0: u32,
-    pub v0: u32,
-    pub u_count: u32,
-    pub v_count: u32,
+    pub x0: u32,
+    pub y0: u32,
+    pub z0: u32,
+    pub x_count: u32,
+    pub y_count: u32,
+    pub z_count: u32,
 }
 
 impl SectionRange {
     pub fn dispatch(&self) -> u32 {
-        self.u_count * self.v_count
+        self.x_count * self.y_count * self.z_count
     }
 }
 
@@ -86,7 +87,6 @@ pub(crate) struct Schedule {
     pub time: u32,
     pub band: u32,
     pub capacity: u32,
-    pub layer: u32,
     pub range: SectionRange,
     pub dispatch: u32,
     pub bucket_scale: f32,
@@ -209,14 +209,15 @@ impl Plan {
             time: schedule.time,
             band: schedule.band,
             capacity: schedule.capacity.min(self.capacity as u32),
-            layer: schedule.layer,
-            u0: schedule.range.u0,
-            v0: schedule.range.v0,
-            u_count: schedule.range.u_count,
-            v_count: schedule.range.v_count,
+            x0: schedule.range.x0,
+            y0: schedule.range.y0,
+            z0: schedule.range.z0,
+            x_count: schedule.range.x_count,
+            y_count: schedule.range.y_count,
             bucket_scale: schedule.bucket_scale,
             base: schedule.base,
-            reserved: [0; 2],
+            z_count: schedule.range.z_count,
+            reserved: 0,
         };
         queue.write_buffer(&self.uniform, 0, bytes_of(&data));
         let header = [0u32; HEADER_WORDS + BUCKET_COUNT];
@@ -456,66 +457,155 @@ pub(crate) fn bucket_scale(camera: &Camera, origin: [f32; 3], world: [f32; 3]) -
 pub(crate) fn section_range(
     pyramid: &Pyramid,
     level_index: usize,
-    camera: &Camera,
     section: &SectionCamera,
     aspect: f32,
     region: Region,
 ) -> SectionRange {
+    let Some((first, last)) = section_cells(pyramid, level_index, section, aspect, region) else {
+        return SectionRange::default();
+    };
+    SectionRange {
+        x0: first[0],
+        y0: first[1],
+        z0: first[2],
+        x_count: last[0] - first[0] + 1,
+        y_count: last[1] - first[1] + 1,
+        z_count: last[2] - first[2] + 1,
+    }
+}
+
+fn section_cells(
+    pyramid: &Pyramid,
+    level_index: usize,
+    section: &SectionCamera,
+    aspect: f32,
+    region: Region,
+) -> Option<([u32; 3], [u32; 3])> {
     let level = pyramid.level(level_index);
     let extent = level.extent();
-    let world = level.world_extent();
-    let origin = level.origin();
-    let dims = [extent.x() as f32, extent.y() as f32, extent.z() as f32];
-    let axis = section.axis().index();
-    let (u_axis, v_axis) = section.axis().in_plane();
-    let (u, v) = (u_axis.index(), v_axis.index());
-    let focus = camera.focus();
-    let layer = (((focus[axis] - origin[axis]) / world[axis]) * dims[axis])
-        .floor()
-        .clamp(0.0, dims[axis] - 1.0);
-    let center_u = (focus[u] - origin[u]) / world[u];
-    let center_v = (focus[v] - origin[v]) / world[v];
-    let half_u = section.span() * aspect / (2.0 * world[u]);
-    let half_v = section.span() / (2.0 * world[v]);
-    let mut umin = (center_u - half_u).clamp(0.0, 1.0);
-    let mut umax = (center_u + half_u).clamp(0.0, 1.0);
-    let mut vmin = (center_v - half_v).clamp(0.0, 1.0);
-    let mut vmax = (center_v + half_v).clamp(0.0, 1.0);
+    let box_low = Vec3::from(level.origin());
+    let box_high = box_low + Vec3::from(level.world_extent());
+    let (mut low, mut high) = section_bounds(section, aspect);
+    low = low.max(box_low);
+    high = high.min(box_high);
     if region.enabled() {
-        let region_min = region.min();
-        let region_max = region.max();
-        if focus[axis] < region_min[axis] || focus[axis] > region_max[axis] {
-            return SectionRange::default();
+        low = low.max(region.min());
+        high = high.min(region.max());
+    }
+    if !(0..3).all(|axis| low[axis] <= high[axis]) {
+        return None;
+    }
+    let counts = BrickGrid::new(extent).counts();
+    let dims = [extent.x() as f32, extent.y() as f32, extent.z() as f32];
+    let world = [
+        box_high.x - box_low.x,
+        box_high.y - box_low.y,
+        box_high.z - box_low.z,
+    ];
+    let number = |point: Vec3, axis: usize, lowest: bool| {
+        let unit = ((point[axis] - box_low[axis]) / world[axis]).clamp(0.0, 1.0);
+        let voxel = (unit * dims[axis]).clamp(0.0, dims[axis]);
+        let voxel = if lowest {
+            voxel
+        } else {
+            (voxel - 1.0).max(0.0)
+        };
+        (voxel / BRICK_SIDE as f32)
+            .floor()
+            .clamp(0.0, (counts[axis] - 1) as f32) as u32
+    };
+    let first = [0, 1, 2].map(|axis| number(low, axis, true));
+    let last = [0, 1, 2].map(|axis| {
+        if high[axis] <= low[axis] {
+            number(low, axis, true)
+        } else {
+            number(high, axis, false)
         }
-        let region_umin = ((region_min[u] - origin[u]) / world[u]).clamp(0.0, 1.0);
-        let region_umax = ((region_max[u] - origin[u]) / world[u]).clamp(0.0, 1.0);
-        let region_vmin = ((region_min[v] - origin[v]) / world[v]).clamp(0.0, 1.0);
-        let region_vmax = ((region_max[v] - origin[v]) / world[v]).clamp(0.0, 1.0);
-        umin = umin.max(region_umin);
-        umax = umax.min(region_umax);
-        vmin = vmin.max(region_vmin);
-        vmax = vmax.min(region_vmax);
+    });
+    Some((first, last))
+}
+
+fn section_bounds(section: &SectionCamera, aspect: f32) -> (Vec3, Vec3) {
+    assert!(aspect > 0.0, "a section pane has a positive aspect");
+    let center = section.center();
+    let right = section.right() * (0.5 * section.span() * aspect);
+    let up = section.up() * (0.5 * section.span());
+    let mut low = Vec3::splat(f32::INFINITY);
+    let mut high = Vec3::splat(f32::NEG_INFINITY);
+    for (across, down) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let corner = center + right * across + up * down;
+        low = low.min(corner);
+        high = high.max(corner);
     }
-    if umin >= umax || vmin >= vmax {
-        return SectionRange::default();
+    (low, high)
+}
+
+fn section_brick_count(
+    pyramid: &Pyramid,
+    level_index: usize,
+    section: &SectionCamera,
+    aspect: f32,
+    region: Region,
+) -> usize {
+    let Some((first, last)) = section_cells(pyramid, level_index, section, aspect, region) else {
+        return 0;
+    };
+    let level = pyramid.level(level_index);
+    let extent = level.extent();
+    let dims = [extent.x() as f32, extent.y() as f32, extent.z() as f32];
+    let origin = Vec3::from(level.origin());
+    let voxel = Vec3::from(level.world_extent()) / Vec3::from(dims);
+    let normal = section.normal();
+    let offset = section.center().dot(normal);
+    let across = section.right();
+    let down = section.up();
+    let across_center = section.center().dot(across);
+    let down_center = section.center().dot(down);
+    let across_half = 0.5 * section.span() * aspect;
+    let down_half = 0.5 * section.span();
+    let mut count = 0;
+    for z in first[2]..=last[2] {
+        for y in first[1]..=last[1] {
+            for x in first[0]..=last[0] {
+                let cell = Vec3::new(x as f32, y as f32, z as f32) * BRICK_SIDE as f32;
+                let size = (Vec3::from(dims) - cell).min(Vec3::splat(BRICK_SIDE as f32));
+                let low = origin + cell * voxel;
+                let high = low + size * voxel;
+                if region.enabled()
+                    && (high.cmplt(region.min()).any() || low.cmpgt(region.max()).any())
+                {
+                    continue;
+                }
+                if !plane_overlaps(low, high, normal, offset) {
+                    continue;
+                }
+                let across_span = interval(low, high, across);
+                let down_span = interval(low, high, down);
+                if across_span.1 < across_center - across_half
+                    || across_span.0 > across_center + across_half
+                    || down_span.1 < down_center - down_half
+                    || down_span.0 > down_center + down_half
+                {
+                    continue;
+                }
+                count += 1;
+            }
+        }
     }
-    let u_extent = u_axis.extent(extent);
-    let v_extent = v_axis.extent(extent);
-    let u0 = ((umin * dims[u]).floor() as u32).min(u_extent - 1);
-    let u1 = ((umax * dims[u]).ceil() as u32)
-        .saturating_sub(1)
-        .min(u_extent - 1);
-    let v0 = ((vmin * dims[v]).floor() as u32).min(v_extent - 1);
-    let v1 = ((vmax * dims[v]).ceil() as u32)
-        .saturating_sub(1)
-        .min(v_extent - 1);
-    SectionRange {
-        layer: (layer as u32) / BRICK_SIDE,
-        u0: u0 / BRICK_SIDE,
-        v0: v0 / BRICK_SIDE,
-        u_count: u1 / BRICK_SIDE - u0 / BRICK_SIDE + 1,
-        v_count: v1 / BRICK_SIDE - v0 / BRICK_SIDE + 1,
-    }
+    count
+}
+
+fn plane_overlaps(low: Vec3, high: Vec3, normal: Vec3, offset: f32) -> bool {
+    let (low, high) = interval(low, high, normal);
+    low <= offset && offset <= high
+}
+
+fn interval(low: Vec3, high: Vec3, direction: Vec3) -> (f32, f32) {
+    let near = direction * low;
+    let far = direction * high;
+    let low = near.min(far);
+    let high = near.max(far);
+    (low.x + low.y + low.z, high.x + high.y + high.z)
 }
 
 pub(crate) fn volume_dispatch(table: &crate::brick::BrickTable) -> u32 {
@@ -571,7 +661,7 @@ pub(crate) fn select_section_level(
     let pixel_world = section.span() / height.max(1.0);
     let mut level = first;
     for index in first..pyramid.level_count() {
-        if section_spacing(pyramid, index, section.axis()) <= pixel_world {
+        if section_spacing(pyramid, index, section) <= pixel_world {
             level = index;
         } else {
             break;
@@ -582,7 +672,7 @@ pub(crate) fn select_section_level(
         level,
         current,
         pixel_world,
-        |index| section_spacing(pyramid, index, section.axis()),
+        |index| section_spacing(pyramid, index, section),
     )
     .max(first)
 }
@@ -608,7 +698,6 @@ fn hold_level(
 
 pub(crate) fn resolve_section_level(
     pyramid: &Pyramid,
-    camera: &Camera,
     section: &SectionCamera,
     aspect: f32,
     target: usize,
@@ -618,8 +707,7 @@ pub(crate) fn resolve_section_level(
     let levels = pyramid.level_count();
     let mut level = target.min(levels - 1);
     loop {
-        let count =
-            section_range(pyramid, level, camera, section, aspect, region).dispatch() as usize;
+        let count = section_brick_count(pyramid, level, section, aspect, region);
         if count <= capacity || level + 1 == levels {
             return (level, count);
         }
@@ -632,8 +720,10 @@ fn minimum_spacing(pyramid: &Pyramid, level: usize) -> f32 {
     spacing.x().min(spacing.y()).min(spacing.z())
 }
 
-fn section_spacing(pyramid: &Pyramid, level: usize, axis: grana_volume::Axis) -> f32 {
+fn section_spacing(pyramid: &Pyramid, level: usize, section: &SectionCamera) -> f32 {
     let spacing = pyramid.level(level).spacing();
-    let (u, v) = axis.in_plane();
-    u.spacing(spacing).max(v.spacing(spacing))
+    let spacing = Vec3::new(spacing.x(), spacing.y(), spacing.z());
+    let across = section.right().abs().dot(spacing);
+    let down = section.up().abs().dot(spacing);
+    across.max(down)
 }

@@ -12,7 +12,7 @@ use grana_protocol::Protocol;
 use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene};
 use grana_session::{Command, Session};
 use grana_volume::{
-    Axis, BrickCoord, BrickRequest, Extent, Fingerprint, Spacing, VolumeSeries, VoxelData,
+    BrickCoord, BrickRequest, Extent, Fingerprint, Spacing, VolumeSeries, VoxelData,
 };
 
 use crate::support::{self, Temp};
@@ -216,7 +216,9 @@ fn round_trips_a_project() {
             fov_y: 0.6,
         },
         section: SectionState {
-            axis: Axis::Z,
+            center: [0.0, 0.0, 0.0],
+            azimuth: 0.0,
+            elevation: 0.0,
             span: 20.0,
         },
         split: 0.5,

@@ -2,7 +2,6 @@ use glam::{Mat4, Vec2, Vec3};
 use grana_measure::Unit;
 use grana_scene::Scene;
 use grana_ui::{Border, Color, Corners, Fill, Painter, Rect, Shadow, TextStyle, TypeStyle};
-use grana_volume::Axis;
 
 const POINT_RADIUS: f32 = 3.2;
 const PICK_RADIUS: f32 = 10.0;
@@ -79,30 +78,32 @@ pub fn volume(items: &[Item], view_projection: Mat4, rect: Rect) -> Vec<Placed> 
 
 pub fn section(
     items: &[Item],
-    focus: Vec3,
-    axis: Axis,
-    span: f32,
+    section: &grana_display::SectionCamera,
     rect: Rect,
     tolerance: f32,
 ) -> Vec<Placed> {
-    let (u, v) = axis.in_plane();
-    let plane = focus[axis.index()];
-    let points_per_micron = rect.height() / span;
+    let normal = section.normal();
+    let offset = section.offset();
+    let center = section.center();
+    let right = section.right();
+    let up = section.up();
+    let points_per_micron = rect.height() / section.span();
     let screen = |point: [f32; 3]| {
+        let point = Vec3::from(point);
         Vec2::new(
-            rect.center().x + (point[u.index()] - focus[u.index()]) * points_per_micron,
-            rect.center().y - (point[v.index()] - focus[v.index()]) * points_per_micron,
+            rect.center().x + (point.dot(right) - center.dot(right)) * points_per_micron,
+            rect.center().y - (point.dot(up) - center.dot(up)) * points_per_micron,
         )
     };
     items
         .iter()
         .filter_map(|item| {
-            if (item.anchor[axis.index()] - plane).abs() > tolerance {
+            if (Vec3::from(item.anchor).dot(normal) - offset).abs() > tolerance {
                 return None;
             }
             let to = match item.end {
                 Some(end) => {
-                    if (end[axis.index()] - plane).abs() > tolerance {
+                    if (Vec3::from(end).dot(normal) - offset).abs() > tolerance {
                         return None;
                     }
                     Some(screen(end))

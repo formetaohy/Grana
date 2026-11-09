@@ -32,11 +32,11 @@ struct FrameData {
 }
 
 struct SectionData {
-    uv_center: vec4<f32>,
-    uv_scale: vec4<f32>,
+    center: vec4<f32>,
     plane: vec4<f32>,
+    right: vec4<f32>,
+    up: vec4<f32>,
     jitter: vec4<f32>,
-    mapping: vec4<u32>,
     box_min: vec4<f32>,
     world: vec4<f32>,
     dims: vec4<f32>,
@@ -66,6 +66,26 @@ struct ChannelData {
 @group(0) @binding(5) var extinction_lut: texture_2d<f32>;
 
 const SHADING_TAU: f32 = 0.020203;
+
+fn section_point(ndc: vec2<f32>) -> vec3<f32> {
+    let across = section.center.x + ndc.x * section.right.w;
+    let down = section.center.y + ndc.y * section.up.w;
+    return section.right.xyz * across
+        + section.up.xyz * down
+        + section.plane.xyz * section.plane.w;
+}
+
+fn section_plane_distance(point: vec3<f32>) -> f32 {
+    return dot(section.plane.xyz, point) - section.plane.w;
+}
+
+fn section_across(point: vec3<f32>) -> f32 {
+    return dot(section.right.xyz, point) - section.center.x;
+}
+
+fn section_down(point: vec3<f32>) -> f32 {
+    return dot(section.up.xyz, point) - section.center.y;
+}
 
 fn channel_opacity(index: u32) -> f32 {
     return channels[index].opacity;

@@ -46,11 +46,11 @@ pub(crate) struct FrameData {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub(crate) struct SectionData {
-    pub uv_center: [f32; 4],
-    pub uv_scale: [f32; 4],
+    pub center: [f32; 4],
     pub plane: [f32; 4],
+    pub right: [f32; 4],
+    pub up: [f32; 4],
     pub jitter: [f32; 4],
-    pub mapping: [u32; 4],
     pub box_min: [f32; 4],
     pub world: [f32; 4],
     pub dims: [f32; 4],
@@ -70,14 +70,15 @@ pub(crate) struct ScheduleData {
     pub time: u32,
     pub band: u32,
     pub capacity: u32,
-    pub layer: u32,
-    pub u0: u32,
-    pub v0: u32,
-    pub u_count: u32,
-    pub v_count: u32,
+    pub x0: u32,
+    pub y0: u32,
+    pub z0: u32,
+    pub x_count: u32,
+    pub y_count: u32,
     pub bucket_scale: f32,
     pub base: u32,
-    pub reserved: [u32; 2],
+    pub z_count: u32,
+    pub reserved: u32,
 }
 
 const _: () = {
@@ -199,52 +200,30 @@ impl FrameData {
 
 impl SectionData {
     pub fn new(
-        camera: &Camera,
         section: &SectionCamera,
         aspect: f32,
         table: &BrickTable,
         fallback: Option<&BrickTable>,
         channels: usize,
     ) -> Self {
-        let axis = section.axis();
-        let (u_axis, v_axis) = axis.in_plane();
+        assert!(aspect > 0.0, "a section pane has a positive aspect");
         let world = table.world;
         let origin = table.origin;
         let dims = table.dims;
-        let focus = camera.focus();
-        let plane_index = axis.index();
-        let layer = (((focus[plane_index] - origin[plane_index]) / world[plane_index])
-            * dims[plane_index])
-            .floor()
-            .clamp(0.0, dims[plane_index] - 1.0);
-        let plane = (layer + 0.5) / dims[plane_index];
-        let uv_center = [
-            (focus[u_axis.index()] - origin[u_axis.index()]) / world[u_axis.index()],
-            (focus[v_axis.index()] - origin[v_axis.index()]) / world[v_axis.index()],
-            0.0,
-            0.0,
-        ];
-        let uv_scale = [
-            section.span() * aspect / (2.0 * world[u_axis.index()]),
-            section.span() / (2.0 * world[v_axis.index()]),
-            0.0,
-            0.0,
-        ];
+        let center = section.center();
+        let normal = section.normal();
+        let right = section.right();
+        let up = section.up();
         let grid = table.grid.counts();
         let fallback = fallback.filter(|fallback| fallback.level() != table.level());
         let support = fallback.unwrap_or(table);
         let support_grid = support.grid.counts();
         Self {
-            uv_center,
-            uv_scale,
-            plane: [plane, 0.0, 0.0, 0.0],
+            center: [center.dot(right), center.dot(up), 0.0, 0.0],
+            plane: [normal.x, normal.y, normal.z, center.dot(normal)],
+            right: [right.x, right.y, right.z, 0.5 * section.span() * aspect],
+            up: [up.x, up.y, up.z, 0.5 * section.span()],
             jitter: [0.0; 4],
-            mapping: [
-                u_axis.index() as u32,
-                v_axis.index() as u32,
-                plane_index as u32,
-                0,
-            ],
             box_min: [origin.x, origin.y, origin.z, 0.0],
             world: [world.x, world.y, world.z, 0.0],
             dims: [dims.x, dims.y, dims.z, 0.0],

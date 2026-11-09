@@ -183,7 +183,11 @@ impl Timeline {
             hash = mix(hash, u64::from(key.camera.pitch.to_bits()));
             hash = mix(hash, u64::from(key.camera.distance.to_bits()));
             hash = mix(hash, u64::from(key.camera.fov_y.to_bits()));
-            hash = mix(hash, key.section.axis.index() as u64);
+            for value in key.section.center {
+                hash = mix(hash, u64::from(value.to_bits()));
+            }
+            hash = mix(hash, u64::from(key.section.azimuth.to_bits()));
+            hash = mix(hash, u64::from(key.section.elevation.to_bits()));
             hash = mix(hash, u64::from(key.section.span.to_bits()));
         }
         hash
@@ -216,11 +220,13 @@ fn blended(from: Keyframe, to: Keyframe, at: f32) -> Sample {
         fov_y: lerp(from.camera.fov_y, to.camera.fov_y),
     };
     let section = SectionState {
-        axis: if eased < 0.5 {
-            from.section.axis
-        } else {
-            to.section.axis
-        },
+        center: [
+            lerp(from.section.center[0], to.section.center[0]),
+            lerp(from.section.center[1], to.section.center[1]),
+            lerp(from.section.center[2], to.section.center[2]),
+        ],
+        azimuth: lerp_angle(from.section.azimuth, to.section.azimuth, eased),
+        elevation: lerp(from.section.elevation, to.section.elevation),
         span: lerp(from.section.span, to.section.span),
     };
     let time = lerp(from.time as f32, to.time as f32)
@@ -231,6 +237,16 @@ fn blended(from: Keyframe, to: Keyframe, at: f32) -> Sample {
         camera,
         section,
     }
+}
+
+fn lerp_angle(from: f32, to: f32, eased: f32) -> f32 {
+    let mut delta = (to - from) % std::f32::consts::TAU;
+    if delta > std::f32::consts::PI {
+        delta -= std::f32::consts::TAU;
+    } else if delta < -std::f32::consts::PI {
+        delta += std::f32::consts::TAU;
+    }
+    from + delta * eased
 }
 
 fn plausible_camera(camera: &CameraState) -> bool {
@@ -244,7 +260,12 @@ fn plausible_camera(camera: &CameraState) -> bool {
 }
 
 fn plausible_section(section: &SectionState) -> bool {
-    section.span.is_finite() && section.span > 0.0
+    section.center.iter().all(|value| value.is_finite())
+        && section.azimuth.is_finite()
+        && section.elevation.is_finite()
+        && section.elevation.abs() <= std::f32::consts::FRAC_PI_2
+        && section.span.is_finite()
+        && section.span > 0.0
 }
 
 fn mix(hash: u64, value: u64) -> u64 {

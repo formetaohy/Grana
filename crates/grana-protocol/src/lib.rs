@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use spec::{
-    AnchorSpec, AnnotationSpec, AxisSpec, CameraSpec, ChannelSpec, ClassifierSpec, ColocPairSpec,
+    AnchorSpec, AnnotationSpec, CameraSpec, ChannelSpec, ClassifierSpec, ColocPairSpec,
     ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec, EditSpec,
     ExportSpec, FilterSpec, HiddenSpec, KeySpec, LassoSpec, MaskFilterSpec, MaskSpec, MeasureSpec,
     MeasuredSpec, MetricSpec, NodeSpec, PartSpec, RegionSpec, RelationSpec, RemovalSpec,

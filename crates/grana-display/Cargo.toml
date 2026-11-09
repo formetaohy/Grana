@@ -8,7 +8,6 @@ repository.workspace = true
 
 [dependencies]
 glam = { workspace = true }
-grana-volume = { workspace = true }
 
 [lints]
 workspace = true

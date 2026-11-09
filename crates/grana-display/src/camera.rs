@@ -1,5 +1,4 @@
 use glam::{Mat4, Vec2, Vec3, Vec4};
-use grana_volume::Axis;
 
 const PITCH_LIMIT: f32 = 1.45;
 const ORBIT_SENSITIVITY: f32 = 0.007;
@@ -7,6 +6,7 @@ const ZOOM_SENSITIVITY: f32 = 0.15;
 const SECTION_ZOOM_SENSITIVITY: f32 = 0.15;
 const FIT_MARGIN: f32 = 1.05;
 const MIN_SPAN_VOXELS: f32 = 8.0;
+const ELEVATION_LIMIT: f32 = std::f32::consts::FRAC_PI_2;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ray {
@@ -25,7 +25,9 @@ pub struct CameraState {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SectionState {
-    pub axis: Axis,
+    pub center: [f32; 3],
+    pub azimuth: f32,
+    pub elevation: f32,
     pub span: f32,
 }
 
@@ -144,23 +146,6 @@ impl Camera {
         self.pivot
     }
 
-    pub fn focus_along(&self, axis: Axis) -> f32 {
-        self.pivot[axis.index()]
-    }
-
-    pub fn set_focus_along(&mut self, axis: Axis, value: f32) {
-        self.pivot[axis.index()] = value;
-    }
-
-    pub fn move_along(&mut self, axis: Axis, distance: f32) {
-        self.pivot[axis.index()] += distance;
-    }
-
-    pub fn pan_in_plane(&mut self, axis: Axis, delta: Vec2, world_per_pixel: f32) {
-        let (right, up) = plane_basis(axis);
-        self.pivot += (right * -delta.x + up * delta.y) * world_per_pixel;
-    }
-
     pub fn clamp_focus(&mut self, half: Vec3) {
         self.pivot = self.pivot.clamp(-half, half);
     }
@@ -203,32 +188,78 @@ impl Camera {
 
 #[derive(Clone, Debug)]
 pub struct SectionCamera {
-    axis: Axis,
+    center: Vec3,
+    azimuth: f32,
+    elevation: f32,
     span: f32,
     min_span: f32,
     max_span: f32,
 }
 
+impl Default for SectionCamera {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SectionCamera {
-    pub fn new(axis: Axis) -> Self {
+    pub fn new() -> Self {
         Self {
-            axis,
+            center: Vec3::ZERO,
+            azimuth: 0.0,
+            elevation: 0.0,
             span: 1.0,
             min_span: 1.0e-4,
             max_span: 1.0e4,
         }
     }
 
-    pub fn axis(&self) -> Axis {
-        self.axis
+    pub fn center(&self) -> Vec3 {
+        self.center
+    }
+
+    pub fn azimuth(&self) -> f32 {
+        self.azimuth
+    }
+
+    pub fn elevation(&self) -> f32 {
+        self.elevation
     }
 
     pub fn span(&self) -> f32 {
         self.span
     }
 
-    pub fn set_axis(&mut self, axis: Axis) {
-        self.axis = axis;
+    pub fn normal(&self) -> Vec3 {
+        let (sin_azimuth, cos_azimuth) = self.azimuth.sin_cos();
+        let (sin_elevation, cos_elevation) = self.elevation.sin_cos();
+        Vec3::new(
+            cos_elevation * sin_azimuth,
+            sin_elevation,
+            cos_elevation * cos_azimuth,
+        )
+    }
+
+    pub fn right(&self) -> Vec3 {
+        let (sin_azimuth, cos_azimuth) = self.azimuth.sin_cos();
+        Vec3::new(cos_azimuth, 0.0, -sin_azimuth)
+    }
+
+    pub fn up(&self) -> Vec3 {
+        self.normal().cross(self.right())
+    }
+
+    pub fn offset(&self) -> f32 {
+        self.center.dot(self.normal())
+    }
+
+    pub fn set_orientation(&mut self, azimuth: f32, elevation: f32) {
+        assert!(
+            azimuth.is_finite() && elevation.is_finite(),
+            "a section orientation is a finite pair of angles"
+        );
+        self.azimuth = wrap(azimuth);
+        self.elevation = elevation.clamp(-ELEVATION_LIMIT, ELEVATION_LIMIT);
     }
 
     pub fn fit(&mut self, world: Vec3, voxel: Vec3, aspect: f32) {
@@ -237,13 +268,13 @@ impl SectionCamera {
             "the volume world size must be positive"
         );
         assert!(aspect > 0.0, "aspect ratio must be positive");
-        let (u, v) = self.axis.in_plane();
-        let world_u = world[u.index()];
-        let world_v = world[v.index()];
-        let span = world_v.max(world_u / aspect) * FIT_MARGIN;
-        self.min_span = MIN_SPAN_VOXELS * voxel[u.index()].min(voxel[v.index()]);
+        let width = world.abs().dot(self.right().abs());
+        let height = world.abs().dot(self.up().abs());
+        let span = height.max(width / aspect) * FIT_MARGIN;
+        self.min_span = MIN_SPAN_VOXELS * voxel.min_element();
         self.max_span = (4.0 * world.length()).max(self.min_span);
         self.span = span.clamp(self.min_span, self.max_span);
+        self.center = Vec3::ZERO;
     }
 
     pub fn zoom(&mut self, scroll: f32) {
@@ -251,37 +282,66 @@ impl SectionCamera {
             .clamp(self.min_span, self.max_span);
     }
 
-    pub fn point(&self, focus: Vec3, ndc: Vec2, aspect: f32) -> Vec3 {
+    pub fn pan(&mut self, delta: Vec2, world_per_point: f32) {
+        self.center += (self.right() * -delta.x + self.up() * delta.y) * world_per_point;
+    }
+
+    pub fn shift(&mut self, distance: f32) {
+        self.center += self.normal() * distance;
+    }
+
+    pub fn point(&self, ndc: Vec2, aspect: f32) -> Vec3 {
         assert!(aspect > 0.0, "aspect ratio must be positive");
-        let (u_axis, v_axis) = self.axis.in_plane();
-        let mut point = focus;
-        point[u_axis.index()] += 0.5 * ndc.x * self.span * aspect;
-        point[v_axis.index()] += 0.5 * ndc.y * self.span;
-        point
+        self.center
+            + self.right() * (0.5 * ndc.x * self.span * aspect)
+            + self.up() * (0.5 * ndc.y * self.span)
+    }
+
+    pub fn set_center(&mut self, center: Vec3) {
+        assert!(
+            center.is_finite(),
+            "a section center is a finite world point"
+        );
+        self.center = center;
     }
 
     pub fn state(&self) -> SectionState {
         SectionState {
-            axis: self.axis,
+            center: self.center.to_array(),
+            azimuth: self.azimuth,
+            elevation: self.elevation,
             span: self.span,
         }
     }
 
     pub fn restore(&mut self, state: SectionState) {
-        let SectionState { axis, span } = state;
+        let SectionState {
+            center,
+            azimuth,
+            elevation,
+            span,
+        } = state;
         assert!(
-            span.is_finite() && span > 0.0,
-            "a section state describes a positive span"
+            center.iter().all(|value| value.is_finite())
+                && azimuth.is_finite()
+                && elevation.is_finite()
+                && span.is_finite()
+                && span > 0.0,
+            "a section state describes a plausible plane"
         );
-        self.axis = axis;
-        self.span = span.clamp(self.min_span, self.max_span);
+        self.center = Vec3::from(center);
+        self.azimuth = wrap(azimuth);
+        self.elevation = elevation.clamp(-ELEVATION_LIMIT, ELEVATION_LIMIT);
+        self.span = span;
     }
 }
 
-pub fn plane_basis(axis: Axis) -> (Vec3, Vec3) {
-    match axis {
-        Axis::X => (Vec3::Y, Vec3::Z),
-        Axis::Y => (Vec3::X, Vec3::Z),
-        Axis::Z => (Vec3::X, Vec3::Y),
+fn wrap(angle: f32) -> f32 {
+    let mut wrapped = angle % std::f32::consts::TAU;
+    if wrapped > std::f32::consts::PI {
+        wrapped -= std::f32::consts::TAU;
+    } else if wrapped < -std::f32::consts::PI {
+        wrapped += std::f32::consts::TAU;
     }
+    wrapped
 }

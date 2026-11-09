@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use glam::{Vec2, Vec3};
 use grana_animation::Keyframe;
-use grana_display::{Viewport, plane_basis};
+use grana_display::Viewport;
 use grana_editor::{
     AnnotationTool, FrameStats, GrabDrag, Pane, Stage, ToolDrag, ViewStats, Workspace,
 };
@@ -451,28 +451,26 @@ impl App {
                 };
                 let half = 0.5 * scene.dataset.world_size();
                 let voxel = scene.dataset.voxel_size();
-                let axis = self.viewport.section().axis();
-                let (u, v) = axis.in_plane();
+                let section = self.viewport.section();
+                let normal = section.normal();
                 let mut min = Vec3::splat(f32::INFINITY);
                 let mut max = Vec3::splat(f32::NEG_INFINITY);
+                let reach = half.length();
                 for point in [from, to] {
-                    for index in 0..3 {
-                        min[index] = min[index].min(point[index]);
-                        max[index] = max[index].max(point[index]);
+                    let point = Vec3::from(point);
+                    for side in [-1.0f32, 1.0] {
+                        let corner = point + normal * (side * reach);
+                        min = min.min(corner);
+                        max = max.max(corner);
                     }
                 }
-                min[axis.index()] = -half[axis.index()];
-                max[axis.index()] = half[axis.index()];
-                for index in [u.index(), v.index()] {
-                    let low = min[index].max(-half[index]);
-                    let high = max[index].min(half[index]);
-                    if high - low < voxel[index] {
-                        let centre = 0.5 * (low + high);
+                min = min.max(-half);
+                max = max.min(half);
+                for index in 0..3 {
+                    if max[index] - min[index] < voxel[index] {
+                        let centre = 0.5 * (min[index] + max[index]);
                         min[index] = (centre - 0.5 * voxel[index]).max(-half[index]);
                         max[index] = (centre + 0.5 * voxel[index]).min(half[index]);
-                    } else {
-                        min[index] = low;
-                        max[index] = high;
                     }
                 }
                 if min.cmplt(max).all() {
@@ -569,10 +567,9 @@ impl App {
                 if rect.height() <= 0.0 {
                     return None;
                 }
-                let axis = self.viewport.section().axis();
-                let (right, up) = plane_basis(axis);
-                let per_point = self.viewport.section().span() / rect.height();
-                Some(right * delta.x * per_point - up * delta.y * per_point)
+                let section = self.viewport.section();
+                let per_point = section.span() / rect.height();
+                Some(section.right() * delta.x * per_point - section.up() * delta.y * per_point)
             }
         }
     }
@@ -663,40 +660,40 @@ impl App {
                 if let Ok(Some(hit)) = scene.surface_hit(origin, direction) {
                     return Some(hit.to_array());
                 }
-                let axis = self.viewport.section().axis();
-                let component = direction[axis.index()];
+                let section = self.viewport.section();
+                let normal = section.normal();
+                let component = direction.dot(normal);
                 if component.abs() <= 1.0e-6 {
                     return None;
                 }
-                let plane = self.viewport.camera().focus()[axis.index()];
-                let distance = (plane - origin[axis.index()]) / component;
+                let distance = (normal.dot(section.center()) - normal.dot(origin)) / component;
                 if distance <= 0.0 {
                     return None;
                 }
                 let position = origin + direction * distance;
                 let half = 0.5 * scene.dataset.world_size();
-                Some([0, 1, 2].map(|axis| position[axis].clamp(-half[axis], half[axis])))
+                let position = position.clamp(-half, half);
+                let offset = normal.dot(section.center());
+                let position = position + normal * (offset - normal.dot(position));
+                Some(position.to_array())
             }
             Pane::Section => {
                 let rect = self.stage.section_rect();
                 if rect.height() <= 0.0 {
                     return None;
                 }
-                let axis = self.viewport.section().axis();
-                let (u, v) = axis.in_plane();
-                let focus = self.viewport.camera().focus();
-                let points_per_micron = rect.height() / self.viewport.section().span();
-                let mut position = [0.0f32; 3];
-                position[u.index()] =
-                    focus[u.index()] + (point.x - rect.center().x) / points_per_micron;
-                position[v.index()] =
-                    focus[v.index()] - (point.y - rect.center().y) / points_per_micron;
-                position[axis.index()] = focus[axis.index()];
+                let section = self.viewport.section();
+                let ndc = Vec2::new(
+                    2.0 * (point.x - rect.center().x) / rect.width(),
+                    -2.0 * (point.y - rect.center().y) / rect.height(),
+                );
+                let position = section.point(ndc, rect.width() / rect.height());
                 let half = 0.5 * scene.dataset.world_size();
-                for axis in 0..3 {
-                    position[axis] = position[axis].clamp(-half[axis], half[axis]);
-                }
-                Some(position)
+                let position = position.clamp(-half, half);
+                let offset = section.center().dot(section.normal());
+                let position =
+                    position + section.normal() * (offset - section.normal().dot(position));
+                Some(position.to_array())
             }
         }
     }
@@ -1590,16 +1587,9 @@ fn annotation_hit(
             if rect.height() <= 0.0 {
                 return None;
             }
-            let axis = viewport.section().axis();
-            let tolerance = 1.5 * scene.dataset.voxel_size()[axis.index()];
-            grana_figure::section_annotations(
-                &items,
-                viewport.camera().focus(),
-                axis,
-                viewport.section().span(),
-                rect,
-                tolerance,
-            )
+            let section = viewport.section();
+            let tolerance = 1.5 * scene.dataset.voxel_size().dot(section.normal().abs());
+            grana_figure::section_annotations(&items, section, rect, tolerance)
         }
     };
     grana_figure::pick_annotation(&placed, pointer)

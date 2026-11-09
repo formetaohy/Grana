@@ -7,7 +7,6 @@ use grana_gpu::Headless;
 use grana_pipeline::{Channels, SnapshotRequest, Snapshotter};
 use grana_scene::Scene;
 use grana_ui::{Rect, Ui, Vec2};
-use grana_volume::Axis;
 
 const STAGE_WIDTH: f32 = 1000.0;
 const STAGE_GAP: f32 = 6.0;
@@ -140,7 +139,7 @@ fn fitted(scene: &Scene, panes: &Panes) -> (CameraState, SectionState) {
     let world = scene.dataset.world_size();
     let mut camera = Camera::new(35.0);
     camera.fit(world, aspect(panes.volume));
-    let mut section = SectionCamera::new(Axis::Z);
+    let mut section = SectionCamera::new();
     section.fit(world, scene.dataset.voxel_size(), aspect(panes.section));
     (camera.state(), section.state())
 }

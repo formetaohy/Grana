@@ -60,7 +60,11 @@ pub enum Message {
     BeginRemote,
     CancelRemote,
     OpenRemote(String),
-    SetSectionAxis(grana_volume::Axis),
+    SetSectionPreset(usize),
+    SetSectionOrientation {
+        azimuth: f32,
+        elevation: f32,
+    },
     SetSectionDepth(f32),
     SetPsfThreshold(f32),
     SetPsfSeparation(f32),

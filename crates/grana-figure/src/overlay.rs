@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use glam::{Mat4, Vec2, Vec3};
-use grana_display::{Camera, Palette, SectionCamera, plane_basis};
+use grana_display::{Camera, Palette, SectionCamera};
 use grana_measure::Unit;
 use grana_scene::{ObjectColor, Scene, TrackColor};
 use grana_ui::{
     Align, Color, Corners, Fill, Painter, Rect, Text, TextLayout, TextStyle, TypeStyle,
 };
-use grana_volume::{Axis, Clip, Region};
+use grana_volume::{Clip, Region};
 
 use crate::annotation::{self, Item as AnnotationItem};
 use crate::labels::{self, Label};
@@ -138,7 +138,6 @@ pub struct Overlay<'a> {
     pub world: Vec3,
     pub volume_safe: Rect,
     pub section_safe: Rect,
-    pub section_stage: Rect,
     pub volume_rect: Rect,
     pub section_rect: Rect,
     pub region: &'a Region,
@@ -170,11 +169,7 @@ fn paint_volume(painter: &mut Painter, overlay: &Overlay<'_>) {
     let view_projection = overlay
         .camera
         .view_projection(aspect, 0.5 * overlay.world.length());
-    let corners = plane_corners(
-        overlay.camera.focus(),
-        overlay.section.axis(),
-        overlay.world,
-    );
+    let corners = plane_corners(overlay.section, rect.width() / rect.height().max(1.0));
     let projected = corners.map(|corner| project(view_projection, corner, rect));
     let clip = painter.clip();
     painter.push_clip(painter.clip().rect.intersect(rect), Corners::ZERO);
@@ -253,11 +248,10 @@ pub fn handles(overlay: &Overlay<'_>) -> Vec<Handle> {
 
 fn paint_section(painter: &mut Painter, overlay: &Overlay<'_>) {
     let rect = overlay.section_rect;
-    let stage = overlay.section_stage;
-    let focus = overlay.camera.focus();
     let world_per_point = overlay.section.span() / rect.height();
     let clip = painter.clip();
     painter.push_clip(painter.clip().rect.intersect(rect), Corners::ZERO);
+    let stage = section_stage(overlay.section, overlay.world, rect);
     painter.outlined(
         stage,
         Corners::all(2.0),
@@ -269,69 +263,90 @@ fn paint_section(painter: &mut Painter, overlay: &Overlay<'_>) {
         grana_ui::Shadow::NONE,
     );
     scale_bar(painter, overlay.section_safe, world_per_point, true);
-    region_rect(painter, overlay, rect, focus);
+    region_outline(painter, overlay, rect);
     if !overlay.labels.is_empty() {
-        let placed = labels::section_labels(
-            overlay.labels,
-            focus,
-            overlay.section.axis(),
-            overlay.section.span(),
-            rect,
-        );
+        let placed = labels::section_labels(overlay.labels, overlay.section, rect);
         labels::paint(painter, rect, &placed);
     }
-    let tolerance = 1.5 * overlay.voxel[overlay.section.axis().index()];
-    let placed = annotation::section(
-        overlay.annotations,
-        focus,
-        overlay.section.axis(),
-        overlay.section.span(),
-        rect,
-        tolerance,
-    );
+    let tolerance = 1.5 * overlay.voxel.dot(overlay.section.normal().abs());
+    let placed = annotation::section(overlay.annotations, overlay.section, rect, tolerance);
     annotation::paint(painter, rect, &placed);
     painter.pop_clip(clip);
 }
 
-fn region_rect(painter: &mut Painter, overlay: &Overlay<'_>, rect: Rect, focus: Vec3) {
+fn section_screen(section: &SectionCamera, point: Vec3, rect: Rect) -> Vec2 {
+    let points_per_micron = rect.height() / section.span();
+    let center = section.center();
+    Vec2::new(
+        rect.center().x
+            + (point.dot(section.right()) - center.dot(section.right())) * points_per_micron,
+        rect.center().y - (point.dot(section.up()) - center.dot(section.up())) * points_per_micron,
+    )
+}
+
+fn section_stage(section: &SectionCamera, world: Vec3, rect: Rect) -> Rect {
+    let points_per_micron = rect.height() / section.span();
+    let width = world.abs().dot(section.right().abs()) * points_per_micron;
+    let height = world.abs().dot(section.up().abs()) * points_per_micron;
+    let center = section_screen(section, Vec3::ZERO, rect);
+    Rect::from_center_size(center, Vec2::new(width, height)).intersect(rect)
+}
+
+fn region_outline(painter: &mut Painter, overlay: &Overlay<'_>, rect: Rect) {
     let region = *overlay.region;
     if !region.enabled() {
         return;
     }
-    let axis = overlay.section.axis();
-    let plane = focus[axis.index()];
-    if plane < region.min()[axis.index()] || plane > region.max()[axis.index()] {
-        return;
-    }
-    let (u, v) = axis.in_plane();
-    let points_per_micron = rect.height() / overlay.section.span();
+    let normal = overlay.section.normal();
+    let offset = overlay.section.offset();
     let low = region.min();
     let high = region.max();
-    let span = Vec2::new(
-        (high[u.index()] - low[u.index()]) * points_per_micron,
-        (high[v.index()] - low[v.index()]) * points_per_micron,
-    );
-    let center = Vec2::new(
-        rect.center().x
-            + (0.5 * (low[u.index()] + high[u.index()]) - focus[u.index()]) * points_per_micron,
-        rect.center().y
-            - (0.5 * (low[v.index()] + high[v.index()]) - focus[v.index()]) * points_per_micron,
-    );
-    let body = Rect::from_center_size(center, span.abs()).intersect(rect);
-    if body.width() < 1.0 || body.height() < 1.0 {
+    let mut points: Vec<Vec2> = Vec::new();
+    for (from, to) in REGION_EDGES {
+        let from = corner(low, high, from);
+        let to = corner(low, high, to);
+        let start = normal.dot(from) - offset;
+        let end = normal.dot(to) - offset;
+        let crossing = if start == 0.0 {
+            Some(from)
+        } else if end == 0.0 {
+            Some(to)
+        } else if (start < 0.0) != (end < 0.0) {
+            Some(from + (to - from) * (start / (start - end)))
+        } else {
+            None
+        };
+        let Some(crossing) = crossing else {
+            continue;
+        };
+        let screen = section_screen(overlay.section, crossing, rect);
+        if !points.iter().any(|other| (*other - screen).length() < 0.5) {
+            points.push(screen);
+        }
+    }
+    if points.len() < 3 {
         return;
     }
-    painter.outlined(
-        body,
-        Corners::ZERO,
-        Fill::Solid(Color::rgba(0.98, 0.75, 0.29, 0.06)),
-        grana_ui::Border {
-            width: 1.0,
-            color: REGION,
-        },
-        grana_ui::Shadow::NONE,
-    );
+    let centroid = points.iter().copied().sum::<Vec2>() / points.len() as f32;
+    points.sort_by(|left, right| {
+        let left = *left - centroid;
+        let right = *right - centroid;
+        left.y.atan2(left.x).total_cmp(&right.y.atan2(right.x))
+    });
+    for index in 0..points.len() {
+        let to = points[(index + 1) % points.len()];
+        painter.segment(points[index], to, 1.0, REGION);
+    }
 }
+
+fn corner(low: Vec3, high: Vec3, index: usize) -> Vec3 {
+    Vec3::new(
+        if index & 1 == 0 { low.x } else { high.x },
+        if index & 2 == 0 { low.y } else { high.y },
+        if index & 4 == 0 { low.z } else { high.z },
+    )
+}
+
 pub(crate) fn figure(
     painter: &mut Painter,
     rect: Rect,
@@ -587,18 +602,16 @@ fn clipped(points: Vec<Vec3>, normal: Vec3, offset: f32) -> Vec<Vec3> {
     kept
 }
 
-fn plane_corners(focus: Vec3, axis: Axis, world: Vec3) -> [Vec3; 4] {
-    let (u, v) = axis.in_plane();
-    let (right, up) = plane_basis(axis);
-    let half_u = 0.5 * world[u.index()];
-    let half_v = 0.5 * world[v.index()];
-    let mut center = Vec3::ZERO;
-    center[axis.index()] = focus[axis.index()];
+fn plane_corners(section: &SectionCamera, aspect: f32) -> [Vec3; 4] {
+    assert!(aspect > 0.0, "a section pane has a positive aspect");
+    let center = section.center();
+    let right = section.right() * (0.5 * section.span() * aspect);
+    let up = section.up() * (0.5 * section.span());
     [
-        center - right * half_u - up * half_v,
-        center + right * half_u - up * half_v,
-        center + right * half_u + up * half_v,
-        center - right * half_u + up * half_v,
+        center - right - up,
+        center + right - up,
+        center + right + up,
+        center - right + up,
     ]
 }
 

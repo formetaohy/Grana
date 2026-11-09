@@ -531,16 +531,22 @@ pub fn apply(
             Message::SetClassifierFeatures { set, features } => {
                 workspace.classifier.insert(set, features);
             }
-            Message::SetSectionAxis(axis) => {
-                viewport.section_mut().set_axis(axis);
+            Message::SetSectionPreset(index) => {
+                let (azimuth, elevation) = crate::section_preset(index);
+                viewport.section_mut().set_orientation(azimuth, elevation);
                 crate::fitting::fit_section(view.scene, viewport, stage);
             }
+            Message::SetSectionOrientation { azimuth, elevation } => {
+                viewport.section_mut().set_orientation(azimuth, elevation);
+            }
             Message::SetSectionDepth(position) => {
-                let axis = viewport.section().axis();
-                let extent = view.scene.dataset.world_size()[axis.index()];
-                viewport
-                    .camera_mut()
-                    .set_focus_along(axis, position.clamp(0.0, extent) - 0.5 * extent);
+                let world = view.scene.dataset.world_size();
+                let section = viewport.section_mut();
+                let normal = section.normal();
+                let extent = world.abs().dot(normal.abs());
+                let target = position.clamp(0.0, extent) - 0.5 * extent;
+                let center = section.center();
+                section.set_center(center + normal * (target - center.dot(normal)));
             }
             Message::SetPsfThreshold(value) => {
                 workspace.psf_threshold = value.clamp(1.0, 64.0);

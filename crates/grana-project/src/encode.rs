@@ -200,7 +200,11 @@ impl Encode for CameraState {
 
 impl Encode for SectionState {
     fn encode(&self, writer: &mut Encoder<'_>) {
-        writer.u8(self.axis.index() as u8);
+        for value in self.center {
+            writer.f32(value);
+        }
+        writer.f32(self.azimuth);
+        writer.f32(self.elevation);
         writer.f32(self.span);
     }
 }

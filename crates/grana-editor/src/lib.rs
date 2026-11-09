@@ -21,3 +21,11 @@ pub use message::{Message, PlotEvent};
 pub use panel::{Panel, build};
 pub use stage::{GrabDrag, Interaction, Pane, Stage, ToolDrag};
 pub use state::{AnnotationTool, FrameStats, Playback, Sections, View, ViewStats, Workspace};
+
+pub(crate) fn section_preset(index: usize) -> (f32, f32) {
+    match index {
+        1 => (-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2),
+        2 => (std::f32::consts::FRAC_PI_2, 0.0),
+        _ => (0.0, 0.0),
+    }
+}

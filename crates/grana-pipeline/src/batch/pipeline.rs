@@ -12,7 +12,7 @@ use grana_project::{Export, Project, Source as ProjectSource, ViewState};
 use grana_scene::{
     Dataset, MaskFilter, Measure, ObjectFrame, ObjectParams, ObjectSetId, Scene, slug,
 };
-use grana_volume::{Axis, Pyramid, Region};
+use grana_volume::{Pyramid, Region};
 
 use crate::channels::Channels;
 use crate::event::Event as RunEvent;
@@ -840,7 +840,7 @@ fn view_state(protocol: &Protocol, scene: &Scene) -> ViewState {
             let world = scene.dataset.world_size();
             let mut camera = Camera::new(35.0);
             camera.fit(world, 1.6);
-            let mut section = SectionCamera::new(Axis::Z);
+            let mut section = SectionCamera::new();
             section.fit(world, scene.dataset.voxel_size(), 1.6);
             ViewState {
                 camera: camera.state(),

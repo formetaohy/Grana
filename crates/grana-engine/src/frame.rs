@@ -55,7 +55,7 @@ pub(crate) fn restored_camera(state: &CameraState) -> Camera {
 }
 
 pub(crate) fn restored_section(state: &SectionState) -> SectionCamera {
-    let mut section = SectionCamera::new(state.axis);
+    let mut section = SectionCamera::new();
     section.restore(*state);
     section
 }

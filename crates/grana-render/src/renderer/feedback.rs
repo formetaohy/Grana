@@ -190,7 +190,9 @@ pub(super) fn view_key(meta: &Residency) -> u64 {
     meta.eye.map(f32::to_bits).hash(&mut hasher);
     meta.focus.map(f32::to_bits).hash(&mut hasher);
     meta.field_of_view.to_bits().hash(&mut hasher);
-    meta.axis.hash(&mut hasher);
+    meta.section_center.map(f32::to_bits).hash(&mut hasher);
+    meta.section_normal.map(f32::to_bits).hash(&mut hasher);
+    meta.section_right.map(f32::to_bits).hash(&mut hasher);
     meta.span.to_bits().hash(&mut hasher);
     meta.volume.hash(&mut hasher);
     meta.section.hash(&mut hasher);

@@ -167,12 +167,9 @@ impl Stage {
                 }
                 Drag::Section => {
                     if moving {
-                        let axis = viewport.section().axis();
-                        let world_per_pixel =
-                            viewport.section().span() / self.section_rect.height();
-                        viewport
-                            .camera_mut()
-                            .pan_in_plane(axis, delta, world_per_pixel);
+                        let span = viewport.section().span();
+                        let world_per_pixel = span / self.section_rect.height();
+                        viewport.section_mut().pan(delta, world_per_pixel);
                         interaction.camera = true;
                     }
                 }
@@ -282,9 +279,8 @@ impl Stage {
                     if self.modifiers.control {
                         viewport.section_mut().zoom(scroll);
                     } else {
-                        let axis = viewport.section().axis();
-                        let step = axis.spacing(spacing) * SECTION_STEP_VOXELS;
-                        viewport.camera_mut().move_along(axis, scroll * step);
+                        let step = section_step(viewport, spacing);
+                        viewport.section_mut().shift(scroll * step);
                     }
                 }
                 None => {}
@@ -300,4 +296,9 @@ impl Stage {
         }
         interaction
     }
+}
+
+fn section_step(viewport: &Viewport, spacing: Spacing) -> f32 {
+    let normal = viewport.section().normal().abs();
+    (spacing.x() * normal.x + spacing.y() * normal.y + spacing.z() * normal.z) * SECTION_STEP_VOXELS
 }

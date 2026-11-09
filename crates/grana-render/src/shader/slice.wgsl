@@ -36,9 +36,7 @@ fn encode_identity(identity: u32) -> vec4<f32> {
 }
 
 fn cut_normal() -> vec3<f32> {
-    var normal = vec3<f32>(0.0);
-    normal[section.mapping.z] = 1.0;
-    return normal;
+    return section.plane.xyz;
 }
 
 fn lit(color: vec3<f32>) -> vec3<f32> {
@@ -54,28 +52,17 @@ fn lit(color: vec3<f32>) -> vec3<f32> {
 }
 
 fn plane_point(uv: vec2<f32>) -> vec3<f32> {
-    var point = vec3<f32>(0.0);
-    point[section.mapping.z] = section.box_min[section.mapping.z]
-        + section.plane.x * section.world[section.mapping.z];
-    point[section.mapping.x] = uv.x;
-    point[section.mapping.y] = uv.y;
-    return point;
+    return section.right.xyz * uv.x
+        + section.up.xyz * uv.y
+        + section.plane.xyz * section.plane.w;
 }
 
 @vertex
 fn vs_main(input: FaceInput) -> FaceOutput {
     var output: FaceOutput;
     output.clip_position = vec4<f32>(
-        ((input.uv.x - section.box_min[section.mapping.x])
-            / section.world[section.mapping.x]
-            - section.uv_center.x)
-            / section.uv_scale.x
-            + section.jitter.x,
-        ((input.uv.y - section.box_min[section.mapping.y])
-            / section.world[section.mapping.y]
-            - section.uv_center.y)
-            / section.uv_scale.y
-            + section.jitter.y,
+        (input.uv.x - section.center.x) / section.right.w + section.jitter.x,
+        (input.uv.y - section.center.y) / section.up.w + section.jitter.y,
         0.5,
         1.0,
     );

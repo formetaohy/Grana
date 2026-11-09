@@ -5,7 +5,7 @@ mod shading;
 mod transfer;
 mod viewport;
 
-pub use camera::{Camera, CameraState, Ray, SectionCamera, SectionState, plane_basis};
+pub use camera::{Camera, CameraState, Ray, SectionCamera, SectionState};
 pub use color::{ColorState, Coloring, Extent, merged};
 pub use palette::Palette;
 pub use shading::{AZIMUTH_LIMIT, DEFAULT_AZIMUTH, DEFAULT_ELEVATION, ELEVATION_LIMIT, Shading};

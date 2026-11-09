@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use glam::Vec3;
+
 use crate::PackedMesh;
 
 const UNIT: f32 = 65535.0;
@@ -7,6 +9,56 @@ const WIDE_SPAN: usize = 8;
 const BIN_FLOOR: usize = 16;
 const BIN_CEIL: usize = 256;
 const BIN_TRIANGLES: usize = 16;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SectionPlane {
+    pub normal: [f32; 3],
+    pub right: [f32; 3],
+    pub up: [f32; 3],
+    pub offset: f32,
+}
+
+impl SectionPlane {
+    pub fn new(normal: Vec3, right: Vec3, offset: f32) -> Self {
+        assert!(
+            normal.is_finite() && right.is_finite() && offset.is_finite(),
+            "a section plane is a finite world plane"
+        );
+        let normal = normal.normalize();
+        let right = (right - normal * right.dot(normal)).normalize();
+        Self {
+            normal: normal.to_array(),
+            right: right.to_array(),
+            up: normal.cross(right).to_array(),
+            offset,
+        }
+    }
+
+    pub fn distance(&self, point: [f32; 3]) -> f32 {
+        let normal = Vec3::from(self.normal);
+        normal.dot(Vec3::from(point)) - self.offset
+    }
+
+    pub fn project(&self, point: [f32; 3]) -> [f32; 2] {
+        let point = Vec3::from(point);
+        [
+            Vec3::from(self.right).dot(point),
+            Vec3::from(self.up).dot(point),
+        ]
+    }
+
+    fn projection_range(&self, low: [f32; 3], scale: [f32; 3]) -> (f32, f32) {
+        let mut minimum = 0.0f32;
+        let mut maximum = 0.0f32;
+        for axis in 0..3 {
+            let start = self.normal[axis] * low[axis];
+            let end = start + self.normal[axis] * UNIT * scale[axis];
+            minimum += start.min(end);
+            maximum += start.max(end);
+        }
+        (minimum, maximum)
+    }
+}
 
 #[derive(Clone, Copy)]
 struct Edge {
@@ -39,10 +91,10 @@ pub struct SectionIndex {
 }
 
 impl SectionIndex {
-    pub fn new(mesh: &PackedMesh, object: usize, axis: usize) -> Self {
+    pub fn new(mesh: &PackedMesh, object: usize, normal: [f32; 3]) -> Self {
+        let plane = SectionPlane::new(Vec3::from(normal), perpendicular(normal), 0.0);
         let group = &mesh.groups()[object];
-        let low = group.min()[axis];
-        let high = low + UNIT * group.scale()[axis];
+        let (low, high) = plane.projection_range(group.min(), group.scale());
         let count = group.index_count() as usize / 3;
         let bins = (count / BIN_TRIANGLES).clamp(BIN_FLOOR, BIN_CEIL);
         let span = (high - low).max(1.0e-6);
@@ -55,8 +107,9 @@ impl SectionIndex {
             let mut minimum = f32::INFINITY;
             let mut maximum = f32::NEG_INFINITY;
             for corner in corners {
-                minimum = minimum.min(corner[axis]);
-                maximum = maximum.max(corner[axis]);
+                let projected = plane.distance(corner);
+                minimum = minimum.min(projected);
+                maximum = maximum.max(projected);
             }
             let first = bin_of(minimum, low, inverse, bins);
             let last = bin_of(maximum, low, inverse, bins);
@@ -105,6 +158,16 @@ impl SectionIndex {
     }
 }
 
+pub fn perpendicular(normal: [f32; 3]) -> Vec3 {
+    let normal = Vec3::from(normal).normalize();
+    let guide = if normal.x.abs() < 0.9 {
+        Vec3::X
+    } else {
+        Vec3::Y
+    };
+    normal.cross(guide).normalize()
+}
+
 fn bin_of(value: f32, low: f32, inverse: f32, bins: usize) -> usize {
     let position = ((value - low) * inverse).floor();
     position.clamp(0.0, (bins - 1) as f32) as usize
@@ -135,20 +198,18 @@ impl SectionCutter {
         &mut self,
         mesh: &PackedMesh,
         object: usize,
-        axis: usize,
-        plane: f32,
+        plane: &SectionPlane,
         vertices: &mut Vec<[f32; 2]>,
     ) -> usize {
         let count = mesh.groups()[object].index_count() as usize / 3;
-        self.cut_of(mesh, object, axis, plane, 0..count as u32, vertices)
+        self.cut_of(mesh, object, plane, 0..count as u32, vertices)
     }
 
     pub fn cut_indexed(
         &mut self,
         mesh: &PackedMesh,
         object: usize,
-        axis: usize,
-        plane: f32,
+        plane: &SectionPlane,
         index: &SectionIndex,
         vertices: &mut Vec<[f32; 2]>,
     ) -> usize {
@@ -156,27 +217,23 @@ impl SectionCutter {
             .wide
             .iter()
             .copied()
-            .chain(index.bin(plane).iter().copied());
-        self.cut_of(mesh, object, axis, plane, candidates, vertices)
+            .chain(index.bin(plane.offset).iter().copied());
+        self.cut_of(mesh, object, plane, candidates, vertices)
     }
 
     fn cut_of(
         &mut self,
         mesh: &PackedMesh,
         object: usize,
-        axis: usize,
-        plane: f32,
+        plane: &SectionPlane,
         triangles: impl Iterator<Item = u32>,
         vertices: &mut Vec<[f32; 2]>,
     ) -> usize {
         let group = &mesh.groups()[object];
-        let base = group.min()[axis];
-        let ceiling = base + UNIT * group.scale()[axis];
-        if plane < base || plane > ceiling {
+        let (base, ceiling) = plane.projection_range(group.min(), group.scale());
+        if plane.offset < base || plane.offset > ceiling {
             return 0;
         }
-        let across = (axis + 1) % 3;
-        let up = (axis + 2) % 3;
         self.segments.clear();
         for triangle in triangles {
             let corners = mesh.triangle(object, triangle as usize);
@@ -184,17 +241,15 @@ impl SectionCutter {
             let mut found = 0usize;
             for corner in 0..3 {
                 let next = (corner + 1) % 3;
-                let from = corners[corner][axis] - plane;
-                let to = corners[next][axis] - plane;
+                let from = plane.distance(corners[corner]);
+                let to = plane.distance(corners[next]);
                 if (from < 0.0) == (to < 0.0) {
                     continue;
                 }
                 let travel = from / (from - to);
-                points[found] = [
-                    corners[corner][across]
-                        + travel * (corners[next][across] - corners[corner][across]),
-                    corners[corner][up] + travel * (corners[next][up] - corners[corner][up]),
-                ];
+                let mut point = Vec3::from(corners[corner]);
+                point += (Vec3::from(corners[next]) - point) * travel;
+                points[found] = plane.project(point.to_array());
                 found += 1;
             }
             if found != 2 {

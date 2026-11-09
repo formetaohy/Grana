@@ -75,7 +75,9 @@ impl Signature<'_, '_> {
         camera.yaw.to_bits().hash(&mut hasher);
         camera.pitch.to_bits().hash(&mut hasher);
         camera.fov_y.to_bits().hash(&mut hasher);
-        view.axis.hash(&mut hasher);
+        view.center.map(f32::to_bits).hash(&mut hasher);
+        view.azimuth.to_bits().hash(&mut hasher);
+        view.elevation.to_bits().hash(&mut hasher);
         view.span.to_bits().hash(&mut hasher);
         data.light.map(f32::to_bits).hash(&mut hasher);
         data.region_min.map(f32::to_bits).hash(&mut hasher);

@@ -4,9 +4,7 @@ use glam::Vec3;
 use grana_display::{Camera, SectionCamera, Shading, TransferFunction};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_render::{Frame, Layer, LayerKey, Renderer, Requests, SceneFrame, Style};
-use grana_volume::{
-    Axis, BrickGrid, Channel, Clip, Extent, Pyramid, Region, Spacing, Volume, VoxelData,
-};
+use grana_volume::{BrickGrid, Channel, Clip, Extent, Pyramid, Region, Spacing, Volume, VoxelData};
 
 use crate::support::{Gpu, blue, gpu, green, lit, read_pixels, red, spheres};
 
@@ -175,7 +173,7 @@ fn streams_and_shades_two_channels() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let section = SectionCamera::new(Axis::Z);
+    let section = SectionCamera::new();
     let scene = SceneFrame {
         channels: &channels,
         shading: Shading::default(),
@@ -228,7 +226,7 @@ fn reveals_a_section_plane() {
     );
     let mut camera = Camera::new(35.0);
     camera.fit(world, 1.0);
-    let mut section = SectionCamera::new(Axis::Z);
+    let mut section = SectionCamera::new();
     section.fit(world, voxel, 1.0);
     let scene = SceneFrame {
         channels: &channels,
@@ -259,6 +257,58 @@ fn reveals_a_section_plane() {
 }
 
 #[test]
+fn reveals_an_oblique_section_plane() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let world = Vec3::from(volume.world_extent());
+    let voxel = Vec3::new(
+        volume.spacing().x(),
+        volume.spacing().y(),
+        volume.spacing().z(),
+    );
+    let mut camera = Camera::new(35.0);
+    camera.fit(world, 1.0);
+    let mut section = SectionCamera::new();
+    section.set_orientation(0.7, 0.45);
+    section.fit(world, voxel, 1.0);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        section: &section,
+        scene: &scene,
+        volume_region: CORNER,
+        section_region: WHOLE,
+    };
+    let requests = settle(&gpu, &mut renderer, &view, &volume);
+    assert!(
+        requests.section_view.visible > 0,
+        "the oblique section sees no brick"
+    );
+    let pixels = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    assert!(
+        lit(&pixels) > 500,
+        "the oblique section barely rendered: {} lit pixels",
+        lit(&pixels)
+    );
+}
+
+#[test]
 fn composites_a_mesh_layer() {
     let Some(gpu) = gpu() else {
         return;
@@ -277,7 +327,7 @@ fn composites_a_mesh_layer() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let section = SectionCamera::new(Axis::Z);
+    let section = SectionCamera::new();
     let mesh = PackedMesh::new(quad(8.0));
     let styles = [Style::new([1.0, 0.1, 0.1], true, false, 1.0)];
     let layers = [Layer {

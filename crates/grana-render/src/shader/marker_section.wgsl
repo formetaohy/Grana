@@ -27,29 +27,27 @@ fn vs_main(@builtin(vertex_index) index: u32, @builtin(instance_index) instance:
     );
     let local = corners[index];
     let data = markers[order[instance]];
-    let axis = section.mapping.z;
-    let u = section.mapping.x;
-    let v = section.mapping.y;
+    let center = data.center_radius.xyz;
     let radius = data.center_radius.w;
-    var uvw = (data.center_radius.xyz - section.box_min.xyz) / section.world.xyz;
-    let offset = (uvw[axis] - section.plane.x) * section.world[axis];
-    let cross = sqrt(max(radius * radius - offset * offset, 0.0));
-    let center = vec2<f32>(
-        (uvw[u] - section.uv_center.x) / section.uv_scale.x,
-        (uvw[v] - section.uv_center.y) / section.uv_scale.y,
+    let distance = section_plane_distance(center);
+    let cross = sqrt(max(radius * radius - distance * distance, 0.0));
+    let at = vec2<f32>(
+        section_across(center) / section.right.w,
+        section_down(center) / section.up.w,
     );
-    let extent = vec2<f32>(
-        cross / (section.world[u] * section.uv_scale.x),
-        cross / (section.world[v] * section.uv_scale.y),
-    );
+    let extent = vec2<f32>(cross / section.right.w, cross / section.up.w);
     var output: MarkerOutput;
-    output.clip_position = vec4<f32>(center + local * extent + section.jitter.xy, 0.0, 1.0);
+    output.clip_position = vec4<f32>(at + local * extent + section.jitter.xy, 0.0, 1.0);
     output.color_alpha = data.color_alpha;
     output.local = local;
-    output.center = data.center_radius.xyz;
+    output.center = center;
     output.cross = cross;
     output.marker = order[instance];
     return output;
+}
+
+fn sample_point(center: vec3<f32>, local: vec2<f32>, cross: f32) -> vec3<f32> {
+    return center + section.right.xyz * (local.x * cross) + section.up.xyz * (local.y * cross);
 }
 
 @fragment
@@ -58,9 +56,7 @@ fn fs_main(input: MarkerOutput) -> @location(0) vec4<f32> {
     if (distance > 1.0) {
         discard;
     }
-    var world = input.center;
-    world[section.mapping.x] += input.local.x * input.cross;
-    world[section.mapping.y] += input.local.y * input.cross;
+    let world = sample_point(input.center, input.local, input.cross);
     if (outside_region(world) || outside_clip(world)) {
         discard;
     }
@@ -82,9 +78,7 @@ fn fs_pick(input: MarkerOutput) -> @location(0) vec2<u32> {
     if (coverage < 0.5) {
         discard;
     }
-    var world = input.center;
-    world[section.mapping.x] += input.local.x * input.cross;
-    world[section.mapping.y] += input.local.y * input.cross;
+    let world = sample_point(input.center, input.local, input.cross);
     if (outside_region(world) || outside_clip(world)) {
         discard;
     }

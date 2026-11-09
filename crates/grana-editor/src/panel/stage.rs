@@ -23,7 +23,6 @@ struct Geometry {
     section_rect: Rect,
     volume_safe: Rect,
     section_safe: Rect,
-    section_stage: Rect,
     world: Vec3,
     recording: Option<(u32, u32)>,
 }
@@ -79,15 +78,20 @@ pub(super) fn view<'a>(
         "3D",
         LABEL,
     ));
-    let axis = state.viewport.section().axis();
-    let plane = state.viewport.camera().focus()[axis.index()] + 0.5 * geometry.world[axis.index()];
+    let section = state.viewport.section();
+    let extent = geometry.world.abs().dot(section.normal().abs());
+    let depth = section.center().dot(section.normal()) + 0.5 * extent;
     elements.push(chip(
         ctx,
         "figure.section",
         geometry.section_rect,
         geometry.section_safe.min,
         Icon::Section,
-        &format!("{} · {} = {plane:.2} µm", plane_name(axis), axis.name()),
+        &format!(
+            "Plane · E{:.0}° A{:.0}° · {depth:.2} µm",
+            section.elevation().to_degrees(),
+            section.azimuth().to_degrees()
+        ),
         LABEL,
     ));
     if let Some((frame, frames)) = geometry.recording {
@@ -148,18 +152,7 @@ pub(super) fn remote<'a>(
 }
 
 fn geometry(layout: &Layout, state: &View<'_>) -> Geometry {
-    let axis = state.viewport.section().axis();
-    let (plane_u, plane_v) = axis.in_plane();
     let world = state.scene.dataset.world_size();
-    let points_per_micron = layout.section.height() / state.viewport.section().span();
-    let section_stage = Rect::from_center_size(
-        layout.section.center(),
-        Vec2::new(
-            world[plane_u.index()] * points_per_micron,
-            world[plane_v.index()] * points_per_micron,
-        ),
-    )
-    .intersect(layout.section);
     let safe_left = if layout.sidebar_visible {
         layout.sidebar.max.x.max(layout.stage.min.x) + GAP
     } else {
@@ -183,7 +176,6 @@ fn geometry(layout: &Layout, state: &View<'_>) -> Geometry {
         section_rect: layout.section,
         volume_safe,
         section_safe,
-        section_stage,
         world,
         recording: state.io.export,
     }
@@ -203,7 +195,6 @@ fn overlay_of<'a>(
         voxel: state.scene.dataset.voxel_size(),
         volume_safe: geometry.volume_safe,
         section_safe: geometry.section_safe,
-        section_stage: geometry.section_stage,
         volume_rect: geometry.volume_rect,
         section_rect: geometry.section_rect,
         region: &state.scene.region,
@@ -387,14 +378,6 @@ fn chip<'a>(
     .named(key)
     .at(Rect::from_min_size(origin, Vec2::new(width, 26.0)))
     .glass(GlassStyle::hud_chip())
-}
-
-fn plane_name(axis: grana_volume::Axis) -> &'static str {
-    match axis {
-        grana_volume::Axis::X => "YZ",
-        grana_volume::Axis::Y => "XZ",
-        grana_volume::Axis::Z => "XY",
-    }
 }
 
 pub(super) fn toast<'a>(

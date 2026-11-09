@@ -682,14 +682,26 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
 
 fn section<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     let theme = *ctx.theme();
-    let axis = state.viewport.section().axis();
+    let camera = state.viewport.section();
+    let azimuth = camera.azimuth();
+    let elevation = camera.elevation();
+    let normal = camera.normal();
+    let axis = if normal.z.abs() >= normal.y.abs() && normal.z.abs() >= normal.x.abs() {
+        Axis::Z
+    } else if normal.y.abs() >= normal.x.abs() {
+        Axis::Y
+    } else {
+        Axis::X
+    };
     let current = match axis {
         Axis::Z => 0,
         Axis::Y => 1,
         Axis::X => 2,
     };
     let spacing = state.scene.dataset.spacing();
-    let detail = format!("{:.3} µm step", axis.spacing(spacing));
+    let step =
+        spacing.x() * normal.x.abs() + spacing.y() * normal.y.abs() + spacing.z() * normal.z.abs();
+    let detail = format!("{step:.3} µm step");
     let mut children = Vec::new();
     children.push(view::card_title(
         ctx,
@@ -698,17 +710,45 @@ fn section<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
         Some(&detail),
     ));
     let options = ["XY", "XZ", "YZ"];
-    let plane = view::segmented_fill(ctx, "section.axis", &options, current, |index| {
-        let axis = match index {
-            0 => Axis::Z,
-            1 => Axis::Y,
-            _ => Axis::X,
-        };
-        Message::SetSectionAxis(axis)
+    let plane = view::segmented_fill(ctx, "section.plane", &options, current, |index| {
+        Message::SetSectionPreset(index)
     });
     children.push(view::form_row(ctx, "Plane", plane));
-    let extent = state.scene.dataset.world_size()[axis.index()];
-    let position = state.viewport.camera().focus_along(axis) + 0.5 * extent;
+    let elevation_degrees = elevation.to_degrees();
+    children.push(
+        grana_ui::widget::slider_readout(
+            &theme,
+            Some("Elevation"),
+            elevation_degrees,
+            -90.0..=90.0,
+            false,
+            &format!("{elevation_degrees:.0}°"),
+        )
+        .named("section.elevation")
+        .on_slide(move |value| Message::SetSectionOrientation {
+            azimuth,
+            elevation: value.to_radians(),
+        }),
+    );
+    let azimuth_degrees = azimuth.to_degrees();
+    children.push(
+        grana_ui::widget::slider_readout(
+            &theme,
+            Some("Azimuth"),
+            azimuth_degrees,
+            -180.0..=180.0,
+            false,
+            &format!("{azimuth_degrees:.0}°"),
+        )
+        .named("section.azimuth")
+        .on_slide(move |value| Message::SetSectionOrientation {
+            azimuth: value.to_radians(),
+            elevation,
+        }),
+    );
+    let world = state.scene.dataset.world_size();
+    let extent = world.abs().dot(normal.abs());
+    let position = state.viewport.section().center().dot(normal) + 0.5 * extent;
     let readout = format!("{position:.2} µm");
     children.push(
         grana_ui::widget::slider_readout(

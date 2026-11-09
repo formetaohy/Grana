@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use grana_display::Camera;
-use grana_geometry::{PackedMesh, SectionCutter, SectionIndex, is_closed};
+use grana_geometry::{PackedMesh, SectionCutter, SectionIndex, SectionPlane, is_closed};
 use grana_gpu::Table;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Buffer, BufferUsages,
@@ -268,25 +268,24 @@ impl SlicePass {
             size,
             camera,
         } = view;
-        if section.uv_scale[0] <= 0.0 || section.uv_scale[1] <= 0.0 {
+        if section.right[3] <= 0.0 || section.up[3] <= 0.0 {
             self.objects = 0;
             self.draws = 0;
             self.index.clear();
             return;
         }
         self.write_styles(device, queue, layouts, scene);
-        let axis = section.mapping[2] as usize;
-        let box_min = section.box_min;
-        let world = section.world;
-        let plane = box_min[axis] + section.plane[0] * world[axis];
+        let normal = Vec3::new(section.plane[0], section.plane[1], section.plane[2]);
+        let right = Vec3::new(section.right[0], section.right[1], section.right[2]);
+        let plane = SectionPlane::new(normal, right, section.plane[3]);
         let budget = index_budget(size);
-        let key = span_key(scene, axis, plane);
+        let key = span_key(scene, &plane);
         if self.span_key != Some(key) {
-            self.build(scene, axis, plane, budget);
+            self.build(scene, &plane, budget);
             self.upload(device, queue);
             self.span_key = Some(key);
         }
-        self.pose(device, queue, scene, section, camera);
+        self.pose(device, queue, scene, &plane, camera);
     }
 
     fn write_styles(
@@ -312,10 +311,11 @@ impl SlicePass {
         }
     }
 
-    fn build(&mut self, scene: &SceneFrame<'_>, axis: usize, plane: f32, budget: u64) {
+    fn build(&mut self, scene: &SceneFrame<'_>, plane: &SectionPlane, budget: u64) {
         self.runs.clear();
         self.staged.clear();
         self.retain(scene);
+        let normal = Vec3::from(plane.normal);
         let mut candidates = Vec::new();
         for layer in scene.layers {
             let mesh = &layer.mesh;
@@ -323,7 +323,17 @@ impl SlicePass {
                 let group = mesh.groups()[object];
                 let low = group.min();
                 let high = [0, 1, 2].map(|index| low[index] + UNIT * group.scale()[index]);
-                if plane < low[axis] || plane > high[axis] {
+                let low = Vec3::from(low);
+                let high = Vec3::from(high);
+                let mut near = 0.0f32;
+                let mut far = 0.0f32;
+                for axis in 0..3 {
+                    let below = normal[axis] * low[axis];
+                    let above = normal[axis] * high[axis];
+                    near += below.min(above);
+                    far += below.max(above);
+                }
+                if plane.offset < near || plane.offset > far {
                     continue;
                 }
                 candidates.push(Candidate {
@@ -331,14 +341,14 @@ impl SlicePass {
                     mesh,
                     object,
                     style: layer.style_start + object,
-                    low,
-                    high,
+                    low: low.to_array(),
+                    high: high.to_array(),
                 });
             }
         }
         self.keep_solid(&mut candidates);
-        self.index.prepare(&candidates, axis, budget);
-        let cuts = self.cut(&candidates, axis, plane);
+        self.index.prepare(&candidates, plane.normal, budget);
+        let cuts = self.cut(&candidates, plane);
         for (candidate, (quads, vertices)) in candidates.iter().zip(cuts) {
             assert!(
                 quads <= QUAD_LIMIT,
@@ -409,7 +419,7 @@ impl SlicePass {
         *candidates = kept;
     }
 
-    fn cut(&mut self, candidates: &[Candidate<'_>], axis: usize, plane: f32) -> Vec<Cut> {
+    fn cut(&mut self, candidates: &[Candidate<'_>], plane: &SectionPlane) -> Vec<Cut> {
         let Self {
             cutter,
             cut_vertices,
@@ -421,7 +431,7 @@ impl SlicePass {
                 .iter()
                 .map(|candidate| {
                     cut_vertices.clear();
-                    let quads = cut_object(cutter, index, candidate, axis, plane, cut_vertices);
+                    let quads = cut_object(cutter, index, candidate, plane, cut_vertices);
                     (quads as u32, std::mem::take(cut_vertices))
                 })
                 .collect();
@@ -446,14 +456,8 @@ impl SlicePass {
                             break;
                         }
                         vertices.clear();
-                        let quads = cut_object(
-                            &mut cutter,
-                            index,
-                            &candidates[slot],
-                            axis,
-                            plane,
-                            &mut vertices,
-                        );
+                        let quads =
+                            cut_object(&mut cutter, index, &candidates[slot], plane, &mut vertices);
                         let quads = quads as u32;
                         let vertices = std::mem::take(&mut vertices);
                         if sender.send((slot, quads, vertices)).is_err() {
@@ -495,13 +499,10 @@ impl SlicePass {
         device: &Device,
         queue: &Queue,
         scene: &SceneFrame<'_>,
-        section: &SectionData,
+        plane: &SectionPlane,
         camera: &Camera,
     ) {
-        let axis = section.mapping[2] as usize;
-        let box_min = section.box_min;
-        let world = section.world;
-        let plane = box_min[axis] + section.plane[0] * world[axis];
+        let normal = Vec3::from(plane.normal);
         let eye = camera.eye();
         let forward = camera.forward();
         let mut order = self
@@ -514,8 +515,9 @@ impl SlicePass {
                 for (corner, slot) in centre.iter_mut().enumerate() {
                     *slot = 0.5 * (run.low[corner] + run.high[corner]);
                 }
-                centre[axis] = plane;
-                ((Vec3::from(centre) - eye).dot(forward), index)
+                let centre = Vec3::from(centre);
+                let on_plane = centre + normal * (plane.offset - centre.dot(normal));
+                ((on_plane - eye).dot(forward), index)
             })
             .collect::<Vec<_>>();
         order.sort_by(|left, right| right.0.total_cmp(&left.0).then(left.1.cmp(&right.1)));
@@ -572,20 +574,14 @@ fn cut_object(
     cutter: &mut SectionCutter,
     index: &SectionCache,
     candidate: &Candidate<'_>,
-    axis: usize,
-    plane: f32,
+    plane: &SectionPlane,
     vertices: &mut Vec<[f32; 2]>,
 ) -> usize {
-    match index.get(candidate.layer, candidate.object, axis) {
-        Some(section) => cutter.cut_indexed(
-            candidate.mesh,
-            candidate.object,
-            axis,
-            plane,
-            section,
-            vertices,
-        ),
-        None => cutter.cut(candidate.mesh, candidate.object, axis, plane, vertices),
+    match index.get(candidate.layer, candidate.object, plane.normal) {
+        Some(section) => {
+            cutter.cut_indexed(candidate.mesh, candidate.object, plane, section, vertices)
+        }
+        None => cutter.cut(candidate.mesh, candidate.object, plane, vertices),
     }
 }
 
@@ -596,7 +592,7 @@ struct CachedIndex {
 }
 
 struct SectionCache {
-    entries: HashMap<(LayerKey, usize, usize), CachedIndex>,
+    entries: HashMap<(LayerKey, usize, [u32; 3]), CachedIndex>,
     resident: u64,
     budget: u64,
     order: u64,
@@ -612,12 +608,13 @@ impl SectionCache {
         }
     }
 
-    fn prepare(&mut self, candidates: &[Candidate<'_>], axis: usize, budget: u64) {
+    fn prepare(&mut self, candidates: &[Candidate<'_>], normal: [f32; 3], budget: u64) {
+        let normal = normal.map(f32::to_bits);
         self.order += 1;
         let order = self.order;
         let mut missing = Vec::new();
         for (slot, candidate) in candidates.iter().enumerate() {
-            let key = (candidate.layer, candidate.object, axis);
+            let key = (candidate.layer, candidate.object, normal);
             if let Some(entry) = self.entries.get_mut(&key) {
                 entry.used = order;
             } else {
@@ -626,11 +623,11 @@ impl SectionCache {
         }
         if !missing.is_empty() {
             let built = parallel_over(candidates, &missing, |candidate| {
-                SectionIndex::new(candidate.mesh, candidate.object, axis)
+                SectionIndex::new(candidate.mesh, candidate.object, normal.map(f32::from_bits))
             });
             for (slot, index) in missing.into_iter().zip(built) {
                 let candidate = &candidates[slot];
-                let key = (candidate.layer, candidate.object, axis);
+                let key = (candidate.layer, candidate.object, normal);
                 let bytes = index.bytes();
                 if let Some(previous) = self.entries.insert(
                     key,
@@ -655,9 +652,9 @@ impl SectionCache {
         self.evict(order);
     }
 
-    fn get(&self, layer: LayerKey, object: usize, axis: usize) -> Option<&SectionIndex> {
+    fn get(&self, layer: LayerKey, object: usize, normal: [f32; 3]) -> Option<&SectionIndex> {
         self.entries
-            .get(&(layer, object, axis))
+            .get(&(layer, object, normal.map(f32::to_bits)))
             .map(|entry| &entry.index)
     }
 
@@ -746,10 +743,11 @@ fn index_budget(size: [u32; 2]) -> u64 {
     (pixels * INDEX_BYTES_PER_PIXEL).clamp(INDEX_BUDGET_FLOOR, INDEX_BUDGET_CEIL)
 }
 
-fn span_key(scene: &SceneFrame<'_>, axis: usize, plane: f32) -> u64 {
+fn span_key(scene: &SceneFrame<'_>, plane: &SectionPlane) -> u64 {
     let mut hasher = DefaultHasher::new();
-    axis.hash(&mut hasher);
-    plane.to_bits().hash(&mut hasher);
+    plane.normal.map(f32::to_bits).hash(&mut hasher);
+    plane.right.map(f32::to_bits).hash(&mut hasher);
+    plane.offset.to_bits().hash(&mut hasher);
     for layer in scene.layers {
         layer.key.hash(&mut hasher);
         layer.style_start.hash(&mut hasher);

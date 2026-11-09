@@ -27,7 +27,7 @@ use grana_scene::{
     SelectionState, SetState, SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor, TrackEdit,
     TrackStyle, Visibility,
 };
-use grana_volume::{Axis, Clip, Fingerprint, Intensity, Region, Spacing};
+use grana_volume::{Clip, Fingerprint, Intensity, Region, Spacing};
 
 use crate::codec::{Decode, Reader};
 use crate::encode::{TAG_FILAMENTS, TAG_SPOTS, TAG_SURFACES};
@@ -296,10 +296,20 @@ impl Decode for CameraState {
 
 impl Decode for SectionState {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        Ok(Self {
-            axis: axis(reader.u8()?)?,
+        let mut center = [0.0f32; 3];
+        for value in &mut center {
+            *value = finite(reader.f32()?)?;
+        }
+        let state = Self {
+            center,
+            azimuth: finite(reader.f32()?)?,
+            elevation: finite(reader.f32()?)?,
             span: positive(reader.f32()?)?,
-        })
+        };
+        if state.elevation.abs() > std::f32::consts::FRAC_PI_2 {
+            return Err(FAULT_VALUE);
+        }
+        Ok(state)
     }
 }
 
@@ -2051,10 +2061,6 @@ fn decode_mask_filter(reader: &mut Reader<'_>) -> Result<Option<MaskFilter>, &'s
     Ok(Some(MaskFilter::new(
         target, shift, field, minimum, maximum,
     )))
-}
-
-fn axis(tag: u8) -> Result<Axis, &'static str> {
-    Axis::ALL.get(tag as usize).copied().ok_or(FAULT_SHAPE)
 }
 
 fn finite(value: f32) -> Result<f32, &'static str> {

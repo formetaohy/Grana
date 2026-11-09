@@ -27,7 +27,7 @@ struct SectionHit {
     dims: vec3<f32>,
 }
 
-fn locate(uvw: vec3<f32>) -> SectionHit {
+fn locate(uvw: vec3<f32>, point: vec3<f32>) -> SectionHit {
     let cell = brick_cell(section.grid.xyz, section.dims.xyz, uvw);
     let record = bricks[section.bases.x + brick_index(section.grid.xyz, cell)];
     let slot = brick_slot(record);
@@ -37,15 +37,14 @@ fn locate(uvw: vec3<f32>) -> SectionHit {
     if (brick_hollow(record) || section.fallback_grid.w == 0u) {
         return SectionHit(0u, uvw, section.grid.xyz, section.dims.xyz);
     }
-    let world = section.box_min.xyz + uvw * section.world.xyz;
-    let local = (world - section.fallback_min.xyz) / section.fallback_world.xyz;
+    let local = (point - section.fallback_min.xyz) / section.fallback_world.xyz;
     let other = brick_cell(section.fallback_grid.xyz, section.fallback_dims.xyz, local);
     let fallback = brick_slot(bricks[section.bases.y + brick_index(section.fallback_grid.xyz, other)]);
     return SectionHit(fallback, local, section.fallback_grid.xyz, section.fallback_dims.xyz);
 }
 
-fn sample_section_pack(pack: u32, uvw: vec3<f32>) -> vec4<f32> {
-    let hit = locate(uvw);
+fn sample_section_pack(pack: u32, uvw: vec3<f32>, point: vec3<f32>) -> vec4<f32> {
+    let hit = locate(uvw, point);
     if (hit.slot == 0u) {
         return vec4<f32>(0.0);
     }
@@ -61,18 +60,12 @@ fn sample_section_pack(pack: u32, uvw: vec3<f32>) -> vec4<f32> {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let u = section.uv_center.x + input.ndc.x * section.uv_scale.x;
-    let v = section.uv_center.y + input.ndc.y * section.uv_scale.y;
-    if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0) {
+    let uvw = (section_point(input.ndc) - section.box_min.xyz) / section.world.xyz;
+    if (any(uvw < vec3<f32>(0.0)) || any(uvw > vec3<f32>(1.0))) {
         return vec4<f32>(0.0);
     }
-    let axis = section.mapping.z;
-    var uvw = vec3<f32>(0.0);
-    uvw[axis] = section.plane.x;
-    uvw[section.mapping.x] = u;
-    uvw[section.mapping.y] = v;
-    if (outside_region(section.box_min.xyz + uvw * section.world.xyz)
-        || outside_clip(section.box_min.xyz + uvw * section.world.xyz)) {
+    let point = section_point(input.ndc);
+    if (outside_region(point) || outside_clip(point)) {
         return vec4<f32>(0.0);
     }
     var color = vec4<f32>(0.0);
@@ -82,7 +75,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         if (!pack_active(pack, count)) {
             continue;
         }
-        let values = sample_section_pack(pack, uvw);
+        let values = sample_section_pack(pack, uvw, point);
         for (var component = 0u; component < PACK; component += 1u) {
             let channel = pack * PACK + component;
             if (channel >= count) {

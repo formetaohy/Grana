@@ -1,5 +1,5 @@
 use glam::{Mat4, Vec3};
-use grana_display::{CameraState, SectionState};
+use grana_display::{CameraState, SectionCamera, SectionState};
 use grana_figure::{AnnotationItem, Caption, Label, Legend};
 use grana_ui::{Instance, Rect, Ui, Vec2};
 
@@ -9,7 +9,6 @@ pub(crate) struct LabelView<'a> {
     pub labels: &'a [Label],
     pub view_projection: Mat4,
     pub eye: Vec3,
-    pub focus: Vec3,
 }
 
 pub(crate) struct Figure<'a> {
@@ -63,20 +62,15 @@ pub(crate) fn instances<A: Clone>(ui: &mut Ui<A>, figure: Figure<'_>) -> Vec<Ins
         figure.backdrop,
     );
     translate(&mut instances, panes.volume_points);
-    let section_labels = grana_figure::section_labels(
-        figure.labels.labels,
-        figure.labels.focus,
-        figure.section.axis,
-        figure.section.span,
-        section_rect,
-    );
+    let mut section_camera = SectionCamera::new();
+    section_camera.restore(*figure.section);
+    let section_labels =
+        grana_figure::section_labels(figure.labels.labels, &section_camera, section_rect);
     let section_annotations = grana_figure::section_annotations(
         figure.annotations,
-        figure.labels.focus,
-        figure.section.axis,
-        figure.section.span,
+        &section_camera,
         section_rect,
-        1.5 * figure.voxel[figure.section.axis.index()],
+        1.5 * figure.voxel.dot(section_camera.normal().abs()),
     );
     let mut scale_bars = grana_figure::instances(
         ui,

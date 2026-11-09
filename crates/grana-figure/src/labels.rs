@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use glam::{Mat4, Vec2, Vec3};
 use grana_scene::Scene;
 use grana_ui::{Color, Corners, Fill, Painter, Rect};
-use grana_volume::Axis;
 
 const CHIP_HEIGHT: f32 = 15.0;
 const CHIP_PAD: f32 = 5.0;
@@ -114,23 +113,23 @@ pub fn volume_labels(
 
 pub fn section_labels(
     labels: &[Label],
-    focus: Vec3,
-    axis: Axis,
-    span: f32,
+    section: &grana_display::SectionCamera,
     rect: Rect,
 ) -> Vec<Placed> {
-    let (u, v) = axis.in_plane();
-    let plane = focus[axis.index()];
-    let points_per_micron = rect.height() / span;
+    let normal = section.normal();
+    let offset = section.offset();
+    let center = section.center();
+    let right = section.right();
+    let up = section.up();
+    let points_per_micron = rect.height() / section.span();
     let mut inside = labels
         .iter()
-        .filter(|label| label.low[axis.index()] <= plane && plane <= label.high[axis.index()])
+        .filter(|label| straddles(label, normal, offset))
         .filter_map(|label| {
+            let position = Vec3::from(label.position);
             let at = Vec2::new(
-                rect.center().x
-                    + (label.position[u.index()] - focus[u.index()]) * points_per_micron,
-                rect.center().y
-                    - (label.position[v.index()] - focus[v.index()]) * points_per_micron,
+                rect.center().x + (position.dot(right) - center.dot(right)) * points_per_micron,
+                rect.center().y - (position.dot(up) - center.dot(up)) * points_per_micron,
             );
             self::inside(rect, at).then_some((!label.selected, at, label))
         })
@@ -142,6 +141,18 @@ pub fn section_labels(
             .then(left.x.total_cmp(&right.x))
     });
     place(inside.into_iter().map(|(_, at, label)| (at, label)))
+}
+
+fn straddles(label: &Label, normal: Vec3, offset: f32) -> bool {
+    let mut low = 0.0f32;
+    let mut high = 0.0f32;
+    for axis in 0..3 {
+        let below = normal[axis] * label.low[axis];
+        let above = normal[axis] * label.high[axis];
+        low += below.min(above);
+        high += below.max(above);
+    }
+    low <= offset && offset <= high
 }
 
 fn place<'a>(labels: impl Iterator<Item = (Vec2, &'a Label)>) -> Vec<Placed> {

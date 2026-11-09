@@ -31,18 +31,13 @@ fn outside_sphere(center: vec3<f32>, radius: f32) -> bool {
 }
 
 fn outside_section(center: vec3<f32>, radius: f32) -> bool {
-    let world = section.world.xyz;
-    let uvw = (center - section.box_min.xyz) / world;
-    let axis = section.mapping.z;
-    if (abs(uvw[axis] - section.plane.x) * world[axis] > radius) {
+    if (abs(section_plane_distance(center)) > radius) {
         return true;
     }
-    let u = section.mapping.x;
-    let v = section.mapping.y;
-    if (abs(uvw[u] - section.uv_center.x) - radius / world[u] > section.uv_scale.x) {
+    if (abs(section_across(center)) - radius > section.right.w) {
         return true;
     }
-    if (abs(uvw[v] - section.uv_center.y) - radius / world[v] > section.uv_scale.y) {
+    if (abs(section_down(center)) - radius > section.up.w) {
         return true;
     }
     return false;
@@ -90,8 +85,7 @@ fn cull_section_side(index: u32, front: bool) {
         || outside_region_sphere(data.center_radius.xyz, data.center_radius.w)) {
         return;
     }
-    let uvw = (data.center_radius.xyz - section.box_min.xyz) / section.world.xyz;
-    let ahead = uvw[section.mapping.z] >= section.plane.x;
+    let ahead = section_plane_distance(data.center_radius.xyz) >= 0.0;
     if (ahead == front) {
         append_section(index, front);
     }

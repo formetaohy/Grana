@@ -1,5 +1,3 @@
-use grana_volume::Axis;
-
 use crate::{Camera, CameraState, SectionCamera, SectionState};
 
 pub struct Viewport {
@@ -18,7 +16,7 @@ impl Viewport {
     pub fn new() -> Self {
         Self {
             camera: Camera::new(35.0),
-            section: SectionCamera::new(Axis::Z),
+            section: SectionCamera::new(),
             split: 0.62,
         }
     }

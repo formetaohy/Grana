@@ -9,7 +9,7 @@ use grana_project::{Export, ViewState};
 use grana_scene::{
     Annotation, ObjectColor, ObjectKind, ObjectParams, ObjectSet, Scene, SegmentParams,
 };
-use grana_volume::{Axis, Clip};
+use grana_volume::Clip;
 use serde::{Deserialize, Serialize};
 
 use crate::Protocol;
@@ -173,16 +173,10 @@ pub struct CameraSpec {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SectionSpec {
-    pub axis: AxisSpec,
+    pub center: [f32; 3],
+    pub azimuth: f32,
+    pub elevation: f32,
     pub span: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum AxisSpec {
-    X,
-    Y,
-    Z,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -981,24 +975,6 @@ impl ColocSpec {
     }
 }
 
-impl AxisSpec {
-    pub fn axis(self) -> Axis {
-        match self {
-            Self::X => Axis::X,
-            Self::Y => Axis::Y,
-            Self::Z => Axis::Z,
-        }
-    }
-
-    pub fn of(axis: Axis) -> Self {
-        match axis {
-            Axis::X => Self::X,
-            Axis::Y => Self::Y,
-            Axis::Z => Self::Z,
-        }
-    }
-}
-
 impl ColorSpec {
     pub fn palette(&self) -> Palette {
         palette(&self.palette).expect("a checked color names a palette")
@@ -1463,9 +1439,15 @@ impl ViewSpec {
                 "a view describes a plausible camera".to_string(),
             ));
         }
-        if !self.section.span.is_finite() || self.section.span <= 0.0 {
+        if !self.section.center.iter().all(|value| value.is_finite())
+            || !self.section.azimuth.is_finite()
+            || !self.section.elevation.is_finite()
+            || self.section.elevation.abs() > std::f32::consts::FRAC_PI_2
+            || !self.section.span.is_finite()
+            || self.section.span <= 0.0
+        {
             return Err(ProtocolError::Invalid(
-                "a view describes a positive section span".to_string(),
+                "a view describes a plausible section plane".to_string(),
             ));
         }
         if !(0.0..=1.0).contains(&self.split) {
@@ -1562,14 +1544,18 @@ impl CameraSpec {
 impl SectionSpec {
     pub fn of(section: SectionState) -> Self {
         Self {
-            axis: AxisSpec::of(section.axis),
+            center: section.center,
+            azimuth: section.azimuth,
+            elevation: section.elevation,
             span: section.span,
         }
     }
 
     pub fn section(&self) -> SectionState {
         SectionState {
-            axis: self.axis.axis(),
+            center: self.center,
+            azimuth: self.azimuth,
+            elevation: self.elevation,
             span: self.span,
         }
     }
