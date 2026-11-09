@@ -246,13 +246,48 @@ pub fn view_body<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
 ) -> Vec<Element<'a, Message>> {
-    vec![
+    let mut elements = Vec::new();
+    if state.plate.is_some() {
+        elements.push(plate(ctx, state));
+    }
+    elements.extend([
         channels(ctx, state),
         display(ctx, state),
         section(ctx, state),
         clip(ctx, state),
         rendering(ctx, state),
-    ]
+    ]);
+    elements
+}
+
+fn plate<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
+    let Some(view) = state.plate else {
+        return hidden();
+    };
+    let source = view.plate;
+    let detail = format!(
+        "{} × {} wells · {} fields",
+        source.rows(),
+        source.columns(),
+        source.len()
+    );
+    let title = view::card_title(ctx, Icon::Grid, source.name(), Some(&detail));
+    let current = view.selected_well().map_or_else(
+        || "no field of view".to_string(),
+        |well| {
+            format!(
+                "Well {} · {} field{}",
+                well.label(),
+                well.fields().len(),
+                if well.fields().len() == 1 { "" } else { "s" }
+            )
+        },
+    );
+    let caption = view::caption(ctx, &current);
+    let browse = view::button(ctx, "Browse Wells", Role::Control)
+        .named("plate.browse")
+        .press(Message::SetPanel(Some(crate::panel::Panel::Plate)));
+    view::card(ctx, 6.0, vec![title, caption, browse])
 }
 
 pub fn objects_body<'a>(

@@ -4,7 +4,7 @@ mod topology;
 
 use std::sync::Arc;
 
-use grana_geometry::{Bounds, Geometry, GeometryStore, Mesh, PackedMesh};
+use grana_geometry::{Bounds, Geometry, GeometryStore, Mesh, PackedMesh, SurfaceShape};
 
 use crate::IntensityTable;
 
@@ -21,6 +21,7 @@ pub struct SurfaceStatistics {
     sphericity: f64,
     centroid: [f32; 3],
     bounds: Bounds,
+    shape: Option<SurfaceShape>,
 }
 
 impl SurfaceStatistics {
@@ -30,6 +31,7 @@ impl SurfaceStatistics {
         area: f64,
         centroid: [f32; 3],
         bounds: Bounds,
+        shape: Option<SurfaceShape>,
     ) -> Self {
         assert!(voxel_count > 0, "a surface encloses at least one voxel");
         assert!(
@@ -53,6 +55,7 @@ impl SurfaceStatistics {
             sphericity,
             centroid,
             bounds,
+            shape,
         }
     }
 
@@ -78,6 +81,10 @@ impl SurfaceStatistics {
 
     pub fn bounds(self) -> Bounds {
         self.bounds
+    }
+
+    pub fn shape(self) -> Option<SurfaceShape> {
+        self.shape
     }
 }
 

@@ -126,6 +126,7 @@ grana-tiff = { workspace = true }
 grana-volume = { workspace = true }
 grana-zarr = { workspace = true }
 wgpu = { workspace = true }
+zarrs = { workspace = true }
 
 [lints]
 workspace = true

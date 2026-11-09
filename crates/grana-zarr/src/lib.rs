@@ -12,7 +12,7 @@ mod write;
 
 pub use error::Error;
 pub use hcs::{
-    Field, Kind as GroupKind, Plate, group_path, kind as group_kind, open as open_plate,
+    Field, Kind as GroupKind, Plate, Well, group_path, kind as group_kind, open as open_plate,
 };
 pub use image::Image;
 pub use label::{

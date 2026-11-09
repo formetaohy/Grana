@@ -8,7 +8,7 @@ use grana_volume::{
     BrickCoord, BrickData, BrickGrid, Extent, Pyramid, VolumeSeries, VoxelData, VoxelFormat,
     pad_brick,
 };
-use grana_zarr::Labels;
+use grana_zarr::{Labels, Plate};
 use rayon::prelude::*;
 
 use crate::align;
@@ -601,7 +601,7 @@ pub fn series_count(path: &Path) -> Result<usize, Error> {
 }
 
 fn series_count_at(root: &grana_zarr::Root) -> Result<usize, Error> {
-    plate(root).map(|plate| plate.map_or(1, |plate| plate.len().max(1)))
+    plate_of_root(root).map(|plate| plate.map_or(1, |plate| plate.len().max(1)))
 }
 
 pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
@@ -624,7 +624,7 @@ pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
 }
 
 fn series_names_at(root: &grana_zarr::Root) -> Result<Vec<Option<String>>, Error> {
-    Ok(plate(root)?
+    Ok(plate_of_root(root)?
         .map(|plate| {
             plate
                 .fields()
@@ -647,7 +647,7 @@ pub fn remote_series_group(url: &str, series: usize) -> Result<Option<String>, E
 }
 
 fn series_group_at(root: &grana_zarr::Root, series: usize) -> Result<Option<String>, Error> {
-    let Some(plate) = plate(root)? else {
+    let Some(plate) = plate_of_root(root)? else {
         return Ok(None);
     };
     let field = plate.field(series).ok_or_else(|| Error::Unsupported {
@@ -660,7 +660,20 @@ fn series_group_at(root: &grana_zarr::Root, series: usize) -> Result<Option<Stri
     Ok(Some(field.path().to_string()))
 }
 
-fn plate(root: &grana_zarr::Root) -> Result<Option<grana_zarr::Plate>, Error> {
+pub fn plate(source: &Source) -> Result<Option<Plate>, Error> {
+    match source {
+        Source::Memory(_) => Ok(None),
+        Source::File { path, .. } => {
+            if !path.is_dir() {
+                return Ok(None);
+            }
+            plate_of_root(&grana_zarr::Root::local(path)?)
+        }
+        Source::Remote { url, .. } => plate_of_root(&grana_zarr::Root::remote(url)?),
+    }
+}
+
+fn plate_of_root(root: &grana_zarr::Root) -> Result<Option<Plate>, Error> {
     if grana_zarr::group_kind(root)? != grana_zarr::GroupKind::Plate {
         return Ok(None);
     }

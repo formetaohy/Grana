@@ -39,7 +39,10 @@ impl ChildMetric {
             Measurement::Intensity { channel, statistic } => {
                 (statistic == Statistic::Mean).then_some(Self::Intensity(channel))
             }
-            Measurement::Position(_) => None,
+            Measurement::Position(_)
+            | Measurement::MaxDiameter
+            | Measurement::HullVolume
+            | Measurement::Ellipsoid(_) => None,
         }
     }
 

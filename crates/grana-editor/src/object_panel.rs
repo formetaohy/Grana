@@ -1828,11 +1828,25 @@ fn measure<'a>(
             let intensity = surfaces.intensities().object(index, channel);
             let centroid = object.centroid();
             let size = object.bounds().size();
+            let (diameter, hull, axes) = match object.shape() {
+                Some(shape) => (
+                    format!("{:.3} µm", shape.diameter()),
+                    format!("{:.2} µm³", shape.hull_volume()),
+                    {
+                        let axes = shape.axes();
+                        format!("{:.2} × {:.2} × {:.2} µm", axes[0], axes[1], axes[2])
+                    },
+                ),
+                None => ("—".to_string(), "—".to_string(), "—".to_string()),
+            };
             vec![
                 ("Object", format!("#{}", index + 1)),
                 ("Volume", format!("{:.2} µm³", object.volume())),
                 ("Area", format!("{:.2} µm²", object.area())),
                 ("Sphericity", format!("{:.3}", object.sphericity())),
+                ("Max diameter", diameter),
+                ("Hull volume", hull),
+                ("Ellipsoid axes", axes),
                 (
                     "Centroid",
                     format!(

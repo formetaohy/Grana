@@ -1,6 +1,6 @@
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use grana_volume::{Channel, Extent, Spacing, Volume, VoxelData};
@@ -278,4 +278,91 @@ impl Snapshot {
         }
         count
     }
+}
+
+pub fn plate(root: &Path) {
+    std::fs::create_dir_all(root).expect("the plate directory is created");
+    group(
+        root,
+        "/",
+        serde_json::json!({
+            "ome": {
+                "plate": {
+                    "name": "assay",
+                    "rows": [{"name": "A"}],
+                    "columns": [{"name": "1"}, {"name": "2"}],
+                    "wells": [
+                        {"path": "A/1", "rowIndex": 0, "columnIndex": 0},
+                        {"path": "A/2", "rowIndex": 0, "columnIndex": 1}
+                    ]
+                }
+            }
+        }),
+    );
+    group(root, "/A", serde_json::json!({}));
+    group(
+        root,
+        "/A/1",
+        serde_json::json!({"ome": {"well": {"images": [{"path": "0"}]}}}),
+    );
+    group(
+        root,
+        "/A/2",
+        serde_json::json!({"ome": {"well": {"images": [{"path": "1"}]}}}),
+    );
+    field(&root.join("A/1/0"), Extent::new(8, 6, 4));
+    field(&root.join("A/2/1"), Extent::new(12, 10, 6));
+}
+
+fn group(root: &Path, path: &str, attributes: serde_json::Value) {
+    let store =
+        Arc::new(zarrs::filesystem::FilesystemStore::new(root).expect("the plate store opens"));
+    let mut builder = zarrs::group::GroupBuilder::new();
+    builder.attributes(
+        attributes
+            .as_object()
+            .expect("group attributes are an object")
+            .clone(),
+    );
+    let group = builder.build(store, path).expect("the plate group builds");
+    group
+        .store_metadata()
+        .expect("the plate group stores its metadata");
+}
+
+fn field(path: &Path, extent: Extent) {
+    let channels = [grana_zarr::WriteChannel {
+        name: "DAPI",
+        tint: [0.0, 0.0, 1.0],
+        range: grana_volume::Intensity::new(0.0, 255.0),
+    }];
+    let levels = [grana_volume::Level::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+    )];
+    let mut fill = |_: usize,
+                    _: u32,
+                    _: usize,
+                    _: [u32; 3],
+                    _: [u32; 3],
+                    data: &mut [f32]|
+     -> Result<(), String> {
+        data.fill(64.0);
+        Ok(())
+    };
+    let mut progress = |_, _| {};
+    grana_zarr::write_image(
+        path,
+        grana_zarr::ImageSpec {
+            name: "field",
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0; 3],
+            frames: 1,
+            interval: 1.0,
+            fill: &mut fill,
+            progress: &mut progress,
+        },
+    )
+    .expect("the plate field writes");
 }

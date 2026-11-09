@@ -74,6 +74,9 @@ pub enum Measurement {
     Volume,
     Area,
     Sphericity,
+    MaxDiameter,
+    HullVolume,
+    Ellipsoid(usize),
     Voxels,
     Length,
     Branches,
@@ -94,7 +97,17 @@ impl Measurement {
     pub fn surfaces(channels: usize) -> Vec<Self> {
         Self::tail(
             channels,
-            &[Self::Volume, Self::Area, Self::Sphericity, Self::Voxels],
+            &[
+                Self::Volume,
+                Self::Area,
+                Self::Sphericity,
+                Self::MaxDiameter,
+                Self::HullVolume,
+                Self::Ellipsoid(0),
+                Self::Ellipsoid(1),
+                Self::Ellipsoid(2),
+                Self::Voxels,
+            ],
         )
     }
 
@@ -121,6 +134,9 @@ impl Measurement {
             Self::Volume => "volume".to_string(),
             Self::Area => "area".to_string(),
             Self::Sphericity => "sphericity".to_string(),
+            Self::MaxDiameter => "max diameter".to_string(),
+            Self::HullVolume => "convex hull volume".to_string(),
+            Self::Ellipsoid(axis) => format!("ellipsoid axis {}", axis + 1),
             Self::Voxels => "voxels".to_string(),
             Self::Length => "length".to_string(),
             Self::Branches => "branches".to_string(),
@@ -141,6 +157,9 @@ impl Measurement {
             Self::Volume => "volume_um3".to_string(),
             Self::Area => "area_um2".to_string(),
             Self::Sphericity => "sphericity".to_string(),
+            Self::MaxDiameter => "max_diameter_um".to_string(),
+            Self::HullVolume => "hull_volume_um3".to_string(),
+            Self::Ellipsoid(axis) => format!("ellipsoid_axis_{}_um", axis + 1),
             Self::Voxels => "voxels".to_string(),
             Self::Length => "length_um".to_string(),
             Self::Branches => "branches".to_string(),
@@ -155,8 +174,12 @@ impl Measurement {
 
     pub fn unit(self) -> Unit {
         match self {
-            Self::Position(_) | Self::Diameter | Self::Length => Unit::Micrometer,
-            Self::Volume => Unit::CubicMicrometer,
+            Self::Position(_)
+            | Self::Diameter
+            | Self::Length
+            | Self::MaxDiameter
+            | Self::Ellipsoid(_) => Unit::Micrometer,
+            Self::Volume | Self::HullVolume => Unit::CubicMicrometer,
             Self::Area => Unit::SquareMicrometer,
             Self::Contrast
             | Self::Sphericity
@@ -172,6 +195,7 @@ impl Measurement {
     pub fn decimals(self) -> u8 {
         match self {
             Self::Position(_) | Self::Diameter | Self::Length => 3,
+            Self::MaxDiameter | Self::Ellipsoid(_) | Self::HullVolume => 3,
             Self::Contrast | Self::Sphericity => 4,
             Self::Volume | Self::Area => 3,
             Self::Voxels | Self::Branches | Self::Terminals | Self::Junctions | Self::Nodes => 0,
@@ -202,6 +226,9 @@ impl Measurement {
                     Self::Volume
                     | Self::Area
                     | Self::Sphericity
+                    | Self::MaxDiameter
+                    | Self::HullVolume
+                    | Self::Ellipsoid(_)
                     | Self::Voxels
                     | Self::Length
                     | Self::Branches
@@ -219,6 +246,15 @@ impl Measurement {
                     Self::Volume => statistics.volume() as f32,
                     Self::Area => statistics.area() as f32,
                     Self::Sphericity => statistics.sphericity() as f32,
+                    Self::MaxDiameter => statistics
+                        .shape()
+                        .map_or(f32::NAN, |shape| shape.diameter() as f32),
+                    Self::HullVolume => statistics
+                        .shape()
+                        .map_or(f32::NAN, |shape| shape.hull_volume() as f32),
+                    Self::Ellipsoid(axis) => statistics
+                        .shape()
+                        .map_or(f32::NAN, |shape| shape.axes()[axis] as f32),
                     Self::Voxels => statistics.voxel_count() as f32,
                     Self::Intensity { channel, statistic } => {
                         statistic.value(intensities.object(object, channel))
@@ -248,7 +284,13 @@ impl Measurement {
                     Self::Intensity { channel, statistic } => {
                         statistic.value(intensities.object(object, channel))
                     }
-                    Self::Contrast | Self::Area | Self::Sphericity | Self::Voxels => {
+                    Self::Contrast
+                    | Self::Area
+                    | Self::Sphericity
+                    | Self::MaxDiameter
+                    | Self::HullVolume
+                    | Self::Ellipsoid(_)
+                    | Self::Voxels => {
                         panic!("the filament measurement {self:?} is read from filaments")
                     }
                 }

@@ -740,7 +740,7 @@ fn preferred_axes(table: &Table) -> [usize; 2] {
     } else if key_family("junctions") {
         &["length_um", "diameter_um"]
     } else {
-        &["volume_um3", "area_um2", "sphericity"]
+        &["volume_um3", "hull_volume_um3", "area_um2", "sphericity"]
     };
     let mut chosen = Vec::with_capacity(2);
     for key in preferred {
@@ -811,6 +811,8 @@ fn default_visibility(table: &Table) -> Vec<bool> {
                     || key.starts_with("volume_um3")
                     || key.starts_with("area_um2")
                     || key.starts_with("sphericity")
+                    || key.starts_with("max_diameter_um")
+                    || key.starts_with("hull_volume_um3")
                     || key.contains("_intensity_mean")
                     || key.ends_with("_distance_um")
                     || key.ends_with("_inside")

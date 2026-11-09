@@ -725,6 +725,12 @@ impl Encode for Measurement {
             Self::Area => writer.u8(4),
             Self::Sphericity => writer.u8(5),
             Self::Voxels => writer.u8(6),
+            Self::MaxDiameter => writer.u8(13),
+            Self::HullVolume => writer.u8(14),
+            Self::Ellipsoid(axis) => {
+                writer.u8(15);
+                writer.u8(*axis as u8);
+            }
             Self::Length => writer.u8(7),
             Self::Branches => writer.u8(8),
             Self::Terminals => writer.u8(9),
@@ -924,6 +930,17 @@ impl Encode for SurfaceStatistics {
             writer.f32(value);
         }
         self.bounds().encode(writer);
+        match self.shape() {
+            Some(shape) => {
+                writer.u8(1);
+                for axis in shape.axes() {
+                    writer.f64(axis);
+                }
+                writer.f64(shape.diameter());
+                writer.f64(shape.hull_volume());
+            }
+            None => writer.u8(0),
+        }
     }
 }
 

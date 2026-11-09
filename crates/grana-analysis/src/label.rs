@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use glam::Vec3;
-use grana_geometry::{Bounds, Mesh, MeshVertex};
+use grana_geometry::{Bounds, Mesh, MeshVertex, SurfaceShape};
 use grana_object::{IntensityTable, SampleAccumulator, SurfaceSet, SurfaceStatistics};
 use grana_volume::{Level, VoxelData};
 
@@ -134,12 +134,14 @@ impl LabelBuilder {
                     .cell_bounds(object.low, object.high.map(|value| value + 1));
                 Bounds::new(low, high)
             };
+            let shape = SurfaceShape::of(&object.positions, object.indices.as_chunks::<3>().0);
             statistics.push(SurfaceStatistics::new(
                 object.voxels,
                 count * voxel_volume,
                 area,
                 centroid,
                 bounds,
+                shape,
             ));
             for accumulator in &object.accumulators {
                 intensities.push(accumulator.statistics());

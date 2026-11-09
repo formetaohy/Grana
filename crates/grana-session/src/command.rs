@@ -28,6 +28,7 @@ pub enum Command {
     ClearCache,
     SetTime(u32),
     SelectSeries(usize),
+    SelectField(usize),
     Select(Option<Selection>),
     ToggleSelect(Selection),
     RenameObject {

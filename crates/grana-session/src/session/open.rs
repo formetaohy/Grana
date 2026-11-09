@@ -27,6 +27,8 @@ impl Session {
         self.measure.reset();
         self.label_images.clear();
         self.mask_stamp = None;
+        self.plate = None;
+        self.field = 0;
         self.set_time(0);
         self.install_channels();
         if let Some(scene) = self.scene.as_ref() {
@@ -58,6 +60,8 @@ impl Session {
         self.pending = None;
         self.project = None;
         self.saved = None;
+        self.plate = None;
+        self.field = 0;
         self.reset();
     }
 
@@ -76,6 +80,8 @@ impl Session {
         self.pending = None;
         self.project = None;
         self.saved = None;
+        self.plate = None;
+        self.field = 0;
         self.reset();
     }
 
@@ -103,10 +109,46 @@ impl Session {
         true
     }
 
+    pub fn select_field(&mut self, index: usize) -> bool {
+        let Some(plate) = self.plate.as_ref() else {
+            return false;
+        };
+        if index >= plate.len() {
+            self.message = Some(Message::error(format!(
+                "the plate holds {} fields of view and field {index} was requested",
+                plate.len()
+            )));
+            return false;
+        }
+        if index == self.field {
+            return false;
+        }
+        let Some(source) = self.source.as_ref().map(Loader::source) else {
+            return false;
+        };
+        let next = match &source {
+            Source::Memory(_) => return false,
+            Source::File { path, .. } => Loader::file_series(path.clone(), index),
+            Source::Remote { url, .. } => Loader::remote_series(url.clone(), index),
+        };
+        if self.reject_transfer() {
+            return false;
+        }
+        self.loading = Some(source.label());
+        self.source = Some(next);
+        self.pending = None;
+        self.project = None;
+        self.saved = None;
+        self.reset();
+        true
+    }
+
     pub fn begin_project(&mut self, path: PathBuf) {
         if self.reject_transfer() {
             return;
         }
+        self.plate = None;
+        self.field = 0;
         self.document = Some(Document::open(path, Arc::clone(&self.store)));
         self.message = None;
     }
@@ -422,8 +464,11 @@ impl Session {
             repaint = true;
             match event {
                 LoaderEvent::Opened(opened) => {
+                    let opened = *opened;
                     self.series = opened.series;
                     self.series_index = opened.selected;
+                    self.plate = opened.plate;
+                    self.field = opened.field;
                     self.label_images = opened.labels;
                     let dataset = match (opened.remote, opened.format) {
                         (true, _) => Dataset::remote(opened.name, opened.pyramid),

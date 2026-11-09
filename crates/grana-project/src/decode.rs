@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use grana_animation::{Keyframe, Timeline};
 use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferFunction};
-use grana_geometry::{Bounds, Geometry, PackedMesh};
+use grana_geometry::{Bounds, Geometry, PackedMesh, SurfaceShape};
 use grana_measure::{
     Aggregate, ChildField, ChildMetric, ClassifierState, Filter, Group, Lasso, MeasureView,
     Measurement, RelationField, Scope, Statistic, TrackMeasurement,
@@ -1243,6 +1243,9 @@ impl Decode for Measurement {
             4 => Self::Area,
             5 => Self::Sphericity,
             6 => Self::Voxels,
+            13 => Self::MaxDiameter,
+            14 => Self::HullVolume,
+            15 => Self::Ellipsoid(reader.u8()? as usize),
             7 => Self::Length,
             8 => Self::Branches,
             9 => Self::Terminals,
@@ -1255,6 +1258,11 @@ impl Decode for Measurement {
             _ => return Err(FAULT_SHAPE),
         };
         if let Self::Position(axis) = measurement
+            && axis >= 3
+        {
+            return Err(FAULT_VALUE);
+        }
+        if let Self::Ellipsoid(axis) = measurement
             && axis >= 3
         {
             return Err(FAULT_VALUE);
@@ -1481,12 +1489,35 @@ impl Decode for SurfaceStatistics {
         {
             return Err(FAULT_VALUE);
         }
+        let bounds = Bounds::decode(reader)?;
+        let shape = match reader.u8()? {
+            0 => None,
+            1 => {
+                let mut axes = [0.0; 3];
+                for axis in &mut axes {
+                    *axis = reader.f64()?;
+                }
+                let diameter = reader.f64()?;
+                let hull_volume = reader.f64()?;
+                if axes.iter().any(|axis| !axis.is_finite() || *axis < 0.0)
+                    || !(diameter.is_finite() && diameter >= 0.0)
+                    || !(hull_volume.is_finite() && hull_volume >= 0.0)
+                    || axes[0] < axes[1]
+                    || axes[1] < axes[2]
+                {
+                    return Err(FAULT_VALUE);
+                }
+                Some(SurfaceShape::new(axes, diameter, hull_volume))
+            }
+            _ => return Err(FAULT_TAG),
+        };
         Ok(Self::new(
             voxel_count,
             volume,
             area,
             centroid,
-            Bounds::decode(reader)?,
+            bounds,
+            shape,
         ))
     }
 }

@@ -9,6 +9,7 @@ mod measure_panel;
 mod message;
 mod object_panel;
 mod panel;
+mod plate_panel;
 mod plot;
 mod shell;
 mod stage;

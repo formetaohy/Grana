@@ -20,6 +20,7 @@ use grana_animation::{Keyframe, Timeline};
 use grana_display::Shading;
 use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
 use grana_image::Format;
+use grana_image::Plate;
 use grana_measure::{ColocPair, ColocThresholds, Group, Scope};
 use grana_object::SurfaceCut;
 use grana_object::TrackSet;
@@ -40,7 +41,8 @@ use crate::sample;
 use crate::task::Poll;
 use crate::transfer::Transfer;
 use crate::view::{
-    BatchComparison, BatchDataset, BatchView, HistoryView, IoView, Message, SeriesView, StoreView,
+    BatchComparison, BatchDataset, BatchView, HistoryView, IoView, Message, PlateView, SeriesView,
+    StoreView,
 };
 use crate::{Action, Analysis, Command, Series, Source};
 use grana_pipeline::run::DetectRequest;
@@ -118,6 +120,8 @@ pub struct Session {
     snapshotter: Option<SnapshotFactory>,
     series: Vec<Series>,
     series_index: usize,
+    plate: Option<Plate>,
+    field: usize,
     fingerprint: Option<Fingerprint>,
     mask_stamp: Option<(u32, u64)>,
     revision: u64,
@@ -179,6 +183,8 @@ impl Session {
             snapshotter: None,
             series: Vec::new(),
             series_index: 0,
+            plate: None,
+            field: 0,
             fingerprint: None,
             mask_stamp: None,
             revision: 0,
@@ -288,6 +294,12 @@ impl Session {
             entries: &self.series,
             selected: self.series_index,
         }
+    }
+    pub fn plate(&self) -> Option<PlateView<'_>> {
+        Some(PlateView {
+            plate: self.plate.as_ref()?,
+            selected: self.field,
+        })
     }
     pub fn label_images(&self) -> &[String] {
         &self.label_images

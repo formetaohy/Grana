@@ -4,6 +4,7 @@ use grana_image::{Format, Image, Source};
 use grana_volume::{Basis, Extent, Intensity, Level, Spacing, VoxelData};
 use grana_zarr::{ImageSpec, WriteChannel, write_image};
 
+use crate::support;
 use crate::support::Temp;
 
 fn fixture(name: &str) -> PathBuf {
@@ -244,4 +245,43 @@ fn reads_ome_tiff_metadata_and_voxels() {
             }
         }
     }
+}
+
+#[test]
+fn browses_an_ome_zarr_plate() {
+    let temp = Temp::new("suite-plate");
+    let root = temp.path().join("assay.ome.zarr");
+    support::plate(&root);
+    assert!(grana_image::is_image(&root), "a plate folder is a dataset");
+    assert_eq!(
+        grana_image::series_count(&root).expect("the plate counts its fields"),
+        2
+    );
+    let names = grana_image::series_names(&root).expect("the plate names its fields");
+    assert_eq!(
+        names,
+        vec![Some("A1/0".to_string()), Some("A2/1".to_string())]
+    );
+    assert_eq!(
+        grana_image::series_group(&root, 1).expect("the second field resolves"),
+        Some("/A/2/1".to_string())
+    );
+    let zarr = grana_zarr::Root::local(&root).expect("the plate opens");
+    let plate = grana_zarr::open_plate(&zarr).expect("the plate metadata parses");
+    assert_eq!((plate.rows(), plate.columns()), (1, 2));
+    let well = plate.well(0, 1).expect("the second column holds a well");
+    assert_eq!(well.label(), "A2");
+    assert_eq!(well.fields().len(), 1);
+    assert_eq!(plate.fields()[1].series(), 1);
+    assert_eq!(plate.well_of(1).map(grana_zarr::Well::label), Some("A2"));
+    let browse = grana_image::plate(&Source::file(root.clone()))
+        .expect("the image layer reads the plate")
+        .expect("the folder is a plate");
+    assert_eq!(browse.len(), plate.len());
+    assert_eq!(browse.wells().len(), plate.wells().len());
+    let resolved = grana_image::resolve_series(&Source::file_series(root, 1))
+        .expect("the second field resolves");
+    assert_eq!(resolved.group(), Some("/A/2/1"));
+    let image = Image::open(&resolved).expect("the second field opens");
+    assert_eq!(image.pyramid().level(0).extent(), Extent::new(12, 10, 6));
 }

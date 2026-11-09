@@ -36,6 +36,9 @@ impl Session {
                     self.message = Some(Message::error("the dataset does not hold that series"));
                 }
             }
+            Command::SelectField(index) => {
+                self.select_field(index);
+            }
             Command::Select(selection) => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.select(selection);

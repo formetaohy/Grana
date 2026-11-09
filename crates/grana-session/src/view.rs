@@ -1,5 +1,5 @@
 use grana_animation::Timeline;
-use grana_image::Series;
+use grana_image::{Plate, Series, Well};
 use grana_scene::{Measure, Progress, Scene};
 
 use crate::command::Action;
@@ -93,6 +93,18 @@ pub struct SeriesView<'a> {
     pub selected: usize,
 }
 
+#[derive(Clone, Copy)]
+pub struct PlateView<'a> {
+    pub plate: &'a Plate,
+    pub selected: usize,
+}
+
+impl PlateView<'_> {
+    pub fn selected_well(&self) -> Option<&Well> {
+        self.plate.well_of(self.selected)
+    }
+}
+
 pub struct SessionView<'a> {
     pub scene: Option<&'a Scene>,
     pub measure: &'a Measure,
@@ -102,5 +114,6 @@ pub struct SessionView<'a> {
     pub batch: Option<BatchView<'a>>,
     pub history: HistoryView,
     pub series: SeriesView<'a>,
+    pub plate: Option<PlateView<'a>>,
     pub labels: &'a [String],
 }

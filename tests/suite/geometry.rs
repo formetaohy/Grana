@@ -1,5 +1,7 @@
 use glam::Vec3;
-use grana_geometry::{Bounds, Mesh, MeshVertex, PackedMesh, SectionCutter, SectionPlane, simplify};
+use grana_geometry::{
+    Bounds, Hull, Mesh, MeshVertex, PackedMesh, SectionCutter, SectionPlane, SurfaceShape, simplify,
+};
 use grana_object::{IntensityTable, Mask, SampleStatistics, SurfaceSet, SurfaceStatistics};
 use grana_volume::{Extent, Level, Region, Spacing};
 
@@ -51,6 +53,7 @@ fn builds_coarse_surface_details_in_the_background() {
         1.0,
         [0.0; 3],
         Bounds::new([-6.5, -6.5, -1.5], [6.5, 6.5, 1.5]),
+        None,
     );
     let intensities = IntensityTable::new(1, vec![SampleStatistics::new(1.0, 1.0, 1.0, 0.0, 1.0)]);
     let set = SurfaceSet::new(0, mesh, vec![statistics], intensities);
@@ -257,5 +260,68 @@ fn rasterises_an_oriented_region_exactly() {
     assert!(
         inside < extent.voxel_count() as usize,
         "the tilted box holds the whole volume"
+    );
+}
+
+#[test]
+fn measures_the_shape_of_a_box() {
+    let mesh = cube(1.0);
+    let positions = mesh
+        .vertices()
+        .iter()
+        .map(|vertex| vertex.position())
+        .collect::<Vec<_>>();
+    let mut hulled = positions.clone();
+    hulled.push([0.0, 0.0, 0.0]);
+    hulled.push([0.2, -0.3, 0.4]);
+    let shape = SurfaceShape::of(&hulled, mesh.indices().as_chunks::<3>().0)
+        .expect("a box carries a shape");
+    let axis = (5.0f64 / 3.0).sqrt();
+    for measured in shape.axes() {
+        assert!(
+            (measured - axis).abs() < 1.0e-4,
+            "a box semi axis is {measured} and not {axis}"
+        );
+    }
+    let diameter = shape.diameter();
+    let expected = 12.0f64.sqrt();
+    assert!(
+        (diameter - expected).abs() < 1.0e-4,
+        "a box diagonal is {diameter} and not {expected}"
+    );
+    let volume = shape.hull_volume();
+    assert!(
+        (volume - 8.0).abs() < 1.0e-6,
+        "a unit box hull holds {volume} of the expected 8"
+    );
+}
+
+#[test]
+fn hulls_a_sphere_of_points() {
+    let radius = 4.0f32;
+    let mut points = Vec::new();
+    for stack in 1..24u32 {
+        let elevation = std::f32::consts::PI * stack as f32 / 24.0;
+        for slice in 0..48u32 {
+            let azimuth = std::f32::consts::TAU * slice as f32 / 48.0;
+            points.push([
+                radius * elevation.sin() * azimuth.cos(),
+                radius * elevation.sin() * azimuth.sin(),
+                radius * elevation.cos(),
+            ]);
+        }
+    }
+    let hull = Hull::of(&points).expect("a sphere of points carries a hull");
+    let expected = 4.0 / 3.0 * std::f64::consts::PI * f64::from(radius).powi(3);
+    let volume = hull.volume();
+    assert!(
+        volume < expected && volume > 0.9 * expected,
+        "the hull holds {volume} of the sphere volume {expected}"
+    );
+    let diameter = hull.diameter();
+    let expected = 2.0 * f64::from(radius);
+    assert!(
+        (diameter - expected).abs() < 0.05 * expected,
+        "the hull diameter is {diameter} and not {expected}"
     );
 }

@@ -368,3 +368,128 @@ fn replays_a_captured_protocol() {
     assert_eq!(staged.color(), [0.2, 0.4, 0.8]);
     assert!(matches!(staged.params(), ObjectParams::Spots(_)));
 }
+
+#[test]
+fn navigates_a_plate_field_by_field() {
+    let temp = Temp::new("suite-plate-session");
+    let root = temp.path().join("assay.ome.zarr");
+    support::plate(&root);
+    let mut session = Session::new();
+    session.begin_load(root.clone());
+    open_field(&mut session, Extent::new(8, 6, 4));
+    {
+        let plate = session.plate().expect("the plate is browsable");
+        assert_eq!((plate.plate.rows(), plate.plate.columns()), (1, 2));
+        assert_eq!(plate.plate.len(), 2);
+        assert_eq!(
+            plate
+                .selected_well()
+                .expect("the field lies in a well")
+                .label(),
+            "A1"
+        );
+    }
+    session.execute(Command::SelectField(1));
+    open_field(&mut session, Extent::new(12, 10, 6));
+    {
+        let plate = session.plate().expect("the plate keeps its layout");
+        assert_eq!(plate.selected, 1);
+        assert_eq!(
+            plate
+                .selected_well()
+                .expect("the field lies in a well")
+                .label(),
+            "A2"
+        );
+    }
+}
+
+fn open_field(session: &mut Session, extent: Extent) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        session.poll();
+        if session
+            .scene()
+            .is_some_and(|scene| scene.dataset.extent() == extent)
+        {
+            return;
+        }
+        assert!(Instant::now() < deadline, "the field never opened");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn round_trips_a_surface_project() {
+    let volume = support::spheres(
+        Extent::new(16, 16, 8),
+        Spacing::new(1.0, 1.0, 1.0),
+        &[([8.0, 8.0, 4.0], 3.0)],
+        HIGH,
+    );
+    let mut scene = Scene::new(Dataset::synthetic("fixture", volume.pyramid()));
+    let set = scene.add_object(ObjectKind::Surfaces, 0);
+    scene.install(set, 0, ObjectFrame::Surfaces(surface()));
+    let project = Project::capture(
+        &scene,
+        &Measure::new(),
+        Source::Synthetic {
+            name: "fixture".to_string(),
+        },
+        view_state(),
+        Fingerprint::new([7; 32]),
+    );
+    let temp = Temp::new("suite-surface-project");
+    let path = temp.path().join("surface.grana");
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the surface project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the surface project reads");
+    assert_eq!(loaded, project);
+}
+
+fn surface() -> grana_object::SurfaceSet {
+    let corners = [
+        [-1.0f32, -1.0, -1.0],
+        [1.0, -1.0, -1.0],
+        [1.0, 1.0, -1.0],
+        [-1.0, 1.0, -1.0],
+        [-1.0, -1.0, 1.0],
+        [1.0, -1.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [-1.0, 1.0, 1.0],
+    ];
+    let vertices = corners
+        .into_iter()
+        .map(|corner| grana_geometry::MeshVertex::new(corner, [0.0, 0.0, 1.0], 0))
+        .collect();
+    let indices = vec![
+        0u32, 3, 2, 0, 2, 1, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7,
+        6, 3, 0, 4, 3, 4, 7,
+    ];
+    let shape = grana_geometry::SurfaceShape::of(&corners, indices.as_chunks::<3>().0)
+        .expect("a box carries a shape");
+    let statistics = grana_object::SurfaceStatistics::new(
+        8,
+        8.0,
+        24.0,
+        [0.0; 3],
+        grana_geometry::Bounds::new([-1.0; 3], [1.0; 3]),
+        Some(shape),
+    );
+    grana_object::SurfaceSet::new(
+        0,
+        grana_geometry::Mesh::new(vertices, indices),
+        vec![statistics],
+        IntensityTable::new(
+            1,
+            vec![SampleStatistics::new(500.0, 500.0, 500.0, 0.0, 500.0)],
+        ),
+    )
+}

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
-use grana_image::{Format, Image, Series, Source};
+use grana_image::{Format, Image, Plate, Series, Source};
 use grana_pipeline::Channels;
 use grana_scene::Drift;
 use grana_volume::{BrickData, BrickRequest, CHANNEL_LIMIT, Fingerprint, Pyramid, VolumeSeries};
@@ -24,10 +24,12 @@ pub struct Opened {
     pub remote: bool,
     pub labels: Vec<String>,
     pub labels_error: Option<String>,
+    pub plate: Option<Plate>,
+    pub field: usize,
 }
 
 pub enum Event {
-    Opened(Opened),
+    Opened(Box<Opened>),
     Brick {
         request: BrickRequest,
         data: BrickData,
@@ -210,6 +212,8 @@ impl Loader {
             remote: false,
             labels: Vec::new(),
             labels_error: None,
+            plate: None,
+            field: 0,
         };
         let channels = Channels::stored(Arc::new(image));
         let (sender, events) = mpsc::channel();
@@ -261,6 +265,7 @@ impl Loader {
         let opening_drift = Arc::clone(&drift);
         let opening_channels = Arc::clone(&resident);
         std::thread::spawn(move || {
+            let plate = grana_image::plate(&opened).ok().flatten();
             let opened = match grana_image::resolve_series(&opened) {
                 Ok(source) => source,
                 Err(detail) => {
@@ -269,6 +274,17 @@ impl Loader {
                     return;
                 }
             };
+            let field = plate.as_ref().map_or(0, |plate| {
+                opened
+                    .group()
+                    .and_then(|group| {
+                        plate
+                            .fields()
+                            .iter()
+                            .position(|field| field.path() == group)
+                    })
+                    .unwrap_or(0)
+            });
             let reader = match Image::open(&opened) {
                 Ok(reader) => reader,
                 Err(detail) => {
@@ -300,7 +316,7 @@ impl Loader {
                 Ok(labels) => (labels.names().map(str::to_string).collect(), None),
                 Err(detail) => (Vec::new(), Some(detail.to_string())),
             };
-            let opened = Event::Opened(Opened {
+            let opened = Event::Opened(Box::new(Opened {
                 name: reader.name().to_string(),
                 pyramid: reader.pyramid().clone(),
                 format: Some(format),
@@ -310,7 +326,9 @@ impl Loader {
                 remote,
                 labels,
                 labels_error,
-            });
+                plate,
+                field,
+            }));
             let channels = Arc::new(Channels::stored(Arc::new(reader)));
             *opening_channels
                 .write()

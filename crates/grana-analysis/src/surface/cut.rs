@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use glam::Vec3;
-use grana_geometry::{Bounds, GeometryStore, Mesh, MeshVertex};
+use grana_geometry::{Bounds, GeometryStore, Mesh, MeshVertex, SurfaceShape};
 use grana_object::{
     Basin, IntensityTable, SampleAccumulator, SampleStatistics, SurfaceSet, SurfaceStatistics,
     SurfaceTopology,
@@ -449,7 +449,14 @@ pub(super) fn mesh_piece(
     let centroid = placement.voxel_center([0, 1, 2].map(|axis| (node.sum()[axis] / count) as f32));
     let (low, high) = placement.cell_bounds(node.low(), node.high().map(|value| value + 1));
     let bounds = Bounds::new(low, high);
-    let statistics = SurfaceStatistics::new(node.voxels(), volume, area, centroid, bounds);
+    let statistics = SurfaceStatistics::new(
+        node.voxels(),
+        volume,
+        area,
+        centroid,
+        bounds,
+        SurfaceShape::of(&positions, &mesh),
+    );
     if let Some(spec) = filter
         && statistics.sphericity() < f64::from(spec.min_sphericity())
     {

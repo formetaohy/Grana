@@ -5,7 +5,7 @@ use grana_animation::Timeline;
 use grana_display::Viewport;
 use grana_measure::{MeasureView, Measurement};
 use grana_scene::{Measure, ObjectSet, ObjectSetId, Progress, Scene};
-use grana_session::{BatchView, Export, HistoryView, IoView, SeriesView};
+use grana_session::{BatchView, Export, HistoryView, IoView, PlateView, SeriesView};
 use grana_ui::Key;
 
 use crate::panel::Panel;
@@ -222,6 +222,7 @@ pub struct View<'a> {
     pub batch: Option<&'a BatchView<'a>>,
     pub history: HistoryView,
     pub series: &'a SeriesView<'a>,
+    pub plate: Option<PlateView<'a>>,
     pub labels: &'a [String],
     pub viewport: &'a Viewport,
     pub stage: &'a Stage,

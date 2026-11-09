@@ -10,6 +10,7 @@ use crate::root::Root;
 pub struct Field {
     path: String,
     name: String,
+    series: usize,
 }
 
 impl Field {
@@ -20,17 +21,31 @@ impl Field {
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    pub fn series(&self) -> usize {
+        self.series
+    }
 }
 
-#[derive(Clone, Debug)]
-pub struct Plate {
-    name: String,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Well {
+    label: String,
+    row: usize,
+    column: usize,
     fields: Vec<Field>,
 }
 
-impl Plate {
-    pub fn name(&self) -> &str {
-        &self.name
+impl Well {
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    pub fn row(&self) -> usize {
+        self.row
+    }
+
+    pub fn column(&self) -> usize {
+        self.column
     }
 
     pub fn fields(&self) -> &[Field] {
@@ -39,6 +54,55 @@ impl Plate {
 
     pub fn field(&self, index: usize) -> Option<&Field> {
         self.fields.get(index)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Plate {
+    name: String,
+    rows: usize,
+    columns: usize,
+    wells: Vec<Well>,
+    cells: Vec<Option<usize>>,
+    fields: Vec<Field>,
+}
+
+impl Plate {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn columns(&self) -> usize {
+        self.columns
+    }
+
+    pub fn wells(&self) -> &[Well] {
+        &self.wells
+    }
+
+    pub fn well(&self, row: usize, column: usize) -> Option<&Well> {
+        if row >= self.rows || column >= self.columns {
+            return None;
+        }
+        self.cells[row * self.columns + column].map(|index| &self.wells[index])
+    }
+
+    pub fn fields(&self) -> &[Field] {
+        &self.fields
+    }
+
+    pub fn field(&self, index: usize) -> Option<&Field> {
+        self.fields.get(index)
+    }
+
+    pub fn well_of(&self, series: usize) -> Option<&Well> {
+        self.wells
+            .iter()
+            .find(|well| well.fields.iter().any(|field| field.series == series))
     }
 
     pub fn len(&self) -> usize {
@@ -83,8 +147,8 @@ pub fn open(root: &Root) -> Result<Plate, Error> {
             path: origin.clone(),
             detail: "the group carries no plate metadata".to_string(),
         })?;
-    let rows = count(plate, "rows", &origin)?;
-    let columns = count(plate, "columns", &origin)?;
+    let rows = names(plate, "rows", &origin)?;
+    let columns = names(plate, "columns", &origin)?;
     let mut wells = plate
         .get("wells")
         .and_then(Value::as_array)
@@ -110,14 +174,16 @@ pub fn open(root: &Root) -> Result<Plate, Error> {
         })
         .collect::<Result<Vec<_>, Error>>()?;
     for well in &wells {
-        if well.row >= rows || well.column >= columns {
+        if well.row >= rows.len() || well.column >= columns.len() {
             return Err(Error::Metadata {
                 path: origin.clone(),
                 detail: format!(
-                    "the well `{}` names the row {} and the column {} of a plate holding {rows} rows and {columns} columns",
+                    "the well `{}` names the row {} and the column {} of a plate holding {} rows and {} columns",
                     well.path.display(),
                     well.row,
-                    well.column
+                    well.column,
+                    rows.len(),
+                    columns.len()
                 ),
             });
         }
@@ -125,11 +191,26 @@ pub fn open(root: &Root) -> Result<Plate, Error> {
     wells.sort_by(|left, right| {
         (left.row, left.column, &left.path).cmp(&(right.row, right.column, &right.path))
     });
-    let mut fields = Vec::new();
-    for well in &wells {
-        for field in well_fields(root, well)? {
-            fields.push(field);
+    let mut collected = Vec::with_capacity(wells.len());
+    let mut flat = Vec::new();
+    for spec in &wells {
+        let label = format!("{}{}", rows[spec.row], columns[spec.column]);
+        let mut fields = well_fields(root, spec, &label)?;
+        fields.sort_by(|left, right| left.path.cmp(&right.path));
+        for field in &mut fields {
+            field.series = flat.len();
+            flat.push(field.clone());
         }
+        collected.push(Well {
+            label,
+            row: spec.row,
+            column: spec.column,
+            fields,
+        });
+    }
+    let mut cells = vec![None; rows.len() * columns.len()];
+    for (index, well) in collected.iter().enumerate() {
+        cells[well.row * columns.len() + well.column].get_or_insert(index);
     }
     Ok(Plate {
         name: plate
@@ -138,7 +219,11 @@ pub fn open(root: &Root) -> Result<Plate, Error> {
             .filter(|name| !name.is_empty())
             .map(str::to_owned)
             .unwrap_or_else(|| root.name()),
-        fields,
+        rows: rows.len(),
+        columns: columns.len(),
+        wells: collected,
+        cells,
+        fields: flat,
     })
 }
 
@@ -148,7 +233,7 @@ struct WellSpec {
     column: usize,
 }
 
-fn well_fields(root: &Root, well: &WellSpec) -> Result<Vec<Field>, Error> {
+fn well_fields(root: &Root, well: &WellSpec, label: &str) -> Result<Vec<Field>, Error> {
     let group = group_path(&well.path);
     let attributes = attributes(root, &group)?;
     let fields = fields(&attributes);
@@ -172,40 +257,54 @@ fn well_fields(root: &Root, well: &WellSpec) -> Result<Vec<Field>, Error> {
                 })
         })
         .collect::<Result<Vec<_>, Error>>()?;
-    let mut fields = images
+    Ok(images
         .into_iter()
         .map(|field| {
             let joined = well.path.join(&field);
             Field {
+                name: field_name(label, &field),
                 path: group_path(&joined),
-                name: field_name(well.row, well.column, &field),
+                series: 0,
             }
         })
-        .collect::<Vec<_>>();
-    fields.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(fields)
+        .collect())
 }
 
-fn count(plate: &Map<String, Value>, key: &str, origin: &str) -> Result<usize, Error> {
-    plate
+fn names(plate: &Map<String, Value>, key: &str, origin: &str) -> Result<Vec<String>, Error> {
+    let entries = plate
         .get(key)
         .and_then(Value::as_array)
-        .map(Vec::len)
         .ok_or_else(|| Error::Metadata {
             path: origin.to_string(),
             detail: format!("the plate metadata lists no {key}"),
+        })?;
+    Ok(entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            entry
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .map_or_else(
+                    || match key {
+                        "rows" => row_name(index),
+                        _ => column_name(index),
+                    },
+                    str::to_owned,
+                )
         })
+        .collect())
 }
 
 fn index(well: &Value, key: &str) -> Option<usize> {
     usize::try_from(well.get(key).and_then(Value::as_u64)?).ok()
 }
 
-fn field_name(row: usize, column: usize, field: &Path) -> String {
-    let base = format!("{}{}", row_name(row), column_name(column));
+fn field_name(well: &str, field: &Path) -> String {
     match relative(field) {
-        Some(path) => format!("{base}/{path}"),
-        None => base,
+        Some(path) => format!("{well}/{path}"),
+        None => well.to_string(),
     }
 }
 

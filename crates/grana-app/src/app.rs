@@ -804,6 +804,7 @@ impl App {
             batch: session.batch(),
             history: session.history(),
             series: session.series(),
+            plate: session.plate(),
             labels: session.label_images(),
         };
         let frame = frame_stats(*info);

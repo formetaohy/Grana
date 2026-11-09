@@ -38,16 +38,18 @@ pub enum Panel {
     Tracks,
     Colocalization,
     Annotations,
+    Plate,
     Batch,
     Animation,
 }
 
 impl Panel {
-    pub const ALL: [Panel; 6] = [
+    pub const ALL: [Panel; 7] = [
         Panel::Statistics,
         Panel::Tracks,
         Panel::Colocalization,
         Panel::Annotations,
+        Panel::Plate,
         Panel::Batch,
         Panel::Animation,
     ];
@@ -58,6 +60,7 @@ impl Panel {
             Self::Tracks => "Tracks",
             Self::Colocalization => "Colocalization",
             Self::Annotations => "Annotations",
+            Self::Plate => "Plate",
             Self::Batch => "Batch",
             Self::Animation => "Animation",
         }
@@ -102,6 +105,7 @@ pub fn build(
         batch: view.batch.as_ref(),
         history: view.history,
         series: &view.series,
+        plate: view.plate,
         labels: view.labels,
         viewport: &*viewport,
         stage: &*stage,
@@ -403,6 +407,7 @@ fn dock<'a>(
             let body = match panel {
                 Panel::Colocalization => crate::coloc_panel::view(ctx, state),
                 Panel::Annotations => crate::annotation_panel::view(ctx, state),
+                Panel::Plate => crate::plate_panel::view(ctx, state),
                 Panel::Batch => crate::batch_panel::view(ctx, state),
                 Panel::Animation => crate::animation_panel::view(ctx, state),
                 Panel::Statistics | Panel::Tracks => {

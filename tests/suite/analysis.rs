@@ -151,6 +151,26 @@ fn extracts_measured_surfaces_from_two_balls() {
             "a ball is not spherical: {}",
             object.sphericity()
         );
+        let shape = object.shape().expect("a ball carries a shape");
+        let radius_um = f64::from(radius) * 0.2;
+        for axis in shape.axes() {
+            let relative = (axis - radius_um).abs() / radius_um;
+            assert!(
+                relative < 0.1,
+                "a ball semi axis {axis} is off from {radius_um}"
+            );
+        }
+        let diameter = shape.diameter();
+        let expected_diameter = 2.0 * radius_um;
+        assert!(
+            (diameter - expected_diameter).abs() / expected_diameter < 0.1,
+            "a ball diameter {diameter} is off from {expected_diameter}"
+        );
+        let hull = shape.hull_volume();
+        assert!(
+            (hull - expected).abs() / expected < 0.15,
+            "a ball hull holds {hull} of the expected {expected}"
+        );
         let centre = object.centroid();
         let placed = expected_centres.iter().any(|candidate| {
             (0..3)
