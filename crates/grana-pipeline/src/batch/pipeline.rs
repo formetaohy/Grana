@@ -235,6 +235,30 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         detail.push(line);
         quality.push(quality::of(&scene, sets[index], &keys, &table, &rows));
     }
+    for set in scene.objects.iter() {
+        for relation in set.relations() {
+            let Some(target) = scene.objects.get(relation.target()) else {
+                continue;
+            };
+            if relation.computed() == 0 {
+                continue;
+            }
+            let file = grana_measure::PairExport::file_name(
+                set.key().as_str(),
+                target.key().as_str(),
+                relation.shift(),
+            );
+            let mut export = grana_measure::PairExport::new(
+                scene.dataset.frame_interval(),
+                set.key().as_str(),
+                target.key().as_str(),
+            );
+            for (time, frame) in relation.frames() {
+                export.push(time, frame);
+            }
+            write(&folder.join(&file), &export.text())?;
+        }
+    }
     if task.protocol.coloc().is_some() {
         let channels = scene
             .dataset
@@ -348,6 +372,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 series: dataset.scene(),
             },
             view_state(task.protocol, &scene),
+            Vec::new(),
             fingerprint,
         );
         let file = format!("{}.granaproj", slug(&name));
@@ -1026,6 +1051,13 @@ pub(super) fn artifacts(
         .iter()
         .map(|set| format!("{}-{}.csv", set.key(), set.group().key()))
         .collect::<Vec<_>>();
+    for relation in protocol.relations() {
+        artifacts.push(grana_measure::PairExport::file_name(
+            &relation.source,
+            &relation.target,
+            relation.shift,
+        ));
+    }
     if let Some(coloc) = protocol.coloc() {
         for pair in &coloc.pairs {
             let stem = format!("coloc-{}-{}", slug(&pair.a), slug(&pair.b));

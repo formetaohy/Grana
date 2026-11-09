@@ -82,6 +82,55 @@ impl Session {
         }
     }
 
+    pub(super) fn export_relation(&mut self, source: ObjectSetId, target: ObjectSetId, shift: i32) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(set) = scene.objects.get(source) else {
+            return;
+        };
+        let Some(related) = scene.objects.get(target) else {
+            return;
+        };
+        let Some(relation) = set.relation(target, shift) else {
+            return;
+        };
+        if relation.computed() == 0 {
+            self.message = Some(Message::info(
+                "measure the relation before exporting its pairs",
+            ));
+            return;
+        }
+        let mut export = grana_measure::PairExport::new(
+            scene.dataset.frame_interval(),
+            set.key().as_str(),
+            related.key().as_str(),
+        );
+        for (time, frame) in relation.frames() {
+            export.push(time, frame);
+        }
+        let file_name =
+            grana_measure::PairExport::file_name(set.key().as_str(), related.key().as_str(), shift);
+        let title = format!("Export {} pairs", set.name());
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(title)
+            .set_file_name(file_name)
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            return;
+        };
+        match std::fs::write(&path, export.text()) {
+            Ok(()) => self.message = None,
+            Err(error) => {
+                self.message = Some(Message::error(format!(
+                    "failed to export relation pairs to {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+
     pub(super) fn export_mesh(&mut self, set: ObjectSetId, format: MeshFormat) {
         let Some(scene) = self.scene.as_ref() else {
             return;

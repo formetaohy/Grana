@@ -7,6 +7,7 @@ pub mod csv;
 mod filter;
 mod lasso;
 mod metric;
+mod pair;
 mod plot;
 mod relation;
 mod scope;
@@ -24,6 +25,7 @@ pub use column::{Column, Unit};
 pub use filter::Filter;
 pub use lasso::Lasso;
 pub use metric::{Measurement, Statistic, TrackMeasurement};
+pub use pair::PairExport;
 pub use plot::{
     HISTOGRAM_BINS, Histogram, MeasureView, Plot, PlotAxis, SCATTER_BINS, Scatter, Summary,
 };

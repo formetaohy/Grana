@@ -335,6 +335,11 @@ pub enum Command {
     },
     ExportColoc,
     ExportMeasure,
+    ExportRelation {
+        source: ObjectSetId,
+        target: ObjectSetId,
+        shift: i32,
+    },
     ExportMesh {
         set: ObjectSetId,
         format: MeshFormat,
@@ -357,6 +362,9 @@ pub enum Command {
     ResumeBatch,
     CancelBatch,
     SetKeyframe,
+    SaveView,
+    ApplyView(usize),
+    RemoveView(usize),
     ClearKeyframes,
     DeleteKeyframe(usize),
     SetTimelineFps(u32),

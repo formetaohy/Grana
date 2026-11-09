@@ -194,7 +194,25 @@ fn header<'a>(
         |value| Message::SetRelationFilter(value / 100.0),
     );
     children.push(view::form_row(ctx, "Filter", slider));
+    let choice = choices[selected];
+    let export = view::button(ctx, "Export Pairs…", Role::Control).press(Message::Command(
+        Command::ExportRelation {
+            source: choice.source,
+            target: choice.target,
+            shift: choice.shift,
+        },
+    ));
+    children.push(grana_ui::row().gap(6.0).children([export]));
+    children.push(view::caption(ctx, export_hint(choice)));
     view::card(ctx, 9.0, children)
+}
+
+fn export_hint(choice: Choice) -> &'static str {
+    match choice.computed {
+        0 => "This relation measures no frame yet.",
+        computed if computed == choice.total => "Exports every measured pair as CSV.",
+        _ => "Exports the pairs measured so far as CSV.",
+    }
 }
 
 fn body(

@@ -605,6 +605,11 @@ impl Session {
             Command::SetDriftOffset { time, offset } => self.set_drift_offset(time, offset),
             Command::ExportColoc => self.export_coloc(),
             Command::ExportMeasure => self.export_measure(),
+            Command::ExportRelation {
+                source,
+                target,
+                shift,
+            } => self.export_relation(source, target, shift),
             Command::ExportMesh { set, format } => self.export_mesh(set, format),
             Command::ExportLabels(set) => self.export_labels(set),
             Command::ExportAllLabels => self.export_all_labels(),
@@ -640,6 +645,15 @@ impl Session {
                 self.batch_paused = false;
             }
             Command::SetKeyframe => effects.keyframe = true,
+            Command::SaveView => {
+                self.save_view();
+            }
+            Command::ApplyView(index) => {
+                self.apply_view(index);
+            }
+            Command::RemoveView(index) => {
+                self.remove_view(index);
+            }
             Command::ClearKeyframes => self.timeline.clear(),
             Command::DeleteKeyframe(index) => {
                 self.timeline.remove(index);

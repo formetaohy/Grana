@@ -25,7 +25,7 @@ use grana_measure::{ColocPair, ColocThresholds, Group, Scope};
 use grana_object::SurfaceCut;
 use grana_object::TrackSet;
 use grana_optics::Psf;
-use grana_project::{Mismatch, Project, Source as ProjectSource, ViewState};
+use grana_project::{Mismatch, NamedView, Project, Source as ProjectSource, ViewState};
 use grana_scene::{
     Criteria, Dataset, FilterRange, Item, Job, LassoPath, Measure, ObjectFrame, ObjectParams,
     ObjectSetId, Origin, Progress, Scene,
@@ -96,6 +96,7 @@ pub struct Session {
     recipe: Option<Recipe>,
     coloc_thresholds: Option<(ColocPair, ColocThresholds)>,
     current_view: Option<ViewState>,
+    views: Vec<NamedView>,
     batch: Option<Batch>,
     batch_datasets: Vec<grana_pipeline::DatasetEntry>,
     batch_rows: Vec<BatchDataset>,
@@ -160,6 +161,7 @@ impl Session {
             recipe: None,
             coloc_thresholds: None,
             current_view: None,
+            views: Vec::new(),
             batch: None,
             batch_datasets: Vec::new(),
             batch_rows: Vec::new(),
@@ -352,6 +354,47 @@ impl Session {
     }
     pub fn observe_view(&mut self, view: ViewState) {
         self.current_view = Some(view);
+    }
+    pub fn views(&self) -> &[NamedView] {
+        &self.views
+    }
+    pub(super) fn save_view(&mut self) -> bool {
+        let Some(view) = self.current_view.clone() else {
+            self.message = Some(Message::info("open a dataset to save its view"));
+            return false;
+        };
+        let name = self.free_view_name();
+        self.views.push(NamedView::new(name, view));
+        self.touch();
+        true
+    }
+    pub(super) fn apply_view(&mut self, index: usize) -> bool {
+        let Some(named) = self.views.get(index).map(|named| named.view.clone()) else {
+            return false;
+        };
+        self.timeline = named.timeline.clone();
+        self.export = named.export;
+        self.view = Some(named);
+        self.touch();
+        true
+    }
+    pub(super) fn remove_view(&mut self, index: usize) -> bool {
+        if index >= self.views.len() {
+            return false;
+        }
+        self.views.remove(index);
+        self.touch();
+        true
+    }
+    fn free_view_name(&self) -> String {
+        let mut ordinal = self.views.len() + 1;
+        loop {
+            let name = format!("View {ordinal}");
+            if self.views.iter().all(|named| named.name != name) {
+                return name;
+            }
+            ordinal += 1;
+        }
     }
     pub fn take_bricks(&mut self) -> Vec<(BrickRequest, BrickData)> {
         std::mem::take(&mut self.bricks)

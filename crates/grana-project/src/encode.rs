@@ -24,7 +24,7 @@ use grana_volume::{Clip, Fingerprint, Intensity, Region};
 use grana_codec::Encoder;
 
 use crate::codec::Encode;
-use crate::project::{Export, Project, Shape, Source, ViewState};
+use crate::project::{Export, NamedView, Project, Shape, Source, ViewState};
 
 pub(crate) const TAG_SPOTS: u8 = 0;
 pub(crate) const TAG_SURFACES: u8 = 1;
@@ -37,6 +37,14 @@ impl Encode for Project {
         self.fingerprint.encode(writer);
         self.scene.encode(writer);
         self.measure.encode(writer);
+        self.view.encode(writer);
+        self.views.encode(writer);
+    }
+}
+
+impl Encode for NamedView {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.string(&self.name);
         self.view.encode(writer);
     }
 }

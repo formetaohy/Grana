@@ -15,7 +15,7 @@ use grana_codec::Encoder;
 use crate::codec::{Decode, Encode, Reader};
 use crate::error::Error;
 
-const MAGIC: &[u8; 11] = b"granaproj47";
+const MAGIC: &[u8; 11] = b"granaproj48";
 const LENGTH: usize = size_of::<u64>();
 const STEPS: usize = size_of::<u32>();
 const HEADER: usize = MAGIC.len() + LENGTH + STEPS;
@@ -31,6 +31,27 @@ pub struct Project {
     pub scene: SceneState,
     pub measure: MeasureState,
     pub view: ViewState,
+    pub views: Vec<NamedView>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NamedView {
+    pub name: String,
+    pub view: ViewState,
+}
+
+impl NamedView {
+    pub fn new(name: impl Into<String>, view: ViewState) -> Self {
+        let name = name.into();
+        assert!(
+            !name.trim().is_empty(),
+            "a named view carries a name of its own"
+        );
+        Self {
+            name: name.trim().to_string(),
+            view,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -62,7 +83,7 @@ pub enum Source {
     },
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ViewState {
     pub camera: CameraState,
     pub section: SectionState,
@@ -98,6 +119,7 @@ impl Project {
         measure: &Measure,
         source: Source,
         view: ViewState,
+        views: Vec<NamedView>,
         fingerprint: Fingerprint,
     ) -> Self {
         let extent = scene.dataset.extent();
@@ -112,6 +134,7 @@ impl Project {
             scene: scene.state(),
             measure: measure.state(),
             view,
+            views,
         }
     }
 

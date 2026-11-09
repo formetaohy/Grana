@@ -169,7 +169,14 @@ impl Session {
             ));
             return;
         };
-        let project = Project::capture(scene, &self.measure, source, view, fingerprint);
+        let project = Project::capture(
+            scene,
+            &self.measure,
+            source,
+            view,
+            self.views.clone(),
+            fingerprint,
+        );
         let hash = self.document_hash();
         self.document = Some(Document::save(project, path, hash));
         self.message = None;
@@ -350,6 +357,7 @@ impl Session {
         self.bricks.clear();
         self.timeline = Timeline::new(30, 1.0);
         self.view = None;
+        self.views.clear();
         self.history.clear();
         self.label_images.clear();
         self.fingerprint = None;
@@ -376,6 +384,7 @@ impl Session {
                     scene.restore(pending.project.scene);
                     self.measure.restore(pending.project.measure, &scene);
                     let view = pending.project.view;
+                    self.views = pending.project.views;
                     self.timeline = view.timeline.clone();
                     self.export = view.export;
                     self.view = Some(view);

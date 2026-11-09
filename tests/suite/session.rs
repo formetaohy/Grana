@@ -9,7 +9,7 @@ use grana_object::{
     IntensityTable, MaskMode, MaskTool, ObjectAnchor, RelationFrame, RelationPair,
     SampleStatistics, Spot, SpotParams, SpotSet, SurfaceFilter, SurfaceParams,
 };
-use grana_project::{Export, Project, Source, ViewState};
+use grana_project::{Export, NamedView, Project, Source, ViewState};
 use grana_protocol::Protocol;
 use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene};
 use grana_session::{Command, Session};
@@ -185,6 +185,7 @@ fn derives_operator_channels_through_a_project() {
             name: "nuclei".to_string(),
         },
         view_state(),
+        Vec::new(),
         Fingerprint::new([7; 32]),
     );
     let temp = Temp::new("suite-operators");
@@ -389,6 +390,7 @@ fn undoes_derived_channels_and_keeps_every_selection() {
             name: "derived undo".to_string(),
         },
         view_state(),
+        Vec::new(),
         Fingerprint::new([9; 32]),
     );
     let temp = Temp::new("suite-derived-undo");
@@ -461,6 +463,7 @@ fn keeps_an_oriented_region_across_a_project() {
             name: "fixture".to_string(),
         },
         view_state(),
+        Vec::new(),
         Fingerprint::new([7; 32]),
     );
     let temp = Temp::new("suite-region");
@@ -520,6 +523,7 @@ fn round_trips_a_project() {
             name: "fixture".to_string(),
         },
         view_state(),
+        vec![NamedView::new("Overview", view_state())],
         Fingerprint::new([7; 32]),
     );
     let temp = Temp::new("suite-project");
@@ -537,6 +541,30 @@ fn round_trips_a_project() {
     )
     .expect("the project reads");
     assert_eq!(loaded, project);
+}
+
+#[test]
+fn saves_and_applies_named_views() {
+    let mut session = Session::new();
+    session.open_series("nuclei", series());
+    session.observe_view(view_state());
+    session.execute(Command::SaveView);
+    assert_eq!(session.views().len(), 1, "the view is saved");
+    assert_eq!(session.views()[0].name, "View 1");
+    let mut moved = view_state();
+    moved.camera.yaw = 0.5;
+    moved.split = 0.4;
+    session.observe_view(moved.clone());
+    session.execute(Command::SaveView);
+    assert_eq!(session.views()[1].name, "View 2");
+    session.execute(Command::ApplyView(0));
+    let applied = session.take_view().expect("the saved view restores");
+    assert_eq!(applied.camera.yaw, 0.0, "the first view keeps its camera");
+    assert_eq!(applied.split, view_state().split);
+    session.execute(Command::RemoveView(0));
+    assert_eq!(session.views().len(), 1, "the view is removed");
+    assert_eq!(session.views()[0].name, "View 2");
+    assert_eq!(session.views()[0].view, moved);
 }
 
 #[test]
@@ -696,6 +724,7 @@ fn paints_erases_and_undoes_a_voxel_mask() {
             name: "masking".to_string(),
         },
         view_state(),
+        Vec::new(),
         Fingerprint::new([9; 32]),
     );
     let temp = Temp::new("suite-mask-project");
@@ -814,6 +843,7 @@ fn round_trips_a_surface_project() {
             name: "fixture".to_string(),
         },
         view_state(),
+        Vec::new(),
         Fingerprint::new([7; 32]),
     );
     let temp = Temp::new("suite-surface-project");
@@ -952,6 +982,7 @@ fn colocalizes_every_object_and_carries_it_through_project_and_protocol() {
                 name: "coloc".to_string(),
             },
             view_state(),
+            Vec::new(),
             Fingerprint::new([13; 32]),
         )
     };

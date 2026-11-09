@@ -1,5 +1,6 @@
 use grana_animation::Timeline;
 use grana_image::{Plate, Series, Well};
+use grana_project::NamedView;
 use grana_scene::{Measure, Progress, Scene};
 
 use crate::command::Action;
@@ -116,4 +117,5 @@ pub struct SessionView<'a> {
     pub series: SeriesView<'a>,
     pub plate: Option<PlateView<'a>>,
     pub labels: &'a [String],
+    pub views: &'a [NamedView],
 }

@@ -337,6 +337,7 @@ pub struct View<'a> {
     pub series: &'a SeriesView<'a>,
     pub plate: Option<PlateView<'a>>,
     pub labels: &'a [String],
+    pub views: &'a [grana_session::NamedView],
     pub viewport: &'a Viewport,
     pub stage: &'a Stage,
     pub workspace: &'a Workspace,

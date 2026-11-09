@@ -111,6 +111,7 @@ pub fn build(
         series: &view.series,
         plate: view.plate,
         labels: view.labels,
+        views: view.views,
         viewport: &*viewport,
         stage: &*stage,
         workspace: &*workspace,

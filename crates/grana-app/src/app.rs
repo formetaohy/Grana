@@ -941,6 +941,7 @@ impl App {
             series: session.series(),
             plate: session.plate(),
             labels: session.label_images(),
+            views: session.views(),
         };
         let frame = frame_stats(*info);
         let commands = grana_editor::build(

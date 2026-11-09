@@ -252,12 +252,61 @@ pub fn view_body<'a>(
     }
     elements.extend([
         channels(ctx, state),
+        views(ctx, state),
         display(ctx, state),
         section(ctx, state),
         clip(ctx, state),
         rendering(ctx, state),
     ]);
     elements
+}
+
+fn views<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
+    let count = state.views.len();
+    let detail = match count {
+        1 => Some("1 saved".to_string()),
+        0 => None,
+        count => Some(format!("{count} saved")),
+    };
+    let mut children = vec![view::card_title(
+        ctx,
+        Icon::Camera,
+        "Views",
+        detail.as_deref(),
+    )];
+    children.push(
+        view::button(ctx, "Save Current View", Role::Control)
+            .named("view.save")
+            .press(Message::Command(Command::SaveView)),
+    );
+    for (index, named) in state.views.iter().enumerate() {
+        let name = named.name.clone();
+        let apply = view::button(ctx, &name, Role::Quiet)
+            .named(&format!("view.apply.{index}"))
+            .press(Message::Command(Command::ApplyView(index)));
+        let remove = view::icon_button(
+            ctx,
+            &format!("view.remove.{index}"),
+            Icon::Close,
+            26.0,
+            Role::Quiet,
+            "Remove view",
+            Message::Command(Command::RemoveView(index)),
+        );
+        children.push(
+            grana_ui::row()
+                .gap(6.0)
+                .align(Align::Center)
+                .children([apply, remove]),
+        );
+    }
+    if count == 0 {
+        children.push(view::caption(
+            ctx,
+            "Keep this camera, section and timeline.",
+        ));
+    }
+    view::card(ctx, 6.0, children)
 }
 
 fn plate<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {

@@ -58,6 +58,13 @@ impl Relation {
             .and_then(|frame| frame.as_deref())
     }
 
+    pub fn frames(&self) -> impl Iterator<Item = (u32, &RelationFrame)> + '_ {
+        self.frames
+            .iter()
+            .enumerate()
+            .filter_map(|(time, frame)| frame.as_deref().map(|frame| (time as u32, frame)))
+    }
+
     pub fn computed(&self) -> usize {
         self.frames.iter().filter(|frame| frame.is_some()).count()
     }

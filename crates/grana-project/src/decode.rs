@@ -31,7 +31,7 @@ use grana_volume::{Clip, Fingerprint, Intensity, Region, Spacing};
 
 use crate::codec::{Decode, Reader};
 use crate::encode::{TAG_FILAMENTS, TAG_SPOTS, TAG_SURFACES};
-use crate::project::{Export, Project, Shape, Source, ViewState};
+use crate::project::{Export, NamedView, Project, Shape, Source, ViewState};
 
 const FAULT_VALUE: &str = "the project data carries a value outside its domain";
 const FAULT_SHAPE: &str = "the project data carries an inconsistent shape";
@@ -41,12 +41,36 @@ const MAX_PROVENANCE_DEPTH: usize = 32;
 
 impl Decode for Project {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        Ok(Self {
+        let project = Self {
             shape: Shape::decode(reader)?,
             source: Source::decode(reader)?,
             fingerprint: Fingerprint::decode(reader)?,
             scene: SceneState::decode(reader)?,
             measure: MeasureState::decode(reader)?,
+            view: ViewState::decode(reader)?,
+            views: Vec::<NamedView>::decode(reader)?,
+        };
+        let unique = project.views.iter().enumerate().all(|(index, view)| {
+            project.views[index + 1..]
+                .iter()
+                .all(|other| other.name != view.name)
+        });
+        if !unique {
+            return Err(FAULT_VALUE);
+        }
+        Ok(project)
+    }
+}
+
+impl Decode for NamedView {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let name = reader.string()?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(FAULT_VALUE);
+        }
+        Ok(Self {
+            name: name.to_string(),
             view: ViewState::decode(reader)?,
         })
     }

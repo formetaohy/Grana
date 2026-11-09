@@ -383,6 +383,52 @@ fn relates_objects_by_surface_centre_and_neighbours() {
     );
 }
 
+#[test]
+fn exports_relation_pairs() {
+    let source = relation_surfaces(&[([20.0, 32.0, 24.0], 8.0)]);
+    let target = relation_surfaces(&[([26.0, 32.0, 24.0], 8.0)]);
+    let frame = Reference::new(&Shape::mesh(
+        target.geometry().expect("the target carries geometry"),
+    ))
+    .relate(
+        &Shape::mesh(source.geometry().expect("the source carries geometry")),
+        0.0,
+        false,
+    );
+    let mut export = grana_measure::PairExport::new(0.5, "cells", "nuclei");
+    export.push(3, &frame);
+    let text = export.text();
+    let mut lines = text.lines();
+    assert_eq!(
+        lines.next(),
+        Some(
+            "frame,time_s,source_set,target_set,source,target,contacting,contact_um2,distance_um,inside_percent,center_um,source_partners"
+        ),
+        "the pair export names every column"
+    );
+    let row = lines.next().expect("the relation writes one pair");
+    assert!(lines.next().is_none(), "the frame holds one pair");
+    let values = row.split(',').collect::<Vec<_>>();
+    assert_eq!(
+        values,
+        vec![
+            "4", "1.500", "cells", "nuclei", "1", "1", "0", values[7], values[8], values[9],
+            values[10], "1",
+        ],
+        "the pair names its frame, offset and objects"
+    );
+    assert_eq!(values[7], "0.000", "a nested pair touches no surface area");
+    assert_eq!(values[8], "0.000", "an overlapping pair touches");
+    assert!(
+        values[9].parse::<f32>().expect("the containment parses") > 30.0,
+        "the pair carries the containment of its source"
+    );
+    assert_eq!(
+        grana_measure::PairExport::file_name("cells", "nuclei", -1),
+        "relations-cells-nuclei-t-1.csv"
+    );
+}
+
 fn relation_surfaces(balls: &[([f32; 3], f32)]) -> SurfaceSet {
     let volume = support::spheres(
         Extent::new(64, 64, 48),
