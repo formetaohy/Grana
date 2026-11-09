@@ -156,7 +156,10 @@ impl Renderer {
             limits,
         );
         let section_level = (section_level + coarsen).min(allowed - 1);
-        let section_capacity = section_count.clamp(1, slots.saturating_sub(1).max(1));
+        let share = (slots / SECTION_BUDGET_DIVISOR).max(1);
+        let needed = info.section.visible.max(info.section.demand);
+        let hint = if needed == 0 { section_count } else { needed };
+        let section_capacity = hint.clamp(1, share).min(slots.saturating_sub(1).max(1));
         let volume_capacity = slots.saturating_sub(section_capacity).max(1);
         let ladder = volume_ladder(LadderView {
             pyramid,
@@ -392,7 +395,6 @@ impl Renderer {
         ];
         let cut_offset = sample::offset(sample_index, cut_size);
         section_data.jitter = [cut_offset.x, cut_offset.y, 0.0, 0.0];
-        let range = section_range(pyramid, section_level, section, section_aspect, region);
         scene_table.write(
             device,
             queue,
@@ -408,6 +410,7 @@ impl Renderer {
                 tables[0].bounds.0.to_array(),
                 tables[0].world.to_array(),
             );
+            let range = section_range(pyramid, section_level, section, section_aspect, region);
             for band in 0..BAND {
                 let plan = &mut planner.bands[band];
                 if band < ladder.count {

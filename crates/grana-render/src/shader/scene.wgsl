@@ -49,6 +49,7 @@ struct SectionData {
     fallback_inverses: array<vec4<f32>, 3>,
     fallback_dims: vec4<f32>,
     fallback_grid: vec4<u32>,
+    projection: vec4<f32>,
 }
 
 struct ChannelData {

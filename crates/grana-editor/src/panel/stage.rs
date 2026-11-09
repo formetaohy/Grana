@@ -81,6 +81,15 @@ pub(super) fn view<'a>(
     let section = state.viewport.section();
     let extent = geometry.world.abs().dot(section.normal().abs());
     let depth = section.center().dot(section.normal()) + 0.5 * extent;
+    let mode = if section.projected() {
+        format!(
+            "{} · {:.2} µm",
+            section.projection().label(),
+            section.thickness()
+        )
+    } else {
+        section.projection().label().to_string()
+    };
     elements.push(chip(
         ctx,
         "figure.section",
@@ -88,7 +97,7 @@ pub(super) fn view<'a>(
         geometry.section_safe.min,
         Icon::Section,
         &format!(
-            "Plane · E{:.0}° A{:.0}° · {depth:.2} µm",
+            "{mode} · E{:.0}° A{:.0}° · {depth:.2} µm",
             section.elevation().to_degrees(),
             section.azimuth().to_degrees()
         ),

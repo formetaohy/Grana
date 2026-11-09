@@ -257,6 +257,8 @@ fn view_state() -> ViewState {
             azimuth: 0.0,
             elevation: 0.0,
             span: 20.0,
+            projection: grana_display::Projection::Plane,
+            thickness: 2.0,
         },
         split: 0.5,
         timeline: Timeline::default(),

@@ -7,6 +7,8 @@ const SECTION_ZOOM_SENSITIVITY: f32 = 0.15;
 const FIT_MARGIN: f32 = 1.05;
 const MIN_SPAN_VOXELS: f32 = 8.0;
 const ELEVATION_LIMIT: f32 = std::f32::consts::FRAC_PI_2;
+pub const THICKNESS_LIMIT: f32 = 1.0e4;
+pub const PROJECTION_THICKNESS: f32 = 2.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ray {
@@ -23,12 +25,62 @@ pub struct CameraState {
     pub fov_y: f32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Projection {
+    #[default]
+    Plane,
+    Maximum,
+    Average,
+}
+
+impl Projection {
+    pub const ALL: [Self; 3] = [Self::Plane, Self::Maximum, Self::Average];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Plane => "plane",
+            Self::Maximum => "maximum",
+            Self::Average => "average",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Plane => "Plane",
+            Self::Maximum => "Max",
+            Self::Average => "Mean",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Plane => 0,
+            Self::Maximum => 1,
+            Self::Average => 2,
+        }
+    }
+
+    pub fn from_index(index: usize) -> Option<Self> {
+        Self::ALL.get(index).copied()
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.name() == name)
+    }
+
+    pub fn projected(self) -> bool {
+        !matches!(self, Self::Plane)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SectionState {
     pub center: [f32; 3],
     pub azimuth: f32,
     pub elevation: f32,
     pub span: f32,
+    pub projection: Projection,
+    pub thickness: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -194,6 +246,8 @@ pub struct SectionCamera {
     span: f32,
     min_span: f32,
     max_span: f32,
+    projection: Projection,
+    thickness: f32,
 }
 
 impl Default for SectionCamera {
@@ -211,6 +265,8 @@ impl SectionCamera {
             span: 1.0,
             min_span: 1.0e-4,
             max_span: 1.0e4,
+            projection: Projection::Plane,
+            thickness: PROJECTION_THICKNESS,
         }
     }
 
@@ -228,6 +284,30 @@ impl SectionCamera {
 
     pub fn span(&self) -> f32 {
         self.span
+    }
+
+    pub fn projection(&self) -> Projection {
+        self.projection
+    }
+
+    pub fn thickness(&self) -> f32 {
+        self.thickness
+    }
+
+    pub fn projected(&self) -> bool {
+        self.projection.projected() && self.thickness > 0.0
+    }
+
+    pub fn set_projection(&mut self, projection: Projection) {
+        self.projection = projection;
+    }
+
+    pub fn set_thickness(&mut self, thickness: f32) {
+        assert!(
+            thickness.is_finite() && (0.0..=THICKNESS_LIMIT).contains(&thickness),
+            "a projection thickness is a bounded length"
+        );
+        self.thickness = thickness;
     }
 
     pub fn normal(&self) -> Vec3 {
@@ -311,6 +391,8 @@ impl SectionCamera {
             azimuth: self.azimuth,
             elevation: self.elevation,
             span: self.span,
+            projection: self.projection,
+            thickness: self.thickness,
         }
     }
 
@@ -320,19 +402,25 @@ impl SectionCamera {
             azimuth,
             elevation,
             span,
+            projection,
+            thickness,
         } = state;
         assert!(
             center.iter().all(|value| value.is_finite())
                 && azimuth.is_finite()
                 && elevation.is_finite()
                 && span.is_finite()
-                && span > 0.0,
+                && span > 0.0
+                && thickness.is_finite()
+                && (0.0..=THICKNESS_LIMIT).contains(&thickness),
             "a section state describes a plausible plane"
         );
         self.center = Vec3::from(center);
         self.azimuth = wrap(azimuth);
         self.elevation = elevation.clamp(-ELEVATION_LIMIT, ELEVATION_LIMIT);
         self.span = span;
+        self.projection = projection;
+        self.thickness = thickness;
     }
 }
 

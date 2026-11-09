@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 use grana_volume::{Clip, Region};
 
 use crate::brick::BrickTable;
@@ -63,6 +63,7 @@ pub(crate) struct SectionData {
     pub fallback_inverses: [[f32; 4]; 3],
     pub fallback_dims: [f32; 4],
     pub fallback_grid: [u32; 4],
+    pub projection: [f32; 4],
 }
 
 #[repr(C)]
@@ -94,7 +95,7 @@ const _: () = {
     assert!(std::mem::offset_of!(FrameData, bases) == 1216);
     assert!(std::mem::offset_of!(FrameData, bands) == 1232);
     assert!(std::mem::offset_of!(FrameData, edge) == 1248);
-    assert!(size_of::<SectionData>() == 416);
+    assert!(size_of::<SectionData>() == 432);
     assert!(size_of::<ScheduleData>() == 48);
 };
 
@@ -253,7 +254,40 @@ impl SectionData {
                 support_grid[2],
                 u32::from(fallback.is_some()),
             ],
+            projection: projection(section, table),
         }
+    }
+}
+
+const PROJECTION_SAMPLE_LIMIT: u32 = 96;
+
+fn projection(section: &SectionCamera, table: &BrickTable) -> [f32; 4] {
+    if !section.projected() {
+        return [0.0, 0.0, 1.0, 0.0];
+    }
+    let half = 0.5 * section.thickness();
+    let step = normal_step(table, section.normal());
+    let samples = ((2.0 * half / step).ceil() as u32).clamp(1, PROJECTION_SAMPLE_LIMIT);
+    [
+        section.projection().index() as f32,
+        half,
+        samples as f32,
+        0.0,
+    ]
+}
+
+fn normal_step(table: &BrickTable, normal: Vec3) -> f32 {
+    let rate = table.rate(normal).abs();
+    let mut step = f32::INFINITY;
+    for rate in rate.to_array() {
+        if rate > 1.0e-6 {
+            step = step.min(1.0 / rate);
+        }
+    }
+    if step.is_finite() {
+        step
+    } else {
+        table.voxel.min_element()
     }
 }
 

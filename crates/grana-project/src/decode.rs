@@ -237,7 +237,9 @@ impl Decode for ViewState {
             timeline: Timeline::decode(reader)?,
             export: Export::decode(reader)?,
         };
-        if !(0.0..=1.0).contains(&view.split) || !view.export.matches() {
+        if !(grana_display::SPLIT_MIN..=grana_display::SPLIT_MAX).contains(&view.split)
+            || !view.export.matches()
+        {
             return Err(FAULT_VALUE);
         }
         Ok(view)
@@ -299,11 +301,22 @@ impl Decode for SectionState {
         for value in &mut center {
             *value = finite(reader.f32()?)?;
         }
+        let azimuth = finite(reader.f32()?)?;
+        let elevation = finite(reader.f32()?)?;
+        let span = positive(reader.f32()?)?;
+        let projection =
+            grana_display::Projection::from_index(reader.u8()? as usize).ok_or(FAULT_VALUE)?;
+        let thickness = non_negative(reader.f32()?)?;
+        if thickness > grana_display::THICKNESS_LIMIT {
+            return Err(FAULT_VALUE);
+        }
         let state = Self {
             center,
-            azimuth: finite(reader.f32()?)?,
-            elevation: finite(reader.f32()?)?,
-            span: positive(reader.f32()?)?,
+            azimuth,
+            elevation,
+            span,
+            projection,
+            thickness,
         };
         if state.elevation.abs() > std::f32::consts::FRAC_PI_2 {
             return Err(FAULT_VALUE);

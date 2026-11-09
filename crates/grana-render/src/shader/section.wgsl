@@ -60,22 +60,42 @@ fn sample_section_pack(pack: u32, uvw: vec3<f32>, point: vec3<f32>) -> vec4<f32>
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let point = section_point(input.ndc + section.jitter.xy);
-    let uvw = section_local(point);
-    if (any(uvw < vec3<f32>(0.0)) || any(uvw > vec3<f32>(1.0))) {
-        return vec4<f32>(0.0);
-    }
-    if (outside_region(point) || outside_clip(point)) {
-        return vec4<f32>(0.0);
-    }
-    var color = vec4<f32>(0.0);
+    let base = section_point(input.ndc + section.jitter.xy);
     let count = section.channels.x;
     let packs = (count + PACK - 1u) / PACK;
+    let mode = u32(section.projection.x);
+    let samples = u32(section.projection.z);
+    let half = section.projection.y;
+    var color = vec4<f32>(0.0);
     for (var pack = 0u; pack < packs; pack += 1u) {
         if (!pack_active(pack, count)) {
             continue;
         }
-        let values = sample_section_pack(pack, uvw, point);
+        var peak = vec4<f32>(0.0);
+        var sum = vec4<f32>(0.0);
+        var valid = 0u;
+        for (var sample = 0u; sample < samples; sample += 1u) {
+            var point = base;
+            if (samples > 1u) {
+                let t = -half + 2.0 * half * ((f32(sample) + 0.5) / f32(samples));
+                point = base + section.plane.xyz * t;
+            }
+            if (outside_region(point) || outside_clip(point)) {
+                continue;
+            }
+            let uvw = section_local(point);
+            if (any(uvw < vec3<f32>(0.0)) || any(uvw > vec3<f32>(1.0))) {
+                continue;
+            }
+            let values = sample_section_pack(pack, uvw, point);
+            peak = max(peak, values);
+            sum += values;
+            valid += 1u;
+        }
+        var values = peak;
+        if (mode == 2u) {
+            values = select(vec4<f32>(0.0), sum / f32(max(valid, 1u)), valid > 0u);
+        }
         for (var component = 0u; component < PACK; component += 1u) {
             let channel = pack * PACK + component;
             if (channel >= count) {

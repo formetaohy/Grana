@@ -124,7 +124,7 @@ fn panels(split: f32, size: [u32; 2]) -> Panels {
         size[0] > 0 && size[1] > 0,
         "a quality snapshot covers at least one pixel"
     );
-    let split = split.clamp(0.25, 0.8);
+    let split = split.clamp(grana_display::SPLIT_MIN, grana_display::SPLIT_MAX);
     let height = STAGE_WIDTH * size[1] as f32 / size[0] as f32;
     let volume_width = (STAGE_WIDTH - STAGE_GAP) * split;
     let volume = Rect::from_min_max(Vec2::ZERO, Vec2::new(volume_width, height));

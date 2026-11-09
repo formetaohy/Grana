@@ -853,6 +853,34 @@ fn section<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
         Message::SetSectionPreset(index)
     });
     children.push(view::form_row(ctx, "Plane", plane));
+    let world = state.scene.dataset.world_size();
+    let extent = world.abs().dot(normal.abs());
+    let projection = camera.projection();
+    let modes = grana_display::Projection::ALL.map(grana_display::Projection::label);
+    let view = view::segmented_fill(
+        ctx,
+        "section.projection",
+        &modes,
+        projection.index(),
+        Message::SetSectionProjection,
+    );
+    children.push(view::form_row(ctx, "View", view));
+    if projection.projected() {
+        let thickness = camera.thickness();
+        let maximum = extent.max(thickness).max(1.0e-3);
+        children.push(
+            grana_ui::widget::slider_readout(
+                &theme,
+                Some("Thickness"),
+                thickness,
+                0.0..=maximum,
+                false,
+                &format!("{thickness:.2} µm"),
+            )
+            .named("section.thickness")
+            .on_slide(Message::SetSectionThickness),
+        );
+    }
     let elevation_degrees = elevation.to_degrees();
     children.push(
         grana_ui::widget::slider_readout(
@@ -885,8 +913,6 @@ fn section<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
             elevation,
         }),
     );
-    let world = state.scene.dataset.world_size();
-    let extent = world.abs().dot(normal.abs());
     let position = state.viewport.section().center().dot(normal) + 0.5 * extent;
     let readout = format!("{position:.2} µm");
     children.push(

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_display::{Camera, SectionCamera, Shading, TransferFunction};
+use grana_display::{Camera, Projection, SectionCamera, Shading, TransferFunction};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_render::{Frame, Layer, LayerKey, Renderer, Requests, SceneFrame, Style};
 use grana_volume::{
@@ -561,6 +561,124 @@ fn reveals_an_oblique_section_plane() {
         shot.coverage(shot.middle()) > 0.15,
         "the oblique section lands outside its centre: {:.2}",
         shot.coverage(shot.middle())
+    );
+}
+
+#[test]
+fn projects_a_slab_through_the_section() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let extent = Extent::new(48, 48, 48);
+    let spacing = Spacing::new(0.5, 0.5, 0.5);
+    let volume = spheres(
+        extent,
+        spacing,
+        &[([24.0, 24.0, 17.5], 4.0), ([24.0, 24.0, 29.5], 4.0)],
+        60_000,
+    );
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = pyramid
+        .channels()
+        .iter()
+        .zip(&transfers)
+        .map(|(channel, transfer)| grana_render::ChannelRow {
+            visible: true,
+            opacity: 1.0,
+            window: grana_volume::Intensity::new(
+                channel.window().min(),
+                channel.window().max() * 2.0,
+            ),
+            transfer,
+        })
+        .collect::<Vec<_>>();
+    let world = Vec3::from(volume.world_extent());
+    let voxel = Vec3::new(
+        volume.spacing().x(),
+        volume.spacing().y(),
+        volume.spacing().z(),
+    );
+    let mut camera = Camera::new(35.0);
+    camera.fit(world, 1.0);
+    let mut section = SectionCamera::new();
+    section.fit(world, voxel, 1.0);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    macro_rules! view {
+        () => {
+            View {
+                target: &view_texture,
+                camera: &camera,
+                section: &section,
+                region: Region::none(),
+                scene: &scene,
+                volume_region: CORNER,
+                section_region: WHOLE,
+                assured: false,
+            }
+        };
+    }
+    let plane = snapshot(&gpu, &mut renderer, &view!(), &target, &volume);
+    assert!(
+        plane.painted(plane.all()) < 64,
+        "the empty plane painted {} pixels",
+        plane.painted(plane.all())
+    );
+    section.set_projection(Projection::Maximum);
+    section.set_thickness(10.0);
+    let maximum = snapshot(&gpu, &mut renderer, &view!(), &target, &volume);
+    assert!(
+        maximum.painted(maximum.all()) > 200,
+        "the projection lost the slab: {} painted pixels",
+        maximum.painted(maximum.all())
+    );
+    assert!(
+        maximum.coverage(maximum.middle()) > 0.04,
+        "the projection lands outside its centre: {:.2}",
+        maximum.coverage(maximum.middle())
+    );
+    section.set_projection(Projection::Average);
+    let average = snapshot(&gpu, &mut renderer, &view!(), &target, &volume);
+    assert!(
+        average.painted(average.all()) > 100,
+        "the average lost the slab: {} painted pixels",
+        average.painted(average.all())
+    );
+    assert!(
+        maximum.contrast(maximum.all()) > 1.5 * average.contrast(average.all()),
+        "the average is as bright as the maximum"
+    );
+    section.set_projection(Projection::Maximum);
+    let assured = View {
+        target: &view_texture,
+        camera: &camera,
+        section: &section,
+        region: Region::none(),
+        scene: &scene,
+        volume_region: CORNER,
+        section_region: WHOLE,
+        assured: true,
+    };
+    let info = assure(
+        &gpu,
+        &mut renderer,
+        &assured,
+        &volume,
+        &BrickGrid::new(volume.extent()),
+    );
+    assert_eq!(
+        info.samples, SAMPLES,
+        "the assured projection stopped short"
     );
 }
 

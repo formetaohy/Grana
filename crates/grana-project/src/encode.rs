@@ -201,6 +201,8 @@ impl Encode for SectionState {
         writer.f32(self.azimuth);
         writer.f32(self.elevation);
         writer.f32(self.span);
+        writer.u8(self.projection.index() as u8);
+        writer.f32(self.thickness);
     }
 }
 

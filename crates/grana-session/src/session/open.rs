@@ -394,8 +394,10 @@ impl Session {
                         self.message = Some(Message::error(detail));
                     }
                     self.measure.restore(pending.project.measure, &scene);
-                    self.export = pending.project.view.export;
-                    self.view = Some(pending.project.view);
+                    let view = pending.project.view;
+                    self.timeline = view.timeline.clone();
+                    self.export = view.export;
+                    self.view = Some(view);
                     self.project = Some(pending.path);
                     self.saved = Some(
                         scene.document_hash()

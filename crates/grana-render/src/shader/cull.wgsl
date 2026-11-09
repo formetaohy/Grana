@@ -116,7 +116,9 @@ fn section_overlap(low: vec3<f32>, high: vec3<f32>) -> bool {
         tmin += min(down_near, down_far);
         tmax += max(down_near, down_far);
     }
-    if (section.plane.w < dmin || section.plane.w > dmax) {
+    if (section.plane.w + section.projection.y < dmin
+        || section.plane.w - section.projection.y > dmax)
+    {
         return false;
     }
     if (smax < section.center.x - section.right.w || smin > section.center.x + section.right.w) {

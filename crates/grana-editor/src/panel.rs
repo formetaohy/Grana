@@ -485,7 +485,7 @@ pub fn apply(
                 };
                 workspace.dock_height = (height + value).max(DOCK_MINIMUM);
             }
-            Message::SetSplit(value) => viewport.set_split(value.clamp(0.3, 0.75)),
+            Message::SetSplit(value) => viewport.set_split(value),
             Message::SetColumnWidth { index, width } => {
                 workspace.column_widths.insert(index, width);
             }
@@ -590,6 +590,19 @@ pub fn apply(
                 if let Some(scene) = view.scene {
                     crate::fitting::fit_section(scene, viewport, stage);
                 }
+            }
+            Message::SetSectionProjection(index) => {
+                if let Some(projection) = grana_display::Projection::from_index(index) {
+                    let section = viewport.section_mut();
+                    section.set_projection(projection);
+                    if section.projected() && section.thickness() <= 0.0 {
+                        section.set_thickness(grana_display::PROJECTION_THICKNESS);
+                    }
+                }
+            }
+            Message::SetSectionThickness(value) => {
+                let section = viewport.section_mut();
+                section.set_thickness(value.clamp(0.0, grana_display::THICKNESS_LIMIT));
             }
             Message::SetSectionOrientation { azimuth, elevation } => {
                 viewport.section_mut().set_orientation(azimuth, elevation);

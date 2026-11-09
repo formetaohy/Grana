@@ -66,6 +66,8 @@ pub enum Message {
     CancelRemote,
     OpenRemote(String),
     SetSectionPreset(usize),
+    SetSectionProjection(usize),
+    SetSectionThickness(f32),
     SetSectionOrientation {
         azimuth: f32,
         elevation: f32,

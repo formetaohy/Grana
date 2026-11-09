@@ -1,5 +1,8 @@
 use crate::{Camera, CameraState, SectionCamera, SectionState};
 
+pub const SPLIT_MIN: f32 = 0.25;
+pub const SPLIT_MAX: f32 = 0.8;
+
 pub struct Viewport {
     camera: Camera,
     section: SectionCamera,
@@ -42,7 +45,8 @@ impl Viewport {
     }
 
     pub fn set_split(&mut self, split: f32) {
-        self.split = split.clamp(0.25, 0.8);
+        assert!(split.is_finite(), "a viewport split is a finite fraction");
+        self.split = split.clamp(SPLIT_MIN, SPLIT_MAX);
     }
 
     pub fn camera_state(&self) -> CameraState {

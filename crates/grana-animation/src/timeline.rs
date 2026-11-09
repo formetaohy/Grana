@@ -189,6 +189,8 @@ impl Timeline {
             hash = mix(hash, u64::from(key.section.azimuth.to_bits()));
             hash = mix(hash, u64::from(key.section.elevation.to_bits()));
             hash = mix(hash, u64::from(key.section.span.to_bits()));
+            hash = mix(hash, key.section.projection.index() as u64);
+            hash = mix(hash, u64::from(key.section.thickness.to_bits()));
         }
         hash
     }
@@ -228,6 +230,12 @@ fn blended(from: Keyframe, to: Keyframe, at: f32) -> Sample {
         azimuth: lerp_angle(from.section.azimuth, to.section.azimuth, eased),
         elevation: lerp(from.section.elevation, to.section.elevation),
         span: lerp(from.section.span, to.section.span),
+        projection: if eased < 0.5 {
+            from.section.projection
+        } else {
+            to.section.projection
+        },
+        thickness: lerp(from.section.thickness, to.section.thickness),
     };
     let time = lerp(from.time as f32, to.time as f32)
         .round()
@@ -266,6 +274,8 @@ fn plausible_section(section: &SectionState) -> bool {
         && section.elevation.abs() <= std::f32::consts::FRAC_PI_2
         && section.span.is_finite()
         && section.span > 0.0
+        && section.thickness.is_finite()
+        && (0.0..=grana_display::THICKNESS_LIMIT).contains(&section.thickness)
 }
 
 fn mix(hash: u64, value: u64) -> u64 {

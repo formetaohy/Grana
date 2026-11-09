@@ -524,12 +524,17 @@ fn section_bounds(section: &SectionCamera, aspect: f32) -> (Vec3, Vec3) {
     let center = section.center();
     let right = section.right() * (0.5 * section.span() * aspect);
     let up = section.up() * (0.5 * section.span());
+    let normal = if section.projected() {
+        section.normal().abs() * (0.5 * section.thickness())
+    } else {
+        Vec3::ZERO
+    };
     let mut low = Vec3::splat(f32::INFINITY);
     let mut high = Vec3::splat(f32::NEG_INFINITY);
     for (across, down) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
         let corner = center + right * across + up * down;
-        low = low.min(corner);
-        high = high.max(corner);
+        low = low.min(corner - normal);
+        high = high.max(corner + normal);
     }
     (low, high)
 }
@@ -549,6 +554,11 @@ fn section_brick_count(
     let dims = [extent.x() as f32, extent.y() as f32, extent.z() as f32];
     let normal = section.normal();
     let offset = section.center().dot(normal);
+    let half = if section.projected() {
+        0.5 * section.thickness()
+    } else {
+        0.0
+    };
     let across = section.right();
     let down = section.up();
     let across_center = section.center().dot(across);
@@ -568,7 +578,7 @@ fn section_brick_count(
                 {
                     continue;
                 }
-                if !plane_overlaps(low, high, normal, offset) {
+                if !slab_overlaps(low, high, normal, offset, half) {
                     continue;
                 }
                 let across_span = interval(low, high, across);
@@ -587,9 +597,9 @@ fn section_brick_count(
     count
 }
 
-fn plane_overlaps(low: Vec3, high: Vec3, normal: Vec3, offset: f32) -> bool {
+fn slab_overlaps(low: Vec3, high: Vec3, normal: Vec3, offset: f32, half: f32) -> bool {
     let (low, high) = interval(low, high, normal);
-    low <= offset && offset <= high
+    low <= offset + half && offset - half <= high
 }
 
 fn interval(low: Vec3, high: Vec3, direction: Vec3) -> (f32, f32) {

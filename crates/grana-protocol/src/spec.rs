@@ -162,7 +162,7 @@ pub struct TimelineSpec {
     pub keys: Vec<KeySpec>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KeySpec {
     pub at: f32,
@@ -181,13 +181,21 @@ pub struct CameraSpec {
     pub fov_y: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SectionSpec {
     pub center: [f32; 3],
     pub azimuth: f32,
     pub elevation: f32,
     pub span: f32,
+    #[serde(default = "default_projection")]
+    pub projection: String,
+    #[serde(default)]
+    pub thickness: f32,
+}
+
+fn default_projection() -> String {
+    grana_display::Projection::default().name().to_string()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1715,18 +1723,13 @@ impl ViewSpec {
                 "a view describes a plausible camera".to_string(),
             ));
         }
-        if !self.section.center.iter().all(|value| value.is_finite())
-            || !self.section.azimuth.is_finite()
-            || !self.section.elevation.is_finite()
-            || self.section.elevation.abs() > std::f32::consts::FRAC_PI_2
-            || !self.section.span.is_finite()
-            || self.section.span <= 0.0
-        {
-            return Err(ProtocolError::Invalid(
-                "a view describes a plausible section plane".to_string(),
-            ));
+        self.section.checked()?;
+        if let Some(timeline) = &self.timeline {
+            for key in &timeline.keys {
+                key.section.checked()?;
+            }
         }
-        if !(0.0..=1.0).contains(&self.split) {
+        if !(grana_display::SPLIT_MIN..=grana_display::SPLIT_MAX).contains(&self.split) {
             return Err(ProtocolError::Invalid(
                 "a view splits the viewport at a unit fraction".to_string(),
             ));
@@ -1824,6 +1827,8 @@ impl SectionSpec {
             azimuth: section.azimuth,
             elevation: section.elevation,
             span: section.span,
+            projection: section.projection.name().to_string(),
+            thickness: section.thickness,
         }
     }
 
@@ -1833,7 +1838,31 @@ impl SectionSpec {
             azimuth: self.azimuth,
             elevation: self.elevation,
             span: self.span,
+            projection: self.mode().expect("a checked section names a projection"),
+            thickness: self.thickness,
         }
+    }
+
+    pub fn mode(&self) -> Option<grana_display::Projection> {
+        grana_display::Projection::from_name(&self.projection)
+    }
+
+    fn checked(&self) -> Result<(), ProtocolError> {
+        if !self.center.iter().all(|value| value.is_finite())
+            || !self.azimuth.is_finite()
+            || !self.elevation.is_finite()
+            || self.elevation.abs() > std::f32::consts::FRAC_PI_2
+            || !self.span.is_finite()
+            || self.span <= 0.0
+            || !self.thickness.is_finite()
+            || !(0.0..=grana_display::THICKNESS_LIMIT).contains(&self.thickness)
+            || self.mode().is_none()
+        {
+            return Err(ProtocolError::Invalid(
+                "a view describes a plausible section plane".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
