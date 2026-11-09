@@ -62,6 +62,10 @@ impl Renderer {
             channels,
             volume_level: volume_rendered,
             section_level: section_rendered,
+            section_probe,
+            section_measure,
+            section_sequence,
+            probe_mark,
             level_cap,
             feedback,
             frames,
@@ -138,6 +142,7 @@ impl Renderer {
         } else {
             frame_budget.penalty()
         };
+        let share = (slots / SECTION_BUDGET_DIVISOR).max(1);
         let section_target_level = select_section_level(
             pyramid,
             section,
@@ -146,20 +151,52 @@ impl Renderer {
             limits,
             penalty,
         );
-        let (section_level, section_count) = resolve_section_level(
+        let (resolved_level, section_count) = resolve_section_level(
             pyramid,
             section,
             section_aspect,
             section_target_level,
-            (slots / SECTION_BUDGET_DIVISOR).max(1),
+            share,
             region,
             limits,
         );
-        let section_level = (section_level + coarsen).min(allowed - 1);
-        let share = (slots / SECTION_BUDGET_DIVISOR).max(1);
+        let pick = if coarsen == 0 && !assured && !*exporting {
+            section_probe.enter(SectionKey {
+                state: section.state(),
+                aspect: section_aspect,
+                region,
+                first: limits.first,
+                ceiling: limits.ceiling,
+                capacity: share,
+            });
+            let measure = section_measure.as_ref().map(|(_, measure)| *measure);
+            let fresh = section_measure
+                .as_ref()
+                .is_some_and(|(sequence, _)| *sequence > *probe_mark);
+            section_probe.level(
+                section_target_level,
+                resolved_level,
+                measure,
+                fresh,
+                share,
+                |level| atlas.hollow_count(time, level),
+            )
+        } else {
+            SectionPick::settled(resolved_level)
+        };
+        if pick.started {
+            *probe_mark = *section_sequence;
+        }
+        let section_level = (pick.level + coarsen).min(allowed - 1);
         let needed = info.section.visible.max(info.section.demand);
         let hint = if needed == 0 { section_count } else { needed };
-        let section_capacity = hint.clamp(1, share).min(slots.saturating_sub(1).max(1));
+        let section_capacity = if pick.probing {
+            share
+        } else {
+            pick.measured.unwrap_or(hint)
+        }
+        .clamp(1, share)
+        .min(slots.saturating_sub(1).max(1));
         let volume_capacity = slots.saturating_sub(section_capacity).max(1);
         let ladder = volume_ladder(LadderView {
             pyramid,

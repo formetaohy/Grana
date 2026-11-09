@@ -53,6 +53,8 @@ impl Renderer {
             prefetch_rate,
             wanted,
             wanted_level,
+            section_measure,
+            section_sequence,
             ..
         } = self;
         let pyramid = pyramid.as_ref()?;
@@ -101,6 +103,14 @@ impl Renderer {
             *pin,
         );
         info.section = section.info;
+        *section_sequence += 1;
+        *section_measure = Some((
+            *section_sequence,
+            SectionMeasure {
+                level: meta.levels.section,
+                visible: section.info.visible,
+            },
+        ));
         let mut demanded = HashSet::new();
         for (band, demand) in demands.iter().enumerate() {
             let level = ladder.level(band);

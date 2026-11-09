@@ -450,6 +450,160 @@ pub fn ordered_field(root: &Path) {
         .expect("the ordered label chunk stores");
 }
 
+pub fn rotated_field_with_axis(root: &Path) {
+    std::fs::create_dir_all(root).expect("the angled directory is created");
+    let store =
+        Arc::new(zarrs::filesystem::FilesystemStore::new(root).expect("the angled store opens"));
+    let axes = serde_json::json!([
+        {"name": "t", "type": "time", "unit": "second"},
+        {"name": "c", "type": "channel"},
+        {"name": "phase", "type": "angle"},
+        {"name": "z", "type": "space", "unit": "micrometer"},
+        {"name": "y", "type": "space", "unit": "micrometer"},
+        {"name": "x", "type": "space", "unit": "micrometer"},
+    ]);
+    let display = serde_json::json!([
+        {"name": "x", "type": "space", "unit": "micrometer"},
+        {"name": "y", "type": "space", "unit": "micrometer"},
+        {"name": "z", "type": "space", "unit": "micrometer"},
+    ]);
+    let multiscales = serde_json::json!([{
+        "name": "angled",
+        "coordinateSystems": [
+            {"name": "physical", "axes": axes},
+            {"name": "stage", "axes": display},
+        ],
+        "datasets": [{
+            "path": "0",
+            "coordinateTransformations": [{
+                "type": "sequence",
+                "input": {"path": "0"},
+                "output": {"name": "physical"},
+                "transformations": [
+                    {"type": "scale", "scale": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]},
+                    {"type": "translation", "translation": [0.0, 0.0, 0.0, -0.5, -1.0, -1.5]},
+                ],
+            }],
+        }],
+        "coordinateTransformations": [{
+            "type": "sequence",
+            "input": {"name": "physical"},
+            "output": {"name": "stage"},
+            "transformations": [
+                {"type": "projectAxis", "droppedInputs": [0, 1, 2], "createdOutputs": []},
+                {"type": "rotation", "rotation": [[0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]},
+            ],
+        }],
+    }]);
+    attributes(
+        store.clone(),
+        "/",
+        serde_json::json!({"ome": {"version": "0.6", "multiscales": multiscales}}),
+    );
+    let names = ["t", "c", "phase", "z", "y", "x"]
+        .map(str::to_string)
+        .to_vec();
+    let array = zarrs::array::ArrayBuilder::new(
+        vec![1u64, 2, 1, 2, 3, 4],
+        vec![1u64, 1, 1, 2, 3, 4],
+        zarrs::array::data_type::uint8(),
+        0u8,
+    )
+    .dimension_names(Some(names))
+    .build(store, "/0")
+    .expect("the angled array builds");
+    array
+        .store_metadata()
+        .expect("the angled array stores its metadata");
+    for channel in 0..2u8 {
+        let mut data = vec![0u8; 2 * 3 * 4];
+        for z in 0..2usize {
+            for y in 0..3usize {
+                for x in 0..4usize {
+                    data[(z * 3 + y) * 4 + x] = channel * 10 + (x + y + z) as u8;
+                }
+            }
+        }
+        array
+            .store_chunk(&[0, u64::from(channel), 0, 0, 0, 0], data)
+            .expect("the angled channel stores its chunk");
+    }
+}
+
+pub fn rotated_plane_with_axis(root: &Path) {
+    std::fs::create_dir_all(root).expect("the plane directory is created");
+    let store =
+        Arc::new(zarrs::filesystem::FilesystemStore::new(root).expect("the plane store opens"));
+    let axes = serde_json::json!([
+        {"name": "t", "type": "time", "unit": "second"},
+        {"name": "c", "type": "channel"},
+        {"name": "phase", "type": "angle"},
+        {"name": "y", "type": "space", "unit": "micrometer"},
+        {"name": "x", "type": "space", "unit": "micrometer"},
+    ]);
+    let display = serde_json::json!([
+        {"name": "x", "type": "space", "unit": "micrometer"},
+        {"name": "y", "type": "space", "unit": "micrometer"},
+    ]);
+    let multiscales = serde_json::json!([{
+        "name": "plane",
+        "coordinateSystems": [
+            {"name": "physical", "axes": axes},
+            {"name": "stage", "axes": display},
+        ],
+        "datasets": [{
+            "path": "0",
+            "coordinateTransformations": [{
+                "type": "sequence",
+                "input": {"path": "0"},
+                "output": {"name": "physical"},
+                "transformations": [
+                    {"type": "scale", "scale": [1.0, 1.0, 1.0, 1.0, 1.0]},
+                    {"type": "translation", "translation": [0.0, 0.0, 0.0, -1.0, -1.5]},
+                ],
+            }],
+        }],
+        "coordinateTransformations": [{
+            "type": "sequence",
+            "input": {"name": "physical"},
+            "output": {"name": "stage"},
+            "transformations": [
+                {"type": "projectAxis", "droppedInputs": [0, 1, 2], "createdOutputs": []},
+                {"type": "rotation", "rotation": [[-1.0, 0.0], [0.0, 1.0]]},
+            ],
+        }],
+    }]);
+    attributes(
+        store.clone(),
+        "/",
+        serde_json::json!({"ome": {"version": "0.6", "multiscales": multiscales}}),
+    );
+    let names = ["t", "c", "phase", "y", "x"].map(str::to_string).to_vec();
+    let array = zarrs::array::ArrayBuilder::new(
+        vec![1u64, 2, 1, 3, 4],
+        vec![1u64, 1, 1, 3, 4],
+        zarrs::array::data_type::uint8(),
+        0u8,
+    )
+    .dimension_names(Some(names))
+    .build(store, "/0")
+    .expect("the plane array builds");
+    array
+        .store_metadata()
+        .expect("the plane array stores its metadata");
+    for channel in 0..2u8 {
+        let mut data = vec![0u8; 3 * 4];
+        for y in 0..3usize {
+            for x in 0..4usize {
+                data[y * 4 + x] = channel * 10 + (x + y) as u8;
+            }
+        }
+        array
+            .store_chunk(&[0, u64::from(channel), 0, 0, 0], data)
+            .expect("the plane channel stores its chunk");
+    }
+}
+
 fn attributes(
     store: Arc<zarrs::filesystem::FilesystemStore>,
     path: &str,

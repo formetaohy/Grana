@@ -104,12 +104,6 @@ pub fn write_image(path: &Path, mut spec: ImageSpec<'_>) -> Result<ImageWritten,
             detail: "the destination is a file".to_string(),
         });
     }
-    if spec.levels.iter().any(|level| !level.basis().orthogonal()) {
-        return Err(Error::Write {
-            path: path.display().to_string(),
-            detail: "a sheared placement cannot be written to OME-Zarr".to_string(),
-        });
-    }
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent).map_err(|error| Error::Write {
         path: path.display().to_string(),
@@ -325,8 +319,9 @@ fn shape(level: Level, spec: &ImageSpec<'_>) -> Vec<u64> {
 
 fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
     let axes = crate::schema::axes();
-    let matrix = crate::schema::rotation(spec.levels[0]);
-    let display = crate::schema::rotated(spec.levels[0]);
+    let matrix = crate::schema::placement(spec.levels[0], 3);
+    let inverse = crate::schema::inverse(matrix);
+    let display = crate::schema::rotated(spec.levels[0], 3);
     let datasets = spec
         .levels
         .iter()
@@ -339,7 +334,7 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
                 [0, 1, 2].map(|axis| f64::from(spec.placement[axis]) + f64::from(center[axis]));
             let translation = [0, 1, 2].map(|row| {
                 (0..3)
-                    .map(|column| matrix[column][row] * point[column])
+                    .map(|column| inverse[row][column] * point[column])
                     .sum::<f64>()
             });
             let scale = [
@@ -381,7 +376,11 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
             spec.name,
             &axes,
             datasets,
-            display.then_some(matrix),
+            display.then_some(crate::schema::Display {
+                matrix,
+                dropped: vec![0, 1],
+                spatial: 3,
+            }),
         ),
         "omero": { "channels": channels },
     });

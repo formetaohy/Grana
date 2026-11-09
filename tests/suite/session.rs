@@ -5,6 +5,7 @@ use glam::Vec3;
 use grana_animation::Timeline;
 use grana_display::{CameraState, SectionState};
 use grana_geometry::GeometryStore;
+use grana_measure::MeasureView;
 use grana_object::{
     IntensityTable, MaskMode, MaskTool, ObjectAnchor, RelationFrame, RelationPair,
     SampleStatistics, Spot, SpotParams, SpotSet, SurfaceFilter, SurfaceParams,
@@ -688,6 +689,112 @@ fn navigates_a_plate_field_by_field() {
     assert!(
         sheet.width() > 2 * 192 && sheet.height() > 144,
         "the montage lays the two wells side by side"
+    );
+}
+
+#[test]
+fn keeps_each_well_scene_until_the_well_returns() {
+    let temp = Temp::new("suite-plate-state");
+    let root = temp.path().join("assay.ome.zarr");
+    support::plate(&root);
+    let mut session = Session::new();
+    session.begin_load(root);
+    open_field(&mut session, Extent::new(8, 6, 4));
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Spots));
+    let first = session
+        .scene()
+        .expect("the first well opens")
+        .objects
+        .iter()
+        .last()
+        .expect("the first set")
+        .id();
+    session.execute(Command::RenameObject {
+        set: first,
+        name: "well one".to_string(),
+    });
+    session.execute(Command::SetMeasureView(MeasureView::Histogram));
+    session.execute(Command::SetTimelineFps(24));
+    session.observe_view(view_state());
+    assert!(session.history().undo.is_some());
+
+    session.execute(Command::SelectField(1));
+    open_field(&mut session, Extent::new(12, 10, 6));
+    assert_eq!(
+        session
+            .scene()
+            .expect("the second well opens")
+            .objects
+            .len(),
+        0,
+        "a new well starts without objects"
+    );
+    assert!(
+        session.history().undo.is_none(),
+        "a new well starts without history"
+    );
+    assert!(
+        session.take_view().is_none(),
+        "a new well fits its own camera"
+    );
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let second = session
+        .scene()
+        .expect("the second well opens")
+        .objects
+        .iter()
+        .last()
+        .expect("the second set")
+        .id();
+    session.execute(Command::RenameObject {
+        set: second,
+        name: "well two".to_string(),
+    });
+    session.observe_view(view_state());
+
+    session.execute(Command::SelectField(0));
+    open_field(&mut session, Extent::new(8, 6, 4));
+    {
+        let scene = session.scene().expect("the first well returns");
+        assert_eq!(
+            scene.objects.len(),
+            1,
+            "the first well keeps its object set"
+        );
+        let held = scene.objects.iter().next().expect("the first set returns");
+        assert_eq!(held.name(), "well one");
+        assert_eq!(held.id(), first);
+    }
+    assert_eq!(session.measure().view(), MeasureView::Histogram);
+    assert_eq!(session.timeline().fps(), 24);
+    let view = session
+        .take_view()
+        .expect("the first well keeps its camera");
+    assert_eq!(view.camera.distance, 10.0);
+    assert_eq!(view.section.span, 20.0);
+    assert_eq!(view.split, 0.5);
+    assert!(
+        session.history().undo.is_some(),
+        "the first well keeps its history"
+    );
+
+    session.execute(Command::SelectField(1));
+    open_field(&mut session, Extent::new(12, 10, 6));
+    let scene = session.scene().expect("the second well returns");
+    assert_eq!(
+        scene.objects.len(),
+        1,
+        "the second well keeps its object set"
+    );
+    assert_eq!(
+        scene
+            .objects
+            .iter()
+            .next()
+            .expect("the second set returns")
+            .name(),
+        "well two"
     );
 }
 

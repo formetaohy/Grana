@@ -163,14 +163,6 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
                 .to_string(),
         ));
     }
-    if kinds.contains(&Kind::Other)
-        && image.modern()
-        && crate::schema::rotated(image.pyramid().level(0))
-    {
-        return Err(fail(
-            "label images cannot mirror a rotated placement that carries a custom axis".to_string(),
-        ));
-    }
     let levels = image.pyramid().level_count();
     if image.datasets().len() != levels {
         return Err(fail(
@@ -213,9 +205,23 @@ pub fn write_group(path: &Path, group: &str, spec: LabelSpec<'_>) -> Result<Writ
         .collect::<Result<Vec<_>, Error>>()?;
     let multiscales = if image.modern() {
         let level = image.pyramid().level(0);
-        let matrix = crate::schema::rotation(level);
-        let display = crate::schema::rotated(level);
-        crate::schema::multiscales(spec.name, &axes_json, datasets, display.then_some(matrix))
+        let spatial = space.len();
+        let matrix = crate::schema::placement(level, spatial);
+        let display = crate::schema::rotated(level, spatial);
+        crate::schema::multiscales(
+            spec.name,
+            &axes_json,
+            datasets,
+            display.then_some(crate::schema::Display {
+                matrix,
+                dropped: kinds
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, kind)| (*kind != Kind::Space).then_some(index))
+                    .collect(),
+                spatial,
+            }),
+        )
     } else {
         json!([{
             "name": spec.name,

@@ -11,7 +11,7 @@ use crate::ViewInfo;
 use crate::brick::BrickArena;
 use crate::frame::ScheduleData;
 use crate::layout::Layouts;
-use grana_display::{Camera, SectionCamera};
+use grana_display::{Camera, SectionCamera, SectionState};
 use grana_volume::BrickRequest;
 
 pub(crate) const BAND: usize = 4;
@@ -640,6 +640,162 @@ impl Limits {
             .level_count()
             .min(self.ceiling + 1)
             .max(self.first + 1)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SectionMeasure {
+    pub level: usize,
+    pub visible: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SectionKey {
+    pub state: SectionState,
+    pub aspect: f32,
+    pub region: Region,
+    pub first: usize,
+    pub ceiling: usize,
+    pub capacity: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SectionPick {
+    pub level: usize,
+    pub probing: bool,
+    pub measured: Option<usize>,
+    pub started: bool,
+}
+
+impl SectionPick {
+    pub fn settled(level: usize) -> Self {
+        Self {
+            level,
+            probing: false,
+            measured: None,
+            started: false,
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct SectionProbe {
+    key: Option<SectionKey>,
+    candidate: Option<usize>,
+    accepted: Option<usize>,
+    rejected: Option<(usize, usize)>,
+}
+
+impl SectionProbe {
+    pub fn enter(&mut self, key: SectionKey) {
+        if self.key != Some(key) {
+            let key = Some(key);
+            *self = Self {
+                key,
+                ..Self::default()
+            };
+        }
+    }
+
+    pub fn level(
+        &mut self,
+        target: usize,
+        resolved: usize,
+        measure: Option<SectionMeasure>,
+        fresh: bool,
+        capacity: usize,
+        hollow: impl Fn(usize) -> usize,
+    ) -> SectionPick {
+        if let Some(accepted) = self.accepted {
+            let exceeded = measure
+                .is_some_and(|measure| measure.level == accepted && measure.visible > capacity);
+            if accepted < target || accepted >= resolved || exceeded {
+                self.accepted = None;
+                if exceeded {
+                    self.rejected = Some((accepted, hollow(accepted)));
+                }
+            }
+        }
+        let desired = match self.accepted {
+            Some(accepted) => {
+                let headroom = measure.is_some_and(|measure| {
+                    measure.level == accepted && measure.visible.saturating_mul(2) <= capacity
+                });
+                if accepted > target && headroom {
+                    accepted - 1
+                } else {
+                    self.candidate = None;
+                    return SectionPick {
+                        level: accepted,
+                        probing: false,
+                        measured: measure
+                            .filter(|measure| measure.level == accepted)
+                            .map(|measure| measure.visible.max(1)),
+                        started: false,
+                    };
+                }
+            }
+            None if resolved > target => resolved - 1,
+            None => {
+                self.candidate = None;
+                return SectionPick::settled(resolved);
+            }
+        };
+        if let Some((level, count)) = self.rejected
+            && level == desired
+        {
+            let known = hollow(desired);
+            if known >= count && known < count.saturating_add(capacity) {
+                self.candidate = None;
+                return self.settled(resolved, measure);
+            }
+            self.rejected = None;
+        }
+        if self.candidate != Some(desired) {
+            self.candidate = Some(desired);
+            return SectionPick {
+                level: desired,
+                probing: true,
+                measured: None,
+                started: true,
+            };
+        }
+        let measured = measure.filter(|measure| fresh && measure.level == desired);
+        let Some(measured) = measured else {
+            return SectionPick {
+                level: desired,
+                probing: true,
+                measured: None,
+                started: false,
+            };
+        };
+        self.candidate = None;
+        if measured.visible > capacity {
+            self.rejected = Some((desired, hollow(desired)));
+            self.settled(resolved, measure)
+        } else {
+            self.accepted = Some(desired);
+            SectionPick {
+                level: desired,
+                probing: false,
+                measured: Some(measured.visible.max(1)),
+                started: false,
+            }
+        }
+    }
+
+    fn settled(&self, resolved: usize, measure: Option<SectionMeasure>) -> SectionPick {
+        match self.accepted {
+            Some(accepted) => SectionPick {
+                level: accepted,
+                probing: false,
+                measured: measure
+                    .filter(|measure| measure.level == accepted)
+                    .map(|measure| measure.visible.max(1)),
+                started: false,
+            },
+            None => SectionPick::settled(resolved),
+        }
     }
 }
 

@@ -29,6 +29,7 @@ impl Session {
         self.mask_stamp = None;
         self.plate = None;
         self.field = 0;
+        self.fields.clear();
         self.clear_plate();
         self.set_time(0);
         self.install_channels();
@@ -63,6 +64,7 @@ impl Session {
         self.saved = None;
         self.plate = None;
         self.field = 0;
+        self.fields.clear();
         self.clear_plate();
         self.reset();
     }
@@ -84,6 +86,7 @@ impl Session {
         self.saved = None;
         self.plate = None;
         self.field = 0;
+        self.fields.clear();
         self.clear_plate();
         self.reset();
     }
@@ -103,6 +106,10 @@ impl Session {
         if self.reject_transfer() {
             return false;
         }
+        if self.switching_wells() {
+            return false;
+        }
+        self.capture_field();
         self.loading = Some(source.label());
         self.source = Some(next);
         self.pending = None;
@@ -138,6 +145,10 @@ impl Session {
         if self.reject_transfer() {
             return false;
         }
+        if self.switching_wells() {
+            return false;
+        }
+        self.capture_field();
         self.loading = Some(source.label());
         self.source = Some(next);
         self.pending = None;
@@ -153,6 +164,7 @@ impl Session {
         }
         self.plate = None;
         self.field = 0;
+        self.fields.clear();
         self.clear_plate();
         self.document = Some(Document::open(path, Arc::clone(&self.store)));
         self.message = None;
@@ -382,7 +394,7 @@ impl Session {
         self.in_flight.clear();
         self.failed.clear();
         self.bricks.clear();
-        self.timeline = Timeline::new(30, self.frame_duration());
+        self.timeline = Timeline::new(30, frame_duration(&scene));
         self.history.clear();
         if let Some(pending) = self.pending.take() {
             match pending.project.matches(&scene.dataset, fingerprint) {
@@ -412,30 +424,35 @@ impl Session {
             }
         }
         self.scene = Some(scene);
+        match self.fields.take(self.series_index, fingerprint) {
+            Recovered::Field(field) => self.recover_field(*field),
+            Recovered::Changed => {
+                self.message = Some(Message::info(
+                    "the well changed since it was last open, so its analysis was reset",
+                ));
+            }
+            Recovered::Absent => {}
+        }
         self.fingerprint = Some(fingerprint);
         self.generation += 1;
         self.mask_stamp = None;
         self.transfer.reset();
         if let Some(source) = &self.source {
-            source.set_time(0);
             if let Some(scene) = self.scene.as_ref() {
+                source.set_time(scene.time());
                 source.set_drift(scene.drift().clone());
+            } else {
+                source.set_time(0);
             }
         }
         self.install_channels();
         if let Some(scene) = self.scene.as_ref() {
-            self.mask_stamp = Some((0, scene.mask_stamp(0)));
+            self.mask_stamp = Some((scene.time(), scene.mask_stamp(scene.time())));
         }
     }
 
     pub(super) fn frame_duration(&self) -> f32 {
-        self.scene
-            .as_ref()
-            .map(|scene| {
-                (scene.dataset.frame_count() as f32 * scene.dataset.frame_interval())
-                    .clamp(1.0, Timeline::MAX_DURATION)
-            })
-            .unwrap_or(1.0)
+        self.scene.as_ref().map_or(1.0, frame_duration)
     }
 
     pub(super) fn poll_source(&mut self) -> bool {
@@ -498,4 +515,9 @@ impl Session {
         }
         repaint
     }
+}
+
+fn frame_duration(scene: &Scene) -> f32 {
+    (scene.dataset.frame_count() as f32 * scene.dataset.frame_interval())
+        .clamp(1.0, Timeline::MAX_DURATION)
 }

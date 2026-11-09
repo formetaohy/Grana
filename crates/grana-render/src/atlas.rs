@@ -207,6 +207,13 @@ impl Atlas {
         self.hollow.contains(&(time, level, index))
     }
 
+    pub fn hollow_count(&self, time: u32, level: usize) -> usize {
+        self.hollow
+            .iter()
+            .filter(|(hollow_time, hollow_level, _)| *hollow_time == time && *hollow_level == level)
+            .count()
+    }
+
     pub fn assign_hollow(&mut self, time: u32, level: usize, index: usize) {
         self.hollow.insert((time, level, index));
     }

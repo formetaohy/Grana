@@ -178,23 +178,52 @@ fn round_trips_a_rotated_placement() {
                     _: &mut [f32]|
      -> Result<(), String> { Ok(()) };
     let mut progress = |_, _| {};
-    let rejected = write_image(
-        temp.path().join("sheared.ome.zarr").as_path(),
+    let sheared_path = temp.path().join("sheared.ome.zarr");
+    write_image(
+        &sheared_path,
         ImageSpec {
             name: "sheared",
             channels: &channels,
             levels: &[sheared],
-            placement: [0.0; 3],
+            placement: [1.5, -2.0, 3.0],
             frames: 1,
             interval: 1.0,
             fill: &mut fill,
             progress: &mut progress,
         },
+    )
+    .expect("the sheared image writes");
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(sheared_path.join("zarr.json")).expect("the sheared metadata reads"),
+    )
+    .expect("the sheared metadata parses");
+    assert_eq!(
+        metadata["attributes"]["ome"]["multiscales"][0]["coordinateTransformations"][0]["transformations"]
+            [1]["type"],
+        "affine",
+        "a sheared placement is written as an affine transform"
     );
-    assert!(
-        rejected.is_err(),
-        "a sheared placement is refused instead of written"
-    );
+    let sheared_image = grana_zarr::Image::open(&sheared_path).expect("the sheared image opens");
+    let written = sheared_image.pyramid().level(0);
+    for axis in 0..3 {
+        for component in 0..3 {
+            let expected = sheared.basis().column(axis)[component];
+            let actual = written.basis().column(axis)[component];
+            assert!(
+                (expected - actual).abs() <= 1.0e-5,
+                "the shear lost its axis {axis} component {component}: {expected} against {actual}"
+            );
+        }
+    }
+    for (expected, actual) in [1.5, -2.0, 3.0]
+        .into_iter()
+        .zip(sheared_image.pyramid().placement())
+    {
+        assert!(
+            (expected - actual).abs() <= 1.0e-4,
+            "the shear lost its placement: {expected} against {actual}"
+        );
+    }
 }
 
 #[test]
@@ -374,6 +403,98 @@ fn opens_permuted_axes_and_inherits_label_placement() {
         assert!(
             (left - right).abs() <= 1.0e-5,
             "the label inherits the placement of its image: {left} against {right}"
+        );
+    }
+}
+
+#[test]
+fn writes_labels_over_a_rotated_custom_axis_image() {
+    let temp = Temp::new("suite-zarr-label-angled");
+    let path = temp.path().join("angled.ome.zarr");
+    support::rotated_field_with_axis(&path);
+    let image = grana_zarr::Image::open(&path).expect("the angled image opens");
+    assert_eq!(image.pyramid().level(0).extent(), Extent::new(4, 3, 2));
+    let mut fill = |_level: usize,
+                    _frame: u32,
+                    _origin: [u32; 3],
+                    _extent: [u32; 3],
+                    data: &mut [u16]|
+     -> Result<(), String> {
+        data.fill(7);
+        Ok(())
+    };
+    let mut progress = |_, _| {};
+    grana_zarr::write_group_labels(
+        &path,
+        "/",
+        grana_zarr::LabelSpec {
+            name: "cells",
+            frames: &[0],
+            labels: 7,
+            color: [0.0, 1.0, 0.0],
+            opacity: 1.0,
+            properties: &[],
+            fill: &mut fill,
+            progress: &mut progress,
+        },
+    )
+    .expect("labels write over a rotated image with a custom axis");
+    let image = grana_zarr::Image::open(&path).expect("the labelled angled image opens");
+    let labels = image.labels().expect("the angled labels read");
+    let label = labels.get("cells").expect("the angled label exists");
+    let level = label.level(0).expect("the angled label level exists");
+    let image_level = image.pyramid().level(0);
+    assert!(level.basis().close(image_level.basis()));
+    for (left, right) in level.origin().into_iter().zip(image_level.origin()) {
+        assert!(
+            (left - right).abs() <= 1.0e-4,
+            "the angled label inherits the placement of its image: {left} against {right}"
+        );
+    }
+}
+
+#[test]
+fn writes_labels_over_a_rotated_plane() {
+    let temp = Temp::new("suite-zarr-label-plane");
+    let path = temp.path().join("plane.ome.zarr");
+    support::rotated_plane_with_axis(&path);
+    let image = grana_zarr::Image::open(&path).expect("the angled plane opens");
+    assert_eq!(image.pyramid().level(0).extent(), Extent::new(4, 3, 1));
+    let mut fill = |_level: usize,
+                    _frame: u32,
+                    _origin: [u32; 3],
+                    _extent: [u32; 3],
+                    data: &mut [u16]|
+     -> Result<(), String> {
+        data.fill(5);
+        Ok(())
+    };
+    let mut progress = |_, _| {};
+    grana_zarr::write_group_labels(
+        &path,
+        "/",
+        grana_zarr::LabelSpec {
+            name: "cells",
+            frames: &[0],
+            labels: 5,
+            color: [1.0, 0.0, 0.0],
+            opacity: 1.0,
+            properties: &[],
+            fill: &mut fill,
+            progress: &mut progress,
+        },
+    )
+    .expect("labels write over a rotated plane with a custom axis");
+    let image = grana_zarr::Image::open(&path).expect("the labelled angled plane opens");
+    let labels = image.labels().expect("the angled plane labels read");
+    let label = labels.get("cells").expect("the angled plane label exists");
+    let level = label.level(0).expect("the angled plane label level exists");
+    let image_level = image.pyramid().level(0);
+    assert!(level.basis().close(image_level.basis()));
+    for (left, right) in level.origin().into_iter().zip(image_level.origin()) {
+        assert!(
+            (left - right).abs() <= 1.0e-4,
+            "the angled plane label inherits its placement: {left} against {right}"
         );
     }
 }

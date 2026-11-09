@@ -34,9 +34,9 @@ use crate::mesh::MeshPasses;
 use crate::oit::Oit;
 use crate::pick::{self, PICK_ROW, PickId, PickPane, PickTarget};
 use crate::planner::{
-    self, BAND, Demand, Ladder, LadderView, Limits, Planner, Schedule, SectionRange, bucket_scale,
-    capacities, decode_plan, resolve_section_level, section_range, select_section_level,
-    volume_dispatch, volume_ladder,
+    self, BAND, Demand, Ladder, LadderView, Limits, Planner, Schedule, SectionKey, SectionMeasure,
+    SectionPick, SectionProbe, SectionRange, bucket_scale, capacities, decode_plan,
+    resolve_section_level, section_range, select_section_level, volume_dispatch, volume_ladder,
 };
 use crate::present::Present;
 use crate::profile::{Budget, FrameProfile, Marks, Profiler, STAGE_COUNT, Stage};
@@ -170,6 +170,10 @@ pub struct Renderer {
     time: u32,
     volume_level: Option<usize>,
     section_level: Option<usize>,
+    section_probe: SectionProbe,
+    section_measure: Option<(u64, SectionMeasure)>,
+    section_sequence: u64,
+    probe_mark: u64,
     level_cap: Option<usize>,
     budget: u64,
     feedback: Option<Readback>,
@@ -248,6 +252,10 @@ impl Renderer {
             time: 0,
             volume_level: None,
             section_level: None,
+            section_probe: SectionProbe::default(),
+            section_measure: None,
+            section_sequence: 0,
+            probe_mark: 0,
             level_cap: None,
             budget,
             feedback: None,
@@ -304,6 +312,10 @@ impl Renderer {
         self.level_cap = None;
         self.volume_level = None;
         self.section_level = None;
+        self.section_probe = SectionProbe::default();
+        self.section_measure = None;
+        self.section_sequence = 0;
+        self.probe_mark = 0;
         self.wanted = [0; BAND];
         self.wanted_level = None;
         self.planned = None;
@@ -404,6 +416,10 @@ impl Renderer {
         self.time = 0;
         self.volume_level = None;
         self.section_level = None;
+        self.section_probe = SectionProbe::default();
+        self.section_measure = None;
+        self.section_sequence = 0;
+        self.probe_mark = 0;
         self.meshes.clear();
         self.target = None;
         self.regions = None;

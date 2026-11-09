@@ -5,7 +5,8 @@ use grana_display::{Camera, Projection, SectionCamera, Shading, TransferFunction
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_render::{Frame, Layer, LayerKey, Renderer, Requests, SceneFrame, Style};
 use grana_volume::{
-    Basis, BrickGrid, Channel, Clip, Extent, Level, Pyramid, Region, Spacing, Volume, VoxelData,
+    Basis, BrickCoord, BrickData, BrickGrid, BrickRequest, Channel, Clip, Extent, Level,
+    PADDED_SIDE, Pyramid, Region, Spacing, Volume, VoxelData,
 };
 
 use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, spheres};
@@ -676,6 +677,134 @@ fn projects_a_slab_through_the_section() {
     assert_eq!(
         info.samples, SAMPLES,
         "the assured projection stopped short"
+    );
+}
+
+fn empty_brick(channels: usize) -> BrickData {
+    BrickData::new(
+        (0..channels)
+            .map(|_| VoxelData::U16(vec![0; (PADDED_SIDE as usize).pow(3)]))
+            .collect(),
+    )
+}
+
+#[test]
+fn probes_a_finer_section_level_for_a_sparse_slab() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let extent = Extent::new(128, 128, 64);
+    let volume = spheres(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        &[([64.0, 64.0, 32.0], 10.0)],
+        60_000,
+    );
+    let base = volume.pyramid();
+    let fine = base.level(0);
+    let pyramid = Pyramid::placed(
+        vec![fine, fine.coarser(), fine.coarser().coarser()],
+        3,
+        base.channels().to_vec(),
+        1,
+        1.0,
+        [0.0; 3],
+    );
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let world = Vec3::from(fine.world_extent());
+    let mut camera = Camera::new(35.0);
+    camera.fit(world, 1.0);
+    let mut section = SectionCamera::new();
+    section.set_center(Vec3::ZERO);
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = Renderer::new(
+        gpu.device(),
+        gpu.queue(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        25_000,
+    );
+    renderer.set_dataset(gpu.device(), &pyramid);
+    let grid = BrickGrid::new(extent);
+    let occupied = BrickCoord::new(2, 2, 1);
+    let mut bricks = (0..grid.count())
+        .map(|index| {
+            let coord = grid.coord(index);
+            let data = if coord == occupied {
+                volume.brick(&grid, coord)
+            } else {
+                empty_brick(1)
+            };
+            (
+                BrickRequest {
+                    time: 0,
+                    level: 0,
+                    coord,
+                },
+                data,
+            )
+        })
+        .collect::<Vec<_>>();
+    let coarse = BrickGrid::new(pyramid.level(1).extent());
+    bricks.extend((0..coarse.count()).map(|index| {
+        (
+            BrickRequest {
+                time: 0,
+                level: 1,
+                coord: coarse.coord(index),
+            },
+            empty_brick(1),
+        )
+    }));
+    renderer.upload(gpu.queue(), &bricks);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        section: &section,
+        region: Region::none(),
+        scene: &scene,
+        volume_region: [0, 0, SIDE / 2, SIDE],
+        section_region: [SIDE / 2, 0, SIDE / 2, SIDE],
+        assured: false,
+    };
+    let mut info = renderer.draw(gpu.device(), gpu.queue(), frame(&view));
+    for _ in 0..64 {
+        if let Some(requests) = next_demand(&gpu, &mut renderer) {
+            let bricks = requests
+                .volume
+                .iter()
+                .chain(&requests.section)
+                .map(|request| {
+                    let data = if request.level == 0 {
+                        volume.brick(&grid, request.coord)
+                    } else {
+                        empty_brick(1)
+                    };
+                    (*request, data)
+                })
+                .collect::<Vec<_>>();
+            renderer.upload(gpu.queue(), &bricks);
+        }
+        info = renderer.draw(gpu.device(), gpu.queue(), frame(&view));
+    }
+    assert_eq!(
+        info.section.level, 0,
+        "the sparse slab settled at level {}",
+        info.section.level
+    );
+    assert!(
+        info.section.visible <= 1,
+        "the probed slab measures {} visible bricks",
+        info.section.visible
     );
 }
 

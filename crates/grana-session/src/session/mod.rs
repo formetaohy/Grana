@@ -5,6 +5,7 @@ mod dataset;
 mod edit;
 mod execute;
 mod export;
+mod field;
 mod import;
 mod interop;
 mod label;
@@ -48,6 +49,7 @@ use crate::view::{
     StoreView,
 };
 use crate::{Action, Analysis, Command, Series, Source};
+use field::{Fields, Recovered};
 use grana_pipeline::run::DetectRequest;
 use grana_pipeline::{
     Batch, BatchEvent, BatchPoll, Event, Outcome, Plan as BatchPlan, SnapshotFactory,
@@ -128,6 +130,7 @@ pub struct Session {
     series_index: usize,
     plate: Option<Plate>,
     field: usize,
+    fields: Fields,
     previews: Option<preview::Previews>,
     montage: Option<montage::Montage>,
     fingerprint: Option<Fingerprint>,
@@ -196,6 +199,7 @@ impl Session {
             series_index: 0,
             plate: None,
             field: 0,
+            fields: Fields::default(),
             previews: None,
             montage: None,
             fingerprint: None,
