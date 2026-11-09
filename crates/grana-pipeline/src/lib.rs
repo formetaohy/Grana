@@ -8,8 +8,9 @@ pub mod run;
 pub mod snapshot;
 
 pub use batch::{
-    Batch, BatchPoll, Comparison, Control, DatasetEntry, DiscoverError, Event as BatchEvent,
-    MAX_JOBS, Outcome, Plan, dataset_name, default_jobs, discover,
+    Batch, BatchPoll, Comparison, ComparisonSample, Control, DatasetEntry, DiscoverError,
+    Event as BatchEvent, MAX_JOBS, Outcome, Plan, Quality, Run, RunDataset, clear_correction,
+    dataset_name, default_jobs, discover, read_run, record_correction,
 };
 pub use channels::{Channels, ChannelsError};
 pub use event::Event;

@@ -64,6 +64,10 @@ pub enum Message {
     },
     SetRelationMetric(usize),
     SetRelationFilter(f32),
+    SetComparisonMetric(usize),
+    SetComparisonGroup(Option<String>),
+    SetComparisonKey(Option<String>),
+    ToggleComparisonDetail(String),
     SelectPair {
         source: ObjectSetId,
         target: ObjectSetId,

@@ -54,6 +54,7 @@ impl Session {
     }
 
     pub fn begin_load(&mut self, path: PathBuf) {
+        self.batch_review_pending = None;
         if self.reject_transfer() {
             return;
         }
@@ -482,6 +483,24 @@ impl Session {
                         (false, None) => Dataset::synthetic(opened.name, opened.pyramid),
                     };
                     self.open_dataset(dataset, opened.fingerprint);
+                    if let Some((index, path, scene)) = self.batch_review_pending.clone() {
+                        if scene >= self.series.len() {
+                            self.batch_review_pending = None;
+                            self.message = Some(Message::error(
+                                "the dataset does not hold the scene the run recorded",
+                            ));
+                        } else if self.series_index != scene {
+                            if !self.select_series(scene) {
+                                self.batch_review_pending = None;
+                                self.message =
+                                    Some(Message::error("the reviewed scene cannot be opened"));
+                            }
+                        } else {
+                            self.batch_review_pending = None;
+                            self.batch_review = Some((index, path, scene, opened.fingerprint));
+                            self.apply_protocol();
+                        }
+                    }
                     self.start_previews();
                     if let Some(detail) = opened.labels_error {
                         self.message = Some(Message::error(detail));
@@ -501,6 +520,7 @@ impl Session {
                 }
                 LoaderEvent::Failed(detail) => {
                     self.loading = None;
+                    self.batch_review_pending = None;
                     self.message = Some(Message::error(detail));
                     self.analysis.clear();
                     self.progress.clear();

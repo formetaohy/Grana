@@ -110,6 +110,8 @@ pub struct Session {
     batch_output: Option<PathBuf>,
     batch_running: bool,
     batch_paused: bool,
+    batch_review: Option<(usize, PathBuf, usize, Fingerprint)>,
+    batch_review_pending: Option<(usize, PathBuf, usize)>,
     batch_jobs: usize,
     batch_project: bool,
     batch_channels: bool,
@@ -179,6 +181,8 @@ impl Session {
             batch_output: None,
             batch_running: false,
             batch_paused: false,
+            batch_review: None,
+            batch_review_pending: None,
             batch_jobs: grana_pipeline::default_jobs(),
             batch_project: false,
             batch_channels: false,
@@ -306,6 +310,8 @@ impl Session {
             channels: self.batch_channels,
             running: self.batch_running,
             paused: self.batch_paused,
+            review: self.batch_review.as_ref().map(|(index, _, _, _)| *index),
+            review_ready: self.review_ready(),
             message: self.batch_message.clone(),
         })
     }

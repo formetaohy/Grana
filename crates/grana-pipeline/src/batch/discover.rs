@@ -1,12 +1,14 @@
 use std::path::{Path, PathBuf};
 
 use grana_scene::slug;
+use serde::{Deserialize, Serialize};
 
 use super::DiscoverError;
 
 const DEFAULT_JOBS: usize = 4;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WellKey {
     row: usize,
     column: usize,
@@ -14,6 +16,10 @@ pub struct WellKey {
 }
 
 impl WellKey {
+    pub fn new(row: usize, column: usize, field: usize) -> Self {
+        Self { row, column, field }
+    }
+
     pub fn row(self) -> usize {
         self.row
     }
@@ -83,6 +89,38 @@ impl DatasetEntry {
             well: Some(key),
             plate_label: Some(field),
         }
+    }
+
+    pub fn restored(
+        path: PathBuf,
+        group: String,
+        scene: usize,
+        scenes: usize,
+        scene_name: Option<String>,
+        well: Option<WellKey>,
+        plate_label: Option<String>,
+    ) -> Self {
+        assert!(
+            scenes >= 1 && scene < scenes,
+            "a restored dataset names a scene of its image"
+        );
+        Self {
+            path,
+            group,
+            scene,
+            scenes,
+            scene_name,
+            well,
+            plate_label,
+        }
+    }
+
+    pub fn scenes(&self) -> usize {
+        self.scenes
+    }
+
+    pub fn scene_name(&self) -> Option<String> {
+        self.scene_name.clone()
     }
 
     pub fn path(&self) -> &Path {
@@ -222,11 +260,7 @@ fn plate_entries(root: &Path, plate: &grana_image::Plate) -> Vec<DatasetEntry> {
             entries.push(DatasetEntry::well(
                 path,
                 plate.name().to_string(),
-                WellKey {
-                    row: well.row(),
-                    column: well.column(),
-                    field: field.index(),
-                },
+                WellKey::new(well.row(), well.column(), field.index()),
                 field.name().to_string(),
             ));
         }

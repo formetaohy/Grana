@@ -625,8 +625,14 @@ impl Session {
             Command::ClearBatchDatasets => {
                 self.batch_datasets.clear();
                 self.batch_rows.clear();
+                self.batch_review = None;
+                self.batch_review_pending = None;
             }
             Command::ChooseBatchOutput => self.choose_batch_output(),
+            Command::OpenBatchRun => self.open_batch_run(),
+            Command::ReviewBatchDataset(index) => self.review_batch_dataset(index),
+            Command::RecordBatchCorrection => self.record_batch_correction(),
+            Command::ClearBatchCorrection => self.clear_batch_correction(),
             Command::SetBatchJobs(jobs) => self.set_batch_jobs(jobs),
             Command::SetBatchProject(project) => {
                 self.batch_project = project;

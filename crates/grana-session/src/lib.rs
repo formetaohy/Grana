@@ -24,6 +24,6 @@ pub use loader::Loader;
 pub use session::{Effects, Session};
 pub use task::Poll;
 pub use view::{
-    BatchComparison, BatchDataset, BatchView, HistoryView, IoView, Kind, Message, PlateView,
-    SeriesView, SessionView, StoreView,
+    BatchComparison, BatchDataset, BatchSample, BatchView, HistoryView, IoView, Kind, Message,
+    PlateView, SeriesView, SessionView, StoreView,
 };

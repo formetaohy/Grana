@@ -1,6 +1,7 @@
 mod channel;
 mod discover;
 mod gate;
+mod manifest;
 mod pipeline;
 mod quality;
 mod resume;
@@ -24,7 +25,10 @@ use quality::Row;
 use resume::{build, completed, content};
 
 pub use discover::{DatasetEntry, dataset_name, default_jobs, discover};
-pub use quality::Comparison;
+pub use manifest::{
+    Run, RunDataset, clear as clear_correction, read as read_run, record as record_correction,
+};
+pub use quality::{Comparison, ComparisonSample, Quality};
 
 const RESULT: &str = "result.json";
 
@@ -34,7 +38,7 @@ const SNAPSHOT: &str = "snapshot.png";
 
 pub const MAX_JOBS: usize = 16;
 
-const ANALYSIS_REVISION: u32 = 9;
+const ANALYSIS_REVISION: u32 = 10;
 
 pub struct Plan {
     pub protocol: Protocol,
@@ -175,6 +179,7 @@ struct Task<'a> {
     index: usize,
     project: bool,
     channels: bool,
+    corrected: bool,
     snapshot: Option<&'a dyn Snapshotter>,
     events: &'a Sender<Event>,
     cancel: &'a AtomicBool,
@@ -195,12 +200,24 @@ impl Progress<'_> {
 }
 
 fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc<Gate>) {
-    if let Err(detail) = prepare(&plan) {
+    let corrections = match manifest::corrections(&plan) {
+        Ok(corrections) => corrections,
+        Err(detail) => {
+            let _ = events.send(Event::Failed(detail));
+            let _ = events.send(Event::Done { cancelled: false });
+            return;
+        }
+    };
+    if let Err(detail) = prepare(&plan, &corrections) {
         let _ = events.send(Event::Failed(detail));
         let _ = events.send(Event::Done { cancelled: false });
         return;
     }
-    let digest = plan.protocol.digest();
+    if let Err(detail) = manifest::write(&plan, &[], &corrections) {
+        let _ = events.send(Event::Failed(detail));
+        let _ = events.send(Event::Done { cancelled: false });
+        return;
+    }
     let contents = Mutex::new(HashMap::new());
     let next = AtomicUsize::new(0);
     let rows = Mutex::new((0..plan.datasets.len()).map(|_| None).collect::<Vec<_>>());
@@ -215,6 +232,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
             let rows = &rows;
             let plan = &plan;
             let contents = &contents;
+            let corrections = &corrections;
             scope.spawn(move || {
                 while gate.hold(&cancel) {
                     let index = next.fetch_add(1, Ordering::Relaxed);
@@ -222,16 +240,18 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
                         break;
                     }
                     let content = content_of(contents, plan.datasets[index].path());
+                    let protocol = corrections[index].as_ref().unwrap_or(&plan.protocol);
                     work(
                         plan,
                         &Task {
-                            protocol: &plan.protocol,
+                            protocol,
                             workers,
-                            digest,
+                            digest: protocol.digest(),
                             content,
                             index,
                             project: plan.project,
                             channels: plan.channels,
+                            corrected: corrections[index].is_some(),
                             snapshot: plan.snapshot.as_deref(),
                             events: &events,
                             cancel: &cancel,
@@ -266,11 +286,22 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
             "failed to write the batch quality report: {error}"
         )));
     }
-    let (comparison, csv) = quality::comparison(&plan, &rows);
+    let (comparison, csv) = quality::comparison(&rows);
     if let Err(error) = std::fs::write(plan.output.join("comparison.csv"), csv) {
         let _ = events.send(Event::Failed(format!(
             "failed to write the batch comparison: {error}"
         )));
+    }
+    if let Err(error) = std::fs::write(
+        plan.output.join("samples.csv"),
+        quality::samples(&comparison),
+    ) {
+        let _ = events.send(Event::Failed(format!(
+            "failed to write the batch comparison samples: {error}"
+        )));
+    }
+    if let Err(detail) = manifest::write(&plan, &rows, &corrections) {
+        let _ = events.send(Event::Failed(detail));
     }
     if let Err(detail) = sheet::write(&plan, &rows, &comparison) {
         let _ = events.send(Event::Failed(detail));
@@ -282,8 +313,13 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
     });
 }
 
-fn prepare(plan: &Plan) -> Result<(), String> {
-    if plan.protocol.snapshot().is_some() {
+fn prepare(plan: &Plan, corrections: &[Option<Protocol>]) -> Result<(), String> {
+    let snapshot = plan.protocol.snapshot().is_some()
+        || corrections
+            .iter()
+            .flatten()
+            .any(|protocol| protocol.snapshot().is_some());
+    if snapshot {
         let snapshotter = plan.snapshot.as_ref().ok_or_else(|| {
             "the protocol requests quality snapshots but this run carries no renderer".to_string()
         })?;
@@ -314,11 +350,12 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
     let folder = plan.output.join(dataset.folder());
     let artifacts = artifacts(task.protocol, &dataset.title(), task.project, task.channels);
     if let Some(record) = completed(&folder, task.digest, &build(), task.content, &artifacts) {
+        let detail = marked(record.detail.clone(), task.corrected);
         let _ = task.events.send(Event::Dataset {
             index,
             outcome: Outcome::Complete {
                 objects: record.objects,
-                detail: record.detail.clone(),
+                detail: detail.clone(),
                 resumed: true,
             },
         });
@@ -328,7 +365,7 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
             Row {
                 status: "resumed",
                 objects: record.objects,
-                detail: record.detail,
+                detail,
                 quality: record.quality,
             },
         );
@@ -340,11 +377,12 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
     });
     match analyse(task, dataset, &plan.output) {
         Ok(report) => {
+            let detail = marked(report.detail, task.corrected);
             let _ = task.events.send(Event::Dataset {
                 index,
                 outcome: Outcome::Complete {
                     objects: report.objects,
-                    detail: report.detail.clone(),
+                    detail: detail.clone(),
                     resumed: false,
                 },
             });
@@ -354,7 +392,7 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
                 Row {
                     status: "ok",
                     objects: report.objects,
-                    detail: report.detail,
+                    detail,
                     quality: report.quality,
                 },
             );
@@ -414,4 +452,11 @@ fn lock(rows: &Mutex<Vec<Option<Row>>>) -> MutexGuard<'_, Vec<Option<Row>>> {
 
 fn store(rows: &Mutex<Vec<Option<Row>>>, index: usize, row: Row) {
     lock(rows)[index] = Some(row);
+}
+
+fn marked(mut detail: String, corrected: bool) -> String {
+    if corrected {
+        detail.push_str(" (corrected)");
+    }
+    detail
 }

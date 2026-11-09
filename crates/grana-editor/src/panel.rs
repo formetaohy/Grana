@@ -532,6 +532,24 @@ pub fn apply(
             Message::SetRelationFilter(value) => {
                 workspace.relation_filter = value.clamp(0.0, 1.0);
             }
+            Message::SetComparisonMetric(index) => {
+                if let Some(metric) = crate::state::ComparisonMetric::ALL.get(index).copied() {
+                    workspace.comparison_metric = metric;
+                }
+            }
+            Message::SetComparisonGroup(group) => {
+                workspace.comparison_group = group;
+                workspace.comparison_key = None;
+            }
+            Message::SetComparisonKey(key) => workspace.comparison_key = key,
+            Message::ToggleComparisonDetail(key) => {
+                workspace.comparison_open =
+                    if workspace.comparison_open.as_deref() == Some(key.as_str()) {
+                        None
+                    } else {
+                        Some(key)
+                    };
+            }
             Message::SelectPair {
                 source,
                 target,

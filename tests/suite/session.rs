@@ -1230,3 +1230,134 @@ fn surface() -> grana_object::SurfaceSet {
         ),
     )
 }
+
+#[test]
+fn reads_a_batch_run_record() {
+    let temp = Temp::new("run-record");
+    let record = serde_json::json!({
+        "format": 1,
+        "build": "0.1.1/10",
+        "protocol": 7,
+        "jobs": 2,
+        "project": true,
+        "channels": false,
+        "datasets": [
+            {
+                "path": "E:\\data\\plate\\well-a1.tif",
+                "group": "control",
+                "title": "A1",
+                "scene": 1,
+                "scenes": 3,
+                "scene_name": "second",
+                "well": {"row": 0, "column": 0, "field": 1},
+                "plate": "A1",
+                "folder": "control\\a1",
+                "status": "ok",
+                "objects": 12,
+                "detail": "Nuclei=12",
+                "quality": [
+                    {
+                        "dataset": "A1",
+                        "group": "control",
+                        "key": "nuclei",
+                        "name": "Nuclei",
+                        "kind": "Surfaces",
+                        "objects": 12,
+                        "volume": 3.5,
+                        "area": 1.0,
+                        "size": 2.0,
+                        "intensity": 120.0
+                    }
+                ]
+            }
+        ]
+    });
+    std::fs::write(temp.path().join("run.json"), record.to_string())
+        .expect("the run record is written");
+    let run = grana_pipeline::read_run(temp.path())
+        .expect("the run record reads")
+        .expect("the folder holds a run record");
+    assert_eq!(run.jobs(), 2);
+    assert!(run.project());
+    assert!(!run.channels());
+    let entry = run.datasets()[0].entry().expect("the dataset reopens");
+    assert_eq!(entry.title(), "A1");
+    assert_eq!(entry.scene(), 1);
+    assert_eq!(entry.scenes(), 3);
+    assert_eq!(entry.well_key().map(|well| well.field()), Some(1));
+    let comparison = run.comparison();
+    assert_eq!(comparison.len(), 1);
+    assert_eq!(comparison[0].datasets, 1);
+    assert_eq!(comparison[0].samples[0].dataset, "A1");
+    assert_eq!(comparison[0].samples[0].objects, 12);
+}
+
+#[test]
+fn records_a_batch_correction() {
+    let temp = Temp::new("run-correction");
+    let record = serde_json::json!({
+        "format": 1,
+        "build": "0.1.1/10",
+        "protocol": 7,
+        "jobs": 1,
+        "project": false,
+        "channels": false,
+        "datasets": [
+            {
+                "path": "E:\\data\\plate\\well-a1.tif",
+                "group": "control",
+                "title": "A1",
+                "scene": 0,
+                "scenes": 1,
+                "scene_name": null,
+                "well": null,
+                "plate": null,
+                "folder": "control\\a1",
+                "status": "ok",
+                "objects": 12,
+                "detail": "Nuclei=12",
+                "quality": []
+            }
+        ]
+    });
+    std::fs::write(temp.path().join("run.json"), record.to_string())
+        .expect("the run record is written");
+    let protocol = Protocol::from_json(
+        r#"{
+            "sets": [
+                {
+                    "key": "spots",
+                    "name": "Spots",
+                    "color": [1.0, 0.5, 0.2],
+                    "source": {
+                        "kind": "spots",
+                        "channel": "Channel 1",
+                        "diameter": 2.0,
+                        "contrast": 0.2
+                    }
+                }
+            ]
+        }"#,
+    )
+    .expect("the correction protocol is valid");
+    let dataset = std::path::PathBuf::from("E:\\data\\plate\\well-a1.tif");
+    grana_pipeline::record_correction(temp.path(), &dataset, 0, &protocol)
+        .expect("the correction records");
+    let run = grana_pipeline::read_run(temp.path())
+        .expect("the run record reads")
+        .expect("the folder holds a run record");
+    assert_eq!(run.datasets()[0].correction(), Some(protocol.digest()));
+    let path = temp.path().join("control\\a1").join("correction.json");
+    assert!(
+        path.exists(),
+        "the correction is written next to the dataset"
+    );
+    let reread = Protocol::read(&path).expect("the correction reads");
+    assert_eq!(reread, protocol);
+    grana_pipeline::clear_correction(temp.path(), &dataset, 0).expect("the correction clears");
+    assert!(!path.exists(), "the correction file is removed");
+    let run = grana_pipeline::read_run(temp.path())
+        .expect("the run record reads")
+        .expect("the folder holds a run record");
+    assert_eq!(run.datasets()[0].correction(), None);
+}

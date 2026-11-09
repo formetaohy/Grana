@@ -222,7 +222,15 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             line.push_str(&format!(" ({} manual edits dropped)", dropped));
         }
         detail.push(line);
-        quality.push(quality::of(&scene, sets[index], &keys, &table, &rows));
+        quality.push(quality::of(
+            &scene,
+            sets[index],
+            &keys,
+            &table,
+            &rows,
+            &name,
+            dataset.group(),
+        ));
     }
     for set in scene.objects.iter() {
         for relation in set.relations() {

@@ -39,6 +39,170 @@ impl Session {
         self.batch_message = None;
     }
 
+    pub(super) fn open_batch_run(&mut self) {
+        if self.batch_running {
+            return;
+        }
+        let Some(folder) = rfd::FileDialog::new()
+            .set_title("Open a batch run")
+            .pick_folder()
+        else {
+            return;
+        };
+        let run = match grana_pipeline::read_run(&folder) {
+            Ok(Some(run)) => run,
+            Ok(None) => {
+                self.batch_message = Some(format!("{} holds no run record", folder.display()));
+                return;
+            }
+            Err(detail) => {
+                self.batch_message = Some(detail);
+                return;
+            }
+        };
+        let protocol = match grana_protocol::Protocol::read(&folder.join("protocol.json")) {
+            Ok(protocol) => protocol,
+            Err(error) => {
+                self.batch_message = Some(format!("the run carries no readable protocol: {error}"));
+                return;
+            }
+        };
+        let mut datasets = Vec::with_capacity(run.datasets().len());
+        for dataset in run.datasets() {
+            let Some(entry) = dataset.entry() else {
+                self.batch_message = Some(format!(
+                    "the run record names the dataset {} it cannot reopen",
+                    dataset.title()
+                ));
+                return;
+            };
+            datasets.push(entry);
+        }
+        self.batch_output = Some(folder);
+        self.batch_datasets = datasets;
+        self.batch_rows = run
+            .datasets()
+            .iter()
+            .map(|dataset| BatchDataset {
+                name: dataset.title().to_string(),
+                state: if dataset.correction().is_some() {
+                    "corrected".to_string()
+                } else {
+                    run_state(dataset.status()).to_string()
+                },
+                detail: dataset.detail().to_string(),
+            })
+            .collect();
+        self.batch_comparison = run.comparison();
+        self.batch_jobs = run.jobs().clamp(1, grana_pipeline::MAX_JOBS);
+        self.batch_project = run.project();
+        self.batch_channels = run.channels();
+        self.batch_review = None;
+        self.batch_review_pending = None;
+        self.protocol_text = Some(protocol.summary());
+        self.protocol = Some(protocol);
+        self.batch_message = None;
+    }
+
+    pub(super) fn review_batch_dataset(&mut self, index: usize) {
+        if self.batch_running && !self.batch_paused {
+            self.batch_message = Some("pause the batch before reviewing a dataset".to_string());
+            return;
+        }
+        if self.loading.is_some() {
+            return;
+        }
+        let Some(dataset) = self.batch_datasets.get(index) else {
+            return;
+        };
+        let path = dataset.path().to_path_buf();
+        let scene = dataset.scene();
+        self.batch_review = None;
+        self.batch_message = None;
+        self.begin_load(path.clone());
+        if self.loading.is_some() {
+            self.batch_review_pending = Some((index, path, scene));
+        }
+    }
+
+    pub(super) fn record_batch_correction(&mut self) {
+        if self.batch_running {
+            self.batch_message =
+                Some("finish the batch before recording its correction".to_string());
+            return;
+        }
+        let Some((index, path, scene, fingerprint)) = self.batch_review.clone() else {
+            self.batch_message =
+                Some("review a dataset before recording its correction".to_string());
+            return;
+        };
+        if self.fingerprint != Some(fingerprint) || self.scene.is_none() {
+            self.batch_message = Some("the reviewed dataset left the session".to_string());
+            return;
+        }
+        let Some(output) = self.batch_output.clone() else {
+            self.batch_message = Some("choose the batch output folder first".to_string());
+            return;
+        };
+        self.capture_protocol();
+        if self.batch_message.is_some() {
+            return;
+        }
+        let Some(protocol) = self.protocol.clone() else {
+            return;
+        };
+        match grana_pipeline::record_correction(&output, &path, scene, &protocol) {
+            Ok(()) => {
+                if let Some(row) = self.batch_rows.get_mut(index) {
+                    row.state = "corrected".to_string();
+                    row.detail = if row.detail.is_empty() {
+                        "correction recorded".to_string()
+                    } else {
+                        format!("{} · correction recorded", row.detail)
+                    };
+                }
+                self.batch_message = None;
+            }
+            Err(detail) => self.batch_message = Some(detail),
+        }
+    }
+
+    pub(super) fn clear_batch_correction(&mut self) {
+        if self.batch_running {
+            self.batch_message =
+                Some("finish the batch before clearing its correction".to_string());
+            return;
+        }
+        let Some((index, path, scene, _)) = self.batch_review.clone() else {
+            self.batch_message =
+                Some("review a dataset before clearing its correction".to_string());
+            return;
+        };
+        let Some(output) = self.batch_output.clone() else {
+            self.batch_message = Some("choose the batch output folder first".to_string());
+            return;
+        };
+        match grana_pipeline::clear_correction(&output, &path, scene) {
+            Ok(()) => {
+                if let Some(row) = self.batch_rows.get_mut(index) {
+                    row.state = "queued".to_string();
+                    row.detail.clear();
+                    row.detail.push_str("the correction was cleared");
+                }
+                self.batch_message = None;
+            }
+            Err(detail) => self.batch_message = Some(detail),
+        }
+    }
+
+    pub(super) fn review_ready(&self) -> bool {
+        self.batch_review
+            .as_ref()
+            .is_some_and(|(_, _, _, fingerprint)| {
+                self.scene.is_some() && self.fingerprint == Some(*fingerprint)
+            })
+    }
+
     pub(super) fn set_batch_jobs(&mut self, jobs: u32) {
         if self.batch_running {
             return;
@@ -180,5 +344,12 @@ impl Session {
             self.batch = Some(batch);
         }
         repaint
+    }
+}
+
+fn run_state(status: &str) -> &str {
+    match status {
+        "ok" => "done",
+        other => other,
     }
 }

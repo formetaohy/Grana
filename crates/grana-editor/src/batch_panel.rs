@@ -1,12 +1,12 @@
 use glam::Vec2;
 use grana_session::Command;
 use grana_ui::{
-    Align, Axis, BuildContext, Color, Corners, Edges, Element, Icon, Length, Level, Rect, Role,
-    State, TextStyle, icon,
+    Align, Axis, BuildContext, Color, Corners, Cursor, Edges, Element, Icon, Length, Level, Rect,
+    Role, State, TextStyle, icon,
 };
 
 use crate::message::Message;
-use crate::state::View;
+use crate::state::{ComparisonMetric, View};
 use crate::view;
 
 pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
@@ -118,12 +118,13 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
         let callout = theme.font(Level::Callout);
         let micro = theme.font(Level::Micro);
         let mut rows = Vec::new();
-        for dataset in state.batch_datasets() {
+        let reviewable = !running || state.batch_paused();
+        for (index, dataset) in state.batch_datasets().iter().enumerate() {
             let tint = state_tint(&dataset.state, &theme);
             let name = dataset.name.clone();
             let label = state_label(&dataset.state).to_string();
             let detail = dataset.detail.clone();
-            let row = grana_ui::canvas(Length::Fill, 30.0, move |painter, info| {
+            let mut row = grana_ui::canvas(Length::Fill, 30.0, move |painter, info| {
                 if info.hover > 0.01 {
                     painter.rect(
                         info.rect,
@@ -161,6 +162,11 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
                 );
             })
             .tooltip(&detail);
+            if reviewable {
+                row = row
+                    .press(Message::Command(Command::ReviewBatchDataset(index)))
+                    .cursor(Cursor::Pointing);
+            }
             rows.push(row);
         }
         children.push(
@@ -191,6 +197,55 @@ fn datasets<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Ele
             .align(Align::Center)
             .children(actions),
     );
+    if let Some(index) = state.batch_review() {
+        let name = state
+            .batch_datasets()
+            .get(index)
+            .map_or_else(|| "the dataset".to_string(), |dataset| dataset.name.clone());
+        children.push(view::divider(ctx));
+        children.push(view::caption(
+            ctx,
+            &format!(
+                "Reviewing {name}. Edit its objects or parameters, then record the correction."
+            ),
+        ));
+        let ready = state.batch_review_ready() && !running;
+        let corrected = state
+            .batch_datasets()
+            .get(index)
+            .is_some_and(|row| row.state.as_str() == "corrected");
+        let theme = *ctx.theme();
+        let record = grana_ui::widget::button_enabled(
+            &theme,
+            "Record Correction",
+            Role::Prominent,
+            Length::Fill,
+            ready,
+        )
+        .named("batch.correct");
+        let record = if ready {
+            record.press(Message::Command(Command::RecordBatchCorrection))
+        } else {
+            record
+        };
+        let mut buttons = vec![record];
+        if corrected && !running {
+            buttons.push(
+                view::button(ctx, "Clear Correction", Role::Quiet)
+                    .press(Message::Command(Command::ClearBatchCorrection)),
+            );
+        }
+        children.push(
+            grana_ui::row()
+                .gap(8.0)
+                .align(Align::Center)
+                .children(buttons),
+        );
+        children.push(view::weak(
+            ctx,
+            "The next run applies the correction to this dataset only.",
+        ));
+    }
     view::card(ctx, 6.0, children)
 }
 
@@ -228,10 +283,18 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
     }
     if !state.batch_running() {
         let theme = *ctx.theme();
-        children.push(
+        let choose =
             grana_ui::widget::action_button(&theme, Icon::Folder, "Choose Folder…", Role::Control)
                 .named("batch.output")
-                .press(Message::Command(Command::ChooseBatchOutput)),
+                .press(Message::Command(Command::ChooseBatchOutput));
+        let open = view::button(ctx, "Open Run", Role::Quiet)
+            .named("batch.open")
+            .press(Message::Command(Command::OpenBatchRun));
+        children.push(
+            grana_ui::row()
+                .gap(8.0)
+                .align(Align::Center)
+                .children([choose, open]),
         );
         let jobs = state.batch_jobs();
         let workers = grana_ui::widget::drag_value(&theme, jobs as f32, 0)
@@ -333,6 +396,8 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
     view::card(ctx, 7.0, children)
 }
 
+const COMPARISON_ROW: f32 = 58.0;
+
 fn comparison<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &'a View<'a>,
@@ -349,89 +414,256 @@ fn comparison<'a>(
     if rows.is_empty() {
         children.push(view::weak(
             ctx,
-            "Run the batch to compare reported groups in comparison.csv.",
+            "Run the batch, or open a run record, to compare the reported groups.",
         ));
         return view::card(ctx, 6.0, children);
     }
-    let theme = *ctx.theme();
-    let palette = theme.palette;
-    let callout = theme.font(Level::Callout);
-    let caption = theme.font(Level::Caption);
-    let mut entries = Vec::new();
-    for (index, row) in rows.iter().enumerate() {
-        let head = grana_ui::canvas(Length::Fill, 18.0, {
-            let group = row.group.clone();
-            let name = row.name.clone();
-            let kind = row.kind.clone();
-            move |painter, info| {
-                painter.text_in(
-                    info.rect,
-                    &format!("{group} · {name}"),
-                    TextStyle::new(callout, palette.text_primary).truncating(),
-                    Align::Center,
-                );
-                painter.text_in(
-                    info.rect,
-                    &kind,
-                    TextStyle::new(caption, palette.text_tertiary).aligned(Align::End),
-                    Align::Center,
-                );
-            }
-        });
-        let mut parts = vec![format!(
-            "{} dataset{}",
-            row.datasets,
-            if row.datasets == 1 { "" } else { "s" }
-        )];
-        if let Some(objects) = row.objects {
-            parts.push(format!("{objects:.1} objects"));
-        }
-        if let Some(volume) = row.volume {
-            parts.push(format!(
-                "Volume {} µm³",
-                spread(volume, row.volume_deviation)
-            ));
-        }
-        if let Some(area) = row.area {
-            parts.push(format!("Area {} µm²", spread(area, row.area_deviation)));
-        }
-        if let Some(size) = row.size {
-            parts.push(format!("Size {} µm", spread(size, row.size_deviation)));
-        }
-        if let Some(intensity) = row.intensity {
-            parts.push(format!(
-                "Intensity {}",
-                spread(intensity, row.intensity_deviation)
-            ));
-        }
-        let detail = grana_ui::text(
-            parts.join(" · "),
-            TextStyle::new(caption, palette.text_secondary).wrapping(),
+    let metric = state.workspace.comparison_metric;
+    let labels = ComparisonMetric::ALL.map(ComparisonMetric::name);
+    children.push(view::segmented(
+        ctx,
+        "comparison.metric",
+        &labels,
+        metric.index(),
+        Message::SetComparisonMetric,
+    ));
+    let groups = group_names(rows);
+    let group = state
+        .workspace
+        .comparison_group
+        .clone()
+        .filter(|group| groups.contains(group));
+    if groups.len() > 1 {
+        let mut items = vec![(None, "All groups".to_string())];
+        items.extend(
+            groups
+                .iter()
+                .map(|group| (Some(group.clone()), group.clone())),
         );
-        entries.push(grana_ui::column().gap(2.0).children([head, detail]));
-        if index + 1 < rows.len() {
-            entries.push(view::divider(ctx));
-        }
+        let group_combo = crate::inspector::combo(
+            ctx,
+            "comparison.group",
+            Length::Fill,
+            220.0,
+            &items,
+            Some(group.clone()),
+            Message::SetComparisonGroup,
+        );
+        children.push(view::form_row(ctx, "Group", group_combo));
+    }
+    let sets = set_names(rows, group.as_deref());
+    let key = state
+        .workspace
+        .comparison_key
+        .clone()
+        .filter(|key| sets.iter().any(|(other, _)| other == key));
+    if sets.len() > 1 {
+        let mut items = vec![(None, "All sets".to_string())];
+        items.extend(sets.iter().cloned().map(|(key, name)| (Some(key), name)));
+        let set_combo = crate::inspector::combo(
+            ctx,
+            "comparison.set",
+            Length::Fill,
+            220.0,
+            &items,
+            Some(key.clone()),
+            Message::SetComparisonKey,
+        );
+        children.push(view::form_row(ctx, "Set", set_combo));
+    }
+    let visible = rows
+        .iter()
+        .filter(|row| group.as_ref().is_none_or(|group| group == &row.group))
+        .filter(|row| key.as_ref().is_none_or(|key| key == &row.key))
+        .collect::<Vec<_>>();
+    let max = visible
+        .iter()
+        .flat_map(|row| {
+            std::iter::once(metric.value(row))
+                .chain(row.samples.iter().map(|sample| metric.sample(sample)))
+        })
+        .flatten()
+        .fold(0.0f64, f64::max)
+        .max(f64::MIN_POSITIVE);
+    let mut entries = Vec::with_capacity(visible.len());
+    for row in &visible {
+        entries.push(comparison_row(ctx, state, row, metric, max));
     }
     children.push(
         Element::new(grana_ui::Layout::column())
-            .scroll(Axis::Column, Length::Fixed(180.0), None)
+            .scroll(Axis::Column, Length::Fixed(240.0), None)
             .clipped()
             .children(entries),
     );
     view::card(ctx, 6.0, children)
 }
 
-fn spread(mean: f64, deviation: Option<f64>) -> String {
-    match deviation {
-        Some(deviation) => format!("{mean:.3} ±{deviation:.3}"),
-        None => format!("{mean:.3}"),
+fn comparison_row<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+    row: &grana_session::BatchComparison,
+    metric: ComparisonMetric,
+    max: f64,
+) -> Element<'a, Message> {
+    let theme = *ctx.theme();
+    let palette = theme.palette;
+    let callout = theme.font(Level::Callout);
+    let caption = theme.font(Level::Caption);
+    let micro = theme.font(Level::Micro);
+    let title = format!("{} · {}", row.group, row.name);
+    let kind = row.kind.clone();
+    let mean = metric.value(row);
+    let readout = match metric.value(row) {
+        Some(mean) => match metric.deviation(row) {
+            Some(deviation) => format!("{} ± {}", metric.format(mean), metric.format(deviation)),
+            None => metric.format(mean),
+        },
+        None => "No value".to_string(),
+    };
+    let count = format!(
+        "{} dataset{}",
+        row.datasets,
+        if row.datasets == 1 { "" } else { "s" }
+    );
+    let samples = row
+        .samples
+        .iter()
+        .filter_map(|sample| metric.sample(sample))
+        .map(|value| (value / max).clamp(0.0, 1.0) as f32)
+        .collect::<Vec<_>>();
+    let fraction = mean.map(|mean| (mean / max).clamp(0.0, 1.0) as f32);
+    let open = state.workspace.comparison_open.as_deref() == Some(row.key.as_str());
+    let key = row.key.clone();
+    let canvas = grana_ui::canvas(Length::Fill, COMPARISON_ROW, move |painter, info| {
+        let rect = info.rect;
+        if info.hover > 0.01 {
+            painter.rect(
+                rect,
+                Corners::all(8.0),
+                Color::white_alpha(0.05 * info.hover),
+            );
+        }
+        let top = Rect::from_min_max(
+            Vec2::new(rect.min.x + 10.0, rect.min.y + 5.0),
+            Vec2::new(rect.max.x - 10.0, rect.min.y + 22.0),
+        );
+        painter.text_in(
+            top,
+            &title,
+            TextStyle::new(callout, palette.text_primary).truncating(),
+            Align::Center,
+        );
+        painter.text_in(
+            top,
+            &kind,
+            TextStyle::new(micro, palette.text_tertiary).aligned(Align::End),
+            Align::Center,
+        );
+        let track = Rect::from_min_size(
+            Vec2::new(rect.min.x + 10.0, rect.min.y + 26.0),
+            Vec2::new((rect.width() - 20.0).max(1.0), 6.0),
+        );
+        painter.rect(track, Corners::capsule(), palette.track.with_alpha(0.55));
+        if let Some(fraction) = fraction.filter(|fraction| *fraction > 0.0) {
+            painter.rect(
+                Rect::from_min_size(
+                    track.min,
+                    Vec2::new(track.width() * fraction, track.height()),
+                ),
+                Corners::capsule(),
+                palette.accent.with_alpha(0.55),
+            );
+        }
+        for sample in &samples {
+            painter.ring(
+                Vec2::new(track.min.x + track.width() * sample, track.center().y),
+                3.0,
+                1.6,
+                0.0,
+                std::f32::consts::TAU,
+                palette.success,
+            );
+        }
+        let bottom = Rect::from_min_max(
+            Vec2::new(rect.min.x + 10.0, rect.min.y + 34.0),
+            Vec2::new(rect.max.x - 10.0, rect.max.y - 2.0),
+        );
+        painter.text_in(
+            bottom,
+            &readout,
+            TextStyle::new(caption, palette.text_secondary).truncating(),
+            Align::Center,
+        );
+        painter.text_in(
+            bottom,
+            &count,
+            TextStyle::new(micro, palette.text_tertiary).aligned(Align::End),
+            Align::Center,
+        );
+    })
+    .press(Message::ToggleComparisonDetail(key.clone()))
+    .cursor(Cursor::Pointing)
+    .focus_ring(Corners::all(8.0));
+    let mut parts = vec![canvas];
+    if open {
+        parts.push(grana_ui::text(
+            sample_line(row, metric),
+            TextStyle::new(caption, palette.text_secondary).wrapping(),
+        ));
     }
+    grana_ui::column().gap(4.0).children(parts)
+}
+
+fn group_names(rows: &[grana_session::BatchComparison]) -> Vec<String> {
+    let mut names = Vec::new();
+    for row in rows {
+        if !names.contains(&row.group) {
+            names.push(row.group.clone());
+        }
+    }
+    names
+}
+
+fn set_names(
+    rows: &[grana_session::BatchComparison],
+    group: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut names = Vec::new();
+    for row in rows {
+        if group.is_some_and(|group| group != row.group) {
+            continue;
+        }
+        if !names.iter().any(|(key, _)| key == &row.key) {
+            names.push((row.key.clone(), row.name.clone()));
+        }
+    }
+    names
+}
+
+fn sample_line(row: &grana_session::BatchComparison, metric: ComparisonMetric) -> String {
+    const LIMIT: usize = 12;
+    if row.samples.is_empty() {
+        return "The run recorded no dataset samples.".to_string();
+    }
+    let mut parts = row
+        .samples
+        .iter()
+        .take(LIMIT)
+        .map(|sample| match metric.sample(sample) {
+            Some(value) => format!("{}: {}", sample.dataset, metric.format(value)),
+            None => format!("{}: no value", sample.dataset),
+        })
+        .collect::<Vec<_>>();
+    if row.samples.len() > LIMIT {
+        parts.push(format!("{} more", row.samples.len() - LIMIT));
+    }
+    parts.join("   ·   ")
 }
 
 fn state_tint(state: &str, theme: &grana_ui::Theme) -> Color {
     match state {
         "complete" | "done" | "resumed" => theme.palette.success,
+        "corrected" => theme.palette.warning,
         "failed" => theme.palette.danger,
         "running" => theme.palette.warning,
         _ => theme.palette.text_secondary,
@@ -442,6 +674,7 @@ fn state_label(state: &str) -> &str {
     match state {
         "complete" | "done" => "Complete",
         "resumed" => "Resumed",
+        "corrected" => "Corrected",
         "failed" => "Failed",
         "running" => "Running",
         "pending" => "Pending",

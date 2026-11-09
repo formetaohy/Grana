@@ -1775,7 +1775,7 @@ pub(crate) fn disclosure<'a>(
     grana_ui::column().gap(0.0).children(items)
 }
 
-pub(crate) fn combo<'a, T: Copy + PartialEq + 'static>(
+pub(crate) fn combo<'a, T: Clone + PartialEq + 'static>(
     ctx: &mut BuildContext<'_, Message>,
     key: &str,
     width: Length,
@@ -1789,11 +1789,14 @@ pub(crate) fn combo<'a, T: Copy + PartialEq + 'static>(
         .map(|(_, label)| label.clone())
         .collect::<Vec<_>>();
     let index =
-        selected.and_then(|selected| items.iter().position(|(value, _)| *value == selected));
+        selected.and_then(|selected| items.iter().position(|(value, _)| value == &selected));
     let shown = index.map_or_else(String::new, |index| labels[index].clone());
-    let values = items.iter().map(|(value, _)| *value).collect::<Vec<_>>();
+    let values = items
+        .iter()
+        .map(|(value, _)| value.clone())
+        .collect::<Vec<_>>();
     let rows = view::popup_rows(ctx, key, &labels, index.unwrap_or(0), move |index| {
-        select(values[index])
+        select(values[index].clone())
     });
     let anchor = combo_anchor(ctx, Key::new(key), shown, width);
     let menu = view::menu(ctx, Key::new(key), popup_width, rows);
@@ -1840,7 +1843,7 @@ fn combo_anchor<'a>(
     .cursor(grana_ui::Cursor::Pointing)
 }
 
-pub(crate) fn form_combo<'a, T: Copy + PartialEq + 'static>(
+pub(crate) fn form_combo<'a, T: Clone + PartialEq + 'static>(
     ctx: &mut BuildContext<'_, Message>,
     key: &str,
     label: &str,
