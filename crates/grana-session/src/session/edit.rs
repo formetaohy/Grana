@@ -811,7 +811,7 @@ impl Session {
             scene
                 .derived()
                 .iter()
-                .any(|entry| entry.spec().mask().is_some_and(|spec| spec.set() == set))
+                .any(|entry| entry.spec().mask() == Some(set))
         });
         if let Some(scene) = self.scene.as_mut() {
             scene.remove_object(set);

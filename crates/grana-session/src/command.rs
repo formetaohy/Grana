@@ -86,6 +86,30 @@ pub enum Command {
         psf: Psf,
         iterations: u32,
     },
+    AddSmoothChannel {
+        source: usize,
+        sigma: f32,
+    },
+    AddBackgroundChannel {
+        source: usize,
+        radius: f32,
+    },
+    AddRatioChannel {
+        numerator: usize,
+        denominator: usize,
+    },
+    SetSmoothChannel {
+        channel: usize,
+        sigma: f32,
+    },
+    SetBackgroundChannel {
+        channel: usize,
+        radius: f32,
+    },
+    SetRatioChannel {
+        channel: usize,
+        denominator: usize,
+    },
     CalibratePsf {
         source: usize,
         threshold: f32,

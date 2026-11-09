@@ -91,11 +91,30 @@ impl Protocol {
                         spec.channel()
                     )));
                 };
-                if source >= base {
+                if source >= base + index {
                     return Err(ProtocolError::Invalid(format!(
-                        "the derived channel {} derives from a stored channel",
+                        "the derived channel {} derives from a channel that follows it",
                         spec.name()
                     )));
+                }
+                if let DerivedSpec::Ratio(ratio) = spec {
+                    let Some(denominator) = self
+                        .channels
+                        .iter()
+                        .position(|channel| channel.name == ratio.denominator)
+                    else {
+                        return Err(ProtocolError::Invalid(format!(
+                            "the ratio channel {} divides the missing channel {}",
+                            spec.name(),
+                            ratio.denominator
+                        )));
+                    };
+                    if denominator >= base + index || denominator == source {
+                        return Err(ProtocolError::Invalid(format!(
+                            "the ratio channel {} divides a channel that follows it",
+                            spec.name()
+                        )));
+                    }
                 }
             }
         }
@@ -479,7 +498,7 @@ impl Protocol {
         if let Some(channel) = source.channel()
             && let Some(mask) = self.derived.iter().find_map(|spec| match spec {
                 DerivedSpec::Mask(mask) if mask.name == channel => Some(mask),
-                DerivedSpec::Mask(_) | DerivedSpec::Restore(_) => None,
+                _ => None,
             })
             && !earlier.contains(&mask.set)
         {

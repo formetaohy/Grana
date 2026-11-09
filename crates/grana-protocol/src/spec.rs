@@ -376,6 +376,9 @@ impl MaskSpec {
 pub enum DerivedSpec {
     Mask(MaskSpec),
     Restore(RestoreSpec),
+    Smooth(SmoothSpec),
+    Background(BackgroundSpec),
+    Ratio(RatioSpec),
 }
 
 impl DerivedSpec {
@@ -383,6 +386,9 @@ impl DerivedSpec {
         match self {
             Self::Mask(spec) => &spec.name,
             Self::Restore(spec) => &spec.name,
+            Self::Smooth(spec) => &spec.name,
+            Self::Background(spec) => &spec.name,
+            Self::Ratio(spec) => &spec.name,
         }
     }
 
@@ -390,13 +396,19 @@ impl DerivedSpec {
         match self {
             Self::Mask(spec) => &spec.channel,
             Self::Restore(spec) => &spec.channel,
+            Self::Smooth(spec) => &spec.channel,
+            Self::Background(spec) => &spec.channel,
+            Self::Ratio(spec) => &spec.channel,
         }
     }
 
-    pub(super) fn checked(&self) -> Result<(), ProtocolError> {
+    pub fn checked(&self) -> Result<(), ProtocolError> {
         match self {
             Self::Mask(spec) => spec.checked(),
             Self::Restore(spec) => spec.checked(),
+            Self::Smooth(spec) => spec.checked(),
+            Self::Background(spec) => spec.checked(),
+            Self::Ratio(spec) => spec.checked(),
         }
     }
 }
@@ -500,6 +512,126 @@ impl RestoreSpec {
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SmoothSpec {
+    pub channel: String,
+    pub name: String,
+    pub tint: [f32; 3],
+    pub intensity: [f32; 2],
+    pub sigma: f32,
+}
+
+impl SmoothSpec {
+    fn checked(&self) -> Result<(), ProtocolError> {
+        derived_common(
+            &self.channel,
+            &self.name,
+            self.tint,
+            self.intensity,
+            "smoothed",
+        )?;
+        if !(self.sigma.is_finite() && self.sigma > 0.0) {
+            return Err(ProtocolError::Invalid(format!(
+                "the smoothed channel {} blurs by a positive distance",
+                self.name
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackgroundSpec {
+    pub channel: String,
+    pub name: String,
+    pub tint: [f32; 3],
+    pub intensity: [f32; 2],
+    pub radius: f32,
+}
+
+impl BackgroundSpec {
+    fn checked(&self) -> Result<(), ProtocolError> {
+        derived_common(
+            &self.channel,
+            &self.name,
+            self.tint,
+            self.intensity,
+            "background",
+        )?;
+        if !(self.radius.is_finite() && self.radius > 0.0) {
+            return Err(ProtocolError::Invalid(format!(
+                "the background channel {} measures a positive radius",
+                self.name
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RatioSpec {
+    pub channel: String,
+    pub denominator: String,
+    pub name: String,
+    pub tint: [f32; 3],
+    pub intensity: [f32; 2],
+}
+
+impl RatioSpec {
+    fn checked(&self) -> Result<(), ProtocolError> {
+        derived_common(
+            &self.channel,
+            &self.name,
+            self.tint,
+            self.intensity,
+            "ratio",
+        )?;
+        if self.denominator.trim().is_empty() {
+            return Err(ProtocolError::Invalid(format!(
+                "the ratio channel {} names a denominator channel",
+                self.name
+            )));
+        }
+        if self.denominator == self.channel {
+            return Err(ProtocolError::Invalid(format!(
+                "the ratio channel {} divides two distinct channels",
+                self.name
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn derived_common(
+    channel: &str,
+    name: &str,
+    tint: [f32; 3],
+    intensity: [f32; 2],
+    label: &str,
+) -> Result<(), ProtocolError> {
+    for (field, value) in [("channel", channel), ("name", name)] {
+        if value.trim().is_empty() {
+            return Err(ProtocolError::Invalid(format!(
+                "a {label} channel names a {field}"
+            )));
+        }
+    }
+    if tint.iter().any(|value| !(0.0..=1.0).contains(value)) {
+        return Err(ProtocolError::Invalid(format!(
+            "the tint of the {label} channel {name} is not an srgb triple"
+        )));
+    }
+    if !(intensity[0].is_finite() && intensity[1].is_finite()) || intensity[0] >= intensity[1] {
+        return Err(ProtocolError::Invalid(format!(
+            "the intensity range of the {label} channel {name} is unordered"
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

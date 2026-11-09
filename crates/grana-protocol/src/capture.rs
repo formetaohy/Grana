@@ -7,11 +7,12 @@ use grana_scene::{
 };
 
 use crate::{
-    AnnotationSpec, ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec,
-    ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec, LassoSpec, MaskEditSpec,
-    MaskFilterSpec, MaskSpec, MeasureSpec, MeasuredSpec, MetricSpec, PartSpec, Protocol,
-    ProtocolError, RegionSpec, RelationSpec, RenderSpec, RestoreSpec, SetSpec, SnapshotSpec,
-    SortSpec, SourceSpec, SurfaceEditSpec, TrackSpec, TransferSpec, ViewSpec, WindowSpec,
+    AnnotationSpec, BackgroundSpec, ChannelSpec, ClassifierSpec, ColocPairSpec, ColocSettingsSpec,
+    ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec, LassoSpec,
+    MaskEditSpec, MaskFilterSpec, MaskSpec, MeasureSpec, MeasuredSpec, MetricSpec, PartSpec,
+    Protocol, ProtocolError, RatioSpec, RegionSpec, RelationSpec, RenderSpec, RestoreSpec, SetSpec,
+    SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, SurfaceEditSpec, TrackSpec, TransferSpec,
+    ViewSpec, WindowSpec,
 };
 
 impl Protocol {
@@ -32,6 +33,7 @@ impl Protocol {
             .iter()
             .map(|entry| {
                 let spec = entry.spec();
+                let intensity = spec.intensity();
                 let channel = scene
                     .dataset
                     .channels()
@@ -44,23 +46,22 @@ impl Protocol {
                     })?
                     .name()
                     .to_string();
-                Ok(match spec {
-                    grana_scene::DerivedSpec::Mask(mask) => {
-                        let set = scene.objects.get(mask.set()).ok_or_else(|| {
+                Ok(match spec.operation() {
+                    grana_scene::Operation::Mask { set } => {
+                        let object = scene.objects.get(*set).ok_or_else(|| {
                             ProtocolError::Invalid(format!(
                                 "the mask channel {} masks an object set that left the scene",
-                                mask.name()
+                                spec.name()
                             ))
                         })?;
                         DerivedSpec::Mask(MaskSpec {
-                            set: set.key().as_str().to_string(),
+                            set: object.key().as_str().to_string(),
                             channel,
-                            name: mask.name().to_string(),
-                            tint: mask.tint(),
+                            name: spec.name().to_string(),
+                            tint: spec.tint(),
                         })
                     }
-                    grana_scene::DerivedSpec::Restore(restore) => {
-                        let intensity = restore.intensity();
+                    grana_scene::Operation::Restore(restore) => {
                         let (params, measured) = match restore.psf() {
                             Psf::Theoretical(params) => (*params, None),
                             Psf::Measured(psf) => {
@@ -81,8 +82,8 @@ impl Protocol {
                         };
                         DerivedSpec::Restore(RestoreSpec {
                             channel,
-                            name: restore.name().to_string(),
-                            tint: restore.tint(),
+                            name: spec.name().to_string(),
+                            tint: spec.tint(),
                             intensity: [intensity.min(), intensity.max()],
                             numerical_aperture: params.numerical_aperture(),
                             wavelength: params.wavelength(),
@@ -91,6 +92,43 @@ impl Protocol {
                             depth: params.depth(),
                             measured,
                             iterations: restore.iterations(),
+                        })
+                    }
+                    grana_scene::Operation::Smooth(smooth) => DerivedSpec::Smooth(SmoothSpec {
+                        channel,
+                        name: spec.name().to_string(),
+                        tint: spec.tint(),
+                        intensity: [intensity.min(), intensity.max()],
+                        sigma: smooth.sigma(),
+                    }),
+                    grana_scene::Operation::Background(background) => {
+                        DerivedSpec::Background(BackgroundSpec {
+                            channel,
+                            name: spec.name().to_string(),
+                            tint: spec.tint(),
+                            intensity: [intensity.min(), intensity.max()],
+                            radius: background.radius(),
+                        })
+                    }
+                    grana_scene::Operation::Ratio(ratio) => {
+                        let denominator = scene
+                            .dataset
+                            .channels()
+                            .get(ratio.denominator())
+                            .ok_or_else(|| {
+                                ProtocolError::Invalid(format!(
+                                    "the ratio channel {} divides a channel of the dataset that left the scene",
+                                    spec.name()
+                                ))
+                            })?
+                            .name()
+                            .to_string();
+                        DerivedSpec::Ratio(RatioSpec {
+                            channel,
+                            denominator,
+                            name: spec.name().to_string(),
+                            tint: spec.tint(),
+                            intensity: [intensity.min(), intensity.max()],
                         })
                     }
                 })
@@ -578,7 +616,7 @@ fn collect_dependencies(source: &SourceSpec, derived: &[DerivedSpec], names: &mu
 fn mask_set<'a>(derived: &'a [DerivedSpec], channel: &str) -> Option<&'a str> {
     derived.iter().find_map(|spec| match spec {
         DerivedSpec::Mask(mask) if mask.name == channel => Some(mask.set.as_str()),
-        DerivedSpec::Mask(_) | DerivedSpec::Restore(_) => None,
+        _ => None,
     })
 }
 

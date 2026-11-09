@@ -1,5 +1,6 @@
 use grana_pipeline::Channels;
-use grana_scene::ObjectSetId;
+use grana_scene::{DerivedSpec, ObjectSetId};
+use grana_volume::Intensity;
 
 use super::*;
 
@@ -90,8 +91,8 @@ impl Session {
             return;
         };
         let name = scene.unique_channel_name(&format!("{} restored", fundus.name()));
-        let spec = RestoreSpec::new(source, name, fundus.tint(), intensity, psf, iterations);
-        match scene.add_restore(spec) {
+        let spec = DerivedSpec::restored(source, name, fundus.tint(), intensity, psf, iterations);
+        match scene.add_derived(spec) {
             Ok(channel) => {
                 let name = scene.dataset.channels()[channel].name().to_string();
                 self.message = None;
@@ -101,6 +102,223 @@ impl Session {
                     fundus.name()
                 )));
             }
+            Err(detail) => self.message = Some(Message::error(detail)),
+        }
+    }
+
+    pub(super) fn add_smooth_channel(&mut self, source: usize, sigma: f32) {
+        if self.recipe.is_some() {
+            self.message = Some(Message::error(
+                "a protocol replay builds its own derived channels",
+            ));
+            return;
+        }
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(info) = scene.dataset.channels().get(source) else {
+            self.message = Some(Message::error("the smoothed channel is missing"));
+            return;
+        };
+        if info.intensity().span() <= 0.0 {
+            self.message = Some(Message::error(
+                "the channel has no intensity range to smooth",
+            ));
+            return;
+        }
+        let name = scene.unique_channel_name(&format!("{} smoothed", info.name()));
+        let tint = info.tint();
+        let intensity = info.intensity();
+        let source_name = info.name().to_string();
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        match scene.add_derived(DerivedSpec::smoothed(source, name, tint, intensity, sigma)) {
+            Ok(channel) => {
+                let name = scene.dataset.channels()[channel].name().to_string();
+                self.message = None;
+                self.after_mask_layout();
+                self.message = Some(Message::info(format!(
+                    "smoothed channel {name} smooths {source_name}"
+                )));
+            }
+            Err(detail) => self.message = Some(Message::error(detail)),
+        }
+    }
+
+    pub(super) fn add_background_channel(&mut self, source: usize, radius: f32) {
+        if self.recipe.is_some() {
+            self.message = Some(Message::error(
+                "a protocol replay builds its own derived channels",
+            ));
+            return;
+        }
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(info) = scene.dataset.channels().get(source) else {
+            self.message = Some(Message::error("the background channel is missing"));
+            return;
+        };
+        let name = scene.unique_channel_name(&format!("{} background removed", info.name()));
+        let tint = info.tint();
+        let source_name = info.name().to_string();
+        let max = info.intensity().max().max(0.0);
+        let intensity = Intensity::new(0.0, if max > 0.0 { max } else { 1.0 });
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        match scene.add_derived(DerivedSpec::background_subtracted(
+            source, name, tint, intensity, radius,
+        )) {
+            Ok(channel) => {
+                let name = scene.dataset.channels()[channel].name().to_string();
+                self.message = None;
+                self.after_mask_layout();
+                self.message = Some(Message::info(format!(
+                    "background channel {name} removes the background of {source_name}"
+                )));
+            }
+            Err(detail) => self.message = Some(Message::error(detail)),
+        }
+    }
+
+    pub(super) fn add_ratio_channel(&mut self, numerator: usize, denominator: usize) {
+        if self.recipe.is_some() {
+            self.message = Some(Message::error(
+                "a protocol replay builds its own derived channels",
+            ));
+            return;
+        }
+        if numerator == denominator {
+            self.message = Some(Message::error(
+                "a ratio channel divides two distinct channels",
+            ));
+            return;
+        }
+        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
+            self.message = Some(Message::error(
+                "open a dataset before deriving a ratio channel",
+            ));
+            return;
+        };
+        let intensity = match channels.ratio_range(numerator, denominator) {
+            Ok(intensity) => intensity,
+            Err(error) => {
+                self.message = Some(Message::error(error.to_string()));
+                return;
+            }
+        };
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let (Some(up), Some(down)) = (
+            scene.dataset.channels().get(numerator),
+            scene.dataset.channels().get(denominator),
+        ) else {
+            self.message = Some(Message::error("the ratio channels are missing"));
+            return;
+        };
+        let name = scene.unique_channel_name(&format!("{} / {}", up.name(), down.name()));
+        let tint = [0, 1, 2]
+            .map(|axis| 0.5 * (up.tint()[axis] + down.tint()[axis]))
+            .map(|value| value.clamp(0.0, 1.0));
+        let up_name = up.name().to_string();
+        let down_name = down.name().to_string();
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+        match scene.add_derived(DerivedSpec::ratio(
+            numerator,
+            denominator,
+            name,
+            tint,
+            intensity,
+        )) {
+            Ok(channel) => {
+                let name = scene.dataset.channels()[channel].name().to_string();
+                self.message = None;
+                self.after_mask_layout();
+                self.message = Some(Message::info(format!(
+                    "ratio channel {name} divides {up_name} by {down_name}"
+                )));
+            }
+            Err(detail) => self.message = Some(Message::error(detail)),
+        }
+    }
+
+    pub(super) fn set_smooth_channel(&mut self, channel: usize, sigma: f32) {
+        if self.recipe.is_some() {
+            self.message = Some(Message::error(
+                "a protocol replay builds its own derived channels",
+            ));
+            return;
+        }
+        let outcome = match self.scene.as_mut() {
+            Some(scene) => scene.set_smooth(channel, sigma),
+            None => return,
+        };
+        match outcome {
+            Ok(true) => self.refresh_derived_layout(),
+            Ok(false) => {}
+            Err(detail) => self.message = Some(Message::error(detail)),
+        }
+    }
+
+    pub(super) fn set_background_channel(&mut self, channel: usize, radius: f32) {
+        if self.recipe.is_some() {
+            self.message = Some(Message::error(
+                "a protocol replay builds its own derived channels",
+            ));
+            return;
+        }
+        let outcome = match self.scene.as_mut() {
+            Some(scene) => scene.set_background(channel, radius),
+            None => return,
+        };
+        match outcome {
+            Ok(true) => self.refresh_derived_layout(),
+            Ok(false) => {}
+            Err(detail) => self.message = Some(Message::error(detail)),
+        }
+    }
+
+    pub(super) fn set_ratio_channel(&mut self, channel: usize, denominator: usize) {
+        if self.recipe.is_some() {
+            self.message = Some(Message::error(
+                "a protocol replay builds its own derived channels",
+            ));
+            return;
+        }
+        let Some(numerator) = self.scene.as_ref().and_then(|scene| {
+            scene
+                .derived()
+                .get(channel.checked_sub(scene.base_channels())?)
+                .map(|entry| entry.spec().source())
+        }) else {
+            self.message = Some(Message::error("the ratio channel is missing"));
+            return;
+        };
+        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
+            self.message = Some(Message::error(
+                "open a dataset before deriving a ratio channel",
+            ));
+            return;
+        };
+        let intensity = match channels.ratio_range(numerator, denominator) {
+            Ok(intensity) => intensity,
+            Err(error) => {
+                self.message = Some(Message::error(error.to_string()));
+                return;
+            }
+        };
+        let outcome = match self.scene.as_mut() {
+            Some(scene) => scene.set_ratio(channel, denominator, intensity),
+            None => return,
+        };
+        match outcome {
+            Ok(true) => self.refresh_derived_layout(),
+            Ok(false) => {}
             Err(detail) => self.message = Some(Message::error(detail)),
         }
     }

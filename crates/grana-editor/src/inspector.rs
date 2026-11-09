@@ -589,15 +589,119 @@ fn display<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
         .then(|| scene.derived().get(index - scene.base_channels()))
         .flatten()
         .map(|entry| entry.spec().clone());
-    if let Some(grana_scene::DerivedSpec::Restore(restore)) = derived.as_ref() {
+    if let Some(operation) = derived.as_ref().map(|spec| spec.operation().clone()) {
         children.push(view::divider(ctx));
-        children.extend(restore_fields(
+        match &operation {
+            grana_scene::Operation::Restore(restore) => children.extend(restore_fields(
+                ctx,
+                index,
+                restore,
+                scene.dataset.world_size().z.max(1.0),
+            )),
+            grana_scene::Operation::Smooth(smooth) => children.push(view::slider_event(
+                ctx,
+                "operator.sigma",
+                Some("Sigma"),
+                smooth.sigma(),
+                0.05..=8.0,
+                &format!("{:.2} µm", smooth.sigma()),
+                move |value| {
+                    Message::Command(Command::SetSmoothChannel {
+                        channel: index,
+                        sigma: value.clamp(0.05, 8.0),
+                    })
+                },
+            )),
+            grana_scene::Operation::Background(background) => {
+                children.push(view::slider_event(
+                    ctx,
+                    "operator.radius",
+                    Some("Radius"),
+                    background.radius(),
+                    0.2..=40.0,
+                    &format!("{:.2} µm", background.radius()),
+                    move |value| {
+                        Message::Command(Command::SetBackgroundChannel {
+                            channel: index,
+                            radius: value.clamp(0.2, 40.0),
+                        })
+                    },
+                ));
+            }
+            grana_scene::Operation::Ratio(ratio) => {
+                let denominator = scene.channel(ratio.denominator()).name().to_string();
+                children.push(view::weak(
+                    ctx,
+                    &format!(
+                        "Divides {} by {denominator}",
+                        scene
+                            .channel(derived.as_ref().expect("a ratio channel exists").source())
+                            .name()
+                    ),
+                ));
+            }
+            grana_scene::Operation::Mask { .. } => {}
+        }
+    }
+    children.push(view::divider(ctx));
+    let voxel = scene.dataset.voxel_size().min_element();
+    let sigma = voxel.max(0.05);
+    let radius = (10.0 * voxel).max(1.0);
+    let third = (width - 12.0) / 3.0;
+    children.push(view::caption(ctx, "Channel operators"));
+    children.push(
+        grana_ui::row().gap(6.0).align(Align::Center).children([
+            view::button_with(ctx, "Smooth", Role::Quiet, Length::Fixed(third))
+                .named("operator.smooth")
+                .press(Message::Command(Command::AddSmoothChannel {
+                    source: index,
+                    sigma,
+                })),
+            view::button_with(ctx, "Background", Role::Quiet, Length::Fixed(third))
+                .named("operator.background")
+                .press(Message::Command(Command::AddBackgroundChannel {
+                    source: index,
+                    radius,
+                })),
+            view::button_with(ctx, "Ratio", Role::Quiet, Length::Fixed(third))
+                .named("display.ratio")
+                .press(Message::Noop),
+        ]),
+    );
+    let ratio_edit = matches!(
+        derived.as_ref().map(|spec| spec.operation()),
+        Some(grana_scene::Operation::Ratio(_))
+    );
+    let mut ratio_rows = Vec::new();
+    for (candidate, info) in scene.dataset.channels().iter().enumerate() {
+        if candidate == index {
+            continue;
+        }
+        let command = if ratio_edit {
+            Command::SetRatioChannel {
+                channel: index,
+                denominator: candidate,
+            }
+        } else {
+            Command::AddRatioChannel {
+                numerator: index,
+                denominator: candidate,
+            }
+        };
+        ratio_rows.push(view::menu_row(
             ctx,
-            index,
-            restore,
-            scene.dataset.world_size().z.max(1.0),
+            &format!("display.ratio.{candidate}"),
+            info.name(),
+            false,
+            Some(Message::Command(command)),
         ));
     }
+    children.push(view::menu(
+        ctx,
+        Key::new("display.ratio"),
+        220.0,
+        ratio_rows,
+    ));
     children.push(view::divider(ctx));
     children.push(
         grana_ui::row()

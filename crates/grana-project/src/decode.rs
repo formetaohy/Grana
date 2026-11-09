@@ -20,12 +20,12 @@ use grana_object::{
 };
 use grana_optics::{Kernel, MeasuredPsf, Psf, PsfParams};
 use grana_scene::{
-    Annotation, AnnotationKind, AnnotationState, ChannelState, ColocResult, ColocState, ColorState,
-    Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState, LassoPath, MaskFilter,
-    MaskSpec, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind, ObjectParams,
-    ObjectSetId, ObjectSetKey, Provenance, Recipe, RelationState, RestoreSpec, SceneState, Seeds,
-    SelectionState, SetState, SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor, TrackEdit,
-    TrackStyle, Visibility,
+    Annotation, AnnotationKind, AnnotationState, BackgroundSpec, ChannelState, ColocResult,
+    ColocState, ColorState, Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState,
+    LassoPath, MaskFilter, MeasureState, ObjectAnchor, ObjectColor, ObjectFrame, ObjectKind,
+    ObjectParams, ObjectSetId, ObjectSetKey, Operation, Provenance, RatioSpec, Recipe,
+    RelationState, RestoreSpec, SceneState, Seeds, SelectionState, SetState, SmoothSpec,
+    SurfaceEdit, SurfaceEditKind, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
 };
 use grana_volume::{Clip, Fingerprint, Intensity, Region, Spacing};
 
@@ -59,36 +59,7 @@ impl Decode for Project {
 
 impl Decode for DerivedSpec {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        match reader.u8()? {
-            0 => Ok(Self::Mask(MaskSpec::decode(reader)?)),
-            1 => Ok(Self::Restore(RestoreSpec::decode(reader)?)),
-            _ => Err(FAULT_TAG),
-        }
-    }
-}
-
-impl Decode for MaskSpec {
-    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let channel = reader.count(1)?;
-        let set = ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?;
-        let name = reader.string()?;
-        if name.trim().is_empty() {
-            return Err(FAULT_VALUE);
-        }
-        let mut tint = [0.0; 3];
-        for value in &mut tint {
-            *value = reader.f32()?;
-            if !(0.0..=1.0).contains(value) {
-                return Err(FAULT_VALUE);
-            }
-        }
-        Ok(Self::new(set, channel, name, tint))
-    }
-}
-
-impl Decode for RestoreSpec {
-    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let channel = reader.count(1)?;
+        let source = reader.u32()? as usize;
         let name = reader.string()?;
         if name.trim().is_empty() {
             return Err(FAULT_VALUE);
@@ -105,78 +76,106 @@ impl Decode for RestoreSpec {
         if !(min.is_finite() && max.is_finite() && min < max) {
             return Err(FAULT_VALUE);
         }
-        let psf = match reader.u8()? {
-            0 => {
-                let mut params = [0.0; 5];
-                for value in &mut params {
-                    *value = reader.f32()?;
-                    if !value.is_finite() {
-                        return Err(FAULT_VALUE);
-                    }
-                }
-                Psf::theoretical(PsfParams::new(
-                    params[0], params[1], params[2], params[3], params[4],
-                ))
-            }
-            1 => {
-                let mut measured = [0.0; 3];
-                for value in &mut measured {
-                    *value = reader.f32()?;
-                    if !(value.is_finite() && *value > 0.0) {
-                        return Err(FAULT_VALUE);
-                    }
-                }
-                let mut dims = [0u32; 3];
-                for value in &mut dims {
-                    *value = reader.u32()?;
-                    if *value % 2 == 0 || !(1..=63).contains(value) {
-                        return Err(FAULT_VALUE);
-                    }
-                }
-                let layers = reader.u32()?;
-                if !(1..=16).contains(&layers) {
+        let operation = match reader.u8()? {
+            0 => Operation::Mask {
+                set: ObjectSetId::from_raw(reader.u64()?).ok_or(FAULT_VALUE)?,
+            },
+            1 => Operation::Restore(RestoreSpec::new(psf(reader)?, iterations(reader)?)),
+            2 => {
+                let sigma = reader.f32()?;
+                if !(sigma.is_finite() && sigma > 0.0) {
                     return Err(FAULT_VALUE);
                 }
-                let count = (dims[0] as u64 * dims[1] as u64 * dims[2] as u64) as usize;
-                if count == 0 || count > 1 << 22 {
+                Operation::Smooth(SmoothSpec::new(sigma))
+            }
+            3 => {
+                let radius = reader.f32()?;
+                if !(radius.is_finite() && radius > 0.0) {
                     return Err(FAULT_VALUE);
                 }
-                let mut kernels = Vec::with_capacity(layers as usize);
-                for _ in 0..layers {
-                    let mut values = vec![0.0f32; count];
-                    let mut total = 0.0f32;
-                    for value in &mut values {
-                        *value = reader.f32()?;
-                        if !(value.is_finite() && *value >= 0.0) {
-                            return Err(FAULT_VALUE);
-                        }
-                        total += *value;
-                    }
-                    if !(total.is_finite() && total > 0.0) {
-                        return Err(FAULT_VALUE);
-                    }
-                    kernels.push(Kernel::from_values(dims, values));
-                }
-                Psf::measured(MeasuredPsf::new(
-                    Spacing::new(measured[0], measured[1], measured[2]),
-                    kernels,
-                ))
+                Operation::Background(BackgroundSpec::new(radius))
             }
+            4 => Operation::Ratio(RatioSpec::new(reader.u32()? as usize)),
             _ => return Err(FAULT_TAG),
         };
-        let iterations = reader.u32()?;
-        if !(1..=1000).contains(&iterations) {
-            return Err(FAULT_VALUE);
-        }
         Ok(Self::new(
-            channel,
+            source,
             name,
             tint,
             Intensity::new(min, max),
-            psf,
-            iterations,
+            operation,
         ))
     }
+}
+
+fn psf(reader: &mut Reader<'_>) -> Result<Psf, &'static str> {
+    match reader.u8()? {
+        0 => {
+            let mut params = [0.0; 5];
+            for value in &mut params {
+                *value = reader.f32()?;
+                if !value.is_finite() {
+                    return Err(FAULT_VALUE);
+                }
+            }
+            Ok(Psf::theoretical(PsfParams::new(
+                params[0], params[1], params[2], params[3], params[4],
+            )))
+        }
+        1 => {
+            let mut measured = [0.0; 3];
+            for value in &mut measured {
+                *value = reader.f32()?;
+                if !(value.is_finite() && *value > 0.0) {
+                    return Err(FAULT_VALUE);
+                }
+            }
+            let mut dims = [0u32; 3];
+            for value in &mut dims {
+                *value = reader.u32()?;
+                if *value % 2 == 0 || !(1..=63).contains(value) {
+                    return Err(FAULT_VALUE);
+                }
+            }
+            let layers = reader.u32()?;
+            if !(1..=16).contains(&layers) {
+                return Err(FAULT_VALUE);
+            }
+            let count = (dims[0] as u64 * dims[1] as u64 * dims[2] as u64) as usize;
+            if count == 0 || count > 1 << 22 {
+                return Err(FAULT_VALUE);
+            }
+            let mut kernels = Vec::with_capacity(layers as usize);
+            for _ in 0..layers {
+                let mut values = vec![0.0f32; count];
+                let mut total = 0.0f32;
+                for value in &mut values {
+                    *value = reader.f32()?;
+                    if !(value.is_finite() && *value >= 0.0) {
+                        return Err(FAULT_VALUE);
+                    }
+                    total += *value;
+                }
+                if !(total.is_finite() && total > 0.0) {
+                    return Err(FAULT_VALUE);
+                }
+                kernels.push(Kernel::from_values(dims, values));
+            }
+            Ok(Psf::measured(MeasuredPsf::new(
+                Spacing::new(measured[0], measured[1], measured[2]),
+                kernels,
+            )))
+        }
+        _ => Err(FAULT_TAG),
+    }
+}
+
+fn iterations(reader: &mut Reader<'_>) -> Result<u32, &'static str> {
+    let iterations = reader.u32()?;
+    if !(1..=1000).contains(&iterations) {
+        return Err(FAULT_VALUE);
+    }
+    Ok(iterations)
 }
 
 impl Decode for Fingerprint {

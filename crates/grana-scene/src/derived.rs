@@ -12,77 +12,150 @@ const INTENSITY_FLOOR: f32 = 0.0;
 
 pub type MaskFrames = Arc<Vec<Option<Arc<ObjectFrame>>>>;
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct MaskSpec {
-    set: ObjectSetId,
-    channel: usize,
-    name: String,
-    tint: [f32; 3],
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SmoothSpec {
+    sigma: f32,
 }
 
-impl MaskSpec {
-    pub fn new(set: ObjectSetId, channel: usize, name: impl Into<String>, tint: [f32; 3]) -> Self {
-        let name = name.into();
+impl SmoothSpec {
+    pub fn new(sigma: f32) -> Self {
         assert!(
-            !name.trim().is_empty(),
-            "a mask channel carries a name for its display"
+            sigma.is_finite() && sigma > 0.0,
+            "a smoothing operator blurs by a positive distance"
         );
+        Self { sigma }
+    }
+
+    pub fn sigma(self) -> f32 {
+        self.sigma
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BackgroundSpec {
+    radius: f32,
+}
+
+impl BackgroundSpec {
+    pub fn new(radius: f32) -> Self {
         assert!(
-            tint.iter().all(|component| (0.0..=1.0).contains(component)),
-            "a channel tint is an srgb triple"
+            radius.is_finite() && radius > 0.0,
+            "a background operator measures a positive radius"
         );
-        Self {
-            set,
-            channel,
-            name,
-            tint,
-        }
+        Self { radius }
     }
 
-    pub fn set(&self) -> ObjectSetId {
-        self.set
+    pub fn radius(self) -> f32 {
+        self.radius
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RatioSpec {
+    denominator: usize,
+}
+
+impl RatioSpec {
+    pub fn new(denominator: usize) -> Self {
+        Self { denominator }
     }
 
-    pub fn channel(&self) -> usize {
-        self.channel
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn tint(&self) -> [f32; 3] {
-        self.tint
-    }
-
-    pub fn info(&self, source: &ChannelInfo) -> ChannelInfo {
-        mask_info(&self.name, self.tint, source)
+    pub fn denominator(self) -> usize {
+        self.denominator
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RestoreSpec {
-    channel: usize,
-    name: String,
-    tint: [f32; 3],
-    intensity: Intensity,
     psf: Psf,
     iterations: u32,
 }
 
 impl RestoreSpec {
+    pub fn new(psf: Psf, iterations: u32) -> Self {
+        assert!(
+            (1..=1000).contains(&iterations),
+            "richardson-lucy runs a bounded number of iterations"
+        );
+        Self { psf, iterations }
+    }
+
+    pub fn psf(&self) -> &Psf {
+        &self.psf
+    }
+
+    pub fn iterations(&self) -> u32 {
+        self.iterations
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Operation {
+    Mask { set: ObjectSetId },
+    Restore(RestoreSpec),
+    Smooth(SmoothSpec),
+    Background(BackgroundSpec),
+    Ratio(RatioSpec),
+}
+
+impl Operation {
+    pub fn mask(&self) -> Option<ObjectSetId> {
+        match self {
+            Self::Mask { set } => Some(*set),
+            Self::Restore(_) | Self::Smooth(_) | Self::Background(_) | Self::Ratio(_) => None,
+        }
+    }
+
+    pub fn restore(&self) -> Option<&RestoreSpec> {
+        match self {
+            Self::Restore(spec) => Some(spec),
+            Self::Mask { .. } | Self::Smooth(_) | Self::Background(_) | Self::Ratio(_) => None,
+        }
+    }
+
+    pub fn smooth(&self) -> Option<f32> {
+        match self {
+            Self::Smooth(spec) => Some(spec.sigma()),
+            _ => None,
+        }
+    }
+
+    pub fn background(&self) -> Option<f32> {
+        match self {
+            Self::Background(spec) => Some(spec.radius()),
+            _ => None,
+        }
+    }
+
+    pub fn ratio(&self) -> Option<usize> {
+        match self {
+            Self::Ratio(spec) => Some(spec.denominator()),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DerivedSpec {
+    name: String,
+    tint: [f32; 3],
+    intensity: Intensity,
+    source: usize,
+    operation: Operation,
+}
+
+impl DerivedSpec {
     pub fn new(
-        channel: usize,
+        source: usize,
         name: impl Into<String>,
         tint: [f32; 3],
         intensity: Intensity,
-        psf: Psf,
-        iterations: u32,
+        operation: Operation,
     ) -> Self {
         let name = name.into();
         assert!(
             !name.trim().is_empty(),
-            "a restored channel carries a name for its display"
+            "a derived channel carries a name for its display"
         );
         assert!(
             tint.iter().all(|component| (0.0..=1.0).contains(component)),
@@ -90,24 +163,94 @@ impl RestoreSpec {
         );
         assert!(
             intensity.span() > 0.0,
-            "a restored channel declares a positive intensity span"
-        );
-        assert!(
-            (1..=1000).contains(&iterations),
-            "richardson-lucy runs a bounded number of iterations"
+            "a derived channel declares a positive intensity span"
         );
         Self {
-            channel,
             name,
             tint,
             intensity,
-            psf,
-            iterations,
+            source,
+            operation,
         }
     }
 
-    pub fn channel(&self) -> usize {
-        self.channel
+    pub fn masked(
+        set: ObjectSetId,
+        source: usize,
+        name: impl Into<String>,
+        tint: [f32; 3],
+        intensity: Intensity,
+    ) -> Self {
+        Self::new(source, name, tint, intensity, Operation::Mask { set })
+    }
+
+    pub fn restored(
+        source: usize,
+        name: impl Into<String>,
+        tint: [f32; 3],
+        intensity: Intensity,
+        psf: Psf,
+        iterations: u32,
+    ) -> Self {
+        Self::new(
+            source,
+            name,
+            tint,
+            intensity,
+            Operation::Restore(RestoreSpec::new(psf, iterations)),
+        )
+    }
+
+    pub fn smoothed(
+        source: usize,
+        name: impl Into<String>,
+        tint: [f32; 3],
+        intensity: Intensity,
+        sigma: f32,
+    ) -> Self {
+        Self::new(
+            source,
+            name,
+            tint,
+            intensity,
+            Operation::Smooth(SmoothSpec::new(sigma)),
+        )
+    }
+
+    pub fn background_subtracted(
+        source: usize,
+        name: impl Into<String>,
+        tint: [f32; 3],
+        intensity: Intensity,
+        radius: f32,
+    ) -> Self {
+        Self::new(
+            source,
+            name,
+            tint,
+            intensity,
+            Operation::Background(BackgroundSpec::new(radius)),
+        )
+    }
+
+    pub fn ratio(
+        numerator: usize,
+        denominator: usize,
+        name: impl Into<String>,
+        tint: [f32; 3],
+        intensity: Intensity,
+    ) -> Self {
+        assert_ne!(
+            numerator, denominator,
+            "a ratio channel divides two distinct channels"
+        );
+        Self::new(
+            numerator,
+            name,
+            tint,
+            intensity,
+            Operation::Ratio(RatioSpec::new(denominator)),
+        )
     }
 
     pub fn name(&self) -> &str {
@@ -122,72 +265,76 @@ impl RestoreSpec {
         self.intensity
     }
 
-    pub fn psf(&self) -> &Psf {
-        &self.psf
+    pub fn source(&self) -> usize {
+        self.source
     }
 
-    pub fn iterations(&self) -> u32 {
-        self.iterations
+    pub fn operation(&self) -> &Operation {
+        &self.operation
     }
 
-    pub fn info(&self) -> ChannelInfo {
+    pub fn replacing(&self, operation: Operation, intensity: Intensity) -> Self {
+        Self::new(
+            self.source,
+            self.name.clone(),
+            self.tint,
+            intensity,
+            operation,
+        )
+    }
+
+    pub fn rebased(&self, source: usize, denominator: Option<usize>) -> Self {
+        let operation = match self.operation {
+            Operation::Ratio(_) => Operation::Ratio(RatioSpec::new(
+                denominator.expect("a ratio channel keeps its denominator"),
+            )),
+            Operation::Mask { .. }
+            | Operation::Restore(_)
+            | Operation::Smooth(_)
+            | Operation::Background(_) => self.operation.clone(),
+        };
+        Self {
+            name: self.name.clone(),
+            tint: self.tint,
+            intensity: self.intensity,
+            source,
+            operation,
+        }
+    }
+
+    pub fn mask(&self) -> Option<ObjectSetId> {
+        self.operation.mask()
+    }
+
+    pub fn restore(&self) -> Option<&RestoreSpec> {
+        self.operation.restore()
+    }
+
+    pub fn smooth(&self) -> Option<f32> {
+        self.operation.smooth()
+    }
+
+    pub fn background(&self) -> Option<f32> {
+        self.operation.background()
+    }
+
+    pub fn ratio_denominator(&self) -> Option<usize> {
+        self.operation.ratio()
+    }
+
+    pub fn info(&self, source: &ChannelInfo) -> ChannelInfo {
+        let format = if self.mask().is_some() {
+            source.format()
+        } else {
+            VoxelFormat::F32
+        };
         ChannelInfo::new(
             self.name.clone(),
             self.tint,
             self.intensity,
             self.intensity,
-            VoxelFormat::F32,
+            format,
         )
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum DerivedSpec {
-    Mask(MaskSpec),
-    Restore(RestoreSpec),
-}
-
-impl DerivedSpec {
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Mask(spec) => spec.name(),
-            Self::Restore(spec) => spec.name(),
-        }
-    }
-
-    pub fn tint(&self) -> [f32; 3] {
-        match self {
-            Self::Mask(spec) => spec.tint(),
-            Self::Restore(spec) => spec.tint(),
-        }
-    }
-
-    pub fn source(&self) -> usize {
-        match self {
-            Self::Mask(spec) => spec.channel(),
-            Self::Restore(spec) => spec.channel(),
-        }
-    }
-
-    pub fn mask(&self) -> Option<&MaskSpec> {
-        match self {
-            Self::Mask(spec) => Some(spec),
-            Self::Restore(_) => None,
-        }
-    }
-
-    pub fn restore(&self) -> Option<&RestoreSpec> {
-        match self {
-            Self::Mask(_) => None,
-            Self::Restore(spec) => Some(spec),
-        }
-    }
-
-    pub fn info(&self, source: &ChannelInfo) -> ChannelInfo {
-        match self {
-            Self::Mask(spec) => spec.info(source),
-            Self::Restore(spec) => spec.info(),
-        }
     }
 }
 
@@ -197,17 +344,22 @@ pub struct Derived {
 }
 
 impl Derived {
-    pub fn restored(spec: RestoreSpec) -> Self {
-        Self {
-            spec: DerivedSpec::Restore(spec),
-            mask: None,
-        }
+    pub fn plain(spec: DerivedSpec) -> Self {
+        assert!(
+            spec.mask().is_none(),
+            "a plain derived channel does not bind object frames"
+        );
+        Self { spec, mask: None }
     }
 
-    pub fn masked(spec: MaskSpec, frames: MaskFrames, radius: f32, stamp: u64) -> Self {
-        let channel = Arc::new(MaskChannel::new(spec.channel(), frames, radius, stamp));
+    pub fn masked(spec: DerivedSpec, frames: MaskFrames, radius: f32, stamp: u64) -> Self {
+        assert!(
+            spec.mask().is_some(),
+            "a bound mask channel masks an object set"
+        );
+        let channel = Arc::new(MaskChannel::new(spec.source(), frames, radius, stamp));
         Self {
-            spec: DerivedSpec::Mask(spec),
+            spec,
             mask: Some(channel),
         }
     }
@@ -225,17 +377,50 @@ impl Derived {
     }
 }
 
+pub fn derived_infos(
+    specs: &[DerivedSpec],
+    base: &[ChannelInfo],
+) -> Result<Vec<ChannelInfo>, String> {
+    let mut channels = base.to_vec();
+    let mut infos = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let source = channels.get(spec.source()).ok_or_else(|| {
+            format!(
+                "the derived channel {} reads a channel the dataset does not hold",
+                spec.name()
+            )
+        })?;
+        if let Some(denominator) = spec.ratio_denominator()
+            && denominator >= channels.len()
+        {
+            return Err(format!(
+                "the ratio channel {} divides a channel the dataset does not hold",
+                spec.name()
+            ));
+        }
+        let info = spec.info(source);
+        channels.push(info.clone());
+        infos.push(info);
+    }
+    Ok(infos)
+}
+
 pub fn mask_info(name: &str, tint: [f32; 3], source: &ChannelInfo) -> ChannelInfo {
-    let intensity = Intensity::new(
-        source.intensity().min().min(INTENSITY_FLOOR),
-        source.intensity().max().max(INTENSITY_FLOOR),
-    );
+    let intensity = mask_intensity(source);
     ChannelInfo::new(
         name.to_string(),
         tint,
         intensity,
         intensity,
         source.format(),
+    )
+}
+
+pub fn mask_intensity(source: &ChannelInfo) -> Intensity {
+    let intensity = source.intensity();
+    Intensity::new(
+        intensity.min().min(INTENSITY_FLOOR),
+        intensity.max().max(INTENSITY_FLOOR),
     )
 }
 

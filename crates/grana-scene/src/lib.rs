@@ -30,7 +30,8 @@ pub use color::ObjectColor;
 pub use curation::{Curation, TrackAnchor, TrackEdit};
 pub use dataset::{Dataset, Origin};
 pub use derived::{
-    Derived, DerivedSpec, MaskChannel, MaskFrames, MaskSpec, RestoreSpec, mask_info,
+    BackgroundSpec, Derived, DerivedSpec, MaskChannel, MaskFrames, Operation, RatioSpec,
+    RestoreSpec, SmoothSpec, derived_infos, mask_info, mask_intensity,
 };
 pub use drift::Drift;
 pub use grana_display::{ColorState, Coloring, Extent};

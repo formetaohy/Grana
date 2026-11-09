@@ -81,6 +81,127 @@ fn detects_surfaces_masks_a_channel_and_captures() {
     assert_eq!(protocol.derived().len(), 1);
 }
 
+#[test]
+fn derives_operator_channels_through_a_project() {
+    let mut session = Session::new();
+    session.open_series("nuclei", series());
+    session.execute(Command::AddSmoothChannel {
+        source: 0,
+        sigma: 0.1,
+    });
+    session.execute(Command::AddBackgroundChannel {
+        source: 1,
+        radius: 1.0,
+    });
+    session.execute(Command::AddRatioChannel {
+        numerator: 0,
+        denominator: 1,
+    });
+    {
+        let scene = session.scene().expect("the series opens");
+        assert_eq!(scene.dataset.channels().len(), 4);
+        assert_eq!(scene.derived().len(), 3);
+        assert!(matches!(
+            scene.derived()[0].spec().operation(),
+            grana_scene::Operation::Smooth(_)
+        ));
+        assert!(matches!(
+            scene.derived()[1].spec().operation(),
+            grana_scene::Operation::Background(_)
+        ));
+        assert!(matches!(
+            scene.derived()[2].spec().operation(),
+            grana_scene::Operation::Ratio(_)
+        ));
+    }
+    session.request(
+        0,
+        &[BrickRequest {
+            time: 0,
+            level: 0,
+            coord: BrickCoord::new(1, 0, 0),
+        }],
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let bricks = loop {
+        session.poll();
+        let bricks = session.take_bricks();
+        if !bricks.is_empty() {
+            break bricks;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the operator brick never arrives"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    let channels = bricks[0].1.channels();
+    assert_eq!(channels.len(), 4);
+    for channel in &channels[1..] {
+        let VoxelData::F32(values) = channel else {
+            panic!("an operator channel computes single precision values");
+        };
+        assert!(
+            values
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0),
+            "an operator channel holds finite non negative values"
+        );
+    }
+
+    session.execute(Command::SelectChannel(1));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: ObjectParams::Surfaces(SurfaceParams::new(
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )),
+    });
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    assert_eq!(
+        objects(&session, set),
+        2,
+        "the smoothed channel detects both nuclei"
+    );
+
+    session.execute(Command::CaptureProtocol);
+    let protocol = session.protocol().expect("the protocol captures");
+    assert_eq!(protocol.derived().len(), 3);
+    let text = protocol.to_json().expect("the protocol serializes");
+    let restored = Protocol::from_json(&text).expect("the protocol parses");
+    assert_eq!(&restored, protocol);
+
+    let scene = session.scene().expect("the series stays open");
+    let project = Project::capture(
+        scene,
+        session.measure(),
+        Source::Synthetic {
+            name: "nuclei".to_string(),
+        },
+        view_state(),
+        Fingerprint::new([7; 32]),
+    );
+    let temp = Temp::new("suite-operators");
+    let path = temp.path().join("operators.grana");
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the operator project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the operator project reads");
+    assert_eq!(loaded, project, "the operator channels survive a project");
+}
+
 fn series() -> VolumeSeries {
     let volume = support::spheres(
         Extent::new(64, 32, 32),

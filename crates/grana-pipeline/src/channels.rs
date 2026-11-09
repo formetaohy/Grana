@@ -1,3 +1,5 @@
+mod operator;
+
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
@@ -6,11 +8,12 @@ use grana_image::{Format, Image, Labels};
 use grana_object::Mask;
 use grana_optics::{KernelBank, Psf};
 use grana_restore::{Job as RestoreJob, Restorer};
-use grana_scene::{DerivedSpec, MaskChannel, Scene};
+use grana_scene::{DerivedSpec, MaskChannel, Operation, Scene};
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, Extent, Intensity, Level, PADDED_SIDE, Pyramid, VoxelData,
-    pad_brick,
+    BrickCoord, BrickData, BrickGrid, Extent, Intensity, Level, Pyramid, VoxelData, pad_brick,
 };
+
+use operator::RegionSource;
 
 const TILE: u32 = 64;
 const TILE_LIMIT: usize = 16;
@@ -31,13 +34,19 @@ impl From<ChannelsError> for String {
     }
 }
 
-enum Derived {
+enum Kind {
     Mask(Arc<MaskChannel>),
     Restore(RestoreChannel),
+    Operator,
+}
+
+struct Node {
+    spec: DerivedSpec,
+    kind: Kind,
 }
 
 struct Site<'a> {
-    reader: &'a Image,
+    source: &'a dyn RegionSource,
     time: u32,
     level: usize,
     info: Level,
@@ -85,7 +94,7 @@ struct RestoreChannel {
 
 pub struct Channels {
     reader: Arc<Image>,
-    derived: Vec<Derived>,
+    derived: Vec<Node>,
     pyramid: Pyramid,
 }
 
@@ -94,18 +103,25 @@ impl Channels {
         let derived = scene
             .derived()
             .iter()
-            .map(|entry| match entry.spec() {
-                DerivedSpec::Mask(_) => Derived::Mask(
-                    entry
-                        .mask()
-                        .expect("a bound mask channel carries its object frames")
-                        .clone(),
-                ),
-                DerivedSpec::Restore(spec) => Derived::Restore(RestoreChannel::new(
-                    spec.channel(),
-                    spec.psf().clone(),
-                    spec.iterations(),
-                )),
+            .map(|entry| {
+                let spec = entry.spec().clone();
+                let kind = match spec.operation() {
+                    Operation::Mask { .. } => Kind::Mask(
+                        entry
+                            .mask()
+                            .expect("a bound mask channel carries its object frames")
+                            .clone(),
+                    ),
+                    Operation::Restore(restore) => Kind::Restore(RestoreChannel::new(
+                        spec.source(),
+                        restore.psf().clone(),
+                        restore.iterations(),
+                    )),
+                    Operation::Smooth(_) | Operation::Background(_) | Operation::Ratio(_) => {
+                        Kind::Operator
+                    }
+                };
+                Node { spec, kind }
             })
             .collect();
         Self {
@@ -169,8 +185,14 @@ impl Channels {
             start..start + window
         });
         let restore = RestoreChannel::new(source, psf, iterations);
+        let reader = ChannelSource {
+            channels: self,
+            time: 0,
+            level: 0,
+            shift: [0.0; 3],
+        };
         let site = Site {
-            reader: &self.reader,
+            source: &reader,
             time: 0,
             level: 0,
             info,
@@ -187,6 +209,44 @@ impl Channels {
             });
         }
         Ok(Intensity::new(min, max))
+    }
+
+    pub fn ratio_range(
+        &self,
+        numerator: usize,
+        denominator: usize,
+    ) -> Result<Intensity, ChannelsError> {
+        let channels = self.channels();
+        if numerator >= channels || denominator >= channels || numerator == denominator {
+            return Err(ChannelsError::Derived {
+                detail: "a ratio channel divides two distinct channels of the dataset".to_string(),
+            });
+        }
+        let info = self.level(0)?;
+        let extent = info.extent();
+        let limits = [extent.x(), extent.y(), extent.z()];
+        let ranges = [0, 1, 2].map(|axis| {
+            let window = limits[axis].min(TILE);
+            let start = (limits[axis] - window) / 2;
+            start..start + window
+        });
+        let up = self.read_region(0, 0, numerator, &ranges, [0.0; 3])?;
+        let down = self.read_region(0, 0, denominator, &ranges, [0.0; 3])?;
+        let mut up_values = vec![0.0f32; up.voxel_count()];
+        up.write_values(&mut up_values);
+        let mut down_values = vec![0.0f32; down.voxel_count()];
+        down.write_values(&mut down_values);
+        let mut max = 0.0f32;
+        for (up, down) in up_values.iter().zip(&down_values) {
+            if *down > 0.0 {
+                max = max.max(up / down);
+            }
+        }
+        Ok(Intensity::new(0.0, if max > 0.0 { max } else { 1.0 }))
+    }
+
+    fn channels(&self) -> usize {
+        self.stored_channels() + self.derived.len()
     }
 
     fn stored_channels(&self) -> usize {
@@ -218,7 +278,7 @@ impl Channels {
                 .read_region(time, level, channel, ranges, shift)
                 .map_err(ChannelsError::Image);
         }
-        let derived = self
+        let node = self
             .derived
             .get(channel - stored)
             .ok_or_else(|| ChannelsError::Derived {
@@ -227,20 +287,23 @@ impl Channels {
                 ),
             })?;
         let info = self.level(level)?;
-        match derived {
-            Derived::Mask(mask_channel) => {
-                let data = self
-                    .reader
-                    .read_region(time, level, mask_channel.source(), ranges, shift)
-                    .map_err(ChannelsError::Image)?;
+        let reader = ChannelSource {
+            channels: self,
+            time,
+            level,
+            shift,
+        };
+        match &node.kind {
+            Kind::Mask(mask_channel) => {
+                let data = reader.read(mask_channel.source(), ranges)?;
                 let mask = mask_channel
                     .mask(time, info)
                     .map_err(|detail| ChannelsError::Derived { detail })?;
                 Ok(masked(&data, ranges, &mask))
             }
-            Derived::Restore(restore) => restore.region(
+            Kind::Restore(restore) => restore.region(
                 &Site {
-                    reader: &self.reader,
+                    source: &reader,
                     time,
                     level,
                     info,
@@ -248,6 +311,7 @@ impl Channels {
                 },
                 ranges,
             ),
+            Kind::Operator => operator::read(&node.spec, &reader, ranges, info),
         }
     }
 
@@ -267,29 +331,40 @@ impl Channels {
         }
         let info = self.level(level)?;
         let grid = BrickGrid::new(info.extent());
+        let stored = self.stored_channels();
         let mut channels = data.channels().to_vec();
-        for derived in &self.derived {
-            channels.push(match derived {
-                Derived::Mask(mask_channel) => {
-                    let mask = mask_channel
-                        .mask(time, info)
-                        .map_err(|detail| ChannelsError::Derived { detail })?;
-                    masked_brick(&data.channels()[mask_channel.source()], &mask, grid, coord)
-                }
-                Derived::Restore(restore) => restore.brick(
-                    &Site {
-                        reader: &self.reader,
-                        time,
-                        level,
-                        info,
-                        shift,
-                    },
-                    grid,
-                    coord,
-                )?,
-            });
+        for index in 0..self.derived.len() {
+            let ranges = grid.padded_range(coord);
+            let region = self.read_region(time, level, stored + index, &ranges, shift)?;
+            let origin = [ranges[0].start, ranges[1].start, ranges[2].start];
+            let covered = Extent::new(
+                ranges[0].end - ranges[0].start,
+                ranges[1].end - ranges[1].start,
+                ranges[2].end - ranges[2].start,
+            );
+            channels.push(pad_brick(
+                &region,
+                origin,
+                covered,
+                grid.origin(coord),
+                info.extent(),
+            ));
         }
         Ok(BrickData::new(channels))
+    }
+}
+
+struct ChannelSource<'a> {
+    channels: &'a Channels,
+    time: u32,
+    level: usize,
+    shift: [f32; 3],
+}
+
+impl RegionSource for ChannelSource<'_> {
+    fn read(&self, channel: usize, ranges: &[Range<u32>; 3]) -> Result<VoxelData, ChannelsError> {
+        self.channels
+            .read_region(self.time, self.level, channel, ranges, self.shift)
     }
 }
 
@@ -313,29 +388,6 @@ impl RestoreChannel {
         let bank = Arc::new(self.psf.bank(site.info.spacing(), site.info.extent().z()));
         banks.insert(key, Arc::clone(&bank));
         bank
-    }
-
-    fn brick(
-        &self,
-        site: &Site<'_>,
-        grid: BrickGrid,
-        coord: BrickCoord,
-    ) -> Result<VoxelData, ChannelsError> {
-        let spatial = grid.padded_range(coord);
-        let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
-        let covered = Extent::new(
-            spatial[0].end - spatial[0].start,
-            spatial[1].end - spatial[1].start,
-            spatial[2].end - spatial[2].start,
-        );
-        let data = self.region(site, &spatial)?;
-        Ok(pad_brick(
-            &data,
-            origin,
-            covered,
-            grid.origin(coord),
-            site.info.extent(),
-        ))
     }
 
     fn region(
@@ -456,10 +508,7 @@ impl RestoreChannel {
         let mut sources = Vec::with_capacity(plans.len());
         for plan in &plans {
             let extent = extent_of(&plan.probe);
-            let data = site
-                .reader
-                .read_region(site.time, site.level, self.source, &plan.probe, site.shift)
-                .map_err(ChannelsError::Image)?;
+            let data = site.source.read(self.source, &plan.probe)?;
             let mut values = vec![0.0f32; extent.voxel_count() as usize];
             data.write_values(&mut values);
             sources.push(values);
@@ -616,40 +665,6 @@ fn copy(target: &mut Target<'_>, source: &Source<'_>, overlap: &[Range<u32>; 3])
                 .copy_from_slice(&source.values[source_start..source_start + width]);
         }
     }
-}
-
-fn masked_brick(data: &VoxelData, mask: &Mask, grid: BrickGrid, coord: BrickCoord) -> VoxelData {
-    match data {
-        VoxelData::U8(values) => VoxelData::U8(mask_cube(values, mask, grid, coord)),
-        VoxelData::U16(values) => VoxelData::U16(mask_cube(values, mask, grid, coord)),
-        VoxelData::F32(values) => VoxelData::F32(mask_cube(values, mask, grid, coord)),
-    }
-}
-
-fn mask_cube<T: Copy + Default>(
-    values: &[T],
-    mask: &Mask,
-    grid: BrickGrid,
-    coord: BrickCoord,
-) -> Vec<T> {
-    assert_eq!(
-        values.len(),
-        (PADDED_SIDE as usize).pow(3),
-        "the masked cube holds every padded voxel"
-    );
-    let mut masked = values.to_vec();
-    let mut index = 0;
-    for z in 0..PADDED_SIDE {
-        for y in 0..PADDED_SIDE {
-            for x in 0..PADDED_SIDE {
-                if !mask.contains_cell(grid.padded_cell(coord, [x, y, z])) {
-                    masked[index] = T::default();
-                }
-                index += 1;
-            }
-        }
-    }
-    masked
 }
 
 pub fn masked(data: &VoxelData, ranges: &[Range<u32>; 3], mask: &Mask) -> VoxelData {

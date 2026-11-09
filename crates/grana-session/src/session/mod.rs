@@ -28,7 +28,7 @@ use grana_optics::Psf;
 use grana_project::{Mismatch, Project, Source as ProjectSource, ViewState};
 use grana_scene::{
     Criteria, Dataset, FilterRange, Item, Job, LassoPath, Measure, ObjectFrame, ObjectParams,
-    ObjectSetId, Origin, Progress, RestoreSpec, Scene,
+    ObjectSetId, Origin, Progress, Scene,
 };
 use grana_volume::{BrickData, BrickRequest, Fingerprint, Region};
 

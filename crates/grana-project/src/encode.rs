@@ -14,10 +14,9 @@ use grana_object::{
 };
 use grana_scene::{
     Annotation, AnnotationKind, AnnotationState, ChannelState, ColocResult, ColocState, ColorState,
-    Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState, LassoPath, MaskSpec,
-    MeasureState, ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe, RelationState,
-    RestoreSpec, SceneState, Seeds, SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit,
-    TrackStyle, Visibility,
+    Criteria, Curation, DerivedSpec, Drift, FilterRange, ItemState, LassoPath, MeasureState,
+    ObjectColor, ObjectFrame, ObjectParams, Provenance, Recipe, RelationState, SceneState, Seeds,
+    SelectionState, SetState, TrackAnchor, TrackColor, TrackEdit, TrackStyle, Visibility,
 };
 use grana_volume::{Clip, Fingerprint, Intensity, Region};
 
@@ -52,69 +51,64 @@ impl Encode for Fingerprint {
 
 impl Encode for DerivedSpec {
     fn encode(&self, writer: &mut Encoder<'_>) {
-        match self {
-            Self::Mask(spec) => {
-                writer.u8(0);
-                spec.encode(writer);
-            }
-            Self::Restore(spec) => {
-                writer.u8(1);
-                spec.encode(writer);
-            }
-        }
-    }
-}
-
-impl Encode for MaskSpec {
-    fn encode(&self, writer: &mut Encoder<'_>) {
-        writer.count(self.channel());
-        writer.u64(self.set().raw());
-        writer.string(self.name());
-        for value in self.tint() {
-            writer.f32(value);
-        }
-    }
-}
-
-impl Encode for RestoreSpec {
-    fn encode(&self, writer: &mut Encoder<'_>) {
-        writer.count(self.channel());
+        writer.u32(self.source() as u32);
         writer.string(self.name());
         for value in self.tint() {
             writer.f32(value);
         }
         writer.f32(self.intensity().min());
         writer.f32(self.intensity().max());
-        match self.psf() {
-            grana_optics::Psf::Theoretical(params) => {
+        match self.operation() {
+            grana_scene::Operation::Mask { set } => {
                 writer.u8(0);
-                for value in [
-                    params.numerical_aperture(),
-                    params.wavelength(),
-                    params.immersion(),
-                    params.sample(),
-                    params.depth(),
-                ] {
-                    writer.f32(value);
-                }
+                writer.u64(set.raw());
             }
-            grana_optics::Psf::Measured(psf) => {
+            grana_scene::Operation::Restore(restore) => {
                 writer.u8(1);
-                for value in [psf.spacing().x(), psf.spacing().y(), psf.spacing().z()] {
-                    writer.f32(value);
-                }
-                for value in psf.dims() {
-                    writer.u32(value);
-                }
-                writer.u32(psf.layers());
-                for kernel in psf.kernels() {
-                    for value in kernel.values() {
-                        writer.f32(*value);
+                match restore.psf() {
+                    grana_optics::Psf::Theoretical(params) => {
+                        writer.u8(0);
+                        for value in [
+                            params.numerical_aperture(),
+                            params.wavelength(),
+                            params.immersion(),
+                            params.sample(),
+                            params.depth(),
+                        ] {
+                            writer.f32(value);
+                        }
+                    }
+                    grana_optics::Psf::Measured(psf) => {
+                        writer.u8(1);
+                        for value in [psf.spacing().x(), psf.spacing().y(), psf.spacing().z()] {
+                            writer.f32(value);
+                        }
+                        for value in psf.dims() {
+                            writer.u32(value);
+                        }
+                        writer.u32(psf.layers());
+                        for kernel in psf.kernels() {
+                            for value in kernel.values() {
+                                writer.f32(*value);
+                            }
+                        }
                     }
                 }
+                writer.u32(restore.iterations());
+            }
+            grana_scene::Operation::Smooth(smooth) => {
+                writer.u8(2);
+                writer.f32(smooth.sigma());
+            }
+            grana_scene::Operation::Background(background) => {
+                writer.u8(3);
+                writer.f32(background.radius());
+            }
+            grana_scene::Operation::Ratio(ratio) => {
+                writer.u8(4);
+                writer.u32(ratio.denominator() as u32);
             }
         }
-        writer.u32(self.iterations());
     }
 }
 

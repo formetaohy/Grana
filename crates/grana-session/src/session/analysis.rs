@@ -688,11 +688,8 @@ impl Session {
         let channel = object.channel();
         if channel >= scene.base_channels() {
             let spec = scene.derived()[channel - scene.base_channels()].spec();
-            if let Some(mask) = spec.mask() {
-                let ready = scene
-                    .objects
-                    .get(mask.set())
-                    .is_some_and(|set| set.detected() > 0);
+            if let Some(set) = spec.mask() {
+                let ready = scene.objects.get(set).is_some_and(|set| set.detected() > 0);
                 if !ready {
                     self.message = Some(Message::error(
                         "the mask channel needs its object set detected",

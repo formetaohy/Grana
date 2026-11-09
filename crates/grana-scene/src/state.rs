@@ -8,7 +8,7 @@ use crate::annotation::AnnotationState;
 use crate::coloc::{ColocState, MaskKey};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
-use crate::derived::DerivedSpec;
+use crate::derived::Operation;
 use crate::drift::Drift;
 use crate::key::ObjectSetKey;
 use crate::mask::MaskFilter;
@@ -294,9 +294,11 @@ impl Scene {
             for component in spec.tint() {
                 hash = mix(hash, u64::from(component.to_bits()));
             }
-            match spec {
-                DerivedSpec::Mask(mask) => hash = mix(hash, mask.set().raw()),
-                DerivedSpec::Restore(restore) => {
+            hash = mix(hash, u64::from(spec.intensity().min().to_bits()));
+            hash = mix(hash, u64::from(spec.intensity().max().to_bits()));
+            match spec.operation() {
+                Operation::Mask { set } => hash = mix(hash, set.raw()),
+                Operation::Restore(restore) => {
                     match restore.psf() {
                         grana_optics::Psf::Theoretical(params) => {
                             for value in [
@@ -325,6 +327,15 @@ impl Scene {
                         }
                     }
                     hash = mix(hash, u64::from(restore.iterations()));
+                }
+                Operation::Smooth(smooth) => {
+                    hash = mix(hash, u64::from(smooth.sigma().to_bits()));
+                }
+                Operation::Background(background) => {
+                    hash = mix(hash, u64::from(background.radius().to_bits()));
+                }
+                Operation::Ratio(ratio) => {
+                    hash = mix(hash, ratio.denominator() as u64);
                 }
             }
         }

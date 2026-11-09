@@ -15,7 +15,9 @@ use crate::coloc::{Coloc, MaskKey};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
 use crate::dataset::Dataset;
-use crate::derived::{Derived, DerivedSpec, MaskFrames, MaskSpec, RestoreSpec};
+use crate::derived::{
+    Derived, DerivedSpec, MaskFrames, Operation, RestoreSpec, mask_info, mask_intensity,
+};
 use crate::drift::Drift;
 use crate::key::ObjectSetKey;
 use crate::mask::MaskFilter;
@@ -223,24 +225,50 @@ impl Scene {
                     info.name()
                 ));
             }
-            if spec.source() >= self.base_channels {
-                return Err("a derived channel derives from a stored channel".to_string());
+            if self.dataset.channels()[..channel]
+                .iter()
+                .any(|other| other.name() == spec.name())
+            {
+                return Err(format!(
+                    "the derived channel {} repeats a channel name",
+                    spec.name()
+                ));
             }
-            entries.push(match spec {
-                DerivedSpec::Mask(spec) => {
-                    let Some(set) = self.objects.get(spec.set()) else {
+            if spec.source() >= channel {
+                return Err(format!(
+                    "the derived channel {} reads a channel that follows it",
+                    spec.name()
+                ));
+            }
+            if let Some(denominator) = spec.ratio_denominator() {
+                if denominator >= channel {
+                    return Err(format!(
+                        "the ratio channel {} divides a channel that follows it",
+                        spec.name()
+                    ));
+                }
+                if denominator == spec.source() {
+                    return Err(format!(
+                        "the ratio channel {} divides two distinct channels",
+                        spec.name()
+                    ));
+                }
+            }
+            entries.push(match spec.mask() {
+                Some(set) => {
+                    let Some(object) = self.objects.get(set) else {
                         return Err(format!(
                             "the mask channel {} names an object set that left the scene",
                             spec.name()
                         ));
                     };
-                    let (frames, stamp) = match self.masked_frames(set) {
-                        Ok(frames) => (frames, self.gate_stamp(set)),
-                        Err(_) => (plain_frames(set), 0),
+                    let (frames, stamp) = match self.masked_frames(object) {
+                        Ok(frames) => (frames, self.gate_stamp(object)),
+                        Err(_) => (plain_frames(object), 0),
                     };
                     Derived::masked(spec, frames, self.mask_radius, stamp)
                 }
-                DerivedSpec::Restore(spec) => Derived::restored(spec),
+                None => Derived::plain(spec),
             });
         }
         self.derived = entries;
@@ -248,8 +276,8 @@ impl Scene {
     }
 
     pub fn add_mask(&mut self, set: ObjectSetId, channel: usize) -> Result<usize, String> {
-        if channel >= self.base_channels {
-            return Err("a mask channel masks a stored channel".to_string());
+        if channel >= self.channels.len() {
+            return Err("a mask channel masks a channel of the dataset".to_string());
         }
         let Some(object) = self.objects.get(set) else {
             return Err("the masked object set is missing from the scene".to_string());
@@ -257,12 +285,11 @@ impl Scene {
         if object.detected() == 0 {
             return Err(format!("{} detected no objects to mask", object.name()));
         }
-        if self.derived.iter().any(|entry| {
-            entry
-                .spec()
-                .mask()
-                .is_some_and(|spec| spec.set() == set && spec.channel() == channel)
-        }) {
+        if self
+            .derived
+            .iter()
+            .any(|entry| entry.spec().mask() == Some(set) && entry.spec().source() == channel)
+        {
             return Err(format!(
                 "{} already masks {}",
                 object.name(),
@@ -274,14 +301,26 @@ impl Scene {
         let stamp = self.gate_stamp(object);
         let source = self.dataset.channels()[channel].clone();
         let name = self.mask_name(&source, object);
-        let spec = MaskSpec::new(set, channel, name, color);
-        let info = spec.info(&source);
+        let intensity = mask_intensity(&source);
+        let spec = DerivedSpec::masked(set, channel, name, color, intensity);
+        let info = mask_info(spec.name(), color, &source);
         self.push_derived(Derived::masked(spec, frames, self.mask_radius, stamp), info)
     }
 
-    pub fn add_restore(&mut self, spec: RestoreSpec) -> Result<usize, String> {
-        if spec.channel() >= self.base_channels {
-            return Err("a restored channel restores a stored channel".to_string());
+    pub fn add_derived(&mut self, spec: DerivedSpec) -> Result<usize, String> {
+        if spec.mask().is_some() {
+            return Err("a mask channel binds the objects it masks".to_string());
+        }
+        if spec.source() >= self.channels.len() {
+            return Err("a derived channel reads a channel of the dataset".to_string());
+        }
+        if let Some(denominator) = spec.ratio_denominator() {
+            if denominator >= self.channels.len() {
+                return Err("a ratio channel divides a channel of the dataset".to_string());
+            }
+            if denominator == spec.source() {
+                return Err("a ratio channel divides two distinct channels".to_string());
+            }
         }
         if self
             .derived
@@ -290,8 +329,8 @@ impl Scene {
         {
             return Err(format!("the scene already holds {}", spec.name()));
         }
-        let info = spec.info();
-        self.push_derived(Derived::restored(spec), info)
+        let info = spec.info(self.channel(spec.source()));
+        self.push_derived(Derived::plain(spec), info)
     }
 
     fn push_derived(&mut self, entry: Derived, info: ChannelInfo) -> Result<usize, String> {
@@ -319,6 +358,13 @@ impl Scene {
             return Err("only a derived channel can be removed".to_string());
         }
         let index = channel - self.base_channels;
+        if self.derived.iter().enumerate().any(|(position, entry)| {
+            position > index
+                && (entry.spec().source() == channel
+                    || entry.spec().ratio_denominator() == Some(channel))
+        }) {
+            return Err("a derived channel reads this derived channel".to_string());
+        }
         if self
             .objects
             .iter()
@@ -353,41 +399,96 @@ impl Scene {
         psf: Psf,
         iterations: u32,
     ) -> Result<bool, String> {
+        let operation = Operation::Restore(RestoreSpec::new(psf, iterations));
+        self.replace_operation(channel, operation, None, |operation| {
+            operation.restore().is_some()
+        })
+    }
+
+    pub fn set_smooth(&mut self, channel: usize, sigma: f32) -> Result<bool, String> {
+        let operation = Operation::Smooth(crate::derived::SmoothSpec::new(sigma));
+        self.replace_operation(channel, operation, None, |operation| {
+            operation.smooth().is_some()
+        })
+    }
+
+    pub fn set_background(&mut self, channel: usize, radius: f32) -> Result<bool, String> {
+        let operation = Operation::Background(crate::derived::BackgroundSpec::new(radius));
+        self.replace_operation(channel, operation, None, |operation| {
+            operation.background().is_some()
+        })
+    }
+
+    pub fn set_ratio(
+        &mut self,
+        channel: usize,
+        denominator: usize,
+        intensity: Intensity,
+    ) -> Result<bool, String> {
+        if denominator >= self.channels.len() || denominator == self.derived_source(channel)? {
+            return Err("a ratio channel divides two distinct channels of the dataset".to_string());
+        }
+        let operation = Operation::Ratio(crate::derived::RatioSpec::new(denominator));
+        self.replace_operation(channel, operation, Some(intensity), |operation| {
+            operation.ratio().is_some()
+        })
+    }
+
+    fn replace_operation(
+        &mut self,
+        channel: usize,
+        operation: Operation,
+        intensity: Option<Intensity>,
+        accepts: impl Fn(&Operation) -> bool,
+    ) -> Result<bool, String> {
         if channel < self.base_channels || channel >= self.channels.len() {
-            return Err("only a derived channel can be restored".to_string());
+            return Err("only a derived channel is an operator".to_string());
         }
         let index = channel - self.base_channels;
-        let Some(restore) = self.derived[index].spec().restore().cloned() else {
-            return Err("the derived channel masks an object set".to_string());
+        let Some(entry) = self.derived.get(index) else {
+            return Err("the derived channel is missing from the scene".to_string());
         };
-        if restore.psf() == &psf && restore.iterations() == iterations {
-            return Ok(false);
+        if !accepts(entry.spec().operation()) {
+            return Err(format!(
+                "{} is not the kind of operator this change edits",
+                entry.spec().name()
+            ));
         }
-        let spec = RestoreSpec::new(
-            restore.channel(),
-            restore.name().to_string(),
-            restore.tint(),
-            restore.intensity(),
-            psf,
-            iterations,
-        );
-        self.derived[index] = Derived::restored(spec);
-        Ok(true)
+        let intensity = intensity.unwrap_or_else(|| entry.spec().intensity());
+        if intensity.span() <= 0.0 {
+            return Err("an operator channel declares a positive intensity span".to_string());
+        }
+        let spec = entry.spec().replacing(operation, intensity);
+        let changed = spec != *entry.spec();
+        if changed {
+            self.derived[index] = Derived::plain(spec);
+        }
+        Ok(changed)
+    }
+
+    fn derived_source(&self, channel: usize) -> Result<usize, String> {
+        if channel < self.base_channels || channel >= self.channels.len() {
+            return Err("only a derived channel is an operator".to_string());
+        }
+        self.derived
+            .get(channel - self.base_channels)
+            .map(|entry| entry.spec().source())
+            .ok_or_else(|| "the derived channel is missing from the scene".to_string())
     }
 
     pub fn sync_masks(&mut self) {
         for entry in &self.derived {
-            let (Some(spec), Some(channel)) = (entry.spec().mask(), entry.mask()) else {
+            let (Some(set), Some(channel)) = (entry.spec().mask(), entry.mask()) else {
                 continue;
             };
-            let Some(set) = self.objects.get(spec.set()) else {
+            let Some(object) = self.objects.get(set) else {
                 continue;
             };
-            let stamp = self.gate_stamp(set);
+            let stamp = self.gate_stamp(object);
             if channel.stamp() == stamp {
                 continue;
             }
-            if let Ok(frames) = self.masked_frames(set) {
+            if let Ok(frames) = self.masked_frames(object) {
                 channel.refresh(frames, self.mask_radius, stamp);
             }
         }
@@ -398,17 +499,17 @@ impl Scene {
         stamp = mix(stamp, u64::from(self.mask_radius.to_bits()));
         stamp = mix(stamp, filter_stamp(self.mask_filter));
         for entry in &self.derived {
-            let (Some(spec), Some(channel)) = (entry.spec().mask(), entry.mask()) else {
+            let (Some(set), Some(channel)) = (entry.spec().mask(), entry.mask()) else {
                 continue;
             };
-            stamp = mix(stamp, spec.set().raw());
-            stamp = mix(stamp, spec.channel() as u64);
+            stamp = mix(stamp, set.raw());
+            stamp = mix(stamp, entry.spec().source() as u64);
             stamp = mix(stamp, channel.stamp());
             stamp = mix(
                 stamp,
                 self.objects
-                    .get(spec.set())
-                    .and_then(|set| set.frame_shared(time))
+                    .get(set)
+                    .and_then(|object| object.frame_shared(time))
                     .map_or(0, |frame| Arc::as_ptr(&frame) as u64),
             );
         }
@@ -764,7 +865,7 @@ impl Scene {
         if self
             .derived
             .iter()
-            .any(|entry| entry.spec().mask().is_some_and(|spec| spec.set() == source))
+            .any(|entry| entry.spec().mask() == Some(source))
         {
             return Err("a mask channel derives from the merged object set".to_string());
         }
@@ -1363,26 +1464,47 @@ impl Scene {
         if !self
             .derived
             .iter()
-            .any(|entry| entry.spec().mask().is_some_and(|spec| spec.set() == set))
+            .any(|entry| entry.spec().mask() == Some(set))
         {
             return;
         }
-        let specs = self
-            .derived_specs()
-            .into_iter()
-            .filter(|spec| spec.mask().is_none_or(|mask| mask.set() != set))
-            .collect::<Vec<_>>();
-        let infos = specs
-            .iter()
-            .filter_map(|spec| {
-                self.dataset
-                    .channels()
-                    .get(spec.source())
-                    .map(|source| spec.info(source))
-            })
-            .collect::<Vec<_>>();
-        let _ = self.set_derived_layout(infos);
-        let _ = self.bind_derived(specs);
+        let mut specs = self.derived_specs();
+        while let Some(index) = specs.iter().position(|spec| spec.mask() == Some(set)) {
+            let removed = self.base_channels + index;
+            specs.remove(index);
+            let mut surviving = Vec::with_capacity(specs.len());
+            for spec in specs {
+                let source = match spec.source().cmp(&removed) {
+                    std::cmp::Ordering::Equal => None,
+                    std::cmp::Ordering::Greater => Some(spec.source() - 1),
+                    std::cmp::Ordering::Less => Some(spec.source()),
+                };
+                let had_denominator = spec.ratio_denominator().is_some();
+                let denominator =
+                    spec.ratio_denominator().and_then(|denominator| {
+                        match denominator.cmp(&removed) {
+                            std::cmp::Ordering::Equal => None,
+                            std::cmp::Ordering::Greater => Some(denominator - 1),
+                            std::cmp::Ordering::Less => Some(denominator),
+                        }
+                    });
+                let Some(source) = source else {
+                    continue;
+                };
+                if had_denominator && denominator.is_none() {
+                    continue;
+                }
+                surviving.push(spec.rebased(source, denominator));
+            }
+            specs = surviving;
+        }
+        let infos =
+            crate::derived::derived_infos(&specs, &self.dataset.channels()[..self.base_channels])
+                .expect("the surviving derived channels read channels the scene holds");
+        self.set_derived_layout(infos)
+            .expect("removing mask channels leaves room for the survivors");
+        self.bind_derived(specs)
+            .expect("the surviving derived channels keep their names");
         self.sync_masks();
     }
 

@@ -79,6 +79,26 @@ impl Session {
                 psf,
                 iterations,
             } => self.add_restore_channel(source, psf, iterations),
+            Command::AddSmoothChannel { source, sigma } => {
+                self.add_smooth_channel(source, sigma);
+            }
+            Command::AddBackgroundChannel { source, radius } => {
+                self.add_background_channel(source, radius);
+            }
+            Command::AddRatioChannel {
+                numerator,
+                denominator,
+            } => self.add_ratio_channel(numerator, denominator),
+            Command::SetSmoothChannel { channel, sigma } => {
+                self.set_smooth_channel(channel, sigma);
+            }
+            Command::SetBackgroundChannel { channel, radius } => {
+                self.set_background_channel(channel, radius);
+            }
+            Command::SetRatioChannel {
+                channel,
+                denominator,
+            } => self.set_ratio_channel(channel, denominator),
             Command::CalibratePsf {
                 source,
                 threshold,
@@ -181,7 +201,7 @@ impl Session {
                     scene
                         .derived()
                         .iter()
-                        .any(|entry| entry.spec().mask().is_some_and(|spec| spec.set() == set))
+                        .any(|entry| entry.spec().mask() == Some(set))
                 });
                 if masked {
                     self.message = Some(Message::error(

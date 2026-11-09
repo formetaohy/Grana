@@ -373,28 +373,16 @@ impl Session {
         let mut derived = Vec::new();
         if let Some(pending) = &self.pending {
             derived = pending.project.masks.clone();
-            let infos = derived
-                .iter()
-                .map(|spec| {
-                    scene
-                        .dataset
-                        .channels()
-                        .get(spec.source())
-                        .map(|source| spec.info(source))
-                })
-                .collect::<Option<Vec<_>>>();
-            match infos {
-                Some(infos) => {
+            match grana_scene::derived_infos(&derived, scene.dataset.channels()) {
+                Ok(infos) => {
                     if let Err(detail) = scene.set_derived_layout(infos) {
                         derived.clear();
                         self.message = Some(Message::error(detail));
                     }
                 }
-                None => {
+                Err(detail) => {
                     derived.clear();
-                    self.message = Some(Message::error(
-                        "the project derives from a channel that the dataset does not hold",
-                    ));
+                    self.message = Some(Message::error(detail));
                 }
             }
         }
