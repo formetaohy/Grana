@@ -34,11 +34,12 @@ use crate::mesh::MeshPasses;
 use crate::oit::Oit;
 use crate::pick::{self, PICK_ROW, PickId, PickPane, PickTarget};
 use crate::planner::{
-    self, BAND, Demand, Ladder, Limits, Planner, Schedule, SectionRange, bucket_scale, capacities,
-    decode_plan, resolve_section_level, section_range, select_section_level, volume_dispatch,
-    volume_ladder,
+    self, BAND, Demand, Ladder, LadderView, Limits, Planner, Schedule, SectionRange, bucket_scale,
+    capacities, decode_plan, resolve_section_level, section_range, select_section_level,
+    volume_dispatch, volume_ladder,
 };
 use crate::present::Present;
+use crate::profile::{Budget, FrameProfile, Marks, Profiler, STAGE_COUNT, Stage};
 use crate::sample;
 use crate::schema::SceneFrame;
 use crate::section::SectionPass;
@@ -67,6 +68,8 @@ const RECORD_SHARE: u64 = 8;
 const FADE_DRAWS: f32 = 10.0;
 
 const UNIT: f32 = 65535.0;
+
+const FRAME_TARGET: f32 = 14.0;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Fade {
@@ -108,6 +111,7 @@ pub struct FrameInfo {
     pub samples: u32,
     pub settled: bool,
     pub fading: bool,
+    pub profile: FrameProfile,
 }
 
 #[derive(Default)]
@@ -190,6 +194,10 @@ pub struct Renderer {
     pick_pending: bool,
     oit_readback: Readback,
     dropped: u32,
+    profile: Option<Profiler>,
+    frame_budget: Budget,
+    measured: [f32; STAGE_COUNT],
+    sampled: bool,
     info: FrameInfo,
 }
 
@@ -262,8 +270,16 @@ impl Renderer {
             pick_pending: false,
             oit_readback: Readback::new(device, "grana.oit.dropped", 4, FEEDBACK_SLOTS),
             dropped: 0,
+            profile: Profiler::new(device, queue),
+            frame_budget: Budget::new(FRAME_TARGET),
+            measured: [0.0; STAGE_COUNT],
+            sampled: false,
             info: FrameInfo::default(),
         }
+    }
+
+    pub fn profiled(&self) -> bool {
+        self.profile.is_some()
     }
 
     pub fn format(&self) -> TextureFormat {
@@ -515,8 +531,22 @@ impl Renderer {
         }
         let mut target = self.target.take().expect("the frame target is ready");
         self.level_cap = Some(frame.level_cap);
-        let info = self.render(device, queue, &mut target, frame);
+        let mut info = self.render(device, queue, &mut target, frame);
         self.target = Some(target);
+        if let Some(profile) = self.profile.as_mut()
+            && let Some(measured) = profile.poll(device)
+        {
+            if self.sampled && info.settled && !self.exporting {
+                self.frame_budget.observe(measured.total);
+            }
+            self.measured = measured.stages;
+        }
+        info.profile = FrameProfile {
+            stages: self.measured,
+            total: self.measured.iter().sum(),
+            target: self.frame_budget.target(),
+            penalty: self.frame_budget.penalty(),
+        };
         info
     }
 

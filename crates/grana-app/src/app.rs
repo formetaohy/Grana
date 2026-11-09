@@ -1666,7 +1666,29 @@ fn frame_stats(info: FrameInfo) -> FrameStats {
         samples: info.samples,
         oit_layers: info.oit.layers,
         oit_dropped: info.oit.dropped,
+        profile: profile_stats(info.profile),
     }
+}
+
+fn profile_stats(profile: grana_render::FrameProfile) -> grana_editor::ProfileStats {
+    let mut rows = profile
+        .stages
+        .into_iter()
+        .enumerate()
+        .map(|(index, millis)| (grana_render::Stage::ALL[index].label(), millis))
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| right.1.total_cmp(&left.1));
+    let mut stats = grana_editor::ProfileStats {
+        total: profile.total,
+        target: profile.target,
+        penalty: profile.penalty,
+        measured: profile.measured(),
+        ..Default::default()
+    };
+    for (slot, row) in stats.rows.iter_mut().zip(rows) {
+        *slot = row;
+    }
+    stats
 }
 
 fn view_stats(info: grana_render::ViewInfo) -> ViewStats {

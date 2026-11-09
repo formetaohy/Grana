@@ -9,6 +9,8 @@ use crate::REQUIRED_FEATURES;
 
 pub const HEADLESS_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
+const TIMING_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
+
 const BACKEND_ORDER: &[Backends] = backend_order();
 
 const fn backend_order() -> &'static [Backends] {
@@ -181,9 +183,13 @@ fn acquire(
     if !adapter.features().contains(REQUIRED_FEATURES) {
         return Err("the graphics adapter cannot stream packed volume bricks".to_string());
     }
+    let mut features = REQUIRED_FEATURES;
+    if adapter.features().contains(TIMING_FEATURES) {
+        features |= TIMING_FEATURES;
+    }
     let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
         label: Some("grana"),
-        required_features: REQUIRED_FEATURES,
+        required_features: features,
         required_limits: adapter.limits(),
         experimental_features: ExperimentalFeatures::disabled(),
         memory_hints: MemoryHints::Performance,

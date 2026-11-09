@@ -30,6 +30,36 @@ pub struct FrameStats {
     pub samples: u32,
     pub oit_layers: u32,
     pub oit_dropped: u32,
+    pub profile: ProfileStats,
+}
+
+pub const PROFILE_ROWS: usize = 4;
+
+#[derive(Clone, Copy, Debug)]
+pub struct ProfileStats {
+    pub rows: [(&'static str, f32); PROFILE_ROWS],
+    pub total: f32,
+    pub target: f32,
+    pub penalty: f32,
+    pub measured: bool,
+}
+
+impl Default for ProfileStats {
+    fn default() -> Self {
+        Self {
+            rows: [("", 0.0); PROFILE_ROWS],
+            total: 0.0,
+            target: 0.0,
+            penalty: 1.0,
+            measured: false,
+        }
+    }
+}
+
+impl ProfileStats {
+    pub fn over_budget(self) -> bool {
+        self.measured && self.total > self.target
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

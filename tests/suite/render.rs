@@ -160,6 +160,22 @@ fn next_demand(gpu: &Gpu, renderer: &mut Renderer) -> Option<Requests> {
     None
 }
 
+fn profile(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>) -> grana_render::FrameProfile {
+    let mut profile = grana_render::FrameProfile::default();
+    for _ in 0..16 {
+        profile = renderer
+            .draw(gpu.device(), gpu.queue(), frame(view))
+            .profile;
+        if profile.measured() {
+            break;
+        }
+        gpu.device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("failed to wait for the gpu");
+    }
+    profile
+}
+
 #[test]
 fn streams_and_shades_two_channels() {
     let Some(gpu) = gpu() else {
@@ -210,6 +226,30 @@ fn streams_and_shades_two_channels() {
     );
     assert!(blue(&pixels) > 100, "the blue channel barely rendered");
     assert!(green(&pixels) > 100, "the green channel barely rendered");
+    let profile = profile(&gpu, &mut renderer, &view);
+    assert!(profile.target > 0.0, "the frame carries no budget");
+    assert!(profile.penalty >= 1.0, "the sampling is finer than asked");
+    if renderer.profiled() {
+        assert!(profile.measured(), "the frame is not timed");
+        assert!(profile.stage(grana_render::Stage::Volume) > 0.0);
+    }
+}
+
+#[test]
+fn holds_the_frame_budget() {
+    let mut budget = grana_render::Budget::new(16.0);
+    assert_eq!(budget.penalty(), 1.0, "a fresh budget samples as asked");
+    for _ in 0..64 {
+        budget.observe(32.0);
+    }
+    assert!(budget.measured() > 16.0, "the overrun is not smoothed");
+    assert!(budget.penalty() > 1.0, "an overrun never coarsens");
+    assert_eq!(budget.penalty(), 4.0, "the penalty is unbounded");
+    for _ in 0..64 {
+        budget.observe(1.0);
+    }
+    assert!(budget.measured() < 16.0, "the headroom is not smoothed");
+    assert_eq!(budget.penalty(), 1.0, "spare budget never refines again");
 }
 
 #[test]

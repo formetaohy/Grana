@@ -76,6 +76,9 @@ impl Renderer {
             info,
             dummy_oit,
             budget,
+            profile,
+            frame_budget,
+            sampled,
             oit_readback,
             dropped,
             wanted,
@@ -126,12 +129,18 @@ impl Renderer {
             .max(first)
             .min(level_count - 1);
         let limits = Limits { first, ceiling };
+        let penalty = if *exporting {
+            1.0
+        } else {
+            frame_budget.penalty()
+        };
         let section_target_level = select_section_level(
             pyramid,
             section,
             section_height as f32,
             *section_rendered,
             limits,
+            penalty,
         );
         let (section_level, section_count) = resolve_section_level(
             pyramid,
@@ -144,15 +153,16 @@ impl Renderer {
         );
         let section_capacity = section_count.clamp(1, slots.saturating_sub(1).max(1));
         let volume_capacity = slots.saturating_sub(section_capacity).max(1);
-        let ladder = volume_ladder(
+        let ladder = volume_ladder(LadderView {
             pyramid,
             camera,
-            volume_height as f32,
-            *volume_rendered,
+            height: volume_height as f32,
+            current: *volume_rendered,
             limits,
-            info.volume.visible,
-            volume_capacity,
-        );
+            previous_visible: info.volume.visible,
+            capacity: volume_capacity,
+            penalty,
+        });
         let capacity = capacities(volume_capacity, wanted, ladder.count);
         let levels = Levels {
             ladder,
@@ -226,6 +236,7 @@ impl Renderer {
             shadow_high,
             Vec3::new(spacing.x(), spacing.y(), spacing.z()),
         );
+        let step_scale = scene.step_scale * penalty;
         let mut frame_data = FrameData::new(
             VolumeView {
                 camera,
@@ -238,7 +249,7 @@ impl Renderer {
             ladder,
             &tables,
             scene.shading,
-            scene.step_scale,
+            step_scale,
             *channels,
             space,
         );
@@ -319,6 +330,8 @@ impl Renderer {
         };
         let reset = target.samples == 0;
         info.samples = target.samples;
+        *sampled = false;
+        let mut marks = Marks::new();
         if reset {
             meshes.set(device, queue, layouts, scene);
             slice.prepare(
@@ -333,6 +346,7 @@ impl Renderer {
                 },
             );
             markers.prepare(device, queue, layouts, scene.markers);
+            mark(profile, &mut encoder, Stage::Cull, &mut marks);
             meshes.cull_volume(&mut encoder, scene_table.group());
             markers.cull_volume(&mut encoder, scene_table.group());
             markers.cull_section(&mut encoder, scene_table.group());
@@ -346,7 +360,7 @@ impl Renderer {
             offset.x,
             offset.y,
             sample_index as f32,
-            scene.step_scale.max(1.0e-3),
+            step_scale.max(1.0e-3),
         ];
         let cut_offset = sample::offset(sample_index, cut_size);
         section_data.jitter = [cut_offset.x, cut_offset.y, 0.0, 0.0];
@@ -409,14 +423,17 @@ impl Renderer {
                     base: section_table.record_base(),
                 },
             );
+            mark(profile, &mut encoder, Stage::Plan, &mut marks);
             planner.encode(&mut encoder, scene_group);
             *planned = Some(residency);
         }
         if target.samples < samples {
             target.samples += 1;
             info.samples = target.samples;
+            *sampled = true;
             meshes.write_uniforms(queue, &frame_data, scene.shading);
             let styles = scene_styles(scene);
+            mark(profile, &mut encoder, Stage::Shadow, &mut marks);
             if let Some(shadow) = shadow.as_mut() {
                 let groups = ShadowGroups {
                     scene: scene_group,
@@ -448,6 +465,7 @@ impl Renderer {
                     );
                 }
             }
+            mark(profile, &mut encoder, Stage::Geometry, &mut marks);
             crate::target::clear(&mut encoder, target.scene.color(), target.scene.depth());
             let shadow_group = shadow
                 .as_ref()
@@ -468,6 +486,7 @@ impl Renderer {
                 scene_group,
             );
             if let Some(oit) = target.oit.as_ref().filter(|_| translucent) {
+                mark(profile, &mut encoder, Stage::Oit, &mut marks);
                 oit.clear(&mut encoder);
                 {
                     let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -609,6 +628,7 @@ impl Renderer {
                     oit_readback.stage(&mut encoder, slot, 0, oit.dropped(), 4);
                 }
             }
+            mark(profile, &mut encoder, Stage::Volume, &mut marks);
             volume.draw(
                 &mut encoder,
                 crate::volume::VolumeFrame {
@@ -622,6 +642,7 @@ impl Renderer {
                     oit: oit_group,
                 },
             );
+            mark(profile, &mut encoder, Stage::Section, &mut marks);
             section_pass.draw(
                 &mut encoder,
                 crate::section::SectionFrame {
@@ -632,6 +653,7 @@ impl Renderer {
                     atlas: atlas.group(),
                 },
             );
+            mark(profile, &mut encoder, Stage::Cut, &mut marks);
             cut.draw(device, &mut encoder, cut_size, |pass| {
                 markers.draw_section_behind(pass, scene_group);
                 slice.draw(pass, scene_group);
@@ -645,6 +667,7 @@ impl Renderer {
             info.cut.draws = slice.draws() + 1 + u32::from(slice.objects() > 0);
             info.cut.targets = cut.targets();
             info.cut.indices = slice.index_bytes();
+            mark(profile, &mut encoder, Stage::Present, &mut marks);
             present.accumulate(
                 &mut encoder,
                 &target.accumulation_view,
@@ -689,9 +712,15 @@ impl Renderer {
             );
             frames[slot] = Some(residency);
         }
+        if let Some(profiler) = profile.as_mut() {
+            profiler.finish(&mut encoder, marks);
+        }
         queue.submit([encoder.finish()]);
         if let Some(feedback) = feedback.as_mut() {
             feedback.register();
+        }
+        if let Some(profiler) = profile.as_mut() {
+            profiler.register();
         }
         oit_readback.register();
         info.volume.level = ladder.base;
@@ -702,6 +731,12 @@ impl Renderer {
         info.oit.layers = target.oit.as_ref().map_or(0, Oit::layers);
         info.oit.dropped = *dropped;
         *info
+    }
+}
+
+fn mark(profile: &Option<Profiler>, encoder: &mut CommandEncoder, stage: Stage, marks: &mut Marks) {
+    if let Some(profiler) = profile.as_ref() {
+        profiler.mark(encoder, stage, marks);
     }
 }
 

@@ -507,6 +507,25 @@ fn diagnostics_menu<'a>(
         ]));
     }
     rows.push(menu_separator(ctx));
+    rows.push(crate::view::section_header(ctx, "Frame", None));
+    rows.push(crate::view::labelled(
+        ctx,
+        "Graphics",
+        &frame_budget(frame.profile),
+    ));
+    for (label, millis) in frame
+        .profile
+        .rows
+        .iter()
+        .filter(|(_, millis)| *millis > 0.0)
+    {
+        rows.push(crate::view::labelled(
+            ctx,
+            label,
+            &format!("{millis:.2} ms"),
+        ));
+    }
+    rows.push(menu_separator(ctx));
     rows.push(
         crate::view::button_with(
             ctx,
@@ -532,4 +551,15 @@ fn bricks(view: crate::state::ViewStats) -> String {
             view.visible
         )
     }
+}
+
+fn frame_budget(profile: crate::state::ProfileStats) -> String {
+    if !profile.measured {
+        return "measuring".to_string();
+    }
+    let marker = if profile.over_budget() { "over" } else { "of" };
+    format!(
+        "{:.2} ms {marker} {:.0} ms · ×{:.2}",
+        profile.total, profile.target, profile.penalty
+    )
 }

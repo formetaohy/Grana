@@ -629,15 +629,28 @@ impl Limits {
     }
 }
 
-pub(crate) fn volume_ladder(
-    pyramid: &Pyramid,
-    camera: &Camera,
-    height: f32,
-    current: Option<usize>,
-    limits: Limits,
-    previous_visible: usize,
-    capacity: usize,
-) -> Ladder {
+pub(crate) struct LadderView<'a> {
+    pub(crate) pyramid: &'a Pyramid,
+    pub(crate) camera: &'a Camera,
+    pub(crate) height: f32,
+    pub(crate) current: Option<usize>,
+    pub(crate) limits: Limits,
+    pub(crate) previous_visible: usize,
+    pub(crate) capacity: usize,
+    pub(crate) penalty: f32,
+}
+
+pub(crate) fn volume_ladder(view: LadderView<'_>) -> Ladder {
+    let LadderView {
+        pyramid,
+        camera,
+        height,
+        current,
+        limits,
+        previous_visible,
+        capacity,
+        penalty,
+    } = view;
     let first = limits.first;
     let levels = limits.levels(pyramid);
     let nearest = nearest_distance(pyramid.level(0), camera.eye());
@@ -645,6 +658,7 @@ pub(crate) fn volume_ladder(
     if previous_visible > capacity {
         pixel_world *= 2.0;
     }
+    pixel_world *= penalty;
     let mut target = first;
     for index in first..levels {
         if minimum_spacing(pyramid, index) <= pixel_world {
@@ -675,10 +689,11 @@ pub(crate) fn select_section_level(
     height: f32,
     current: Option<usize>,
     limits: Limits,
+    penalty: f32,
 ) -> usize {
     let first = limits.first;
     let levels = limits.levels(pyramid);
-    let pixel_world = section.span() / height.max(1.0);
+    let pixel_world = section.span() / height.max(1.0) * penalty;
     let mut level = first;
     for index in first..levels {
         if section_spacing(pyramid, index, section) <= pixel_world {
