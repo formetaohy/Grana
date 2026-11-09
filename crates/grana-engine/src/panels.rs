@@ -27,10 +27,6 @@ impl Panels {
         }
     }
 
-    pub fn stage_width(&self) -> f32 {
-        self.stage[2]
-    }
-
     pub fn native_width(&self, scale: f32) -> u32 {
         (self.stage[2] * scale).round().max(1.0) as u32
     }

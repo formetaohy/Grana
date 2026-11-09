@@ -69,7 +69,7 @@ pub struct Stage {
     drag: Option<Drag>,
     drag_button: Option<Button>,
     press: Option<Press>,
-    cursor: Option<Vec2>,
+
     hovered: Option<Pane>,
     volume_region: [u32; 4],
     section_region: [u32; 4],
@@ -90,7 +90,7 @@ impl Stage {
             drag: None,
             drag_button: None,
             press: None,
-            cursor: None,
+
             hovered: None,
             volume_region: [0, 0, 1, 1],
             section_region: [0, 0, 1, 1],
@@ -122,14 +122,6 @@ impl Stage {
         self.volume_region
     }
 
-    pub fn hovered(&self) -> Option<Pane> {
-        self.hovered
-    }
-
-    pub fn cursor(&self) -> Option<Vec2> {
-        self.cursor
-    }
-
     pub fn pane_at(&self, point: Vec2) -> Option<Pane> {
         if self.volume_rect.contains(point) {
             Some(Pane::Volume)
@@ -155,7 +147,7 @@ impl Stage {
         self.modifiers = input.modifiers();
         interaction.modifiers = self.modifiers;
         let pointer = input.position();
-        self.cursor = input.inside().then_some(pointer);
+
         self.hovered = self.pane_at(pointer);
         let delta = input.delta();
         if let Some(drag) = self.drag {

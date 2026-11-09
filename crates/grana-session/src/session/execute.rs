@@ -771,7 +771,9 @@ impl Session {
         let Some(scene) = self.scene.as_mut() else {
             return;
         };
+        let derived = scene.derived_shared();
         scene.restore(state);
+        let derived = scene.derived_shared() != derived;
         self.measure.restore(measure, scene);
         self.measure.set_roi(scene.region_scope());
         self.timeline = timeline;
@@ -780,6 +782,9 @@ impl Session {
         }
         self.realign();
         self.message = None;
+        if derived {
+            self.refresh_derived_layout();
+        }
     }
 
     pub(super) fn object_mut(&mut self, set: ObjectSetId) -> Option<&mut grana_scene::ObjectSet> {

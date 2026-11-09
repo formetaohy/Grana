@@ -331,6 +331,85 @@ fn undoes_and_replays_object_edits() {
 }
 
 #[test]
+fn undoes_derived_channels_and_keeps_every_selection() {
+    let mut session = Session::new();
+    session.open_series("derived undo", series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: ObjectParams::Surfaces(SurfaceParams::new(
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+        )),
+    });
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    assert_eq!(objects(&session, set), 2, "the two nuclei are detected");
+    for object in 0..2 {
+        session.execute(Command::ToggleSelect(grana_scene::Selection {
+            set,
+            item: grana_scene::Item::Object(object),
+        }));
+    }
+
+    session.execute(Command::AddSmoothChannel {
+        source: 0,
+        sigma: 0.2,
+    });
+    {
+        let scene = session.scene().expect("the derived channel opens");
+        assert_eq!(scene.dataset.channels().len(), 2);
+        assert_eq!(scene.derived().len(), 1);
+    }
+    assert!(session.history().undo.is_some());
+
+    session.execute(Command::Undo);
+    {
+        let scene = session.scene().expect("the series stays open");
+        assert_eq!(scene.dataset.channels().len(), 1, "the channel is undone");
+        assert!(scene.derived().is_empty(), "the layout is undone");
+    }
+    session.execute(Command::Redo);
+    {
+        let scene = session.scene().expect("the series stays open");
+        assert_eq!(scene.dataset.channels().len(), 2, "the channel is redone");
+        assert_eq!(scene.selections().len(), 2, "every selection survives undo");
+    }
+
+    let scene = session.scene().expect("the series stays open");
+    let project = Project::capture(
+        scene,
+        session.measure(),
+        Source::Synthetic {
+            name: "derived undo".to_string(),
+        },
+        view_state(),
+        Fingerprint::new([9; 32]),
+    );
+    let temp = Temp::new("suite-derived-undo");
+    let path = temp.path().join("derived.grana");
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the derived project writes");
+    let loaded = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the derived project reads");
+    assert_eq!(
+        loaded, project,
+        "the derived layout and selections survive a project"
+    );
+}
+
+#[test]
 fn gates_detection_with_an_oriented_region() {
     let mut session = Session::new();
     session.open_series("region", series());

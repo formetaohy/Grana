@@ -2115,15 +2115,19 @@ impl ObjectSet {
     }
 
     pub fn set_track_visible(&mut self, visible: bool) {
+        let mut changed = false;
         if let Some(style) = self.track_style.as_mut() {
+            let previous = style.visible();
             style.set_visible(visible);
+            changed |= style.visible() != previous;
         }
         if let Some(layer) = self.tracks.as_mut() {
             let previous = layer.visible();
             layer.set_visible(visible);
-            if layer.visible() != previous {
-                self.document += 1;
-            }
+            changed |= layer.visible() != previous;
+        }
+        if changed {
+            self.document += 1;
         }
     }
 

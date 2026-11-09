@@ -36,7 +36,6 @@ impl Encode for Project {
         self.source.encode(writer);
         self.fingerprint.encode(writer);
         self.scene.encode(writer);
-        self.masks.encode(writer);
         self.measure.encode(writer);
         self.view.encode(writer);
     }
@@ -209,6 +208,7 @@ impl Encode for SectionState {
 impl Encode for SceneState {
     fn encode(&self, writer: &mut Encoder<'_>) {
         self.channels.encode(writer);
+        self.derived.encode(writer);
         writer.count(self.selected);
         self.shading.encode(writer);
         writer.f32(self.step_scale);
@@ -230,7 +230,7 @@ impl Encode for SceneState {
             None => writer.bool(false),
         }
         writer.u32(self.time);
-        self.selection.encode(writer);
+        self.selections.encode(writer);
         self.sets.encode(writer);
         self.coloc.encode(writer);
         self.drift.encode(writer);

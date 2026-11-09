@@ -25,7 +25,6 @@ pub(crate) struct CutLayer {
     composite: RenderPipeline,
     outline: RenderPipeline,
     target: Option<Target>,
-    targets: u64,
 }
 
 struct Target {
@@ -140,12 +139,7 @@ impl CutLayer {
             composite,
             outline,
             target: None,
-            targets: 0,
         }
-    }
-
-    pub fn targets(&self) -> u64 {
-        self.targets
     }
 
     pub fn draw<'a, T>(
@@ -158,7 +152,6 @@ impl CutLayer {
         if self.target.is_none() || self.size != size {
             self.target = Some(self.build_target(device, size));
             self.size = size;
-            self.targets += 1;
         }
         let target = self.target.as_ref().expect("the cut target is ready");
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {

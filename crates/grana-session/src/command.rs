@@ -398,6 +398,7 @@ pub enum Action {
     Window,
     ResetWindow,
     Transfer,
+    Derived,
     ObjectVisible,
     ObjectLabels,
     ObjectHidden,
@@ -474,6 +475,7 @@ impl Action {
             Self::Window => "intensity window",
             Self::ResetWindow => "window reset",
             Self::Transfer => "transfer function",
+            Self::Derived => "derived channel",
             Self::ObjectVisible => "object visibility",
             Self::ObjectLabels => "object labels",
             Self::ObjectHidden => "hidden objects",
@@ -633,6 +635,19 @@ impl Command {
             Self::SetWindow { channel, .. } => Edit::targeted(Action::Window, *channel as u64),
             Self::ResetWindow(channel) => Edit::targeted(Action::ResetWindow, *channel as u64),
             Self::SetTransfer { channel, .. } => Edit::targeted(Action::Transfer, *channel as u64),
+            Self::AddMaskChannel { .. }
+            | Self::AddRestoreChannel { .. }
+            | Self::AddSmoothChannel { .. }
+            | Self::AddBackgroundChannel { .. }
+            | Self::AddRatioChannel { .. }
+            | Self::CalibratePsf { .. } => Edit::new(Action::Derived),
+            Self::SetSmoothChannel { channel, .. }
+            | Self::SetBackgroundChannel { channel, .. }
+            | Self::SetRatioChannel { channel, .. }
+            | Self::SetRestore { channel, .. }
+            | Self::RemoveDerivedChannel { channel } => {
+                Edit::targeted(Action::Derived, *channel as u64)
+            }
             Self::SetObjectVisible { set, .. } => Edit::targeted(Action::ObjectVisible, set.raw()),
             Self::SetObjectLabels { set, .. } => Edit::targeted(Action::ObjectLabels, set.raw()),
             Self::SetLabelMetric { set, .. } => Edit::targeted(Action::ObjectLabels, set.raw()),

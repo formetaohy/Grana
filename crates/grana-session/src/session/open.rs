@@ -370,29 +370,10 @@ impl Session {
         self.bricks.clear();
         self.timeline = Timeline::new(30, self.frame_duration());
         self.history.clear();
-        let mut derived = Vec::new();
-        if let Some(pending) = &self.pending {
-            derived = pending.project.masks.clone();
-            match grana_scene::derived_infos(&derived, scene.dataset.channels()) {
-                Ok(infos) => {
-                    if let Err(detail) = scene.set_derived_layout(infos) {
-                        derived.clear();
-                        self.message = Some(Message::error(detail));
-                    }
-                }
-                Err(detail) => {
-                    derived.clear();
-                    self.message = Some(Message::error(detail));
-                }
-            }
-        }
         if let Some(pending) = self.pending.take() {
             match pending.project.matches(&scene.dataset, fingerprint) {
                 Ok(()) => {
                     scene.restore(pending.project.scene);
-                    if let Err(detail) = scene.bind_derived(derived) {
-                        self.message = Some(Message::error(detail));
-                    }
                     self.measure.restore(pending.project.measure, &scene);
                     let view = pending.project.view;
                     self.timeline = view.timeline.clone();
@@ -406,7 +387,6 @@ impl Session {
                     );
                 }
                 Err(mismatch) => {
-                    let _ = scene.set_derived_layout(Vec::new());
                     self.message = Some(Message::error(match mismatch {
                         Mismatch::Dataset => "the project was saved from a different dataset",
                         Mismatch::Shape => {

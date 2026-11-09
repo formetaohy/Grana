@@ -339,7 +339,7 @@ impl DerivedSpec {
 }
 
 pub struct Derived {
-    spec: DerivedSpec,
+    spec: Arc<DerivedSpec>,
     mask: Option<Arc<MaskChannel>>,
 }
 
@@ -349,7 +349,10 @@ impl Derived {
             spec.mask().is_none(),
             "a plain derived channel does not bind object frames"
         );
-        Self { spec, mask: None }
+        Self {
+            spec: Arc::new(spec),
+            mask: None,
+        }
     }
 
     pub fn masked(spec: DerivedSpec, frames: MaskFrames, radius: f32, stamp: u64) -> Self {
@@ -359,13 +362,17 @@ impl Derived {
         );
         let channel = Arc::new(MaskChannel::new(spec.source(), frames, radius, stamp));
         Self {
-            spec,
+            spec: Arc::new(spec),
             mask: Some(channel),
         }
     }
 
     pub fn spec(&self) -> &DerivedSpec {
         &self.spec
+    }
+
+    pub fn shared(&self) -> Arc<DerivedSpec> {
+        Arc::clone(&self.spec)
     }
 
     pub fn mask(&self) -> Option<&Arc<MaskChannel>> {

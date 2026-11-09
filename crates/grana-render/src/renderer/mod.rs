@@ -89,7 +89,6 @@ pub struct ViewInfo {
 pub struct CutInfo {
     pub objects: u32,
     pub draws: u32,
-    pub targets: u64,
     pub indices: u64,
 }
 

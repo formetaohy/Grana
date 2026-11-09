@@ -376,7 +376,6 @@ impl Session {
     }
 
     pub(super) fn after_mask_layout(&mut self) {
-        self.history.clear();
         self.in_flight.clear();
         self.failed.clear();
         self.bricks.clear();

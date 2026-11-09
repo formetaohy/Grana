@@ -696,7 +696,6 @@ impl Renderer {
             cut.composite(&mut encoder, target.scene.color(), section_region);
             info.cut.objects = slice.objects();
             info.cut.draws = slice.draws() + 1 + u32::from(slice.objects() > 0);
-            info.cut.targets = cut.targets();
             info.cut.indices = slice.index_bytes();
             mark(profile, &mut encoder, Stage::Present, &mut marks);
             present.accumulate(

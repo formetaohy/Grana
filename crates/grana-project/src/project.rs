@@ -7,7 +7,7 @@ use std::time::Duration;
 use grana_animation::Timeline;
 use grana_display::{CameraState, SectionState};
 use grana_geometry::GeometryStore;
-use grana_scene::{Dataset, DerivedSpec, Measure, MeasureState, ObjectFrame, Scene, SceneState};
+use grana_scene::{Dataset, Measure, MeasureState, ObjectFrame, Scene, SceneState};
 use grana_volume::Fingerprint;
 
 use grana_codec::Encoder;
@@ -29,7 +29,6 @@ pub struct Project {
     pub source: Source,
     pub fingerprint: Fingerprint,
     pub scene: SceneState,
-    pub masks: Vec<DerivedSpec>,
     pub measure: MeasureState,
     pub view: ViewState,
 }
@@ -111,7 +110,6 @@ impl Project {
             source,
             fingerprint,
             scene: scene.state(),
-            masks: scene.derived_specs(),
             measure: measure.state(),
             view,
         }
@@ -125,10 +123,9 @@ impl Project {
         let spacing = dataset.spacing();
         let shape = self.shape.extent == [extent.x(), extent.y(), extent.z()]
             && self.shape.spacing == [spacing.x(), spacing.y(), spacing.z()];
-        let channels = self.masks.len() <= dataset.channels().len()
-            && self
-                .scene
-                .matches(dataset.channels().len(), dataset.frame_count());
+        let channels = self
+            .scene
+            .matches(dataset.channels().len(), dataset.frame_count());
         if !shape || !channels {
             return Err(Mismatch::Shape);
         }

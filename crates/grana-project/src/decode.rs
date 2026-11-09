@@ -41,19 +41,14 @@ const MAX_PROVENANCE_DEPTH: usize = 32;
 
 impl Decode for Project {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let project = Self {
+        Ok(Self {
             shape: Shape::decode(reader)?,
             source: Source::decode(reader)?,
             fingerprint: Fingerprint::decode(reader)?,
             scene: SceneState::decode(reader)?,
-            masks: Vec::<DerivedSpec>::decode(reader)?,
             measure: MeasureState::decode(reader)?,
             view: ViewState::decode(reader)?,
-        };
-        if project.masks.len() > project.scene.channels.len() {
-            return Err(FAULT_SHAPE);
-        }
-        Ok(project)
+        })
     }
 }
 
@@ -329,6 +324,7 @@ impl Decode for SceneState {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let state = Self {
             channels: Vec::<ChannelState>::decode(reader)?,
+            derived: Vec::<Arc<DerivedSpec>>::decode(reader)?,
             selected: reader.count(1)?,
             shading: Shading::decode(reader)?,
             step_scale: positive(reader.f32()?)?,
@@ -342,12 +338,43 @@ impl Decode for SceneState {
             mask_radius: non_negative(reader.f32()?)?,
             mask_filter: decode_mask_filter(reader)?,
             time: reader.u32()?,
-            selection: Option::<SelectionState>::decode(reader)?,
+            selections: Vec::<SelectionState>::decode(reader)?,
             sets: Vec::<SetState>::decode(reader)?,
             coloc: ColocState::decode(reader)?,
             drift: Drift::decode(reader)?,
             annotations: AnnotationState::decode(reader)?,
         };
+        if state.selections.len() > 1 && state.selections.windows(2).any(|pair| pair[0] == pair[1])
+        {
+            return Err(FAULT_SHAPE);
+        }
+        let channels = state.channels.len();
+        let Some(base) = channels.checked_sub(state.derived.len()) else {
+            return Err(FAULT_SHAPE);
+        };
+        let mut names = state
+            .derived
+            .iter()
+            .map(|spec| spec.name())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        if names.windows(2).any(|pair| pair[0] == pair[1])
+            || state.derived.iter().enumerate().any(|(index, spec)| {
+                let channel = base + index;
+                spec.source() >= channel
+                    || spec.ratio_denominator().is_some_and(|denominator| {
+                        denominator >= channel || denominator == spec.source()
+                    })
+                    || spec.mask().is_some_and(|set| {
+                        !state.sets.iter().any(|candidate| candidate.id == set.raw())
+                    })
+            })
+        {
+            return Err(FAULT_SHAPE);
+        }
+        if state.selected >= channels {
+            return Err(FAULT_VALUE);
+        }
         let mut ids = state.sets.iter().map(|set| set.id).collect::<Vec<_>>();
         ids.sort_unstable();
         if ids.windows(2).any(|pair| pair[0] == pair[1]) {
@@ -362,7 +389,6 @@ impl Decode for SceneState {
         if keys.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err(FAULT_SHAPE);
         }
-        let channels = state.channels.len();
         if state.sets.iter().any(|set| {
             set.channel >= channels
                 || (!set.kind.trackable() && set.track_color.metric.is_some())
@@ -449,6 +475,23 @@ impl Decode for SceneState {
             {
                 return Err(FAULT_SHAPE);
             }
+        }
+        if state.selections.iter().any(|selection| {
+            let Some(set) = state.sets.iter().find(|set| set.id == selection.set) else {
+                return true;
+            };
+            match selection.item {
+                ItemState::Object(index) => !set.frames.iter().any(|frame| {
+                    frame
+                        .as_deref()
+                        .is_some_and(|frame| index < frame.object_count())
+                }),
+                ItemState::Track(index) => {
+                    !set.tracks.as_ref().is_some_and(|set| index < set.len())
+                }
+            }
+        }) {
+            return Err(FAULT_SHAPE);
         }
         Ok(state)
     }

@@ -3,13 +3,13 @@ use std::sync::Arc;
 use grana_display::{Shading, TransferFunction};
 use grana_measure::ObjectColoc;
 use grana_object::{RelationFrame, TrackSet};
-use grana_volume::{Clip, Intensity, Region};
+use grana_volume::{CHANNEL_LIMIT, Clip, Intensity, Region};
 
 use crate::annotation::AnnotationState;
 use crate::coloc::{ColocState, MaskKey};
 use crate::color::ObjectColor;
 use crate::curation::Curation;
-use crate::derived::Operation;
+use crate::derived::{DerivedSpec, Operation};
 use crate::drift::Drift;
 use crate::key::ObjectSetKey;
 use crate::label_export::LabelExport;
@@ -28,6 +28,7 @@ const HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 #[derive(Debug, PartialEq)]
 pub struct SceneState {
     pub channels: Vec<ChannelState>,
+    pub derived: Vec<Arc<DerivedSpec>>,
     pub selected: usize,
     pub shading: Shading,
     pub step_scale: f32,
@@ -40,7 +41,7 @@ pub struct SceneState {
     pub mask_radius: f32,
     pub annotations: AnnotationState,
     pub time: u32,
-    pub selection: Option<SelectionState>,
+    pub selections: Vec<SelectionState>,
     pub sets: Vec<SetState>,
     pub coloc: ColocState,
 }
@@ -106,8 +107,20 @@ pub struct SetState {
 }
 
 impl SceneState {
-    pub fn matches(&self, channel_count: usize, frame_count: u32) -> bool {
+    pub fn matches(&self, base_channels: usize, frame_count: u32) -> bool {
+        let channel_count = base_channels + self.derived.len();
         self.channels.len() == channel_count
+            && channel_count <= CHANNEL_LIMIT
+            && self.derived.iter().enumerate().all(|(index, spec)| {
+                let channel = base_channels + index;
+                spec.source() < channel
+                    && spec.ratio_denominator().is_none_or(|denominator| {
+                        denominator < channel && denominator != spec.source()
+                    })
+                    && spec
+                        .mask()
+                        .is_none_or(|set| self.sets.iter().any(|entry| entry.id == set.raw()))
+            })
             && self.selected < channel_count
             && self.time < frame_count
             && (self.drift.is_empty()
@@ -218,6 +231,7 @@ impl Scene {
                     transfer: channel.transfer().clone(),
                 })
                 .collect(),
+            derived: self.derived_shared(),
             selected: self.selected,
             shading: self.shading,
             step_scale: self.step_scale,
@@ -230,13 +244,17 @@ impl Scene {
             mask_radius: self.mask_radius,
             annotations: self.annotations.state(),
             time: self.time(),
-            selection: self.selection().map(|selection| SelectionState {
-                set: selection.set.raw(),
-                item: match selection.item {
-                    Item::Object(index) => ItemState::Object(index),
-                    Item::Track(index) => ItemState::Track(index),
-                },
-            }),
+            selections: self
+                .selections()
+                .iter()
+                .map(|selection| SelectionState {
+                    set: selection.set.raw(),
+                    item: match selection.item {
+                        Item::Object(index) => ItemState::Object(index),
+                        Item::Track(index) => ItemState::Track(index),
+                    },
+                })
+                .collect(),
             sets: self.objects.iter().map(|set| set.state()).collect(),
             coloc: self.coloc.state(),
         }
@@ -244,9 +262,24 @@ impl Scene {
 
     pub fn restore(&mut self, state: SceneState) {
         assert!(
-            state.matches(self.channels.len(), self.frame_count()),
+            state.matches(self.base_channels(), self.frame_count()),
             "a scene state matches the dataset it was captured from"
         );
+        let derived = state.derived != self.derived_shared();
+        if derived {
+            let specs = state
+                .derived
+                .iter()
+                .map(|spec| spec.as_ref().clone())
+                .collect::<Vec<_>>();
+            let infos = crate::derived::derived_infos(
+                &specs,
+                &self.dataset.channels()[..self.base_channels()],
+            )
+            .expect("a scene state names a derived layout of its dataset");
+            self.set_derived_layout(infos)
+                .expect("a scene state fits the channel limit of its dataset");
+        }
         for (channel, source) in self.channels.iter_mut().zip(state.channels) {
             channel.enabled = source.enabled;
             channel.opacity = source.opacity;
@@ -261,6 +294,15 @@ impl Scene {
         self.clip = state.clip;
         self.set_drift(state.drift);
         self.objects.restore(state.sets, &self.dataset);
+        if derived {
+            let specs = state
+                .derived
+                .iter()
+                .map(|spec| spec.as_ref().clone())
+                .collect::<Vec<_>>();
+            self.bind_derived(specs)
+                .expect("a scene state binds the derived channels of its objects");
+        }
         self.mask = state
             .mask
             .and_then(ObjectSetId::from_raw)
@@ -291,14 +333,20 @@ impl Scene {
             mask,
         );
         self.set_time(state.time);
-        self.select(state.selection.map(|selection| Selection {
-            set: ObjectSetId::new(selection.set),
-            item: match selection.item {
-                ItemState::Object(index) => Item::Object(index),
-                ItemState::Track(index) => Item::Track(index),
-            },
-        }));
-        self.validate_selection();
+        self.select_many(
+            state
+                .selections
+                .into_iter()
+                .map(|selection| Selection {
+                    set: ObjectSetId::new(selection.set),
+                    item: match selection.item {
+                        ItemState::Object(index) => Item::Object(index),
+                        ItemState::Track(index) => Item::Track(index),
+                    },
+                })
+                .collect(),
+        );
+        self.validate_selections();
         self.sync_masks();
     }
 
@@ -371,7 +419,6 @@ impl Scene {
                 }
             }
         }
-        hash = mix(hash, self.selected as u64);
         hash = mix(hash, u64::from(self.step_scale.to_bits()));
         hash = mix(hash, u64::from(self.exposure.to_bits()));
         for value in [
@@ -444,22 +491,21 @@ impl Scene {
         hash
     }
 
-    fn validate_selection(&mut self) {
-        let Some(selection) = self.selection() else {
-            return;
-        };
-        let valid = self
-            .objects
-            .get(selection.set)
-            .is_some_and(|set| match selection.item {
-                Item::Object(index) => set
-                    .frame(self.time())
-                    .is_some_and(|frame| index < frame.object_count()),
-                Item::Track(index) => set.tracks().is_some_and(|layer| index < layer.set().len()),
-            });
-        if !valid {
-            self.select(None);
-        }
+    fn validate_selections(&mut self) {
+        let time = self.time();
+        let objects = &self.objects;
+        self.selections.retain(|selection| {
+            objects
+                .get(selection.set)
+                .is_some_and(|set| match selection.item {
+                    Item::Object(index) => set
+                        .frame(time)
+                        .is_some_and(|frame| index < frame.object_count()),
+                    Item::Track(index) => {
+                        set.tracks().is_some_and(|layer| index < layer.set().len())
+                    }
+                })
+        });
     }
 }
 

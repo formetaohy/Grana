@@ -181,7 +181,7 @@ pub struct Scene {
     derived: Vec<Derived>,
     base_channels: usize,
     time: u32,
-    selections: Vec<Selection>,
+    pub(crate) selections: Vec<Selection>,
 }
 
 impl Scene {
@@ -240,6 +240,10 @@ impl Scene {
             .iter()
             .map(|entry| entry.spec().clone())
             .collect()
+    }
+
+    pub fn derived_shared(&self) -> Vec<Arc<DerivedSpec>> {
+        self.derived.iter().map(Derived::shared).collect()
     }
 
     pub fn set_derived_layout(&mut self, infos: Vec<ChannelInfo>) -> Result<(), String> {
@@ -1814,6 +1818,10 @@ impl Scene {
     pub fn select(&mut self, selection: Option<Selection>) {
         self.selections.clear();
         self.selections.extend(selection);
+    }
+
+    pub fn select_many(&mut self, selections: Vec<Selection>) {
+        self.selections = selections;
     }
 
     pub fn toggle_select(&mut self, selection: Selection) {
