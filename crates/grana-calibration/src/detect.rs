@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use grana_image::Image;
-use grana_volume::Spacing;
+use grana_volume::Level;
 use rayon::prelude::*;
 
 use crate::error::{Error, calibration};
@@ -64,8 +64,7 @@ pub(crate) fn background(values: &[f32]) -> Result<(f32, f32), Error> {
 pub(crate) fn beads(
     values: &[f32],
     dims: [u32; 3],
-    origin: [f32; 3],
-    spacing: Spacing,
+    level: Level,
     threshold: f32,
     separation: f32,
     limit: usize,
@@ -103,13 +102,10 @@ pub(crate) fn beads(
     });
     candidates.truncate(CANDIDATE_LIMIT);
     let mut beads: Vec<Bead> = Vec::new();
-    let separation = separation.max(spacing.x().max(spacing.y()).max(spacing.z()));
+    let spacing = level.voxel();
+    let separation = separation.max(spacing[0].max(spacing[1]).max(spacing[2]));
     for (_, coord) in candidates {
-        let world = [
-            origin[0] + (coord[0] as f32 + 0.5) * spacing.x(),
-            origin[1] + (coord[1] as f32 + 0.5) * spacing.y(),
-            origin[2] + (coord[2] as f32 + 0.5) * spacing.z(),
-        ];
+        let world = level.voxel_center(coord.map(|value| value as f32));
         if beads
             .iter()
             .any(|bead| distance(bead.world, world) < separation)

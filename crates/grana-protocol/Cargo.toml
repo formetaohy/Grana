@@ -12,6 +12,7 @@ grana-animation = { workspace = true }
 grana-display = { workspace = true }
 grana-geometry = { workspace = true }
 grana-measure = { workspace = true }
+grana-mesh = { workspace = true }
 grana-object = { workspace = true }
 grana-optics = { workspace = true }
 grana-project = { workspace = true }

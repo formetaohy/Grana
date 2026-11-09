@@ -7,6 +7,7 @@ use grana_display::{Camera, SectionCamera};
 use grana_geometry::{DEFAULT_BUDGET, GeometryStore};
 use grana_image::{Format, Image, Source};
 use grana_measure::{ColocPair, ColocSeries, Group, Lasso};
+use grana_mesh::Format as MeshFormat;
 use grana_object::Roi;
 use grana_project::{Export, Project, Source as ProjectSource, ViewState};
 use grana_scene::{
@@ -16,6 +17,7 @@ use grana_volume::{Pyramid, Region};
 
 use crate::channels::Channels;
 use crate::event::Event as RunEvent;
+use crate::mesh::{self, Export as MeshExport};
 use crate::run;
 use crate::snapshot::SnapshotRequest;
 use grana_protocol::{Protocol, ProtocolError, Step};
@@ -75,16 +77,17 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         .pyramid()
         .levels()
         .iter()
-        .any(|level| level.basis().diagonal_spacing().is_none())
+        .any(|level| !level.basis().orthogonal())
     {
         return Err(
-            "the dataset is placed with a transform that analysis does not measure yet".to_string(),
+            "the dataset is placed with a sheared transform that analysis cannot measure yet"
+                .to_string(),
         );
     }
     let store = GeometryStore::temporary(DEFAULT_BUDGET)
         .map_err(|error| format!("the dataset cannot page its geometry: {error}"))?;
     let name = dataset.title();
-    let artifacts = artifacts(task.protocol, &name, task.project, task.channels);
+    let mut artifacts = artifacts(task.protocol, &name, task.project, task.channels);
     let mut scene = Scene::new(dataset_of(reader.format(), &name, reader.pyramid()));
     let infos = task
         .protocol
@@ -268,6 +271,33 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             );
             grana_raster::write(&folder.join(&plot), &raster)
                 .map_err(|error| format!("failed to write {plot}: {error}"))?;
+        }
+    }
+    if task
+        .protocol
+        .sets()
+        .iter()
+        .any(|spec| !spec.meshes.is_empty())
+    {
+        let _ = task.events.send(Event::Step {
+            index: task.index,
+            label: format!("exporting the meshes of {}", reader.name()),
+        });
+        for (index, spec) in task.protocol.sets().iter().enumerate() {
+            let stem = format!("{}-{}", slug(&name), spec.key());
+            for time in 0..scene.frame_count() {
+                for format in &spec.meshes {
+                    let file = match format {
+                        MeshFormat::Stl => format!("{stem}-t{time:04}"),
+                        format => format!("{stem}-t{time:04}.{}", format.extension()),
+                    };
+                    let path = folder.join(&file);
+                    match mesh::write(&scene, sets[index], time, *format, &path)? {
+                        MeshExport::Written => artifacts.push(file),
+                        MeshExport::Empty => {}
+                    }
+                }
+            }
         }
     }
     let report = Report {

@@ -254,6 +254,15 @@ impl Protocol {
                         text = format!("{text} · {} track edits", curation.edits.len());
                     }
                 }
+                if !set.meshes.is_empty() {
+                    let formats = set
+                        .meshes
+                        .iter()
+                        .map(|format| format.extension())
+                        .collect::<Vec<_>>()
+                        .join(" and ");
+                    text = format!("{text} · exports {formats}");
+                }
                 text
             })
             .collect::<Vec<_>>()

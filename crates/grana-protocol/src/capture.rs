@@ -146,6 +146,7 @@ impl Protocol {
                     }),
                     curation: CurationSpec::of(set.curation()),
                     measure: (measure.set() == Some(set.id())).then(|| MeasureSpec::of(measure)),
+                    meshes: Vec::new(),
                 })
             })
             .collect::<Result<Vec<_>, ProtocolError>>()?;

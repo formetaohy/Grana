@@ -218,10 +218,9 @@ impl<'a> Assembler<'a> {
             plan.level_index,
             plan.channels,
             plan.detection,
-            plan.spacing,
-            plan.origin,
+            plan.placement(),
         )
-        .with_sampling(plan.voxel_volume, plan.span, self.seed_count);
+        .with_sampling(plan.span, self.seed_count);
         SurfaceTopology::new(info, basins, accumulators, seams, patches)
     }
 

@@ -16,10 +16,10 @@ impl Session {
             .pyramid()
             .levels()
             .iter()
-            .any(|level| level.basis().diagonal_spacing().is_none());
+            .any(|level| !level.basis().orthogonal());
         if placed {
             self.message = Some(Message::error(
-                "the dataset is placed with a transform that analysis does not measure yet",
+                "the dataset is placed with a sheared transform that analysis cannot measure yet",
             ));
             return false;
         }

@@ -274,15 +274,15 @@ impl Area {
         if !(radius.is_finite() && radius > 0.0) {
             return;
         }
-        let center = self.continuous(center);
+        let continuous = self.continuous(center);
         let spacing = self.level.voxel();
         let mut low = [0u32; 3];
         let mut high = [0u32; 3];
         for axis in 0..3 {
             let reach = radius / spacing[axis];
-            low[axis] =
-                ((center[axis] - reach).floor() as i64).max(i64::from(self.origin[axis])) as u32;
-            high[axis] = (((center[axis] + reach).ceil() as i64) + 1)
+            low[axis] = ((continuous[axis] - reach).floor() as i64)
+                .max(i64::from(self.origin[axis])) as u32;
+            high[axis] = (((continuous[axis] + reach).ceil() as i64) + 1)
                 .min(i64::from(self.origin[axis] + self.extent[axis]))
                 as u32;
             if high[axis] <= low[axis] {
@@ -295,8 +295,8 @@ impl Area {
             while cell[1] < high[1] {
                 cell[0] = low[0];
                 while cell[0] < high[0] {
-                    let offset = [0, 1, 2]
-                        .map(|axis| ((cell[axis] as f32 + 0.5) - center[axis]) * spacing[axis]);
+                    let point = self.level.voxel_center(cell.map(|value| value as f32));
+                    let offset = [0, 1, 2].map(|axis| point[axis] - center[axis]);
                     if offset.iter().map(|value| value * value).sum::<f32>() <= radius * radius {
                         self.set(cell.map(i64::from), label, labels);
                     }

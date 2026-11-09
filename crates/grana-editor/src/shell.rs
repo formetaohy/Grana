@@ -206,7 +206,7 @@ fn brand<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
                 Vec2::new(rect.min.x + 20.0, rect.min.y),
                 Vec2::new(180.0, rect.height()),
             ),
-            "grana",
+            "Grana",
             TextStyle::new(title, palette.text_primary),
             Align::Center,
         );

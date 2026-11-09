@@ -249,7 +249,7 @@ fn rebuild(
         pieces.push(chunk);
     }
     let assembled = cut::assemble(
-        topology.info().level(),
+        topology.info().resolution(),
         channels,
         pieces,
         leaves,

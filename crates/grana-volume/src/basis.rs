@@ -63,17 +63,23 @@ impl Basis {
         (self.inverse * Vec3::from(vector)).to_array()
     }
 
-    pub fn diagonal_spacing(self) -> Option<Spacing> {
-        let matrix = self.matrix;
-        let columns = [matrix.col(0), matrix.col(1), matrix.col(2)];
-        let aligned = (0..3).all(|left| {
-            (0..3).all(|right| {
-                left == right
-                    || columns[left][right].abs()
-                        <= ALIGNMENT_TOLERANCE * columns[right][right].abs()
+    pub fn gradient(self, vector: [f32; 3]) -> [f32; 3] {
+        (self.inverse.transpose() * Vec3::from(vector)).to_array()
+    }
+
+    pub fn determinant(self) -> f32 {
+        self.matrix.determinant()
+    }
+
+    pub fn close(self, other: Self) -> bool {
+        [0, 1, 2].into_iter().all(|column| {
+            let left = self.matrix.col(column);
+            let right = other.matrix.col(column);
+            (0..3).all(|row| {
+                (left[row] - right[row]).abs()
+                    <= ALIGNMENT_TOLERANCE * left[row].abs().max(right[row].abs()).max(1.0)
             })
-        });
-        (aligned && (0..3).all(|axis| columns[axis][axis] > 0.0)).then(|| self.spacing())
+        })
     }
 
     pub fn orthogonal(self) -> bool {

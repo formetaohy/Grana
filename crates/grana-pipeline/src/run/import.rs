@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::channels::Channels;
 use grana_analysis::{LabelBuilder, LabelSlab};
 use grana_scene::{Drift, ObjectFrame};
-use grana_volume::{Pyramid, Spacing, VoxelData};
+use grana_volume::{Pyramid, VoxelData};
 
 use crate::event::Event;
 
@@ -132,23 +132,13 @@ fn match_levels(pyramid: &Pyramid, label: &grana_image::Label) -> Option<(usize,
         let info = label.level(label_level)?;
         if let Some(image_level) = pyramid.levels().iter().position(|level| {
             level.extent() == info.extent()
-                && close(level.spacing(), info.spacing())
+                && level.basis().close(info.basis())
                 && close_origin(level.origin(), info.origin())
         }) {
             return Some((label_level, image_level));
         }
     }
     None
-}
-
-fn close(left: Spacing, right: Spacing) -> bool {
-    [
-        (left.x(), right.x()),
-        (left.y(), right.y()),
-        (left.z(), right.z()),
-    ]
-    .into_iter()
-    .all(|(left, right)| (left - right).abs() <= 1.0e-4 * left.abs().max(right.abs()).max(1.0))
 }
 
 fn close_origin(left: [f32; 3], right: [f32; 3]) -> bool {

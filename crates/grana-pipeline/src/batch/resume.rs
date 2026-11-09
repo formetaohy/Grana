@@ -35,8 +35,11 @@ pub(super) fn completed(
     (record.protocol == digest
         && record.build == build
         && record.content == content
-        && record.artifacts == artifacts
-        && artifacts.iter().all(|name| folder.join(name).exists()))
+        && artifacts.iter().all(|name| record.artifacts.contains(name))
+        && record
+            .artifacts
+            .iter()
+            .all(|name| folder.join(name).exists()))
     .then_some(record)
 }
 

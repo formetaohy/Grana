@@ -74,9 +74,36 @@ impl Level {
         [self.basis.step(0), self.basis.step(1), self.basis.step(2)]
     }
 
+    pub fn voxel_volume(self) -> f64 {
+        f64::from(self.basis.determinant().abs())
+    }
+
+    pub fn corner(self, index: [f32; 3]) -> [f32; 3] {
+        (Vec3::from(self.origin) + self.basis.matrix() * Vec3::from(index)).to_array()
+    }
+
     pub fn voxel_center(self, index: [f32; 3]) -> [f32; 3] {
-        let center = Vec3::from(index) + Vec3::splat(0.5);
-        (Vec3::from(self.origin) + self.basis.matrix() * center).to_array()
+        self.corner((Vec3::from(index) + Vec3::splat(0.5)).to_array())
+    }
+
+    pub fn cell_bounds(self, low: [u32; 3], high: [u32; 3]) -> ([f32; 3], [f32; 3]) {
+        let mut minimum = [f32::INFINITY; 3];
+        let mut maximum = [f32::NEG_INFINITY; 3];
+        for corner in 0..8 {
+            let index = [0, 1, 2].map(|axis| {
+                if corner & (1 << axis) == 0 {
+                    low[axis] as f32
+                } else {
+                    high[axis] as f32
+                }
+            });
+            let point = self.corner(index);
+            for (axis, value) in point.into_iter().enumerate() {
+                minimum[axis] = minimum[axis].min(value);
+                maximum[axis] = maximum[axis].max(value);
+            }
+        }
+        (minimum, maximum)
     }
 
     pub fn voxel_of(self, point: [f32; 3]) -> [f32; 3] {

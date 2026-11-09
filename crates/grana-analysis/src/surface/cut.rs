@@ -99,7 +99,7 @@ pub(super) fn cut(
         ));
     }
     Ok(Some(assemble(
-        info.level(),
+        info.resolution(),
         channels,
         pieces,
         leaves,
@@ -445,23 +445,10 @@ pub(super) fn mesh_piece(
     if area <= 0.0 {
         return None;
     }
-    let spacing = info.spacing();
-    let origin = info.origin();
-    let centroid = [0, 1, 2].map(|axis| {
-        (f64::from(origin[axis]) + (node.sum()[axis] / count + 0.5) * f64::from(spacing[axis]))
-            as f32
-    });
-    let bounds = Bounds::new(
-        [0, 1, 2].map(|axis| {
-            (f64::from(origin[axis]) + f64::from(node.low()[axis]) * f64::from(spacing[axis]))
-                as f32
-        }),
-        [0, 1, 2].map(|axis| {
-            (f64::from(origin[axis])
-                + (f64::from(node.high()[axis]) + 1.0) * f64::from(spacing[axis]))
-                as f32
-        }),
-    );
+    let placement = info.placement();
+    let centroid = placement.voxel_center([0, 1, 2].map(|axis| (node.sum()[axis] / count) as f32));
+    let (low, high) = placement.cell_bounds(node.low(), node.high().map(|value| value + 1));
+    let bounds = Bounds::new(low, high);
     let statistics = SurfaceStatistics::new(node.voxels(), volume, area, centroid, bounds);
     if let Some(spec) = filter
         && statistics.sphericity() < f64::from(spec.min_sphericity())

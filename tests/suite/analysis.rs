@@ -11,7 +11,7 @@ use grana_object::{
     FilamentParams, Spot, SpotParams, SurfaceFilter, SurfaceParams, SurfaceSet, TrackParams,
 };
 use grana_volume::{
-    ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, VoxelData, VoxelFormat,
+    Basis, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing, VoxelData, VoxelFormat,
 };
 
 use crate::support;
@@ -162,8 +162,53 @@ fn extracts_measured_surfaces_from_two_balls() {
     }
 }
 
+#[test]
+fn places_measured_surfaces_through_the_placement_basis() {
+    let extent = Extent::new(80, 64, 48);
+    let spacing = Spacing::new(0.2, 0.2, 0.2);
+    let centres = [[24.0f32, 32.0, 24.0], [56.0, 32.0, 24.0]];
+    let volume = support::spheres(
+        extent,
+        spacing,
+        &[(centres[0], 8.0), (centres[1], 8.0)],
+        HIGH,
+    );
+    let level = Level::of(
+        extent,
+        Basis::new([[0.0, -0.2, 0.0], [0.2, 0.0, 0.0], [0.0, 0.0, 0.3]]),
+    );
+    let set = extract_surfaces_at(
+        &volume,
+        level,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
+    );
+    assert_eq!(set.object_count(), 2, "each ball is one object");
+    let expected = centres.map(|centre| level.voxel_center(centre));
+    for object in set.objects() {
+        let centre = object.centroid();
+        let placed = expected.iter().any(|candidate| {
+            (0..3)
+                .map(|axis| f64::from(centre[axis] - candidate[axis]).powi(2))
+                .sum::<f64>()
+                < 0.25
+        });
+        assert!(placed, "the object centroid {centre:?} is misplaced");
+    }
+}
+
 fn extract_surfaces(volume: &grana_volume::Volume, params: SurfaceParams) -> SurfaceSet {
-    let level = Level::new(volume.extent(), volume.spacing());
+    extract_surfaces_at(
+        volume,
+        Level::new(volume.extent(), volume.spacing()),
+        params,
+    )
+}
+
+fn extract_surfaces_at(
+    volume: &grana_volume::Volume,
+    level: Level,
+    params: SurfaceParams,
+) -> SurfaceSet {
     let intensity = Intensity::new(0.0, f32::from(HIGH));
     let channels = volume.channel_count();
     let builder = SurfaceBuilder::new(0, level, params, channels, 0, Region::none(), intensity);

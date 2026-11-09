@@ -302,14 +302,14 @@ impl Area {
         if !(radius.is_finite() && radius > 0.0) {
             return;
         }
-        let center = self.continuous(center);
+        let continuous = self.continuous(center);
         let spacing = self.level.voxel();
         let mut low = [0i64; 3];
         let mut high = [0i64; 3];
         for axis in 0..3 {
             let reach = radius / spacing[axis];
-            low[axis] = self.clip_axis((center[axis] - reach).floor() as i64, axis);
-            high[axis] = self.clip_axis((center[axis] + reach).ceil() as i64 + 1, axis);
+            low[axis] = self.clip_axis((continuous[axis] - reach).floor() as i64, axis);
+            high[axis] = self.clip_axis((continuous[axis] + reach).ceil() as i64 + 1, axis);
             if high[axis] <= low[axis] {
                 return;
             }
@@ -320,9 +320,8 @@ impl Area {
             while cell[1] < high[1] {
                 cell[0] = low[0];
                 while cell[0] < high[0] {
-                    let offset = [0, 1, 2]
-                        .map(|axis| ((cell[axis] as f32 + 0.5) - center[axis]) * spacing[axis]);
-                    if offset.iter().map(|value| value * value).sum::<f32>() <= radius * radius {
+                    let offset = Vec3::from(center) - Vec3::from(self.cell_center(cell));
+                    if offset.length_squared() <= radius * radius {
                         self.set(cell);
                     }
                     cell[0] += 1;
@@ -333,37 +332,34 @@ impl Area {
         }
     }
 
+    fn cell_center(&self, cell: [i64; 3]) -> [f32; 3] {
+        self.level.voxel_center(cell.map(|value| value as f32))
+    }
+
     fn boxed(&mut self, region: Region) {
         if self.extent.contains(&0) {
             return;
         }
-        let spacing = self.level.voxel();
-        let origin = self.level.origin();
-        let corner = Vec3::new(
-            origin[0] + 0.5 * spacing[0],
-            origin[1] + 0.5 * spacing[1],
-            origin[2] + 0.5 * spacing[2],
-        );
         let half = region.half();
         let center = region.center();
+        let axes = region.axes();
+        let row = Vec3::from(self.level.basis().column(0));
         let width = self.extent[0] as i64;
         let height = self.extent[1] as i64;
         let depth = self.extent[2] as i64;
-        let axes = region.axes();
         for z in 0..depth {
             for y in 0..height {
-                let row = corner
-                    + Vec3::new(
-                        0.0,
-                        (self.origin[1] + y) as f32 * spacing[1],
-                        (self.origin[2] + z) as f32 * spacing[2],
-                    );
+                let start = Vec3::from(self.level.voxel_center([
+                    self.origin[0] as f32,
+                    (self.origin[1] + y) as f32,
+                    (self.origin[2] + z) as f32,
+                ]));
                 let mut low = f32::NEG_INFINITY;
                 let mut high = f32::INFINITY;
                 for axis in 0..3 {
                     let unit = axes[axis];
-                    let offset = (row - center).dot(unit);
-                    let slope = spacing[0] * unit.x;
+                    let offset = (start - center).dot(unit);
+                    let slope = row.dot(unit);
                     if slope.abs() < PARALLEL {
                         if offset.abs() > half[axis] {
                             low = 1.0;
@@ -380,8 +376,8 @@ impl Area {
                 if low > high {
                     continue;
                 }
-                let first = (low.ceil() as i64).max(self.origin[0]);
-                let last = (high.floor() as i64).min(self.origin[0] + width - 1);
+                let first = (low.ceil() as i64 + self.origin[0]).max(self.origin[0]);
+                let last = (high.floor() as i64 + self.origin[0]).min(self.origin[0] + width - 1);
                 if first > last {
                     continue;
                 }

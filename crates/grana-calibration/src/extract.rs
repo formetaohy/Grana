@@ -13,12 +13,9 @@ pub(crate) fn patch(
     bead: &Bead,
 ) -> Result<Option<Kernel>, Error> {
     let level = image.pyramid().level(0);
-    let spacing = level.spacing();
-    let origin = level.origin();
     let extent = level.extent();
     let half = settings.half();
-    let centre =
-        [0, 1, 2].map(|axis| (bead.world[axis] - origin[axis]) / spacing_axis(spacing, axis) - 0.5);
+    let centre = level.voxel_of(bead.world).map(|value| value - 0.5);
     let start = [0, 1, 2].map(|axis| (centre[axis] - half[axis] as f32).round() as i64);
     let dims = [0, 1, 2].map(|axis| 2 * half[axis] + 1);
     let limits = [extent.x(), extent.y(), extent.z()];
@@ -62,14 +59,6 @@ pub(crate) fn patch(
     }
     let shifted = shifted_values(&values, dims, shift);
     Ok(Some(Kernel::from_values(dims, shifted)))
-}
-
-fn spacing_axis(spacing: grana_volume::Spacing, axis: usize) -> f32 {
-    match axis {
-        0 => spacing.x(),
-        1 => spacing.y(),
-        _ => spacing.z(),
-    }
 }
 
 fn border_median(values: &[f32], dims: [u32; 3]) -> f32 {

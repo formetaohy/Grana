@@ -91,8 +91,7 @@ impl LabelBuilder {
         let mut indices = Vec::new();
         let mut statistics = Vec::with_capacity(objects.len());
         let mut intensities = Vec::with_capacity(objects.len() * self.channels);
-        let spacing = self.info.voxel();
-        let voxel_volume = f64::from(spacing[0]) * f64::from(spacing[1]) * f64::from(spacing[2]);
+        let voxel_volume = self.info.voxel_volume();
         for (object_index, object) in objects.iter().enumerate() {
             assert!(
                 object.voxels > 0 && !object.indices.is_empty(),
@@ -129,18 +128,12 @@ impl LabelBuilder {
                 (object.sum[1] / count) as f32,
                 (object.sum[2] / count) as f32,
             ]);
-            let bounds = Bounds::new(
-                self.info.voxel_center([
-                    object.low[0] as f32,
-                    object.low[1] as f32,
-                    object.low[2] as f32,
-                ]),
-                self.info.voxel_center([
-                    object.high[0] as f32 + 1.0,
-                    object.high[1] as f32 + 1.0,
-                    object.high[2] as f32 + 1.0,
-                ]),
-            );
+            let bounds = {
+                let (low, high) = self
+                    .info
+                    .cell_bounds(object.low, object.high.map(|value| value + 1));
+                Bounds::new(low, high)
+            };
             statistics.push(SurfaceStatistics::new(
                 object.voxels,
                 count * voxel_volume,

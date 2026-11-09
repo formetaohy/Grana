@@ -185,6 +185,15 @@ impl Protocol {
                     set.name
                 )));
             }
+            for (index, mesh) in set.meshes.iter().enumerate() {
+                if *mesh == grana_mesh::Format::Obj || set.meshes[..index].contains(mesh) {
+                    return Err(ProtocolError::Invalid(format!(
+                        "{} exports {} twice or as OBJ",
+                        set.name,
+                        mesh.label()
+                    )));
+                }
+            }
             if !(0.0..=1.0).contains(&set.opacity) {
                 return Err(ProtocolError::Invalid(format!(
                     "the opacity of {} is a unit fraction",

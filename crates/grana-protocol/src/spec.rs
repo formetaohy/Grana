@@ -4,6 +4,7 @@ use grana_display::{CameraState, Palette, SectionState, Shading, Stop, TransferF
 use grana_measure::{
     Aggregate, ChildField, Filter, Group, MeasureView, RelationField, Scope, Statistic, Table,
 };
+use grana_mesh::Format as MeshFormat;
 use grana_object::{FilamentParams, SpotParams, SurfaceFilter, SurfaceParams, TrackParams};
 use grana_project::{Export, ViewState};
 use grana_scene::{
@@ -570,6 +571,8 @@ pub struct SetSpec {
     pub curation: Option<CurationSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub measure: Option<MeasureSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub meshes: Vec<MeshFormat>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

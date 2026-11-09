@@ -111,7 +111,7 @@ fn project_pill<'a>(
                 Vec2::new(frame.min.x + 27.0, frame.min.y),
                 Vec2::new(46.0, frame.height()),
             ),
-            "grana",
+            "Grana",
             TextStyle::new(brand_font, palette.text_primary),
             Align::Center,
         );

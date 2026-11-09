@@ -189,9 +189,7 @@ impl Tile<'_> {
         );
         let fallback = if low < high { -fallback } else { fallback };
         let normal = self.normal(point, fallback);
-        let world = [0, 1, 2].map(|component| {
-            plan.origin[component] + (point[component] + 0.5) * plan.spacing[component]
-        });
+        let world = plan.placement().voxel_center(point);
         let vertex = self.vertices.len() as u32;
         self.vertices
             .push(MeshVertex::new(world, normal.to_array(), object));
@@ -225,17 +223,20 @@ impl Tile<'_> {
     }
 
     fn normal(&self, point: [f32; 3], fallback: Vec3) -> Vec3 {
-        let spacing = self.pass.plan.spacing;
-        let gradient = Vec3::new(
-            (self.sample([point[0] + 1.0, point[1], point[2]])
-                - self.sample([point[0] - 1.0, point[1], point[2]]))
-                / (2.0 * spacing[0]),
-            (self.sample([point[0], point[1] + 1.0, point[2]])
-                - self.sample([point[0], point[1] - 1.0, point[2]]))
-                / (2.0 * spacing[1]),
-            (self.sample([point[0], point[1], point[2] + 1.0])
-                - self.sample([point[0], point[1], point[2] - 1.0]))
-                / (2.0 * spacing[2]),
+        let slope = Vec3::new(
+            self.sample([point[0] + 1.0, point[1], point[2]])
+                - self.sample([point[0] - 1.0, point[1], point[2]]),
+            self.sample([point[0], point[1] + 1.0, point[2]])
+                - self.sample([point[0], point[1] - 1.0, point[2]]),
+            self.sample([point[0], point[1], point[2] + 1.0])
+                - self.sample([point[0], point[1], point[2] - 1.0]),
+        );
+        let gradient = Vec3::from(
+            self.pass
+                .plan
+                .placement()
+                .basis()
+                .gradient(slope.to_array()),
         );
         if gradient.length_squared() > 1.0e-20 {
             return -gradient.normalize();

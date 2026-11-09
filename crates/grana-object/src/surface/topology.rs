@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use grana_codec::{Decoder, Encoder, FAULT_VALUE, Fault};
 use grana_geometry::{Decode, Payload};
+use grana_volume::{Basis, Extent, Level};
 
 use crate::intensity::{AccumulatorParts, SampleAccumulator};
 
@@ -115,68 +116,43 @@ impl Seam {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TopologyInfo {
-    level: usize,
+    resolution: usize,
     channels: usize,
     detection: usize,
-    spacing: [f32; 3],
-    origin: [f32; 3],
-    voxel_volume: f64,
+    placement: Level,
     span: f32,
     seeds: usize,
 }
 
 impl TopologyInfo {
-    pub fn new(
-        level: usize,
-        channels: usize,
-        detection: usize,
-        spacing: [f32; 3],
-        origin: [f32; 3],
-    ) -> Self {
+    pub fn new(resolution: usize, channels: usize, detection: usize, placement: Level) -> Self {
         assert!(channels > 0, "a surface measures at least one channel");
         assert!(
             detection < channels,
             "the detection channel is one of the measured channels"
         );
-        assert!(
-            spacing
-                .iter()
-                .all(|value| value.is_finite() && *value > 0.0),
-            "a surface voxel is a positive size on every axis"
-        );
-        assert!(
-            origin.iter().all(|value| value.is_finite()),
-            "a surface origin is finite on every axis"
-        );
         Self {
-            level,
+            resolution,
             channels,
             detection,
-            spacing,
-            origin,
-            voxel_volume: 1.0,
+            placement,
             span: 0.0,
             seeds: 0,
         }
     }
 
-    pub fn with_sampling(mut self, voxel_volume: f64, span: f32, seeds: usize) -> Self {
-        assert!(
-            voxel_volume.is_finite() && voxel_volume > 0.0,
-            "a surface voxel encloses a positive volume"
-        );
+    pub fn with_sampling(mut self, span: f32, seeds: usize) -> Self {
         assert!(
             span.is_finite() && span >= 0.0,
             "a surface intensity span is a non negative range"
         );
-        self.voxel_volume = voxel_volume;
         self.span = span;
         self.seeds = seeds;
         self
     }
 
-    pub fn level(self) -> usize {
-        self.level
+    pub fn resolution(self) -> usize {
+        self.resolution
     }
 
     pub fn channels(self) -> usize {
@@ -187,16 +163,12 @@ impl TopologyInfo {
         self.detection
     }
 
-    pub fn spacing(self) -> [f32; 3] {
-        self.spacing
-    }
-
-    pub fn origin(self) -> [f32; 3] {
-        self.origin
+    pub fn placement(self) -> Level {
+        self.placement
     }
 
     pub fn voxel_volume(self) -> f64 {
-        self.voxel_volume
+        self.placement.voxel_volume()
     }
 
     pub fn span(self) -> f32 {
@@ -208,12 +180,10 @@ impl TopologyInfo {
     }
 
     pub fn shares_detection(self, other: Self) -> bool {
-        self.level == other.level
+        self.resolution == other.resolution
             && self.channels == other.channels
             && self.detection == other.detection
-            && self.spacing == other.spacing
-            && self.origin == other.origin
-            && self.voxel_volume == other.voxel_volume
+            && self.placement == other.placement
             && self.span == other.span
     }
 }
@@ -357,7 +327,7 @@ impl SurfaceTopology {
     }
 
     pub fn level(&self) -> usize {
-        self.info.level()
+        self.info.resolution()
     }
 
     pub fn basins(&self) -> &[Basin] {
@@ -406,9 +376,7 @@ impl SurfaceTopology {
         }));
         let info = self
             .info
-            .with_sampling(self.info.voxel_volume(), self.info.span(), {
-                self.info.seeds() + other.info.seeds()
-            });
+            .with_sampling(self.info.span(), self.info.seeds() + other.info.seeds());
         Some(Self::new(
             info,
             basins,
@@ -420,15 +388,24 @@ impl SurfaceTopology {
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let info = self.info;
+        let placement = info.placement();
+        let extent = placement.extent();
         let mut bytes = Vec::with_capacity(self.stored_bytes());
         let mut writer = Encoder::memory(&mut bytes);
-        writer.count(info.level());
+        writer.count(info.resolution());
         writer.count(info.channels());
         writer.count(info.detection());
-        for value in info.spacing().into_iter().chain(info.origin()) {
+        for value in [extent.x(), extent.y(), extent.z()] {
+            writer.u32(value);
+        }
+        for axis in 0..3 {
+            for value in placement.basis().column(axis) {
+                writer.f32(value);
+            }
+        }
+        for value in placement.origin() {
             writer.f32(value);
         }
-        writer.f64(info.voxel_volume());
         writer.f32(info.span());
         writer.count(info.seeds());
         writer.count(self.basins.len());
@@ -498,27 +475,30 @@ impl SurfaceTopology {
 
     fn decode(bytes: &[u8]) -> Result<Self, Fault> {
         let mut reader = Decoder::memory(bytes);
-        let level = reader.count(1)?;
+        let resolution = reader.count(1)?;
         let channels = reader.count(1)?;
         let detection = reader.count(1)?;
         if channels == 0 || detection >= channels {
             return Err(FAULT_VALUE);
         }
-        let mut spacing = [0.0f32; 3];
-        let mut origin = [0.0f32; 3];
-        for value in &mut spacing {
-            *value = finite(reader.f32()?)?;
-            if *value <= 0.0 {
+        let mut extent = [0u32; 3];
+        for value in &mut extent {
+            *value = reader.u32()?;
+            if *value == 0 {
                 return Err(FAULT_VALUE);
             }
         }
+        let mut columns = [[0.0f32; 3]; 3];
+        for column in &mut columns {
+            for value in column {
+                *value = finite(reader.f32()?)?;
+            }
+        }
+        let mut origin = [0.0f32; 3];
         for value in &mut origin {
             *value = finite(reader.f32()?)?;
         }
-        let voxel_volume = reader.f64()?;
-        if !voxel_volume.is_finite() || voxel_volume <= 0.0 {
-            return Err(FAULT_VALUE);
-        }
+        let placement = placement(extent, columns, origin)?;
         let span = reader.f32()?;
         if !span.is_finite() || span < 0.0 {
             return Err(FAULT_VALUE);
@@ -637,11 +617,8 @@ impl SurfaceTopology {
             tagged_basins,
         );
         Ok(Self::new(
-            TopologyInfo::new(level, channels, detection, spacing, origin).with_sampling(
-                voxel_volume,
-                span,
-                seeds,
-            ),
+            TopologyInfo::new(resolution, channels, detection, placement)
+                .with_sampling(span, seeds),
             basins,
             accumulators,
             seams,
@@ -664,8 +641,7 @@ impl SurfaceTopology {
     }
 }
 
-const INFO_BYTES: usize =
-    4 * size_of::<u32>() + 6 * size_of::<f32>() + size_of::<f64>() + size_of::<f32>();
+const INFO_BYTES: usize = 7 * size_of::<u32>() + 13 * size_of::<f32>();
 const BASIN_BYTES: usize = size_of::<u32>()
     + size_of::<u64>()
     + 3 * size_of::<f64>()
@@ -677,6 +653,20 @@ const SEAM_BYTES: usize = 3 * size_of::<u32>();
 
 fn finite(value: f32) -> Result<f32, Fault> {
     value.is_finite().then_some(value).ok_or(FAULT_VALUE)
+}
+
+fn placement(extent: [u32; 3], columns: [[f32; 3]; 3], origin: [f32; 3]) -> Result<Level, Fault> {
+    let matrix = glam::Mat3::from_cols_array_2d(&columns);
+    let volume = matrix.col(0).length() * matrix.col(1).length() * matrix.col(2).length();
+    let determinant = matrix.determinant();
+    if !(volume.is_finite() && determinant.is_finite() && determinant.abs() > 1.0e-6 * volume) {
+        return Err(FAULT_VALUE);
+    }
+    Ok(Level::placed(
+        Extent::new(extent[0], extent[1], extent[2]),
+        Basis::new(columns),
+        origin,
+    ))
 }
 
 impl Payload for SurfaceTopology {
@@ -703,7 +693,7 @@ impl std::fmt::Debug for SurfaceTopology {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("SurfaceTopology")
-            .field("level", &self.info.level())
+            .field("level", &self.info.resolution())
             .field("basins", &self.basins.len())
             .field("seams", &self.seams.len())
             .field("triangles", &self.patches.triangles().len())

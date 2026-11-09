@@ -2,6 +2,7 @@ mod batch;
 pub mod channels;
 pub mod event;
 pub mod export;
+pub mod mesh;
 pub mod run;
 pub mod snapshot;
 

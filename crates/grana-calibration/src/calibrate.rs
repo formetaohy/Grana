@@ -44,8 +44,7 @@ pub fn calibrate(image: &Image, settings: Settings) -> Result<Calibration, Error
     let beads = detect::beads(
         &volume,
         dims,
-        info.origin(),
-        info.spacing(),
+        info,
         settings.threshold(),
         settings.separation(),
         settings.bead_limit(),
@@ -56,7 +55,7 @@ pub fn calibrate(image: &Image, settings: Settings) -> Result<Calibration, Error
         let Some(patch) = extract::patch(image, &settings, bead)? else {
             continue;
         };
-        depths.push(bead.world[2]);
+        depths.push(info.voxel_of(bead.world)[2] / dims[2] as f32);
         patches.push(patch);
     }
     if patches.is_empty() {
@@ -66,16 +65,10 @@ pub fn calibrate(image: &Image, settings: Settings) -> Result<Calibration, Error
     }
     let finest = pyramid.level(0);
     let spacing = finest.spacing();
-    let low = finest.origin()[2];
-    let high = low + finest.extent().z() as f32 * spacing.z();
     let bands = settings.bands().min(patches.len() as u32).max(1);
     let mut groups = vec![Vec::new(); bands as usize];
     for (index, depth) in depths.iter().enumerate() {
-        let position = if high > low {
-            ((depth - low) / (high - low)).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        let position = depth.clamp(0.0, 1.0);
         let band = ((position * bands as f32) as usize).min(bands as usize - 1);
         groups[band].push(index);
     }

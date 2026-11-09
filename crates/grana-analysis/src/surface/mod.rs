@@ -139,8 +139,7 @@ impl Face {
 pub(super) struct Gate<'a> {
     pub(super) region: [u32; 3],
     pub(super) limit: [u32; 3],
-    pub(super) spacing: [f32; 3],
-    pub(super) origin: [f32; 3],
+    pub(super) placement: Level,
     pub(super) roi: Option<&'a Mask>,
 }
 
@@ -153,11 +152,7 @@ impl Gate<'_> {
             return false;
         }
         match self.roi {
-            Some(roi) => {
-                roi.contains([0, 1, 2].map(|axis| {
-                    self.origin[axis] + (voxel[axis] as f32 + 0.5) * self.spacing[axis]
-                }))
-            }
+            Some(roi) => roi.contains(self.placement.voxel_center(voxel.map(|value| value as f32))),
             None => true,
         }
     }
@@ -168,9 +163,7 @@ pub struct SurfaceBuilder {
     detection: usize,
     channels: usize,
     extent: [u32; 3],
-    spacing: [f32; 3],
-    origin: [f32; 3],
-    voxel_volume: f64,
+    placement: Level,
     span: f32,
     intensity: Intensity,
     params: SurfaceParams,
@@ -207,8 +200,6 @@ impl SurfaceBuilder {
         let extent = [extent.x(), extent.y(), extent.z()];
         let spacing = level.spacing();
         let spacing = [spacing.x(), spacing.y(), spacing.z()];
-        let origin = level.origin();
-        let voxel_volume = f64::from(spacing[0]) * f64::from(spacing[1]) * f64::from(spacing[2]);
         let region = region.voxel_range(level);
         let region = region.unwrap_or([0..0, 0..0, 0..0]);
         let narrowest = spacing.iter().copied().fold(f32::INFINITY, f32::min);
@@ -242,9 +233,7 @@ impl SurfaceBuilder {
             detection,
             channels,
             extent,
-            spacing,
-            origin,
-            voxel_volume,
+            placement: level,
             span: intensity.span(),
             intensity,
             params,
@@ -270,6 +259,10 @@ impl SurfaceBuilder {
 
     pub fn level(&self) -> usize {
         self.level_index
+    }
+
+    pub(super) fn placement(&self) -> Level {
+        self.placement
     }
 
     pub(super) fn dims(&self) -> [usize; 3] {
@@ -350,8 +343,7 @@ impl SurfaceBuilder {
                 self.region[2].start,
             ],
             limit: [self.region[0].end, self.region[1].end, self.region[2].end],
-            spacing: self.spacing,
-            origin: self.origin,
+            placement: self.placement,
             roi,
         }
     }
@@ -369,9 +361,10 @@ impl SurfaceBuilder {
     }
 
     fn landing(&self, solid: &SolidMask, seed: [f32; 3]) -> Option<[i64; 3]> {
-        let centre = [0, 1, 2].map(|axis| {
-            ((seed[axis] - self.origin[axis]) / self.spacing[axis] - 0.5).round() as i64
-        });
+        let centre = self
+            .placement
+            .voxel_of(seed)
+            .map(|value| (value - 0.5).round() as i64);
         let mut nearest: Option<(i64, [i64; 3])> = None;
         for dz in -SEED_SNAP..=SEED_SNAP {
             for dy in -SEED_SNAP..=SEED_SNAP {
