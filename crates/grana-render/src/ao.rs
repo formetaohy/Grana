@@ -10,11 +10,10 @@ use wgpu::{
 
 use crate::frame::FrameData;
 use crate::layout::Layouts;
+use crate::target::{DEPTH_FORMAT, NORMAL_FORMAT};
 
 const WORKGROUP: u32 = 8;
 const OUTPUT_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
-const NORMAL_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
-const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 const SHADER: &str = include_str!("shader/gtao.wgsl");
 
 #[repr(C)]
@@ -25,66 +24,61 @@ struct AoData {
     eye: [f32; 4],
     extent: [f32; 4],
     noise: [f32; 4],
+    region: [f32; 4],
 }
 
-const _: () = assert!(size_of::<AoData>() == 176);
+const _: () = assert!(size_of::<AoData>() == 192);
 
 pub(crate) struct Ao {
     normal: TextureView,
     depth: TextureView,
+    volume_normal: TextureView,
     read: BindGroup,
     compute: BindGroup,
     pipeline: ComputePipeline,
     uniform: Buffer,
     size: [u32; 2],
+    volume_size: [u32; 2],
 }
 
 impl Ao {
-    pub fn new(device: &Device, layouts: &Layouts, size: [u32; 2]) -> Self {
+    pub fn new(device: &Device, layouts: &Layouts, size: [u32; 2], volume_size: [u32; 2]) -> Self {
         assert!(
-            size[0] > 0 && size[1] > 0,
+            size[0] > 0 && size[1] > 0 && volume_size[0] > 0 && volume_size[1] > 0,
             "an ambient occlusion target covers a positive surface"
         );
-        let extent = Extent3d {
-            width: size[0],
-            height: size[1],
-            depth_or_array_layers: 1,
-        };
-        let normal = device
-            .create_texture(&TextureDescriptor {
-                label: Some("grana.ao.normal"),
-                size: extent,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: NORMAL_FORMAT,
-                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&TextureViewDescriptor::default());
-        let depth = device
-            .create_texture(&TextureDescriptor {
-                label: Some("grana.ao.depth"),
-                size: extent,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: DEPTH_FORMAT,
-                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&TextureViewDescriptor::default());
-        let output = device.create_texture(&TextureDescriptor {
-            label: Some("grana.ao.output"),
-            size: extent,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: OUTPUT_FORMAT,
-            usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let output_view = output.create_view(&TextureViewDescriptor::default());
+        assert!(
+            volume_size[0] >= size[0] && volume_size[1] >= size[1],
+            "the volume target holds the volume pane"
+        );
+        let normal = attachment(
+            device,
+            "grana.ao.normal",
+            size,
+            NORMAL_FORMAT,
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        );
+        let depth = attachment(
+            device,
+            "grana.ao.depth",
+            size,
+            DEPTH_FORMAT,
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        );
+        let volume_normal = attachment(
+            device,
+            "grana.ao.volume.normal",
+            volume_size,
+            NORMAL_FORMAT,
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        );
+        let output = attachment(
+            device,
+            "grana.ao.output",
+            size,
+            OUTPUT_FORMAT,
+            TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+        );
         let uniform = device.create_buffer(&BufferDescriptor {
             label: Some("grana.ao.uniforms"),
             size: size_of::<AoData>() as u64,
@@ -96,7 +90,7 @@ impl Ao {
             layout: &layouts.ao_read,
             entries: &[BindGroupEntry {
                 binding: 0,
-                resource: BindingResource::TextureView(&output_view),
+                resource: BindingResource::TextureView(&output),
             }],
         });
         let compute = device.create_bind_group(&BindGroupDescriptor {
@@ -117,7 +111,11 @@ impl Ao {
                 },
                 BindGroupEntry {
                     binding: 3,
-                    resource: BindingResource::TextureView(&output_view),
+                    resource: BindingResource::TextureView(&output),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: BindingResource::TextureView(&volume_normal),
                 },
             ],
         });
@@ -136,16 +134,22 @@ impl Ao {
         Self {
             normal,
             depth,
+            volume_normal,
             read,
             compute,
             pipeline,
             uniform,
             size,
+            volume_size,
         }
     }
 
     pub fn size(&self) -> [u32; 2] {
         self.size
+    }
+
+    pub fn volume_size(&self) -> [u32; 2] {
+        self.volume_size
     }
 
     pub fn normal(&self) -> &TextureView {
@@ -154,6 +158,10 @@ impl Ao {
 
     pub fn depth(&self) -> &TextureView {
         &self.depth
+    }
+
+    pub fn volume_normal(&self) -> &TextureView {
+        &self.volume_normal
     }
 
     pub fn group(&self) -> &BindGroup {
@@ -184,6 +192,28 @@ impl Ao {
         });
     }
 
+    pub fn clear_volume(&self, encoder: &mut CommandEncoder) {
+        let _ = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("grana.ao.volume.clear.pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: &self.volume_normal,
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Clear(wgpu::Color {
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 1.0,
+                    }),
+                    store: StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
+    }
+
     pub fn evaluate(
         &self,
         queue: &Queue,
@@ -207,6 +237,7 @@ impl Ao {
             eye: frame.eye,
             extent: [self.size[0] as f32, self.size[1] as f32, reach, strength],
             noise: [sample as f32, frame.march[3], 0.0, 0.0],
+            region: frame.viewport,
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&data));
         let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
@@ -267,4 +298,29 @@ pub(crate) fn dummy(device: &Device, queue: &Queue, layouts: &Layouts) -> BindGr
             ),
         }],
     })
+}
+
+fn attachment(
+    device: &Device,
+    label: &str,
+    size: [u32; 2],
+    format: TextureFormat,
+    usage: TextureUsages,
+) -> TextureView {
+    device
+        .create_texture(&TextureDescriptor {
+            label: Some(label),
+            size: Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+        .create_view(&TextureViewDescriptor::default())
 }

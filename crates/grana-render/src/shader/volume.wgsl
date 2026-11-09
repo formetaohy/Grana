@@ -1,7 +1,6 @@
 @group(3) @binding(0) var object_depth: texture_depth_2d;
 @group(4) @binding(0) var shadow_tau: texture_3d<f32>;
 @group(4) @binding(1) var shadow_sampler: sampler;
-@group(4) @binding(2) var shadow_occlusion: texture_3d<f32>;
 @group(4) @binding(3) var shadow_objects: texture_depth_2d;
 @group(4) @binding(4) var shadow_compare: sampler_comparison;
 
@@ -11,6 +10,8 @@
 @group(5) @binding(3) var oit_accumulate: texture_2d<f32>;
 @group(5) @binding(4) var oit_reveal: texture_2d<f32>;
 @group(5) @binding(5) var oit_tail_depth: texture_2d<f32>;
+
+@group(6) @binding(0) var ao_map: texture_2d<f32>;
 
 const MAX_SAMPLES: u32 = 4096u;
 const MAX_CELLS: u32 = 4096u;
@@ -86,22 +87,26 @@ fn region_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(entry, exit);
 }
 
-fn lighting(band: u32, uvw: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
-    let occlusion = local_occlusion(band_uvw(band, uvw));
+fn lighting(band: u32, uvw: vec3<f32>, normal: vec3<f32>) -> f32 {
     let strength = clamp(frame.march.y, 0.0, 1.0);
     if (strength <= 0.0) {
-        return vec2<f32>(1.0, occlusion);
+        return 1.0;
     }
     let world = level_world(band, uvw);
     let coordinate = shadow_coordinate(frame.light_view, world);
-    let sun = sun_transmittance(
+    return sun_transmittance(
         coordinate,
         shadow_bias(frame.light_reach, normal, frame.light.xyz),
     );
-    return vec2<f32>(mix(1.0, sun, strength), occlusion);
 }
 
-fn lit(color: vec3<f32>, normal: vec3<f32>, direction: vec3<f32>, light: vec2<f32>) -> vec3<f32> {
+fn lit(
+    color: vec3<f32>,
+    normal: vec3<f32>,
+    direction: vec3<f32>,
+    light: f32,
+    ao: f32,
+) -> vec3<f32> {
     if (length(normal) < 0.5) {
         return color;
     }
@@ -113,11 +118,11 @@ fn lit(color: vec3<f32>, normal: vec3<f32>, direction: vec3<f32>, light: vec2<f3
         facing,
         -direction,
         frame.light.xyz,
-        light.x,
+        light,
         frame.shading.x,
         frame.shading.y,
         1.0,
-    ) * (1.0 - OCCLUSION_STRENGTH * (1.0 - light.y));
+    ) * (1.0 - OCCLUSION_STRENGTH * (1.0 - ao));
 }
 
 fn shade_channel(
@@ -126,6 +131,7 @@ fn shade_channel(
     color: vec3<f32>,
     uvw: vec3<f32>,
     direction: vec3<f32>,
+    ao: f32,
 ) -> vec3<f32> {
     let magnitude = length(gradient);
     if (magnitude < GRADIENT_EPSILON) {
@@ -140,7 +146,7 @@ fn shade_channel(
         return color;
     }
     let normal = shaded_normal(gradient, band);
-    return mix(color, lit(color, normal, direction, lighting(band, uvw, normal)), weight);
+    return mix(color, lit(color, normal, direction, lighting(band, uvw, normal), ao), weight);
 }
 
 fn brick_visible(record: BrickRecord, channels_active: u32) -> bool {
@@ -250,11 +256,26 @@ fn local_step(t: f32) -> f32 {
     return max(frame.march.x, 0.5 * frame.jitter.w * t / frame.march.w);
 }
 
-fn march(begin: f32, finish: f32, direction: vec3<f32>, dither: f32) -> vec4<f32> {
+struct March {
+    radiance: vec3<f32>,
+    transmittance: f32,
+    hit: vec4<f32>,
+    normal: vec4<f32>,
+}
+
+fn march(
+    begin: f32,
+    finish: f32,
+    direction: vec3<f32>,
+    dither: f32,
+    ao: f32,
+) -> March {
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
+    var hit = vec4<f32>(0.0);
+    var hit_normal = vec4<f32>(0.0);
     if (finish <= begin) {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+        return March(radiance, transmittance, hit, hit_normal);
     }
     let channel_count = u32(frame.march.z);
     let pack_count = (channel_count + PACK - 1u) / PACK;
@@ -340,6 +361,25 @@ fn march(begin: f32, finish: f32, direction: vec3<f32>, dither: f32) -> vec4<f32
                     }
                     if (shaded) {
                         let gradient = pack_gradient(band, pack, position, gradient_step);
+                        if (hit.w <= 0.0) {
+                            for (var component = 0u; component < PACK; component += 1u) {
+                                let channel = pack * PACK + component;
+                                if (channel >= channel_count) {
+                                    break;
+                                }
+                                if (tau[component] <= SHADING_TAU
+                                    || channel_opacity(channel) <= 0.0) {
+                                    continue;
+                                }
+                                let surface_normal = gradient[component];
+                                if (length(surface_normal) < GRADIENT_EPSILON) {
+                                    continue;
+                                }
+                                hit = vec4<f32>(level_world(band, position), 1.0);
+                                hit_normal = vec4<f32>(shaded_normal(surface_normal, band), 1.0);
+                                break;
+                            }
+                        }
                         for (var component = 0u; component < PACK; component += 1u) {
                             let channel = pack * PACK + component;
                             if (channel >= channel_count) {
@@ -354,6 +394,7 @@ fn march(begin: f32, finish: f32, direction: vec3<f32>, dither: f32) -> vec4<f32
                                 color[component],
                                 position,
                                 direction,
+                                ao,
                             );
                         }
                     }
@@ -389,14 +430,34 @@ fn march(begin: f32, finish: f32, direction: vec3<f32>, dither: f32) -> vec4<f32
         }
         t = max(cursor, boundary);
     }
-    return vec4<f32>(radiance, transmittance);
+    return March(radiance, transmittance, hit, hit_normal);
+}
+
+struct VolumeOutput {
+    @location(0) color: vec4<f32>,
+    @location(1) normal: vec4<f32>,
+}
+
+fn ambient_occlusion(pixel: vec2<f32>) -> f32 {
+    let size = vec2<i32>(frame.viewport.zw);
+    let at = vec2<i32>(floor(pixel - frame.viewport.xy));
+    if (at.x < 0 || at.y < 0 || at.x >= size.x || at.y >= size.y) {
+        return 1.0;
+    }
+    return textureLoad(ao_map, at, 0).r;
+}
+
+fn clip_depth(world: vec3<f32>) -> f32 {
+    let clip = frame.view_projection * vec4<f32>(world, 1.0);
+    return clamp(clip.z / clip.w, 0.0, 1.0);
 }
 
 @fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(input: VertexOutput) -> VolumeOutput {
     let eye = frame.eye.xyz;
     let ndc = input.ndc + frame.jitter.xy;
     let pixel = vec2<i32>(input.clip_position.xy);
+    let ao = ambient_occlusion(vec2<f32>(input.clip_position.xy));
     let direction = normalize(unproject(vec3<f32>(ndc, 1.0)) - eye);
     let local_eye = level_local(0u, eye);
     let local_direction = level_rate(0u, direction);
@@ -511,12 +572,18 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         layers += 1u;
     }
     var cursor = start + min(jitter, max(exit - start, 0.0));
+    var hit = vec4<f32>(0.0);
+    var hit_normal = vec4<f32>(0.0);
     for (var index = 0u; index < layers; index += 1u) {
         let limit = min(object_distance(layer_depth[index], ndc), exit);
         if (limit > cursor) {
-            let segment = march(cursor, limit, direction, dither);
-            radiance += transmittance * segment.rgb;
-            transmittance *= segment.a;
+            let segment = march(cursor, limit, direction, dither, ao);
+            radiance += transmittance * segment.radiance;
+            transmittance *= segment.transmittance;
+            if (hit.w <= 0.0 && segment.hit.w > 0.0) {
+                hit = segment.hit;
+                hit_normal = segment.normal;
+            }
             cursor = limit;
         }
         let sample = vec4<f32>(
@@ -530,9 +597,17 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
     if (cursor < exit) {
-        let segment = march(cursor, exit, direction, dither);
-        radiance += transmittance * segment.rgb;
-        transmittance *= segment.a;
+        let segment = march(cursor, exit, direction, dither, ao);
+        radiance += transmittance * segment.radiance;
+        transmittance *= segment.transmittance;
+        if (hit.w <= 0.0 && segment.hit.w > 0.0) {
+            hit = segment.hit;
+            hit_normal = segment.normal;
+        }
     }
-    return vec4<f32>(radiance, 1.0 - transmittance);
+    let depth = select(1.0, clip_depth(hit.xyz), hit.w > 0.0);
+    return VolumeOutput(
+        vec4<f32>(radiance, 1.0 - transmittance),
+        vec4<f32>(hit_normal.xyz, depth),
+    );
 }

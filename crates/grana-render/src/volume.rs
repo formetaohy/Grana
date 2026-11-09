@@ -1,13 +1,13 @@
 use wgpu::{
     BindGroup, BlendComponent, BlendFactor, BlendOperation, BlendState, ColorTargetState,
-    ColorWrites, CommandEncoder, DepthStencilState, Device, FragmentState, LoadOp,
+    ColorWrites, CommandEncoder, CompareFunction, DepthStencilState, Device, FragmentState, LoadOp,
     MultisampleState, Operations, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
     RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, StencilState,
     StoreOp, TextureView, VertexState,
 };
 
 use crate::layout::Layouts;
-use crate::target::{DEPTH_FORMAT, SCENE_FORMAT};
+use crate::target::{DEPTH_FORMAT, NORMAL_FORMAT, SCENE_FORMAT};
 
 const SHADER: &str = concat!(
     "enable wgpu_binding_array;\n",
@@ -49,6 +49,7 @@ pub(crate) struct VolumePass {
 
 pub(crate) struct VolumeFrame<'a> {
     pub target: &'a TextureView,
+    pub normal: &'a TextureView,
     pub region: [u32; 4],
     pub scene: &'a BindGroup,
     pub level: &'a BindGroup,
@@ -56,6 +57,7 @@ pub(crate) struct VolumeFrame<'a> {
     pub depth_group: &'a BindGroup,
     pub shadow: &'a BindGroup,
     pub oit: &'a BindGroup,
+    pub ao: &'a BindGroup,
 }
 
 impl VolumePass {
@@ -80,11 +82,18 @@ impl VolumePass {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
-                targets: &[Some(ColorTargetState {
-                    format: SCENE_FORMAT,
-                    blend: Some(BLEND),
-                    write_mask: ColorWrites::ALL,
-                })],
+                targets: &[
+                    Some(ColorTargetState {
+                        format: SCENE_FORMAT,
+                        blend: Some(BLEND),
+                        write_mask: ColorWrites::ALL,
+                    }),
+                    Some(ColorTargetState {
+                        format: NORMAL_FORMAT,
+                        blend: None,
+                        write_mask: ColorWrites::ALL,
+                    }),
+                ],
             }),
             multiview_mask: None,
             cache: None,
@@ -98,15 +107,27 @@ impl VolumePass {
         let height = region[3].max(1);
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("grana.volume.pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: frame.target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
-                },
-            })],
+            color_attachments: &[
+                Some(RenderPassColorAttachment {
+                    view: frame.target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    },
+                }),
+                Some(RenderPassColorAttachment {
+                    view: frame.normal,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    },
+                }),
+            ],
+            depth_stencil_attachment: None,
             ..Default::default()
         });
         pass.set_viewport(
@@ -125,11 +146,12 @@ impl VolumePass {
         pass.set_bind_group(3, frame.depth_group, &[]);
         pass.set_bind_group(4, frame.shadow, &[]);
         pass.set_bind_group(5, frame.oit, &[]);
+        pass.set_bind_group(6, frame.ao, &[]);
         pass.draw(0..3, 0..1);
     }
 }
 
-pub(crate) fn depth_state(write: bool, compare: wgpu::CompareFunction) -> DepthStencilState {
+pub(crate) fn depth_state(write: bool, compare: CompareFunction) -> DepthStencilState {
     DepthStencilState {
         format: DEPTH_FORMAT,
         depth_write_enabled: Some(write),

@@ -42,12 +42,3 @@ fn shadow_bias(reach: vec4<f32>, normal: vec3<f32>, light: vec3<f32>) -> f32 {
 fn sun_transmittance(coordinate: vec3<f32>, bias: f32) -> f32 {
     return tau_transmittance(coordinate) * object_visibility(coordinate, bias);
 }
-
-fn local_occlusion(uvw: vec3<f32>) -> f32 {
-    return textureSampleLevel(
-        shadow_occlusion,
-        shadow_sampler,
-        clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0)),
-        0.0,
-    ).r;
-}

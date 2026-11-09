@@ -27,6 +27,7 @@ struct Entry {
     accent: [u8; 4],
     image: Raster,
     plots: Vec<Raster>,
+    profiles: Vec<Raster>,
 }
 
 pub(super) fn write(
@@ -59,6 +60,7 @@ pub(super) fn write(
             accent: status_color(row.status),
             image,
             plots: colocalizations(&folder),
+            profiles: profiles(&folder),
         });
     }
     if entries.is_empty() {
@@ -82,7 +84,7 @@ pub(super) fn write(
         }
         ordinal += entries[start..end]
             .iter()
-            .map(|entry| entry.plots.len())
+            .map(|entry| entry.plots.len() + entry.profiles.len())
             .sum::<usize>();
         start = end;
     }
@@ -297,7 +299,28 @@ fn groups<'a>(entries: &'a [Entry], tables: &'a [(String, Table)]) -> Vec<Group<
                 })
                 .collect();
             groups.push(Group {
-                name: format!("{name} · colocalization"),
+                name: section(name, "colocalization"),
+                table: None,
+                cells,
+            });
+        }
+        if entries[start..end]
+            .iter()
+            .any(|entry| !entry.profiles.is_empty())
+        {
+            let cells = entries[start..end]
+                .iter()
+                .flat_map(|entry| {
+                    entry.profiles.iter().map(|profile| Cell {
+                        image: profile,
+                        title: &entry.title,
+                        detail: "intensity profile",
+                        accent: Some(entry.accent),
+                    })
+                })
+                .collect();
+            groups.push(Group {
+                name: section(name, "profiles"),
                 table: None,
                 cells,
             });
@@ -308,6 +331,14 @@ fn groups<'a>(entries: &'a [Entry], tables: &'a [(String, Table)]) -> Vec<Group<
 }
 
 fn colocalizations(folder: &Path) -> Vec<Raster> {
+    rasters(folder, "coloc-")
+}
+
+fn profiles(folder: &Path) -> Vec<Raster> {
+    rasters(folder, "profile-")
+}
+
+fn rasters(folder: &Path, prefix: &str) -> Vec<Raster> {
     let Ok(entries) = std::fs::read_dir(folder) else {
         return Vec::new();
     };
@@ -317,7 +348,7 @@ fn colocalizations(folder: &Path) -> Vec<Raster> {
         .filter(|path| {
             path.file_name().is_some_and(|name| {
                 let name = name.to_string_lossy();
-                name.starts_with("coloc-") && name.ends_with(".png")
+                name.starts_with(prefix) && name.ends_with(".png")
             })
         })
         .collect::<Vec<_>>();
@@ -326,6 +357,14 @@ fn colocalizations(folder: &Path) -> Vec<Raster> {
         .iter()
         .filter_map(|path| grana_raster::read(path).ok())
         .collect()
+}
+
+fn section(group: &str, kind: &str) -> String {
+    if group.is_empty() {
+        kind.to_string()
+    } else {
+        format!("{group} · {kind}")
+    }
 }
 
 fn status_color(status: &str) -> [u8; 4] {

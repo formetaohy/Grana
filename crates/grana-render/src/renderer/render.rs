@@ -506,25 +506,33 @@ impl Renderer {
             *sampled = true;
             meshes.write_uniforms(queue, &frame_data, scene.shading);
             let surfaces = !scene.layers.is_empty() || !scene.markers.is_empty();
-            if surfaces
-                && target
-                    .ao
-                    .as_ref()
-                    .is_none_or(|ao| ao.size() != [volume_width, volume_height])
+            let volume_visible = scene
+                .channels
+                .iter()
+                .any(|row| row.visible && row.opacity > 0.0);
+            let ambient = surfaces || volume_visible;
+            if ambient
+                && target.ao.as_ref().is_none_or(|ao| {
+                    ao.size() != [volume_width, volume_height] || ao.volume_size() != size
+                })
             {
                 target.ao = Some(crate::ao::Ao::new(
                     device,
                     layouts,
                     [volume_width, volume_height],
+                    size,
                 ));
             }
             let ao_group: &BindGroup = target.ao.as_ref().map_or(dummy_ao, crate::ao::Ao::group);
-            if surfaces {
+            if ambient {
                 mark(profile, &mut encoder, Stage::Ambient, &mut marks);
                 let ao = target
                     .ao
                     .as_ref()
                     .expect("the ambient occlusion target is ready");
+                if reset {
+                    ao.clear_volume(&mut encoder);
+                }
                 ao.clear(&mut encoder);
                 meshes.draw_gbuffer(
                     &mut encoder,
@@ -557,11 +565,6 @@ impl Renderer {
                     level: level_group,
                     atlas: atlas.group(),
                 };
-                shadow.encode_occlusion(
-                    &mut encoder,
-                    groups,
-                    digest(&[*content, styles, ladder.base as u64, ladder.count as u64]),
-                );
                 if scene.shading.shadows > 0.0 {
                     let object = digest(&[shadow_geometry(scene), space.digest()]);
                     if *object_key != Some(object) {
@@ -752,19 +755,27 @@ impl Renderer {
                 }
             }
             mark(profile, &mut encoder, Stage::Volume, &mut marks);
-            volume.draw(
-                &mut encoder,
-                crate::volume::VolumeFrame {
-                    target: target.scene.color(),
-                    region: volume_region,
-                    scene: scene_group,
-                    level: level_group,
-                    atlas: atlas.group(),
-                    depth_group: target.scene.depth_group(),
-                    shadow: shadow_group,
-                    oit: oit_group,
-                },
-            );
+            if volume_visible {
+                let ao = target
+                    .ao
+                    .as_ref()
+                    .expect("a visible volume carries an ambient occlusion target");
+                volume.draw(
+                    &mut encoder,
+                    crate::volume::VolumeFrame {
+                        target: target.scene.color(),
+                        normal: ao.volume_normal(),
+                        region: volume_region,
+                        scene: scene_group,
+                        level: level_group,
+                        atlas: atlas.group(),
+                        depth_group: target.scene.depth_group(),
+                        shadow: shadow_group,
+                        oit: oit_group,
+                        ao: ao.group(),
+                    },
+                );
+            }
             mark(profile, &mut encoder, Stage::Section, &mut marks);
             section_pass.draw(
                 &mut encoder,

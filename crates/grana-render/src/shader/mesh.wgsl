@@ -36,7 +36,6 @@ struct Style {
 @group(2) @binding(0) var<storage, read> styles: array<Style>;
 @group(3) @binding(0) var shadow_tau: texture_3d<f32>;
 @group(3) @binding(1) var shadow_sampler: sampler;
-@group(3) @binding(2) var shadow_occlusion: texture_3d<f32>;
 @group(3) @binding(3) var shadow_objects: texture_depth_2d;
 @group(3) @binding(4) var shadow_compare: sampler_comparison;
 @group(5) @binding(0) var<storage, read> pick_ids: array<u32>;

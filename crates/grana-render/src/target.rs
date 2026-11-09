@@ -7,6 +7,7 @@ use wgpu::{
 
 pub(crate) const SCENE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const ACCUMULATION_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+pub(crate) const NORMAL_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 pub(crate) const CUT_ID_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 pub(crate) const PICK_FORMAT: TextureFormat = TextureFormat::Rg32Uint;

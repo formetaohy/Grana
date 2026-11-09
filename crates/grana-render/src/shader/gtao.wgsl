@@ -4,12 +4,14 @@ struct AoData {
     eye: vec4<f32>,
     extent: vec4<f32>,
     noise: vec4<f32>,
+    region: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> ao: AoData;
 @group(0) @binding(1) var surface_depth: texture_depth_2d;
 @group(0) @binding(2) var surface_normal: texture_2d<f32>;
 @group(0) @binding(3) var ao_output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(5) var volume_normal: texture_2d<f32>;
 
 const SLICES: u32 = 8u;
 const STEPS: u32 = 5u;
@@ -58,9 +60,20 @@ fn gtao_main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let pixel = vec2<i32>(id.xy);
-    let depth = textureLoad(surface_depth, pixel, 0);
-    let raw_normal = textureLoad(surface_normal, pixel, 0).xyz;
-    if (depth >= 1.0 || length(raw_normal) < 0.5) {
+    let volume_at = pixel + vec2<i32>(ao.region.xy);
+    var depth = textureLoad(surface_depth, pixel, 0);
+    var raw_normal = textureLoad(surface_normal, pixel, 0).xyz;
+    var surface = depth < 1.0 && length(raw_normal) >= 0.5;
+    let volume_sample = textureLoad(volume_normal, volume_at, 0);
+    let depth_of_volume = volume_sample.w;
+    let normal_of_volume = volume_sample.xyz;
+    let volume = depth_of_volume < 1.0 && length(normal_of_volume) >= 0.5;
+    if (volume && (!surface || depth_of_volume < depth)) {
+        depth = depth_of_volume;
+        raw_normal = normal_of_volume;
+        surface = true;
+    }
+    if (!surface) {
         store(pixel, 1.0);
         return;
     }

@@ -8,7 +8,6 @@ use wgpu::{
 
 use crate::layout::Layouts;
 
-const OCCLUSION_SIDE: u32 = 128;
 const OBJECT_SIDE: u32 = 2048;
 const SIDE: [u32; 2] = [112, 256];
 const WORKGROUP: u32 = 4;
@@ -28,18 +27,6 @@ const TAU_SHADER: &str = concat!(
     include_str!("shader/tau_codec.wgsl"),
     "\n",
     include_str!("shader/tau.wgsl")
-);
-const OCCLUSION_SHADER: &str = concat!(
-    "enable wgpu_binding_array;\n",
-    include_str!("shader/scene.wgsl"),
-    "\n",
-    include_str!("shader/brick.wgsl"),
-    "\n",
-    include_str!("shader/band.wgsl"),
-    "\n",
-    include_str!("shader/volume_sample.wgsl"),
-    "\n",
-    include_str!("shader/occlusion.wgsl")
 );
 
 #[derive(Clone, Copy, Debug)]
@@ -153,18 +140,14 @@ pub(crate) struct Shadow {
     objects: TextureView,
     read: BindGroup,
     tau_write: BindGroup,
-    occlusion_write: BindGroup,
     tau_pipeline: ComputePipeline,
-    occlusion_pipeline: ComputePipeline,
     dims: [u32; 3],
     tau_key: Option<u64>,
-    occlusion_key: Option<u64>,
 }
 
 impl Shadow {
     pub fn new(device: &Device, layouts: &Layouts, dims: [u32; 3]) -> Self {
         let tau = volume(device, "grana.shadow.tau", dims);
-        let occlusion = volume(device, "grana.shadow.occlusion", [OCCLUSION_SIDE; 3]);
         let objects = depth(device, "grana.shadow.objects", OBJECT_SIDE);
         let sampler = linear(device);
         let compare = device.create_sampler(&SamplerDescriptor {
@@ -188,10 +171,6 @@ impl Shadow {
                     resource: BindingResource::Sampler(&sampler),
                 },
                 BindGroupEntry {
-                    binding: 2,
-                    resource: BindingResource::TextureView(&occlusion),
-                },
-                BindGroupEntry {
                     binding: 3,
                     resource: BindingResource::TextureView(&objects),
                 },
@@ -209,32 +188,14 @@ impl Shadow {
                 resource: BindingResource::TextureView(&tau),
             }],
         });
-        let occlusion_write = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.shadow.occlusion.write"),
-            layout: &layouts.shadow_write,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::TextureView(&occlusion),
-            }],
-        });
         let tau_pipeline = pipeline(device, layouts, TAU_SHADER, "tau_main", "grana.shadow.tau");
-        let occlusion_pipeline = pipeline(
-            device,
-            layouts,
-            OCCLUSION_SHADER,
-            "occlusion_main",
-            "grana.shadow.occlusion",
-        );
         Self {
             objects,
             read,
             tau_write,
-            occlusion_write,
             tau_pipeline,
-            occlusion_pipeline,
             dims,
             tau_key: None,
-            occlusion_key: None,
         }
     }
 
@@ -264,32 +225,6 @@ impl Shadow {
             self.dims[0].div_ceil(WORKGROUP),
             self.dims[1].div_ceil(WORKGROUP),
             1,
-        );
-    }
-
-    pub fn encode_occlusion(
-        &mut self,
-        encoder: &mut CommandEncoder,
-        groups: ShadowGroups<'_>,
-        key: u64,
-    ) {
-        if self.occlusion_key == Some(key) {
-            return;
-        }
-        self.occlusion_key = Some(key);
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("grana.shadow.occlusion.pass"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(&self.occlusion_pipeline);
-        pass.set_bind_group(0, groups.scene, &[]);
-        pass.set_bind_group(1, groups.level, &[]);
-        pass.set_bind_group(2, groups.atlas, &[]);
-        pass.set_bind_group(3, &self.occlusion_write, &[]);
-        pass.dispatch_workgroups(
-            OCCLUSION_SIDE.div_ceil(WORKGROUP),
-            OCCLUSION_SIDE.div_ceil(WORKGROUP),
-            OCCLUSION_SIDE.div_ceil(WORKGROUP),
         );
     }
 }

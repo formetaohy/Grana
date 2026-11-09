@@ -3,6 +3,7 @@ mod discover;
 mod gate;
 mod manifest;
 mod pipeline;
+mod profile;
 mod quality;
 mod resume;
 mod sheet;

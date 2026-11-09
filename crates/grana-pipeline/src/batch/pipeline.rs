@@ -24,6 +24,7 @@ use crate::snapshot::SnapshotRequest;
 use grana_protocol::{Protocol, ProtocolError, Step, ViewSpec};
 
 use super::channel;
+use super::profile;
 use super::quality::{self, Quality};
 use super::resume::{Record, build};
 use super::{DatasetEntry, Event, PARTIAL, Progress, RESULT, SNAPSHOT, Task};
@@ -255,6 +256,17 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             }
             write(&folder.join(&file), &export.text())?;
         }
+    }
+    if scene
+        .annotations
+        .iter()
+        .any(|annotation| annotation.profile().is_some())
+    {
+        let _ = task.events.send(Event::Step {
+            index: task.index,
+            label: format!("exporting the intensity profiles of {}", reader.name()),
+        });
+        profile::write(&scene, folder)?;
     }
     if task.protocol.coloc().is_some() {
         let channels = scene
@@ -1097,6 +1109,13 @@ pub(super) fn artifacts(
             &relation.target,
             relation.shift,
         ));
+    }
+    for (index, annotation) in protocol.annotations().iter().enumerate() {
+        if annotation.profile().is_some() {
+            let stem = format!("profile-{index:02}-{}", slug(annotation.name()));
+            artifacts.push(format!("{stem}.csv"));
+            artifacts.push(format!("{stem}.png"));
+        }
     }
     if let Some(coloc) = protocol.coloc() {
         for pair in &coloc.pairs {

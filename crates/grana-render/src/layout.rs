@@ -122,16 +122,6 @@ impl Layouts {
                 },
                 sampler(1, ShaderStages::FRAGMENT),
                 BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D3,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
                     binding: 3,
                     visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Texture {
@@ -291,12 +281,22 @@ impl Layouts {
                     },
                     count: None,
                 },
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let volume = pipeline_layout(
             device,
             "grana.volume.layout",
-            &[&scene, &level, &atlas, &depth, &shadow, &oit_read],
+            &[&scene, &level, &atlas, &depth, &shadow, &oit_read, &ao_read],
         );
         let section = pipeline_layout(device, "grana.section.layout", &[&scene, &level, &atlas]);
         let cull = pipeline_layout(
