@@ -199,6 +199,8 @@ fn panes<'a>(
             section,
             region: section_region,
         }),
+        None,
+        None,
     ]
 }
 

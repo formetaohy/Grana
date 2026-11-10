@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
-use grana_display::{PANE_COUNT, PaneKind, Panes};
+use grana_display::{PANE_GAP, Panes};
 use grana_engine::{Destination, Engine, Outcome, Panels, Plan, Pose};
 use grana_gpu::Headless;
 use grana_pipeline::{Channels, SnapshotRequest, Snapshotter};
@@ -9,7 +9,6 @@ use grana_scene::Scene;
 use grana_ui::{Rect, Ui, Vec2};
 
 const STAGE_WIDTH: f32 = 1000.0;
-const STAGE_GAP: f32 = 6.0;
 const ATTEMPTS: usize = 4096;
 
 pub struct Snapshot {
@@ -62,16 +61,19 @@ impl Snapshotter for Snapshot {
         let mut panes = Panes::new();
         if let Some(view) = &request.view {
             panes.restore(view.panes);
+            panes.set_layout(view.layout);
             panes.set_split(view.split);
+            panes.set_row(view.row);
         }
-        let kinds: [PaneKind; PANE_COUNT] = std::array::from_fn(|index| panes.pane(index).kind());
-        let panels = panels(panes.split(), kinds, request.size);
+        let panels = panels(&panes, request.size);
         let regions = panels.export(request.size[0], false);
         if request.view.is_none() {
             panes.fit(
                 scene.dataset.world_size(),
                 scene.dataset.voxel_size(),
-                std::array::from_fn(|index| aspect(regions.panes[index].region)),
+                std::array::from_fn(|index| {
+                    regions.panes[index].map_or(1.0, |pane| aspect(pane.region))
+                }),
             );
         }
         let mut ui: Ui<()> = Ui::new(&gpu.device, &gpu.queue, gpu.format());
@@ -123,22 +125,24 @@ fn render(
     ))
 }
 
-fn panels(split: f32, kinds: [PaneKind; PANE_COUNT], size: [u32; 2]) -> Panels {
+fn panels(panes: &Panes, size: [u32; 2]) -> Panels {
     assert!(
         size[0] > 0 && size[1] > 0,
         "a quality snapshot covers at least one pixel"
     );
-    let split = split.clamp(grana_display::SPLIT_MIN, grana_display::SPLIT_MAX);
     let height = STAGE_WIDTH * size[1] as f32 / size[0] as f32;
-    let left = (STAGE_WIDTH - STAGE_GAP) * split;
-    let rects = [
-        Rect::from_min_max(Vec2::ZERO, Vec2::new(left, height)),
-        Rect::from_min_max(
-            Vec2::new(left + STAGE_GAP, 0.0),
-            Vec2::new(STAGE_WIDTH, height),
-        ),
-    ];
-    Panels::new(std::array::from_fn(|index| (rects[index], kinds[index])))
+    let rects = panes.rects([0.0, 0.0, STAGE_WIDTH, height], PANE_GAP);
+    Panels::new(std::array::from_fn(|index| {
+        panes.visible(index).then(|| {
+            (
+                Rect::from_min_size(
+                    Vec2::new(rects[index][0], rects[index][1]),
+                    Vec2::new(rects[index][2], rects[index][3]),
+                ),
+                panes.pane(index).kind(),
+            )
+        })
+    }))
 }
 
 fn aspect(region: [u32; 4]) -> f32 {

@@ -259,11 +259,15 @@ impl Decode for ViewState {
         }
         let view = Self {
             panes: panes.try_into().map_err(|_| FAULT_VALUE)?,
+            layout: grana_display::PaneLayout::from_index(reader.u8()? as usize)
+                .ok_or(FAULT_VALUE)?,
             split: finite(reader.f32()?)?,
+            row: finite(reader.f32()?)?,
             timeline: Timeline::decode(reader)?,
             export: Export::decode(reader)?,
         };
         if !(grana_display::SPLIT_MIN..=grana_display::SPLIT_MAX).contains(&view.split)
+            || !(grana_display::SPLIT_MIN..=grana_display::SPLIT_MAX).contains(&view.row)
             || !view.export.matches()
         {
             return Err(FAULT_VALUE);

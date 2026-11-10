@@ -154,7 +154,9 @@ pub struct NamedViewSpec {
 #[serde(deny_unknown_fields)]
 pub struct ViewSpec {
     pub panes: [PaneSpec; grana_display::PANE_COUNT],
+    pub layout: String,
     pub split: f32,
+    pub row: f32,
     #[serde(default)]
     pub time: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1811,11 +1813,17 @@ impl ViewSpec {
     pub fn of(view: &ViewState, time: u32) -> Self {
         Self {
             panes: view.panes.map(PaneSpec::of),
+            layout: view.layout.name().to_string(),
             split: view.split,
+            row: view.row,
             time,
             timeline: Some(TimelineSpec::of(&view.timeline)),
             export: Some(ExportSpec::of(view.export)),
         }
+    }
+
+    pub fn layout(&self) -> grana_display::PaneLayout {
+        grana_display::PaneLayout::from_name(&self.layout).expect("the view layout was checked")
     }
 
     pub fn panes(&self) -> [PaneState; grana_display::PANE_COUNT] {
@@ -1845,9 +1853,19 @@ impl ViewSpec {
                 }
             }
         }
+        if grana_display::PaneLayout::from_name(&self.layout).is_none() {
+            return Err(ProtocolError::Invalid(
+                "a view names a known pane layout".to_string(),
+            ));
+        }
         if !(grana_display::SPLIT_MIN..=grana_display::SPLIT_MAX).contains(&self.split) {
             return Err(ProtocolError::Invalid(
                 "a view splits the viewport at a unit fraction".to_string(),
+            ));
+        }
+        if !(grana_display::SPLIT_MIN..=grana_display::SPLIT_MAX).contains(&self.row) {
+            return Err(ProtocolError::Invalid(
+                "a view rows the viewport at a unit fraction".to_string(),
             ));
         }
         if let Some(timeline) = &self.timeline {

@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_display::{PANE_COUNT, PaneKind, SectionCamera};
+use grana_display::{PANE_GAP, PaneKind, PaneLayout, SectionCamera};
 use grana_figure::{self as overlay, Handle, Label, Legend, Pane};
 use grana_ui::glass::GlassStyle;
 use grana_ui::{
@@ -13,6 +13,7 @@ use crate::state::View;
 use crate::view::scene_uv;
 
 const PANE_CONTROL: f32 = 26.0;
+const LAYOUT_CONTROL: f32 = 30.0;
 const LABEL: Color = Color::rgba(1.0, 1.0, 1.0, 0.82);
 const REGION: Color = Color::rgba(0.98, 0.75, 0.29, 0.40);
 const REGION_ACTIVE: Color = Color::rgba(0.98, 0.83, 0.45, 0.95);
@@ -32,7 +33,9 @@ pub(super) fn view<'a>(
     let content = grana_ui::canvas(Length::Fill, full.height(), move |painter, info| {
         painter.rect(info.rect, Corners::ZERO, stage_backdrop);
         for rect in rects {
-            painter.scene(rect, Corners::ZERO, scene_uv(rect, size));
+            if rect.width() > 0.0 && rect.height() > 0.0 {
+                painter.scene(rect, Corners::ZERO, scene_uv(rect, size));
+            }
         }
     })
     .named("stage.content")
@@ -41,14 +44,15 @@ pub(super) fn view<'a>(
     elements.push(content);
     elements.push(overlay_view(state, layout, full));
     elements.extend(region_handles(state, layout));
-    for index in 0..PANE_COUNT {
+    for index in 0..state.panes.count() {
         let safe = layout.panes[index].shrink(STAGE_INSET);
         elements.push(pane_fit(ctx, safe, index));
         elements.extend(pane_chip(ctx, layout, state, index));
     }
-    elements.extend(split_handle(ctx, layout));
+    elements.extend(dividers(ctx, layout, state));
     elements.extend(recording_chip(ctx, layout, state));
     elements.extend(mask_bar(ctx, state, layout));
+    elements.extend(layout_control(ctx, layout, state));
     elements
 }
 
@@ -212,7 +216,7 @@ fn overlay_view<'a>(state: &'a View<'a>, layout: &Layout, full: Rect) -> Element
     let sections = sections(state);
     let layout = *layout;
     grana_ui::canvas(Length::Fill, full.height(), move |painter, _info| {
-        for index in 0..PANE_COUNT {
+        for index in 0..state.panes.count() {
             let pane = pane(
                 state,
                 &layout,
@@ -231,7 +235,7 @@ fn overlay_view<'a>(state: &'a View<'a>, layout: &Layout, full: Rect) -> Element
 }
 
 fn sections(state: &View<'_>) -> Vec<SectionCamera> {
-    (0..PANE_COUNT)
+    (0..state.panes.count())
         .filter(|index| state.panes.pane(*index).kind() == PaneKind::Section)
         .map(|index| state.panes.pane(index).section().clone())
         .collect()
@@ -241,7 +245,9 @@ fn region_handles<'a>(state: &'a View<'a>, layout: &Layout) -> Vec<Element<'a, M
     let sections = sections(state);
     let labels: [Label; 0] = [];
     let annotations: [grana_figure::AnnotationItem; 0] = [];
-    let Some(index) = (0..PANE_COUNT).find(|index| state.panes.pane(*index).kind().volume()) else {
+    let Some(index) =
+        (0..state.panes.count()).find(|index| state.panes.pane(*index).kind().volume())
+    else {
         return Vec::new();
     };
     let pane = pane(state, layout, index, &sections, &[], &labels, &annotations);
@@ -308,64 +314,234 @@ fn pane_fit<'a>(
     .at(rect)
 }
 
-fn split_handle<'a>(
+fn dividers<'a>(
     ctx: &mut BuildContext<'_, Message>,
     layout: &Layout,
+    state: &'a View<'a>,
 ) -> Vec<Element<'a, Message>> {
-    let left = layout.panes[0];
-    let right = layout.panes[1];
-    let x = (left.max.x + right.min.x) * 0.5;
-    let grab = Rect::from_center_size(
-        Vec2::new(x, left.center().y),
-        Vec2::new(16.0, left.height()),
-    );
-    let total = (left.width() + right.width()).max(1.0);
-    let origin = left.min.x;
+    let mut elements = Vec::new();
+    let stage = layout.stage;
     let palette = ctx.theme().palette;
+    let count = state.panes.count();
+    if count < 2 {
+        return elements;
+    }
+    let vertical = (layout.panes[0].max.x + layout.panes[1].min.x) * 0.5;
+    elements.extend(divider(
+        palette.text_primary,
+        Vec2::new(vertical, stage.center().y),
+        Vec2::new(16.0, stage.height()),
+        Cursor::ResizeHorizontal,
+        "split.vertical",
+        {
+            let origin = stage.min.x;
+            let total = (stage.width() - PANE_GAP).max(1.0);
+            move |position| ((position - origin - PANE_GAP * 0.5) / total).clamp(0.0, 1.0)
+        },
+    ));
+    if count > 2 {
+        let horizontal = (layout.panes[0].max.y + layout.panes[2].min.y) * 0.5;
+        elements.extend(divider(
+            palette.text_primary,
+            Vec2::new(stage.center().x, horizontal),
+            Vec2::new(stage.width(), 16.0),
+            Cursor::ResizeVertical,
+            "split.horizontal",
+            {
+                let origin = stage.min.y;
+                let total = (stage.height() - PANE_GAP).max(1.0);
+                move |position| ((position - origin - PANE_GAP * 0.5) / total).clamp(0.0, 1.0)
+            },
+        ));
+    }
+    elements
+}
+
+#[allow(clippy::too_many_arguments)]
+fn divider<'a>(
+    tint: Color,
+    center: Vec2,
+    size: Vec2,
+    cursor: Cursor,
+    name: &'static str,
+    fraction: impl Fn(f32) -> f32 + 'static,
+) -> Vec<Element<'a, Message>> {
+    let grab = Rect::from_center_size(center, size);
+    let vertical = size.x < size.y;
     let line = grana_ui::canvas(Length::Fill, grab.height(), move |painter, info| {
         let rect = info.rect;
-        painter.rect(
-            Rect::from_center_size(rect.center(), Vec2::new(1.0, rect.height())),
-            Corners::ZERO,
-            palette.separator.amplify(0.85),
-        );
+        let body = if vertical {
+            Rect::from_center_size(rect.center(), Vec2::new(1.0, rect.height()))
+        } else {
+            Rect::from_center_size(rect.center(), Vec2::new(rect.width(), 1.0))
+        };
+        painter.rect(body, Corners::ZERO, tint.with_alpha(0.18));
     })
     .at(grab)
-    .named("split.line");
+    .named(name);
     let lens = grana_ui::canvas(Length::Fill, 36.0, |_painter, _info| {})
         .at(Rect::from_center_size(
-            Vec2::new(x, left.center().y),
-            Vec2::new(8.0, 36.0),
+            center,
+            if vertical {
+                Vec2::new(8.0, 36.0)
+            } else {
+                Vec2::new(36.0, 8.0)
+            },
         ))
-        .named("split.lens")
+        .named(if vertical {
+            "split.lens.vertical"
+        } else {
+            "split.lens.horizontal"
+        })
         .glass(GlassStyle::lens());
     let bar = grana_ui::canvas(Length::Fill, grab.height(), move |painter, info| {
         let rect = info.rect;
         let engaged = info.hover.max(info.press);
-        let size = Vec2::new(8.0 + engaged * 4.0, 36.0 + engaged * 18.0);
-        let body = Rect::from_center_size(rect.center(), size);
+        let extent = if vertical {
+            Vec2::new(8.0 + engaged * 4.0, 36.0 + engaged * 18.0)
+        } else {
+            Vec2::new(36.0 + engaged * 18.0, 8.0 + engaged * 4.0)
+        };
+        let body = Rect::from_center_size(rect.center(), extent);
         painter.rect(
-            Rect::from_center_size(body.center(), Vec2::new(1.4, size.y * 0.34)),
+            if vertical {
+                Rect::from_center_size(body.center(), Vec2::new(1.4, extent.y * 0.34))
+            } else {
+                Rect::from_center_size(body.center(), Vec2::new(extent.x * 0.34, 1.4))
+            },
             Corners::capsule(),
-            palette.text_primary.with_alpha(0.30 + engaged * 0.40),
+            tint.with_alpha(0.30 + engaged * 0.40),
         );
         if engaged > 0.01 {
             painter.rect(
-                Rect::from_center_size(body.center(), Vec2::new(1.0, 26.0 + 10.0 * engaged)),
+                if vertical {
+                    Rect::from_center_size(body.center(), Vec2::new(1.0, 26.0 + 10.0 * engaged))
+                } else {
+                    Rect::from_center_size(body.center(), Vec2::new(26.0 + 10.0 * engaged, 1.0))
+                },
                 Corners::capsule(),
                 Color::white_alpha(0.12 * engaged),
             );
         }
     })
     .at(grab)
-    .named("split.bar")
-    .cursor(Cursor::ResizeHorizontal)
+    .named(if vertical {
+        "split.bar.vertical"
+    } else {
+        "split.bar.horizontal"
+    })
+    .cursor(cursor)
     .on_pointer(move |pointer| {
-        (pointer.phase == grana_ui::Phase::Move)
-            .then_some(Message::SetSplit((pointer.position.x - origin) / total))
+        (pointer.phase == grana_ui::Phase::Move).then_some(if vertical {
+            Message::SetSplit(fraction(pointer.position.x))
+        } else {
+            Message::SetRow(fraction(pointer.position.y))
+        })
     })
     .layer(Layer::Labels);
     vec![line, lens, bar]
+}
+
+fn layout_control<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    layout: &Layout,
+    state: &'a View<'a>,
+) -> Vec<Element<'a, Message>> {
+    let palette = ctx.theme().palette;
+    let count = PaneLayout::ALL.len();
+    let width = LAYOUT_CONTROL * count as f32 + 8.0;
+    let stage = layout.stage;
+    let rect = Rect::from_min_size(
+        Vec2::new(
+            stage.center().x - width * 0.5,
+            stage.max.y - LAYOUT_CONTROL - 8.0,
+        ),
+        Vec2::new(width, LAYOUT_CONTROL),
+    );
+    let active = state.panes.layout();
+    let mut segments = Vec::with_capacity(count);
+    for (index, option) in PaneLayout::ALL.into_iter().enumerate() {
+        let engaged = option == active;
+        let key = format!("layout.{}", option.name());
+        let segment = grana_ui::canvas(
+            Length::Fixed(LAYOUT_CONTROL),
+            LAYOUT_CONTROL - 8.0,
+            move |painter, info| {
+                let body = info.rect.shrink(3.0);
+                if engaged {
+                    painter.rect(body, Corners::all(6.0), palette.accent.with_alpha(0.85));
+                } else if info.hover > 0.01 {
+                    painter.rect(
+                        body,
+                        Corners::all(6.0),
+                        Color::white_alpha(0.10 * info.hover),
+                    );
+                }
+                let tint = if engaged {
+                    palette.text_on_accent
+                } else {
+                    palette.text_secondary
+                };
+                let edge = body.width().min(body.height()) - 10.0;
+                let inner = Rect::from_center_size(body.center(), Vec2::splat(edge));
+                let gap = 1.6;
+                match option {
+                    PaneLayout::Single => {
+                        painter.rect(inner, Corners::all(1.6), tint);
+                    }
+                    PaneLayout::Split => {
+                        let column = (inner.width() - gap) * 0.5;
+                        painter.rect(
+                            Rect::from_min_size(inner.min, Vec2::new(column, inner.height())),
+                            Corners::all(1.6),
+                            tint,
+                        );
+                        painter.rect(
+                            Rect::from_min_size(
+                                Vec2::new(inner.min.x + column + gap, inner.min.y),
+                                Vec2::new(column, inner.height()),
+                            ),
+                            Corners::all(1.6),
+                            tint,
+                        );
+                    }
+                    PaneLayout::Quad => {
+                        let column = (inner.width() - gap) * 0.5;
+                        let row = (inner.height() - gap) * 0.5;
+                        for (column_index, row_index) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                            painter.rect(
+                                Rect::from_min_size(
+                                    Vec2::new(
+                                        inner.min.x + column_index as f32 * (column + gap),
+                                        inner.min.y + row_index as f32 * (row + gap),
+                                    ),
+                                    Vec2::new(column, row),
+                                ),
+                                Corners::all(1.6),
+                                tint,
+                            );
+                        }
+                    }
+                }
+            },
+        )
+        .named(&key)
+        .cursor(Cursor::Pointing)
+        .on_pointer(move |pointer| {
+            (pointer.phase == grana_ui::Phase::Up).then_some(Message::SetLayout(option))
+        });
+        let _ = index;
+        segments.push(segment);
+    }
+    vec![
+        grana_ui::row()
+            .gap(0.0)
+            .padding(Edges::all(4.0))
+            .glass(GlassStyle::hud_chip())
+            .children(segments)
+            .at(rect)
+            .layer(Layer::Hud),
+    ]
 }
 
 fn pane_chip<'a>(

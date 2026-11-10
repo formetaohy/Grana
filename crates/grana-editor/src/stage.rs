@@ -108,6 +108,19 @@ impl Stage {
         self.rects[index]
     }
 
+    pub fn area(&self) -> Rect {
+        self.rects
+            .iter()
+            .filter(|rect| rect.width() > 0.0 && rect.height() > 0.0)
+            .fold(Rect::ZERO, |area, rect| {
+                if area.width() <= 0.0 && area.height() <= 0.0 {
+                    *rect
+                } else {
+                    Rect::from_min_max(area.min.min(rect.min), area.max.max(rect.max))
+                }
+            })
+    }
+
     pub fn set_regions(&mut self, regions: [[u32; 4]; PANE_COUNT]) {
         self.regions = regions;
     }

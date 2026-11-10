@@ -589,6 +589,59 @@ impl SectionCamera {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SectionPreset {
+    #[default]
+    Xy,
+    Xz,
+    Yz,
+}
+
+impl SectionPreset {
+    pub const ALL: [Self; 3] = [Self::Xy, Self::Xz, Self::Yz];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Xy => "xy",
+            Self::Xz => "xz",
+            Self::Yz => "yz",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Xy => "XY Slice",
+            Self::Xz => "XZ Slice",
+            Self::Yz => "YZ Slice",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Xy => 0,
+            Self::Xz => 1,
+            Self::Yz => 2,
+        }
+    }
+
+    pub fn from_index(index: usize) -> Option<Self> {
+        Self::ALL.get(index).copied()
+    }
+
+    pub fn orientation(self) -> (f32, f32) {
+        match self {
+            Self::Xy => (0.0, 0.0),
+            Self::Xz => (-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2),
+            Self::Yz => (std::f32::consts::FRAC_PI_2, 0.0),
+        }
+    }
+
+    pub fn apply(self, camera: &mut SectionCamera) {
+        let (azimuth, elevation) = self.orientation();
+        camera.set_orientation(azimuth, elevation);
+    }
+}
+
 fn wrap(angle: f32) -> f32 {
     let mut wrapped = angle % std::f32::consts::TAU;
     if wrapped > std::f32::consts::PI {

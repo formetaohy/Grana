@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use grana_animation::Timeline;
-use grana_display::{PANE_COUNT, PaneState};
+use grana_display::{PANE_COUNT, PaneLayout, PaneState};
 use grana_geometry::GeometryStore;
 use grana_scene::{Dataset, Measure, MeasureState, ObjectFrame, Scene, SceneShape, SceneState};
 use grana_volume::Fingerprint;
@@ -15,7 +15,7 @@ use grana_codec::Encoder;
 use crate::codec::{Decode, Encode, Reader};
 use crate::error::Error;
 
-const MAGIC: &[u8; 11] = b"granaproj53";
+const MAGIC: &[u8; 11] = b"granaproj54";
 const LENGTH: usize = size_of::<u64>();
 const STEPS: usize = size_of::<u32>();
 const HEADER: usize = MAGIC.len() + LENGTH + STEPS;
@@ -86,7 +86,9 @@ pub enum Source {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewState {
     pub panes: [PaneState; PANE_COUNT],
+    pub layout: PaneLayout,
     pub split: f32,
+    pub row: f32,
     pub timeline: Timeline,
     pub export: Export,
 }

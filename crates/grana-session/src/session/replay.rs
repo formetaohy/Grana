@@ -337,7 +337,9 @@ impl Session {
             }
             self.view = Some(ViewState {
                 panes: view.panes(),
+                layout: view.layout(),
                 split: view.split,
+                row: view.row,
                 timeline: self.timeline.clone(),
                 export: self.export,
             });
@@ -351,7 +353,9 @@ impl Session {
                         named.name.clone(),
                         ViewState {
                             panes: named.view().panes(),
+                            layout: named.view().layout(),
                             split: named.view().split,
+                            row: named.view().row,
                             timeline: named
                                 .view()
                                 .timeline()

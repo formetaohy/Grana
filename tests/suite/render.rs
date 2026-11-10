@@ -41,6 +41,8 @@ fn panes<'a>(
             section,
             region: section_region,
         }),
+        None,
+        None,
     ]
 }
 
@@ -1579,6 +1581,8 @@ fn renders_a_section_pane_without_a_volume() {
             section: &section,
             region: WHOLE,
         }),
+        None,
+        None,
     ];
     let build = || Frame {
         target: &view_texture,
@@ -1668,6 +1672,8 @@ fn keeps_two_volume_panes_independent() {
             },
             region: right_region,
         }),
+        None,
+        None,
     ];
     let build = || Frame {
         target: &view_texture,

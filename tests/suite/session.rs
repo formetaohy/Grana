@@ -470,8 +470,18 @@ fn view_state() -> ViewState {
                 kind: grana_display::PaneKind::Section,
                 view,
             },
+            grana_display::PaneState {
+                kind: grana_display::PaneKind::Section,
+                view,
+            },
+            grana_display::PaneState {
+                kind: grana_display::PaneKind::Section,
+                view,
+            },
         ],
+        layout: grana_display::PaneLayout::Split,
         split: 0.5,
+        row: 0.5,
         timeline: Timeline::default(),
         export: Export::NATIVE,
     }
@@ -728,14 +738,18 @@ fn round_trips_a_project() {
     scene.annotations.add_point([0.1, 0.2, 0.3], Some(0));
     scene.set_volume_mode(0, grana_display::VolumeMode::Isosurface);
     scene.set_isovalue(0, 0.35);
+    let mut view = view_state();
+    view.layout = grana_display::PaneLayout::Quad;
+    view.split = 0.55;
+    view.row = 0.45;
     let project = Project::capture(
         &scene,
         &Measure::new(),
         Source::Synthetic {
             name: "fixture".to_string(),
         },
-        view_state(),
-        vec![NamedView::new("Overview", view_state())],
+        view.clone(),
+        vec![NamedView::new("Overview", view.clone())],
         Fingerprint::new([7; 32]),
     );
     let temp = Temp::new("suite-project");

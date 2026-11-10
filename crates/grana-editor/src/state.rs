@@ -367,11 +367,11 @@ pub struct View<'a> {
 
 impl<'a> View<'a> {
     pub fn pane(&self) -> &'a Pane {
-        self.panes.pane(self.workspace.active.min(PANE_COUNT - 1))
+        self.panes.pane(self.active())
     }
 
     pub fn active(&self) -> usize {
-        self.workspace.active.min(PANE_COUNT - 1)
+        self.workspace.active.min(self.panes.count() - 1)
     }
 
     pub fn batch_protocol(&self) -> Option<&str> {

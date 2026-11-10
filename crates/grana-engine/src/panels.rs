@@ -3,7 +3,7 @@ use grana_ui::Rect;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Panels {
-    panes: [(Rect, PaneKind); PANE_COUNT],
+    panes: [Option<(Rect, PaneKind)>; PANE_COUNT],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -17,32 +17,39 @@ pub struct PaneRegion {
 pub struct Regions {
     pub size: [u32; 2],
     pub pixels_per_point: f32,
-    pub panes: [PaneRegion; PANE_COUNT],
+    pub panes: [Option<PaneRegion>; PANE_COUNT],
 }
 
 impl Panels {
-    pub fn new(panes: [(Rect, PaneKind); PANE_COUNT]) -> Self {
-        for (rect, _) in &panes {
-            assert!(
-                rect.width() > 0.0 && rect.height() > 0.0,
-                "a panel covers a non empty stage"
-            );
+    pub fn new(panes: [Option<(Rect, PaneKind)>; PANE_COUNT]) -> Self {
+        Self {
+            panes: panes
+                .map(|pane| pane.filter(|(rect, _)| rect.width() > 0.0 && rect.height() > 0.0)),
         }
-        Self { panes }
     }
 
-    pub fn pane(&self, index: usize) -> (Rect, PaneKind) {
+    pub fn pane(&self, index: usize) -> Option<(Rect, PaneKind)> {
         self.panes[index]
     }
 
+    pub fn panes(&self) -> impl Iterator<Item = (usize, Rect, PaneKind)> {
+        self.panes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, pane)| pane.map(|(rect, kind)| (index, rect, kind)))
+    }
+
     pub fn stage(&self) -> Rect {
-        self.panes.iter().fold(Rect::ZERO, |stage, (rect, _)| {
-            if stage.width() <= 0.0 && stage.height() <= 0.0 {
-                *rect
-            } else {
-                Rect::from_min_max(stage.min.min(rect.min), stage.max.max(rect.max))
-            }
-        })
+        self.panes
+            .iter()
+            .flatten()
+            .fold(Rect::ZERO, |stage, (rect, _)| {
+                if stage.width() <= 0.0 && stage.height() <= 0.0 {
+                    *rect
+                } else {
+                    Rect::from_min_max(stage.min.min(rect.min), stage.max.max(rect.max))
+                }
+            })
     }
 
     pub fn native_width(&self, scale: f32) -> u32 {
@@ -55,6 +62,11 @@ impl Panels {
 
     pub fn export(&self, width: u32, even: bool) -> Regions {
         assert!(width > 0, "an export names a positive image width");
+        let stage = self.stage();
+        assert!(
+            stage.width() > 0.0 && stage.height() > 0.0,
+            "an export covers at least one pane"
+        );
         let width = if even { even_size(width) } else { width };
         let scale = width as f32 / self.stage().width().max(1.0);
         let height = (self.stage().height() * scale).round().max(1.0) as u32;
@@ -67,10 +79,12 @@ impl Panels {
         Regions {
             size,
             pixels_per_point: scale,
-            panes: self.panes.map(|(rect, kind)| PaneRegion {
-                kind,
-                region: region(rect, scale, origin, size),
-                points: points(rect, origin),
+            panes: self.panes.map(|pane| {
+                pane.map(|(rect, kind)| PaneRegion {
+                    kind,
+                    region: region(rect, scale, origin, size),
+                    points: points(rect, origin),
+                })
             }),
         }
     }

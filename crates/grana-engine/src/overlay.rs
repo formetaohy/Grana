@@ -19,14 +19,23 @@ pub(crate) struct Figure<'a> {
 
 pub(crate) fn instances<A: Clone>(ui: &mut Ui<A>, figure: Figure<'_>) -> Vec<Instance> {
     let scale = figure.regions.pixels_per_point;
+    let first = figure
+        .regions
+        .panes
+        .iter()
+        .position(Option::is_some)
+        .expect("a figure covers at least one pane");
     let mut instances = Vec::new();
-    for (index, pane) in figure.regions.panes.iter().enumerate() {
+    for (index, slot) in figure.regions.panes.iter().enumerate() {
+        let Some(pane) = slot else {
+            continue;
+        };
         let view = figure.views[index];
         let rect = Rect::from_min_size(
             Vec2::ZERO,
             Vec2::new(pane.points[2].max(1.0), pane.points[3].max(1.0)),
         );
-        let first = index == 0;
+        let first = index == first;
         let legends = if first { figure.legends } else { &[] };
         let caption = if first { figure.caption } else { None };
         let mut built = match pane.kind {

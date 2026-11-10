@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use glam::{Vec2, Vec3};
 use grana_animation::Keyframe;
-use grana_display::{PANE_COUNT, PaneKind, Panes};
+use grana_display::{PaneKind, Panes};
 use grana_editor::{
     AnnotationTool, FrameStats, GrabDrag, MaskBrush, PaintDrag, Panel, Stage, ToolDrag, ViewStats,
     Workspace,
@@ -287,23 +287,24 @@ impl App {
         let Some(surface) = self.surface.as_ref() else {
             return;
         };
+        let Some(scene) = self.session.scene() else {
+            return;
+        };
         let scale = surface.window.scale_factor() as f32;
         let size = surface.gpu.size();
         let panels = self.panels();
         let regions = panels.screen(scale, size);
-        self.stage
-            .set_regions(std::array::from_fn(|index| regions.panes[index].region));
-        let sized = regions
-            .panes
-            .iter()
-            .all(|pane| pane.region[2] > 64 && pane.region[3] > 64);
-        let Some(scene) = self.session.scene() else {
-            return;
-        };
+        self.stage.set_regions(std::array::from_fn(|index| {
+            regions.panes[index].map_or([0, 0, 1, 1], |pane| pane.region)
+        }));
+        let sized = (0..self.panes.count()).all(|index| {
+            regions.panes[index].is_some_and(|pane| pane.region[2] > 64 && pane.region[3] > 64)
+        });
         if self.needs_fit && sized {
             let aspects = std::array::from_fn(|index| {
-                let region = regions.panes[index].region;
-                region[2] as f32 / region[3].max(1) as f32
+                regions.panes[index].map_or(1.0, |pane| {
+                    pane.region[2] as f32 / pane.region[3].max(1) as f32
+                })
             });
             self.panes.fit(
                 scene.dataset.world_size(),
@@ -522,7 +523,7 @@ impl App {
     }
 
     fn region_axes(&self) -> [Vec3; 3] {
-        let index = (0..PANE_COUNT)
+        let index = (0..self.panes.count())
             .find(|index| self.panes.pane(*index).kind() == PaneKind::Section)
             .unwrap_or(0);
         let section = self.panes.pane(index).section();
@@ -1051,7 +1052,9 @@ impl App {
                     scene,
                     panes,
                     size,
-                    regions: std::array::from_fn(|index| regions.panes[index].region),
+                    regions: std::array::from_fn(|index| {
+                        regions.panes[index].map(|pane| pane.region)
+                    }),
                     prefetch: playing,
                     level_cap: cap,
                 },
@@ -1100,7 +1103,9 @@ impl App {
     fn panels(&self) -> Panels {
         let rects = self.stage.rects();
         Panels::new(std::array::from_fn(|index| {
-            (rects[index], self.panes.pane(index).kind())
+            self.panes
+                .visible(index)
+                .then(|| (rects[index], self.panes.pane(index).kind()))
         }))
     }
 
@@ -1386,7 +1391,9 @@ impl App {
         stamp.u64(self.session.revision().raw());
         stamp.u64(self.uploads);
         stamp.u64(u64::from(self.panes.split().to_bits()));
-        for index in 0..PANE_COUNT {
+        stamp.u64(u64::from(self.panes.row().to_bits()));
+        stamp.u64(self.panes.layout().index() as u64);
+        for index in 0..self.panes.count() {
             let pane = self.panes.pane(index);
             let camera = pane.camera().state();
             let section = pane.section().state();
@@ -1410,8 +1417,10 @@ impl App {
             {
                 stamp.f32(value);
             }
-            for value in regions.panes[index].region {
-                stamp.u64(u64::from(value));
+            if let Some(pane) = regions.panes[index] {
+                for value in pane.region {
+                    stamp.u64(u64::from(value));
+                }
             }
         }
         let info = self.info;
@@ -1458,7 +1467,9 @@ impl App {
     fn view_state(&self) -> ViewState {
         ViewState {
             panes: self.panes.states(),
+            layout: self.panes.layout(),
             split: self.panes.split(),
+            row: self.panes.row(),
             timeline: self.session.timeline().clone(),
             export: self.session.export(),
         }
@@ -1466,7 +1477,10 @@ impl App {
 
     fn apply_view(&mut self, view: &ViewState) {
         self.panes.restore(view.panes);
+        self.panes.set_layout(view.layout);
         self.panes.set_split(view.split);
+        self.panes.set_row(view.row);
+        self.workspace.active = self.workspace.active.min(view.layout.count() - 1);
         self.session.restore_timeline(view.timeline.clone());
         self.workspace.playback.selected = None;
         self.workspace.playback.position = 0.0;

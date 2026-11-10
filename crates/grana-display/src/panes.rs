@@ -1,10 +1,67 @@
 use glam::Vec3;
 
-use crate::{Camera, CameraState, SectionCamera, SectionState};
+use crate::{Camera, CameraState, SectionCamera, SectionPreset, SectionState};
 
-pub const PANE_COUNT: usize = 2;
+pub const PANE_COUNT: usize = 4;
 pub const SPLIT_MIN: f32 = 0.25;
 pub const SPLIT_MAX: f32 = 0.8;
+pub const PANE_GAP: f32 = 6.0;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaneLayout {
+    Single,
+    #[default]
+    Split,
+    Quad,
+}
+
+impl PaneLayout {
+    pub const ALL: [Self; 3] = [Self::Single, Self::Split, Self::Quad];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Single => "single",
+            Self::Split => "split",
+            Self::Quad => "quad",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Single => "One View",
+            Self::Split => "Two Views",
+            Self::Quad => "Four Views",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Single => 0,
+            Self::Split => 1,
+            Self::Quad => 2,
+        }
+    }
+
+    pub fn from_index(index: usize) -> Option<Self> {
+        Self::ALL.get(index).copied()
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|layout| layout.name() == name)
+    }
+
+    pub fn count(self) -> usize {
+        match self {
+            Self::Single => 1,
+            Self::Split => 2,
+            Self::Quad => PANE_COUNT,
+        }
+    }
+
+    pub fn visible(self, index: usize) -> bool {
+        index < self.count()
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PaneKind {
@@ -78,6 +135,12 @@ impl Pane {
         }
     }
 
+    pub fn sliced(preset: SectionPreset) -> Self {
+        let mut pane = Self::new(PaneKind::Section);
+        preset.apply(&mut pane.section);
+        pane
+    }
+
     pub fn kind(&self) -> PaneKind {
         self.kind
     }
@@ -135,7 +198,9 @@ impl Pane {
 #[derive(Clone, Debug)]
 pub struct Panes {
     panes: [Pane; PANE_COUNT],
+    layout: PaneLayout,
     split: f32,
+    row: f32,
 }
 
 impl Default for Panes {
@@ -147,8 +212,15 @@ impl Default for Panes {
 impl Panes {
     pub fn new() -> Self {
         Self {
-            panes: [Pane::new(PaneKind::Volume), Pane::new(PaneKind::Section)],
+            panes: [
+                Pane::new(PaneKind::Volume),
+                Pane::sliced(SectionPreset::Xy),
+                Pane::sliced(SectionPreset::Xz),
+                Pane::sliced(SectionPreset::Yz),
+            ],
+            layout: PaneLayout::Split,
             split: 0.62,
+            row: 0.5,
         }
     }
 
@@ -170,6 +242,22 @@ impl Panes {
         self.panes.iter()
     }
 
+    pub fn layout(&self) -> PaneLayout {
+        self.layout
+    }
+
+    pub fn set_layout(&mut self, layout: PaneLayout) {
+        self.layout = layout;
+    }
+
+    pub fn count(&self) -> usize {
+        self.layout.count()
+    }
+
+    pub fn visible(&self, index: usize) -> bool {
+        self.layout.visible(index)
+    }
+
     pub fn split(&self) -> f32 {
         self.split
     }
@@ -177,6 +265,44 @@ impl Panes {
     pub fn set_split(&mut self, split: f32) {
         assert!(split.is_finite(), "a pane split is a finite fraction");
         self.split = split.clamp(SPLIT_MIN, SPLIT_MAX);
+    }
+
+    pub fn row(&self) -> f32 {
+        self.row
+    }
+
+    pub fn set_row(&mut self, row: f32) {
+        assert!(row.is_finite(), "a pane row is a finite fraction");
+        self.row = row.clamp(SPLIT_MIN, SPLIT_MAX);
+    }
+
+    pub fn rects(&self, stage: [f32; 4], gap: f32) -> [[f32; 4]; PANE_COUNT] {
+        assert!(
+            stage[2] > 0.0 && stage[3] > 0.0,
+            "a pane layout covers a non empty stage"
+        );
+        assert!(gap >= 0.0, "a pane layout keeps a non negative gap");
+        let [x, y, width, height] = stage;
+        let mut rects = [[0.0; 4]; PANE_COUNT];
+        match self.layout {
+            PaneLayout::Single => rects[0] = stage,
+            PaneLayout::Split => {
+                let columns = columns(x, width, gap, self.split);
+                for (rect, (left, width)) in rects.iter_mut().zip(columns) {
+                    *rect = [left, y, width, height];
+                }
+            }
+            PaneLayout::Quad => {
+                let columns = columns(x, width, gap, self.split);
+                let rows = rows(y, height, gap, self.row);
+                for (index, rect) in rects.iter_mut().enumerate() {
+                    let (left, width) = columns[index % 2];
+                    let (top, height) = rows[index / 2];
+                    *rect = [left, top, width, height];
+                }
+            }
+        }
+        rects
     }
 
     pub fn states(&self) -> [PaneState; PANE_COUNT] {
@@ -200,8 +326,10 @@ impl Panes {
     }
 
     pub fn fit(&mut self, world: Vec3, voxel: Vec3, aspects: [f32; PANE_COUNT]) {
-        for (pane, aspect) in self.panes.iter_mut().zip(aspects) {
-            pane.fit(world, voxel, aspect);
+        for (index, aspect) in aspects.into_iter().enumerate() {
+            if self.visible(index) {
+                self.panes[index].fit(world, voxel, aspect);
+            }
         }
     }
 
@@ -214,4 +342,16 @@ impl Panes {
             pane.camera_mut().clamp_focus(half);
         }
     }
+}
+
+fn columns(x: f32, width: f32, gap: f32, split: f32) -> [(f32, f32); 2] {
+    let usable = (width - gap).max(2.0);
+    let first = (usable * split).round().clamp(1.0, usable - 1.0);
+    [(x, first), (x + first + gap, usable - first)]
+}
+
+fn rows(y: f32, height: f32, gap: f32, row: f32) -> [(f32, f32); 2] {
+    let usable = (height - gap).max(2.0);
+    let first = (usable * row).round().clamp(1.0, usable - 1.0);
+    [(y, first), (y + first + gap, usable - first)]
 }

@@ -1155,7 +1155,9 @@ fn view_state(view: Option<&ViewSpec>, scene: &Scene) -> ViewState {
     match view {
         Some(view) => ViewState {
             panes: view.panes(),
+            layout: view.layout(),
             split: view.split,
+            row: view.row,
             timeline: view.timeline().unwrap_or_else(fitted),
             export: view.export().unwrap_or(Export::NATIVE),
         },
@@ -1168,7 +1170,9 @@ fn view_state(view: Option<&ViewSpec>, scene: &Scene) -> ViewState {
             );
             ViewState {
                 panes: panes.states(),
+                layout: panes.layout(),
                 split: panes.split(),
+                row: panes.row(),
                 timeline: fitted(),
                 export: Export::NATIVE,
             }

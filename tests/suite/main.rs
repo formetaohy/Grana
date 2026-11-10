@@ -3,6 +3,7 @@ mod core;
 mod format;
 mod geometry;
 mod imaris;
+mod layout;
 mod measure;
 mod mesh;
 mod optics;

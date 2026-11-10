@@ -90,6 +90,7 @@ pub struct Export {
     coarsen: usize,
     truncated: bool,
     regions: Regions,
+    lens: Option<(Camera, u32)>,
     transparent: bool,
     format: TextureFormat,
     texture: Texture,
@@ -147,6 +148,7 @@ impl Export {
             },
         };
         let samples = if movie { MOVIE_SAMPLES } else { IMAGE_SAMPLES };
+        let lens = detail_lens(&poses, &regions);
         Ok(Self {
             sink: Some(sink),
             poses,
@@ -156,12 +158,17 @@ impl Export {
             coarsen: 0,
             truncated: false,
             regions,
+            lens,
             transparent,
             format,
             texture,
             view,
             layer,
         })
+    }
+
+    pub fn lens(&self) -> Option<&(Camera, u32)> {
+        self.lens.as_ref()
     }
 
     pub fn pose(&self) -> Pose {
@@ -187,7 +194,7 @@ impl Export {
             .views
             .map(|view| frame::restored_section(&view.section));
         let panes = std::array::from_fn(|index| {
-            let pane = self.regions.panes[index];
+            let pane = self.regions.panes[index]?;
             match pane.kind {
                 PaneKind::Volume => Some(PaneFrame::Volume {
                     camera: &cameras[index],
@@ -391,6 +398,27 @@ fn clear(encoder: &mut CommandEncoder, target: &TextureView) {
 
 pub(crate) fn restored_camera(view: &PaneView) -> Camera {
     frame::restored_camera(&view.camera)
+}
+
+fn detail_lens(poses: &[Pose], regions: &Regions) -> Option<(Camera, u32)> {
+    let mut best: Option<(Camera, u32, f32)> = None;
+    for pose in poses {
+        for (index, pane) in regions.panes.iter().enumerate() {
+            let Some(pane) = pane else {
+                continue;
+            };
+            if pane.kind != PaneKind::Volume {
+                continue;
+            }
+            let height = pane.region[3].max(1);
+            let camera = restored_camera(&pose.views[index]);
+            let scale = camera.pixels_per_world(height);
+            if best.as_ref().is_none_or(|(_, _, held)| scale > *held) {
+                best = Some((camera, height, scale));
+            }
+        }
+    }
+    best.map(|(camera, height, _)| (camera, height))
 }
 
 pub(crate) fn restored_section(view: &PaneView) -> SectionCamera {

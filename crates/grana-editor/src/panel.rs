@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_display::{PANE_COUNT, PaneKind, Panes};
+use grana_display::{PANE_COUNT, PANE_GAP, PaneKind, Panes};
 use grana_scene::{Item, Selection};
 use grana_session::{Command, SessionView};
 use grana_ui::glass::GlassStyle;
@@ -283,11 +283,24 @@ impl Layout {
             state.panes.split(),
             Motion::response(0.18, 0.06),
         );
-        let split = (stage.min.x + stage.width() * split_ratio).round();
-        let panes = [
-            Rect::from_min_max(stage.min, Vec2::new(split, stage.max.y)),
-            Rect::from_min_max(Vec2::new(split, stage.min.y), stage.max),
-        ];
+        let row_ratio = ctx.animate(
+            Key::new("panes.row.spring").id(),
+            state.panes.row(),
+            Motion::response(0.18, 0.06),
+        );
+        let mut preview = state.panes.clone();
+        preview.set_split(split_ratio);
+        preview.set_row(row_ratio);
+        let rects = preview.rects(
+            [stage.min.x, stage.min.y, stage.width(), stage.height()],
+            PANE_GAP,
+        );
+        let panes = std::array::from_fn(|index| {
+            Rect::from_min_size(
+                Vec2::new(rects[index][0], rects[index][1]),
+                Vec2::new(rects[index][2], rects[index][3]),
+            )
+        });
         Self {
             toolbar_left,
             toolbar_right,
@@ -554,6 +567,25 @@ pub fn apply(
                 workspace.dock_height = (height + value).max(DOCK_MINIMUM);
             }
             Message::SetSplit(value) => panes.set_split(value),
+            Message::SetRow(value) => panes.set_row(value),
+            Message::SetLayout(layout) => {
+                let previous = panes.count();
+                panes.set_layout(layout);
+                if let Some(scene) = view.scene {
+                    let area = stage.area();
+                    if area.width() > 0.0 && area.height() > 0.0 {
+                        let rects = panes.rects(
+                            [area.min.x, area.min.y, area.width(), area.height()],
+                            PANE_GAP,
+                        );
+                        for (index, rect) in rects.into_iter().enumerate().skip(previous) {
+                            let aspect = rect[2].max(1.0) / rect[3].max(1.0);
+                            crate::fitting::fit_pane(scene, panes, index, aspect);
+                        }
+                    }
+                }
+                workspace.active = workspace.active.min(layout.count() - 1);
+            }
             Message::SetColumnWidth { index, width } => {
                 workspace.column_widths.insert(index, width);
             }
@@ -722,23 +754,22 @@ pub fn apply(
             }
             Message::SetPaneSlice { index, preset } => {
                 let aspect = pane_aspect(stage, index);
-                let (azimuth, elevation) = crate::section_preset(preset);
                 let pane = panes.pane_mut(index);
                 pane.set_kind(PaneKind::Section);
-                pane.section_mut().set_orientation(azimuth, elevation);
+                if let Some(preset) = grana_display::SectionPreset::from_index(preset) {
+                    preset.apply(pane.section_mut());
+                }
                 if let Some(scene) = view.scene {
                     crate::fitting::fit_pane(scene, panes, index, aspect);
                 }
                 workspace.active = index.min(PANE_COUNT - 1);
             }
             Message::SetSectionPreset(index) => {
-                let (azimuth, elevation) = crate::section_preset(index);
                 let active = workspace.active.min(PANE_COUNT - 1);
                 let aspect = pane_aspect(stage, active);
-                panes
-                    .pane_mut(active)
-                    .section_mut()
-                    .set_orientation(azimuth, elevation);
+                if let Some(preset) = grana_display::SectionPreset::from_index(index) {
+                    preset.apply(panes.pane_mut(active).section_mut());
+                }
                 if let Some(scene) = view.scene {
                     crate::fitting::fit_pane(scene, panes, active, aspect);
                 }

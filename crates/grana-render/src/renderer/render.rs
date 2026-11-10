@@ -670,7 +670,8 @@ impl Renderer {
                 }
             }
             mark(profile, &mut encoder, Stage::Plan, &mut marks);
-            let groups = [scene_table.group(0), scene_table.group(1)];
+            let groups: [&BindGroup; PANE_COUNT] =
+                std::array::from_fn(|index| scene_table.group(index));
             planner.encode(&mut encoder, &groups);
             *planned = Some(residency);
         }

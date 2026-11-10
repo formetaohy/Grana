@@ -17,7 +17,7 @@ pub struct ViewportFrame<'a> {
     pub scene: &'a Scene,
     pub panes: &'a Panes,
     pub size: [u32; 2],
-    pub regions: [[u32; 4]; PANE_COUNT],
+    pub regions: [Option<[u32; 4]>; PANE_COUNT],
     pub prefetch: bool,
     pub level_cap: usize,
 }
@@ -93,10 +93,13 @@ impl Engine {
             .panes()
             .iter()
             .enumerate()
-            .find(|(_, pane)| pane.kind().volume())
-            .map(|(index, pane)| crate::view::Lens {
-                camera: pane.camera(),
-                height: frame.regions[index][3],
+            .filter(|(index, pane)| frame.regions[*index].is_some() && pane.kind().volume())
+            .find_map(|(index, pane)| {
+                let region = frame.regions[index]?;
+                Some(crate::view::Lens {
+                    camera: pane.camera(),
+                    height: region[3],
+                })
             });
         let rendered = crate::view::frame(frame.scene, lens)?;
         let panes = pane_frames(frame.panes, frame.regions);
@@ -217,7 +220,11 @@ impl Engine {
             .as_ref()
             .is_none_or(|held| held.revision != revision || held.time != time)
         {
-            match crate::view::frame(scene, None) {
+            let lens = job.lens().map(|(camera, height)| crate::view::Lens {
+                camera,
+                height: *height,
+            });
+            match crate::view::frame(scene, lens) {
                 Ok(rendered) => {
                     *prepared = Some(Prepared {
                         revision,
@@ -262,11 +269,11 @@ impl Engine {
 
 fn pane_frames<'a>(
     panes: &'a Panes,
-    regions: [[u32; 4]; PANE_COUNT],
+    regions: [Option<[u32; 4]>; PANE_COUNT],
 ) -> [Option<PaneFrame<'a>>; PANE_COUNT] {
     std::array::from_fn(|index| {
+        let region = regions[index]?;
         let pane = panes.pane(index);
-        let region = regions[index];
         match pane.kind() {
             PaneKind::Volume => Some(PaneFrame::Volume {
                 camera: pane.camera(),

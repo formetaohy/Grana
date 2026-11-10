@@ -27,6 +27,8 @@ pub enum Message {
     ToggleSidebar,
     SetDockHeight(f32),
     SetSplit(f32),
+    SetRow(f32),
+    SetLayout(grana_display::PaneLayout),
     SetColumnWidth {
         index: usize,
         width: f32,

@@ -161,7 +161,9 @@ impl Encode for ViewState {
         for pane in &self.panes {
             pane.encode(writer);
         }
+        writer.u8(self.layout.index() as u8);
         writer.f32(self.split);
+        writer.f32(self.row);
         self.timeline.encode(writer);
         self.export.encode(writer);
     }

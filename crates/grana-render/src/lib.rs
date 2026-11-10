@@ -25,8 +25,6 @@ mod volume;
 
 pub use grana_display::PANE_COUNT;
 
-pub const DEPTH_BUCKETS: usize = planner::BUCKET_COUNT;
-
 pub use image::{Image, read as read_image};
 pub use marker::Marker;
 pub use pick::PickId;
