@@ -1,5 +1,7 @@
-use grana_display::{PANE_COUNT, PaneKind};
-use grana_ui::Rect;
+use grana_display::{PANE_COUNT, PANE_GAP, PaneKind, Panes};
+use grana_ui::{Rect, Vec2};
+
+const STAGE_WIDTH: f32 = 1000.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Panels {
@@ -26,6 +28,27 @@ impl Panels {
             panes: panes
                 .map(|pane| pane.filter(|(rect, _)| rect.width() > 0.0 && rect.height() > 0.0)),
         }
+    }
+
+    pub fn of(panes: &Panes, size: [u32; 2]) -> Self {
+        assert!(
+            size[0] > 0 && size[1] > 0,
+            "a stage covers at least one pixel"
+        );
+        let scale = size[0] as f32 / STAGE_WIDTH;
+        let stage = [0.0, 0.0, STAGE_WIDTH, size[1] as f32 / scale];
+        let rects = panes.rects(stage, PANE_GAP);
+        Self::new(std::array::from_fn(|index| {
+            panes.visible(index).then(|| {
+                (
+                    Rect::from_min_size(
+                        Vec2::new(rects[index][0], rects[index][1]),
+                        Vec2::new(rects[index][2], rects[index][3]),
+                    ),
+                    panes.pane(index).kind(),
+                )
+            })
+        }))
     }
 
     pub fn pane(&self, index: usize) -> Option<(Rect, PaneKind)> {

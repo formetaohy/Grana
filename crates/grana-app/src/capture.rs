@@ -1,16 +1,13 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use grana_display::{PANE_GAP, Panes};
+use grana_display::Panes;
 use grana_engine::Panels;
 use grana_offline::{Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_pipeline::{Capture, CaptureKind, CaptureRequest, Channels};
 use grana_scene::Scene;
-use grana_ui::{Rect, Vec2};
 
 use crate::bricks::ImageBricks;
-
-const STAGE_WIDTH: f32 = 1000.0;
 
 pub struct OfflineCapture {
     state: Mutex<Option<Offline>>,
@@ -57,7 +54,7 @@ impl Capture for OfflineCapture {
         panes.set_layout(request.view.layout);
         panes.set_split(request.view.split);
         panes.set_row(request.view.row);
-        let panels = panels(&panes, request.size);
+        let panels = Panels::of(&panes, request.size);
         let views = panes.views();
         let (destination, poses, fps) = match request.kind {
             CaptureKind::Still { time } => (
@@ -121,24 +118,4 @@ impl Capture for OfflineCapture {
             Outcome::Cancelled => Err(format!("the capture at {} was cancelled", path.display())),
         }
     }
-}
-
-fn panels(panes: &Panes, size: [u32; 2]) -> Panels {
-    assert!(
-        size[0] > 0 && size[1] > 0,
-        "a capture covers at least one pixel"
-    );
-    let height = STAGE_WIDTH * size[1] as f32 / size[0] as f32;
-    let rects = panes.rects([0.0, 0.0, STAGE_WIDTH, height], PANE_GAP);
-    Panels::new(std::array::from_fn(|index| {
-        panes.visible(index).then(|| {
-            (
-                Rect::from_min_size(
-                    Vec2::new(rects[index][0], rects[index][1]),
-                    Vec2::new(rects[index][2], rects[index][3]),
-                ),
-                panes.pane(index).kind(),
-            )
-        })
-    }))
 }

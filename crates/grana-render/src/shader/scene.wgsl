@@ -31,6 +31,7 @@ struct FrameData {
     projection: vec4<f32>,
     lens: vec4<f32>,
     volume_layer: vec4<f32>,
+    sampling: vec4<f32>,
 }
 
 struct SectionData {
@@ -118,7 +119,7 @@ fn lens_shift(clip_w: f32) -> vec2<f32> {
 }
 
 fn pixel_world(distance: f32) -> f32 {
-    return select(distance, 1.0, orthographic()) / frame.march.w;
+    return select(distance, 1.0, orthographic()) / max(frame.sampling.x, 1.0e-6);
 }
 
 fn volume_scale() -> f32 {

@@ -43,6 +43,7 @@ pub(crate) struct FrameData {
     pub projection: [f32; 4],
     pub lens: [f32; 4],
     pub volume_layer: [f32; 4],
+    pub sampling: [f32; 4],
 }
 
 #[repr(C)]
@@ -87,7 +88,7 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 1312);
+    assert!(size_of::<FrameData>() == 1328);
     assert!(std::mem::offset_of!(FrameData, region_axis) == 224);
     assert!(std::mem::offset_of!(FrameData, planes) == 352);
     assert!(std::mem::offset_of!(FrameData, light_view) == 448);
@@ -101,6 +102,7 @@ const _: () = {
     assert!(std::mem::offset_of!(FrameData, projection) == 1264);
     assert!(std::mem::offset_of!(FrameData, lens) == 1280);
     assert!(std::mem::offset_of!(FrameData, volume_layer) == 1296);
+    assert!(std::mem::offset_of!(FrameData, sampling) == 1312);
     assert!(size_of::<SectionData>() == 432);
     assert!(size_of::<ScheduleData>() == 48);
 };
@@ -120,6 +122,7 @@ pub(crate) struct VolumeView<'a> {
     pub clip: Clip,
     pub aspect: f32,
     pub height: u32,
+    pub lod: f32,
     pub time: u32,
 }
 
@@ -178,6 +181,7 @@ impl FrameData {
             projection: [1.0, 0.0, 0.0, 0.0],
             lens: [0.0, 0.0, 1.0, 0.0],
             volume_layer: [1.0, 0.0, 0.0, 0.0],
+            sampling: [1.0, 1.0, 0.0, 0.0],
         }
     }
 
@@ -201,12 +205,15 @@ impl FrameData {
             clip,
             aspect,
             height,
+            lod,
             time,
         } = view;
+        assert!(lod >= 1.0, "a volume sample covers at least one pixel");
         let first = tables[0];
         let view_projection = camera.view_projection(aspect, 0.5 * first.world.length());
         let step = step_length(camera, first, step_scale);
         let pixel_scale = camera.pixels_per_world(height);
+        let sampling = pixel_scale / lod;
         let orthographic = camera.projection().orthographic();
         let half = camera.half_height();
         let (half_width, half_height) = if orthographic {
@@ -234,7 +241,7 @@ impl FrameData {
             }
             bases[band] = table.record_base();
             if band > 0 && !orthographic {
-                edge[band - 1] = table.voxel.min_element() * pixel_scale;
+                edge[band - 1] = table.voxel.min_element() * sampling;
             }
         }
         Self {
@@ -286,6 +293,7 @@ impl FrameData {
             ],
             lens: [0.0, 0.0, camera.focus(), camera.aperture()],
             volume_layer: [1.0, 0.0, 0.0, 0.0],
+            sampling: [sampling, lod, 0.0, 0.0],
         }
     }
 

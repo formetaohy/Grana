@@ -876,6 +876,7 @@ pub(crate) struct FitView<'a> {
     pub(crate) region: Region,
     pub(crate) aspect: f32,
     pub(crate) height: u32,
+    pub(crate) lod: f32,
     pub(crate) limits: Limits,
     pub(crate) capacity: usize,
     pub(crate) current: Option<usize>,
@@ -889,6 +890,7 @@ pub(crate) fn fit_volume(view: FitView<'_>) -> VolumeFit {
         region,
         aspect,
         height,
+        lod,
         limits,
         capacity,
         current,
@@ -900,7 +902,7 @@ pub(crate) fn fit_volume(view: FitView<'_>) -> VolumeFit {
     let desired = volume_ladder(LadderView {
         pyramid,
         camera,
-        height: height as f32,
+        height: height as f32 / lod,
         current,
         limits,
         penalty,
@@ -908,7 +910,15 @@ pub(crate) fn fit_volume(view: FitView<'_>) -> VolumeFit {
     let mut fallback: Option<VolumeFit> = None;
     for base in desired.base..levels {
         let count = ladder_count(camera.projection(), levels, base);
-        let counts = volume_counts(pyramid, base, count, camera, aspect, height, region);
+        let counts = volume_counts(
+            pyramid,
+            base,
+            count,
+            camera,
+            aspect,
+            height as f32 / lod,
+            region,
+        );
         let demand = counts[..count].iter().sum::<usize>();
         if demand <= capacity {
             return VolumeFit {
@@ -942,10 +952,10 @@ pub(crate) fn volume_counts(
     count: usize,
     camera: &Camera,
     aspect: f32,
-    height: u32,
+    height: f32,
     region: Region,
 ) -> [usize; BAND] {
-    let scale = camera.pixels_per_world(height);
+    let scale = camera.pixels_per_world_at(height);
     let radius = 0.5 * Vec3::from(pyramid.level(base).world_extent()).length();
     let planes = crate::frame::planes(camera.view_projection(aspect, radius));
     let eye = camera.eye();

@@ -24,7 +24,7 @@ fn pane_local(pixel: vec2<f32>) -> vec2<f32> {
 }
 
 fn tap_weight(centre_ndc: vec2<f32>, centre: vec3<f32>, depth: f32) -> f32 {
-    let reach = 8.0 / max(frame.march.w, 1.0e-6);
+    let reach = 8.0 / max(frame.sampling.x, 1.0e-6);
     let gap = length(unproject(vec3<f32>(centre_ndc, depth)) - centre);
     let ratio = gap / reach;
     let squared = ratio * ratio;

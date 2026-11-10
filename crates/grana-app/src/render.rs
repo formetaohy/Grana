@@ -4,18 +4,16 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use grana_animation::Timeline;
-use grana_display::{PANE_GAP, PaneLayout, Panes};
+use grana_display::{PaneLayout, Panes};
 use grana_engine::Panels;
 use grana_offline::{Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_pipeline::Channels;
 use grana_project::ViewState;
 use grana_scene::Scene;
 use grana_session::{Kind as MessageKind, Session};
-use grana_ui::{Rect, Vec2};
 
 use crate::bricks::ImageBricks;
 
-const STAGE_WIDTH: f32 = 1000.0;
 const OPEN_LIMIT: Duration = Duration::from_secs(600);
 const OPEN_POLL: Duration = Duration::from_millis(10);
 const DEFAULT_WIDTH: u32 = 1920;
@@ -76,7 +74,7 @@ pub fn run(request: &Request) -> Result<PathBuf, String> {
     if width == 0 || height == 0 {
         return Err("a render covers at least one pixel".to_string());
     }
-    let panels = panels(&panes, width, height);
+    let panels = Panels::of(&panes, [width, height]);
     let regions = panels.export(width, kind == DestinationKind::Movie);
     if view.is_none() {
         panes.fit(
@@ -279,28 +277,6 @@ fn default_width(view: &Option<ViewState>, kind: DestinationKind) -> u32 {
 
 fn default_height(width: u32) -> u32 {
     (u64::from(width) * u64::from(ASPECT[1]) / u64::from(ASPECT[0])).max(1) as u32
-}
-
-fn panels(panes: &Panes, width: u32, height: u32) -> Panels {
-    assert!(width > 0 && height > 0, "a render covers at least a pixel");
-    let stage = [
-        0.0,
-        0.0,
-        STAGE_WIDTH,
-        STAGE_WIDTH * height as f32 / width as f32,
-    ];
-    let rects = panes.rects(stage, PANE_GAP);
-    Panels::new(std::array::from_fn(|index| {
-        panes.visible(index).then(|| {
-            (
-                Rect::from_min_size(
-                    Vec2::new(rects[index][0], rects[index][1]),
-                    Vec2::new(rects[index][2], rects[index][3]),
-                ),
-                panes.pane(index).kind(),
-            )
-        })
-    }))
 }
 
 fn aspect(region: [u32; 4]) -> f32 {

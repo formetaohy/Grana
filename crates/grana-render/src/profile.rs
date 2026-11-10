@@ -12,9 +12,6 @@ const SLOTS: usize = 4;
 const SMOOTHING: f32 = 0.3;
 const OVERRUN: f32 = 1.1;
 const HEADROOM: f32 = 0.7;
-const STEP: f32 = 1.15;
-const PENALTY_FLOOR: f32 = 1.0;
-const PENALTY_CEILING: f32 = 4.0;
 const NANOSECONDS: f32 = 1.0e6;
 
 const FEATURES: Features = Features::TIMESTAMP_QUERY;
@@ -91,7 +88,6 @@ impl FrameProfile {
 pub struct Budget {
     target: f32,
     measured: f32,
-    penalty: f32,
 }
 
 impl Budget {
@@ -103,7 +99,6 @@ impl Budget {
         Self {
             target,
             measured: target,
-            penalty: 1.0,
         }
     }
 
@@ -111,12 +106,12 @@ impl Budget {
         self.target
     }
 
-    pub fn measured(self) -> f32 {
-        self.measured
+    pub fn overrun(self) -> bool {
+        self.measured > self.target * OVERRUN
     }
 
-    pub fn penalty(self) -> f32 {
-        self.penalty
+    pub fn headroom(self) -> bool {
+        self.measured < self.target * HEADROOM
     }
 
     pub fn observe(&mut self, elapsed: f32) {
@@ -125,11 +120,6 @@ impl Budget {
             "a measured frame spans a finite duration"
         );
         self.measured += SMOOTHING * (elapsed - self.measured);
-        if self.measured > self.target * OVERRUN {
-            self.penalty = (self.penalty * STEP).min(PENALTY_CEILING);
-        } else if self.measured < self.target * HEADROOM {
-            self.penalty = (self.penalty / STEP).max(PENALTY_FLOOR);
-        }
     }
 }
 

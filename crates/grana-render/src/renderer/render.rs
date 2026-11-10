@@ -9,8 +9,6 @@ use grana_display::ChannelMask;
 
 const AMBIENT_REACH: f32 = 40.0;
 const AMBIENT_STRENGTH: f32 = 0.9;
-const VOLUME_SCALE: u32 = 2;
-const VOLUME_SCALE_PIXELS: u64 = 1 << 21;
 
 impl Renderer {
     pub(super) fn render(
@@ -74,14 +72,18 @@ impl Renderer {
         });
         let moved: [bool; PANE_COUNT] =
             std::array::from_fn(|index| motion[index] != self.motion[index]);
-        let scales: [u32; PANE_COUNT] = std::array::from_fn(|index| match panes[index] {
-            Some(PaneFrame::Volume { region, .. }) => volume_scale(
-                pane_quality[index],
-                [region[2].max(1), region[3].max(1)],
-                !self.exporting && !assured && !translucent && moved[index],
+        let frozen = self.exporting || assured;
+        let loads: [Load; PANE_COUNT] = std::array::from_fn(|index| match panes[index] {
+            Some(PaneFrame::Volume { region, .. }) => Load::volume(
+                u64::from(region[2].max(1)) * u64::from(region[3].max(1)),
+                !frozen && !translucent && pane_quality[index] != Quality::High,
+                moved[index],
             ),
-            _ => 1,
+            _ => Load::IDLE,
         });
+        let resolution = self.governor.decide(&loads, frozen);
+        let scales = resolution.scale;
+        let penalty = resolution.penalty;
         self.motion = motion;
         self.info.volume_scale = scales;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -131,7 +133,6 @@ impl Renderer {
             dummy_ao,
             budget,
             profile,
-            frame_budget,
             sampled,
             oit_readback,
             dropped,
@@ -176,11 +177,6 @@ impl Renderer {
             .min(level_count - 1);
         let limits = Limits { first, ceiling };
         let allowed = limits.count(pyramid);
-        let penalty = if *exporting || assured {
-            1.0
-        } else {
-            frame_budget.penalty()
-        };
         let steps: [f32; PANE_COUNT] =
             std::array::from_fn(|index| scene.step_scale * pane_quality[index].scale() * penalty);
         let active = panes.iter().flatten().count();
@@ -279,6 +275,7 @@ impl Renderer {
                 region: bounds,
                 aspect,
                 height,
+                lod: scales[index] as f32,
                 limits,
                 capacity: volume_share,
                 current: if assured { None } else { volume_level[index] },
@@ -396,6 +393,7 @@ impl Renderer {
                             clip,
                             aspect: region[2].max(1) as f32 / region[3].max(1) as f32,
                             height: region[3].max(1),
+                            lod: scales[index] as f32,
                             time,
                         },
                         levels.ladder,
@@ -1291,15 +1289,6 @@ fn pane_motion(
             .hash(&mut hasher);
     }
     hasher.finish()
-}
-
-fn volume_scale(quality: Quality, extent: [u32; 2], allowed: bool) -> u32 {
-    let pixels = u64::from(extent[0]) * u64::from(extent[1]);
-    if allowed && quality != Quality::High && pixels >= VOLUME_SCALE_PIXELS {
-        VOLUME_SCALE
-    } else {
-        1
-    }
 }
 
 fn cut_view(panes: &[Option<PaneFrame<'_>>; PANE_COUNT], section: &SectionCamera) -> (Vec3, Vec3) {

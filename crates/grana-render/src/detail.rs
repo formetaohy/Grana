@@ -74,7 +74,7 @@ pub fn residency(
                     ladder.count,
                     camera,
                     aspect,
-                    height,
+                    height as f32,
                     region,
                 );
                 let bricks = counts[..ladder.count].iter().sum();

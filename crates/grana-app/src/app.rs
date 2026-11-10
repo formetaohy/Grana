@@ -1837,7 +1837,7 @@ fn annotation_hit(
 
 fn frame_stats(info: FrameInfo) -> FrameStats {
     FrameStats {
-        panes: std::array::from_fn(|index| view_stats(info.panes[index])),
+        panes: std::array::from_fn(|index| view_stats(info.panes[index], info.volume_scale[index])),
         bytes: info.bytes,
         geometry: info.geometry,
         fragments: info.fragments,
@@ -1870,12 +1870,13 @@ fn profile_stats(profile: grana_render::FrameProfile) -> grana_editor::ProfileSt
     stats
 }
 
-fn view_stats(info: grana_render::ViewInfo) -> ViewStats {
+fn view_stats(info: grana_render::ViewInfo, scale: u32) -> ViewStats {
     ViewStats {
         level: info.level,
         visible: info.visible,
         demand: info.demand,
         resident: info.resident,
+        scale,
     }
 }
 

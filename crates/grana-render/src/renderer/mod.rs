@@ -1,6 +1,7 @@
 mod feedback;
 mod render;
 mod residency;
+mod resolution;
 mod signature;
 mod upload;
 
@@ -45,7 +46,7 @@ use crate::planner::{
     resolve_section_level, section_range, select_section_level, volume_dispatch,
 };
 use crate::present::Present;
-use crate::profile::{Budget, FrameProfile, Marks, Profiler, STAGE_COUNT, Stage};
+use crate::profile::{FrameProfile, Marks, Profiler, STAGE_COUNT, Stage};
 use crate::sample;
 use crate::schema::SceneFrame;
 use crate::section::SectionPass;
@@ -73,6 +74,8 @@ const FADE_DRAWS: f32 = 10.0;
 const UNIT: f32 = 65535.0;
 
 const FRAME_TARGET: f32 = 14.0;
+
+pub use resolution::{Governor, Load, Resolution};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Fade {
@@ -272,7 +275,7 @@ pub struct Renderer {
     oit_readback: [Readback; PANE_COUNT],
     dropped: [u32; PANE_COUNT],
     profile: Option<Profiler>,
-    frame_budget: Budget,
+    governor: Governor,
     measured: [f32; STAGE_COUNT],
     sampled: bool,
     info: FrameInfo,
@@ -361,7 +364,7 @@ impl Renderer {
             }),
             dropped: [0; PANE_COUNT],
             profile: Profiler::new(device, queue),
-            frame_budget: Budget::new(FRAME_TARGET),
+            governor: Governor::new(FRAME_TARGET),
             measured: [0.0; STAGE_COUNT],
             sampled: false,
             info: FrameInfo::default(),
@@ -598,15 +601,15 @@ impl Renderer {
             && let Some(measured) = profile.poll(device)
         {
             if self.sampled && info.settled && !self.exporting {
-                self.frame_budget.observe(measured.total);
+                self.governor.observe(measured.total);
             }
             self.measured = measured.stages;
         }
         info.profile = FrameProfile {
             stages: self.measured,
             total: self.measured.iter().sum(),
-            target: self.frame_budget.target(),
-            penalty: self.frame_budget.penalty(),
+            target: self.governor.target(),
+            penalty: self.governor.penalty(),
         };
         info
     }
