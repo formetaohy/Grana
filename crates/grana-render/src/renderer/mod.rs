@@ -34,9 +34,9 @@ use crate::mesh::MeshPasses;
 use crate::oit::Oit;
 use crate::pick::{self, PICK_ROW, PickId, PickPane, PickTarget};
 use crate::planner::{
-    self, BAND, Demand, Ladder, LadderView, Limits, Planner, Schedule, SectionKey, SectionMeasure,
-    SectionPick, SectionProbe, SectionRange, bucket_scale, capacities, decode_plan,
-    resolve_section_level, section_range, select_section_level, volume_dispatch, volume_ladder,
+    self, BAND, Demand, FitView, Ladder, Limits, Planner, Schedule, SectionKey, SectionMeasure,
+    SectionPick, SectionProbe, SectionRange, bucket_scale, capacities, decode_plan, fit_volume,
+    resolve_section_level, section_range, select_section_level, volume_dispatch,
 };
 use crate::present::Present;
 use crate::profile::{Budget, FrameProfile, Marks, Profiler, STAGE_COUNT, Stage};
@@ -189,8 +189,6 @@ pub struct Renderer {
     prefetch_key: Option<u64>,
     prefetch_issued: Vec<BrickRequest>,
     prefetch_rate: f32,
-    wanted: [usize; BAND],
-    wanted_level: Option<usize>,
     transparent: bool,
     exporting: bool,
     fade: Option<Fade>,
@@ -273,8 +271,6 @@ impl Renderer {
             prefetch_key: None,
             prefetch_issued: Vec::new(),
             prefetch_rate: 1.0,
-            wanted: [0; BAND],
-            wanted_level: None,
             transparent: false,
             exporting: false,
             fade: None,
@@ -319,8 +315,6 @@ impl Renderer {
         self.section_measure = None;
         self.section_sequence = 0;
         self.probe_mark = 0;
-        self.wanted = [0; BAND];
-        self.wanted_level = None;
         self.planned = None;
         self.prefetched.clear();
         self.prefetch_key = None;
@@ -435,8 +429,6 @@ impl Renderer {
         self.prefetch_key = None;
         self.prefetch_issued.clear();
         self.prefetch_rate = 1.0;
-        self.wanted = [0; BAND];
-        self.wanted_level = None;
         self.settled = None;
         self.planned = None;
         self.exporting = false;

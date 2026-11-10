@@ -1332,3 +1332,167 @@ fn projects_the_maximum_and_surfaces_the_isovalue() {
         "the isovalue does not shrink the surface: {coarse} and {fine}"
     );
 }
+
+fn ladder_volumes() -> Vec<Volume> {
+    [
+        (Extent::new(128, 128, 64), Spacing::new(1.0, 1.0, 1.0), 12.0),
+        (Extent::new(64, 64, 32), Spacing::new(2.0, 2.0, 2.0), 6.0),
+        (Extent::new(32, 32, 16), Spacing::new(4.0, 4.0, 4.0), 3.0),
+    ]
+    .into_iter()
+    .map(|(extent, spacing, radius)| {
+        let centre = [
+            0.5 * extent.x() as f32,
+            0.5 * extent.y() as f32,
+            0.5 * extent.z() as f32,
+        ];
+        spheres(extent, spacing, &[(centre, radius)], 60_000)
+    })
+    .collect()
+}
+
+fn ladder_pyramid(volumes: &[Volume]) -> Pyramid {
+    let base = volumes[0].pyramid();
+    let fine = base.level(0);
+    Pyramid::placed(
+        vec![fine, fine.coarser(), fine.coarser().coarser()],
+        volumes.len(),
+        base.channels().to_vec(),
+        1,
+        1.0,
+        [0.0; 3],
+    )
+}
+
+fn stream_levels(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    view: &View<'_>,
+    volumes: &[Volume],
+) -> grana_render::FrameInfo {
+    for _ in 0..64 {
+        let mut info = renderer.draw(gpu.device(), gpu.queue(), frame(view));
+        if !renderer.requests_pending() {
+            while info.samples < SAMPLES || info.fading {
+                info = renderer.draw(gpu.device(), gpu.queue(), frame(view));
+            }
+            return info;
+        }
+        if let Some(requests) = next_demand(gpu, renderer) {
+            let bricks = requests
+                .volume
+                .iter()
+                .chain(&requests.section)
+                .map(|request| {
+                    let volume = &volumes[request.level];
+                    let grid = BrickGrid::new(volume.extent());
+                    (*request, volume.brick(&grid, request.coord))
+                })
+                .collect::<Vec<_>>();
+            renderer.upload(gpu.queue(), &bricks);
+        }
+    }
+    panic!("the stream never settled");
+}
+
+fn ladder_view<'a>(
+    target: &'a wgpu::TextureView,
+    camera: &'a Camera,
+    section: &'a SectionCamera,
+    scene: &'a SceneFrame<'a>,
+) -> View<'a> {
+    View {
+        target,
+        camera,
+        section,
+        region: Region::none(),
+        scene,
+        volume_region: WHOLE,
+        section_region: CORNER,
+        assured: false,
+    }
+}
+
+#[test]
+fn degrades_the_volume_level_to_fit_a_residency_budget() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volumes = ladder_volumes();
+    let pyramid = ladder_pyramid(&volumes);
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
+    let section = SectionCamera::new();
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = Renderer::new(
+        gpu.device(),
+        gpu.queue(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        1 << 20,
+    );
+    renderer.set_dataset(gpu.device(), &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = ladder_view(&view_texture, &camera, &section, &scene);
+    let info = stream_levels(&gpu, &mut renderer, &view, &volumes);
+    assert_eq!(info.samples, SAMPLES, "the constrained view never resolved");
+    assert!(
+        info.volume.level > 0,
+        "the budget still asks for the finest level"
+    );
+    assert_eq!(
+        info.volume.visible, info.volume.demand,
+        "the fitting level still truncates its bricks"
+    );
+    assert!(!info.truncated, "the fitting level reports truncation");
+    holds_a_settled_frame(&gpu, &mut renderer, &view);
+}
+
+#[test]
+fn keeps_the_finest_volume_level_when_the_budget_holds_it() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volumes = ladder_volumes();
+    let pyramid = ladder_pyramid(&volumes);
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
+    let section = SectionCamera::new();
+    let scene = SceneFrame {
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        styles: &[],
+        layers: &[],
+        markers: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = ladder_view(&view_texture, &camera, &section, &scene);
+    let info = stream_levels(&gpu, &mut renderer, &view, &volumes);
+    assert_eq!(info.samples, SAMPLES, "the roomy view never resolved");
+    assert_eq!(info.volume.level, 0, "a roomy budget coarsens the volume");
+    assert_eq!(info.volume.visible, info.volume.demand);
+    assert!(!info.truncated);
+    holds_a_settled_frame(&gpu, &mut renderer, &view);
+}
+fn holds_a_settled_frame(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>) {
+    for _ in 0..4 {
+        let info = renderer.draw(gpu.device(), gpu.queue(), frame(view));
+        assert!(info.settled, "an idle fitted frame replans");
+        assert_eq!(info.samples, SAMPLES, "an idle fitted frame resamples");
+        assert!(!info.truncated, "an idle fitted frame truncates");
+    }
+}

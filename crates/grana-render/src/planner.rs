@@ -18,6 +18,8 @@ pub(crate) const BAND: usize = 4;
 
 pub(crate) const BUCKET_COUNT: usize = 128;
 const LEVEL_HYSTERESIS: f32 = 1.2;
+const BAND_FLOOR: f32 = 0.75;
+const BAND_CEIL: f32 = 1.25;
 const HEADER_WORDS: usize = 4;
 const VISIBLE_BASE: usize = HEADER_WORDS;
 const BASE_BASE: usize = VISIBLE_BASE + BUCKET_COUNT;
@@ -805,8 +807,6 @@ pub(crate) struct LadderView<'a> {
     pub(crate) height: f32,
     pub(crate) current: Option<usize>,
     pub(crate) limits: Limits,
-    pub(crate) previous_visible: usize,
-    pub(crate) capacity: usize,
     pub(crate) penalty: f32,
 }
 
@@ -817,8 +817,6 @@ pub(crate) fn volume_ladder(view: LadderView<'_>) -> Ladder {
         height,
         current,
         limits,
-        previous_visible,
-        capacity,
         penalty,
     } = view;
     let first = limits.first;
@@ -830,9 +828,6 @@ pub(crate) fn volume_ladder(view: LadderView<'_>) -> Ladder {
         }
         CameraProjection::Orthographic => 2.0 * camera.half_height() / height.max(1.0),
     };
-    if previous_visible > capacity {
-        pixel_world *= 2.0;
-    }
     pixel_world *= penalty;
     let mut target = first;
     for index in first..levels {
@@ -851,6 +846,173 @@ pub(crate) fn volume_ladder(view: LadderView<'_>) -> Ladder {
         CameraProjection::Orthographic => 1,
     };
     Ladder { base, count }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct VolumeFit {
+    pub(crate) ladder: Ladder,
+    pub(crate) capacity: [usize; BAND],
+}
+
+pub(crate) struct FitView<'a> {
+    pub(crate) pyramid: &'a Pyramid,
+    pub(crate) camera: &'a Camera,
+    pub(crate) region: Region,
+    pub(crate) aspect: f32,
+    pub(crate) height: u32,
+    pub(crate) limits: Limits,
+    pub(crate) capacity: usize,
+    pub(crate) current: Option<usize>,
+    pub(crate) penalty: f32,
+}
+
+pub(crate) fn fit_volume(view: FitView<'_>) -> VolumeFit {
+    let FitView {
+        pyramid,
+        camera,
+        region,
+        aspect,
+        height,
+        limits,
+        capacity,
+        current,
+        penalty,
+    } = view;
+    assert!(capacity > 0, "a volume fit reserves at least one brick");
+    assert!(aspect > 0.0, "a volume pane has a positive aspect");
+    let levels = limits.count(pyramid);
+    let desired = volume_ladder(LadderView {
+        pyramid,
+        camera,
+        height: height as f32,
+        current,
+        limits,
+        penalty,
+    });
+    let mut fallback: Option<VolumeFit> = None;
+    for base in desired.base..levels {
+        let count = ladder_count(camera.projection(), levels, base);
+        let counts = volume_counts(pyramid, base, count, camera, aspect, height, region);
+        let demand = counts[..count].iter().sum::<usize>();
+        if demand <= capacity {
+            return VolumeFit {
+                ladder: Ladder { base, count },
+                capacity: counts,
+            };
+        }
+        let closer = fallback
+            .as_ref()
+            .is_none_or(|held| demand < held.capacity[..held.ladder.count].iter().sum::<usize>());
+        if closer {
+            fallback = Some(VolumeFit {
+                ladder: Ladder { base, count },
+                capacity: capacities(capacity, &counts, count),
+            });
+        }
+    }
+    fallback.expect("the coarsest level holds a ladder")
+}
+
+fn ladder_count(projection: CameraProjection, levels: usize, base: usize) -> usize {
+    match projection {
+        CameraProjection::Perspective => BAND.min(levels - base),
+        CameraProjection::Orthographic => 1,
+    }
+}
+
+fn volume_counts(
+    pyramid: &Pyramid,
+    base: usize,
+    count: usize,
+    camera: &Camera,
+    aspect: f32,
+    height: u32,
+    region: Region,
+) -> [usize; BAND] {
+    let scale = camera.pixels_per_world(height);
+    let radius = 0.5 * Vec3::from(pyramid.level(base).world_extent()).length();
+    let planes = crate::frame::planes(camera.view_projection(aspect, radius));
+    let eye = camera.eye();
+    let mut counts = [0usize; BAND];
+    for (band, slot) in counts.iter_mut().enumerate().take(count) {
+        let level = pyramid.level(base + band);
+        let lower = if band == 0 || band + 1 == count {
+            0.0
+        } else {
+            BAND_FLOOR * Vec3::from(level.voxel()).min_element() * scale
+        };
+        let upper = if band + 1 < count {
+            BAND_CEIL * Vec3::from(pyramid.level(base + band + 1).voxel()).min_element() * scale
+        } else {
+            f32::INFINITY
+        };
+        *slot = band_visible(level, lower, upper, eye, &planes, region);
+    }
+    counts
+}
+
+fn band_visible(
+    level: grana_volume::Level,
+    lower: f32,
+    upper: f32,
+    eye: Vec3,
+    planes: &[[f32; 4]; 6],
+    region: Region,
+) -> usize {
+    let extent = level.extent();
+    let counts = BrickGrid::new(extent).counts();
+    let dims = Vec3::new(extent.x() as f32, extent.y() as f32, extent.z() as f32);
+    let mut visible = 0;
+    for z in 0..counts[2] {
+        for y in 0..counts[1] {
+            for x in 0..counts[0] {
+                let cell = Vec3::new(x as f32, y as f32, z as f32) * BRICK_SIDE as f32;
+                let size = (dims - cell).min(Vec3::splat(BRICK_SIDE as f32));
+                let (low, high) = brick_bounds(level, cell, size);
+                if outside_frustum(low, high, planes) || outside_region(low, high, region) {
+                    continue;
+                }
+                let (near, far) = reach(low, high, eye);
+                if far >= lower && near < upper {
+                    visible += 1;
+                }
+            }
+        }
+    }
+    visible
+}
+
+fn outside_frustum(low: Vec3, high: Vec3, planes: &[[f32; 4]; 6]) -> bool {
+    planes.iter().any(|plane| {
+        let direction = Vec3::from_array([plane[0], plane[1], plane[2]]);
+        let positive = Vec3::new(
+            if plane[0] >= 0.0 { high.x } else { low.x },
+            if plane[1] >= 0.0 { high.y } else { low.y },
+            if plane[2] >= 0.0 { high.z } else { low.z },
+        );
+        direction.dot(positive) + plane[3] < 0.0
+    })
+}
+
+fn outside_region(low: Vec3, high: Vec3, region: Region) -> bool {
+    if !region.enabled() {
+        return false;
+    }
+    let half = region.half();
+    let middle = 0.5 * (low + high);
+    let extent = 0.5 * (high - low);
+    let offset = middle - region.center();
+    (0..3).any(|axis| {
+        let direction = region.axis(axis);
+        let reach = extent.dot(direction.abs());
+        offset.dot(direction).abs() > half[axis] + reach
+    })
+}
+
+fn reach(low: Vec3, high: Vec3, eye: Vec3) -> (f32, f32) {
+    let near = (eye.clamp(low, high) - eye).length();
+    let far = (eye - low).abs().max((eye - high).abs()).length();
+    (near, far)
 }
 
 fn nearest_distance(level: grana_volume::Level, eye: Vec3) -> f32 {

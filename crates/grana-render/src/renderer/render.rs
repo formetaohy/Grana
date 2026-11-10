@@ -91,8 +91,6 @@ impl Renderer {
             sampled,
             oit_readback,
             dropped,
-            wanted,
-            wanted_level,
             ..
         } = self;
         let (
@@ -202,32 +200,24 @@ impl Renderer {
         .clamp(1, share)
         .min(slots.saturating_sub(1).max(1));
         let volume_capacity = slots.saturating_sub(section_capacity).max(1);
-        let ladder = volume_ladder(LadderView {
+        let fit = fit_volume(FitView {
             pyramid,
             camera,
-            height: volume_height as f32,
-            current: if assured { None } else { *volume_rendered },
+            region,
+            aspect: volume_aspect,
+            height: volume_height,
             limits,
-            previous_visible: if assured { 0 } else { info.volume.visible },
             capacity: volume_capacity,
+            current: if assured { None } else { *volume_rendered },
             penalty,
         });
-        let base = (ladder.base + coarsen).min(allowed - 1);
-        let ladder = Ladder {
-            base,
-            count: BAND.min(allowed - base),
-        };
-        let exact = *wanted_level == Some(ladder.base);
-        let capacity = if assured && !exact {
-            capacities(volume_capacity, &[1; BAND], ladder.count)
-        } else if wanted[..ladder.count].iter().sum::<usize>() <= volume_capacity {
-            let mut caps = [0usize; BAND];
-            for (band, want) in wanted[..ladder.count].iter().enumerate() {
-                caps[band] = (*want).max(1);
-            }
-            caps
+        let base = (fit.ladder.base + coarsen).min(allowed - 1);
+        let count = BAND.min(allowed - base);
+        let ladder = Ladder { base, count };
+        let capacity = if base == fit.ladder.base && count == fit.ladder.count {
+            fit.capacity
         } else {
-            capacities(volume_capacity, wanted, ladder.count)
+            capacities(volume_capacity, &fit.capacity, count)
         };
         let levels = Levels {
             ladder,
@@ -258,7 +248,6 @@ impl Renderer {
         info.settled = !replan;
         let decoded = info.volume.level == ladder.base && info.section.level == section_level;
         info.truncated = decoded
-            && (!assured || exact)
             && (info.volume.visible > info.volume.demand
                 || info.section.visible > info.section.demand);
         let ready = !assured || (info.settled && !info.truncated);

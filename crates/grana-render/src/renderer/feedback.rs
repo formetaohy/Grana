@@ -51,8 +51,6 @@ impl Renderer {
             prefetch_key,
             prefetch_issued,
             prefetch_rate,
-            wanted,
-            wanted_level,
             section_measure,
             section_sequence,
             ..
@@ -68,13 +66,14 @@ impl Renderer {
         let mut demands = Vec::with_capacity(ladder.count);
         for band in 0..ladder.count {
             let slice = &words[band * *view_words..(band + 1) * *view_words];
-            demands.push(decode_plan(
+            let held = decode_plan(
                 slice,
                 planner.bands[band].capacity(),
                 meta.time,
                 ladder.level(band),
                 pyramid,
-            )?);
+            )?;
+            demands.push(held);
         }
         let section = decode_plan(
             &words[BAND * *view_words..(BAND + 1) * *view_words],
@@ -92,10 +91,7 @@ impl Renderer {
                 demand.indices.iter().copied(),
                 *pin,
             );
-            wanted[band] = demand.info.visible;
         }
-        wanted[ladder.count..].fill(0);
-        *wanted_level = Some(ladder.base);
         atlas.touch(
             meta.time,
             meta.levels.section,

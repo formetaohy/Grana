@@ -337,7 +337,7 @@ fn step_length(camera: &Camera, table: &BrickTable, step_scale: f32) -> f32 {
     (voxel_world * step_scale.max(1.0e-3)).max(1.0e-7)
 }
 
-fn planes(view_projection: Mat4) -> [[f32; 4]; 6] {
+pub(crate) fn planes(view_projection: Mat4) -> [[f32; 4]; 6] {
     let row0 = view_projection.row(0);
     let row1 = view_projection.row(1);
     let row2 = view_projection.row(2);
