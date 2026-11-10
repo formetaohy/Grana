@@ -198,6 +198,9 @@ impl Encode for CameraState {
         writer.f32(self.pitch);
         writer.f32(self.distance);
         writer.f32(self.fov_y);
+        writer.u8(self.projection.index() as u8);
+        writer.f32(self.aperture);
+        writer.f32(self.focus);
     }
 }
 

@@ -11,7 +11,7 @@ use crate::ViewInfo;
 use crate::brick::BrickArena;
 use crate::frame::ScheduleData;
 use crate::layout::Layouts;
-use grana_display::{Camera, SectionCamera, SectionState};
+use grana_display::{Camera, CameraProjection, SectionCamera, SectionState};
 use grana_volume::BrickRequest;
 
 pub(crate) const BAND: usize = 4;
@@ -823,8 +823,13 @@ pub(crate) fn volume_ladder(view: LadderView<'_>) -> Ladder {
     } = view;
     let first = limits.first;
     let levels = limits.count(pyramid);
-    let nearest = nearest_distance(pyramid.level(0), camera.eye());
-    let mut pixel_world = 2.0 * nearest * (camera.fov_y() * 0.5).tan() / height.max(1.0);
+    let mut pixel_world = match camera.projection() {
+        CameraProjection::Perspective => {
+            2.0 * nearest_distance(pyramid.level(0), camera.eye()) * (camera.fov_y() * 0.5).tan()
+                / height.max(1.0)
+        }
+        CameraProjection::Orthographic => 2.0 * camera.half_height() / height.max(1.0),
+    };
     if previous_visible > capacity {
         pixel_world *= 2.0;
     }
@@ -841,7 +846,10 @@ pub(crate) fn volume_ladder(view: LadderView<'_>) -> Ladder {
         minimum_spacing(pyramid, index)
     })
     .max(first);
-    let count = BAND.min(levels - base);
+    let count = match camera.projection() {
+        CameraProjection::Perspective => BAND.min(levels - base),
+        CameraProjection::Orthographic => 1,
+    };
     Ladder { base, count }
 }
 

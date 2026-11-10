@@ -7,8 +7,8 @@ mod transfer;
 mod viewport;
 
 pub use camera::{
-    Camera, CameraState, PROJECTION_THICKNESS, Projection, Ray, SectionCamera, SectionState,
-    THICKNESS_LIMIT,
+    APERTURE_LIMIT, Camera, CameraProjection, CameraState, PROJECTION_THICKNESS, Ray,
+    SectionCamera, SectionProjection, SectionState, THICKNESS_LIMIT,
 };
 pub use color::{ColorState, Coloring, Extent, merged};
 pub use material::Material;

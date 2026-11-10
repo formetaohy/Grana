@@ -24,6 +24,7 @@ impl Signature<'_, '_> {
             scene,
             data,
             section,
+            camera,
             levels,
             time,
             exposure,
@@ -35,7 +36,11 @@ impl Signature<'_, '_> {
             ..
         } = self;
         let mut hasher = DefaultHasher::new();
-        bytemuck::bytes_of(data).hash(&mut hasher);
+        let mut data = *data;
+        data.jitter = [0.0; 4];
+        data.lens = [0.0, 0.0, data.lens[2], data.lens[3]];
+        bytemuck::bytes_of(&data).hash(&mut hasher);
+        camera.projection.index().hash(&mut hasher);
         let mut section = *section;
         section.jitter = [0.0; 4];
         bytemuck::bytes_of(&section).hash(&mut hasher);
@@ -75,6 +80,9 @@ impl Signature<'_, '_> {
         camera.yaw.to_bits().hash(&mut hasher);
         camera.pitch.to_bits().hash(&mut hasher);
         camera.fov_y.to_bits().hash(&mut hasher);
+        camera.projection.index().hash(&mut hasher);
+        camera.aperture.to_bits().hash(&mut hasher);
+        camera.focus.to_bits().hash(&mut hasher);
         view.center.map(f32::to_bits).hash(&mut hasher);
         view.azimuth.to_bits().hash(&mut hasher);
         view.elevation.to_bits().hash(&mut hasher);

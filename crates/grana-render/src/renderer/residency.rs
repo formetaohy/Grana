@@ -70,7 +70,7 @@ impl Residency {
             assured: mode.assured,
             time,
             eye: view.camera.eye().to_array(),
-            focus: view.camera.focus().to_array(),
+            focus: view.camera.pivot().to_array(),
             field_of_view: view.camera.fov_y(),
             section_center: view.section.center().to_array(),
             section_normal: view.section.normal().to_array(),

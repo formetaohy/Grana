@@ -53,11 +53,11 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
     return output;
 }
 
-fn object_distance(depth: f32, ndc: vec2<f32>) -> f32 {
+fn object_distance(origin: vec3<f32>, depth: f32, ndc: vec2<f32>) -> f32 {
     if (depth >= 1.0) {
         return EMPTY_DISTANCE;
     }
-    return length(unproject(vec3<f32>(ndc, depth)) - frame.eye.xyz);
+    return length(unproject(vec3<f32>(ndc, depth)) - origin);
 }
 
 fn region_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
@@ -206,9 +206,15 @@ fn cell_extinction(band: u32, slot: u32, cell: u32, channels_active: u32) -> f32
     return extinction;
 }
 
-fn sight(band: u32, t: f32, direction: vec3<f32>, channels_active: u32) -> BrickSight {
+fn sight(
+    origin: vec3<f32>,
+    band: u32,
+    t: f32,
+    direction: vec3<f32>,
+    channels_active: u32,
+) -> BrickSight {
     let g = level_frame(band);
-    let uvw = ray_uvw(band, t, direction);
+    let uvw = ray_uvw(origin, band, t, direction);
     let cell = brick_cell(g.grid, g.dims, uvw);
     let record = level_record(band, brick_index(g.grid, cell));
     let slot = brick_slot(record);
@@ -220,9 +226,15 @@ fn sight(band: u32, t: f32, direction: vec3<f32>, channels_active: u32) -> Brick
     return BrickSight(usable, slot == 0u && !hollow, band, cell, uvw);
 }
 
-fn reachable(band: u32, t: f32, direction: vec3<f32>, channels_active: u32) -> BrickSight {
+fn reachable(
+    origin: vec3<f32>,
+    band: u32,
+    t: f32,
+    direction: vec3<f32>,
+    channels_active: u32,
+) -> BrickSight {
     let count = band_count();
-    let first = sight(band, t, direction, channels_active);
+    let first = sight(origin, band, t, direction, channels_active);
     if (first.usable) {
         return first;
     }
@@ -230,7 +242,7 @@ fn reachable(band: u32, t: f32, direction: vec3<f32>, channels_active: u32) -> B
     for (var step = 1u; step < count; step += 1u) {
         let coarser = band + step;
         if (coarser < count) {
-            let other = sight(coarser, t, direction, channels_active);
+            let other = sight(origin, coarser, t, direction, channels_active);
             if (other.usable) {
                 return other;
             }
@@ -240,7 +252,7 @@ fn reachable(band: u32, t: f32, direction: vec3<f32>, channels_active: u32) -> B
         }
         if (step <= band) {
             let finer = band - step;
-            let other = sight(finer, t, direction, channels_active);
+            let other = sight(origin, finer, t, direction, channels_active);
             if (other.usable) {
                 return other;
             }
@@ -253,7 +265,7 @@ fn reachable(band: u32, t: f32, direction: vec3<f32>, channels_active: u32) -> B
 }
 
 fn local_step(t: f32) -> f32 {
-    return max(frame.march.x, 0.5 * frame.jitter.w * t / frame.march.w);
+    return max(frame.march.x, 0.5 * frame.jitter.w * pixel_world(t));
 }
 
 struct March {
@@ -264,6 +276,7 @@ struct March {
 }
 
 fn march(
+    origin: vec3<f32>,
     begin: f32,
     finish: f32,
     direction: vec3<f32>,
@@ -285,10 +298,10 @@ fn march(
     var cells = 0u;
     var complete = false;
     while (t < finish && samples < MAX_SAMPLES && cells < MAX_CELLS && !complete) {
-        var found = reachable(band_for(t, dither), t, direction, channel_count);
+        var found = reachable(origin, band_for(t, dither), t, direction, channel_count);
         let band = found.band;
         if (!found.usable) {
-            let skip = ray_uvw(band, t, direction);
+            let skip = ray_uvw(origin, band, t, direction);
             let g = level_frame(band);
             let edge = boundary_delta(band, skip, level_rate(band, direction), local_step(t) * 0.25);
             t = min(t + edge, finish);
@@ -312,7 +325,7 @@ fn march(
         while (cursor < boundary && cells < MAX_CELLS && !complete) {
             cells += 1u;
             let step = local_step(cursor);
-            let local = ray_uvw(band, cursor, direction);
+            let local = ray_uvw(origin, band, cursor, direction);
             let subcell = cell_index(cell_coord(cell_voxel(band, local, brick)));
             let limit = min(cursor + cell_delta(band, local, brick, direction_uvw, step * 0.25), boundary);
             if (!cell_visible(band, slot, subcell, channel_count)) {
@@ -329,7 +342,7 @@ fn march(
             while (cursor < limit && samples < MAX_SAMPLES) {
                 let next = min(cursor + stride, limit);
                 let segment = next - cursor;
-                let position = ray_uvw(band, cursor, direction);
+                let position = ray_uvw(origin, band, cursor, direction);
                 var optical_depth = 0.0;
                 var emission = vec3<f32>(0.0);
                 for (var pack = 0u; pack < pack_count; pack += 1u) {
@@ -454,12 +467,13 @@ fn clip_depth(world: vec3<f32>) -> f32 {
 
 @fragment
 fn fs_main(input: VertexOutput) -> VolumeOutput {
-    let eye = frame.eye.xyz;
     let ndc = input.ndc + frame.jitter.xy;
     let pixel = vec2<i32>(input.clip_position.xy);
     let ao = ambient_occlusion(vec2<f32>(input.clip_position.xy));
-    let direction = normalize(unproject(vec3<f32>(ndc, 1.0)) - eye);
-    let local_eye = level_local(0u, eye);
+    let ray = camera_ray(ndc);
+    let origin = ray.origin;
+    let direction = ray.direction;
+    let local_eye = level_local(0u, origin);
     let local_direction = level_rate(0u, direction);
 
     let inverse_direction = vec3<f32>(1.0) / local_direction;
@@ -468,9 +482,9 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
     let lowest_t = min(near_t, far_t);
     let highest_t = max(near_t, far_t);
     let entry = max(max(lowest_t.x, lowest_t.y), lowest_t.z);
-    let object = object_distance(textureLoad(object_depth, pixel, 0), ndc);
-    let region = region_interval(eye, direction);
-    let plane = clip_interval(eye, direction);
+    let object = object_distance(origin, textureLoad(object_depth, pixel, 0), ndc);
+    let region = region_interval(origin, direction);
+    let plane = clip_interval(origin, direction);
     let clip = vec2<f32>(max(region.x, plane.x), min(region.y, plane.y));
     let exit = min(
         min(min(highest_t.x, highest_t.y), highest_t.z),
@@ -575,9 +589,9 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
     var hit = vec4<f32>(0.0);
     var hit_normal = vec4<f32>(0.0);
     for (var index = 0u; index < layers; index += 1u) {
-        let limit = min(object_distance(layer_depth[index], ndc), exit);
+        let limit = min(object_distance(origin, layer_depth[index], ndc), exit);
         if (limit > cursor) {
-            let segment = march(cursor, limit, direction, dither, ao);
+            let segment = march(origin, cursor, limit, direction, dither, ao);
             radiance += transmittance * segment.radiance;
             transmittance *= segment.transmittance;
             if (hit.w <= 0.0 && segment.hit.w > 0.0) {
@@ -597,7 +611,7 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
         }
     }
     if (cursor < exit) {
-        let segment = march(cursor, exit, direction, dither, ao);
+        let segment = march(origin, cursor, exit, direction, dither, ao);
         radiance += transmittance * segment.radiance;
         transmittance *= segment.transmittance;
         if (hit.w <= 0.0 && segment.hit.w > 0.0) {

@@ -42,11 +42,10 @@ fn cut_normal() -> vec3<f32> {
 
 fn lit(albedo: vec3<f32>, roughness: f32, metallic: f32, point: vec3<f32>) -> vec3<f32> {
     var normal = cut_normal();
-    let toward = frame.eye.xyz - point;
-    if (dot(normal, toward) < 0.0) {
+    let view = view_direction(point);
+    if (dot(normal, view) < 0.0) {
         normal = -normal;
     }
-    let view = normalize(toward);
     return shade_surface(
         albedo,
         roughness,

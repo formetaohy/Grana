@@ -33,6 +33,31 @@ pub struct Placed {
     width: f32,
 }
 
+#[derive(Clone, Copy)]
+pub struct Depth {
+    eye: Vec3,
+    forward: Vec3,
+    orthographic: bool,
+}
+
+impl Depth {
+    pub fn new(camera: &grana_display::Camera) -> Self {
+        Self {
+            eye: camera.eye(),
+            forward: camera.forward(),
+            orthographic: camera.projection().orthographic(),
+        }
+    }
+
+    fn of(self, point: Vec3) -> f32 {
+        if self.orthographic {
+            (point - self.eye).dot(self.forward)
+        } else {
+            point.distance(self.eye)
+        }
+    }
+}
+
 pub fn labels(scene: &Scene, time: u32) -> Vec<Label> {
     let clip = scene.clip;
     let mut labels = Vec::new();
@@ -87,7 +112,7 @@ fn text(metric: Option<grana_scene::ObjectColor>, value: Option<f32>, index: usi
 pub fn volume_labels(
     labels: &[Label],
     view_projection: Mat4,
-    eye: Vec3,
+    depth: Depth,
     rect: Rect,
 ) -> Vec<Placed> {
     let mut near = labels
@@ -98,7 +123,7 @@ pub fn volume_labels(
             if !inside(rect, at) {
                 return None;
             }
-            Some((!label.selected, point.distance_squared(eye), at, label))
+            Some((!label.selected, depth.of(point), at, label))
         })
         .collect::<Vec<_>>();
     near.sort_unstable_by(

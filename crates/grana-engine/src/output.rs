@@ -16,8 +16,8 @@ use crate::frame::{self, View};
 use crate::overlay;
 use crate::panels::{Panels, Panes};
 
-pub const IMAGE_SAMPLES: u32 = 8;
-pub const MOVIE_SAMPLES: u32 = 16;
+pub const IMAGE_SAMPLES: u32 = 64;
+pub const MOVIE_SAMPLES: u32 = 32;
 const IMAGE_ATTEMPTS: u32 = 4096;
 const MOVIE_ATTEMPTS: u32 = 4096;
 
@@ -251,7 +251,7 @@ impl Export {
         let label = overlay::LabelView {
             labels: &labels,
             view_projection: camera.view_projection(aspect, 0.5 * world.length()),
-            eye: camera.eye(),
+            depth: grana_figure::Depth::new(&camera),
         };
         let instances = overlay::instances(
             ui,

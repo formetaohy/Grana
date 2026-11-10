@@ -28,6 +28,8 @@ struct FrameData {
     bases: vec4<u32>,
     bands: vec4<u32>,
     edge: vec4<f32>,
+    projection: vec4<f32>,
+    lens: vec4<f32>,
 }
 
 struct SectionData {
@@ -69,6 +71,52 @@ struct ChannelData {
 @group(0) @binding(6) var section_lut: texture_2d<f32>;
 
 const SHADING_TAU: f32 = 0.020203;
+
+struct CameraRay {
+    origin: vec3<f32>,
+    direction: vec3<f32>,
+}
+
+fn orthographic() -> bool {
+    return frame.projection.x > 0.5;
+}
+
+fn unproject(ndc: vec3<f32>) -> vec3<f32> {
+    let homogeneous = frame.inv_view_projection * vec4<f32>(ndc, 1.0);
+    return homogeneous.xyz / homogeneous.w;
+}
+
+fn lens_origin() -> vec3<f32> {
+    return frame.eye.xyz + frame.right.xyz * frame.lens.x + frame.up.xyz * frame.lens.y;
+}
+
+fn camera_ray(ndc: vec2<f32>) -> CameraRay {
+    if (orthographic()) {
+        let origin = frame.eye.xyz
+            + frame.right.xyz * (ndc.x * frame.projection.z)
+            + frame.up.xyz * (ndc.y * frame.projection.w);
+        return CameraRay(origin, frame.forward.xyz);
+    }
+    let central = normalize(unproject(vec3<f32>(ndc, 1.0)) - frame.eye.xyz);
+    let origin = lens_origin();
+    let focus = frame.eye.xyz + central * frame.lens.z;
+    return CameraRay(origin, normalize(focus - origin));
+}
+
+fn view_direction(point: vec3<f32>) -> vec3<f32> {
+    if (orthographic()) {
+        return -frame.forward.xyz;
+    }
+    return normalize(frame.eye.xyz - point);
+}
+
+fn lens_shift(clip_w: f32) -> vec2<f32> {
+    return frame.lens.xy * (clip_w / frame.lens.z - 1.0);
+}
+
+fn pixel_world(distance: f32) -> f32 {
+    return select(distance, 1.0, orthographic()) / frame.march.w;
+}
 
 fn level_origin(band: u32) -> vec3<f32> {
     return frame.origins[band].xyz;

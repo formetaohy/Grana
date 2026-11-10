@@ -99,13 +99,16 @@ struct MeshUniforms {
     viewport: [f32; 4],
     oit: [u32; 4],
     clip: [f32; 4],
+    forward: [f32; 4],
+    projection: [f32; 4],
+    lens: [f32; 4],
 }
 
 const _: () = {
     assert!(size_of::<PointData>() == 16);
     assert!(size_of::<ObjectData>() == 80);
     assert!(size_of::<StyleData>() == 48);
-    assert!(size_of::<MeshUniforms>() == 336);
+    assert!(size_of::<MeshUniforms>() == 384);
 };
 
 pub(crate) struct MeshPasses {
@@ -514,6 +517,9 @@ impl MeshPasses {
             viewport: frame.viewport,
             oit: frame.oit,
             clip: frame.clip,
+            forward: frame.forward,
+            projection: frame.projection,
+            lens: frame.lens,
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }

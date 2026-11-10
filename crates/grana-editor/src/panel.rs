@@ -719,7 +719,7 @@ pub fn apply(
                 }
             }
             Message::SetSectionProjection(index) => {
-                if let Some(projection) = grana_display::Projection::from_index(index) {
+                if let Some(projection) = grana_display::SectionProjection::from_index(index) {
                     let section = viewport.section_mut();
                     section.set_projection(projection);
                     if section.projected() && section.thickness() <= 0.0 {
@@ -727,6 +727,22 @@ pub fn apply(
                     }
                 }
             }
+            Message::SetCameraProjection(index) => {
+                if let Some(projection) = grana_display::CameraProjection::from_index(index) {
+                    viewport.camera_mut().set_projection(projection);
+                }
+            }
+            Message::SetAperture(value) => {
+                viewport
+                    .camera_mut()
+                    .set_aperture(value.clamp(0.0, grana_display::APERTURE_LIMIT));
+            }
+            Message::SetFocus(value) => {
+                viewport
+                    .camera_mut()
+                    .set_focus(value.clamp(1.0e-3, grana_display::APERTURE_LIMIT));
+            }
+            Message::FocusCamera => viewport.camera_mut().focus_at_pivot(),
             Message::SetSectionThickness(value) => {
                 let section = viewport.section_mut();
                 section.set_thickness(value.clamp(0.0, grana_display::THICKNESS_LIMIT));

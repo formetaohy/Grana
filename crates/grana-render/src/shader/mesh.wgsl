@@ -12,6 +12,9 @@ struct MeshUniforms {
     viewport: vec4<f32>,
     oit: vec4<u32>,
     clip: vec4<f32>,
+    forward: vec4<f32>,
+    projection: vec4<f32>,
+    lens: vec4<f32>,
 }
 
 struct ObjectData {
@@ -92,12 +95,26 @@ fn object_position(input: VertexInput) -> vec3<f32> {
     return object.minimum.xyz + input.position.xyz * object.extent.xyz;
 }
 
+fn lens_shift(clip_w: f32) -> vec2<f32> {
+    return mesh.lens.xy * (clip_w / mesh.lens.z - 1.0);
+}
+
+fn view_direction(point: vec3<f32>) -> vec3<f32> {
+    if (mesh.projection.x > 0.5) {
+        return -mesh.forward.xyz;
+    }
+    return normalize(mesh.eye.xyz - point);
+}
+
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
     let position = object_position(input);
     let clip = mesh.view_projection * vec4<f32>(position, 1.0);
     var output: VertexOutput;
-    output.clip_position = vec4<f32>(clip.xy + mesh.jitter.xy * clip.w, clip.zw);
+    output.clip_position = vec4<f32>(
+        clip.xy + mesh.jitter.xy * clip.w + lens_shift(clip.w),
+        clip.zw,
+    );
     output.normal = decode_normal(input.normal);
     output.position = position;
     output.object = input.object;
@@ -144,7 +161,7 @@ fn is_outside(input: VertexOutput) -> bool {
 fn shade(input: VertexOutput, occlusion: f32) -> vec4<f32> {
     let style = styles[input.object];
     let normal = normalize(input.normal);
-    let view = normalize(mesh.eye.xyz - input.position);
+    let view = view_direction(input.position);
     let lit_normal = select(normal, -normal, dot(normal, mesh.light.xyz) < 0.0);
     let facing_normal = select(normal, -normal, dot(normal, view) < 0.0);
     let sun = sun_transmittance(

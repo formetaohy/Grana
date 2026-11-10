@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_display::{Camera, Projection, SectionCamera, Shading, TransferFunction};
+use grana_display::{Camera, SectionCamera, SectionProjection, Shading, TransferFunction};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_render::{Frame, Layer, LayerKey, Renderer, Requests, SceneFrame, Style};
 use grana_volume::{
@@ -632,7 +632,7 @@ fn projects_a_slab_through_the_section() {
         "the empty plane painted {} pixels",
         plane.painted(plane.all())
     );
-    section.set_projection(Projection::Maximum);
+    section.set_projection(SectionProjection::Maximum);
     section.set_thickness(10.0);
     let maximum = snapshot(&gpu, &mut renderer, &view!(), &target, &volume);
     assert!(
@@ -645,7 +645,7 @@ fn projects_a_slab_through_the_section() {
         "the projection lands outside its centre: {:.2}",
         maximum.coverage(maximum.middle())
     );
-    section.set_projection(Projection::Average);
+    section.set_projection(SectionProjection::Average);
     let average = snapshot(&gpu, &mut renderer, &view!(), &target, &volume);
     assert!(
         average.painted(average.all()) > 100,
@@ -656,7 +656,7 @@ fn projects_a_slab_through_the_section() {
         maximum.contrast(maximum.all()) > 1.5 * average.contrast(average.all()),
         "the average is as bright as the maximum"
     );
-    section.set_projection(Projection::Maximum);
+    section.set_projection(SectionProjection::Maximum);
     let assured = View {
         target: &view_texture,
         camera: &camera,

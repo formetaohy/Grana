@@ -588,8 +588,7 @@ impl App {
                 }
                 let camera = self.viewport.camera();
                 let depth = (Vec3::from(anchor) - camera.eye()).dot(camera.forward());
-                let per_point =
-                    2.0 * depth.abs().max(1.0e-6) * (camera.fov_y() * 0.5).tan() / rect.height();
+                let per_point = camera.world_per_point(rect.height(), depth);
                 Some(camera.right() * delta.x * per_point - camera.up() * delta.y * per_point)
             }
             Pane::Section => {
@@ -1382,9 +1381,12 @@ impl App {
             camera.pitch,
             camera.distance,
             camera.fov_y,
+            camera.aperture,
+            camera.focus,
         ]) {
             stamp.f32(value);
         }
+        stamp.u64(camera.projection.index() as u64);
         for value in
             section
                 .center

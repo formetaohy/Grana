@@ -91,11 +91,6 @@ fn cell_delta(
     return max(delta, minimum);
 }
 
-fn unproject(ndc: vec3<f32>) -> vec3<f32> {
-    let homogeneous = frame.inv_view_projection * vec4<f32>(ndc, 1.0);
-    return homogeneous.xyz / homogeneous.w;
-}
-
 fn sample_atlas(pack: u32, texel: vec3<f32>) -> vec4<f32> {
     return textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);
 }
@@ -173,8 +168,8 @@ fn channel_extinction(band: u32, uvw: vec3<f32>) -> f32 {
     return extinction;
 }
 
-fn ray_uvw(band: u32, t: f32, direction: vec3<f32>) -> vec3<f32> {
-    return level_local(band, frame.eye.xyz + direction * t);
+fn ray_uvw(origin: vec3<f32>, band: u32, t: f32, direction: vec3<f32>) -> vec3<f32> {
+    return level_local(band, origin + direction * t);
 }
 
 fn boundary_delta(band: u32, uvw: vec3<f32>, direction: vec3<f32>, minimum: f32) -> f32 {

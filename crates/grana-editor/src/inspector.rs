@@ -254,11 +254,77 @@ pub fn view_body<'a>(
         channels(ctx, state),
         views(ctx, state),
         display(ctx, state),
+        camera(ctx, state),
         section(ctx, state),
         clip(ctx, state),
         rendering(ctx, state),
     ]);
     elements
+}
+
+fn camera<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
+    let camera = state.viewport.camera();
+    let projection = camera.projection();
+    let mut children = vec![view::card_title(
+        ctx,
+        Icon::Cube,
+        "Camera",
+        Some(projection.label()),
+    )];
+    let modes = grana_display::CameraProjection::ALL.map(grana_display::CameraProjection::label);
+    let selector = view::segmented_fill(
+        ctx,
+        "camera.projection",
+        &modes,
+        projection.index(),
+        Message::SetCameraProjection,
+    );
+    children.push(view::form_row(ctx, "Projection", selector));
+    if projection.orthographic() {
+        children.push(view::caption(
+            ctx,
+            "Parallel rays hold one scale across depth.",
+        ));
+    } else {
+        let world = state.scene.dataset.world_size();
+        let aperture = camera.aperture();
+        let limit = (0.08 * world.length()).max(1.0e-3);
+        let readout = if aperture > 0.0 {
+            format!("{aperture:.2} µm")
+        } else {
+            "off".to_string()
+        };
+        children.push(view::slider_event(
+            ctx,
+            "camera.aperture",
+            Some("Aperture"),
+            aperture.clamp(0.0, limit),
+            0.0..=limit,
+            &readout,
+            Message::SetAperture,
+        ));
+        let focus = camera.focus();
+        let span = camera.distance();
+        let range = (0.1 * span)..=(6.0 * span);
+        let readout = format!("{focus:.2} µm");
+        children.push(view::slider_event(
+            ctx,
+            "camera.focus",
+            Some("Focus"),
+            focus.clamp(*range.start(), *range.end()),
+            range,
+            &readout,
+            Message::SetFocus,
+        ));
+        if aperture > 0.0 {
+            children.push(
+                view::button(ctx, "Focus Pivot", Role::Quiet)
+                    .named("camera.focus_pivot")
+                    .press(Message::FocusCamera),
+            );
+        }
+    }
+    view::card(ctx, 8.0, children)
 }
 
 fn views<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
@@ -905,7 +971,7 @@ fn section<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Elem
     let world = state.scene.dataset.world_size();
     let extent = world.abs().dot(normal.abs());
     let projection = camera.projection();
-    let modes = grana_display::Projection::ALL.map(grana_display::Projection::label);
+    let modes = grana_display::SectionProjection::ALL.map(grana_display::SectionProjection::label);
     let view = view::segmented_fill(
         ctx,
         "section.projection",

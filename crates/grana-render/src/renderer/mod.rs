@@ -424,6 +424,7 @@ impl Renderer {
         self.section_sequence = 0;
         self.probe_mark = 0;
         self.meshes.clear();
+        self.slice.reset();
         self.target = None;
         self.regions = None;
         self.pick_readback = None;

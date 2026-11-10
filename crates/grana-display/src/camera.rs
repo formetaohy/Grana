@@ -7,13 +7,59 @@ const SECTION_ZOOM_SENSITIVITY: f32 = 0.15;
 const FIT_MARGIN: f32 = 1.05;
 const MIN_SPAN_VOXELS: f32 = 8.0;
 const ELEVATION_LIMIT: f32 = std::f32::consts::FRAC_PI_2;
+const GOLDEN_ANGLE: f32 = 2.399_963_2;
 pub const THICKNESS_LIMIT: f32 = 1.0e4;
+pub const APERTURE_LIMIT: f32 = 1.0e4;
 pub const PROJECTION_THICKNESS: f32 = 2.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ray {
     pub origin: Vec3,
     pub direction: Vec3,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CameraProjection {
+    #[default]
+    Perspective,
+    Orthographic,
+}
+
+impl CameraProjection {
+    pub const ALL: [Self; 2] = [Self::Perspective, Self::Orthographic];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Perspective => "perspective",
+            Self::Orthographic => "orthographic",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Perspective => "Perspective",
+            Self::Orthographic => "Orthographic",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Perspective => 0,
+            Self::Orthographic => 1,
+        }
+    }
+
+    pub fn from_index(index: usize) -> Option<Self> {
+        Self::ALL.get(index).copied()
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.name() == name)
+    }
+
+    pub fn orthographic(self) -> bool {
+        matches!(self, Self::Orthographic)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -23,17 +69,20 @@ pub struct CameraState {
     pub pitch: f32,
     pub distance: f32,
     pub fov_y: f32,
+    pub projection: CameraProjection,
+    pub aperture: f32,
+    pub focus: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Projection {
+pub enum SectionProjection {
     #[default]
     Plane,
     Maximum,
     Average,
 }
 
-impl Projection {
+impl SectionProjection {
     pub const ALL: [Self; 3] = [Self::Plane, Self::Maximum, Self::Average];
 
     pub fn name(self) -> &'static str {
@@ -79,7 +128,7 @@ pub struct SectionState {
     pub azimuth: f32,
     pub elevation: f32,
     pub span: f32,
-    pub projection: Projection,
+    pub projection: SectionProjection,
     pub thickness: f32,
 }
 
@@ -90,6 +139,9 @@ pub struct Camera {
     pitch: f32,
     distance: f32,
     fov_y: f32,
+    projection: CameraProjection,
+    aperture: f32,
+    focus: f32,
 }
 
 impl Camera {
@@ -104,6 +156,9 @@ impl Camera {
             pitch: 0.32,
             distance: 1.0,
             fov_y: fov_y_degrees.to_radians(),
+            projection: CameraProjection::Perspective,
+            aperture: 0.0,
+            focus: 1.0,
         }
     }
 
@@ -111,8 +166,48 @@ impl Camera {
         self.fov_y
     }
 
+    pub fn pivot(&self) -> Vec3 {
+        self.pivot
+    }
+
     pub fn distance(&self) -> f32 {
         self.distance
+    }
+
+    pub fn projection(&self) -> CameraProjection {
+        self.projection
+    }
+
+    pub fn set_projection(&mut self, projection: CameraProjection) {
+        self.projection = projection;
+    }
+
+    pub fn aperture(&self) -> f32 {
+        self.aperture
+    }
+
+    pub fn set_aperture(&mut self, aperture: f32) {
+        assert!(
+            aperture.is_finite() && (0.0..=APERTURE_LIMIT).contains(&aperture),
+            "an aperture is a bounded length"
+        );
+        self.aperture = aperture;
+    }
+
+    pub fn focus(&self) -> f32 {
+        self.focus
+    }
+
+    pub fn set_focus(&mut self, focus: f32) {
+        assert!(
+            focus.is_finite() && focus > 0.0 && focus <= APERTURE_LIMIT,
+            "a focus distance is a bounded positive length"
+        );
+        self.focus = focus;
+    }
+
+    pub fn focused(&self) -> bool {
+        self.aperture > 0.0 && !self.projection.orthographic()
     }
 
     pub fn eye(&self) -> Vec3 {
@@ -133,25 +228,80 @@ impl Camera {
         self.right().cross(self.forward())
     }
 
+    pub fn half_height(&self) -> f32 {
+        self.distance * (self.fov_y * 0.5).tan()
+    }
+
+    pub fn pixels_per_world(&self, height: u32) -> f32 {
+        self.pixels_per_world_at(height.max(1) as f32)
+    }
+
+    pub fn pixels_per_world_at(&self, height: f32) -> f32 {
+        let height = height.max(1.0);
+        match self.projection {
+            CameraProjection::Perspective => 0.5 * height / (0.5 * self.fov_y).tan(),
+            CameraProjection::Orthographic => height / (2.0 * self.half_height().max(1.0e-6)),
+        }
+    }
+
+    pub fn world_per_point(&self, height: f32, distance: f32) -> f32 {
+        let reach = match self.projection {
+            CameraProjection::Perspective => distance.abs(),
+            CameraProjection::Orthographic => 1.0,
+        };
+        reach.max(1.0e-6) / self.pixels_per_world_at(height)
+    }
+
     pub fn view_projection(&self, aspect: f32, scene_radius: f32) -> Mat4 {
         assert!(aspect > 0.0, "aspect ratio must be positive");
         assert!(scene_radius > 0.0, "scene radius must be positive");
-        let near = (self.distance - scene_radius)
-            .max(scene_radius * 0.01)
-            .max(1e-4);
         let far = self.distance + scene_radius * 4.0;
-        let projection = Mat4::perspective_rh(self.fov_y, aspect, near, far);
+        let projection = match self.projection {
+            CameraProjection::Perspective => {
+                let near = (self.distance - scene_radius)
+                    .max(scene_radius * 0.01)
+                    .max(1e-4);
+                Mat4::perspective_rh(self.fov_y, aspect, near, far)
+            }
+            CameraProjection::Orthographic => {
+                let half = self.half_height();
+                Mat4::orthographic_rh(-half * aspect, half * aspect, -half, half, 0.0, far)
+            }
+        };
         projection * Mat4::look_at_rh(self.eye(), self.pivot, Vec3::Y)
+    }
+
+    pub fn lens(&self, index: u32, samples: u32) -> Vec2 {
+        if !self.focused() {
+            return Vec2::ZERO;
+        }
+        let samples = samples.max(1);
+        let radius = self.aperture * ((index as f32 + 0.5) / samples as f32).sqrt();
+        let angle = index as f32 * GOLDEN_ANGLE;
+        Vec2::new(radius * angle.cos(), radius * angle.sin())
     }
 
     pub fn ray(&self, ndc: Vec2, aspect: f32) -> Ray {
         assert!(aspect > 0.0, "aspect ratio must be positive");
-        let projection = self.view_projection(aspect, self.distance.max(1.0e-4));
-        let clipped = projection.inverse() * Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
-        let origin = self.eye();
-        Ray {
-            origin,
-            direction: (clipped.truncate() / clipped.w - origin).normalize(),
+        let eye = self.eye();
+        match self.projection {
+            CameraProjection::Perspective => {
+                let projection = self.view_projection(aspect, self.distance.max(1.0e-4));
+                let clipped = projection.inverse() * Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
+                Ray {
+                    origin: eye,
+                    direction: (clipped.truncate() / clipped.w - eye).normalize(),
+                }
+            }
+            CameraProjection::Orthographic => {
+                let half = self.half_height();
+                Ray {
+                    origin: eye
+                        + self.right() * (ndc.x * half * aspect)
+                        + self.up() * (ndc.y * half),
+                    direction: self.forward(),
+                }
+            }
         }
     }
 
@@ -178,6 +328,7 @@ impl Camera {
         }
         self.pivot = Vec3::ZERO;
         self.distance = distance * 1.06;
+        self.focus = self.distance;
     }
 
     pub fn orbit(&mut self, delta: Vec2) {
@@ -186,7 +337,7 @@ impl Camera {
     }
 
     pub fn pan(&mut self, delta: Vec2, viewport_height: f32) {
-        let scale = 2.0 * self.distance * (self.fov_y * 0.5).tan() / viewport_height.max(1.0);
+        let scale = 2.0 * self.half_height() / viewport_height.max(1.0);
         self.pivot += (self.right() * -delta.x + self.up() * delta.y) * scale;
     }
 
@@ -194,8 +345,8 @@ impl Camera {
         self.distance = (self.distance * (1.0 - scroll * ZOOM_SENSITIVITY)).clamp(1e-4, 1.0e7);
     }
 
-    pub fn focus(&self) -> Vec3 {
-        self.pivot
+    pub fn focus_at_pivot(&mut self) {
+        self.focus = self.distance;
     }
 
     pub fn clamp_focus(&mut self, half: Vec3) {
@@ -209,6 +360,9 @@ impl Camera {
             pitch: self.pitch,
             distance: self.distance,
             fov_y: self.fov_y,
+            projection: self.projection,
+            aperture: self.aperture,
+            focus: self.focus,
         }
     }
 
@@ -219,6 +373,9 @@ impl Camera {
             pitch,
             distance,
             fov_y,
+            projection,
+            aperture,
+            focus,
         } = state;
         assert!(
             pivot.iter().all(|value| value.is_finite())
@@ -227,7 +384,12 @@ impl Camera {
                 && distance.is_finite()
                 && distance > 0.0
                 && fov_y > 1.0f32.to_radians()
-                && fov_y < 179.0f32.to_radians(),
+                && fov_y < 179.0f32.to_radians()
+                && aperture.is_finite()
+                && (0.0..=APERTURE_LIMIT).contains(&aperture)
+                && focus.is_finite()
+                && focus > 0.0
+                && focus <= APERTURE_LIMIT,
             "a camera state describes a plausible view"
         );
         self.pivot = Vec3::from(pivot);
@@ -235,6 +397,9 @@ impl Camera {
         self.pitch = pitch.clamp(-PITCH_LIMIT, PITCH_LIMIT);
         self.distance = distance;
         self.fov_y = fov_y;
+        self.projection = projection;
+        self.aperture = aperture;
+        self.focus = focus;
     }
 }
 
@@ -246,7 +411,7 @@ pub struct SectionCamera {
     span: f32,
     min_span: f32,
     max_span: f32,
-    projection: Projection,
+    projection: SectionProjection,
     thickness: f32,
 }
 
@@ -265,7 +430,7 @@ impl SectionCamera {
             span: 1.0,
             min_span: 1.0e-4,
             max_span: 1.0e4,
-            projection: Projection::Plane,
+            projection: SectionProjection::Plane,
             thickness: PROJECTION_THICKNESS,
         }
     }
@@ -286,7 +451,7 @@ impl SectionCamera {
         self.span
     }
 
-    pub fn projection(&self) -> Projection {
+    pub fn projection(&self) -> SectionProjection {
         self.projection
     }
 
@@ -298,7 +463,7 @@ impl SectionCamera {
         self.projection.projected() && self.thickness > 0.0
     }
 
-    pub fn set_projection(&mut self, projection: Projection) {
+    pub fn set_projection(&mut self, projection: SectionProjection) {
         self.projection = projection;
     }
 

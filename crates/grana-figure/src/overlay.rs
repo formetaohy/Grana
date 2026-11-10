@@ -188,8 +188,9 @@ fn paint_volume(painter: &mut Painter, overlay: &Overlay<'_>) {
     }
     region_box(painter, view_projection, *overlay.region, rect);
     clip_plane(painter, view_projection, overlay.clip, overlay.world, rect);
-    let world_per_point =
-        2.0 * overlay.camera.distance() * (overlay.camera.fov_y() * 0.5).tan() / rect.height();
+    let world_per_point = overlay
+        .camera
+        .world_per_point(rect.height(), overlay.camera.distance());
     figure(
         painter,
         overlay.volume_safe,
@@ -200,8 +201,12 @@ fn paint_volume(painter: &mut Painter, overlay: &Overlay<'_>) {
     );
     orientation(painter, overlay.volume_safe, overlay.camera);
     if !overlay.labels.is_empty() {
-        let placed =
-            labels::volume_labels(overlay.labels, view_projection, overlay.camera.eye(), rect);
+        let placed = labels::volume_labels(
+            overlay.labels,
+            view_projection,
+            labels::Depth::new(overlay.camera),
+            rect,
+        );
         labels::paint(painter, rect, &placed);
     }
     let placed = annotation::volume(overlay.annotations, view_projection, rect);

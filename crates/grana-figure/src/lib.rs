@@ -9,7 +9,7 @@ pub use annotation::{
     pick as pick_annotation, section as section_annotations, volume as volume_annotations,
 };
 pub use figure::{Contents, instances};
-pub use labels::{Label, Placed, labels, section_labels, volume_labels};
+pub use labels::{Depth, Label, Placed, labels, section_labels, volume_labels};
 pub use overlay::{Caption, Handle, Legend, Overlay, caption, handles, legends, paint};
 
 pub fn value(value: f32, unit: grana_measure::Unit, decimals: u8) -> String {

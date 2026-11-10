@@ -5,6 +5,7 @@ mod geometry;
 mod imaris;
 mod measure;
 mod mesh;
+mod optics;
 mod render;
 mod restore;
 mod segment;

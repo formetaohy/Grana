@@ -435,6 +435,7 @@ impl Renderer {
             sample_index as f32,
             step_scale.max(1.0e-3),
         ];
+        frame_data.lens = crate::frame::lens(camera, sample_index, samples, volume_aspect);
         let cut_offset = sample::offset(sample_index, cut_size);
         section_data.jitter = [cut_offset.x, cut_offset.y, 0.0, 0.0];
         scene_table.write(

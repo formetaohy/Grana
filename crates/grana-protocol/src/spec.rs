@@ -191,7 +191,7 @@ pub struct KeySpec {
     pub section: SectionSpec,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CameraSpec {
     pub pivot: [f32; 3],
@@ -199,6 +199,9 @@ pub struct CameraSpec {
     pub pitch: f32,
     pub distance: f32,
     pub fov_y: f32,
+    pub projection: String,
+    pub aperture: f32,
+    pub focus: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -215,7 +218,9 @@ pub struct SectionSpec {
 }
 
 fn default_projection() -> String {
-    grana_display::Projection::default().name().to_string()
+    grana_display::SectionProjection::default()
+        .name()
+        .to_string()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1812,23 +1817,11 @@ impl ViewSpec {
     }
 
     pub(super) fn checked(&self) -> Result<(), ProtocolError> {
-        let camera = &self.camera;
-        if !camera.pivot.iter().all(|value| value.is_finite())
-            || !camera.yaw.is_finite()
-            || !camera.pitch.is_finite()
-            || !camera.distance.is_finite()
-            || camera.distance <= 0.0
-            || !camera.fov_y.is_finite()
-            || camera.fov_y <= 1.0f32.to_radians()
-            || camera.fov_y >= 179.0f32.to_radians()
-        {
-            return Err(ProtocolError::Invalid(
-                "a view describes a plausible camera".to_string(),
-            ));
-        }
+        self.camera.checked()?;
         self.section.checked()?;
         if let Some(timeline) = &self.timeline {
             for key in &timeline.keys {
+                key.camera.checked()?;
                 key.section.checked()?;
             }
         }
@@ -1965,6 +1958,9 @@ impl CameraSpec {
             pitch: camera.pitch,
             distance: camera.distance,
             fov_y: camera.fov_y,
+            projection: camera.projection.name().to_string(),
+            aperture: camera.aperture,
+            focus: camera.focus,
         }
     }
 
@@ -1975,7 +1971,37 @@ impl CameraSpec {
             pitch: self.pitch,
             distance: self.distance,
             fov_y: self.fov_y,
+            projection: self.mode().expect("a checked camera names a projection"),
+            aperture: self.aperture,
+            focus: self.focus,
         }
+    }
+
+    pub fn mode(&self) -> Option<grana_display::CameraProjection> {
+        grana_display::CameraProjection::from_name(&self.projection)
+    }
+
+    fn checked(&self) -> Result<(), ProtocolError> {
+        if !self.pivot.iter().all(|value| value.is_finite())
+            || !self.yaw.is_finite()
+            || !self.pitch.is_finite()
+            || !self.distance.is_finite()
+            || self.distance <= 0.0
+            || !self.fov_y.is_finite()
+            || self.fov_y <= 1.0f32.to_radians()
+            || self.fov_y >= 179.0f32.to_radians()
+            || !self.aperture.is_finite()
+            || !(0.0..=grana_display::APERTURE_LIMIT).contains(&self.aperture)
+            || !self.focus.is_finite()
+            || self.focus <= 0.0
+            || self.focus > grana_display::APERTURE_LIMIT
+            || self.mode().is_none()
+        {
+            return Err(ProtocolError::Invalid(
+                "a view describes a plausible camera".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -2002,8 +2028,8 @@ impl SectionSpec {
         }
     }
 
-    pub fn mode(&self) -> Option<grana_display::Projection> {
-        grana_display::Projection::from_name(&self.projection)
+    pub fn mode(&self) -> Option<grana_display::SectionProjection> {
+        grana_display::SectionProjection::from_name(&self.projection)
     }
 
     fn checked(&self) -> Result<(), ProtocolError> {

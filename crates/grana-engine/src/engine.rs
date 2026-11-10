@@ -10,7 +10,7 @@ use crate::output::{Export, Outcome, Plan, Pose};
 use crate::view::RenderedScene;
 
 const TEXTURE_BUDGET: u64 = 512 << 20;
-pub const SAMPLE_LIMIT: u32 = 8;
+pub const SAMPLE_LIMIT: u32 = 32;
 
 pub struct ViewportFrame<'a> {
     pub target: &'a TextureView,

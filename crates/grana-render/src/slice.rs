@@ -257,6 +257,17 @@ impl SlicePass {
         self.index.resident
     }
 
+    pub fn reset(&mut self) {
+        self.runs.clear();
+        self.staged.clear();
+        self.style_cache.clear();
+        self.closed.clear();
+        self.index.clear();
+        self.span_key = None;
+        self.objects = 0;
+        self.draws = 0;
+    }
+
     pub fn prepare(
         &mut self,
         device: &Device,

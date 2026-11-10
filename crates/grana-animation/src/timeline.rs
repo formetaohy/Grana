@@ -183,6 +183,9 @@ impl Timeline {
             hash = mix(hash, u64::from(key.camera.pitch.to_bits()));
             hash = mix(hash, u64::from(key.camera.distance.to_bits()));
             hash = mix(hash, u64::from(key.camera.fov_y.to_bits()));
+            hash = mix(hash, key.camera.projection.index() as u64);
+            hash = mix(hash, u64::from(key.camera.aperture.to_bits()));
+            hash = mix(hash, u64::from(key.camera.focus.to_bits()));
             for value in key.section.center {
                 hash = mix(hash, u64::from(value.to_bits()));
             }
@@ -220,6 +223,13 @@ fn blended(from: Keyframe, to: Keyframe, at: f32) -> Sample {
         pitch: lerp(from.camera.pitch, to.camera.pitch),
         distance: lerp(from.camera.distance, to.camera.distance),
         fov_y: lerp(from.camera.fov_y, to.camera.fov_y),
+        projection: if eased < 0.5 {
+            from.camera.projection
+        } else {
+            to.camera.projection
+        },
+        aperture: lerp(from.camera.aperture, to.camera.aperture),
+        focus: lerp(from.camera.focus, to.camera.focus),
     };
     let section = SectionState {
         center: [
@@ -265,6 +275,11 @@ fn plausible_camera(camera: &CameraState) -> bool {
         && camera.distance > 0.0
         && camera.fov_y > 1.0f32.to_radians()
         && camera.fov_y < 179.0f32.to_radians()
+        && camera.aperture.is_finite()
+        && (0.0..=grana_display::APERTURE_LIMIT).contains(&camera.aperture)
+        && camera.focus.is_finite()
+        && camera.focus > 0.0
+        && camera.focus <= grana_display::APERTURE_LIMIT
 }
 
 fn plausible_section(section: &SectionState) -> bool {

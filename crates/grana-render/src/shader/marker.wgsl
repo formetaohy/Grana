@@ -62,7 +62,7 @@ fn vs_main(@builtin(vertex_index) index: u32, @builtin(instance_index) instance:
     let world = center + (frame.right.xyz * local.x + frame.up.xyz * local.y) * radius;
     let clip = frame.view_projection * vec4<f32>(world, 1.0);
     var output: MarkerOutput;
-    output.clip_position = vec4<f32>(clip.xy + frame.jitter.xy * clip.w, clip.zw);
+    output.clip_position = vec4<f32>(clip.xy + frame.jitter.xy * clip.w + lens_shift(clip.w), clip.zw);
     output.center_radius = vec4<f32>(center, radius);
     output.color_alpha = data.color_alpha;
     output.local = local;
@@ -98,7 +98,7 @@ fn shade(input: MarkerOutput, occlusion: f32) -> Shaded {
     let normal = normalize(
         frame.right.xyz * local.x + frame.up.xyz * local.y - frame.forward.xyz * depth,
     );
-    let view = normalize(frame.eye.xyz - surface);
+    let view = view_direction(surface);
     let color = shade_surface(
         input.color_alpha.rgb,
         MARKER_ROUGHNESS,

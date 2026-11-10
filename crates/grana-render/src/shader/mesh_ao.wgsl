@@ -52,7 +52,7 @@ fn vs_ao(input: VertexInput) -> VertexOutput {
     let position = object.minimum.xyz + input.position.xyz * object.extent.xyz;
     let clip = frame.view_projection * vec4<f32>(position, 1.0);
     var output: VertexOutput;
-    output.clip_position = vec4<f32>(clip.xy + frame.jitter.xy * clip.w, clip.zw);
+    output.clip_position = vec4<f32>(clip.xy + frame.jitter.xy * clip.w + lens_shift(clip.w), clip.zw);
     output.normal = decode_normal(input.normal);
     output.position = position;
     return output;

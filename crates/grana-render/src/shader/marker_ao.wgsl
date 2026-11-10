@@ -31,7 +31,7 @@ fn vs_ao(@builtin(vertex_index) index: u32, @builtin(instance_index) instance: u
     let world = center + (frame.right.xyz * local.x + frame.up.xyz * local.y) * radius;
     let clip = frame.view_projection * vec4<f32>(world, 1.0);
     var output: VertexOutput;
-    output.clip_position = vec4<f32>(clip.xy + frame.jitter.xy * clip.w, clip.zw);
+    output.clip_position = vec4<f32>(clip.xy + frame.jitter.xy * clip.w + lens_shift(clip.w), clip.zw);
     output.center_radius = vec4<f32>(center, radius);
     output.local = local;
     return output;

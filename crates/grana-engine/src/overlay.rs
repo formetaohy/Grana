@@ -8,7 +8,7 @@ use crate::panels::Panes;
 pub(crate) struct LabelView<'a> {
     pub labels: &'a [Label],
     pub view_projection: Mat4,
-    pub eye: Vec3,
+    pub depth: grana_figure::Depth,
 }
 
 pub(crate) struct Figure<'a> {
@@ -40,7 +40,7 @@ pub(crate) fn instances<A: Clone>(ui: &mut Ui<A>, figure: Figure<'_>) -> Vec<Ins
     let volume_labels = grana_figure::volume_labels(
         figure.labels.labels,
         figure.labels.view_projection,
-        figure.labels.eye,
+        figure.labels.depth,
         volume_rect,
     );
     let volume_annotations = grana_figure::volume_annotations(

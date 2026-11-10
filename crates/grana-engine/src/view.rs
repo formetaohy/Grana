@@ -188,14 +188,20 @@ fn marker(scene: &Scene, set: &ObjectSet, index: usize, spot: Spot, color: [f32;
 }
 
 fn triangle_target(surfaces: &grana_object::SurfaceSet, lens: Lens<'_>) -> usize {
-    let focal = 0.5 * lens.height as f32 / (0.5 * lens.camera.fov_y()).tan();
+    let focal = lens.camera.pixels_per_world(lens.height);
     let eye = lens.camera.eye();
+    let orthographic = lens.camera.projection().orthographic();
     let mut area = 0.0f64;
     for object in surfaces.objects() {
         let bounds = object.bounds();
         let radius = 0.5 * Vec3::from(bounds.size()).length();
         let center = Vec3::from(bounds.center());
-        let distance = (eye - center).length().max(0.5 * radius).max(1.0e-6);
+        let distance = if orthographic {
+            lens.camera.distance()
+        } else {
+            (eye - center).length().max(0.5 * radius)
+        }
+        .max(1.0e-6);
         let pixels = f64::from(radius * focal / distance);
         area += std::f64::consts::PI * pixels * pixels / f64::from(PIXEL_TRIANGLE_AREA);
     }

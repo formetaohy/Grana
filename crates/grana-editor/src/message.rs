@@ -93,6 +93,10 @@ pub enum Message {
     CancelRemote,
     OpenRemote(String),
     SetSectionPreset(usize),
+    SetCameraProjection(usize),
+    SetAperture(f32),
+    SetFocus(f32),
+    FocusCamera,
     SetSectionProjection(usize),
     SetSectionThickness(f32),
     SetSectionOrientation {

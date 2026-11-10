@@ -308,8 +308,16 @@ impl Decode for CameraState {
             pitch: finite(reader.f32()?)?,
             distance: positive(reader.f32()?)?,
             fov_y: finite(reader.f32()?)?,
+            projection: grana_display::CameraProjection::from_index(reader.u8()? as usize)
+                .ok_or(FAULT_VALUE)?,
+            aperture: non_negative(reader.f32()?)?,
+            focus: positive(reader.f32()?)?,
         };
-        if state.fov_y <= 1.0f32.to_radians() || state.fov_y >= 179.0f32.to_radians() {
+        if state.fov_y <= 1.0f32.to_radians()
+            || state.fov_y >= 179.0f32.to_radians()
+            || state.aperture > grana_display::APERTURE_LIMIT
+            || state.focus > grana_display::APERTURE_LIMIT
+        {
             return Err(FAULT_VALUE);
         }
         Ok(state)
@@ -325,8 +333,8 @@ impl Decode for SectionState {
         let azimuth = finite(reader.f32()?)?;
         let elevation = finite(reader.f32()?)?;
         let span = positive(reader.f32()?)?;
-        let projection =
-            grana_display::Projection::from_index(reader.u8()? as usize).ok_or(FAULT_VALUE)?;
+        let projection = grana_display::SectionProjection::from_index(reader.u8()? as usize)
+            .ok_or(FAULT_VALUE)?;
         let thickness = non_negative(reader.f32()?)?;
         if thickness > grana_display::THICKNESS_LIMIT {
             return Err(FAULT_VALUE);

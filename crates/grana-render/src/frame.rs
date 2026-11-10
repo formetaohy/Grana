@@ -40,6 +40,8 @@ pub(crate) struct FrameData {
     pub bases: [u32; 4],
     pub bands: [u32; 4],
     pub edge: [f32; 4],
+    pub projection: [f32; 4],
+    pub lens: [f32; 4],
 }
 
 #[repr(C)]
@@ -84,7 +86,7 @@ pub(crate) struct ScheduleData {
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 1264);
+    assert!(size_of::<FrameData>() == 1296);
     assert!(std::mem::offset_of!(FrameData, region_axis) == 224);
     assert!(std::mem::offset_of!(FrameData, planes) == 352);
     assert!(std::mem::offset_of!(FrameData, light_view) == 448);
@@ -95,6 +97,8 @@ const _: () = {
     assert!(std::mem::offset_of!(FrameData, bases) == 1216);
     assert!(std::mem::offset_of!(FrameData, bands) == 1232);
     assert!(std::mem::offset_of!(FrameData, edge) == 1248);
+    assert!(std::mem::offset_of!(FrameData, projection) == 1264);
+    assert!(std::mem::offset_of!(FrameData, lens) == 1280);
     assert!(size_of::<SectionData>() == 432);
     assert!(size_of::<ScheduleData>() == 48);
 };
@@ -136,7 +140,14 @@ impl FrameData {
         let first = tables[0];
         let view_projection = camera.view_projection(aspect, 0.5 * first.world.length());
         let step = step_length(camera, first, step_scale);
-        let pixel_scale = 0.5 * height as f32 / (0.5 * camera.fov_y()).tan();
+        let pixel_scale = camera.pixels_per_world(height);
+        let orthographic = camera.projection().orthographic();
+        let half = camera.half_height();
+        let (half_width, half_height) = if orthographic {
+            (half * aspect, half)
+        } else {
+            (0.0, 0.0)
+        };
         let eye = camera.eye();
         let light = shading.light();
         let mut dims = [[0.0; 4]; BAND];
@@ -156,7 +167,7 @@ impl FrameData {
                 inverses[band * 3 + axis] = table.inverses[axis].extend(0.0).to_array();
             }
             bases[band] = table.record_base();
-            if band > 0 {
+            if band > 0 && !orthographic {
                 edge[band - 1] = table.voxel.min_element() * pixel_scale;
             }
         }
@@ -201,8 +212,31 @@ impl FrameData {
             bases,
             bands: [ladder.count as u32, 0, 0, 0],
             edge,
+            projection: [
+                f32::from(u8::from(orthographic)),
+                0.0,
+                half_width,
+                half_height,
+            ],
+            lens: [0.0, 0.0, camera.focus(), camera.aperture()],
         }
     }
+}
+
+pub(crate) fn lens(camera: &Camera, index: u32, samples: u32, aspect: f32) -> [f32; 4] {
+    assert!(aspect > 0.0, "a volume pane has a positive aspect");
+    let focus = camera.focus();
+    if !camera.focused() {
+        return [0.0, 0.0, focus, 0.0];
+    }
+    let offset = camera.lens(index, samples);
+    let focal = 1.0 / (0.5 * camera.fov_y()).tan();
+    [
+        offset.x * focal / aspect,
+        offset.y * focal,
+        focus,
+        camera.aperture(),
+    ]
 }
 
 impl SectionData {

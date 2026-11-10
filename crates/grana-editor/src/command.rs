@@ -1,3 +1,4 @@
+use grana_display::CameraProjection;
 use grana_session::Command;
 use grana_ui::Icon;
 
@@ -96,6 +97,8 @@ pub enum Action {
     Panel(Panel),
     ClosePanel,
     SectionPreset(usize),
+    Projection(CameraProjection),
+    FocusCamera,
     SaveView,
     ApplyView(usize),
     Play,
@@ -142,6 +145,8 @@ impl Action {
             Self::Panel(panel) => Message::SetPanel(Some(panel)),
             Self::ClosePanel => Message::SetPanel(None),
             Self::SectionPreset(index) => Message::SetSectionPreset(index),
+            Self::Projection(projection) => Message::SetCameraProjection(projection.index()),
+            Self::FocusCamera => Message::FocusCamera,
             Self::SaveView => Message::Command(Command::SaveView),
             Self::ApplyView(index) => Message::Command(Command::ApplyView(index)),
             Self::Play => Message::SetPlaying(true),
@@ -423,6 +428,33 @@ pub const SPECS: &[Spec] = &[
         scope: Scope::Scene,
         shortcut: None,
         action: Action::SectionPreset(2),
+    },
+    Spec {
+        id: "camera.perspective",
+        title: "Perspective Projection",
+        group: Group::View,
+        symbol: Icon::Cube,
+        scope: Scope::Scene,
+        shortcut: None,
+        action: Action::Projection(CameraProjection::Perspective),
+    },
+    Spec {
+        id: "camera.orthographic",
+        title: "Orthographic Projection",
+        group: Group::View,
+        symbol: Icon::Cube,
+        scope: Scope::Scene,
+        shortcut: None,
+        action: Action::Projection(CameraProjection::Orthographic),
+    },
+    Spec {
+        id: "camera.focus",
+        title: "Focus Camera on Pivot",
+        group: Group::View,
+        symbol: Icon::Target,
+        scope: Scope::Scene,
+        shortcut: None,
+        action: Action::FocusCamera,
     },
     Spec {
         id: "view.save",
