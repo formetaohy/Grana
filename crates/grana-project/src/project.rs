@@ -15,10 +15,12 @@ use grana_codec::Encoder;
 use crate::codec::{Decode, Encode, Reader};
 use crate::error::Error;
 
-const MAGIC: &[u8; 11] = b"granaproj55";
+const MAGIC: &[u8; 9] = b"granaproj";
+const VERSION: u32 = 56;
+const VERSION_BYTES: usize = size_of::<u32>();
 const LENGTH: usize = size_of::<u64>();
 const STEPS: usize = size_of::<u32>();
-const HEADER: usize = MAGIC.len() + LENGTH + STEPS;
+const HEADER: usize = MAGIC.len() + VERSION_BYTES + LENGTH + STEPS;
 const COMPRESSION_LEVEL: i32 = 6;
 const RAW_LIMIT: u64 = 16 << 30;
 const STALE_AGE: Duration = Duration::from_secs(3600);
@@ -219,10 +221,19 @@ impl Project {
         if &header[..MAGIC.len()] != MAGIC {
             return Err(format("the file does not carry a grana project header"));
         }
+        let mut version = [0u8; VERSION_BYTES];
+        version.copy_from_slice(&header[MAGIC.len()..MAGIC.len() + VERSION_BYTES]);
+        let version = u32::from_le_bytes(version);
+        if version != VERSION {
+            return Err(format(&format!(
+                "the project was written by schema {version}, and this build reads schema {VERSION}"
+            )));
+        }
+        let start = MAGIC.len() + VERSION_BYTES;
         let mut length = [0u8; LENGTH];
-        length.copy_from_slice(&header[MAGIC.len()..MAGIC.len() + LENGTH]);
+        length.copy_from_slice(&header[start..start + LENGTH]);
         let mut steps = [0u8; STEPS];
-        steps.copy_from_slice(&header[MAGIC.len() + LENGTH..HEADER]);
+        steps.copy_from_slice(&header[start + LENGTH..HEADER]);
         let total = u32::from_le_bytes(steps) as usize;
         let raw_length = u64::from_le_bytes(length);
         if raw_length > RAW_LIMIT {
@@ -274,6 +285,8 @@ impl Project {
             std::fs::File::create(temporary).map_err(|error| write(error.to_string()))?;
         file.write_all(MAGIC)
             .map_err(|error| write(error.to_string()))?;
+        file.write_all(&VERSION.to_le_bytes())
+            .map_err(|error| write(error.to_string()))?;
         file.write_all(&[0u8; LENGTH + STEPS])
             .map_err(|error| write(error.to_string()))?;
         let mut encoder = zstd::Encoder::new(file, COMPRESSION_LEVEL)
@@ -291,7 +304,7 @@ impl Project {
             writer.len()
         };
         let mut file = encoder.finish().map_err(|error| write(error.to_string()))?;
-        file.seek(SeekFrom::Start(MAGIC.len() as u64))
+        file.seek(SeekFrom::Start((MAGIC.len() + VERSION_BYTES) as u64))
             .map_err(|error| write(error.to_string()))?;
         file.write_all(&(raw as u64).to_le_bytes())
             .map_err(|error| write(error.to_string()))?;

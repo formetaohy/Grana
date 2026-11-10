@@ -15,7 +15,7 @@ pub(super) struct Field {
     pub(super) coloc_thresholds: Option<(ColocPair, ColocThresholds)>,
     pub(super) mask_stamp: Option<(u32, u64)>,
     pub(super) project: Option<PathBuf>,
-    pub(super) saved: Option<u64>,
+    pub(super) baseline: Option<u64>,
 }
 
 pub(super) enum Recovered {
@@ -84,7 +84,7 @@ impl Session {
             coloc_thresholds: self.coloc_thresholds.take(),
             mask_stamp: self.mask_stamp.take(),
             project: self.project.take(),
-            saved: self.saved.take(),
+            baseline: self.baseline.take(),
         };
         self.fields.keep(field);
     }
@@ -101,7 +101,7 @@ impl Session {
             coloc_thresholds,
             mask_stamp,
             project,
-            saved,
+            baseline,
             ..
         } = field;
         self.scene = Some(scene);
@@ -118,7 +118,7 @@ impl Session {
         self.coloc_thresholds = coloc_thresholds;
         self.mask_stamp = mask_stamp;
         self.project = project;
-        self.saved = saved;
+        self.baseline = baseline;
     }
 
     pub(super) fn switching_wells(&mut self) -> bool {

@@ -1,5 +1,5 @@
 use glam::Vec2;
-use grana_session::{Command, Kind, RecentEntry, RecentKind, SessionView};
+use grana_session::{Command, Kind, RecentEntry, RecentKind, RecoveryView, SessionView};
 use grana_ui::{
     Align, BuildContext, Corners, Edges, Element, Icon, Key, Layer, Length, Level, Rect, Role,
     TextStyle, TypeStyle,
@@ -15,6 +15,7 @@ const BRAND_HEIGHT: f32 = 42.0;
 const STATE_HEIGHT: f32 = 24.0;
 const RECENT_HEADER: f32 = 22.0;
 const RECENT_ROW: f32 = 38.0;
+const RECOVERY_HEIGHT: f32 = 76.0;
 
 struct Status {
     text: String,
@@ -54,6 +55,11 @@ pub(crate) fn view<'a>(
     } else {
         0.0
     };
+    let recovered = if view.recovery.is_some() {
+        CARD_GAP + RECOVERY_HEIGHT
+    } else {
+        0.0
+    };
     let height = 2.0 * CARD_PADDING
         + BRAND_HEIGHT
         + CARD_GAP
@@ -64,6 +70,7 @@ pub(crate) fn view<'a>(
         + button
         + CARD_GAP
         + button
+        + recovered
         + recents;
     let rect = Rect::from_min_size(
         Vec2::new(
@@ -83,42 +90,43 @@ pub(crate) fn view<'a>(
         .at(full)
         .layer(Layer::Content),
     ];
+    let mut children = vec![
+        brand(ctx),
+        state(ctx, &status),
+        grana_ui::text(status.detail.clone(), detail_style),
+        actions(ctx),
+    ];
+    if let Some(recovery) = view.recovery.as_ref() {
+        children.push(recovery_block(ctx, recovery));
+    }
+    children.push(
+        grana_ui::row().gap(8.0).children([
+            grana_ui::widget::action_button(
+                ctx.theme(),
+                Icon::Folder,
+                "OME-Zarr Folder",
+                Role::Control,
+            )
+            .named("shell.open.dataset")
+            .press(Message::Command(Command::OpenDataset)),
+            grana_ui::widget::action_button(
+                ctx.theme(),
+                Icon::Globe,
+                "Remote OME-Zarr",
+                Role::Control,
+            )
+            .named("shell.open.remote")
+            .press(Message::BeginRemote),
+            grana_ui::widget::action_button(ctx.theme(), Icon::Folder, "Project", Role::Control)
+                .named("shell.open.project")
+                .press(Message::Command(Command::OpenProject)),
+        ]),
+    );
+    children.push(recent_block(ctx, view));
     let card = grana_ui::column()
         .padding(Edges::all(CARD_PADDING))
         .gap(CARD_GAP)
-        .children([
-            brand(ctx),
-            state(ctx, &status),
-            grana_ui::text(status.detail.clone(), detail_style),
-            actions(ctx),
-            grana_ui::row().gap(8.0).children([
-                grana_ui::widget::action_button(
-                    ctx.theme(),
-                    Icon::Folder,
-                    "OME-Zarr Folder",
-                    Role::Control,
-                )
-                .named("shell.open.dataset")
-                .press(Message::Command(Command::OpenDataset)),
-                grana_ui::widget::action_button(
-                    ctx.theme(),
-                    Icon::Globe,
-                    "Remote OME-Zarr",
-                    Role::Control,
-                )
-                .named("shell.open.remote")
-                .press(Message::BeginRemote),
-                grana_ui::widget::action_button(
-                    ctx.theme(),
-                    Icon::Folder,
-                    "Project",
-                    Role::Control,
-                )
-                .named("shell.open.project")
-                .press(Message::Command(Command::OpenProject)),
-            ]),
-            recent_block(ctx, view),
-        ])
+        .children(children)
         .at(rect)
         .named("shell.card");
     elements.push(surface(ctx, rect));
@@ -261,6 +269,49 @@ fn actions<'a>(ctx: &mut BuildContext<'_, Message>) -> Element<'a, Message> {
     grana_ui::widget::button_width(ctx.theme(), "Open Image…", Role::Prominent, Length::Fill)
         .named("shell.open.image")
         .press(Message::Command(Command::OpenImage))
+}
+
+fn recovery_block<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    recovery: &RecoveryView<'_>,
+) -> Element<'a, Message> {
+    let theme = *ctx.theme();
+    let palette = theme.palette;
+    let headline = format!("Unsaved analysis of {}", recovery.name);
+    let detail = format!("{} · saved {}", recovery.detail, ago(recovery.age));
+    grana_ui::column()
+        .gap(6.0)
+        .height(Length::Fixed(RECOVERY_HEIGHT))
+        .children([
+            grana_ui::text(
+                headline,
+                TextStyle::new(theme.font(Level::Body), palette.text_primary).truncating(),
+            ),
+            grana_ui::text(
+                detail,
+                TextStyle::new(theme.font(Level::Caption), palette.text_tertiary).truncating(),
+            ),
+            grana_ui::row().gap(8.0).children([
+                grana_ui::widget::action_button(&theme, Icon::Undo, "Recover", Role::Prominent)
+                    .named("shell.recover")
+                    .press(Message::Command(Command::RecoverAnalysis)),
+                grana_ui::widget::action_button(&theme, Icon::Trash, "Discard", Role::Control)
+                    .named("shell.discard")
+                    .press(Message::Command(Command::DiscardAnalysis)),
+            ]),
+        ])
+}
+
+fn ago(seconds: u64) -> String {
+    match seconds {
+        0..=59 => "moments ago".to_string(),
+        60..=119 => "a minute ago".to_string(),
+        120..=3599 => format!("{} minutes ago", seconds / 60),
+        3600..=7199 => "an hour ago".to_string(),
+        7200..=86399 => format!("{} hours ago", seconds / 3600),
+        86400..=172799 => "a day ago".to_string(),
+        _ => format!("{} days ago", seconds / 86400),
+    }
 }
 
 fn recent_block<'a>(

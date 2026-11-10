@@ -1500,6 +1500,10 @@ fn reads_a_batch_run_record() {
             "status": "ok",
             "objects": objects,
             "detail": format!("Nuclei={objects}"),
+            "content": 424242,
+            "bytes": 1024,
+            "modified": 1700000000,
+            "protocol": 7,
             "quality": [
                 {
                     "dataset": title,
@@ -1518,8 +1522,8 @@ fn reads_a_batch_run_record() {
     })
     .collect::<Vec<_>>();
     let record = serde_json::json!({
-        "format": 1,
-        "build": "0.1.1/10",
+        "format": 2,
+        "build": "0.1.1/11",
         "protocol": 7,
         "jobs": 2,
         "project": true,
@@ -1578,8 +1582,8 @@ fn reads_a_batch_run_record() {
 fn records_a_batch_correction() {
     let temp = Temp::new("run-correction");
     let record = serde_json::json!({
-        "format": 1,
-        "build": "0.1.1/10",
+        "format": 2,
+        "build": "0.1.1/11",
         "protocol": 7,
         "jobs": 1,
         "project": false,
@@ -1598,6 +1602,10 @@ fn records_a_batch_correction() {
                 "status": "ok",
                 "objects": 12,
                 "detail": "Nuclei=12",
+                "content": 424242,
+                "bytes": 1024,
+                "modified": 1700000000,
+                "protocol": 7,
                 "quality": []
             }
         ]
@@ -1642,4 +1650,100 @@ fn records_a_batch_correction() {
         .expect("the run record reads")
         .expect("the folder holds a run record");
     assert_eq!(run.datasets()[0].correction(), None);
+}
+
+#[test]
+fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
+    let temp = Temp::new("grana-recovery");
+    let root = temp.path().join("recovery");
+    let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/imaris-filaments.ims");
+    let mut session = Session::new();
+    session.attach_recovery_at(root.clone());
+    session.begin_load(fixture);
+    wait_for_scene(&mut session, 1);
+    assert!(
+        !session.dirty(),
+        "a freshly opened dataset carries no unsaved work"
+    );
+    session.execute(Command::SetChannelOpacity {
+        channel: 0,
+        opacity: 0.4,
+    });
+    assert!(session.dirty(), "an edit leaves the analysis unsaved");
+    assert!(session.autosave(view_state()), "the autosave starts");
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while session.recovery().is_none() {
+        assert!(Instant::now() < deadline, "the autosave never finishes");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(session.dirty(), "an autosave does not pass for a save");
+
+    let mut recovered = Session::new();
+    recovered.attach_recovery_at(root);
+    let offered = recovered.recovery().expect("the recovery is offered");
+    assert_eq!(offered.name, "imaris-filaments");
+    recovered.execute(Command::RecoverAnalysis);
+    wait_for_scene(&mut recovered, 1);
+    assert!(
+        recovered.dirty(),
+        "recovered work is unsaved until it is saved again"
+    );
+    assert_eq!(
+        recovered.scene().expect("the fixture opens").channels[0].opacity,
+        0.4,
+        "the recovered analysis keeps its display state"
+    );
+    assert!(
+        recovered.recovery().is_none(),
+        "the recovery is spent once it is loaded"
+    );
+}
+
+#[test]
+fn refuses_a_project_written_by_another_schema() {
+    let temp = Temp::new("grana-project-schema");
+    let mut session = Session::new();
+    session.open_series("nuclei", series());
+    let scene = session.scene().expect("the series opens");
+    let project = Project::capture(
+        scene,
+        session.measure(),
+        Source::Synthetic {
+            name: "nuclei".to_string(),
+        },
+        view_state(),
+        Vec::new(),
+        Fingerprint::new([3; 32]),
+    );
+    let path = temp.path().join("schema.grana");
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the project writes");
+    let mut bytes = std::fs::read(&path).expect("the project reads back");
+    bytes[9..13].copy_from_slice(&1u32.to_le_bytes());
+    std::fs::write(&path, &bytes).expect("the header is patched");
+    let error = Project::read(
+        &path,
+        GeometryStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect_err("another schema is refused");
+    assert!(
+        format!("{error}").contains("schema"),
+        "the error names the schema: {error}"
+    );
+}
+
+fn wait_for_scene(session: &mut Session, frames: u32) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while session.scene().is_none() {
+        assert!(Instant::now() < deadline, "the dataset never opens");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let scene = session.scene().expect("the dataset opens");
+    assert_eq!(scene.frame_count(), frames, "the dataset keeps its frames");
 }

@@ -15,6 +15,7 @@ mod montage;
 mod open;
 mod plate;
 mod preview;
+mod recover;
 mod replay;
 mod scene_import;
 mod seed;
@@ -44,6 +45,7 @@ use crate::history::{History, Snapshot};
 use crate::loader::{Event as LoaderEvent, Loader};
 use crate::recent::{Entry as RecentEntry, Recent};
 use crate::recipe::Recipe;
+use crate::recovery::Recovery;
 use crate::sample;
 use crate::task::Poll;
 use crate::transfer::Transfer;
@@ -58,6 +60,7 @@ use grana_pipeline::{
     Batch, BatchEvent, BatchPoll, CaptureFactory, Event, Outcome, Plan as BatchPlan,
 };
 use grana_protocol::{NamedViewSpec, Protocol, Step, ViewSpec};
+use recover::Restore;
 
 const MAX_IN_FLIGHT: usize = 8192;
 
@@ -99,7 +102,10 @@ pub struct Session {
     document: Option<Document>,
     message: Option<Message>,
     project: Option<PathBuf>,
-    saved: Option<u64>,
+    baseline: Option<u64>,
+    deferred: bool,
+    recovery: Recovery,
+    restore: Option<Restore>,
     protocol: Option<Protocol>,
     protocol_text: Option<String>,
     recipe: Option<Recipe>,
@@ -174,7 +180,10 @@ impl Session {
             document: None,
             message: None,
             project: None,
-            saved: None,
+            baseline: None,
+            deferred: false,
+            recovery: Recovery::default(),
+            restore: None,
             protocol: None,
             protocol_text: None,
             recipe: None,
@@ -315,7 +324,7 @@ impl Session {
         self.project.as_ref().map(|path| file_name(path))
     }
     pub fn dirty(&self) -> bool {
-        self.project.is_some() && self.document_hash() != self.saved
+        self.scene.is_some() && self.document_hash() != self.baseline
     }
     pub fn history(&self) -> HistoryView {
         HistoryView {
@@ -496,6 +505,11 @@ impl Session {
         repaint |= self.poll_plate();
         repaint |= self.poll_dataset();
         repaint |= self.refresh_masks();
+        repaint |= self.poll_recovery();
+        if self.deferred && self.analysis.is_empty() && self.progress.is_empty() {
+            self.baseline = self.document_hash();
+            self.deferred = false;
+        }
         if repaint {
             self.touch();
         }

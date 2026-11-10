@@ -289,6 +289,123 @@ fn captures_a_protocol_film_without_a_window() {
     );
 }
 
+#[test]
+fn keeps_previous_results_when_a_batch_rerun_fails() {
+    let temp = Temp::new("grana-batch-swap");
+    let datasets = temp.path().join("datasets");
+    std::fs::create_dir_all(&datasets).expect("the dataset folder is created");
+    std::fs::copy(fixture("ome.tif"), datasets.join("first.tif")).expect("the fixture is copied");
+    std::fs::copy(fixture("ome.tif"), datasets.join("second.tif")).expect("the fixture is copied");
+    let source = grana_image::Source::file(fixture("ome.tif"));
+    let image = grana_image::Image::open(&source).expect("the fixture opens");
+    let mut scene = Scene::new(Dataset::tiff(
+        image.name().to_string(),
+        image.pyramid().clone(),
+    ));
+    let spots = scene.add_object(grana_scene::ObjectKind::Spots, 0);
+    scene
+        .objects
+        .get_mut(spots)
+        .expect("the set exists")
+        .set_params(grana_scene::ObjectParams::Spots(
+            grana_object::SpotParams::new(0.5, 0.1),
+        ));
+    let mut capture = serde_json::from_str::<serde_json::Value>(
+        &grana_protocol::Protocol::capture(&scene, &Measure::new(), None, Vec::new())
+            .expect("the scene captures")
+            .to_json()
+            .expect("the protocol serializes"),
+    )
+    .expect("the protocol is json");
+    capture
+        .as_object_mut()
+        .expect("the protocol is an object")
+        .remove("snapshot");
+    let protocol =
+        grana_protocol::Protocol::from_json(&capture.to_string()).expect("the protocol parses");
+    let output = temp.path().join("runs");
+    let start = || {
+        grana_pipeline::Batch::start(grana_pipeline::Plan {
+            protocol: protocol.clone(),
+            datasets: grana_pipeline::discover(&datasets).expect("the folder discovers"),
+            output: output.clone(),
+            jobs: 1,
+            project: false,
+            channels: false,
+            capture: None,
+        })
+    };
+    let running = start();
+    let mut failures = 0;
+    let mut done = false;
+    while let Some(event) = running.wait() {
+        match event {
+            grana_pipeline::BatchEvent::Dataset {
+                outcome: grana_pipeline::Outcome::Failed { .. },
+                ..
+            }
+            | grana_pipeline::BatchEvent::Failed(_) => failures += 1,
+            grana_pipeline::BatchEvent::Done { cancelled } => {
+                assert!(!cancelled, "the first run is not cancelled");
+                done = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(done && failures == 0, "the first run completes");
+    let written = results(&output);
+    assert_eq!(written.len(), 2, "the first run writes both datasets");
+    let manifest = std::fs::read_to_string(output.join("run.json")).expect("the run record lands");
+    for field in ["\"content\"", "\"bytes\"", "\"modified\"", "\"protocol\""] {
+        assert!(
+            manifest.contains(field),
+            "the run record keeps the input evidence {field}"
+        );
+    }
+
+    let truncated = std::fs::read(fixture("ome.tif")).expect("the fixture reads");
+    std::fs::write(datasets.join("second.tif"), &truncated[..8]).expect("the dataset truncates");
+    let running = start();
+    let mut failed = false;
+    while let Some(event) = running.wait() {
+        match event {
+            grana_pipeline::BatchEvent::Dataset {
+                outcome: grana_pipeline::Outcome::Failed { .. },
+                ..
+            }
+            | grana_pipeline::BatchEvent::Failed(_) => failed = true,
+            grana_pipeline::BatchEvent::Done { .. } => {}
+            _ => {}
+        }
+    }
+    assert!(failed, "the truncated dataset fails");
+    assert_eq!(
+        results(&output).len(),
+        2,
+        "a failed rerun keeps the previous results of both datasets"
+    );
+}
+
+fn results(root: &std::path::Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut folders = vec![root.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        let Ok(listing) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in listing.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                folders.push(path);
+            } else if path.file_name().and_then(|name| name.to_str()) == Some("result.json") {
+                found.push(path);
+            }
+        }
+    }
+    found
+}
+
 fn find(root: &std::path::Path, name: &str) -> Option<PathBuf> {
     for entry in std::fs::read_dir(root).ok()?.flatten() {
         let path = entry.path();

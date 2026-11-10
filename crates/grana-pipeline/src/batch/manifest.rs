@@ -14,7 +14,7 @@ pub(super) const RUN: &str = "run.json";
 
 const CORRECTION: &str = "correction.json";
 
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,6 +43,10 @@ pub struct RunDataset {
     status: String,
     objects: usize,
     detail: String,
+    content: u64,
+    bytes: u64,
+    modified: Option<u64>,
+    protocol: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     correction: Option<u64>,
     quality: Vec<Quality>,
@@ -186,6 +190,7 @@ pub fn clear(run: &Path, dataset: &Path, scene: usize) -> Result<(), String> {
 
 pub(super) fn write(
     plan: &Plan,
+    evidence: &[resume::Evidence],
     rows: &[Option<Row>],
     corrections: &[Option<Protocol>],
 ) -> Result<(), String> {
@@ -202,6 +207,11 @@ pub(super) fn write(
             .enumerate()
             .map(|(index, dataset)| {
                 let row = rows.get(index).and_then(Option::as_ref);
+                let held = evidence.get(index).copied().unwrap_or(resume::Evidence {
+                    content: 0,
+                    bytes: 0,
+                    modified: None,
+                });
                 RunDataset {
                     path: dataset.path().display().to_string(),
                     group: dataset.group().to_string(),
@@ -215,6 +225,14 @@ pub(super) fn write(
                     status: row.map_or("queued", |row| row.status).to_string(),
                     objects: row.map_or(0, |row| row.objects),
                     detail: row.map_or_else(String::new, |row| row.detail.clone()),
+                    content: held.content,
+                    bytes: held.bytes,
+                    modified: held.modified,
+                    protocol: corrections
+                        .get(index)
+                        .and_then(Option::as_ref)
+                        .unwrap_or(&plan.protocol)
+                        .digest(),
                     correction: corrections
                         .get(index)
                         .and_then(Option::as_ref)

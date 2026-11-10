@@ -9,12 +9,11 @@ mod resume;
 mod sheet;
 mod significance;
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard};
 
 use grana_protocol::Protocol;
 use thiserror::Error;
@@ -24,7 +23,7 @@ use discover::dataset_workers;
 use gate::Gate;
 use pipeline::{analyse, artifacts};
 use quality::Row;
-use resume::{build, completed, content};
+use resume::{Evidence, build, completed, evidence};
 
 pub use discover::{DatasetEntry, dataset_name, default_jobs, discover};
 pub use manifest::{
@@ -39,7 +38,7 @@ const PARTIAL: &str = "partial";
 
 pub const MAX_JOBS: usize = 16;
 
-const ANALYSIS_REVISION: u32 = 10;
+const ANALYSIS_REVISION: u32 = 11;
 
 pub struct Plan {
     pub protocol: Protocol,
@@ -176,7 +175,7 @@ struct Task<'a> {
     protocol: &'a Protocol,
     workers: usize,
     digest: u64,
-    content: u64,
+    evidence: Evidence,
     index: usize,
     project: bool,
     channels: bool,
@@ -214,12 +213,16 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
         let _ = events.send(Event::Done { cancelled: false });
         return;
     }
-    if let Err(detail) = manifest::write(&plan, &[], &corrections) {
+    let evidence = plan
+        .datasets
+        .iter()
+        .map(|dataset| evidence(dataset.path()))
+        .collect::<Vec<_>>();
+    if let Err(detail) = manifest::write(&plan, &evidence, &[], &corrections) {
         let _ = events.send(Event::Failed(detail));
         let _ = events.send(Event::Done { cancelled: false });
         return;
     }
-    let contents = Mutex::new(HashMap::new());
     let next = AtomicUsize::new(0);
     let rows = Mutex::new((0..plan.datasets.len()).map(|_| None).collect::<Vec<_>>());
     let jobs = plan.jobs.clamp(1, MAX_JOBS).min(plan.datasets.len().max(1));
@@ -232,7 +235,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
             let next = &next;
             let rows = &rows;
             let plan = &plan;
-            let contents = &contents;
+            let evidence = &evidence;
             let corrections = &corrections;
             scope.spawn(move || {
                 while gate.hold(&cancel) {
@@ -240,7 +243,6 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
                     if index >= plan.datasets.len() {
                         break;
                     }
-                    let content = content_of(contents, plan.datasets[index].path());
                     let protocol = corrections[index].as_ref().unwrap_or(&plan.protocol);
                     work(
                         plan,
@@ -248,7 +250,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
                             protocol,
                             workers,
                             digest: protocol.digest(),
-                            content,
+                            evidence: evidence[index],
                             index,
                             project: plan.project,
                             channels: plan.channels,
@@ -309,7 +311,7 @@ fn execute(plan: Plan, events: Sender<Event>, cancel: Arc<AtomicBool>, gate: Arc
             "failed to write the batch comparison samples: {error}"
         )));
     }
-    if let Err(detail) = manifest::write(&plan, &rows, &corrections) {
+    if let Err(detail) = manifest::write(&plan, &evidence, &rows, &corrections) {
         let _ = events.send(Event::Failed(detail));
     }
     if let Err(detail) = sheet::write(&plan, &rows, &report) {
@@ -361,7 +363,13 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
     let dataset = &plan.datasets[index];
     let folder = plan.output.join(dataset.folder());
     let artifacts = artifacts(task.protocol, &dataset.title(), task.project, task.channels);
-    if let Some(record) = completed(&folder, task.digest, &build(), task.content, &artifacts) {
+    if let Some(record) = completed(
+        &folder,
+        task.digest,
+        &build(),
+        task.evidence.content,
+        &artifacts,
+    ) {
         let detail = marked(record.detail.clone(), task.corrected);
         let _ = task.events.send(Event::Dataset {
             index,
@@ -431,16 +439,6 @@ fn work(plan: &Plan, task: &Task<'_>, rows: &Mutex<Vec<Option<Row>>>) {
             );
         }
     }
-}
-
-type Contents = Mutex<HashMap<PathBuf, Arc<OnceLock<u64>>>>;
-
-fn content_of(contents: &Contents, path: &std::path::Path) -> u64 {
-    let cell = {
-        let mut known = contents.lock().unwrap_or_else(|error| error.into_inner());
-        Arc::clone(known.entry(path.to_path_buf()).or_default())
-    };
-    *cell.get_or_init(|| content(path))
 }
 
 fn row_line(dataset: &DatasetEntry, row: &Row) -> String {

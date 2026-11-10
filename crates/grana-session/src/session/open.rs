@@ -15,7 +15,7 @@ impl Session {
         self.loading = None;
         self.replace();
         self.project = None;
-        self.saved = None;
+        self.baseline = None;
         self.history.clear();
         self.analysis.clear();
         self.progress.clear();
@@ -36,6 +36,7 @@ impl Session {
         if let Some(scene) = self.scene.as_ref() {
             self.mask_stamp = Some((0, scene.mask_stamp(0)));
         }
+        self.baseline = self.document_hash();
     }
 
     pub fn open_sample(&mut self) {
@@ -47,6 +48,8 @@ impl Session {
         for set in [staged.spots, staged.surfaces, staged.filaments] {
             self.start_detect(set);
         }
+        self.baseline = None;
+        self.deferred = true;
     }
 
     pub fn set_capture_factory(&mut self, factory: CaptureFactory) {
@@ -66,7 +69,7 @@ impl Session {
         self.source = Some(Loader::file_series(path, series));
         self.pending = None;
         self.project = None;
-        self.saved = None;
+        self.baseline = None;
         self.plate = None;
         self.field = 0;
         self.fields.clear();
@@ -92,7 +95,7 @@ impl Session {
         self.source = Some(Loader::remote_series(url, series));
         self.pending = None;
         self.project = None;
-        self.saved = None;
+        self.baseline = None;
         self.plate = None;
         self.field = 0;
         self.fields.clear();
@@ -114,6 +117,22 @@ impl Session {
             crate::recent::Kind::Remote => {
                 self.begin_remote_series(entry.target().to_string(), entry.series());
             }
+        }
+    }
+
+    pub fn open_path(&mut self, path: PathBuf) {
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "grana")
+        {
+            self.begin_project(path);
+        } else if grana_image::is_image(&path) {
+            self.begin_load(path);
+        } else {
+            self.message = Some(Message::error(format!(
+                "{} is neither a supported image nor a grana project",
+                path.display()
+            )));
         }
     }
 
@@ -140,7 +159,7 @@ impl Session {
         self.source = Some(next);
         self.pending = None;
         self.project = None;
-        self.saved = None;
+        self.baseline = None;
         self.clear_plate();
         self.reset();
         true
@@ -179,7 +198,7 @@ impl Session {
         self.source = Some(next);
         self.pending = None;
         self.project = None;
-        self.saved = None;
+        self.baseline = None;
         self.reset();
         true
     }
@@ -265,7 +284,7 @@ impl Session {
                     project,
                 });
                 self.project = None;
-                self.saved = None;
+                self.baseline = None;
                 self.reset();
                 self.open_dataset(Dataset::synthetic(name, opened.pyramid), opened.fingerprint);
             }
@@ -288,7 +307,7 @@ impl Session {
                     project,
                 });
                 self.project = None;
-                self.saved = None;
+                self.baseline = None;
                 self.reset();
             }
             ProjectSource::Remote { url, series, .. } => {
@@ -301,7 +320,7 @@ impl Session {
                     project,
                 });
                 self.project = None;
-                self.saved = None;
+                self.baseline = None;
                 self.reset();
             }
         }
@@ -340,7 +359,8 @@ impl Session {
             match event {
                 document::Outcome::Saved => {
                     self.project = Some(path.clone());
-                    self.saved = hash;
+                    self.baseline = hash;
+                    self.clear_recovery();
                     self.record_recent(RecentEntry::project(&path));
                 }
                 document::Outcome::Opened(project) => {
@@ -348,9 +368,12 @@ impl Session {
                     self.record_recent(RecentEntry::project(&path));
                 }
                 document::Outcome::Failed(detail) => {
+                    self.restore = None;
                     self.message = Some(Message::error(detail));
                 }
-                document::Outcome::Cancelled => {}
+                document::Outcome::Cancelled => {
+                    self.restore = None;
+                }
             }
         }
         let finished = settled || closed;
@@ -400,6 +423,7 @@ impl Session {
         self.abort_recipe();
         self.analysis.clear();
         self.progress.clear();
+        self.deferred = false;
         self.recut = None;
         self.message = None;
         self.in_flight.clear();
@@ -440,11 +464,6 @@ impl Session {
                     self.export = view.export;
                     self.view = Some(view);
                     self.project = Some(pending.path);
-                    self.saved = Some(
-                        scene.document_hash()
-                            ^ self.measure.document_hash()
-                            ^ self.timeline.document(),
-                    );
                 }
                 Err(mismatch) => {
                     self.message = Some(Message::error(match mismatch {
@@ -482,6 +501,7 @@ impl Session {
         if let Some(scene) = self.scene.as_ref() {
             self.mask_stamp = Some((scene.time(), scene.mask_stamp(scene.time())));
         }
+        self.accept_open();
     }
 
     pub(super) fn frame_duration(&self) -> f32 {
@@ -504,6 +524,7 @@ impl Session {
                     let name = opened.name.clone();
                     let selected = opened.selected;
                     let restored = self.pending.is_some();
+                    let imported = !restored && !opened.imports.is_empty();
                     let file = current
                         .as_ref()
                         .map(Source::label)
@@ -552,6 +573,13 @@ impl Session {
                     if let Some(detail) = opened.labels_error {
                         self.message = Some(Message::error(detail));
                     }
+                    if imported {
+                        self.baseline = self.document_hash();
+                    }
+                    if self.batch_review.is_some() {
+                        self.baseline = None;
+                        self.deferred = true;
+                    }
                 }
                 LoaderEvent::Brick { request, data } => {
                     self.in_flight.remove(&request);
@@ -568,6 +596,7 @@ impl Session {
                 LoaderEvent::Failed(detail) => {
                     self.loading = None;
                     self.batch_review_pending = None;
+                    self.restore = None;
                     self.message = Some(Message::error(detail));
                     self.analysis.clear();
                     self.progress.clear();
@@ -575,7 +604,7 @@ impl Session {
                     self.channels = None;
                     self.in_flight.clear();
                     self.project = None;
-                    self.saved = None;
+                    self.baseline = None;
                     self.transfer.reset();
                 }
             }

@@ -18,6 +18,7 @@ pub(super) struct Record {
     pub(super) build: String,
     pub(super) content: u64,
     pub(super) artifacts: Vec<String>,
+    pub(super) labels: Vec<String>,
     pub(super) objects: usize,
     pub(super) detail: String,
     pub(super) quality: Vec<Quality>,
@@ -47,12 +48,97 @@ pub(super) fn build() -> String {
     format!("{}/{}", env!("CARGO_PKG_VERSION"), ANALYSIS_REVISION)
 }
 
-pub(super) fn content(dataset: &Path) -> u64 {
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Evidence {
+    pub(super) content: u64,
+    pub(super) bytes: u64,
+    pub(super) modified: Option<u64>,
+}
+
+pub(super) fn evidence(dataset: &Path) -> Evidence {
     match std::fs::metadata(dataset) {
-        Err(_) => 0,
-        Ok(metadata) if metadata.is_dir() => directory_content(dataset),
-        Ok(metadata) => file_content(dataset, metadata.len()),
+        Err(_) => Evidence {
+            content: 0,
+            bytes: 0,
+            modified: None,
+        },
+        Ok(metadata) if metadata.is_dir() => directory_evidence(dataset),
+        Ok(metadata) => Evidence {
+            content: file_content(dataset, metadata.len()),
+            bytes: metadata.len(),
+            modified: modified(&metadata),
+        },
     }
+}
+
+fn directory_evidence(root: &Path) -> Evidence {
+    let mut entries = Vec::new();
+    collect(root, root, &mut entries);
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
+    let mut hash = mix_u64(HASH, entries.len() as u64);
+    let mut bytes = 0;
+    let mut modified_at = None;
+    for entry in &entries {
+        hash = mix_u64(hash, entry.size);
+        hash = mix_u64(hash, entry.name.len() as u64);
+        hash = mix_bytes(hash, entry.name.as_bytes());
+        bytes += entry.size;
+        modified_at = modified_at.max(entry.modified);
+        hash = file_bytes(hash, &root.join(&entry.name), entry.size);
+    }
+    Evidence {
+        content: hash,
+        bytes,
+        modified: modified_at,
+    }
+}
+
+struct Entry {
+    name: String,
+    size: u64,
+    modified: Option<u64>,
+}
+
+fn collect(root: &Path, folder: &Path, entries: &mut Vec<Entry>) {
+    let Ok(listing) = std::fs::read_dir(folder) else {
+        return;
+    };
+    for entry in listing.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.is_dir() {
+            collect(root, &path, entries);
+            continue;
+        }
+        let name = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if derived(&name) {
+            continue;
+        }
+        entries.push(Entry {
+            size: metadata.len(),
+            modified: modified(&metadata),
+            name,
+        });
+    }
+}
+
+fn derived(name: &str) -> bool {
+    name.split('/').any(|part| part == "labels")
+}
+
+fn modified(metadata: &std::fs::Metadata) -> Option<u64> {
+    metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|elapsed| elapsed.as_secs())
 }
 
 fn file_content(path: &Path, length: u64) -> u64 {
@@ -81,42 +167,6 @@ fn file_bytes(seed: u64, path: &Path, length: u64) -> u64 {
         hash = mix_bytes(hash, &buffer[..count]);
     }
     hash
-}
-
-fn directory_content(root: &Path) -> u64 {
-    let mut entries = Vec::new();
-    collect(root, root, &mut entries);
-    entries.sort();
-    let mut hash = mix_u64(HASH, entries.len() as u64);
-    for (name, size) in entries {
-        hash = mix_u64(hash, size);
-        hash = mix_u64(hash, name.len() as u64);
-        hash = mix_bytes(hash, name.as_bytes());
-        hash = file_bytes(hash, &root.join(&name), size);
-    }
-    hash
-}
-
-fn collect(root: &Path, folder: &Path, entries: &mut Vec<(String, u64)>) {
-    let Ok(listing) = std::fs::read_dir(folder) else {
-        return;
-    };
-    for entry in listing.flatten() {
-        let path = entry.path();
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if metadata.is_dir() {
-            collect(root, &path, entries);
-            continue;
-        }
-        let name = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .replace('\\', "/");
-        entries.push((name, metadata.len()));
-    }
 }
 
 fn mix_bytes(mut hash: u64, bytes: &[u8]) -> u64 {

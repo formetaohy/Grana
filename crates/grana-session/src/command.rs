@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use grana_display::{Coloring, Material, Shading, TransferFunction, VolumeMode};
 use grana_measure::{
     Aggregate, ColocPair, ColocSettings, ColocThresholds, Filter, Group, Lasso, MeasureView,
@@ -19,9 +21,12 @@ pub use grana_project::Export;
 pub enum Command {
     OpenDataset,
     OpenImage,
+    OpenPath(PathBuf),
     OpenRemote(String),
     OpenRecent(usize),
     OpenDemo,
+    RecoverAnalysis,
+    DiscardAnalysis,
     OpenProject,
     SaveProject,
     SaveProjectAs,
@@ -634,6 +639,21 @@ impl Edit {
 }
 
 impl Command {
+    pub fn replaces_document(&self) -> bool {
+        matches!(
+            self,
+            Self::OpenDataset
+                | Self::OpenImage
+                | Self::OpenPath(_)
+                | Self::OpenRemote(_)
+                | Self::OpenRecent(_)
+                | Self::OpenDemo
+                | Self::OpenProject
+                | Self::RecoverAnalysis
+                | Self::DiscardAnalysis
+        )
+    }
+
     pub(crate) fn edit(&self) -> Option<Edit> {
         let edit = match self {
             Self::AddObject(_) | Self::AddSegment => Edit::new(Action::AddObject),

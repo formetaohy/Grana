@@ -34,6 +34,7 @@ pub(super) struct Report {
     pub(super) objects: usize,
     pub(super) detail: String,
     pub(super) quality: Vec<Quality>,
+    pub(super) labels: Vec<String>,
 }
 
 pub(super) fn analyse(
@@ -43,8 +44,17 @@ pub(super) fn analyse(
 ) -> Result<Report, String> {
     let folder = output.join(dataset.folder());
     let partial = output.join(format!(".{PARTIAL}-{}", dataset.key()));
+    let previous = output.join(format!(".{PARTIAL}-{}-previous", dataset.key()));
+    if !folder.exists() && previous.exists() {
+        std::fs::rename(&previous, &folder).map_err(|error| {
+            format!(
+                "failed to restore {} over {}: {error}",
+                previous.display(),
+                folder.display()
+            )
+        })?;
+    }
     clear(&partial)?;
-    clear(&folder)?;
     std::fs::create_dir_all(&partial)
         .map_err(|error| format!("failed to create {}: {error}", partial.display()))?;
     let outcome = write_dataset(task, dataset, &partial);
@@ -61,11 +71,49 @@ pub(super) fn analyse(
         let _ = std::fs::remove_dir_all(&partial);
         return Err(format!("failed to create {}: {error}", parent.display()));
     }
-    std::fs::rename(&partial, &folder).map_err(|error| {
-        let _ = std::fs::remove_dir_all(&partial);
-        format!("failed to write {}: {error}", folder.display())
-    })?;
+    install(&partial, &folder, &previous, dataset)?;
     Ok(report)
+}
+
+fn install(
+    partial: &Path,
+    folder: &Path,
+    previous: &Path,
+    dataset: &DatasetEntry,
+) -> Result<(), String> {
+    if !folder.exists() {
+        return std::fs::rename(partial, folder).map_err(|error| {
+            let _ = std::fs::remove_dir_all(partial);
+            format!("failed to write {}: {error}", folder.display())
+        });
+    }
+    clear(previous)?;
+    std::fs::rename(folder, previous).map_err(|error| {
+        let _ = std::fs::remove_dir_all(partial);
+        format!(
+            "failed to set aside {} for {}: {error}",
+            folder.display(),
+            dataset.title()
+        )
+    })?;
+    match std::fs::rename(partial, folder) {
+        Ok(()) => {
+            let _ = std::fs::remove_dir_all(previous);
+            Ok(())
+        }
+        Err(error) => {
+            let restored = std::fs::rename(previous, folder);
+            let _ = std::fs::remove_dir_all(partial);
+            match restored {
+                Ok(()) => Err(format!("failed to write {}: {error}", folder.display())),
+                Err(detail) => Err(format!(
+                    "failed to write {}: {error}; the previous results stay at {} ({detail})",
+                    folder.display(),
+                    previous.display()
+                )),
+            }
+        }
+    }
 }
 
 fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Result<Report, String> {
@@ -336,10 +384,17 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
             }
         }
     }
+    let labels = scene
+        .objects
+        .iter()
+        .filter_map(|set| set.label_export())
+        .map(|export| export.path().to_string())
+        .collect::<Vec<_>>();
     let report = Report {
         objects,
         detail: detail.join("; "),
         quality,
+        labels,
     };
     if let Some(spec) = task.protocol.snapshot() {
         let capture = task.capture.ok_or_else(|| {
@@ -416,8 +471,9 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
     let record = serde_json::to_string(&Record {
         protocol: task.digest,
         build: build(),
-        content: task.content,
+        content: task.evidence.content,
         artifacts,
+        labels: report.labels.clone(),
         objects: report.objects,
         detail: report.detail.clone(),
         quality: report.quality.clone(),

@@ -37,11 +37,19 @@ const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
 const CAPTURE_BUDGET: Duration = Duration::from_secs(240);
 const TOOL_CLICK_SLOP: f32 = 3.0;
+const AUTOSAVE_IDLE: Duration = Duration::from_secs(8);
+const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(120);
 
 struct Surface {
     window: Arc<Window>,
     gpu: Gpu,
     ui: Ui<grana_editor::Message>,
+}
+
+#[derive(Clone)]
+enum Resume {
+    Exit,
+    Command(Command),
 }
 
 pub struct App {
@@ -74,12 +82,17 @@ pub struct App {
     mask_path: Vec<[f32; 3]>,
     plate: Option<(String, usize)>,
     export: Export,
+    resume: Option<Resume>,
+    autosave_at: Option<Instant>,
+    changed_at: Option<Instant>,
+    revision: Revision,
 }
 
 impl App {
     pub fn new(capture: Option<PathBuf>, startup: Option<String>) -> Self {
         let mut session = Session::new();
         session.attach_recent_store();
+        session.attach_recovery_store();
         session.set_capture_factory(Arc::new(|| Arc::new(crate::capture::OfflineCapture::new())));
         Self {
             surface: None,
@@ -111,6 +124,10 @@ impl App {
             mask_path: Vec::new(),
             plate: None,
             export: Export::new(),
+            resume: None,
+            autosave_at: None,
+            changed_at: None,
+            revision: Revision::ZERO,
         }
     }
 
@@ -134,7 +151,11 @@ impl App {
         ui.set_clipboard(Box::new(SystemClipboard::new()));
         let mut engine = Engine::new(&gpu.device, &gpu.queue, gpu.format());
         match self.startup.take() {
-            None => self.session.open_sample(),
+            None => {
+                if self.capture.is_some() || self.session.recovery().is_none() {
+                    self.session.open_sample();
+                }
+            }
             Some(target) if grana_session::is_remote(&target) => self.session.begin_remote(target),
             Some(target) => {
                 let path = PathBuf::from(target);
@@ -171,6 +192,10 @@ impl App {
 
     fn redraw(&mut self) {
         self.session.poll();
+        if self.follow_resume() {
+            return;
+        }
+        self.track_changes();
         self.poll_export();
         self.sync_plate_panel();
         if let Some(set) = self.workspace.seed
@@ -192,6 +217,7 @@ impl App {
         }
         self.session.apply_measure();
         self.sync_title();
+        self.autosave();
         self.advance_playback();
         self.advance_animation();
         self.fit_views();
@@ -886,6 +912,11 @@ impl App {
         let view = self.view_state();
         self.session.observe_view(view);
         for command in commands {
+            if command.replaces_document()
+                && !self.release_document(Resume::Command(command.clone()))
+            {
+                continue;
+            }
             let effects = self.session.execute(command);
             if self.react(effects) {
                 return true;
@@ -994,6 +1025,7 @@ impl App {
             views: session.views(),
             recent: session.recent(),
             import: session.import(),
+            recovery: session.recovery(),
             export: session.export(),
         };
         let frame = frame_stats(*info);
@@ -1445,6 +1477,96 @@ impl App {
         self.session.dirty()
     }
 
+    fn track_changes(&mut self) {
+        let revision = self.session.revision();
+        if revision != self.revision {
+            self.revision = revision;
+            self.changed_at = Some(Instant::now());
+        }
+    }
+
+    fn autosave(&mut self) {
+        if self.capture.is_some() {
+            return;
+        }
+        let now = Instant::now();
+        let idle = self
+            .changed_at
+            .is_none_or(|at| now.duration_since(at) >= AUTOSAVE_IDLE);
+        let due = self
+            .autosave_at
+            .is_none_or(|at| now.duration_since(at) >= AUTOSAVE_INTERVAL);
+        if !idle || !due || !self.session.dirty() || self.session.analysing() {
+            return;
+        }
+        self.autosave_at = Some(now);
+        let view = self.view_state();
+        self.session.autosave(view);
+    }
+
+    fn autosave_wait(&self) -> Duration {
+        let held = self
+            .autosave_at
+            .map_or(Duration::ZERO, |at| Instant::now().duration_since(at));
+        AUTOSAVE_INTERVAL.saturating_sub(held).max(AUTOSAVE_IDLE)
+    }
+
+    fn release_document(&mut self, next: Resume) -> bool {
+        if self.resume.is_some() {
+            return false;
+        }
+        if self.session.transferring() {
+            self.resume = Some(next);
+            return false;
+        }
+        if !self.session.dirty() {
+            return true;
+        }
+        let answer = rfd::MessageDialog::new()
+            .set_title("Unsaved analysis")
+            .set_description("The analysis has unsaved changes. Save them before continuing?")
+            .set_level(rfd::MessageLevel::Warning)
+            .set_buttons(rfd::MessageButtons::YesNoCancel)
+            .show();
+        match answer {
+            rfd::MessageDialogResult::No => {
+                self.session.discard_recovery();
+                true
+            }
+            rfd::MessageDialogResult::Yes => {
+                let view = self.view_state();
+                let Some(path) = self.project_path(false) else {
+                    return false;
+                };
+                self.session.save_project(path, view);
+                self.resume = Some(next);
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn follow_resume(&mut self) -> bool {
+        if self.resume.is_none() || self.session.transferring() {
+            return false;
+        }
+        if self.session.dirty() {
+            self.resume = None;
+            return false;
+        }
+        match self.resume.take() {
+            Some(Resume::Exit) => {
+                self.exiting = true;
+                true
+            }
+            Some(Resume::Command(command)) => {
+                self.apply(vec![command]);
+                false
+            }
+            None => false,
+        }
+    }
+
     fn sync_title(&mut self) {
         let name = self
             .session
@@ -1752,6 +1874,7 @@ impl App {
                 views: session.views(),
                 recent: session.recent(),
                 import: session.import(),
+                recovery: session.recovery(),
                 export: session.export(),
             };
             let mut commands = Vec::new();
@@ -1767,16 +1890,6 @@ impl App {
             commands
         };
         self.apply(commands)
-    }
-
-    fn confirm_close(&self) -> bool {
-        rfd::MessageDialog::new()
-            .set_title("Unsaved analysis")
-            .set_description("The project has unsaved changes. Close grana without saving them?")
-            .set_level(rfd::MessageLevel::Warning)
-            .set_buttons(rfd::MessageButtons::YesNo)
-            .show()
-            == rfd::MessageDialogResult::Yes
     }
 
     fn confirm_export_close(&self) {
@@ -2030,11 +2143,15 @@ impl ApplicationHandler for App {
         self.push_event(&event);
         match event {
             WindowEvent::CloseRequested => {
+                if self.capture.is_some() {
+                    event_loop.exit();
+                    return;
+                }
                 if self.export.running() {
                     self.confirm_export_close();
                     return;
                 }
-                if !self.dirty() || self.confirm_close() {
+                if self.release_document(Resume::Exit) {
                     event_loop.exit();
                 }
             }
@@ -2051,19 +2168,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Moved(_) => self.sync_frame_target(),
             WindowEvent::DroppedFile(path) => {
-                if path
-                    .extension()
-                    .is_some_and(|extension| extension == "grana")
-                {
-                    self.session.begin_project(path);
-                } else if grana_session::is_image(&path) {
-                    self.session.begin_load(path);
-                } else {
-                    self.output = Some(format!(
-                        "{} is neither a supported image nor a grana project",
-                        path.display()
-                    ));
-                }
+                self.apply(vec![Command::OpenPath(path)]);
                 self.request_redraw();
             }
             WindowEvent::ModifiersChanged(modifiers) => {
@@ -2093,6 +2198,8 @@ impl ApplicationHandler for App {
                 self.repaint_at = Some(Instant::now() + STREAM_POLL);
             } else if self.export.running() {
                 self.repaint_at = Some(Instant::now() + EXPORT_POLL);
+            } else if self.capture.is_none() && self.session.dirty() {
+                self.repaint_at = Some(Instant::now() + self.autosave_wait());
             }
         }
         let Some(deadline) = self.repaint_at else {

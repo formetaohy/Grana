@@ -123,6 +123,12 @@ impl<'a> PlateView<'a> {
     }
 }
 
+pub struct RecoveryView<'a> {
+    pub name: &'a str,
+    pub detail: String,
+    pub age: u64,
+}
+
 pub struct SessionView<'a> {
     pub scene: Option<&'a Scene>,
     pub measure: &'a Measure,
@@ -137,6 +143,7 @@ pub struct SessionView<'a> {
     pub views: &'a [NamedView],
     pub recent: &'a [crate::RecentEntry],
     pub import: &'a [ImportNote],
+    pub recovery: Option<RecoveryView<'a>>,
     pub export: Export,
 }
 
