@@ -50,6 +50,19 @@ fn reads_imaris_points() {
 }
 
 #[test]
+fn reads_imaris_track_edges_between_filaments() {
+    let imported = imported(&fixture("imaris-tracks.ims")).expect("the track fixture opens");
+    let objects = imported.objects();
+    assert_eq!(objects.len(), 1, "the filament object is read");
+    let object = &objects[0];
+    assert_eq!(object.name(), "Filaments 1");
+    assert_eq!(object.kind(), ImportedKind::Filaments);
+    let frames = object.frames();
+    assert_eq!(frames.len(), 2, "both filmed frames carry a filament");
+    assert_eq!(object.links(), &[([0, 0], [1, 0])]);
+}
+
+#[test]
 fn reads_legacy_filaments_and_reports_a_block_model() {
     let imported = imported(&fixture("imaris-blocks.ims")).expect("the block fixture opens");
     let objects = imported.objects();

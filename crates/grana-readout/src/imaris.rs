@@ -91,6 +91,7 @@ impl Sample {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Surface {
+    id: Option<i64>,
     vertices: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     triangles: Vec<[u32; 3]>,
@@ -110,11 +111,16 @@ impl Surface {
             "every surface vertex carries a normal"
         );
         Self {
+            id: None,
             vertices,
             normals,
             triangles,
             intensities: Some(intensities),
         }
+    }
+
+    pub fn id(&self) -> Option<i64> {
+        self.id
     }
 
     pub fn vertices(&self) -> &[[f32; 3]] {
@@ -136,12 +142,17 @@ impl Surface {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Spot {
+    id: Option<i64>,
     center: [f32; 3],
     radius: f32,
     intensities: Option<Vec<Sample>>,
 }
 
 impl Spot {
+    pub fn id(&self) -> Option<i64> {
+        self.id
+    }
+
     pub fn center(&self) -> [f32; 3] {
         self.center
     }
@@ -157,6 +168,7 @@ impl Spot {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Filament {
+    id: Option<i64>,
     positions: Vec<[f32; 3]>,
     radii: Vec<f32>,
     edges: Vec<[u32; 2]>,
@@ -164,6 +176,10 @@ pub struct Filament {
 }
 
 impl Filament {
+    pub fn id(&self) -> Option<i64> {
+        self.id
+    }
+
     pub fn positions(&self) -> &[[f32; 3]] {
         &self.positions
     }
@@ -193,6 +209,7 @@ pub struct Object {
     name: String,
     kind: Kind,
     frames: Vec<(u32, Frame)>,
+    links: Vec<([u32; 2], [u32; 2])>,
 }
 
 impl Object {
@@ -206,6 +223,10 @@ impl Object {
 
     pub fn frames(&self) -> &[(u32, Frame)] {
         &self.frames
+    }
+
+    pub fn links(&self) -> &[([u32; 2], [u32; 2])] {
+        &self.links
     }
 }
 
@@ -295,11 +316,66 @@ fn read(
     if frames.is_empty() {
         return Err("the object holds no frame with geometry".to_string());
     }
+    let links = links(file, path, candidate, &frames);
     Ok(Some(Object {
         name: candidate.label(file),
         kind,
         frames,
+        links,
     }))
+}
+
+fn links(
+    file: &File,
+    path: &Path,
+    candidate: &Group,
+    frames: &[(u32, Frame)],
+) -> Vec<([u32; 2], [u32; 2])> {
+    let mut slots = BTreeMap::new();
+    for (time, frame) in frames {
+        for (index, id) in frame_ids(frame).into_iter().enumerate() {
+            if let Some(id) = id {
+                slots.insert(id, [*time, index as u32]);
+            }
+        }
+    }
+    if slots.is_empty() {
+        return Vec::new();
+    }
+    let mut pairs = Vec::new();
+    for group in &candidate.paths {
+        let vertices = format!("{group}/GraphTracks/GraphVertex");
+        if let Ok(table) = read_table(file, path, &vertices, 4) {
+            for row in 0..table.rows {
+                let values = table.row(row);
+                pairs.push([values[0] as i64, values[2] as i64]);
+            }
+            continue;
+        }
+        let edges = format!("{group}/TrackEdge0");
+        if let Some(records) = records(file, &edges)
+            && let (Some(first), Some(second)) = (
+                column(&records, "ID_ObjectA"),
+                column(&records, "ID_ObjectB"),
+            )
+        {
+            for (first, second) in first.iter().zip(&second) {
+                pairs.push([*first as i64, *second as i64]);
+            }
+        }
+    }
+    pairs
+        .into_iter()
+        .filter_map(|[source, target]| Some((*slots.get(&source)?, *slots.get(&target)?)))
+        .collect()
+}
+
+fn frame_ids(frame: &Frame) -> Vec<Option<i64>> {
+    match frame {
+        Frame::Surfaces(surfaces) => surfaces.iter().map(Surface::id).collect(),
+        Frame::Spots(spots) => spots.iter().map(Spot::id).collect(),
+        Frame::Filaments(filaments) => filaments.iter().map(Filament::id).collect(),
+    }
 }
 
 fn center(file: &File) -> [f32; 3] {
@@ -653,6 +729,7 @@ fn surfaces(
                     ]
                 })
                 .collect(),
+            id: None,
             intensities: None,
         };
         if !surface.vertices.is_empty()
@@ -784,6 +861,7 @@ fn spots(
                     values[2] as f32 - center[2],
                 ],
                 radius: radius as f32,
+                id: None,
                 intensities: None,
             });
     }
@@ -976,6 +1054,7 @@ fn points(file: &File, group: &str, center: [f32; 3]) -> Result<Vec<(u32, Frame)
         frames.entry(time_of(times[row])).or_default().push(Spot {
             center,
             radius: radius as f32,
+            id: None,
             intensities: None,
         });
     }
@@ -1025,6 +1104,7 @@ fn build(positions: Vec<[f32; 3]>, radii: Vec<f32>, edges: Vec<[u32; 2]>) -> Opt
         positions,
         radii,
         edges: kept,
+        id: None,
         intensities: None,
     })
 }
@@ -1269,6 +1349,7 @@ fn attach(
                 for surface in &mut surfaces {
                     surface.intensities =
                         statistics.and_then(|held| held.samples(time, global, ids));
+                    surface.id = ids.and_then(|held| held.get(global).copied());
                     global += 1;
                 }
                 Frame::Surfaces(surfaces)
@@ -1276,6 +1357,7 @@ fn attach(
             Frame::Spots(mut spots) => {
                 for spot in &mut spots {
                     spot.intensities = statistics.and_then(|held| held.samples(time, global, ids));
+                    spot.id = ids.and_then(|held| held.get(global).copied());
                     global += 1;
                 }
                 Frame::Spots(spots)
@@ -1284,6 +1366,7 @@ fn attach(
                 for filament in &mut filaments {
                     filament.intensities =
                         statistics.and_then(|held| held.samples(time, global, ids));
+                    filament.id = ids.and_then(|held| held.get(global).copied());
                     global += 1;
                 }
                 Frame::Filaments(filaments)

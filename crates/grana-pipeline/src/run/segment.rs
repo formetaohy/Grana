@@ -63,11 +63,7 @@ pub(super) fn segmenter(
         params.tile_overlap(),
         params.slice_overlap(),
     );
-    let version = match params.model() {
-        grana_scene::SegmentModel::Cpsam => grana_weight::ModelVersion::Cpsam,
-        grana_scene::SegmentModel::CpsamV2 => grana_weight::ModelVersion::CpsamV2,
-    };
-    let path = match grana_weight::weights(version, cancel, &mut |done, total| {
+    let path = match grana_weight::weights(params.model(), cancel, &mut |done, total| {
         sink(Event::Progress {
             time: 0,
             done: done as usize,

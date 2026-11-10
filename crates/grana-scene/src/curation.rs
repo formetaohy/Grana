@@ -1,5 +1,7 @@
 use grana_object::{ObjectAnchor, assign};
 
+use crate::revision::Revision;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrackAnchor {
     time: u32,
@@ -53,12 +55,10 @@ impl TrackEdit {
 
 #[derive(Clone, Debug, Default)]
 pub struct Curation {
-    expected: Vec<Option<usize>>,
     removed: Vec<Vec<ObjectAnchor>>,
     hidden: Vec<Vec<ObjectAnchor>>,
     edits: Vec<TrackEdit>,
-    pruned: bool,
-    produced: Vec<bool>,
+    applied: Vec<Revision>,
     dropped: usize,
     pending: usize,
 }
@@ -70,45 +70,22 @@ pub(crate) struct Kept {
 
 impl PartialEq for Curation {
     fn eq(&self, other: &Self) -> bool {
-        self.expected == other.expected
-            && self.removed == other.removed
-            && self.hidden == other.hidden
-            && self.edits == other.edits
+        self.removed == other.removed && self.hidden == other.hidden && self.edits == other.edits
     }
 }
 
 impl Curation {
     pub fn restored(
-        expected: &[Option<usize>],
+        frames: usize,
         removed: &[Vec<ObjectAnchor>],
         hidden: &[Vec<ObjectAnchor>],
         edits: &[TrackEdit],
     ) -> Result<Self, String> {
-        if removed.len() != expected.len() {
+        if removed.len() != frames {
             return Err("the manual removals cover another set of frames".to_string());
         }
-        if !hidden.is_empty() && hidden.len() != expected.len() {
+        if !hidden.is_empty() && hidden.len() != frames {
             return Err("the hidden objects cover another set of frames".to_string());
-        }
-        for (time, objects) in removed.iter().enumerate() {
-            if objects.is_empty() {
-                continue;
-            }
-            if expected[time].is_none() {
-                return Err(format!(
-                    "the manual removals of frame {time} record no object count"
-                ));
-            }
-        }
-        for (time, objects) in hidden.iter().enumerate() {
-            if objects.is_empty() {
-                continue;
-            }
-            if expected.get(time).is_none_or(Option::is_none) {
-                return Err(format!(
-                    "the hidden objects of frame {time} record no object count"
-                ));
-            }
         }
         for edit in edits {
             let [first, second] = edit.nodes();
@@ -118,58 +95,22 @@ impl Curation {
                 return Err("a track join names two objects of one frame".to_string());
             }
             for node in [first, second] {
-                match expected.get(node.time as usize).copied().flatten() {
-                    Some(count) if node.object >= count => {
-                        return Err(format!(
-                            "a track edit names object {} of a frame that holds {count} objects",
-                            node.object
-                        ));
-                    }
-                    Some(_) => {}
-                    None => {
-                        return Err(format!(
-                            "a track edit names frame {} without an object count",
-                            node.time
-                        ));
-                    }
+                if node.time as usize >= frames {
+                    return Err(format!(
+                        "a track edit names the frame {} of {frames}",
+                        node.time
+                    ));
                 }
             }
         }
         Ok(Self {
-            expected: expected.to_vec(),
             removed: removed.to_vec(),
             hidden: hidden.to_vec(),
             edits: edits.to_vec(),
-            pruned: true,
-            produced: vec![false; expected.len()],
+            applied: vec![Revision::ZERO; frames],
             dropped: 0,
             pending: 0,
         })
-    }
-
-    pub fn applied(&self) -> bool {
-        self.pruned
-    }
-
-    pub(crate) fn set_applied(&mut self) {
-        self.pruned = true;
-        self.produced.clear();
-    }
-
-    pub(crate) fn set_produced(&mut self, time: u32) {
-        self.pruned = false;
-        if self.produced.len() <= time as usize {
-            self.produced.resize(time as usize + 1, false);
-        }
-        self.produced[time as usize] = true;
-    }
-
-    pub(crate) fn produced(&self, time: u32) -> bool {
-        self.produced.get(time as usize).copied().unwrap_or(false)
-    }
-
-    pub fn expected(&self) -> &[Option<usize>] {
-        &self.expected
     }
 
     pub fn removed(&self) -> &[Vec<ObjectAnchor>] {
@@ -184,6 +125,10 @@ impl Curation {
         &self.edits
     }
 
+    pub fn frames(&self) -> usize {
+        self.removed.len()
+    }
+
     pub fn dropped(&self) -> usize {
         self.dropped
     }
@@ -194,6 +139,20 @@ impl Curation {
 
     pub(crate) fn set_pending(&mut self, pending: usize) {
         self.pending = pending;
+    }
+
+    pub(crate) fn applied(&self, time: u32) -> Revision {
+        self.applied
+            .get(time as usize)
+            .copied()
+            .unwrap_or(Revision::ZERO)
+    }
+
+    pub(crate) fn set_applied(&mut self, time: u32, stamp: Revision) {
+        if self.applied.len() <= time as usize {
+            self.applied.resize(time as usize + 1, Revision::ZERO);
+        }
+        self.applied[time as usize] = stamp;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -214,24 +173,26 @@ impl Curation {
         self.edits.len()
     }
 
-    pub(crate) fn seed(&mut self, frames: usize, counts: impl Fn(usize) -> Option<usize>) {
-        if !self.expected.is_empty() {
+    pub(crate) fn seed(&mut self, frames: usize) {
+        if !self.removed.is_empty() {
+            if self.hidden.len() != frames {
+                self.hidden = vec![Vec::new(); frames];
+            }
             return;
         }
-        self.expected = (0..frames).map(counts).collect();
         self.removed = vec![Vec::new(); frames];
         self.hidden = vec![Vec::new(); frames];
-        self.produced = vec![false; frames];
+        self.applied = vec![Revision::ZERO; frames];
     }
 
     pub(crate) fn record_hidden(&mut self, time: u32, anchors: Vec<ObjectAnchor>) {
         let time = time as usize;
         assert!(
-            time < self.expected.len(),
+            time < self.removed.len(),
             "a hidden frame lies inside the seeded frames"
         );
-        if self.hidden.len() != self.expected.len() {
-            self.hidden = vec![Vec::new(); self.expected.len()];
+        if self.hidden.len() != self.removed.len() {
+            self.hidden = vec![Vec::new(); self.removed.len()];
         }
         self.hidden[time] = anchors;
     }
@@ -260,7 +221,7 @@ impl Curation {
     pub(crate) fn record(&mut self, time: u32, keep: &[bool], anchors: &[ObjectAnchor]) {
         let time = time as usize;
         assert!(
-            time < self.expected.len(),
+            time < self.removed.len(),
             "a curated frame lies inside the seeded frames"
         );
         assert_eq!(
@@ -306,23 +267,8 @@ impl Curation {
     }
 
     pub(crate) fn combined(&self, other: &Self) -> Self {
-        let frames = self
-            .removed
-            .len()
-            .max(other.removed.len())
-            .max(self.hidden.len())
-            .max(other.hidden.len());
+        let frames = self.removed.len().max(other.removed.len());
         Self {
-            expected: (0..frames)
-                .map(|time| {
-                    let left = self.expected.get(time).copied().flatten();
-                    let right = other.expected.get(time).copied().flatten();
-                    match (left, right) {
-                        (Some(left), Some(right)) => Some(left + right),
-                        (left, right) => left.or(right),
-                    }
-                })
-                .collect(),
             removed: (0..frames)
                 .map(|time| {
                     let mut anchors = self.removed.get(time).cloned().unwrap_or_default();
@@ -346,8 +292,7 @@ impl Curation {
                 }
                 edits
             },
-            pruned: self.pruned && other.pruned,
-            produced: vec![false; frames],
+            applied: vec![Revision::ZERO; frames],
             dropped: self.dropped + other.dropped,
             pending: 0,
         }

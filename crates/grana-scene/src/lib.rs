@@ -53,7 +53,7 @@ pub use relation::Relation;
 pub use revision::{Revision, Revisions};
 pub use scene::{Item, Scene, Selection};
 pub use seed::Seeds;
-pub use segment::{SEGMENT_FIELDS, SegmentModel, SegmentParams};
+pub use segment::{License, SEGMENT_FIELDS, SegmentModel, SegmentParams};
 pub use slug::slug;
 pub use state::{ChannelState, ItemState, RelationState, SceneState, SelectionState, SetState};
 pub use track_color::TrackColor;

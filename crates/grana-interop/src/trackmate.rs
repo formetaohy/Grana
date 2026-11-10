@@ -321,8 +321,19 @@ pub fn write(path: &Path, lineage: &Lineage, header: &Header) -> Result<(), Erro
     }
     write(Event::End(BytesEnd::new("SpotFeatures")))?;
     write(Event::Empty(BytesStart::new("EdgeFeatures")))?;
-    write(Event::Empty(BytesStart::new("TrackFeatures")))?;
+    write(Event::Start(element("TrackFeatures", &[])))?;
+    for feature in [
+        ("TRACK_DURATION", "Duration", "TIME", false),
+        ("TRACK_LENGTH", "Length", "LENGTH", false),
+        ("TRACK_DISPLACEMENT", "Displacement", "LENGTH", false),
+        ("TRACK_SPEED", "Speed", "VELOCITY", false),
+        ("TRACK_STRAIGHTNESS", "Straightness", "NONE", false),
+    ] {
+        write(Event::Empty(feature_declaration(feature)))?;
+    }
+    write(Event::End(BytesEnd::new("TrackFeatures")))?;
     write(Event::End(BytesEnd::new("FeatureDeclarations")))?;
+    let set = lineage.tracks(header.interval)?;
     let spots = lineage.len().to_string();
     write(Event::Start(element("AllSpots", &[("nspots", &spots)])))?;
     let mut index = 0usize;
@@ -342,6 +353,15 @@ pub fn write(path: &Path, lineage: &Lineage, header: &Header) -> Result<(), Erro
         let id = track.to_string();
         let name = format!("Track_{track}");
         let count = path.nodes().len().to_string();
+        let statistics = set
+            .track(track)
+            .expect("an exported path names a track of the set")
+            .statistics(header.interval);
+        let duration = statistics.duration().to_string();
+        let length = statistics.length().to_string();
+        let displacement = statistics.displacement().to_string();
+        let speed = statistics.speed().to_string();
+        let straightness = statistics.straightness().to_string();
         write(Event::Start(element(
             "Track",
             &[
@@ -349,6 +369,11 @@ pub fn write(path: &Path, lineage: &Lineage, header: &Header) -> Result<(), Erro
                 ("name", &name),
                 ("NUMBER_SPOTS", &count),
                 ("NUMBER_GAPS", "0"),
+                ("TRACK_DURATION", &duration),
+                ("TRACK_LENGTH", &length),
+                ("TRACK_DISPLACEMENT", &displacement),
+                ("TRACK_SPEED", &speed),
+                ("TRACK_STRAIGHTNESS", &straightness),
             ],
         )))?;
         if let Some(parent) = path.parent() {

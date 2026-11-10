@@ -748,14 +748,10 @@ impl Builder<'_> {
         let Some(curation) = curation else {
             return Ok(());
         };
-        if curation.expected.len() != self.scene.dataset.frame_count() as usize {
-            return Err(ProtocolError::Invalid(format!(
-                "the manual edits of {name} cover {} frames and the dataset holds {}",
-                curation.expected.len(),
-                self.scene.dataset.frame_count()
-            )));
-        }
-        let curation = curation.curation().map_err(ProtocolError::Invalid)?;
+        let frames = self.scene.dataset.frame_count() as usize;
+        let curation = curation.curation(frames).map_err(|detail| {
+            ProtocolError::Invalid(format!("the manual edits of {name} {detail}"))
+        })?;
         self.scene.set_curation(id, curation);
         Ok(())
     }

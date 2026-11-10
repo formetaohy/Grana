@@ -3364,6 +3364,7 @@ dependencies = [
  "grana-image",
  "grana-measure",
  "grana-mesh",
+ "grana-model",
  "grana-object",
  "grana-optics",
  "grana-pipeline",
@@ -3594,6 +3595,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "grana-model"
+version = "0.1.1"
+
+[[package]]
 name = "grana-net"
 version = "0.1.1"
 dependencies = [
@@ -3764,6 +3769,7 @@ dependencies = [
  "grana-display",
  "grana-geometry",
  "grana-measure",
+ "grana-model",
  "grana-object",
  "grana-optics",
  "grana-profile",
@@ -3865,6 +3871,7 @@ name = "grana-weight"
 version = "0.1.1"
 dependencies = [
  "grana-dir",
+ "grana-model",
  "sha2",
  "thiserror 2.0.21",
  "ureq 3.5.1",

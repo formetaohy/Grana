@@ -2,11 +2,14 @@ use grana_weight::{License, ModelVersion, license};
 
 #[test]
 fn licenses_every_model_asset() {
-    let expected = if cfg!(feature = "commercial") {
-        None
-    } else {
-        Some(License::NonCommercial)
-    };
-    assert_eq!(license(ModelVersion::Cpsam), expected);
-    assert_eq!(license(ModelVersion::CpsamV2), expected);
+    for model in ModelVersion::ALL {
+        assert_eq!(model.license(), License::NonCommercial);
+        let expected = model.licensed().then_some(License::NonCommercial);
+        assert_eq!(license(model), expected);
+    }
+    assert_eq!(
+        ModelVersion::preferred().is_some(),
+        !cfg!(feature = "commercial"),
+        "a commercial build carries no commercially licensed weight yet"
+    );
 }

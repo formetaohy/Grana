@@ -19,5 +19,8 @@ grana-session = { workspace = true }
 grana-ui = { workspace = true }
 grana-volume = { workspace = true }
 
+[features]
+commercial = ["grana-scene/commercial", "grana-session/commercial"]
+
 [lints]
 workspace = true

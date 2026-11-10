@@ -249,7 +249,7 @@ impl SceneState {
         {
             return Err(fault("the hidden objects cover another set of frames"));
         }
-        if !set.curation.is_empty() && set.curation.expected().len() != set.frames.len() {
+        if !set.curation.is_empty() && set.curation.frames() != set.frames.len() {
             return Err(fault("the manual edits cover another set of frames"));
         }
         if let Some(coloc) = &set.object_coloc

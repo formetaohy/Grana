@@ -161,11 +161,16 @@ fn add_menu<'a>(
     } else {
         Message::Command(Command::AddSegment)
     };
+    let licensed = grana_scene::SegmentModel::preferred();
+    let (label, message) = match licensed {
+        Some(model) => (format!("Segments · {}", model.license().name()), message),
+        None => ("Segments · unlicensed".to_string(), Message::Noop),
+    };
     rows.push(action_row(
         ctx,
         "add.segments",
         Icon::Sparkles,
-        "Segments",
+        &label,
         message,
     ));
     if !state.labels.is_empty() {
@@ -1067,9 +1072,11 @@ fn origin<'a>(
     };
     let text = match set.provenance() {
         Provenance::Detection => return None,
-        Provenance::Segmented { params } => {
-            format!("Segmented with {}", params.model().label())
-        }
+        Provenance::Segmented { params } => format!(
+            "Segmented with {} · {} weights",
+            params.model().label(),
+            params.model().license().name()
+        ),
         Provenance::Imported { label } => format!("Imported from {label}"),
         Provenance::Interop { file } => format!("Imported from {file}"),
         Provenance::Attached { file, .. } => format!("Attached from {file}"),
@@ -1165,25 +1172,50 @@ fn params<'a>(
     let params = set.params();
     let mut children = Vec::new();
     if let Some(segment) = set.provenance().segment() {
-        let models = grana_scene::SegmentModel::ALL
-            .iter()
-            .map(|model| (*model, model.label().to_string()))
+        let models = grana_scene::SegmentModel::available()
+            .map(|model| {
+                (
+                    model,
+                    format!("{} · {}", model.label(), model.license().name()),
+                )
+            })
             .collect::<Vec<_>>();
         let selected = segment.clone();
-        children.push(crate::inspector::form_combo(
-            ctx,
-            &format!("object.{}.segment.model", id.raw()),
-            "Model",
-            &models,
-            Some(segment.model()),
-            200.0,
-            move |model| {
-                Message::Command(Command::SetSegment {
-                    set: id,
-                    params: selected.clone().with_model(model),
-                })
-            },
-        ));
+        if models.is_empty() {
+            children.push(crate::view::caption(
+                ctx,
+                "This build licenses no segmentation weights.",
+            ));
+        } else if models.iter().any(|(model, _)| *model == segment.model()) {
+            children.push(crate::inspector::form_combo(
+                ctx,
+                &format!("object.{}.segment.model", id.raw()),
+                "Model",
+                &models,
+                Some(segment.model()),
+                220.0,
+                move |model| {
+                    Message::Command(Command::SetSegment {
+                        set: id,
+                        params: selected.clone().with_model(model),
+                    })
+                },
+            ));
+        } else {
+            children.push(crate::view::labelled(
+                ctx,
+                "Model",
+                &format!(
+                    "{} · {} weights",
+                    segment.model().label(),
+                    segment.model().license().name()
+                ),
+            ));
+            children.push(crate::view::caption(
+                ctx,
+                "This build licenses no weights for the model the object set was segmented with.",
+            ));
+        }
         for (index, field) in SEGMENT_FIELDS.iter().enumerate() {
             let (minimum, maximum) = bounds(field, voxel, world);
             let value = segment.field(index).clamp(minimum, maximum);

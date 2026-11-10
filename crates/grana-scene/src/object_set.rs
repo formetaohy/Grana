@@ -1,4 +1,4 @@
-﻿use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use grana_measure::{
     ChildField, ChildMetric, Classifier, Measurement, ObjectColoc, RelationField, TrackMeasurement,
@@ -633,7 +633,7 @@ impl ObjectSet {
             .iter()
             .map(|slot| slot.data.as_deref().map(ObjectFrame::object_count))
             .collect::<Vec<_>>();
-        self.curation.seed(counts.len(), |time| counts[time]);
+        self.curation.seed(counts.len());
         self.curation.record_hidden(time, anchors);
     }
 
@@ -1025,7 +1025,6 @@ impl ObjectSet {
             "a restored track layer carries track parameters"
         );
         let frame_count = frames.len();
-        let applied = curation.applied();
         let mut set = Self {
             id: ObjectSetId::new(id),
             key,
@@ -1104,6 +1103,10 @@ impl ObjectSet {
                 set.install_shared(time as u32, frame, stamps.mint());
             }
         }
+        for time in 0..set.frames.len() {
+            let stamp = set.frames[time].stamp;
+            set.curation.set_applied(time as u32, stamp);
+        }
         if let Some(coloc) = object_coloc {
             assert_eq!(
                 coloc.frames().len(),
@@ -1122,9 +1125,6 @@ impl ObjectSet {
             set.object_coloc = Some(coloc);
         }
         set.restore_hidden(hidden);
-        if applied {
-            set.curation.set_applied();
-        }
         if let Some(channels) = set
             .frames
             .iter()
@@ -1373,15 +1373,10 @@ impl ObjectSet {
         if keep.iter().all(|kept| *kept) {
             return Ok(false);
         }
-        if !self.curation.is_empty() && !self.curation.applied() {
+        if !self.curation.is_empty() {
             self.apply_curation(stamp);
         }
-        let counts = self
-            .frames
-            .iter()
-            .map(|slot| slot.data.as_deref().map(ObjectFrame::object_count))
-            .collect::<Vec<_>>();
-        self.curation.seed(counts.len(), |time| counts[time]);
+        self.curation.seed(self.frames.len());
         self.curation.record(time, keep, &frame.anchors());
         let removed = keep
             .iter()
@@ -1391,7 +1386,6 @@ impl ObjectSet {
             .collect::<Vec<_>>();
         let pruned = frame.retain(keep).map_err(|error| error.to_string())?;
         self.install_retained(time, pruned, &removed, stamp);
-        self.curation.set_applied();
         Ok(true)
     }
 
@@ -1409,16 +1403,14 @@ impl ObjectSet {
     }
 
     pub(crate) fn apply_curation(&mut self, stamp: Revision) -> usize {
-        if self.curation.is_empty() || self.curation.applied() {
-            return 0;
-        }
         let mut keeps = Vec::new();
         let mut pending = 0;
         for time in 0..self.frames.len() {
-            if !self.curation.produced(time as u32) {
+            let slot = &self.frames[time];
+            if self.curation.applied(time as u32) == slot.stamp {
                 continue;
             }
-            let anchors = self.frames[time]
+            let anchors = slot
                 .data
                 .as_deref()
                 .map_or_else(Vec::new, ObjectFrame::anchors);
@@ -1446,9 +1438,12 @@ impl ObjectSet {
             };
             self.install_retained(time, pruned, &removed, stamp);
         }
+        for time in 0..self.frames.len() {
+            let stamp = self.frames[time].stamp;
+            self.curation.set_applied(time as u32, stamp);
+        }
         self.reapply_hidden();
         self.curation.set_pending(pending);
-        self.curation.set_applied();
         applied
     }
 
@@ -1553,6 +1548,7 @@ impl ObjectSet {
         if !done {
             return false;
         }
+        self.curation.seed(self.frames.len());
         self.curation.record_edit(edit);
         self.revision = stamp;
         self.document = self.document.next();
@@ -1920,7 +1916,6 @@ impl ObjectSet {
         self.hidden.clear();
         slot.stamp = stamp;
         slot.data = Some(frame);
-        self.curation.set_produced(time);
     }
 
     pub(crate) fn install_optional(
@@ -1947,7 +1942,6 @@ impl ObjectSet {
         self.hidden.clear();
         slot.stamp = stamp;
         slot.data = frame;
-        self.curation.set_produced(time);
     }
 
     pub(crate) fn clear(&mut self, stamp: Revision) {

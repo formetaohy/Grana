@@ -213,6 +213,99 @@ impl TrackSet {
         self.frame_interval
     }
 
+    /// Builds the set from the edges a file records between detections: every edge joins a node of
+    /// an earlier frame to a node of a later one, and a node follows at most one predecessor and
+    /// leads to at most two daughters. `nodes` lists every detection as `(time, object)` together
+    /// with the centroid the track tube passes through.
+    pub fn linked(
+        frame_interval: f32,
+        nodes: &[(u32, usize, [f32; 3])],
+        edges: &[([u32; 2], [u32; 2])],
+    ) -> Result<Option<Self>, String> {
+        if nodes.is_empty() {
+            return Ok(None);
+        }
+        let mut slots = std::collections::HashMap::with_capacity(nodes.len());
+        for (slot, (time, object, _)) in nodes.iter().enumerate() {
+            if slots.insert((*time, *object), slot).is_some() {
+                return Err(format!(
+                    "the detection {object} of the frame {time} appears twice"
+                ));
+            }
+        }
+        let mut successors: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+        let mut predecessors: Vec<Option<usize>> = vec![None; nodes.len()];
+        for (source, target) in edges {
+            let (Some(source), Some(target)) = (
+                slots.get(&(source[0], source[1] as usize)).copied(),
+                slots.get(&(target[0], target[1] as usize)).copied(),
+            ) else {
+                continue;
+            };
+            if source == target || nodes[source].0 >= nodes[target].0 {
+                continue;
+            }
+            if let Some(previous) = predecessors[target]
+                && previous != source
+            {
+                return Err(format!(
+                    "the detection {} of the frame {} follows both {} and {}",
+                    target, nodes[target].0, previous, source
+                ));
+            }
+            predecessors[target] = Some(source);
+            if !successors[source].contains(&target) {
+                successors[source].push(target);
+            }
+        }
+        for next in &successors {
+            if next.len() > 2 {
+                return Err(format!("a detection links to {} daughters", next.len()));
+            }
+        }
+        let mut tracks: Vec<Track> = Vec::new();
+        let mut visited = vec![false; nodes.len()];
+        let mut pending = predecessors
+            .iter()
+            .enumerate()
+            .filter(|(_, previous)| previous.is_none())
+            .map(|(slot, _)| (slot, None))
+            .collect::<Vec<_>>();
+        pending.reverse();
+        while let Some((start, parent)) = pending.pop() {
+            let mut held = Vec::new();
+            let mut current = start;
+            let mut daughters = Vec::new();
+            loop {
+                if visited[current] {
+                    return Err("a detection belongs to two tracks".to_string());
+                }
+                visited[current] = true;
+                let (time, object, centroid) = nodes[current];
+                held.push(TrackNode::new(time, object, centroid));
+                match successors[current].as_slice() {
+                    [] => break,
+                    [only] => current = *only,
+                    [first, second] => {
+                        daughters = vec![*first, *second];
+                        break;
+                    }
+                    _ => unreachable!("a detection links to at most two daughters"),
+                }
+            }
+            let index = tracks.len() as u32;
+            tracks.push(Track::new(parent, held));
+            daughters.reverse();
+            for daughter in daughters {
+                pending.push((daughter, Some(index)));
+            }
+        }
+        if visited.iter().any(|visited| !visited) {
+            return Err("the track edges close a cycle".to_string());
+        }
+        Self::try_new(frame_interval, tracks).map(Some)
+    }
+
     pub fn tracks(&self) -> &[Track] {
         &self.tracks
     }

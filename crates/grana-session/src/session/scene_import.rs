@@ -142,8 +142,31 @@ impl Session {
                     scene
                         .objects
                         .attached(kind, object.name(), file, intensities, &scene.dataset);
+                let mut nodes = Vec::new();
+                for (time, frame) in &loaded {
+                    nodes.extend(
+                        frame
+                            .centroids()
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, centroid)| (*time, index, centroid)),
+                    );
+                }
                 for (time, frame) in loaded {
                     scene.objects.install(set, time, frame);
+                }
+                if !object.links().is_empty() {
+                    match grana_object::TrackSet::linked(
+                        scene.dataset.frame_interval(),
+                        &nodes,
+                        object.links(),
+                    ) {
+                        Ok(Some(tracks)) => {
+                            scene.objects.install_tracks(set, tracks);
+                        }
+                        Ok(None) => {}
+                        Err(detail) => failed.push(ImportNote::new(object.name(), &detail)),
+                    }
                 }
             }
         }

@@ -1,6 +1,6 @@
 use super::*;
 
-use grana_scene::SegmentParams;
+use grana_scene::{SegmentModel, SegmentParams};
 
 use super::edit::{MaskPaint, SurfaceEditRequest};
 
@@ -57,9 +57,15 @@ impl Session {
                 }
             }
             Command::AddSegment => {
+                let Some(model) = SegmentModel::preferred() else {
+                    self.message = Some(Message::error(
+                        "no segmentation model is licensed for this build",
+                    ));
+                    return Effects::default();
+                };
                 if let Some(scene) = self.scene.as_mut() {
                     let channel = scene.selected;
-                    scene.add_segment(channel, SegmentParams::default());
+                    scene.add_segment(channel, SegmentParams::default().with_model(model));
                 }
             }
             Command::SetSegment { set, params } => {

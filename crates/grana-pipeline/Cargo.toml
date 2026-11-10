@@ -35,7 +35,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [features]
-commercial = ["grana-weight/commercial"]
+commercial = ["grana-weight/commercial", "grana-scene/commercial"]
 
 [lints]
 workspace = true

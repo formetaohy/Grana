@@ -9,8 +9,10 @@ use grana_object::{
 
 const SPOT_STEP: f32 = 8.0;
 const SURFACE_STEP: f32 = 12.0;
+const FILAMENT_STEP: f32 = 12.0;
 const SPOT_THICKNESS: f32 = 1.0;
 const SURFACE_THICKNESS: f32 = 2.0;
+const FILAMENT_THICKNESS: f32 = 1.0;
 const MAX_GAP: u32 = 1;
 const DIVISION_SCALE: f32 = 2.0;
 const SPOT_DIAMETER: f32 = 4.0;
@@ -184,7 +186,7 @@ impl ObjectKind {
     }
 
     pub fn trackable(self) -> bool {
-        !matches!(self, Self::Filaments)
+        true
     }
 
     pub fn measurements(self, channels: usize) -> Vec<Measurement> {
@@ -231,7 +233,7 @@ impl ObjectKind {
         let (step, thickness) = match self {
             Self::Spots => (SPOT_STEP, SPOT_THICKNESS),
             Self::Surfaces => (SURFACE_STEP, SURFACE_THICKNESS),
-            Self::Filaments => return None,
+            Self::Filaments => (FILAMENT_STEP, FILAMENT_THICKNESS),
         };
         let step = step * voxel;
         Some(TrackStyle::new(

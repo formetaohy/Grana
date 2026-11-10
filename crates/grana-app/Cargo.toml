@@ -30,7 +30,7 @@ wgpu = { workspace = true }
 winit = { workspace = true }
 
 [features]
-commercial = ["grana-session/commercial"]
+commercial = ["grana-session/commercial", "grana-editor/commercial"]
 
 [lints]
 workspace = true

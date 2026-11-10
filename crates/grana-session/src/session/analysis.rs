@@ -296,7 +296,9 @@ impl Session {
                 .scene
                 .as_ref()
                 .and_then(|scene| scene.objects.get(set))
-                .is_some_and(|object| object.provenance().is_interop());
+                .is_some_and(|object| {
+                    object.provenance().is_interop() || object.tracks().is_some()
+                });
             if !imported_tracks {
                 self.start_tracks(set);
             }

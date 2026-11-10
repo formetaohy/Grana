@@ -354,6 +354,36 @@ fn imports_imaris_filaments() {
 }
 
 #[test]
+fn imports_imaris_filament_tracks() {
+    let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/imaris-tracks.ims");
+    let mut session = Session::new();
+    session.begin_load(fixture);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.scene().is_none() {
+        assert!(Instant::now() < deadline, "the Imaris fixture never opens");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let scene = session.scene().expect("the fixture opens");
+    let set = scene
+        .objects
+        .iter()
+        .next()
+        .expect("the filament object is attached");
+    assert_eq!(set.kind(), ObjectKind::Filaments);
+    let tracks = set
+        .tracks()
+        .expect("the Imaris track edges become a track set");
+    assert_eq!(tracks.set().len(), 1, "the two filaments share one track");
+    assert_eq!(tracks.set().node_count(), 2);
+    let track = tracks.set().track(0).expect("the track is recorded");
+    assert_eq!(track.start(), 0);
+    assert_eq!(track.end(), 1);
+    assert!(tracks.set().statistics(0).is_some());
+}
+
+#[test]
 fn measures_imported_objects_without_statistics() {
     let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/imaris-no-statistics.ims");

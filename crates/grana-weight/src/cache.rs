@@ -4,7 +4,7 @@ use crate::Error;
 use crate::model::Asset;
 
 pub(crate) fn stored(asset: &Asset) -> Result<PathBuf, Error> {
-    Ok(directory()?.join(asset.version.file()))
+    Ok(directory()?.join(asset.version.name()))
 }
 
 fn directory() -> Result<PathBuf, Error> {

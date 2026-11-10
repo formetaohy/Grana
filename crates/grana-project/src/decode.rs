@@ -698,15 +698,6 @@ impl Decode for Provenance {
 
 impl Decode for Curation {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let frames = reader.count(2)?;
-        let mut expected = Vec::with_capacity(frames);
-        for _ in 0..frames {
-            expected.push(match reader.u8()? {
-                0 => None,
-                1 => Some(reader.count(1)?),
-                _ => return Err(FAULT_TAG),
-            });
-        }
         let removed_frames = reader.count(8)?;
         let mut removed = Vec::with_capacity(removed_frames);
         for _ in 0..removed_frames {
@@ -722,7 +713,7 @@ impl Decode for Curation {
         for _ in 0..edits {
             edits_vec.push(TrackEdit::decode(reader)?);
         }
-        Curation::restored(&expected, &removed, &hidden, &edits_vec).map_err(|_| FAULT_VALUE)
+        Curation::restored(removed_frames, &removed, &hidden, &edits_vec).map_err(|_| FAULT_VALUE)
     }
 }
 
@@ -893,6 +884,9 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
                 return Err(FAULT_VALUE);
             }
             let model = grana_scene::SegmentModel::from_index(model).ok_or(FAULT_VALUE)?;
+            if !model.licensed() {
+                return Err(FAULT_VALUE);
+            }
             Ok(Provenance::Segmented {
                 params: grana_scene::SegmentParams::with_settings(
                     cellprob,

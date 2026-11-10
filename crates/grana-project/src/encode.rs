@@ -465,16 +465,6 @@ impl Encode for LabelExport {
 
 impl Encode for Curation {
     fn encode(&self, writer: &mut Encoder<'_>) {
-        writer.count(self.expected().len());
-        for value in self.expected() {
-            match value {
-                None => writer.u8(0),
-                Some(count) => {
-                    writer.u8(1);
-                    writer.count(*count);
-                }
-            }
-        }
         writer.count(self.removed().len());
         for frame in self.removed() {
             encode_anchors(frame, writer);

@@ -92,7 +92,10 @@ fn default_azimuth() -> f32 {
 }
 
 fn default_segment_model() -> String {
-    grana_scene::SegmentModel::default().name().to_string()
+    grana_scene::SegmentModel::preferred()
+        .expect("a build licenses at least one segmentation model")
+        .name()
+        .to_string()
 }
 
 fn default_elevation() -> f32 {
@@ -979,7 +982,6 @@ pub struct FilterSpec {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CurationSpec {
-    pub expected: Vec<Option<usize>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed: Vec<RemovalSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1058,32 +1060,29 @@ impl CurationSpec {
             .collect();
         let edits = curation.edits().iter().map(EditSpec::of).collect();
         Some(Self {
-            expected: curation.expected().to_vec(),
             removed,
             hidden,
             edits,
         })
     }
 
-    pub fn curation(&self) -> Result<grana_scene::Curation, String> {
-        let mut removed = vec![Vec::new(); self.expected.len()];
+    pub fn curation(&self, frames: usize) -> Result<grana_scene::Curation, String> {
+        let mut removed = vec![Vec::new(); frames];
         for spec in &self.removed {
             let Some(slot) = removed.get_mut(spec.frame as usize) else {
                 return Err(format!(
-                    "the protocol removes objects from the frame {} of {}",
-                    spec.frame,
-                    self.expected.len()
+                    "the protocol removes objects from the frame {} of {frames}",
+                    spec.frame
                 ));
             };
             *slot = spec.anchors.iter().map(|anchor| anchor.anchor()).collect();
         }
-        let mut hidden = vec![Vec::new(); self.expected.len()];
+        let mut hidden = vec![Vec::new(); frames];
         for spec in &self.hidden {
             let Some(slot) = hidden.get_mut(spec.frame as usize) else {
                 return Err(format!(
-                    "the protocol hides objects of the frame {} of {}",
-                    spec.frame,
-                    self.expected.len()
+                    "the protocol hides objects of the frame {} of {frames}",
+                    spec.frame
                 ));
             };
             *slot = spec.anchors.iter().map(|anchor| anchor.anchor()).collect();
@@ -1093,7 +1092,7 @@ impl CurationSpec {
             .iter()
             .map(|edit| edit.edit())
             .collect::<Vec<_>>();
-        grana_scene::Curation::restored(&self.expected, &removed, &hidden, &edits)
+        grana_scene::Curation::restored(frames, &removed, &hidden, &edits)
     }
 }
 
@@ -2730,8 +2729,14 @@ impl SourceSpec {
                 if !(slice_overlap.is_finite() && (0.0..=1.0).contains(slice_overlap)) {
                     return invalid("needs a unit slice overlap".to_string());
                 }
-                if grana_scene::SegmentModel::from_name(model).is_none() {
+                let Some(model) = grana_scene::SegmentModel::from_name(model) else {
                     return invalid("names an unknown segmentation model".to_string());
+                };
+                if !model.licensed() {
+                    return invalid(format!(
+                        "names the {} model, which this build is not licensed to run",
+                        model.label()
+                    ));
                 }
                 if seeds
                     .iter()
@@ -2981,8 +2986,8 @@ impl CurationSpec {
                 "the manual edits of {set} {detail}"
             )))
         };
-        if self.expected.is_empty() {
-            return invalid("cover no frame".to_string());
+        if self.removed.is_empty() && self.hidden.is_empty() && self.edits.is_empty() {
+            return invalid("record no edit".to_string());
         }
         if !self.edits.is_empty() && !tracked {
             return invalid("edit tracks the set does not measure".to_string());
@@ -2998,7 +3003,7 @@ impl CurationSpec {
             .map(|hidden| (hidden.frame, hidden.anchors.as_slice()))
             .collect::<Vec<_>>();
         for (entries, verb) in [(&removed, "remove"), (&hidden, "hide")] {
-            if let Err(detail) = check_anchors(&self.expected, entries, verb) {
+            if let Err(detail) = check_anchors(entries, verb) {
                 return invalid(detail);
             }
         }
@@ -3019,21 +3024,6 @@ impl CurationSpec {
                         node.frame
                     ));
                 }
-                match self.expected.get(node.frame as usize).copied().flatten() {
-                    Some(count) if node.object >= count => {
-                        return invalid(format!(
-                            "name an object outside the frame {} of {count}",
-                            node.frame
-                        ));
-                    }
-                    Some(_) => {}
-                    None => {
-                        return invalid(format!(
-                            "name an object of the frame {} without an object count",
-                            node.frame
-                        ));
-                    }
-                }
             }
         }
         Ok(())
@@ -3044,22 +3034,13 @@ fn truth() -> bool {
     true
 }
 
-fn check_anchors(
-    expected: &[Option<usize>],
-    entries: &[(u32, &[AnchorSpec])],
-    verb: &str,
-) -> Result<(), String> {
+fn check_anchors(entries: &[(u32, &[AnchorSpec])], verb: &str) -> Result<(), String> {
     let mut previous = None;
     for (frame, anchors) in entries {
         if previous.is_some_and(|previous: u32| previous >= *frame) {
             return Err("are not ordered by frame".to_string());
         }
         previous = Some(*frame);
-        if expected.get(*frame as usize).copied().flatten().is_none() {
-            return Err(format!(
-                "{verb} objects from the frame {frame} without an object count"
-            ));
-        }
         if anchors.is_empty() {
             return Err(format!("{verb} no object from the frame {frame}"));
         }

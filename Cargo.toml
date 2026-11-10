@@ -74,6 +74,7 @@ grana-interop = { version = "0.1.1", path = "crates/grana-interop" }
 grana-net = { version = "0.1.1", path = "crates/grana-net" }
 grana-measure = { version = "0.1.1", path = "crates/grana-measure" }
 grana-mesh = { version = "0.1.1", path = "crates/grana-mesh" }
+grana-model = { version = "0.1.1", path = "crates/grana-model" }
 grana-optics = { version = "0.1.1", path = "crates/grana-optics" }
 grana-restore = { version = "0.1.1", path = "crates/grana-restore" }
 grana-segment = { version = "0.1.1", path = "crates/grana-segment" }
@@ -118,6 +119,7 @@ grana-gpu = { workspace = true }
 grana-image = { workspace = true }
 grana-measure = { workspace = true }
 grana-mesh = { workspace = true }
+grana-model = { workspace = true }
 grana-object = { workspace = true }
 grana-optics = { workspace = true }
 grana-pipeline = { workspace = true }

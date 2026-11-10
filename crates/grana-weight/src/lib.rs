@@ -16,7 +16,7 @@ pub fn weights(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<PathBuf, Error> {
-    let asset = model::asset(version).ok_or_else(|| Error::unavailable(version.file()))?;
+    let asset = model::asset(version).ok_or_else(|| Error::unavailable(version.name()))?;
     let path = cache::stored(asset)?;
     if integrity::checked(asset, &path, cancel)? {
         return Ok(path);
